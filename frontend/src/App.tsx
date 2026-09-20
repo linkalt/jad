@@ -29,6 +29,7 @@ import {
   StatusDot,
   Text,
   VStack,
+  VisuallyHidden,
 } from '@astryxdesign/core';
 import type {
   ChatToolCallItem,
@@ -72,6 +73,16 @@ const styles = stylex.create({
     flexShrink: 0,
   },
   chat: {
+    height: '100%',
+    minHeight: 0,
+    minWidth: 0,
+  },
+  conversationFrame: {
+    height: '100%',
+    minHeight: 0,
+    minWidth: 0,
+  },
+  conversationLane: {
     height: '100%',
     minHeight: 0,
     minWidth: 0,
@@ -852,6 +863,13 @@ function App() {
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState(baseReasoning.length);
   const [streamingMessage, setStreamingMessage] = useState<WebUiMessage | null>(null);
+  const conversation = useResizable({
+    defaultSize: pixel(800),
+    minSize: pixel(520),
+    maxSize: pixel(1200),
+    direction: 'horizontal',
+    autoSaveId: 'agent-harness-conversation-width',
+  });
   const runAbortRef = useRef<AbortController | null>(null);
   const runTimeoutRef = useRef<number | null>(null);
 
@@ -1198,6 +1216,13 @@ function App() {
       elevation="low"
     />
   );
+  const centeredComposer = (
+    <HStack align="center" justify="center" width="100%">
+      <VStack width={conversation.size} maxWidth="100%">
+        {composer}
+      </VStack>
+    </HStack>
+  );
 
   return (
     <AppShell
@@ -1225,29 +1250,54 @@ function App() {
               label="Agent conversation"
             >
               <ChatLayout
-                density="spacious"
+                density="balanced"
                 xstyle={styles.chat}
-                composer={composer}
+                composer={centeredComposer}
               >
-                <ChatMessageList density="spacious" align="top" isStreaming={isRunning}>
-                  {messages.map(renderMessage)}
-                  {isRunning && (!isLiveSession || streamingMessage) && (
-                    <ChatMessage sender="assistant" avatar={<AgentAvatar isRunning />}>
-                      <ChatMessageBubble variant="ghost" width="100%">
-                        {isLiveSession && streamingMessage ? (
-                          <WebUiParts parts={streamingMessage.parts} isStreaming />
-                        ) : (
-                          <VStack gap={3} width="100%">
-                            <ReasoningBlock steps={reasoningSteps} />
-                            <Markdown density="compact" isStreaming headingLevelStart={3}>
-                              Astra is working through the request…
-                            </Markdown>
-                          </VStack>
-                        )}
-                      </ChatMessageBubble>
-                    </ChatMessage>
-                  )}
-                </ChatMessageList>
+                <HStack
+                  align="stretch"
+                  justify="center"
+                  gap={0}
+                  width="100%"
+                  height="100%"
+                  xstyle={styles.conversationFrame}
+                >
+                  <VStack
+                    width={conversation.size}
+                    maxWidth="100%"
+                    height="100%"
+                    xstyle={styles.conversationLane}
+                  >
+                    <ChatMessageList density="balanced" align="top" isStreaming={isRunning}>
+                      {messages.map(renderMessage)}
+                      {isRunning && (!isLiveSession || streamingMessage) && (
+                        <ChatMessage sender="assistant" avatar={<AgentAvatar isRunning />}>
+                          <ChatMessageBubble variant="ghost" width="100%">
+                            {isLiveSession && streamingMessage ? (
+                              <WebUiParts parts={streamingMessage.parts} isStreaming />
+                            ) : (
+                              <VStack gap={3} width="100%">
+                                <ReasoningBlock steps={reasoningSteps} />
+                                <Markdown density="compact" isStreaming headingLevelStart={3}>
+                                  Astra is working through the request…
+                                </Markdown>
+                              </VStack>
+                            )}
+                          </ChatMessageBubble>
+                        </ChatMessage>
+                      )}
+                    </ChatMessageList>
+                  </VStack>
+                  <ResizeHandle
+                    direction="horizontal"
+                    hasDivider={false}
+                    isAlwaysVisible={false}
+                    label="Resize conversation width"
+                    resizable={conversation.props}
+                  >
+                    <VisuallyHidden>Resize conversation width</VisuallyHidden>
+                  </ResizeHandle>
+                </HStack>
               </ChatLayout>
             </LayoutContent>
           }
