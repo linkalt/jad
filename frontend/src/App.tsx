@@ -94,9 +94,17 @@ const styles = stylex.create({
   reasoningCard: {
     width: '100%',
   },
+  reasoningTrigger: {
+    minWidth: 0,
+    width: '100%',
+  },
   reasoningTitle: {
     minWidth: 0,
+    maxWidth: '100%',
     flex: 1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   reasoningContent: {
     color: colorVars['--color-text-secondary'],
@@ -473,7 +481,13 @@ function ReasoningBlock({
         isOpen={isOpen}
         onOpenChange={setIsOpen}
         trigger={
-          <HStack as="span" align="center" gap={2} width="100%">
+          <HStack
+            as="span"
+            align="center"
+            gap={2}
+            width="100%"
+            xstyle={styles.reasoningTrigger}
+          >
             <Icon icon="wrench" size="sm" color="accent" />
             {isOpen ? (
               <VisuallyHidden>Thinking</VisuallyHidden>
