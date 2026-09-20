@@ -99,9 +99,9 @@ const styles = stylex.create({
   },
   reasoningTitle: {
     minWidth: 0,
-    width: 0,
+    width: 'auto',
     maxWidth: '100%',
-    flex: 1,
+    flex: '0 1 auto',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -233,8 +233,18 @@ function messageTime(): string {
   });
 }
 
+const MAX_REASONING_TITLE_LENGTH = 48;
+
 function oneLine(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function reasoningTitleText(value: string): string {
+  const title = oneLine(value);
+  if (title.length <= MAX_REASONING_TITLE_LENGTH) {
+    return title;
+  }
+  return `${title.slice(0, MAX_REASONING_TITLE_LENGTH - 1).trimEnd()}…`;
 }
 
 function recordsToMessages(records: unknown[]): MessageRecord[] {
@@ -463,7 +473,7 @@ function ReasoningBlock({
   const [isOpen, setIsOpen] = useState(false);
   const hasContent = content.trim().length > 0;
   const hasSteps = steps.length > 0;
-  const title = oneLine(
+  const title = reasoningTitleText(
     content ||
       steps.find(step => step.status === 'running')?.detail ||
       steps[0]?.detail ||
