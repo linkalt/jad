@@ -471,7 +471,11 @@ function ReasoningBlock({
         xstyle={[styles.reasoningPanel, !isOpen && styles.reasoningPanelHidden]}
       >
         {hasContent && (
-          <Markdown density="compact" xstyle={styles.reasoningContent}>
+          <Markdown
+            density="compact"
+            contentWidth="100%"
+            xstyle={styles.reasoningContent}
+          >
             {content}
           </Markdown>
         )}
@@ -529,6 +533,7 @@ function WebUiParts({
           <Markdown
             key={`text-${index}`}
             density="compact"
+            contentWidth="100%"
             isStreaming={isStreaming && isLast}
             headingLevelStart={3}
           >
@@ -792,7 +797,7 @@ function renderMessage(message: MessageRecord) {
           name={<Text type="label" weight="semibold">You</Text>}
           metadata={<ChatMessageMetadata timestamp={message.timestamp} status="read" />}
         >
-          <Markdown density="compact">{message.text}</Markdown>
+          <Markdown density="compact" contentWidth="100%">{message.text}</Markdown>
         </ChatMessageBubble>
       </ChatMessage>
     );
@@ -832,7 +837,7 @@ function renderMessage(message: MessageRecord) {
                   content={message.reasoningContent}
                 />
               )}
-              <Markdown density="compact" headingLevelStart={3}>
+              <Markdown density="compact" contentWidth="100%" headingLevelStart={3}>
                 {message.text}
               </Markdown>
             </>
@@ -1278,7 +1283,12 @@ function App() {
                             ) : (
                               <VStack gap={3} width="100%">
                                 <ReasoningBlock steps={reasoningSteps} />
-                                <Markdown density="compact" isStreaming headingLevelStart={3}>
+                                <Markdown
+                                  density="compact"
+                                  contentWidth="100%"
+                                  isStreaming
+                                  headingLevelStart={3}
+                                >
                                   Astra is working through the request…
                                 </Markdown>
                               </VStack>
