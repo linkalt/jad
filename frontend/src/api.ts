@@ -1,8 +1,23 @@
+export interface WebUiPart {
+  type: 'reasoning' | 'text';
+  text: string;
+}
+
+export interface WebUiMessage {
+  id: string;
+  sender: 'system' | 'user' | 'assistant';
+  text: string;
+  timestamp: string;
+  parts: WebUiPart[];
+  status?: 'streaming' | 'complete';
+  reasoningContent?: string;
+}
+
 export interface SessionSnapshot {
   id: string;
   session_name: string;
   turns: number;
-  messages: unknown[];
+  messages: WebUiMessage[];
   model?: {
     provider?: string;
     model?: string;
@@ -96,15 +111,33 @@ async function* readSse(response: Response): AsyncGenerator<SseMessage> {
   }
 }
 
+function isWebUiMessage(value: unknown): value is WebUiMessage {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.id === 'string' &&
+    (value.sender === 'system' || value.sender === 'user' || value.sender === 'assistant') &&
+    typeof value.text === 'string' &&
+    typeof value.timestamp === 'string' &&
+    Array.isArray(value.parts) &&
+    value.parts.every(
+      part =>
+        isRecord(part) &&
+        (part.type === 'reasoning' || part.type === 'text') &&
+        typeof part.text === 'string',
+    )
+  );
+}
+
 export interface StreamSessionRunOptions {
   signal?: AbortSignal;
-  onDelta?: (text: string) => void;
-  onReasoning?: (text: string) => void;
-  onCompleted?: (response: unknown) => void;
+  onMessage?: (message: WebUiMessage) => void;
+  onCompleted?: (message: WebUiMessage) => void;
 }
 
 export interface StreamSessionRunResult {
-  response?: unknown;
+  message?: WebUiMessage;
 }
 
 export async function streamSessionRun(
@@ -122,24 +155,21 @@ export async function streamSessionRun(
     throw new Error(await readError(response));
   }
 
-  let completedResponse: unknown;
+  let completedMessage: WebUiMessage | undefined;
   for await (const message of readSse(response)) {
-    if (message.event === 'delta') {
-      if (isRecord(message.data) && typeof message.data.text === 'string') {
-        options.onDelta?.(message.data.text);
-      }
-      continue;
-    }
-    if (message.event === 'reasoning') {
-      if (isRecord(message.data) && typeof message.data.text === 'string') {
-        options.onReasoning?.(message.data.text);
+    if (message.event === 'ui.message') {
+      if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
+        options.onMessage?.(message.data.message);
+        if (message.data.message.status === 'complete') {
+          completedMessage = message.data.message;
+        }
       }
       continue;
     }
     if (message.event === 'completed') {
-      if (isRecord(message.data)) {
-        completedResponse = message.data.response;
-        options.onCompleted?.(completedResponse);
+      if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
+        completedMessage = message.data.message;
+        options.onCompleted?.(completedMessage);
       }
       continue;
     }
@@ -151,5 +181,5 @@ export async function streamSessionRun(
     }
   }
 
-  return {response: completedResponse};
+  return {message: completedMessage};
 }

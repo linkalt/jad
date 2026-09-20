@@ -124,11 +124,23 @@ Runs are serialized per `AgentSession` instance. Tool execution and tool definit
 
 - `GET /api/health` checks that the server is available;
 - `GET /api/sessions/:id` returns the persisted transcript snapshot;
-- `POST /api/sessions/:id/run` accepts `{ "input": "..." }` and emits SSE `delta`, `completed`, `done`, or `error` events.
+- `POST /api/sessions/:id/run` accepts `{ "input": "..." }` and emits SSE `ui.message`, `completed`, `done`, or `error` events.
 
 The default session root is `.jad/sessions` (or `JAD_SESSIONS_DIR`). The frontend Vite server proxies `/api` to `127.0.0.1:8787`. Start the local integration with `npm run server --prefix backend` and `npm run dev --prefix frontend` from the project root. The backend owns its TypeScript compiler and Node types; the frontend is only an HTTP/SSE client and is not a backend build dependency.
 
 The browser may abort its fetch, but the first bridge version does not cancel an already-started provider request; the server continues persistence so the transcript remains consistent.
+
+### 2.5 `web-ui-normalized` plugin
+
+`src/plugins/web-ui-normalized.ts` is a transport/view plugin, separate from `messages.jsonl` persistence:
+
+- it converts raw session records into UI messages for `GET /api/sessions/:id`;
+- it converts provider stream events into ordered `ui.message` SSE updates;
+- it keeps adjacent reasoning/text chunks merged in the backend;
+- it does not change the raw `messages.jsonl` format or write a UI projection there;
+- the frontend receives ready-to-render messages and does not normalize provider events.
+
+Each normalized assistant message contains ordered `parts` with `reasoning` or `text` types, plus aggregate `text` and `reasoningContent` fields for rendering.
 
 ## 3. Terminology
 

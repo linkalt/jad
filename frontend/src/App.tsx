@@ -35,7 +35,7 @@ import type {
   ChatToolCallItem,
   StatusDotVariant,
 } from '@astryxdesign/core';
-import {fetchSession, streamSessionRun} from './api';
+import {fetchSession, streamSessionRun, type WebUiMessage, type WebUiPart} from './api';
 import {ResizeHandle, useResizable} from '@astryxdesign/core/Resizable';
 import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {
@@ -142,8 +142,6 @@ const styles = stylex.create({
 
 type SessionState = 'success' | 'warning' | 'accent';
 type TraceState = 'complete' | 'running' | 'pending';
-type MessageSender = 'system' | 'user' | 'assistant';
-
 interface Session {
   id: string;
   title: string;
@@ -158,73 +156,13 @@ interface ReasoningStep {
   status: TraceState;
 }
 
-interface MessageRecord {
-  id: string;
-  sender: MessageSender;
-  text: string;
-  timestamp: string;
+type MessageRecord = Omit<WebUiMessage, 'parts'> & {
+  parts?: WebUiPart[];
   reasoning?: ReasoningStep[];
-  reasoningContent?: string;
   tools?: ChatToolCallItem[];
-}
+};
 
 const LIVE_SESSION_ID = 'session1';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function textFromParts(value: unknown, types: string[]): string {
-  if (!Array.isArray(value)) {
-    return '';
-  }
-  return value
-    .filter(
-      (part): part is Record<string, unknown> =>
-        isRecord(part) && typeof part.type === 'string' && types.includes(part.type),
-    )
-    .map(part => (typeof part.text === 'string' ? part.text : ''))
-    .join('');
-}
-
-function responseText(value: unknown): string {
-  if (!isRecord(value)) {
-    return '';
-  }
-  const response = isRecord(value.response) ? value.response : value;
-  if (!Array.isArray(response.output)) {
-    return '';
-  }
-  return response.output
-    .filter(
-      (item): item is Record<string, unknown> =>
-        isRecord(item) && item.type === 'message' && item.role === 'assistant',
-    )
-    .map(item => textFromParts(item.content, ['output_text']))
-    .join('');
-}
-
-function responseReasoningText(value: unknown): string {
-  if (!isRecord(value)) {
-    return '';
-  }
-  const response = isRecord(value.response) ? value.response : value;
-  if (!Array.isArray(response.output)) {
-    return '';
-  }
-  return response.output
-    .filter(
-      (item): item is Record<string, unknown> =>
-        isRecord(item) && item.type === 'reasoning',
-    )
-    .flatMap(item => [
-      textFromParts(item.content, ['reasoning_text', 'output_text', 'text']),
-      textFromParts(item.summary, ['summary_text', 'reasoning_text', 'output_text', 'text']),
-    ])
-    .filter(Boolean)
-    .join('\n\n')
-    .trim();
-}
 
 function messageTime(): string {
   return new Date().toLocaleTimeString([], {
@@ -245,41 +183,6 @@ function reasoningTitleText(value: string): string {
     return title;
   }
   return `${title.slice(0, MAX_REASONING_TITLE_LENGTH - 1).trimEnd()}…`;
-}
-
-function recordsToMessages(records: unknown[]): MessageRecord[] {
-  const messages: MessageRecord[] = [];
-  records.forEach((value, index) => {
-    if (!isRecord(value)) {
-      return;
-    }
-    if (value.type === 'message' && value.role === 'user') {
-      const text = textFromParts(value.content, ['input_text']);
-      if (text) {
-        messages.push({
-          id: `session-record-user-${index}`,
-          sender: 'user',
-          text,
-          timestamp: messageTime(),
-        });
-      }
-      return;
-    }
-    if (value.type === 'response.completed') {
-      const text = responseText(value);
-      const reasoningContent = responseReasoningText(value);
-      if (text) {
-        messages.push({
-          id: `session-record-assistant-${index}`,
-          sender: 'assistant',
-          text,
-          timestamp: messageTime(),
-          ...(reasoningContent ? {reasoningContent} : {}),
-        });
-      }
-    }
-  });
-  return messages;
 }
 
 const baseReasoning: Omit<ReasoningStep, 'status'>[] = [
@@ -555,6 +458,35 @@ function ReasoningBlock({
         </VStack>
       </Collapsible>
     </Card>
+  );
+}
+
+function WebUiParts({
+  parts,
+  isStreaming = false,
+}: {
+  parts: WebUiPart[];
+  isStreaming?: boolean;
+}) {
+  return (
+    <VStack gap={3} width="100%">
+      {parts.map((part, index) => {
+        const isLast = index === parts.length - 1;
+        if (part.type === 'reasoning') {
+          return <ReasoningBlock key={`reasoning-${index}`} steps={[]} content={part.text} />;
+        }
+        return (
+          <Markdown
+            key={`text-${index}`}
+            density="compact"
+            isStreaming={isStreaming && isLast}
+            headingLevelStart={3}
+          >
+            {part.text}
+          </Markdown>
+        );
+      })}
+    </VStack>
   );
 }
 
@@ -840,15 +772,21 @@ function renderMessage(message: MessageRecord) {
         }
       >
         <VStack gap={3} width="100%">
-          {(message.reasoning || message.reasoningContent) && (
-            <ReasoningBlock
-              steps={message.reasoning ?? []}
-              content={message.reasoningContent}
-            />
+          {message.parts && message.parts.length > 0 ? (
+            <WebUiParts parts={message.parts} />
+          ) : (
+            <>
+              {(message.reasoning || message.reasoningContent) && (
+                <ReasoningBlock
+                  steps={message.reasoning ?? []}
+                  content={message.reasoningContent}
+                />
+              )}
+              <Markdown density="compact" headingLevelStart={3}>
+                {message.text}
+              </Markdown>
+            </>
           )}
-          <Markdown density="compact" headingLevelStart={3}>
-            {message.text}
-          </Markdown>
           {message.tools && message.tools.length > 0 && (
             <VStack gap={2}>
               <HStack align="center" gap={2}>
@@ -874,8 +812,7 @@ function App() {
   const [showInspector, setShowInspector] = useState(true);
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState(baseReasoning.length);
-  const [streamingText, setStreamingText] = useState('');
-  const [streamingReasoning, setStreamingReasoning] = useState('');
+  const [streamingMessage, setStreamingMessage] = useState<WebUiMessage | null>(null);
   const runAbortRef = useRef<AbortController | null>(null);
   const runTimeoutRef = useRef<number | null>(null);
 
@@ -919,8 +856,7 @@ function App() {
       window.clearTimeout(runTimeoutRef.current);
       runTimeoutRef.current = null;
     }
-    setStreamingText('');
-    setStreamingReasoning('');
+    setStreamingMessage(null);
     setRunningSessionId(null);
     setRunProgress(baseReasoning.length);
   }, []);
@@ -954,40 +890,33 @@ function App() {
       setComposerValue('');
       setRunningSessionId(sessionId);
       setRunProgress(sessionId === LIVE_SESSION_ID ? 0 : 1);
-      setStreamingText('');
-      setStreamingReasoning('');
+      setStreamingMessage(null);
 
       if (sessionId === LIVE_SESSION_ID) {
         const controller = new AbortController();
-        let streamedText = '';
-        let streamedReasoning = '';
         runAbortRef.current = controller;
         void streamSessionRun(sessionId, trimmedValue, {
           signal: controller.signal,
-          onDelta: text => {
-            streamedText += text;
-            setStreamingText(streamedText);
+          onMessage: message => {
+            setStreamingMessage(message);
             setRunProgress(1);
           },
-          onReasoning: text => {
-            streamedReasoning += text;
-            setStreamingReasoning(streamedReasoning);
+          onCompleted: message => {
+            setStreamingMessage(message);
+            setRunProgress(2);
           },
-          onCompleted: () => setRunProgress(2),
         })
           .then(result => {
             if (controller.signal.aborted || runAbortRef.current !== controller) {
               return;
             }
-            const assistantText =
-              streamedText || responseText(result.response) || 'The run completed without text output.';
-            const reasoningContent = responseReasoningText(result.response) || streamedReasoning;
-            const assistantMessage: MessageRecord = {
+            const assistantMessage: MessageRecord = result.message ?? {
               id: `${sessionId}-assistant-${Date.now()}`,
               sender: 'assistant',
-              text: assistantText,
+              text: 'The run completed without text output.',
               timestamp: messageTime(),
-              ...(reasoningContent ? {reasoningContent} : {}),
+              parts: [],
+              status: 'complete',
             };
             setThreads(current => ({
               ...current,
@@ -1027,8 +956,7 @@ function App() {
               return;
             }
             runAbortRef.current = null;
-            setStreamingText('');
-            setStreamingReasoning('');
+            setStreamingMessage(null);
             setRunProgress(sessionId === LIVE_SESSION_ID ? 0 : baseReasoning.length);
             setRunningSessionId(current => (current === sessionId ? null : current));
           });
@@ -1109,7 +1037,7 @@ function App() {
         }
         setThreads(current => ({
           ...current,
-          [LIVE_SESSION_ID]: recordsToMessages(snapshot.messages),
+          [LIVE_SESSION_ID]: snapshot.messages,
         }));
         setSessions(current =>
           current.map(session =>
@@ -1264,18 +1192,19 @@ function App() {
               >
                 <ChatMessageList density="balanced" align="top" isStreaming={isRunning}>
                   {messages.map(renderMessage)}
-                  {isRunning && (
+                  {isRunning && (!isLiveSession || streamingMessage) && (
                     <ChatMessage sender="assistant" avatar={<AgentAvatar isRunning />}>
                       <ChatMessageBubble variant="ghost" width="100%">
-                        <VStack gap={3} width="100%">
-                          <ReasoningBlock
-                            steps={reasoningSteps}
-                            content={streamingReasoning}
-                          />
-                          <Markdown density="compact" isStreaming headingLevelStart={3}>
-                            {streamingText || 'Astra is working through the request…'}
-                          </Markdown>
-                        </VStack>
+                        {isLiveSession && streamingMessage ? (
+                          <WebUiParts parts={streamingMessage.parts} isStreaming />
+                        ) : (
+                          <VStack gap={3} width="100%">
+                            <ReasoningBlock steps={reasoningSteps} />
+                            <Markdown density="compact" isStreaming headingLevelStart={3}>
+                              Astra is working through the request…
+                            </Markdown>
+                          </VStack>
+                        )}
                       </ChatMessageBubble>
                     </ChatMessage>
                   )}

@@ -19,6 +19,11 @@ import {
 } from "./config.js";
 import { AgentSession } from "./session.js";
 import type { JsonRecord } from "./persistence.js";
+import {
+  normalizeWebUiSession,
+  WebUiNormalizedRun,
+  type WebUiSessionSnapshot,
+} from "./plugins/web-ui-normalized.js";
 
 const DEFAULT_PORT = 8787;
 const DEFAULT_HOST = "127.0.0.1";
@@ -163,17 +168,8 @@ function sessionSummary(
   id: string,
   config: LoadedSessionConfig,
   messages: JsonRecord[],
-): JsonRecord {
-  return {
-    id,
-    session_name: config.settings.session_name,
-    model: {
-      provider: config.model.provider,
-      model: config.model.model,
-    },
-    turns: messages.filter((record) => record.type === "response.completed").length,
-    messages,
-  };
+): WebUiSessionSnapshot {
+  return normalizeWebUiSession(id, config, messages);
 }
 
 class AgentHttpApplication {
@@ -313,7 +309,7 @@ class AgentHttpApplication {
       throw error;
     }
 
-    const sessions: JsonRecord[] = [];
+    const sessions: WebUiSessionSnapshot[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory() || !SESSION_ID_PATTERN.test(entry.name)) {
         continue;
@@ -369,32 +365,26 @@ class AgentHttpApplication {
     });
 
     try {
+      const turnId = `web-${randomUUID()}`;
+      const normalizedRun = new WebUiNormalizedRun(turnId);
       const result = await handle.session.run(body.input, {
-        turnId: `web-${randomUUID()}`,
+        turnId,
         onEvent: (event) => {
           if (!connected) {
             return;
           }
-          if (
-            event.type === "response.output_text.delta" &&
-            typeof event.delta === "string"
-          ) {
-            writeSse(response, "delta", { text: event.delta });
-            return;
-          }
-          if (
-            (event.type === "response.reasoning_text.delta" ||
-              event.type === "response.reasoning_summary_text.delta") &&
-            typeof event.delta === "string"
-          ) {
-            writeSse(response, "reasoning", { text: event.delta });
+          const message = normalizedRun.update(event);
+          if (message) {
+            writeSse(response, "ui.message", { message });
           }
         },
       });
 
       if (connected) {
+        const message = normalizedRun.complete(result.response.event.response);
+        writeSse(response, "ui.message", { message });
         writeSse(response, "completed", {
-          response: result.response.event.response,
+          message,
           committed: true,
         });
         writeSse(response, "done", {});

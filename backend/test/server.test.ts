@@ -44,6 +44,10 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
     }),
   );
 
+  const reasoning = {
+    type: "reasoning",
+    content: [{ type: "reasoning_text", text: "Plan the bridge response." }],
+  };
   const output = {
     type: "message",
     role: "assistant",
@@ -64,9 +68,14 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
           yield {
             type: "response.output_item.done",
             output_index: 0,
+            item: reasoning,
+          };
+          yield {
+            type: "response.output_item.done",
+            output_index: 1,
             item: output,
           };
-          yield completedEvent([output], "resp_bridge");
+          yield completedEvent([reasoning, output], "resp_bridge");
         })(),
     },
   } as unknown as OpenAI;
@@ -102,18 +111,35 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
     });
     assert.equal(run.status, 200);
     const stream = await run.text();
-    assert.match(stream, /event: reasoning/);
+    assert.match(stream, /event: ui\.message/);
+    assert.match(stream, /"status":"streaming"/);
+    assert.match(stream, /"type":"reasoning"/);
     assert.match(stream, /Plan the bridge response\./);
-    assert.match(stream, /event: delta/);
+    assert.match(stream, /"type":"text"/);
     assert.match(stream, /BRIDGE_OK/);
-    assert.ok(stream.indexOf("event: reasoning") < stream.indexOf("event: delta"));
+    assert.ok(stream.indexOf('"type":"reasoning"') < stream.indexOf('"type":"text"'));
+    assert.match(stream, /"status":"complete"/);
     assert.match(stream, /event: completed/);
     assert.match(stream, /event: done/);
 
     const finalSnapshot = await fetch(`${baseUrl}/api/sessions/session1`);
-    const final = (await finalSnapshot.json()) as { turns: number; messages: unknown[] };
+    const final = (await finalSnapshot.json()) as {
+      turns: number;
+      messages: Array<{
+        sender: string;
+        text: string;
+        parts: Array<{ type: string; text: string }>;
+        status?: string;
+      }>;
+    };
     assert.equal(final.turns, 1);
     assert.equal(final.messages.length, 2);
+    assert.deepEqual(final.messages.map(message => message.sender), ["user", "assistant"]);
+    assert.deepEqual(final.messages[1]?.parts, [
+      { type: "reasoning", text: "Plan the bridge response." },
+      { type: "text", text: "BRIDGE_OK" },
+    ]);
+    assert.equal(final.messages[1]?.status, "complete");
   } finally {
     await running.close();
     await rm(root, { recursive: true, force: true });
