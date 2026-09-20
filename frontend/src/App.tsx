@@ -1225,11 +1225,11 @@ function App() {
               label="Agent conversation"
             >
               <ChatLayout
-                density="balanced"
+                density="spacious"
                 xstyle={styles.chat}
                 composer={composer}
               >
-                <ChatMessageList density="balanced" align="top" isStreaming={isRunning}>
+                <ChatMessageList density="spacious" align="top" isStreaming={isRunning}>
                   {messages.map(renderMessage)}
                   {isRunning && (!isLiveSession || streamingMessage) && (
                     <ChatMessage sender="assistant" avatar={<AgentAvatar isRunning />}>
