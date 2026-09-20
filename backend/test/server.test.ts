@@ -7,6 +7,11 @@ import test from "node:test";
 import type OpenAI from "openai";
 
 import { createAgentServer } from "../src/server.js";
+import {
+  normalizeWebUiSession,
+  WebUiNormalizedRun,
+} from "../src/plugins/web-ui-normalized.js";
+import type { LoadedSessionConfig } from "../src/config.js";
 
 function completedEvent(output: Record<string, unknown>[], id: string): Record<string, unknown> {
   return {
@@ -20,6 +25,55 @@ function completedEvent(output: Record<string, unknown>[], id: string): Record<s
     },
   };
 }
+
+test("preserves interleaved reasoning and assistant parts", () => {
+  const normalizedRun = new WebUiNormalizedRun("interleaved-turn");
+  const events = [
+    { type: "response.reasoning_summary_text.delta", delta: "r1" },
+    { type: "response.output_text.delta", delta: "a1" },
+    { type: "response.reasoning_summary_text.delta", delta: "r2" },
+    { type: "response.output_text.delta", delta: "a2" },
+    { type: "response.reasoning_summary_text.delta", delta: "r3" },
+    { type: "response.reasoning_summary_text.delta", delta: "r4" },
+  ];
+  for (const event of events) {
+    normalizedRun.update(event);
+  }
+
+  const expectedParts = [
+    { type: "reasoning", text: "r1" },
+    { type: "text", text: "a1" },
+    { type: "reasoning", text: "r2" },
+    { type: "text", text: "a2" },
+    { type: "reasoning", text: "r3r4" },
+  ];
+  assert.deepEqual(normalizedRun.complete({
+    id: "response-interleaved",
+    output: [],
+  }).parts, expectedParts);
+
+  const snapshot = normalizeWebUiSession(
+    "session1",
+    {
+      model: { provider: "fake", model: "fake-model" },
+      settings: { session_name: "interleaved" },
+    } as unknown as LoadedSessionConfig,
+    [
+      completedEvent(
+        [
+          { type: "reasoning", content: [{ type: "reasoning_text", text: "r1" }] },
+          { type: "message", role: "assistant", content: [{ type: "output_text", text: "a1" }] },
+          { type: "reasoning", content: [{ type: "reasoning_text", text: "r2" }] },
+          { type: "message", role: "assistant", content: [{ type: "output_text", text: "a2" }] },
+          { type: "reasoning", content: [{ type: "reasoning_text", text: "r3" }] },
+          { type: "reasoning", content: [{ type: "reasoning_text", text: "r4" }] },
+        ],
+        "response-interleaved",
+      ),
+    ],
+  );
+  assert.deepEqual(snapshot.messages[0]?.parts, expectedParts);
+});
 
 test("serves a session snapshot and streams a committed run over SSE", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-server-"));

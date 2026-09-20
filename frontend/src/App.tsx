@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react';
 import * as stylex from '@stylexjs/stylex';
 import {
   AppShell,
@@ -7,7 +7,6 @@ import {
   Button,
   Card,
   ChatComposer,
-  Collapsible,
   ChatLayout,
   ChatMessage,
   ChatMessageBubble,
@@ -101,9 +100,24 @@ const styles = stylex.create({
   reasoningCard: {
     width: '100%',
   },
+  reasoningButton: {
+    justifyContent: 'flex-start',
+    paddingBlock: spacingVars['--spacing-0'],
+    paddingInline: spacingVars['--spacing-0'],
+    textAlign: 'start',
+  },
   reasoningTrigger: {
     minWidth: 0,
     width: '100%',
+  },
+  reasoningPanel: {
+    paddingBlockStart: spacingVars['--spacing-1'],
+  },
+  reasoningPanelHidden: {
+    display: 'none',
+  },
+  reasoningIconOpen: {
+    transform: 'rotate(180deg)',
   },
   reasoningTitle: {
     display: 'block',
@@ -383,6 +397,8 @@ function ReasoningBlock({
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const contentId = useId();
   const hasContent = content.trim().length > 0;
   const hasSteps = steps.length > 0;
   const title = reasoningTitleText(
@@ -399,72 +415,87 @@ function ReasoningBlock({
 
   return (
     <Card variant="muted" padding={compact ? 2 : 3} xstyle={styles.reasoningCard}>
-      <Collapsible
-        isOpen={isOpen}
-        onOpenChange={setIsOpen}
-        trigger={
-          <HStack
-            as="span"
-            align="center"
-            gap={2}
-            width="100%"
-            xstyle={styles.reasoningTrigger}
-          >
-            <Icon icon="wrench" size="sm" color="accent" />
-            <Text type="label" weight="semibold">
-              Thinking
-            </Text>
-            {!isOpen && title && (
-              <Text
-                type="supporting"
-                color="secondary"
-                xstyle={styles.reasoningTitle}
-              >
-                {title}
-              </Text>
-            )}
-          </HStack>
-        }
+      <Button
+        label={isOpen ? 'Collapse reasoning' : 'Expand reasoning'}
+        variant="ghost"
+        width="100%"
+        xstyle={styles.reasoningButton}
+        aria-expanded={isOpen}
+        aria-controls={contentId}
+        onClick={() => setIsOpen(current => !current)}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
       >
-        <VStack gap={2}>
-          {hasContent && (
-            <Markdown density="compact" xstyle={styles.reasoningContent}>
-              {content}
-            </Markdown>
+        <HStack
+          as="span"
+          align="center"
+          gap={2}
+          width="100%"
+          xstyle={styles.reasoningTrigger}
+        >
+          <Icon
+            icon={isOpen || isHovered ? 'chevronDown' : 'wrench'}
+            size="sm"
+            color="accent"
+            xstyle={isOpen ? styles.reasoningIconOpen : undefined}
+          />
+          <Text type="label" weight="semibold">
+            Thinking
+          </Text>
+          {!isOpen && title && (
+            <Text
+              type="supporting"
+              color="secondary"
+              xstyle={styles.reasoningTitle}
+            >
+              {title}
+            </Text>
           )}
-          {hasSteps && (
-            <>
-              <Text type="supporting" color="secondary">
-                {completedSteps}/{steps.length} steps
-              </Text>
-              <VStack as="ol" gap={1} xstyle={styles.traceList}>
-                {steps.map(step => (
-                  <HStack as="li" key={step.label} align="start" gap={2} xstyle={styles.traceRow}>
-                    <HStack align="center" justify="center" xstyle={styles.traceMarker}>
-                      <StatusDot
-                        variant={getStatusDotVariant(step.status)}
-                        label={getStatusLabel(step.status)}
-                        isPulsing={step.status === 'running'}
-                        icon={
-                          step.status === 'complete' ? (
-                            <Icon icon="check" size="xsm" />
-                          ) : undefined
-                        }
-                      />
-                    </HStack>
-                    <VStack gap={0.5} xstyle={styles.traceCopy}>
-                      <Text type="label">{step.label}</Text>
-                      <Text type="supporting" color="secondary">
-                        {step.detail}
-                      </Text>
-                    </VStack>
+        </HStack>
+      </Button>
+      <VStack
+        id={contentId}
+        gap={2}
+        aria-hidden={!isOpen}
+        xstyle={[styles.reasoningPanel, !isOpen && styles.reasoningPanelHidden]}
+      >
+        {hasContent && (
+          <Markdown density="compact" xstyle={styles.reasoningContent}>
+            {content}
+          </Markdown>
+        )}
+        {hasSteps && (
+          <>
+            <Text type="supporting" color="secondary">
+              {completedSteps}/{steps.length} steps
+            </Text>
+            <VStack as="ol" gap={1} xstyle={styles.traceList}>
+              {steps.map(step => (
+                <HStack as="li" key={step.label} align="start" gap={2} xstyle={styles.traceRow}>
+                  <HStack align="center" justify="center" xstyle={styles.traceMarker}>
+                    <StatusDot
+                      variant={getStatusDotVariant(step.status)}
+                      label={getStatusLabel(step.status)}
+                      isPulsing={step.status === 'running'}
+                      icon={
+                        step.status === 'complete' ? (
+                          <Icon icon="check" size="xsm" />
+                        ) : undefined
+                      }
+                    />
                   </HStack>
-                ))}
-              </VStack>
-            </>
-          )}
-        </VStack>
-      </Collapsible>
+                  <VStack gap={0.5} xstyle={styles.traceCopy}>
+                    <Text type="label">{step.label}</Text>
+                    <Text type="supporting" color="secondary">
+                      {step.detail}
+                    </Text>
+                  </VStack>
+                </HStack>
+              ))}
+            </VStack>
+          </>
+        )}
+      </VStack>
     </Card>
   );
 }
