@@ -29,6 +29,7 @@ import {
   StatusDot,
   Text,
   VStack,
+  VisuallyHidden,
 } from '@astryxdesign/core';
 import type {
   ChatToolCallItem,
@@ -1230,22 +1231,26 @@ function App() {
         direction="horizontal"
         isReversed
         hasDivider={false}
-        isAlwaysVisible
+        isAlwaysVisible={false}
         xstyle={styles.composerResizeHandle}
         label="Resize conversation width from left border"
         resizable={conversation.props}
-      />
+      >
+        <VisuallyHidden>Resize conversation width from left border</VisuallyHidden>
+      </ResizeHandle>
       <VStack width={conversation.size} maxWidth="100%">
         {composer}
       </VStack>
       <ResizeHandle
         direction="horizontal"
         hasDivider={false}
-        isAlwaysVisible
+        isAlwaysVisible={false}
         xstyle={styles.composerResizeHandle}
         label="Resize conversation width from right border"
         resizable={conversation.props}
-      />
+      >
+        <VisuallyHidden>Resize conversation width from right border</VisuallyHidden>
+      </ResizeHandle>
     </HStack>
   );
 
