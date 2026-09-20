@@ -1229,7 +1229,7 @@ function App() {
       <ResizeHandle
         direction="horizontal"
         isReversed
-        hasDivider
+        hasDivider={false}
         isAlwaysVisible
         xstyle={styles.composerResizeHandle}
         label="Resize conversation width from left border"
@@ -1240,7 +1240,7 @@ function App() {
       </VStack>
       <ResizeHandle
         direction="horizontal"
-        hasDivider
+        hasDivider={false}
         isAlwaysVisible
         xstyle={styles.composerResizeHandle}
         label="Resize conversation width from right border"
