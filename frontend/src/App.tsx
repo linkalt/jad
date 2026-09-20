@@ -209,18 +209,12 @@ function messageTime(): string {
   });
 }
 
-const MAX_REASONING_TITLE_LENGTH = 48;
-
 function oneLine(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
 function reasoningTitleText(value: string): string {
-  const title = oneLine(value);
-  if (title.length <= MAX_REASONING_TITLE_LENGTH) {
-    return title;
-  }
-  return `${title.slice(0, MAX_REASONING_TITLE_LENGTH - 1).trimEnd()}…`;
+  return oneLine(value);
 }
 
 const baseReasoning: Omit<ReasoningStep, 'status'>[] = [
