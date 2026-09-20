@@ -61,6 +61,14 @@ const styles = stylex.create({
   headerTitle: {
     minWidth: 0,
   },
+  singleLine: {
+    display: 'block',
+    minWidth: 0,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   headerActions: {
     flexShrink: 0,
   },
@@ -98,6 +106,7 @@ const styles = stylex.create({
     width: '100%',
   },
   reasoningTitle: {
+    display: 'block',
     minWidth: 0,
     width: 'auto',
     maxWidth: '100%',
@@ -409,7 +418,6 @@ function ReasoningBlock({
               <Text
                 type="supporting"
                 color="secondary"
-                maxLines={1}
                 xstyle={styles.reasoningTitle}
               >
                 {title}
@@ -638,7 +646,7 @@ function RunInspector({
             <Text type="label" weight="semibold">
               Run inspector
             </Text>
-            <Text type="supporting" color="secondary" maxLines={1}>
+            <Text type="supporting" color="secondary" xstyle={styles.singleLine}>
               {activeSession.title}
             </Text>
           </VStack>
@@ -1082,7 +1090,7 @@ function App() {
       <HStack align="center" justify="between" gap={4}>
         <VStack gap={0.5} xstyle={styles.headerTitle}>
           <HStack align="center" gap={2}>
-            <Heading level={1} maxLines={1}>
+            <Heading level={1} xstyle={styles.singleLine}>
               {activeSession.title}
             </Heading>
             <Text type="supporting" color="secondary">
