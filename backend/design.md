@@ -72,7 +72,7 @@ The history reader yields raw input items directly and expands each committed `r
 - unknown fields are preserved for forward compatibility;
 - normalized model and setting objects receive canonical SHA-256 hashes;
 - `setting.json.http_debug` is disabled by default and controls native request/response diagnostics;
-- enabled diagnostics append JSONL records to `http-debug.jsonl` in the session directory;
+- enabled diagnostics write numbered JSON records to `debug/http/request1`, `debug/http/response1`, and subsequent request/response files in the session directory;
 - API-key and authorization headers are redacted, and bodies are opt-in and capped by `max_body_bytes`.
 
 Example HTTP debug configuration:

@@ -1,5 +1,5 @@
-import { appendFile, mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import type { HttpDebugSettings } from "./config.js";
 import type { JsonRecord } from "./persistence.js";
@@ -140,20 +140,50 @@ async function captureResponseBody(
 }
 
 class HttpDebugLogger {
+  private nextRequestId = 1;
   private pending: Promise<void> = Promise.resolve();
+  private readonly ready: Promise<void>;
 
-  public constructor(private readonly path: string) {}
+  public constructor(private readonly directory: string) {
+    this.ready = this.initialize();
+  }
 
-  public log(record: JsonRecord): void {
-    const line = `${JSON.stringify(record)}\n`;
+  public async reserveRequestId(): Promise<number> {
+    await this.ready;
+    const requestId = this.nextRequestId;
+    this.nextRequestId += 1;
+    return requestId;
+  }
+
+  public log(fileName: string, record: JsonRecord): void {
+    const path = join(this.directory, fileName);
+    const contents = `${JSON.stringify(record)}\n`;
     this.pending = this.pending
       .then(async () => {
-        await mkdir(dirname(this.path), { recursive: true });
-        await appendFile(this.path, line, "utf8");
+        await this.ready;
+        await writeFile(path, contents, "utf8");
       })
       .catch((error: unknown) => {
-        console.error(`Unable to write HTTP debug log ${this.path}:`, error);
+        console.error(`Unable to write HTTP debug file ${path}:`, error);
       });
+  }
+
+  private async initialize(): Promise<void> {
+    try {
+      await mkdir(this.directory, { recursive: true });
+      const entries = await readdir(this.directory, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile()) {
+          continue;
+        }
+        const match = /^(?:request|response)(\d+)$/.exec(entry.name);
+        if (match) {
+          this.nextRequestId = Math.max(this.nextRequestId, Number(match[1]) + 1);
+        }
+      }
+    } catch (error) {
+      console.error(`Unable to initialize HTTP debug directory ${this.directory}:`, error);
+    }
   }
 }
 
@@ -179,8 +209,9 @@ export function createHttpDebugFetch(
     return undefined;
   }
 
-  const logger = new HttpDebugLogger(join(sessionDir, "http-debug.jsonl"));
+  const logger = new HttpDebugLogger(join(sessionDir, "debug", "http"));
   return async (input, init) => {
+    const requestId = await logger.reserveRequestId();
     const requestRecord: JsonRecord = {
       timestamp: new Date().toISOString(),
       direction: "request",
@@ -196,13 +227,13 @@ export function createHttpDebugFetch(
         await captureRequestBody(input, init, settings.max_body_bytes),
       );
     }
-    logger.log(requestRecord);
+    logger.log(`request${requestId}`, requestRecord);
 
     let response: Response;
     try {
       response = await nativeFetch(input, init);
     } catch (error) {
-      logger.log({
+      logger.log(`response${requestId}`, {
         timestamp: new Date().toISOString(),
         direction: "response",
         url: requestUrl(input),
@@ -223,15 +254,15 @@ export function createHttpDebugFetch(
     }
     if (settings.include_response_body) {
       void captureResponseBody(response, settings.max_body_bytes)
-        .then((captured) => logger.log({ ...responseRecord, ...captured }))
+        .then((captured) => logger.log(`response${requestId}`, { ...responseRecord, ...captured }))
         .catch((error: unknown) =>
-          logger.log({
+          logger.log(`response${requestId}`, {
             ...responseRecord,
             body_error: error instanceof Error ? error.message : String(error),
           }),
         );
     } else {
-      logger.log(responseRecord);
+      logger.log(`response${requestId}`, responseRecord);
     }
     return response;
   };
