@@ -30,7 +30,6 @@ import {
   StatusDot,
   Text,
   VStack,
-  VisuallyHidden,
 } from '@astryxdesign/core';
 import type {
   ChatToolCallItem,
@@ -100,6 +99,7 @@ const styles = stylex.create({
   },
   reasoningTitle: {
     minWidth: 0,
+    width: 0,
     maxWidth: '100%',
     flex: 1,
     overflow: 'hidden',
@@ -489,24 +489,18 @@ function ReasoningBlock({
             xstyle={styles.reasoningTrigger}
           >
             <Icon icon="wrench" size="sm" color="accent" />
-            {isOpen ? (
-              <VisuallyHidden>Thinking</VisuallyHidden>
-            ) : (
-              <>
-                <Text type="label" weight="semibold">
-                  Thinking
-                </Text>
-                {title && (
-                  <Text
-                    type="supporting"
-                    color="secondary"
-                    maxLines={1}
-                    xstyle={styles.reasoningTitle}
-                  >
-                    {title}
-                  </Text>
-                )}
-              </>
+            <Text type="label" weight="semibold">
+              Thinking
+            </Text>
+            {!isOpen && title && (
+              <Text
+                type="supporting"
+                color="secondary"
+                maxLines={1}
+                xstyle={styles.reasoningTitle}
+              >
+                {title}
+              </Text>
             )}
           </HStack>
         }
