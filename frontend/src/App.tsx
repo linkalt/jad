@@ -94,6 +94,10 @@ const styles = stylex.create({
   reasoningCard: {
     width: '100%',
   },
+  reasoningTitle: {
+    minWidth: 0,
+    flex: 1,
+  },
   reasoningContent: {
     color: colorVars['--color-text-secondary'],
     fontSize: typeScaleVars['--text-supporting-size'],
@@ -219,6 +223,10 @@ function messageTime(): string {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function oneLine(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
 }
 
 function recordsToMessages(records: unknown[]): MessageRecord[] {
@@ -447,6 +455,12 @@ function ReasoningBlock({
   const [isOpen, setIsOpen] = useState(false);
   const hasContent = content.trim().length > 0;
   const hasSteps = steps.length > 0;
+  const title = oneLine(
+    content ||
+      steps.find(step => step.status === 'running')?.detail ||
+      steps[0]?.detail ||
+      '',
+  );
   const completedSteps = steps.filter(step => step.status === 'complete').length;
 
   if (!hasContent && !hasSteps) {
@@ -464,9 +478,21 @@ function ReasoningBlock({
             {isOpen ? (
               <VisuallyHidden>Thinking</VisuallyHidden>
             ) : (
-              <Text type="label" weight="semibold">
-                Thinking
-              </Text>
+              <>
+                <Text type="label" weight="semibold">
+                  Thinking
+                </Text>
+                {title && (
+                  <Text
+                    type="supporting"
+                    color="secondary"
+                    maxLines={1}
+                    xstyle={styles.reasoningTitle}
+                  >
+                    {title}
+                  </Text>
+                )}
+              </>
             )}
           </HStack>
         }
