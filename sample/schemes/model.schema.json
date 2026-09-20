@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "model.schema.json",
+  "title": "Agent Harness model.json",
+  "description": "Session model and provider configuration. Secrets are referenced through an environment variable name, never stored here.",
+  "type": "object",
+  "required": ["model"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "provider": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Provider identifier, for example openai or openrouter.",
+      "default": "openai"
+    },
+    "base_url": {
+      "type": "string",
+      "pattern": "^https?://\\S+$",
+      "description": "OpenAI-compatible SDK base URL. Do not include the /responses path."
+    },
+    "api_key_env": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "description": "Environment variable containing the provider API key."
+    },
+    "model": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Provider model identifier."
+    },
+    "request": {
+      "type": "object",
+      "description": "Additional Responses API generation options. The session runner owns model, input, instructions, stream, and tools.",
+      "default": {},
+      "not": {
+        "anyOf": [
+          { "required": ["model"] },
+          { "required": ["input"] },
+          { "required": ["instructions"] },
+          { "required": ["stream"] },
+          { "required": ["tools"] }
+        ]
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

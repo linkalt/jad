@@ -1,0 +1,155 @@
+export interface SessionSnapshot {
+  id: string;
+  session_name: string;
+  turns: number;
+  messages: unknown[];
+  model?: {
+    provider?: string;
+    model?: string;
+  };
+}
+
+interface SseMessage {
+  event: string;
+  data: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function errorText(value: unknown): string {
+  if (isRecord(value) && typeof value.error === 'string') {
+    return value.error;
+  }
+  if (isRecord(value) && typeof value.message === 'string') {
+    return value.message;
+  }
+  return typeof value === 'string' ? value : 'request failed';
+}
+
+async function readError(response: Response): Promise<string> {
+  try {
+    return errorText(JSON.parse(await response.text()));
+  } catch {
+    return `${response.status} ${response.statusText}`;
+  }
+}
+
+export async function fetchSession(sessionId: string): Promise<SessionSnapshot> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return (await response.json()) as SessionSnapshot;
+}
+
+async function* readSse(response: Response): AsyncGenerator<SseMessage> {
+  if (!response.body) {
+    throw new Error('the server did not return a stream');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  const parseBlock = (block: string): SseMessage | undefined => {
+    let event = 'message';
+    const data: string[] = [];
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event:')) {
+        event = line.slice('event:'.length).trim();
+      } else if (line.startsWith('data:')) {
+        data.push(line.slice('data:'.length).trimStart());
+      }
+    }
+    if (data.length === 0) {
+      return undefined;
+    }
+    try {
+      return {event, data: JSON.parse(data.join('\n'))};
+    } catch {
+      throw new Error('the server returned invalid stream data');
+    }
+  };
+
+  while (true) {
+    const chunk = await reader.read();
+    buffer += decoder.decode(chunk.value, {stream: !chunk.done}).replace(/\r\n/g, '\n');
+    let separator = buffer.indexOf('\n\n');
+    while (separator >= 0) {
+      const block = buffer.slice(0, separator);
+      buffer = buffer.slice(separator + 2);
+      const message = parseBlock(block);
+      if (message) {
+        yield message;
+      }
+      separator = buffer.indexOf('\n\n');
+    }
+    if (chunk.done) {
+      const message = parseBlock(buffer.trim());
+      if (message) {
+        yield message;
+      }
+      return;
+    }
+  }
+}
+
+export interface StreamSessionRunOptions {
+  signal?: AbortSignal;
+  onDelta?: (text: string) => void;
+  onReasoning?: (text: string) => void;
+  onCompleted?: (response: unknown) => void;
+}
+
+export interface StreamSessionRunResult {
+  response?: unknown;
+}
+
+export async function streamSessionRun(
+  sessionId: string,
+  input: string,
+  options: StreamSessionRunOptions = {},
+): Promise<StreamSessionRunResult> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/run`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({input}),
+    signal: options.signal,
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+
+  let completedResponse: unknown;
+  for await (const message of readSse(response)) {
+    if (message.event === 'delta') {
+      if (isRecord(message.data) && typeof message.data.text === 'string') {
+        options.onDelta?.(message.data.text);
+      }
+      continue;
+    }
+    if (message.event === 'reasoning') {
+      if (isRecord(message.data) && typeof message.data.text === 'string') {
+        options.onReasoning?.(message.data.text);
+      }
+      continue;
+    }
+    if (message.event === 'completed') {
+      if (isRecord(message.data)) {
+        completedResponse = message.data.response;
+        options.onCompleted?.(completedResponse);
+      }
+      continue;
+    }
+    if (message.event === 'error') {
+      throw new Error(errorText(message.data));
+    }
+    if (message.event === 'done') {
+      break;
+    }
+  }
+
+  return {response: completedResponse};
+}

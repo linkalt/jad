@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "setting.schema.json",
+  "title": "Agent Harness setting.json",
+  "description": "Session-specific settings. Tool selection is intentionally defined later and is not part of this first schema.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "session_name": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Human-readable session name. Defaults to the session directory name."
+    },
+    "cwd": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Working directory. The loader resolves it to an absolute existing directory."
+    },
+    "system_prompt": {
+      "type": "string",
+      "description": "Mapped to the Responses API instructions field. Defaults to an empty string.",
+      "default": ""
+    },
+    "http_debug": {
+      "type": "object",
+      "description": "Optional native HTTP diagnostics written to http-debug.jsonl in the session directory. Disabled by default.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "include_request_headers": {
+          "type": "boolean",
+          "default": false
+        },
+        "include_request_body": {
+          "type": "boolean",
+          "default": false
+        },
+        "include_response_headers": {
+          "type": "boolean",
+          "default": true
+        },
+        "include_response_body": {
+          "type": "boolean",
+          "default": false
+        },
+        "max_body_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10485760,
+          "default": 65536
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

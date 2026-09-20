@@ -1,0 +1,19 @@
+{
+  "name": "agent-harness-backend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --pretty false",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "server": "npm run build && node dist/src/server.js",
+    "test": "npm run build && node --test dist/test/persistence.test.js dist/test/server.test.js dist/test/http-debug.test.js"
+  },
+  "dependencies": {
+    "openai": "^7.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^5.9.0"
+  }
+}
