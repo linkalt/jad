@@ -29,7 +29,6 @@ import {
   StatusDot,
   Text,
   VStack,
-  VisuallyHidden,
 } from '@astryxdesign/core';
 import type {
   ChatToolCallItem,
@@ -86,6 +85,10 @@ const styles = stylex.create({
     height: '100%',
     minHeight: 0,
     minWidth: 0,
+  },
+  composerResizeHandle: {
+    alignSelf: 'stretch',
+    height: 'auto',
   },
   floatingWindow: {
     position: 'absolute',
@@ -1222,10 +1225,27 @@ function App() {
     />
   );
   const centeredComposer = (
-    <HStack align="center" justify="center" width="100%">
+    <HStack align="stretch" justify="center" width="100%">
+      <ResizeHandle
+        direction="horizontal"
+        isReversed
+        hasDivider
+        isAlwaysVisible
+        xstyle={styles.composerResizeHandle}
+        label="Resize conversation width from left border"
+        resizable={conversation.props}
+      />
       <VStack width={conversation.size} maxWidth="100%">
         {composer}
       </VStack>
+      <ResizeHandle
+        direction="horizontal"
+        hasDivider
+        isAlwaysVisible
+        xstyle={styles.composerResizeHandle}
+        label="Resize conversation width from right border"
+        resizable={conversation.props}
+      />
     </HStack>
   );
 
@@ -1298,15 +1318,6 @@ function App() {
                       )}
                     </ChatMessageList>
                   </VStack>
-                  <ResizeHandle
-                    direction="horizontal"
-                    hasDivider={false}
-                    isAlwaysVisible={false}
-                    label="Resize conversation width"
-                    resizable={conversation.props}
-                  >
-                    <VisuallyHidden>Resize conversation width</VisuallyHidden>
-                  </ResizeHandle>
                 </HStack>
               </ChatLayout>
             </LayoutContent>
