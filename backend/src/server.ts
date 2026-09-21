@@ -202,8 +202,9 @@ async function readJsonRecord(path: string): Promise<JsonRecord> {
 async function sessionListingConfig(
   directory: string,
   sessionId: string,
+  globalJadRoot: string,
 ): Promise<WebUiSessionConfig> {
-  const settings = await new SessionConfigLoader(directory).loadSettings();
+  const settings = await new SessionConfigLoader(directory, {globalJadRoot}).loadSettings();
   const model = await readJsonRecord(join(directory, "model.json"));
   const provider = model.provider;
   return {
@@ -440,12 +441,17 @@ class AgentHttpApplication {
 
     const directory = join(location.root.directory, location.sessionId);
     const pending = (async (): Promise<SessionHandle> => {
-      const session = await AgentSession.open(directory, this.sessionOptions);
+      const session = await AgentSession.open(directory, {
+        ...this.sessionOptions,
+        globalJadRoot: location.root.globalJadRoot,
+      });
       return {
         location,
         directory,
         session,
-        loader: new SessionConfigLoader(directory),
+        loader: new SessionConfigLoader(directory, {
+          globalJadRoot: location.root.globalJadRoot,
+        }),
       };
     })();
     this.sessions.set(location.ref, pending);
@@ -476,7 +482,11 @@ class AgentHttpApplication {
           continue;
         }
         try {
-          const config = await sessionListingConfig(directory, entry.name);
+          const config = await sessionListingConfig(
+            directory,
+            entry.name,
+            root.globalJadRoot,
+          );
           const messages = await readListingMessages(join(directory, "messages.jsonl"));
           sessions.push(sessionSummary(location, config, messages));
         } catch (error) {

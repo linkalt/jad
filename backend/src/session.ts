@@ -28,6 +28,7 @@ export type SessionUserInput = string | ResponseInputItem | readonly ResponseInp
 export interface AgentSessionOptions {
   client?: OpenAI;
   environment?: NodeJS.ProcessEnv;
+  globalJadRoot?: string;
   store?: SessionResponseStoreOptions;
 }
 
@@ -149,7 +150,9 @@ export class AgentSession {
     return new AgentSession(
       sessionDir,
       store,
-      new SessionConfigLoader(sessionDir),
+      new SessionConfigLoader(sessionDir, {
+        globalJadRoot: options.globalJadRoot,
+      }),
       options,
     );
   }

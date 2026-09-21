@@ -410,7 +410,7 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
     }),
   );
   await writeFile(
-    join(sessionDir, "read.json"),
+    join(root, "read.json"),
     JSON.stringify({schema_version: 1, tools: [nativeReadDefinition]}),
   );
 
@@ -632,7 +632,7 @@ test("streams tool call and result blocks over SSE", async () => {
     }),
   );
   await writeFile(
-    join(sessionDir, "read.json"),
+    join(root, "read.json"),
     JSON.stringify({schema_version: 1, tools: [nativeReadDefinition]}),
   );
   await writeFile(join(sessionDir, "sample.txt"), "tool result content\\n", "utf8");

@@ -6,10 +6,10 @@
 
 ## 1. Purpose
 
-The Agent harness stores each session below:
+The system `setting.json` establishes the global JAD data root as the directory containing that file. The default workspace stores each session below:
 
 ```text
-.jad/sessions/<session-id>/
+<global-jad-root>/.jad/sessions/<session-id>/
 ├── messages.jsonl
 ├── model.json
 ├── setting.json
@@ -66,15 +66,15 @@ The history reader yields raw input items directly and expands each committed `r
 `src/config.ts` loads and validates the session configuration. JSON Schema definitions are kept in `sample/schemes/model.schema.json` and `sample/schemes/setting.schema.json`:
 
 - `model.json` is required and contains `provider`, `model`, optional `base_url`, an `api_key_env` name, and request-generation options;
-- `setting.json` is optional and defaults to the session directory name, the current working directory, and an empty system prompt;
+- `setting.json` is optional and defaults to the session directory name, the global JAD root as an absolute `cwd`, and an empty system prompt;
 - API keys are never read from JSON files;
-- relative working directories are resolved to absolute paths and must exist as directories;
+- `cwd` must be an absolute existing directory; relative working directories are rejected;
 - unknown fields are preserved for forward compatibility;
 - normalized model and setting objects receive canonical SHA-256 hashes;
 - `setting.json.http_debug` is disabled by default and controls native request/response diagnostics;
 - enabled diagnostics write numbered JSON records to `debug/http/request1`, `debug/http/response1`, and subsequent request/response files in the session directory;
 - API-key and authorization headers are redacted, and bodies are opt-in and capped by `max_body_bytes`;
-- `tool_definition_paths` selects definition documents relative to `cwd`;
+- `tool_definition_paths` selects definition documents relative to the global JAD root; absolute paths are used as-is;
 - a tool must also be present in the per-session `tools` policy to be exposed, so omitted tools are disabled;
 - native `read` uses `max_bytes` as its output-content cap and defaults its optional `limit` to 250.
 
@@ -132,7 +132,7 @@ Runs are serialized per `AgentSession` instance. Tool-call schema failures and e
 - `GET /api/sessions/:id/tools` returns the effective provider-neutral tool definitions;
 - `POST /api/sessions/:id/run` accepts `{ "input": "..." }` and emits SSE `ui.message`, `completed`, `done`, or `error` events.
 
-The session roots are configured by the workspace-level `setting.json` `session_roots` array. Each root path is resolved relative to that file and contains session subdirectories. `JAD_ROOT_SETTING_PATH` selects another root setting file, while `JAD_SESSIONS_DIR` and the `sessionsDir` server option remain single-root compatibility overrides. The default fallback is `.jad/sessions` (or `../.jad/sessions`). When multiple roots are configured, API session references are namespaced as `root-id:session-id` to avoid collisions. The frontend Vite server proxies `/api` to `127.0.0.1:8787`. Start the local integration with `npm run server --prefix backend` and `npm run dev --prefix frontend` from the project root. The backend owns its TypeScript compiler and Node types; the frontend is only an HTTP/SSE client and is not a backend build dependency.
+The session roots are configured by the system `setting.json` `session_roots` array. Each root path is resolved relative to the directory containing that file and contains session subdirectories; that same directory is the global JAD root used for other relative paths. A future `jad --config <path-to-setting.json>` entry point will select the system setting explicitly. `JAD_ROOT_SETTING_PATH` selects another system setting file, while `JAD_SESSIONS_DIR` and the `sessionsDir` server option remain single-root compatibility overrides. The default fallback is `.jad/sessions` (or `../.jad/sessions`). When multiple roots are configured, API session references are namespaced as `root-id:session-id` to avoid collisions. The frontend Vite server proxies `/api` to `127.0.0.1:8787`. Start the local integration with `npm run server --prefix backend` and `npm run dev --prefix frontend` from the project root. The backend owns its TypeScript compiler and Node types; the frontend is only an HTTP/SSE client and is not a backend build dependency.
 
 The browser may abort its fetch, but the first bridge version does not cancel an already-started provider request; the server continues persistence so the transcript remains consistent. Raw user input is appended before model/tool/provider setup, so a configuration failure still leaves the user message in `messages.jsonl`. HTTP debug files are created only when the provider fetch starts; setup failures therefore have no HTTP request artifact.
 

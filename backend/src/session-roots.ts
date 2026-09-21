@@ -11,6 +11,7 @@ export interface SessionRoot {
   id: string;
   label: string;
   directory: string;
+  globalJadRoot: string;
 }
 
 export interface SessionRootOptions {
@@ -47,15 +48,21 @@ function validateRootId(value: string, path: string): string {
 
 async function defaultSessionRoots(): Promise<SessionRoot[]> {
   const candidates = [
-    resolve(process.cwd(), ".jad/sessions"),
-    resolve(process.cwd(), "../.jad/sessions"),
+    {
+      directory: resolve(process.cwd(), ".jad/sessions"),
+      globalJadRoot: resolve(process.cwd()),
+    },
+    {
+      directory: resolve(process.cwd(), "../.jad/sessions"),
+      globalJadRoot: resolve(process.cwd(), ".."),
+    },
   ];
-  let directory = candidates[0]!;
+  let selected = candidates[0]!;
   for (const candidate of candidates) {
     try {
-      const info = await stat(candidate);
+      const info = await stat(candidate.directory);
       if (info.isDirectory()) {
-        directory = candidate;
+        selected = candidate;
         break;
       }
     } catch (error) {
@@ -67,7 +74,7 @@ async function defaultSessionRoots(): Promise<SessionRoot[]> {
   return [{
     id: DEFAULT_ROOT_ID,
     label: DEFAULT_ROOT_LABEL,
-    directory,
+    ...selected,
   }];
 }
 
@@ -172,7 +179,12 @@ async function rootsFromSetting(settingPath: string): Promise<SessionRoot[]> {
     }
     ids.add(entry.id);
     directories.add(directory);
-    roots.push({id: entry.id, label: entry.label, directory});
+    roots.push({
+      id: entry.id,
+      label: entry.label,
+      directory,
+      globalJadRoot: dirname(settingPath),
+    });
   }
   return roots;
 }
@@ -185,6 +197,7 @@ export async function loadSessionRoots(options: SessionRootOptions = {}): Promis
         id: DEFAULT_ROOT_ID,
         label: DEFAULT_ROOT_LABEL,
         directory: resolve(options.sessionsDir),
+        globalJadRoot: resolve(options.sessionsDir),
       },
     ];
   }
@@ -196,6 +209,7 @@ export async function loadSessionRoots(options: SessionRootOptions = {}): Promis
         id: DEFAULT_ROOT_ID,
         label: DEFAULT_ROOT_LABEL,
         directory: resolve(configuredSessionsDir),
+        globalJadRoot: resolve(configuredSessionsDir),
       },
     ];
   }

@@ -37,6 +37,7 @@ export type {
   LoadedSessionConfig,
   ModelConfig,
   NativeReadToolSettings,
+  SessionConfigLoaderOptions,
   SessionConfigPaths,
   SessionSettings,
   ToolSettings,

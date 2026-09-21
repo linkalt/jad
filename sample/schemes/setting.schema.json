@@ -17,8 +17,8 @@
     },
     "cwd": {
       "type": "string",
-      "pattern": "\\S",
-      "description": "Working directory. The loader resolves it to an absolute existing directory."
+      "pattern": "^/",
+      "description": "Working directory. Must be an absolute existing directory; it is never resolved relative to another path."
     },
     "system_prompt": {
       "type": "string",
@@ -27,7 +27,7 @@
     },
     "tool_definition_paths": {
       "type": "array",
-      "description": "Definition documents loaded relative to cwd.",
+      "description": "Definition documents loaded relative to the global JAD root; absolute paths are used as-is.",
       "items": {
         "type": "string",
         "pattern": "\\S"

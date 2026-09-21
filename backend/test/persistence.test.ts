@@ -384,6 +384,44 @@ test("defaults empty settings and rejects missing or unsafe model configuration"
   }
 });
 
+test("resolves configured paths from the global JAD root and rejects relative cwd", async () => {
+  const globalJadRoot = await makeSession();
+  const sessionDir = join(globalJadRoot, "sessions", "session1");
+  try {
+    await mkdir(sessionDir, {recursive: true});
+    await mkdir(join(globalJadRoot, "tools"), {recursive: true});
+    await writeFile(join(globalJadRoot, "tools", "read.json"), "{}");
+    await writeFile(join(sessionDir, "model.json"), JSON.stringify({model: "gpt-test"}));
+    await writeFile(
+      join(sessionDir, "setting.json"),
+      JSON.stringify({
+        cwd: sessionDir,
+        tool_definition_paths: ["tools/read.json"],
+      }),
+    );
+
+    const loader = new SessionConfigLoader(sessionDir, {globalJadRoot});
+    const settings = await loader.loadSettings();
+    assert.equal(settings.cwd, sessionDir);
+    assert.deepEqual(settings.tool_definition_paths, [
+      join(globalJadRoot, "tools", "read.json"),
+    ]);
+    assert.equal(loader.paths.global_jad_root, globalJadRoot);
+
+    await writeFile(
+      join(sessionDir, "setting.json"),
+      JSON.stringify({cwd: "relative/workspace"}),
+    );
+    await assert.rejects(
+      () => loader.loadSettings(),
+      (error: unknown) =>
+        error instanceof ConfigError && /cwd must be an absolute path/.test(error.message),
+    );
+  } finally {
+    await removeSession(globalJadRoot);
+  }
+});
+
 test("normalizes and validates HTTP debug settings", async () => {
   const sessionDir = await makeSession();
   try {

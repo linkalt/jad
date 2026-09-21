@@ -25,7 +25,7 @@ async function makeToolSession(): Promise<string> {
     join(sessionDir, "setting.json"),
     JSON.stringify({
       cwd: sessionDir,
-      tool_definition_paths: ["read.json"],
+      tool_definition_paths: [join(sessionDir, "read.json")],
       tools: {
         native: {
           read: {
@@ -68,7 +68,10 @@ test("loads native read only when selected and exposes an OpenAI-compatible defi
 
     await writeFile(
       join(sessionDir, "setting.json"),
-      JSON.stringify({cwd: sessionDir, tool_definition_paths: ["read.json"]}),
+      JSON.stringify({
+        cwd: sessionDir,
+        tool_definition_paths: [join(sessionDir, "read.json")],
+      }),
     );
     const disabledConfig = await new SessionConfigLoader(sessionDir).load();
     assert.deepEqual((await loadToolCatalog(disabledConfig)).definitions(), []);

@@ -27,7 +27,8 @@
           },
           "path": {
             "type": "string",
-            "pattern": "\\S"
+            "pattern": "\\S",
+            "description": "Session-root directory relative to the system setting.json parent; absolute paths are used as-is."
           }
         },
         "additionalProperties": true

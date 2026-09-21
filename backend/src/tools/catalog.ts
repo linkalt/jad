@@ -252,7 +252,7 @@ export async function loadToolCatalog(
   for (const configuredPath of config.settings.tool_definition_paths) {
     const path = isAbsolute(configuredPath)
       ? resolve(configuredPath)
-      : resolve(config.settings.cwd, configuredPath);
+      : resolve(config.paths.global_jad_root, configuredPath);
     const document = await readDefinitionDocument(path);
     const rawTools = document.tools;
     if (!Array.isArray(rawTools)) {

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 
 import type { JsonRecord } from "./persistence.js";
 
@@ -47,9 +47,14 @@ export interface SessionSettings extends JsonRecord {
 }
 
 export interface SessionConfigPaths {
+  global_jad_root: string;
   session_dir: string;
   model_path: string;
   setting_path: string;
+}
+
+export interface SessionConfigLoaderOptions {
+  globalJadRoot?: string;
 }
 
 export interface LoadedSessionConfig {
@@ -177,7 +182,11 @@ function normalizeModel(raw: JsonRecord, path: string): ModelConfig {
 }
 
 async function normalizeCwd(value: unknown, path: string): Promise<string> {
-  const cwd = resolve(requiredString(value, "cwd", path));
+  const rawCwd = requiredString(value, "cwd", path);
+  if (!isAbsolute(rawCwd)) {
+    throw new ConfigError(`${path}: cwd must be an absolute path`);
+  }
+  const cwd = resolve(rawCwd);
   let info;
   try {
     info = await stat(cwd);
@@ -252,16 +261,27 @@ function normalizeHttpDebug(value: unknown, path: string): HttpDebugSettings {
   } as HttpDebugSettings;
 }
 
-function normalizeToolDefinitionPaths(value: unknown, path: string): string[] {
+function normalizeToolDefinitionPaths(
+  value: unknown,
+  path: string,
+  globalJadRoot: string,
+): string[] {
   if (value === undefined) {
     return [];
   }
   if (!Array.isArray(value)) {
     throw new ConfigError(`${path}: tool_definition_paths must be an array`);
   }
-  return value.map((item, index) =>
-    requiredString(item, `tool_definition_paths[${index}]`, path),
-  );
+  return value.map((item, index) => {
+    const configuredPath = requiredString(
+      item,
+      `tool_definition_paths[${index}]`,
+      path,
+    );
+    return isAbsolute(configuredPath)
+      ? resolve(configuredPath)
+      : resolve(globalJadRoot, configuredPath);
+  });
 }
 
 function normalizeTools(value: unknown, path: string): ToolSettings {
@@ -326,6 +346,7 @@ async function normalizeSettings(
   raw: JsonRecord,
   path: string,
   sessionDir: string,
+  globalJadRoot: string,
 ): Promise<SessionSettings> {
   const version = schemaVersion(raw.schema_version, path);
   const sessionName = requiredString(
@@ -333,7 +354,7 @@ async function normalizeSettings(
     "session_name",
     path,
   );
-  const cwd = await normalizeCwd(raw.cwd ?? process.cwd(), path);
+  const cwd = await normalizeCwd(raw.cwd ?? globalJadRoot, path);
   const systemPrompt = raw.system_prompt ?? "";
   if (typeof systemPrompt !== "string") {
     throw new ConfigError(`${path}: system_prompt must be a string`);
@@ -342,6 +363,7 @@ async function normalizeSettings(
   const toolDefinitionPaths = normalizeToolDefinitionPaths(
     raw.tool_definition_paths,
     path,
+    globalJadRoot,
   );
   const tools = normalizeTools(raw.tools, path);
 
@@ -406,9 +428,14 @@ export function resolveApiKey(
 export class SessionConfigLoader {
   public readonly paths: SessionConfigPaths;
 
-  public constructor(sessionDir: string) {
+  public constructor(
+    sessionDir: string,
+    options: SessionConfigLoaderOptions = {},
+  ) {
     const absoluteSessionDir = resolve(sessionDir);
+    const globalJadRoot = resolve(options.globalJadRoot ?? process.cwd());
     this.paths = {
+      global_jad_root: globalJadRoot,
       session_dir: absoluteSessionDir,
       model_path: join(absoluteSessionDir, "model.json"),
       setting_path: join(absoluteSessionDir, "setting.json"),
@@ -422,7 +449,12 @@ export class SessionConfigLoader {
 
   public async loadSettings(): Promise<SessionSettings> {
     const raw = (await readObject(this.paths.setting_path, true)) ?? {};
-    return normalizeSettings(raw, this.paths.setting_path, this.paths.session_dir);
+    return normalizeSettings(
+      raw,
+      this.paths.setting_path,
+      this.paths.session_dir,
+      this.paths.global_jad_root,
+    );
   }
 
   public async load(): Promise<LoadedSessionConfig> {
