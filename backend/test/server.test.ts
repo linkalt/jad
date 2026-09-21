@@ -182,6 +182,115 @@ test("normalizes tool call and result parts for snapshots and live runs", () => 
   ]);
 });
 
+test("lists sessions from configured roots and namespaces duplicate ids", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "agent-harness-roots-"));
+  const primaryDir = join(workspace, "roots", "primary", "shared");
+  const secondaryDir = join(workspace, "roots", "secondary", "shared");
+  const rootSettingPath = join(workspace, "setting.json");
+
+  for (const [directory, name] of [
+    [primaryDir, "Primary session"],
+    [secondaryDir, "Secondary session"],
+  ] as const) {
+    await mkdir(directory, {recursive: true});
+    await writeFile(
+      join(directory, "model.json"),
+      JSON.stringify({
+        schema_version: 1,
+        provider: "fake",
+        api_key_env: "FAKE_API_KEY",
+        model: "fake-model",
+      }),
+    );
+    await writeFile(
+      join(directory, "setting.json"),
+      JSON.stringify({
+        schema_version: 1,
+        session_name: name,
+        cwd: directory,
+      }),
+    );
+  }
+  await writeFile(
+    rootSettingPath,
+    JSON.stringify({
+      schema_version: 1,
+      session_roots: [
+        {id: "primary", label: "Primary", path: "roots/primary"},
+        {id: "secondary", label: "Secondary", path: "roots/secondary"},
+      ],
+    }),
+  );
+
+  const running = createAgentServer({
+    rootSettingPath,
+    environment: {FAKE_API_KEY: "test-key"},
+  });
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const list = await fetch(`${baseUrl}/api/sessions`);
+    assert.equal(list.status, 200);
+    const body = (await list.json()) as {
+      sessions: Array<{
+        id: string;
+        session_id?: string;
+        root_id?: string;
+        root_label?: string;
+        session_name: string;
+      }>;
+    };
+    assert.deepEqual(body.sessions.map((session) => ({
+      id: session.id,
+      session_id: session.session_id,
+      root_id: session.root_id,
+      root_label: session.root_label,
+      session_name: session.session_name,
+    })), [
+      {
+        id: "primary:shared",
+        session_id: "shared",
+        root_id: "primary",
+        root_label: "Primary",
+        session_name: "Primary session",
+      },
+      {
+        id: "secondary:shared",
+        session_id: "shared",
+        root_id: "secondary",
+        root_label: "Secondary",
+        session_name: "Secondary session",
+      },
+    ]);
+
+    const snapshot = await fetch(
+      `${baseUrl}/api/sessions/${encodeURIComponent("secondary:shared")}`,
+    );
+    assert.equal(snapshot.status, 200);
+    const selected = (await snapshot.json()) as {
+      id: string;
+      session_name: string;
+      root_id?: string;
+    };
+    assert.equal(selected.id, "secondary:shared");
+    assert.equal(selected.session_name, "Secondary session");
+    assert.equal(selected.root_id, "secondary");
+
+    const ambiguous = await fetch(`${baseUrl}/api/sessions/shared`);
+    assert.equal(ambiguous.status, 400);
+  } finally {
+    await running.close();
+    await rm(workspace, {recursive: true, force: true});
+  }
+});
+
 test("serves a session snapshot and streams a committed run over SSE", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-server-"));
   const sessionDir = join(root, "session1");

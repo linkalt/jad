@@ -132,7 +132,7 @@ Runs are serialized per `AgentSession` instance. Tool-call schema failures and e
 - `GET /api/sessions/:id/tools` returns the effective provider-neutral tool definitions;
 - `POST /api/sessions/:id/run` accepts `{ "input": "..." }` and emits SSE `ui.message`, `completed`, `done`, or `error` events.
 
-The default session root is `.jad/sessions` (or `JAD_SESSIONS_DIR`). The frontend Vite server proxies `/api` to `127.0.0.1:8787`. Start the local integration with `npm run server --prefix backend` and `npm run dev --prefix frontend` from the project root. The backend owns its TypeScript compiler and Node types; the frontend is only an HTTP/SSE client and is not a backend build dependency.
+The session roots are configured by the workspace-level `setting.json` `session_roots` array. Each root path is resolved relative to that file and contains session subdirectories. `JAD_ROOT_SETTING_PATH` selects another root setting file, while `JAD_SESSIONS_DIR` and the `sessionsDir` server option remain single-root compatibility overrides. The default fallback is `.jad/sessions` (or `../.jad/sessions`). When multiple roots are configured, API session references are namespaced as `root-id:session-id` to avoid collisions. The frontend Vite server proxies `/api` to `127.0.0.1:8787`. Start the local integration with `npm run server --prefix backend` and `npm run dev --prefix frontend` from the project root. The backend owns its TypeScript compiler and Node types; the frontend is only an HTTP/SSE client and is not a backend build dependency.
 
 The browser may abort its fetch, but the first bridge version does not cancel an already-started provider request; the server continues persistence so the transcript remains consistent.
 
@@ -148,7 +148,7 @@ The browser may abort its fetch, but the first bridge version does not cancel an
 
 The plugin:
 
-- converts raw session records into UI messages for `GET /api/sessions/:id`;
+- converts raw session records into UI messages for `GET /api/sessions` and `GET /api/sessions/:id`;
 - it converts provider stream events into ordered `ui.message` SSE updates;
 - it keeps adjacent reasoning/text chunks merged in the backend and emits tool call/result blocks as structured parts;
 - it does not change the raw `messages.jsonl` format or write a UI projection there;

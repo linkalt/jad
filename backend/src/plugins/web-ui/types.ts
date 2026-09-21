@@ -35,6 +35,9 @@ export interface WebUiMessage {
 
 export interface WebUiSessionSnapshot {
   id: string;
+  session_id?: string;
+  root_id?: string;
+  root_label?: string;
   session_name: string;
   turns: number;
   messages: WebUiMessage[];

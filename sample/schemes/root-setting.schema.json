@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "root-setting.schema.json",
+  "title": "Agent Harness root setting.json",
+  "description": "Workspace-level session roots used by the web UI session list.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "session_roots": {
+      "type": "array",
+      "description": "Directories containing session subdirectories.",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "label": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "required": ["session_roots"],
+  "additionalProperties": true
+}

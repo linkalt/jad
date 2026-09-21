@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import {
   createServer,
   type IncomingMessage,
@@ -20,6 +19,11 @@ import {
 import { AgentSession } from "./session.js";
 import type { JsonRecord } from "./persistence.js";
 import {
+  directoryEntries,
+  loadSessionRoots,
+  type SessionRoot,
+} from "./session-roots.js";
+import {
   normalizeWebUiSession,
   WebUiNormalizedRun,
 } from "./plugins/web-ui/normalize-web-ui.js";
@@ -29,9 +33,11 @@ const DEFAULT_PORT = 8787;
 const DEFAULT_HOST = "127.0.0.1";
 const MAX_BODY_BYTES = 1024 * 1024;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SESSION_ROOT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export interface AgentServerOptions {
   sessionsDir?: string;
+  rootSettingPath?: string;
   client?: OpenAI;
   environment?: NodeJS.ProcessEnv;
   host?: string;
@@ -53,7 +59,14 @@ class HttpError extends Error {
   }
 }
 
+interface SessionLocation {
+  ref: string;
+  sessionId: string;
+  root: SessionRoot;
+}
+
 interface SessionHandle {
+  location: SessionLocation;
   directory: string;
   session: AgentSession;
   loader: SessionConfigLoader;
@@ -63,23 +76,47 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function defaultSessionsDirectory(): string {
-  const configured = process.env.JAD_SESSIONS_DIR?.trim();
-  if (configured) {
-    return resolve(configured);
-  }
-
-  const candidates = [
-    resolve(process.cwd(), ".jad/sessions"),
-    resolve(process.cwd(), "../.jad/sessions"),
-  ];
-  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
-}
-
 function validateSessionId(value: string): string {
   if (!SESSION_ID_PATTERN.test(value) || value === "." || value === "..") {
     throw new HttpError(400, "invalid session id");
   }
+  return value;
+}
+
+function validateSessionRootId(value: string): string {
+  if (!SESSION_ROOT_ID_PATTERN.test(value)) {
+    throw new HttpError(400, "invalid session root id");
+  }
+  return value;
+}
+
+function parseSessionReference(value: string): {
+  rootId?: string;
+  sessionId: string;
+} {
+  const parts = value.split(":");
+  if (parts.length === 1) {
+    return {sessionId: validateSessionId(value)};
+  }
+  if (parts.length !== 2) {
+    throw new HttpError(400, "invalid session reference");
+  }
+  return {
+    rootId: validateSessionRootId(parts[0]!),
+    sessionId: validateSessionId(parts[1]!),
+  };
+}
+
+function sessionReference(
+  root: SessionRoot,
+  sessionId: string,
+  rootCount: number,
+): string {
+  return rootCount === 1 ? sessionId : `${root.id}:${sessionId}`;
+}
+
+function validateSessionReference(value: string): string {
+  parseSessionReference(value);
   return value;
 }
 
@@ -165,23 +202,32 @@ async function readJsonl(path: string): Promise<JsonRecord[]> {
 }
 
 function sessionSummary(
-  id: string,
+  location: SessionLocation,
   config: LoadedSessionConfig,
   messages: JsonRecord[],
 ): WebUiSessionSnapshot {
-  return normalizeWebUiSession(id, config, messages);
+  return {
+    ...normalizeWebUiSession(location.ref, config, messages),
+    session_id: location.sessionId,
+    root_id: location.root.id,
+    root_label: location.root.label,
+  };
 }
 
 class AgentHttpApplication {
   private readonly sessions = new Map<string, Promise<SessionHandle>>();
-  private readonly sessionsDir: string;
+  private readonly sessionRoots: Promise<SessionRoot[]>;
   private readonly sessionOptions: {
     client?: OpenAI;
     environment?: NodeJS.ProcessEnv;
   };
 
   public constructor(options: AgentServerOptions = {}) {
-    this.sessionsDir = resolve(options.sessionsDir ?? defaultSessionsDirectory());
+    this.sessionRoots = loadSessionRoots({
+      sessionsDir: options.sessionsDir,
+      rootSettingPath: options.rootSettingPath,
+      environment: options.environment,
+    });
     this.sessionOptions = {
       ...(options.client ? { client: options.client } : {}),
       ...(options.environment ? { environment: options.environment } : {}),
@@ -226,9 +272,9 @@ class AgentHttpApplication {
         return;
       }
 
-      const sessionId = validateSessionId(segments[2] ?? "");
+      const sessionRef = validateSessionReference(segments[2] ?? "");
       if (request.method === "GET" && segments.length === 3) {
-        await this.handleSessionSnapshot(sessionId, response);
+        await this.handleSessionSnapshot(sessionRef, response);
         return;
       }
 
@@ -237,7 +283,7 @@ class AgentHttpApplication {
         segments.length === 4 &&
         segments[3] === "tools"
       ) {
-        await this.handleTools(sessionId, response);
+        await this.handleTools(sessionRef, response);
         return;
       }
 
@@ -246,7 +292,7 @@ class AgentHttpApplication {
         segments.length === 4 &&
         segments[3] === "run"
       ) {
-        await this.handleRun(sessionId, request, response);
+        await this.handleRun(sessionRef, request, response);
         return;
       }
 
@@ -282,57 +328,103 @@ class AgentHttpApplication {
     );
   }
 
-  private async getSession(id: string): Promise<SessionHandle> {
-    const existing = this.sessions.get(id);
+  private async resolveSessionLocation(reference: string): Promise<SessionLocation> {
+    const roots = await this.sessionRoots;
+    const parsed = parseSessionReference(reference);
+    if (parsed.rootId) {
+      const root = roots.find((candidate) => candidate.id === parsed.rootId);
+      if (!root) {
+        throw new HttpError(404, "session root not found");
+      }
+      return {
+        ref: sessionReference(root, parsed.sessionId, roots.length),
+        sessionId: parsed.sessionId,
+        root,
+      };
+    }
+
+    if (roots.length === 1) {
+      const root = roots[0]!;
+      return {
+        ref: sessionReference(root, parsed.sessionId, roots.length),
+        sessionId: parsed.sessionId,
+        root,
+      };
+    }
+
+    const matches: SessionRoot[] = [];
+    for (const root of roots) {
+      const entries = await directoryEntries(root);
+      if (entries.some((entry) => entry.isDirectory() && entry.name === parsed.sessionId)) {
+        matches.push(root);
+      }
+    }
+    if (matches.length === 0) {
+      throw new HttpError(404, "session not found");
+    }
+    if (matches.length > 1) {
+      throw new HttpError(400, "session reference must include a root id");
+    }
+    const root = matches[0]!;
+    return {
+      ref: sessionReference(root, parsed.sessionId, roots.length),
+      sessionId: parsed.sessionId,
+      root,
+    };
+  }
+
+  private async getSession(reference: string): Promise<SessionHandle> {
+    const location = await this.resolveSessionLocation(reference);
+    const existing = this.sessions.get(location.ref);
     if (existing) {
       return existing;
     }
 
-    const directory = join(this.sessionsDir, id);
+    const directory = join(location.root.directory, location.sessionId);
     const pending = (async (): Promise<SessionHandle> => {
       const session = await AgentSession.open(directory, this.sessionOptions);
       return {
+        location,
         directory,
         session,
         loader: new SessionConfigLoader(directory),
       };
     })();
-    this.sessions.set(id, pending);
+    this.sessions.set(location.ref, pending);
     try {
       return await pending;
     } catch (error) {
-      this.sessions.delete(id);
+      this.sessions.delete(location.ref);
       throw error;
     }
   }
 
   private async handleSessionList(response: ServerResponse): Promise<void> {
-    let entries;
-    try {
-      entries = await readdir(this.sessionsDir, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        sendJson(response, 200, { sessions: [] });
-        return;
-      }
-      throw error;
-    }
-
+    const roots = await this.sessionRoots;
     const sessions: WebUiSessionSnapshot[] = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory() || !SESSION_ID_PATTERN.test(entry.name)) {
-        continue;
-      }
-      try {
-        const handle = await this.getSession(entry.name);
-        const config = await handle.loader.load();
-        const messages = await readJsonl(join(handle.directory, "messages.jsonl"));
-        sessions.push(sessionSummary(entry.name, config, messages));
-      } catch (error) {
-        if (error instanceof ConfigError) {
+    for (const root of roots) {
+      const entries = await directoryEntries(root);
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !SESSION_ID_PATTERN.test(entry.name)) {
           continue;
         }
-        throw error;
+        const location: SessionLocation = {
+          ref: sessionReference(root, entry.name, roots.length),
+          sessionId: entry.name,
+          root,
+        };
+        try {
+          const directory = join(root.directory, entry.name);
+          const loader = new SessionConfigLoader(directory);
+          const config = await loader.load();
+          const messages = await readJsonl(join(directory, "messages.jsonl"));
+          sessions.push(sessionSummary(location, config, messages));
+        } catch (error) {
+          if (error instanceof ConfigError) {
+            continue;
+          }
+          throw error;
+        }
       }
     }
     sessions.sort((left, right) => String(left.id).localeCompare(String(right.id)));
@@ -346,7 +438,7 @@ class AgentHttpApplication {
     const handle = await this.getSession(id);
     const config = await handle.loader.load();
     const messages = await readJsonl(join(handle.directory, "messages.jsonl"));
-    sendJson(response, 200, sessionSummary(id, config, messages));
+    sendJson(response, 200, sessionSummary(handle.location, config, messages));
   }
 
   private async handleTools(

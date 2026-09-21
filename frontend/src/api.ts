@@ -31,6 +31,9 @@ export interface WebUiMessage {
 
 export interface SessionSnapshot {
   id: string;
+  session_id?: string;
+  root_id?: string;
+  root_label?: string;
   session_name: string;
   turns: number;
   messages: WebUiMessage[];
@@ -74,6 +77,18 @@ async function readError(response: Response): Promise<string> {
   } catch {
     return `${response.status} ${response.statusText}`;
   }
+}
+
+export async function fetchSessions(): Promise<SessionSnapshot[]> {
+  const response = await fetch('/api/sessions');
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value = (await response.json()) as {sessions?: unknown};
+  if (!Array.isArray(value.sessions)) {
+    throw new Error('the server returned invalid sessions');
+  }
+  return value.sessions as SessionSnapshot[];
 }
 
 export async function fetchSession(sessionId: string): Promise<SessionSnapshot> {

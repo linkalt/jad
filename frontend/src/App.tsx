@@ -36,7 +36,7 @@ import type {
   ChatToolCallItem,
   StatusDotVariant,
 } from '@astryxdesign/core';
-import {fetchSession, streamSessionRun, type WebUiMessage, type WebUiPart} from './api';
+import {fetchSessions, streamSessionRun, type SessionSnapshot, type WebUiMessage, type WebUiPart} from './api';
 import {ResizeHandle, useResizable} from '@astryxdesign/core/Resizable';
 import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {
@@ -174,6 +174,9 @@ interface Session {
   time: string;
   turns: number;
   state: SessionState;
+  source: 'live' | 'sample';
+  sessionRef?: string;
+  rootLabel?: string;
   model?: {
     provider?: string;
     model?: string;
@@ -263,6 +266,8 @@ const initialSessions: Session[] = [
     time: 'Ready',
     turns: 0,
     state: 'success',
+    source: 'live',
+    sessionRef: LIVE_SESSION_ID,
   },
   {
     id: 'atlas',
@@ -270,6 +275,7 @@ const initialSessions: Session[] = [
     time: '2 min ago',
     turns: 8,
     state: 'success',
+    source: 'sample',
   },
   {
     id: 'settings',
@@ -277,6 +283,7 @@ const initialSessions: Session[] = [
     time: '18 min ago',
     turns: 5,
     state: 'warning',
+    source: 'sample',
   },
   {
     id: 'empty',
@@ -284,6 +291,7 @@ const initialSessions: Session[] = [
     time: 'Yesterday',
     turns: 3,
     state: 'success',
+    source: 'sample',
   },
 ];
 
@@ -356,6 +364,27 @@ const initialThreads: Record<string, MessageRecord[]> = {
     },
   ],
 };
+
+function sessionUiId(snapshot: SessionSnapshot, current: readonly Session[]): string {
+  const sampleCollision = current.some(
+    session => session.source === 'sample' && session.id === snapshot.id,
+  );
+  return sampleCollision ? `live:${snapshot.id}` : snapshot.id;
+}
+
+function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
+  return {
+    id,
+    title: oneLine(snapshot.session_name) || snapshot.session_id || snapshot.id,
+    time: snapshot.turns > 0 ? 'Local transcript' : 'Ready',
+    turns: snapshot.turns,
+    state: 'success',
+    source: 'live',
+    sessionRef: snapshot.id,
+    ...(snapshot.root_label ? {rootLabel: snapshot.root_label} : {}),
+    model: snapshot.model,
+  };
+}
 
 function getTraceForSteps(
   steps: Omit<ReasoningStep, 'status'>[],
@@ -878,7 +907,7 @@ function RunInspector({
   onClose: () => void;
 }) {
   const completedSteps = steps.filter(step => step.status === 'complete').length;
-  const isLive = activeSession.id === LIVE_SESSION_ID;
+  const isLive = activeSession.source === 'live';
   const inspector = useResizable({
     defaultSize: pixel(360),
     minSize: pixel(280),
@@ -1111,7 +1140,7 @@ function App() {
     sessions.find(session => session.id === activeSessionId) ?? sessions[0];
   const messages = threads[activeSessionId] ?? [];
   const isRunning = runningSessionId === activeSessionId;
-  const isLiveSession = activeSessionId === LIVE_SESSION_ID;
+  const isLiveSession = activeSession?.source === 'live';
 
   const reasoningSteps = useMemo(() => {
     const steps = isLiveSession ? [] : baseReasoning;
@@ -1119,7 +1148,7 @@ function App() {
   }, [isLiveSession, isRunning, runProgress]);
 
   const tools = useMemo(() => {
-    if (activeSessionId === LIVE_SESSION_ID) {
+    if (isLiveSession) {
       if (isRunning && !streamingMessage) {
         return [];
       }
@@ -1144,7 +1173,7 @@ function App() {
         duration: undefined,
       }),
     );
-  }, [activeSessionId, isRunning, messages, streamingMessage]);
+  }, [activeSessionId, isLiveSession, isRunning, messages, streamingMessage]);
 
   const stopRun = useCallback(() => {
     runAbortRef.current?.abort();
@@ -1166,6 +1195,8 @@ function App() {
       }
 
       const sessionId = activeSessionId;
+      const sessionRef = activeSession?.sessionRef;
+      const isLiveRun = activeSession?.source === 'live' && typeof sessionRef === 'string';
       const userMessage: MessageRecord = {
         id: `${sessionId}-user-${Date.now()}`,
         sender: 'user',
@@ -1186,13 +1217,13 @@ function App() {
       );
       setComposerValue('');
       setRunningSessionId(sessionId);
-      setRunProgress(sessionId === LIVE_SESSION_ID ? 0 : 1);
+      setRunProgress(isLiveRun ? 0 : 1);
       setStreamingMessage(null);
 
-      if (sessionId === LIVE_SESSION_ID) {
+      if (isLiveRun && sessionRef) {
         const controller = new AbortController();
         runAbortRef.current = controller;
-        void streamSessionRun(sessionId, trimmedValue, {
+        void streamSessionRun(sessionRef, trimmedValue, {
           signal: controller.signal,
           onMessage: message => {
             setStreamingMessage(message);
@@ -1254,7 +1285,7 @@ function App() {
             }
             runAbortRef.current = null;
             setStreamingMessage(null);
-            setRunProgress(sessionId === LIVE_SESSION_ID ? 0 : baseReasoning.length);
+            setRunProgress(isLiveRun ? 0 : baseReasoning.length);
             setRunningSessionId(current => (current === sessionId ? null : current));
           });
         return;
@@ -1286,7 +1317,7 @@ function App() {
         runTimeoutRef.current = null;
       }, 1100);
     },
-    [activeSessionId, isRunning],
+    [activeSession, activeSessionId, isRunning],
   );
 
   const createSession = useCallback(() => {
@@ -1298,6 +1329,7 @@ function App() {
       time: 'Now',
       turns: 1,
       state: 'accent',
+      source: 'sample',
     };
     setSessions(current => [newSession, ...current]);
     setThreads(current => ({
@@ -1327,33 +1359,37 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void fetchSession(LIVE_SESSION_ID)
-      .then(snapshot => {
+    void fetchSessions()
+      .then(snapshots => {
         if (cancelled) {
           return;
         }
-        setThreads(current => ({
-          ...current,
-          [LIVE_SESSION_ID]: snapshot.messages,
+        const liveItems = snapshots.map(snapshot => ({
+          snapshot,
+          id: sessionUiId(snapshot, initialSessions),
         }));
-        setSessions(current =>
-          current.map(session =>
-            session.id === LIVE_SESSION_ID
-              ? {
-                  ...session,
-                  title: snapshot.session_name || session.title,
-                  turns: snapshot.turns,
-                  time: snapshot.turns > 0 ? 'Local transcript' : 'Ready',
-                  state: 'success',
-                  model: snapshot.model,
-                }
-              : session,
-          ),
-        );
+        setThreads(current => {
+          const next = {...current};
+          for (const item of liveItems) {
+            next[item.id] = item.snapshot.messages;
+          }
+          return next;
+        });
+        setSessions(current => {
+          const liveIds = new Set(liveItems.map(item => item.id));
+          const liveSessions = liveItems.map(item => sessionFromSnapshot(item.snapshot, item.id));
+          const existingLive = current.filter(
+            session => session.source === 'live' && !liveIds.has(session.id),
+          );
+          const samples = current.filter(
+            session => session.source === 'sample' && !liveIds.has(session.id),
+          );
+          return [...liveSessions, ...existingLive, ...samples];
+        });
       })
       .catch(error => {
         if (!cancelled) {
-          console.warn('Unable to load the live session:', error);
+          console.warn('Unable to load configured sessions:', error);
         }
       });
 
