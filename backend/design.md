@@ -142,11 +142,11 @@ The browser may abort its fetch, but the first bridge version does not cancel an
 
 - it converts raw session records into UI messages for `GET /api/sessions/:id`;
 - it converts provider stream events into ordered `ui.message` SSE updates;
-- it keeps adjacent reasoning/text chunks merged in the backend;
+- it keeps adjacent reasoning/text chunks merged in the backend and emits tool call/result blocks as structured parts;
 - it does not change the raw `messages.jsonl` format or write a UI projection there;
 - the frontend receives ready-to-render messages and does not normalize provider events.
 
-Each normalized assistant message contains ordered `parts` with `reasoning` or `text` types, plus aggregate `text` and `reasoningContent` fields for rendering.
+Each normalized assistant message contains ordered `parts` with `reasoning`, `text`, `tool_call`, or `tool_result` types, plus aggregate `text` and `reasoningContent` fields for rendering. Tool results retain their bounded output and a normalized success/error status.
 
 ## 3. Terminology
 

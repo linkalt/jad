@@ -1,13 +1,30 @@
 import type { LoadedSessionConfig } from "../config.js";
 import type { JsonRecord } from "../persistence.js";
 
-export type WebUiPartType = "reasoning" | "text";
+export type WebUiPartType = "reasoning" | "text" | "tool_call" | "tool_result";
 export type WebUiMessageStatus = "streaming" | "complete";
+export type WebUiToolResultStatus = "success" | "error" | "unknown";
 
-export interface WebUiPart {
-  type: WebUiPartType;
+export interface WebUiTextPart {
+  type: "reasoning" | "text";
   text: string;
 }
+
+export interface WebUiToolCallPart {
+  type: "tool_call";
+  callId: string;
+  name: string;
+  arguments: string;
+}
+
+export interface WebUiToolResultPart {
+  type: "tool_result";
+  callId: string;
+  output: string;
+  status: WebUiToolResultStatus;
+}
+
+export type WebUiPart = WebUiTextPart | WebUiToolCallPart | WebUiToolResultPart;
 
 export interface WebUiMessage {
   id: string;
@@ -51,9 +68,9 @@ function responseFromRecord(value: JsonRecord): JsonRecord {
   return isRecord(value.response) ? value.response : value;
 }
 
-function appendPart(
+function appendTextPart(
   parts: WebUiPart[],
-  type: WebUiPartType,
+  type: "reasoning" | "text",
   text: string,
 ): WebUiPart[] {
   if (text.length === 0) {
@@ -69,13 +86,70 @@ function appendPart(
   return [...parts, { type, text }];
 }
 
+function appendToolPart(parts: WebUiPart[], part: WebUiToolCallPart | WebUiToolResultPart): WebUiPart[] {
+  return [...parts, part];
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+function serializedValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function toolResultStatus(output: string): WebUiToolResultStatus {
+  const firstLine = output.split("\n", 1)[0] ?? "";
+  try {
+    const metadata = JSON.parse(firstLine) as unknown;
+    if (!isRecord(metadata) || typeof metadata.status !== "string") {
+      return "unknown";
+    }
+    return metadata.status === "ok" ? "success" : "error";
+  } catch {
+    return "unknown";
+  }
+}
+
+function toolCallPart(value: JsonRecord, index: number): WebUiToolCallPart | undefined {
+  if (value.type !== "function_call") {
+    return undefined;
+  }
+  return {
+    type: "tool_call",
+    callId: stringValue(value.call_id, stringValue(value.id, `tool-call-${index}`)),
+    name: stringValue(value.name, "unknown_tool"),
+    arguments: serializedValue(value.arguments),
+  };
+}
+
+function toolResultPart(value: JsonRecord, index: number): WebUiToolResultPart | undefined {
+  if (value.type !== "function_call_output") {
+    return undefined;
+  }
+  const output = serializedValue(value.output);
+  return {
+    type: "tool_result",
+    callId: stringValue(value.call_id, `tool-call-${index}`),
+    output,
+    status: toolResultStatus(output),
+  };
+}
+
 function fieldsFromParts(parts: WebUiPart[]): Pick<WebUiMessage, "text" | "reasoningContent"> {
   const text = parts
-    .filter((part) => part.type === "text")
+    .filter((part): part is WebUiTextPart => part.type === "text")
     .map((part) => part.text)
     .join("");
   const reasoningContent = parts
-    .filter((part) => part.type === "reasoning")
+    .filter((part): part is WebUiTextPart => part.type === "reasoning")
     .map((part) => part.text)
     .join("\n\n")
     .trim();
@@ -132,11 +206,16 @@ function responseParts(value: JsonRecord): WebUiPart[] {
       ]
         .filter(Boolean)
         .join("\n\n");
-      parts = appendPart(parts, "reasoning", reasoning);
+      parts = appendTextPart(parts, "reasoning", reasoning);
       continue;
     }
     if (output.type === "message" && output.role === "assistant") {
-      parts = appendPart(parts, "text", textFromParts(output.content, ["output_text"]));
+      parts = appendTextPart(parts, "text", textFromParts(output.content, ["output_text"]));
+      continue;
+    }
+    const call = toolCallPart(output, parts.length);
+    if (call) {
+      parts = appendToolPart(parts, call);
     }
   }
   return parts;
@@ -151,8 +230,18 @@ function mergeCompletedParts(
   }
   let parts = streamedParts;
   for (const completedPart of completedParts) {
+    if (completedPart.type === "tool_call" || completedPart.type === "tool_result") {
+      const hasPart = parts.some(
+        (part) =>
+          part.type === completedPart.type && part.callId === completedPart.callId,
+      );
+      if (!hasPart) {
+        parts = appendToolPart(parts, completedPart);
+      }
+      continue;
+    }
     if (!parts.some((part) => part.type === completedPart.type)) {
-      parts = appendPart(parts, completedPart.type, completedPart.text);
+      parts = appendTextPart(parts, completedPart.type, completedPart.text);
     }
   }
   return parts;
@@ -181,12 +270,38 @@ export function normalizeWebUiSession(
   records: readonly JsonRecord[],
 ): WebUiSessionSnapshot {
   const messages: WebUiMessage[] = [];
+  const toolMessages = new Map<string, number>();
+  let activeToolMessageIndex: number | undefined;
   records.forEach((record, index) => {
     const user = userMessage(record, index);
     if (user) {
+      toolMessages.clear();
+      activeToolMessageIndex = undefined;
       messages.push(user);
       return;
     }
+
+    const result = toolResultPart(record, index);
+    if (result) {
+      const messageIndex = toolMessages.get(result.callId);
+      if (messageIndex !== undefined) {
+        const message = messages[messageIndex];
+        if (message) {
+          const parts = [...message.parts, result];
+          messages[messageIndex] = {
+            ...message,
+            parts,
+            ...fieldsFromParts(parts),
+          };
+        }
+      } else {
+        messages.push(
+          assistantMessage(`session-tool-${index}`, [result], timestampFromRecord(record), "complete"),
+        );
+      }
+      return;
+    }
+
     if (record.type !== "response.completed") {
       return;
     }
@@ -195,6 +310,53 @@ export function normalizeWebUiSession(
     if (parts.length === 0) {
       return;
     }
+
+    const callParts = parts.filter(
+      (part): part is WebUiToolCallPart => part.type === "tool_call",
+    );
+    if (callParts.length > 0) {
+      let messageIndex = activeToolMessageIndex;
+      const activeMessage = messageIndex === undefined ? undefined : messages[messageIndex];
+      if (messageIndex === undefined || !activeMessage) {
+        messageIndex = messages.length;
+        messages.push(
+          assistantMessage(
+            typeof response.id === "string" ? response.id : `session-assistant-${index}`,
+            parts,
+            timestampFromRecord(response),
+            "complete",
+          ),
+        );
+      } else {
+        const mergedParts = [...activeMessage.parts, ...parts];
+        messages[messageIndex] = {
+          ...activeMessage,
+          parts: mergedParts,
+          ...fieldsFromParts(mergedParts),
+        };
+      }
+      activeToolMessageIndex = messageIndex;
+      for (const part of callParts) {
+        toolMessages.set(part.callId, messageIndex);
+      }
+      return;
+    }
+
+    if (activeToolMessageIndex !== undefined) {
+      const activeMessage = messages[activeToolMessageIndex];
+      if (activeMessage?.parts.some((part) => part.type === "tool_call")) {
+        const mergedParts = [...activeMessage.parts, ...parts];
+        messages[activeToolMessageIndex] = {
+          ...activeMessage,
+          parts: mergedParts,
+          ...fieldsFromParts(mergedParts),
+        };
+        toolMessages.clear();
+        activeToolMessageIndex = undefined;
+        return;
+      }
+    }
+
     messages.push(
       assistantMessage(
         typeof response.id === "string" ? response.id : `session-assistant-${index}`,
@@ -233,7 +395,7 @@ export class WebUiNormalizedRun {
       event.type === "response.output_text.delta" &&
       typeof event.delta === "string"
     ) {
-      this.parts = appendPart(this.parts, "text", event.delta);
+      this.parts = appendTextPart(this.parts, "text", event.delta);
       return this.streamingMessage();
     }
     if (
@@ -241,10 +403,31 @@ export class WebUiNormalizedRun {
         event.type === "response.reasoning_summary_text.delta") &&
       typeof event.delta === "string"
     ) {
-      this.parts = appendPart(this.parts, "reasoning", event.delta);
+      this.parts = appendTextPart(this.parts, "reasoning", event.delta);
       return this.streamingMessage();
     }
+    if (event.type === "response.completed") {
+      const responsePartsValue = responseParts(event);
+      const toolParts = responsePartsValue.filter(
+        (part): part is WebUiToolCallPart => part.type === "tool_call",
+      );
+      if (toolParts.length > 0) {
+        for (const part of toolParts) {
+          this.parts = appendToolPart(this.parts, part);
+        }
+        return this.streamingMessage();
+      }
+    }
     return undefined;
+  }
+
+  public toolResult(value: JsonRecord): WebUiMessage | undefined {
+    const result = toolResultPart(value, this.parts.length);
+    if (!result) {
+      return undefined;
+    }
+    this.parts = appendToolPart(this.parts, result);
+    return this.streamingMessage();
   }
 
   public complete(response: JsonRecord): WebUiMessage {

@@ -7,6 +7,7 @@ import {
   Button,
   Card,
   ChatComposer,
+  CodeBlock,
   ChatLayout,
   ChatMessage,
   ChatMessageBubble,
@@ -513,6 +514,150 @@ function ReasoningBlock({
   );
 }
 
+type WebUiToolCall = Extract<WebUiPart, {type: 'tool_call'}>;
+type WebUiToolResult = Extract<WebUiPart, {type: 'tool_result'}>;
+
+function prettyToolArguments(argumentsText: string): string {
+  try {
+    const parsed = JSON.parse(argumentsText) as unknown;
+    return JSON.stringify(parsed, null, 2) ?? argumentsText;
+  } catch {
+    return argumentsText;
+  }
+}
+
+function toolTarget(argumentsText: string): string {
+  try {
+    const parsed = JSON.parse(argumentsText) as unknown;
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      typeof (parsed as Record<string, unknown>).path === 'string'
+    ) {
+      return (parsed as Record<string, string>).path;
+    }
+  } catch {
+    // Keep the generic target when arguments are not JSON.
+  }
+  return 'arguments available';
+}
+
+function visibleToolOutput(output: string): string {
+  const limit = 12000;
+  if (output.length <= limit) {
+    return output;
+  }
+  return `${output.slice(0, limit)}\n\n[Output truncated in the UI]`;
+}
+
+function toolResultLabel(status: WebUiToolResult['status']): string {
+  if (status === 'success') {
+    return 'Success';
+  }
+  if (status === 'error') {
+    return 'Error';
+  }
+  return 'Result';
+}
+
+function ToolCallBlock({call, result}: {call: WebUiToolCall; result?: WebUiToolResult}) {
+  const resultStatus = result?.status;
+  const item: ChatToolCallItem = {
+    key: `tool-${call.callId}`,
+    name: call.name,
+    status: resultStatus === 'error' ? 'error' : result ? 'complete' : 'running',
+    target: toolTarget(call.arguments),
+    errorMessage: resultStatus === 'error' ? 'The tool returned an error.' : undefined,
+    resultDetail: (
+      <VStack gap={2} width="100%">
+        <VStack gap={1} width="100%">
+          <Text type="supporting" color="secondary">Arguments</Text>
+          <CodeBlock
+            code={prettyToolArguments(call.arguments)}
+            language="json"
+            size="sm"
+            width="100%"
+            container="section"
+            hasCopyButton
+          />
+        </VStack>
+        {result && (
+          <VStack gap={1} width="100%">
+            <HStack align="center" gap={2}>
+              <Text type="supporting" color="secondary">Result</Text>
+              <Badge
+                label={toolResultLabel(result.status)}
+                variant={result.status === 'error' ? 'error' : result.status === 'success' ? 'success' : 'neutral'}
+              />
+            </HStack>
+            <CodeBlock
+              code={visibleToolOutput(result.output)}
+              language="text"
+              size="sm"
+              width="100%"
+              container="section"
+              hasCopyButton
+            />
+          </VStack>
+        )}
+      </VStack>
+    ),
+  };
+
+  return <ChatToolCalls calls={[item]} />;
+}
+
+function OrphanToolResultBlock({result}: {result: WebUiToolResult}) {
+  return (
+    <Card variant="muted" padding={2}>
+      <VStack gap={1} width="100%">
+        <HStack align="center" gap={2}>
+          <Text type="label" weight="semibold">Tool result</Text>
+          <Badge
+            label={toolResultLabel(result.status)}
+            variant={result.status === 'error' ? 'error' : result.status === 'success' ? 'success' : 'neutral'}
+          />
+        </HStack>
+        <CodeBlock
+          code={visibleToolOutput(result.output)}
+          language="text"
+          size="sm"
+          width="100%"
+          container="section"
+          hasCopyButton
+        />
+      </VStack>
+    </Card>
+  );
+}
+
+function toolActivityForParts(parts: WebUiPart[]): ChatToolCallItem[] {
+  const calls = new Map<string, ChatToolCallItem>();
+  for (const part of parts) {
+    if (part.type === 'tool_call') {
+      calls.set(part.callId, {
+        key: `tool-${part.callId}`,
+        name: part.name,
+        status: 'running',
+        target: toolTarget(part.arguments),
+      });
+      continue;
+    }
+    if (part.type === 'tool_result') {
+      const call = calls.get(part.callId);
+      if (call) {
+        calls.set(part.callId, {
+          ...call,
+          status: part.status === 'error' ? 'error' : 'complete',
+          errorMessage: part.status === 'error' ? 'The tool returned an error.' : undefined,
+        });
+      }
+    }
+  }
+  return [...calls.values()];
+}
+
 function WebUiParts({
   parts,
   isStreaming = false,
@@ -526,6 +671,21 @@ function WebUiParts({
         const isLast = index === parts.length - 1;
         if (part.type === 'reasoning') {
           return <ReasoningBlock key={`reasoning-${index}`} steps={[]} content={part.text} />;
+        }
+        if (part.type === 'tool_call') {
+          const result = parts
+            .slice(index + 1)
+            .find(
+              (candidate): candidate is WebUiToolResult =>
+                candidate.type === 'tool_result' && candidate.callId === part.callId,
+            );
+          return <ToolCallBlock key={`tool-call-${part.callId}-${index}`} call={part} result={result} />;
+        }
+        if (part.type === 'tool_result') {
+          const hasCall = parts
+            .slice(0, index)
+            .some(candidate => candidate.type === 'tool_call' && candidate.callId === part.callId);
+          return hasCall ? null : <OrphanToolResultBlock key={`tool-result-${part.callId}-${index}`} result={part} />;
         }
         return (
           <Markdown
@@ -889,7 +1049,13 @@ function App() {
 
   const tools = useMemo(() => {
     if (activeSessionId === LIVE_SESSION_ID) {
-      return [];
+      if (isRunning && !streamingMessage) {
+        return [];
+      }
+      const sourceMessage = streamingMessage ?? [...messages]
+        .reverse()
+        .find(message => message.sender === 'assistant' && message.parts?.some(part => part.type === 'tool_call'));
+      return sourceMessage?.parts ? toolActivityForParts(sourceMessage.parts) : [];
     }
     const latestAssistant = [...messages]
       .reverse()
@@ -907,7 +1073,7 @@ function App() {
         duration: undefined,
       }),
     );
-  }, [activeSessionId, isRunning, messages]);
+  }, [activeSessionId, isRunning, messages, streamingMessage]);
 
   const stopRun = useCallback(() => {
     runAbortRef.current?.abort();

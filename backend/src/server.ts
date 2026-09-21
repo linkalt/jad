@@ -395,6 +395,15 @@ class AgentHttpApplication {
             writeSse(response, "ui.message", { message });
           }
         },
+        onToolResult: (item) => {
+          if (!connected) {
+            return;
+          }
+          const message = normalizedRun.toolResult(item);
+          if (message) {
+            writeSse(response, "ui.message", { message });
+          }
+        },
       });
 
       if (connected) {

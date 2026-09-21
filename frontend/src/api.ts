@@ -1,7 +1,23 @@
-export interface WebUiPart {
+export interface WebUiTextPart {
   type: 'reasoning' | 'text';
   text: string;
 }
+
+export interface WebUiToolCallPart {
+  type: 'tool_call';
+  callId: string;
+  name: string;
+  arguments: string;
+}
+
+export interface WebUiToolResultPart {
+  type: 'tool_result';
+  callId: string;
+  output: string;
+  status: 'success' | 'error' | 'unknown';
+}
+
+export type WebUiPart = WebUiTextPart | WebUiToolCallPart | WebUiToolResultPart;
 
 export interface WebUiMessage {
   id: string;
@@ -132,6 +148,30 @@ async function* readSse(response: Response): AsyncGenerator<SseMessage> {
   }
 }
 
+function isWebUiPart(value: unknown): value is WebUiPart {
+  if (!isRecord(value) || typeof value.type !== 'string') {
+    return false;
+  }
+  if (value.type === 'reasoning' || value.type === 'text') {
+    return typeof value.text === 'string';
+  }
+  if (value.type === 'tool_call') {
+    return (
+      typeof value.callId === 'string' &&
+      typeof value.name === 'string' &&
+      typeof value.arguments === 'string'
+    );
+  }
+  if (value.type === 'tool_result') {
+    return (
+      typeof value.callId === 'string' &&
+      typeof value.output === 'string' &&
+      (value.status === 'success' || value.status === 'error' || value.status === 'unknown')
+    );
+  }
+  return false;
+}
+
 function isWebUiMessage(value: unknown): value is WebUiMessage {
   if (!isRecord(value)) {
     return false;
@@ -142,12 +182,7 @@ function isWebUiMessage(value: unknown): value is WebUiMessage {
     typeof value.text === 'string' &&
     typeof value.timestamp === 'string' &&
     Array.isArray(value.parts) &&
-    value.parts.every(
-      part =>
-        isRecord(part) &&
-        (part.type === 'reasoning' || part.type === 'text') &&
-        typeof part.text === 'string',
-    )
+    value.parts.every(isWebUiPart)
   );
 }
 

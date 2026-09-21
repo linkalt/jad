@@ -95,6 +95,93 @@ test("preserves interleaved reasoning and assistant parts", () => {
   assert.deepEqual(snapshot.messages[0]?.parts, expectedParts);
 });
 
+test("normalizes tool call and result parts for snapshots and live runs", () => {
+  const call = {
+    type: "function_call",
+    call_id: "call_read",
+    name: "read",
+    arguments: JSON.stringify({path: "README.md"}),
+  };
+  const result = {
+    type: "function_call_output",
+    call_id: "call_read",
+    output: '{"status":"ok"}\n--- CONTENT token=abc ---\nhello',
+  };
+  const snapshot = normalizeWebUiSession(
+    "session1",
+    {
+      model: { provider: "fake", model: "fake-model" },
+      settings: { session_name: "tools" },
+    } as unknown as LoadedSessionConfig,
+    [
+      completedEvent([call], "response-tool"),
+      result,
+      completedEvent(
+        [{type: "message", role: "assistant", content: [{type: "output_text", text: "Done"}]}],
+        "response-final",
+      ),
+    ],
+  );
+  assert.equal(snapshot.messages.length, 1);
+  assert.deepEqual(snapshot.messages[0]?.parts, [
+    {
+      type: "tool_call",
+      callId: "call_read",
+      name: "read",
+      arguments: JSON.stringify({path: "README.md"}),
+    },
+    {
+      type: "tool_result",
+      callId: "call_read",
+      output: '{"status":"ok"}\n--- CONTENT token=abc ---\nhello',
+      status: "success",
+    },
+    {type: "text", text: "Done"},
+  ]);
+
+  const normalizedRun = new WebUiNormalizedRun("live-tool-turn");
+  assert.deepEqual(
+    normalizedRun.update(completedEvent([call], "response-tool"))?.parts,
+    [{
+      type: "tool_call",
+      callId: "call_read",
+      name: "read",
+      arguments: JSON.stringify({path: "README.md"}),
+    }],
+  );
+  assert.deepEqual(normalizedRun.toolResult(result)?.parts, [
+    {
+      type: "tool_call",
+      callId: "call_read",
+      name: "read",
+      arguments: JSON.stringify({path: "README.md"}),
+    },
+    {
+      type: "tool_result",
+      callId: "call_read",
+      output: '{"status":"ok"}\n--- CONTENT token=abc ---\nhello',
+      status: "success",
+    },
+  ]);
+  assert.deepEqual(normalizedRun.complete({id: "response-final", output: [
+    {type: "message", role: "assistant", content: [{type: "output_text", text: "Done"}]},
+  ]}).parts, [
+    {
+      type: "tool_call",
+      callId: "call_read",
+      name: "read",
+      arguments: JSON.stringify({path: "README.md"}),
+    },
+    {
+      type: "tool_result",
+      callId: "call_read",
+      output: '{"status":"ok"}\n--- CONTENT token=abc ---\nhello',
+      status: "success",
+    },
+    {type: "text", text: "Done"},
+  ]);
+});
+
 test("serves a session snapshot and streams a committed run over SSE", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-server-"));
   const sessionDir = join(root, "session1");
@@ -319,5 +406,115 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
   } finally {
     await running.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("streams tool call and result blocks over SSE", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-server-tools-"));
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({
+      schema_version: 1,
+      provider: "fake",
+      api_key_env: "FAKE_API_KEY",
+      model: "fake-model",
+    }),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({
+      schema_version: 1,
+      session_name: "server-tools-test",
+      cwd: sessionDir,
+      tool_definition_paths: ["read.json"],
+      tools: {native: {read: {max_bytes: 65536, default_limit: 250}}},
+    }),
+  );
+  await writeFile(
+    join(sessionDir, "read.json"),
+    JSON.stringify({schema_version: 1, tools: [nativeReadDefinition]}),
+  );
+  await writeFile(join(sessionDir, "sample.txt"), "tool result content\\n", "utf8");
+
+  const call = {
+    type: "function_call",
+    call_id: "call_read",
+    name: "read",
+    arguments: JSON.stringify({path: "sample.txt"}),
+  };
+  const finalMessage = {
+    type: "message",
+    role: "assistant",
+    content: [{type: "output_text", text: "Tool finished."}],
+  };
+  let responseNumber = 0;
+  const fakeClient = {
+    responses: {
+      create: async () => {
+        responseNumber += 1;
+        const output = responseNumber === 1 ? call : finalMessage;
+        return (async function* () {
+          yield {type: "response.output_item.done", output_index: 0, item: output};
+          yield completedEvent([output], `response-tool-${responseNumber}`);
+        })();
+      },
+    },
+  } as unknown as OpenAI;
+
+  const running = createAgentServer({sessionsDir: root, client: fakeClient});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const run = await fetch(
+      `http://127.0.0.1:${address.port}/api/sessions/session1/run`,
+      {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({input: "read the sample"}),
+      },
+    );
+    assert.equal(run.status, 200);
+    const stream = await run.text();
+    const uiMessages = ssePayloads(stream, "ui.message").map(
+      (payload) => payload.message as {
+        status?: string;
+        parts: Array<Record<string, unknown>>;
+      },
+    );
+    assert.deepEqual(uiMessages.map((message) => message.status), [
+      "streaming",
+      "streaming",
+      "complete",
+    ]);
+    assert.deepEqual(uiMessages[0]?.parts, [
+      {
+        type: "tool_call",
+        callId: "call_read",
+        name: "read",
+        arguments: JSON.stringify({path: "sample.txt"}),
+      },
+    ]);
+    assert.equal(uiMessages[1]?.parts[1]?.type, "tool_result");
+    assert.equal(uiMessages[1]?.parts[1]?.status, "success");
+    assert.equal(uiMessages[2]?.parts[2]?.type, "text");
+    assert.equal(uiMessages[2]?.parts[2]?.text, "Tool finished.");
+
+    const snapshot = await fetch("http://127.0.0.1:" + address.port + "/api/sessions/session1");
+    const body = (await snapshot.json()) as {messages: Array<{parts: Array<Record<string, unknown>>}>};
+    assert.deepEqual(body.messages[1]?.parts.map((part) => part.type), [
+      "tool_call",
+      "tool_result",
+      "text",
+    ]);
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
   }
 });

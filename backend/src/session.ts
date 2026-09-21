@@ -34,6 +34,7 @@ export interface AgentSessionOptions {
 export interface AgentRunOptions {
   turnId?: string;
   onEvent?: (event: JsonRecord) => void | Promise<void>;
+  onToolResult?: (item: ResponseInputItem) => void | Promise<void>;
 }
 
 export interface AgentRunResult {
@@ -191,6 +192,9 @@ export class AgentSession {
           );
         }
         await this.store.appendInputItems(toolOutputs);
+        for (const toolOutput of toolOutputs) {
+          await options.onToolResult?.(toolOutput);
+        }
       }
 
       throw new Error(`tool execution exceeded ${MAX_TOOL_ROUNDS} rounds`);
