@@ -32,6 +32,7 @@ export default defineConfig({
       runtimeInjection: false,
       treeshakeCompensation: true,
       useCSSLayers: true,
+      debugFilePath: filePath => path.relative(__dirname, filePath),
       unstable_moduleResolution: {
         type: 'commonJS',
         rootDir: __dirname,
