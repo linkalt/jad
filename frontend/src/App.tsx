@@ -517,16 +517,39 @@ function prettyToolArguments(argumentsText: string): string {
   }
 }
 
+function compactToolValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.length > 0 ? value : '""';
+  }
+  if (value === null) {
+    return 'null';
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return JSON.stringify(value) ?? '[…]';
+  }
+  if (typeof value === 'object') {
+    return '{…}';
+  }
+  return String(value);
+}
+
 function toolTarget(argumentsText: string): string {
   try {
     const parsed = JSON.parse(argumentsText) as unknown;
     if (
       typeof parsed === 'object' &&
       parsed !== null &&
-      !Array.isArray(parsed) &&
-      typeof (parsed as Record<string, unknown>).path === 'string'
+      !Array.isArray(parsed)
     ) {
-      return (parsed as Record<string, string>).path;
+      const entries = Object.entries(parsed as Record<string, unknown>);
+      if (entries.length > 0) {
+        return entries
+          .map(([key, value]) => `${key}: ${compactToolValue(value)}`)
+          .join(' · ');
+      }
     }
   } catch {
     // Keep the generic target when arguments are not JSON.
