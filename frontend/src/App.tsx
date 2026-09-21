@@ -145,7 +145,7 @@ const styles = stylex.create({
   reasoningButton: {
     justifyContent: 'flex-start',
     paddingBlock: spacingVars['--spacing-0-5'],
-    paddingInline: spacingVars['--spacing-1'],
+    paddingInline: spacingVars['--spacing-0'],
     borderRadius: radiusVars['--radius-element'],
     textAlign: 'start',
     '@media (hover: hover)': {
@@ -1126,7 +1126,6 @@ function renderMessage(message: MessageRecord, model?: Session['model']) {
         avatar={<Avatar name="You" size="sm" />}
       >
         <ChatMessageBubble
-          name={<Text type="label" weight="semibold">You</Text>}
           metadata={<ChatMessageMetadata timestamp={message.timestamp} status="read" />}
         >
           <Markdown density="compact" contentWidth="100%">{message.text}</Markdown>
