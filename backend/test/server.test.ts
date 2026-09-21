@@ -95,6 +95,27 @@ test("preserves interleaved reasoning and assistant parts", () => {
   assert.deepEqual(snapshot.messages[0]?.parts, expectedParts);
 });
 
+test("ignores encrypted or empty reasoning summaries in the UI stream", () => {
+  const normalizedRun = new WebUiNormalizedRun("opaque-reasoning-turn");
+  assert.equal(
+    normalizedRun.update({
+      type: "response.reasoning_summary_text.delta",
+      delta: "   ",
+    }),
+    undefined,
+  );
+  normalizedRun.update({type: "response.output_text.delta", delta: "answer"});
+  const completed = normalizedRun.complete({
+    id: "response-opaque-reasoning",
+    output: [
+      {type: "reasoning", encrypted_content: "opaque"},
+      {type: "message", role: "assistant", content: [{type: "output_text", text: "answer"}]},
+    ],
+  });
+  assert.deepEqual(completed.parts, [{type: "text", text: "answer"}]);
+  assert.equal(completed.reasoningContent, undefined);
+});
+
 test("normalizes tool call and result parts for snapshots and live runs", () => {
   const call = {
     type: "function_call",

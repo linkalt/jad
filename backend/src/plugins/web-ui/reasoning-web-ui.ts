@@ -14,7 +14,7 @@ export function reasoningPartFromOutput(
   ]
     .filter(Boolean)
     .join("\n\n");
-  return text.length > 0 ? { type: "reasoning", text } : undefined;
+  return text.trim().length > 0 ? { type: "reasoning", text } : undefined;
 }
 
 export function reasoningDeltaFromEvent(value: JsonRecord): string | undefined {
@@ -23,7 +23,7 @@ export function reasoningDeltaFromEvent(value: JsonRecord): string | undefined {
       value.type === "response.reasoning_summary_text.delta") &&
     typeof value.delta === "string"
   ) {
-    return value.delta;
+    return value.delta.trim().length > 0 ? value.delta : undefined;
   }
   return undefined;
 }

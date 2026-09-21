@@ -559,17 +559,12 @@ function toolCallStatus(result?: WebUiToolResult): 'running' | 'complete' | 'err
   return result.status === 'error' ? 'error' : 'complete';
 }
 
-function ToolCallBlock({
-  call,
-  result,
-  isGrouped = false,
-}: {
-  call: WebUiToolCall;
-  result?: WebUiToolResult;
-  isGrouped?: boolean;
-}) {
+function toolCallItem(
+  call: WebUiToolCall,
+  result?: WebUiToolResult,
+): ChatToolCallItem {
   const resultStatus = result?.status;
-  const item: ChatToolCallItem = {
+  return {
     key: `tool-${call.callId}`,
     name: call.name,
     status: toolCallStatus(result),
@@ -610,13 +605,6 @@ function ToolCallBlock({
       </VStack>
     ),
   };
-
-  return (
-    <ChatToolCalls
-      calls={[item]}
-      xstyle={isGrouped ? styles.toolCallsGrouped : undefined}
-    />
-  );
 }
 
 function OrphanToolResultBlock({result}: {result: WebUiToolResult}) {
@@ -653,17 +641,19 @@ function toolActivityForParts(parts: WebUiPart[]): ChatToolCallItem[] {
         status: 'running',
         target: toolTarget(part.arguments),
       });
+    }
+  }
+  for (const part of parts) {
+    if (part.type !== 'tool_result') {
       continue;
     }
-    if (part.type === 'tool_result') {
-      const call = calls.get(part.callId);
-      if (call) {
-        calls.set(part.callId, {
-          ...call,
-          status: part.status === 'error' ? 'error' : part.status === 'success' ? 'complete' : 'running',
-          errorMessage: part.status === 'error' ? 'The tool returned an error.' : undefined,
-        });
-      }
+    const call = calls.get(part.callId);
+    if (call) {
+      calls.set(part.callId, {
+        ...call,
+        status: part.status === 'error' ? 'error' : part.status === 'success' ? 'complete' : 'running',
+        errorMessage: part.status === 'error' ? 'The tool returned an error.' : undefined,
+      });
     }
   }
   return [...calls.values()];
@@ -703,6 +693,9 @@ function groupWebUiParts(parts: WebUiPart[]): WebUiPartGroup[] {
   };
 
   parts.forEach((part, index) => {
+    if (part.type === 'reasoning' && part.text.trim().length === 0) {
+      return;
+    }
     if (isWebUiActivityPart(part)) {
       activityItems.push({part, index});
       return;
@@ -730,6 +723,25 @@ function WebUiParts({
     <VStack gap={3} width="100%">
       {groups.map((group, groupIndex) => {
         if (group.type === 'activity') {
+          const toolCallItems = group.items
+            .filter(({part}) => part.type === 'tool_call')
+            .map(({part, index}) => {
+              if (part.type !== 'tool_call') {
+                return undefined;
+              }
+              const result = parts
+                .slice(index + 1)
+                .find(
+                  (candidate): candidate is WebUiToolResult =>
+                    candidate.type === 'tool_result' && candidate.callId === part.callId,
+                );
+              return toolCallItem(part, result);
+            })
+            .filter((item): item is ChatToolCallItem => item !== undefined);
+          const firstToolCallIndex = group.items.find(
+            ({part}) => part.type === 'tool_call',
+          )?.index;
+
           return (
             <VStack
               key={`activity-${group.items[0]?.index ?? groupIndex}`}
@@ -750,20 +762,13 @@ function WebUiParts({
                   );
                 }
                 if (part.type === 'tool_call') {
-                  const result = parts
-                    .slice(index + 1)
-                    .find(
-                      (candidate): candidate is WebUiToolResult =>
-                        candidate.type === 'tool_result' && candidate.callId === part.callId,
-                    );
-                  return (
-                    <ToolCallBlock
-                      key={`tool-call-${part.callId}-${index}`}
-                      call={part}
-                      result={result}
-                      isGrouped
+                  return index === firstToolCallIndex ? (
+                    <ChatToolCalls
+                      key={`tool-calls-${index}`}
+                      calls={toolCallItems}
+                      xstyle={styles.toolCallsGrouped}
                     />
-                  );
+                  ) : null;
                 }
                 const hasCall = parts
                   .slice(0, index)
@@ -1231,12 +1236,16 @@ function App() {
   });
   const runAbortRef = useRef<AbortController | null>(null);
   const runTimeoutRef = useRef<number | null>(null);
+  const activeRunSessionIdRef = useRef<string | null>(null);
 
   const activeSession =
     sessions.find(session => session.id === activeSessionId) ?? sessions[0];
   const messages = threads[activeSessionId] ?? [];
   const isRunning = runningSessionId === activeSessionId;
   const isLiveSession = activeSession?.source === 'live';
+  const streamingMessageCommitted = streamingMessage !== null && messages.some(
+    message => message.id === streamingMessage.id,
+  );
 
   const reasoningSteps = useMemo(() => {
     const steps = isLiveSession ? [] : baseReasoning;
@@ -1272,6 +1281,7 @@ function App() {
   }, [activeSessionId, isLiveSession, isRunning, messages, streamingMessage]);
 
   const stopRun = useCallback(() => {
+    activeRunSessionIdRef.current = null;
     runAbortRef.current?.abort();
     runAbortRef.current = null;
     if (runTimeoutRef.current !== null) {
@@ -1312,6 +1322,7 @@ function App() {
         ),
       );
       setComposerValue('');
+      activeRunSessionIdRef.current = sessionId;
       setRunningSessionId(sessionId);
       setRunProgress(isLiveRun ? 0 : 1);
       setStreamingMessage(null);
@@ -1342,10 +1353,21 @@ function App() {
               parts: [],
               status: 'complete',
             };
-            setThreads(current => ({
-              ...current,
-              [sessionId]: [...(current[sessionId] ?? []), assistantMessage],
-            }));
+            setThreads(current => {
+              const existing = current[sessionId] ?? [];
+              const existingIndex = existing.findIndex(
+                message => message.id === assistantMessage.id,
+              );
+              if (existingIndex < 0) {
+                return {
+                  ...current,
+                  [sessionId]: [...existing, assistantMessage],
+                };
+              }
+              const next = [...existing];
+              next[existingIndex] = assistantMessage;
+              return {...current, [sessionId]: next};
+            });
             setSessions(current =>
               current.map(session =>
                 session.id === sessionId ? {...session, state: 'success'} : session,
@@ -1380,6 +1402,7 @@ function App() {
               return;
             }
             runAbortRef.current = null;
+            activeRunSessionIdRef.current = null;
             setStreamingMessage(null);
             setRunProgress(isLiveRun ? 0 : baseReasoning.length);
             setRunningSessionId(current => (current === sessionId ? null : current));
@@ -1408,6 +1431,7 @@ function App() {
               : session,
           ),
         );
+        activeRunSessionIdRef.current = null;
         setRunProgress(baseReasoning.length);
         setRunningSessionId(current => (current === sessionId ? null : current));
         runTimeoutRef.current = null;
@@ -1465,9 +1489,13 @@ function App() {
             snapshot,
             id: sessionUiId(snapshot, initialSessions),
           }));
+          const activeRunSessionId = activeRunSessionIdRef.current;
           setThreads(current => {
             const next = {...current};
             for (const item of liveItems) {
+              if (item.id === activeRunSessionId) {
+                continue;
+              }
               next[item.id] = item.snapshot.messages;
             }
             return next;
@@ -1479,7 +1507,15 @@ function App() {
                 .filter(session => session.source === 'live')
                 .map(session => session.id),
             );
-            const liveSessions = liveItems.map(item => sessionFromSnapshot(item.snapshot, item.id));
+            const liveSessions = liveItems.map(item => {
+              if (item.id === activeRunSessionId) {
+                const existing = current.find(session => session.id === item.id);
+                if (existing) {
+                  return existing;
+                }
+              }
+              return sessionFromSnapshot(item.snapshot, item.id);
+            });
             const existingLive = current.filter(
               session =>
                 session.source === 'live' &&
@@ -1677,7 +1713,7 @@ function App() {
                   >
                     <ChatMessageList density="balanced" align="top" isStreaming={isRunning}>
                       {messages.map(message => renderMessage(message, activeSession.model))}
-                      {isRunning && (!isLiveSession || streamingMessage) && (
+                      {isRunning && (!isLiveSession || streamingMessage) && !streamingMessageCommitted && (
                         <ChatMessage sender="assistant" avatar={<AgentAvatar isRunning />}>
                           <ChatMessageBubble
                             variant="ghost"
