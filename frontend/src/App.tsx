@@ -1037,38 +1037,90 @@ function AssistantIdentity({model}: {model?: Session['model']}) {
   );
 }
 
-function renderMessage(message: MessageRecord, model?: Session['model']) {
-  if (message.sender === 'system') {
-    return (
-      <ChatSystemMessage
-        key={message.id}
-        variant="divider"
-        icon={<Icon icon="check" color="success" size="sm" />}
-      >
-        {message.text}
-      </ChatSystemMessage>
-    );
+type CopyState = 'idle' | 'copied' | 'error';
+
+async function copyMarkdownToClipboard(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
   }
 
-  if (message.sender === 'user') {
-    return (
-      <ChatMessage
-        key={message.id}
-        sender="user"
-        avatar={<Avatar name="You" size="sm" />}
-      >
-        <ChatMessageBubble
-          metadata={<ChatMessageMetadata timestamp={message.timestamp} status="read" />}
-        >
-          <Markdown density="compact" contentWidth="100%">{message.text}</Markdown>
-        </ChatMessageBubble>
-      </ChatMessage>
-    );
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.inset = '0';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) {
+    throw new Error('Clipboard access is unavailable');
   }
+}
+
+function assistantOutputMarkdown(message: MessageRecord): string {
+  if (message.text.length > 0 || !message.parts) {
+    return message.text;
+  }
+  return message.parts
+    .filter((part): part is WebUiContentPart => part.type === 'text')
+    .map(part => part.text)
+    .join('');
+}
+
+function copyActionLabel(state: CopyState): string {
+  if (state === 'copied') {
+    return 'Copied as Markdown';
+  }
+  if (state === 'error') {
+    return 'Copy failed';
+  }
+  return 'Copy as Markdown';
+}
+
+function AssistantMessage({
+  message,
+  model,
+}: {
+  message: MessageRecord;
+  model?: Session['model'];
+}) {
+  const [copyState, setCopyState] = useState<CopyState>('idle');
+  const resetTimerRef = useRef<number | null>(null);
+  const markdown = assistantOutputMarkdown(message);
+
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current !== null) {
+        window.clearTimeout(resetTimerRef.current);
+      }
+    };
+  }, []);
+
+  const setTemporaryCopyState = useCallback((state: CopyState) => {
+    if (resetTimerRef.current !== null) {
+      window.clearTimeout(resetTimerRef.current);
+    }
+    setCopyState(state);
+    resetTimerRef.current = window.setTimeout(() => {
+      resetTimerRef.current = null;
+      setCopyState('idle');
+    }, 2000);
+  }, []);
+
+  const copyAsMarkdown = useCallback(async () => {
+    try {
+      await copyMarkdownToClipboard(markdown);
+      setTemporaryCopyState('copied');
+    } catch {
+      setTemporaryCopyState('error');
+    }
+  }, [markdown, setTemporaryCopyState]);
 
   return (
     <ChatMessage
-      key={message.id}
       sender="assistant"
       avatar={<AgentAvatar />}
     >
@@ -1079,7 +1131,19 @@ function renderMessage(message: MessageRecord, model?: Session['model']) {
         metadata={
           <ChatMessageMetadata
             timestamp={message.timestamp}
-            footer="agent response"
+            footer={
+              <HStack align="center" gap={2}>
+                <Text type="supporting" color="secondary">agent response</Text>
+                <Button
+                  label={copyActionLabel(copyState)}
+                  icon={<Icon icon={copyState === 'copied' ? 'check' : copyState === 'error' ? 'error' : 'copy'} size="sm" />}
+                  variant="ghost"
+                  size="sm"
+                  isDisabled={markdown.length === 0}
+                  onClick={() => { void copyAsMarkdown(); }}
+                />
+              </HStack>
+            }
             status="delivered"
           />
         }
@@ -1115,6 +1179,38 @@ function renderMessage(message: MessageRecord, model?: Session['model']) {
       </ChatMessageBubble>
     </ChatMessage>
   );
+}
+
+function renderMessage(message: MessageRecord, model?: Session['model']) {
+  if (message.sender === 'system') {
+    return (
+      <ChatSystemMessage
+        key={message.id}
+        variant="divider"
+        icon={<Icon icon="check" color="success" size="sm" />}
+      >
+        {message.text}
+      </ChatSystemMessage>
+    );
+  }
+
+  if (message.sender === 'user') {
+    return (
+      <ChatMessage
+        key={message.id}
+        sender="user"
+        avatar={<Avatar name="You" size="sm" />}
+      >
+        <ChatMessageBubble
+          metadata={<ChatMessageMetadata timestamp={message.timestamp} status="read" />}
+        >
+          <Markdown density="compact" contentWidth="100%">{message.text}</Markdown>
+        </ChatMessageBubble>
+      </ChatMessage>
+    );
+  }
+
+  return <AssistantMessage key={message.id} message={message} model={model} />;
 }
 
 function App() {
