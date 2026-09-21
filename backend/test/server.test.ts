@@ -318,6 +318,69 @@ test("lists sessions with valid settings and namespaces duplicate ids", async ()
   }
 });
 
+test("persists user input before a tool configuration failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-input-persist-"));
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, {recursive: true});
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({
+      schema_version: 1,
+      provider: "fake",
+      api_key_env: "FAKE_API_KEY",
+      model: "fake-model",
+    }),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({
+      schema_version: 1,
+      session_name: "persist-input",
+      cwd: sessionDir,
+      tool_definition_paths: ["missing-tools.json"],
+      tools: {
+        native: {
+          read: {max_bytes: 65536, default_limit: 250},
+        },
+      },
+    }),
+  );
+
+  const running = createAgentServer({sessionsDir: root});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/sessions/session1/run`,
+      {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({input: "persist this input"}),
+      },
+    );
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /missing-tools\.json/);
+
+    const records = (await readFile(join(sessionDir, "messages.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.deepEqual(records[0], {
+      type: "message",
+      role: "user",
+      content: [{type: "input_text", text: "persist this input"}],
+    });
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test("serves a session snapshot and streams a committed run over SSE", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-server-"));
   const sessionDir = join(root, "session1");

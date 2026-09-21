@@ -134,7 +134,7 @@ Runs are serialized per `AgentSession` instance. Tool-call schema failures and e
 
 The session roots are configured by the workspace-level `setting.json` `session_roots` array. Each root path is resolved relative to that file and contains session subdirectories. `JAD_ROOT_SETTING_PATH` selects another root setting file, while `JAD_SESSIONS_DIR` and the `sessionsDir` server option remain single-root compatibility overrides. The default fallback is `.jad/sessions` (or `../.jad/sessions`). When multiple roots are configured, API session references are namespaced as `root-id:session-id` to avoid collisions. The frontend Vite server proxies `/api` to `127.0.0.1:8787`. Start the local integration with `npm run server --prefix backend` and `npm run dev --prefix frontend` from the project root. The backend owns its TypeScript compiler and Node types; the frontend is only an HTTP/SSE client and is not a backend build dependency.
 
-The browser may abort its fetch, but the first bridge version does not cancel an already-started provider request; the server continues persistence so the transcript remains consistent.
+The browser may abort its fetch, but the first bridge version does not cancel an already-started provider request; the server continues persistence so the transcript remains consistent. Raw user input is appended before model/tool/provider setup, so a configuration failure still leaves the user message in `messages.jsonl`. HTTP debug files are created only when the provider fetch starts; setup failures therefore have no HTTP request artifact.
 
 ### 2.5 `web-ui-normalized` plugin
 

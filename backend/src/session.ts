@@ -160,10 +160,10 @@ export class AgentSession {
   ): Promise<AgentRunResult> {
     return this.runMutex.runExclusive(async () => {
       this.assertOpen();
-      const config = await this.loader.load();
-      const catalog = await loadToolCatalog(config);
       const inputItems = normalizeSessionInput(input);
       await this.store.appendInputItems(inputItems);
+      const config = await this.loader.load();
+      const catalog = await loadToolCatalog(config);
       const client = this.options.client ?? createClient(config, this.options.environment ?? process.env);
 
       for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
