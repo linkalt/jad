@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.write",
+      "source": "native",
+      "name": "write",
+      "description": "Write file content, creating parent directories as needed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Path relative to cwd or an absolute path."
+          },
+          "content": {
+            "type": "string"
+          },
+          "contentEncoding": {
+            "type": "string",
+            "enum": ["utf8", "base64"]
+          },
+          "backup": {
+            "type": "boolean",
+            "description": "Back up an existing file before replacing it. Defaults to true."
+          }
+        },
+        "required": ["path", "content"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

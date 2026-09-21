@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
+import {mkdtemp, readFile, readdir, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import {SessionConfigLoader} from "../src/config.js";
 import {AgentSession} from "../src/session.js";
 import {loadToolCatalog} from "../src/tools/index.js";
 import {nativeReadDefinition} from "../src/tools/native/read.js";
+import {nativeWriteDefinition} from "../src/tools/native/write.js";
 
 async function makeToolSession(): Promise<string> {
   const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-tools-"));
@@ -31,6 +32,33 @@ async function makeToolSession(): Promise<string> {
           read: {
             max_bytes: 8,
             default_limit: 250,
+          },
+        },
+      },
+    }),
+  );
+  return sessionDir;
+}
+
+async function makeWriteToolSession(): Promise<string> {
+  const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-write-tools-"));
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({model: "gpt-test"}),
+  );
+  await writeFile(
+    join(sessionDir, "write.json"),
+    JSON.stringify({schema_version: 1, tools: [nativeWriteDefinition]}),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({
+      cwd: sessionDir,
+      tool_definition_paths: [join(sessionDir, "write.json")],
+      tools: {
+        native: {
+          write: {
+            max_bytes: 1024,
           },
         },
       },
@@ -182,6 +210,177 @@ test("executes a minimal read call, applies the byte policy, and separates error
     assert.match(executionOutput, /error_code: not_found/);
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("executes minimal writes, creates directories, and backs up replacements", async () => {
+  const sessionDir = await makeWriteToolSession();
+  try {
+    const config = await new SessionConfigLoader(sessionDir).load();
+    const catalog = await loadToolCatalog(config);
+    assert.deepEqual(catalog.definitions().map((definition) => definition.id), ["native.write"]);
+
+    const created = await catalog.executeFunctionCall(
+      {
+        type: "function_call",
+        call_id: "write-create",
+        name: "write",
+        arguments: JSON.stringify({
+          path: "nested/deeper/file.txt",
+          content: "created content\n",
+        }),
+      },
+      {workspaceRoot: sessionDir, sessionDir},
+    );
+    const createdOutput = outputText(created.output);
+    assert.equal(firstLine(createdOutput).status, "ok");
+    assert.match(createdOutput, /created: true/);
+    assert.equal(
+      await readFile(join(sessionDir, "nested/deeper/file.txt"), "utf8"),
+      "created content\n",
+    );
+
+    await writeFile(join(sessionDir, "replace.txt"), "old content\n", "utf8");
+    const replaced = await catalog.executeFunctionCall(
+      {
+        type: "function_call",
+        call_id: "write-replace",
+        name: "write",
+        arguments: JSON.stringify({path: "replace.txt", content: "new content\n"}),
+      },
+      {workspaceRoot: sessionDir, sessionDir},
+    );
+    const replacedOutput = outputText(replaced.output);
+    assert.equal(firstLine(replacedOutput).status, "ok");
+    const backupDisplayPath = replacedOutput
+      .split("\n")
+      .find((line) => line.startsWith("backup_path: "))
+      ?.slice("backup_path: ".length);
+    assert.ok(backupDisplayPath);
+    assert.equal(
+      await readFile(join(sessionDir, backupDisplayPath), "utf8"),
+      "old content\n",
+    );
+    assert.equal(await readFile(join(sessionDir, "replace.txt"), "utf8"), "new content\n");
+
+    const noBackup = await catalog.executeFunctionCall(
+      {
+        type: "function_call",
+        call_id: "write-no-backup",
+        name: "write",
+        arguments: JSON.stringify({path: "no-backup.txt", content: "content", backup: false}),
+      },
+      {workspaceRoot: sessionDir, sessionDir},
+    );
+    const noBackupOutput = outputText(noBackup.output);
+    assert.equal(firstLine(noBackupOutput).status, "ok");
+    assert.doesNotMatch(noBackupOutput, /backup_path:/);
+    assert.equal(
+      (await readdir(sessionDir)).some((entry) => entry.startsWith("no-backup.txt.bak-")),
+      false,
+    );
+
+    const binary = await catalog.executeFunctionCall(
+      {
+        type: "function_call",
+        call_id: "write-binary",
+        name: "write",
+        arguments: JSON.stringify({
+          path: "binary.dat",
+          content: "AP8=",
+          contentEncoding: "base64",
+        }),
+      },
+      {workspaceRoot: sessionDir, sessionDir},
+    );
+    assert.equal(firstLine(outputText(binary.output)).status, "ok");
+    assert.deepEqual(await readFile(join(sessionDir, "binary.dat")), Buffer.from([0, 255]));
+
+    const oversized = await catalog.executeFunctionCall(
+      {
+        type: "function_call",
+        call_id: "write-oversized",
+        name: "write",
+        arguments: JSON.stringify({path: "oversized.txt", content: "x".repeat(1025)}),
+      },
+      {workspaceRoot: sessionDir, sessionDir},
+    );
+    const oversizedOutput = outputText(oversized.output);
+    assert.equal(firstLine(oversizedOutput).status, "blocked");
+    assert.match(oversizedOutput, /error_code: size_limit/);
+
+    const schemaFailure = await catalog.executeFunctionCall(
+      {
+        type: "function_call",
+        call_id: "write-schema-error",
+        name: "write",
+        arguments: JSON.stringify({path: "missing-content.txt"}),
+      },
+      {workspaceRoot: sessionDir, sessionDir},
+    );
+    const schemaOutput = outputText(schemaFailure.output);
+    assert.equal(firstLine(schemaOutput).status, "invalid_input");
+    assert.match(schemaOutput, /missingProperty/);
+    assert.match(schemaOutput, /example_operation: \{"path":"example.txt","content":"\.\.\."\}/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("applies native write allow and deny path policies", async () => {
+  const sessionDir = await makeWriteToolSession();
+  const externalRoot = await mkdtemp(join(tmpdir(), "agent-harness-write-policy-"));
+  const outsidePath = join(externalRoot, "nested", "outside.txt");
+  try {
+    const writeCall = (callId: string) => ({
+      type: "function_call",
+      call_id: callId,
+      name: "write",
+      arguments: JSON.stringify({path: outsidePath, content: "outside content\n"}),
+    });
+    const execute = async (paths: unknown[], callId: string) => {
+      await writeFile(
+        join(sessionDir, "setting.json"),
+        JSON.stringify({
+          cwd: sessionDir,
+          tool_definition_paths: [join(sessionDir, "write.json")],
+          tools: {
+            native: {
+              write: {
+                max_bytes: 65536,
+                paths,
+              },
+            },
+          },
+        }),
+      );
+      const config = await new SessionConfigLoader(sessionDir).load();
+      const catalog = await loadToolCatalog(config);
+      const result = await catalog.executeFunctionCall(
+        writeCall(callId),
+        {workspaceRoot: sessionDir, sessionDir},
+      );
+      return outputText(result.output);
+    };
+
+    const defaultDenied = await execute([], "write-policy-default-denied");
+    assert.equal(firstLine(defaultDenied).status, "forbidden");
+    assert.match(defaultDenied, /error_code: path_outside_workspace/);
+    assert.equal(await readFile(outsidePath, "utf8").catch(() => undefined), undefined);
+
+    const rootAllowed = await execute([{action: "allow", path: "/"}], "write-policy-allowed");
+    assert.equal(firstLine(rootAllowed).status, "ok");
+    assert.equal(await readFile(outsidePath, "utf8"), "outside content\n");
+
+    const denyWins = await execute([
+      {action: "allow", path: "/"},
+      {action: "deny", path: externalRoot},
+    ], "write-policy-denied");
+    assert.equal(firstLine(denyWins).status, "forbidden");
+    assert.match(denyWins, /error_code: path_denied/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+    await rm(externalRoot, {recursive: true, force: true});
   }
 });
 

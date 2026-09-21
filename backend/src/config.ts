@@ -24,19 +24,29 @@ export interface HttpDebugSettings extends JsonRecord {
 
 export type NativeReadPathAction = "allow" | "deny";
 
-export interface NativeReadPathRule extends JsonRecord {
+export interface NativePathRule extends JsonRecord {
   action: NativeReadPathAction;
   path: string;
 }
 
-export interface NativeReadToolSettings extends JsonRecord {
+export type NativeReadPathRule = NativePathRule;
+
+export interface NativePathPolicy extends JsonRecord {
+  paths: NativePathRule[];
+}
+
+export interface NativeReadToolSettings extends NativePathPolicy {
   max_bytes: number;
   default_limit: number;
-  paths: NativeReadPathRule[];
+}
+
+export interface NativeWriteToolSettings extends NativePathPolicy {
+  max_bytes: number;
 }
 
 export interface NativeToolSettings extends JsonRecord {
   read?: NativeReadToolSettings;
+  write?: NativeWriteToolSettings;
 }
 
 export interface ToolSettings extends JsonRecord {
@@ -303,19 +313,20 @@ function normalizeToolDefinitionPaths(
   });
 }
 
-function normalizeNativeReadPaths(
+function normalizeNativePaths(
   value: unknown,
   path: string,
   globalJadRoot: string,
-): NativeReadPathRule[] {
+  toolName: "read" | "write",
+): NativePathRule[] {
   if (value === undefined) {
     return [];
   }
   if (!Array.isArray(value)) {
-    throw new ConfigError(`${path}: tools.native.read.paths must be an array`);
+    throw new ConfigError(`${path}: tools.native.${toolName}.paths must be an array`);
   }
   return value.map((item, index) => {
-    const itemPath = `${path}: tools.native.read.paths[${index}]`;
+    const itemPath = `${path}: tools.native.${toolName}.paths[${index}]`;
     if (!isRecord(item)) {
       throw new ConfigError(`${itemPath} must be an object`);
     }
@@ -330,7 +341,7 @@ function normalizeNativeReadPaths(
       path: isAbsolute(configuredPath)
         ? resolve(configuredPath)
         : resolve(globalJadRoot, configuredPath),
-    } as NativeReadPathRule;
+    } as NativePathRule;
   });
 }
 
@@ -379,7 +390,31 @@ function normalizeTools(
       ...readValue,
       max_bytes: maxBytes,
       default_limit: defaultLimit,
-      paths: normalizeNativeReadPaths(readValue.paths, path, globalJadRoot),
+      paths: normalizeNativePaths(readValue.paths, path, globalJadRoot, "read"),
+    };
+  }
+
+  const writeValue = nativeValue.write;
+  let write: NativeWriteToolSettings | undefined;
+  if (writeValue !== undefined) {
+    if (!isRecord(writeValue)) {
+      throw new ConfigError(`${path}: tools.native.write must be an object`);
+    }
+    const maxBytes = writeValue.max_bytes ?? MAX_NATIVE_TOOL_BYTES;
+    if (
+      typeof maxBytes !== "number" ||
+      !Number.isSafeInteger(maxBytes) ||
+      maxBytes < 1 ||
+      maxBytes > MAX_NATIVE_TOOL_BYTES
+    ) {
+      throw new ConfigError(
+        `${path}: tools.native.write.max_bytes must be a safe integer between 1 and ${MAX_NATIVE_TOOL_BYTES}`,
+      );
+    }
+    write = {
+      ...writeValue,
+      max_bytes: maxBytes,
+      paths: normalizeNativePaths(writeValue.paths, path, globalJadRoot, "write"),
     };
   }
 
@@ -392,6 +427,7 @@ function normalizeTools(
     native: {
       ...nativeValue,
       ...(read ? {read} : {}),
+      ...(write ? {write} : {}),
     },
     mcp: mcpValue,
   } as ToolSettings;

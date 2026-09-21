@@ -1,10 +1,12 @@
-import { readFile, readdir, realpath, stat } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readFile, readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { TextDecoder } from "node:util";
 
 import type { NativeReadToolSettings } from "../../config.js";
 import type { JsonRecord } from "../../persistence.js";
 import { executionError, renderToolResult } from "../output.js";
+import {resolveExistingTarget} from "./path.js";
+import type {ResolvedTarget} from "./path.js";
 import type { ToolDefinition, ToolExecutionContext } from "../types.js";
 
 export const NATIVE_READ_ID = "native.read";
@@ -86,182 +88,6 @@ interface LineSpan {
   start: number;
   end: number;
   fullEnd: number;
-}
-
-interface ResolvedTarget {
-  realPath: string;
-  displayPath: string;
-  errorPath: string;
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function withinRoot(root: string, target: string): boolean {
-  if (root === sep) {
-    return target.startsWith(sep);
-  }
-  return target === root || target.startsWith(`${root}${sep}`);
-}
-
-function displayPath(root: string, target: string): string {
-  if (!withinRoot(root, target)) {
-    return target;
-  }
-  const value = relative(root, target).split(sep).join("/");
-  return value.length > 0 ? value : ".";
-}
-
-function errorPath(root: string, target: string): string {
-  if (withinRoot(root, target)) {
-    return displayPath(root, target);
-  }
-  const name = basename(target);
-  return name.length > 0 ? `../${name}` : "..";
-}
-
-function pathPolicyError(
-  target: string,
-  workspaceRoot: string,
-  paths: NativeReadToolSettings["paths"],
-  callId: string,
-): string | undefined {
-  const matches = paths.filter((rule) => withinRoot(rule.path, target));
-  if (matches.some((rule) => rule.action === "deny")) {
-    return executionError(
-      callId,
-      "forbidden",
-      "path_denied",
-      "The requested path is denied by the read policy",
-      [["path", errorPath(workspaceRoot, target)]],
-    );
-  }
-  if (withinRoot(workspaceRoot, target) || matches.some((rule) => rule.action === "allow")) {
-    return undefined;
-  }
-  return executionError(
-    callId,
-    "forbidden",
-    "path_outside_workspace",
-    "The requested path is outside the workspace",
-    [["path", errorPath(workspaceRoot, target)]],
-  );
-}
-
-async function resolveTarget(
-  requestedPath: string,
-  workspaceRoot: string,
-  policy: NativeReadToolSettings,
-  callId: string,
-): Promise<{target?: ResolvedTarget; error?: string}> {
-  let root: string;
-  try {
-    root = await realpath(workspaceRoot);
-  } catch {
-    return {
-      error: executionError(
-        callId,
-        "error",
-        "workspace_unavailable",
-        "Workspace is not available",
-      ),
-    };
-  }
-
-  const candidate = isAbsolute(requestedPath)
-    ? resolve(requestedPath)
-    : resolve(root, requestedPath);
-  const candidatePolicyError = pathPolicyError(
-    candidate,
-    root,
-    policy.paths,
-    callId,
-  );
-  if (candidatePolicyError) {
-    return {error: candidatePolicyError};
-  }
-  const safeCandidatePath = errorPath(root, candidate);
-
-  let target: string;
-  try {
-    target = await realpath(candidate);
-  } catch (error) {
-    const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return {
-        error: executionError(
-          callId,
-          "not_found",
-          "not_found",
-          `Could not find ${safeCandidatePath}`,
-          [["path", safeCandidatePath]],
-        ),
-      };
-    }
-    if (code === "EACCES" || code === "EPERM") {
-      return {
-        error: executionError(
-          callId,
-          "forbidden",
-          "path_forbidden",
-          "The requested path is not accessible",
-          [["path", safeCandidatePath]],
-        ),
-      };
-    }
-    return {
-      error: executionError(
-        callId,
-        "error",
-        "path_resolution_failed",
-        "The requested path could not be resolved",
-        [["path", safeCandidatePath]],
-      ),
-    };
-  }
-
-  if (!withinRoot(root, target) && target !== candidate) {
-    return {
-      error: executionError(
-        callId,
-        "forbidden",
-        "symlink_outside_workspace",
-        "The requested path resolves outside the workspace",
-        [["path", safeCandidatePath]],
-      ),
-    };
-  }
-
-  const targetPolicyError = pathPolicyError(
-    target,
-    root,
-    policy.paths,
-    callId,
-  );
-  if (targetPolicyError) {
-    return {error: targetPolicyError};
-  }
-
-  if (target !== candidate) {
-    return {
-      error: executionError(
-        callId,
-        "forbidden",
-        "symlink_forbidden",
-        "The requested path is a symlink",
-        [["path", safeCandidatePath]],
-      ),
-    };
-  }
-
-  return {
-    target: {
-      realPath: target,
-      displayPath: displayPath(root, target),
-      errorPath: errorPath(root, target),
-    },
-  };
 }
 
 function lineSpans(data: Buffer): LineSpan[] {
@@ -595,7 +421,7 @@ export async function executeNativeRead(
   context: ReadContext,
 ): Promise<string> {
   const readArgs = args as unknown as ReadArgs;
-  const resolved = await resolveTarget(
+  const resolved = await resolveExistingTarget(
     readArgs.path,
     context.workspaceRoot,
     context.policy,

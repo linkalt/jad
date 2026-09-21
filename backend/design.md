@@ -83,7 +83,23 @@ The history reader yields raw input items directly and expands each committed `r
 - `tools.native.read.paths` contains normalized `{action: "allow"|"deny", path}` rules, with relative rule paths resolved from the global JAD root; paths inside `cwd` are allowed by default, paths outside `cwd` require an allow rule, and deny rules take precedence;
 - native `read` uses `max_bytes` as its output-content cap and defaults its optional `limit` to 250;
 - native `read` supports `includeContent: false` for stat-only file metadata without loading content;
-- out-of-range reads report `offset_clamped: true` and a no-content EOF summary; validation failures include a compact `example_operation` for the native read schema.
+- out-of-range reads report `offset_clamped: true` and a no-content EOF summary; validation failures include a compact `example_operation` for the native read schema;
+- native `write` accepts `path` and `content`, optionally `contentEncoding` (`utf8` by default), and `backup` (true by default);
+- native `write` creates missing parent directories, writes atomically, preserves existing file permissions, and creates a versioned sibling backup before replacing an existing regular file;
+- `tools.native.write.max_bytes` bounds writes, and `tools.native.write.paths` applies the same normalized allow/deny path policy as `read`.
+
+Example write-tool enablement:
+
+```json
+{
+  "tool_definition_paths": ["sample/tools/native/write.json"],
+  "tools": {
+    "native": {
+      "write": {}
+    }
+  }
+}
+```
 
 Example storage and HTTP debug paths:
 
