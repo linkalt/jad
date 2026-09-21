@@ -34,7 +34,7 @@ export function appendTextPart(
   type: "reasoning" | "text",
   text: string,
 ): WebUiPart[] {
-  if (text.length === 0 || (type === "reasoning" && text.trim().length === 0)) {
+  if (text.trim().length === 0) {
     return parts;
   }
   const previous = parts[parts.length - 1];

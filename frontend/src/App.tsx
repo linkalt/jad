@@ -693,7 +693,7 @@ function groupWebUiParts(parts: WebUiPart[]): WebUiPartGroup[] {
   };
 
   parts.forEach((part, index) => {
-    if (part.type === 'reasoning' && part.text.trim().length === 0) {
+    if ((part.type === 'reasoning' || part.type === 'text') && part.text.trim().length === 0) {
       return;
     }
     if (isWebUiActivityPart(part)) {

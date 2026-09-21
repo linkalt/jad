@@ -116,6 +116,43 @@ test("ignores encrypted or empty reasoning summaries in the UI stream", () => {
   assert.equal(completed.reasoningContent, undefined);
 });
 
+test("drops whitespace-only assistant content between tool calls", () => {
+  const output = [
+    {
+      type: "function_call",
+      call_id: "call_first",
+      name: "read",
+      arguments: "{\"path\":\"first\"}",
+    },
+    {type: "message", role: "assistant", content: [{type: "output_text", text: "\n"}]},
+    {
+      type: "function_call",
+      call_id: "call_second",
+      name: "read",
+      arguments: "{\"path\":\"second\"}",
+    },
+  ];
+  const expectedParts = [
+    {type: "tool_call", callId: "call_first", name: "read", arguments: "{\"path\":\"first\"}"},
+    {type: "tool_call", callId: "call_second", name: "read", arguments: "{\"path\":\"second\"}"},
+  ];
+  const snapshot = normalizeWebUiSession(
+    "session1",
+    {
+      model: { provider: "fake", model: "fake-model" },
+      settings: { session_name: "tools" },
+    } as unknown as LoadedSessionConfig,
+    [completedEvent(output, "response-whitespace-between-tools")],
+  );
+  assert.deepEqual(snapshot.messages[0]?.parts, expectedParts);
+
+  const normalizedRun = new WebUiNormalizedRun("live-whitespace-between-tools");
+  assert.deepEqual(
+    normalizedRun.update(completedEvent(output, "response-whitespace-between-tools"))?.parts,
+    expectedParts,
+  );
+});
+
 test("normalizes tool call and result parts for snapshots and live runs", () => {
   const call = {
     type: "function_call",
