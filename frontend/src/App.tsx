@@ -27,6 +27,7 @@ import {
   SideNavHeading,
   SideNavItem,
   SideNavSection,
+  Spinner,
   StatusDot,
   Text,
   VStack,
@@ -115,6 +116,18 @@ const styles = stylex.create({
   sectionHeading: {
     minWidth: 0,
   },
+  assistantIdentity: {
+    minWidth: 0,
+    maxWidth: '100%',
+  },
+  assistantModel: {
+    minWidth: 0,
+    maxWidth: '100%',
+    flexShrink: 1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   reasoningRoot: {
     width: '100%',
     marginBlockStart: spacingVars['--spacing-2'],
@@ -170,8 +183,7 @@ const styles = stylex.create({
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
-    flexShrink: 1,
-    minWidth: '4ch',
+    flexShrink: 0,
   },
   reasoningTitle: {
     fontSize: typeScaleVars['--text-supporting-size'],
@@ -227,6 +239,10 @@ interface Session {
   time: string;
   turns: number;
   state: SessionState;
+  model?: {
+    provider?: string;
+    model?: string;
+  };
 }
 
 interface ReasoningStep {
@@ -441,10 +457,12 @@ function ReasoningBlock({
   steps,
   content = '',
   isGrouped = false,
+  isStreaming = false,
 }: {
   steps: ReasoningStep[];
   content?: string;
   isGrouped?: boolean;
+  isStreaming?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const contentId = useId();
@@ -480,7 +498,11 @@ function ReasoningBlock({
           width="100%"
           xstyle={styles.reasoningTrigger}
         >
-          <Icon icon="wrench" size="sm" color="accent" />
+          {isStreaming ? (
+            <Spinner size="sm" shade="subtle" aria-hidden="true" />
+          ) : (
+            <Icon icon="success" size="xsm" color="success" />
+          )}
           <Text type="inherit" xstyle={styles.reasoningName}>
             Think
           </Text>
@@ -598,6 +620,13 @@ function toolResultLabel(status: WebUiToolResult['status']): string {
   return 'Result';
 }
 
+function toolCallStatus(result?: WebUiToolResult): 'running' | 'complete' | 'error' {
+  if (!result || result.status === 'unknown') {
+    return 'running';
+  }
+  return result.status === 'error' ? 'error' : 'complete';
+}
+
 function ToolCallBlock({
   call,
   result,
@@ -611,7 +640,7 @@ function ToolCallBlock({
   const item: ChatToolCallItem = {
     key: `tool-${call.callId}`,
     name: call.name,
-    status: resultStatus === 'error' ? 'error' : result ? 'complete' : 'running',
+    status: toolCallStatus(result),
     target: toolTarget(call.arguments),
     errorMessage: resultStatus === 'error' ? 'The tool returned an error.' : undefined,
     resultDetail: (
@@ -699,7 +728,7 @@ function toolActivityForParts(parts: WebUiPart[]): ChatToolCallItem[] {
       if (call) {
         calls.set(part.callId, {
           ...call,
-          status: part.status === 'error' ? 'error' : 'complete',
+          status: part.status === 'error' ? 'error' : part.status === 'success' ? 'complete' : 'running',
           errorMessage: part.status === 'error' ? 'The tool returned an error.' : undefined,
         });
       }
@@ -784,6 +813,7 @@ function WebUiParts({
                       steps={[]}
                       content={part.text}
                       isGrouped
+                      isStreaming={isStreaming}
                     />
                   );
                 }
@@ -1061,7 +1091,21 @@ function RunInspector({
   );
 }
 
-function renderMessage(message: MessageRecord) {
+function AssistantIdentity({model}: {model?: Session['model']}) {
+  const providerName = model?.provider?.trim() || 'provider_name';
+  const modelId = model?.model?.trim() || 'model_id';
+
+  return (
+    <HStack align="center" gap={2} xstyle={styles.assistantIdentity}>
+      <Text type="label" weight="semibold">{providerName}</Text>
+      <Text type="supporting" color="secondary" xstyle={styles.assistantModel}>
+        {modelId}
+      </Text>
+    </HStack>
+  );
+}
+
+function renderMessage(message: MessageRecord, model?: Session['model']) {
   if (message.sender === 'system') {
     return (
       <ChatSystemMessage
@@ -1100,12 +1144,7 @@ function renderMessage(message: MessageRecord) {
       <ChatMessageBubble
         variant="ghost"
         width="100%"
-        name={
-          <HStack align="center" gap={2}>
-            <Text type="label" weight="semibold">Astra</Text>
-            <Text type="supporting" color="secondary">agent</Text>
-          </HStack>
-        }
+        name={<AssistantIdentity model={model} />}
         metadata={
           <ChatMessageMetadata
             timestamp={message.timestamp}
@@ -1404,6 +1443,7 @@ function App() {
                   turns: snapshot.turns,
                   time: snapshot.turns > 0 ? 'Local transcript' : 'Ready',
                   state: 'success',
+                  model: snapshot.model,
                 }
               : session,
           ),
@@ -1589,15 +1629,19 @@ function App() {
                     xstyle={styles.conversationLane}
                   >
                     <ChatMessageList density="balanced" align="top" isStreaming={isRunning}>
-                      {messages.map(renderMessage)}
+                      {messages.map(message => renderMessage(message, activeSession.model))}
                       {isRunning && (!isLiveSession || streamingMessage) && (
                         <ChatMessage sender="assistant" avatar={<AgentAvatar isRunning />}>
-                          <ChatMessageBubble variant="ghost" width="100%">
+                          <ChatMessageBubble
+                            variant="ghost"
+                            width="100%"
+                            name={<AssistantIdentity model={activeSession.model} />}
+                          >
                             {isLiveSession && streamingMessage ? (
                               <WebUiParts parts={streamingMessage.parts} isStreaming />
                             ) : (
                               <VStack gap={3} width="100%">
-                                <ReasoningBlock steps={reasoningSteps} />
+                                <ReasoningBlock steps={reasoningSteps} isStreaming />
                                 <Markdown
                                   density="compact"
                                   contentWidth="100%"
