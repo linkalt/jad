@@ -144,8 +144,11 @@ const styles = stylex.create({
   },
   reasoningButton: {
     justifyContent: 'flex-start',
+    height: `calc(${typeScaleVars['--text-supporting-size']} * ${typeScaleVars['--text-supporting-leading']} + ${spacingVars['--spacing-1']})`,
+    width: `calc(100% + ${spacingVars['--spacing-2']})`,
+    marginInline: `calc(-1 * ${spacingVars['--spacing-1']})`,
     paddingBlock: spacingVars['--spacing-0-5'],
-    paddingInline: spacingVars['--spacing-0'],
+    paddingInline: spacingVars['--spacing-1'],
     borderRadius: radiusVars['--radius-element'],
     textAlign: 'start',
     '@media (hover: hover)': {
@@ -153,6 +156,16 @@ const styles = stylex.create({
         backgroundColor: colorVars['--color-overlay-hover'],
       },
     },
+  },
+  reasoningStatusIcon: {
+    position: 'relative',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    width: spacingVars['--spacing-4'],
+    height: spacingVars['--spacing-4'],
+    borderRadius: radiusVars['--radius-full'],
   },
   reasoningTrigger: {
     minWidth: 0,
@@ -485,7 +498,6 @@ function ReasoningBlock({
       <Button
         label={isOpen ? 'Collapse reasoning' : 'Expand reasoning'}
         variant="ghost"
-        width="100%"
         xstyle={styles.reasoningButton}
         aria-expanded={isOpen}
         aria-controls={contentId}
@@ -498,11 +510,13 @@ function ReasoningBlock({
           width="100%"
           xstyle={styles.reasoningTrigger}
         >
-          {isStreaming ? (
-            <Spinner size="sm" shade="subtle" aria-hidden="true" />
-          ) : (
-            <Icon icon="success" size="xsm" color="success" />
-          )}
+          <HStack as="span" align="center" justify="center" xstyle={styles.reasoningStatusIcon}>
+            {isStreaming ? (
+              <Spinner size="sm" shade="subtle" aria-hidden="true" />
+            ) : (
+              <Icon icon="success" size="xsm" color="success" />
+            )}
+          </HStack>
           <Text type="inherit" xstyle={styles.reasoningName}>
             Think
           </Text>
