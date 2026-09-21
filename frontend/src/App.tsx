@@ -119,6 +119,16 @@ const styles = stylex.create({
     width: '100%',
     marginBlockStart: spacingVars['--spacing-2'],
   },
+  activityGroup: {
+    width: '100%',
+    marginBlockStart: spacingVars['--spacing-2'],
+  },
+  reasoningRootGrouped: {
+    marginBlockStart: spacingVars['--spacing-0'],
+  },
+  toolCallsGrouped: {
+    marginBlockStart: spacingVars['--spacing-0'],
+  },
   reasoningButton: {
     justifyContent: 'flex-start',
     paddingBlock: spacingVars['--spacing-0-5'],
@@ -430,9 +440,11 @@ function getStatusLabel(status: TraceState): string {
 function ReasoningBlock({
   steps,
   content = '',
+  isGrouped = false,
 }: {
   steps: ReasoningStep[];
   content?: string;
+  isGrouped?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const contentId = useId();
@@ -451,7 +463,7 @@ function ReasoningBlock({
   }
 
   return (
-    <VStack xstyle={styles.reasoningRoot}>
+    <VStack xstyle={[styles.reasoningRoot, isGrouped && styles.reasoningRootGrouped]}>
       <Button
         label={isOpen ? 'Collapse reasoning' : 'Expand reasoning'}
         variant="ghost"
@@ -470,7 +482,7 @@ function ReasoningBlock({
         >
           <Icon icon="wrench" size="sm" color="accent" />
           <Text type="inherit" xstyle={styles.reasoningName}>
-            Thinking
+            Think
           </Text>
           {!isOpen && title && (
             <Text
@@ -586,7 +598,15 @@ function toolResultLabel(status: WebUiToolResult['status']): string {
   return 'Result';
 }
 
-function ToolCallBlock({call, result}: {call: WebUiToolCall; result?: WebUiToolResult}) {
+function ToolCallBlock({
+  call,
+  result,
+  isGrouped = false,
+}: {
+  call: WebUiToolCall;
+  result?: WebUiToolResult;
+  isGrouped?: boolean;
+}) {
   const resultStatus = result?.status;
   const item: ChatToolCallItem = {
     key: `tool-${call.callId}`,
@@ -630,7 +650,12 @@ function ToolCallBlock({call, result}: {call: WebUiToolCall; result?: WebUiToolR
     ),
   };
 
-  return <ChatToolCalls calls={[item]} />;
+  return (
+    <ChatToolCalls
+      calls={[item]}
+      xstyle={isGrouped ? styles.toolCallsGrouped : undefined}
+    />
+  );
 }
 
 function OrphanToolResultBlock({result}: {result: WebUiToolResult}) {
@@ -683,6 +708,54 @@ function toolActivityForParts(parts: WebUiPart[]): ChatToolCallItem[] {
   return [...calls.values()];
 }
 
+type WebUiReasoningPart = {type: 'reasoning'; text: string};
+type WebUiContentPart = {type: 'text'; text: string};
+type WebUiActivityPart = WebUiReasoningPart | WebUiToolCall | WebUiToolResult;
+type IndexedWebUiPart<T extends WebUiPart> = {part: T; index: number};
+type WebUiPartGroup =
+  | {
+      type: 'activity';
+      items: IndexedWebUiPart<WebUiActivityPart>[];
+    }
+  | {
+      type: 'content';
+      item: IndexedWebUiPart<WebUiContentPart>;
+    };
+
+function isWebUiActivityPart(part: WebUiPart): part is WebUiActivityPart {
+  return part.type === 'reasoning' || part.type === 'tool_call' || part.type === 'tool_result';
+}
+
+function isWebUiContentPart(part: WebUiPart): part is WebUiContentPart {
+  return part.type === 'text';
+}
+
+function groupWebUiParts(parts: WebUiPart[]): WebUiPartGroup[] {
+  const groups: WebUiPartGroup[] = [];
+  let activityItems: IndexedWebUiPart<WebUiActivityPart>[] = [];
+
+  const flushActivity = () => {
+    if (activityItems.length > 0) {
+      groups.push({type: 'activity', items: activityItems});
+      activityItems = [];
+    }
+  };
+
+  parts.forEach((part, index) => {
+    if (isWebUiActivityPart(part)) {
+      activityItems.push({part, index});
+      return;
+    }
+    if (isWebUiContentPart(part)) {
+      flushActivity();
+      groups.push({type: 'content', item: {part, index}});
+    }
+  });
+  flushActivity();
+
+  return groups;
+}
+
 function WebUiParts({
   parts,
   isStreaming = false,
@@ -690,37 +763,69 @@ function WebUiParts({
   parts: WebUiPart[];
   isStreaming?: boolean;
 }) {
+  const groups = groupWebUiParts(parts);
+
   return (
     <VStack gap={3} width="100%">
-      {parts.map((part, index) => {
-        const isLast = index === parts.length - 1;
-        if (part.type === 'reasoning') {
-          return <ReasoningBlock key={`reasoning-${index}`} steps={[]} content={part.text} />;
+      {groups.map((group, groupIndex) => {
+        if (group.type === 'activity') {
+          return (
+            <VStack
+              key={`activity-${group.items[0]?.index ?? groupIndex}`}
+              gap={1}
+              width="100%"
+              xstyle={styles.activityGroup}
+            >
+              {group.items.map(({part, index}) => {
+                if (part.type === 'reasoning') {
+                  return (
+                    <ReasoningBlock
+                      key={`reasoning-${index}`}
+                      steps={[]}
+                      content={part.text}
+                      isGrouped
+                    />
+                  );
+                }
+                if (part.type === 'tool_call') {
+                  const result = parts
+                    .slice(index + 1)
+                    .find(
+                      (candidate): candidate is WebUiToolResult =>
+                        candidate.type === 'tool_result' && candidate.callId === part.callId,
+                    );
+                  return (
+                    <ToolCallBlock
+                      key={`tool-call-${part.callId}-${index}`}
+                      call={part}
+                      result={result}
+                      isGrouped
+                    />
+                  );
+                }
+                const hasCall = parts
+                  .slice(0, index)
+                  .some(candidate => candidate.type === 'tool_call' && candidate.callId === part.callId);
+                return hasCall ? null : (
+                  <OrphanToolResultBlock
+                    key={`tool-result-${part.callId}-${index}`}
+                    result={part}
+                  />
+                );
+              })}
+            </VStack>
+          );
         }
-        if (part.type === 'tool_call') {
-          const result = parts
-            .slice(index + 1)
-            .find(
-              (candidate): candidate is WebUiToolResult =>
-                candidate.type === 'tool_result' && candidate.callId === part.callId,
-            );
-          return <ToolCallBlock key={`tool-call-${part.callId}-${index}`} call={part} result={result} />;
-        }
-        if (part.type === 'tool_result') {
-          const hasCall = parts
-            .slice(0, index)
-            .some(candidate => candidate.type === 'tool_call' && candidate.callId === part.callId);
-          return hasCall ? null : <OrphanToolResultBlock key={`tool-result-${part.callId}-${index}`} result={part} />;
-        }
+
         return (
           <Markdown
-            key={`text-${index}`}
+            key={`text-${group.item.index}`}
             density="compact"
             contentWidth="100%"
-            isStreaming={isStreaming && isLast}
+            isStreaming={isStreaming && group.item.index === parts.length - 1}
             headingLevelStart={3}
           >
-            {part.text}
+            {group.item.part.text}
           </Markdown>
         );
       })}
