@@ -113,14 +113,21 @@ const styles = stylex.create({
   sectionHeading: {
     minWidth: 0,
   },
-  reasoningCard: {
+  reasoningRoot: {
     width: '100%',
+    marginBlockStart: spacingVars['--spacing-2'],
   },
   reasoningButton: {
     justifyContent: 'flex-start',
-    paddingBlock: spacingVars['--spacing-0'],
-    paddingInline: spacingVars['--spacing-0'],
+    paddingBlock: spacingVars['--spacing-0-5'],
+    paddingInline: spacingVars['--spacing-1'],
+    borderRadius: radiusVars['--radius-element'],
     textAlign: 'start',
+    '@media (hover: hover)': {
+      ':hover:where(:not(:disabled,[aria-disabled="true"]))': {
+        backgroundColor: colorVars['--color-overlay-hover'],
+      },
+    },
   },
   reasoningTrigger: {
     minWidth: 0,
@@ -128,11 +135,18 @@ const styles = stylex.create({
   },
   reasoningPanel: {
     paddingBlockStart: spacingVars['--spacing-1'],
+    paddingInlineStart: `calc(${sizeVars['--size-element-sm']} + ${spacingVars['--spacing-1-5']})`,
+    paddingBlockEnd: spacingVars['--spacing-2'],
   },
   reasoningPanelHidden: {
     display: 'none',
   },
-  reasoningIconOpen: {
+  reasoningChevron: {
+    flexShrink: 0,
+    marginInlineStart: 'auto',
+    color: colorVars['--color-text-disabled'],
+  },
+  reasoningChevronOpen: {
     transform: 'rotate(180deg)',
   },
   reasoningTitle: {
@@ -400,14 +414,11 @@ function getStatusLabel(status: TraceState): string {
 function ReasoningBlock({
   steps,
   content = '',
-  compact = false,
 }: {
   steps: ReasoningStep[];
   content?: string;
-  compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
   const contentId = useId();
   const hasContent = content.trim().length > 0;
   const hasSteps = steps.length > 0;
@@ -424,7 +435,7 @@ function ReasoningBlock({
   }
 
   return (
-    <Card variant="muted" padding={compact ? 2 : 3} xstyle={styles.reasoningCard}>
+    <VStack xstyle={styles.reasoningRoot}>
       <Button
         label={isOpen ? 'Collapse reasoning' : 'Expand reasoning'}
         variant="ghost"
@@ -433,22 +444,16 @@ function ReasoningBlock({
         aria-expanded={isOpen}
         aria-controls={contentId}
         onClick={() => setIsOpen(current => !current)}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
       >
         <HStack
           as="span"
           align="center"
+          justify="between"
           gap={2}
           width="100%"
           xstyle={styles.reasoningTrigger}
         >
-          <Icon
-            icon={isOpen || isHovered ? 'chevronDown' : 'wrench'}
-            size="sm"
-            color="accent"
-            xstyle={isOpen ? styles.reasoningIconOpen : undefined}
-          />
+          <Icon icon="wrench" size="sm" color="accent" />
           <Text type="label" weight="semibold">
             Thinking
           </Text>
@@ -461,6 +466,12 @@ function ReasoningBlock({
               {title}
             </Text>
           )}
+          <Icon
+            icon="chevronDown"
+            size="xsm"
+            color="inherit"
+            xstyle={[styles.reasoningChevron, isOpen && styles.reasoningChevronOpen]}
+          />
         </HStack>
       </Button>
       <VStack
@@ -510,7 +521,7 @@ function ReasoningBlock({
           </>
         )}
       </VStack>
-    </Card>
+    </VStack>
   );
 }
 
@@ -901,7 +912,7 @@ function RunInspector({
                 {isLive ? 'Live' : 'Preview'}
               </Text>
             </HStack>
-            <ReasoningBlock steps={steps} compact />
+            <ReasoningBlock steps={steps} />
           </VStack>
         )}
 
