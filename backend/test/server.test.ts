@@ -95,6 +95,51 @@ test("preserves interleaved reasoning and assistant parts", () => {
   assert.deepEqual(snapshot.messages[0]?.parts, expectedParts);
 });
 
+test("preserves interleaved reasoning and tool-call order in the live UI stream", () => {
+  const normalizedRun = new WebUiNormalizedRun("interleaved-tool-turn");
+  const callOne = {
+    type: "function_call",
+    call_id: "call_one",
+    name: "read",
+    arguments: "{\"path\":\"one\"}",
+  };
+  const callTwo = {
+    type: "function_call",
+    call_id: "call_two",
+    name: "write",
+    arguments: "{\"path\":\"two\",\"content\":\"two\"}",
+  };
+  const callThree = {
+    type: "function_call",
+    call_id: "call_three",
+    name: "read",
+    arguments: "{\"path\":\"three\"}",
+  };
+  const events = [
+    {type: "response.reasoning_summary_text.delta", delta: "r1"},
+    {type: "response.output_item.done", output_index: 1, item: callOne},
+    {type: "response.reasoning_summary_text.delta", delta: "r2"},
+    {type: "response.output_item.done", output_index: 3, item: callTwo},
+    {type: "response.output_item.done", output_index: 4, item: callThree},
+    {type: "response.reasoning_summary_text.delta", delta: "r3"},
+  ];
+  for (const event of events) {
+    normalizedRun.update(event);
+  }
+
+  assert.deepEqual(
+    normalizedRun.complete({id: "response-interleaved-tools", output: []}).parts,
+    [
+      {type: "reasoning", text: "r1"},
+      {type: "tool_call", callId: "call_one", name: "read", arguments: "{\"path\":\"one\"}"},
+      {type: "reasoning", text: "r2"},
+      {type: "tool_call", callId: "call_two", name: "write", arguments: "{\"path\":\"two\",\"content\":\"two\"}"},
+      {type: "tool_call", callId: "call_three", name: "read", arguments: "{\"path\":\"three\"}"},
+      {type: "reasoning", text: "r3"},
+    ],
+  );
+});
+
 test("ignores encrypted or empty reasoning summaries in the UI stream", () => {
   const normalizedRun = new WebUiNormalizedRun("opaque-reasoning-turn");
   assert.equal(

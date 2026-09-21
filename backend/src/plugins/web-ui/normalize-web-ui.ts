@@ -251,15 +251,28 @@ export class WebUiNormalizedRun {
       return this.streamingMessage();
     }
 
+    if (event.type === "response.output_item.done" && isRecord(event.item)) {
+      const call = toolCallPartFromAnyOutput(event.item, this.parts.length);
+      if (call && !this.hasToolCall(call.callId)) {
+        this.parts = appendToolPart(this.parts, call);
+        return this.streamingMessage();
+      }
+    }
+
     if (event.type === "response.completed") {
       const completedParts = responseParts(event);
       const toolParts = completedParts.filter(
         (part): part is WebUiToolCallPart => part.type === "tool_call",
       );
-      if (toolParts.length > 0) {
-        for (const part of toolParts) {
-          this.parts = appendToolPart(this.parts, part);
+      let appended = false;
+      for (const part of toolParts) {
+        if (this.hasToolCall(part.callId)) {
+          continue;
         }
+        this.parts = appendToolPart(this.parts, part);
+        appended = true;
+      }
+      if (appended) {
         return this.streamingMessage();
       }
     }
@@ -279,6 +292,12 @@ export class WebUiNormalizedRun {
     const completedParts = responseParts(response);
     this.parts = mergeCompletedParts(this.parts, completedParts);
     return assistantMessage(this.messageId, this.parts, this.timestamp, "complete");
+  }
+
+  private hasToolCall(callId: string): boolean {
+    return this.parts.some(
+      (part) => part.type === "tool_call" && part.callId === callId,
+    );
   }
 
   private streamingMessage(): WebUiMessage {
