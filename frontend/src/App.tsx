@@ -1359,44 +1359,49 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void fetchSessions()
-      .then(snapshots => {
-        if (cancelled) {
-          return;
-        }
-        const liveItems = snapshots.map(snapshot => ({
-          snapshot,
-          id: sessionUiId(snapshot, initialSessions),
-        }));
-        setThreads(current => {
-          const next = {...current};
-          for (const item of liveItems) {
-            next[item.id] = item.snapshot.messages;
+    const loadSessions = () => {
+      void fetchSessions()
+        .then(snapshots => {
+          if (cancelled) {
+            return;
           }
-          return next;
+          const liveItems = snapshots.map(snapshot => ({
+            snapshot,
+            id: sessionUiId(snapshot, initialSessions),
+          }));
+          setThreads(current => {
+            const next = {...current};
+            for (const item of liveItems) {
+              next[item.id] = item.snapshot.messages;
+            }
+            return next;
+          });
+          setSessions(current => {
+            const liveIds = new Set(liveItems.map(item => item.id));
+            const liveSessions = liveItems.map(item => sessionFromSnapshot(item.snapshot, item.id));
+            const existingLive = current.filter(
+              session => session.source === 'live' && !liveIds.has(session.id),
+            );
+            const samples = current.filter(
+              session => session.source === 'sample' && !liveIds.has(session.id),
+            );
+            return [...liveSessions, ...existingLive, ...samples];
+          });
+        })
+        .catch(error => {
+          if (!cancelled) {
+            console.warn('Unable to load configured sessions:', error);
+          }
         });
-        setSessions(current => {
-          const liveIds = new Set(liveItems.map(item => item.id));
-          const liveSessions = liveItems.map(item => sessionFromSnapshot(item.snapshot, item.id));
-          const existingLive = current.filter(
-            session => session.source === 'live' && !liveIds.has(session.id),
-          );
-          const samples = current.filter(
-            session => session.source === 'sample' && !liveIds.has(session.id),
-          );
-          return [...liveSessions, ...existingLive, ...samples];
-        });
-      })
-      .catch(error => {
-        if (!cancelled) {
-          console.warn('Unable to load configured sessions:', error);
-        }
-      });
+    };
 
+    loadSessions();
+    const refreshTimer = window.setInterval(loadSessions, 5000);
     return () => {
       cancelled = true;
+      window.clearInterval(refreshTimer);
     };
-  }, []);
+  }, [isRunning]);
 
   useEffect(() => {
     return () => {

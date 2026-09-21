@@ -1,4 +1,3 @@
-import type { LoadedSessionConfig } from "../../config.js";
 import type { JsonRecord } from "../../persistence.js";
 import {
   assistantTextDeltaFromEvent,
@@ -26,6 +25,7 @@ import {
 import type {
   WebUiMessage,
   WebUiPart,
+  WebUiSessionConfig,
   WebUiSessionSnapshot,
   WebUiToolCallPart,
 } from "./types.js";
@@ -107,7 +107,7 @@ function userMessage(value: JsonRecord, index: number): WebUiMessage | undefined
 
 export function normalizeWebUiSession(
   id: string,
-  config: LoadedSessionConfig,
+  config: WebUiSessionConfig,
   records: readonly JsonRecord[],
 ): WebUiSessionSnapshot {
   const messages: WebUiMessage[] = [];

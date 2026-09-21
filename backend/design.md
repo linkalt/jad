@@ -149,6 +149,7 @@ The browser may abort its fetch, but the first bridge version does not cancel an
 The plugin:
 
 - converts raw session records into UI messages for `GET /api/sessions` and `GET /api/sessions/:id`;
+- the session list reads `setting.json` metadata independently, so an incomplete provider/cwd configuration can still appear by name; full session operations continue to validate their configuration;
 - it converts provider stream events into ordered `ui.message` SSE updates;
 - it keeps adjacent reasoning/text chunks merged in the backend and emits tool call/result blocks as structured parts;
 - it does not change the raw `messages.jsonl` format or write a UI projection there;
