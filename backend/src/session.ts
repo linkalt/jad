@@ -165,11 +165,13 @@ export class AgentSession {
     const loader = new SessionConfigLoader(sessionDir, {
       globalJadRoot: options.globalJadRoot,
     });
-    await loader.loadSettings();
+    const settings = await loader.loadSettings();
     const store = await SessionResponseStore.open(loader.paths.session_dir, {
       ...options.store,
       messagesPath: options.store?.messagesPath ?? loader.paths.messages_path,
       stagingDir: options.store?.stagingDir ?? loader.paths.staging_dir,
+      durability: options.store?.durability ?? settings.persistence.durability,
+      maxItemBytes: options.store?.maxItemBytes ?? settings.persistence.max_item_bytes,
     });
     return new AgentSession(
       loader.paths.session_dir,

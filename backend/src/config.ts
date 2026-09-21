@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { JsonRecord } from "./persistence.js";
+import type { DurabilityMode, JsonRecord } from "./persistence.js";
 
 export interface ModelConfig extends JsonRecord {
   schema_version: 1;
@@ -61,12 +61,18 @@ export interface SessionStoragePaths extends JsonRecord {
   http_debug: string;
 }
 
+export interface PersistenceSettings extends JsonRecord {
+  durability: DurabilityMode;
+  max_item_bytes: number;
+}
+
 export interface SessionSettings extends JsonRecord {
   schema_version: 1;
   session_name: string;
   cwd: string;
   system_prompt: string;
   max_tool_rounds: number;
+  persistence: PersistenceSettings;
   http_debug: HttpDebugSettings;
   paths: SessionStoragePaths;
   tool_definition_paths: string[];
@@ -96,7 +102,9 @@ export interface LoadedSessionConfig {
 }
 
 export const DEFAULT_MAX_TOOL_ROUNDS = 8;
-export const MAX_CONFIGURED_TOOL_ROUNDS = 1000;
+export const MAX_CONFIGURED_TOOL_ROUNDS = 50_000;
+export const DEFAULT_PERSISTENCE_MAX_ITEM_BYTES = 10 * 1024 * 1024;
+export const MAX_CONFIGURED_PERSISTENCE_ITEM_BYTES = 64 * 1024 * 1024;
 
 export class ConfigError extends Error {
   public override name = "ConfigError";
@@ -242,6 +250,36 @@ type HttpDebugBooleanField =
 export const DEFAULT_NATIVE_READ_MAX_BYTES = 64 * 1024;
 export const DEFAULT_NATIVE_READ_LIMIT = 250;
 const MAX_NATIVE_TOOL_BYTES = 10 * 1024 * 1024;
+
+function normalizePersistence(
+  value: unknown,
+  path: string,
+): PersistenceSettings {
+  if (value !== undefined && !isRecord(value)) {
+    throw new ConfigError(`${path}: persistence must be an object`);
+  }
+  const persistence = value ?? {};
+  const durability = persistence.durability ?? "turn";
+  if (durability !== "process" && durability !== "turn" && durability !== "strict") {
+    throw new ConfigError(`${path}: persistence.durability must be process, turn, or strict`);
+  }
+  const maxItemBytes = persistence.max_item_bytes ?? DEFAULT_PERSISTENCE_MAX_ITEM_BYTES;
+  if (
+    typeof maxItemBytes !== "number" ||
+    !Number.isSafeInteger(maxItemBytes) ||
+    maxItemBytes < 1 ||
+    maxItemBytes > MAX_CONFIGURED_PERSISTENCE_ITEM_BYTES
+  ) {
+    throw new ConfigError(
+      `${path}: persistence.max_item_bytes must be a safe integer between 1 and ${MAX_CONFIGURED_PERSISTENCE_ITEM_BYTES}`,
+    );
+  }
+  return {
+    ...persistence,
+    durability,
+    max_item_bytes: maxItemBytes,
+  } as PersistenceSettings;
+}
 
 function normalizeMaxToolRounds(value: unknown, path: string): number {
   const maxToolRounds = value ?? DEFAULT_MAX_TOOL_ROUNDS;
@@ -497,6 +535,7 @@ async function normalizeSettings(
     throw new ConfigError(`${path}: system_prompt must be a string`);
   }
   const maxToolRounds = normalizeMaxToolRounds(raw.max_tool_rounds, path);
+  const persistence = normalizePersistence(raw.persistence, path);
   const httpDebug = normalizeHttpDebug(raw.http_debug, path);
   const toolDefinitionPaths = normalizeToolDefinitionPaths(
     raw.tool_definition_paths,
@@ -512,6 +551,7 @@ async function normalizeSettings(
     cwd,
     system_prompt: systemPrompt,
     max_tool_rounds: maxToolRounds,
+    persistence,
     http_debug: httpDebug,
     paths: storagePaths,
     tool_definition_paths: toolDefinitionPaths,

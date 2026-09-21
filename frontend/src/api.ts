@@ -1,3 +1,9 @@
+import appConfig from './config.json';
+
+function apiUrl(path: string): string {
+  return `${appConfig.api_base_path.replace(/\/$/, '')}${path}`;
+}
+
 export interface WebUiTextPart {
   type: 'reasoning' | 'text';
   text: string;
@@ -80,7 +86,7 @@ async function readError(response: Response): Promise<string> {
 }
 
 export async function fetchSessions(): Promise<SessionSnapshot[]> {
-  const response = await fetch('/api/sessions');
+  const response = await fetch(apiUrl('/sessions'));
   if (!response.ok) {
     throw new Error(await readError(response));
   }
@@ -92,7 +98,7 @@ export async function fetchSessions(): Promise<SessionSnapshot[]> {
 }
 
 export async function fetchSession(sessionId: string): Promise<SessionSnapshot> {
-  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}`));
   if (!response.ok) {
     throw new Error(await readError(response));
   }
@@ -100,7 +106,7 @@ export async function fetchSession(sessionId: string): Promise<SessionSnapshot> 
 }
 
 export async function fetchSessionTools(sessionId: string): Promise<ToolDefinition[]> {
-  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/tools`);
+  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/tools`));
   if (!response.ok) {
     throw new Error(await readError(response));
   }
@@ -216,7 +222,7 @@ export async function streamSessionRun(
   input: string,
   options: StreamSessionRunOptions = {},
 ): Promise<StreamSessionRunResult> {
-  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/run`, {
+  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/run`), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({input}),

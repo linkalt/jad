@@ -13,6 +13,7 @@ import {
 } from "../src/plugins/web-ui-normalized.js";
 import type { LoadedSessionConfig } from "../src/config.js";
 import {nativeReadDefinition} from "../src/tools/native/read.js";
+import {loadRootServerSettings} from "../src/session-roots.js";
 
 function completedEvent(output: Record<string, unknown>[], id: string): Record<string, unknown> {
   return {
@@ -45,6 +46,36 @@ function ssePayloads(stream: string, eventName: string): Record<string, unknown>
     return data ? [JSON.parse(data) as Record<string, unknown>] : [];
   });
 }
+
+test("loads configurable root server settings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-root-settings-"));
+  const settingPath = join(root, "setting.json");
+  try {
+    await writeFile(
+      settingPath,
+      JSON.stringify({
+        server: {host: "0.0.0.0", port: 9876, max_body_bytes: 2 * 1024 * 1024},
+        session_roots: [{path: ".jad/sessions"}],
+      }),
+    );
+    assert.deepEqual(await loadRootServerSettings({rootSettingPath: settingPath}), {
+      host: "0.0.0.0",
+      port: 9876,
+      max_body_bytes: 2 * 1024 * 1024,
+    });
+
+    await writeFile(
+      settingPath,
+      JSON.stringify({server: {port: 65536}, session_roots: [{path: ".jad/sessions"}]}),
+    );
+    await assert.rejects(
+      () => loadRootServerSettings({rootSettingPath: settingPath}),
+      /server\.port/,
+    );
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
 
 test("preserves interleaved reasoning and assistant parts", () => {
   const normalizedRun = new WebUiNormalizedRun("interleaved-turn");

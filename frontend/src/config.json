@@ -1,0 +1,17 @@
+{
+  "api_base_path": "/api",
+  "dev_api_proxy_target": "http://127.0.0.1:8787",
+  "browser_targets": {
+    "chrome_major": 123,
+    "firefox_major": 120,
+    "safari_major": 17,
+    "safari_minor": 5
+  },
+  "live_session_id": "session1",
+  "show_inspector_by_default": true,
+  "reasoning_title_max_length": 80,
+  "tool_output_max_chars": 12000,
+  "copy_feedback_duration_ms": 2000,
+  "mock_run_delay_ms": 1100,
+  "session_refresh_interval_ms": 5000
+}

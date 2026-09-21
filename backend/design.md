@@ -106,6 +106,10 @@ Example storage and HTTP debug paths:
 ```json
 {
   "max_tool_rounds": 8,
+  "persistence": {
+    "durability": "turn",
+    "max_item_bytes": 10485760
+  },
   "paths": {
     "messages": "data/messages.jsonl",
     "model": "config/model.json",
@@ -151,7 +155,7 @@ The loader rejects runner-owned request fields such as `input`, `instructions`, 
 7. persist the streamed response through the response adapter;
 8. execute returned function calls, append `function_call_output` items, and continue until a response has no tool calls.
 
-`setting.json` controls the hard limit with `max_tool_rounds` (default `8`, range `0..1000`). The initial provider request is not counted; each tool-execution continuation consumes one round. A final tool result receives its follow-up provider request before the limit is enforced. `AgentRunOptions.maxToolRounds` can override the session setting for one run.
+`setting.json` controls the hard limit with `max_tool_rounds` (default `8`, range `0..50000`). The initial provider request is not counted; each tool-execution continuation consumes one round. A final tool result receives its follow-up provider request before the limit is enforced. `AgentRunOptions.maxToolRounds` can override the session setting for one run. The same file controls persistence `durability` (`process`, `turn`, or `strict`) and `max_item_bytes`.
 
 Runs are serialized per `AgentSession` instance. Tool-call schema failures and execution failures are returned as compact tool output text; they do not cause an unnecessary duplicate provider request.
 
@@ -164,7 +168,7 @@ Runs are serialized per `AgentSession` instance. Tool-call schema failures and e
 - `GET /api/sessions/:id/tools` returns the effective provider-neutral tool definitions;
 - `POST /api/sessions/:id/run` accepts `{ "input": "..." }` and emits SSE `ui.message`, `completed`, `done`, or `error` events.
 
-The session roots are configured by the system `setting.json` `session_roots` array. Each root path is resolved relative to the directory containing that file and contains session subdirectories; that same directory is the global JAD root used for other relative paths. A future `jad --config <path-to-setting.json>` entry point will select the system setting explicitly. `JAD_ROOT_SETTING_PATH` selects another system setting file, while `JAD_SESSIONS_DIR` and the `sessionsDir` server option remain single-root compatibility overrides. The default fallback is `.jad/sessions` (or `../.jad/sessions`). When multiple roots are configured, API session references are namespaced as `root-id:session-id` to avoid collisions. The frontend Vite server proxies `/api` to `127.0.0.1:8787`. Start the local integration with `npm run server --prefix backend` and `npm run dev --prefix frontend` from the project root. The backend owns its TypeScript compiler and Node types; the frontend is only an HTTP/SSE client and is not a backend build dependency.
+The session roots are configured by the system `setting.json` `session_roots` array. Each root path is resolved relative to the directory containing that file and contains session subdirectories; that same directory is the global JAD root used for other relative paths. The same file's `server` object controls host, port, and request-body size defaults; explicit server options and environment variables override those values. A future `jad --config <path-to-setting.json>` entry point will select the system setting explicitly. `JAD_ROOT_SETTING_PATH` selects another system setting file, while `JAD_SESSIONS_DIR` and the `sessionsDir` server option remain single-root compatibility overrides. The default fallback is `.jad/sessions` (or `../.jad/sessions`). When multiple roots are configured, API session references are namespaced as `root-id:session-id` to avoid collisions. The frontend Vite server proxy target is configured in `frontend/src/config.json`. Start the local integration with `npm run server --prefix backend` and `npm run dev --prefix frontend` from the project root. The backend owns its TypeScript compiler and Node types; the frontend is only an HTTP/SSE client and is not a backend build dependency.
 
 The browser may abort its fetch, but the first bridge version does not cancel an already-started provider request; the server continues persistence so the transcript remains consistent. Raw user input is appended before model/tool/provider setup, so a configuration failure still leaves the user message in the configured transcript path. HTTP debug files are created only when the provider fetch starts; setup failures therefore have no HTTP request artifact.
 

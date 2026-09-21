@@ -6,6 +6,20 @@ import { ConfigError } from "./config.js";
 const ROOT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DEFAULT_ROOT_ID = "default";
 const DEFAULT_ROOT_LABEL = "Local sessions";
+const MAX_SERVER_PORT = 65_535;
+const MAX_SERVER_BODY_BYTES = 64 * 1024 * 1024;
+
+export const DEFAULT_ROOT_SERVER_SETTINGS = {
+  host: "127.0.0.1",
+  port: 8787,
+  max_body_bytes: 1024 * 1024,
+} as const;
+
+export interface RootServerSettings {
+  host: string;
+  port: number;
+  max_body_bytes: number;
+}
 
 export interface SessionRoot {
   id: string;
@@ -24,6 +38,7 @@ interface RootSettingRecord {
   schema_version?: unknown;
   session_roots?: unknown;
   session_paths?: unknown;
+  server?: unknown;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -76,6 +91,43 @@ async function defaultSessionRoots(): Promise<SessionRoot[]> {
     label: DEFAULT_ROOT_LABEL,
     ...selected,
   }];
+}
+
+function normalizeRootServerSettings(
+  value: unknown,
+  path: string,
+): RootServerSettings {
+  if (value === undefined) {
+    return {...DEFAULT_ROOT_SERVER_SETTINGS};
+  }
+  if (!isRecord(value)) {
+    throw new ConfigError(`${path}: server must be an object`);
+  }
+
+  const host = value.host === undefined
+    ? DEFAULT_ROOT_SERVER_SETTINGS.host
+    : requiredString(value.host, "host", path);
+  const port = value.port ?? DEFAULT_ROOT_SERVER_SETTINGS.port;
+  if (
+    typeof port !== "number" ||
+    !Number.isSafeInteger(port) ||
+    port < 1 ||
+    port > MAX_SERVER_PORT
+  ) {
+    throw new ConfigError(`${path}: server.port must be an integer between 1 and ${MAX_SERVER_PORT}`);
+  }
+  const maxBodyBytes = value.max_body_bytes ?? DEFAULT_ROOT_SERVER_SETTINGS.max_body_bytes;
+  if (
+    typeof maxBodyBytes !== "number" ||
+    !Number.isSafeInteger(maxBodyBytes) ||
+    maxBodyBytes < 1 ||
+    maxBodyBytes > MAX_SERVER_BODY_BYTES
+  ) {
+    throw new ConfigError(
+      `${path}: server.max_body_bytes must be a safe integer between 1 and ${MAX_SERVER_BODY_BYTES}`,
+    );
+  }
+  return {host, port, max_body_bytes: maxBodyBytes};
 }
 
 async function firstExistingPath(paths: readonly string[]): Promise<string | undefined> {
@@ -189,6 +241,36 @@ async function rootsFromSetting(settingPath: string): Promise<SessionRoot[]> {
   return roots;
 }
 
+async function findRootSettingPath(
+  options: SessionRootOptions,
+): Promise<string | undefined> {
+  const environment = options.environment ?? process.env;
+  if (options.sessionsDir !== undefined || environment.JAD_SESSIONS_DIR?.trim()) {
+    return undefined;
+  }
+
+  const configuredSettingPath = options.rootSettingPath?.trim() || environment.JAD_ROOT_SETTING_PATH?.trim();
+  if (configuredSettingPath) {
+    return resolve(configuredSettingPath);
+  }
+
+  return firstExistingPath([
+    resolve(process.cwd(), "setting.json"),
+    resolve(process.cwd(), "../setting.json"),
+  ]);
+}
+
+export async function loadRootServerSettings(
+  options: SessionRootOptions = {},
+): Promise<RootServerSettings> {
+  const settingPath = await findRootSettingPath(options);
+  if (!settingPath) {
+    return {...DEFAULT_ROOT_SERVER_SETTINGS};
+  }
+  const setting = await readRootSetting(settingPath);
+  return normalizeRootServerSettings(setting.server, `${settingPath}: server`);
+}
+
 export async function loadSessionRoots(options: SessionRootOptions = {}): Promise<SessionRoot[]> {
   const environment = options.environment ?? process.env;
   if (options.sessionsDir !== undefined) {
@@ -214,16 +296,7 @@ export async function loadSessionRoots(options: SessionRootOptions = {}): Promis
     ];
   }
 
-  const configuredSettingPath = options.rootSettingPath?.trim() || environment.JAD_ROOT_SETTING_PATH?.trim();
-  if (configuredSettingPath) {
-    return rootsFromSetting(resolve(configuredSettingPath));
-  }
-
-  const candidates = [
-    resolve(process.cwd(), "setting.json"),
-    resolve(process.cwd(), "../setting.json"),
-  ];
-  const settingPath = await firstExistingPath(candidates);
+  const settingPath = await findRootSettingPath(options);
   if (settingPath) {
     return rootsFromSetting(settingPath);
   }

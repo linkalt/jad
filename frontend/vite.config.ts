@@ -3,13 +3,14 @@ import {fileURLToPath} from 'node:url';
 import {defineConfig} from 'vite';
 import react from '@vitejs/plugin-react';
 import stylex from '@stylexjs/unplugin';
+import appConfig from './src/config.json' with {type: 'json'};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const lightningcssTargets = {
-  chrome: 123 << 16,
-  firefox: 120 << 16,
-  safari: (17 << 16) | (5 << 8),
+  chrome: appConfig.browser_targets.chrome_major << 16,
+  firefox: appConfig.browser_targets.firefox_major << 16,
+  safari: (appConfig.browser_targets.safari_major << 16) | (appConfig.browser_targets.safari_minor << 8),
 };
 
 export default defineConfig({
@@ -60,7 +61,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8787',
+      [appConfig.api_base_path]: appConfig.dev_api_proxy_target,
     },
   },
 });

@@ -28,6 +28,8 @@ export type { PersistResponseStreamOptions, PersistedResponse } from "./response
 export {
   ConfigError,
   DEFAULT_MAX_TOOL_ROUNDS,
+  DEFAULT_PERSISTENCE_MAX_ITEM_BYTES,
+  MAX_CONFIGURED_PERSISTENCE_ITEM_BYTES,
   MAX_CONFIGURED_TOOL_ROUNDS,
   SessionConfigLoader,
   resolveApiKey,
@@ -37,6 +39,7 @@ export {
 export type {
   HttpDebugSettings,
   LoadedSessionConfig,
+  PersistenceSettings,
   ModelConfig,
   NativeReadPathAction,
   NativeReadPathRule,
@@ -62,6 +65,12 @@ export type {
 
 export { createAgentServer, startAgentServer } from "./server.js";
 export type { AgentServerOptions, RunningAgentServer } from "./server.js";
+
+export {
+  DEFAULT_ROOT_SERVER_SETTINGS,
+  loadRootServerSettings,
+} from "./session-roots.js";
+export type { RootServerSettings, SessionRoot, SessionRootOptions } from "./session-roots.js";
 
 export { createHttpDebugFetch } from "./http-debug.js";
 

@@ -10,6 +10,31 @@
       "const": 1,
       "default": 1
     },
+    "server": {
+      "type": "object",
+      "description": "Local HTTP server defaults. Explicit server options and environment variables override these values.",
+      "properties": {
+        "host": {
+          "type": "string",
+          "pattern": "\\S",
+          "default": "127.0.0.1"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8787
+        },
+        "max_body_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864,
+          "default": 1048576
+        }
+      },
+      "additionalProperties": true,
+      "default": {}
+    },
     "session_roots": {
       "type": "array",
       "description": "Directories containing session subdirectories.",

@@ -334,6 +334,10 @@ test("loads model and session settings with normalized paths and hashes", async 
     assert.equal(config.settings.cwd, sessionDir);
     assert.equal(config.settings.system_prompt, "Be concise.");
     assert.equal(config.settings.max_tool_rounds, 8);
+    assert.deepEqual(config.settings.persistence, {
+      durability: "turn",
+      max_item_bytes: 10 * 1024 * 1024,
+    });
     assert.deepEqual(config.settings.http_debug, {
       enabled: false,
       include_request_headers: false,
@@ -357,11 +361,11 @@ test("validates configurable tool-round limits", async () => {
     await writeFile(join(sessionDir, "model.json"), JSON.stringify({model: "gpt-test"}));
     await writeFile(
       join(sessionDir, "setting.json"),
-      JSON.stringify({cwd: sessionDir, max_tool_rounds: 12}),
+      JSON.stringify({cwd: sessionDir, max_tool_rounds: 50000}),
     );
-    assert.equal((await new SessionConfigLoader(sessionDir).loadSettings()).max_tool_rounds, 12);
+    assert.equal((await new SessionConfigLoader(sessionDir).loadSettings()).max_tool_rounds, 50000);
 
-    for (const value of [-1, 1001, 1.5, "12"]) {
+    for (const value of [-1, 50001, 1.5, "12"]) {
       await writeFile(
         join(sessionDir, "setting.json"),
         JSON.stringify({cwd: sessionDir, max_tool_rounds: value}),
@@ -444,6 +448,10 @@ test("defaults empty settings and rejects missing or unsafe model configuration"
     assert.equal(settings.session_name, sessionDir.split("/").pop());
     assert.equal(settings.cwd, process.cwd());
     assert.equal(settings.system_prompt, "");
+    assert.deepEqual(settings.persistence, {
+      durability: "turn",
+      max_item_bytes: 10 * 1024 * 1024,
+    });
     assert.equal(settings.http_debug.enabled, false);
     assert.equal(settings.http_debug.include_response_headers, true);
     assert.equal(settings.http_debug.max_body_bytes, 65536);

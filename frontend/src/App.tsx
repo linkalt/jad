@@ -37,6 +37,7 @@ import type {
   StatusDotVariant,
 } from '@astryxdesign/core';
 import {fetchSessions, streamSessionRun, type SessionSnapshot, type WebUiMessage, type WebUiPart} from './api';
+import appConfig from './config.json';
 import {ResizeHandle, useResizable} from '@astryxdesign/core/Resizable';
 import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {
@@ -195,7 +196,7 @@ type MessageRecord = Omit<WebUiMessage, 'parts'> & {
   tools?: ChatToolCallItem[];
 };
 
-const LIVE_SESSION_ID = 'session1';
+const LIVE_SESSION_ID = appConfig.live_session_id;
 
 function messageTime(): string {
   return new Date().toLocaleTimeString([], {
@@ -210,7 +211,7 @@ function oneLine(value: string): string {
 
 function reasoningTitleText(value: string): string {
   const normalized = oneLine(value);
-  const maxLength = 80;
+  const maxLength = appConfig.reasoning_title_max_length;
   return normalized.length > maxLength
     ? `${normalized.slice(0, maxLength - 1)}…`
     : normalized;
@@ -558,7 +559,7 @@ function toolTarget(argumentsText: string): string {
 }
 
 function visibleToolOutput(output: string): string {
-  const limit = 12000;
+  const limit = appConfig.tool_output_max_chars;
   if (output.length <= limit) {
     return output;
   }
@@ -1135,7 +1136,7 @@ function AssistantMessage({
     resetTimerRef.current = window.setTimeout(() => {
       resetTimerRef.current = null;
       setCopyState('idle');
-    }, 2000);
+    }, appConfig.copy_feedback_duration_ms);
   }, []);
 
   const copyAsMarkdown = useCallback(async () => {
@@ -1246,7 +1247,7 @@ function App() {
   const [activeSessionId, setActiveSessionId] = useState(LIVE_SESSION_ID);
   const [threads, setThreads] = useState<Record<string, MessageRecord[]>>(initialThreads);
   const [composerValue, setComposerValue] = useState('');
-  const [showInspector, setShowInspector] = useState(true);
+  const [showInspector, setShowInspector] = useState(appConfig.show_inspector_by_default);
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState(baseReasoning.length);
   const [streamingMessage, setStreamingMessage] = useState<WebUiMessage | null>(null);
@@ -1458,7 +1459,7 @@ function App() {
         setRunProgress(baseReasoning.length);
         setRunningSessionId(current => (current === sessionId ? null : current));
         runTimeoutRef.current = null;
-      }, 1100);
+      }, appConfig.mock_run_delay_ms);
     },
     [activeSession, activeSessionId, isRunning],
   );
@@ -1559,7 +1560,7 @@ function App() {
     };
 
     loadSessions();
-    const refreshTimer = window.setInterval(loadSessions, 5000);
+    const refreshTimer = window.setInterval(loadSessions, appConfig.session_refresh_interval_ms);
     return () => {
       cancelled = true;
       window.clearInterval(refreshTimer);

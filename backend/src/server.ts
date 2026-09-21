@@ -18,7 +18,9 @@ import {
 import { AgentSession } from "./session.js";
 import type { JsonRecord } from "./persistence.js";
 import {
+  DEFAULT_ROOT_SERVER_SETTINGS,
   directoryEntries,
+  loadRootServerSettings,
   loadSessionRoots,
   type SessionRoot,
 } from "./session-roots.js";
@@ -31,9 +33,6 @@ import type {
   WebUiSessionSnapshot,
 } from "./plugins/web-ui/types.js";
 
-const DEFAULT_PORT = 8787;
-const DEFAULT_HOST = "127.0.0.1";
-const MAX_BODY_BYTES = 1024 * 1024;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SESSION_ROOT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
@@ -44,6 +43,7 @@ export interface AgentServerOptions {
   environment?: NodeJS.ProcessEnv;
   host?: string;
   port?: number;
+  maxBodyBytes?: number;
 }
 
 export interface RunningAgentServer {
@@ -150,13 +150,16 @@ function writeSse(response: ServerResponse, event: string, value: unknown): void
   }
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+async function readJsonBody(
+  request: IncomingMessage,
+  maxBodyBytes: number,
+): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
-    if (size > MAX_BODY_BYTES) {
+    if (size > maxBodyBytes) {
       throw new HttpError(413, "request body is too large");
     }
     chunks.push(buffer);
@@ -284,6 +287,7 @@ class AgentHttpApplication {
     client?: OpenAI;
     environment?: NodeJS.ProcessEnv;
   };
+  private readonly maxBodyBytes: number;
 
   public constructor(options: AgentServerOptions = {}) {
     this.sessionRoots = loadSessionRoots({
@@ -295,6 +299,7 @@ class AgentHttpApplication {
       ...(options.client ? { client: options.client } : {}),
       ...(options.environment ? { environment: options.environment } : {}),
     };
+    this.maxBodyBytes = options.maxBodyBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.max_body_bytes;
   }
 
   public async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -529,7 +534,7 @@ class AgentHttpApplication {
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, this.maxBodyBytes);
     if (!isRecord(body) || typeof body.input !== "string" || body.input.trim().length === 0) {
       throw new HttpError(400, "input must be a non-empty string");
     }
@@ -616,9 +621,14 @@ export function createAgentServer(options: AgentServerOptions = {}): RunningAgen
 export async function startAgentServer(
   options: AgentServerOptions = {},
 ): Promise<RunningAgentServer> {
-  const running = createAgentServer(options);
-  const port = options.port ?? Number(process.env.PORT ?? DEFAULT_PORT);
-  const host = options.host ?? process.env.HOST ?? DEFAULT_HOST;
+  const serverSettings = await loadRootServerSettings(options);
+  const running = createAgentServer({
+    ...options,
+    maxBodyBytes: options.maxBodyBytes ?? serverSettings.max_body_bytes,
+  });
+  const environment = options.environment ?? process.env;
+  const port = options.port ?? Number(environment.PORT ?? serverSettings.port);
+  const host = options.host ?? environment.HOST ?? serverSettings.host;
   await new Promise<void>((resolveListen, reject) => {
     running.server.once("error", reject);
     running.server.listen(port, host, () => resolveListen());
