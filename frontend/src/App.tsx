@@ -206,7 +206,11 @@ function oneLine(value: string): string {
 }
 
 function reasoningTitleText(value: string): string {
-  return oneLine(value);
+  const normalized = oneLine(value);
+  const maxLength = 80;
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 1)}…`
+    : normalized;
 }
 
 const baseReasoning: Omit<ReasoningStep, 'status'>[] = [
