@@ -46,6 +46,8 @@ import {
   sizeVars,
   spacingVars,
   typeScaleVars,
+  typographyVars,
+  fontWeightVars,
 } from '@astryxdesign/core/theme/tokens.stylex';
 
 const styles = stylex.create({
@@ -149,15 +151,29 @@ const styles = stylex.create({
   reasoningChevronOpen: {
     transform: 'rotate(180deg)',
   },
-  reasoningTitle: {
-    display: 'block',
-    minWidth: 0,
-    width: 'auto',
-    maxWidth: '100%',
-    flex: '0 1 auto',
+  reasoningName: {
+    fontSize: typeScaleVars['--text-supporting-size'],
+    lineHeight: typeScaleVars['--text-supporting-leading'],
+    fontFamily: typographyVars['--font-family-code'],
+    fontWeight: fontWeightVars['--font-weight-medium'],
+    color: colorVars['--color-text-secondary'],
+    whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
+    flexShrink: 1,
+    minWidth: '4ch',
+  },
+  reasoningTitle: {
+    fontSize: typeScaleVars['--text-supporting-size'],
+    lineHeight: typeScaleVars['--text-supporting-leading'],
+    fontFamily: typographyVars['--font-family-body'],
+    fontWeight: fontWeightVars['--font-weight-normal'],
+    color: colorVars['--color-text-disabled'],
     whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    flexShrink: 10,
+    minWidth: 0,
   },
   reasoningContent: {
     color: colorVars['--color-text-secondary'],
@@ -448,19 +464,17 @@ function ReasoningBlock({
         <HStack
           as="span"
           align="center"
-          justify="between"
-          gap={2}
+          gap={1.5}
           width="100%"
           xstyle={styles.reasoningTrigger}
         >
           <Icon icon="wrench" size="sm" color="accent" />
-          <Text type="label" weight="semibold">
+          <Text type="inherit" xstyle={styles.reasoningName}>
             Thinking
           </Text>
           {!isOpen && title && (
             <Text
-              type="supporting"
-              color="secondary"
+              type="inherit"
               xstyle={styles.reasoningTitle}
             >
               {title}
