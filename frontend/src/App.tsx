@@ -128,7 +128,7 @@ const styles = stylex.create({
   },
   activityGroup: {
     width: '100%',
-    marginBlockStart: spacingVars['--spacing-2'],
+    marginBlockStart: spacingVars['--spacing-0'],
   },
   toolCallsGrouped: {
     marginBlockStart: spacingVars['--spacing-0'],
@@ -518,46 +518,6 @@ function prettyToolArguments(argumentsText: string): string {
   }
 }
 
-function compactToolValue(value: unknown): string {
-  if (typeof value === 'string') {
-    return value.length > 0 ? value : '""';
-  }
-  if (value === null) {
-    return 'null';
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-  if (Array.isArray(value)) {
-    return JSON.stringify(value) ?? '[…]';
-  }
-  if (typeof value === 'object') {
-    return '{…}';
-  }
-  return String(value);
-}
-
-function toolTarget(argumentsText: string): string {
-  try {
-    const parsed = JSON.parse(argumentsText) as unknown;
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      !Array.isArray(parsed)
-    ) {
-      const entries = Object.entries(parsed as Record<string, unknown>);
-      if (entries.length > 0) {
-        return entries
-          .map(([key, value]) => `${key}: ${compactToolValue(value)}`)
-          .join(' · ');
-      }
-    }
-  } catch {
-    // Keep the generic target when arguments are not JSON.
-  }
-  return 'arguments available';
-}
-
 function visibleToolOutput(output: string): string {
   const limit = appConfig.tool_output_max_chars;
   if (output.length <= limit) {
@@ -592,7 +552,6 @@ function toolCallItem(
     key: `tool-${call.callId}`,
     name: call.name,
     status: toolCallStatus(result),
-    target: toolTarget(call.arguments),
     errorMessage: resultStatus === 'error' ? 'The tool returned an error.' : undefined,
     resultDetail: (
       <VStack gap={2} width="100%">
@@ -663,7 +622,6 @@ function toolActivityForParts(parts: WebUiPart[]): ChatToolCallItem[] {
         key: `tool-${part.callId}`,
         name: part.name,
         status: 'running',
-        target: toolTarget(part.arguments),
       });
     }
   }
@@ -756,6 +714,7 @@ function WebUiParts({
               key={`reasoning-${group.item.index}`}
               steps={[]}
               content={group.item.part.text}
+              isGrouped
               isStreaming={isStreaming && group.item.index === parts.length - 1}
             />
           );
