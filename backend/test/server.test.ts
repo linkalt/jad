@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -24,6 +24,25 @@ function completedEvent(output: Record<string, unknown>[], id: string): Record<s
       output,
     },
   };
+}
+
+function ssePayloads(stream: string, eventName: string): Record<string, unknown>[] {
+  return stream.split("\n\n").flatMap((block) => {
+    const event = block
+      .split("\n")
+      .find((line) => line.startsWith("event:"))
+      ?.slice("event:".length)
+      .trim();
+    if (event !== eventName) {
+      return [];
+    }
+    const data = block
+      .split("\n")
+      .find((line) => line.startsWith("data:"))
+      ?.slice("data:".length)
+      .trimStart();
+    return data ? [JSON.parse(data) as Record<string, unknown>] : [];
+  });
 }
 
 test("preserves interleaved reasoning and assistant parts", () => {
@@ -98,14 +117,23 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
     }),
   );
 
-  const reasoning = {
+  const reasoningOne = {
     type: "reasoning",
-    content: [{ type: "reasoning_text", text: "Plan the bridge response." }],
+    content: [{ type: "reasoning_text", text: "Plan the bridge " }],
   };
-  const output = {
+  const outputOne = {
     type: "message",
     role: "assistant",
-    content: [{ type: "output_text", text: "BRIDGE_OK" }],
+    content: [{ type: "output_text", text: "BRIDGE_" }],
+  };
+  const reasoningTwo = {
+    type: "reasoning",
+    content: [{ type: "reasoning_text", text: "response." }],
+  };
+  const outputTwo = {
+    type: "message",
+    role: "assistant",
+    content: [{ type: "output_text", text: "OK" }],
   };
   const fakeClient = {
     responses: {
@@ -113,23 +141,44 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
         (async function* () {
           yield {
             type: "response.reasoning_summary_text.delta",
-            delta: "Plan the bridge response.",
+            delta: "Plan the bridge ",
           };
           yield {
             type: "response.output_text.delta",
-            delta: "BRIDGE_OK",
+            delta: "BRIDGE_",
+          };
+          yield {
+            type: "response.reasoning_summary_text.delta",
+            delta: "response.",
+          };
+          yield {
+            type: "response.output_text.delta",
+            delta: "OK",
           };
           yield {
             type: "response.output_item.done",
             output_index: 0,
-            item: reasoning,
+            item: reasoningOne,
           };
           yield {
             type: "response.output_item.done",
             output_index: 1,
-            item: output,
+            item: outputOne,
           };
-          yield completedEvent([reasoning, output], "resp_bridge");
+          yield {
+            type: "response.output_item.done",
+            output_index: 2,
+            item: reasoningTwo,
+          };
+          yield {
+            type: "response.output_item.done",
+            output_index: 3,
+            item: outputTwo,
+          };
+          yield completedEvent(
+            [reasoningOne, outputOne, reasoningTwo, outputTwo],
+            "resp_bridge",
+          );
         })(),
     },
   } as unknown as OpenAI;
@@ -168,13 +217,53 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
     assert.match(stream, /event: ui\.message/);
     assert.match(stream, /"status":"streaming"/);
     assert.match(stream, /"type":"reasoning"/);
-    assert.match(stream, /Plan the bridge response\./);
+    assert.match(stream, /Plan the bridge /);
     assert.match(stream, /"type":"text"/);
-    assert.match(stream, /BRIDGE_OK/);
+    assert.match(stream, /BRIDGE_/);
+    assert.match(stream, /response\./);
+    assert.match(stream, /OK/);
     assert.ok(stream.indexOf('"type":"reasoning"') < stream.indexOf('"type":"text"'));
     assert.match(stream, /"status":"complete"/);
     assert.match(stream, /event: completed/);
     assert.match(stream, /event: done/);
+
+    const uiMessages = ssePayloads(stream, "ui.message").map((payload) =>
+      payload.message as {
+        status?: string;
+        parts: Array<{type: string; text: string}>;
+      },
+    );
+    assert.deepEqual(uiMessages.map((message) => message.status), [
+      "streaming",
+      "streaming",
+      "streaming",
+      "streaming",
+      "complete",
+    ]);
+    assert.deepEqual(uiMessages.map((message) => message.parts), [
+      [{type: "reasoning", text: "Plan the bridge "}],
+      [
+        {type: "reasoning", text: "Plan the bridge "},
+        {type: "text", text: "BRIDGE_"},
+      ],
+      [
+        {type: "reasoning", text: "Plan the bridge "},
+        {type: "text", text: "BRIDGE_"},
+        {type: "reasoning", text: "response."},
+      ],
+      [
+        {type: "reasoning", text: "Plan the bridge "},
+        {type: "text", text: "BRIDGE_"},
+        {type: "reasoning", text: "response."},
+        {type: "text", text: "OK"},
+      ],
+      [
+        {type: "reasoning", text: "Plan the bridge "},
+        {type: "text", text: "BRIDGE_"},
+        {type: "reasoning", text: "response."},
+        {type: "text", text: "OK"},
+      ],
+    ]);
 
     const finalSnapshot = await fetch(`${baseUrl}/api/sessions/session1`);
     const final = (await finalSnapshot.json()) as {
@@ -189,11 +278,27 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
     assert.equal(final.turns, 1);
     assert.equal(final.messages.length, 2);
     assert.deepEqual(final.messages.map(message => message.sender), ["user", "assistant"]);
-    assert.deepEqual(final.messages[1]?.parts, [
-      { type: "reasoning", text: "Plan the bridge response." },
-      { type: "text", text: "BRIDGE_OK" },
-    ]);
+    const expectedParts = [
+      {type: "reasoning", text: "Plan the bridge "},
+      {type: "text", text: "BRIDGE_"},
+      {type: "reasoning", text: "response."},
+      {type: "text", text: "OK"},
+    ];
+    assert.deepEqual(final.messages[1]?.parts, expectedParts);
     assert.equal(final.messages[1]?.status, "complete");
+
+    const persisted = (await readFile(join(sessionDir, "messages.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const persistedResponse = persisted[1]?.response as Record<string, unknown>;
+    assert.deepEqual(persistedResponse.output, [
+      reasoningOne,
+      outputOne,
+      reasoningTwo,
+      outputTwo,
+    ]);
+    assert.equal(JSON.stringify(persisted).includes('"parts"'), false);
   } finally {
     await running.close();
     await rm(root, { recursive: true, force: true });
