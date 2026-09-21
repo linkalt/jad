@@ -13,14 +13,14 @@ export const nativeReadDefinition: ToolDefinition = {
   id: NATIVE_READ_ID,
   source: "native",
   name: "read",
-  description: "Read workspace file content or inspect a directory.",
+  description: "Read file content or inspect a directory.",
   inputSchema: {
     type: "object",
     properties: {
       path: {
         type: "string",
         minLength: 1,
-        description: "Workspace-relative path.",
+        description: "Path relative to cwd or an absolute path.",
       },
       offset: {
         type: "integer",
@@ -93,17 +93,52 @@ function isRecord(value: unknown): value is JsonRecord {
 }
 
 function withinRoot(root: string, target: string): boolean {
+  if (root === sep) {
+    return target.startsWith(sep);
+  }
   return target === root || target.startsWith(`${root}${sep}`);
 }
 
 function displayPath(root: string, target: string): string {
+  if (!withinRoot(root, target)) {
+    return target;
+  }
   const value = relative(root, target).split(sep).join("/");
   return value.length > 0 ? value : ".";
+}
+
+function pathPolicyError(
+  target: string,
+  workspaceRoot: string,
+  paths: NativeReadToolSettings["paths"],
+  callId: string,
+): string | undefined {
+  const matches = paths.filter((rule) => withinRoot(rule.path, target));
+  if (matches.some((rule) => rule.action === "deny")) {
+    return executionError(
+      callId,
+      "forbidden",
+      "path_denied",
+      "The requested path is denied by the read policy",
+      [["path", displayPath(workspaceRoot, target)]],
+    );
+  }
+  if (withinRoot(workspaceRoot, target) || matches.some((rule) => rule.action === "allow")) {
+    return undefined;
+  }
+  return executionError(
+    callId,
+    "forbidden",
+    "path_outside_workspace",
+    "The requested path is outside the workspace",
+    [["path", displayPath(workspaceRoot, target)]],
+  );
 }
 
 async function resolveTarget(
   requestedPath: string,
   workspaceRoot: string,
+  policy: NativeReadToolSettings,
   callId: string,
 ): Promise<{target?: ResolvedTarget; error?: string}> {
   let root: string;
@@ -123,15 +158,14 @@ async function resolveTarget(
   const candidate = isAbsolute(requestedPath)
     ? resolve(requestedPath)
     : resolve(root, requestedPath);
-  if (!withinRoot(root, candidate)) {
-    return {
-      error: executionError(
-        callId,
-        "forbidden",
-        "path_outside_workspace",
-        "The requested path is outside the workspace",
-      ),
-    };
+  const candidatePolicyError = pathPolicyError(
+    candidate,
+    root,
+    policy.paths,
+    callId,
+  );
+  if (candidatePolicyError) {
+    return {error: candidatePolicyError};
   }
   const safeCandidatePath = displayPath(root, candidate);
 
@@ -173,7 +207,7 @@ async function resolveTarget(
     };
   }
 
-  if (!withinRoot(root, target)) {
+  if (!withinRoot(root, target) && target !== candidate) {
     return {
       error: executionError(
         callId,
@@ -183,6 +217,16 @@ async function resolveTarget(
         [["path", safeCandidatePath]],
       ),
     };
+  }
+
+  const targetPolicyError = pathPolicyError(
+    target,
+    root,
+    policy.paths,
+    callId,
+  );
+  if (targetPolicyError) {
+    return {error: targetPolicyError};
   }
 
   if (target !== candidate) {
@@ -508,7 +552,12 @@ export async function executeNativeRead(
   context: ReadContext,
 ): Promise<string> {
   const readArgs = args as unknown as ReadArgs;
-  const resolved = await resolveTarget(readArgs.path, context.workspaceRoot, context.callId);
+  const resolved = await resolveTarget(
+    readArgs.path,
+    context.workspaceRoot,
+    context.policy,
+    context.callId,
+  );
   if (resolved.error) {
     return resolved.error;
   }

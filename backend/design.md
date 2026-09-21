@@ -76,6 +76,8 @@ The history reader yields raw input items directly and expands each committed `r
 - API-key and authorization headers are redacted, and bodies are opt-in and capped by `max_body_bytes`;
 - `tool_definition_paths` selects definition documents relative to the global JAD root; absolute paths are used as-is;
 - a tool must also be present in the per-session `tools` policy to be exposed, so omitted tools are disabled;
+- native `read` accepts request paths relative to `cwd` or as absolute paths;
+- `tools.native.read.paths` contains normalized `{action: "allow"|"deny", path}` rules, with relative rule paths resolved from the global JAD root; paths inside `cwd` are allowed by default, paths outside `cwd` require an allow rule, and deny rules take precedence;
 - native `read` uses `max_bytes` as its output-content cap and defaults its optional `limit` to 250.
 
 Example HTTP debug configuration:

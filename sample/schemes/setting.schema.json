@@ -53,6 +53,26 @@
                   "type": "integer",
                   "minimum": 1,
                   "default": 250
+                },
+                "paths": {
+                  "type": "array",
+                  "description": "Allow/deny path rules. Relative paths resolve from the global JAD root; absolute paths are used as-is. Paths inside cwd are allowed by default; paths outside cwd require an allow rule.",
+                  "items": {
+                    "type": "object",
+                    "required": ["action", "path"],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": ["allow", "deny"]
+                      },
+                      "path": {
+                        "type": "string",
+                        "pattern": "\\S"
+                      }
+                    },
+                    "additionalProperties": true
+                  },
+                  "default": []
                 }
               },
               "additionalProperties": true

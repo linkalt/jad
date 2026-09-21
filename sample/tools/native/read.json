@@ -5,14 +5,14 @@
       "id": "native.read",
       "source": "native",
       "name": "read",
-      "description": "Read workspace file content or inspect a directory.",
+      "description": "Read file content or inspect a directory.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
             "minLength": 1,
-            "description": "Workspace-relative path."
+            "description": "Path relative to cwd or an absolute path."
           },
           "offset": {
             "type": "integer",

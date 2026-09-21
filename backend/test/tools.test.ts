@@ -60,7 +60,7 @@ test("loads native read only when selected and exposes an OpenAI-compatible defi
       {
         type: "function",
         name: "read",
-        description: "Read workspace file content or inspect a directory.",
+        description: "Read file content or inspect a directory.",
         parameters: nativeReadDefinition.inputSchema,
         strict: false,
       },
@@ -117,6 +117,17 @@ test("executes a minimal read call, applies the byte policy, and separates error
     assert.match(schemaOutput, /error_type: schema/);
     assert.match(schemaOutput, /missingProperty/);
 
+    const absoluteSuccess = await catalog.executeFunctionCall(
+      {
+        type: "function_call",
+        call_id: "read-absolute-success",
+        name: "read",
+        arguments: JSON.stringify({path: join(sessionDir, "sample.txt")}),
+      },
+      {workspaceRoot: sessionDir, sessionDir},
+    );
+    assert.equal(firstLine(outputText(absoluteSuccess.output)).status, "ok");
+
     const executionFailure = await catalog.executeFunctionCall(
       {
         type: "function_call",
@@ -132,6 +143,63 @@ test("executes a minimal read call, applies the byte policy, and separates error
     assert.match(executionOutput, /error_code: not_found/);
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("applies native read allow and deny path policies", async () => {
+  const sessionDir = await makeToolSession();
+  const externalRoot = await mkdtemp(join(tmpdir(), "agent-harness-read-policy-"));
+  const outsidePath = join(externalRoot, "outside.txt");
+  try {
+    await writeFile(outsidePath, "outside content\n", "utf8");
+    const readCall = (callId: string) => ({
+      type: "function_call",
+      call_id: callId,
+      name: "read",
+      arguments: JSON.stringify({path: outsidePath}),
+    });
+    const execute = async (paths: unknown[]) => {
+      await writeFile(
+        join(sessionDir, "setting.json"),
+        JSON.stringify({
+          cwd: sessionDir,
+          tool_definition_paths: [join(sessionDir, "read.json")],
+          tools: {
+            native: {
+              read: {
+                max_bytes: 65536,
+                default_limit: 250,
+                paths,
+              },
+            },
+          },
+        }),
+      );
+      const config = await new SessionConfigLoader(sessionDir).load();
+      const catalog = await loadToolCatalog(config);
+      const result = await catalog.executeFunctionCall(
+        readCall(`read-policy-${paths.length}`),
+        {workspaceRoot: sessionDir, sessionDir},
+      );
+      return outputText(result.output);
+    };
+
+    const defaultDenied = await execute([]);
+    assert.equal(firstLine(defaultDenied).status, "forbidden");
+    assert.match(defaultDenied, /error_code: path_outside_workspace/);
+
+    const rootAllowed = await execute([{action: "allow", path: "/"}]);
+    assert.equal(firstLine(rootAllowed).status, "ok");
+
+    const denyWins = await execute([
+      {action: "allow", path: "/"},
+      {action: "deny", path: outsidePath},
+    ]);
+    assert.equal(firstLine(denyWins).status, "forbidden");
+    assert.match(denyWins, /error_code: path_denied/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+    await rm(externalRoot, {recursive: true, force: true});
   }
 });
 
@@ -184,7 +252,7 @@ test("executes native read calls between Responses API turns", async () => {
       {
         type: "function",
         name: "read",
-        description: "Read workspace file content or inspect a directory.",
+        description: "Read file content or inspect a directory.",
         parameters: nativeReadDefinition.inputSchema,
         strict: false,
       },

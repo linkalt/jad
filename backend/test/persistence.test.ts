@@ -397,6 +397,13 @@ test("resolves configured paths from the global JAD root and rejects relative cw
       JSON.stringify({
         cwd: sessionDir,
         tool_definition_paths: ["tools/read.json"],
+        tools: {
+          native: {
+            read: {
+              paths: [{action: "allow", path: "tools"}],
+            },
+          },
+        },
       }),
     );
 
@@ -405,6 +412,9 @@ test("resolves configured paths from the global JAD root and rejects relative cw
     assert.equal(settings.cwd, sessionDir);
     assert.deepEqual(settings.tool_definition_paths, [
       join(globalJadRoot, "tools", "read.json"),
+    ]);
+    assert.deepEqual(settings.tools.native.read?.paths, [
+      {action: "allow", path: join(globalJadRoot, "tools")},
     ]);
     assert.equal(loader.paths.global_jad_root, globalJadRoot);
 

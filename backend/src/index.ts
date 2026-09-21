@@ -36,6 +36,8 @@ export type {
   HttpDebugSettings,
   LoadedSessionConfig,
   ModelConfig,
+  NativeReadPathAction,
+  NativeReadPathRule,
   NativeReadToolSettings,
   SessionConfigLoaderOptions,
   SessionConfigPaths,

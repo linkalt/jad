@@ -22,9 +22,17 @@ export interface HttpDebugSettings extends JsonRecord {
   max_body_bytes: number;
 }
 
+export type NativeReadPathAction = "allow" | "deny";
+
+export interface NativeReadPathRule extends JsonRecord {
+  action: NativeReadPathAction;
+  path: string;
+}
+
 export interface NativeReadToolSettings extends JsonRecord {
   max_bytes: number;
   default_limit: number;
+  paths: NativeReadPathRule[];
 }
 
 export interface NativeToolSettings extends JsonRecord {
@@ -284,7 +292,42 @@ function normalizeToolDefinitionPaths(
   });
 }
 
-function normalizeTools(value: unknown, path: string): ToolSettings {
+function normalizeNativeReadPaths(
+  value: unknown,
+  path: string,
+  globalJadRoot: string,
+): NativeReadPathRule[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new ConfigError(`${path}: tools.native.read.paths must be an array`);
+  }
+  return value.map((item, index) => {
+    const itemPath = `${path}: tools.native.read.paths[${index}]`;
+    if (!isRecord(item)) {
+      throw new ConfigError(`${itemPath} must be an object`);
+    }
+    const action = requiredString(item.action, "action", itemPath);
+    if (action !== "allow" && action !== "deny") {
+      throw new ConfigError(`${itemPath}: action must be allow or deny`);
+    }
+    const configuredPath = requiredString(item.path, "path", itemPath);
+    return {
+      ...item,
+      action,
+      path: isAbsolute(configuredPath)
+        ? resolve(configuredPath)
+        : resolve(globalJadRoot, configuredPath),
+    } as NativeReadPathRule;
+  });
+}
+
+function normalizeTools(
+  value: unknown,
+  path: string,
+  globalJadRoot: string,
+): ToolSettings {
   if (value !== undefined && !isRecord(value)) {
     throw new ConfigError(`${path}: tools must be an object`);
   }
@@ -325,6 +368,7 @@ function normalizeTools(value: unknown, path: string): ToolSettings {
       ...readValue,
       max_bytes: maxBytes,
       default_limit: defaultLimit,
+      paths: normalizeNativeReadPaths(readValue.paths, path, globalJadRoot),
     };
   }
 
@@ -365,7 +409,7 @@ async function normalizeSettings(
     path,
     globalJadRoot,
   );
-  const tools = normalizeTools(raw.tools, path);
+  const tools = normalizeTools(raw.tools, path, globalJadRoot);
 
   return {
     ...raw,

@@ -220,7 +220,7 @@ test("lists sessions with valid settings and namespaces duplicate ids", async ()
     JSON.stringify({
       schema_version: 1,
       session_name: "Luna session",
-      cwd: "/tmp/test",
+      cwd: primaryDir,
     }),
   );
   await writeFile(
