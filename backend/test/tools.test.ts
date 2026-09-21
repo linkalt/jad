@@ -116,6 +116,23 @@ test("executes a minimal read call, applies the byte policy, and separates error
     assert.equal(firstLine(schemaOutput).status, "invalid_input");
     assert.match(schemaOutput, /error_type: schema/);
     assert.match(schemaOutput, /missingProperty/);
+    assert.match(schemaOutput, /example_operation: \{"path":"\."\}/);
+
+    const metadataOnly = await catalog.executeFunctionCall(
+      {
+        type: "function_call",
+        call_id: "read-metadata-only",
+        name: "read",
+        arguments: JSON.stringify({path: "sample.txt", includeContent: false}),
+      },
+      {workspaceRoot: sessionDir, sessionDir},
+    );
+    const metadataOutput = outputText(metadataOnly.output);
+    assert.equal(firstLine(metadataOutput).status, "ok");
+    assert.match(metadataOutput, /metadata_only: true/);
+    assert.match(metadataOutput, /size_bytes: 14/);
+    assert.doesNotMatch(metadataOutput, /--- CONTENT token=/);
+    assert.doesNotMatch(metadataOutput, /total_line_count:/);
 
     const absoluteSuccess = await catalog.executeFunctionCall(
       {
@@ -127,6 +144,28 @@ test("executes a minimal read call, applies the byte policy, and separates error
       {workspaceRoot: sessionDir, sessionDir},
     );
     assert.equal(firstLine(outputText(absoluteSuccess.output)).status, "ok");
+
+    const byteOffsetFailure = await catalog.executeFunctionCall(
+      {
+        type: "function_call",
+        call_id: "read-byte-offset-eof",
+        name: "read",
+        arguments: JSON.stringify({
+          path: "sample.txt",
+          rangeType: "bytes",
+          offset: 100,
+          limit: 10,
+        }),
+      },
+      {workspaceRoot: sessionDir, sessionDir},
+    );
+    const byteOffsetOutput = outputText(byteOffsetFailure.output);
+    assert.equal(firstLine(byteOffsetOutput).status, "ok");
+    assert.match(byteOffsetOutput, /No content; offset is at or beyond EOF/);
+    assert.match(byteOffsetOutput, /returned_bytes: 0/);
+    assert.match(byteOffsetOutput, /offset_clamped: true/);
+    assert.match(byteOffsetOutput, /eof: true/);
+    assert.doesNotMatch(byteOffsetOutput, /--- CONTENT token=/);
 
     const executionFailure = await catalog.executeFunctionCall(
       {
@@ -187,6 +226,8 @@ test("applies native read allow and deny path policies", async () => {
     const defaultDenied = await execute([]);
     assert.equal(firstLine(defaultDenied).status, "forbidden");
     assert.match(defaultDenied, /error_code: path_outside_workspace/);
+    assert.match(defaultDenied, /path: \.\.\/outside\.txt/);
+    assert.doesNotMatch(defaultDenied, new RegExp(externalRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
     const rootAllowed = await execute([{action: "allow", path: "/"}]);
     assert.equal(firstLine(rootAllowed).status, "ok");

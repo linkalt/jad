@@ -97,6 +97,10 @@ function validateNativeReadDefinition(
   }
 }
 
+function validationExample(definition: ToolDefinition): JsonRecord | undefined {
+  return definition.id === NATIVE_READ_ID ? {path: "."} : undefined;
+}
+
 function buildLoadedTool(
   definition: ToolDefinition,
   config: LoadedSessionConfig,
@@ -175,6 +179,7 @@ export class ToolCatalog {
       };
     }
 
+    const exampleOperation = validationExample(tool.definition);
     const rawArguments = call.arguments;
     if (typeof rawArguments !== "string") {
       return {
@@ -184,6 +189,7 @@ export class ToolCatalog {
           callId,
           `Invalid arguments for ${name}`,
           [{keyword: "type", message: "function call arguments must be a JSON string"}],
+          exampleOperation,
         ),
       };
     }
@@ -195,7 +201,7 @@ export class ToolCatalog {
       return {
         type: "function_call_output",
         call_id: callId,
-        output: invalidArgumentsJsonError(callId, name),
+        output: invalidArgumentsJsonError(callId, name, exampleOperation),
       };
     }
     if (!tool.validate(parsed)) {
@@ -206,6 +212,7 @@ export class ToolCatalog {
           callId,
           `Invalid arguments for ${name}`,
           tool.validate.errors ?? [],
+          exampleOperation,
         ),
       };
     }
@@ -218,6 +225,7 @@ export class ToolCatalog {
           callId,
           `Invalid arguments for ${name}`,
           [{keyword: "type", message: "arguments must be a JSON object"}],
+          exampleOperation,
         ),
       };
     }

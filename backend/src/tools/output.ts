@@ -97,6 +97,7 @@ export function schemaError(
   id: string,
   summary: string,
   errors: unknown,
+  exampleOperation?: JsonRecord,
 ): string {
   return renderToolResult({
     id,
@@ -105,6 +106,7 @@ export function schemaError(
     information: [
       ["error_type", "schema"],
       ["error_code", "validation_failed"],
+      ...(exampleOperation ? [["example_operation", exampleOperation] as [string, unknown]] : []),
       ["ajv_errors", errors],
     ],
   });
@@ -120,11 +122,16 @@ export function unknownToolError(id: string, name: string): string {
   );
 }
 
-export function invalidArgumentsJsonError(id: string, name: string): string {
+export function invalidArgumentsJsonError(
+  id: string,
+  name: string,
+  exampleOperation?: JsonRecord,
+): string {
   return schemaError(
     id,
     `Invalid JSON arguments for ${name}`,
     [{keyword: "parse", message: "tool arguments must be valid JSON"}],
+    exampleOperation,
   );
 }
 

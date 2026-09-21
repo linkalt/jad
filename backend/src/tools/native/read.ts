@@ -1,5 +1,5 @@
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { TextDecoder } from "node:util";
 
 import type { NativeReadToolSettings } from "../../config.js";
@@ -38,6 +38,10 @@ export const nativeReadDefinition: ToolDefinition = {
         type: "string",
         enum: ["utf8", "base64"],
       },
+      includeContent: {
+        type: "boolean",
+        description: "When false, return file metadata without reading file content.",
+      },
     },
     required: ["path"],
     additionalProperties: false,
@@ -71,6 +75,7 @@ interface ReadArgs {
   limit?: number;
   rangeType?: RangeType;
   contentEncoding?: ContentEncoding;
+  includeContent?: boolean;
 }
 
 interface ReadContext extends ToolExecutionContext {
@@ -86,6 +91,7 @@ interface LineSpan {
 interface ResolvedTarget {
   realPath: string;
   displayPath: string;
+  errorPath: string;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -107,6 +113,14 @@ function displayPath(root: string, target: string): string {
   return value.length > 0 ? value : ".";
 }
 
+function errorPath(root: string, target: string): string {
+  if (withinRoot(root, target)) {
+    return displayPath(root, target);
+  }
+  const name = basename(target);
+  return name.length > 0 ? `../${name}` : "..";
+}
+
 function pathPolicyError(
   target: string,
   workspaceRoot: string,
@@ -120,7 +134,7 @@ function pathPolicyError(
       "forbidden",
       "path_denied",
       "The requested path is denied by the read policy",
-      [["path", displayPath(workspaceRoot, target)]],
+      [["path", errorPath(workspaceRoot, target)]],
     );
   }
   if (withinRoot(workspaceRoot, target) || matches.some((rule) => rule.action === "allow")) {
@@ -131,7 +145,7 @@ function pathPolicyError(
     "forbidden",
     "path_outside_workspace",
     "The requested path is outside the workspace",
-    [["path", displayPath(workspaceRoot, target)]],
+    [["path", errorPath(workspaceRoot, target)]],
   );
 }
 
@@ -167,7 +181,7 @@ async function resolveTarget(
   if (candidatePolicyError) {
     return {error: candidatePolicyError};
   }
-  const safeCandidatePath = displayPath(root, candidate);
+  const safeCandidatePath = errorPath(root, candidate);
 
   let target: string;
   try {
@@ -245,6 +259,7 @@ async function resolveTarget(
     target: {
       realPath: target,
       displayPath: displayPath(root, target),
+      errorPath: errorPath(root, target),
     },
   };
 }
@@ -347,6 +362,24 @@ function commonFileInformation(
   ];
 }
 
+function renderFileMetadata(
+  id: string,
+  target: ResolvedTarget,
+  sizeBytes: number,
+): string {
+  return renderToolResult({
+    id,
+    status: "ok",
+    summary: "Inspected file metadata",
+    information: [
+      ["path", target.displayPath],
+      ["kind", "file"],
+      ["size_bytes", sizeBytes],
+      ["metadata_only", true],
+    ],
+  });
+}
+
 function renderFileRange(
   id: string,
   target: ResolvedTarget,
@@ -362,6 +395,7 @@ function renderFileRange(
 
   if (rangeType === "lines") {
     const offset = args.offset ?? 1;
+    const offsetClamped = offset - 1 > spans.length;
     const startIndex = Math.min(offset - 1, spans.length);
     const requestedEnd = Math.min(startIndex + limit, spans.length);
     let endIndex = startIndex;
@@ -398,8 +432,8 @@ function renderFileRange(
         id,
         "unsupported_encoding",
         "unsupported_encoding",
-        `Could not decode ${target.displayPath} as UTF-8`,
-        [["path", target.displayPath]],
+        `Could not decode ${target.errorPath} as UTF-8`,
+        [["path", target.errorPath]],
       );
     }
 
@@ -408,6 +442,7 @@ function renderFileRange(
       ["returned_bytes", returnedBytes],
       ["next_offset", remaining ? endIndex + 1 : null],
       ["eof", !remaining],
+      ...(offsetClamped ? [["offset_clamped", true] as [string, unknown]] : []),
     );
     if (contentTruncated) {
       information.push(
@@ -425,7 +460,9 @@ function renderFileRange(
       status: "ok",
       summary: endIndex > startIndex
         ? `Read lines ${startIndex + 1}-${endIndex} from ${target.displayPath}`
-        : `Read no content from ${target.displayPath}`,
+        : offsetClamped
+          ? "No content; offset is at or beyond EOF"
+          : "No content at EOF",
       information,
       ...(selected.length > 0 && contentText !== undefined
         ? {content: {text: contentText, encoding}}
@@ -434,6 +471,7 @@ function renderFileRange(
   }
 
   const offset = args.offset ?? 0;
+  const offsetClamped = offset > data.length;
   const start = Math.min(offset, data.length);
   const requestedEnd = Math.min(start + limit, data.length);
   const cappedEnd = Math.min(requestedEnd, start + policy.max_bytes);
@@ -449,8 +487,8 @@ function renderFileRange(
       id,
       "unsupported_encoding",
       "unsupported_encoding",
-      `Could not decode ${target.displayPath} as UTF-8`,
-      [["path", target.displayPath]],
+      `Could not decode ${target.errorPath} as UTF-8`,
+      [["path", target.errorPath]],
     );
   }
 
@@ -460,6 +498,7 @@ function renderFileRange(
     ["returned_bytes", selected.length],
     ["next_offset", remaining ? range.nextOffset : null],
     ["eof", !remaining],
+    ...(offsetClamped ? [["offset_clamped", true] as [string, unknown]] : []),
   );
   if (range.adjusted) {
     information.push(
@@ -481,7 +520,11 @@ function renderFileRange(
   return renderToolResult({
     id,
     status: "ok",
-    summary: `Read bytes ${range.start}-${Math.max(range.start, range.end - 1)} from ${target.displayPath}`,
+    summary: selected.length > 0
+      ? `Read bytes ${range.start}-${range.end - 1} from ${target.displayPath}`
+      : offsetClamped
+        ? "No content; offset is at or beyond EOF"
+        : "No content at EOF",
     information,
     ...(selected.length > 0 && contentText !== undefined
       ? {content: {text: contentText, encoding}}
@@ -503,8 +546,8 @@ async function renderDirectory(
       id,
       "error",
       "directory_read_failed",
-      `Could not inspect ${target.displayPath}`,
-      [["path", target.displayPath]],
+      `Could not inspect ${target.errorPath}`,
+      [["path", target.errorPath]],
     );
   }
   entries.sort((left, right) => left.name.localeCompare(right.name));
@@ -571,8 +614,8 @@ export async function executeNativeRead(
       context.callId,
       "not_found",
       "not_found",
-      `Could not find ${target.displayPath}`,
-      [["path", target.displayPath]],
+      `Could not find ${target.errorPath}`,
+      [["path", target.errorPath]],
     );
   }
   if (before.isDirectory()) {
@@ -589,8 +632,12 @@ export async function executeNativeRead(
       "error",
       "unsupported_file_type",
       `The requested path is not a regular file or directory`,
-      [["path", target.displayPath]],
+      [["path", target.errorPath]],
     );
+  }
+
+  if (readArgs.includeContent === false) {
+    return renderFileMetadata(context.callId, target, before.size);
   }
 
   let data: Buffer;
@@ -601,8 +648,8 @@ export async function executeNativeRead(
       context.callId,
       "error",
       "read_failed",
-      `Could not read ${target.displayPath}`,
-      [["path", target.displayPath]],
+      `Could not read ${target.errorPath}`,
+      [["path", target.errorPath]],
     );
   }
   let after;
@@ -614,7 +661,7 @@ export async function executeNativeRead(
       "error",
       "changed_during_read",
       `The file changed while it was being read`,
-      [["path", target.displayPath]],
+      [["path", target.errorPath]],
     );
   }
   if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
@@ -623,7 +670,7 @@ export async function executeNativeRead(
       "error",
       "changed_during_read",
       `The file changed while it was being read`,
-      [["path", target.displayPath]],
+      [["path", target.errorPath]],
     );
   }
 
@@ -632,8 +679,8 @@ export async function executeNativeRead(
       context.callId,
       "unsupported_encoding",
       "unsupported_encoding",
-      `Could not decode ${target.displayPath} as UTF-8`,
-      [["path", target.displayPath]],
+      `Could not decode ${target.errorPath} as UTF-8`,
+      [["path", target.errorPath]],
     );
   }
 

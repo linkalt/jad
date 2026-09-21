@@ -78,7 +78,9 @@ The history reader yields raw input items directly and expands each committed `r
 - a tool must also be present in the per-session `tools` policy to be exposed, so omitted tools are disabled;
 - native `read` accepts request paths relative to `cwd` or as absolute paths;
 - `tools.native.read.paths` contains normalized `{action: "allow"|"deny", path}` rules, with relative rule paths resolved from the global JAD root; paths inside `cwd` are allowed by default, paths outside `cwd` require an allow rule, and deny rules take precedence;
-- native `read` uses `max_bytes` as its output-content cap and defaults its optional `limit` to 250.
+- native `read` uses `max_bytes` as its output-content cap and defaults its optional `limit` to 250;
+- native `read` supports `includeContent: false` for stat-only file metadata without loading content;
+- out-of-range reads report `offset_clamped: true` and a no-content EOF summary; validation failures include a compact `example_operation` for the native read schema.
 
 Example HTTP debug configuration:
 

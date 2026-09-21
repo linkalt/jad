@@ -29,6 +29,10 @@
           "contentEncoding": {
             "type": "string",
             "enum": ["utf8", "base64"]
+          },
+          "includeContent": {
+            "type": "boolean",
+            "description": "When false, return file metadata without reading file content."
           }
         },
         "required": ["path"],
