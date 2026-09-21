@@ -233,6 +233,15 @@ class AgentHttpApplication {
       }
 
       if (
+        request.method === "GET" &&
+        segments.length === 4 &&
+        segments[3] === "tools"
+      ) {
+        await this.handleTools(sessionId, response);
+        return;
+      }
+
+      if (
         request.method === "POST" &&
         segments.length === 4 &&
         segments[3] === "run"
@@ -338,6 +347,14 @@ class AgentHttpApplication {
     const config = await handle.loader.load();
     const messages = await readJsonl(join(handle.directory, "messages.jsonl"));
     sendJson(response, 200, sessionSummary(id, config, messages));
+  }
+
+  private async handleTools(
+    id: string,
+    response: ServerResponse,
+  ): Promise<void> {
+    const handle = await this.getSession(id);
+    sendJson(response, 200, {tools: await handle.session.listTools()});
   }
 
   private async handleRun(

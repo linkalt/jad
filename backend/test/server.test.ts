@@ -12,6 +12,7 @@ import {
   WebUiNormalizedRun,
 } from "../src/plugins/web-ui-normalized.js";
 import type { LoadedSessionConfig } from "../src/config.js";
+import {nativeReadDefinition} from "../src/tools/native/read.js";
 
 function completedEvent(output: Record<string, unknown>[], id: string): Record<string, unknown> {
   return {
@@ -114,7 +115,17 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
       session_name: "server-test",
       cwd: sessionDir,
       system_prompt: "Be concise.",
+      tool_definition_paths: ["read.json"],
+      tools: {
+        native: {
+          read: {max_bytes: 65536, default_limit: 250},
+        },
+      },
     }),
+  );
+  await writeFile(
+    join(sessionDir, "read.json"),
+    JSON.stringify({schema_version: 1, tools: [nativeReadDefinition]}),
   );
 
   const reasoningOne = {
@@ -206,6 +217,12 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
     const initial = (await snapshot.json()) as { turns: number; messages: unknown[] };
     assert.equal(initial.turns, 0);
     assert.equal(initial.messages.length, 0);
+
+    const tools = await fetch(`${baseUrl}/api/sessions/session1/tools`);
+    assert.equal(tools.status, 200);
+    assert.deepEqual(await tools.json(), {
+      tools: [nativeReadDefinition],
+    });
 
     const run = await fetch(`${baseUrl}/api/sessions/session1/run`, {
       method: "POST",

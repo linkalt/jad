@@ -36,8 +36,10 @@ export type {
   HttpDebugSettings,
   LoadedSessionConfig,
   ModelConfig,
+  NativeReadToolSettings,
   SessionConfigPaths,
   SessionSettings,
+  ToolSettings,
 } from "./config.js";
 
 export {
@@ -57,3 +59,10 @@ export { createAgentServer, startAgentServer } from "./server.js";
 export type { AgentServerOptions, RunningAgentServer } from "./server.js";
 
 export { createHttpDebugFetch } from "./http-debug.js";
+
+export {
+  loadToolCatalog,
+  responseFunctionCalls,
+  ToolCatalog,
+} from "./tools/index.js";
+export type {ToolDefinition, ToolExecutionContext, ToolSource} from "./tools/index.js";

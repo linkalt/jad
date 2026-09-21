@@ -13,7 +13,7 @@ The Agent harness stores each session below:
 ├── messages.jsonl
 ├── model.json
 ├── setting.json
-├── tool.json
+├── tools/                  # optional tool definition documents
 └── staging/
 ```
 
@@ -59,7 +59,7 @@ The transcript therefore has two canonical line categories:
 1. raw input items such as `message` and `function_call_output`;
 2. completed model events with the exact `response.completed` shape.
 
-The history reader yields raw input items directly and expands each committed `response.completed.response.output` array into input items for the next request. This preserves output order and avoids a custom cache-relevant wrapper. `model.json`, `setting.json`, and `tool.json` remain separate configuration sources.
+The history reader yields raw input items directly and expands each committed `response.completed.response.output` array into input items for the next request. This preserves output order and avoids a custom cache-relevant wrapper. `model.json`, `setting.json`, and tool definition documents remain separate configuration sources.
 
 ### 2.2 Configuration loading
 
@@ -73,7 +73,10 @@ The history reader yields raw input items directly and expands each committed `r
 - normalized model and setting objects receive canonical SHA-256 hashes;
 - `setting.json.http_debug` is disabled by default and controls native request/response diagnostics;
 - enabled diagnostics write numbered JSON records to `debug/http/request1`, `debug/http/response1`, and subsequent request/response files in the session directory;
-- API-key and authorization headers are redacted, and bodies are opt-in and capped by `max_body_bytes`.
+- API-key and authorization headers are redacted, and bodies are opt-in and capped by `max_body_bytes`;
+- `tool_definition_paths` selects definition documents relative to `cwd`;
+- a tool must also be present in the per-session `tools` policy to be exposed, so omitted tools are disabled;
+- native `read` uses `max_bytes` as its output-content cap and defaults its optional `limit` to 250.
 
 Example HTTP debug configuration:
 
@@ -105,18 +108,20 @@ Example model configuration:
 
 The loader rejects runner-owned request fields such as `input`, `instructions`, `stream`, and `tools` inside `model.json`.
 
-### 2.3 Minimal session runner
+### 2.3 Session runner and native tools
 
-`src/session.ts` provides `AgentSession` for the non-tool turn path:
+`src/session.ts` provides `AgentSession` for the streaming turn path:
 
 1. load and normalize model/settings files;
-2. normalize text input into a Responses `message` input item;
-3. append the input item to `messages.jsonl`;
-4. reconstruct all prior input items and completed response output items;
-5. build a streaming request with `model`, `input`, `instructions`, and model request options;
-6. persist the streamed response through the response adapter.
+2. load the selected tool definition documents and compile their input schemas with AJV;
+3. normalize text input into a Responses `message` input item;
+4. append the input item to `messages.jsonl`;
+5. reconstruct all prior input items and completed response output items;
+6. build a streaming request with `model`, `input`, `instructions`, model request options, and selected tools;
+7. persist the streamed response through the response adapter;
+8. execute returned function calls, append `function_call_output` items, and continue until a response has no tool calls.
 
-Runs are serialized per `AgentSession` instance. Tool execution and tool definitions are intentionally not part of this runner yet; a `function_call` output is persisted and returned to the caller for the later tool loop implementation.
+Runs are serialized per `AgentSession` instance. Tool-call schema failures and execution failures are returned as compact tool output text; they do not cause an unnecessary duplicate provider request.
 
 ### 2.4 Local HTTP/SSE bridge
 
@@ -124,6 +129,7 @@ Runs are serialized per `AgentSession` instance. Tool execution and tool definit
 
 - `GET /api/health` checks that the server is available;
 - `GET /api/sessions/:id` returns the persisted transcript snapshot;
+- `GET /api/sessions/:id/tools` returns the effective provider-neutral tool definitions;
 - `POST /api/sessions/:id/run` accepts `{ "input": "..." }` and emits SSE `ui.message`, `completed`, `done`, or `error` events.
 
 The default session root is `.jad/sessions` (or `JAD_SESSIONS_DIR`). The frontend Vite server proxies `/api` to `127.0.0.1:8787`. Start the local integration with `npm run server --prefix backend` and `npm run dev --prefix frontend` from the project root. The backend owns its TypeScript compiler and Node types; the frontend is only an HTTP/SSE client and is not a backend build dependency.
@@ -420,7 +426,7 @@ The first implementation should test at least:
 
 ## 12. Deliberate scope boundaries
 
-This design standardizes both assistant response completion records and raw user/tool input items. It does not yet implement the higher-level session runner, tool execution policy, or automatic retry strategy.
+This design standardizes assistant response completion records, raw user/tool input items, and the initial native `read` tool. It does not yet implement MCP transport, destructive native tools, or automatic retry strategy.
 
 The design also assumes that cache compatibility means stable structural/serialized response data. Provider prompt-cache hit rate additionally depends on stable input history, model settings, tools, and other request fields; storing the response event alone cannot guarantee a provider cache hit.
 

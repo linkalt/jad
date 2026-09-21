@@ -22,12 +22,28 @@ export interface HttpDebugSettings extends JsonRecord {
   max_body_bytes: number;
 }
 
+export interface NativeReadToolSettings extends JsonRecord {
+  max_bytes: number;
+  default_limit: number;
+}
+
+export interface NativeToolSettings extends JsonRecord {
+  read?: NativeReadToolSettings;
+}
+
+export interface ToolSettings extends JsonRecord {
+  native: NativeToolSettings;
+  mcp: JsonRecord;
+}
+
 export interface SessionSettings extends JsonRecord {
   schema_version: 1;
   session_name: string;
   cwd: string;
   system_prompt: string;
   http_debug: HttpDebugSettings;
+  tool_definition_paths: string[];
+  tools: ToolSettings;
 }
 
 export interface SessionConfigPaths {
@@ -181,6 +197,10 @@ type HttpDebugBooleanField =
   | "include_response_headers"
   | "include_response_body";
 
+export const DEFAULT_NATIVE_READ_MAX_BYTES = 64 * 1024;
+export const DEFAULT_NATIVE_READ_LIMIT = 250;
+const MAX_NATIVE_TOOL_BYTES = 10 * 1024 * 1024;
+
 const DEFAULT_HTTP_DEBUG: HttpDebugSettings = {
   enabled: false,
   include_request_headers: false,
@@ -232,6 +252,76 @@ function normalizeHttpDebug(value: unknown, path: string): HttpDebugSettings {
   } as HttpDebugSettings;
 }
 
+function normalizeToolDefinitionPaths(value: unknown, path: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new ConfigError(`${path}: tool_definition_paths must be an array`);
+  }
+  return value.map((item, index) =>
+    requiredString(item, `tool_definition_paths[${index}]`, path),
+  );
+}
+
+function normalizeTools(value: unknown, path: string): ToolSettings {
+  if (value !== undefined && !isRecord(value)) {
+    throw new ConfigError(`${path}: tools must be an object`);
+  }
+  const tools = value ?? {};
+  const nativeValue = (tools as JsonRecord).native ?? {};
+  if (!isRecord(nativeValue)) {
+    throw new ConfigError(`${path}: tools.native must be an object`);
+  }
+
+  const readValue = nativeValue.read;
+  let read: NativeReadToolSettings | undefined;
+  if (readValue !== undefined) {
+    if (!isRecord(readValue)) {
+      throw new ConfigError(`${path}: tools.native.read must be an object`);
+    }
+    const maxBytes = readValue.max_bytes ?? DEFAULT_NATIVE_READ_MAX_BYTES;
+    if (
+      typeof maxBytes !== "number" ||
+      !Number.isSafeInteger(maxBytes) ||
+      maxBytes < 1 ||
+      maxBytes > MAX_NATIVE_TOOL_BYTES
+    ) {
+      throw new ConfigError(
+        `${path}: tools.native.read.max_bytes must be a safe integer between 1 and ${MAX_NATIVE_TOOL_BYTES}`,
+      );
+    }
+    const defaultLimit = readValue.default_limit ?? DEFAULT_NATIVE_READ_LIMIT;
+    if (
+      typeof defaultLimit !== "number" ||
+      !Number.isSafeInteger(defaultLimit) ||
+      defaultLimit < 1
+    ) {
+      throw new ConfigError(
+        `${path}: tools.native.read.default_limit must be a positive safe integer`,
+      );
+    }
+    read = {
+      ...readValue,
+      max_bytes: maxBytes,
+      default_limit: defaultLimit,
+    };
+  }
+
+  const mcpValue = (tools as JsonRecord).mcp ?? {};
+  if (!isRecord(mcpValue)) {
+    throw new ConfigError(`${path}: tools.mcp must be an object`);
+  }
+  return {
+    ...(tools as JsonRecord),
+    native: {
+      ...nativeValue,
+      ...(read ? {read} : {}),
+    },
+    mcp: mcpValue,
+  } as ToolSettings;
+}
+
 async function normalizeSettings(
   raw: JsonRecord,
   path: string,
@@ -249,6 +339,11 @@ async function normalizeSettings(
     throw new ConfigError(`${path}: system_prompt must be a string`);
   }
   const httpDebug = normalizeHttpDebug(raw.http_debug, path);
+  const toolDefinitionPaths = normalizeToolDefinitionPaths(
+    raw.tool_definition_paths,
+    path,
+  );
+  const tools = normalizeTools(raw.tools, path);
 
   return {
     ...raw,
@@ -257,6 +352,8 @@ async function normalizeSettings(
     cwd,
     system_prompt: systemPrompt,
     http_debug: httpDebug,
+    tool_definition_paths: toolDefinitionPaths,
+    tools,
   } as SessionSettings;
 }
 

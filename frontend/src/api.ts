@@ -24,6 +24,15 @@ export interface SessionSnapshot {
   };
 }
 
+export interface ToolDefinition {
+  id: string;
+  source: 'native' | 'mcp';
+  server?: string;
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
 interface SseMessage {
   event: string;
   data: unknown;
@@ -57,6 +66,18 @@ export async function fetchSession(sessionId: string): Promise<SessionSnapshot> 
     throw new Error(await readError(response));
   }
   return (await response.json()) as SessionSnapshot;
+}
+
+export async function fetchSessionTools(sessionId: string): Promise<ToolDefinition[]> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/tools`);
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value = (await response.json()) as {tools?: unknown};
+  if (!Array.isArray(value.tools)) {
+    throw new Error('the server returned invalid tool definitions');
+  }
+  return value.tools as ToolDefinition[];
 }
 
 async function* readSse(response: Response): AsyncGenerator<SseMessage> {

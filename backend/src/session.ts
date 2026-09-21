@@ -17,6 +17,11 @@ import {
   type PersistedResponse,
 } from "./responses.js";
 import { createHttpDebugFetch } from "./http-debug.js";
+import {
+  loadToolCatalog,
+  responseFunctionCalls,
+  type ToolDefinition,
+} from "./tools/index.js";
 
 export type SessionUserInput = string | ResponseInputItem | readonly ResponseInputItem[];
 
@@ -35,6 +40,8 @@ export interface AgentRunResult {
   config: LoadedSessionConfig;
   response: PersistedResponse;
 }
+
+const MAX_TOOL_ROUNDS = 8;
 
 class AsyncMutex {
   private tail: Promise<void> = Promise.resolve();
@@ -89,6 +96,7 @@ export function normalizeSessionInput(input: SessionUserInput): ResponseInputIte
 export function buildResponseRequest(
   config: LoadedSessionConfig,
   history: readonly ResponseInputItem[],
+  tools: readonly JsonRecord[] = [],
 ): ResponseCreateParamsStreaming {
   const request: JsonRecord = {
     ...config.model.request,
@@ -98,6 +106,9 @@ export function buildResponseRequest(
   };
   if (config.settings.system_prompt.length > 0) {
     request.instructions = config.settings.system_prompt;
+  }
+  if (tools.length > 0) {
+    request.tools = [...tools];
   }
   return request as unknown as ResponseCreateParamsStreaming;
 }
@@ -149,22 +160,47 @@ export class AgentSession {
     return this.runMutex.runExclusive(async () => {
       this.assertOpen();
       const config = await this.loader.load();
+      const catalog = await loadToolCatalog(config);
       const inputItems = normalizeSessionInput(input);
       await this.store.appendInputItems(inputItems);
+      const client = this.options.client ?? createClient(config, this.options.environment ?? process.env);
 
-      const history: ResponseInputItem[] = [];
-      for await (const item of this.store.readInputItems()) {
-        history.push(item);
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+        const history: ResponseInputItem[] = [];
+        for await (const item of this.store.readInputItems()) {
+          history.push(item);
+        }
+
+        const request = buildResponseRequest(config, history, catalog.responseTools());
+        const response = await persistOpenAIResponse(client, this.store, request, {
+          turnId: options.turnId ? `${options.turnId}-${round}` : undefined,
+          onEvent: options.onEvent,
+        });
+        const calls = responseFunctionCalls(response.event.response);
+        if (calls.length === 0) {
+          return {config, response};
+        }
+
+        const toolOutputs: ResponseInputItem[] = [];
+        for (const call of calls) {
+          toolOutputs.push(
+            await catalog.executeFunctionCall(call, {
+              workspaceRoot: config.settings.cwd,
+              sessionDir: config.paths.session_dir,
+            }),
+          );
+        }
+        await this.store.appendInputItems(toolOutputs);
       }
 
-      const request = buildResponseRequest(config, history);
-      const client = this.options.client ?? createClient(config, this.options.environment ?? process.env);
-      const response = await persistOpenAIResponse(client, this.store, request, {
-        turnId: options.turnId,
-        onEvent: options.onEvent,
-      });
-      return { config, response };
+      throw new Error(`tool execution exceeded ${MAX_TOOL_ROUNDS} rounds`);
     });
+  }
+
+  public async listTools(): Promise<ToolDefinition[]> {
+    this.assertOpen();
+    const config = await this.loader.load();
+    return (await loadToolCatalog(config)).definitions();
   }
 
   public async close(): Promise<void> {

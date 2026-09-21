@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.read",
+      "source": "native",
+      "name": "read",
+      "description": "Read workspace file content or inspect a directory.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Workspace-relative path."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "rangeType": {
+            "type": "string",
+            "enum": ["lines", "bytes"]
+          },
+          "contentEncoding": {
+            "type": "string",
+            "enum": ["utf8", "base64"]
+          }
+        },
+        "required": ["path"],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "rangeType": {"const": "lines"}
+              }
+            },
+            "then": {
+              "properties": {
+                "offset": {"type": "integer", "minimum": 1}
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "rangeType": {"const": "bytes"}
+              }
+            },
+            "then": {
+              "properties": {
+                "offset": {"type": "integer", "minimum": 0}
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

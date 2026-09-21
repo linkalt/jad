@@ -7,9 +7,10 @@
     "build": "tsc -p tsconfig.json --pretty false",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "server": "npm run build && node dist/src/server.js",
-    "test": "npm run build && node --test dist/test/persistence.test.js dist/test/server.test.js dist/test/http-debug.test.js"
+    "test": "npm run build && node --test dist/test/persistence.test.js dist/test/server.test.js dist/test/http-debug.test.js dist/test/tools.test.js"
   },
   "dependencies": {
+    "ajv": "^8.20.0",
     "openai": "^7.20.0"
   },
   "devDependencies": {
