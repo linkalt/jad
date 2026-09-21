@@ -4,10 +4,9 @@ function apiUrl(path: string): string {
   return `${appConfig.api_base_path.replace(/\/$/, '')}${path}`;
 }
 
-export interface WebUiTextPart {
-  type: 'reasoning' | 'text';
-  text: string;
-}
+export type WebUiTextPart =
+  | {type: 'reasoning'; text: string}
+  | {type: 'text'; text: string};
 
 export interface WebUiToolCallPart {
   type: 'tool_call';

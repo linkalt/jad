@@ -685,34 +685,35 @@ function toolActivityForParts(parts: WebUiPart[]): ChatToolCallItem[] {
 
 type WebUiReasoningPart = {type: 'reasoning'; text: string};
 type WebUiContentPart = {type: 'text'; text: string};
-type WebUiActivityPart = WebUiReasoningPart | WebUiToolCall | WebUiToolResult;
+type WebUiToolPart = WebUiToolCall | WebUiToolResult;
 type IndexedWebUiPart<T extends WebUiPart> = {part: T; index: number};
 type WebUiPartGroup =
   | {
-      type: 'activity';
-      items: IndexedWebUiPart<WebUiActivityPart>[];
+      type: 'reasoning';
+      item: IndexedWebUiPart<WebUiReasoningPart>;
+    }
+  | {
+      type: 'tools';
+      items: IndexedWebUiPart<WebUiToolPart>[];
     }
   | {
       type: 'content';
       item: IndexedWebUiPart<WebUiContentPart>;
     };
 
-function isWebUiActivityPart(part: WebUiPart): part is WebUiActivityPart {
-  return part.type === 'reasoning' || part.type === 'tool_call' || part.type === 'tool_result';
-}
-
-function isWebUiContentPart(part: WebUiPart): part is WebUiContentPart {
-  return part.type === 'text';
+function isWebUiToolPart(part: WebUiPart): part is WebUiToolPart {
+  return part.type === 'tool_call' || part.type === 'tool_result';
 }
 
 function groupWebUiParts(parts: WebUiPart[]): WebUiPartGroup[] {
   const groups: WebUiPartGroup[] = [];
-  let activityItems: IndexedWebUiPart<WebUiActivityPart>[] = [];
+  // Group only adjacent tool parts; reasoning and text always flush the tool run.
+  let toolItems: IndexedWebUiPart<WebUiToolPart>[] = [];
 
-  const flushActivity = () => {
-    if (activityItems.length > 0) {
-      groups.push({type: 'activity', items: activityItems});
-      activityItems = [];
+  const flushTools = () => {
+    if (toolItems.length > 0) {
+      groups.push({type: 'tools', items: toolItems});
+      toolItems = [];
     }
   };
 
@@ -720,16 +721,19 @@ function groupWebUiParts(parts: WebUiPart[]): WebUiPartGroup[] {
     if ((part.type === 'reasoning' || part.type === 'text') && part.text.trim().length === 0) {
       return;
     }
-    if (isWebUiActivityPart(part)) {
-      activityItems.push({part, index});
+    if (isWebUiToolPart(part)) {
+      toolItems.push({part, index});
       return;
     }
-    if (isWebUiContentPart(part)) {
-      flushActivity();
-      groups.push({type: 'content', item: {part, index}});
+
+    flushTools();
+    if (part.type === 'reasoning') {
+      groups.push({type: 'reasoning', item: {part, index}});
+      return;
     }
+    groups.push({type: 'content', item: {part, index}});
   });
-  flushActivity();
+  flushTools();
 
   return groups;
 }
@@ -746,15 +750,28 @@ function WebUiParts({
   return (
     <VStack gap={3} width="100%">
       {groups.map((group, groupIndex) => {
-        if (group.type === 'activity') {
+        if (group.type === 'reasoning') {
+          return (
+            <ReasoningBlock
+              key={`reasoning-${group.item.index}`}
+              steps={[]}
+              content={group.item.part.text}
+              isStreaming={isStreaming && group.item.index === parts.length - 1}
+            />
+          );
+        }
+
+        if (group.type === 'tools') {
           const toolCallItems = group.items
             .filter(({part}) => part.type === 'tool_call')
             .map(({part, index}) => {
               if (part.type !== 'tool_call') {
                 return undefined;
               }
-              const result = parts
-                .slice(index + 1)
+              const itemIndex = group.items.findIndex(item => item.index === index);
+              const result = group.items
+                .slice(itemIndex + 1)
+                .map(item => item.part)
                 .find(
                   (candidate): candidate is WebUiToolResult =>
                     candidate.type === 'tool_result' && candidate.callId === part.callId,
@@ -768,23 +785,12 @@ function WebUiParts({
 
           return (
             <VStack
-              key={`activity-${group.items[0]?.index ?? groupIndex}`}
+              key={`tools-${group.items[0]?.index ?? groupIndex}`}
               gap={1}
               width="100%"
               xstyle={styles.activityGroup}
             >
-              {group.items.map(({part, index}) => {
-                if (part.type === 'reasoning') {
-                  return (
-                    <ReasoningBlock
-                      key={`reasoning-${index}`}
-                      steps={[]}
-                      content={part.text}
-                      isGrouped
-                      isStreaming={isStreaming}
-                    />
-                  );
-                }
+              {group.items.map(({part, index}, itemIndex) => {
                 if (part.type === 'tool_call') {
                   return index === firstToolCallIndex ? (
                     <ChatToolCalls
@@ -794,9 +800,12 @@ function WebUiParts({
                     />
                   ) : null;
                 }
-                const hasCall = parts
-                  .slice(0, index)
-                  .some(candidate => candidate.type === 'tool_call' && candidate.callId === part.callId);
+                const hasCall = group.items
+                  .slice(0, itemIndex)
+                  .some(
+                    ({part: candidate}) =>
+                      candidate.type === 'tool_call' && candidate.callId === part.callId,
+                  );
                 return hasCall ? null : (
                   <OrphanToolResultBlock
                     key={`tool-result-${part.callId}-${index}`}
