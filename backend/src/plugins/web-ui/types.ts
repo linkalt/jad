@@ -33,16 +33,6 @@ export interface WebUiMessage {
   reasoningContent?: string;
 }
 
-export interface WebUiSessionConfig {
-  model: {
-    provider: string;
-    model: string;
-  };
-  settings: {
-    session_name: string;
-  };
-}
-
 export interface WebUiSessionSnapshot {
   id: string;
   session_id?: string;

@@ -1,10 +1,8 @@
-import type {
-  WebUiSessionConfig,
-  WebUiSessionSnapshot,
-} from "./types.js";
+import type { LoadedSessionConfig } from "../../config.js";
+import type { WebUiSessionSnapshot } from "./types.js";
 
 export function sessionSettingsFromConfig(
-  config: WebUiSessionConfig,
+  config: LoadedSessionConfig,
 ): Pick<WebUiSessionSnapshot, "session_name" | "model"> {
   return {
     session_name: config.settings.session_name,

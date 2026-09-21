@@ -182,11 +182,12 @@ test("normalizes tool call and result parts for snapshots and live runs", () => 
   ]);
 });
 
-test("lists sessions from configured roots and namespaces duplicate ids", async () => {
+test("lists only valid configured sessions and namespaces duplicate ids", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "agent-harness-roots-"));
   const primaryDir = join(workspace, "roots", "primary", "shared");
   const secondaryDir = join(workspace, "roots", "secondary", "shared");
   const incompleteDir = join(workspace, "roots", "primary", "luna");
+  const missingSettingDir = join(workspace, "roots", "primary", "missing-setting");
   const rootSettingPath = join(workspace, "setting.json");
 
   for (const [directory, name] of [
@@ -213,6 +214,7 @@ test("lists sessions from configured roots and namespaces duplicate ids", async 
     );
   }
   await mkdir(incompleteDir, {recursive: true});
+  await mkdir(missingSettingDir, {recursive: true});
   await writeFile(
     join(incompleteDir, "setting.json"),
     JSON.stringify({
@@ -264,13 +266,6 @@ test("lists sessions from configured roots and namespaces duplicate ids", async 
       root_label: session.root_label,
       session_name: session.session_name,
     })), [
-      {
-        id: "primary:luna",
-        session_id: "luna",
-        root_id: "primary",
-        root_label: "Primary",
-        session_name: "Luna session",
-      },
       {
         id: "primary:shared",
         session_id: "shared",

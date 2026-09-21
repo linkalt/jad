@@ -1378,9 +1378,17 @@ function App() {
           });
           setSessions(current => {
             const liveIds = new Set(liveItems.map(item => item.id));
+            const initialLiveIds = new Set(
+              initialSessions
+                .filter(session => session.source === 'live')
+                .map(session => session.id),
+            );
             const liveSessions = liveItems.map(item => sessionFromSnapshot(item.snapshot, item.id));
             const existingLive = current.filter(
-              session => session.source === 'live' && !liveIds.has(session.id),
+              session =>
+                session.source === 'live' &&
+                initialLiveIds.has(session.id) &&
+                !liveIds.has(session.id),
             );
             const samples = current.filter(
               session => session.source === 'sample' && !liveIds.has(session.id),
