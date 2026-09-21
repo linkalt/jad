@@ -182,7 +182,7 @@ test("normalizes tool call and result parts for snapshots and live runs", () => 
   ]);
 });
 
-test("lists only valid configured sessions and namespaces duplicate ids", async () => {
+test("lists sessions with valid settings and namespaces duplicate ids", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "agent-harness-roots-"));
   const primaryDir = join(workspace, "roots", "primary", "shared");
   const secondaryDir = join(workspace, "roots", "secondary", "shared");
@@ -221,6 +221,14 @@ test("lists only valid configured sessions and namespaces duplicate ids", async 
       schema_version: 1,
       session_name: "Luna session",
       cwd: "/tmp/test",
+    }),
+  );
+  await writeFile(
+    join(incompleteDir, "model.json"),
+    JSON.stringify({
+      schema_version: 1,
+      provider: {only: ["openai/flex"]},
+      model: "openai/gpt-5.6-luna",
     }),
   );
   await writeFile(
@@ -266,6 +274,13 @@ test("lists only valid configured sessions and namespaces duplicate ids", async 
       root_label: session.root_label,
       session_name: session.session_name,
     })), [
+      {
+        id: "primary:luna",
+        session_id: "luna",
+        root_id: "primary",
+        root_label: "Primary",
+        session_name: "Luna session",
+      },
       {
         id: "primary:shared",
         session_id: "shared",

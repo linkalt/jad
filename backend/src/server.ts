@@ -14,7 +14,6 @@ import type OpenAI from "openai";
 import {
   ConfigError,
   SessionConfigLoader,
-  type LoadedSessionConfig,
 } from "./config.js";
 import { AgentSession } from "./session.js";
 import type { JsonRecord } from "./persistence.js";
@@ -27,7 +26,10 @@ import {
   normalizeWebUiSession,
   WebUiNormalizedRun,
 } from "./plugins/web-ui/normalize-web-ui.js";
-import type { WebUiSessionSnapshot } from "./plugins/web-ui/types.js";
+import type {
+  WebUiSessionConfig,
+  WebUiSessionSnapshot,
+} from "./plugins/web-ui/types.js";
 
 const DEFAULT_PORT = 8787;
 const DEFAULT_HOST = "127.0.0.1";
@@ -171,8 +173,8 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   }
 }
 
-async function hasSessionConfig(directory: string): Promise<boolean> {
-  for (const name of ["setting.json", "model.json"]) {
+async function hasSessionSetting(directory: string): Promise<boolean> {
+  for (const name of ["setting.json"]) {
     try {
       const info = await stat(join(directory, name));
       if (!info.isFile()) {
@@ -186,6 +188,45 @@ async function hasSessionConfig(directory: string): Promise<boolean> {
     }
   }
   return true;
+}
+
+async function readJsonRecord(path: string): Promise<JsonRecord> {
+  try {
+    const value: unknown = JSON.parse(await readFile(path, "utf8"));
+    return isRecord(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+async function sessionListingConfig(
+  directory: string,
+  sessionId: string,
+): Promise<WebUiSessionConfig> {
+  const settings = await new SessionConfigLoader(directory).loadSettings();
+  const model = await readJsonRecord(join(directory, "model.json"));
+  const provider = model.provider;
+  return {
+    settings,
+    model: {
+      provider:
+        typeof provider === "string" && provider.trim().length > 0
+          ? provider.trim()
+          : "unknown",
+      model:
+        typeof model.model === "string" && model.model.trim().length > 0
+          ? model.model.trim()
+          : sessionId,
+    },
+  };
+}
+
+async function readListingMessages(path: string): Promise<JsonRecord[]> {
+  try {
+    return await readJsonl(path);
+  } catch {
+    return [];
+  }
 }
 
 async function readJsonl(path: string): Promise<JsonRecord[]> {
@@ -220,7 +261,7 @@ async function readJsonl(path: string): Promise<JsonRecord[]> {
 
 function sessionSummary(
   location: SessionLocation,
-  config: LoadedSessionConfig,
+  config: WebUiSessionConfig,
   messages: JsonRecord[],
 ): WebUiSessionSnapshot {
   return {
@@ -431,13 +472,12 @@ class AgentHttpApplication {
           root,
         };
         const directory = join(root.directory, entry.name);
-        if (!(await hasSessionConfig(directory))) {
+        if (!(await hasSessionSetting(directory))) {
           continue;
         }
         try {
-          const loader = new SessionConfigLoader(directory);
-          const config = await loader.load();
-          const messages = await readJsonl(join(directory, "messages.jsonl"));
+          const config = await sessionListingConfig(directory, entry.name);
+          const messages = await readListingMessages(join(directory, "messages.jsonl"));
           sessions.push(sessionSummary(location, config, messages));
         } catch (error) {
           if (error instanceof ConfigError) {
