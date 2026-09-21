@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 
 import {
+  MAX_CONFIGURED_TOOL_ROUNDS,
   SessionConfigLoader,
   resolveApiKey,
   type LoadedSessionConfig,
@@ -34,6 +35,8 @@ export interface AgentSessionOptions {
 
 export interface AgentRunOptions {
   turnId?: string;
+  /** Override setting.json max_tool_rounds for this run. */
+  maxToolRounds?: number;
   onEvent?: (event: JsonRecord) => void | Promise<void>;
   onToolResult?: (item: ResponseInputItem) => void | Promise<void>;
 }
@@ -43,7 +46,18 @@ export interface AgentRunResult {
   response: PersistedResponse;
 }
 
-const MAX_TOOL_ROUNDS = 8;
+function validateMaxToolRounds(value: number): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value > MAX_CONFIGURED_TOOL_ROUNDS
+  ) {
+    throw new Error(
+      `maxToolRounds must be a safe integer between 0 and ${MAX_CONFIGURED_TOOL_ROUNDS}`,
+    );
+  }
+  return value;
+}
 
 class AsyncMutex {
   private tail: Promise<void> = Promise.resolve();
@@ -176,8 +190,11 @@ export class AgentSession {
       const config = await this.loader.load();
       const catalog = await loadToolCatalog(config);
       const client = this.options.client ?? createClient(config, this.options.environment ?? process.env);
+      const maxToolRounds = validateMaxToolRounds(
+        options.maxToolRounds ?? config.settings.max_tool_rounds,
+      );
 
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+      for (let round = 0; ; round += 1) {
         const history: ResponseInputItem[] = [];
         for await (const item of this.store.readInputItems()) {
           history.push(item);
@@ -191,6 +208,9 @@ export class AgentSession {
         const calls = responseFunctionCalls(response.event.response);
         if (calls.length === 0) {
           return {config, response};
+        }
+        if (round >= maxToolRounds) {
+          throw new Error(`tool execution exceeded ${maxToolRounds} tool rounds`);
         }
 
         const toolOutputs: ResponseInputItem[] = [];
@@ -207,8 +227,6 @@ export class AgentSession {
           await options.onToolResult?.(toolOutput);
         }
       }
-
-      throw new Error(`tool execution exceeded ${MAX_TOOL_ROUNDS} rounds`);
     });
   }
 

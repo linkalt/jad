@@ -333,6 +333,7 @@ test("loads model and session settings with normalized paths and hashes", async 
     assert.equal(config.model.base_url, "https://openrouter.ai/api/v1");
     assert.equal(config.settings.cwd, sessionDir);
     assert.equal(config.settings.system_prompt, "Be concise.");
+    assert.equal(config.settings.max_tool_rounds, 8);
     assert.deepEqual(config.settings.http_debug, {
       enabled: false,
       include_request_headers: false,
@@ -345,6 +346,31 @@ test("loads model and session settings with normalized paths and hashes", async 
     assert.match(config.settings_sha256, /^[a-f0-9]{64}$/);
     assert.equal(resolveApiKey(config.model, { OPENROUTER_API_KEY: "secret" }), "secret");
     assert.equal(sha256Json({ b: 2, a: 1 }), sha256Json({ a: 1, b: 2 }));
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
+test("validates configurable tool-round limits", async () => {
+  const sessionDir = await makeSession();
+  try {
+    await writeFile(join(sessionDir, "model.json"), JSON.stringify({model: "gpt-test"}));
+    await writeFile(
+      join(sessionDir, "setting.json"),
+      JSON.stringify({cwd: sessionDir, max_tool_rounds: 12}),
+    );
+    assert.equal((await new SessionConfigLoader(sessionDir).loadSettings()).max_tool_rounds, 12);
+
+    for (const value of [-1, 1001, 1.5, "12"]) {
+      await writeFile(
+        join(sessionDir, "setting.json"),
+        JSON.stringify({cwd: sessionDir, max_tool_rounds: value}),
+      );
+      await assert.rejects(
+        () => new SessionConfigLoader(sessionDir).loadSettings(),
+        (error: unknown) => error instanceof ConfigError && /max_tool_rounds/.test(error.message),
+      );
+    }
   } finally {
     await removeSession(sessionDir);
   }

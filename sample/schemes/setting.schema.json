@@ -25,6 +25,13 @@
       "description": "Mapped to the Responses API instructions field. Defaults to an empty string.",
       "default": ""
     },
+    "max_tool_rounds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000,
+      "description": "Maximum number of tool-execution continuations for a run. The initial provider request is not counted. Defaults to 8.",
+      "default": 8
+    },
     "paths": {
       "type": "object",
       "description": "Session storage paths. Relative paths resolve from the directory containing this setting.json; absolute paths are used as-is.",

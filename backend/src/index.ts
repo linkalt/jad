@@ -27,6 +27,8 @@ export type { PersistResponseStreamOptions, PersistedResponse } from "./response
 
 export {
   ConfigError,
+  DEFAULT_MAX_TOOL_ROUNDS,
+  MAX_CONFIGURED_TOOL_ROUNDS,
   SessionConfigLoader,
   resolveApiKey,
   sha256Json,

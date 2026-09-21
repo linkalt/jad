@@ -514,3 +514,131 @@ test("executes native read calls between Responses API turns", async () => {
     await rm(sessionDir, {recursive: true, force: true});
   }
 });
+
+test("forwards the final configured tool-round result before stopping", async () => {
+  const sessionDir = await makeToolSession();
+  try {
+    await writeFile(join(sessionDir, "sample.txt"), "native tool output\n", "utf8");
+    await writeFile(
+      join(sessionDir, "setting.json"),
+      JSON.stringify({
+        cwd: sessionDir,
+        max_tool_rounds: 2,
+        tool_definition_paths: [join(sessionDir, "read.json")],
+        tools: {native: {read: {max_bytes: 8, default_limit: 250}}},
+      }),
+    );
+
+    const requests: Record<string, unknown>[] = [];
+    let responseNumber = 0;
+    const fakeClient = {
+      responses: {
+        create: async (request: unknown) => {
+          responseNumber += 1;
+          requests.push(request as Record<string, unknown>);
+          const output = responseNumber <= 2
+            ? {
+                type: "function_call",
+                call_id: `call_read_${responseNumber}`,
+                name: "read",
+                arguments: JSON.stringify({path: "sample.txt"}),
+              }
+            : {
+                type: "message",
+                role: "assistant",
+                content: [{type: "output_text", text: "READ_DONE"}],
+              };
+          return (async function* () {
+            yield {type: "response.output_item.done", output_index: 0, item: output};
+            yield {
+              type: "response.completed",
+              response: {
+                id: `response-${responseNumber}`,
+                object: "response",
+                status: "completed",
+                model: "gpt-test",
+                output: [output],
+              },
+            };
+          })();
+        },
+      },
+    } as unknown as OpenAI;
+
+    const session = await AgentSession.open(sessionDir, {client: fakeClient});
+    const result = await session.run("read twice", {turnId: "round-limit-forward"});
+    assert.equal(result.response.event.response.id, "response-3");
+    assert.equal(requests.length, 3);
+    assert.deepEqual(
+      (requests[2]?.input as Array<Record<string, unknown>>).slice(-2).map((item) => item.type),
+      ["function_call", "function_call_output"],
+    );
+    assert.equal(
+      (requests[2]?.input as Array<Record<string, unknown>>).at(-1)?.call_id,
+      "call_read_2",
+    );
+    await session.close();
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("enforces the configured and per-run hard tool-round limit", async () => {
+  const sessionDir = await makeToolSession();
+  try {
+    await writeFile(join(sessionDir, "sample.txt"), "native tool output\n", "utf8");
+    await writeFile(
+      join(sessionDir, "setting.json"),
+      JSON.stringify({
+        cwd: sessionDir,
+        max_tool_rounds: 4,
+        tool_definition_paths: [join(sessionDir, "read.json")],
+        tools: {native: {read: {max_bytes: 8, default_limit: 250}}},
+      }),
+    );
+
+    const requests: Record<string, unknown>[] = [];
+    let responseNumber = 0;
+    const fakeClient = {
+      responses: {
+        create: async (request: unknown) => {
+          responseNumber += 1;
+          requests.push(request as Record<string, unknown>);
+          const output = {
+            type: "function_call",
+            call_id: `call_read_${responseNumber}`,
+            name: "read",
+            arguments: JSON.stringify({path: "sample.txt"}),
+          };
+          return (async function* () {
+            yield {type: "response.output_item.done", output_index: 0, item: output};
+            yield {
+              type: "response.completed",
+              response: {
+                id: `response-${responseNumber}`,
+                object: "response",
+                status: "completed",
+                model: "gpt-test",
+                output: [output],
+              },
+            };
+          })();
+        },
+      },
+    } as unknown as OpenAI;
+
+    const session = await AgentSession.open(sessionDir, {client: fakeClient});
+    await assert.rejects(
+      () => session.run("keep reading", {turnId: "round-limit-hard", maxToolRounds: 1}),
+      /tool execution exceeded 1 tool rounds/,
+    );
+    assert.equal(requests.length, 2);
+    assert.equal(
+      (requests[1]?.input as Array<Record<string, unknown>>).at(-1)?.call_id,
+      "call_read_1",
+    );
+    await session.close();
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});

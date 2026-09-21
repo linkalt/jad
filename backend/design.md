@@ -105,6 +105,7 @@ Example storage and HTTP debug paths:
 
 ```json
 {
+  "max_tool_rounds": 8,
   "paths": {
     "messages": "data/messages.jsonl",
     "model": "config/model.json",
@@ -149,6 +150,8 @@ The loader rejects runner-owned request fields such as `input`, `instructions`, 
 6. build a streaming request with `model`, `input`, `instructions`, model request options, and selected tools;
 7. persist the streamed response through the response adapter;
 8. execute returned function calls, append `function_call_output` items, and continue until a response has no tool calls.
+
+`setting.json` controls the hard limit with `max_tool_rounds` (default `8`, range `0..1000`). The initial provider request is not counted; each tool-execution continuation consumes one round. A final tool result receives its follow-up provider request before the limit is enforced. `AgentRunOptions.maxToolRounds` can override the session setting for one run.
 
 Runs are serialized per `AgentSession` instance. Tool-call schema failures and execution failures are returned as compact tool output text; they do not cause an unnecessary duplicate provider request.
 

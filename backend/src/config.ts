@@ -66,6 +66,7 @@ export interface SessionSettings extends JsonRecord {
   session_name: string;
   cwd: string;
   system_prompt: string;
+  max_tool_rounds: number;
   http_debug: HttpDebugSettings;
   paths: SessionStoragePaths;
   tool_definition_paths: string[];
@@ -93,6 +94,9 @@ export interface LoadedSessionConfig {
   model_sha256: string;
   settings_sha256: string;
 }
+
+export const DEFAULT_MAX_TOOL_ROUNDS = 8;
+export const MAX_CONFIGURED_TOOL_ROUNDS = 1000;
 
 export class ConfigError extends Error {
   public override name = "ConfigError";
@@ -238,6 +242,21 @@ type HttpDebugBooleanField =
 export const DEFAULT_NATIVE_READ_MAX_BYTES = 64 * 1024;
 export const DEFAULT_NATIVE_READ_LIMIT = 250;
 const MAX_NATIVE_TOOL_BYTES = 10 * 1024 * 1024;
+
+function normalizeMaxToolRounds(value: unknown, path: string): number {
+  const maxToolRounds = value ?? DEFAULT_MAX_TOOL_ROUNDS;
+  if (
+    typeof maxToolRounds !== "number" ||
+    !Number.isSafeInteger(maxToolRounds) ||
+    maxToolRounds < 0 ||
+    maxToolRounds > MAX_CONFIGURED_TOOL_ROUNDS
+  ) {
+    throw new ConfigError(
+      `${path}: max_tool_rounds must be a safe integer between 0 and ${MAX_CONFIGURED_TOOL_ROUNDS}`,
+    );
+  }
+  return maxToolRounds;
+}
 
 const DEFAULT_HTTP_DEBUG: HttpDebugSettings = {
   enabled: false,
@@ -477,6 +496,7 @@ async function normalizeSettings(
   if (typeof systemPrompt !== "string") {
     throw new ConfigError(`${path}: system_prompt must be a string`);
   }
+  const maxToolRounds = normalizeMaxToolRounds(raw.max_tool_rounds, path);
   const httpDebug = normalizeHttpDebug(raw.http_debug, path);
   const toolDefinitionPaths = normalizeToolDefinitionPaths(
     raw.tool_definition_paths,
@@ -491,6 +511,7 @@ async function normalizeSettings(
     session_name: sessionName,
     cwd,
     system_prompt: systemPrompt,
+    max_tool_rounds: maxToolRounds,
     http_debug: httpDebug,
     paths: storagePaths,
     tool_definition_paths: toolDefinitionPaths,
