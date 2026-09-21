@@ -138,9 +138,17 @@ The browser may abort its fetch, but the first bridge version does not cancel an
 
 ### 2.5 `web-ui-normalized` plugin
 
-`src/plugins/web-ui-normalized.ts` is a transport/view plugin, separate from `messages.jsonl` persistence:
+`src/plugins/web-ui/` is a transport/view plugin, separate from `messages.jsonl` persistence. The legacy `src/plugins/web-ui-normalized.ts` module remains a compatibility barrel:
 
-- it converts raw session records into UI messages for `GET /api/sessions/:id`;
+- `reasoning-web-ui.ts` normalizes reasoning output and deltas;
+- `assistant-output-web-ui.ts` normalizes assistant text output and deltas;
+- `tool-read-web-ui.ts` normalizes native read calls, tool-call fallbacks, and tool results;
+- `setting-web-ui.ts` maps session configuration into UI metadata;
+- `normalize-web-ui.ts` owns ordering, merging, tool-result pairing, and message assembly.
+
+The plugin:
+
+- converts raw session records into UI messages for `GET /api/sessions/:id`;
 - it converts provider stream events into ordered `ui.message` SSE updates;
 - it keeps adjacent reasoning/text chunks merged in the backend and emits tool call/result blocks as structured parts;
 - it does not change the raw `messages.jsonl` format or write a UI projection there;

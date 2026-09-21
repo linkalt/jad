@@ -22,8 +22,8 @@ import type { JsonRecord } from "./persistence.js";
 import {
   normalizeWebUiSession,
   WebUiNormalizedRun,
-  type WebUiSessionSnapshot,
-} from "./plugins/web-ui-normalized.js";
+} from "./plugins/web-ui/normalize-web-ui.js";
+import type { WebUiSessionSnapshot } from "./plugins/web-ui/types.js";
 
 const DEFAULT_PORT = 8787;
 const DEFAULT_HOST = "127.0.0.1";
