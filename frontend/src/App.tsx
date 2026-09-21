@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import * as stylex from '@stylexjs/stylex';
 import {
   AppShell,
@@ -27,7 +27,6 @@ import {
   SideNavHeading,
   SideNavItem,
   SideNavSection,
-  Spinner,
   StatusDot,
   Text,
   VStack,
@@ -47,8 +46,6 @@ import {
   sizeVars,
   spacingVars,
   typeScaleVars,
-  typographyVars,
-  fontWeightVars,
 } from '@astryxdesign/core/theme/tokens.stylex';
 
 const styles = stylex.create({
@@ -128,87 +125,12 @@ const styles = stylex.create({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
-  reasoningRoot: {
-    width: '100%',
-    marginBlockStart: spacingVars['--spacing-2'],
-  },
   activityGroup: {
     width: '100%',
     marginBlockStart: spacingVars['--spacing-2'],
   },
-  reasoningRootGrouped: {
-    marginBlockStart: spacingVars['--spacing-0'],
-  },
   toolCallsGrouped: {
     marginBlockStart: spacingVars['--spacing-0'],
-  },
-  reasoningButton: {
-    justifyContent: 'flex-start',
-    height: `calc(${typeScaleVars['--text-supporting-size']} * ${typeScaleVars['--text-supporting-leading']} + ${spacingVars['--spacing-1']})`,
-    width: `calc(100% + ${spacingVars['--spacing-2']})`,
-    marginInline: `calc(-1 * ${spacingVars['--spacing-1']})`,
-    paddingBlock: spacingVars['--spacing-0-5'],
-    paddingInline: spacingVars['--spacing-1'],
-    borderRadius: radiusVars['--radius-element'],
-    textAlign: 'start',
-    '@media (hover: hover)': {
-      ':hover:where(:not(:disabled,[aria-disabled="true"]))': {
-        backgroundColor: colorVars['--color-overlay-hover'],
-      },
-    },
-  },
-  reasoningStatusIcon: {
-    position: 'relative',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    width: spacingVars['--spacing-4'],
-    height: spacingVars['--spacing-4'],
-    borderRadius: radiusVars['--radius-full'],
-  },
-  reasoningTrigger: {
-    minWidth: 0,
-    width: '100%',
-  },
-  reasoningPanel: {
-    paddingBlockStart: spacingVars['--spacing-1'],
-    paddingInlineStart: `calc(${sizeVars['--size-element-sm']} + ${spacingVars['--spacing-1-5']})`,
-    paddingBlockEnd: spacingVars['--spacing-2'],
-  },
-  reasoningPanelHidden: {
-    display: 'none',
-  },
-  reasoningChevron: {
-    flexShrink: 0,
-    marginInlineStart: 'auto',
-    color: colorVars['--color-text-disabled'],
-  },
-  reasoningChevronOpen: {
-    transform: 'rotate(180deg)',
-  },
-  reasoningName: {
-    fontSize: typeScaleVars['--text-supporting-size'],
-    lineHeight: typeScaleVars['--text-supporting-leading'],
-    fontFamily: typographyVars['--font-family-code'],
-    fontWeight: fontWeightVars['--font-weight-medium'],
-    color: colorVars['--color-text-secondary'],
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    flexShrink: 0,
-  },
-  reasoningTitle: {
-    fontSize: typeScaleVars['--text-supporting-size'],
-    lineHeight: typeScaleVars['--text-supporting-leading'],
-    fontFamily: typographyVars['--font-family-body'],
-    fontWeight: fontWeightVars['--font-weight-normal'],
-    color: colorVars['--color-text-disabled'],
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    flexShrink: 10,
-    minWidth: 0,
   },
   reasoningContent: {
     color: colorVars['--color-text-secondary'],
@@ -477,8 +399,6 @@ function ReasoningBlock({
   isGrouped?: boolean;
   isStreaming?: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const contentId = useId();
   const hasContent = content.trim().length > 0;
   const hasSteps = steps.length > 0;
   const title = reasoningTitleText(
@@ -493,55 +413,13 @@ function ReasoningBlock({
     return null;
   }
 
-  return (
-    <VStack xstyle={[styles.reasoningRoot, isGrouped && styles.reasoningRootGrouped]}>
-      <Button
-        label={isOpen ? 'Collapse reasoning' : 'Expand reasoning'}
-        variant="ghost"
-        xstyle={styles.reasoningButton}
-        aria-expanded={isOpen}
-        aria-controls={contentId}
-        onClick={() => setIsOpen(current => !current)}
-      >
-        <HStack
-          as="span"
-          align="center"
-          gap={1.5}
-          width="100%"
-          xstyle={styles.reasoningTrigger}
-        >
-          <HStack as="span" align="center" justify="center" xstyle={styles.reasoningStatusIcon}>
-            {isStreaming ? (
-              <Spinner size="sm" shade="subtle" aria-hidden="true" />
-            ) : (
-              <Icon icon="success" size="xsm" color="success" />
-            )}
-          </HStack>
-          <Text type="inherit" xstyle={styles.reasoningName}>
-            Think
-          </Text>
-          {!isOpen && title && (
-            <Text
-              type="inherit"
-              xstyle={styles.reasoningTitle}
-            >
-              {title}
-            </Text>
-          )}
-          <Icon
-            icon="chevronDown"
-            size="xsm"
-            color="inherit"
-            xstyle={[styles.reasoningChevron, isOpen && styles.reasoningChevronOpen]}
-          />
-        </HStack>
-      </Button>
-      <VStack
-        id={contentId}
-        gap={2}
-        aria-hidden={!isOpen}
-        xstyle={[styles.reasoningPanel, !isOpen && styles.reasoningPanelHidden]}
-      >
+  const item: ChatToolCallItem = {
+    key: `reasoning-${title}-${steps.length}`,
+    name: 'Think',
+    status: isStreaming ? 'running' : 'complete',
+    target: title || undefined,
+    resultDetail: (
+      <VStack gap={2} width="100%">
         {hasContent && (
           <Markdown
             density="compact"
@@ -583,7 +461,14 @@ function ReasoningBlock({
           </>
         )}
       </VStack>
-    </VStack>
+    ),
+  };
+
+  return (
+    <ChatToolCalls
+      calls={[item]}
+      xstyle={isGrouped ? styles.toolCallsGrouped : undefined}
+    />
   );
 }
 
