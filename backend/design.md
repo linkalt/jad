@@ -17,6 +17,8 @@ The system `setting.json` establishes the global JAD data root as the directory 
 └── staging/
 ```
 
+The default layout is configurable per session through `setting.json.paths`: `messages`, `model`, `staging`, and `http_debug`. Relative values resolve from the directory containing that session's `setting.json`; absolute values are used as-is. When omitted, the paths above retain the default layout shown here.
+
 This document defines the first version of the response persistence protocol. The primary goals are:
 
 - preserve the OpenAI Responses API response shape;
@@ -71,8 +73,9 @@ The history reader yields raw input items directly and expands each committed `r
 - `cwd` must be an absolute existing directory; relative working directories are rejected;
 - unknown fields are preserved for forward compatibility;
 - normalized model and setting objects receive canonical SHA-256 hashes;
+- `setting.json.paths` optionally relocates the transcript, model file, staging directory, and HTTP debug directory; relative paths resolve from the session `setting.json` directory and absolute paths are used as-is;
 - `setting.json.http_debug` is disabled by default and controls native request/response diagnostics;
-- enabled diagnostics write numbered JSON records to `debug/http/request1`, `debug/http/response1`, and subsequent request/response files in the session directory;
+- enabled diagnostics write numbered JSON records to the configured `paths.http_debug` directory, defaulting to `debug/http/request1`, `debug/http/response1`, and subsequent request/response files;
 - API-key and authorization headers are redacted, and bodies are opt-in and capped by `max_body_bytes`;
 - `tool_definition_paths` selects definition documents relative to the global JAD root; absolute paths are used as-is;
 - a tool must also be present in the per-session `tools` policy to be exposed, so omitted tools are disabled;
@@ -82,10 +85,16 @@ The history reader yields raw input items directly and expands each committed `r
 - native `read` supports `includeContent: false` for stat-only file metadata without loading content;
 - out-of-range reads report `offset_clamped: true` and a no-content EOF summary; validation failures include a compact `example_operation` for the native read schema.
 
-Example HTTP debug configuration:
+Example storage and HTTP debug paths:
 
 ```json
 {
+  "paths": {
+    "messages": "data/messages.jsonl",
+    "model": "config/model.json",
+    "staging": "runtime/staging",
+    "http_debug": "/var/tmp/agent-harness/http"
+  },
   "http_debug": {
     "enabled": false,
     "include_request_headers": false,
@@ -119,8 +128,8 @@ The loader rejects runner-owned request fields such as `input`, `instructions`, 
 1. load and normalize model/settings files;
 2. load the selected tool definition documents and compile their input schemas with AJV;
 3. normalize text input into a Responses `message` input item;
-4. append the input item to `messages.jsonl`;
-5. reconstruct all prior input items and completed response output items;
+4. append the input item to the configured transcript path, defaulting to `messages.jsonl`;
+5. reconstruct all prior input items and completed response output items from that same path;
 6. build a streaming request with `model`, `input`, `instructions`, model request options, and selected tools;
 7. persist the streamed response through the response adapter;
 8. execute returned function calls, append `function_call_output` items, and continue until a response has no tool calls.
@@ -138,7 +147,7 @@ Runs are serialized per `AgentSession` instance. Tool-call schema failures and e
 
 The session roots are configured by the system `setting.json` `session_roots` array. Each root path is resolved relative to the directory containing that file and contains session subdirectories; that same directory is the global JAD root used for other relative paths. A future `jad --config <path-to-setting.json>` entry point will select the system setting explicitly. `JAD_ROOT_SETTING_PATH` selects another system setting file, while `JAD_SESSIONS_DIR` and the `sessionsDir` server option remain single-root compatibility overrides. The default fallback is `.jad/sessions` (or `../.jad/sessions`). When multiple roots are configured, API session references are namespaced as `root-id:session-id` to avoid collisions. The frontend Vite server proxies `/api` to `127.0.0.1:8787`. Start the local integration with `npm run server --prefix backend` and `npm run dev --prefix frontend` from the project root. The backend owns its TypeScript compiler and Node types; the frontend is only an HTTP/SSE client and is not a backend build dependency.
 
-The browser may abort its fetch, but the first bridge version does not cancel an already-started provider request; the server continues persistence so the transcript remains consistent. Raw user input is appended before model/tool/provider setup, so a configuration failure still leaves the user message in `messages.jsonl`. HTTP debug files are created only when the provider fetch starts; setup failures therefore have no HTTP request artifact.
+The browser may abort its fetch, but the first bridge version does not cancel an already-started provider request; the server continues persistence so the transcript remains consistent. Raw user input is appended before model/tool/provider setup, so a configuration failure still leaves the user message in the configured transcript path. HTTP debug files are created only when the provider fetch starts; setup failures therefore have no HTTP request artifact.
 
 ### 2.5 `web-ui-normalized` plugin
 

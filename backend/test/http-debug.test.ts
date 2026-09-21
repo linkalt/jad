@@ -100,6 +100,27 @@ test("writes numbered request and response files with secret headers redacted", 
   }
 });
 
+test("writes HTTP diagnostics to a configured directory", async () => {
+  const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-http-debug-path-"));
+  const debugDir = join(sessionDir, "diagnostics", "provider");
+  try {
+    const debugFetch = createHttpDebugFetch(
+      sessionDir,
+      debugSettings,
+      async () => new Response("configured-response", {status: 200}),
+      debugDir,
+    );
+    assert.ok(debugFetch);
+    await debugFetch("https://provider.test/v1/responses");
+    await waitForJsonFile(join(debugDir, "request1"));
+    const response = await waitForJsonFile(join(debugDir, "response1"));
+    assert.equal(response.status, 200);
+    await assert.rejects(readFile(join(sessionDir, "debug", "http", "request1")));
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
 test("returns no wrapper when HTTP debugging is disabled", async () => {
   const disabled = createHttpDebugFetch(
     "/tmp/agent-harness-http-debug-disabled",

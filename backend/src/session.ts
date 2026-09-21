@@ -123,6 +123,8 @@ function createClient(
   const debugFetch = createHttpDebugFetch(
     config.paths.session_dir,
     config.settings.http_debug,
+    undefined,
+    config.paths.http_debug_dir,
   );
   return new OpenAI({
     apiKey,
@@ -146,13 +148,19 @@ export class AgentSession {
     sessionDir: string,
     options: AgentSessionOptions = {},
   ): Promise<AgentSession> {
-    const store = await SessionResponseStore.open(sessionDir, options.store);
+    const loader = new SessionConfigLoader(sessionDir, {
+      globalJadRoot: options.globalJadRoot,
+    });
+    await loader.loadSettings();
+    const store = await SessionResponseStore.open(loader.paths.session_dir, {
+      ...options.store,
+      messagesPath: options.store?.messagesPath ?? loader.paths.messages_path,
+      stagingDir: options.store?.stagingDir ?? loader.paths.staging_dir,
+    });
     return new AgentSession(
-      sessionDir,
+      loader.paths.session_dir,
       store,
-      new SessionConfigLoader(sessionDir, {
-        globalJadRoot: options.globalJadRoot,
-      }),
+      loader,
       options,
     );
   }

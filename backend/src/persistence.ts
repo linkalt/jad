@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { createInterface } from "node:readline";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 export type JsonRecord = Record<string, unknown>;
 export type ResponseInputItem = JsonRecord;
@@ -22,6 +22,10 @@ export interface SessionResponseStoreOptions {
   durability?: DurabilityMode;
   /** Maximum serialized output-item size in bytes. */
   maxItemBytes?: number;
+  /** Transcript path; relative values resolve from the session directory. */
+  messagesPath?: string;
+  /** Staging directory; relative values resolve from the session directory. */
+  stagingDir?: string;
 }
 
 export interface ResponseOutputItemDoneEvent {
@@ -608,15 +612,24 @@ export class SessionResponseStore {
   public readonly messagesPath: string;
   public readonly stagingDir: string;
 
-  private readonly options: Required<SessionResponseStoreOptions>;
+  private readonly options: Required<Pick<SessionResponseStoreOptions, "durability" | "maxItemBytes">>;
   private readonly messageMutex = new AsyncMutex();
   private readonly activeTurns = new Set<ResponseTurn>();
   private closed = false;
 
   private constructor(sessionDir: string, options: SessionResponseStoreOptions) {
-    this.sessionDir = sessionDir;
-    this.messagesPath = join(sessionDir, MESSAGES_FILE);
-    this.stagingDir = join(sessionDir, STAGING_DIRECTORY);
+    const absoluteSessionDir = resolve(sessionDir);
+    this.sessionDir = absoluteSessionDir;
+    this.messagesPath = options.messagesPath
+      ? isAbsolute(options.messagesPath)
+        ? resolve(options.messagesPath)
+        : resolve(absoluteSessionDir, options.messagesPath)
+      : join(absoluteSessionDir, MESSAGES_FILE);
+    this.stagingDir = options.stagingDir
+      ? isAbsolute(options.stagingDir)
+        ? resolve(options.stagingDir)
+        : resolve(absoluteSessionDir, options.stagingDir)
+      : join(absoluteSessionDir, STAGING_DIRECTORY);
     this.options = {
       durability: options.durability ?? "turn",
       maxItemBytes: options.maxItemBytes ?? Number.MAX_SAFE_INTEGER,
@@ -633,6 +646,7 @@ export class SessionResponseStore {
   ): Promise<SessionResponseStore> {
     const store = new SessionResponseStore(sessionDir, options);
     await mkdir(store.sessionDir, { recursive: true });
+    await mkdir(dirname(store.messagesPath), { recursive: true });
     await mkdir(store.stagingDir, { recursive: true });
     await repairJsonlTail(store.messagesPath);
     return store;

@@ -25,6 +25,34 @@
       "description": "Mapped to the Responses API instructions field. Defaults to an empty string.",
       "default": ""
     },
+    "paths": {
+      "type": "object",
+      "description": "Session storage paths. Relative paths resolve from the directory containing this setting.json; absolute paths are used as-is.",
+      "properties": {
+        "messages": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Transcript path. Defaults to messages.jsonl."
+        },
+        "model": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Model configuration path. Defaults to model.json."
+        },
+        "staging": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Response staging directory. Defaults to staging."
+        },
+        "http_debug": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "HTTP debug directory. Defaults to debug/http."
+        }
+      },
+      "additionalProperties": true,
+      "default": {}
+    },
     "tool_definition_paths": {
       "type": "array",
       "description": "Definition documents loaded relative to the global JAD root; absolute paths are used as-is.",
@@ -90,7 +118,7 @@
     },
     "http_debug": {
       "type": "object",
-      "description": "Optional native HTTP diagnostics written as numbered request/response files under debug/http in the session directory. Disabled by default.",
+      "description": "Optional native HTTP diagnostics written as numbered request/response files under paths.http_debug. Disabled by default.",
       "properties": {
         "enabled": {
           "type": "boolean",

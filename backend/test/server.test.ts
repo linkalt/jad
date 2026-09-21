@@ -376,6 +376,89 @@ test("lists sessions with valid settings and namespaces duplicate ids", async ()
   }
 });
 
+test("serves sessions using configured model and transcript paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-configured-paths-"));
+  const sessionDir = join(root, "session1");
+  const modelPath = join(sessionDir, "config", "provider.json");
+  const messagesPath = join(sessionDir, "data", "transcript.jsonl");
+  await mkdir(sessionDir, {recursive: true});
+  await mkdir(join(sessionDir, "config"), {recursive: true});
+  await mkdir(join(sessionDir, "data"), {recursive: true});
+  await writeFile(
+    modelPath,
+    JSON.stringify({provider: "configured-provider", model: "configured-model"}),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({
+      session_name: "configured paths",
+      cwd: sessionDir,
+      paths: {
+        messages: "data/transcript.jsonl",
+        model: "config/provider.json",
+        staging: "runtime/staging",
+        http_debug: "diagnostics/http",
+      },
+    }),
+  );
+  await writeFile(
+    messagesPath,
+    `${JSON.stringify({
+      type: "response.completed",
+      response: {
+        id: "configured-response",
+        output: [{
+          type: "message",
+          role: "assistant",
+          content: [{type: "output_text", text: "from configured transcript"}],
+        }],
+      },
+    })}\n`,
+  );
+
+  const running = createAgentServer({sessionsDir: root});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const listResponse = await fetch(`${baseUrl}/api/sessions`);
+    assert.equal(listResponse.status, 200);
+    const list = (await listResponse.json()) as {
+      sessions: Array<{
+        id: string;
+        model: {provider: string; model: string};
+        messages: Array<{text: string}>;
+      }>;
+    };
+    assert.equal(list.sessions[0]?.id, "session1");
+    assert.deepEqual(list.sessions[0]?.model, {
+      provider: "configured-provider",
+      model: "configured-model",
+    });
+    assert.equal(list.sessions[0]?.messages[0]?.text, "from configured transcript");
+
+    const snapshotResponse = await fetch(`${baseUrl}/api/sessions/session1`);
+    assert.equal(snapshotResponse.status, 200);
+    const snapshot = (await snapshotResponse.json()) as {
+      model: {provider: string; model: string};
+      messages: Array<{text: string}>;
+    };
+    assert.deepEqual(snapshot.model, {
+      provider: "configured-provider",
+      model: "configured-model",
+    });
+    assert.equal(snapshot.messages[0]?.text, "from configured transcript");
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test("persists user input before a tool configuration failure", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-input-persist-"));
   const sessionDir = join(root, "session1");

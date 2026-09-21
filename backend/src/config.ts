@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { JsonRecord } from "./persistence.js";
 
@@ -44,12 +44,20 @@ export interface ToolSettings extends JsonRecord {
   mcp: JsonRecord;
 }
 
+export interface SessionStoragePaths extends JsonRecord {
+  messages: string;
+  model: string;
+  staging: string;
+  http_debug: string;
+}
+
 export interface SessionSettings extends JsonRecord {
   schema_version: 1;
   session_name: string;
   cwd: string;
   system_prompt: string;
   http_debug: HttpDebugSettings;
+  paths: SessionStoragePaths;
   tool_definition_paths: string[];
   tools: ToolSettings;
 }
@@ -59,6 +67,9 @@ export interface SessionConfigPaths {
   session_dir: string;
   model_path: string;
   setting_path: string;
+  messages_path: string;
+  staging_dir: string;
+  http_debug_dir: string;
 }
 
 export interface SessionConfigLoaderOptions {
@@ -386,11 +397,38 @@ function normalizeTools(
   } as ToolSettings;
 }
 
+function normalizeStoragePaths(
+  value: unknown,
+  path: string,
+  settingPath: string,
+): SessionStoragePaths {
+  if (value !== undefined && !isRecord(value)) {
+    throw new ConfigError(`${path}: paths must be a JSON object`);
+  }
+  const paths = value ?? {};
+  const pathValue = (field: string, fallback: string): string => {
+    const configured = (paths as JsonRecord)[field] ?? fallback;
+    return resolve(
+      dirname(settingPath),
+      requiredString(configured, field, `${path}: paths`),
+    );
+  };
+
+  return {
+    ...(paths as JsonRecord),
+    messages: pathValue("messages", "messages.jsonl"),
+    model: pathValue("model", "model.json"),
+    staging: pathValue("staging", "staging"),
+    http_debug: pathValue("http_debug", "debug/http"),
+  } as SessionStoragePaths;
+}
+
 async function normalizeSettings(
   raw: JsonRecord,
   path: string,
   sessionDir: string,
   globalJadRoot: string,
+  storagePaths: SessionStoragePaths,
 ): Promise<SessionSettings> {
   const version = schemaVersion(raw.schema_version, path);
   const sessionName = requiredString(
@@ -418,6 +456,7 @@ async function normalizeSettings(
     cwd,
     system_prompt: systemPrompt,
     http_debug: httpDebug,
+    paths: storagePaths,
     tool_definition_paths: toolDefinitionPaths,
     tools,
   } as SessionSettings;
@@ -483,26 +522,45 @@ export class SessionConfigLoader {
       session_dir: absoluteSessionDir,
       model_path: join(absoluteSessionDir, "model.json"),
       setting_path: join(absoluteSessionDir, "setting.json"),
+      messages_path: join(absoluteSessionDir, "messages.jsonl"),
+      staging_dir: join(absoluteSessionDir, "staging"),
+      http_debug_dir: join(absoluteSessionDir, "debug", "http"),
     };
   }
 
-  public async loadModel(): Promise<ModelConfig> {
+  private async loadModelAtResolvedPath(): Promise<ModelConfig> {
     const raw = await readObject(this.paths.model_path, false);
     return normalizeModel(raw!, this.paths.model_path);
   }
 
+  public async loadModel(): Promise<ModelConfig> {
+    await this.loadSettings();
+    return this.loadModelAtResolvedPath();
+  }
+
   public async loadSettings(): Promise<SessionSettings> {
     const raw = (await readObject(this.paths.setting_path, true)) ?? {};
+    const storagePaths = normalizeStoragePaths(
+      raw.paths,
+      this.paths.setting_path,
+      this.paths.setting_path,
+    );
+    this.paths.model_path = storagePaths.model;
+    this.paths.messages_path = storagePaths.messages;
+    this.paths.staging_dir = storagePaths.staging;
+    this.paths.http_debug_dir = storagePaths.http_debug;
     return normalizeSettings(
       raw,
       this.paths.setting_path,
       this.paths.session_dir,
       this.paths.global_jad_root,
+      storagePaths,
     );
   }
 
   public async load(): Promise<LoadedSessionConfig> {
-    const [model, settings] = await Promise.all([this.loadModel(), this.loadSettings()]);
+    const settings = await this.loadSettings();
+    const model = await this.loadModelAtResolvedPath();
     return {
       model,
       settings,

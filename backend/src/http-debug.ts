@@ -204,12 +204,13 @@ export function createHttpDebugFetch(
   sessionDir: string,
   settings: HttpDebugSettings,
   nativeFetch: Fetch = globalThis.fetch.bind(globalThis) as Fetch,
+  debugDirectory = join(sessionDir, "debug", "http"),
 ): Fetch | undefined {
   if (!settings.enabled) {
     return undefined;
   }
 
-  const logger = new HttpDebugLogger(join(sessionDir, "debug", "http"));
+  const logger = new HttpDebugLogger(debugDirectory);
   return async (input, init) => {
     const requestId = await logger.reserveRequestId();
     const requestRecord: JsonRecord = {

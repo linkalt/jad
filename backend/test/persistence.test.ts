@@ -350,6 +350,64 @@ test("loads model and session settings with normalized paths and hashes", async 
   }
 });
 
+test("resolves configurable session storage paths relative to setting.json", async () => {
+  const sessionDir = await makeSession();
+  const externalDir = await makeSession();
+  const modelPath = join(externalDir, "provider-model.json");
+  const stagingPath = join(externalDir, "response-staging");
+  const messagesPath = join(sessionDir, "data", "transcript.jsonl");
+  const httpDebugPath = join(sessionDir, "diagnostics", "http");
+  try {
+    await writeFile(modelPath, JSON.stringify({model: "configured-model"}));
+    await writeFile(
+      join(sessionDir, "setting.json"),
+      JSON.stringify({
+        cwd: sessionDir,
+        paths: {
+          messages: "data/transcript.jsonl",
+          model: modelPath,
+          staging: stagingPath,
+          http_debug: "diagnostics/http",
+        },
+      }),
+    );
+
+    const loader = new SessionConfigLoader(sessionDir);
+    const settings = await loader.loadSettings();
+    assert.equal(settings.paths.messages, messagesPath);
+    assert.equal(settings.paths.model, modelPath);
+    assert.equal(settings.paths.staging, stagingPath);
+    assert.equal(settings.paths.http_debug, httpDebugPath);
+
+    const config = await loader.load();
+    assert.equal(config.model.model, "configured-model");
+    assert.equal(config.paths.messages_path, messagesPath);
+    assert.equal(config.paths.model_path, modelPath);
+    assert.equal(config.paths.staging_dir, stagingPath);
+    assert.equal(config.paths.http_debug_dir, httpDebugPath);
+
+    const session = await AgentSession.open(sessionDir);
+    assert.deepEqual(await readdir(stagingPath), []);
+    await session.close();
+    await assert.rejects(() => readdir(join(sessionDir, "staging")));
+
+    const store = await SessionResponseStore.open(sessionDir, {
+      messagesPath,
+      stagingDir: stagingPath,
+    });
+    await store.appendInputItem({
+      type: "message",
+      role: "user",
+      content: [{type: "input_text", text: "configured storage"}],
+    });
+    assert.match(await readFile(messagesPath, "utf8"), /configured storage/);
+    await store.close();
+  } finally {
+    await removeSession(sessionDir);
+    await removeSession(externalDir);
+  }
+});
+
 test("defaults empty settings and rejects missing or unsafe model configuration", async () => {
   const sessionDir = await makeSession();
   try {

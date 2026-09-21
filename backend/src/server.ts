@@ -203,22 +203,26 @@ async function sessionListingConfig(
   directory: string,
   sessionId: string,
   globalJadRoot: string,
-): Promise<WebUiSessionConfig> {
-  const settings = await new SessionConfigLoader(directory, {globalJadRoot}).loadSettings();
-  const model = await readJsonRecord(join(directory, "model.json"));
+): Promise<{config: WebUiSessionConfig; messagesPath: string}> {
+  const loader = new SessionConfigLoader(directory, {globalJadRoot});
+  const settings = await loader.loadSettings();
+  const model = await readJsonRecord(loader.paths.model_path);
   const provider = model.provider;
   return {
-    settings,
-    model: {
-      provider:
-        typeof provider === "string" && provider.trim().length > 0
-          ? provider.trim()
-          : "unknown",
-      model:
-        typeof model.model === "string" && model.model.trim().length > 0
-          ? model.model.trim()
-          : sessionId,
+    config: {
+      settings,
+      model: {
+        provider:
+          typeof provider === "string" && provider.trim().length > 0
+            ? provider.trim()
+            : "unknown",
+        model:
+          typeof model.model === "string" && model.model.trim().length > 0
+            ? model.model.trim()
+            : sessionId,
+      },
     },
+    messagesPath: loader.paths.messages_path,
   };
 }
 
@@ -482,13 +486,13 @@ class AgentHttpApplication {
           continue;
         }
         try {
-          const config = await sessionListingConfig(
+          const listing = await sessionListingConfig(
             directory,
             entry.name,
             root.globalJadRoot,
           );
-          const messages = await readListingMessages(join(directory, "messages.jsonl"));
-          sessions.push(sessionSummary(location, config, messages));
+          const messages = await readListingMessages(listing.messagesPath);
+          sessions.push(sessionSummary(location, listing.config, messages));
         } catch (error) {
           if (error instanceof ConfigError) {
             console.warn(`Skipping invalid session ${location.ref}: ${error.message}`);
@@ -508,7 +512,7 @@ class AgentHttpApplication {
   ): Promise<void> {
     const handle = await this.getSession(id);
     const config = await handle.loader.load();
-    const messages = await readJsonl(join(handle.directory, "messages.jsonl"));
+    const messages = await readJsonl(handle.loader.paths.messages_path);
     sendJson(response, 200, sessionSummary(handle.location, config, messages));
   }
 
