@@ -489,6 +489,83 @@ test("keeps the harness credential and denied variables out of the environment",
   }
 });
 
+test("loads bash environment files relative to the session and applies overrides and denials", {skip: bashSkip}, async () => {
+  const sessionDir = await makeBashToolSession({
+    env_file: "command.env",
+    env: {OVERRIDDEN: "inline"},
+    env_deny: ["DENIED"],
+  });
+  try {
+    await writeFile(
+      join(sessionDir, "command.env"),
+      [
+        "# command-specific configuration",
+        "FILE_VALUE=from-file",
+        "OVERRIDDEN=from-file",
+        "QUOTED=\"line one\\nline two # literal\"",
+        "export DENIED=from-file",
+        "",
+      ].join("\n"),
+    );
+    const config = await new SessionConfigLoader(sessionDir).load();
+    assert.equal(config.settings.tools.native.bash?.env_file, join(sessionDir, "command.env"));
+    const catalog = await loadToolCatalog(config);
+    const output = outputText(
+      (
+        await catalog.executeFunctionCall(
+          {
+            type: "function_call",
+            call_id: "bash-env-file",
+            name: "bash",
+            arguments: JSON.stringify({
+              command: "printf '%s|%s|%s|%s' \"$FILE_VALUE\" \"$OVERRIDDEN\" \"$QUOTED\" \"${DENIED-unset}\"",
+            }),
+          },
+          {workspaceRoot: sessionDir, sessionDir},
+        )
+      ).output,
+    );
+    assert.equal(firstLine(output).status, "ok");
+    assert.match(output, /from-file\|inline\|line one\nline two # literal\|unset/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("loads an absolute bash env_file and rejects malformed files", {skip: bashSkip}, async () => {
+  const sessionDir = await makeBashToolSession();
+  try {
+    const envFile = join(sessionDir, "absolute-command.env");
+    await writeFile(envFile, "ABSOLUTE_VALUE=available\n");
+    await refreshBashSession(sessionDir, {env_file: envFile});
+    const config = await new SessionConfigLoader(sessionDir).load();
+    assert.equal(config.settings.tools.native.bash?.env_file, envFile);
+    const catalog = await loadToolCatalog(config);
+    const output = outputText(
+      (
+        await catalog.executeFunctionCall(
+          {
+            type: "function_call",
+            call_id: "bash-absolute-env-file",
+            name: "bash",
+            arguments: JSON.stringify({command: "printf '%s' \"$ABSOLUTE_VALUE\""}),
+          },
+          {workspaceRoot: sessionDir, sessionDir},
+        )
+      ).output,
+    );
+    assert.match(output, /available/);
+
+    await writeFile(envFile, "NOT VALID\n");
+    await assert.rejects(
+      () => new SessionConfigLoader(sessionDir).load(),
+      /absolute-command\.env:1: expected NAME=value/,
+    );
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
 test("flags output that is not valid text", {skip: bashSkip}, async () => {
   const {sessionDir, run} = await openBashSession();
   try {

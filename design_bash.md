@@ -83,8 +83,8 @@ resolve cwd (path policy, must be an existing directory)
   leaks become the operator's problem.
 * **No TTY, stdin closed.** Interactive prompts cannot hang the turn; `GIT_TERMINAL_PROMPT=0` keeps git
   from waiting for credentials. A command that genuinely needs input fails fast instead of hanging.
-* **Environment** = backend environment, minus `env_deny`, plus `env` (§8). The harness's own API-key
-  variable is denied by default.
+* **Environment** = a small allowlist from the backend environment, plus `env_file` and inline `env`
+  additions (§8). `env_deny` and the harness API-key variable are applied last.
 * **One `bash` at a time per session.** `AgentSession.run` already executes tool calls of a round
   sequentially under a mutex, so a long command delays the other calls of the same round. That is
   acceptable and needs no extra locking, but the timeout is the only bound — there is no cancellation
@@ -221,13 +221,12 @@ which `cwd` the tool itself will start from. Containment is operator-level:
 
 Concrete hygiene the tool does own:
 
-* **Credential hygiene in the environment:** the child environment is the backend environment minus
-  `env_deny`, whose default is the harness's own credential variable (`model.api_key_env`, e.g.
-  `OPENAI_API_KEY`), plus `env` additions (default `NO_COLOR=1`, `TERM=dumb`, `GIT_TERMINAL_PROMPT=0`,
-  `GIT_PAGER=cat`, `PAGER=cat`). Without this, `bash: env` would print the harness's API key into the
-  conversation. Everything else (`PATH`, `HOME`, toolchain tokens) passes through, so builds and
-  `git`/`npm` keep working; operators extend `env_deny` for other secrets. This is a default, not a
-  guarantee: a command can still read any file the backend user can read.
+* **Credential hygiene in the environment:** the child inherits only `PATH`, `HOME`, locale/temp, and
+  platform shell variables from the backend. It then merges default values (`NO_COLOR=1`, `TERM=dumb`,
+  `GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`, `PAGER=cat`), optional `env_file` values, and inline `env`
+  values in that order. `env_deny` and the harness credential (`model.api_key_env`, e.g.
+  `OPENAI_API_KEY`) are removed last. Put command credentials in a protected dotenv file rather than
+  `setting.json`; this is still not a sandbox, because a command can read any file the backend user can read.
 * **No leaked processes:** the process group is signalled on timeout and, by default, on completion.
 * **No unbounded calls:** the timeout ladder ends in a hard deadline, so a command cannot hold a call open
   even if it never reacts to SIGKILL.
@@ -270,8 +269,9 @@ turn waits for `timeout_ms`. Wiring cancellation into `AgentSession.run` is a se
       },
       "max_line_chars": 2000,
       "strip_ansi": true,
-      "env": {"NO_COLOR": "1", "TERM": "dumb", "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "PAGER": "cat"},
-      "env_deny": [],              // defaults to [model.api_key_env] when unset
+      "env_file": "command.env", // dotenv; relative to the session directory, or absolute
+      "env": {"NO_COLOR": "1", "TERM": "dumb", "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "PAGER": "cat"}, // overrides env_file
+      "env_deny": [],              // always applied after env_file/env; harness API key is always denied
       "paths": []                  // defaults to the tools.native.write rules
     }
   }
@@ -364,10 +364,10 @@ All ten open items were confirmed as recommended. Where the implementation diffe
    tool call from killing a command instantly.
 4. **`kill_process_group: "always"`** is the default; the group is signalled on the child's `exit`, before it
    is reaped, so a recycled pid cannot be hit.
-5. **Environment:** `tools.native.bash.env` merges over `DEFAULT_NATIVE_BASH_ENV`. The harness credential is
-   removed unconditionally, not merely defaulted: `buildCommandEnvironment()` always deletes
-   `model.api_key_env` (resolved when the catalog is built) plus every name in `env_deny`, so a session
-   cannot re-enable it by writing its own `env_deny`.
+5. **Environment:** `tools.native.bash.env_file` is a strict dotenv file; paths are session-relative or
+   absolute. Its values merge over `DEFAULT_NATIVE_BASH_ENV`, then inline `tools.native.bash.env` wins.
+   `buildCommandEnvironment()` removes `model.api_key_env` (resolved when the catalog is built) plus every
+   name in `env_deny` last, so neither source can re-enable the harness credential.
 6. **Budgets:** per stream — stdout 16 KiB head / 32 KiB tail, stderr 4 KiB head / 12 KiB tail, together no
    more than `max_bytes` (64 KiB) — plus `max_line_chars` 2000; the middle is dropped and the complete
    stream lives in its spill file while it is read.

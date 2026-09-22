@@ -68,6 +68,7 @@ export interface NativeBashSessionOptions {
   };
   max_line_chars?: number;
   strip_ansi?: boolean;
+  env_file?: string;
   env?: Record<string, string>;
   env_deny?: string[];
   paths?: unknown[];
@@ -297,6 +298,7 @@ function bashToolSettings(options: NativeBashSessionOptions): Record<string, unk
           ? {max_line_chars: options.max_line_chars}
           : {}),
         ...(options.strip_ansi !== undefined ? {strip_ansi: options.strip_ansi} : {}),
+        ...(options.env_file !== undefined ? {env_file: options.env_file} : {}),
         ...(options.env !== undefined ? {env: options.env} : {}),
         ...(options.env_deny !== undefined ? {env_deny: options.env_deny} : {}),
         ...(options.paths !== undefined ? {paths: options.paths} : {}),

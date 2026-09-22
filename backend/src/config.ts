@@ -159,6 +159,8 @@ export interface NativeBashToolSettings extends NativePathPolicy {
   max_line_chars: number;
   /** Remove ANSI escape sequences and other control characters. */
   strip_ansi: boolean;
+  /** Resolved dotenv file loaded before inline environment overrides. */
+  env_file?: string;
   /** Environment additions or overrides for every command. */
   env: Record<string, string>;
   /** Environment variables removed before the command runs. */
@@ -860,13 +862,86 @@ function mutationBackupDir(
   return isAbsolute(configured) ? resolve(configured) : resolve(cwd, configured);
 }
 
-function normalizeTools(
+function parseBashEnvValue(value: string, path: string, lineNumber: number): string {
+  const trimmed = value.trimStart();
+  if (trimmed.length === 0) {
+    return "";
+  }
+  const quote = trimmed[0];
+  if (quote !== "\"" && quote !== "'") {
+    return trimmed.replace(/\s+#.*$/, "").trimEnd();
+  }
+
+  let escaped = false;
+  let close = -1;
+  for (let index = 1; index < trimmed.length; index += 1) {
+    const character = trimmed[index]!;
+    if (quote === "\"" && character === "\\" && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if (character === quote && !escaped) {
+      close = index;
+      break;
+    }
+    escaped = false;
+  }
+  if (close < 0) {
+    throw new ConfigError(`${path}:${lineNumber}: unterminated quoted value`);
+  }
+  const suffix = trimmed.slice(close + 1).trimStart();
+  if (suffix.length > 0 && !suffix.startsWith("#")) {
+    throw new ConfigError(`${path}:${lineNumber}: unexpected content after quoted value`);
+  }
+  const quoted = trimmed.slice(1, close);
+  if (quote === "'") {
+    return quoted;
+  }
+  return quoted.replace(/\\([\\"nrt])/g, (_match, escapedCharacter: string) => {
+    switch (escapedCharacter) {
+      case "n": return "\n";
+      case "r": return "\r";
+      case "t": return "\t";
+      default: return escapedCharacter;
+    }
+  });
+}
+
+function parseBashEnvFile(contents: string, path: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [index, rawLine] of contents.replace(/^\uFEFF/, "").split(/\r?\n/).entries()) {
+    const lineNumber = index + 1;
+    const line = rawLine.trimStart();
+    if (line.length === 0 || line.startsWith("#")) {
+      continue;
+    }
+    const assignment = /^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/.exec(line);
+    if (!assignment) {
+      throw new ConfigError(`${path}:${lineNumber}: expected NAME=value`);
+    }
+    env[assignment[1]!] = parseBashEnvValue(assignment[2] ?? "", path, lineNumber);
+  }
+  return env;
+}
+
+async function loadBashEnvFile(envFile: string, settingPath: string): Promise<Record<string, string>> {
+  let contents: string;
+  try {
+    contents = await readFile(envFile, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(`${settingPath}: could not read ${envFile}: ${message}`);
+  }
+  return parseBashEnvFile(contents, envFile);
+}
+
+async function normalizeTools(
   value: unknown,
   path: string,
   globalJadRoot: string,
   sessionDir: string,
   cwd: string,
-): ToolSettings {
+): Promise<ToolSettings> {
   const defaultBackupDir = join(sessionDir, SESSION_BACKUP_DIRECTORY_NAME);
   if (value !== undefined && !isRecord(value)) {
     throw new ConfigError(`${path}: tools must be an object`);
@@ -1239,12 +1314,27 @@ function normalizeTools(
     if (typeof stripAnsi !== "boolean") {
       throw new ConfigError(`${path}: tools.native.bash.strip_ansi must be a boolean`);
     }
+    const envFileValue = bashValue.env_file;
+    let envFile: string | undefined;
+    let fileEnv: Record<string, string> = {};
+    if (envFileValue !== undefined) {
+      const configuredEnvFile = requiredString(
+        envFileValue,
+        "env_file",
+        `${path}: tools.native.bash`,
+      );
+      envFile = resolve(sessionDir, configuredEnvFile);
+      fileEnv = await loadBashEnvFile(envFile, `${path}: tools.native.bash.env_file`);
+    }
     const envValue = bashValue.env ?? {};
     if (!isRecord(envValue)) {
       throw new ConfigError(`${path}: tools.native.bash.env must be an object`);
     }
-    const env: Record<string, string> = {...DEFAULT_NATIVE_BASH_ENV};
+    const env: Record<string, string> = {...DEFAULT_NATIVE_BASH_ENV, ...fileEnv};
     for (const [name, configured] of Object.entries(envValue)) {
+      if (!ENVIRONMENT_NAME_PATTERN.test(name)) {
+        throw new ConfigError(`${path}: tools.native.bash.env.${name} is not a valid environment variable name`);
+      }
       if (typeof configured !== "string") {
         throw new ConfigError(`${path}: tools.native.bash.env.${name} must be a string`);
       }
@@ -1277,6 +1367,7 @@ function normalizeTools(
       spill,
       max_line_chars: maxLineChars,
       strip_ansi: stripAnsi,
+      ...(envFile ? {env_file: envFile} : {}),
       env,
       env_deny: envDeny,
       // Commands mutate the workspace like `write` does, so the write path
@@ -1433,7 +1524,7 @@ async function normalizeSettings(
     path,
     globalJadRoot,
   );
-  const tools = normalizeTools(raw.tools, path, globalJadRoot, sessionDir, cwd);
+  const tools = await normalizeTools(raw.tools, path, globalJadRoot, sessionDir, cwd);
 
   return {
     ...raw,

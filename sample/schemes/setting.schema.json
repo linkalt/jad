@@ -476,6 +476,11 @@
                   "default": true,
                   "description": "Remove ANSI escape sequences and other control characters."
                 },
+                "env_file": {
+                  "type": "string",
+                  "pattern": "\\S",
+                  "description": "Dotenv file loaded before inline env overrides. Relative paths resolve from the session directory; absolute paths are accepted."
+                },
                 "env": {
                   "type": "object",
                   "default": {},
