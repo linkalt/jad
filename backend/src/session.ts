@@ -7,6 +7,7 @@ import {
   resolveApiKey,
   type LoadedSessionConfig,
 } from "./config.js";
+import { AsyncMutex } from "./concurrency.js";
 import {
   SessionResponseStore,
   type JsonRecord,
@@ -57,25 +58,6 @@ function validateMaxToolRounds(value: number): number {
     );
   }
   return value;
-}
-
-class AsyncMutex {
-  private tail: Promise<void> = Promise.resolve();
-
-  public async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
-    const previous = this.tail;
-    let release!: () => void;
-    this.tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-    }
-  }
 }
 
 function isRecord(value: unknown): value is JsonRecord {

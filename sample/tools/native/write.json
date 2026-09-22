@@ -5,7 +5,7 @@
       "id": "native.write",
       "source": "native",
       "name": "write",
-      "description": "Write file content, creating parent directories as needed.",
+      "description": "Write file content, creating parent directories as needed. Identical content is left unchanged.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -19,11 +19,12 @@
           },
           "contentEncoding": {
             "type": "string",
-            "enum": ["utf8", "base64"]
+            "enum": ["utf8", "base64"],
+            "description": "Encoding of content. Defaults to utf8."
           },
           "backup": {
             "type": "boolean",
-            "description": "Back up an existing file before replacing it. Defaults to true."
+            "description": "Back up an existing file before replacing it; the session decides where backups are kept. Defaults to true."
           }
         },
         "required": ["path", "content"],

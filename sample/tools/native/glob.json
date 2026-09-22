@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.glob",
+      "source": "native",
+      "name": "glob",
+      "description": "List files matching a name pattern, sorted by path. Use it to find files by name or extension; use grep to search file contents and read to open a specific file. Patterns without a slash match the file name at any depth (*.ts), patterns with a slash match the path relative to the workspace (src/**/*.ts), and {} supports alternatives (*.{ts,tsx}). Hidden files are listed, files git ignores are not, and symlinks are skipped.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "File name or path pattern to match. Omit it to list every visible file."
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Directory to search, relative to the workspace root or absolute. Defaults to the workspace root."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

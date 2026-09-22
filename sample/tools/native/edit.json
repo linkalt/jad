@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.edit",
+      "source": "native",
+      "name": "edit",
+      "description": "Replace exact text in an existing file. oldText must match the file's current text exactly and occur once unless replaceAll is true; an empty newText deletes the match. Use write to create files, replace whole files, or write binary content.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Path relative to cwd or an absolute path."
+          },
+          "oldText": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Exact text to replace, copied from a read."
+          },
+          "newText": {
+            "type": "string",
+            "description": "Replacement text. Empty deletes oldText."
+          },
+          "replaceAll": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of requiring exactly one. Defaults to false."
+          },
+          "backup": {
+            "type": "boolean",
+            "description": "Back up the file before replacing it; the session decides where backups are kept. Defaults to true."
+          }
+        },
+        "required": ["path", "oldText", "newText"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

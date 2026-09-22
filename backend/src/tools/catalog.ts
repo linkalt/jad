@@ -1,6 +1,7 @@
 import {Ajv, type ValidateFunction} from "ajv";
 import {readFile} from "node:fs/promises";
 import {isAbsolute, resolve} from "node:path";
+import {isDeepStrictEqual} from "node:util";
 
 import type {LoadedSessionConfig} from "../config.js";
 import {ConfigError} from "../config.js";
@@ -12,8 +13,8 @@ import {
   schemaError,
   unknownToolError,
 } from "./output.js";
-import {executeNativeRead, NATIVE_READ_ID, nativeReadDefinition} from "./native/read.js";
-import {executeNativeWrite, NATIVE_WRITE_ID, nativeWriteDefinition} from "./native/write.js";
+import {nativeToolSpecs} from "./native/registry.js";
+import type {NativeToolSpec} from "./native/registry.js";
 import type {LoadedTool, ToolDefinition, ToolExecutionContext} from "./types.js";
 
 const definitionDocumentSchema: JsonRecord = {
@@ -77,89 +78,41 @@ async function readDefinitionDocument(path: string): Promise<JsonRecord> {
   return value as JsonRecord;
 }
 
-function configuredNativeTool(config: LoadedSessionConfig, id: string): boolean {
-  if (id === NATIVE_READ_ID) {
-    return config.settings.tools.native.read !== undefined;
-  }
-  if (id === NATIVE_WRITE_ID) {
-    return config.settings.tools.native.write !== undefined;
-  }
-  return false;
-}
+const nativeSpecsById = new Map(
+  nativeToolSpecs().map((spec) => [spec.id, spec]),
+);
 
 function validateNativeDefinition(
   definition: ToolDefinition,
   config: LoadedSessionConfig,
-  expectedRequired: readonly string[],
+  spec: NativeToolSpec,
 ): void {
-  const required = definition.inputSchema.required;
-  if (
-    !Array.isArray(required) ||
-    required.length !== expectedRequired.length ||
-    expectedRequired.some((field, index) => required[index] !== field)
-  ) {
+  // Native implementations rely on the full schema, not only its required
+  // fields. Definition documents are an enablement manifest; the in-code
+  // definition remains the executable contract and provider source of truth.
+  if (!isDeepStrictEqual(definition.inputSchema, spec.definition.inputSchema)) {
     throw configError(
       config.paths.setting_path,
-      `${definition.id} must require exactly ${expectedRequired.join(", ")}`,
+      `${definition.id} inputSchema must exactly match the native tool schema`,
     );
   }
 }
 
 function validationExample(definition: ToolDefinition): JsonRecord | undefined {
-  if (definition.id === NATIVE_READ_ID) {
-    return {path: "."};
-  }
-  if (definition.id === NATIVE_WRITE_ID) {
-    return {path: "example.txt", content: "..."};
-  }
-  return undefined;
+  return nativeSpecsById.get(definition.id)?.exampleOperation;
 }
 
-function buildLoadedTool(
+function buildNativeTool(
+  spec: NativeToolSpec,
   definition: ToolDefinition,
   config: LoadedSessionConfig,
   validate: ValidateFunction<unknown>,
 ): LoadedTool {
-  if (definition.id === NATIVE_READ_ID) {
-    const policy = config.settings.tools.native.read;
-    if (!policy) {
-      throw configError(
-        config.paths.setting_path,
-        `tool ${definition.id} is not exposed in tools.native`,
-      );
-    }
-    return {
-      definition,
-      validate,
-      execute: (args, context) =>
-        executeNativeRead(args, {
-          ...context,
-          policy,
-        }),
-    };
+  const built = spec.build(definition, config, validate);
+  if ("error" in built) {
+    throw configError(config.paths.setting_path, built.error);
   }
-  if (definition.id === NATIVE_WRITE_ID) {
-    const policy = config.settings.tools.native.write;
-    if (!policy) {
-      throw configError(
-        config.paths.setting_path,
-        `tool ${definition.id} is not exposed in tools.native`,
-      );
-    }
-    return {
-      definition,
-      validate,
-      execute: (args, context) =>
-        executeNativeWrite(args, {
-          ...context,
-          policy,
-        }),
-    };
-  }
-  throw configError(
-    config.paths.setting_path,
-    `native tool ${definition.id} is not implemented`,
-  );
+  return {...built.tool, normalizeArguments: spec.normalizeArguments};
 }
 
 export class ToolCatalog {
@@ -236,7 +189,13 @@ export class ToolCatalog {
         output: invalidArgumentsJsonError(callId, name, exampleOperation),
       };
     }
-    if (!tool.validate(parsed)) {
+    // Normalize harmless variants ("utf-8", "Lines") before validation, so a
+    // near-miss spelling does not become an invalid_input retry.
+    const parsedObject = asJsonRecord(parsed);
+    const normalized = parsedObject && tool.normalizeArguments
+      ? tool.normalizeArguments(parsedObject)
+      : parsed;
+    if (!tool.validate(normalized)) {
       return {
         type: "function_call_output",
         call_id: callId,
@@ -248,7 +207,7 @@ export class ToolCatalog {
         ),
       };
     }
-    const args = asJsonRecord(parsed);
+    const args = asJsonRecord(normalized);
     if (!args) {
       return {
         type: "function_call_output",
@@ -284,9 +243,8 @@ export class ToolCatalog {
 export async function loadToolCatalog(
   config: LoadedSessionConfig,
 ): Promise<ToolCatalog> {
-  const configuredIds = [NATIVE_READ_ID, NATIVE_WRITE_ID]
-    .filter((id) => configuredNativeTool(config, id));
-  if (configuredIds.length === 0) {
+  const configuredSpecs = nativeToolSpecs().filter((spec) => spec.configured(config));
+  if (configuredSpecs.length === 0) {
     return new ToolCatalog([]);
   }
 
@@ -313,29 +271,24 @@ export async function loadToolCatalog(
   }
 
   const loadedTools: LoadedTool[] = [];
-  for (const id of configuredIds) {
-    const definition = definitions.get(id);
+  for (const spec of configuredSpecs) {
+    const definition = definitions.get(spec.id);
     if (!definition) {
       throw configError(
         config.paths.setting_path,
-        `tools.native.${id === NATIVE_READ_ID ? "read" : "write"} is configured but ${id} is missing from tool_definition_paths`,
+        `tools.native.${spec.settingName} is configured but ${spec.id} is missing from tool_definition_paths`,
       );
     }
-    const expectedDefinition = id === NATIVE_READ_ID
-      ? nativeReadDefinition
-      : nativeWriteDefinition;
-    if (definition.name !== expectedDefinition.name || definition.source !== "native") {
+    if (definition.name !== spec.definition.name || definition.source !== "native") {
       throw configError(
         config.paths.setting_path,
-        `${id} must define the native ${expectedDefinition.name} tool`,
+        `${spec.id} must define the native ${spec.definition.name} tool`,
       );
     }
-    validateNativeDefinition(
-      definition,
-      config,
-      id === NATIVE_READ_ID ? ["path"] : ["path", "content"],
+    validateNativeDefinition(definition, config, spec);
+    loadedTools.push(
+      buildNativeTool(spec, spec.definition, config, ajv.compile(spec.definition.inputSchema)),
     );
-    loadedTools.push(buildLoadedTool(definition, config, ajv.compile(definition.inputSchema)));
   }
   return new ToolCatalog(loadedTools);
 }

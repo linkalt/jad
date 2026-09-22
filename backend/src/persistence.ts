@@ -6,11 +6,14 @@ import {
   readdir,
   readFile,
   rename,
+  stat,
   rm,
 } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+
+import { AsyncMutex } from "./concurrency.js";
 
 export type JsonRecord = Record<string, unknown>;
 export type ResponseInputItem = JsonRecord;
@@ -87,35 +90,41 @@ interface RenderedLine {
   bytes: number;
 }
 
+interface TranscriptMetadata {
+  device: number;
+  inode: number;
+  size: number;
+  modifiedAt: number;
+  changedAt: number;
+}
+
+interface InputHistoryCache {
+  schema_version: typeof HISTORY_CACHE_SCHEMA_VERSION;
+  transcript: {
+    device: number;
+    inode: number;
+    offset: number;
+    modified_at_ms: number;
+    changed_at_ms: number;
+    checkpoint_start: number;
+    checkpoint_sha256: string;
+  };
+  items: ResponseInputItem[];
+}
+
 const STAGING_DIRECTORY = "staging";
 const MESSAGES_FILE = "messages.jsonl";
 const MANIFEST_FILE = "manifest.json";
 const ITEMS_FILE = "items.jsonl";
 const ITEMS_INDEX_FILE = "items.index.jsonl";
 const FINAL_FILE = "final.jsonl";
+const HISTORY_CACHE_FILE = "history-cache.json";
+const HISTORY_CACHE_SCHEMA_VERSION = 1;
+const HISTORY_CHECKPOINT_BYTES = 64 * 1024;
 const LINE_BUFFER_SIZE = 64 * 1024;
 
 export class PersistenceError extends Error {
   public override name = "PersistenceError";
-}
-
-class AsyncMutex {
-  private tail: Promise<void> = Promise.resolve();
-
-  public async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
-    const previous = this.tail;
-    let release!: () => void;
-    this.tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-    }
-  }
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -321,6 +330,30 @@ async function repairJsonlTail(path: string): Promise<number> {
   }
 }
 
+async function hashFileRange(path: string, start: number, end: number): Promise<string> {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start) {
+    throw new PersistenceError("invalid transcript hash range");
+  }
+  const handle = await open(path, "r");
+  const hash = createHash("sha256");
+  const buffer = Buffer.alloc(LINE_BUFFER_SIZE);
+  try {
+    let position = start;
+    while (position < end) {
+      const length = Math.min(buffer.length, end - position);
+      const result = await handle.read(buffer, 0, length, position);
+      if (result.bytesRead <= 0) {
+        throw new PersistenceError("transcript ended before cache checkpoint");
+      }
+      hash.update(buffer.subarray(0, result.bytesRead));
+      position += result.bytesRead;
+    }
+    return hash.digest("hex");
+  } finally {
+    await handle.close();
+  }
+}
+
 async function hashFile(path: string): Promise<string> {
   const handle = await open(path, "r");
   const hash = createHash("sha256");
@@ -415,8 +448,9 @@ async function appendFileIncrementally(
 async function readJsonLines(
   path: string,
   onLine: (line: string) => void | Promise<void>,
+  start = 0,
 ): Promise<void> {
-  const input = createReadStream(path, { encoding: "utf8" });
+  const input = createReadStream(path, { encoding: "utf8", start });
   const lines = createInterface({ input, crlfDelay: Infinity });
   try {
     for await (const line of lines) {
@@ -428,6 +462,68 @@ async function readJsonLines(
     lines.close();
     input.destroy();
   }
+}
+
+function expandTranscriptRecord(value: unknown): ResponseInputItem[] {
+  const record = asObject(value, "messages.jsonl record");
+  if (record.type === "response.completed") {
+    const response = validateCompletedEvent(record as unknown as ResponseCompletedEvent);
+    if (!Array.isArray(response.output)) {
+      throw new PersistenceError("committed response has no output array");
+    }
+    return response.output.map((item) => validateOutputItem(item));
+  }
+  if (typeof record.type === "string" && record.type.startsWith("response.")) {
+    throw new PersistenceError(`unsupported response event in messages.jsonl: ${record.type}`);
+  }
+  return [validateInputItem(record)];
+}
+
+function parseHistoryCache(value: unknown): InputHistoryCache {
+  const record = asObject(value, "history cache");
+  const transcript = asObject(record.transcript, "history cache transcript");
+  if (
+    record.schema_version !== HISTORY_CACHE_SCHEMA_VERSION ||
+    !Array.isArray(record.items) ||
+    typeof transcript.device !== "number" ||
+    typeof transcript.inode !== "number" ||
+    typeof transcript.offset !== "number" ||
+    typeof transcript.modified_at_ms !== "number" ||
+    typeof transcript.changed_at_ms !== "number" ||
+    typeof transcript.checkpoint_start !== "number" ||
+    typeof transcript.checkpoint_sha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(transcript.checkpoint_sha256)
+  ) {
+    throw new PersistenceError("invalid history cache");
+  }
+  for (const number of [
+    transcript.device,
+    transcript.inode,
+    transcript.offset,
+    transcript.modified_at_ms,
+    transcript.changed_at_ms,
+    transcript.checkpoint_start,
+  ]) {
+    if (!Number.isSafeInteger(number) || number < 0) {
+      throw new PersistenceError("history cache has invalid transcript metadata");
+    }
+  }
+  if (transcript.checkpoint_start > transcript.offset) {
+    throw new PersistenceError("history cache checkpoint begins after its offset");
+  }
+  return {
+    schema_version: HISTORY_CACHE_SCHEMA_VERSION,
+    transcript: {
+      device: transcript.device,
+      inode: transcript.inode,
+      offset: transcript.offset,
+      modified_at_ms: transcript.modified_at_ms,
+      changed_at_ms: transcript.changed_at_ms,
+      checkpoint_start: transcript.checkpoint_start,
+      checkpoint_sha256: transcript.checkpoint_sha256,
+    },
+    items: record.items.map((item) => validateInputItem(item)),
+  };
 }
 
 async function loadItemIndex(path: string): Promise<Map<number, StagedItemIndexEntry>> {
@@ -611,8 +707,10 @@ export class SessionResponseStore {
   public readonly sessionDir: string;
   public readonly messagesPath: string;
   public readonly stagingDir: string;
+  public readonly historyCachePath: string;
 
   private readonly options: Required<Pick<SessionResponseStoreOptions, "durability" | "maxItemBytes">>;
+  private historyCache: InputHistoryCache | undefined;
   private readonly messageMutex = new AsyncMutex();
   private readonly activeTurns = new Set<ResponseTurn>();
   private closed = false;
@@ -630,6 +728,7 @@ export class SessionResponseStore {
         ? resolve(options.stagingDir)
         : resolve(absoluteSessionDir, options.stagingDir)
       : join(absoluteSessionDir, STAGING_DIRECTORY);
+    this.historyCachePath = join(this.stagingDir, HISTORY_CACHE_FILE);
     this.options = {
       durability: options.durability ?? "turn",
       maxItemBytes: options.maxItemBytes ?? Number.MAX_SAFE_INTEGER,
@@ -739,45 +838,124 @@ export class SessionResponseStore {
    */
   public async *readInputItems(): AsyncGenerator<ResponseInputItem> {
     this.assertOpen();
-    await repairJsonlTail(this.messagesPath);
-    const input = createReadStream(this.messagesPath, { encoding: "utf8" });
-    const lines = createInterface({ input, crlfDelay: Infinity });
-    try {
-      for await (const line of lines) {
-        if (line.length === 0) {
-          continue;
-        }
+    const items = await this.loadInputHistory();
+    yield* items;
+  }
 
-        let value: unknown;
-        try {
-          value = JSON.parse(line);
-        } catch (error) {
-          throw new PersistenceError(
-            `invalid messages.jsonl record: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-
-        const record = asObject(value, "messages.jsonl record");
-        if (record.type === "response.completed") {
-          const response = validateCompletedEvent(record as unknown as ResponseCompletedEvent);
-          if (!Array.isArray(response.output)) {
-            throw new PersistenceError("committed response has no output array");
-          }
-          for (const item of response.output) {
-            yield validateOutputItem(item);
-          }
-          continue;
-        }
-
-        if (typeof record.type === "string" && record.type.startsWith("response.")) {
-          throw new PersistenceError(`unsupported response event in messages.jsonl: ${record.type}`);
-        }
-        yield validateInputItem(record);
+  private async loadInputHistory(): Promise<ResponseInputItem[]> {
+    return this.messageMutex.runExclusive(async () => {
+      await repairJsonlTail(this.messagesPath);
+      const current = await this.readTranscriptMetadata();
+      const cached = this.historyCache ?? (await this.readHistoryCache());
+      const valid = cached !== undefined && (await this.cacheMatches(cached, current));
+      if (valid && current.size === cached!.transcript.offset) {
+        return cached!.items;
       }
-    } finally {
-      lines.close();
-      input.destroy();
+      const start = valid ? cached!.transcript.offset : 0;
+      // Never mutate the prior cache until its replacement is durable.
+      const items = valid ? [...cached!.items] : [];
+
+      if (current.size > start) {
+        items.push(...(await this.readTranscriptItems(start)));
+      }
+
+      const cache = await this.makeHistoryCache(items, current);
+      this.historyCache = cache;
+      await writeJsonAtomic(this.historyCachePath, cache, this.options.durability);
+      return cache.items;
+    });
+  }
+
+  private async readHistoryCache(): Promise<InputHistoryCache | undefined> {
+    try {
+      return parseHistoryCache(JSON.parse(await readFile(this.historyCachePath, "utf8")));
+    } catch {
+      return undefined;
     }
+  }
+
+  private async readTranscriptMetadata(): Promise<TranscriptMetadata> {
+    const current = await stat(this.messagesPath, {bigint: false});
+    if (current === undefined) {
+      throw new PersistenceError("unable to stat messages.jsonl");
+    }
+    return {
+      device: current.dev,
+      inode: current.ino,
+      size: Number(current.size),
+      modifiedAt: Math.trunc(current.mtimeMs),
+      changedAt: Math.trunc(current.ctimeMs),
+    };
+  }
+
+  private async cacheMatches(
+    cache: InputHistoryCache,
+    current: TranscriptMetadata,
+  ): Promise<boolean> {
+    if (
+      current.size < cache.transcript.offset ||
+      current.device !== cache.transcript.device ||
+      current.inode !== cache.transcript.inode
+    ) {
+      return false;
+    }
+    if (current.size === cache.transcript.offset) {
+      return (
+        current.modifiedAt === cache.transcript.modified_at_ms &&
+        current.changedAt === cache.transcript.changed_at_ms
+      );
+    }
+    try {
+      return (
+        (await hashFileRange(
+          this.messagesPath,
+          cache.transcript.checkpoint_start,
+          cache.transcript.offset,
+        )) === cache.transcript.checkpoint_sha256
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private async readTranscriptItems(start: number): Promise<ResponseInputItem[]> {
+    const items: ResponseInputItem[] = [];
+    await readJsonLines(this.messagesPath, async (line) => {
+      if (line.length === 0) {
+        return;
+      }
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch (error) {
+        throw new PersistenceError(
+          `invalid messages.jsonl record: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      items.push(...expandTranscriptRecord(value));
+    }, start);
+    return items;
+  }
+
+  private async makeHistoryCache(
+    items: ResponseInputItem[],
+    current: TranscriptMetadata,
+  ): Promise<InputHistoryCache> {
+    const offset = current.size;
+    const checkpointStart = Math.max(0, offset - HISTORY_CHECKPOINT_BYTES);
+    return {
+      schema_version: HISTORY_CACHE_SCHEMA_VERSION,
+      transcript: {
+        device: current.device,
+        inode: current.inode,
+        offset,
+        modified_at_ms: current.modifiedAt,
+        changed_at_ms: current.changedAt,
+        checkpoint_start: checkpointStart,
+        checkpoint_sha256: await hashFileRange(this.messagesPath, checkpointStart, offset),
+      },
+      items,
+    };
   }
 
   public async recover(): Promise<RecoveryReport> {

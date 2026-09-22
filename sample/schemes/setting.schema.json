@@ -104,6 +104,13 @@
                   "maximum": 10485760,
                   "default": 65536
                 },
+                "max_file_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1073741824,
+                  "default": 67108864,
+                  "description": "Largest file the read tool will load; larger files are refused and reported as a size limit."
+                },
                 "default_limit": {
                   "type": "integer",
                   "minimum": 1,
@@ -134,7 +141,7 @@
             },
             "write": {
               "type": "object",
-              "description": "Native file writes. Parent directories are created automatically; backups default to true.",
+              "description": "Native file writes. Parent directories are created automatically; backups default to true and collect in backup_dir (the session's backups directory unless configured); identical content is left unchanged.",
               "properties": {
                 "max_bytes": {
                   "type": "integer",
@@ -142,9 +149,414 @@
                   "maximum": 10485760,
                   "default": 10485760
                 },
+                "backup_max_count": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "default": 5,
+                  "description": "Replacements of one file keep at most this many backups."
+                },
+                "backup_max_total_bytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1073741824,
+                  "default": 10485760,
+                  "description": "Kept backups of one file may use this many bytes; 0 disables the size limit."
+                },
+                "backup_dir": {
+                  "type": ["string", "null"],
+                  "description": "Directory that collects the backups of every replaced file: an absolute path, or a path relative to the session cwd. Defaults to the session's backups directory. Relative paths resolve from cwd, not from the global JAD root. null keeps each backup beside its own file."
+                },
+                "fsync": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Sync the new file and its directory before reporting success."
+                },
                 "paths": {
                   "type": "array",
                   "description": "Allow/deny path rules. Relative paths resolve from the global JAD root; absolute paths are used as-is. Paths inside cwd are allowed by default; paths outside cwd require an allow rule.",
+                  "items": {
+                    "type": "object",
+                    "required": ["action", "path"],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": ["allow", "deny"]
+                      },
+                      "path": {
+                        "type": "string",
+                        "pattern": "\\S"
+                      }
+                    },
+                    "additionalProperties": true
+                  },
+                  "default": []
+                }
+              },
+              "additionalProperties": true
+            },
+            "edit": {
+              "type": "object",
+              "description": "Native surgical text edits. oldText must match the file exactly and occur once unless replaceAll is true; backups and durability default to the tools.native.write settings and may be overridden here, and paths fall back to the write path rules.",
+              "properties": {
+                "max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 1048576,
+                  "description": "Largest file the edit tool will read and write."
+                },
+                "backup_max_count": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "description": "Replacements of one file keep at most this many backups. Defaults to the tools.native.write setting."
+                },
+                "backup_max_total_bytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1073741824,
+                  "description": "Kept backups of one file may use this many bytes; 0 disables the size limit. Defaults to the tools.native.write setting."
+                },
+                "backup_dir": {
+                  "type": ["string", "null"],
+                  "description": "Directory that collects the backups of every replaced file: an absolute path, or a path relative to the session cwd. Defaults to the tools.native.write setting (the session's backups directory). null keeps each backup beside its own file."
+                },
+                "fsync": {
+                  "type": "boolean",
+                  "description": "Sync the new file and its directory before reporting success. Defaults to the tools.native.write setting."
+                },
+                "paths": {
+                  "type": "array",
+                  "description": "Allow/deny path rules. Defaults to the tools.native.write rules.",
+                  "items": {
+                    "type": "object",
+                    "required": ["action", "path"],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": ["allow", "deny"]
+                      },
+                      "path": {
+                        "type": "string",
+                        "pattern": "\\S"
+                      }
+                    },
+                    "additionalProperties": true
+                  },
+                  "default": []
+                }
+              },
+              "additionalProperties": true
+            },
+            "grep": {
+              "type": "object",
+              "description": "Native content search backed by ripgrep. Bounds the matches, payload bytes, matches per file, line length, file size, and wall clock; path rules fall back to the tools.native.read rules.",
+              "properties": {
+                "binary": {
+                  "type": "string",
+                  "pattern": "\\S",
+                  "default": "rg",
+                  "description": "ripgrep executable: a PATH name or an absolute path."
+                },
+                "max_results": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000,
+                  "default": 200,
+                  "description": "Matches returned before the search is stopped."
+                },
+                "max_matches_per_file": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "default": 20,
+                  "description": "Matches returned per file (ripgrep --max-count)."
+                },
+                "max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 65536,
+                  "description": "Payload bytes returned before the search is stopped."
+                },
+                "max_line_chars": {
+                  "type": "integer",
+                  "minimum": 20,
+                  "maximum": 4000,
+                  "default": 240,
+                  "description": "Longest rendered match line before it is cut."
+                },
+                "max_file_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1073741824,
+                  "default": 8388608,
+                  "description": "Files larger than this are not searched."
+                },
+                "timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 600000,
+                  "default": 10000,
+                  "description": "Wall-clock budget for one search; the partial result is returned."
+                },
+                "paths": {
+                  "type": "array",
+                  "description": "Allow/deny path rules. Defaults to the tools.native.read rules.",
+                  "items": {
+                    "type": "object",
+                    "required": ["action", "path"],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": ["allow", "deny"]
+                      },
+                      "path": {
+                        "type": "string",
+                        "pattern": "\\S"
+                      }
+                    },
+                    "additionalProperties": true
+                  },
+                  "default": []
+                }
+              },
+              "additionalProperties": true
+            },
+            "bash": {
+              "type": "object",
+              "description": "Shell command execution. Each call gets a fresh shell in a resolved working directory; the path rules only decide that directory, because the command itself runs with the backend user's rights.",
+              "properties": {
+                "shell": {
+                  "type": "string",
+                  "pattern": "\\S",
+                  "default": "/bin/bash",
+                  "description": "Shell executable: a PATH name or an absolute path."
+                },
+                "login_shell": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Add -l so profile-provided PATH entries exist; profiles may print output and change the working directory."
+                },
+                "timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600000,
+                  "default": 120000,
+                  "description": "Wall-clock budget for one command."
+                },
+                "max_timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600000,
+                  "default": 600000,
+                  "description": "Upper clamp for the per-call timeout_ms argument."
+                },
+                "kill_grace_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 60000,
+                  "default": 2000,
+                  "description": "Time between SIGTERM and SIGKILL of the process group."
+                },
+                "kill_process_group": {
+                  "type": "string",
+                  "enum": ["always", "timeout_only"],
+                  "default": "always",
+                  "description": "Signal leftover descendants when a command finishes, or only on timeout."
+                },
+                "max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 65536,
+                  "description": "Ceiling for the four stream budgets together."
+                },
+                "stdout": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "What the model sees of stdout: bytes from its start and from its end.",
+                  "properties": {
+                    "head_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10485760,
+                      "default": 16384,
+                      "description": "Bytes kept from the start of stdout."
+                    },
+                    "tail_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10485760,
+                      "default": 32768,
+                      "description": "Bytes kept from the end of stdout, where failures are reported."
+                    }
+                  }
+                },
+                "stderr": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "What the model sees of stderr: bytes from its start and from its end.",
+                  "properties": {
+                    "head_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10485760,
+                      "default": 4096,
+                      "description": "Bytes kept from the start of stderr."
+                    },
+                    "tail_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10485760,
+                      "default": 12288,
+                      "description": "Bytes kept from the end of stderr, where failures are reported."
+                    }
+                  }
+                },
+                "spill": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Complete streams written to disk while they are read.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "default": true,
+                      "description": "Write the complete streams to disk while they are read."
+                    },
+                    "keep": {
+                      "type": "string",
+                      "enum": ["always", "truncated_only"],
+                      "default": "truncated_only",
+                      "description": "Keep every spill file, or only files for output the model did not see."
+                    },
+                    "cap_bytes": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1073741824,
+                      "default": 67108864,
+                      "description": "Bytes written per stream before the file is left incomplete."
+                    },
+                    "retention_days": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 3650,
+                      "default": 14,
+                      "description": "Days a spill file survives; 0 disables pruning."
+                    },
+                    "stdout_full": {
+                      "type": "string",
+                      "minLength": 1,
+                      "default": "{cwd}/.bash-output/bash-{call_id}.{stream}.log",
+                      "description": "Template for the complete stdout stream; must contain {call_id} and may use {cwd}, {session_dir}, {session_name}, {stream}."
+                    },
+                    "stderr_full": {
+                      "type": "string",
+                      "minLength": 1,
+                      "default": "{cwd}/.bash-output/bash-{call_id}.{stream}.log",
+                      "description": "Template for the complete stderr stream; must contain {call_id} and may use {cwd}, {session_dir}, {session_name}, {stream}."
+                    },
+                    "allow_unreadable": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Allow a location the model could not read back with read or grep."
+                    }
+                  }
+                },
+                "max_line_chars": {
+                  "type": "integer",
+                  "minimum": 20,
+                  "maximum": 8000,
+                  "default": 2000,
+                  "description": "Longest rendered output line before it is cut."
+                },
+                "strip_ansi": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Remove ANSI escape sequences and other control characters."
+                },
+                "env": {
+                  "type": "object",
+                  "default": {},
+                  "description": "Environment additions or overrides applied to every command, merged over the defaults (NO_COLOR, TERM, git and pager settings).",
+                  "additionalProperties": {"type": "string"}
+                },
+                "env_deny": {
+                  "type": "array",
+                  "default": [],
+                  "description": "Environment variables removed before the command runs; the harness credential variable is always removed.",
+                  "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+                },
+                "paths": {
+                  "type": "array",
+                  "description": "Allow/deny path rules for the working directory. Defaults to the tools.native.write rules.",
+                  "items": {
+                    "type": "object",
+                    "required": ["action", "path"],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": ["allow", "deny"]
+                      },
+                      "path": {
+                        "type": "string",
+                        "pattern": "\\S"
+                      }
+                    },
+                    "additionalProperties": true
+                  },
+                  "default": []
+                }
+              },
+              "additionalProperties": true
+            },
+            "glob": {
+              "type": "object",
+              "description": "File listing by name pattern. Read-only: it reuses the read path rules for the searched directory.",
+              "properties": {
+                "binary": {
+                  "type": "string",
+                  "pattern": "\\S",
+                  "default": "rg",
+                  "description": "ripgrep executable: a PATH name or an absolute path."
+                },
+                "include_hidden": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "List hidden files. Files ignored by git stay invisible either way."
+                },
+                "max_results": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100000,
+                  "default": 500,
+                  "description": "Files returned before the listing is stopped."
+                },
+                "max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 65536,
+                  "description": "Payload bytes returned before the listing is stopped."
+                },
+                "max_line_chars": {
+                  "type": "integer",
+                  "minimum": 20,
+                  "maximum": 8000,
+                  "default": 1000,
+                  "description": "Longest rendered path before it is cut."
+                },
+                "timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 600000,
+                  "default": 10000,
+                  "description": "Wall-clock budget for one listing."
+                },
+                "paths": {
+                  "type": "array",
+                  "description": "Allow/deny path rules for the searched directory. Defaults to the tools.native.read rules.",
                   "items": {
                     "type": "object",
                     "required": ["action", "path"],

@@ -38,15 +38,21 @@ import type {
 } from '@astryxdesign/core';
 import {fetchSessions, streamSessionRun, type SessionSnapshot, type WebUiMessage, type WebUiPart} from './api';
 import appConfig from './config.json';
-import {ResizeHandle, useResizable} from '@astryxdesign/core/Resizable';
+import {
+  ResizeHandle,
+  useResizable,
+  type ResizableRegion,
+} from '@astryxdesign/core/Resizable';
 import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {
   borderVars,
   colorVars,
+  fontWeightVars,
   radiusVars,
   sizeVars,
   spacingVars,
   typeScaleVars,
+  typographyVars,
 } from '@astryxdesign/core/theme/tokens.stylex';
 
 const styles = stylex.create({
@@ -126,12 +132,39 @@ const styles = stylex.create({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
+  // The assistant name row carries a negative block margin of its own, so the
+  // bubble contributes the rest of the gap between the identity row and the
+  // message body.
+  assistantBubble: {
+    marginBlockStart: spacingVars['--spacing-4'],
+  },
+  // Reasoning rows and tool rows share one tight stack, so the group itself
+  // carries no block margin; the stack gap supplies the row rhythm.
   activityGroup: {
     width: '100%',
-    marginBlockStart: spacingVars['--spacing-2'],
-  },
-  toolCallsGrouped: {
     marginBlockStart: spacingVars['--spacing-0'],
+  },
+  toolCallsFlush: {
+    marginBlockStart: spacingVars['--spacing-0'],
+  },
+  // Off-screen probes used only to resolve the fonts a tool row renders with.
+  textProbe: {
+    position: 'absolute',
+    insetInlineStart: '-10000px',
+    insetBlockStart: 0,
+    visibility: 'hidden',
+    pointerEvents: 'none',
+    whiteSpace: 'nowrap',
+  },
+  textProbeBody: {
+    fontFamily: typographyVars['--font-family-body'],
+    fontSize: typeScaleVars['--text-supporting-size'],
+    fontWeight: fontWeightVars['--font-weight-normal'],
+  },
+  textProbeCode: {
+    fontFamily: typographyVars['--font-family-code'],
+    fontSize: typeScaleVars['--text-supporting-size'],
+    fontWeight: fontWeightVars['--font-weight-medium'],
   },
   reasoningContent: {
     color: colorVars['--color-text-secondary'],
@@ -209,12 +242,16 @@ function oneLine(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
-function reasoningTitleText(value: string): string {
+const REASONING_ROW_NAME = 'Think';
+
+function reasoningTitleText(value: string, maxPx: number): string {
   const normalized = oneLine(value);
   const maxLength = appConfig.reasoning_title_max_length;
-  return normalized.length > maxLength
-    ? `${normalized.slice(0, maxLength - 1)}…`
-    : normalized;
+  const limited =
+    normalized.length > maxLength
+      ? `${normalized.slice(0, maxLength - 1)}…`
+      : normalized;
+  return cutRowText(limited, maxPx);
 }
 
 const baseReasoning: Omit<ReasoningStep, 'status'>[] = [
@@ -425,12 +462,16 @@ function getStatusLabel(status: TraceState): string {
 function ReasoningBlock({
   steps,
   content = '',
-  isGrouped = false,
+  rowWidthPx,
+  isFlush = false,
   isStreaming = false,
 }: {
   steps: ReasoningStep[];
   content?: string;
-  isGrouped?: boolean;
+  /** Width available to the row; the title is cut to it so the name stays whole. */
+  rowWidthPx: number;
+  /** Drop the row's own block margin; the parent supplies the spacing. */
+  isFlush?: boolean;
   isStreaming?: boolean;
 }) {
   const hasContent = content.trim().length > 0;
@@ -440,6 +481,7 @@ function ReasoningBlock({
       steps.find(step => step.status === 'running')?.detail ||
       steps[0]?.detail ||
       '',
+    toolTitleBudgetPx(rowWidthPx, REASONING_ROW_NAME),
   );
   const completedSteps = steps.filter(step => step.status === 'complete').length;
 
@@ -449,7 +491,7 @@ function ReasoningBlock({
 
   const item: ChatToolCallItem = {
     key: `reasoning-${title}-${steps.length}`,
-    name: 'Think',
+    name: REASONING_ROW_NAME,
     status: isStreaming ? 'running' : 'complete',
     target: title || undefined,
     resultDetail: (
@@ -501,7 +543,7 @@ function ReasoningBlock({
   return (
     <ChatToolCalls
       calls={[item]}
-      xstyle={isGrouped ? styles.toolCallsGrouped : undefined}
+      xstyle={isFlush ? styles.toolCallsFlush : undefined}
     />
   );
 }
@@ -518,9 +560,101 @@ function prettyToolArguments(argumentsText: string): string {
   }
 }
 
-function compactToolValue(value: unknown): string {
+// A tool or reasoning row shares its width between the tool name and the title,
+// and the row layout gives the title `flex-shrink: 10` while the tool name only
+// keeps a `4ch` minimum - so any title that does not fit clips the name to
+// `writ…`. Titles are therefore cut to the measured row width, which lets the
+// title carry the truncation instead of the name.
+const TOOL_ROW_CHROME_PX = 96;
+const TOOL_TITLE_SAFETY_PX = 8;
+const TOOL_TITLE_FALLBACK_PX_PER_CHAR = 7;
+
+type RowTextFont = 'body' | 'code';
+
+const resolvedRowFonts: Partial<Record<RowTextFont, string>> = {};
+let rowTextCanvas: HTMLCanvasElement | null = null;
+
+function resolveRowFont(font: RowTextFont): string {
+  const cached = resolvedRowFonts[font];
+  if (cached || typeof document === 'undefined') {
+    return cached ?? `${TOOL_TITLE_FALLBACK_PX_PER_CHAR}px`;
+  }
+  const probe = document.createElement('span');
+  probe.setAttribute('aria-hidden', 'true');
+  probe.className =
+    stylex.props(
+      styles.textProbe,
+      font === 'code' ? styles.textProbeCode : styles.textProbeBody,
+    ).className ?? '';
+  document.body.appendChild(probe);
+  const probeStyles = getComputedStyle(probe);
+  const resolved = `${probeStyles.fontWeight} ${probeStyles.fontSize} ${probeStyles.fontFamily}`;
+  probe.remove();
+  resolvedRowFonts[font] = resolved;
+  return resolved;
+}
+
+/** Width of row text in px, measured with the font the row renders it in. */
+function measureRowText(text: string, font: RowTextFont): number {
+  if (typeof document === 'undefined') {
+    return text.length * TOOL_TITLE_FALLBACK_PX_PER_CHAR;
+  }
+  rowTextCanvas ??= document.createElement('canvas');
+  const context = rowTextCanvas.getContext('2d');
+  if (!context) {
+    return text.length * TOOL_TITLE_FALLBACK_PX_PER_CHAR;
+  }
+  context.font = resolveRowFont(font);
+  return context.measureText(text).width;
+}
+
+/** Cut text to a pixel width, ending with an ellipsis when it does not fit. */
+function cutRowText(text: string, maxPx: number): string {
+  if (maxPx <= 0) {
+    return '';
+  }
+  if (measureRowText(text, 'body') <= maxPx) {
+    return text;
+  }
+  let fits = 0;
+  let tooLong = text.length;
+  while (fits < tooLong) {
+    const middle = Math.ceil((fits + tooLong) / 2);
+    if (measureRowText(`${text.slice(0, middle)}…`, 'body') <= maxPx) {
+      fits = middle;
+    } else {
+      tooLong = middle - 1;
+    }
+  }
+  return fits > 0 ? `${text.slice(0, fits)}…` : '…';
+}
+
+/**
+ * Width a row title may use so its tool name keeps full width: the measured row
+ * width minus the fixed row furniture (status icon, gaps, count, chevron,
+ * padding), the name itself and a safety margin.
+ */
+function toolTitleBudgetPx(rowWidthPx: number, toolName: string): number {
+  if (rowWidthPx <= 0) {
+    return 0;
+  }
+  return Math.max(
+    0,
+    rowWidthPx -
+      TOOL_ROW_CHROME_PX -
+      measureRowText(toolName, 'code') -
+      TOOL_TITLE_SAFETY_PX,
+  );
+}
+
+function compactToolValue(value: unknown, maxChars: number): string {
   if (typeof value === 'string') {
-    return value.length > 0 ? value : '""';
+    if (value.length === 0) {
+      return '""';
+    }
+    return value.length > maxChars
+      ? `"${value.slice(0, maxChars)}…" (${value.length} chars)`
+      : value;
   }
   if (value === null) {
     return 'null';
@@ -529,15 +663,22 @@ function compactToolValue(value: unknown): string {
     return String(value);
   }
   if (Array.isArray(value)) {
-    return JSON.stringify(value) ?? '[…]';
+    const json = JSON.stringify(value);
+    return json && json.length <= maxChars ? json : `[${value.length} items]`;
   }
   if (typeof value === 'object') {
-    return '{…}';
+    const json = JSON.stringify(value);
+    return json && json.length <= maxChars
+      ? json
+      : `{${Object.keys(value).length} keys}`;
   }
   return String(value);
 }
 
-function toolTarget(argumentsText: string): string {
+function toolTarget(argumentsText: string, budgetPx: number): string {
+  if (budgetPx <= 0) {
+    return '';
+  }
   try {
     const parsed = JSON.parse(argumentsText) as unknown;
     if (
@@ -546,16 +687,23 @@ function toolTarget(argumentsText: string): string {
       !Array.isArray(parsed)
     ) {
       const entries = Object.entries(parsed as Record<string, unknown>);
-      if (entries.length > 0) {
-        return entries
-          .map(([key, value]) => `${key}: ${compactToolValue(value)}`)
-          .join(' · ');
+      if (entries.length === 0) {
+        return 'no arguments';
       }
+      return cutRowText(
+        entries
+          .map(
+            ([key, value]) =>
+              `${key}: ${compactToolValue(value, appConfig.tool_title_value_max_chars)}`,
+          )
+          .join(' · '),
+        budgetPx,
+      );
     }
   } catch {
     // Keep the generic target when arguments are not JSON.
   }
-  return 'arguments available';
+  return cutRowText('arguments available', budgetPx);
 }
 
 function visibleToolOutput(output: string): string {
@@ -585,14 +733,15 @@ function toolCallStatus(result?: WebUiToolResult): 'running' | 'complete' | 'err
 
 function toolCallItem(
   call: WebUiToolCall,
-  result?: WebUiToolResult,
+  result: WebUiToolResult | undefined,
+  rowWidthPx: number,
 ): ChatToolCallItem {
   const resultStatus = result?.status;
   return {
     key: `tool-${call.callId}`,
     name: call.name,
     status: toolCallStatus(result),
-    target: toolTarget(call.arguments),
+    target: toolTarget(call.arguments, toolTitleBudgetPx(rowWidthPx, call.name)),
     errorMessage: resultStatus === 'error' ? 'The tool returned an error.' : undefined,
     resultDetail: (
       <VStack gap={2} width="100%">
@@ -655,7 +804,10 @@ function OrphanToolResultBlock({result}: {result: WebUiToolResult}) {
   );
 }
 
-function toolActivityForParts(parts: WebUiPart[]): ChatToolCallItem[] {
+function toolActivityForParts(
+  parts: WebUiPart[],
+  rowWidthPx: number,
+): ChatToolCallItem[] {
   const calls = new Map<string, ChatToolCallItem>();
   for (const part of parts) {
     if (part.type === 'tool_call') {
@@ -663,7 +815,7 @@ function toolActivityForParts(parts: WebUiPart[]): ChatToolCallItem[] {
         key: `tool-${part.callId}`,
         name: part.name,
         status: 'running',
-        target: toolTarget(part.arguments),
+        target: toolTarget(part.arguments, toolTitleBudgetPx(rowWidthPx, part.name)),
       });
     }
   }
@@ -738,95 +890,168 @@ function groupWebUiParts(parts: WebUiPart[]): WebUiPartGroup[] {
   return groups;
 }
 
+type WebUiActivityGroupPart = Extract<WebUiPartGroup, {type: 'reasoning' | 'tools'}>;
+type WebUiContentGroupPart = Extract<WebUiPartGroup, {type: 'content'}>;
+type IndexedWebUiActivityGroup = {group: WebUiActivityGroupPart; index: number};
+type WebUiSegment =
+  | {type: 'activity'; items: IndexedWebUiActivityGroup[]}
+  | {type: 'content'; item: {group: WebUiContentGroupPart; index: number}};
+
+function webUiGroupKey(group: WebUiPartGroup, index: number): string {
+  if (group.type === 'tools') {
+    return `tools-${group.items[0]?.index ?? index}`;
+  }
+  return `${group.type}-${group.item.index}`;
+}
+
+function webUiGroupIndex(group: WebUiPartGroup): number {
+  return group.type === 'tools' ? group.items[0]?.index ?? -1 : group.item.index;
+}
+
+/**
+ * Reasoning rows and tool rows are the same Astryx call row, so consecutive
+ * ones are laid out in a single tight stack: they keep the tool-to-tool row
+ * rhythm instead of the wider block spacing used around Markdown text.
+ */
+function segmentWebUiGroups(groups: WebUiPartGroup[]): WebUiSegment[] {
+  const segments: WebUiSegment[] = [];
+  let activity: IndexedWebUiActivityGroup[] = [];
+
+  const flushActivity = () => {
+    if (activity.length > 0) {
+      segments.push({type: 'activity', items: activity});
+      activity = [];
+    }
+  };
+
+  groups.forEach((group, index) => {
+    if (group.type === 'content') {
+      flushActivity();
+      segments.push({type: 'content', item: {group, index}});
+      return;
+    }
+    activity.push({group, index});
+  });
+  flushActivity();
+
+  return segments;
+}
+
+function WebUiActivityGroup({
+  group,
+  rowWidthPx,
+  isStreaming,
+}: {
+  group: WebUiActivityGroupPart;
+  rowWidthPx: number;
+  isStreaming: boolean;
+}) {
+  if (group.type === 'reasoning') {
+    return (
+      <ReasoningBlock
+        steps={[]}
+        content={group.item.part.text}
+        rowWidthPx={rowWidthPx}
+        isFlush
+        isStreaming={isStreaming}
+      />
+    );
+  }
+
+  const toolCallItems = group.items
+    .filter(({part}) => part.type === 'tool_call')
+    .map(({part, index}) => {
+      if (part.type !== 'tool_call') {
+        return undefined;
+      }
+      const itemIndex = group.items.findIndex(item => item.index === index);
+      const result = group.items
+        .slice(itemIndex + 1)
+        .map(item => item.part)
+        .find(
+          (candidate): candidate is WebUiToolResult =>
+            candidate.type === 'tool_result' && candidate.callId === part.callId,
+        );
+      return toolCallItem(part, result, rowWidthPx);
+    })
+    .filter((item): item is ChatToolCallItem => item !== undefined);
+  const firstToolCallIndex = group.items.find(
+    ({part}) => part.type === 'tool_call',
+  )?.index;
+
+  return (
+    <VStack gap={1} width="100%" xstyle={styles.activityGroup}>
+      {group.items.map(({part, index}, itemIndex) => {
+        if (part.type === 'tool_call') {
+          return index === firstToolCallIndex ? (
+            <ChatToolCalls
+              key={`tool-calls-${index}`}
+              calls={toolCallItems}
+              xstyle={styles.toolCallsFlush}
+            />
+          ) : null;
+        }
+        const hasCall = group.items
+          .slice(0, itemIndex)
+          .some(
+            ({part: candidate}) =>
+              candidate.type === 'tool_call' && candidate.callId === part.callId,
+          );
+        return hasCall ? null : (
+          <OrphanToolResultBlock
+            key={`tool-result-${part.callId}-${index}`}
+            result={part}
+          />
+        );
+      })}
+    </VStack>
+  );
+}
+
 function WebUiParts({
   parts,
+  rowWidthPx,
   isStreaming = false,
 }: {
   parts: WebUiPart[];
+  rowWidthPx: number;
   isStreaming?: boolean;
 }) {
-  const groups = groupWebUiParts(parts);
+  const segments = segmentWebUiGroups(groupWebUiParts(parts));
+  const lastPartIndex = parts.length - 1;
 
   return (
     <VStack gap={3} width="100%">
-      {groups.map((group, groupIndex) => {
-        if (group.type === 'reasoning') {
+      {segments.map((segment, segmentIndex) => {
+        if (segment.type === 'content') {
           return (
-            <ReasoningBlock
-              key={`reasoning-${group.item.index}`}
-              steps={[]}
-              content={group.item.part.text}
-              isStreaming={isStreaming && group.item.index === parts.length - 1}
-            />
-          );
-        }
-
-        if (group.type === 'tools') {
-          const toolCallItems = group.items
-            .filter(({part}) => part.type === 'tool_call')
-            .map(({part, index}) => {
-              if (part.type !== 'tool_call') {
-                return undefined;
+            <Markdown
+              key={webUiGroupKey(segment.item.group, segment.item.index)}
+              density="compact"
+              contentWidth="100%"
+              isStreaming={
+                isStreaming && segment.item.group.item.index === lastPartIndex
               }
-              const itemIndex = group.items.findIndex(item => item.index === index);
-              const result = group.items
-                .slice(itemIndex + 1)
-                .map(item => item.part)
-                .find(
-                  (candidate): candidate is WebUiToolResult =>
-                    candidate.type === 'tool_result' && candidate.callId === part.callId,
-                );
-              return toolCallItem(part, result);
-            })
-            .filter((item): item is ChatToolCallItem => item !== undefined);
-          const firstToolCallIndex = group.items.find(
-            ({part}) => part.type === 'tool_call',
-          )?.index;
-
-          return (
-            <VStack
-              key={`tools-${group.items[0]?.index ?? groupIndex}`}
-              gap={1}
-              width="100%"
-              xstyle={styles.activityGroup}
+              headingLevelStart={3}
             >
-              {group.items.map(({part, index}, itemIndex) => {
-                if (part.type === 'tool_call') {
-                  return index === firstToolCallIndex ? (
-                    <ChatToolCalls
-                      key={`tool-calls-${index}`}
-                      calls={toolCallItems}
-                      xstyle={styles.toolCallsGrouped}
-                    />
-                  ) : null;
-                }
-                const hasCall = group.items
-                  .slice(0, itemIndex)
-                  .some(
-                    ({part: candidate}) =>
-                      candidate.type === 'tool_call' && candidate.callId === part.callId,
-                  );
-                return hasCall ? null : (
-                  <OrphanToolResultBlock
-                    key={`tool-result-${part.callId}-${index}`}
-                    result={part}
-                  />
-                );
-              })}
-            </VStack>
+              {segment.item.group.item.part.text}
+            </Markdown>
           );
         }
 
         return (
-          <Markdown
-            key={`text-${group.item.index}`}
-            density="compact"
-            contentWidth="100%"
-            isStreaming={isStreaming && group.item.index === parts.length - 1}
-            headingLevelStart={3}
-          >
-            {group.item.part.text}
-          </Markdown>
+          <VStack key={`activity-${segmentIndex}`} gap={0} width="100%">
+            {segment.items.map(({group, index}) => (
+              <WebUiActivityGroup
+                key={webUiGroupKey(group, index)}
+                group={group}
+                rowWidthPx={rowWidthPx}
+                isStreaming={
+                  isStreaming && webUiGroupIndex(group) === lastPartIndex
+                }
+              />
+            ))}
+          </VStack>
         );
       })}
     </VStack>
@@ -935,24 +1160,28 @@ function RunInspector({
   activeSession,
   steps,
   tools,
+  liveToolParts,
+  inspector,
   isRunning,
   onClose,
 }: {
   activeSession: Session;
   steps: ReasoningStep[];
   tools: ChatToolCallItem[];
+  liveToolParts: WebUiPart[] | null;
+  inspector: ResizableRegion;
   isRunning: boolean;
   onClose: () => void;
 }) {
   const completedSteps = steps.filter(step => step.status === 'complete').length;
   const isLive = activeSession.source === 'live';
-  const inspector = useResizable({
-    defaultSize: pixel(360),
-    minSize: pixel(280),
-    maxSize: pixel(640),
-    direction: 'horizontal',
-    autoSaveId: 'agent-harness-run-inspector',
-  });
+  // Rows measure their own width so titles fit the floating panel too.
+  const [toolListRef, toolListWidthPx] = useRowWidth();
+  const toolItems = liveToolParts
+    ? toolActivityForParts(liveToolParts, toolListWidthPx)
+    : isLive
+      ? []
+      : tools;
 
   return (
     <HStack
@@ -1031,18 +1260,18 @@ function RunInspector({
                 {isLive ? 'Live' : 'Preview'}
               </Text>
             </HStack>
-            <ReasoningBlock steps={steps} />
+            <ReasoningBlock steps={steps} rowWidthPx={toolListWidthPx} />
           </VStack>
         )}
 
-        <VStack as="section" gap={2}>
+        <VStack as="section" gap={2} ref={toolListRef}>
           <HStack align="center" justify="between" gap={2}>
             <Heading level={2} accessibilityLevel={3}>
               Tool activity
             </Heading>
-            <Badge label={String(tools.length)} />
+            <Badge label={String(toolItems.length)} />
           </HStack>
-          <ChatToolCalls calls={tools} defaultIsExpanded />
+          <ChatToolCalls calls={toolItems} defaultIsExpanded />
         </VStack>
 
         <VStack gap={2} xstyle={styles.inspectorNote}>
@@ -1076,6 +1305,43 @@ function AssistantIdentity({model}: {model?: Session['model']}) {
 }
 
 type CopyState = 'idle' | 'copied' | 'error';
+
+/**
+ * Measured width available to message rows. The conversation lane is clamped by
+ * its container (the run inspector takes part of it, and narrow windows squeeze
+ * it), so a configured lane size is not the width rows actually render at.
+ */
+function useRowWidth(): [(node: HTMLElement | null) => void, number] {
+  const [rowWidthPx, setRowWidthPx] = useState(0);
+  const observerRef = useRef<ResizeObserver | null>(null);
+
+  const measure = useCallback((node: HTMLElement) => {
+    const computed = getComputedStyle(node);
+    const inlinePadding =
+      (Number.parseFloat(computed.paddingInlineStart) || 0) +
+      (Number.parseFloat(computed.paddingInlineEnd) || 0);
+    setRowWidthPx(Math.max(0, node.clientWidth - inlinePadding));
+  }, []);
+
+  const attach = useCallback(
+    (node: HTMLElement | null) => {
+      observerRef.current?.disconnect();
+      observerRef.current = null;
+      if (!node) {
+        return;
+      }
+      measure(node);
+      const observer = new ResizeObserver(() => measure(node));
+      observer.observe(node);
+      observerRef.current = observer;
+    },
+    [measure],
+  );
+
+  useEffect(() => () => observerRef.current?.disconnect(), []);
+
+  return [attach, rowWidthPx];
+}
 
 async function copyMarkdownToClipboard(value: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -1125,6 +1391,7 @@ function AssistantMessage({
   message: MessageRecord;
   model?: Session['model'];
 }) {
+  const [rowRef, rowWidthPx] = useRowWidth();
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const resetTimerRef = useRef<number | null>(null);
   const markdown = assistantOutputMarkdown(message);
@@ -1163,8 +1430,10 @@ function AssistantMessage({
       avatar={<AgentAvatar />}
     >
       <ChatMessageBubble
+        ref={rowRef}
         variant="ghost"
         width="100%"
+        xstyle={styles.assistantBubble}
         name={<AssistantIdentity model={model} />}
         metadata={
           <ChatMessageMetadata
@@ -1188,13 +1457,15 @@ function AssistantMessage({
       >
         <VStack gap={3} width="100%">
           {message.parts && message.parts.length > 0 ? (
-            <WebUiParts parts={message.parts} />
+            <WebUiParts parts={message.parts} rowWidthPx={rowWidthPx} />
           ) : (
             <>
               {(message.reasoning || message.reasoningContent) && (
                 <ReasoningBlock
                   steps={message.reasoning ?? []}
                   content={message.reasoningContent}
+                  rowWidthPx={rowWidthPx}
+                  isFlush
                 />
               )}
               <Markdown density="compact" contentWidth="100%" headingLevelStart={3}>
@@ -1219,7 +1490,10 @@ function AssistantMessage({
   );
 }
 
-function renderMessage(message: MessageRecord, model?: Session['model']) {
+function renderMessage(
+  message: MessageRecord,
+  model: Session['model'] | undefined,
+) {
   if (message.sender === 'system') {
     return (
       <ChatSystemMessage
@@ -1248,7 +1522,9 @@ function renderMessage(message: MessageRecord, model?: Session['model']) {
     );
   }
 
-  return <AssistantMessage key={message.id} message={message} model={model} />;
+  return (
+    <AssistantMessage key={message.id} message={message} model={model} />
+  );
 }
 
 function App() {
@@ -1266,6 +1542,16 @@ function App() {
     maxSize: pixel(1200),
     direction: 'horizontal',
     autoSaveId: 'agent-harness-conversation-width',
+  });
+  // The in-flight assistant bubble is rendered here rather than through
+  // AssistantMessage, so it measures its own row width for title fitting.
+  const [liveBubbleRef, liveBubbleWidthPx] = useRowWidth();
+  const inspector = useResizable({
+    defaultSize: pixel(360),
+    minSize: pixel(280),
+    maxSize: pixel(640),
+    direction: 'horizontal',
+    autoSaveId: 'agent-harness-run-inspector',
   });
   const runAbortRef = useRef<AbortController | null>(null);
   const runTimeoutRef = useRef<number | null>(null);
@@ -1285,22 +1571,23 @@ function App() {
     return getTraceForSteps(steps, isRunning ? runProgress : steps.length);
   }, [isLiveSession, isRunning, runProgress]);
 
-  const tools = useMemo(() => {
-    if (isLiveSession) {
-      if (isRunning && !streamingMessage) {
-        return [];
-      }
-      const sourceMessage = streamingMessage ?? [...messages]
-        .reverse()
-        .find(message => message.sender === 'assistant' && message.parts?.some(part => part.type === 'tool_call'));
-      return sourceMessage?.parts ? toolActivityForParts(sourceMessage.parts) : [];
+  const liveToolParts = useMemo(() => {
+    if (!isLiveSession || (isRunning && !streamingMessage)) {
+      return null;
     }
+    const sourceMessage = streamingMessage ?? [...messages]
+      .reverse()
+      .find(message => message.sender === 'assistant' && message.parts?.some(part => part.type === 'tool_call'));
+    return sourceMessage?.parts ?? null;
+  }, [isLiveSession, isRunning, messages, streamingMessage]);
+
+  const tools = useMemo(() => {
     const latestAssistant = [...messages]
       .reverse()
       .find(message => message.sender === 'assistant' && message.tools);
     const sourceTools = latestAssistant?.tools ?? defaultTools;
 
-    if (!isRunning) {
+    if (!isRunning || isLiveSession) {
       return sourceTools;
     }
 
@@ -1311,7 +1598,7 @@ function App() {
         duration: undefined,
       }),
     );
-  }, [activeSessionId, isLiveSession, isRunning, messages, streamingMessage]);
+  }, [isLiveSession, isRunning, messages]);
 
   const stopRun = useCallback(() => {
     activeRunSessionIdRef.current = null;
@@ -1745,19 +2032,32 @@ function App() {
                     xstyle={styles.conversationLane}
                   >
                     <ChatMessageList density="balanced" align="top" isStreaming={isRunning}>
-                      {messages.map(message => renderMessage(message, activeSession.model))}
+                      {messages.map(message =>
+                        renderMessage(message, activeSession.model),
+                      )}
                       {isRunning && (!isLiveSession || streamingMessage) && !streamingMessageCommitted && (
                         <ChatMessage sender="assistant" avatar={<AgentAvatar isRunning />}>
                           <ChatMessageBubble
+                            ref={liveBubbleRef}
                             variant="ghost"
                             width="100%"
+                            xstyle={styles.assistantBubble}
                             name={<AssistantIdentity model={activeSession.model} />}
                           >
                             {isLiveSession && streamingMessage ? (
-                              <WebUiParts parts={streamingMessage.parts} isStreaming />
+                              <WebUiParts
+                                parts={streamingMessage.parts}
+                                rowWidthPx={liveBubbleWidthPx}
+                                isStreaming
+                              />
                             ) : (
                               <VStack gap={3} width="100%">
-                                <ReasoningBlock steps={reasoningSteps} isStreaming />
+                                <ReasoningBlock
+                                  steps={reasoningSteps}
+                                  rowWidthPx={liveBubbleWidthPx}
+                                  isFlush
+                                  isStreaming
+                                />
                                 <Markdown
                                   density="compact"
                                   contentWidth="100%"
@@ -1783,6 +2083,8 @@ function App() {
             activeSession={activeSession}
             steps={reasoningSteps}
             tools={tools}
+            liveToolParts={liveToolParts}
+            inspector={inspector}
             isRunning={isRunning}
             onClose={() => setShowInspector(false)}
           />

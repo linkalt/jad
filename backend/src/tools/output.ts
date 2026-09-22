@@ -7,7 +7,6 @@ export type ToolStatus =
   | "not_found"
   | "forbidden"
   | "invalid_input"
-  | "is_directory"
   | "unsupported_encoding"
   | "blocked"
   | "error";
@@ -76,7 +75,7 @@ export function renderToolResult(options: {
 
 export function executionError(
   id: string,
-  status: Exclude<ToolStatus, "ok" | "invalid_input" | "is_directory">,
+  status: Exclude<ToolStatus, "ok">,
   errorCode: string,
   summary: string,
   information: Array<[string, unknown]> = [],

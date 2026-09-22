@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.grep",
+      "source": "native",
+      "name": "grep",
+      "description": "Search file contents with ripgrep and return matching lines grouped by file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "minLength": 1,
+            "description": "ripgrep regular expression (Rust syntax: no lookaround or backreferences). Use literal when the text contains regex characters."
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "File or directory to search, relative to cwd or absolute. Defaults to the workspace root. Explicit paths are searched even when ignored or hidden."
+          },
+          "include": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Only search files matching this glob, for example \"*.ts\" or \"src/**/*.{ts,tsx}\"."
+          },
+          "literal": {
+            "type": "boolean",
+            "description": "Treat the pattern as exact text instead of a regular expression."
+          },
+          "context": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20,
+            "description": "Lines of context to show before and after each match."
+          }
+        },
+        "required": ["pattern"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

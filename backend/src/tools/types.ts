@@ -22,6 +22,8 @@ export interface ToolExecutionContext {
 export interface LoadedTool {
   definition: ToolDefinition;
   validate: ValidateFunction<unknown>;
+  /** Tolerant pre-validation normalization (enum aliases, harmless variants). */
+  normalizeArguments?(args: JsonRecord): JsonRecord;
   execute(
     args: JsonRecord,
     context: ToolExecutionContext,

@@ -141,6 +141,75 @@ test("stores raw input items and reconstructs request history", async () => {
   }
 });
 
+test("persists normalized request history and refreshes only appended transcript records", async () => {
+  const sessionDir = await makeSession();
+  try {
+    const store = await SessionResponseStore.open(sessionDir);
+    const first = {
+      type: "message",
+      role: "user",
+      content: [{type: "input_text", text: "first"}],
+    };
+    const second = {
+      type: "message",
+      role: "user",
+      content: [{type: "input_text", text: "second"}],
+    };
+    await store.appendInputItem(first);
+    const firstHistory = [];
+    for await (const item of store.readInputItems()) firstHistory.push(item);
+    assert.deepEqual(firstHistory, [first]);
+
+    const firstCache = JSON.parse(
+      await readFile(join(sessionDir, "staging", "history-cache.json"), "utf8"),
+    ) as {schema_version: number; transcript: {offset: number}; items: unknown[]};
+    assert.equal(firstCache.schema_version, 1);
+    assert.equal(firstCache.transcript.offset, (await readFile(join(sessionDir, "messages.jsonl"))).length);
+    assert.deepEqual(firstCache.items, [first]);
+
+    await store.appendInputItem(second);
+    const secondHistory = [];
+    for await (const item of store.readInputItems()) secondHistory.push(item);
+    assert.deepEqual(secondHistory, [first, second]);
+    const secondCache = JSON.parse(
+      await readFile(join(sessionDir, "staging", "history-cache.json"), "utf8"),
+    ) as {transcript: {offset: number}; items: unknown[]};
+    assert.equal(secondCache.transcript.offset, (await readFile(join(sessionDir, "messages.jsonl"))).length);
+    assert.deepEqual(secondCache.items, [first, second]);
+    await store.close();
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
+test("rebuilds cached history when the transcript prefix changes", async () => {
+  const sessionDir = await makeSession();
+  try {
+    const store = await SessionResponseStore.open(sessionDir);
+    const original = {
+      type: "message",
+      role: "user",
+      content: [{type: "input_text", text: "original"}],
+    };
+    const replacement = {
+      type: "message",
+      role: "user",
+      content: [{type: "input_text", text: "a substantially longer replacement"}],
+    };
+    await store.appendInputItem(original);
+    for await (const _item of store.readInputItems()) {
+      // Populate the staged cache before replacing the authoritative transcript.
+    }
+    await writeFile(join(sessionDir, "messages.jsonl"), `${JSON.stringify(replacement)}\n`);
+    const history = [];
+    for await (const item of store.readInputItems()) history.push(item);
+    assert.deepEqual(history, [replacement]);
+    await store.close();
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("uses fallback sequence numbers when output_index is absent", async () => {
   const sessionDir = await makeSession();
   try {

@@ -1,12 +1,16 @@
-import {constants as fsConstants} from "node:fs";
-import {chmod, copyFile, rename, rm, writeFile} from "node:fs/promises";
-import {randomBytes} from "node:crypto";
-
 import type {NativeWriteToolSettings} from "../../config.js";
 import type {JsonRecord} from "../../persistence.js";
 import {executionError, renderToolResult} from "../output.js";
 import type {ToolDefinition, ToolExecutionContext} from "../types.js";
-import {displayPath, resolveWriteTarget} from "./path.js";
+import {commitFile, errorCode, hasSameContent, pathLocks} from "./mutate.js";
+import {
+  displayPath,
+  inspectMutateTarget,
+  prepareMutateParent,
+  resolveMutatePath,
+} from "./path.js";
+import type {ResolvedMutatePath} from "./path.js";
+import {normalizeEncoding} from "./text.js";
 
 export const NATIVE_WRITE_ID = "native.write";
 
@@ -14,7 +18,8 @@ export const nativeWriteDefinition: ToolDefinition = {
   id: NATIVE_WRITE_ID,
   source: "native",
   name: "write",
-  description: "Write file content, creating parent directories as needed.",
+  description:
+    "Write file content, creating parent directories as needed. Identical content is left unchanged.",
   inputSchema: {
     type: "object",
     properties: {
@@ -29,10 +34,12 @@ export const nativeWriteDefinition: ToolDefinition = {
       contentEncoding: {
         type: "string",
         enum: ["utf8", "base64"],
+        description: "Encoding of content. Defaults to utf8.",
       },
       backup: {
         type: "boolean",
-        description: "Back up an existing file before replacing it. Defaults to true.",
+        description:
+          "Back up an existing file before replacing it; the session decides where backups are kept. Defaults to true.",
       },
     },
     required: ["path", "content"],
@@ -41,6 +48,8 @@ export const nativeWriteDefinition: ToolDefinition = {
 };
 
 type ContentEncoding = "utf8" | "base64";
+
+type WriteAction = "created" | "updated" | "unchanged";
 
 interface WriteArgs {
   path: string;
@@ -51,12 +60,6 @@ interface WriteArgs {
 
 interface WriteContext extends ToolExecutionContext {
   policy: NativeWriteToolSettings;
-}
-
-function errorCode(error: unknown): string | undefined {
-  return typeof error === "object" && error !== null && "code" in error
-    ? String((error as {code?: unknown}).code)
-    : undefined;
 }
 
 function decodeBase64(value: string): Buffer | undefined {
@@ -89,48 +92,19 @@ function contentBuffer(
   return {data};
 }
 
-async function createBackup(targetPath: string, mode: number | undefined): Promise<string> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const backupPath = `${targetPath}.bak-${Date.now()}-${randomBytes(8).toString("hex")}`;
-    try {
-      await copyFile(targetPath, backupPath, fsConstants.COPYFILE_EXCL);
-      if (mode !== undefined) {
-        await chmod(backupPath, mode);
-      }
-      return backupPath;
-    } catch (error) {
-      if (errorCode(error) !== "EEXIST" || attempt === 4) {
-        throw error;
-      }
-    }
+function actionSummary(action: WriteAction, targetPath: string): string {
+  if (action === "created") {
+    return `Created ${targetPath}`;
   }
-  throw new Error("could not create a unique backup path");
-}
-
-async function writeAtomically(
-  targetPath: string,
-  data: Buffer,
-  mode: number | undefined,
-): Promise<void> {
-  const temporaryPath = `${targetPath}.tmp-${randomBytes(8).toString("hex")}`;
-  try {
-    await writeFile(temporaryPath, data, {
-      flag: "wx",
-      mode: mode ?? 0o666,
-    });
-    if (mode !== undefined) {
-      await chmod(temporaryPath, mode);
-    }
-    await rename(temporaryPath, targetPath);
-  } catch (error) {
-    await rm(temporaryPath, {force: true}).catch(() => undefined);
-    throw error;
+  if (action === "updated") {
+    return `Updated ${targetPath}`;
   }
+  return `Unchanged ${targetPath}`;
 }
 
 function failure(
   callId: string,
-  targetPath: string,
+  errorPath: string,
   errorCodeValue: string,
   summary: string,
   extra: Array<[string, unknown]> = [],
@@ -140,73 +114,91 @@ function failure(
     "error",
     errorCodeValue,
     summary,
-    [["path", targetPath], ...extra],
+    [["path", errorPath], ...extra],
   );
 }
 
-export async function executeNativeWrite(
-  args: JsonRecord,
+async function applyWrite(
+  path: ResolvedMutatePath,
+  data: Buffer,
+  writeArgs: WriteArgs,
   context: WriteContext,
+  policy: NativeWriteToolSettings,
 ): Promise<string> {
-  const writeArgs = args as unknown as WriteArgs;
-  const encoding = writeArgs.contentEncoding ?? "utf8";
-  const content = contentBuffer(writeArgs.content, encoding);
-  if (content.error) {
-    return failure(context.callId, writeArgs.path, "invalid_base64", content.error);
-  }
-  const data = content.data!;
-  if (data.length > context.policy.max_bytes) {
-    return executionError(
-      context.callId,
-      "blocked",
-      "size_limit",
-      "The write exceeds the configured byte limit",
-      [
-        ["path", writeArgs.path],
-        ["size_bytes", data.length],
-        ["max_bytes", context.policy.max_bytes],
-      ],
-    );
+  const parentError = await prepareMutateParent(path, policy, context.callId);
+  if (parentError) {
+    return parentError;
   }
 
-  const resolved = await resolveWriteTarget(
-    writeArgs.path,
-    context.workspaceRoot,
-    context.policy,
-    context.callId,
-  );
-  if (resolved.error) {
-    return resolved.error;
+  const inspected = await inspectMutateTarget(path, policy, context.callId);
+  if (inspected.error) {
+    return inspected.error;
   }
-  const target = resolved.target!;
-  const shouldBackup = writeArgs.backup ?? true;
-  let backupPath: string | undefined;
+  const target = inspected.target!;
 
-  if (shouldBackup && target.existed) {
-    try {
-      backupPath = await createBackup(target.realPath, target.mode);
-    } catch {
-      return failure(
-        context.callId,
-        target.displayPath,
-        "backup_failed",
-        "Could not create a backup before writing",
-      );
-    }
+  const information = (
+    action: WriteAction,
+    backupPath?: string,
+  ): Array<[string, unknown]> => [
+    ["path", target.displayPath],
+    ["action", action],
+    ["bytes", data.length],
+    ...(backupPath
+      ? [[
+          "backup_path",
+          displayPath(target.workspaceRoot, backupPath),
+        ] as [string, unknown]]
+      : []),
+  ];
+
+  if (target.existed && (await hasSameContent(target, data))) {
+    return renderToolResult({
+      id: context.callId,
+      status: "ok",
+      summary: actionSummary("unchanged", target.displayPath),
+      information: information("unchanged"),
+    });
   }
 
-  try {
-    await writeAtomically(target.realPath, data, target.mode);
-  } catch (error) {
+  const action: WriteAction = target.existed ? "updated" : "created";
+  const commit = await commitFile({
+    target,
+    settings: policy,
+    data,
+    backup: writeArgs.backup ?? true,
+  });
+
+  if (commit.error === "backup_failed") {
     return failure(
       context.callId,
-      target.displayPath,
+      target.errorPath,
+      "backup_failed",
+      "Could not create a backup before writing",
+    );
+  }
+  if (commit.error === "target_changed") {
+    return failure(
+      context.callId,
+      target.errorPath,
+      "changed_during_write",
+      "The target changed while it was being written",
+    );
+  }
+  if (commit.error === "write_failed") {
+    return failure(
+      context.callId,
+      target.errorPath,
       "write_failed",
       "Could not write the file",
       [
-        ...(errorCode(error) ? [["system_error", errorCode(error)] as [string, unknown]] : []),
-        ...(backupPath
-          ? [["backup_path", displayPath(target.workspaceRoot, backupPath)] as [string, unknown]]
+        ...(commit.systemError
+          ? [["system_error", commit.systemError] as [string, unknown]]
+          : []),
+        ...(commit.backupPath
+          ? [[
+              "backup_path",
+              displayPath(target.workspaceRoot, commit.backupPath),
+            ] as [string, unknown]]
           : []),
       ],
     );
@@ -215,18 +207,58 @@ export async function executeNativeWrite(
   return renderToolResult({
     id: context.callId,
     status: "ok",
-    summary: target.existed
-      ? `Wrote ${target.displayPath}`
-      : `Created ${target.displayPath}`,
-    information: [
-      ["path", target.displayPath],
-      ["kind", "file"],
-      ["size_bytes", data.length],
-      ["encoding", encoding === "utf8" ? "utf-8" : "base64"],
-      ["created", !target.existed],
-      ...(backupPath
-        ? [["backup_path", displayPath(target.workspaceRoot, backupPath)] as [string, unknown]]
-        : []),
-    ],
+    summary: actionSummary(action, target.displayPath),
+    information: information(action, commit.backupPath),
   });
+}
+
+export async function executeNativeWrite(
+  args: JsonRecord,
+  context: WriteContext,
+): Promise<string> {
+  const writeArgs = args as unknown as WriteArgs;
+  const policy = context.policy;
+
+  // Path resolution comes first and has no filesystem side effect, so every
+  // error reports the canonical path and an invalid request never creates
+  // directories, backups, or temporary files.
+  const resolved = await resolveMutatePath(
+    writeArgs.path,
+    context.workspaceRoot,
+    policy,
+    context.callId,
+  );
+  if (resolved.error) {
+    return resolved.error;
+  }
+  const path = resolved.path!;
+
+  const encoding = normalizeEncoding(writeArgs.contentEncoding) ?? "utf8";
+  const content = contentBuffer(writeArgs.content, encoding);
+  if (content.error) {
+    return failure(context.callId, path.errorPath, "invalid_base64", content.error, [
+      [
+        "suggestion",
+        "base64 content must use the standard alphabet and padding; use contentEncoding \"utf8\" for text",
+      ],
+    ]);
+  }
+  const data = content.data!;
+  if (data.length > policy.max_bytes) {
+    return executionError(
+      context.callId,
+      "blocked",
+      "size_limit",
+      "The write exceeds the configured byte limit",
+      [
+        ["path", path.errorPath],
+        ["bytes", data.length],
+        ["max_bytes", policy.max_bytes],
+      ],
+    );
+  }
+
+  return pathLocks.runExclusive(path.candidate, () =>
+    applyWrite(path, data, writeArgs, context, policy),
+  );
 }

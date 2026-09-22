@@ -1,4 +1,5 @@
-import {lstat, mkdir, realpath} from "node:fs/promises";
+import {constants as fsConstants, type Stats} from "node:fs";
+import {lstat, mkdir, open, realpath} from "node:fs/promises";
 import {basename, dirname, isAbsolute, relative, resolve, sep} from "node:path";
 
 import type {NativePathPolicy} from "../../config.js";
@@ -15,15 +16,80 @@ export interface ResolvedTarget {
   errorPath: string;
 }
 
-export interface ResolvedWriteTarget extends ResolvedTarget {
+/** Shared by both mutating tools; "write" in these helpers means "mutation". */
+export interface ResolvedMutatePath {
+  workspaceRoot: string;
+  /** Canonical absolute target; no filesystem side effect has happened yet. */
+  candidate: string;
+  displayPath: string;
+  errorPath: string;
+}
+
+export interface FileIdentity {
+  device: number;
+  inode: number;
+}
+
+export interface MutateTarget extends ResolvedTarget {
   existed: boolean;
   mode?: number;
+  size?: number;
+  identity?: FileIdentity;
+}
+
+export interface VerifiedFile {
+  data: Buffer;
+  stats: Stats;
+}
+
+export function sameFileIdentity(
+  left: Pick<Stats, "dev" | "ino">,
+  right: FileIdentity,
+): boolean {
+  return left.dev === right.device && left.ino === right.inode;
+}
+
+/**
+ * Opens one regular file without following a final symlink, then verifies that
+ * the descriptor is the file inspected by the caller. File reads use the
+ * descriptor thereafter, closing the check-to-use window for the final path.
+ */
+export async function readVerifiedRegularFile(
+  path: string,
+  expected: FileIdentity,
+): Promise<VerifiedFile | undefined> {
+  let handle;
+  try {
+    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const stats = await handle.stat();
+    if (!stats.isFile() || !sameFileIdentity(stats, expected)) {
+      return undefined;
+    }
+    const data = await handle.readFile();
+    const after = await handle.stat();
+    if (!sameFileIdentity(after, expected) || after.size !== data.length) {
+      return undefined;
+    }
+    return {data, stats: after};
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 function errorCode(error: unknown): string | undefined {
   return typeof error === "object" && error !== null && "code" in error
     ? (error as FsError).code
     : undefined;
+}
+
+async function statOrUndefined(path: string): Promise<Stats | undefined> {
+  try {
+    return await lstat(path);
+  } catch {
+    return undefined;
+  }
 }
 
 export function withinRoot(root: string, target: string): boolean {
@@ -231,12 +297,12 @@ function writePathError(
   );
 }
 
-async function ensureWriteParent(
-  candidate: string,
-  root: string,
+export async function prepareMutateParent(
+  path: ResolvedMutatePath,
   policy: NativePathPolicy,
   callId: string,
 ): Promise<string | undefined> {
+  const {workspaceRoot: root, candidate} = path;
   const parent = dirname(candidate);
   const nearest = await nearestExistingParent(candidate);
   if ("errorCode" in nearest) {
@@ -254,8 +320,18 @@ async function ensureWriteParent(
       root,
       candidate,
       "symlink_forbidden",
-      "The write path contains a symlinked directory",
+      "The path contains a symlinked directory",
       "forbidden",
+    );
+  }
+  const nearestStat = await statOrUndefined(nearest.realPath);
+  if (!nearestStat?.isDirectory()) {
+    return writePathError(
+      callId,
+      root,
+      candidate,
+      "parent_not_directory",
+      "The parent directory is not a directory",
     );
   }
   if (withinRoot(root, candidate)) {
@@ -269,12 +345,19 @@ async function ensureWriteParent(
     await mkdir(parent, {recursive: true});
   } catch (error) {
     const code = errorCode(error);
+    const isNotDirectory = code === "ENOTDIR" || code === "EEXIST";
     return writePathError(
       callId,
       root,
       candidate,
-      code === "EACCES" || code === "EPERM" ? "parent_forbidden" : "directory_create_failed",
-      "Could not create the parent directory",
+      isNotDirectory
+        ? "parent_not_directory"
+        : code === "EACCES" || code === "EPERM"
+          ? "parent_forbidden"
+          : "directory_create_failed",
+      isNotDirectory
+        ? "The parent directory is not a directory"
+        : "Could not create the parent directory",
       code === "EACCES" || code === "EPERM" ? "forbidden" : "error",
     );
   }
@@ -298,7 +381,7 @@ async function ensureWriteParent(
       root,
       candidate,
       "symlink_forbidden",
-      "The write path contains a symlinked directory",
+      "The path contains a symlinked directory",
       "forbidden",
     );
   }
@@ -307,12 +390,12 @@ async function ensureWriteParent(
     : undefined;
 }
 
-export async function resolveWriteTarget(
+export async function resolveMutatePath(
   requestedPath: string,
   workspaceRoot: string,
   policy: NativePathPolicy,
   callId: string,
-): Promise<{target?: ResolvedWriteTarget; error?: string}> {
+): Promise<{path?: ResolvedMutatePath; error?: string}> {
   const workspace = await workspaceRootOrError(workspaceRoot, callId);
   if (workspace.error) {
     return {error: workspace.error};
@@ -325,11 +408,56 @@ export async function resolveWriteTarget(
   if (candidatePolicyError) {
     return {error: candidatePolicyError};
   }
-
-  const parentError = await ensureWriteParent(candidate, root, policy, callId);
-  if (parentError) {
-    return {error: parentError};
+  if (candidate === root) {
+    return {
+      error: writePathError(
+        callId,
+        root,
+        candidate,
+        "target_is_directory",
+        "The target is a directory",
+      ),
+    };
   }
+  if (requestedPath.endsWith(sep)) {
+    const existing = await statOrUndefined(candidate);
+    if (!existing?.isDirectory()) {
+      return {
+        error: writePathError(
+          callId,
+          root,
+          candidate,
+          "invalid_path",
+          "The path ends with a directory separator but is not a directory",
+        ),
+      };
+    }
+  }
+  return {
+    path: {
+      workspaceRoot: root,
+      candidate,
+      displayPath: displayPath(root, candidate),
+      errorPath: errorPath(root, candidate),
+    },
+  };
+}
+
+/**
+ * Inspects the resolved target. Runs after the parent chain exists so a missing
+ * target is reported as a creatable file rather than an error.
+ */
+export async function inspectMutateTarget(
+  path: ResolvedMutatePath,
+  policy: NativePathPolicy,
+  callId: string,
+): Promise<{target?: MutateTarget; error?: string}> {
+  const {
+    workspaceRoot: root,
+    candidate,
+    displayPath: candidateDisplayPath,
+    errorPath: candidateErrorPath,
+  } = path;
 
   let existing;
   try {
@@ -343,21 +471,20 @@ export async function resolveWriteTarget(
           root,
           candidate,
           code === "EACCES" || code === "EPERM" ? "path_forbidden" : "path_stat_failed",
-          "The write target could not be inspected",
+          "The target could not be inspected",
           code === "EACCES" || code === "EPERM" ? "forbidden" : "error",
         ),
       };
     }
   }
 
-  const safeCandidatePath = errorPath(root, candidate);
   if (!existing) {
     return {
       target: {
         workspaceRoot: root,
         realPath: candidate,
-        displayPath: displayPath(root, candidate),
-        errorPath: safeCandidatePath,
+        displayPath: candidateDisplayPath,
+        errorPath: candidateErrorPath,
         existed: false,
       },
     };
@@ -370,7 +497,7 @@ export async function resolveWriteTarget(
         root,
         candidate,
         "symlink_forbidden",
-        "The write target is a symlink",
+        "The target is a symlink",
         "forbidden",
       ),
     };
@@ -382,7 +509,7 @@ export async function resolveWriteTarget(
         root,
         candidate,
         "target_is_directory",
-        "The write target is a directory",
+        "The target is a directory",
       ),
     };
   }
@@ -393,7 +520,7 @@ export async function resolveWriteTarget(
         root,
         candidate,
         "unsupported_file_type",
-        "The write target is not a regular file",
+        "The target is not a regular file",
       ),
     };
   }
@@ -408,7 +535,7 @@ export async function resolveWriteTarget(
         root,
         candidate,
         "path_resolution_failed",
-        "The write target could not be resolved",
+        "The target could not be resolved",
       ),
     };
   }
@@ -419,7 +546,7 @@ export async function resolveWriteTarget(
         root,
         candidate,
         "symlink_forbidden",
-        "The write target is a symlink",
+        "The target is a symlink",
         "forbidden",
       ),
     };
@@ -433,9 +560,11 @@ export async function resolveWriteTarget(
       workspaceRoot: root,
       realPath: target,
       displayPath: displayPath(root, target),
-      errorPath: safeCandidatePath,
+      errorPath: candidateErrorPath,
       existed: true,
       mode: existing.mode & 0o7777,
+      size: existing.size,
+      identity: {device: existing.dev, inode: existing.ino},
     },
   };
 }

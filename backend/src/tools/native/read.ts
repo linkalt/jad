@@ -1,12 +1,18 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import {lstat, readdir, stat} from "node:fs/promises";
 import { join } from "node:path";
-import { TextDecoder } from "node:util";
 
 import type { NativeReadToolSettings } from "../../config.js";
 import type { JsonRecord } from "../../persistence.js";
 import { executionError, renderToolResult } from "../output.js";
-import {resolveExistingTarget} from "./path.js";
+import {
+  pathPolicyError,
+  readVerifiedRegularFile,
+  resolveExistingTarget,
+  sameFileIdentity,
+} from "./path.js";
 import type {ResolvedTarget} from "./path.js";
+import {decodeUtf8, normalizeEncoding, normalizeRangeType} from "./text.js";
+import type {ContentEncoding, RangeType} from "./text.js";
 import type { ToolDefinition, ToolExecutionContext } from "../types.js";
 
 export const NATIVE_READ_ID = "native.read";
@@ -27,18 +33,24 @@ export const nativeReadDefinition: ToolDefinition = {
       offset: {
         type: "integer",
         minimum: 0,
+        description:
+          "Start position: a 1-based line number, or a 0-based byte offset when rangeType is bytes. Values below the start mean the beginning. Defaults to the beginning.",
       },
       limit: {
         type: "integer",
         minimum: 1,
+        description: "Maximum lines or bytes to return. Defaults to the configured content limit.",
       },
       rangeType: {
         type: "string",
         enum: ["lines", "bytes"],
+        description: "Unit used by offset and limit. Defaults to lines.",
       },
       contentEncoding: {
         type: "string",
         enum: ["utf8", "base64"],
+        description:
+          "utf8 for text, base64 for binary content. Defaults to the encoding that decodes the content.",
       },
       includeContent: {
         type: "boolean",
@@ -47,29 +59,8 @@ export const nativeReadDefinition: ToolDefinition = {
     },
     required: ["path"],
     additionalProperties: false,
-    allOf: [
-      {
-        if: {
-          properties: {rangeType: {const: "lines"}},
-        },
-        then: {
-          properties: {offset: {type: "integer", minimum: 1}},
-        },
-      },
-      {
-        if: {
-          properties: {rangeType: {const: "bytes"}},
-        },
-        then: {
-          properties: {offset: {type: "integer", minimum: 0}},
-        },
-      },
-    ],
   },
 };
-
-type RangeType = "lines" | "bytes";
-type ContentEncoding = "utf8" | "base64";
 
 interface ReadArgs {
   path: string;
@@ -127,18 +118,6 @@ function lineEnding(data: Buffer): string | undefined {
   return endings.size === 1 ? [...endings][0] : "mixed";
 }
 
-function utf8Decoder(): TextDecoder {
-  return new TextDecoder("utf-8", {fatal: true});
-}
-
-function decodeUtf8(data: Buffer): string | undefined {
-  try {
-    return utf8Decoder().decode(data);
-  } catch {
-    return undefined;
-  }
-}
-
 function isContinuationByte(value: number | undefined): boolean {
   return value !== undefined && (value & 0xc0) === 0x80;
 }
@@ -176,12 +155,16 @@ function commonFileInformation(
   encoding: ContentEncoding,
   rangeType: RangeType,
   spans: LineSpan[],
+  encodingReason?: "invalid_utf8",
 ): Array<[string, unknown]> {
   return [
     ["path", target.displayPath],
     ["kind", "file"],
     ["size_bytes", data.length],
-    ["encoding", encoding === "utf8" ? "utf-8" : "base64"],
+    ["encoding", encoding],
+    ...(encodingReason
+      ? [["encoding_reason", encodingReason]] as Array<[string, unknown]>
+      : []),
     ...(lineEnding(data) ? [["line_ending", lineEnding(data)]] as Array<[string, unknown]> : []),
     ["total_line_count", spans.length],
     ["range_type", rangeType],
@@ -212,15 +195,25 @@ function renderFileRange(
   data: Buffer,
   args: ReadArgs,
   policy: NativeReadToolSettings,
+  encoding: ContentEncoding,
+  encodingReason?: "invalid_utf8",
 ): string {
-  const rangeType = args.rangeType ?? "lines";
-  const encoding = args.contentEncoding ?? "utf8";
+  const rangeType = normalizeRangeType(args.rangeType) ?? "lines";
   const limit = args.limit ?? policy.default_limit;
   const spans = lineSpans(data);
-  const information = commonFileInformation(target, data, encoding, rangeType, spans);
+  const information = commonFileInformation(
+    target,
+    data,
+    encoding,
+    rangeType,
+    spans,
+    encodingReason,
+  );
 
   if (rangeType === "lines") {
-    const offset = args.offset ?? 1;
+    const requestedOffset = args.offset ?? 1;
+    const offset = Math.max(1, requestedOffset);
+    const offsetAdjusted = offset !== requestedOffset;
     const offsetClamped = offset - 1 > spans.length;
     const startIndex = Math.min(offset - 1, spans.length);
     const requestedEnd = Math.min(startIndex + limit, spans.length);
@@ -257,7 +250,7 @@ function renderFileRange(
       return executionError(
         id,
         "unsupported_encoding",
-        "unsupported_encoding",
+        "binary_file",
         `Could not decode ${target.errorPath} as UTF-8`,
         [["path", target.errorPath]],
       );
@@ -268,7 +261,9 @@ function renderFileRange(
       ["returned_bytes", returnedBytes],
       ["next_offset", remaining ? endIndex + 1 : null],
       ["eof", !remaining],
-      ...(offsetClamped ? [["offset_clamped", true] as [string, unknown]] : []),
+      ...(offsetClamped || offsetAdjusted
+        ? [["offset_clamped", true] as [string, unknown]]
+        : []),
     );
     if (contentTruncated) {
       information.push(
@@ -296,7 +291,8 @@ function renderFileRange(
     });
   }
 
-  const offset = args.offset ?? 0;
+  const offset = Math.max(0, args.offset ?? 0);
+  const offsetAdjusted = offset !== (args.offset ?? 0);
   const offsetClamped = offset > data.length;
   const start = Math.min(offset, data.length);
   const requestedEnd = Math.min(start + limit, data.length);
@@ -312,7 +308,7 @@ function renderFileRange(
     return executionError(
       id,
       "unsupported_encoding",
-      "unsupported_encoding",
+      "binary_file",
       `Could not decode ${target.errorPath} as UTF-8`,
       [["path", target.errorPath]],
     );
@@ -324,7 +320,9 @@ function renderFileRange(
     ["returned_bytes", selected.length],
     ["next_offset", remaining ? range.nextOffset : null],
     ["eof", !remaining],
-    ...(offsetClamped ? [["offset_clamped", true] as [string, unknown]] : []),
+    ...(offsetClamped || offsetAdjusted
+      ? [["offset_clamped", true] as [string, unknown]]
+      : []),
   );
   if (range.adjusted) {
     information.push(
@@ -361,6 +359,7 @@ function renderFileRange(
 async function renderDirectory(
   id: string,
   target: ResolvedTarget,
+  policy: NativeReadToolSettings,
   limit: number,
   maxBytes: number,
 ): Promise<string> {
@@ -377,10 +376,15 @@ async function renderDirectory(
     );
   }
   entries.sort((left, right) => left.name.localeCompare(right.name));
-  const visible = entries.slice(0, limit);
+  // Filter before applying the result limit, otherwise denied names can both
+  // leak through truncation behavior and crowd allowed children out of a page.
+  const allowed = entries.filter(
+    (entry) => !pathPolicyError(join(target.realPath, entry.name), target.workspaceRoot, policy, id),
+  );
+  const visible = allowed.slice(0, limit);
   const entryLines: Array<[string, unknown]> = [];
   let usedBytes = 0;
-  let truncated = entries.length > visible.length;
+  let truncated = allowed.length > visible.length;
   for (const entry of visible) {
     const item: JsonRecord = {
       name: entry.name,
@@ -404,7 +408,7 @@ async function renderDirectory(
 
   return renderToolResult({
     id,
-    status: "is_directory",
+    status: "ok",
     summary: `Listed directory ${target.displayPath}`,
     information: [
       ["path", target.displayPath],
@@ -434,7 +438,7 @@ export async function executeNativeRead(
 
   let before;
   try {
-    before = await stat(target.realPath);
+    before = await lstat(target.realPath);
   } catch {
     return executionError(
       context.callId,
@@ -448,6 +452,7 @@ export async function executeNativeRead(
     return renderDirectory(
       context.callId,
       target,
+      context.policy,
       readArgs.limit ?? context.policy.default_limit,
       context.policy.max_bytes,
     );
@@ -466,21 +471,40 @@ export async function executeNativeRead(
     return renderFileMetadata(context.callId, target, before.size);
   }
 
-  let data: Buffer;
-  try {
-    data = await readFile(target.realPath);
-  } catch (error) {
+  // Bounded work: refuse to load a file far larger than what can be returned.
+  // Metadata-only reads are not affected.
+  if (before.size > context.policy.max_file_bytes) {
+    return executionError(
+      context.callId,
+      "blocked",
+      "size_limit",
+      "The file exceeds the configured read size limit",
+      [
+        ["path", target.errorPath],
+        ["bytes", before.size],
+        ["max_bytes", context.policy.max_file_bytes],
+        [
+          "suggestion",
+          "read metadata with includeContent false, or have the session raise tools.native.read.max_file_bytes",
+        ],
+      ],
+    );
+  }
+
+  const identity = {device: before.dev, inode: before.ino};
+  const verified = await readVerifiedRegularFile(target.realPath, identity);
+  if (!verified) {
     return executionError(
       context.callId,
       "error",
-      "read_failed",
-      `Could not read ${target.errorPath}`,
+      "changed_during_read",
+      `The file changed while it was being read`,
       [["path", target.errorPath]],
     );
   }
   let after;
   try {
-    after = await stat(target.realPath);
+    after = await lstat(target.realPath);
   } catch {
     return executionError(
       context.callId,
@@ -490,7 +514,7 @@ export async function executeNativeRead(
       [["path", target.errorPath]],
     );
   }
-  if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
+  if (!after.isFile() || !sameFileIdentity(after, identity)) {
     return executionError(
       context.callId,
       "error",
@@ -499,19 +523,40 @@ export async function executeNativeRead(
       [["path", target.errorPath]],
     );
   }
+  const data = verified.data;
 
-  if ((readArgs.contentEncoding ?? "utf8") === "utf8" && decodeUtf8(data) === undefined) {
+  // Default to the representation that decodes the content: UTF-8 text when it
+  // is valid, base64 when it is not. An explicit contentEncoding is honoured,
+  // and asking for utf8 on binary content stays an error with a suggestion.
+  const requestedEncoding = normalizeEncoding(readArgs.contentEncoding);
+  const text = decodeUtf8(data);
+  if (requestedEncoding === "utf8" && text === undefined) {
     return executionError(
       context.callId,
       "unsupported_encoding",
-      "unsupported_encoding",
+      "binary_file",
       `Could not decode ${target.errorPath} as UTF-8`,
-      [["path", target.errorPath]],
+      [
+        ["path", target.errorPath],
+        ["suggestion", "omit contentEncoding to receive the content as base64"],
+      ],
     );
   }
+  const encoding: ContentEncoding = requestedEncoding ?? (text === undefined ? "base64" : "utf8");
+  const encodingReason = requestedEncoding === undefined && encoding === "base64"
+    ? "invalid_utf8" as const
+    : undefined;
 
   try {
-    return renderFileRange(context.callId, target, data, readArgs, context.policy);
+    return renderFileRange(
+      context.callId,
+      target,
+      data,
+      readArgs,
+      context.policy,
+      encoding,
+      encodingReason,
+    );
   } catch {
     return executionError(
       context.callId,

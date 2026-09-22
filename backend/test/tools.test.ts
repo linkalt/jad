@@ -1,82 +1,21 @@
 import assert from "node:assert/strict";
-import {mkdtemp, readFile, readdir, rm, writeFile} from "node:fs/promises";
+import {mkdir, mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
 
 import type OpenAI from "openai";
 
-import {SessionConfigLoader} from "../src/config.js";
+import {DEFAULT_NATIVE_READ_MAX_FILE_BYTES, SessionConfigLoader} from "../src/config.js";
 import {AgentSession} from "../src/session.js";
 import {loadToolCatalog} from "../src/tools/index.js";
 import {nativeReadDefinition} from "../src/tools/native/read.js";
-import {nativeWriteDefinition} from "../src/tools/native/write.js";
-
-async function makeToolSession(): Promise<string> {
-  const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-tools-"));
-  await writeFile(
-    join(sessionDir, "model.json"),
-    JSON.stringify({model: "gpt-test"}),
-  );
-  await writeFile(
-    join(sessionDir, "read.json"),
-    JSON.stringify({schema_version: 1, tools: [nativeReadDefinition]}),
-  );
-  await writeFile(
-    join(sessionDir, "setting.json"),
-    JSON.stringify({
-      cwd: sessionDir,
-      tool_definition_paths: [join(sessionDir, "read.json")],
-      tools: {
-        native: {
-          read: {
-            max_bytes: 8,
-            default_limit: 250,
-          },
-        },
-      },
-    }),
-  );
-  return sessionDir;
-}
-
-async function makeWriteToolSession(): Promise<string> {
-  const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-write-tools-"));
-  await writeFile(
-    join(sessionDir, "model.json"),
-    JSON.stringify({model: "gpt-test"}),
-  );
-  await writeFile(
-    join(sessionDir, "write.json"),
-    JSON.stringify({schema_version: 1, tools: [nativeWriteDefinition]}),
-  );
-  await writeFile(
-    join(sessionDir, "setting.json"),
-    JSON.stringify({
-      cwd: sessionDir,
-      tool_definition_paths: [join(sessionDir, "write.json")],
-      tools: {
-        native: {
-          write: {
-            max_bytes: 1024,
-          },
-        },
-      },
-    }),
-  );
-  return sessionDir;
-}
-
-function outputText(value: unknown): string {
-  if (typeof value !== "string") {
-    throw new TypeError("expected tool output to be a string");
-  }
-  return value;
-}
-
-function firstLine(value: string): Record<string, unknown> {
-  return JSON.parse(value.split("\n", 1)[0]!) as Record<string, unknown>;
-}
+import {
+  firstLine,
+  makeReadToolSession as makeToolSession,
+  outputText,
+  refreshReadSession,
+} from "./tool-session.js";
 
 test("loads native read only when selected and exposes an OpenAI-compatible definition", async () => {
   const sessionDir = await makeToolSession();
@@ -103,6 +42,25 @@ test("loads native read only when selected and exposes an OpenAI-compatible defi
     );
     const disabledConfig = await new SessionConfigLoader(sessionDir).load();
     assert.deepEqual((await loadToolCatalog(disabledConfig)).definitions(), []);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("rejects a definition document that changes a native tool schema", async () => {
+  const sessionDir = await makeToolSession();
+  try {
+    const tampered = structuredClone(nativeReadDefinition);
+    const properties = tampered.inputSchema.properties as Record<string, unknown>;
+    (properties.path as Record<string, unknown>).minLength = 2;
+    await writeFile(
+      join(sessionDir, "read.json"),
+      JSON.stringify({schema_version: 1, tools: [tampered]}),
+    );
+    await assert.rejects(
+      loadToolCatalog(await new SessionConfigLoader(sessionDir).load()),
+      /native\.read inputSchema must exactly match the native tool schema/,
+    );
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
   }
@@ -213,177 +171,6 @@ test("executes a minimal read call, applies the byte policy, and separates error
   }
 });
 
-test("executes minimal writes, creates directories, and backs up replacements", async () => {
-  const sessionDir = await makeWriteToolSession();
-  try {
-    const config = await new SessionConfigLoader(sessionDir).load();
-    const catalog = await loadToolCatalog(config);
-    assert.deepEqual(catalog.definitions().map((definition) => definition.id), ["native.write"]);
-
-    const created = await catalog.executeFunctionCall(
-      {
-        type: "function_call",
-        call_id: "write-create",
-        name: "write",
-        arguments: JSON.stringify({
-          path: "nested/deeper/file.txt",
-          content: "created content\n",
-        }),
-      },
-      {workspaceRoot: sessionDir, sessionDir},
-    );
-    const createdOutput = outputText(created.output);
-    assert.equal(firstLine(createdOutput).status, "ok");
-    assert.match(createdOutput, /created: true/);
-    assert.equal(
-      await readFile(join(sessionDir, "nested/deeper/file.txt"), "utf8"),
-      "created content\n",
-    );
-
-    await writeFile(join(sessionDir, "replace.txt"), "old content\n", "utf8");
-    const replaced = await catalog.executeFunctionCall(
-      {
-        type: "function_call",
-        call_id: "write-replace",
-        name: "write",
-        arguments: JSON.stringify({path: "replace.txt", content: "new content\n"}),
-      },
-      {workspaceRoot: sessionDir, sessionDir},
-    );
-    const replacedOutput = outputText(replaced.output);
-    assert.equal(firstLine(replacedOutput).status, "ok");
-    const backupDisplayPath = replacedOutput
-      .split("\n")
-      .find((line) => line.startsWith("backup_path: "))
-      ?.slice("backup_path: ".length);
-    assert.ok(backupDisplayPath);
-    assert.equal(
-      await readFile(join(sessionDir, backupDisplayPath), "utf8"),
-      "old content\n",
-    );
-    assert.equal(await readFile(join(sessionDir, "replace.txt"), "utf8"), "new content\n");
-
-    const noBackup = await catalog.executeFunctionCall(
-      {
-        type: "function_call",
-        call_id: "write-no-backup",
-        name: "write",
-        arguments: JSON.stringify({path: "no-backup.txt", content: "content", backup: false}),
-      },
-      {workspaceRoot: sessionDir, sessionDir},
-    );
-    const noBackupOutput = outputText(noBackup.output);
-    assert.equal(firstLine(noBackupOutput).status, "ok");
-    assert.doesNotMatch(noBackupOutput, /backup_path:/);
-    assert.equal(
-      (await readdir(sessionDir)).some((entry) => entry.startsWith("no-backup.txt.bak-")),
-      false,
-    );
-
-    const binary = await catalog.executeFunctionCall(
-      {
-        type: "function_call",
-        call_id: "write-binary",
-        name: "write",
-        arguments: JSON.stringify({
-          path: "binary.dat",
-          content: "AP8=",
-          contentEncoding: "base64",
-        }),
-      },
-      {workspaceRoot: sessionDir, sessionDir},
-    );
-    assert.equal(firstLine(outputText(binary.output)).status, "ok");
-    assert.deepEqual(await readFile(join(sessionDir, "binary.dat")), Buffer.from([0, 255]));
-
-    const oversized = await catalog.executeFunctionCall(
-      {
-        type: "function_call",
-        call_id: "write-oversized",
-        name: "write",
-        arguments: JSON.stringify({path: "oversized.txt", content: "x".repeat(1025)}),
-      },
-      {workspaceRoot: sessionDir, sessionDir},
-    );
-    const oversizedOutput = outputText(oversized.output);
-    assert.equal(firstLine(oversizedOutput).status, "blocked");
-    assert.match(oversizedOutput, /error_code: size_limit/);
-
-    const schemaFailure = await catalog.executeFunctionCall(
-      {
-        type: "function_call",
-        call_id: "write-schema-error",
-        name: "write",
-        arguments: JSON.stringify({path: "missing-content.txt"}),
-      },
-      {workspaceRoot: sessionDir, sessionDir},
-    );
-    const schemaOutput = outputText(schemaFailure.output);
-    assert.equal(firstLine(schemaOutput).status, "invalid_input");
-    assert.match(schemaOutput, /missingProperty/);
-    assert.match(schemaOutput, /example_operation: \{"path":"example.txt","content":"\.\.\."\}/);
-  } finally {
-    await rm(sessionDir, {recursive: true, force: true});
-  }
-});
-
-test("applies native write allow and deny path policies", async () => {
-  const sessionDir = await makeWriteToolSession();
-  const externalRoot = await mkdtemp(join(tmpdir(), "agent-harness-write-policy-"));
-  const outsidePath = join(externalRoot, "nested", "outside.txt");
-  try {
-    const writeCall = (callId: string) => ({
-      type: "function_call",
-      call_id: callId,
-      name: "write",
-      arguments: JSON.stringify({path: outsidePath, content: "outside content\n"}),
-    });
-    const execute = async (paths: unknown[], callId: string) => {
-      await writeFile(
-        join(sessionDir, "setting.json"),
-        JSON.stringify({
-          cwd: sessionDir,
-          tool_definition_paths: [join(sessionDir, "write.json")],
-          tools: {
-            native: {
-              write: {
-                max_bytes: 65536,
-                paths,
-              },
-            },
-          },
-        }),
-      );
-      const config = await new SessionConfigLoader(sessionDir).load();
-      const catalog = await loadToolCatalog(config);
-      const result = await catalog.executeFunctionCall(
-        writeCall(callId),
-        {workspaceRoot: sessionDir, sessionDir},
-      );
-      return outputText(result.output);
-    };
-
-    const defaultDenied = await execute([], "write-policy-default-denied");
-    assert.equal(firstLine(defaultDenied).status, "forbidden");
-    assert.match(defaultDenied, /error_code: path_outside_workspace/);
-    assert.equal(await readFile(outsidePath, "utf8").catch(() => undefined), undefined);
-
-    const rootAllowed = await execute([{action: "allow", path: "/"}], "write-policy-allowed");
-    assert.equal(firstLine(rootAllowed).status, "ok");
-    assert.equal(await readFile(outsidePath, "utf8"), "outside content\n");
-
-    const denyWins = await execute([
-      {action: "allow", path: "/"},
-      {action: "deny", path: externalRoot},
-    ], "write-policy-denied");
-    assert.equal(firstLine(denyWins).status, "forbidden");
-    assert.match(denyWins, /error_code: path_denied/);
-  } finally {
-    await rm(sessionDir, {recursive: true, force: true});
-    await rm(externalRoot, {recursive: true, force: true});
-  }
-});
-
 test("applies native read allow and deny path policies", async () => {
   const sessionDir = await makeToolSession();
   const externalRoot = await mkdtemp(join(tmpdir(), "agent-harness-read-policy-"));
@@ -397,22 +184,11 @@ test("applies native read allow and deny path policies", async () => {
       arguments: JSON.stringify({path: outsidePath}),
     });
     const execute = async (paths: unknown[]) => {
-      await writeFile(
-        join(sessionDir, "setting.json"),
-        JSON.stringify({
-          cwd: sessionDir,
-          tool_definition_paths: [join(sessionDir, "read.json")],
-          tools: {
-            native: {
-              read: {
-                max_bytes: 65536,
-                default_limit: 250,
-                paths,
-              },
-            },
-          },
-        }),
-      );
+      await refreshReadSession(sessionDir, {
+        max_bytes: 65536,
+        default_limit: 250,
+        paths,
+      });
       const config = await new SessionConfigLoader(sessionDir).load();
       const catalog = await loadToolCatalog(config);
       const result = await catalog.executeFunctionCall(
@@ -638,6 +414,194 @@ test("enforces the configured and per-run hard tool-round limit", async () => {
       "call_read_1",
     );
     await session.close();
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+function readRunner(catalog: Awaited<ReturnType<typeof loadToolCatalog>>, sessionDir: string) {
+  return async (callId: string, args: Record<string, unknown>) =>
+    outputText(
+      (
+        await catalog.executeFunctionCall(
+          {
+            type: "function_call",
+            call_id: callId,
+            name: "read",
+            arguments: JSON.stringify(args),
+          },
+          {workspaceRoot: sessionDir, sessionDir},
+        )
+      ).output,
+    );
+}
+
+test("clamps a line offset below the start instead of rejecting it", async () => {
+  const sessionDir = await makeToolSession({max_bytes: 4096});
+  try {
+    await writeFile(join(sessionDir, "sample.txt"), "one\ntwo\nthree\n", "utf8");
+    const catalog = await loadToolCatalog(await new SessionConfigLoader(sessionDir).load());
+    const output = await readRunner(catalog, sessionDir)("read-offset-zero", {
+      path: "sample.txt",
+      offset: 0,
+    });
+    assert.equal(firstLine(output).status, "ok");
+    assert.match(output, /Read lines 1-3 from sample\.txt/);
+    assert.match(output, /offset_clamped: true/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("accepts near-miss enum spellings instead of rejecting them", async () => {
+  const sessionDir = await makeToolSession({max_bytes: 4096});
+  try {
+    await writeFile(join(sessionDir, "sample.txt"), "one\ntwo\n", "utf8");
+    const catalog = await loadToolCatalog(await new SessionConfigLoader(sessionDir).load());
+    const run = readRunner(catalog, sessionDir);
+
+    const dashed = await run("read-dashed-encoding", {
+      path: "sample.txt",
+      contentEncoding: "utf-8",
+    });
+    assert.equal(firstLine(dashed).status, "ok");
+    assert.match(dashed, /encoding: utf8/);
+    assert.match(dashed, /one\ntwo/);
+
+    const shouted = await run("read-shouted-range", {
+      path: "sample.txt",
+      rangeType: "LINES",
+      limit: 1,
+    });
+    assert.equal(firstLine(shouted).status, "ok");
+    assert.match(shouted, /range_type: lines/);
+    assert.match(shouted, /Read lines 1-1 from sample\.txt/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("chooses base64 for binary content and reports why", async () => {
+  const sessionDir = await makeToolSession({max_bytes: 4096});
+  try {
+    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe]);
+    await writeFile(join(sessionDir, "image.png"), binary);
+    const catalog = await loadToolCatalog(await new SessionConfigLoader(sessionDir).load());
+    const run = readRunner(catalog, sessionDir);
+
+    const automatic = await run("read-binary-default", {path: "image.png"});
+    assert.equal(firstLine(automatic).status, "ok");
+    assert.match(automatic, /encoding: base64/);
+    assert.match(automatic, /encoding_reason: invalid_utf8/);
+    assert.ok(automatic.includes(binary.toString("base64")));
+
+    const explicitBinary = await run("read-binary-explicit", {
+      path: "image.png",
+      contentEncoding: "base64",
+    });
+    assert.equal(firstLine(explicitBinary).status, "ok");
+    assert.doesNotMatch(explicitBinary, /encoding_reason:/);
+
+    const explicitText = await run("read-binary-as-text", {
+      path: "image.png",
+      contentEncoding: "utf8",
+    });
+    assert.equal(firstLine(explicitText).status, "unsupported_encoding");
+    assert.match(explicitText, /error_code: binary_file/);
+    assert.match(explicitText, /suggestion: omit contentEncoding/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("lists a directory as a normal successful read", async () => {
+  const sessionDir = await makeToolSession({max_bytes: 4096});
+  try {
+    await mkdir(join(sessionDir, "folder"));
+    await writeFile(join(sessionDir, "folder/a.txt"), "a\n", "utf8");
+    await writeFile(join(sessionDir, "folder/b.txt"), "bb\n", "utf8");
+    const catalog = await loadToolCatalog(await new SessionConfigLoader(sessionDir).load());
+    const output = await readRunner(catalog, sessionDir)("read-directory", {path: "folder"});
+    assert.equal(firstLine(output).status, "ok");
+    assert.match(output, /Listed directory folder/);
+    assert.match(output, /kind: directory/);
+    assert.match(output, /entry_count: 2/);
+    assert.match(output, /"name":"a\.txt","kind":"file","size_bytes":2/);
+    assert.doesNotMatch(output, /error_code/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("does not disclose denied children when listing a directory", async () => {
+  const sessionDir = await makeToolSession({
+    max_bytes: 4096,
+    default_limit: 1,
+  });
+  try {
+    await refreshReadSession(sessionDir, {
+      max_bytes: 4096,
+      default_limit: 1,
+      paths: [{action: "deny", path: join(sessionDir, "folder/a-secret.txt")}],
+    });
+    await mkdir(join(sessionDir, "folder"));
+    await writeFile(join(sessionDir, "folder/a-secret.txt"), "secret\n", "utf8");
+    await writeFile(join(sessionDir, "folder/b-visible.txt"), "visible\n", "utf8");
+    const catalog = await loadToolCatalog(await new SessionConfigLoader(sessionDir).load());
+    const output = await readRunner(catalog, sessionDir)("read-directory-policy", {path: "folder"});
+    assert.equal(firstLine(output).status, "ok");
+    assert.match(output, /"name":"b-visible\.txt"/);
+    assert.doesNotMatch(output, /a-secret\.txt/);
+    assert.match(output, /entry_count: 1/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("refuses to load a file beyond max_file_bytes but still reports metadata", async () => {
+  const sessionDir = await makeToolSession({max_bytes: 4096, max_file_bytes: 16});
+  try {
+    await writeFile(join(sessionDir, "big.txt"), "x".repeat(64), "utf8");
+    const catalog = await loadToolCatalog(await new SessionConfigLoader(sessionDir).load());
+    const run = readRunner(catalog, sessionDir);
+
+    const blocked = await run("read-too-big", {path: "big.txt"});
+    assert.equal(firstLine(blocked).status, "blocked");
+    assert.match(blocked, /error_code: size_limit/);
+    assert.match(blocked, /bytes: 64/);
+    assert.match(blocked, /max_bytes: 16/);
+    assert.match(blocked, /suggestion: read metadata with includeContent false/);
+
+    const metadata = await run("read-too-big-metadata", {
+      path: "big.txt",
+      includeContent: false,
+    });
+    assert.equal(firstLine(metadata).status, "ok");
+    assert.match(metadata, /metadata_only: true/);
+    assert.match(metadata, /size_bytes: 64/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("validates the read byte limits with configurable defaults", async () => {
+  const sessionDir = await makeToolSession();
+  try {
+    const config = await new SessionConfigLoader(sessionDir).load();
+    assert.equal(
+      config.settings.tools.native.read?.max_file_bytes,
+      DEFAULT_NATIVE_READ_MAX_FILE_BYTES,
+    );
+    for (const maxFileBytes of [0, 1.5, 1024 * 1024 * 1024 + 1]) {
+      await refreshReadSession(sessionDir, {max_file_bytes: maxFileBytes});
+      await assert.rejects(
+        new SessionConfigLoader(sessionDir).load(),
+        /tools\.native\.read\.max_file_bytes/,
+      );
+    }
+    await refreshReadSession(sessionDir, {max_file_bytes: 1024});
+    const limited = await new SessionConfigLoader(sessionDir).load();
+    assert.equal(limited.settings.tools.native.read?.max_file_bytes, 1024);
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
   }

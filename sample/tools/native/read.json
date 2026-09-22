@@ -16,19 +16,23 @@
           },
           "offset": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Start position: a 1-based line number, or a 0-based byte offset when rangeType is bytes. Values below the start mean the beginning. Defaults to the beginning."
           },
           "limit": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "description": "Maximum lines or bytes to return. Defaults to the configured content limit."
           },
           "rangeType": {
             "type": "string",
-            "enum": ["lines", "bytes"]
+            "enum": ["lines", "bytes"],
+            "description": "Unit used by offset and limit. Defaults to lines."
           },
           "contentEncoding": {
             "type": "string",
-            "enum": ["utf8", "base64"]
+            "enum": ["utf8", "base64"],
+            "description": "utf8 for text, base64 for binary content. Defaults to the encoding that decodes the content."
           },
           "includeContent": {
             "type": "boolean",
@@ -36,33 +40,7 @@
           }
         },
         "required": ["path"],
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "rangeType": {"const": "lines"}
-              }
-            },
-            "then": {
-              "properties": {
-                "offset": {"type": "integer", "minimum": 1}
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "rangeType": {"const": "bytes"}
-              }
-            },
-            "then": {
-              "properties": {
-                "offset": {"type": "integer", "minimum": 0}
-              }
-            }
-          }
-        ]
+        "additionalProperties": false
       }
     }
   ]
