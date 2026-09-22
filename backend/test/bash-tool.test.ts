@@ -291,6 +291,25 @@ test("cleans up background children when the command finishes", {skip: bashSkip}
   }
 });
 
+test("escalates after a completed command when a descendant ignores SIGTERM", {skip: bashSkip}, async () => {
+  const {sessionDir, run} = await openBashSession({kill_grace_ms: 200});
+  try {
+    const marker = join(sessionDir, "term-ignoring-descendant-marker");
+    const output = await run("bash-term-ignoring-descendant", {
+      // The descendant closes the inherited pipes, so the leader's close event
+      // cannot be used as proof that the whole process group has exited.
+      command:
+        "(trap '' TERM; sleep 1; touch term-ignoring-descendant-marker) </dev/null >/dev/null 2>&1 & echo started",
+    });
+    assert.equal(firstLine(output).status, "ok");
+    assert.match(output, /started/);
+    await delay(1500);
+    assert.equal(await exists(marker), false);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
 test("leaves background children alone with kill_process_group timeout_only", {skip: bashSkip}, async () => {
   const {sessionDir, run} = await openBashSession({
     kill_grace_ms: 200,

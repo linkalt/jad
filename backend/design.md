@@ -29,7 +29,7 @@ This document defines the first version of the response persistence protocol. Th
 
 ## 2. Core decision
 
-`messages.jsonl` stores one compact JSON event for each completed model response:
+`messages.jsonl` stores one compact JSON event for each committed model response:
 
 ```json
 {"type":"response.completed","response":{"id":"resp_123","status":"completed","model":"gpt-...","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}]}}
@@ -45,7 +45,7 @@ The following events are **not** written to `messages.jsonl`:
 - `response.output_item.done`;
 - other intermediate streaming events.
 
-Intermediate events are transport state. The committed `response.completed` event is the durable session state.
+Intermediate events are transport state. A provider `response.incomplete` event is also committed through the replay-compatible `response.completed` envelope, while preserving its `response.status` and `incomplete_details`; completed output items, including function calls, must not be discarded merely because the provider stopped at an output limit.
 
 ### 2.1 Input transcript decision
 
@@ -182,8 +182,9 @@ The loader rejects runner-owned request fields such as `input`, `instructions`, 
 4. append the input item to the configured transcript path, defaulting to `messages.jsonl`;
 5. reconstruct all prior input items and completed response output items from that same path;
 6. build a streaming request with `model`, `input`, `instructions`, model request options, and selected tools;
-7. persist the streamed response through the response adapter;
-8. execute returned function calls, append `function_call_output` items, and continue until a response has no tool calls.
+7. persist the streamed response through the response adapter, including provider `response.incomplete` terminal responses;
+8. execute returned function calls, append `function_call_output` items, and continue until a response has no tool calls;
+9. if execution is interrupted, the round limit is reached, or an older transcript contains an unanswered `function_call`, append an explicit error `function_call_output` before the next provider request. This prevents a committed function call from becoming an invalid provider history; missing results are not rerun automatically because a previous tool may already have had side effects.
 
 `setting.json` controls the hard limit with `max_tool_rounds` (default `8`, range `0..50000`). The initial provider request is not counted; each tool-execution continuation consumes one round. A final tool result receives its follow-up provider request before the limit is enforced. `AgentRunOptions.maxToolRounds` can override the session setting for one run. The same file controls persistence `durability` (`process`, `turn`, or `strict`) and `max_item_bytes`.
 

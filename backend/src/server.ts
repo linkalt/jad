@@ -282,6 +282,7 @@ function sessionSummary(
 
 class AgentHttpApplication {
   private readonly sessions = new Map<string, Promise<SessionHandle>>();
+  private readonly activeRunControllers = new Set<AbortController>();
   private readonly sessionRoots: Promise<SessionRoot[]>;
   private readonly sessionOptions: {
     client?: OpenAI;
@@ -387,7 +388,15 @@ class AgentHttpApplication {
     }
   }
 
+  /** Cancels foreground provider and tool work before server shutdown. */
+  public abortActiveRuns(reason = "server_shutdown"): void {
+    for (const controller of this.activeRunControllers) {
+      controller.abort(reason);
+    }
+  }
+
   public async close(): Promise<void> {
+    this.abortActiveRuns("application_close");
     const handles = await Promise.allSettled(this.sessions.values());
     await Promise.all(
       handles.flatMap((result) =>
@@ -549,15 +558,30 @@ class AgentHttpApplication {
     response.flushHeaders();
 
     let connected = true;
+    const turnId = `web-${randomUUID()}`;
     response.once("close", () => {
+      // Disconnecting a browser does not discard an accepted, persisted run.
       connected = false;
     });
+    const controller = new AbortController();
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        const reason = controller.signal.reason;
+        const detail = reason instanceof Error
+          ? `${reason.name}: ${reason.message}`
+          : String(reason ?? "unspecified");
+        console.warn(`[agent-run] aborted session=${id} turn=${turnId} reason=${detail}`);
+      },
+      {once: true},
+    );
+    this.activeRunControllers.add(controller);
 
     try {
-      const turnId = `web-${randomUUID()}`;
       const normalizedRun = new WebUiNormalizedRun(turnId);
       const result = await handle.session.run(body.input, {
         turnId,
+        signal: controller.signal,
         onEvent: (event) => {
           if (!connected) {
             return;
@@ -589,10 +613,16 @@ class AgentHttpApplication {
         response.end();
       }
     } catch (error) {
+      console.error(
+        `[agent-run] failed session=${id} turn=${turnId} connected=${connected} aborted=${controller.signal.aborted}: ${errorMessage(error)}`,
+        error,
+      );
       if (connected) {
         writeSse(response, "error", { message: errorMessage(error) });
         response.end();
       }
+    } finally {
+      this.activeRunControllers.delete(controller);
     }
   }
 }
@@ -606,6 +636,7 @@ export function createAgentServer(options: AgentServerOptions = {}): RunningAgen
   return {
     server,
     async close(): Promise<void> {
+      application.abortActiveRuns("server_close");
       await new Promise<void>((resolveClose, reject) => {
         if (!server.listening) {
           resolveClose();

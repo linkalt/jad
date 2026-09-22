@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.process",
+      "source": "native",
+      "name": "process",
+      "description": "Start and manage a long-running shell process. Call with command to start, id to inspect status and recent logs, or no arguments to list session processes. Use action wait to wait briefly for one process and stop to terminate one managed process.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {"type": "string", "enum": ["start", "status", "list", "wait", "stop"], "description": "Usually inferred from command or id."},
+          "command": {"type": "string", "minLength": 1, "description": "Shell command to start."},
+          "cwd": {"type": "string", "minLength": 1, "description": "Working directory for start. Defaults to the workspace."},
+          "id": {"type": "string", "minLength": 1, "description": "Id returned by a prior start."},
+          "filter": {"type": "string", "enum": ["running", "exited", "stopped", "failed", "lost"], "description": "State filter for list."},
+          "timeout_ms": {"type": "integer", "minimum": 1, "description": "Maximum time wait blocks; clamped to session policy."}
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

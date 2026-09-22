@@ -375,6 +375,50 @@ test("adapts a Responses-compatible stream into staging and commit", async () =>
   }
 });
 
+test("commits completed output items when a provider response is incomplete", async () => {
+  const sessionDir = await makeSession();
+  try {
+    const functionCall = {
+      type: "function_call",
+      call_id: "call_incomplete",
+      name: "read",
+      arguments: JSON.stringify({path: "sample.txt"}),
+    };
+    async function* events(): AsyncGenerator<unknown> {
+      yield {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: functionCall,
+      };
+      yield {
+        type: "response.incomplete",
+        response: {
+          id: "resp_incomplete",
+          object: "response",
+          status: "incomplete",
+          incomplete_details: {reason: "max_output_tokens"},
+          output: [functionCall],
+        },
+      };
+    }
+
+    const store = await SessionResponseStore.open(sessionDir);
+    const result = await persistResponseStream(store, events(), {turnId: "turn-incomplete"});
+    assert.equal(result.event.type, "response.completed");
+    assert.equal(result.event.response.status, "incomplete");
+    assert.deepEqual(result.event.response.incomplete_details, {reason: "max_output_tokens"});
+
+    const history = [];
+    for await (const item of store.readInputItems()) {
+      history.push(item);
+    }
+    assert.deepEqual(history, [functionCall]);
+    await store.close();
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("loads model and session settings with normalized paths and hashes", async () => {
   const sessionDir = await makeSession();
   try {

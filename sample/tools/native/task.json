@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.task",
+      "source": "native",
+      "name": "task",
+      "description": "Maintain the session task plan. Omit action when title, id, or filters make the intent clear; tasks start as todo unless status is in-progress.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["list", "get", "add", "update", "done", "delete"],
+            "description": "Optional when the supplied fields make the action clear."
+          },
+          "id": {"type": "string", "minLength": 1, "description": "Task id returned by add."},
+          "title": {"type": "string", "minLength": 1, "description": "Task title for add or update."},
+          "status": {"type": "string", "enum": ["todo", "in-progress", "blocked", "done", "all"], "description": "Task state; all is a list filter only."},
+          "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"], "description": "Optional task priority or list filter. Defaults to normal when adding."},
+          "tags": {"type": "array", "items": {"type": "string"}, "description": "Task tags. An empty array clears tags on update."},
+          "documents": {"type": "array", "items": {"type": "string"}, "description": "Planning-document paths. An empty array clears links on update."},
+          "tag": {"type": "string", "minLength": 1, "description": "Optional tag filter for list."},
+          "limit": {"type": "integer", "minimum": 1, "description": "Optional list limit; defaults to the session policy."}
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}

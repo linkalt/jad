@@ -15,6 +15,8 @@ import {
 } from "./output.js";
 import {nativeToolSpecs} from "./native/registry.js";
 import type {NativeToolSpec} from "./native/registry.js";
+import type {ProcessManager} from "./native/process-manager.js";
+import type {TaskStore} from "./native/task-store.js";
 import type {LoadedTool, ToolDefinition, ToolExecutionContext} from "./types.js";
 
 const definitionDocumentSchema: JsonRecord = {
@@ -107,8 +109,9 @@ function buildNativeTool(
   definition: ToolDefinition,
   config: LoadedSessionConfig,
   validate: ValidateFunction<unknown>,
+  resources: {processManager?: ProcessManager; taskStore?: TaskStore},
 ): LoadedTool {
-  const built = spec.build(definition, config, validate);
+  const built = spec.build(definition, config, validate, resources);
   if ("error" in built) {
     throw configError(config.paths.setting_path, built.error);
   }
@@ -242,6 +245,7 @@ export class ToolCatalog {
 
 export async function loadToolCatalog(
   config: LoadedSessionConfig,
+  resources: {processManager?: ProcessManager; taskStore?: TaskStore} = {},
 ): Promise<ToolCatalog> {
   const configuredSpecs = nativeToolSpecs().filter((spec) => spec.configured(config));
   if (configuredSpecs.length === 0) {
@@ -287,7 +291,7 @@ export async function loadToolCatalog(
     }
     validateNativeDefinition(definition, config, spec);
     loadedTools.push(
-      buildNativeTool(spec, spec.definition, config, ajv.compile(spec.definition.inputSchema)),
+      buildNativeTool(spec, spec.definition, config, ajv.compile(spec.definition.inputSchema), resources),
     );
   }
   return new ToolCatalog(loadedTools);

@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json --pretty false",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "server": "npm run build && node dist/src/server.js",
-    "test": "npm run build && node --test dist/test/persistence.test.js dist/test/server.test.js dist/test/http-debug.test.js dist/test/tools.test.js dist/test/write-tool.test.js dist/test/edit-tool.test.js dist/test/grep-tool.test.js dist/test/bash-tool.test.js dist/test/glob-tool.test.js dist/test/definitions.test.js"
+    "test": "npm run build && node --test dist/test/persistence.test.js dist/test/server.test.js dist/test/http-debug.test.js dist/test/tools.test.js dist/test/write-tool.test.js dist/test/edit-tool.test.js dist/test/grep-tool.test.js dist/test/bash-tool.test.js dist/test/glob-tool.test.js dist/test/process-tool.test.js dist/test/task-tool.test.js dist/test/definitions.test.js"
   },
   "dependencies": {
     "ajv": "^8.20.0",

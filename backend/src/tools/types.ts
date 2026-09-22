@@ -17,6 +17,8 @@ export interface ToolExecutionContext {
   callId: string;
   workspaceRoot: string;
   sessionDir: string;
+  /** Cancels foreground work when its owning run is shutting down. */
+  signal?: AbortSignal;
 }
 
 export interface LoadedTool {

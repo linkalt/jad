@@ -62,6 +62,8 @@ export interface RipgrepSearch {
   paths: string[];
   cwd: string;
   timeoutMs: number;
+  /** Cancels this foreground search and its process group. */
+  signal?: AbortSignal;
   /** Matches returned overall; enforced while parsing. */
   maxMatches: number;
   /** Matches per file (ripgrep --max-count). */
@@ -76,6 +78,7 @@ const MAX_STDERR_BYTES = 8 * 1024;
 /** Internal cleanup bounds; the configured search timeout remains the user-facing limit. */
 const KILL_GRACE_MS = 250;
 const KILL_DEADLINE_MS = 1000;
+const DRAIN_AFTER_EXIT_MS = 500;
 
 interface JsonLine {
   type?: unknown;
@@ -175,6 +178,7 @@ export function runRipgrep(search: RipgrepSearch): Promise<RipgrepResult> {
     let settled = false;
     let timedOut = false;
     let stopped = false;
+    let exitCode: number | null = null;
     const timers: NodeJS.Timeout[] = [];
 
     const child = spawn(search.binary, argv, {
@@ -185,10 +189,19 @@ export function runRipgrep(search: RipgrepSearch): Promise<RipgrepResult> {
       windowsHide: true,
     });
 
-    const later = (callback: () => void, delay: number): void => {
+    const later = (
+      callback: () => void,
+      delay: number,
+      cancelOnFinish = true,
+      keepEventLoopAlive = false,
+    ): void => {
       const timer = setTimeout(callback, delay);
-      timer.unref();
-      timers.push(timer);
+      if (!keepEventLoopAlive) {
+        timer.unref();
+      }
+      if (cancelOnFinish) {
+        timers.push(timer);
+      }
     };
 
     const signalProcess = (signal: NodeJS.Signals): void => {
@@ -215,6 +228,7 @@ export function runRipgrep(search: RipgrepSearch): Promise<RipgrepResult> {
       for (const timer of timers) {
         clearTimeout(timer);
       }
+      search.signal?.removeEventListener("abort", abort);
       if (force) {
         child.stdout?.destroy();
         child.stderr?.destroy();
@@ -254,14 +268,32 @@ export function runRipgrep(search: RipgrepSearch): Promise<RipgrepResult> {
       }, KILL_GRACE_MS);
     };
 
+    function abort(): void {
+      stop("timeout");
+    }
+
     const timer = setTimeout(() => {
       timedOut = true;
       stop("timeout");
     }, search.timeoutMs);
     timers.push(timer);
+    search.signal?.addEventListener("abort", abort, {once: true});
+    if (search.signal?.aborted) {
+      abort();
+    }
 
     child.on("error", (error: Error) => finish(null, error));
-    child.on("close", (code: number | null) => finish(code));
+    child.on("exit", (code: number | null) => {
+      exitCode = code;
+      if (!stopped) {
+        // ripgrep is foreground work too. A wrapper can leave a descendant
+        // holding no pipes, so TERM/SIGKILL must outlive this leader's close.
+        signalProcess("SIGTERM");
+        later(() => signalProcess("SIGKILL"), KILL_GRACE_MS, false, true);
+      }
+      later(() => finish(code, undefined, true), DRAIN_AFTER_EXIT_MS);
+    });
+    child.on("close", (code: number | null) => finish(code ?? exitCode));
     child.stderr?.on("data", (chunk: Buffer | string) => {
       if (stderr.length < MAX_STDERR_BYTES) {
         stderr += chunk.toString();

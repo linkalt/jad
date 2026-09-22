@@ -16,6 +16,8 @@ import {
 export interface PersistResponseStreamOptions {
   turnId?: string;
   onEvent?: (event: JsonRecord) => void | Promise<void>;
+  /** Cancels the provider request and streaming response. */
+  signal?: AbortSignal;
 }
 
 export interface PersistedResponse extends CommitResult {
@@ -34,7 +36,21 @@ function asRecord(value: unknown, description: string): JsonRecord {
 }
 
 function isTerminalFailureType(type: unknown): boolean {
-  return type === "response.failed" || type === "response.incomplete" || type === "error";
+  return type === "response.failed" || type === "error";
+}
+
+function completedEventFromTerminal(event: JsonRecord): ResponseCompletedEvent | undefined {
+  if (event.type !== "response.completed" && event.type !== "response.incomplete") {
+    return undefined;
+  }
+  return {
+    // The transcript currently replays response output items from the durable
+    // response.completed envelope. Preserve an incomplete response's status and
+    // incomplete_details inside response while using that replay-compatible
+    // envelope, so completed function calls are not discarded.
+    type: "response.completed",
+    response: asRecord(event.response, `${String(event.type)}.response`),
+  };
 }
 
 /**
@@ -70,11 +86,17 @@ export async function persistResponseStream(
         continue;
       }
 
-      if (type === "response.completed") {
-        const completedEvent: ResponseCompletedEvent = {
-          type: "response.completed",
-          response: asRecord(event.response, "response.completed.response"),
-        };
+      const completedEvent = completedEventFromTerminal(event);
+      if (completedEvent) {
+        if (type === "response.incomplete") {
+          const incompleteDetails = completedEvent.response.incomplete_details;
+          const reason = isRecord(incompleteDetails) && typeof incompleteDetails.reason === "string"
+            ? incompleteDetails.reason
+            : "unspecified";
+          console.warn(
+            `[responses] provider response incomplete id=${String(completedEvent.response.id ?? "unknown")} reason=${reason}; preserving staged output`,
+          );
+        }
         const commit = await turn.commit(completedEvent);
         return { ...commit, event: completedEvent };
       }
@@ -107,6 +129,8 @@ export async function persistOpenAIResponse(
   params: ResponseCreateParamsStreaming,
   options: PersistResponseStreamOptions = {},
 ): Promise<PersistedResponse> {
-  const stream = await client.responses.create(params);
+  const stream = await client.responses.create(params, {
+    ...(options.signal ? {signal: options.signal} : {}),
+  });
   return persistResponseStream(store, stream as AsyncIterable<ResponseStreamEvent>, options);
 }

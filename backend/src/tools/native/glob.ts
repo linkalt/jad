@@ -258,7 +258,10 @@ export async function executeNativeGlob(
     env: process.env,
     timeoutMs: policy.timeout_ms,
     killGraceMs: GLOB_KILL_GRACE_MS,
-    killProcessGroupWhenDone: false,
+    // Listing is foreground work: also remove descendants that inherited a
+    // pipe and would otherwise survive after ripgrep exits.
+    killProcessGroupWhenDone: true,
+    signal: context.signal,
     output: {
       // A listing is read from its start, so the head window is the whole budget
       // and the tail window stays empty.

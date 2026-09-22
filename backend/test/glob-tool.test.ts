@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {execFileSync} from "node:child_process";
-import {mkdir, rm, symlink, writeFile} from "node:fs/promises";
+import {access, chmod, mkdir, rm, symlink, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
@@ -40,6 +40,19 @@ function gitSkip(): false | string {
 }
 
 type GlobRunner = (callId: string, args: Record<string, unknown>) => Promise<string>;
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function openGlobSession(options: NativeGlobSessionOptions = {}, repository = false) {
   const sessionDir = await makeGlobToolSession(options);
@@ -119,6 +132,39 @@ test("splits NUL-delimited ripgrep output without changing valid filenames", () 
   );
   // Truncated output may end mid-path, so the final fragment is dropped.
   assert.deepEqual(parseListedFiles("a.ts\u0000b/c", true), ["a.ts"]);
+});
+
+test("reaps a glob wrapper's TERM-ignoring descendant after normal exit", async () => {
+  const sessionDir = await makeGlobToolSession({binary: join(tmpdir(), "unavailable")});
+  try {
+    const binary = join(sessionDir, "fake-rg");
+    const marker = join(sessionDir, "orphan-marker");
+    await writeFile(
+      binary,
+      "#!/bin/sh\n(trap '' TERM; touch cleanup-ready; sleep 3; touch orphan-marker) </dev/null >/dev/null 2>&1 &\nwhile [ ! -f cleanup-ready ]; do :; done\nexit 0\n",
+    );
+    await chmod(binary, 0o700);
+    await refreshGlobSession(sessionDir, {binary});
+    const catalog = await loadToolCatalog(await new SessionConfigLoader(sessionDir).load());
+    const output = outputText(
+      (
+        await catalog.executeFunctionCall(
+          {
+            type: "function_call",
+            call_id: "glob-cleanup",
+            name: "glob",
+            arguments: JSON.stringify({}),
+          },
+          {workspaceRoot: sessionDir, sessionDir},
+        )
+      ).output,
+    );
+    assert.equal(firstLine(output).status, "ok");
+    await delay(2500);
+    assert.equal(await exists(marker), false);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
 });
 
 test("lists files matching a pattern at any depth", {skip: ripgrepSkip}, async () => {

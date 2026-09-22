@@ -10,6 +10,8 @@ import {nativeGlobDefinition} from "../src/tools/native/glob.js";
 import {nativeGrepDefinition} from "../src/tools/native/grep.js";
 import {nativeReadDefinition} from "../src/tools/native/read.js";
 import {nativeWriteDefinition} from "../src/tools/native/write.js";
+import {nativeProcessDefinition} from "../src/tools/native/process.js";
+import {nativeTaskDefinition} from "../src/tools/native/task.js";
 
 const sampleDirectory = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -32,6 +34,8 @@ test("shipped definition documents match the code definitions", async () => {
     ["grep.json", nativeGrepDefinition],
     ["bash.json", nativeBashDefinition],
     ["glob.json", nativeGlobDefinition],
+    ["process.json", nativeProcessDefinition],
+    ["task.json", nativeTaskDefinition],
   ] as const;
   for (const [file, definition] of definitions) {
     const document = JSON.parse(

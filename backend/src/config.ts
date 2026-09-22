@@ -167,6 +167,43 @@ export interface NativeBashToolSettings extends NativePathPolicy {
   env_deny: string[];
 }
 
+export interface NativeTaskToolSettings extends JsonRecord {
+  max_tasks: number;
+  list_limit: number;
+  max_list_limit: number;
+  max_title_chars: number;
+  max_tags: number;
+  max_tag_chars: number;
+  max_documents: number;
+  max_document_chars: number;
+  max_storage_bytes: number;
+  max_list_bytes: number;
+  /** Resolved task-plan file, relative to cwd when configured relatively. */
+  storage_path: string;
+}
+
+export interface NativeProcessToolSettings extends NativePathPolicy {
+  shell: string;
+  login_shell: boolean;
+  kill_grace_ms: number;
+  max_running: number;
+  max_completed: number;
+  retention_days: number;
+  wait_timeout_ms: number;
+  max_wait_timeout_ms: number;
+  /** Bounded stdout excerpt returned by status-like calls. */
+  stdout: NativeBashStreamBudget;
+  /** Bounded stderr excerpt returned by status-like calls. */
+  stderr: NativeBashStreamBudget;
+  log_cap_bytes: number;
+  max_line_chars: number;
+  strip_ansi: boolean;
+  env: Record<string, string>;
+  env_deny: string[];
+  /** Resolved managed-process directory, relative to cwd when configured relatively. */
+  storage_dir: string;
+}
+
 export interface NativeToolSettings extends JsonRecord {
   read?: NativeReadToolSettings;
   write?: NativeWriteToolSettings;
@@ -174,6 +211,8 @@ export interface NativeToolSettings extends JsonRecord {
   grep?: NativeGrepToolSettings;
   bash?: NativeBashToolSettings;
   glob?: NativeGlobToolSettings;
+  process?: NativeProcessToolSettings;
+  task?: NativeTaskToolSettings;
 }
 
 export interface ToolSettings extends JsonRecord {
@@ -435,6 +474,23 @@ export const DEFAULT_NATIVE_BASH_SPILL_RETENTION_DAYS = 14;
 export const DEFAULT_NATIVE_BASH_SPILL_PATH = "{cwd}/.bash-output/bash-{call_id}.{stream}.log";
 export const DEFAULT_NATIVE_BASH_MAX_LINE_CHARS = 2000;
 export const DEFAULT_NATIVE_BASH_STRIP_ANSI = true;
+export const DEFAULT_NATIVE_PROCESS_STORAGE_DIR = ".processes";
+export const DEFAULT_NATIVE_TASK_STORAGE_PATH = ".tasks.json";
+export const DEFAULT_NATIVE_PROCESS_MAX_RUNNING = 8;
+export const DEFAULT_NATIVE_PROCESS_WAIT_TIMEOUT_MS = 10_000;
+export const DEFAULT_NATIVE_PROCESS_MAX_WAIT_TIMEOUT_MS = 120_000;
+export const DEFAULT_NATIVE_PROCESS_LOG_CAP_BYTES = 64 * 1024 * 1024;
+export const DEFAULT_NATIVE_PROCESS_MAX_COMPLETED = 100;
+export const DEFAULT_NATIVE_TASK_MAX_TASKS = 1000;
+export const DEFAULT_NATIVE_TASK_LIST_LIMIT = 100;
+export const DEFAULT_NATIVE_TASK_MAX_LIST_LIMIT = 500;
+export const DEFAULT_NATIVE_TASK_MAX_TITLE_CHARS = 500;
+export const DEFAULT_NATIVE_TASK_MAX_TAGS = 32;
+export const DEFAULT_NATIVE_TASK_MAX_TAG_CHARS = 50;
+export const DEFAULT_NATIVE_TASK_MAX_DOCUMENTS = 32;
+export const DEFAULT_NATIVE_TASK_MAX_DOCUMENT_CHARS = 1024;
+export const DEFAULT_NATIVE_TASK_MAX_STORAGE_BYTES = 1024 * 1024;
+export const DEFAULT_NATIVE_TASK_MAX_LIST_BYTES = 64 * 1024;
 /** Keeps colour, pagers, and credential prompts out of captured output. */
 export const DEFAULT_NATIVE_BASH_ENV: Record<string, string> = {
   NO_COLOR: "1",
@@ -451,6 +507,13 @@ const MAX_NATIVE_BASH_SPILL_RETENTION_DAYS = 3650;
 const MAX_NATIVE_WRITE_BACKUP_MAX_COUNT = 1000;
 const MAX_NATIVE_WRITE_BACKUP_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const MAX_NATIVE_TOOL_BYTES = 10 * 1024 * 1024;
+const MAX_NATIVE_TASKS = 100_000;
+const MAX_NATIVE_TASK_LIST_LIMIT = 10_000;
+const MAX_NATIVE_TASK_TITLE_CHARS = 10_000;
+const MAX_NATIVE_TASK_TAGS = 1000;
+const MAX_NATIVE_TASK_TAG_CHARS = 1000;
+const MAX_NATIVE_TASK_DOCUMENTS = 1000;
+const MAX_NATIVE_TASK_DOCUMENT_CHARS = 16_384;
 
 function normalizePersistence(
   value: unknown,
@@ -569,6 +632,16 @@ function normalizeToolDefinitionPaths(
       ? resolve(configuredPath)
       : resolve(globalJadRoot, configuredPath);
   });
+}
+
+function resolveToolStoragePath(
+  value: unknown,
+  fallback: string,
+  cwd: string,
+  path: string,
+): string {
+  const configured = requiredString(value ?? fallback, "storage path", path);
+  return isAbsolute(configured) ? resolve(configured) : resolve(cwd, configured);
 }
 
 function normalizeBashStreamBudget(
@@ -749,7 +822,7 @@ function normalizeNativePaths(
   value: unknown,
   path: string,
   globalJadRoot: string,
-  toolName: "read" | "write" | "edit" | "grep" | "bash" | "glob",
+  toolName: "read" | "write" | "edit" | "grep" | "bash" | "glob" | "process",
 ): NativePathRule[] {
   if (value === undefined) {
     return [];
@@ -1379,6 +1452,151 @@ async function normalizeTools(
     };
   }
 
+  const taskValue = nativeValue.task;
+  let task: NativeTaskToolSettings | undefined;
+  if (taskValue !== undefined) {
+    if (!isRecord(taskValue)) {
+      throw new ConfigError(`${path}: tools.native.task must be an object`);
+    }
+    const positiveInteger = (field: string, fallback: number, maximum: number): number => {
+      const value = taskValue[field] ?? fallback;
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > maximum) {
+        throw new ConfigError(`${path}: tools.native.task.${field} must be a safe integer between 1 and ${maximum}`);
+      }
+      return value;
+    };
+    const storagePath = resolveToolStoragePath(
+      taskValue.storage_path,
+      DEFAULT_NATIVE_TASK_STORAGE_PATH,
+      cwd,
+      `${path}: tools.native.task.storage_path`,
+    );
+    task = {
+      ...taskValue,
+      max_tasks: positiveInteger("max_tasks", DEFAULT_NATIVE_TASK_MAX_TASKS, MAX_NATIVE_TASKS),
+      list_limit: positiveInteger("list_limit", DEFAULT_NATIVE_TASK_LIST_LIMIT, MAX_NATIVE_TASK_LIST_LIMIT),
+      max_list_limit: positiveInteger("max_list_limit", DEFAULT_NATIVE_TASK_MAX_LIST_LIMIT, MAX_NATIVE_TASK_LIST_LIMIT),
+      max_title_chars: positiveInteger("max_title_chars", DEFAULT_NATIVE_TASK_MAX_TITLE_CHARS, MAX_NATIVE_TASK_TITLE_CHARS),
+      max_tags: positiveInteger("max_tags", DEFAULT_NATIVE_TASK_MAX_TAGS, MAX_NATIVE_TASK_TAGS),
+      max_tag_chars: positiveInteger("max_tag_chars", DEFAULT_NATIVE_TASK_MAX_TAG_CHARS, MAX_NATIVE_TASK_TAG_CHARS),
+      max_documents: positiveInteger("max_documents", DEFAULT_NATIVE_TASK_MAX_DOCUMENTS, MAX_NATIVE_TASK_DOCUMENTS),
+      max_document_chars: positiveInteger("max_document_chars", DEFAULT_NATIVE_TASK_MAX_DOCUMENT_CHARS, MAX_NATIVE_TASK_DOCUMENT_CHARS),
+      max_storage_bytes: positiveInteger("max_storage_bytes", DEFAULT_NATIVE_TASK_MAX_STORAGE_BYTES, MAX_NATIVE_TOOL_BYTES),
+      max_list_bytes: positiveInteger("max_list_bytes", DEFAULT_NATIVE_TASK_MAX_LIST_BYTES, MAX_NATIVE_TOOL_BYTES),
+      storage_path: storagePath,
+    };
+    if (task.list_limit > task.max_list_limit) {
+      throw new ConfigError(`${path}: tools.native.task.list_limit must not exceed max_list_limit`);
+    }
+  }
+
+  const processValue = nativeValue.process;
+  let processTool: NativeProcessToolSettings | undefined;
+  if (processValue !== undefined) {
+    if (!isRecord(processValue)) {
+      throw new ConfigError(`${path}: tools.native.process must be an object`);
+    }
+    const positiveInteger = (field: string, fallback: number, maximum: number): number => {
+      const value = processValue[field] ?? fallback;
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > maximum) {
+        throw new ConfigError(`${path}: tools.native.process.${field} must be a safe integer between 1 and ${maximum}`);
+      }
+      return value;
+    };
+    const shell = processValue.shell ?? DEFAULT_NATIVE_BASH_SHELL;
+    if (typeof shell !== "string" || shell.trim().length === 0) {
+      throw new ConfigError(`${path}: tools.native.process.shell must be a non-empty string`);
+    }
+    const loginShell = processValue.login_shell ?? DEFAULT_NATIVE_BASH_LOGIN_SHELL;
+    if (typeof loginShell !== "boolean") {
+      throw new ConfigError(`${path}: tools.native.process.login_shell must be a boolean`);
+    }
+    const killGraceMs = processValue.kill_grace_ms ?? DEFAULT_NATIVE_BASH_KILL_GRACE_MS;
+    if (typeof killGraceMs !== "number" || !Number.isSafeInteger(killGraceMs) || killGraceMs < 0 || killGraceMs > MAX_NATIVE_BASH_KILL_GRACE_MS) {
+      throw new ConfigError(`${path}: tools.native.process.kill_grace_ms must be a safe integer between 0 and ${MAX_NATIVE_BASH_KILL_GRACE_MS}`);
+    }
+    if (processValue.status_log_bytes !== undefined && (processValue.stdout !== undefined || processValue.stderr !== undefined)) {
+      throw new ConfigError(`${path}: tools.native.process.status_log_bytes cannot be combined with stdout or stderr budgets`);
+    }
+    const legacyStatusLogBytes = processValue.status_log_bytes === undefined
+      ? undefined
+      : positiveInteger("status_log_bytes", 1, MAX_NATIVE_TOOL_BYTES);
+    const stdout = legacyStatusLogBytes === undefined
+      ? normalizeBashStreamBudget(processValue.stdout, bash?.stdout ?? DEFAULT_NATIVE_BASH_STDOUT_BUDGET, `${path}: tools.native.process.stdout`)
+      : {head_bytes: 0, tail_bytes: legacyStatusLogBytes};
+    const stderr = legacyStatusLogBytes === undefined
+      ? normalizeBashStreamBudget(processValue.stderr, bash?.stderr ?? DEFAULT_NATIVE_BASH_STDERR_BUDGET, `${path}: tools.native.process.stderr`)
+      : {head_bytes: 0, tail_bytes: legacyStatusLogBytes};
+    const statusOutputBytes = stdout.head_bytes + stdout.tail_bytes + stderr.head_bytes + stderr.tail_bytes;
+    if (statusOutputBytes > MAX_NATIVE_TOOL_BYTES) {
+      throw new ConfigError(`${path}: tools.native.process stdout and stderr budgets total ${statusOutputBytes} bytes, exceeding ${MAX_NATIVE_TOOL_BYTES}`);
+    }
+    const logCapBytes = positiveInteger("log_cap_bytes", DEFAULT_NATIVE_PROCESS_LOG_CAP_BYTES, 1024 * 1024 * 1024);
+    if (Math.max(stdout.head_bytes + stdout.tail_bytes, stderr.head_bytes + stderr.tail_bytes) > logCapBytes) {
+      throw new ConfigError(`${path}: tools.native.process stream budgets must not exceed log_cap_bytes`);
+    }
+    const maxLineChars = positiveInteger("max_line_chars", DEFAULT_NATIVE_BASH_MAX_LINE_CHARS, MAX_NATIVE_BASH_LINE_CHARS);
+    if (maxLineChars < 20) {
+      throw new ConfigError(`${path}: tools.native.process.max_line_chars must be at least 20`);
+    }
+    const stripAnsi = processValue.strip_ansi ?? DEFAULT_NATIVE_BASH_STRIP_ANSI;
+    if (typeof stripAnsi !== "boolean") {
+      throw new ConfigError(`${path}: tools.native.process.strip_ansi must be a boolean`);
+    }
+    const envValue = processValue.env ?? {};
+    if (!isRecord(envValue)) {
+      throw new ConfigError(`${path}: tools.native.process.env must be an object`);
+    }
+    const env: Record<string, string> = {...DEFAULT_NATIVE_BASH_ENV};
+    for (const [name, value] of Object.entries(envValue)) {
+      if (!ENVIRONMENT_NAME_PATTERN.test(name) || typeof value !== "string") {
+        throw new ConfigError(`${path}: tools.native.process.env entries must be valid string environment variables`);
+      }
+      env[name] = value;
+    }
+    const envDenyValue = processValue.env_deny ?? [];
+    if (!Array.isArray(envDenyValue) || envDenyValue.some((value) => typeof value !== "string" || !ENVIRONMENT_NAME_PATTERN.test(value))) {
+      throw new ConfigError(`${path}: tools.native.process.env_deny must contain environment variable names`);
+    }
+    const storageDir = resolveToolStoragePath(
+      processValue.storage_dir,
+      DEFAULT_NATIVE_PROCESS_STORAGE_DIR,
+      cwd,
+      `${path}: tools.native.process.storage_dir`,
+    );
+    processTool = {
+      ...processValue,
+      shell: shell.trim(),
+      login_shell: loginShell,
+      kill_grace_ms: killGraceMs,
+      max_running: positiveInteger("max_running", DEFAULT_NATIVE_PROCESS_MAX_RUNNING, 1024),
+      max_completed: positiveInteger("max_completed", DEFAULT_NATIVE_PROCESS_MAX_COMPLETED, 100_000),
+      retention_days: (() => {
+        const value = processValue.retention_days ?? DEFAULT_NATIVE_BASH_SPILL_RETENTION_DAYS;
+        if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > MAX_NATIVE_BASH_SPILL_RETENTION_DAYS) {
+          throw new ConfigError(`${path}: tools.native.process.retention_days must be a safe integer between 0 and ${MAX_NATIVE_BASH_SPILL_RETENTION_DAYS}`);
+        }
+        return value;
+      })(),
+      wait_timeout_ms: positiveInteger("wait_timeout_ms", DEFAULT_NATIVE_PROCESS_WAIT_TIMEOUT_MS, MAX_NATIVE_BASH_MAX_TIMEOUT_MS),
+      max_wait_timeout_ms: positiveInteger("max_wait_timeout_ms", DEFAULT_NATIVE_PROCESS_MAX_WAIT_TIMEOUT_MS, MAX_NATIVE_BASH_MAX_TIMEOUT_MS),
+      stdout,
+      stderr,
+      log_cap_bytes: logCapBytes,
+      max_line_chars: maxLineChars,
+      strip_ansi: stripAnsi,
+      env,
+      env_deny: [...envDenyValue] as string[],
+      storage_dir: storageDir,
+      paths: processValue.paths === undefined
+        ? (bash?.paths ?? write?.paths ?? [])
+        : normalizeNativePaths(processValue.paths, path, globalJadRoot, "process"),
+    };
+    if (processTool.max_wait_timeout_ms < processTool.wait_timeout_ms) {
+      throw new ConfigError(`${path}: tools.native.process.max_wait_timeout_ms must be greater than or equal to wait_timeout_ms`);
+    }
+  }
+
   const globValue = nativeValue.glob;
   let glob: NativeGlobToolSettings | undefined;
   if (globValue !== undefined) {
@@ -1467,6 +1685,8 @@ async function normalizeTools(
       ...(grep ? {grep} : {}),
       ...(bash ? {bash} : {}),
       ...(glob ? {glob} : {}),
+      ...(processTool ? {process: processTool} : {}),
+      ...(task ? {task} : {}),
     },
     mcp: mcpValue,
   } as ToolSettings;
@@ -1481,6 +1701,9 @@ function normalizeStoragePaths(
     throw new ConfigError(`${path}: paths must be a JSON object`);
   }
   const paths = value ?? {};
+  if ((paths as JsonRecord).processes !== undefined || (paths as JsonRecord).tasks !== undefined) {
+    throw new ConfigError(`${path}: paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_path`);
+  }
   const pathValue = (field: string, fallback: string): string => {
     const configured = (paths as JsonRecord)[field] ?? fallback;
     return resolve(

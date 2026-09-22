@@ -38,7 +38,11 @@
       "properties": {
         "durability": {
           "type": "string",
-          "enum": ["process", "turn", "strict"],
+          "enum": [
+            "process",
+            "turn",
+            "strict"
+          ],
           "default": "turn"
         },
         "max_item_bytes": {
@@ -121,11 +125,17 @@
                   "description": "Allow/deny path rules. Relative paths resolve from the global JAD root; absolute paths are used as-is. Paths inside cwd are allowed by default; paths outside cwd require an allow rule.",
                   "items": {
                     "type": "object",
-                    "required": ["action", "path"],
+                    "required": [
+                      "action",
+                      "path"
+                    ],
                     "properties": {
                       "action": {
                         "type": "string",
-                        "enum": ["allow", "deny"]
+                        "enum": [
+                          "allow",
+                          "deny"
+                        ]
                       },
                       "path": {
                         "type": "string",
@@ -164,7 +174,10 @@
                   "description": "Kept backups of one file may use this many bytes; 0 disables the size limit."
                 },
                 "backup_dir": {
-                  "type": ["string", "null"],
+                  "type": [
+                    "string",
+                    "null"
+                  ],
                   "description": "Directory that collects the backups of every replaced file: an absolute path, or a path relative to the session cwd. Defaults to the session's backups directory. Relative paths resolve from cwd, not from the global JAD root. null keeps each backup beside its own file."
                 },
                 "fsync": {
@@ -177,11 +190,17 @@
                   "description": "Allow/deny path rules. Relative paths resolve from the global JAD root; absolute paths are used as-is. Paths inside cwd are allowed by default; paths outside cwd require an allow rule.",
                   "items": {
                     "type": "object",
-                    "required": ["action", "path"],
+                    "required": [
+                      "action",
+                      "path"
+                    ],
                     "properties": {
                       "action": {
                         "type": "string",
-                        "enum": ["allow", "deny"]
+                        "enum": [
+                          "allow",
+                          "deny"
+                        ]
                       },
                       "path": {
                         "type": "string",
@@ -219,7 +238,10 @@
                   "description": "Kept backups of one file may use this many bytes; 0 disables the size limit. Defaults to the tools.native.write setting."
                 },
                 "backup_dir": {
-                  "type": ["string", "null"],
+                  "type": [
+                    "string",
+                    "null"
+                  ],
                   "description": "Directory that collects the backups of every replaced file: an absolute path, or a path relative to the session cwd. Defaults to the tools.native.write setting (the session's backups directory). null keeps each backup beside its own file."
                 },
                 "fsync": {
@@ -231,11 +253,17 @@
                   "description": "Allow/deny path rules. Defaults to the tools.native.write rules.",
                   "items": {
                     "type": "object",
-                    "required": ["action", "path"],
+                    "required": [
+                      "action",
+                      "path"
+                    ],
                     "properties": {
                       "action": {
                         "type": "string",
-                        "enum": ["allow", "deny"]
+                        "enum": [
+                          "allow",
+                          "deny"
+                        ]
                       },
                       "path": {
                         "type": "string",
@@ -306,11 +334,17 @@
                   "description": "Allow/deny path rules. Defaults to the tools.native.read rules.",
                   "items": {
                     "type": "object",
-                    "required": ["action", "path"],
+                    "required": [
+                      "action",
+                      "path"
+                    ],
                     "properties": {
                       "action": {
                         "type": "string",
-                        "enum": ["allow", "deny"]
+                        "enum": [
+                          "allow",
+                          "deny"
+                        ]
                       },
                       "path": {
                         "type": "string",
@@ -362,7 +396,10 @@
                 },
                 "kill_process_group": {
                   "type": "string",
-                  "enum": ["always", "timeout_only"],
+                  "enum": [
+                    "always",
+                    "timeout_only"
+                  ],
                   "default": "always",
                   "description": "Signal leftover descendants when a command finishes, or only on timeout."
                 },
@@ -427,7 +464,10 @@
                     },
                     "keep": {
                       "type": "string",
-                      "enum": ["always", "truncated_only"],
+                      "enum": [
+                        "always",
+                        "truncated_only"
+                      ],
                       "default": "truncated_only",
                       "description": "Keep every spill file, or only files for output the model did not see."
                     },
@@ -485,24 +525,35 @@
                   "type": "object",
                   "default": {},
                   "description": "Environment additions or overrides applied to every command, merged over the defaults (NO_COLOR, TERM, git and pager settings).",
-                  "additionalProperties": {"type": "string"}
+                  "additionalProperties": {
+                    "type": "string"
+                  }
                 },
                 "env_deny": {
                   "type": "array",
                   "default": [],
                   "description": "Environment variables removed before the command runs; the harness credential variable is always removed.",
-                  "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                  }
                 },
                 "paths": {
                   "type": "array",
                   "description": "Allow/deny path rules for the working directory. Defaults to the tools.native.write rules.",
                   "items": {
                     "type": "object",
-                    "required": ["action", "path"],
+                    "required": [
+                      "action",
+                      "path"
+                    ],
                     "properties": {
                       "action": {
                         "type": "string",
-                        "enum": ["allow", "deny"]
+                        "enum": [
+                          "allow",
+                          "deny"
+                        ]
                       },
                       "path": {
                         "type": "string",
@@ -564,11 +615,17 @@
                   "description": "Allow/deny path rules for the searched directory. Defaults to the tools.native.read rules.",
                   "items": {
                     "type": "object",
-                    "required": ["action", "path"],
+                    "required": [
+                      "action",
+                      "path"
+                    ],
                     "properties": {
                       "action": {
                         "type": "string",
-                        "enum": ["allow", "deny"]
+                        "enum": [
+                          "allow",
+                          "deny"
+                        ]
                       },
                       "path": {
                         "type": "string",
@@ -578,6 +635,216 @@
                     "additionalProperties": true
                   },
                   "default": []
+                }
+              },
+              "additionalProperties": true
+            },
+            "process": {
+              "type": "object",
+              "description": "Long-running shell process management. Processes are session-owned and stopped on orderly backend shutdown.",
+              "properties": {
+                "shell": {
+                  "type": "string",
+                  "pattern": "\\S",
+                  "default": "/bin/bash"
+                },
+                "login_shell": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "kill_grace_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 60000,
+                  "default": 2000
+                },
+                "max_running": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1024,
+                  "default": 8
+                },
+                "wait_timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600000,
+                  "default": 10000
+                },
+                "max_wait_timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600000,
+                  "default": 120000
+                },
+                "status_log_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "description": "Deprecated compatibility setting. It supplies a tail-only budget for both streams; do not combine with stdout or stderr."
+                },
+                "log_cap_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1073741824,
+                  "default": 67108864
+                },
+                "max_line_chars": {
+                  "type": "integer",
+                  "minimum": 20,
+                  "maximum": 8000,
+                  "default": 2000
+                },
+                "strip_ansi": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "env": {
+                  "type": "object",
+                  "default": {},
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "env_deny": {
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                  }
+                },
+                "paths": {
+                  "type": "array",
+                  "default": []
+                },
+                "max_completed": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100000,
+                  "default": 100
+                },
+                "retention_days": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 3650,
+                  "default": 14
+                },
+                "stdout": {
+                  "type": "object",
+                  "description": "Bounded stdout excerpt for status, wait, and stop. Defaults to the bash stdout budget.",
+                  "properties": {
+                    "head_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10485760,
+                      "default": 16384
+                    },
+                    "tail_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10485760,
+                      "default": 32768
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "stderr": {
+                  "type": "object",
+                  "description": "Bounded stderr excerpt for status, wait, and stop. Defaults to the bash stderr budget.",
+                  "properties": {
+                    "head_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10485760,
+                      "default": 4096
+                    },
+                    "tail_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10485760,
+                      "default": 12288
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "storage_dir": {
+                  "type": "string",
+                  "pattern": "\\S",
+                  "default": ".processes",
+                  "description": "Managed-process manifests and full logs. Relative values resolve from setting.cwd; absolute paths are used as-is."
+                }
+              },
+              "additionalProperties": true
+            },
+            "task": {
+              "type": "object",
+              "description": "Persistent session task-plan policy. The task tool is exposed only when configured and its definition manifest is supplied.",
+              "properties": {
+                "max_tasks": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100000,
+                  "default": 1000
+                },
+                "list_limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000,
+                  "default": 100
+                },
+                "max_list_limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000,
+                  "default": 500
+                },
+                "max_title_chars": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000,
+                  "default": 500
+                },
+                "max_tags": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "default": 32
+                },
+                "max_tag_chars": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "default": 50
+                },
+                "max_documents": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "default": 32
+                },
+                "max_document_chars": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 16384,
+                  "default": 1024
+                },
+                "max_storage_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 1048576
+                },
+                "max_list_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 65536
+                },
+                "storage_path": {
+                  "type": "string",
+                  "pattern": "\\S",
+                  "default": ".tasks.json",
+                  "description": "Persistent task-plan file. Relative values resolve from setting.cwd; absolute paths are used as-is."
                 }
               },
               "additionalProperties": true

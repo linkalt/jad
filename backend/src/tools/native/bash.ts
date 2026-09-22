@@ -310,6 +310,7 @@ export async function executeNativeBash(
     timeoutMs,
     killGraceMs: policy.kill_grace_ms,
     killProcessGroupWhenDone: policy.kill_process_group === "always",
+    signal: context.signal,
     output: {
       stdout: toStreamLimits(policy.stdout),
       stderr: toStreamLimits(policy.stderr),

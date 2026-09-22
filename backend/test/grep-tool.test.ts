@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import {execFileSync} from "node:child_process";
-import {mkdir, mkdtemp, rm, writeFile} from "node:fs/promises";
+import {access, chmod, mkdir, mkdtemp, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
 
 import {SessionConfigLoader} from "../src/config.js";
 import {loadToolCatalog} from "../src/tools/index.js";
+import {runRipgrep} from "../src/tools/native/ripgrep.js";
 import {
   firstLine,
   informationFields,
@@ -36,6 +37,19 @@ const gitAvailable = ((): boolean => {
 
 type GrepRunner = (callId: string, args: Record<string, unknown>) => Promise<string>;
 
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function openGrepSession(options: NativeGrepSessionOptions = {}) {
   const sessionDir = await makeGrepToolSession(options);
   const catalog = await loadToolCatalog(await new SessionConfigLoader(sessionDir).load());
@@ -63,6 +77,37 @@ async function writeTree(sessionDir: string): Promise<void> {
   await writeFile(join(sessionDir, "src/sub/c.ts"), "TODO again\n", "utf8");
   await writeFile(join(sessionDir, "src/notes.md"), "TODO in markdown\n", "utf8");
 }
+
+test("reaps a ripgrep wrapper's TERM-ignoring descendant after normal exit", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-harness-ripgrep-cleanup-"));
+  try {
+    const binary = join(directory, "fake-rg");
+    const marker = join(directory, "orphan-marker");
+    await writeFile(
+      binary,
+      "#!/bin/sh\n(trap '' TERM; sleep 1; touch orphan-marker) </dev/null >/dev/null 2>&1 &\nexit 1\n",
+    );
+    await chmod(binary, 0o700);
+    const result = await runRipgrep({
+      binary,
+      flags: [],
+      pattern: "unused",
+      paths: ["."],
+      cwd: directory,
+      timeoutMs: 2000,
+      maxMatches: 1,
+      maxMatchesPerFile: 1,
+      maxFileBytes: 1024,
+      maxBytes: 1024,
+      maxLineChars: 80,
+    });
+    assert.equal(result.failure, undefined);
+    await delay(1500);
+    assert.equal(await exists(marker), false);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
 
 test("finds matches with the smallest call and groups them by file", {skip: ripgrepSkip}, async () => {
   const {sessionDir, run} = await openGrepSession();

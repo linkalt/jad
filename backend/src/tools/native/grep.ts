@@ -224,6 +224,7 @@ export async function executeNativeGrep(
     paths: [root.displayPath],
     cwd: context.workspaceRoot,
     timeoutMs: policy.timeout_ms,
+    signal: context.signal,
     maxMatches: policy.max_results,
     maxMatchesPerFile: policy.max_matches_per_file,
     maxFileBytes: policy.max_file_bytes,

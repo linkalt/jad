@@ -18,6 +18,10 @@ import {executeNativeEdit, NATIVE_EDIT_ID, nativeEditDefinition} from "./edit.js
 import {executeNativeGlob, NATIVE_GLOB_ID, nativeGlobDefinition} from "./glob.js";
 import {executeNativeGrep, NATIVE_GREP_ID, nativeGrepDefinition} from "./grep.js";
 import {executeNativeRead, NATIVE_READ_ID, nativeReadDefinition} from "./read.js";
+import {executeNativeProcess, NATIVE_PROCESS_ID, nativeProcessDefinition, normalizeProcessArguments} from "./process.js";
+import {ProcessManager} from "./process-manager.js";
+import {executeNativeTask, NATIVE_TASK_ID, nativeTaskDefinition, normalizeTaskArguments} from "./task.js";
+import {TaskStore} from "./task-store.js";
 import {normalizeEncoding, normalizeRangeType} from "./text.js";
 import {executeNativeWrite, NATIVE_WRITE_ID, nativeWriteDefinition} from "./write.js";
 
@@ -40,6 +44,7 @@ export interface NativeToolSpec {
     definition: ToolDefinition,
     config: LoadedSessionConfig,
     validate: ValidateFunction<unknown>,
+    resources?: {processManager?: ProcessManager; taskStore?: TaskStore},
   ): {tool: LoadedTool} | {error: string};
 }
 
@@ -162,7 +167,60 @@ function grepSpec(): NativeToolSpec {
 }
 
 export function nativeToolSpecs(): NativeToolSpec[] {
-  return [readSpec(), writeSpec(), editSpec(), grepSpec(), bashSpec(), globSpec()];
+  return [readSpec(), writeSpec(), editSpec(), grepSpec(), bashSpec(), globSpec(), processSpec(), taskSpec()];
+}
+
+function taskSpec(): NativeToolSpec {
+  return {
+    id: NATIVE_TASK_ID,
+    settingName: "task",
+    definition: nativeTaskDefinition,
+    required: [],
+    exampleOperation: {title: "Plan the next change"},
+    normalizeArguments: normalizeTaskArguments,
+    configured: (config) => config.settings.tools.native.task !== undefined,
+    build: (definition, config, validate, resources) => {
+      const policy = config.settings.tools.native.task;
+      if (!policy) return {error: `tool ${definition.id} is not exposed in tools.native`};
+      const store = resources?.taskStore ?? new TaskStore(policy.storage_path);
+      return {
+        tool: {
+          definition,
+          validate,
+          execute: (args, context) => executeNativeTask(args, {...context, policy, store}),
+        },
+      };
+    },
+  };
+}
+
+function processSpec(): NativeToolSpec {
+  return {
+    id: NATIVE_PROCESS_ID,
+    settingName: "process",
+    definition: nativeProcessDefinition,
+    required: [],
+    exampleOperation: {command: "npm run dev"},
+    normalizeArguments: normalizeProcessArguments,
+    configured: (config) => config.settings.tools.native.process !== undefined,
+    build: (definition, config, validate, resources) => {
+      const policy = config.settings.tools.native.process;
+      if (!policy) return {error: `tool ${definition.id} is not exposed in tools.native`};
+      const manager = resources?.processManager ?? new ProcessManager(policy.storage_dir);
+      return {
+        tool: {
+          definition,
+          validate,
+          execute: (args, context) => executeNativeProcess(args, {
+            ...context,
+            policy,
+            manager,
+            apiKeyEnv: config.model.api_key_env,
+          }),
+        },
+      };
+    },
+  };
 }
 
 function globSpec(): NativeToolSpec {

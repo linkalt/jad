@@ -219,6 +219,134 @@ test("applies native read allow and deny path policies", async () => {
   }
 });
 
+test("persists cancellation outputs for every interrupted function call", async () => {
+  const sessionDir = await makeToolSession();
+  try {
+    const controller = new AbortController();
+    const calls = [
+      {
+        type: "function_call",
+        call_id: "call_cancel_1",
+        name: "read",
+        arguments: JSON.stringify({path: "missing-1.txt"}),
+      },
+      {
+        type: "function_call",
+        call_id: "call_cancel_2",
+        name: "read",
+        arguments: JSON.stringify({path: "missing-2.txt"}),
+      },
+    ];
+    const fakeClient = {
+      responses: {
+        create: async () => {
+          controller.abort();
+          return (async function* () {
+            for (const [output_index, item] of calls.entries()) {
+              yield {type: "response.output_item.done", output_index, item};
+            }
+            yield {
+              type: "response.completed",
+              response: {
+                id: "response-cancelled",
+                object: "response",
+                status: "completed",
+                model: "gpt-test",
+                output: calls,
+              },
+            };
+          })();
+        },
+      },
+    } as unknown as OpenAI;
+
+    const session = await AgentSession.open(sessionDir, {client: fakeClient});
+    await assert.rejects(
+      () => session.run("cancel this", {turnId: "cancelled-tool-round", signal: controller.signal}),
+      /agent run was cancelled/,
+    );
+
+    const messages = (await readFile(join(sessionDir, "messages.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const outputs = messages.filter((item) => item.type === "function_call_output");
+    assert.deepEqual(outputs.map((item) => item.call_id), ["call_cancel_1", "call_cancel_2"]);
+    assert.match(String(outputs[0]?.output), /tool_execution_cancelled/);
+    assert.match(String(outputs[1]?.output), /tool_execution_cancelled/);
+    await session.close();
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("repairs a persisted function call before the next provider request", async () => {
+  const sessionDir = await makeToolSession();
+  try {
+    const functionCall = {
+      type: "function_call",
+      call_id: "call_recover",
+      name: "read",
+      arguments: JSON.stringify({path: "sample.txt"}),
+    };
+    await writeFile(
+      join(sessionDir, "messages.jsonl"),
+      `${JSON.stringify({type: "message", role: "user", content: [{type: "input_text", text: "old"}]})}\n` +
+        `${JSON.stringify({
+          type: "response.completed",
+          response: {
+            id: "response-orphaned",
+            object: "response",
+            status: "completed",
+            model: "gpt-test",
+            output: [functionCall],
+          },
+        })}\n`,
+    );
+    const requests: Record<string, unknown>[] = [];
+    const finalMessage = {
+      type: "message",
+      role: "assistant",
+      content: [{type: "output_text", text: "RECOVERED"}],
+    };
+    const fakeClient = {
+      responses: {
+        create: async (request: unknown) => {
+          requests.push(request as Record<string, unknown>);
+          return (async function* () {
+            yield {type: "response.output_item.done", output_index: 0, item: finalMessage};
+            yield {
+              type: "response.completed",
+              response: {
+                id: "response-recovered",
+                object: "response",
+                status: "completed",
+                model: "gpt-test",
+                output: [finalMessage],
+              },
+            };
+          })();
+        },
+      },
+    } as unknown as OpenAI;
+
+    const session = await AgentSession.open(sessionDir, {client: fakeClient});
+    await session.run("continue", {turnId: "recover-orphaned-call"});
+    const input = requests[0]?.input as Array<Record<string, unknown>>;
+    assert.deepEqual(input.map((item) => item.type), [
+      "message",
+      "function_call",
+      "function_call_output",
+      "message",
+    ]);
+    assert.equal(input[2]?.call_id, "call_recover");
+    assert.match(String(input[2]?.output), /tool_result_missing/);
+    await session.close();
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
 test("executes native read calls between Responses API turns", async () => {
   const sessionDir = await makeToolSession();
   try {
@@ -245,12 +373,14 @@ test("executes native read calls between Responses API turns", async () => {
               };
           return (async function* () {
             yield {type: "response.output_item.done", output_index: 0, item: output};
+            const incomplete = responseNumber === 1;
             yield {
-              type: "response.completed",
+              type: incomplete ? "response.incomplete" : "response.completed",
               response: {
                 id: `response-${responseNumber}`,
                 object: "response",
-                status: "completed",
+                status: incomplete ? "incomplete" : "completed",
+                ...(incomplete ? {incomplete_details: {reason: "max_output_tokens"}} : {}),
                 model: "gpt-test",
                 output: [output],
               },
@@ -413,6 +543,13 @@ test("enforces the configured and per-run hard tool-round limit", async () => {
       (requests[1]?.input as Array<Record<string, unknown>>).at(-1)?.call_id,
       "call_read_1",
     );
+    const messages = (await readFile(join(sessionDir, "messages.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const outputs = messages.filter((item) => item.type === "function_call_output");
+    assert.deepEqual(outputs.map((item) => item.call_id), ["call_read_1", "call_read_2"]);
+    assert.match(String(outputs[1]?.output), /tool_round_limit/);
     await session.close();
   } finally {
     await rm(sessionDir, {recursive: true, force: true});

@@ -94,6 +94,8 @@ export interface ChildProcessRequest {
   /** Signal leftover descendants when the command finishes normally. */
   killProcessGroupWhenDone: boolean;
   output: OutputLimits;
+  /** Cancels this foreground child process and its process group. */
+  signal?: AbortSignal;
   /** Complete streams written to disk while they are read. */
   spill?: {
     stdout?: SpillTarget;
@@ -105,6 +107,8 @@ export interface ChildProcessResult extends RenderedOutput {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
+  /** The owning run was cancelled before this process completed. */
+  aborted?: boolean;
   durationMs: number;
   /** Which signal ended the command because of the timeout, when applicable. */
   termination?: "sigterm" | "sigkill";
@@ -419,17 +423,17 @@ class StreamCollector {
    * stream, and the bytes between them become the marker, which counts both the
    * bytes dropped from the windows and the bytes the windows never kept.
    */
-  public render(maxLineChars: number): StreamOutput {
+  public render(maxLineChars: number, producedBytes = this.producedBytes): StreamOutput {
     const headText = this.head.map((segment) => segment.text).join("");
     const tailText = this.tail.map((segment) => segment.text).join("");
     const shownBytes = this.headBytes + this.tailBytes;
-    const omittedBytes = Math.max(this.producedBytes - shownBytes, 0);
+    const omittedBytes = Math.max(producedBytes - shownBytes, 0);
     const body = omittedBytes === 0
       ? `${headText}${tailText}`
       : `${headText}${headText.length > 0 && !headText.endsWith("\n") ? "\n" : ""}${omittedMarker(omittedBytes)}${tailText.length > 0 && !tailText.startsWith("\n") ? "\n" : ""}${tailText}`;
     const text = cutLongLinesWithinBudget(body, maxLineChars);
     return {
-      producedBytes: this.producedBytes,
+      producedBytes,
       shownBytes,
       omittedBytes,
       truncated: omittedBytes > 0,
@@ -466,9 +470,9 @@ export class OutputCollector {
     return this.streams.stdout.binary || this.streams.stderr.binary;
   }
 
-  public render(): RenderedOutput {
-    const stdout = this.streams.stdout.render(this.limits.maxLineChars);
-    const stderr = this.streams.stderr.render(this.limits.maxLineChars);
+  public render(producedBytes: Partial<Record<ChildStream, number>> = {}): RenderedOutput {
+    const stdout = this.streams.stdout.render(this.limits.maxLineChars, producedBytes.stdout);
+    const stderr = this.streams.stderr.render(this.limits.maxLineChars, producedBytes.stderr);
     const labeled = stdout.text.length > 0 && stderr.text.length > 0;
     const sections: string[] = [];
     if (stdout.text.length > 0) {
@@ -603,6 +607,7 @@ export function runChildProcess(request: ChildProcessRequest): Promise<ChildProc
     const startedAt = Date.now();
     let settled = false;
     let timedOut = false;
+    let aborted = false;
     let termination: "sigterm" | "sigkill" | undefined;
     let leftRunning = false;
     let exitCode: number | null = null;
@@ -636,10 +641,19 @@ export function runChildProcess(request: ChildProcessRequest): Promise<ChildProc
       }
     };
 
-    const later = (callback: () => void, delay: number): void => {
+    const later = (
+      callback: () => void,
+      delay: number,
+      cancelOnFinish = true,
+      keepEventLoopAlive = false,
+    ): void => {
       const timer = setTimeout(callback, delay);
-      timer.unref();
-      timers.push(timer);
+      if (!keepEventLoopAlive) {
+        timer.unref();
+      }
+      if (cancelOnFinish) {
+        timers.push(timer);
+      }
     };
 
     const finish = (): void => {
@@ -650,6 +664,7 @@ export function runChildProcess(request: ChildProcessRequest): Promise<ChildProc
       for (const timer of timers) {
         clearTimeout(timer);
       }
+      request.signal?.removeEventListener("abort", abort);
       collector.end();
       const rendered = collector.render();
       const durationMs = Date.now() - startedAt;
@@ -670,6 +685,7 @@ export function runChildProcess(request: ChildProcessRequest): Promise<ChildProc
           exitCode,
           signal: exitSignal,
           timedOut,
+          ...(aborted ? {aborted} : {}),
           durationMs,
           ...(termination ? {termination} : {}),
           ...(leftRunning ? {leftRunning} : {}),
@@ -686,8 +702,12 @@ export function runChildProcess(request: ChildProcessRequest): Promise<ChildProc
       });
     };
 
-    const timeout = (): void => {
-      timedOut = true;
+    const terminate = (reason: "timeout" | "abort"): void => {
+      if (timedOut || aborted) {
+        return;
+      }
+      timedOut = reason === "timeout";
+      aborted = reason === "abort";
       termination = "sigterm";
       signalGroup("SIGTERM");
       later(() => {
@@ -705,6 +725,12 @@ export function runChildProcess(request: ChildProcessRequest): Promise<ChildProc
       }
     };
 
+    const timeout = (): void => terminate("timeout");
+    const abort = (): void => terminate("abort");
+    request.signal?.addEventListener("abort", abort, {once: true});
+    if (request.signal?.aborted) {
+      abort();
+    }
     if (request.timeoutMs > 0) {
       timers.push(setTimeout(timeout, request.timeoutMs));
     }
@@ -724,7 +750,9 @@ export function runChildProcess(request: ChildProcessRequest): Promise<ChildProc
         // Leftover descendants inherited our pipes; signalling the group here
         // (before the child is reaped) keeps the pid from being recycled.
         signalGroup("SIGTERM");
-        later(() => signalGroup("SIGKILL"), request.killGraceMs);
+        // Keep escalating after close: descendants can close inherited pipes,
+        // make this call finish, and still ignore SIGTERM.
+        later(() => signalGroup("SIGKILL"), request.killGraceMs, false, true);
       }
       later(finish, DRAIN_AFTER_EXIT_MS);
     });
