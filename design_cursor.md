@@ -133,9 +133,12 @@ Validation mirrors `cacheMatches` (`persistence.ts:1566`): device/inode, `size >
   default). The backup holds raw records, so reasoning and tool calls survive; the compacted request
   items keep only what the model was given, which is why the view no longer reads
   `compaction-cache.json` at all. The block is cached in memory under the backup's identity plus the
-  transcript's generation — the window in which a seam can still move without the backup changing;
+  transcript's generation — the window in which a seam can still move without the backup changing.
+  It is **served as its own resource** (`GET /api/sessions/:ref/history`) whose validator is that
+  identity: a snapshot names it as `history: {etag, count}` instead of carrying it, so a committed
+  step ships the live tail only and the static block is fetched once per identity;
 - `tail` = records in `[start, end)` of the transcript, where `start` is the oldest turn in the
-  window. Nothing before it is read.
+  window. Nothing before it is read, and a page (`before=`) does not restate the block.
 
 The backup's end is the **compaction seam**: compaction rewrites the transcript with the response it
 kept in flight, and the backup still holds that record at its end. The transcript's leading records
@@ -161,6 +164,11 @@ read.
   state*.
 - `If-None-Match` ⇒ `304` before anything is read; 200 responses carry `ETag` +
   `Cache-Control: no-cache`, so a client that stores the body revalidates instead of trusting it.
+- The **history block** has its own validator (`GET /api/sessions/:ref/history`): the response ETag
+  covers the whole payload and therefore moves on every committed step, while the block only moves
+  when history is compacted. Keeping them apart is what stops the static block from being re-sent
+  with every step — the client holds it, revalidates it separately, and a `304` there costs a stat
+  set.
 - The session **list** ships metadata only (name, model, turns, usage, run); the transcript of the
   viewed session is fetched from the snapshot endpoint.
 - While attached to a run, the poll backs off (`session_refresh_interval_ms_streaming`), because the
@@ -224,9 +232,9 @@ message's capped reasoning (16,276 of 38,500 B) came back whole — 38,254 chars
 
 - Strip the provider request echo from stored records (`tools` et al. — 84–91% of bytes).
 - Per-message manifest for client-side delta sync (the `turnOffsets` data supports it later).
-- The history block is always sent whole, so a session whose backup is large pays for it whenever the
-  block changes; `compaction.keepbackup.turns` and `server.max_inline_part_bytes` are the levers until
-  the block gets a cursor of its own.
+- The history block is fetched whole once per identity, so a session whose backup is large pays that
+  once per compaction instead of once per step; `compaction.keepbackup.turns` and
+  `server.max_inline_part_bytes` bound it until it gets a cursor of its own.
 
 ## Verification
 
@@ -245,3 +253,8 @@ message's capped reasoning (16,276 of 38,500 B) came back whole — 38,254 chars
 7. **History source:** compacted history comes from the backup with reasoning and tool calls intact
    while the compacted items do not carry them; a preserved response is trimmed at the seam and
    rendered once; `keepbackup.turns` caps the block and `0` hides it (`cursor-cache.test.ts`).
+8. **Split validators:** a snapshot carries the tail plus `history: {etag, count}`, never the block;
+   `/history` serves the same messages the view holds, answers `304` to its own fingerprint, and a
+   capped block message hydrates whole from it (`server.test.ts`). Verified in the browser against a
+   copy of the live session: one `1359954 B` snapshot and one `1673643 B` history fetch, then 300-byte
+   `304` revalidations, with the block rendering ahead of the tail and hydration updating it in place.

@@ -952,9 +952,17 @@ test("serves sessions using configured model and transcript paths", async () => 
     const compactedSnapshot = await fetch(`${baseUrl}/api/sessions/session1`);
     const compactedBody = await compactedSnapshot.json() as {
       messages: Array<{text: string}>;
+      history?: {etag: string | null; count: number};
       usage?: Record<string, unknown>;
     };
-    assert.equal(compactedBody.messages[0]?.text, "from configured transcript");
+    // The transcript half is empty after compaction: the removed turn is the
+    // block the snapshot refers to, fetched (and revalidated) on its own.
+    assert.deepEqual(compactedBody.messages, []);
+    assert.equal(typeof compactedBody.history?.etag, "string");
+    const historyResponse = await fetch(`${baseUrl}/api/sessions/session1/history`);
+    assert.equal(historyResponse.status, 200);
+    const history = await historyResponse.json() as {messages: Array<{text: string}>};
+    assert.equal(history.messages[0]?.text, "from configured transcript");
     assert.deepEqual(compactedBody.usage, list.sessions[0]?.usage);
   } finally {
     await running.close();
@@ -2478,21 +2486,41 @@ test("a capped message from the compacted prefix is returned whole", async () =>
     const baseUrl = `http://127.0.0.1:${address.port}`;
 
     const snapshot = (await (await fetch(`${baseUrl}/api/sessions/session1`)).json()) as {
+      messages: Array<{ id: string }>;
+      history?: { etag: string | null; count: number };
+    };
+    // The transcript half of the snapshot carries no compacted turn; it refers to
+    // the block the client fetches (and revalidates) separately.
+    assert.deepEqual(snapshot.messages.map((message) => message.id), ["session-user-o0", "r-2-1"]);
+    assert.ok(snapshot.history, "the snapshot refers to the history block");
+    assert.equal(snapshot.history.count > 0, true);
+    assert.equal(typeof snapshot.history.etag, "string");
+
+    const historyResponse = await fetch(`${baseUrl}/api/sessions/session1/history`);
+    assert.equal(historyResponse.status, 200);
+    const history = (await historyResponse.json()) as {
       messages: Array<{
         id: string;
         cursor?: number;
         parts: Array<{ type: string; text?: string; truncated?: { bytes: number } }>;
       }>;
     };
-    const final = snapshot.messages.find((message) => message.id === "gen-final-1");
-    assert.ok(final, "the compacted final is part of the snapshot");
+    const final = history.messages.find((message) => message.id === "gen-final-1");
+    assert.ok(final, "the compacted final is part of the history block");
     const part = final.parts.find((candidate) => candidate.type === "text");
     assert.ok(part);
     assert.equal(Buffer.byteLength(part.text ?? "", "utf8"), 128);
     assert.deepEqual(part.truncated, { bytes: Buffer.byteLength(finalText, "utf8") });
-    assert.equal(final.cursor, undefined, "a compacted message has no turn cursor");
+    assert.equal(final.cursor, undefined, "a history message has no turn cursor");
 
-    // No cursor: the message is served from the head the view already holds.
+    // The block is static, so its own fingerprint revalidates it without a body.
+    const revalidated = await fetch(`${baseUrl}/api/sessions/session1/history`, {
+      headers: {"if-none-match": historyResponse.headers.get("etag") ?? ""},
+    });
+    assert.equal(revalidated.status, 304);
+    assert.equal(await revalidated.text(), "");
+
+    // No cursor: the message is served from the block the view already holds.
     const hydrated = (await (await fetch(
       `${baseUrl}/api/sessions/session1/messages/gen-final-1`,
     )).json()) as { message: { id: string; text: string } };

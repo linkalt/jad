@@ -36,6 +36,7 @@ import { sessionUsageFromSummary } from "./plugins/web-ui/usage-web-ui.js";
 import type {
   WebUiMessage,
   WebUiSessionConfig,
+  WebUiSessionHistory,
   WebUiSessionRun,
   WebUiSessionSnapshot,
 } from "./plugins/web-ui/types.js";
@@ -407,7 +408,7 @@ async function sessionListingConfig(
 function sessionSummary(
   location: SessionLocation,
   config: WebUiSessionConfig,
-  view: {messages: WebUiMessage[]; turns: number},
+  view: {messages: WebUiMessage[]; turns: number; history?: WebUiSessionHistory},
   usage?: SessionUsageSummary,
   run?: WebUiSessionRun,
   page?: SessionPageInfo,
@@ -421,6 +422,7 @@ function sessionSummary(
     ...(usageValue === undefined ? {} : {usage: usageValue}),
     ...(run === undefined ? {} : {run}),
     ...(page === undefined ? {} : {page}),
+    ...(view.history === undefined ? {} : {history: view.history}),
     session_id: location.sessionId,
     root_id: location.root.id,
     root_label: location.root.label,
@@ -551,6 +553,15 @@ class AgentHttpApplication {
         segments[3] === "messages"
       ) {
         await this.handleSessionMessage(sessionRef, segments[4] ?? "", url, response);
+        return;
+      }
+
+      if (
+        request.method === "GET" &&
+        segments.length === 4 &&
+        segments[3] === "history"
+      ) {
+        await this.handleSessionHistory(sessionRef, request, response);
         return;
       }
 
@@ -824,7 +835,11 @@ class AgentHttpApplication {
     const summary = sessionSummary(
       handle.location,
       config,
-      {messages, turns: usage.turn_count},
+      {
+        messages,
+        turns: usage.turn_count,
+        ...(view.history === undefined ? {} : {history: view.history}),
+      },
       usage,
       run,
       page,
@@ -859,6 +874,37 @@ class AgentHttpApplication {
       throw new HttpError(404, "message not found");
     }
     sendJson(response, 200, {message});
+  }
+
+  /**
+   * The history block a snapshot referred to.
+   *
+   * It is the backup's tail — turns a compaction removed, which the transcript
+   * no longer carries — and static between compactions, so it carries its own
+   * fingerprint: a client fetches it once per identity and revalidates cheaply,
+   * instead of receiving it again with every transcript change.
+   */
+  private async handleSessionHistory(
+    id: string,
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    const handle = await this.getSession(id);
+    const config = await handle.loader.load();
+    const history = await handle.view.readHistory(config.settings.compaction.keepbackup.turns);
+    if (history.etag === null) {
+      sendJson(response, 200, {messages: []});
+      return;
+    }
+    const etag = `"${history.etag}"`;
+    if (this.conditionalRequests && respondNotModified(request, response, etag)) {
+      return;
+    }
+    const messages = capWebUiMessages(history.messages, {
+      maxInlineBytes: this.maxInlinePartBytes,
+      cursors: new Map(),
+    });
+    sendVersionedJson(response, {messages}, etag, this.conditionalRequests);
   }
 
   private async handleRunStream(id: string, response: ServerResponse): Promise<void> {

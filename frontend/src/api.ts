@@ -98,11 +98,21 @@ export interface SessionSnapshot {
   run?: SessionRunState;
   /** Set when the transcript was capped; `next_before` fetches older turns. */
   page?: SessionPage;
+  /**
+   * Reference to the history block this snapshot left out: turns a compaction
+   * removed, served from the backup by `fetchSessionHistory`.
+   */
+  history?: SessionHistory;
 }
 
 export interface SessionPage {
   has_more: boolean;
   next_before: number | null;
+}
+
+export interface SessionHistory {
+  etag: string | null;
+  count: number;
 }
 
 /**
@@ -207,12 +217,36 @@ export async function fetchSession(
 }
 
 /**
+ * The history block a snapshot referred to.
+ *
+ * Turns a compaction removed, folded from the backup, are static until the next
+ * compaction — so they are fetched once per identity instead of riding on every
+ * snapshot a committed step produces. A `304` means the held copy is still the
+ * one the server would send.
+ */
+export async function fetchSessionHistory(
+  sessionId: string,
+  etag?: string,
+): Promise<ConditionalResult<{messages: WebUiMessage[]}>> {
+  return fetchConditional(
+    `/sessions/${encodeURIComponent(sessionId)}/history`,
+    etag,
+    value => {
+      if (!isRecord(value) || !Array.isArray(value.messages)) {
+        throw new Error('the server returned invalid session history');
+      }
+      return {messages: value.messages as WebUiMessage[]};
+    },
+  );
+}
+
+/**
  * One transcript message, whole.
  *
  * A snapshot caps the inline text of large parts, so a message it sent may carry
  * a cut reasoning summary, call arguments or tool output. `cursor` is the turn
  * the message came from, which a capped transcript message publishes; a message
- * from the compacted prefix has none and is served from the compaction cache.
+ * from the history block has none and is served from the block itself.
  */
 export async function fetchSessionMessage(
   sessionId: string,

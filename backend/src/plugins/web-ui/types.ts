@@ -89,6 +89,20 @@ export interface WebUiSessionPage {
   next_before: number | null;
 }
 
+/**
+ * Reference to the history block a snapshot left out.
+ *
+ * The block is the backup's tail — turns a compaction removed, which the
+ * transcript no longer carries. It is static between compactions, so it is
+ * served as its own resource: `etag` is what the block's copy was built from,
+ * and `count` how many messages it holds. `etag` is `null` when there is no
+ * history to show.
+ */
+export interface WebUiSessionHistory {
+  etag: string | null;
+  count: number;
+}
+
 export interface WebUiSessionSnapshot {
   id: string;
   session_id?: string;
@@ -104,4 +118,5 @@ export interface WebUiSessionSnapshot {
   usage?: WebUiSessionUsage;
   run?: WebUiSessionRun;
   page?: WebUiSessionPage;
+  history?: WebUiSessionHistory;
 }

@@ -352,16 +352,21 @@ test("renders compacted history from the backup, keeping reasoning and tool call
       snapshotTurns: 0,
       maxPageTurns: 50,
     });
+    const history = await cache.readHistory(20);
+    assert.deepEqual(plain(history.messages), plain(messagesOf(records) as never));
+    assert.equal(
+      history.messages.some((message) => message.parts.some((part) => part.type === "reasoning")),
+      true,
+    );
+    assert.equal(
+      history.messages.some((message) => message.parts.some((part) => part.type === "tool_result")),
+      true,
+    );
+    assert.equal(typeof history.etag, "string");
+    // The snapshot carries the live tail and a reference, not the block itself.
     const view = await cache.read();
-    assert.deepEqual(plain(view.messages), plain(messagesOf(records) as never));
-    assert.equal(
-      view.messages.some((message) => message.parts.some((part) => part.type === "reasoning")),
-      true,
-    );
-    assert.equal(
-      view.messages.some((message) => message.parts.some((part) => part.type === "tool_result")),
-      true,
-    );
+    assert.deepEqual(view.messages, []);
+    assert.deepEqual(view.history, {etag: history.etag, count: history.messages.length});
   } finally {
     await store.close();
     await rm(sessionDir, { recursive: true, force: true });
@@ -399,18 +404,23 @@ test("trims the backup at the seam so a preserved response stays one message", a
       snapshotTurns: 0,
       maxPageTurns: 50,
     });
-    const view = await cache.read();
-    // run-2 comes from the transcript, everything before it from the backup.
-    // Without the seam the same record would be rendered twice.
+    // run-2 comes from the transcript, everything before it from the backup: the
+    // seam keeps the record out of the block, so it is rendered once.
+    const history = await cache.readHistory(20);
     assert.deepEqual(
-      view.messages.map((message) => message.sender),
-      ["user", "assistant", "assistant"],
+      history.messages.map((message) => message.sender),
+      ["user", "assistant"],
     );
-    assert.equal(view.messages.filter((message) => message.id === "run-2").length, 1);
-    assert.equal(view.messages.filter((message) => message.text === "draft answer").length, 1);
+    assert.equal(history.messages.filter((message) => message.id === "run-2").length, 0);
     assert.equal(
-      view.messages[1]?.parts.some((part) => part.type === "tool_result"),
+      history.messages[1]?.parts.some((part) => part.type === "tool_result"),
       true,
+    );
+    const view = await cache.read();
+    assert.deepEqual(view.messages.map((message) => message.id), ["run-2"]);
+    assert.equal(
+      [...history.messages, ...view.messages].filter((message) => message.text === "draft answer").length,
+      1,
     );
   } finally {
     await store.close();
@@ -435,19 +445,24 @@ test("caps the rendered backup at keepbackup.turns", async () => {
       maxPageTurns: 50,
     });
     // The transcript is empty after compaction, so the backup is the history.
-    const whole = await cache.read({backupTurns: 20});
+    const whole = await cache.readHistory(20);
     assert.deepEqual(plain(whole.messages), plain(messagesOf(TRANSCRIPT) as never));
 
-    const capped = await cache.read({backupTurns: 1});
+    const capped = await cache.readHistory(1);
     assert.deepEqual(
       plain(capped.messages),
       plain(messagesOf([TRANSCRIPT[4]!, TRANSCRIPT[5]!]) as never),
     );
     assert.equal(capped.messages[0]?.text, "second question");
+    assert.notEqual(capped.etag, whole.etag);
 
-    const hidden = await cache.read({backupTurns: 0});
+    const hidden = await cache.readHistory(0);
     assert.deepEqual(hidden.messages, []);
-    assert.equal(hidden.hasMore, false);
+    assert.equal(hidden.etag, null);
+    const view = await cache.read({backupTurns: 0});
+    assert.deepEqual(view.messages, []);
+    assert.deepEqual(view.history, {etag: null, count: 0});
+    assert.equal(view.hasMore, false);
   } finally {
     await store.close();
     await rm(sessionDir, { recursive: true, force: true });
@@ -508,13 +523,14 @@ test("reads an empty transcript and a session without compaction as empty", asyn
     assert.deepEqual((await store.readCursorIndex()).runs, []);
     assert.equal(await store.readBackupStamp(), undefined);
     assert.equal(await store.readBackupTail(20), undefined);
+    assert.deepEqual(await cache.readHistory(20), {etag: null, messages: []});
   } finally {
     await store.close();
     await rm(sessionDir, { recursive: true, force: true });
   }
 });
 
-test("keeps the compaction prefix while the tail grows", async () => {
+test("keeps the history block stable while the tail grows", async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-view-head-"));
   const messagesPath = join(sessionDir, "messages.jsonl");
   await writeTranscript(messagesPath, TRANSCRIPT);
@@ -531,18 +547,24 @@ test("keeps the compaction prefix while the tail grows", async () => {
       snapshotTurns: 24,
       maxPageTurns: 50,
     });
-    const withHead = await cache.read();
-    // The head supplies the retained turns; the tail continues after them.
-    const items: ResponseInputItem[] = (await store.readCompactionItems()) ?? [];
-    assert.equal(items.length > 0, true);
-    assert.equal(withHead.messages.length > 0, true);
+    // The transcript is empty after compaction, so the snapshot is a reference
+    // to the block alone.
+    const history = await cache.readHistory(20);
+    assert.equal(history.messages.length > 0, true);
+    const before = await cache.read();
+    assert.deepEqual(before.messages, []);
+    assert.equal(before.history?.etag, history.etag);
+
     await appendFile(
       messagesPath,
       records([completedRecord("r-9-1", 9, 1, [assistantItem("tail answer", "msg-9-1")])]),
     );
     const grown = await cache.read();
-    assert.deepEqual(grown.messages.slice(0, withHead.messages.length), withHead.messages);
     assert.equal(grown.messages.at(-1)?.id, "r-9-1");
+    // The append moved the tail, not the block: same identity, same messages.
+    const after = await cache.readHistory(20);
+    assert.equal(after.etag, history.etag);
+    assert.deepEqual(plain(after.messages), plain(history.messages));
   } finally {
     await store.close();
     await rm(sessionDir, { recursive: true, force: true });

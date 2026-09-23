@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { DEFAULT_KEEP_BACKUP_TURNS } from "../../config.js";
 import type { JsonRecord, SessionResponseStore } from "../../persistence.js";
 import {
@@ -5,7 +7,7 @@ import {
   isUserTurnRecord,
   reduceWebUiRecord,
 } from "./normalize-web-ui.js";
-import type { WebUiMessage } from "./types.js";
+import type { WebUiMessage, WebUiSessionHistory } from "./types.js";
 
 /** A slice of a session transcript projected for the web UI. */
 export interface WebUiSessionView {
@@ -20,6 +22,11 @@ export interface WebUiSessionView {
   hasMore: boolean;
   /** Cursor for the next older page; `null` when the transcript is exhausted. */
   nextBefore: number | null;
+  /**
+   * Reference to the history block this response left out. Present unless the
+   * response is a page, which a client only asks for once it holds the block.
+   */
+  history?: WebUiSessionHistory;
 }
 
 export interface WebUiViewOptions {
@@ -74,12 +81,29 @@ export class WebUiSessionViewCache {
   ): Promise<WebUiSessionView> {
     const stamp = await this.store.readTranscriptStamp();
     const page = await this.readPage(stamp.size, options);
-    // A cursor asks for older tail turns only: the caller already holds the head.
+    // A cursor asks for older tail turns only: the caller already holds the
+    // history block, and a page does not restate it.
     if (options.before !== undefined) {
       return page;
     }
-    const history = await this.readBackupBlock(options.backupTurns ?? DEFAULT_KEEP_BACKUP_TURNS);
-    return {...page, messages: [...history, ...page.messages]};
+    const history = await this.readHistory(options.backupTurns ?? DEFAULT_KEEP_BACKUP_TURNS);
+    return {...page, history: {etag: history.etag, count: history.messages.length}};
+  }
+
+  /**
+   * The history block and its identity.
+   *
+   * The block is static between compactions — which is exactly what the identity
+   * says — so it is served as its own resource and revalidated apart from the
+   * transcript, which changes on every committed step.
+   */
+  public async readHistory(
+    turns: number,
+  ): Promise<{etag: string | null; messages: WebUiMessage[]}> {
+    const block = await this.readBackupBlock(turns);
+    return block === undefined
+      ? {etag: null, messages: []}
+      : {etag: createHash("sha256").update(block.key).digest("hex"), messages: block.messages};
   }
 
   /**
@@ -97,7 +121,7 @@ export class WebUiSessionViewCache {
   ): Promise<WebUiMessage | undefined> {
     if (cursor === undefined) {
       const block = await this.readBackupBlock(backupTurns ?? DEFAULT_KEEP_BACKUP_TURNS);
-      return block.find((message) => message.id === messageId);
+      return block?.messages.find((message) => message.id === messageId);
     }
     const stamp = await this.store.readTranscriptStamp();
     const starts = await this.turnStarts(stamp.size);
@@ -214,20 +238,21 @@ export class WebUiSessionViewCache {
    * compaction replaced it with — the window in which the seam can still move
    * without the backup changing.
    */
-  private async readBackupBlock(turns: number): Promise<WebUiMessage[]> {
+  private async readBackupBlock(turns: number): Promise<BackupBlock | undefined> {
     const limit = Number.isSafeInteger(turns) && turns > 0 ? turns : 0;
     if (limit === 0) {
-      return [];
+      this.backup = undefined;
+      return undefined;
     }
     const stamp = await this.store.readBackupStamp();
     if (stamp === undefined) {
       this.backup = undefined;
-      return [];
+      return undefined;
     }
     const generation = (await this.store.readTranscriptGeneration()) ?? "-";
     const key = `${stamp}|${generation}|${limit}`;
     if (this.backup !== undefined && this.backup.key === key) {
-      return this.backup.messages;
+      return this.backup;
     }
     const range = await this.store.readBackupTail(limit);
     const state = createWebUiSessionState();
@@ -240,6 +265,6 @@ export class WebUiSessionViewCache {
       });
     }
     this.backup = {key, messages: state.messages};
-    return this.backup.messages;
+    return this.backup;
   }
 }

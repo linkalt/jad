@@ -38,6 +38,7 @@ import {
   attachSessionRun,
   compactSession,
   fetchSession,
+  fetchSessionHistory,
   fetchSessionMessage,
   fetchSessions,
   stopSessionRun,
@@ -234,6 +235,12 @@ type MessageRecord = Omit<WebUiMessage, 'parts'> & {
   reasoning?: ReasoningStep[];
   tools?: ChatToolCallItem[];
 };
+
+/**
+ * History the snapshot left out: the turns a compaction removed, served from the
+ * backup. `etag` is the identity the server published for it.
+ */
+type HistoryBlock = {uiId: string; etag: string; messages: MessageRecord[]};
 
 const LIVE_SESSION_ID = appConfig.live_session_id;
 
@@ -1748,6 +1755,18 @@ function App() {
   const [activeSessionId, setActiveSessionId] = useState(LIVE_SESSION_ID);
   const hasChosenSessionRef = useRef(false);
   const [threads, setThreads] = useState<Record<string, MessageRecord[]>>(initialThreads);
+
+  /**
+   * Turns a compaction removed, folded from the backup. They are static between
+   * compactions, so the block is fetched once per identity the snapshot hands
+   * out — a committed step re-sends the live tail, not the history.
+   */
+  const [historyBlock, setHistoryBlock] = useState<HistoryBlock | null>(null);
+  const historyRef = useRef<HistoryBlock | null>(null);
+  const setHistory = useCallback((next: HistoryBlock | null) => {
+    historyRef.current = next;
+    setHistoryBlock(next);
+  }, []);
   const [showInspector, setShowInspector] = useState(appConfig.show_inspector_by_default);
   // One left slot, several datasets: the panel shows whichever workspace view
   // was picked last, so two panels never stack on the same edge. The closed
@@ -1913,12 +1932,22 @@ function App() {
             next[index] = full;
             return {...current, [uiId]: next};
           });
+          // A message from the history block is not part of the thread.
+          const block = historyRef.current;
+          if (block !== null && block.uiId === uiId) {
+            const index = block.messages.findIndex(candidate => candidate.id === message.id);
+            if (index >= 0) {
+              const messages = [...block.messages];
+              messages[index] = full;
+              setHistory({...block, messages});
+            }
+          }
         })
         .catch(error => {
           console.warn('Unable to load the full message:', error);
         });
     },
-    [],
+    [setHistory],
   );
   // How much of the transcript is still on the server, per session.
   const [sessionPages, setSessionPages] = useState<Record<string, SessionPage>>({});
@@ -1952,7 +1981,18 @@ function App() {
 
   const activeSession =
     sessions.find(session => session.id === activeSessionId) ?? sessions[0];
-  const messages = threads[activeSessionId] ?? [];
+  const threadMessages = threads[activeSessionId] ?? [];
+  // The history block renders ahead of the transcript: it holds the turns a
+  // compaction removed, which are older than everything the transcript carries.
+  const messages = useMemo(() => {
+    const block =
+      historyBlock !== null && historyBlock.uiId === activeSessionId
+        ? historyBlock.messages
+        : undefined;
+    return block === undefined || block.length === 0
+      ? threadMessages
+      : [...block, ...threadMessages];
+  }, [threadMessages, activeSessionId, historyBlock]);
   const {visibleMessages, hiddenCount, revealEarlier} = useTranscriptWindow({
     messages,
     sessionId: activeSessionId,
@@ -2432,6 +2472,44 @@ function App() {
     let cancelled = false;
     // The transcript of the session being viewed, fetched separately from the
     // list because only one transcript is ever needed at a time.
+    // The block is fetched only when the snapshot's reference names a copy other
+    // than the one being held: it is static between compactions, so a committed
+    // step never re-downloads it.
+    const ensureHistory = async (
+      sessionRef: string,
+      uiId: string,
+      reference: SessionSnapshot['history'],
+    ): Promise<HistoryBlock | null> => {
+      const held = historyRef.current !== null && historyRef.current.uiId === uiId
+        ? historyRef.current
+        : null;
+      if (reference === undefined) {
+        // A page: the caller already holds the block, and it is not restated.
+        return held;
+      }
+      if (reference.etag === null) {
+        if (held !== null) {
+          setHistory(null);
+        }
+        return null;
+      }
+      if (held !== null && held.etag === reference.etag) {
+        return held;
+      }
+      const result = await fetchSessionHistory(sessionRef, held?.etag);
+      if (result.kind === 'ok') {
+        const next = {uiId, etag: reference.etag, messages: result.value.messages};
+        setHistory(next);
+        return next;
+      }
+      if (result.kind === 'not-modified' && held !== null) {
+        const next = {...held, etag: reference.etag};
+        setHistory(next);
+        return next;
+      }
+      return held;
+    };
+
     const loadTranscript = (sessionRef: string, uiId: string) => {
       // While this client streams (or is attached to) that session's run, the
       // stream owns the transcript: a committed step of the same turn would
@@ -2441,12 +2519,16 @@ function App() {
         return;
       }
       void fetchSession(sessionRef, {etag: snapshotEtagRef.current})
-        .then(result => {
+        .then(async result => {
           if (cancelled || result.kind !== 'ok') {
             return;
           }
           snapshotEtagRef.current = result.etag;
           const snapshot = result.value;
+          await ensureHistory(sessionRef, uiId, snapshot.history);
+          if (cancelled) {
+            return;
+          }
           const messages = applyHydrated(uiId, snapshot.messages ?? []);
           setThreads(current => {
             const previous = current[uiId];
@@ -2549,7 +2631,7 @@ function App() {
       refreshSessionsRef.current = null;
       window.clearInterval(refreshTimer);
     };
-  }, [applyHydrated, isRunning]);
+  }, [applyHydrated, isRunning, setHistory]);
 
   // The active session carries the run the server is executing, so a page that
   // reloads mid-run attaches as soon as the session list has settled instead of
