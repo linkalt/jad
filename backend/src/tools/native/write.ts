@@ -36,11 +36,6 @@ export const nativeWriteDefinition: ToolDefinition = {
         enum: ["utf8", "base64"],
         description: "Encoding of content. Defaults to utf8.",
       },
-      backup: {
-        type: "boolean",
-        description:
-          "Back up an existing file before replacing it; the session decides where backups are kept. Defaults to true.",
-      },
     },
     required: ["path", "content"],
     additionalProperties: false,
@@ -55,7 +50,6 @@ interface WriteArgs {
   path: string;
   content: string;
   contentEncoding?: ContentEncoding;
-  backup?: boolean;
 }
 
 interface WriteContext extends ToolExecutionContext {
@@ -165,7 +159,7 @@ async function applyWrite(
     target,
     settings: policy,
     data,
-    backup: writeArgs.backup ?? true,
+    backup: true,
   });
 
   if (commit.error === "backup_failed") {

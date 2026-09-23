@@ -199,7 +199,6 @@ test("stops at the result cap and says so", {skip: ripgrepSkip}, async () => {
     const fields = informationFields(output);
     assert.equal(fields.truncated, "true");
     assert.equal(fields.truncation_reason, "max_results");
-    assert.equal(fields.max_results, "2");
     assert.match(fields.hint ?? "", /narrow the path, include, or pattern/);
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
@@ -219,7 +218,6 @@ test("caps matches per file and reports it", {skip: ripgrepSkip}, async () => {
     const fields = informationFields(output);
     assert.equal(fields.matches, "2");
     assert.equal(fields.per_file_limit_reached, "true");
-    assert.equal(fields.max_matches_per_file, "2");
     assert.match(fields.hint ?? "", /reached max_matches_per_file/);
     assert.match(output, /many\.txt\n1:TODO 1\n2:TODO 2/);
     assert.doesNotMatch(output, /TODO 3/);
@@ -242,18 +240,19 @@ test("cuts long lines and stops at the byte budget", {skip: ripgrepSkip}, async 
   }
 });
 
-test("returns a partial result when the search times out", {skip: ripgrepSkip}, async () => {
-  const {sessionDir, run} = await openGrepSession({timeout_ms: 1});
+test("returns a partial result when the search times out", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-harness-ripgrep-timeout-"));
   try {
-    await writeTree(sessionDir);
-    const output = await run("grep-timeout", {pattern: "TODO"});
-    assert.equal(firstLine(output).status, "ok");
-    const fields = informationFields(output);
-    assert.equal(fields.truncated, "true");
-    assert.equal(fields.truncation_reason, "timeout");
-    assert.match(fields.hint ?? "", /timed out/);
+    const binary = join(directory, "fake-rg");
+    await writeFile(binary, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"fixture.txt\"},\"lines\":{\"text\":\"TODO\\n\"},\"line_number\":1}}'\nsleep 1\n");
+    await chmod(binary, 0o700);
+    const result = await runRipgrep({binary, flags: [], pattern: "TODO", paths: ["."], cwd: directory, timeoutMs: 100, maxMatches: 10, maxMatchesPerFile: 10, maxFileBytes: 1024, maxBytes: 1024, maxLineChars: 80});
+    assert.equal(result.truncated, true);
+    assert.equal(result.truncationReason, "timeout");
+    assert.equal(result.matches, 1);
+    assert.deepEqual(result.groups.map((group) => group.path), ["fixture.txt"]);
   } finally {
-    await rm(sessionDir, {recursive: true, force: true});
+    await rm(directory, {recursive: true, force: true});
   }
 });
 

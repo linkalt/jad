@@ -26,6 +26,8 @@ const policy: NativeProcessToolSettings = {
   env_deny: [],
   storage_dir: ".processes",
   paths: [],
+  unrestricted_paths: false,
+  statecontext: {states: ["running"], limit: 20},
 };
 
 function resultId(text: string): string {

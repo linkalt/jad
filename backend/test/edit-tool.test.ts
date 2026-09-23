@@ -404,9 +404,14 @@ test("rejects missing files, directories, symlinks, and escapes", async () => {
   const {sessionDir, run} = await openEditSession();
   const workspace = join(sessionDir, "workspace");
   const outside = join(sessionDir, "outside.txt");
+  const externalRoot = await mkdtemp(join(tmpdir(), "agent-harness-edit-symlink-"));
+  const externalFile = join(externalRoot, "outside.txt");
+  const insideTarget = join(sessionDir, "inside.txt");
   try {
     await mkdir(workspace);
     await writeFile(outside, "outside\n", "utf8");
+    await writeFile(externalFile, "outside\n", "utf8");
+    await writeFile(insideTarget, "inside\n", "utf8");
 
     const missing = await run("edit", "edit-missing", {
       path: "workspace/missing.txt",
@@ -430,7 +435,8 @@ test("rejects missing files, directories, symlinks, and escapes", async () => {
     assert.equal(firstLine(directory).status, "error");
     assert.match(directory, /error_code: target_is_directory/);
 
-    await symlink(outside, join(workspace, "link.txt"));
+    // A link resolving outside the policy stays refused.
+    await symlink(externalFile, join(workspace, "link.txt"));
     const symlinked = await run("edit", "edit-symlink", {
       path: "workspace/link.txt",
       oldText: "outside",
@@ -438,8 +444,19 @@ test("rejects missing files, directories, symlinks, and escapes", async () => {
     });
     assert.equal(firstLine(symlinked).status, "forbidden");
     assert.match(symlinked, /error_code: symlink_forbidden/);
-    assert.equal(await readFile(outside, "utf8"), "outside\n");
+    assert.equal(await readFile(externalFile, "utf8"), "outside\n");
     assert.equal((await lstat(join(workspace, "link.txt"))).isSymbolicLink(), true);
+
+    // A link resolving inside the policy is edited through to its real file.
+    await symlink(insideTarget, join(workspace, "inside-link.txt"));
+    const insideLink = await run("edit", "edit-symlink-inside", {
+      path: "workspace/inside-link.txt",
+      oldText: "inside",
+      newText: "edited",
+    });
+    assert.equal(firstLine(insideLink).status, "ok");
+    assert.equal(await readFile(insideTarget, "utf8"), "edited\n");
+    assert.equal((await lstat(join(workspace, "inside-link.txt"))).isSymbolicLink(), true);
 
     const escape = await run(
       "edit",
@@ -453,6 +470,7 @@ test("rejects missing files, directories, symlinks, and escapes", async () => {
     assert.equal(await readFile(outside, "utf8"), "outside\n");
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
+    await rm(externalRoot, {recursive: true, force: true});
   }
 });
 

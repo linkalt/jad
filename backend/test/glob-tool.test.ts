@@ -179,7 +179,6 @@ test("lists files matching a pattern at any depth", {skip: ripgrepSkip}, async (
     assert.equal(fields.pattern, "*.test.ts");
     assert.equal(fields.files, "2");
     assert.equal(fields.truncated, "false");
-    assert.equal(fields.max_results, "500");
     assert.equal(fields.hint, undefined);
     assert.match(output, /--- CONTENT token=[\w-]+ encoding=utf8 ---/);
     assert.match(output, /src\/a\.test\.ts\nsrc\/sub\/b\.test\.ts/);
@@ -318,7 +317,6 @@ test("stops at the result cap and says so", {skip: ripgrepSkip}, async () => {
     assert.equal(fields.files, "3");
     assert.equal(fields.truncated, "true");
     assert.equal(fields.truncation_reason, "max_results");
-    assert.equal(fields.max_results, "3");
     assert.match(fields.hint ?? "", /narrow the pattern or path/);
   } finally {
     await rm(sessionDir, {recursive: true, force: true});

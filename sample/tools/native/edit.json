@@ -5,7 +5,7 @@
       "id": "native.edit",
       "source": "native",
       "name": "edit",
-      "description": "Replace exact text in an existing file. oldText must match the file's current text exactly and occur once unless replaceAll is true; an empty newText deletes the match. Use write to create files, replace whole files, or write binary content.",
+      "description": "Replace exact text in an existing file. Use replaceAll only for every occurrence.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -26,10 +26,6 @@
           "replaceAll": {
             "type": "boolean",
             "description": "Replace every occurrence instead of requiring exactly one. Defaults to false."
-          },
-          "backup": {
-            "type": "boolean",
-            "description": "Back up the file before replacing it; the session decides where backups are kept. Defaults to true."
           }
         },
         "required": ["path", "oldText", "newText"],

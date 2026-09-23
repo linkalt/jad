@@ -17,7 +17,9 @@ import {nativeToolSpecs} from "./native/registry.js";
 import type {NativeToolSpec} from "./native/registry.js";
 import type {ProcessManager} from "./native/process-manager.js";
 import type {TaskStore} from "./native/task-store.js";
-import type {LoadedTool, ToolDefinition, ToolExecutionContext} from "./types.js";
+import type {MemoryStore} from "./native/memory-store.js";
+import type {McpServerManager} from "./mcp/manager.js";
+import type {LoadedTool, ToolDefinition, ToolExecutionContext, ToolOutput} from "./types.js";
 
 const definitionDocumentSchema: JsonRecord = {
   type: "object",
@@ -224,7 +226,7 @@ export class ToolCatalog {
       };
     }
 
-    let output: string;
+    let output: ToolOutput;
     try {
       output = await tool.execute(args, { ...context, callId });
     } catch (error) {
@@ -245,32 +247,30 @@ export class ToolCatalog {
 
 export async function loadToolCatalog(
   config: LoadedSessionConfig,
-  resources: {processManager?: ProcessManager; taskStore?: TaskStore} = {},
+  resources: {processManager?: ProcessManager; taskStore?: TaskStore; memoryStore?: MemoryStore; mcpManager?: McpServerManager} = {},
 ): Promise<ToolCatalog> {
   const configuredSpecs = nativeToolSpecs().filter((spec) => spec.configured(config));
-  if (configuredSpecs.length === 0) {
-    return new ToolCatalog([]);
-  }
-
   const definitions = new Map<string, ToolDefinition>();
-  for (const configuredPath of config.settings.tool_definition_paths) {
-    const path = isAbsolute(configuredPath)
-      ? resolve(configuredPath)
-      : resolve(config.paths.global_jad_root, configuredPath);
-    const document = await readDefinitionDocument(path);
-    const rawTools = document.tools;
-    if (!Array.isArray(rawTools)) {
-      throw configError(path, "tools must be an array");
-    }
-    for (const rawTool of rawTools) {
-      if (!isRecord(rawTool)) {
-        throw configError(path, "each tool definition must be an object");
+  if (configuredSpecs.length > 0) {
+    for (const configuredPath of config.settings.tool_definition_paths) {
+      const path = isAbsolute(configuredPath)
+        ? resolve(configuredPath)
+        : resolve(config.paths.global_jad_root, configuredPath);
+      const document = await readDefinitionDocument(path);
+      const rawTools = document.tools;
+      if (!Array.isArray(rawTools)) {
+        throw configError(path, "tools must be an array");
       }
-      const definition = rawTool as unknown as ToolDefinition;
-      if (definitions.has(definition.id)) {
-        throw configError(path, `duplicate tool definition ${definition.id}`);
+      for (const rawTool of rawTools) {
+        if (!isRecord(rawTool)) {
+          throw configError(path, "each tool definition must be an object");
+        }
+        const definition = rawTool as unknown as ToolDefinition;
+        if (definitions.has(definition.id)) {
+          throw configError(path, `duplicate tool definition ${definition.id}`);
+        }
+        definitions.set(definition.id, definition);
       }
-      definitions.set(definition.id, definition);
     }
   }
 
@@ -293,6 +293,13 @@ export async function loadToolCatalog(
     loadedTools.push(
       buildNativeTool(spec, spec.definition, config, ajv.compile(spec.definition.inputSchema), resources),
     );
+  }
+  const enabledMcpServers = config.settings.mcp_servers.filter((server) => server.enabled);
+  if (enabledMcpServers.length > 0 && !resources.mcpManager) {
+    throw new ConfigError("enabled MCP servers require an MCP client manager");
+  }
+  if (resources.mcpManager) {
+    loadedTools.push(...await resources.mcpManager.loadTools(config.settings.mcp_servers, config.settings.cwd));
   }
   return new ToolCatalog(loadedTools);
 }

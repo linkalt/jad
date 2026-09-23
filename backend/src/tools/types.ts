@@ -1,6 +1,10 @@
 import type { ValidateFunction } from "ajv";
 
+import type { ResponseFunctionCallOutputItemList } from "openai/resources/responses/responses.js";
+
 import type { JsonRecord } from "../persistence.js";
+
+export type ToolOutput = string | ResponseFunctionCallOutputItemList;
 
 export type ToolSource = "native" | "mcp";
 
@@ -29,5 +33,5 @@ export interface LoadedTool {
   execute(
     args: JsonRecord,
     context: ToolExecutionContext,
-  ): Promise<string>;
+  ): Promise<ToolOutput>;
 }

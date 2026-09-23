@@ -16,9 +16,13 @@ import type {LoadedTool, ToolDefinition} from "../types.js";
 import {executeNativeBash, NATIVE_BASH_ID, nativeBashDefinition} from "./bash.js";
 import {executeNativeEdit, NATIVE_EDIT_ID, nativeEditDefinition} from "./edit.js";
 import {executeNativeGlob, NATIVE_GLOB_ID, nativeGlobDefinition} from "./glob.js";
-import {executeNativeGrep, NATIVE_GREP_ID, nativeGrepDefinition} from "./grep.js";
+import {executeNativeGrep, NATIVE_GREP_ID, nativeGrepDefinition, normalizeGrepArguments} from "./grep.js";
 import {executeNativeRead, NATIVE_READ_ID, nativeReadDefinition} from "./read.js";
 import {executeNativeProcess, NATIVE_PROCESS_ID, nativeProcessDefinition, normalizeProcessArguments} from "./process.js";
+import {executeNativeFetch, NATIVE_FETCH_ID, nativeFetchDefinition, normalizeFetchArguments} from "./fetch.js";
+import {FetchStore} from "./fetch-store.js";
+import {executeNativeMemory, NATIVE_MEMORY_ID, nativeMemoryDefinition, normalizeMemoryArguments} from "./memory.js";
+import {MemoryStore} from "./memory-store.js";
 import {ProcessManager} from "./process-manager.js";
 import {executeNativeTask, NATIVE_TASK_ID, nativeTaskDefinition, normalizeTaskArguments} from "./task.js";
 import {TaskStore} from "./task-store.js";
@@ -44,7 +48,7 @@ export interface NativeToolSpec {
     definition: ToolDefinition,
     config: LoadedSessionConfig,
     validate: ValidateFunction<unknown>,
-    resources?: {processManager?: ProcessManager; taskStore?: TaskStore},
+    resources?: {processManager?: ProcessManager; taskStore?: TaskStore; memoryStore?: MemoryStore},
   ): {tool: LoadedTool} | {error: string};
 }
 
@@ -64,6 +68,12 @@ function readSpec(): NativeToolSpec {
       const rangeType = normalizeRangeType(args.rangeType);
       if (rangeType) {
         normalized.rangeType = rangeType;
+      }
+      if (typeof args.offset === "number" && Number.isSafeInteger(args.offset)) {
+        normalized.offset = Math.max(0, args.offset);
+      }
+      if (typeof args.limit === "number" && Number.isSafeInteger(args.limit)) {
+        normalized.limit = Math.max(1, args.limit);
       }
       return normalized;
     },
@@ -148,7 +158,7 @@ function grepSpec(): NativeToolSpec {
     definition: nativeGrepDefinition,
     required: ["pattern"],
     exampleOperation: {pattern: "TODO", path: "src"},
-    normalizeArguments: (args) => args,
+    normalizeArguments: normalizeGrepArguments,
     configured: (config) => config.settings.tools.native.grep !== undefined,
     build: (definition, config, validate) => {
       const policy = config.settings.tools.native.grep;
@@ -167,7 +177,35 @@ function grepSpec(): NativeToolSpec {
 }
 
 export function nativeToolSpecs(): NativeToolSpec[] {
-  return [readSpec(), writeSpec(), editSpec(), grepSpec(), bashSpec(), globSpec(), processSpec(), taskSpec()];
+  return [readSpec(), writeSpec(), editSpec(), grepSpec(), bashSpec(), globSpec(), processSpec(), taskSpec(), memorySpec(), fetchSpec()];
+}
+
+function fetchSpec(): NativeToolSpec {
+  return {
+    id: NATIVE_FETCH_ID, settingName: "fetch", definition: nativeFetchDefinition,
+    required: [], exampleOperation: {url: "https://example.com"}, normalizeArguments: normalizeFetchArguments,
+    configured: (config) => config.settings.tools.native.fetch !== undefined,
+    build: (definition, config, validate) => {
+      const policy = config.settings.tools.native.fetch;
+      if (!policy) return {error: `tool ${definition.id} is not exposed in tools.native`};
+      const store = new FetchStore(policy.storage_dir);
+      return {tool: {definition, validate, execute: (args, context) => executeNativeFetch(args, {...context, policy, store})}};
+    },
+  };
+}
+
+function memorySpec(): NativeToolSpec {
+  return {
+    id: NATIVE_MEMORY_ID, settingName: "memory", definition: nativeMemoryDefinition,
+    required: ["operation", "type"], exampleOperation: {operation: "list", type: "workspace"}, normalizeArguments: normalizeMemoryArguments,
+    configured: (config) => config.settings.tools.native.memory !== undefined,
+    build: (definition, config, validate, resources) => {
+      const policy = config.settings.tools.native.memory;
+      if (!policy) return {error: `tool ${definition.id} is not exposed in tools.native`};
+      const store = resources?.memoryStore ?? new MemoryStore(policy.storage_dir);
+      return {tool: {definition, validate, execute: (args, context) => executeNativeMemory(args, {...context, policy, store})}};
+    },
+  };
 }
 
 function taskSpec(): NativeToolSpec {
@@ -182,7 +220,7 @@ function taskSpec(): NativeToolSpec {
     build: (definition, config, validate, resources) => {
       const policy = config.settings.tools.native.task;
       if (!policy) return {error: `tool ${definition.id} is not exposed in tools.native`};
-      const store = resources?.taskStore ?? new TaskStore(policy.storage_path);
+      const store = resources?.taskStore ?? new TaskStore(policy.storage_dir);
       return {
         tool: {
           definition,

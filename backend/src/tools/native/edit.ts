@@ -45,8 +45,7 @@ export const nativeEditDefinition: ToolDefinition = {
   id: NATIVE_EDIT_ID,
   source: "native",
   name: "edit",
-  description:
-    "Replace exact text in an existing file. oldText must match the file's current text exactly and occur once unless replaceAll is true; an empty newText deletes the match. Use write to create files, replace whole files, or write binary content.",
+  description: "Replace exact text in an existing file. Use replaceAll only for every occurrence.",
   inputSchema: {
     type: "object",
     properties: {
@@ -69,11 +68,6 @@ export const nativeEditDefinition: ToolDefinition = {
         description:
           "Replace every occurrence instead of requiring exactly one. Defaults to false.",
       },
-      backup: {
-        type: "boolean",
-        description:
-          "Back up the file before replacing it; the session decides where backups are kept. Defaults to true.",
-      },
     },
     required: ["path", "oldText", "newText"],
     additionalProperties: false,
@@ -89,7 +83,6 @@ interface EditArgs {
   oldText: string;
   newText: string;
   replaceAll?: boolean;
-  backup?: boolean;
 }
 
 interface EditContext extends ToolExecutionContext {
@@ -316,7 +309,7 @@ async function applyEdit(
     target,
     settings: policy,
     data: nextData,
-    backup: editArgs.backup ?? true,
+    backup: true,
   });
   if (commit.error === "backup_failed") {
     return failure(

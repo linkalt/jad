@@ -13,7 +13,7 @@ export interface NativeReadSessionOptions {
   max_bytes?: number;
   max_file_bytes?: number;
   default_limit?: number;
-  paths?: unknown[];
+  paths?: unknown;
 }
 
 export interface NativeWriteSessionOptions {
@@ -22,7 +22,7 @@ export interface NativeWriteSessionOptions {
   backup_max_total_bytes?: number;
   backup_dir?: string | null;
   fsync?: boolean;
-  paths?: unknown[];
+  paths?: unknown;
   cwd?: string;
 }
 
@@ -32,7 +32,7 @@ export interface NativeEditSessionOptions {
   backup_max_total_bytes?: number;
   backup_dir?: string | null;
   fsync?: boolean;
-  paths?: unknown[];
+  paths?: unknown;
   cwd?: string;
 }
 
@@ -44,7 +44,7 @@ export interface NativeGrepSessionOptions {
   max_line_chars?: number;
   max_file_bytes?: number;
   timeout_ms?: number;
-  paths?: unknown[];
+  paths?: unknown;
 }
 
 export interface NativeBashSessionOptions {
@@ -62,6 +62,7 @@ export interface NativeBashSessionOptions {
     keep?: "always" | "truncated_only";
     cap_bytes?: number;
     retention_days?: number;
+    storage_dir?: string;
     stdout_full?: string;
     stderr_full?: string;
     allow_unreadable?: boolean;
@@ -71,7 +72,7 @@ export interface NativeBashSessionOptions {
   env_file?: string;
   env?: Record<string, string>;
   env_deny?: string[];
-  paths?: unknown[];
+  paths?: unknown;
 }
 
 export interface NativeGlobSessionOptions {
@@ -81,7 +82,7 @@ export interface NativeGlobSessionOptions {
   max_bytes?: number;
   max_line_chars?: number;
   timeout_ms?: number;
-  paths?: unknown[];
+  paths?: unknown;
 }
 
 export const DEFAULT_TEST_WRITE_MAX_BYTES = 64 * 1024;

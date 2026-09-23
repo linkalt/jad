@@ -16,10 +16,13 @@
  */
 
 import {stat, unlink} from "node:fs/promises";
-import {basename, dirname} from "node:path";
+import {basename, dirname, join} from "node:path";
 
 import {
   DEFAULT_NATIVE_BASH_ENV,
+  DEFAULT_NATIVE_BASH_SPILL_FILENAME,
+  DEFAULT_NATIVE_BASH_SPILL_PATH,
+  DEFAULT_NATIVE_BASH_SPILL_STORAGE_DIR,
   MIN_NATIVE_BASH_CALL_TIMEOUT_MS,
   type NativeBashToolSettings,
 } from "../../config.js";
@@ -29,6 +32,7 @@ import type {ToolDefinition, ToolExecutionContext} from "../types.js";
 import {type ChildProcessResult, type ChildStream, runChildProcess, type SpillTarget, type StreamLimits} from "./child.js";
 import {displayPath, resolveExistingTarget} from "./path.js";
 import {
+  encodeSpillCallId,
   prepareSpillDir,
   pruneSpillFiles,
   resolveSpillPath,
@@ -42,8 +46,7 @@ export const nativeBashDefinition: ToolDefinition = {
   id: NATIVE_BASH_ID,
   source: "native",
   name: "bash",
-  description:
-    "Run one shell command in the workspace and return its output. Use read, write, edit, and grep for file work; bash is for builds, tests, package managers, git, and pipelines. Every call is a fresh shell, so cd and export do not carry over: pass cwd or chain commands with &&. Commands must finish on their own, because stdin is closed and a prompt cannot be answered. A non-zero exit is reported as an error, with the output still returned. stdout and stderr are returned as separate sections when both wrote, each keeping its start and its end; when a stream was truncated, its complete bytes are in the file named by stdout_full or stderr_full, so read or grep that file instead of re-running the command.",
+  description: "Run a bounded shell command. Use file tools for file operations.",
   inputSchema: {
     type: "object",
     properties: {
@@ -153,9 +156,9 @@ export interface SpillPlan {
 }
 
 /**
- * Resolves both spill templates for this call, creates their directories, and
- * prunes expired files. Nothing here can fail the call: a location that cannot be
- * prepared surfaces later as spill_error on the result.
+ * Resolves both per-stream output files from storage_dir or legacy templates,
+ * creates their directories, and prunes expired files. Nothing here can fail the
+ * call: a location that cannot be prepared surfaces later as spill_error on the result.
  */
 export async function planSpill(
   policy: NativeBashToolSettings,
@@ -173,19 +176,31 @@ export async function planSpill(
     call_id: callId,
     stream: "stdout",
   };
-  const paths: Record<ChildStream, string> = {
-    stdout: resolveSpillPath(policy.spill.stdout_full, {...vars, stream: "stdout"}),
-    stderr: resolveSpillPath(policy.spill.stderr_full, {...vars, stream: "stderr"}),
-  };
+  const useLegacyTemplates = policy.spill.stdout_full !== undefined || policy.spill.stderr_full !== undefined;
+  const generatedVars = {...vars, call_id: encodeSpillCallId(callId)};
+  const storageDir = policy.spill.storage_dir ?? join(workspaceRoot, DEFAULT_NATIVE_BASH_SPILL_STORAGE_DIR);
+  const paths = {} as Record<ChildStream, string>;
+  for (const stream of ["stdout", "stderr"] as ChildStream[]) {
+    const template = useLegacyTemplates
+      ? policy.spill[`${stream}_full`] ?? DEFAULT_NATIVE_BASH_SPILL_PATH
+      : DEFAULT_NATIVE_BASH_SPILL_FILENAME;
+    const streamVars = {...(useLegacyTemplates ? vars : generatedVars), stream};
+    const filePath = resolveSpillPath(template, streamVars);
+    paths[stream] = useLegacyTemplates ? filePath : join(storageDir, filePath);
+  }
   await Promise.all(Object.values(paths).map((path) => prepareSpillDir(path).catch(() => undefined)));
   await Promise.all(
-    (["stdout", "stderr"] as ChildStream[]).map((stream) =>
-      pruneSpillFiles({
+    (["stdout", "stderr"] as ChildStream[]).map((stream) => {
+      const template = useLegacyTemplates
+        ? policy.spill[`${stream}_full`] ?? DEFAULT_NATIVE_BASH_SPILL_PATH
+        : DEFAULT_NATIVE_BASH_SPILL_FILENAME;
+      const streamVars = {...(useLegacyTemplates ? vars : generatedVars), stream};
+      return pruneSpillFiles({
         directory: dirname(paths[stream]),
-        pattern: spillPrunePattern(policy.spill[`${stream}_full`], {...vars, stream}),
+        pattern: spillPrunePattern(template, streamVars),
         retentionDays: policy.spill.retention_days,
-      }).catch(() => 0),
-    ),
+      }).catch(() => 0);
+    }),
   );
   return {
     targets: {
@@ -342,47 +357,23 @@ export async function executeNativeBash(
         ? "stdout"
         : undefined;
   const measured: Array<[string, unknown]> = [
-    ...(result.exitCode !== null ? [["exit_code", result.exitCode] as [string, unknown]] : []),
+    ...(result.exitCode !== null && result.exitCode !== 0
+      ? [["exit_code", result.exitCode] as [string, unknown]]
+      : []),
     ...(result.signal ? [["signal", result.signal] as [string, unknown]] : []),
-    ["duration_ms", result.durationMs],
     ...(result.timedOut ? [["timed_out", true] as [string, unknown]] : []),
-    ...(contentStream ? [["content_stream", contentStream] as [string, unknown]] : []),
-    ["stdout_bytes", result.stdout.producedBytes],
-    ["stdout_shown_bytes", result.stdout.shownBytes],
-    ...(result.stdout.omittedBytes > 0
-      ? [["stdout_omitted_bytes", result.stdout.omittedBytes] as [string, unknown]]
-      : []),
-    ["stderr_bytes", result.stderr.producedBytes],
-    ["stderr_shown_bytes", result.stderr.shownBytes],
-    ...(result.stderr.omittedBytes > 0
-      ? [["stderr_omitted_bytes", result.stderr.omittedBytes] as [string, unknown]]
-      : []),
-    ["returned_bytes", result.returnedBytes],
-    ["truncated", truncated],
+    ...(contentStream && truncated ? [["content_stream", contentStream] as [string, unknown]] : []),
+    ...(truncated ? [["truncated", true] as [string, unknown]] : []),
     ...(truncated
       ? [["truncation_reason", result.timedOut ? "timeout" : "max_bytes"] as [string, unknown]]
       : []),
     ...(result.omittedBytes > 0
       ? [["omitted_bytes", result.omittedBytes] as [string, unknown]]
       : []),
-    ...(kept.stdout
-      ? [["stdout_full", kept.stdout.display] as [string, unknown]]
-      : []),
-    ...(kept.stdout
-      ? [["stdout_full_bytes", kept.stdout.writtenBytes] as [string, unknown]]
-      : []),
-    ...(kept.stdout?.capped
-      ? [["stdout_full_capped", true] as [string, unknown]]
-      : []),
-    ...(kept.stderr
-      ? [["stderr_full", kept.stderr.display] as [string, unknown]]
-      : []),
-    ...(kept.stderr
-      ? [["stderr_full_bytes", kept.stderr.writtenBytes] as [string, unknown]]
-      : []),
-    ...(kept.stderr?.capped
-      ? [["stderr_full_capped", true] as [string, unknown]]
-      : []),
+    ...(kept.stdout ? [["stdout_full", kept.stdout.display] as [string, unknown]] : []),
+    ...(kept.stdout?.capped ? [["stdout_full_capped", true] as [string, unknown]] : []),
+    ...(kept.stderr ? [["stderr_full", kept.stderr.display] as [string, unknown]] : []),
+    ...(kept.stderr?.capped ? [["stderr_full_capped", true] as [string, unknown]] : []),
     ...(kept.error ? [["spill_error", kept.error] as [string, unknown]] : []),
     ...(kept.hint ? [["hint", kept.hint] as [string, unknown]] : []),
     ...(result.binary ? [["binary_output", true] as [string, unknown]] : []),

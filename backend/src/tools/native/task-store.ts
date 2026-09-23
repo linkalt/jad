@@ -1,6 +1,6 @@
 import {randomBytes} from "node:crypto";
 import {mkdir, open, readFile, rename, rm} from "node:fs/promises";
-import {dirname} from "node:path";
+import {join} from "node:path";
 
 import {AsyncMutex} from "../../concurrency.js";
 import type {NativeTaskToolSettings} from "../../config.js";
@@ -21,6 +21,7 @@ export interface TaskRecord {
 
 export interface TaskListFilter {
   status?: TaskStatus | "all";
+  statuses?: readonly TaskStatus[];
   priority?: TaskPriority;
   tag?: string;
   limit: number;
@@ -48,6 +49,7 @@ interface TaskDocument {
 const TASK_ID_PATTERN = /^T-\d{3,}$/;
 const STATUSES = new Set<TaskStatus>(["todo", "in-progress", "blocked", "done"]);
 const PRIORITIES = new Set<TaskPriority>(["low", "normal", "high", "urgent"]);
+export const TASK_STORAGE_FILE_NAME = "tasks.json";
 
 export class TaskStoreError extends Error {
   public override name = "TaskStoreError";
@@ -107,7 +109,9 @@ function priorityRank(priority: TaskPriority): number {
 export class TaskStore {
   private readonly mutex = new AsyncMutex();
 
-  public constructor(private readonly path: string) {}
+  public constructor(private readonly directory: string) {}
+
+  private get path(): string { return join(this.directory, TASK_STORAGE_FILE_NAME); }
 
   public async create(
     input: Omit<TaskRecord, "id" | "created_at" | "updated_at">,
@@ -147,7 +151,9 @@ export class TaskStore {
     return this.mutex.runExclusive(async () => {
       const document = await this.load();
       const matching = document.tasks
-        .filter((task) => filter.status === "all" || (filter.status ? task.status === filter.status : task.status !== "done"))
+        .filter((task) => filter.statuses !== undefined
+          ? filter.statuses.includes(task.status)
+          : filter.status === "all" || (filter.status ? task.status === filter.status : task.status !== "done"))
         .filter((task) => !filter.priority || task.priority === filter.priority)
         .filter((task) => !filter.tag || task.tags.includes(filter.tag))
         .sort((left, right) => statusRank(left.status) - statusRank(right.status)
@@ -213,7 +219,7 @@ export class TaskStore {
     if (Buffer.byteLength(serialized, "utf8") > policy.max_storage_bytes) {
       throw new TaskStoreError("task storage exceeds the configured byte limit");
     }
-    await mkdir(dirname(this.path), {recursive: true});
+    await mkdir(this.directory, {recursive: true});
     const temporary = `${this.path}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
     let handle;
     try {

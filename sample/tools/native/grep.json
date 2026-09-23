@@ -5,7 +5,7 @@
       "id": "native.grep",
       "source": "native",
       "name": "grep",
-      "description": "Search file contents with ripgrep and return matching lines grouped by file.",
+      "description": "Search workspace file contents and group matching lines by file.",
       "inputSchema": {
         "type": "object",
         "properties": {

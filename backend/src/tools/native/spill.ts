@@ -1,16 +1,18 @@
 /**
  * @file spill.ts
- * @input A spill path template, the call's identities, and a retention window
- * @output Exports resolveSpillPath(), spillPrunePattern(), prepareSpillDir(), pruneSpillFiles()
+ * @input A spill storage directory or legacy path template, the call's identities, and a retention window
+ * @output Exports path-safe filename encoding, legacy template helpers, directory preparation, and retention pruning
  * @position Per-stream full-output files behind the native bash tool
  *
  * The middle of a truncated stream exists nowhere else — the collector dropped it
  * and the model only sees the head and the tail — so the complete bytes are teed
- * to a file while they are read. Locations come from a template validated at
- * configuration time, and pruning only ever removes files that the same template
- * could have created, because the directory usually belongs to a user's project.
+ * to a file while they are read. Generated filenames are fixed and path-safe;
+ * legacy locations come from a template validated at configuration time. Pruning
+ * only ever removes files matching those generated or legacy names, because the
+ * directory usually belongs to a user's project.
  */
 
+import {createHash} from "node:crypto";
 import {mkdir, readdir, stat, unlink} from "node:fs/promises";
 import {basename, dirname} from "node:path";
 
@@ -35,6 +37,19 @@ export const SPILL_PLACEHOLDERS = [
 ] as const;
 
 export type SpillPlaceholder = (typeof SPILL_PLACEHOLDERS)[number];
+
+/** Keeps generated filenames path-safe and bounded even for unusual call IDs. */
+export function encodeSpillCallId(callId: string): string {
+  let encoded: string;
+  try {
+    encoded = encodeURIComponent(callId);
+  } catch {
+    encoded = Buffer.from(callId, "utf8").toString("base64url");
+  }
+  if (encoded.length <= 180) return encoded || "empty";
+  const digest = createHash("sha256").update(callId).digest("hex").slice(0, 16);
+  return `${encoded.slice(0, 120)}-${digest}`;
+}
 
 const PLACEHOLDER_PATTERN = /\{([a-z_]+)\}/g;
 

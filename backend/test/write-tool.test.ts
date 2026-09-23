@@ -234,17 +234,16 @@ test("writes files, creates parent directories, and reports compact fields", asy
       "replacement content\n",
     );
 
-    const noBackup = await runWrite(catalog, sessionDir, "write-no-backup", {
+    const updatedAgain = await runWrite(catalog, sessionDir, "write-update-again", {
       path: "nested/deeper/file.txt",
-      content: "no backup content\n",
-      backup: false,
+      content: "updated again\n",
     });
-    assert.equal(firstLine(noBackup).status, "ok");
-    assert.equal(informationFields(noBackup).action, "updated");
-    assert.equal(informationFields(noBackup).backup_path, undefined);
+    assert.equal(firstLine(updatedAgain).status, "ok");
+    assert.equal(informationFields(updatedAgain).action, "updated");
+    assert.ok(informationFields(updatedAgain).backup_path);
     assert.equal(
       (await backupNamesIn(sessionDir, "nested/deeper", "file.txt")).length,
-      1,
+      2,
     );
 
     const binary = await runWrite(catalog, sessionDir, "write-binary", {
@@ -496,12 +495,11 @@ test("reports identical content as unchanged without touching the file", async (
     });
     assert.equal(informationFields(encoded).action, "unchanged");
 
-    const noBackup = await runWrite(catalog, sessionDir, "noop-no-backup", {
+    const unchangedAgain = await runWrite(catalog, sessionDir, "noop-again", {
       path: "same.txt",
       content: "same content\n",
-      backup: false,
     });
-    assert.equal(informationFields(noBackup).action, "unchanged");
+    assert.equal(informationFields(unchangedAgain).action, "unchanged");
 
     const updated = await runWrite(catalog, sessionDir, "noop-different", {
       path: "same.txt",

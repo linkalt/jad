@@ -1,5 +1,5 @@
 import {constants as fsConstants, type Stats} from "node:fs";
-import {lstat, mkdir, open, realpath} from "node:fs/promises";
+import {lstat, mkdir, open, realpath, stat} from "node:fs/promises";
 import {basename, dirname, isAbsolute, relative, resolve, sep} from "node:path";
 
 import type {NativePathPolicy} from "../../config.js";
@@ -131,7 +131,11 @@ export function pathPolicyError(
       [["path", errorPath(workspaceRoot, target)]],
     );
   }
-  if (withinRoot(workspaceRoot, target) || matches.some((rule) => rule.action === "allow")) {
+  if (
+    policy.unrestricted_paths ||
+    withinRoot(workspaceRoot, target) ||
+    matches.some((rule) => rule.action === "allow")
+  ) {
     return undefined;
   }
   return executionError(
@@ -141,6 +145,22 @@ export function pathPolicyError(
     "The requested path is outside the workspace",
     [["path", errorPath(workspaceRoot, target)]],
   );
+}
+
+/**
+ * True when a resolved path may be used even though its spelling differs from
+ * the requested one — a symlinked directory in the chain, or a symlinked final
+ * component. The path policy decides: an unrestricted policy, a path inside the
+ * workspace, or an allow rule covering the resolved path all permit it, while a
+ * deny rule (or an outside path with no rule) keeps it forbidden.
+ */
+function resolvedPathAllowed(
+  target: string,
+  root: string,
+  policy: NativePathPolicy,
+  callId: string,
+): boolean {
+  return pathPolicyError(target, root, policy, callId) === undefined;
 }
 
 async function workspaceRootOrError(
@@ -219,7 +239,7 @@ export async function resolveExistingTarget(
     };
   }
 
-  if (!withinRoot(root, target) && target !== candidate) {
+  if (target !== candidate && !withinRoot(root, target) && !resolvedPathAllowed(target, root, policy, callId)) {
     return {
       error: executionError(
         callId,
@@ -236,7 +256,7 @@ export async function resolveExistingTarget(
     return {error: targetPolicyError};
   }
 
-  if (target !== candidate) {
+  if (target !== candidate && !resolvedPathAllowed(target, root, policy, callId)) {
     return {
       error: executionError(
         callId,
@@ -375,7 +395,7 @@ export async function prepareMutateParent(
       "not_found",
     );
   }
-  if (realParent !== parent) {
+  if (realParent !== parent && !resolvedPathAllowed(realParent, root, policy, callId)) {
     return writePathError(
       callId,
       root,
@@ -491,15 +511,73 @@ export async function inspectMutateTarget(
   }
 
   if (existing.isSymbolicLink()) {
+    // A symlinked target is allowed only when the policy covers the file it
+    // resolves to. The mutation then targets that resolved file, and
+    // `commitFile` still re-checks its identity before replacing it.
+    const linked = await realpath(candidate).catch(() => undefined);
+    if (linked === undefined || !resolvedPathAllowed(linked, root, policy, callId)) {
+      return {
+        error: writePathError(
+          callId,
+          root,
+          candidate,
+          "symlink_forbidden",
+          "The target is a symlink",
+          "forbidden",
+        ),
+      };
+    }
+    const linkedPolicyError = pathPolicyError(linked, root, policy, callId);
+    if (linkedPolicyError) {
+      return {error: linkedPolicyError};
+    }
+    let linkedStats: Stats;
+    try {
+      linkedStats = await stat(linked);
+    } catch {
+      return {
+        error: writePathError(
+          callId,
+          root,
+          candidate,
+          "path_resolution_failed",
+          "The target could not be resolved",
+        ),
+      };
+    }
+    if (linkedStats.isDirectory()) {
+      return {
+        error: writePathError(
+          callId,
+          root,
+          candidate,
+          "target_is_directory",
+          "The target is a directory",
+        ),
+      };
+    }
+    if (!linkedStats.isFile()) {
+      return {
+        error: writePathError(
+          callId,
+          root,
+          candidate,
+          "unsupported_file_type",
+          "The target is not a regular file",
+        ),
+      };
+    }
     return {
-      error: writePathError(
-        callId,
-        root,
-        candidate,
-        "symlink_forbidden",
-        "The target is a symlink",
-        "forbidden",
-      ),
+      target: {
+        workspaceRoot: root,
+        realPath: linked,
+        displayPath: displayPath(root, linked),
+        errorPath: candidateErrorPath,
+        existed: true,
+        mode: linkedStats.mode & 0o7777,
+        size: linkedStats.size,
+        identity: {device: linkedStats.dev, inode: linkedStats.ino},
+      },
     };
   }
   if (existing.isDirectory()) {
@@ -539,7 +617,7 @@ export async function inspectMutateTarget(
       ),
     };
   }
-  if (target !== candidate) {
+  if (target !== candidate && !resolvedPathAllowed(target, root, policy, callId)) {
     return {
       error: writePathError(
         callId,

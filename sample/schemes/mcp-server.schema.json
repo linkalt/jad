@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mcp-server.schema.json",
+  "title": "Agent Harness MCP server configuration",
+  "type": "object",
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1, "default": 1},
+    "transport": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "command"],
+          "properties": {
+            "type": {"const": "stdio"},
+            "command": {"type": "string", "pattern": "\\S"},
+            "args": {"type": "array", "items": {"type": "string"}, "default": []},
+            "cwd": {"type": "string", "pattern": "\\S", "description": "Optional process working directory, relative to the session cwd."},
+            "env": {
+              "type": "object",
+              "description": "Environment values passed to the MCP process. Avoid placing secrets here; use env_from for secrets.",
+              "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+              "additionalProperties": {"type": "string"},
+              "default": {}
+            },
+            "env_from": {
+              "type": "object",
+              "description": "Map child environment names to names of variables in the backend environment; secret values are not stored in this file.",
+              "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+              "additionalProperties": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+              "default": {}
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "url"],
+          "properties": {
+            "type": {"const": "streamable_http"},
+            "url": {"type": "string", "format": "uri"},
+            "headers_from": {
+              "type": "object",
+              "description": "Map HTTP header names to names of variables in the backend environment; secret values are not stored in this file.",
+              "additionalProperties": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+              "default": {}
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 600000,
+      "description": "Connection and tool-call timeout. Defaults to 30000.",
+      "default": 30000
+    },
+    "max_result_bytes": {
+      "type": "integer",
+      "minimum": 512,
+      "maximum": 16777216,
+      "description": "Maximum serialized MCP tool result content sent to the model. Defaults to 1048576.",
+      "default": 1048576
+    }
+  },
+  "required": ["transport"],
+  "additionalProperties": false
+}

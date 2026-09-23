@@ -18,7 +18,7 @@ export const nativeTaskDefinition: ToolDefinition = {
   id: NATIVE_TASK_ID,
   source: "native",
   name: "task",
-  description: "Maintain the session task plan. Omit action when title, id, or filters make the intent clear; tasks start as todo unless status is in-progress.",
+  description: "Create and maintain session tasks.",
   inputSchema: {
     type: "object",
     properties: {
@@ -33,6 +33,15 @@ export const nativeTaskDefinition: ToolDefinition = {
       limit: {type: "integer", minimum: 1, description: "Optional list limit; defaults to the session policy."},
     },
     additionalProperties: false,
+    allOf: [
+      {if: {properties: {action: {const: "add"}}, required: ["action"]}, then: {properties: {title: {}}, required: ["title"]}},
+      {if: {properties: {action: {enum: ["get", "update", "done", "delete"]}}, required: ["action"]}, then: {properties: {id: {}}, required: ["id"]}},
+      {if: {properties: {action: {const: "update"}}, required: ["action"]}, then: {anyOf: [
+        {properties: {title: {}}, required: ["title"]}, {properties: {status: {}}, required: ["status"]},
+        {properties: {priority: {}}, required: ["priority"]}, {properties: {tags: {}}, required: ["tags"]},
+        {properties: {documents: {}}, required: ["documents"]},
+      ]}},
+    ],
   },
 };
 
@@ -41,6 +50,14 @@ type TaskAction = "list" | "get" | "add" | "update" | "done" | "delete";
 interface TaskContext extends ToolExecutionContext {
   policy: NativeTaskToolSettings;
   store: TaskStore;
+}
+
+export async function collectTaskStateContext(store: TaskStore, options: NativeTaskToolSettings["statecontext"]): Promise<JsonRecord> {
+  const listed = await store.list({statuses: options.statuses, limit: options.limit});
+  return {
+    items: listed.tasks.map(({id, title, status, priority, tags, updated_at}) => ({id, title, status, priority, tags, updated_at})),
+    has_more: listed.hasMore,
+  };
 }
 
 const ACTIONS: Record<string, TaskAction> = {
@@ -86,6 +103,7 @@ export function normalizeTaskArguments(args: JsonRecord): JsonRecord {
   if (rawAction) normalized.action = ACTIONS[rawAction] ?? rawAction;
   if (normalized.id === undefined && typeof args.taskId === "string") normalized.id = args.taskId;
   if (normalized.limit === undefined && args.maxItems !== undefined) normalized.limit = args.maxItems;
+  if (typeof normalized.limit === "number" && Number.isSafeInteger(normalized.limit)) normalized.limit = Math.max(1, normalized.limit);
   const id = text(normalized.id);
   if (id !== undefined) normalized.id = id.toUpperCase();
   const title = text(normalized.title);

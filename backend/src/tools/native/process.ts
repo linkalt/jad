@@ -13,7 +13,7 @@ export const nativeProcessDefinition: ToolDefinition = {
   id: NATIVE_PROCESS_ID,
   source: "native",
   name: "process",
-  description: "Start and manage a long-running shell process. Call with command to start, id to inspect status and recent logs, or no arguments to list session processes. Use action wait to wait briefly for one process and stop to terminate one managed process.",
+  description: "Start, inspect, wait for, or stop a managed long-running process.",
   inputSchema: {
     type: "object",
     properties: {
@@ -26,6 +26,10 @@ export const nativeProcessDefinition: ToolDefinition = {
     },
     required: [],
     additionalProperties: false,
+    allOf: [
+      {if: {properties: {action: {const: "start"}}, required: ["action"]}, then: {properties: {command: {}}, required: ["command"]}},
+      {if: {properties: {action: {enum: ["status", "wait", "stop"]}}, required: ["action"]}, then: {properties: {id: {}}, required: ["id"]}},
+    ],
   },
 };
 
@@ -34,6 +38,19 @@ export interface NativeProcessExecutionContext extends ToolExecutionContext {
   manager: ProcessManager;
   apiKeyEnv: string;
   environment?: NodeJS.ProcessEnv;
+}
+
+export function collectProcessStateContext(manager: ProcessManager, options: NativeProcessToolSettings["statecontext"]): JsonRecord {
+  const matching = manager.list()
+    .filter((snapshot) => options.states.includes(snapshot.state))
+    .sort((left, right) => right.started_at.localeCompare(left.started_at) || left.id.localeCompare(right.id));
+  return {
+    items: matching.slice(0, options.limit).map(({id, state, cwd, started_at, ended_at, pid, exit_code, signal}) => ({
+      id, state, cwd, started_at, ...(ended_at ? {ended_at} : {}), ...(pid !== undefined ? {pid} : {}),
+      ...(exit_code !== undefined ? {exit_code} : {}), ...(signal !== undefined ? {signal} : {}),
+    })),
+    has_more: matching.length > options.limit,
+  };
 }
 
 type ProcessAction = "start" | "status" | "list" | "wait" | "stop";
@@ -65,6 +82,9 @@ export function normalizeProcessArguments(args: JsonRecord): JsonRecord {
   if (typeof normalized.filter === "string") {
     const filter = normalized.filter.trim().toLowerCase();
     normalized.filter = filter === "all" || filter.length === 0 ? undefined : filter;
+  }
+  if (typeof normalized.timeout_ms === "number" && Number.isSafeInteger(normalized.timeout_ms)) {
+    normalized.timeout_ms = Math.max(1, normalized.timeout_ms);
   }
   if (normalized.action === undefined && (normalized.filter !== undefined || suppliedFilter)) normalized.action = "list";
   return Object.fromEntries(Object.entries(normalized).filter(([, value]) => value !== undefined));

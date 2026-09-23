@@ -5,7 +5,7 @@
    "id": "native.bash",
    "source": "native",
    "name": "bash",
-   "description": "Run one shell command in the workspace and return its output. Use read, write, edit, and grep for file work; bash is for builds, tests, package managers, git, and pipelines. Every call is a fresh shell, so cd and export do not carry over: pass cwd or chain commands with &&. Commands must finish on their own, because stdin is closed and a prompt cannot be answered. A non-zero exit is reported as an error, with the output still returned. stdout and stderr are returned as separate sections when both wrote, each keeping its start and its end; when a stream was truncated, its complete bytes are in the file named by stdout_full or stderr_full, so read or grep that file instead of re-running the command.",
+   "description": "Run a bounded shell command. Use file tools for file operations.",
    "inputSchema": {
     "type": "object",
     "properties": {

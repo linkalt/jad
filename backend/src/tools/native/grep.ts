@@ -19,8 +19,7 @@ export const nativeGrepDefinition: ToolDefinition = {
   id: NATIVE_GREP_ID,
   source: "native",
   name: "grep",
-  description:
-    "Search file contents with ripgrep and return matching lines grouped by file.",
+  description: "Search workspace file contents and group matching lines by file.",
   inputSchema: {
     type: "object",
     properties: {
@@ -68,6 +67,14 @@ interface GrepArgs {
 
 interface GrepContext extends ToolExecutionContext {
   policy: NativeGrepToolSettings;
+}
+
+export function normalizeGrepArguments(args: JsonRecord): JsonRecord {
+  const normalized = {...args};
+  if (typeof args.context === "number" && Number.isSafeInteger(args.context)) {
+    normalized.context = Math.min(Math.max(args.context, 0), 20);
+  }
+  return normalized;
 }
 
 function searchFlags(args: GrepArgs): string[] {
@@ -256,7 +263,6 @@ export async function executeNativeGrep(
 
   const text = renderRipgrepGroups(allowed);
   const files = allowed.length;
-  const returnedBytes = Buffer.byteLength(text, "utf8");
   const information: Array<[string, unknown]> = [
     ["path", root.displayPath],
     ["pattern", grepArgs.pattern],
@@ -267,7 +273,6 @@ export async function executeNativeGrep(
       : []),
     ["files", files],
     ["matches", matches],
-    ["returned_bytes", returnedBytes],
     ["truncated", result.truncated],
     ...(result.truncationReason
       ? [["truncation_reason", result.truncationReason] as [string, unknown]]
@@ -278,9 +283,6 @@ export async function executeNativeGrep(
     ...(result.binarySkipped > 0
       ? [["binary_files_skipped", result.binarySkipped] as [string, unknown]]
       : []),
-    ["max_results", policy.max_results],
-    ["max_content_bytes", policy.max_bytes],
-    ["max_matches_per_file", policy.max_matches_per_file],
   ];
   const hints = searchHints(result, matches);
   if (hints.length > 0) {

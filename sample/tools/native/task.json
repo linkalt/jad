@@ -5,7 +5,7 @@
       "id": "native.task",
       "source": "native",
       "name": "task",
-      "description": "Maintain the session task plan. Omit action when title, id, or filters make the intent clear; tasks start as todo unless status is in-progress.",
+      "description": "Create and maintain session tasks.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -23,7 +23,16 @@
           "tag": {"type": "string", "minLength": 1, "description": "Optional tag filter for list."},
           "limit": {"type": "integer", "minimum": 1, "description": "Optional list limit; defaults to the session policy."}
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "allOf": [
+          {"if": {"properties": {"action": {"const": "add"}}, "required": ["action"]}, "then": {"properties": {"title": {}}, "required": ["title"]}},
+          {"if": {"properties": {"action": {"enum": ["get", "update", "done", "delete"]}}, "required": ["action"]}, "then": {"properties": {"id": {}}, "required": ["id"]}},
+          {"if": {"properties": {"action": {"const": "update"}}, "required": ["action"]}, "then": {"anyOf": [
+            {"properties": {"title": {}}, "required": ["title"]}, {"properties": {"status": {}}, "required": ["status"]},
+            {"properties": {"priority": {}}, "required": ["priority"]}, {"properties": {"tags": {}}, "required": ["tags"]},
+            {"properties": {"documents": {}}, "required": ["documents"]}
+          ]}}
+        ]
       }
     }
   ]

@@ -19,7 +19,8 @@ const policy: NativeTaskToolSettings = {
   max_document_chars: 100,
   max_storage_bytes: 10_000,
   max_list_bytes: 1_000,
-  storage_path: ".tasks.json",
+  storage_dir: ".tasks",
+  statecontext: {statuses: ["in-progress", "done"], limit: 25},
 };
 
 function taskId(text: string): string {
@@ -30,7 +31,7 @@ function taskId(text: string): string {
 
 async function makeRunner(overrides: Partial<NativeTaskToolSettings> = {}) {
   const directory = await mkdtemp(join(tmpdir(), "agent-task-tool-"));
-  const store = new TaskStore(join(directory, "tasks.json"));
+  const store = new TaskStore(join(directory, "tasks"));
   let sequence = 0;
   const run = (args: Record<string, unknown>) => executeNativeTask(args, {
     callId: `call-${sequence += 1}`,
@@ -53,14 +54,19 @@ test("normalizes task settings and task storage paths", async () => {
         max_tasks: 12,
         list_limit: 2,
         max_list_limit: 3,
-        storage_path: "plans/tasks.json",
+        storage_dir: "plans",
       }}}, 
     }));
     const loader = new SessionConfigLoader(directory);
     const settings = await loader.loadSettings();
     assert.equal(settings.tools.native.task?.max_tasks, 12);
     assert.equal(settings.tools.native.task?.list_limit, 2);
-    assert.equal(settings.tools.native.task?.storage_path, join(workspace, "plans/tasks.json"));
+    assert.equal(settings.tools.native.task?.storage_dir, join(workspace, "plans"));
+    const absolute = join(directory, "absolute-tasks");
+    await writeFile(join(directory, "setting.json"), JSON.stringify({cwd: workspace, tools: {native: {task: {storage_dir: absolute}}}}));
+    assert.equal((await new SessionConfigLoader(directory).loadSettings()).tools.native.task?.storage_dir, absolute);
+    await writeFile(join(directory, "setting.json"), JSON.stringify({cwd: workspace, tools: {native: {task: {storage_path: "tasks.json"}}}}));
+    await assert.rejects(new SessionConfigLoader(directory).loadSettings(), /storage_path was removed; use storage_dir/);
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
@@ -90,7 +96,7 @@ test("adds, updates, completes, lists, and persists documented tasks", async () 
     assert.match(done, new RegExp(first));
     const fetched = await run({id: active});
     assert.match(fetched, /docs\/plan.md/);
-    const stored = JSON.parse(await readFile(join(directory, "tasks.json"), "utf8")) as {tasks: Array<{id: string}>};
+    const stored = JSON.parse(await readFile(join(directory, "tasks", "tasks.json"), "utf8")) as {tasks: Array<{id: string}>};
     assert.deepEqual(stored.tasks.map((task) => task.id), [first, active]);
   } finally {
     await rm(directory, {recursive: true, force: true});
@@ -120,10 +126,10 @@ test("bounds task count, documents, and list output without corrupting storage",
     assert.match(list, /has_more: true/);
     assert.doesNotMatch(list, /--- CONTENT/);
     assert.match(await run({id, documents: ["a.md", "b.md", "c.md", "d.md", "e.md"]}), /error_code: invalid_documents/);
-    const before = await readFile(join(directory, "tasks.json"), "utf8");
-    await writeFile(join(directory, "tasks.json"), "not-json");
+    const before = await readFile(join(directory, "tasks", "tasks.json"), "utf8");
+    await writeFile(join(directory, "tasks", "tasks.json"), "not-json");
     assert.match(await run({title: "Unsafe overwrite"}), /error_code: task_storage_error/);
-    assert.equal(await readFile(join(directory, "tasks.json"), "utf8"), "not-json");
+    assert.equal(await readFile(join(directory, "tasks", "tasks.json"), "utf8"), "not-json");
     assert.notEqual(before, "not-json");
   } finally {
     await rm(directory, {recursive: true, force: true});

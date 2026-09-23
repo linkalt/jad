@@ -37,8 +37,7 @@ export const nativeGlobDefinition: ToolDefinition = {
   id: NATIVE_GLOB_ID,
   source: "native",
   name: "glob",
-  description:
-    "List files matching a name pattern, sorted by path. Use it to find files by name or extension; use grep to search file contents and read to open a specific file. Patterns without a slash match the file name at any depth (*.ts), patterns with a slash match the path relative to the workspace (src/**/*.ts), and {} supports alternatives (*.{ts,tsx}). Hidden files are listed, files git ignores are not, and symlinks are skipped.",
+  description: "List workspace files by glob; use grep to search file contents.",
   inputSchema: {
     type: "object",
     properties: {
@@ -373,7 +372,6 @@ export async function executeNativeGlob(
     ["files", listed.length],
     ["truncated", truncated],
     ...(truncationReason ? [["truncation_reason", truncationReason] as [string, unknown]] : []),
-    ["max_results", policy.max_results],
     ...(hints.length > 0 ? [["hint", hints.join("; ")] as [string, unknown]] : []),
   ];
 

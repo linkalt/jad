@@ -5,7 +5,7 @@
       "id": "native.process",
       "source": "native",
       "name": "process",
-      "description": "Start and manage a long-running shell process. Call with command to start, id to inspect status and recent logs, or no arguments to list session processes. Use action wait to wait briefly for one process and stop to terminate one managed process.",
+      "description": "Start, inspect, wait for, or stop a managed long-running process.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -17,7 +17,11 @@
           "timeout_ms": {"type": "integer", "minimum": 1, "description": "Maximum time wait blocks; clamped to session policy."}
         },
         "required": [],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "allOf": [
+          {"if": {"properties": {"action": {"const": "start"}}, "required": ["action"]}, "then": {"properties": {"command": {}}, "required": ["command"]}},
+          {"if": {"properties": {"action": {"enum": ["status", "wait", "stop"]}}, "required": ["action"]}, "then": {"properties": {"id": {}}, "required": ["id"]}}
+        ]
       }
     }
   ]

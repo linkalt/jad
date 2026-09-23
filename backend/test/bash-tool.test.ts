@@ -81,10 +81,8 @@ test("runs the smallest call and reports where it ran", {skip: bashSkip}, async 
     assert.match(output, /"summary":"Command completed in \d+ ms"/);
     const fields = informationFields(output);
     assert.equal(fields.cwd, ".");
-    assert.equal(fields.exit_code, "0");
-    assert.equal(fields.truncated, "false");
-    assert.ok(Number(fields.stdout_bytes) > 0);
-    assert.equal(fields.stderr_bytes, "0");
+    assert.equal(fields.exit_code, undefined);
+    assert.equal(fields.truncated, undefined);
     assert.doesNotMatch(output, /error_code/);
     assert.match(output, /--- CONTENT token=[\w-]+ encoding=utf8 ---/);
     assert.match(output, /hello-from-bash/);
@@ -99,8 +97,7 @@ test("returns metadata only when a command prints nothing", {skip: bashSkip}, as
     const output = await run("bash-silent", {command: "true"});
     assert.equal(firstLine(output).status, "ok");
     const fields = informationFields(output);
-    assert.equal(fields.stdout_bytes, "0");
-    assert.equal(fields.stderr_bytes, "0");
+    assert.equal(fields.truncated, undefined);
     assert.doesNotMatch(output, /--- CONTENT token=/);
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
@@ -137,9 +134,6 @@ test("attributes stdout and stderr and keeps both in one stream", {skip: bashSki
     });
     assert.equal(firstLine(output).status, "ok");
     const fields = informationFields(output);
-    assert.ok(Number(fields.stdout_bytes) >= 7);
-    assert.ok(Number(fields.stderr_bytes) >= 7);
-    assert.ok(Number(fields.stdout_shown_bytes) >= 7);
     assert.match(output, /to-out[\s\S]*to-err/);
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
@@ -187,7 +181,7 @@ test("cuts long lines and keeps the end of a large stream", {skip: bashSkip}, as
     assert.match(flood, /\[\.\.\. \d+ bytes omitted \.\.\.\]/);
     assert.match(flood, /1\n2\n3\n/);
     assert.match(flood, /20000\n+--- END CONTENT/);
-    assert.ok(Number(fields.returned_bytes) < 4096 + 512);
+    assert.ok(Buffer.byteLength(flood, "utf8") < 4096 + 1024);
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
   }
@@ -220,7 +214,7 @@ test("keeps memory bounded for a very large stream", {skip: bashSkip}, async () 
     const output = await run("bash-huge", {command: "seq 1 500000"});
     const fields = informationFields(output);
     assert.equal(fields.truncated, "true");
-    assert.ok(Number(fields.returned_bytes) < 8192 + 512);
+    assert.ok(Buffer.byteLength(output, "utf8") < 8192 + 1024);
     assert.ok(Number(fields.omitted_bytes) > 1024 * 1024);
     assert.match(output, /500000\n+--- END CONTENT/);
   } finally {
@@ -642,8 +636,7 @@ test("clamps the per-call timeout to the configured range", () => {
       keep: "truncated_only" as const,
       cap_bytes: 1024,
       retention_days: 0,
-      stdout_full: "{cwd}/x-{call_id}.{stream}.log",
-      stderr_full: "{cwd}/x-{call_id}.{stream}.log",
+      storage_dir: ".bash-output",
       allow_unreadable: true,
     },
     max_line_chars: 100,
@@ -651,6 +644,7 @@ test("clamps the per-call timeout to the configured range", () => {
     env: {},
     env_deny: [],
     paths: [],
+    unrestricted_paths: false,
   };
   assert.equal(effectiveTimeoutMs(undefined, settings), 60_000);
   assert.equal(effectiveTimeoutMs(1000, settings), 1000);
@@ -703,7 +697,8 @@ test("validates bash settings and inherits write path rules", async () => {
     assert.equal(bash.spill.keep, "truncated_only");
     assert.equal(bash.spill.cap_bytes, 64 * 1024 * 1024);
     assert.equal(bash.spill.retention_days, 14);
-    assert.equal(bash.spill.stdout_full, "{cwd}/.bash-output/bash-{call_id}.{stream}.log");
+    assert.equal(bash.spill.storage_dir, join(sessionDir, ".bash-output"));
+    assert.equal(bash.spill.stdout_full, undefined);
     assert.equal(bash.spill.allow_unreadable, false);
     assert.equal(bash.max_line_chars, 2000);
     assert.equal(bash.strip_ansi, true);
@@ -731,6 +726,7 @@ test("validates bash settings and inherits write path rules", async () => {
       // The spill template needs a call id and known placeholders.
       {spill: {stdout_full: "fixed.log"}},
       {spill: {stdout_full: "{cwd}/{nope}-{call_id}.log"}},
+      {spill: {storage_dir: "custom-output", stdout_full: "{cwd}/old-{call_id}.log"}},
       // Both streams cannot share one file.
       {
         spill: {
@@ -747,6 +743,7 @@ test("validates bash settings and inherits write path rules", async () => {
           stderr_full: "/tmp/agent-harness-spill-{call_id}.{stream}.log",
         },
       },
+      {spill: {storage_dir: "/tmp/agent-harness-spill-directory"}},
       {max_line_chars: 5},
       {strip_ansi: "yes"},
       {env: {HARNESS_BAD: 1}},
@@ -865,7 +862,6 @@ test("labels each stream when both wrote", {skip: bashSkip}, async () => {
       command: "printf 'out\\n'; printf 'err\\n' 1>&2",
     });
     assert.equal(firstLine(output).status, "ok");
-    assert.equal(informationFields(output).content_stream, "mixed");
     assert.match(output, /\[stdout\]\nout\n\[stderr\]\nerr\n/);
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
@@ -884,9 +880,6 @@ test("keeps stderr when stdout floods", {skip: bashSkip}, async () => {
     });
     const fields = informationFields(output);
     // Each stream owns its windows, so the flood cannot evict the error.
-    assert.equal(fields.content_stream, "mixed");
-    assert.equal(fields.stderr_omitted_bytes, undefined);
-    assert.equal(fields.stderr_shown_bytes, "16");
     assert.match(output, /\[stderr\]\nimportant-error/);
     assert.match(output, /200000/);
   } finally {
@@ -904,14 +897,12 @@ test("spills a truncated stream to a file the model can read", {skip: bashSkip},
     const output = await run("bash-spill", {command: "seq 1 5000"});
     const fields = informationFields(output);
     assert.equal(fields.truncated, "true");
-    assert.equal(fields.content_stream, "stdout");
-    assert.ok(fields.stdout_full, "the complete stdout must be reported");
+    assert.equal(fields.stdout_full, ".bash-output/bash-bash-spill.stdout.log");
     const written = await readFile(join(sessionDir, fields.stdout_full!), "utf8");
     // The file holds every byte, including the middle the content dropped.
     assert.equal(written.split("\n").length - 1, 5000);
     assert.match(written, /^1\n2\n3\n/);
     assert.match(written, /5000\n$/);
-    assert.ok(Number(fields.stdout_full_bytes) > 2048);
     assert.match(fields.hint ?? "", /read or grep/);
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
@@ -932,13 +923,43 @@ test("removes the spill file when the model saw the whole stream", {skip: bashSk
 });
 
 test("keeps every call's output when keep is always", {skip: bashSkip}, async () => {
-  const {sessionDir, run} = await openBashSession({spill: {keep: "always"}});
+  const {sessionDir, run} = await openBashSession({spill: {keep: "always", storage_dir: "custom-spill"}});
   try {
     const output = await run("bash-spill-always", {command: "printf 'kept\\n'"});
     const fields = informationFields(output);
-    assert.equal(fields.stdout_full, ".bash-output/bash-bash-spill-always.stdout.log");
+    assert.equal(fields.stdout_full, "custom-spill/bash-bash-spill-always.stdout.log");
     const written = await readFile(join(sessionDir, fields.stdout_full!), "utf8");
     assert.equal(written, "kept\n");
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("keeps generated spill filenames inside storage_dir for unusual call IDs", {skip: bashSkip}, async () => {
+  const {sessionDir, run} = await openBashSession({spill: {keep: "always"}});
+  try {
+    const output = await run(`../../../../outside/${"x".repeat(300)}`, {command: "printf 'safe\\n'"});
+    const fields = informationFields(output);
+    assert.match(String(fields.stdout_full), /^\.bash-output\/bash-[^/]+\.stdout\.log$/);
+    assert.equal(await readFile(join(sessionDir, String(fields.stdout_full)), "utf8"), "safe\n");
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("continues accepting legacy per-stream spill templates", {skip: bashSkip}, async () => {
+  const {sessionDir, run} = await openBashSession({
+    spill: {
+      keep: "always",
+      storage_dir: ".bash-output",
+      stdout_full: "{cwd}/legacy-spill/stdout-{call_id}.log",
+    },
+  });
+  try {
+    const output = await run("legacy-template-call", {command: "printf 'legacy\\n'"});
+    const fields = informationFields(output);
+    assert.equal(fields.stdout_full, "legacy-spill/stdout-legacy-template-call.log");
+    assert.equal(await readFile(join(sessionDir, fields.stdout_full!), "utf8"), "legacy\n");
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
   }
@@ -955,7 +976,6 @@ test("caps a spill file and says so", {skip: bashSkip}, async () => {
     const output = await run("bash-spill-cap", {command: "seq 1 5000"});
     const fields = informationFields(output);
     assert.equal(fields.stdout_full_capped, "true");
-    assert.ok(Number(fields.stdout_full_bytes) <= 512);
     const written = await readFile(join(sessionDir, fields.stdout_full!), "utf8");
     assert.ok(Buffer.byteLength(written, "utf8") <= 512);
     assert.match(written, /^1\n/);
@@ -969,7 +989,7 @@ test("reports a spill failure without failing the command", {skip: bashSkip}, as
     max_bytes: 2048,
     stdout: {head_bytes: 512, tail_bytes: 512},
     stderr: {head_bytes: 512, tail_bytes: 512},
-    spill: {stdout_full: "{cwd}/blocked/out-{call_id}.{stream}.log"},
+    spill: {storage_dir: "blocked/out"},
   });
   try {
     // A file where the directory should be makes the spill impossible.
@@ -987,9 +1007,9 @@ test("reports a spill failure without failing the command", {skip: bashSkip}, as
 });
 
 test("prunes expired spill files and leaves other files alone", {skip: bashSkip}, async () => {
-  const {sessionDir, run} = await openBashSession({spill: {retention_days: 1}});
+  const {sessionDir, run} = await openBashSession({spill: {retention_days: 1, storage_dir: "custom-spills"}});
   try {
-    const directory = join(sessionDir, ".bash-output");
+    const directory = join(sessionDir, "custom-spills");
     await mkdir(directory, {recursive: true});
     const expired = join(directory, "bash-old-call.stdout.log");
     const unrelated = join(directory, "notes.txt");

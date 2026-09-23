@@ -30,6 +30,20 @@
           "minimum": 1,
           "maximum": 67108864,
           "default": 1048576
+        },
+        "run_state_retention_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400000,
+          "default": 30000,
+          "description": "How long a finished run stays attachable, so a browser reload can still catch its completion."
+        },
+        "tool_stream_interval_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60000,
+          "default": 120,
+          "description": "Coalescing window for in-progress tool-call snapshots. Long arguments stream as one snapshot per window instead of one per delta; 0 streams every delta."
         }
       },
       "additionalProperties": true,

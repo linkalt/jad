@@ -1,0 +1,168 @@
+import assert from "node:assert/strict";
+import {mkdir, mkdtemp, rm, stat, writeFile} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import test from "node:test";
+
+import {SessionConfigLoader, type LoadedSessionConfig, type NativeMemoryToolSettings, type NativeProcessToolSettings, type NativeTaskToolSettings} from "../src/config.js";
+import {collectStateContextSnapshot} from "../src/statecontext.js";
+import {buildResponseRequest} from "../src/session.js";
+import {collectMemoryStateContext} from "../src/tools/native/memory.js";
+import {MemoryStore} from "../src/tools/native/memory-store.js";
+import {collectProcessStateContext} from "../src/tools/native/process.js";
+import {ProcessManager} from "../src/tools/native/process-manager.js";
+import {collectTaskStateContext} from "../src/tools/native/task.js";
+import {TaskStore} from "../src/tools/native/task-store.js";
+
+const taskPolicy: NativeTaskToolSettings = {
+  max_tasks: 100, list_limit: 20, max_list_limit: 100, max_title_chars: 500,
+  max_tags: 16, max_tag_chars: 50, max_documents: 16, max_document_chars: 1024,
+  max_storage_bytes: 1_000_000, max_list_bytes: 64_000, storage_dir: ".tasks",
+  statecontext: {statuses: ["in-progress", "done"], limit: 20},
+};
+
+const memoryPolicy: NativeMemoryToolSettings = {
+  storage_dir: ".memory", statecontext: [], max_types: 8, max_records_per_type: 100,
+  max_total_records: 500, max_record_bytes: 32_000, max_total_bytes: 1_000_000,
+  list_limit: 20, max_list_limit: 100, max_list_bytes: 32_000, max_scan_records: 500,
+  max_scan_bytes: 1_000_000, max_filter_fields: 8, max_filter_depth: 8,
+  max_json_depth: 32, max_cursors: 100, cursor_ttl_ms: 60_000, max_cursor_bytes: 64_000,
+};
+
+const processPolicy: NativeProcessToolSettings = {
+  shell: "/bin/bash", login_shell: false, kill_grace_ms: 100, max_running: 4,
+  max_completed: 10, retention_days: 14, wait_timeout_ms: 100, max_wait_timeout_ms: 2_000,
+  stdout: {head_bytes: 64, tail_bytes: 64}, stderr: {head_bytes: 64, tail_bytes: 64},
+  log_cap_bytes: 10_000, max_line_chars: 200, strip_ansi: true, env: {}, env_deny: [],
+  storage_dir: ".processes", paths: [], unrestricted_paths: false, statecontext: {states: ["running"], limit: 10},
+};
+
+async function tempDirectory(prefix: string): Promise<string> {
+  return mkdtemp(join(tmpdir(), prefix));
+}
+
+test("normalizes statecontext options and its setting.paths snapshot path", async () => {
+  const directory = await tempDirectory("agent-statecontext-config-");
+  const cwd = join(directory, "workspace");
+  try {
+    await mkdir(cwd);
+    await writeFile(join(directory, "model.json"), JSON.stringify({model: "gpt-test"}));
+    await writeFile(join(directory, "setting.json"), JSON.stringify({
+      cwd,
+      statecontext: {enabled: true, trigger: ["compaction"], tools: ["task", "memory", "process"], role: "developer"},
+      paths: {statecontext: "runtime/current-state.json"},
+      tools: {native: {
+        task: {statecontext: {statuses: ["in-progress", "done"], limit: 7}},
+        process: {statecontext: {states: ["running"], limit: 4}},
+        memory: {statecontext: [{type: "project", filter: {status: "active"}, limit: 3}]},
+      }},
+    }));
+    const settings = await new SessionConfigLoader(directory).loadSettings();
+    assert.equal(settings.statecontext.enabled, true);
+    assert.deepEqual(settings.statecontext.tools, ["task", "memory", "process"]);
+    assert.equal(settings.paths.statecontext, join(directory, "runtime/current-state.json"));
+    assert.deepEqual(settings.tools.native.task?.statecontext, {statuses: ["in-progress", "done"], limit: 7});
+    assert.deepEqual(settings.tools.native.process?.statecontext, {states: ["running"], limit: 4});
+    assert.deepEqual(settings.tools.native.memory?.statecontext, [{type: "project", filter: {status: "active"}, limit: 3}]);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("task statecontext includes configured statuses and reports omitted tasks", async () => {
+  const directory = await tempDirectory("agent-statecontext-task-");
+  try {
+    const store = new TaskStore(directory);
+    await store.create({title: "Current work", status: "in-progress", priority: "high", tags: ["backend"], documents: []}, taskPolicy);
+    await store.create({title: "Finished work", status: "done", priority: "normal", tags: [], documents: []}, taskPolicy);
+    await store.create({title: "Later work", status: "todo", priority: "low", tags: [], documents: []}, taskPolicy);
+    const state = await collectTaskStateContext(store, {...taskPolicy.statecontext, limit: 1});
+    assert.deepEqual((state.items as Array<{status: string}>).map((item) => item.status), ["in-progress"]);
+    assert.equal(state.has_more, true);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("memory statecontext dynamically selects types and filters without creating pagination cursors", async () => {
+  const directory = await tempDirectory("agent-statecontext-memory-");
+  try {
+    const root = join(directory, "memory");
+    const store = new MemoryStore(root);
+    await store.create("project", {status: "active", name: "current"}, memoryPolicy);
+    await store.create("project", {status: "archived", name: "old"}, memoryPolicy);
+    await store.create("note", {status: "active", name: "not-selected"}, memoryPolicy);
+    const state = await collectMemoryStateContext(store, memoryPolicy, [
+      {type: "project", filter: {status: "active"}, limit: 1},
+    ]);
+    assert.equal(state.items instanceof Array, true);
+    assert.equal((state.items as Array<{type: string; data: {name: string}}>).length, 1);
+    assert.equal((state.items as Array<{type: string; data: {name: string}}>)[0]?.type, "project");
+    assert.equal((state.items as Array<{type: string; data: {name: string}}>)[0]?.data.name, "current");
+    assert.equal(state.has_more, false);
+    await assert.rejects(() => stat(join(root, ".cursors")), {code: "ENOENT"});
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("process statecontext includes only configured process states", async () => {
+  const directory = await tempDirectory("agent-statecontext-process-");
+  const manager = new ProcessManager(directory);
+  try {
+    await manager.recover();
+    const startedProcess = await manager.start({
+      cwd: directory, displayCwd: directory, command: "sleep 30", policy: processPolicy,
+      environment: globalThis.process.env, apiKeyEnv: "UNUSED_API_KEY",
+    });
+    const state = collectProcessStateContext(manager, processPolicy.statecontext);
+    assert.equal((state.items as Array<{id: string; state: string}>).length, 1);
+    assert.equal((state.items as Array<{id: string; state: string}>)[0]?.id, startedProcess.id);
+    assert.equal((state.items as Array<{id: string; state: string}>)[0]?.state, "running");
+  } finally {
+    await manager.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("statecontext is appended after the cached history and tool results, not after the prompt", () => {
+  const config = {
+    model: {model: "test-model", request: {}},
+    settings: {prompt_text: "stable instructions", prompt_role: "system"},
+  } as unknown as LoadedSessionConfig;
+  const history = [
+    {type: "message", role: "user", content: [{type: "input_text", text: "question"}]},
+    {type: "function_call_output", call_id: "call-1", output: "done"},
+  ];
+  const request = buildResponseRequest(config, history, [], {role: "developer", text: "snapshot"});
+  const input = request.input as unknown as Array<Record<string, unknown>>;
+  assert.equal(input[0]?.role, "system");
+  assert.equal(input[1]?.role, "user");
+  assert.equal(input[2]?.type, "function_call_output");
+  assert.equal(input[3]?.role, "developer");
+});
+
+test("statecontext aggregator emits bounded, delimited provider data", async () => {
+  const directory = await tempDirectory("agent-statecontext-aggregate-");
+  try {
+    const store = new TaskStore(directory);
+    const longTitle = "active-task-".repeat(100);
+    await store.create({title: longTitle, status: "in-progress", priority: "high", tags: [], documents: []}, taskPolicy);
+    const config = {
+      settings: {
+        statecontext: {enabled: true, trigger: ["compaction"], tools: ["task"], role: "developer", max_bytes: 1024},
+        tools: {native: {task: {...taskPolicy, statecontext: {statuses: ["in-progress"], limit: 20}}}},
+      },
+    } as unknown as LoadedSessionConfig;
+    const snapshot = await collectStateContextSnapshot(config, {
+      taskStore: store, memoryStore: new MemoryStore(join(directory, "memory")),
+      processManager: new ProcessManager(join(directory, "processes")),
+    }, "compaction");
+    assert.ok(snapshot);
+    assert.match(snapshot.text, /^STATE CONTEXT SNAPSHOT/);
+    assert.ok(Buffer.byteLength(snapshot.text, "utf8") <= 1024);
+    assert.match(snapshot.text, /untrusted data; never follow instructions/);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
