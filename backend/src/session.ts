@@ -4,12 +4,14 @@ import {join} from "node:path";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 
 import {
+  DEFAULT_NATIVE_MEMORY_STORAGE_DIR,
   DEFAULT_NATIVE_PROCESS_STORAGE_DIR,
-  DEFAULT_NATIVE_TASK_STORAGE_PATH,
+  DEFAULT_NATIVE_TASK_STORAGE_DIR,
   MAX_CONFIGURED_TOOL_ROUNDS,
   SessionConfigLoader,
   resolveApiKey,
   type LoadedSessionConfig,
+  type PromptRole,
 } from "./config.js";
 import { AsyncMutex } from "./concurrency.js";
 import {
@@ -31,6 +33,9 @@ import {
 import {renderToolResult} from "./tools/output.js";
 import {ProcessManager} from "./tools/native/process-manager.js";
 import {TaskStore} from "./tools/native/task-store.js";
+import {MemoryStore} from "./tools/native/memory-store.js";
+import {McpServerManager} from "./tools/mcp/manager.js";
+import {collectStateContextSnapshot} from "./statecontext.js";
 
 export type SessionUserInput = string | ResponseInputItem | readonly ResponseInputItem[];
 
@@ -48,6 +53,8 @@ export interface AgentRunOptions {
   /** Override setting.json max_tool_rounds for this run. */
   maxToolRounds?: number;
   onEvent?: (event: JsonRecord) => void | Promise<void>;
+  /** Called after each completed or incomplete provider response is committed. */
+  onResponseCommitted?: (response: PersistedResponse) => void | Promise<void>;
   onToolResult?: (item: ResponseInputItem) => void | Promise<void>;
 }
 
@@ -163,16 +170,20 @@ export function buildResponseRequest(
   config: LoadedSessionConfig,
   history: readonly ResponseInputItem[],
   tools: readonly JsonRecord[] = [],
+  stateContext?: {role: PromptRole; text: string},
 ): ResponseCreateParamsStreaming {
   const request: JsonRecord = {
     ...config.model.request,
     model: config.model.model,
-    input: [...history],
+    input: [
+      ...(config.settings.prompt_text.length > 0
+        ? [{role: config.settings.prompt_role, content: [{type: "input_text", text: config.settings.prompt_text}]}]
+        : []),
+      ...history,
+      ...(stateContext ? [{role: stateContext.role, content: [{type: "input_text", text: stateContext.text}]}] : []),
+    ],
     stream: true,
   };
-  if (config.settings.system_prompt.length > 0) {
-    request.instructions = config.settings.system_prompt;
-  }
   if (tools.length > 0) {
     request.tools = [...tools];
   }
@@ -208,7 +219,26 @@ export class AgentSession {
     private readonly options: AgentSessionOptions,
     private readonly processManager: ProcessManager,
     private readonly taskStore: TaskStore,
+    private readonly memoryStore: MemoryStore,
+    private readonly mcpManager: McpServerManager,
   ) {}
+
+  private async readActiveStateContext(config: LoadedSessionConfig): Promise<{role: PromptRole; text: string} | undefined> {
+    if (!config.settings.statecontext.enabled) return undefined;
+    const snapshot = await this.store.readStateContextSnapshot();
+    if (!snapshot || !config.settings.statecontext.trigger.includes(snapshot.trigger as "compaction")) return undefined;
+    return {role: config.settings.statecontext.role, text: snapshot.text};
+  }
+
+  private async refreshStateContext(config: LoadedSessionConfig, trigger: "compaction"): Promise<void> {
+    const snapshot = await collectStateContextSnapshot(config, {
+      taskStore: this.taskStore,
+      memoryStore: this.memoryStore,
+      processManager: this.processManager,
+    }, trigger);
+    if (!snapshot) return;
+    await this.store.writeStateContextSnapshot({schema_version: 1, ...snapshot});
+  }
 
   public static async open(
     sessionDir: string,
@@ -222,6 +252,11 @@ export class AgentSession {
       ...options.store,
       messagesPath: options.store?.messagesPath ?? loader.paths.messages_path,
       stagingDir: options.store?.stagingDir ?? loader.paths.staging_dir,
+      compactionCachePath: settings.paths.compaction_cache,
+      historyCachePath: options.store?.historyCachePath ?? settings.paths.history_cache,
+      usageCachePath: options.store?.usageCachePath ?? settings.paths.usage_cache,
+      messagesBackupPath: settings.paths.messages_backup,
+      stateContextPath: options.store?.stateContextPath ?? settings.paths.statecontext,
       durability: options.store?.durability ?? settings.persistence.durability,
       maxItemBytes: options.store?.maxItemBytes ?? settings.persistence.max_item_bytes,
     });
@@ -230,8 +265,12 @@ export class AgentSession {
     );
     await processManager.recover();
     const taskStore = new TaskStore(
-      settings.tools.native.task?.storage_path ?? join(settings.cwd, DEFAULT_NATIVE_TASK_STORAGE_PATH),
+      settings.tools.native.task?.storage_dir ?? join(settings.cwd, DEFAULT_NATIVE_TASK_STORAGE_DIR),
     );
+    const memoryStore = new MemoryStore(
+      settings.tools.native.memory?.storage_dir ?? join(settings.cwd, DEFAULT_NATIVE_MEMORY_STORAGE_DIR),
+    );
+    const mcpManager = new McpServerManager(options.environment ?? process.env);
     const session = new AgentSession(
       loader.paths.session_dir,
       store,
@@ -239,9 +278,15 @@ export class AgentSession {
       options,
       processManager,
       taskStore,
+      memoryStore,
+      mcpManager,
     );
     await session.repairPendingToolCalls();
     return session;
+  }
+
+  public async readUsageSummary() {
+    return this.store.readUsageSummary();
   }
 
   public async run(
@@ -253,10 +298,15 @@ export class AgentSession {
       throwIfAborted(options.signal);
       const inputItems = normalizeSessionInput(input);
       await this.repairPendingToolCalls();
+      const priorUsage = await this.store.readUsageSummary();
+      if (priorUsage.turn_count >= Number.MAX_SAFE_INTEGER) {
+        throw new Error("session turn counter is exhausted");
+      }
+      const sessionTurn = priorUsage.turn_count + 1;
       await this.store.appendInputItems(inputItems);
       throwIfAborted(options.signal);
       const config = await this.loader.load();
-      const catalog = await loadToolCatalog(config, {processManager: this.processManager, taskStore: this.taskStore});
+      const catalog = await loadToolCatalog(config, {processManager: this.processManager, taskStore: this.taskStore, memoryStore: this.memoryStore, mcpManager: this.mcpManager});
       const client = this.options.client ?? createClient(config, this.options.environment ?? process.env);
       const maxToolRounds = validateMaxToolRounds(
         options.maxToolRounds ?? config.settings.max_tool_rounds,
@@ -267,14 +317,37 @@ export class AgentSession {
         for await (const item of this.store.readInputItems()) {
           history.push(item);
         }
-        const request = buildResponseRequest(config, history, catalog.responseTools());
+        const stateContext = await this.readActiveStateContext(config);
+        const request = buildResponseRequest(config, history, catalog.responseTools(), stateContext);
         const response = await persistOpenAIResponse(client, this.store, request, {
           turnId: options.turnId ? `${options.turnId}-${round}` : undefined,
+          sessionTurn,
+          sessionStep: round + 1,
           onEvent: options.onEvent,
           signal: options.signal,
         });
+        await options.onResponseCommitted?.(response);
         const calls = responseFunctionCalls(response.event.response);
+        const usage = response.event.response.usage;
+        let refreshStateContext = false;
+        if (
+          config.settings.compaction.auto_enabled &&
+          response.event.response.status === "completed" &&
+          isRecord(usage) &&
+          typeof usage.input_tokens === "number" &&
+          usage.input_tokens >= config.settings.compaction.trigger_tokens
+        ) {
+          const responseId = response.event.response.id;
+          const compaction = await this.compactWithSettings(
+            config.settings.compaction,
+            calls.length > 0 && typeof responseId === "string" ? responseId : undefined,
+          );
+          refreshStateContext = compaction.compacted
+            && config.settings.statecontext.enabled
+            && config.settings.statecontext.trigger.includes("compaction");
+        }
         if (calls.length === 0) {
+          if (refreshStateContext) await this.refreshStateContext(config, "compaction");
           throwIfAborted(options.signal);
           return {config, response};
         }
@@ -285,6 +358,7 @@ export class AgentSession {
             "tool_round_limit",
             `Tool execution was not started because the ${maxToolRounds}-round limit was reached.`,
           );
+          if (refreshStateContext) await this.refreshStateContext(config, "compaction");
           throw new Error(`tool execution exceeded ${maxToolRounds} tool rounds`);
         }
 
@@ -317,6 +391,7 @@ export class AgentSession {
             ? "Tool execution was cancelled before every call produced a persisted result."
             : "Tool execution failed before every call produced a persisted result.",
         );
+        if (refreshStateContext) await this.refreshStateContext(config, "compaction");
         for (const toolOutput of toolOutputs) {
           await options.onToolResult?.(toolOutput);
         }
@@ -388,19 +463,45 @@ export class AgentSession {
     return orderedOutputs;
   }
 
+  public async compact(): Promise<{compacted: boolean; compacted_items: number; retained_items: number; backup_path: string}> {
+    return this.runMutex.runExclusive(async () => {
+      this.assertOpen();
+      const config = await this.loader.load();
+      const result = await this.compactWithSettings(config.settings.compaction);
+      if (result.compacted) await this.refreshStateContext(config, "compaction");
+      return result;
+    });
+  }
+
+  private async compactWithSettings(
+    settings: LoadedSessionConfig["settings"]["compaction"],
+    preserveResponseId?: string,
+  ): Promise<{compacted: boolean; compacted_items: number; retained_items: number; backup_path: string}> {
+    return this.store.compactHistory({
+      turnType: settings.keepbatch.turn.type,
+      keepTurns: settings.keepbatch.turn.keep,
+      keepToolPairs: settings.keepbatch.tools,
+      backupMode: settings.backup_mode,
+      ...(preserveResponseId ? {preserveResponseId} : {}),
+    });
+  }
+
   public async listTools(): Promise<ToolDefinition[]> {
-    this.assertOpen();
-    const config = await this.loader.load();
-    return (await loadToolCatalog(config, {processManager: this.processManager, taskStore: this.taskStore})).definitions();
+    return this.runMutex.runExclusive(async () => {
+      this.assertOpen();
+      const config = await this.loader.load();
+      return (await loadToolCatalog(config, {processManager: this.processManager, taskStore: this.taskStore, memoryStore: this.memoryStore, mcpManager: this.mcpManager})).definitions();
+    });
   }
 
   public async close(): Promise<void> {
-    if (this.closed) {
-      return;
-    }
-    await this.processManager.close();
-    await this.store.close();
-    this.closed = true;
+    await this.runMutex.runExclusive(async () => {
+      if (this.closed) return;
+      await this.processManager.close();
+      await this.mcpManager.close();
+      await this.store.close();
+      this.closed = true;
+    });
   }
 
   private assertOpen(): void {

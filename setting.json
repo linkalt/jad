@@ -3,7 +3,9 @@
   "server": {
     "host": "127.0.0.1",
     "port": 8787,
-    "max_body_bytes": 1048576
+    "max_body_bytes": 1048576,
+    "run_state_retention_ms": 30000,
+    "tool_stream_interval_ms": 120
   },
   "session_roots": [
     {

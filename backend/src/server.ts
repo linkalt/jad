@@ -16,7 +16,11 @@ import {
   SessionConfigLoader,
 } from "./config.js";
 import { AgentSession } from "./session.js";
-import type { JsonRecord } from "./persistence.js";
+import {
+  SessionResponseStore,
+  type JsonRecord,
+  type SessionUsageSummary,
+} from "./persistence.js";
 import {
   DEFAULT_ROOT_SERVER_SETTINGS,
   directoryEntries,
@@ -29,9 +33,13 @@ import {
   WebUiNormalizedRun,
 } from "./plugins/web-ui/normalize-web-ui.js";
 import type {
+  WebUiMessage,
   WebUiSessionConfig,
+  WebUiSessionRun,
   WebUiSessionSnapshot,
 } from "./plugins/web-ui/types.js";
+import { SessionRunRegistry, type SessionRun } from "./run-registry.js";
+import { MessageStreamEmitter } from "./stream-emitter.js";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SESSION_ROOT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -44,6 +52,10 @@ export interface AgentServerOptions {
   host?: string;
   port?: number;
   maxBodyBytes?: number;
+  /** How long a finished run stays attachable, so a reload can still catch it. */
+  runStateRetentionMs?: number;
+  /** Coalescing window for in-progress tool-call snapshots; 0 streams every delta. */
+  toolStreamIntervalMs?: number;
 }
 
 export interface RunningAgentServer {
@@ -206,7 +218,7 @@ async function sessionListingConfig(
   directory: string,
   sessionId: string,
   globalJadRoot: string,
-): Promise<{config: WebUiSessionConfig; messagesPath: string}> {
+): Promise<{config: WebUiSessionConfig; messagesPath: string; messagesBackupPath: string; usageCachePath: string}> {
   const loader = new SessionConfigLoader(directory, {globalJadRoot});
   const settings = await loader.loadSettings();
   const model = await readJsonRecord(loader.paths.model_path);
@@ -226,15 +238,20 @@ async function sessionListingConfig(
       },
     },
     messagesPath: loader.paths.messages_path,
+    messagesBackupPath: settings.paths.messages_backup,
+    usageCachePath: settings.paths.usage_cache,
   };
 }
 
-async function readListingMessages(path: string): Promise<JsonRecord[]> {
-  try {
-    return await readJsonl(path);
-  } catch {
-    return [];
+async function readListingMessages(messagesPath: string, backupPath?: string): Promise<JsonRecord[]> {
+  const [backup, active] = await Promise.all([
+    backupPath ? readJsonl(backupPath).catch(() => []) : Promise.resolve([]),
+    readJsonl(messagesPath).catch(() => []),
+  ]);
+  if (backup.length === active.length && backup.every((item, index) => JSON.stringify(item) === JSON.stringify(active[index]))) {
+    return active;
   }
+  return [...backup, ...active];
 }
 
 async function readJsonl(path: string): Promise<JsonRecord[]> {
@@ -271,9 +288,12 @@ function sessionSummary(
   location: SessionLocation,
   config: WebUiSessionConfig,
   messages: JsonRecord[],
+  usage?: SessionUsageSummary,
+  run?: WebUiSessionRun,
 ): WebUiSessionSnapshot {
   return {
-    ...normalizeWebUiSession(location.ref, config, messages),
+    ...normalizeWebUiSession(location.ref, config, messages, usage),
+    ...(run === undefined ? {} : {run}),
     session_id: location.sessionId,
     root_id: location.root.id,
     root_label: location.root.label,
@@ -282,13 +302,14 @@ function sessionSummary(
 
 class AgentHttpApplication {
   private readonly sessions = new Map<string, Promise<SessionHandle>>();
-  private readonly activeRunControllers = new Set<AbortController>();
   private readonly sessionRoots: Promise<SessionRoot[]>;
   private readonly sessionOptions: {
     client?: OpenAI;
     environment?: NodeJS.ProcessEnv;
   };
   private readonly maxBodyBytes: number;
+  private readonly toolStreamIntervalMs: number;
+  private readonly runs: SessionRunRegistry;
 
   public constructor(options: AgentServerOptions = {}) {
     this.sessionRoots = loadSessionRoots({
@@ -301,6 +322,11 @@ class AgentHttpApplication {
       ...(options.environment ? { environment: options.environment } : {}),
     };
     this.maxBodyBytes = options.maxBodyBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.max_body_bytes;
+    this.toolStreamIntervalMs =
+      options.toolStreamIntervalMs ?? DEFAULT_ROOT_SERVER_SETTINGS.tool_stream_interval_ms;
+    this.runs = new SessionRunRegistry(
+      options.runStateRetentionMs ?? DEFAULT_ROOT_SERVER_SETTINGS.run_state_retention_ms,
+    );
   }
 
   public async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -359,6 +385,35 @@ class AgentHttpApplication {
       if (
         request.method === "POST" &&
         segments.length === 4 &&
+        segments[3] === "compact"
+      ) {
+        await this.handleCompact(sessionRef, response);
+        return;
+      }
+
+      if (
+        request.method === "GET" &&
+        segments.length === 5 &&
+        segments[3] === "run" &&
+        segments[4] === "stream"
+      ) {
+        await this.handleRunStream(sessionRef, response);
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        segments.length === 5 &&
+        segments[3] === "run" &&
+        segments[4] === "stop"
+      ) {
+        await this.handleRunStop(sessionRef, response);
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        segments.length === 4 &&
         segments[3] === "run"
       ) {
         await this.handleRun(sessionRef, request, response);
@@ -390,13 +445,12 @@ class AgentHttpApplication {
 
   /** Cancels foreground provider and tool work before server shutdown. */
   public abortActiveRuns(reason = "server_shutdown"): void {
-    for (const controller of this.activeRunControllers) {
-      controller.abort(reason);
-    }
+    this.runs.abortAll(new Error(reason));
   }
 
   public async close(): Promise<void> {
     this.abortActiveRuns("application_close");
+    this.runs.clear();
     const handles = await Promise.allSettled(this.sessions.values());
     await Promise.all(
       handles.flatMap((result) =>
@@ -505,8 +559,19 @@ class AgentHttpApplication {
             entry.name,
             root.globalJadRoot,
           );
-          const messages = await readListingMessages(listing.messagesPath);
-          sessions.push(sessionSummary(location, listing.config, messages));
+          const [messages, usage] = await Promise.all([
+            readListingMessages(listing.messagesPath, listing.messagesBackupPath),
+            SessionResponseStore.readCachedUsageSummary(listing.usageCachePath),
+          ]);
+          sessions.push(
+            sessionSummary(
+              location,
+              listing.config,
+              messages,
+              usage,
+              this.runs.describe(location.ref),
+            ),
+          );
         } catch (error) {
           if (error instanceof ConfigError) {
             console.warn(`Skipping invalid session ${location.ref}: ${error.message}`);
@@ -526,8 +591,70 @@ class AgentHttpApplication {
   ): Promise<void> {
     const handle = await this.getSession(id);
     const config = await handle.loader.load();
-    const messages = await readJsonl(handle.loader.paths.messages_path);
-    sendJson(response, 200, sessionSummary(handle.location, config, messages));
+    const [messages, usage] = await Promise.all([
+      readListingMessages(
+        handle.loader.paths.messages_path,
+        config.settings.paths.messages_backup,
+      ),
+      handle.session.readUsageSummary(),
+    ]);
+    sendJson(
+      response,
+      200,
+      sessionSummary(
+        handle.location,
+        config,
+        messages,
+        usage,
+        this.runs.describe(handle.location.ref),
+      ),
+    );
+  }
+
+  private async handleRunStream(id: string, response: ServerResponse): Promise<void> {
+    // Resolving the session first keeps unknown references a 404 instead of an
+    // empty stream.
+    await this.getSession(id);
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    response.flushHeaders();
+
+    const run = this.runs.current(id);
+    if (run === undefined) {
+      writeSse(response, "idle", {});
+      response.end();
+      return;
+    }
+
+    writeSse(response, "run", run.summary());
+    let detach = (): void => {};
+    response.once("close", () => detach());
+    detach = run.subscribe((event) => {
+      writeSse(response, event.event, event.data);
+      if (event.event === "done") {
+        response.end();
+      }
+    });
+    if (run.status !== "running") {
+      // The retained terminal events were replayed synchronously; the stream is
+      // complete.
+      response.end();
+    }
+  }
+
+  private async handleRunStop(id: string, response: ServerResponse): Promise<void> {
+    await this.getSession(id);
+    sendJson(response, 200, {stop: this.runs.stop(id)});
+  }
+
+  private async handleCompact(id: string, response: ServerResponse): Promise<void> {
+    const handle = await this.getSession(id);
+    const {compacted, compacted_items, retained_items} = await handle.session.compact();
+    sendJson(response, 200, {compaction: {compacted, compacted_items, retained_items}});
   }
 
   private async handleTools(
@@ -560,7 +687,8 @@ class AgentHttpApplication {
     let connected = true;
     const turnId = `web-${randomUUID()}`;
     response.once("close", () => {
-      // Disconnecting a browser does not discard an accepted, persisted run.
+      // Disconnecting a browser does not discard an accepted, persisted run: the
+      // run stays registered so a reload can attach to it again.
       connected = false;
     });
     const controller = new AbortController();
@@ -575,54 +703,81 @@ class AgentHttpApplication {
       },
       {once: true},
     );
-    this.activeRunControllers.add(controller);
+    const run = this.runs.begin(id, turnId, controller);
+    const emitter = new MessageStreamEmitter(
+      this.toolStreamIntervalMs,
+      (message) => run.publishMessage(message),
+    );
 
     try {
       const normalizedRun = new WebUiNormalizedRun(turnId);
+      // The response that started the run is one subscriber among others, so a
+      // second tab (or the same tab after a reload) can attach to the same run.
+      const detach = run.subscribe((event) => {
+        writeSse(response, event.event, event.data);
+        if (event.event === "done") {
+          response.end();
+        }
+      });
+      response.once("close", detach);
+
       const result = await handle.session.run(body.input, {
         turnId,
         signal: controller.signal,
         onEvent: (event) => {
-          if (!connected) {
-            return;
-          }
           const message = normalizedRun.update(event);
           if (message) {
-            writeSse(response, "ui.message", { message });
+            emitter.push(message);
+          }
+        },
+        onResponseCommitted: async () => {
+          try {
+            const usage = await handle.session.readUsageSummary();
+            run.publish("usage", {usage});
+          } catch (error) {
+            console.warn(
+              `[agent-run] failed to publish usage session=${id} turn=${turnId}: ${errorMessage(error)}`,
+            );
           }
         },
         onToolResult: (item) => {
-          if (!connected) {
-            return;
-          }
           const message = normalizedRun.toolResult(item);
           if (message) {
-            writeSse(response, "ui.message", { message });
+            emitter.push(message);
           }
         },
       });
 
-      if (connected) {
-        const message = normalizedRun.complete(result.response.event.response);
-        writeSse(response, "ui.message", { message });
-        writeSse(response, "completed", {
-          message,
-          committed: true,
-        });
-        writeSse(response, "done", {});
-        response.end();
-      }
+      const message = normalizedRun.complete(result.response.event.response);
+      // The completed message supersedes any snapshot still waiting to be sent.
+      emitter.discard();
+      run.finish("completed", [
+        {event: "ui.message", data: {message}},
+        {event: "completed", data: {message, committed: true}},
+        {event: "done", data: {}},
+      ], message);
     } catch (error) {
+      const aborted = controller.signal.aborted;
+      emitter.discard();
       console.error(
-        `[agent-run] failed session=${id} turn=${turnId} connected=${connected} aborted=${controller.signal.aborted}: ${errorMessage(error)}`,
+        `[agent-run] failed session=${id} turn=${turnId} connected=${connected} aborted=${aborted}: ${errorMessage(error)}`,
         error,
       );
-      if (connected) {
-        writeSse(response, "error", { message: errorMessage(error) });
+      run.finish(aborted ? "aborted" : "failed", [
+        {
+          event: "error",
+          data: {
+            message: aborted
+              ? "The run was stopped before it completed."
+              : errorMessage(error),
+          },
+        },
+        {event: "done", data: {}},
+      ]);
+    } finally {
+      if (!response.writableEnded && !response.destroyed) {
         response.end();
       }
-    } finally {
-      this.activeRunControllers.delete(controller);
     }
   }
 }
@@ -656,6 +811,10 @@ export async function startAgentServer(
   const running = createAgentServer({
     ...options,
     maxBodyBytes: options.maxBodyBytes ?? serverSettings.max_body_bytes,
+    runStateRetentionMs:
+      options.runStateRetentionMs ?? serverSettings.run_state_retention_ms,
+    toolStreamIntervalMs:
+      options.toolStreamIntervalMs ?? serverSettings.tool_stream_interval_ms,
   });
   const environment = options.environment ?? process.env;
   const port = options.port ?? Number(environment.PORT ?? serverSettings.port);

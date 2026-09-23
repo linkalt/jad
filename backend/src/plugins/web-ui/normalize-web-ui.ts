@@ -1,4 +1,4 @@
-import type { JsonRecord } from "../../persistence.js";
+import type {JsonRecord, SessionUsageSummary} from "../../persistence.js";
 import {
   assistantTextDeltaFromEvent,
   assistantTextPartFromOutput,
@@ -18,8 +18,13 @@ import {
   reasoningPartFromOutput,
 } from "./reasoning-web-ui.js";
 import { sessionSettingsFromConfig } from "./setting-web-ui.js";
+import {sessionUsageFromSummary} from "./usage-web-ui.js";
 import {
+  toolCallArgumentsDeltaFromEvent,
+  toolCallArgumentsFromEvent,
+  toolCallPartFromAddedItem,
   toolCallPartFromAnyOutput,
+  toolCallStreamTarget,
   toolResultPartFromOutput,
 } from "./tool-read-web-ui.js";
 import type {
@@ -78,6 +83,16 @@ function mergeCompletedParts(
       );
       if (!hasPart) {
         parts = appendToolPart(parts, completedPart);
+        continue;
+      }
+      if (completedPart.type === "tool_call") {
+        // The provider's finished item is authoritative for the arguments, and
+        // it also drops the in-progress marker of a streamed call.
+        parts = parts.map((part): WebUiPart =>
+          part.type === "tool_call" && part.callId === completedPart.callId
+            ? {...completedPart}
+            : part,
+        );
       }
       continue;
     }
@@ -109,6 +124,7 @@ export function normalizeWebUiSession(
   id: string,
   config: WebUiSessionConfig,
   records: readonly JsonRecord[],
+  usageSummary?: SessionUsageSummary,
 ): WebUiSessionSnapshot {
   const messages: WebUiMessage[] = [];
   const toolMessages = new Map<string, number>();
@@ -219,17 +235,23 @@ export function normalizeWebUiSession(
     );
   });
 
+  const usage = sessionUsageFromSummary(usageSummary);
   return {
     id,
     ...sessionSettingsFromConfig(config),
     turns: records.filter((record) => record.type === "response.completed").length,
     messages,
+    ...(usage === undefined ? {} : { usage }),
   };
 }
 
 export class WebUiNormalizedRun {
   private parts: WebUiPart[] = [];
   private readonly timestamp: string;
+  // Stream events identify an item by `item_id` (and `output_index`), while a
+  // tool part is keyed by its call id, so the two have to be correlated.
+  private readonly callIdsByItemId = new Map<string, string>();
+  private readonly callIdsByOutputIndex = new Map<number, string>();
 
   public constructor(private readonly messageId: string) {
     this.timestamp = new Date().toLocaleTimeString([], {
@@ -251,10 +273,49 @@ export class WebUiNormalizedRun {
       return this.streamingMessage();
     }
 
+    if (event.type === "response.output_item.added" && isRecord(event.item)) {
+      const call = toolCallPartFromAddedItem(event.item, this.parts.length);
+      if (call !== undefined) {
+        this.rememberToolCall(call.callId, event, event.item);
+        if (!this.hasToolCall(call.callId)) {
+          this.parts = appendToolPart(this.parts, call);
+          return this.streamingMessage();
+        }
+      }
+      return undefined;
+    }
+
+    const argumentsDelta = toolCallArgumentsDeltaFromEvent(event);
+    if (argumentsDelta !== undefined) {
+      const callId = this.toolCallIdForEvent(event);
+      if (callId !== undefined && this.hasToolCall(callId)) {
+        this.updateToolArguments(callId, (current) => `${current}${argumentsDelta}`, true);
+        return this.streamingMessage();
+      }
+      return undefined;
+    }
+
+    const argumentsDone = toolCallArgumentsFromEvent(event);
+    if (argumentsDone !== undefined) {
+      const callId = this.toolCallIdForEvent(event);
+      if (callId !== undefined && this.hasToolCall(callId)) {
+        this.updateToolArguments(callId, () => argumentsDone, false);
+        return this.streamingMessage();
+      }
+      return undefined;
+    }
+
     if (event.type === "response.output_item.done" && isRecord(event.item)) {
       const call = toolCallPartFromAnyOutput(event.item, this.parts.length);
-      if (call && !this.hasToolCall(call.callId)) {
-        this.parts = appendToolPart(this.parts, call);
+      if (call !== undefined) {
+        this.rememberToolCall(call.callId, event, event.item);
+        if (this.hasToolCall(call.callId)) {
+          // The finished item is authoritative: it replaces whatever arrived as
+          // deltas and clears the partial marker.
+          this.updateToolArguments(call.callId, () => call.arguments, false, call.name);
+        } else {
+          this.parts = appendToolPart(this.parts, call);
+        }
         return this.streamingMessage();
       }
     }
@@ -290,7 +351,7 @@ export class WebUiNormalizedRun {
 
   public complete(response: JsonRecord): WebUiMessage {
     const completedParts = responseParts(response);
-    this.parts = mergeCompletedParts(this.parts, completedParts);
+    this.parts = clearPartialToolCalls(mergeCompletedParts(this.parts, completedParts));
     return assistantMessage(this.messageId, this.parts, this.timestamp, "complete");
   }
 
@@ -300,7 +361,63 @@ export class WebUiNormalizedRun {
     );
   }
 
+  private rememberToolCall(callId: string, event: JsonRecord, item: JsonRecord): void {
+    const itemId = typeof item.id === "string" && item.id.length > 0 ? item.id : undefined;
+    if (itemId !== undefined) {
+      this.callIdsByItemId.set(itemId, callId);
+    }
+    const {outputIndex} = toolCallStreamTarget(event);
+    if (outputIndex !== undefined) {
+      this.callIdsByOutputIndex.set(outputIndex, callId);
+    }
+  }
+
+  private toolCallIdForEvent(event: JsonRecord): string | undefined {
+    const {itemId, outputIndex} = toolCallStreamTarget(event);
+    if (itemId !== undefined) {
+      const known = this.callIdsByItemId.get(itemId);
+      if (known !== undefined) {
+        return known;
+      }
+    }
+    if (outputIndex !== undefined) {
+      return this.callIdsByOutputIndex.get(outputIndex);
+    }
+    return undefined;
+  }
+
+  private updateToolArguments(
+    callId: string,
+    argumentsText: (current: string) => string,
+    partial: boolean,
+    name?: string,
+  ): void {
+    this.parts = this.parts.map((part): WebUiPart => {
+      if (part.type !== "tool_call" || part.callId !== callId) {
+        return part;
+      }
+      const {partial: _streamed, ...rest} = part;
+      const next: WebUiToolCallPart = {
+        ...rest,
+        arguments: argumentsText(part.arguments),
+        ...(name === undefined ? {} : {name}),
+      };
+      return partial ? {...next, partial: true} : next;
+    });
+  }
+
   private streamingMessage(): WebUiMessage {
     return assistantMessage(this.messageId, this.parts, this.timestamp, "streaming");
   }
+}
+
+/** A finished message never carries the in-progress marker. */
+function clearPartialToolCalls(parts: WebUiPart[]): WebUiPart[] {
+  return parts.map((part): WebUiPart => {
+    if (part.type !== "tool_call" || part.partial !== true) {
+      return part;
+    }
+    const {partial: _streamed, ...rest} = part;
+    return rest;
+  });
 }

@@ -8,17 +8,24 @@ const DEFAULT_ROOT_ID = "default";
 const DEFAULT_ROOT_LABEL = "Local sessions";
 const MAX_SERVER_PORT = 65_535;
 const MAX_SERVER_BODY_BYTES = 64 * 1024 * 1024;
+const MAX_RUN_STATE_RETENTION_MS = 24 * 60 * 60 * 1000;
+const MAX_TOOL_STREAM_INTERVAL_MS = 60 * 1000;
 
 export const DEFAULT_ROOT_SERVER_SETTINGS = {
   host: "127.0.0.1",
   port: 8787,
   max_body_bytes: 1024 * 1024,
+  run_state_retention_ms: 30_000,
+  tool_stream_interval_ms: 120,
 } as const;
 
 export interface RootServerSettings {
   host: string;
   port: number;
   max_body_bytes: number;
+  run_state_retention_ms: number;
+  /** Coalescing window for in-progress tool-call snapshots; 0 streams every delta. */
+  tool_stream_interval_ms: number;
 }
 
 export interface SessionRoot {
@@ -127,7 +134,37 @@ function normalizeRootServerSettings(
       `${path}: server.max_body_bytes must be a safe integer between 1 and ${MAX_SERVER_BODY_BYTES}`,
     );
   }
-  return {host, port, max_body_bytes: maxBodyBytes};
+  const runStateRetentionMs =
+    value.run_state_retention_ms ?? DEFAULT_ROOT_SERVER_SETTINGS.run_state_retention_ms;
+  if (
+    typeof runStateRetentionMs !== "number" ||
+    !Number.isSafeInteger(runStateRetentionMs) ||
+    runStateRetentionMs < 0 ||
+    runStateRetentionMs > MAX_RUN_STATE_RETENTION_MS
+  ) {
+    throw new ConfigError(
+      `${path}: server.run_state_retention_ms must be a safe integer between 0 and ${MAX_RUN_STATE_RETENTION_MS}`,
+    );
+  }
+  const toolStreamIntervalMs =
+    value.tool_stream_interval_ms ?? DEFAULT_ROOT_SERVER_SETTINGS.tool_stream_interval_ms;
+  if (
+    typeof toolStreamIntervalMs !== "number" ||
+    !Number.isSafeInteger(toolStreamIntervalMs) ||
+    toolStreamIntervalMs < 0 ||
+    toolStreamIntervalMs > MAX_TOOL_STREAM_INTERVAL_MS
+  ) {
+    throw new ConfigError(
+      `${path}: server.tool_stream_interval_ms must be a safe integer between 0 and ${MAX_TOOL_STREAM_INTERVAL_MS}`,
+    );
+  }
+  return {
+    host,
+    port,
+    max_body_bytes: maxBodyBytes,
+    run_state_retention_ms: runStateRetentionMs,
+    tool_stream_interval_ms: toolStreamIntervalMs,
+  };
 }
 
 async function firstExistingPath(paths: readonly string[]): Promise<string | undefined> {

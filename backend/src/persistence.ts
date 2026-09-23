@@ -10,6 +10,7 @@ import {
   rm,
 } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import { createInterface } from "node:readline";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -29,6 +30,44 @@ export interface SessionResponseStoreOptions {
   messagesPath?: string;
   /** Staging directory; relative values resolve from the session directory. */
   stagingDir?: string;
+  /** Replaceable compacted request-context cache. */
+  compactionCachePath?: string;
+  /** Replaceable normalized input-history cache; relative paths resolve from the session directory. */
+  historyCachePath?: string;
+  /** Durable usage-summary cache; relative paths resolve from the session directory. */
+  usageCachePath?: string;
+  /** Latest pre-compaction transcript backup. */
+  messagesBackupPath?: string;
+  /** Replaceable state-context snapshot file. */
+  stateContextPath?: string;
+}
+
+export interface StateContextSnapshot extends JsonRecord {
+  schema_version: 1;
+  generated_at: string;
+  trigger: string;
+  text: string;
+}
+
+export interface ResponseUsageMetrics extends JsonRecord {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  cached_input_tokens?: number;
+}
+
+export interface CurrentResponseUsage extends ResponseUsageMetrics {
+  turn: number;
+  step: number;
+  response_id?: string;
+}
+
+export interface SessionUsageSummary extends ResponseUsageMetrics {
+  completed_responses: number;
+  responses_with_usage: number;
+  turn_count: number;
+  history_partial: boolean;
+  current?: CurrentResponseUsage;
 }
 
 export interface ResponseOutputItemDoneEvent {
@@ -40,6 +79,10 @@ export interface ResponseOutputItemDoneEvent {
 export interface ResponseCompletedEvent {
   type: "response.completed";
   response: JsonRecord;
+  /** Session-level user-submission number; stored outside the provider response. */
+  session_turn?: number;
+  /** Model-response step within the session turn. */
+  session_step?: number;
 }
 
 export interface StagedOutputItemRecord {
@@ -98,6 +141,31 @@ interface TranscriptMetadata {
   changedAt: number;
 }
 
+interface UsageTranscriptCheckpoint {
+  device: number;
+  inode: number;
+  offset: number;
+  modified_at_ms: number;
+  changed_at_ms: number;
+  checkpoint_start: number;
+  checkpoint_sha256: string;
+}
+
+interface UsageCache {
+  schema_version: 1;
+  transcript: UsageTranscriptCheckpoint;
+  summary: SessionUsageSummary;
+  last_response_key?: string;
+}
+
+interface CompactionCache {
+  schema_version: 1;
+  source_sha256: string;
+  items: ResponseInputItem[];
+  assistant_final_items: string[];
+  active_tail: JsonRecord[];
+}
+
 interface InputHistoryCache {
   schema_version: typeof HISTORY_CACHE_SCHEMA_VERSION;
   transcript: {
@@ -118,8 +186,11 @@ const MANIFEST_FILE = "manifest.json";
 const ITEMS_FILE = "items.jsonl";
 const ITEMS_INDEX_FILE = "items.index.jsonl";
 const FINAL_FILE = "final.jsonl";
-const HISTORY_CACHE_FILE = "history-cache.json";
+export const HISTORY_CACHE_FILE = "history-cache.json";
+export const USAGE_CACHE_FILE = "usage-cache.json";
+const COMPACTION_CACHE_FILE = "compaction-cache.json";
 const HISTORY_CACHE_SCHEMA_VERSION = 1;
+const USAGE_CACHE_SCHEMA_VERSION = 1;
 const HISTORY_CHECKPOINT_BYTES = 64 * 1024;
 const LINE_BUFFER_SIZE = 64 * 1024;
 
@@ -189,6 +260,14 @@ function validateInputItem(item: unknown): JsonRecord {
 function validateCompletedEvent(event: ResponseCompletedEvent): JsonRecord {
   if (!isRecord(event) || event.type !== "response.completed") {
     throw new PersistenceError("expected a response.completed event");
+  }
+  for (const [field, value] of [
+    ["session_turn", event.session_turn],
+    ["session_step", event.session_step],
+  ] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+      throw new PersistenceError(`${field} must be a positive safe integer`);
+    }
   }
 
   const response = asObject(event.response, "completed response");
@@ -277,6 +356,28 @@ async function writeJsonAtomic(
       await handle.close().catch(() => undefined);
     }
     await rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Statistics for a transcript file, creating it when the session has not
+ * produced a committed response yet. A missing `messages.jsonl` means "empty
+ * transcript", not a broken session: the same file is created lazily by
+ * `repairJsonlTail` on the paths that read it.
+ */
+async function statOrCreate(path: string): Promise<Stats> {
+  try {
+    return await stat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    const handle = await open(path, "a");
+    try {
+      return await handle.stat();
+    } finally {
+      await handle.close();
+    }
   }
 }
 
@@ -526,6 +627,238 @@ function parseHistoryCache(value: unknown): InputHistoryCache {
   };
 }
 
+const USAGE_TOKEN_FIELDS = [
+  "input_tokens",
+  "output_tokens",
+  "total_tokens",
+  "cached_input_tokens",
+] as const;
+
+type UsageTokenField = (typeof USAGE_TOKEN_FIELDS)[number];
+
+function isUsageTokenCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function parseUsageTokenFields(
+  record: JsonRecord,
+  description: string,
+): ResponseUsageMetrics {
+  const metrics: ResponseUsageMetrics = {};
+  for (const field of USAGE_TOKEN_FIELDS) {
+    const value = record[field];
+    if (value === undefined) continue;
+    if (!isUsageTokenCount(value)) {
+      throw new PersistenceError(`${description}.${field} must be a non-negative safe integer`);
+    }
+    metrics[field] = value;
+  }
+  return metrics;
+}
+
+function parseUsageSummary(value: unknown): SessionUsageSummary {
+  const record = asObject(value, "usage cache summary");
+  const completedResponses = record.completed_responses;
+  const responsesWithUsage = record.responses_with_usage;
+  const turnCount = record.turn_count;
+  if (
+    !isUsageTokenCount(completedResponses) ||
+    !isUsageTokenCount(responsesWithUsage) ||
+    !isUsageTokenCount(turnCount)
+  ) {
+    throw new PersistenceError("usage cache summary counters must be non-negative safe integers");
+  }
+  if (
+    typeof record.history_partial !== "boolean" ||
+    responsesWithUsage > completedResponses
+  ) {
+    throw new PersistenceError("invalid usage cache summary counters");
+  }
+
+  let current: CurrentResponseUsage | undefined;
+  if (record.current !== undefined) {
+    const currentRecord = asObject(record.current, "usage cache current response");
+    if (
+      !Number.isSafeInteger(currentRecord.turn) ||
+      (currentRecord.turn as number) <= 0 ||
+      !Number.isSafeInteger(currentRecord.step) ||
+      (currentRecord.step as number) <= 0 ||
+      (currentRecord.response_id !== undefined && typeof currentRecord.response_id !== "string")
+    ) {
+      throw new PersistenceError("invalid usage cache current response metadata");
+    }
+    current = {
+      ...parseUsageTokenFields(currentRecord, "usage cache current response"),
+      turn: currentRecord.turn as number,
+      step: currentRecord.step as number,
+      ...(typeof currentRecord.response_id === "string"
+        ? {response_id: currentRecord.response_id}
+        : {}),
+    };
+  }
+
+  return {
+    ...parseUsageTokenFields(record, "usage cache summary"),
+    completed_responses: record.completed_responses as number,
+    responses_with_usage: record.responses_with_usage as number,
+    turn_count: record.turn_count as number,
+    history_partial: record.history_partial,
+    ...(current === undefined ? {} : {current}),
+  };
+}
+
+function parseUsageCache(value: unknown): UsageCache {
+  const record = asObject(value, "usage cache");
+  const transcript = asObject(record.transcript, "usage cache transcript");
+  if (
+    record.schema_version !== USAGE_CACHE_SCHEMA_VERSION ||
+    typeof transcript.device !== "number" ||
+    typeof transcript.inode !== "number" ||
+    typeof transcript.offset !== "number" ||
+    typeof transcript.modified_at_ms !== "number" ||
+    typeof transcript.changed_at_ms !== "number" ||
+    typeof transcript.checkpoint_start !== "number" ||
+    typeof transcript.checkpoint_sha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(transcript.checkpoint_sha256)
+  ) {
+    throw new PersistenceError("invalid usage cache");
+  }
+  for (const number of [
+    transcript.device,
+    transcript.inode,
+    transcript.offset,
+    transcript.modified_at_ms,
+    transcript.changed_at_ms,
+    transcript.checkpoint_start,
+  ]) {
+    if (!Number.isSafeInteger(number) || number < 0) {
+      throw new PersistenceError("usage cache has invalid transcript metadata");
+    }
+  }
+  if (transcript.checkpoint_start > transcript.offset) {
+    throw new PersistenceError("usage cache checkpoint begins after its offset");
+  }
+  const lastResponseKey = record.last_response_key;
+  if (
+    lastResponseKey !== undefined &&
+    (typeof lastResponseKey !== "string" || !/^[a-f0-9]{64}$/.test(lastResponseKey))
+  ) {
+    throw new PersistenceError("usage cache has an invalid response checkpoint");
+  }
+  const summary = parseUsageSummary(record.summary);
+  if ((summary.completed_responses > 0) !== (lastResponseKey !== undefined)) {
+    throw new PersistenceError("usage cache response checkpoint does not match its summary");
+  }
+  return {
+    schema_version: USAGE_CACHE_SCHEMA_VERSION,
+    transcript: {
+      device: transcript.device,
+      inode: transcript.inode,
+      offset: transcript.offset,
+      modified_at_ms: transcript.modified_at_ms,
+      changed_at_ms: transcript.changed_at_ms,
+      checkpoint_start: transcript.checkpoint_start,
+      checkpoint_sha256: transcript.checkpoint_sha256,
+    },
+    summary,
+    ...(typeof lastResponseKey === "string" ? {last_response_key: lastResponseKey} : {}),
+  };
+}
+
+function usageMetricsFromResponse(response: JsonRecord): ResponseUsageMetrics {
+  if (!isRecord(response.usage)) return {};
+  const usage = response.usage;
+  const metrics: ResponseUsageMetrics = {};
+  const inputTokens = isUsageTokenCount(usage.input_tokens) ? usage.input_tokens : undefined;
+  const outputTokens = isUsageTokenCount(usage.output_tokens) ? usage.output_tokens : undefined;
+  const reportedTotalTokens = isUsageTokenCount(usage.total_tokens) ? usage.total_tokens : undefined;
+  const inputDetails = isRecord(usage.input_tokens_details)
+    ? usage.input_tokens_details
+    : undefined;
+  const cachedInputTokens = isUsageTokenCount(inputDetails?.cached_tokens)
+    ? inputDetails.cached_tokens
+    : undefined;
+  if (inputTokens !== undefined) metrics.input_tokens = inputTokens;
+  if (outputTokens !== undefined) metrics.output_tokens = outputTokens;
+  if (reportedTotalTokens !== undefined) {
+    metrics.total_tokens = reportedTotalTokens;
+  } else if (inputTokens !== undefined && outputTokens !== undefined) {
+    const derivedTotal = inputTokens + outputTokens;
+    if (Number.isSafeInteger(derivedTotal)) metrics.total_tokens = derivedTotal;
+  }
+  if (cachedInputTokens !== undefined) metrics.cached_input_tokens = cachedInputTokens;
+  return metrics;
+}
+
+function usageResponseKey(record: JsonRecord): string {
+  const response = isRecord(record.response) ? record.response : undefined;
+  const id = response?.id;
+  const identity = typeof id === "string" && id.length > 0
+    ? `response:${id}`
+    : `record:${stringifyJson(record, "completed response record")}`;
+  return createHash("sha256").update(identity).digest("hex");
+}
+
+function addUsageValue(
+  summary: SessionUsageSummary,
+  field: UsageTokenField,
+  value: number,
+): void {
+  const total = (summary[field] ?? 0) + value;
+  if (Number.isSafeInteger(total)) summary[field] = total;
+  else delete summary[field];
+}
+
+function addUsageTranscriptRecord(
+  cache: UsageCache,
+  record: JsonRecord,
+  seenResponses?: Set<string>,
+  countUserMessage = true,
+): void {
+  const summary = cache.summary;
+  if (countUserMessage && record.role === "user" && summary.turn_count < Number.MAX_SAFE_INTEGER) {
+    summary.turn_count += 1;
+  }
+  if (record.type !== "response.completed" || !isRecord(record.response)) return;
+
+  const responseKey = usageResponseKey(record);
+  if (seenResponses?.has(responseKey) || cache.last_response_key === responseKey) return;
+  seenResponses?.add(responseKey);
+
+  const response = record.response;
+  const metrics = usageMetricsFromResponse(response);
+  const hasUsage = USAGE_TOKEN_FIELDS.some((field) => metrics[field] !== undefined);
+  const explicitTurn = isUsageTokenCount(record.session_turn) && record.session_turn > 0
+    ? record.session_turn
+    : undefined;
+  const turn = explicitTurn ?? Math.max(summary.turn_count, 1);
+  if (explicitTurn !== undefined) summary.turn_count = explicitTurn;
+  else if (summary.turn_count < turn) summary.turn_count = turn;
+  const previous = summary.current;
+  const explicitStep = isUsageTokenCount(record.session_step) && record.session_step > 0
+    ? record.session_step
+    : undefined;
+  const step = explicitStep ?? (previous?.turn === turn ? previous.step + 1 : 1);
+
+  summary.completed_responses += 1;
+  if (hasUsage) {
+    summary.responses_with_usage += 1;
+    for (const field of USAGE_TOKEN_FIELDS) {
+      const value = metrics[field];
+      if (value !== undefined) addUsageValue(summary, field, value);
+    }
+  }
+  summary.current = {
+    ...metrics,
+    turn,
+    step,
+    ...(typeof response.id === "string" && response.id.length > 0
+      ? {response_id: response.id}
+      : {}),
+  };
+  cache.last_response_key = responseKey;
+}
+
 async function loadItemIndex(path: string): Promise<Map<number, StagedItemIndexEntry>> {
   const index = new Map<number, StagedItemIndexEntry>();
   await readJsonLines(path, (line) => {
@@ -601,6 +934,8 @@ async function renderCanonicalCompletion(
   finalPath: string,
   expectedItemCount: number,
   durability: DurabilityMode,
+  sessionTurn?: number,
+  sessionStep?: number,
 ): Promise<RenderedLine> {
   const metadata: JsonRecord = {};
   for (const [key, value] of Object.entries(response)) {
@@ -614,8 +949,12 @@ async function renderCanonicalCompletion(
     throw new PersistenceError("serialized response metadata is not an object");
   }
 
+  const eventMetadata: JsonRecord = {type: "response.completed"};
+  if (sessionTurn !== undefined) eventMetadata.session_turn = sessionTurn;
+  if (sessionStep !== undefined) eventMetadata.session_step = sessionStep;
+  const eventMetadataJson = stringifyJson(eventMetadata, "response event metadata");
   const prefix =
-    `{"type":"response.completed","response":${metadataJson.slice(0, -1)}` +
+    `${eventMetadataJson.slice(0, -1)},\"response\":${metadataJson.slice(0, -1)}` +
     `${metadataJson.length > 2 ? "," : ""}\"output\":[`;
   const suffix = "]}}\n";
   const temporaryPath = `${finalPath}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
@@ -708,9 +1047,14 @@ export class SessionResponseStore {
   public readonly messagesPath: string;
   public readonly stagingDir: string;
   public readonly historyCachePath: string;
+  public readonly usageCachePath: string;
+  public readonly compactionCachePath: string;
+  public readonly messagesBackupPath: string;
+  public readonly stateContextPath: string;
 
   private readonly options: Required<Pick<SessionResponseStoreOptions, "durability" | "maxItemBytes">>;
   private historyCache: InputHistoryCache | undefined;
+  private usageCache: UsageCache | undefined;
   private readonly messageMutex = new AsyncMutex();
   private readonly activeTurns = new Set<ResponseTurn>();
   private closed = false;
@@ -728,7 +1072,31 @@ export class SessionResponseStore {
         ? resolve(options.stagingDir)
         : resolve(absoluteSessionDir, options.stagingDir)
       : join(absoluteSessionDir, STAGING_DIRECTORY);
-    this.historyCachePath = join(this.stagingDir, HISTORY_CACHE_FILE);
+    this.historyCachePath = options.historyCachePath
+      ? isAbsolute(options.historyCachePath)
+        ? resolve(options.historyCachePath)
+        : resolve(absoluteSessionDir, options.historyCachePath)
+      : join(this.stagingDir, HISTORY_CACHE_FILE);
+    this.usageCachePath = options.usageCachePath
+      ? isAbsolute(options.usageCachePath)
+        ? resolve(options.usageCachePath)
+        : resolve(absoluteSessionDir, options.usageCachePath)
+      : join(this.stagingDir, USAGE_CACHE_FILE);
+    this.compactionCachePath = options.compactionCachePath
+      ? isAbsolute(options.compactionCachePath)
+        ? resolve(options.compactionCachePath)
+        : resolve(absoluteSessionDir, options.compactionCachePath)
+      : join(this.stagingDir, COMPACTION_CACHE_FILE);
+    this.messagesBackupPath = options.messagesBackupPath
+      ? isAbsolute(options.messagesBackupPath)
+        ? resolve(options.messagesBackupPath)
+        : resolve(absoluteSessionDir, options.messagesBackupPath)
+      : join(absoluteSessionDir, "messages.backup.jsonl");
+    this.stateContextPath = options.stateContextPath
+      ? isAbsolute(options.stateContextPath)
+        ? resolve(options.stateContextPath)
+        : resolve(absoluteSessionDir, options.stateContextPath)
+      : join(this.stagingDir, "statecontext.json");
     this.options = {
       durability: options.durability ?? "turn",
       maxItemBytes: options.maxItemBytes ?? Number.MAX_SAFE_INTEGER,
@@ -747,8 +1115,29 @@ export class SessionResponseStore {
     await mkdir(store.sessionDir, { recursive: true });
     await mkdir(dirname(store.messagesPath), { recursive: true });
     await mkdir(store.stagingDir, { recursive: true });
+    await mkdir(dirname(store.historyCachePath), { recursive: true });
+    await mkdir(dirname(store.usageCachePath), { recursive: true });
     await repairJsonlTail(store.messagesPath);
+    await store.finishPendingCompaction();
+    await store.initializeUsageCache();
     return store;
+  }
+
+  /** Reads only usage-cache.json for listings; it never scans the transcript. */
+  public static async readCachedUsageSummary(
+    path: string,
+  ): Promise<SessionUsageSummary | undefined> {
+    try {
+      const cache = parseUsageCache(JSON.parse(await readFile(path, "utf8")) as unknown);
+      return {
+        ...cache.summary,
+        ...(cache.summary.current === undefined
+          ? {}
+          : {current: {...cache.summary.current}}),
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   public get durability(): DurabilityMode {
@@ -828,13 +1217,41 @@ export class SessionResponseStore {
       } finally {
         await handle.close();
       }
+      await this.refreshUsageCacheUnlocked();
+    });
+  }
+
+  public async readStateContextSnapshot(): Promise<StateContextSnapshot | undefined> {
+    this.assertOpen();
+    return this.messageMutex.runExclusive(async () => {
+      let text: string;
+      try {
+        text = await readFile(this.stateContextPath, "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+      let value: unknown;
+      try { value = JSON.parse(text); } catch { throw new PersistenceError("state-context snapshot is not valid JSON"); }
+      if (!isRecord(value) || value.schema_version !== 1 || typeof value.generated_at !== "string" || typeof value.trigger !== "string" || typeof value.text !== "string") {
+        throw new PersistenceError("state-context snapshot has an unsupported or invalid format");
+      }
+      return value as StateContextSnapshot;
+    });
+  }
+
+  public async writeStateContextSnapshot(snapshot: StateContextSnapshot): Promise<void> {
+    this.assertOpen();
+    await this.messageMutex.runExclusive(async () => {
+      await mkdir(dirname(this.stateContextPath), {recursive: true});
+      await writeJsonAtomic(this.stateContextPath, snapshot, this.options.durability);
     });
   }
 
   /**
-   * Reconstructs request history from the append-only transcript. Raw input
-   * items are yielded as-is; each committed response contributes its ordered
-   * `response.output` items.
+   * Reconstructs request history from the replaceable compaction prefix and
+   * active transcript. Raw input items are yielded as-is; each committed
+   * response contributes its ordered `response.output` items.
    */
   public async *readInputItems(): AsyncGenerator<ResponseInputItem> {
     this.assertOpen();
@@ -845,12 +1262,20 @@ export class SessionResponseStore {
   private async loadInputHistory(): Promise<ResponseInputItem[]> {
     return this.messageMutex.runExclusive(async () => {
       await repairJsonlTail(this.messagesPath);
-      const current = await this.readTranscriptMetadata();
-      const cached = this.historyCache ?? (await this.readHistoryCache());
-      const valid = cached !== undefined && (await this.cacheMatches(cached, current));
-      if (valid && current.size === cached!.transcript.offset) {
-        return cached!.items;
-      }
+      return this.loadInputHistoryUnlocked();
+    });
+  }
+
+  private async loadInputHistoryUnlocked(): Promise<ResponseInputItem[]> {
+    await repairJsonlTail(this.messagesPath);
+    const current = await this.readTranscriptMetadata();
+    const compaction = await this.readCompactionCache();
+    const cached = this.historyCache ?? (await this.readHistoryCache());
+    const valid = cached !== undefined && (await this.cacheMatches(cached, current));
+    let tail: ResponseInputItem[];
+    if (valid && current.size === cached!.transcript.offset) {
+      tail = cached!.items;
+    } else {
       const start = valid ? cached!.transcript.offset : 0;
       // Never mutate the prior cache until its replacement is durable.
       const items = valid ? [...cached!.items] : [];
@@ -859,11 +1284,84 @@ export class SessionResponseStore {
         items.push(...(await this.readTranscriptItems(start)));
       }
 
-      const cache = await this.makeHistoryCache(items, current);
-      this.historyCache = cache;
-      await writeJsonAtomic(this.historyCachePath, cache, this.options.durability);
-      return cache.items;
-    });
+      const historyCache = await this.makeHistoryCache(items, current);
+      this.historyCache = historyCache;
+      await writeJsonAtomic(this.historyCachePath, historyCache, this.options.durability);
+      tail = historyCache.items;
+    }
+    if (compaction === undefined) return tail;
+    if ((await hashFile(this.messagesPath).catch(() => "")) === compaction.source_sha256) {
+      return [...compaction.items, ...compaction.active_tail.flatMap((record) => expandTranscriptRecord(record))];
+    }
+    return [...compaction.items, ...tail];
+  }
+
+  private async finishPendingCompaction(): Promise<void> {
+    const cache = await this.readCompactionCache();
+    if (cache === undefined) return;
+    const currentHash = await hashFile(this.messagesPath).catch(() => "");
+    if (currentHash === cache.source_sha256) {
+      await this.replaceMessagesWithRecords(cache.active_tail);
+      await rm(this.historyCachePath, {force: true});
+      return;
+    }
+    if ((await stat(this.messagesPath)).size === 0) {
+      await rm(this.historyCachePath, {force: true});
+    }
+  }
+
+  private async replaceMessagesWithRecords(records: readonly JsonRecord[]): Promise<void> {
+    const temporaryPath = `${this.messagesPath}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
+    let handle: FileHandle | undefined;
+    try {
+      handle = await open(temporaryPath, "wx");
+      for (const record of records) {
+        await writeAll(handle, Buffer.from(`${stringifyJson(record, "transcript record")}\n`, "utf8"));
+      }
+      await syncIfRequired(handle, this.options.durability);
+      await handle.close();
+      handle = undefined;
+      await rename(temporaryPath, this.messagesPath);
+    } finally {
+      if (handle !== undefined) await handle.close().catch(() => undefined);
+      await rm(temporaryPath, {force: true}).catch(() => undefined);
+    }
+  }
+
+  private async readCompactionCache(): Promise<CompactionCache | undefined> {
+    try {
+      const value = JSON.parse(await readFile(this.compactionCachePath, "utf8")) as unknown;
+      if (
+        !isRecord(value) ||
+        value.schema_version !== 1 ||
+        typeof value.source_sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/.test(value.source_sha256) ||
+        !Array.isArray(value.items)
+      ) {
+        return undefined;
+      }
+      const assistantFinalItems = value.assistant_final_items ?? [];
+      const activeTail = value.active_tail ?? [];
+      if (
+        !Array.isArray(assistantFinalItems) ||
+        assistantFinalItems.some((item) => typeof item !== "string") ||
+        !Array.isArray(activeTail) ||
+        activeTail.some((record) => {
+          try { expandTranscriptRecord(record); return !isRecord(record); } catch { return true; }
+        })
+      ) {
+        return undefined;
+      }
+      return {
+        schema_version: 1,
+        source_sha256: value.source_sha256,
+        items: value.items.map((item) => validateInputItem(item)),
+        assistant_final_items: assistantFinalItems as string[],
+        active_tail: activeTail as JsonRecord[],
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   private async readHistoryCache(): Promise<InputHistoryCache | undefined> {
@@ -874,11 +1372,188 @@ export class SessionResponseStore {
     }
   }
 
-  private async readTranscriptMetadata(): Promise<TranscriptMetadata> {
-    const current = await stat(this.messagesPath, {bigint: false});
-    if (current === undefined) {
-      throw new PersistenceError("unable to stat messages.jsonl");
+  private async initializeUsageCache(): Promise<void> {
+    this.usageCache = await this.readUsageCache();
+    if (this.usageCache === undefined) {
+      this.usageCache = await this.rebuildUsageCache();
+      await this.writeUsageCache();
+      return;
     }
+    await this.refreshUsageCacheUnlocked();
+  }
+
+  private async readUsageCache(): Promise<UsageCache | undefined> {
+    try {
+      return parseUsageCache(JSON.parse(await readFile(this.usageCachePath, "utf8")) as unknown);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async writeUsageCache(): Promise<void> {
+    if (this.usageCache === undefined) {
+      throw new PersistenceError("usage cache is not initialized");
+    }
+    await mkdir(dirname(this.usageCachePath), {recursive: true});
+    await writeJsonAtomic(this.usageCachePath, this.usageCache, this.options.durability);
+  }
+
+  private async makeUsageCheckpoint(
+    current: TranscriptMetadata,
+  ): Promise<UsageTranscriptCheckpoint> {
+    const checkpointStart = Math.max(0, current.size - HISTORY_CHECKPOINT_BYTES);
+    return {
+      device: current.device,
+      inode: current.inode,
+      offset: current.size,
+      modified_at_ms: current.modifiedAt,
+      changed_at_ms: current.changedAt,
+      checkpoint_start: checkpointStart,
+      checkpoint_sha256: await hashFileRange(this.messagesPath, checkpointStart, current.size),
+    };
+  }
+
+  private async rebuildUsageCache(): Promise<UsageCache> {
+    const summary: SessionUsageSummary = {
+      completed_responses: 0,
+      responses_with_usage: 0,
+      turn_count: 0,
+      history_partial: (await this.readCompactionCache()) !== undefined,
+    };
+    const cache: UsageCache = {
+      schema_version: USAGE_CACHE_SCHEMA_VERSION,
+      transcript: await this.makeUsageCheckpoint(await this.readTranscriptMetadata()),
+      summary,
+    };
+    const seenResponses = new Set<string>();
+    const processFile = async (path: string): Promise<void> => {
+      try {
+        await readJsonLines(path, (line) => {
+          try {
+            const record = asObject(JSON.parse(line) as unknown, "usage transcript record");
+            addUsageTranscriptRecord(cache, record, seenResponses);
+          } catch {
+            summary.history_partial = true;
+          }
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          summary.history_partial = true;
+        }
+      }
+    };
+    await processFile(this.messagesBackupPath);
+    await processFile(this.messagesPath);
+    cache.transcript = await this.makeUsageCheckpoint(await this.readTranscriptMetadata());
+    return cache;
+  }
+
+  private async usageCacheMatchesTranscript(
+    cache: UsageCache,
+    current: TranscriptMetadata,
+  ): Promise<boolean> {
+    return this.cacheMatches(
+      {
+        schema_version: HISTORY_CACHE_SCHEMA_VERSION,
+        transcript: cache.transcript,
+        items: [],
+      },
+      current,
+    );
+  }
+
+  private async refreshUsageCacheUnlocked(): Promise<void> {
+    if (this.usageCache === undefined) {
+      this.usageCache = await this.rebuildUsageCache();
+      await this.writeUsageCache();
+      return;
+    }
+
+    const cache = this.usageCache;
+    const current = await this.readTranscriptMetadata();
+    if (await this.usageCacheMatchesTranscript(cache, current)) {
+      if (current.size > cache.transcript.offset) {
+        let countedUserSubmission = false;
+        await readJsonLines(this.messagesPath, (line) => {
+          try {
+            const record = asObject(JSON.parse(line) as unknown, "usage transcript record");
+            if (
+              !countedUserSubmission &&
+              record.role === "user" &&
+              cache.summary.turn_count < Number.MAX_SAFE_INTEGER
+            ) {
+              cache.summary.turn_count += 1;
+              countedUserSubmission = true;
+            }
+            addUsageTranscriptRecord(cache, record, undefined, false);
+          } catch {
+            cache.summary.history_partial = true;
+          }
+        }, cache.transcript.offset);
+      }
+      if (
+        current.size !== cache.transcript.offset ||
+        current.modifiedAt !== cache.transcript.modified_at_ms ||
+        current.changedAt !== cache.transcript.changed_at_ms
+      ) {
+        cache.transcript = await this.makeUsageCheckpoint(await this.readTranscriptMetadata());
+        await this.writeUsageCache();
+      }
+      return;
+    }
+
+    const compaction = await this.readCompactionCache();
+    if (compaction !== undefined) {
+      const compactedTranscriptMatches = await this.transcriptMatchesRecords(compaction.active_tail);
+      if (!compactedTranscriptMatches) cache.summary.history_partial = true;
+      cache.transcript = await this.makeUsageCheckpoint(await this.readTranscriptMetadata());
+      await this.writeUsageCache();
+      return;
+    }
+
+    this.usageCache = await this.rebuildUsageCache();
+    await this.writeUsageCache();
+  }
+
+  private async transcriptMatchesRecords(records: readonly JsonRecord[]): Promise<boolean> {
+    let index = 0;
+    let matches = true;
+    await readJsonLines(this.messagesPath, (line) => {
+      if (!matches) return;
+      try {
+        const record = asObject(JSON.parse(line) as unknown, "compacted transcript record");
+        if (index >= records.length || stringifyJson(record, "compacted transcript record") !== stringifyJson(records[index], "compaction cache record")) {
+          matches = false;
+          return;
+        }
+        index += 1;
+      } catch {
+        matches = false;
+      }
+    });
+    return matches && index === records.length;
+  }
+
+  private async resetUsageCheckpointAfterCompactionUnlocked(): Promise<void> {
+    if (this.usageCache === undefined) return;
+    this.usageCache.transcript = await this.makeUsageCheckpoint(await this.readTranscriptMetadata());
+    await this.writeUsageCache();
+  }
+
+  public async readUsageSummary(): Promise<SessionUsageSummary> {
+    this.assertOpen();
+    return this.messageMutex.runExclusive(async () => {
+      await this.refreshUsageCacheUnlocked();
+      const summary = this.usageCache!.summary;
+      return {
+        ...summary,
+        ...(summary.current === undefined ? {} : {current: {...summary.current}}),
+      };
+    });
+  }
+
+  private async readTranscriptMetadata(): Promise<TranscriptMetadata> {
+    const current = await statOrCreate(this.messagesPath);
     return {
       device: current.dev,
       inode: current.ino,
@@ -958,6 +1633,140 @@ export class SessionResponseStore {
     };
   }
 
+  public async compactHistory(options: {
+    turnType: "assistant_final" | "full";
+    keepTurns: number;
+    keepToolPairs: number;
+    backupMode: "replace" | "append";
+    preserveResponseId?: string;
+  }): Promise<{compacted: boolean; compacted_items: number; retained_items: number; backup_path: string}> {
+    this.assertOpen();
+    if (this.activeTurns.size > 0) throw new PersistenceError("cannot compact while a response turn is active");
+    return this.messageMutex.runExclusive(async () => {
+      await repairJsonlTail(this.messagesPath);
+      await this.refreshUsageCacheUnlocked();
+      const history = await this.loadInputHistoryUnlocked();
+      const sourceHash = await hashFile(this.messagesPath).catch(() => createHash("sha256").update("").digest("hex"));
+      const previousCompaction = await this.readCompactionCache();
+      const finalByTurn = new Map<number, string>();
+      const priorFinalItems = new Set(previousCompaction?.assistant_final_items ?? []);
+      let turnIndex = -1;
+      for (const item of previousCompaction?.items ?? []) {
+        if (item.role === "user") turnIndex += 1;
+        if (turnIndex < 0) turnIndex = 0;
+        if (item.type === "message" && item.role === "assistant") {
+          const key = stringifyJson(item, "cached assistant message");
+          if (priorFinalItems.has(key)) finalByTurn.set(turnIndex, key);
+        }
+      }
+
+      const activeTail: JsonRecord[] = [];
+      const excludedCounts = new Map<string, number>();
+      await readJsonLines(this.messagesPath, (line) => {
+        let record: unknown;
+        try { record = JSON.parse(line); } catch { throw new PersistenceError("invalid messages.jsonl record during compaction"); }
+        if (isRecord(record) && record.role === "user") {
+          turnIndex += 1;
+          return;
+        }
+        if (!isRecord(record) || record.type !== "response.completed" || !isRecord(record.response)) return;
+        const response = record.response;
+        if (response.id === options.preserveResponseId) {
+          activeTail.push(record);
+          if (Array.isArray(response.output)) {
+            for (const item of response.output) {
+              const key = stringifyJson(item, "in-flight response item");
+              excludedCounts.set(key, (excludedCounts.get(key) ?? 0) + 1);
+            }
+          }
+        }
+        if (!Array.isArray(response.output)) return;
+        if (response.output.some((item) => isRecord(item) && item.type === "function_call")) {
+          finalByTurn.delete(Math.max(turnIndex, 0));
+          return;
+        }
+        if (response.status !== "completed") return;
+        const assistant = [...response.output].reverse().find((item) => isRecord(item) && item.type === "message" && item.role === "assistant");
+        if (isRecord(assistant)) finalByTurn.set(Math.max(turnIndex, 0), stringifyJson(assistant, "assistant final"));
+      });
+      if (options.preserveResponseId && activeTail.length === 0) {
+        throw new PersistenceError("cannot preserve a response that is missing from messages.jsonl");
+      }
+      const finalAssistant = new Set(finalByTurn.values());
+      const compactableHistory = history.filter((item) => {
+        const key = stringifyJson(item, "history item");
+        const remaining = excludedCounts.get(key) ?? 0;
+        if (remaining === 0) return true;
+        excludedCounts.set(key, remaining - 1);
+        return false;
+      });
+      const activeTailItems = activeTail.flatMap((record) => expandTranscriptRecord(record));
+
+      const turns: ResponseInputItem[][] = [];
+      for (const item of compactableHistory) {
+        if (item.role === "user") turns.push([]);
+        if (turns.length === 0) turns.push([]);
+        turns[turns.length - 1]!.push(item);
+      }
+      const selectedTurns = turns.slice(-options.keepTurns);
+      const callById = new Map<string, ResponseInputItem>();
+      const outputById = new Map<string, ResponseInputItem>();
+      for (const turn of selectedTurns) for (const item of turn) {
+        if (item.type === "function_call" && typeof item.call_id === "string") callById.set(item.call_id, item);
+        if (item.type === "function_call_output" && typeof item.call_id === "string") outputById.set(item.call_id, item);
+      }
+      const completePairIds = options.turnType === "full" || options.keepToolPairs === 0
+        ? []
+        : [...callById.keys()].filter((id) => outputById.has(id)).slice(-options.keepToolPairs);
+      const retained = selectedTurns.flatMap((turn) => {
+        const assistantFinal = [...turn].reverse().find((item) => item.type === "message" && item.role === "assistant" && finalAssistant.has(stringifyJson(item, "assistant message")));
+        return turn.filter((item) => {
+          if (item.type === "function_call" || item.type === "function_call_output") return typeof item.call_id === "string" && completePairIds.includes(item.call_id);
+          if (options.turnType === "assistant_final") return item.role === "user" || item === assistantFinal;
+          return item.role === "user" || item.role === "assistant" || item.type === "reasoning";
+        });
+      });
+
+      const nextHistory = [...retained, ...activeTailItems];
+      const retainedBytes = Buffer.byteLength(stringifyJson(nextHistory, "compacted request history"), "utf8");
+      const historyBytes = Buffer.byteLength(stringifyJson(history, "history items"), "utf8");
+      if (retainedBytes >= historyBytes) {
+        return {compacted: false, compacted_items: history.length, retained_items: history.length, backup_path: this.messagesBackupPath};
+      }
+
+      await mkdir(dirname(this.messagesBackupPath), {recursive: true});
+      const backupTemp = `${this.messagesBackupPath}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
+      try {
+        if (options.backupMode === "append") {
+          await appendFileIncrementally(this.messagesBackupPath, backupTemp, this.options.durability).catch((error) => {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          });
+        }
+        await appendFileIncrementally(this.messagesPath, backupTemp, this.options.durability);
+        await rename(backupTemp, this.messagesBackupPath);
+      } finally { await rm(backupTemp, {force: true}).catch(() => undefined); }
+
+      const retainedAssistantFinals = retained
+        .filter((item) => item.type === "message" && item.role === "assistant")
+        .map((item) => stringifyJson(item, "retained assistant message"))
+        .filter((item) => finalAssistant.has(item));
+      const cache: CompactionCache = {
+        schema_version: 1,
+        source_sha256: sourceHash,
+        items: retained,
+        assistant_final_items: retainedAssistantFinals,
+        active_tail: activeTail,
+      };
+      await mkdir(dirname(this.compactionCachePath), {recursive: true});
+      await writeJsonAtomic(this.compactionCachePath, cache, this.options.durability);
+      await this.replaceMessagesWithRecords(activeTail);
+      this.historyCache = undefined;
+      await rm(this.historyCachePath, {force: true});
+      await this.resetUsageCheckpointAfterCompactionUnlocked();
+      return {compacted: true, compacted_items: history.length, retained_items: nextHistory.length, backup_path: this.messagesBackupPath};
+    });
+  }
+
   public async recover(): Promise<RecoveryReport> {
     this.assertOpen();
     if (this.activeTurns.size > 0) {
@@ -998,6 +1807,7 @@ export class SessionResponseStore {
           );
         }
       }
+      await this.refreshUsageCacheUnlocked();
       return report;
     });
   }
@@ -1059,11 +1869,12 @@ export class SessionResponseStore {
     lineHash: string,
   ): Promise<boolean> {
     await repairJsonlTail(this.messagesPath);
-    if (await containsLineHash(this.messagesPath, lineHash)) {
-      return false;
+    const alreadyPresent = await containsLineHash(this.messagesPath, lineHash);
+    if (!alreadyPresent) {
+      await appendFileIncrementally(finalPath, this.messagesPath, this.options.durability);
     }
-    await appendFileIncrementally(finalPath, this.messagesPath, this.options.durability);
-    return true;
+    await this.refreshUsageCacheUnlocked();
+    return !alreadyPresent;
   }
 
   private async recoverTurnUnlocked(turnDir: string): Promise<"committed" | "removed" | "retained"> {
@@ -1250,6 +2061,8 @@ export class ResponseTurn {
         finalPath,
         expectedItemCount,
         this.store.durability,
+        event.session_turn,
+        event.session_step,
       );
       this.manifest.canonical_line_sha256 = rendered.hash;
       await this.persistManifest();

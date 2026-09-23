@@ -15,6 +15,10 @@ import {
 
 export interface PersistResponseStreamOptions {
   turnId?: string;
+  /** Session-level user submission that produced this model response. */
+  sessionTurn?: number;
+  /** Model response round within the current session turn. */
+  sessionStep?: number;
   onEvent?: (event: JsonRecord) => void | Promise<void>;
   /** Cancels the provider request and streaming response. */
   signal?: AbortSignal;
@@ -88,6 +92,12 @@ export async function persistResponseStream(
 
       const completedEvent = completedEventFromTerminal(event);
       if (completedEvent) {
+        if (options.sessionTurn !== undefined) {
+          completedEvent.session_turn = options.sessionTurn;
+        }
+        if (options.sessionStep !== undefined) {
+          completedEvent.session_step = options.sessionStep;
+        }
         if (type === "response.incomplete") {
           const incompleteDetails = completedEvent.response.incomplete_details;
           const reason = isRecord(incompleteDetails) && typeof incompleteDetails.reason === "string"

@@ -7,6 +7,7 @@ import test from "node:test";
 import type OpenAI from "openai";
 
 import { createAgentServer } from "../src/server.js";
+import {SessionResponseStore} from "../src/persistence.js";
 import {
   normalizeWebUiSession,
   WebUiNormalizedRun,
@@ -15,7 +16,11 @@ import type { LoadedSessionConfig } from "../src/config.js";
 import {nativeReadDefinition} from "../src/tools/native/read.js";
 import {loadRootServerSettings} from "../src/session-roots.js";
 
-function completedEvent(output: Record<string, unknown>[], id: string): Record<string, unknown> {
+function completedEvent(
+  output: Record<string, unknown>[],
+  id: string,
+  usage?: Record<string, unknown>,
+): Record<string, unknown> {
   return {
     type: "response.completed",
     response: {
@@ -24,6 +29,7 @@ function completedEvent(output: Record<string, unknown>[], id: string): Record<s
       status: "completed",
       model: "fake-model",
       output,
+      ...(usage === undefined ? {} : { usage }),
     },
   };
 }
@@ -62,6 +68,8 @@ test("loads configurable root server settings", async () => {
       host: "0.0.0.0",
       port: 9876,
       max_body_bytes: 2 * 1024 * 1024,
+      run_state_retention_ms: 30_000,
+      tool_stream_interval_ms: 120,
     });
 
     await writeFile(
@@ -71,6 +79,15 @@ test("loads configurable root server settings", async () => {
     await assert.rejects(
       () => loadRootServerSettings({rootSettingPath: settingPath}),
       /server\.port/,
+    );
+
+    await writeFile(
+      settingPath,
+      JSON.stringify({server: {run_state_retention_ms: -1}, session_roots: [{path: ".jad/sessions"}]}),
+    );
+    await assert.rejects(
+      () => loadRootServerSettings({rootSettingPath: settingPath}),
+      /server\.run_state_retention_ms/,
     );
   } finally {
     await rm(root, {recursive: true, force: true});
@@ -124,6 +141,126 @@ test("preserves interleaved reasoning and assistant parts", () => {
     ],
   );
   assert.deepEqual(snapshot.messages[0]?.parts, expectedParts);
+});
+
+test("uses latest and cumulative usage from the cached session summary", () => {
+  const snapshot = normalizeWebUiSession(
+    "session1",
+    {
+      model: { provider: "fake", model: "fake-model" },
+      settings: { session_name: "usage" },
+    } as unknown as LoadedSessionConfig,
+    [
+      completedEvent([], "response-usage-one", {
+        input_tokens: 100,
+        output_tokens: 25,
+        total_tokens: 125,
+        input_tokens_details: { cached_tokens: 10 },
+      }),
+      completedEvent([], "response-usage-two", {
+        input_tokens: 40,
+        output_tokens: 5,
+      }),
+      completedEvent([], "response-without-usage"),
+    ],
+    {
+      completed_responses: 3,
+      responses_with_usage: 2,
+      turn_count: 2,
+      history_partial: false,
+      input_tokens: 140,
+      output_tokens: 30,
+      total_tokens: 170,
+      cached_input_tokens: 10,
+      current: {
+        turn: 2,
+        step: 2,
+        response_id: "response-usage-two",
+        input_tokens: 40,
+        output_tokens: 5,
+        total_tokens: 45,
+      },
+    },
+  );
+
+  assert.deepEqual(snapshot.usage, {
+    completed_responses: 3,
+    responses_with_usage: 2,
+    turn_count: 2,
+    history_partial: false,
+    input_tokens: 140,
+    output_tokens: 30,
+    total_tokens: 170,
+    cached_input_tokens: 10,
+    current: {
+      turn: 2,
+      step: 2,
+      response_id: "response-usage-two",
+      input_tokens: 40,
+      output_tokens: 5,
+      total_tokens: 45,
+    },
+  });
+  assert.equal(snapshot.turns, 3);
+});
+
+test("does not recalculate usage from the transcript when no cache summary is provided", () => {
+  const snapshot = normalizeWebUiSession(
+    "session1",
+    {
+      model: { provider: "fake", model: "fake-model" },
+      settings: { session_name: "usage" },
+    } as unknown as LoadedSessionConfig,
+    [
+      completedEvent([], "response-without-usage"),
+      completedEvent([], "response-invalid-usage", {
+        input_tokens: "100",
+        output_tokens: -1,
+        total_tokens: 3.5,
+        input_tokens_details: { cached_tokens: null },
+      }),
+    ],
+  );
+
+  assert.equal(snapshot.usage, undefined);
+});
+
+test("preserves partial token fields from the cached usage summary", () => {
+  const snapshot = normalizeWebUiSession(
+    "session1",
+    {
+      model: { provider: "fake", model: "fake-model" },
+      settings: { session_name: "usage" },
+    } as unknown as LoadedSessionConfig,
+    [completedEvent([], "response-partial-usage", { input_tokens: 12 })],
+    {
+      completed_responses: 1,
+      responses_with_usage: 1,
+      turn_count: 1,
+      history_partial: false,
+      input_tokens: 12,
+      current: {
+        turn: 1,
+        step: 1,
+        response_id: "response-partial-usage",
+        input_tokens: 12,
+      },
+    },
+  );
+
+  assert.deepEqual(snapshot.usage, {
+    completed_responses: 1,
+    responses_with_usage: 1,
+    turn_count: 1,
+    history_partial: false,
+    input_tokens: 12,
+    current: {
+      turn: 1,
+      step: 1,
+      response_id: "response-partial-usage",
+      input_tokens: 12,
+    },
+  });
 });
 
 test("preserves interleaved reasoning and tool-call order in the live UI stream", () => {
@@ -316,6 +453,131 @@ test("normalizes tool call and result parts for snapshots and live runs", () => 
   ]);
 });
 
+test("streams function-call arguments before the item completes", () => {
+  const call = {
+    id: "fc_1",
+    type: "function_call",
+    call_id: "call_write",
+    name: "write",
+    arguments: "",
+  };
+  const normalizedRun = new WebUiNormalizedRun("streaming-tool-turn");
+
+  assert.deepEqual(
+    normalizedRun.update({type: "response.output_item.added", output_index: 0, item: call})?.parts,
+    [{type: "tool_call", callId: "call_write", name: "write", arguments: "", partial: true}],
+  );
+
+  // An added message item is not a tool call and must not create a part.
+  assert.equal(
+    normalizedRun.update({
+      type: "response.output_item.added",
+      output_index: 1,
+      item: {id: "msg_1", type: "message", role: "assistant", content: []},
+    }),
+    undefined,
+  );
+
+  assert.deepEqual(
+    normalizedRun.update({
+      type: "response.function_call_arguments.delta",
+      item_id: "fc_1",
+      output_index: 0,
+      delta: '{"path":"notes.md","content":"hel',
+    })?.parts,
+    [{
+      type: "tool_call",
+      callId: "call_write",
+      name: "write",
+      arguments: '{"path":"notes.md","content":"hel',
+      partial: true,
+    }],
+  );
+
+  assert.deepEqual(
+    normalizedRun.update({
+      type: "response.function_call_arguments.delta",
+      item_id: "fc_1",
+      output_index: 0,
+      delta: 'lo"}',
+    })?.parts,
+    [{
+      type: "tool_call",
+      callId: "call_write",
+      name: "write",
+      arguments: '{"path":"notes.md","content":"hello"}',
+      partial: true,
+    }],
+  );
+
+  // `arguments.done` is the last word on the argument text and clears the flag.
+  assert.deepEqual(
+    normalizedRun.update({
+      type: "response.function_call_arguments.done",
+      item_id: "fc_1",
+      output_index: 0,
+      arguments: '{"path":"notes.md","content":"hello"}',
+    })?.parts,
+    [{
+      type: "tool_call",
+      callId: "call_write",
+      name: "write",
+      arguments: '{"path":"notes.md","content":"hello"}',
+    }],
+  );
+
+  // The finished item replaces the streamed call instead of adding a second one.
+  normalizedRun.update({
+    type: "response.output_item.done",
+    output_index: 0,
+    item: {...call, arguments: '{"path":"notes.md","content":"hello"}'},
+  });
+  assert.deepEqual(
+    normalizedRun.complete({
+      id: "response-write",
+      output: [{...call, arguments: '{"path":"notes.md","content":"hello"}'}],
+    }).parts,
+    [{
+      type: "tool_call",
+      callId: "call_write",
+      name: "write",
+      arguments: '{"path":"notes.md","content":"hello"}',
+    }],
+  );
+});
+
+test("a call interrupted mid-arguments is not left marked partial", () => {
+  const normalizedRun = new WebUiNormalizedRun("interrupted-tool-turn");
+  normalizedRun.update({
+    type: "response.output_item.added",
+    output_index: 0,
+    item: {id: "fc_2", type: "function_call", call_id: "call_edit", name: "edit", arguments: ""},
+  });
+  normalizedRun.update({
+    type: "response.function_call_arguments.delta",
+    item_id: "fc_2",
+    output_index: 0,
+    delta: '{"path":"notes.md"',
+  });
+
+  const complete = normalizedRun.complete({
+    id: "response-interrupted",
+    output: [{
+      id: "fc_2",
+      type: "function_call",
+      call_id: "call_edit",
+      name: "edit",
+      arguments: '{"path":"notes.md"}',
+    }],
+  });
+  assert.deepEqual(complete.parts, [{
+    type: "tool_call",
+    callId: "call_edit",
+    name: "edit",
+    arguments: '{"path":"notes.md"}',
+  }]);
+});
+
 test("lists sessions with valid settings and namespaces duplicate ids", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "agent-harness-roots-"));
   const primaryDir = join(workspace, "roots", "primary", "shared");
@@ -483,6 +745,12 @@ test("serves sessions using configured model and transcript paths", async () => 
       type: "response.completed",
       response: {
         id: "configured-response",
+        usage: {
+          input_tokens: 23,
+          output_tokens: 7,
+          total_tokens: 30,
+          input_tokens_details: {cached_tokens: 3},
+        },
         output: [{
           type: "message",
           role: "assistant",
@@ -491,6 +759,12 @@ test("serves sessions using configured model and transcript paths", async () => 
       },
     })}\n`,
   );
+
+  const cacheStore = await SessionResponseStore.open(sessionDir, {
+    messagesPath,
+    stagingDir: "runtime/staging",
+  });
+  await cacheStore.close();
 
   const running = createAgentServer({sessionsDir: root});
   await new Promise<void>((resolve, reject) => {
@@ -509,6 +783,7 @@ test("serves sessions using configured model and transcript paths", async () => 
         id: string;
         model: {provider: string; model: string};
         messages: Array<{text: string}>;
+        usage?: Record<string, unknown>;
       }>;
     };
     assert.equal(list.sessions[0]?.id, "session1");
@@ -517,18 +792,53 @@ test("serves sessions using configured model and transcript paths", async () => 
       model: "configured-model",
     });
     assert.equal(list.sessions[0]?.messages[0]?.text, "from configured transcript");
+    assert.deepEqual(list.sessions[0]?.usage, {
+      completed_responses: 1,
+      responses_with_usage: 1,
+      turn_count: 1,
+      history_partial: false,
+      input_tokens: 23,
+      output_tokens: 7,
+      total_tokens: 30,
+      cached_input_tokens: 3,
+      current: {
+        input_tokens: 23,
+        output_tokens: 7,
+        total_tokens: 30,
+        cached_input_tokens: 3,
+        turn: 1,
+        step: 1,
+        response_id: "configured-response",
+      },
+    });
 
     const snapshotResponse = await fetch(`${baseUrl}/api/sessions/session1`);
     assert.equal(snapshotResponse.status, 200);
     const snapshot = (await snapshotResponse.json()) as {
       model: {provider: string; model: string};
       messages: Array<{text: string}>;
+      usage?: Record<string, unknown>;
     };
     assert.deepEqual(snapshot.model, {
       provider: "configured-provider",
       model: "configured-model",
     });
     assert.equal(snapshot.messages[0]?.text, "from configured transcript");
+    assert.deepEqual(snapshot.usage, list.sessions[0]?.usage);
+
+    const compactResponse = await fetch(`${baseUrl}/api/sessions/session1/compact`, {method: "POST"});
+    assert.equal(compactResponse.status, 200);
+    const compacted = await compactResponse.json() as {compaction: {compacted: boolean}};
+    assert.equal(compacted.compaction.compacted, true);
+    assert.equal(await readFile(messagesPath, "utf8"), "");
+    assert.match(await readFile(join(sessionDir, "messages.backup.jsonl"), "utf8"), /configured transcript/);
+    const compactedSnapshot = await fetch(`${baseUrl}/api/sessions/session1`);
+    const compactedBody = await compactedSnapshot.json() as {
+      messages: Array<{text: string}>;
+      usage?: Record<string, unknown>;
+    };
+    assert.equal(compactedBody.messages[0]?.text, "from configured transcript");
+    assert.deepEqual(compactedBody.usage, list.sessions[0]?.usage);
   } finally {
     await running.close();
     await rm(root, {recursive: true, force: true});
@@ -617,7 +927,6 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
       schema_version: 1,
       session_name: "server-test",
       cwd: sessionDir,
-      system_prompt: "Be concise.",
       tool_definition_paths: ["read.json"],
       tools: {
         native: {
@@ -745,7 +1054,17 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
     assert.ok(stream.indexOf('"type":"reasoning"') < stream.indexOf('"type":"text"'));
     assert.match(stream, /"status":"complete"/);
     assert.match(stream, /event: completed/);
+    assert.match(stream, /event: usage/);
     assert.match(stream, /event: done/);
+    const usageEvents = ssePayloads(stream, "usage");
+    assert.equal(usageEvents.length, 1);
+    assert.deepEqual(usageEvents[0]?.usage, {
+      completed_responses: 1,
+      responses_with_usage: 0,
+      turn_count: 1,
+      history_partial: false,
+      current: {turn: 1, step: 1, response_id: "resp_bridge"},
+    });
 
     const uiMessages = ssePayloads(stream, "ui.message").map((payload) =>
       payload.message as {
@@ -788,6 +1107,7 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
     const finalSnapshot = await fetch(`${baseUrl}/api/sessions/session1`);
     const final = (await finalSnapshot.json()) as {
       turns: number;
+      usage?: Record<string, unknown>;
       messages: Array<{
         sender: string;
         text: string;
@@ -796,6 +1116,7 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
       }>;
     };
     assert.equal(final.turns, 1);
+    assert.deepEqual(final.usage, usageEvents[0]?.usage);
     assert.equal(final.messages.length, 2);
     assert.deepEqual(final.messages.map(message => message.sender), ["user", "assistant"]);
     const expectedParts = [
@@ -812,6 +1133,8 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     const persistedResponse = persisted[1]?.response as Record<string, unknown>;
+    assert.equal(persisted[1]?.session_turn, 1);
+    assert.equal(persisted[1]?.session_step, 1);
     assert.deepEqual(persistedResponse.output, [
       reasoningOne,
       outputOne,
@@ -825,7 +1148,7 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
   }
 });
 
-test("streams tool call and result blocks over SSE", async () => {
+test("streams per-response usage, including incomplete responses, with tool blocks over SSE", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-server-tools-"));
   const sessionDir = join(root, "session1");
   await mkdir(sessionDir, { recursive: true });
@@ -870,10 +1193,29 @@ test("streams tool call and result blocks over SSE", async () => {
     responses: {
       create: async () => {
         responseNumber += 1;
-        const output = responseNumber === 1 ? call : finalMessage;
+        const currentResponse = responseNumber;
+        const output = currentResponse === 1 ? call : finalMessage;
         return (async function* () {
           yield {type: "response.output_item.done", output_index: 0, item: output};
-          yield completedEvent([output], `response-tool-${responseNumber}`);
+          if (currentResponse === 1) {
+            yield completedEvent([output], "response-tool-1", {
+              input_tokens: 10,
+              output_tokens: 3,
+            });
+            return;
+          }
+          const terminal = completedEvent([output], "response-tool-2", {
+            input_tokens: 15,
+            output_tokens: 4,
+          });
+          yield {
+            type: "response.incomplete",
+            response: {
+              ...(terminal.response as Record<string, unknown>),
+              status: "incomplete",
+              incomplete_details: {reason: "max_output_tokens"},
+            },
+          };
         })();
       },
     },
@@ -923,12 +1265,699 @@ test("streams tool call and result blocks over SSE", async () => {
     assert.equal(uiMessages[2]?.parts[2]?.text, "Tool finished.");
 
     const snapshot = await fetch("http://127.0.0.1:" + address.port + "/api/sessions/session1");
-    const body = (await snapshot.json()) as {messages: Array<{parts: Array<Record<string, unknown>>}>};
+    const body = (await snapshot.json()) as {
+      messages: Array<{parts: Array<Record<string, unknown>>}>;
+      usage?: {current?: {turn: number; step: number}};
+    };
     assert.deepEqual(body.messages[1]?.parts.map((part) => part.type), [
       "tool_call",
       "tool_result",
       "text",
     ]);
+    assert.deepEqual(body.usage?.current, {
+      input_tokens: 15,
+      output_tokens: 4,
+      total_tokens: 19,
+      turn: 1,
+      step: 2,
+      response_id: "response-tool-2",
+    });
+    const usageEvents = ssePayloads(stream, "usage");
+    assert.equal(usageEvents.length, 2);
+    assert.deepEqual(usageEvents[0]?.usage, {
+      completed_responses: 1,
+      responses_with_usage: 1,
+      turn_count: 1,
+      history_partial: false,
+      input_tokens: 10,
+      output_tokens: 3,
+      total_tokens: 13,
+      current: {
+        input_tokens: 10,
+        output_tokens: 3,
+        total_tokens: 13,
+        turn: 1,
+        step: 1,
+        response_id: "response-tool-1",
+      },
+    });
+    assert.deepEqual(usageEvents[1]?.usage, {
+      completed_responses: 2,
+      responses_with_usage: 2,
+      turn_count: 1,
+      history_partial: false,
+      input_tokens: 25,
+      output_tokens: 7,
+      total_tokens: 32,
+      current: {
+        input_tokens: 15,
+        output_tokens: 4,
+        total_tokens: 19,
+        turn: 1,
+        step: 2,
+        response_id: "response-tool-2",
+      },
+    });
+    assert.ok(stream.indexOf("event: usage") < stream.indexOf('"type":"tool_result"'));
+    assert.ok(stream.lastIndexOf("event: usage") < stream.lastIndexOf('"status":"complete"'));
+    const persistedResponses = (await readFile(join(sessionDir, "messages.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((record) => record.type === "response.completed");
+    assert.deepEqual(persistedResponses.map(({session_turn, session_step}) => [session_turn, session_step]), [
+      [1, 1],
+      [1, 2],
+    ]);
+    const incompleteResponse = persistedResponses[1]?.response as Record<string, unknown>;
+    assert.equal(incompleteResponse.status, "incomplete");
+    assert.deepEqual(incompleteResponse.incomplete_details, {reason: "max_output_tokens"});
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+interface CollectedEvent {
+  event: string;
+  data: Record<string, unknown>;
+}
+
+function parseSseBlock(block: string): CollectedEvent | undefined {
+  const event = block
+    .split("\n")
+    .find((line) => line.startsWith("event:"))
+    ?.slice("event:".length)
+    .trim();
+  const data = block
+    .split("\n")
+    .find((line) => line.startsWith("data:"))
+    ?.slice("data:".length)
+    .trimStart();
+  if (event === undefined || data === undefined || data.length === 0) {
+    return undefined;
+  }
+  return {event, data: JSON.parse(data) as Record<string, unknown>};
+}
+
+/**
+ * Reads a run stream while the test keeps producing provider events, so a test
+ * can assert what a client sees at a specific moment of a run.
+ */
+class RunStreamReader {
+  public readonly events: CollectedEvent[] = [];
+  private readonly finished: Promise<void>;
+
+  public constructor(response: Response) {
+    this.finished = this.consume(response);
+  }
+
+  public async waitFor(event: string, timeoutMs = 4000): Promise<CollectedEvent> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const found = this.events.find((candidate) => candidate.event === event);
+      if (found !== undefined) {
+        return found;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(
+      `timed out waiting for ${event}; saw ${this.events.map((item) => item.event).join(",") || "nothing"}`,
+    );
+  }
+
+  public async waitForEnd(timeoutMs = 4000): Promise<void> {
+    await Promise.race([
+      this.finished,
+      new Promise((_resolve, reject) =>
+        setTimeout(() => reject(new Error("stream did not end")), timeoutMs).unref?.(),
+      ),
+    ]);
+  }
+
+  private async consume(response: Response): Promise<void> {
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value, {stream: !chunk.done}).replace(/\r\n/g, "\n");
+      let separator = buffer.indexOf("\n\n");
+      while (separator >= 0) {
+        const block = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        const parsed = parseSseBlock(block);
+        if (parsed !== undefined) {
+          this.events.push(parsed);
+        }
+        separator = buffer.indexOf("\n\n");
+      }
+      if (chunk.done) {
+        return;
+      }
+    }
+  }
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  description: string,
+  timeoutMs = 4000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`timed out waiting for ${description}`);
+}
+
+interface ManualProviderStream {
+  iterator: AsyncGenerator<unknown>;
+  push: (event: unknown) => void;
+  end: () => void;
+  fail: (error: unknown) => void;
+}
+
+/**
+ * A provider stream the test drives: events are pushed on demand, so a run can
+ * be held open while another client attaches to it.
+ */
+function createManualProviderStream(): ManualProviderStream {
+  const queue: unknown[] = [];
+  let wake: (() => void) | undefined;
+  let failure: unknown;
+  let ended = false;
+
+  const iterator = (async function* () {
+    while (true) {
+      if (queue.length > 0) {
+        yield queue.shift();
+        continue;
+      }
+      if (failure !== undefined) {
+        throw failure;
+      }
+      if (ended) {
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+      wake = undefined;
+    }
+  })();
+
+  const notify = (): void => {
+    wake?.();
+  };
+
+  return {
+    iterator,
+    push: (event) => {
+      queue.push(event);
+      notify();
+    },
+    end: () => {
+      ended = true;
+      notify();
+    },
+    fail: (error) => {
+      failure = error;
+      notify();
+    },
+  };
+}
+
+async function writePlainSession(root: string): Promise<string> {
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, {recursive: true});
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({
+      schema_version: 1,
+      provider: "fake",
+      api_key_env: "FAKE_API_KEY",
+      model: "fake-model",
+    }),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({
+      schema_version: 1,
+      session_name: "server-run-test",
+      cwd: sessionDir,
+    }),
+  );
+  return sessionDir;
+}
+
+test("a client that attaches mid-run sees the current snapshot and the completion", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-attach-"));
+  await writePlainSession(root);
+
+  const streams: ManualProviderStream[] = [];
+  const fakeClient = {
+    responses: {
+      create: async () => {
+        const stream = createManualProviderStream();
+        streams.push(stream);
+        return stream.iterator;
+      },
+    },
+  } as unknown as OpenAI;
+
+  const running = createAgentServer({
+    sessionsDir: root,
+    client: fakeClient,
+    runStateRetentionMs: 30_000,
+  });
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const runResponse = await fetch(`${baseUrl}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "hello"}),
+    });
+    assert.equal(runResponse.status, 200);
+    const runReader = new RunStreamReader(runResponse);
+    await waitForCondition(() => streams.length === 1, "the provider stream");
+
+    const provider = streams[0]!;
+    provider.push({type: "response.output_text.delta", delta: "half "});
+    await runReader.waitFor("ui.message");
+    assert.equal(
+      (runReader.events.find((item) => item.event === "ui.message")!.data.message as Record<string, unknown>).text,
+      "half ",
+    );
+
+    // A second client (the reloaded page) discovers the run from the snapshot…
+    const snapshot = await fetch(`${baseUrl}/api/sessions/session1`);
+    const snapshotBody = (await snapshot.json()) as Record<string, unknown>;
+    const run = snapshotBody.run as Record<string, unknown> | undefined;
+    assert.ok(run !== undefined, "the snapshot must report the run in flight");
+    assert.equal(run.status, "running");
+    assert.equal(typeof run.turn_id, "string");
+
+    // …and attaches to it, starting with the message as it stands right now.
+    const attachResponse = await fetch(
+      `${baseUrl}/api/sessions/session1/run/stream`,
+    );
+    assert.equal(attachResponse.status, 200);
+    const attachReader = new RunStreamReader(attachResponse);
+    const attached = await attachReader.waitFor("ui.message");
+    assert.equal((attached.data.message as Record<string, unknown>).status, "streaming");
+    assert.equal((attached.data.message as Record<string, unknown>).text, "half ");
+    assert.equal(
+      (attachReader.events[0]!.data as Record<string, unknown>).turn_id,
+      run.turn_id,
+    );
+
+    // The rest of the run reaches both clients.
+    provider.push({type: "response.output_text.delta", delta: "answer"});
+    const answerItem = {
+      type: "message",
+      role: "assistant",
+      content: [{type: "output_text", text: "half answer"}],
+    };
+    provider.push({type: "response.output_item.done", output_index: 0, item: answerItem});
+    provider.push(completedEvent([answerItem], "response-attach"));
+    provider.end();
+    const completed = await attachReader.waitFor("completed");
+    assert.equal(
+      ((completed.data.message as Record<string, unknown>).text),
+      "half answer",
+    );
+    await attachReader.waitForEnd();
+    await runReader.waitForEnd();
+    assert.deepEqual(
+      attachReader.events.map((item) => item.event).filter((event) => event === "done"),
+      ["done"],
+    );
+
+    const after = (await (await fetch(`${baseUrl}/api/sessions/session1`)).json()) as Record<string, unknown>;
+    assert.equal((after.run as Record<string, unknown>).status, "completed");
+    assert.equal(after.turns, 1);
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("an attaching client receives the retained completion after a reload", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-late-attach-"));
+  await writePlainSession(root);
+
+  const fakeClient = {
+    responses: {
+      create: async () =>
+        (async function* () {
+          const item = {
+            type: "message",
+            role: "assistant",
+            content: [{type: "output_text", text: "done "}],
+          };
+          yield {type: "response.output_text.delta", delta: "done "};
+          yield {type: "response.output_item.done", output_index: 0, item};
+          yield completedEvent([item], "response-late");
+        })(),
+    },
+  } as unknown as OpenAI;
+
+  const running = createAgentServer({
+    sessionsDir: root,
+    client: fakeClient,
+    runStateRetentionMs: 30_000,
+  });
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const runReader = new RunStreamReader(
+      await fetch(`${baseUrl}/api/sessions/session1/run`, {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({input: "hello"}),
+      }),
+    );
+    await runReader.waitForEnd();
+
+    const attachReader = new RunStreamReader(
+      await fetch(`${baseUrl}/api/sessions/session1/run/stream`),
+    );
+    const replayed = await attachReader.waitFor("completed");
+    assert.equal(
+      ((replayed.data.message as Record<string, unknown>).text),
+      "done ",
+    );
+    await attachReader.waitForEnd();
+    assert.equal(attachReader.events[0]!.event, "run");
+    assert.equal(
+      (attachReader.events[0]!.data as Record<string, unknown>).status,
+      "completed",
+    );
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("a session with no run answers idle and a fresh session loads without a transcript", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-idle-"));
+  const sessionDir = await writePlainSession(root);
+
+  const running = createAgentServer({sessionsDir: root});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const attachReader = new RunStreamReader(
+      await fetch(`${baseUrl}/api/sessions/session1/run/stream`),
+    );
+    await attachReader.waitForEnd();
+    assert.deepEqual(attachReader.events.map((item) => item.event), ["idle"]);
+
+    // A session that has never committed a response has no messages.jsonl; the
+    // snapshot reports an empty transcript instead of failing.
+    const snapshot = await fetch(`${baseUrl}/api/sessions/session1`);
+    assert.equal(snapshot.status, 200);
+    const body = (await snapshot.json()) as Record<string, unknown>;
+    assert.equal(body.turns, 0);
+    assert.deepEqual(body.messages, []);
+    assert.equal(body.run, undefined);
+    assert.equal(
+      (await readFile(join(sessionDir, "messages.jsonl"), "utf8")),
+      "",
+    );
+
+    const stopped = await fetch(`${baseUrl}/api/sessions/session1/run/stop`, {method: "POST"});
+    assert.equal(stopped.status, 200);
+    assert.deepEqual(await stopped.json(), {stop: {stopped: false}});
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("stop aborts the run in flight and commits no response for it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-stop-"));
+  const sessionDir = await writePlainSession(root);
+
+  const streams: ManualProviderStream[] = [];
+  const fakeClient = {
+    responses: {
+      create: async (_params: unknown, options?: {signal?: AbortSignal}) => {
+        const stream = createManualProviderStream();
+        streams.push(stream);
+        options?.signal?.addEventListener(
+          "abort",
+          () => stream.fail(new Error("aborted")),
+          {once: true},
+        );
+        return stream.iterator;
+      },
+    },
+  } as unknown as OpenAI;
+
+  const running = createAgentServer({
+    sessionsDir: root,
+    client: fakeClient,
+    runStateRetentionMs: 30_000,
+  });
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const runReader = new RunStreamReader(
+      await fetch(`${baseUrl}/api/sessions/session1/run`, {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({input: "keep going"}),
+      }),
+    );
+    await waitForCondition(() => streams.length === 1, "the provider stream");
+    streams[0]!.push({type: "response.output_text.delta", delta: "half "});
+    await runReader.waitFor("ui.message");
+
+    const attachReader = new RunStreamReader(
+      await fetch(`${baseUrl}/api/sessions/session1/run/stream`),
+    );
+    await attachReader.waitFor("ui.message");
+
+    const stopResponse = await fetch(`${baseUrl}/api/sessions/session1/run/stop`, {method: "POST"});
+    assert.equal(stopResponse.status, 200);
+    const stopped = (await stopResponse.json()) as Record<string, unknown>;
+    const stop = stopped.stop as Record<string, unknown>;
+    assert.equal(stop.stopped, true);
+    assert.equal(typeof stop.turn_id, "string");
+
+    await runReader.waitForEnd();
+    await attachReader.waitForEnd();
+    assert.deepEqual(
+      attachReader.events.map((item) => item.event),
+      ["run", "ui.message", "error", "done"],
+    );
+
+    const after = (await (await fetch(`${baseUrl}/api/sessions/session1`)).json()) as Record<string, unknown>;
+    assert.equal((after.run as Record<string, unknown>).status, "aborted");
+    assert.equal(after.turns, 0);
+    // The user's own input stays in the transcript; only the assistant response
+    // for the stopped round is missing.
+    const afterMessages = after.messages as Record<string, unknown>[];
+    assert.deepEqual(afterMessages.map((item) => item.sender), ["user"]);
+    assert.equal(afterMessages[0]!.text, "keep going");
+
+    // Nothing was committed for the stopped round.
+    const transcript = await readFile(join(sessionDir, "messages.jsonl"), "utf8");
+    assert.equal(
+      transcript
+        .split("\n")
+        .filter((line) => line.includes('"type":"response.completed"'))
+        .length,
+      0,
+    );
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("streams tool arguments over SSE before the call completes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-tool-stream-"));
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, {recursive: true});
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({
+      schema_version: 1,
+      provider: "fake",
+      api_key_env: "FAKE_API_KEY",
+      model: "fake-model",
+    }),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({
+      schema_version: 1,
+      session_name: "tool-stream-test",
+      cwd: sessionDir,
+      tool_definition_paths: ["read.json"],
+      tools: {native: {read: {max_bytes: 65536, default_limit: 250}}},
+    }),
+  );
+  await writeFile(
+    join(root, "read.json"),
+    JSON.stringify({schema_version: 1, tools: [nativeReadDefinition]}),
+  );
+  await writeFile(join(sessionDir, "sample.txt"), "sample content\n", "utf8");
+
+  const started = {
+    id: "fc_read",
+    type: "function_call",
+    call_id: "call_read",
+    name: "read",
+    arguments: "",
+  };
+  const finished = {...started, arguments: '{"path":"sample.txt"}'};
+  const argumentDeltas = ['{', '"p', 'ath"', ':', '"sa', 'mple', '.txt"', '}'];
+  let responseNumber = 0;
+  const fakeClient = {
+    responses: {
+      create: async () => {
+        responseNumber += 1;
+        if (responseNumber === 1) {
+          return (async function* () {
+            yield {type: "response.output_item.added", output_index: 0, item: started};
+            // Argument deltas arrive a few characters at a time; the harness
+            // coalesces the resulting snapshots instead of forwarding each one.
+            for (const delta of argumentDeltas) {
+              yield {
+                type: "response.function_call_arguments.delta",
+                item_id: "fc_read",
+                output_index: 0,
+                delta,
+              };
+            }
+            yield {
+              type: "response.function_call_arguments.done",
+              item_id: "fc_read",
+              output_index: 0,
+              arguments: '{"path":"sample.txt"}',
+            };
+            yield {type: "response.output_item.done", output_index: 0, item: finished};
+            yield completedEvent([finished], "response-stream-call");
+          })();
+        }
+        const finalMessage = {
+          type: "message",
+          role: "assistant",
+          content: [{type: "output_text", text: "Read it."}],
+        };
+        return (async function* () {
+          yield {type: "response.output_item.done", output_index: 0, item: finalMessage};
+          yield completedEvent([finalMessage], "response-stream-final");
+        })();
+      },
+    },
+  } as unknown as OpenAI;
+
+  // A long interval makes the coalescing observable: only the snapshot taken the
+  // moment the call appears is sent before the arguments finish.
+  const running = createAgentServer({
+    sessionsDir: root,
+    client: fakeClient,
+    toolStreamIntervalMs: 60_000,
+  });
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/sessions/session1/run`,
+      {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({input: "read sample.txt"}),
+      },
+    );
+    assert.equal(response.status, 200);
+    const stream = await response.text();
+
+    const callSnapshots = ssePayloads(stream, "ui.message").flatMap((payload) => {
+      const message = payload.message as Record<string, unknown>;
+      const parts = Array.isArray(message.parts) ? message.parts : [];
+      return parts
+        .filter(
+          (part): part is Record<string, unknown> =>
+            typeof part === "object" &&
+            part !== null &&
+            (part as {type?: unknown}).type === "tool_call",
+        )
+        .map((part) => ({
+          arguments: typeof part.arguments === "string" ? part.arguments : "",
+          partial: part.partial === true,
+        }));
+    });
+
+    const texts = callSnapshots.map((snapshot) => snapshot.arguments);
+    const partialSnapshots = callSnapshots.filter((snapshot) => snapshot.partial);
+    // The call itself goes out immediately and the newest coalesced state follows
+    // before completion - never one snapshot per delta.
+    assert.ok(
+      partialSnapshots.length <= 2,
+      `expected coalescing for ${argumentDeltas.length} deltas, saw ${partialSnapshots.length}: ${JSON.stringify(texts)}`,
+    );
+    assert.equal(partialSnapshots[0]?.arguments, "");
+    // The coalesced snapshot still carries the newest state, not a stale one.
+    assert.equal(
+      partialSnapshots[partialSnapshots.length - 1]?.arguments,
+      '{"path":"sample.txt"}',
+    );
+    assert.ok(texts.includes('{"path":"sample.txt"}'));
+    assert.ok(
+      callSnapshots.some((snapshot) => snapshot.partial),
+      "at least one snapshot must be marked partial",
+    );
+    const last = callSnapshots[callSnapshots.length - 1]!;
+    assert.equal(last.arguments, '{"path":"sample.txt"}');
+    assert.equal(last.partial, false);
+
+    // The call is on the wire before its result, not after the tool ran.
+    const partialIndex = stream.indexOf('"partial":true');
+    assert.ok(partialIndex >= 0);
+    assert.ok(partialIndex < stream.indexOf("tool_result"));
   } finally {
     await running.close();
     await rm(root, {recursive: true, force: true});
