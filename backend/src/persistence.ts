@@ -652,12 +652,12 @@ export async function readTranscriptRecords(
         lineStart = chunkStart + consumed;
         newline = chunk.indexOf(0x0a, consumed);
       }
-      carry = chunk.subarray(consumed);
+      const remainder = chunk.subarray(consumed);
       // The remainder must not alias the shared read buffer: the next read
-      // overwrites it, and the carry-out line has to stay intact.
-      if (carry.length > 0 && chunk === buffer.subarray(0, read.bytesRead)) {
-        carry = Buffer.from(carry);
-      }
+      // overwrites it, and the carry-out line has to stay intact. `chunk`
+      // aliases `buffer` whenever there was no carry into this read, which is
+      // exactly the case that carries a line across the buffer boundary.
+      carry = remainder.length === 0 ? remainder : Buffer.from(remainder);
     }
     return lineStart;
   } catch (error) {

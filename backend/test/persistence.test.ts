@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import {
   PersistenceError,
   SessionResponseStore,
+  readTranscriptRecords,
   type ResponseCompletedEvent,
 } from "../src/persistence.js";
 import { persistResponseStream } from "../src/responses.js";
@@ -1514,5 +1515,55 @@ test("runs consecutive session turns using config and reconstructed history", as
     await session.close();
   } finally {
     await removeSession(sessionDir);
+  }
+});
+
+test("transcript reads emit boundary-crossing records once, with unchanged offsets", async () => {
+  const root = await makeSession();
+  try {
+    const path = join(root, "messages.jsonl");
+    // The reader refills one 64 KiB buffer per read, so a record longer than
+    // that is carried into the next read (a committed response echo is ~77 KB).
+    // It must come back byte for byte, exactly once, and the records after it
+    // must keep their true offsets.
+    const lineOf = (marker: string, bytes: number): string => {
+      const bare = JSON.stringify({marker}).length;
+      return JSON.stringify({marker, pad: "p".repeat(bytes - (bare + 9))});
+    };
+    const build = (lines: readonly string[]): {source: string; offsets: number[]} => {
+      const offsets: number[] = [];
+      let cursor = 0;
+      for (const value of lines) {
+        offsets.push(cursor);
+        cursor += Buffer.byteLength(value) + 1;
+      }
+      return {source: lines.map((value) => `${value}\n`).join(""), offsets};
+    };
+    const readBack = async (lines: readonly string[]) => {
+      const {source, offsets} = build(lines);
+      await writeFile(path, source);
+      const readOffsets: number[] = [];
+      const readLines: string[] = [];
+      await readTranscriptRecords(path, 0, Buffer.byteLength(source), (offset, record) => {
+        readOffsets.push(offset);
+        readLines.push(record);
+      });
+      return {offsets, readOffsets, readLines};
+    };
+
+    const echo = lineOf("echo", 76_999);
+    const outputs = [lineOf("c0", 1_000), lineOf("c1", 1_262), lineOf("c2", 469), lineOf("c3", 390)];
+    const source = [lineOf("user", 156), echo, ...outputs, lineOf("r1", 46_288)];
+    const first = await readBack(source);
+    assert.deepEqual(first.readOffsets, first.offsets);
+    assert.deepEqual(first.readLines, source);
+
+    // A record several buffers long crosses the boundary repeatedly.
+    const deepSource = [lineOf("user", 100), lineOf("huge", 200_000), lineOf("tail", 500)];
+    const deep = await readBack(deepSource);
+    assert.deepEqual(deep.readOffsets, deep.offsets);
+    assert.deepEqual(deep.readLines, deepSource);
+  } finally {
+    await removeSession(root);
   }
 });
