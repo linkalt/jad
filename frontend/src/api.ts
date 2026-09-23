@@ -412,6 +412,14 @@ function isSessionUsageSummary(value: unknown): value is SessionUsageSummary {
 export interface StreamSessionRunOptions {
   signal?: AbortSignal;
   onMessage?: (message: WebUiMessage) => void;
+  /**
+   * An increment to the message a client already holds: `ui.delta` appends to a
+   * part, `ui.part` replaces one. The full snapshot still arrives on structural
+   * changes and at completion, so a client can ignore increments and stay correct
+   * from the next snapshot on.
+   */
+  onDelta?: (messageId: string, index: number, append: string) => void;
+  onPart?: (messageId: string, index: number, part: WebUiPart) => void;
   onCompleted?: (message: WebUiMessage) => void;
   onUsage?: (usage: SessionUsageSummary) => void;
   onRun?: (run: SessionRunState) => void;
@@ -464,6 +472,28 @@ async function consumeRunStream(
         if (message.data.message.status === 'complete') {
           completedMessage = message.data.message;
         }
+      }
+      continue;
+    }
+    if (message.event === 'ui.delta') {
+      if (
+        isRecord(message.data) &&
+        typeof message.data.id === 'string' &&
+        isNonnegativeSafeInteger(message.data.index) &&
+        typeof message.data.append === 'string'
+      ) {
+        options.onDelta?.(message.data.id, message.data.index, message.data.append);
+      }
+      continue;
+    }
+    if (message.event === 'ui.part') {
+      if (
+        isRecord(message.data) &&
+        typeof message.data.id === 'string' &&
+        isNonnegativeSafeInteger(message.data.index) &&
+        isWebUiPart(message.data.part)
+      ) {
+        options.onPart?.(message.data.id, message.data.index, message.data.part);
       }
       continue;
     }

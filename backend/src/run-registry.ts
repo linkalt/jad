@@ -3,6 +3,7 @@ import type {
   WebUiRunStatus,
   WebUiSessionRun,
 } from "./plugins/web-ui/types.js";
+import { messageIncrements } from "./plugins/web-ui/incremental-web-ui.js";
 
 export interface RunStreamEvent {
   event: string;
@@ -20,9 +21,12 @@ export interface StopRunResult {
  * One accepted run.
  *
  * A run outlives the HTTP request that started it, so the registry keeps the
- * newest normalized message snapshot. Every `ui.message` payload is already a
- * complete snapshot of the message, so re-attaching after a browser reload
- * means replaying the latest snapshot instead of buffering a delta history.
+ * newest normalized message. Subscribers receive only what changed since the
+ * last published state — an appended part as `ui.delta`, a replaced or added
+ * part as `ui.part` — and a full `ui.message` snapshot whenever the change has
+ * no incremental form (the first state, a status change). Attaching after a
+ * reload replays the newest snapshot, so a client that missed every delta is
+ * still correct from that point on.
  */
 export class SessionRun {
   public status: WebUiRunStatus = "running";
@@ -45,10 +49,18 @@ export class SessionRun {
     };
   }
 
-  /** Records the newest snapshot and forwards it to every subscriber. */
+  /** Records the newest state and forwards what changed to every subscriber. */
   public publishMessage(message: WebUiMessage): void {
+    const previous = this.latest;
     this.latest = message;
-    this.publish("ui.message", {message});
+    const increments = previous === undefined ? undefined : messageIncrements(previous, message);
+    if (increments === undefined) {
+      this.publish("ui.message", {message});
+      return;
+    }
+    for (const increment of increments) {
+      this.publish(increment.event, increment.data);
+    }
   }
 
   public publish(event: string, data: unknown): void {

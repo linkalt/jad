@@ -12,6 +12,7 @@ import {
   normalizeWebUiSession,
   WebUiNormalizedRun,
 } from "../src/plugins/web-ui-normalized.js";
+import type {WebUiMessage, WebUiPart} from "../src/plugins/web-ui/types.js";
 import type { LoadedSessionConfig } from "../src/config.js";
 import {nativeReadDefinition} from "../src/tools/native/read.js";
 import {loadRootServerSettings} from "../src/session-roots.js";
@@ -51,6 +52,65 @@ function ssePayloads(stream: string, eventName: string): Record<string, unknown>
       .trimStart();
     return data ? [JSON.parse(data) as Record<string, unknown>] : [];
   });
+}
+
+/**
+ * The messages a client renders from a run stream: `ui.message` replaces the
+ * message it holds, `ui.delta` appends to a part and `ui.part` sets one — the
+ * same merge the viewer performs.
+ */
+function runStreamStates(stream: string): WebUiMessage[] {
+  const states: WebUiMessage[] = [];
+  let current: WebUiMessage | undefined;
+  for (const block of stream.split("\n\n")) {
+    const name = block
+      .split("\n")
+      .find((line) => line.startsWith("event:"))
+      ?.slice("event:".length)
+      .trim();
+    const dataLine = block
+      .split("\n")
+      .find((line) => line.startsWith("data:"))
+      ?.slice("data:".length)
+      .trimStart();
+    if (name === undefined || !dataLine) {
+      continue;
+    }
+    const data = JSON.parse(dataLine) as Record<string, unknown>;
+    if (name === "ui.message") {
+      current = data.message as WebUiMessage;
+      states.push(current);
+      continue;
+    }
+    if (current === undefined) {
+      continue;
+    }
+    if (name === "ui.part") {
+      const parts = current.parts.slice();
+      parts[data.index as number] = data.part as WebUiPart;
+      current = {...current, parts};
+      states.push(current);
+      continue;
+    }
+    if (name === "ui.delta") {
+      const index = data.index as number;
+      const part = current.parts[index];
+      if (part === undefined) {
+        continue;
+      }
+      const append = data.append as string;
+      const parts = current.parts.slice();
+      parts[index] =
+        part.type === "tool_call"
+          ? {...part, arguments: part.arguments + append}
+          : part.type === "tool_result"
+            ? {...part, output: part.output + append}
+            : {...part, text: part.text + append};
+      current = {...current, parts};
+      states.push(current);
+    }
+  }
+  return states;
 }
 
 test("loads configurable root server settings", async () => {
@@ -1123,12 +1183,7 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
       current: {turn: 1, step: 1, response_id: "resp_bridge"},
     });
 
-    const uiMessages = ssePayloads(stream, "ui.message").map((payload) =>
-      payload.message as {
-        status?: string;
-        parts: Array<{type: string; text: string}>;
-      },
-    );
+    const uiMessages = runStreamStates(stream);
     assert.deepEqual(uiMessages.map((message) => message.status), [
       "streaming",
       "streaming",
@@ -1297,12 +1352,7 @@ test("streams per-response usage, including incomplete responses, with tool bloc
     );
     assert.equal(run.status, 200);
     const stream = await run.text();
-    const uiMessages = ssePayloads(stream, "ui.message").map(
-      (payload) => payload.message as {
-        status?: string;
-        parts: Array<Record<string, unknown>>;
-      },
-    );
+    const uiMessages = runStreamStates(stream);
     assert.deepEqual(uiMessages.map((message) => message.status), [
       "streaming",
       "streaming",
@@ -1317,9 +1367,9 @@ test("streams per-response usage, including incomplete responses, with tool bloc
       },
     ]);
     assert.equal(uiMessages[1]?.parts[1]?.type, "tool_result");
-    assert.equal(uiMessages[1]?.parts[1]?.status, "success");
+    assert.equal((uiMessages[1]?.parts[1] as {status?: string}).status, "success");
     assert.equal(uiMessages[2]?.parts[2]?.type, "text");
-    assert.equal(uiMessages[2]?.parts[2]?.text, "Tool finished.");
+    assert.equal((uiMessages[2]?.parts[2] as {text?: string}).text, "Tool finished.");
 
     const snapshot = await fetch("http://127.0.0.1:" + address.port + "/api/sessions/session1");
     const body = (await snapshot.json()) as {
@@ -1974,42 +2024,39 @@ test("streams tool arguments over SSE before the call completes", async () => {
     assert.equal(response.status, 200);
     const stream = await response.text();
 
-    const callSnapshots = ssePayloads(stream, "ui.message").flatMap((payload) => {
-      const message = payload.message as Record<string, unknown>;
-      const parts = Array.isArray(message.parts) ? message.parts : [];
-      return parts
-        .filter(
-          (part): part is Record<string, unknown> =>
-            typeof part === "object" &&
-            part !== null &&
-            (part as {type?: unknown}).type === "tool_call",
-        )
+    // What the client renders, replayed from the stream: the call appears the
+    // moment it starts, its arguments arrive while it is still partial, and the
+    // finished call replaces the streamed part — never a whole message per delta.
+    const states = runStreamStates(stream);
+    const callStates = states.flatMap((state) =>
+      state.parts
+        .filter((part) => part.type === "tool_call")
         .map((part) => ({
-          arguments: typeof part.arguments === "string" ? part.arguments : "",
-          partial: part.partial === true,
-        }));
-    });
-
-    const texts = callSnapshots.map((snapshot) => snapshot.arguments);
-    const partialSnapshots = callSnapshots.filter((snapshot) => snapshot.partial);
-    // The call itself goes out immediately and the newest coalesced state follows
-    // before completion - never one snapshot per delta.
-    assert.ok(
-      partialSnapshots.length <= 2,
-      `expected coalescing for ${argumentDeltas.length} deltas, saw ${partialSnapshots.length}: ${JSON.stringify(texts)}`,
+          arguments: (part as {arguments?: string}).arguments ?? "",
+          partial: (part as {partial?: boolean}).partial === true,
+        })),
     );
-    assert.equal(partialSnapshots[0]?.arguments, "");
-    // The coalesced snapshot still carries the newest state, not a stale one.
+
+    const partialStates = callStates.filter((state) => state.partial);
+    assert.ok(
+      partialStates.length >= 2 && partialStates.length <= 3,
+      `expected the streamed call to coalesce for ${argumentDeltas.length} deltas, saw ${JSON.stringify(callStates)}`,
+    );
+    assert.equal(partialStates[0]?.arguments, "");
+    // The coalesced state carries the newest arguments, not a stale prefix.
     assert.equal(
-      partialSnapshots[partialSnapshots.length - 1]?.arguments,
+      partialStates[partialStates.length - 1]?.arguments,
       '{"path":"sample.txt"}',
     );
-    assert.ok(texts.includes('{"path":"sample.txt"}'));
     assert.ok(
-      callSnapshots.some((snapshot) => snapshot.partial),
-      "at least one snapshot must be marked partial",
+      callStates.some((state) => !state.partial && state.arguments === '{"path":"sample.txt"}'),
+      "the finished call carries its whole arguments",
     );
-    const last = callSnapshots[callSnapshots.length - 1]!;
+    assert.ok(
+      ssePayloads(stream, "ui.message").length <= 3,
+      "increments replace the per-delta snapshots",
+    );
+    const last = callStates[callStates.length - 1]!;
     assert.equal(last.arguments, '{"path":"sample.txt"}');
     assert.equal(last.partial, false);
 

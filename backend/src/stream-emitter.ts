@@ -1,20 +1,23 @@
 import type {WebUiMessage} from "./plugins/web-ui/types.js";
+import {messageIncrements} from "./plugins/web-ui/incremental-web-ui.js";
 
 /**
- * A message snapshot is cumulative: every one supersedes the previous. While a
- * long tool argument streams, the provider emits a small delta every few
- * characters, so publishing a full snapshot per delta grows quadratically — one
- * 5.9 KB `write` body produced 1244 snapshots and 4.8 MB on the wire.
+ * A message is published for every provider delta, and a complete snapshot of it
+ * is orders of magnitude larger than the delta that changed it — one 5.9 KB
+ * `write` body produced 1244 snapshots and 4.8 MB on the wire, and a message
+ * that carries the turn's tool results re-sent all of them per delta.
  *
- * This coalesces the in-progress snapshots to at most one per interval. Nothing
- * that matters is delayed: a snapshot without an in-progress tool call goes out
- * immediately, and `flush()` (used before tool results and terminal events) sends
- * the newest coalesced state first.
+ * Only growth waits for a coalescing window. A state whose only change is an
+ * appended text, reasoning or tool-arguments part is held for at most
+ * `intervalMs`; anything else — a new part (a tool result, a finished call), a
+ * status change — goes out immediately, after flushing the held state so a
+ * subscriber never sees an older state after a newer one.
  */
 export class MessageStreamEmitter {
   private pending: WebUiMessage | undefined;
   private timer: NodeJS.Timeout | undefined;
   private lastEmitAt = Number.NEGATIVE_INFINITY;
+  private lastEmitted: WebUiMessage | undefined;
 
   public constructor(
     private readonly intervalMs: number,
@@ -22,13 +25,13 @@ export class MessageStreamEmitter {
   ) {}
 
   public push(message: WebUiMessage): void {
-    if (this.intervalMs <= 0 || !isStreamingToolCallMessage(message)) {
+    if (this.intervalMs <= 0 || !this.canCoalesce(message)) {
       this.flush();
       this.emitNow(message);
       return;
     }
     // Nothing is waiting and the window is open: the caller sees this state at
-    // once instead of one tick later, so a tool call appears the moment it starts.
+    // once instead of one tick later, so a part appears the moment it starts.
     if (
       this.pending === undefined &&
       this.timer === undefined &&
@@ -39,6 +42,19 @@ export class MessageStreamEmitter {
     }
     this.pending = message;
     this.schedule();
+  }
+
+  /**
+   * Only a state that grew its last part can wait: a change a client cannot
+   * express as an append is visible at once.
+   */
+  private canCoalesce(message: WebUiMessage): boolean {
+    const previous = this.lastEmitted;
+    if (previous === undefined) {
+      return false;
+    }
+    const increments = messageIncrements(previous, message);
+    return increments !== undefined && increments.every((item) => item.event === "ui.delta");
   }
 
   /** Sends the newest coalesced snapshot, if one is waiting. */
@@ -71,6 +87,7 @@ export class MessageStreamEmitter {
 
   private emitNow(message: WebUiMessage): void {
     this.lastEmitAt = Date.now();
+    this.lastEmitted = message;
     this.emit(message);
   }
 

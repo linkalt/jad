@@ -49,6 +49,7 @@ import {
 } from './api';
 import appConfig from './config.json';
 import {deepEqual} from './deepEqual';
+import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
 import {FloatingPanel} from './components/FloatingPanel';
 import {MarkdownText} from './components/MarkdownText';
@@ -1761,6 +1762,19 @@ function App() {
   const [isUsageDrawerCollapsed, setIsUsageDrawerCollapsed] = useState(true);
   const [runProgress, setRunProgress] = useState(baseReasoning.length);
   const [streamingMessage, setStreamingMessage] = useState<WebUiMessage | null>(null);
+  // The run stream sends increments instead of a snapshot per provider delta, so
+  // the message on screen is merged here; the id check keeps a stale stream from
+  // patching the message a newer run already replaced.
+  const applyRunDelta = useCallback((messageId: string, index: number, append: string) => {
+    setStreamingMessage(current =>
+      current !== null && current.id === messageId ? applyPartDelta(current, index, append) : current,
+    );
+  }, []);
+  const applyRunPart = useCallback((messageId: string, index: number, part: WebUiPart) => {
+    setStreamingMessage(current =>
+      current !== null && current.id === messageId ? applyPart(current, index, part) : current,
+    );
+  }, []);
   const conversation = useResizable({
     defaultSize: pixel(appConfig.conversation_lane_default_size),
     minSize: pixel(appConfig.conversation_lane_min_size),
@@ -2165,6 +2179,8 @@ function App() {
             setStreamingMessage(message);
             setRunProgress(1);
           },
+          onDelta: applyRunDelta,
+          onPart: applyRunPart,
           onCompleted: message => {
             setStreamingMessage(message);
             setRunProgress(2);
@@ -2296,6 +2312,8 @@ function App() {
       void attachSessionRun(sessionRef, {
         signal: controller.signal,
         onMessage: message => setStreamingMessage(message),
+        onDelta: applyRunDelta,
+        onPart: applyRunPart,
         onCompleted: message => setStreamingMessage(message),
         onUsage: usage => {
           setSessions(current =>

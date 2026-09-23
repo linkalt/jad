@@ -36,16 +36,18 @@ test("recognizes an in-progress tool call", () => {
   );
 });
 
-test("coalesces a burst of in-progress snapshots into one emit", () => {
+test("coalesces a burst of growing tool arguments into one emit", () => {
   const sent: WebUiMessage[] = [];
   const emitter = new MessageStreamEmitter(60_000, (value) => sent.push(value));
 
-  emitter.push(toolCall("{", true));
+  let argumentsText = "{";
+  emitter.push(toolCall(argumentsText, true));
   for (const chunk of ['"path"', ':"notes.md"', "}"]) {
-    emitter.push(toolCall(chunk, true));
+    argumentsText += chunk;
+    emitter.push(toolCall(argumentsText, true));
   }
 
-  // The first snapshot goes out immediately; the rest wait for the interval.
+  // The first snapshot goes out immediately; the growth waits for the interval.
   assert.equal(sent.length, 1);
   assert.equal(sent[0]?.parts[0]?.type, "tool_call");
 
@@ -53,8 +55,30 @@ test("coalesces a burst of in-progress snapshots into one emit", () => {
   assert.equal(sent.length, 2);
   assert.equal(
     (sent[1]?.parts[0] as {arguments?: string}).arguments,
-    "}",
+    '{"path":"notes.md"}',
   );
+  emitter.discard();
+});
+
+test("coalesces streamed text and publishes a new part at once", () => {
+  const sent: WebUiMessage[] = [];
+  const emitter = new MessageStreamEmitter(60_000, (value) => sent.push(value));
+
+  emitter.push(message([{type: "text", text: "hello"}]));
+  emitter.push(message([{type: "text", text: "hello world"}]));
+  assert.equal(sent.length, 1, "growth waits for the interval");
+
+  emitter.push(
+    message([
+      {type: "text", text: "hello world"},
+      {type: "tool_result", callId: "call_read", output: "ok", status: "success"},
+    ]),
+  );
+  // The new part flushes the held state first, then goes out immediately: a tool
+  // result is not growth and must never wait behind one.
+  assert.equal(sent.length, 3);
+  assert.equal((sent[1]?.parts[0] as {text?: string}).text, "hello world");
+  assert.equal(sent[2]?.parts[1]?.type, "tool_result");
   emitter.discard();
 });
 
