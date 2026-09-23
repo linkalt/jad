@@ -527,6 +527,105 @@ test("recovers a rendered final record after a commit interruption", async () =>
   }
 });
 
+test("stores only the response fields the transcript reads, without the provider request echo", async () => {
+  const sessionDir = await makeSession();
+  try {
+    const store = await SessionResponseStore.open(sessionDir);
+    assert.equal(store.responseMetadata, "minimal");
+    const item = {type: "message", role: "assistant", content: [{type: "output_text", text: "answer"}]};
+    const turn = await store.beginTurn("turn-metadata-minimal");
+    await turn.stageOutputItem({type: "response.output_item.done", output_index: 0, item});
+    const event = completedEvent([item], "resp-metadata");
+    event.response = {
+      ...event.response,
+      tools: [{type: "function", name: "read", description: "request echo ".repeat(500)}],
+      tool_choice: "auto",
+      truncation: "disabled",
+      service_tier: "auto",
+      text: {format: {type: "text"}},
+      reasoning: {effort: "max", summary: "auto"},
+      prompt_cache_key: "jad-echo",
+      created_at: 1790186909,
+      completed_at: 1790186915,
+    };
+    await turn.commit(event);
+
+    const raw = await readFile(store.messagesPath, "utf8");
+    const [line] = raw.trimEnd().split("\n");
+    const persisted = JSON.parse(line!) as ResponseCompletedEvent;
+    assert.deepEqual(persisted.response, {
+      id: "resp-metadata",
+      object: "response",
+      status: "completed",
+      model: "gpt-test",
+      created_at: 1790186909,
+      completed_at: 1790186915,
+      usage: {input_tokens: 10, output_tokens: 4},
+      output: [item],
+    });
+    assert.doesNotMatch(raw, /request echo/);
+
+    // The request history and the usage summary are unchanged by the trim.
+    const history = [];
+    for await (const input of store.readInputItems()) history.push(input);
+    assert.deepEqual(history, [item]);
+    const usage = await store.readUsageSummary();
+    assert.equal(usage.current?.response_id, "resp-metadata");
+    assert.equal(usage.current?.input_tokens, 10);
+    await store.close();
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
+test("full response metadata keeps the provider response verbatim", async () => {
+  const sessionDir = await makeSession();
+  try {
+    const store = await SessionResponseStore.open(sessionDir, {responseMetadata: "full"});
+    assert.equal(store.responseMetadata, "full");
+    const item = {type: "message", role: "assistant", content: [{type: "output_text", text: "answer"}]};
+    const turn = await store.beginTurn("turn-metadata-full");
+    await turn.stageOutputItem({type: "response.output_item.done", output_index: 0, item});
+    const event = completedEvent([item], "resp-metadata-full");
+    event.response = {...event.response, tools: [{type: "function", name: "read"}]};
+    await turn.commit(event);
+
+    const [line] = (await readFile(store.messagesPath, "utf8")).trimEnd().split("\n");
+    const persisted = JSON.parse(line!) as ResponseCompletedEvent;
+    assert.deepEqual(persisted.response.tools, [{type: "function", name: "read"}]);
+    await store.close();
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
+test("rejects an unsupported persistence.response_metadata and threads a configured one", async () => {
+  const sessionDir = await makeSession();
+  try {
+    await writeFile(join(sessionDir, "model.json"), JSON.stringify({model: "gpt-test"}));
+    await writeFile(
+      join(sessionDir, "setting.json"),
+      JSON.stringify({cwd: sessionDir, persistence: {response_metadata: "tiny"}}),
+    );
+    await assert.rejects(
+      () => new SessionConfigLoader(sessionDir).loadSettings(),
+      /persistence\.response_metadata must be minimal or full/,
+    );
+
+    await writeFile(
+      join(sessionDir, "setting.json"),
+      JSON.stringify({cwd: sessionDir, persistence: {response_metadata: "full"}}),
+    );
+    const config = await new SessionConfigLoader(sessionDir).load();
+    assert.equal(config.settings.persistence.response_metadata, "full");
+    const session = await AgentSession.open(sessionDir);
+    assert.equal(session.store.responseMetadata, "full");
+    await session.close();
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("rejects incomplete output sets and oversized items without committing", async () => {
   const sessionDir = await makeSession();
   try {
@@ -682,6 +781,7 @@ test("loads model and session settings with normalized paths and hashes", async 
     assert.deepEqual(config.settings.persistence, {
       durability: "turn",
       max_item_bytes: 10 * 1024 * 1024,
+      response_metadata: "minimal",
     });
     assert.deepEqual(config.settings.http_debug, {
       enabled: false,
@@ -1181,6 +1281,7 @@ test("defaults empty settings and rejects missing or unsafe model configuration"
     assert.deepEqual(settings.persistence, {
       durability: "turn",
       max_item_bytes: 10 * 1024 * 1024,
+      response_metadata: "minimal",
     });
     assert.equal(settings.http_debug.enabled, false);
     assert.equal(settings.paths.history_cache, join(sessionDir, "staging/history-cache.json"));

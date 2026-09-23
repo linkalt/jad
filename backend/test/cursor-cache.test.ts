@@ -267,6 +267,59 @@ test("projects the transcript identically to a full normalization", async () => 
   }
 });
 
+test("projects the same messages whether or not records carry the provider request echo", async () => {
+  const echo: JsonRecord = {
+    tools: [{type: "function", name: "read", description: "request echo ".repeat(200)}],
+    instructions: "system prompt echo",
+    temperature: 1,
+    top_p: 1,
+    truncation: "disabled",
+    tool_choice: "auto",
+    metadata: {echo: true},
+  };
+  const withEcho = TRANSCRIPT.map((record) =>
+    record.type === "response.completed"
+      ? {...record, response: {...(record.response as JsonRecord), ...echo}}
+      : record,
+  );
+  // The shape `persistence.response_metadata: "minimal"` writes.
+  const minimal = TRANSCRIPT.map((record) => {
+    if (record.type !== "response.completed") {
+      return record;
+    }
+    const response = record.response as JsonRecord;
+    return {
+      ...record,
+      response: {id: response.id, status: response.status, output: response.output},
+    };
+  });
+
+  const echoed = await makeStore(withEcho);
+  const stripped = await makeStore(minimal);
+  try {
+    const read = async (session: {store: SessionResponseStore}) =>
+      plain(
+        (
+          await new WebUiSessionViewCache(session.store, {
+            snapshotTurns: 0,
+            maxPageTurns: 50,
+          }).read()
+        ).messages,
+      );
+    const echoedView = await read(echoed);
+    assert.deepEqual(await read(stripped), echoedView);
+    assert.deepEqual(echoedView, plain(messagesOf(TRANSCRIPT) as never));
+    // The echo is really in the compared file, so the equality is meaningful.
+    assert.match(await readFile(echoed.messagesPath, "utf8"), /request echo/);
+    assert.doesNotMatch(await readFile(stripped.messagesPath, "utf8"), /request echo/);
+  } finally {
+    await echoed.store.close();
+    await stripped.store.close();
+    await rm(echoed.sessionDir, {recursive: true, force: true});
+    await rm(stripped.sessionDir, {recursive: true, force: true});
+  }
+});
+
 test("pages the transcript by turn and tiles it exactly", async () => {
   const { store, sessionDir, messagesPath } = await makeStore();
   try {

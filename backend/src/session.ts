@@ -261,6 +261,7 @@ export class AgentSession {
       stateContextPath: options.store?.stateContextPath ?? settings.paths.statecontext,
       durability: options.store?.durability ?? settings.persistence.durability,
       maxItemBytes: options.store?.maxItemBytes ?? settings.persistence.max_item_bytes,
+      responseMetadata: options.store?.responseMetadata ?? settings.persistence.response_metadata,
     });
     const processManager = new ProcessManager(
       settings.tools.native.process?.storage_dir ?? join(settings.cwd, DEFAULT_NATIVE_PROCESS_STORAGE_DIR),

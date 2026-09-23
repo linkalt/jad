@@ -192,7 +192,8 @@ Example storage and HTTP debug paths:
   "max_tool_rounds": 8,
   "persistence": {
     "durability": "turn",
-    "max_item_bytes": 10485760
+    "max_item_bytes": 10485760,
+    "response_metadata": "minimal"
   },
   "compaction": {
     "auto_enabled": true,
@@ -562,7 +563,14 @@ persistOpenAIResponse(client, store, streamingRequest, { turnId });
 
 The official SDK dependency is limited to the adapter; the file format and staging implementation do not import SDK response classes.
 
-The final event type should remain extensible. Unknown API fields must survive persistence so that adding a newer Responses API field does not require a migration before it can be stored.
+The final event type should remain extensible. Under `persistence.response_metadata: "full"` unknown API
+fields survive persistence verbatim, so adding a newer Responses API field requires no migration. The
+default `"minimal"` stores only the fields the store and its readers use (`id`, `object`, `status`,
+`model`, `created_at`, `completed_at`, `incomplete_details`, `usage`, `output`) because providers echo
+the whole request — tool definitions included — on every completed response, which measured 80–82% of
+all stored bytes in this workspace (`tools` alone is 84% of a record). A reader never needs that echo:
+the request context is rebuilt from configuration, and `http_debug` records the wire traffic when the
+echo is wanted for auditing. Set `"full"` to restore verbatim storage.
 
 ## 11. Validation and tests
 

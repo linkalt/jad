@@ -71,6 +71,15 @@
           "maximum": 67108864,
           "description": "Maximum serialized response output-item size. Defaults to 10485760.",
           "default": 10485760
+        },
+        "response_metadata": {
+          "type": "string",
+          "enum": [
+            "minimal",
+            "full"
+          ],
+          "description": "Provider response fields kept beside the output items. `minimal` (default) keeps id, object, status, model, created_at, completed_at, incomplete_details, and usage; `full` also stores the request echo the provider repeats on every response (tool definitions included).",
+          "default": "minimal"
         }
       },
       "additionalProperties": true,

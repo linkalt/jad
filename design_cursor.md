@@ -216,6 +216,7 @@ message's capped reasoning (16,276 of 38,500 B) came back whole — 38,254 chars
 | `server.max_page_turns` | `50` | largest page one cursor request may return |
 | `server.max_inline_part_bytes` | `16384` | inline text per part; `0` sends parts uncut |
 | `compaction.keepbackup.turns` | `20` | backup turns rendered as history; `0` hides them |
+| `persistence.response_metadata` | `minimal` | response fields stored per completed record; `full` keeps the provider's request echo |
 | `session_refresh_interval_ms_streaming` | `30000` | frontend poll cadence while attached to a run |
 | `transcript_page_turns` | `5` | turns fetched per "load earlier messages" click |
 
@@ -227,10 +228,10 @@ message's capped reasoning (16,276 of 38,500 B) came back whole — 38,254 chars
 | one step commits | 160 ms, 3 MB | the window's own bytes, index update is sub-ms |
 | load an older turn | impossible | seek + one turn |
 | cold start | 160 ms | one scan of the transcript, then incremental |
+| stored bytes (`response_metadata: "minimal"`) | 1.51 MB transcript / 6.80 MB backup, 80–82% request echo | **0.26 MB / 1.29 MB** |
 
 ## Out of scope (follow-ups)
 
-- Strip the provider request echo from stored records (`tools` et al. — 84–91% of bytes).
 - Per-message manifest for client-side delta sync (the `turnOffsets` data supports it later).
 - The history block is fetched whole once per identity, so a session whose backup is large pays that
   once per compaction instead of once per step; `compaction.keepbackup.turns` and
@@ -258,3 +259,7 @@ message's capped reasoning (16,276 of 38,500 B) came back whole — 38,254 chars
    capped block message hydrates whole from it (`server.test.ts`). Verified in the browser against a
    copy of the live session: one `1359954 B` snapshot and one `1673643 B` history fetch, then 300-byte
    `304` revalidations, with the block rendering ahead of the tail and hydration updating it in place.
+9. **Stored response metadata:** `minimal` keeps only the fields readers use and drops the echo, while
+   `full` reproduces the pre-change record byte for byte (same sha256); the trimmed record still
+   rebuilds request history, usage, and compaction (`persistence.test.ts`). One real turn through
+   `AgentSession` with a live-size echo (35,190 B of `tools`) stored `361 B` instead of `35,622 B`.

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import {CURSOR_CACHE_FILE, HISTORY_CACHE_FILE, USAGE_CACHE_FILE} from "./persistence.js";
-import type {DurabilityMode, JsonRecord} from "./persistence.js";
+import type {DurabilityMode, JsonRecord, ResponseMetadataMode} from "./persistence.js";
 import {
   SPILL_PLACEHOLDERS,
   resolveSpillPath,
@@ -325,6 +325,7 @@ export interface CompactionSettings extends JsonRecord {
 export interface PersistenceSettings extends JsonRecord {
   durability: DurabilityMode;
   max_item_bytes: number;
+  response_metadata: ResponseMetadataMode;
 }
 
 export type PromptRole = "system" | "developer";
@@ -389,6 +390,11 @@ export const DEFAULT_MAX_TOOL_ROUNDS = 8;
 export const MAX_CONFIGURED_TOOL_ROUNDS = 50_000;
 export const DEFAULT_PERSISTENCE_MAX_ITEM_BYTES = 10 * 1024 * 1024;
 export const MAX_CONFIGURED_PERSISTENCE_ITEM_BYTES = 64 * 1024 * 1024;
+/**
+ * Completed-response fields kept in the transcript. Providers echo the whole
+ * request on every response, so `full` stores that echo verbatim.
+ */
+export const DEFAULT_PERSISTENCE_RESPONSE_METADATA: ResponseMetadataMode = "minimal";
 /** Pre-compaction turns the web UI renders from the backup. */
 export const DEFAULT_KEEP_BACKUP_TURNS = 20;
 export const MAX_KEEP_BACKUP_TURNS = 1000;
@@ -695,10 +701,15 @@ function normalizePersistence(
       `${path}: persistence.max_item_bytes must be a safe integer between 1 and ${MAX_CONFIGURED_PERSISTENCE_ITEM_BYTES}`,
     );
   }
+  const responseMetadata = persistence.response_metadata ?? DEFAULT_PERSISTENCE_RESPONSE_METADATA;
+  if (responseMetadata !== "minimal" && responseMetadata !== "full") {
+    throw new ConfigError(`${path}: persistence.response_metadata must be minimal or full`);
+  }
   return {
     ...persistence,
     durability,
     max_item_bytes: maxItemBytes,
+    response_metadata: responseMetadata,
   } as PersistenceSettings;
 }
 

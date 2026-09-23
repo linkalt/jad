@@ -21,9 +21,19 @@ export type ResponseInputItem = JsonRecord;
 
 export type DurabilityMode = "process" | "turn" | "strict";
 
+/**
+ * How much of the provider response is stored beside its output items.
+ *
+ * Providers echo the whole request (tool catalog included) on every completed
+ * response; `minimal` keeps only the fields this store and its readers use.
+ */
+export type ResponseMetadataMode = "minimal" | "full";
+
 export interface SessionResponseStoreOptions {
   /** Defaults to `turn`. */
   durability?: DurabilityMode;
+  /** Provider response fields kept in each stored record. Defaults to `minimal`. */
+  responseMetadata?: ResponseMetadataMode;
   /** Maximum serialized output-item size in bytes. */
   maxItemBytes?: number;
   /** Transcript path; relative values resolve from the session directory. */
@@ -235,6 +245,22 @@ const LINE_BUFFER_SIZE = 64 * 1024;
 const COMPLETED_RECORD_MARKER = '"response.completed"';
 /** The same idea for a turn-opening record, counted when the UI walks back. */
 const USER_RECORD_MARKER = '"role":"user"';
+/**
+ * Completed-response fields the transcript and its readers use: identity,
+ * status, timing, and usage. Every other field of a completed response is
+ * request echo — the provider repeats the request (tool definitions included)
+ * on each response, and nothing reads it back.
+ */
+const RESPONSE_METADATA_KEYS: readonly string[] = [
+  "id",
+  "object",
+  "status",
+  "model",
+  "created_at",
+  "completed_at",
+  "incomplete_details",
+  "usage",
+];
 /** Bytes read per backward step while locating the backup's last turns. */
 const BACKUP_TAIL_WINDOW_BYTES = 256 * 1024;
 /** Transcript records the compaction seam compares against the backup's end. */
@@ -1115,14 +1141,19 @@ async function renderCanonicalCompletion(
   finalPath: string,
   expectedItemCount: number,
   durability: DurabilityMode,
+  responseMetadata: ResponseMetadataMode,
   sessionTurn?: number,
   sessionStep?: number,
 ): Promise<RenderedLine> {
   const metadata: JsonRecord = {};
   for (const [key, value] of Object.entries(response)) {
-    if (key !== "output") {
-      metadata[key] = value;
+    if (key === "output") {
+      continue;
     }
+    if (responseMetadata === "minimal" && !RESPONSE_METADATA_KEYS.includes(key)) {
+      continue;
+    }
+    metadata[key] = value;
   }
 
   const metadataJson = stringifyJson(metadata, "response metadata");
@@ -1234,7 +1265,7 @@ export class SessionResponseStore {
   public readonly messagesBackupPath: string;
   public readonly stateContextPath: string;
 
-  private readonly options: Required<Pick<SessionResponseStoreOptions, "durability" | "maxItemBytes">>;
+  private readonly options: Required<Pick<SessionResponseStoreOptions, "durability" | "maxItemBytes" | "responseMetadata">>;
   private historyCache: InputHistoryCache | undefined;
   private usageCache: UsageCache | undefined;
   private cursorCache: CursorCache | undefined;
@@ -1288,10 +1319,17 @@ export class SessionResponseStore {
     this.options = {
       durability: options.durability ?? "turn",
       maxItemBytes: options.maxItemBytes ?? Number.MAX_SAFE_INTEGER,
+      responseMetadata: options.responseMetadata ?? "minimal",
     };
 
     if (!Number.isSafeInteger(this.options.maxItemBytes) || this.options.maxItemBytes <= 0) {
       throw new PersistenceError("maxItemBytes must be a positive safe integer");
+    }
+    if (
+      this.options.responseMetadata !== "minimal" &&
+      this.options.responseMetadata !== "full"
+    ) {
+      throw new PersistenceError("responseMetadata must be minimal or full");
     }
   }
 
@@ -2487,6 +2525,10 @@ export class SessionResponseStore {
   public get maxItemBytes(): number {
     return this.options.maxItemBytes;
   }
+
+  public get responseMetadata(): ResponseMetadataMode {
+    return this.options.responseMetadata;
+  }
 }
 
 export class ResponseTurn {
@@ -2613,6 +2655,7 @@ export class ResponseTurn {
         finalPath,
         expectedItemCount,
         this.store.durability,
+        this.store.responseMetadata,
         event.session_turn,
         event.session_step,
       );
