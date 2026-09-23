@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "theme:build": "astryx theme build src/themes/neutral/neutralTheme.ts -o src/themes/neutral/theme.css",
+    "theme:check": "astryx theme build -c -o src/themes/neutral/theme.css src/themes/neutral/neutralTheme.ts",
+    "build": "npm run theme:build && tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false"
   },
@@ -17,6 +19,7 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@astryxdesign/cli": "^0.6.2",
     "@stylexjs/unplugin": "0.19.1",
     "@types/node": "^26.6.2",
     "@types/react": "^19.1.0",

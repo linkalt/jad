@@ -1,4 +1,5 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {memo, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import type {ChangeEvent, CSSProperties} from 'react';
 import * as stylex from '@stylexjs/stylex';
 import {
   AppShell,
@@ -6,7 +7,6 @@ import {
   Badge,
   Button,
   Card,
-  ChatComposer,
   CodeBlock,
   ChatLayout,
   ChatMessage,
@@ -21,8 +21,6 @@ import {
   IconButton,
   Layout,
   LayoutContent,
-  LayoutHeader,
-  Markdown,
   SideNav,
   SideNavHeading,
   SideNavItem,
@@ -36,8 +34,27 @@ import type {
   ChatToolCallItem,
   StatusDotVariant,
 } from '@astryxdesign/core';
-import {fetchSessions, streamSessionRun, type SessionSnapshot, type WebUiMessage, type WebUiPart} from './api';
+import {
+  attachSessionRun,
+  compactSession,
+  fetchSessions,
+  stopSessionRun,
+  streamSessionRun,
+  type SessionSnapshot,
+  type WebUiMessage,
+  type WebUiPart,
+} from './api';
 import appConfig from './config.json';
+import {deepEqual} from './deepEqual';
+import {ComposerPane} from './components/ComposerPane';
+import {FloatingPanel} from './components/FloatingPanel';
+import {MarkdownText} from './components/MarkdownText';
+import {PromptLibraryPanel} from './components/PromptLibraryPanel';
+import {RunSettingsPanel} from './components/RunSettingsPanel';
+import {SessionSearchPanel} from './components/SessionSearchPanel';
+import {EarlierMessagesControl, useTranscriptWindow} from './components/TranscriptWindow';
+import {UsageDetailsDrawer} from './components/UsageDetailsDrawer';
+import type {PromptTemplate} from './promptLibrary';
 import {
   ResizeHandle,
   useResizable,
@@ -63,12 +80,6 @@ const styles = stylex.create({
     minWidth: 0,
     backgroundColor: colorVars['--color-background-body'],
   },
-  header: {
-    backgroundColor: colorVars['--color-background-surface'],
-  },
-  headerTitle: {
-    minWidth: 0,
-  },
   singleLine: {
     display: 'block',
     minWidth: 0,
@@ -76,9 +87,6 @@ const styles = stylex.create({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-  },
-  headerActions: {
-    flexShrink: 0,
   },
   chat: {
     height: '100%',
@@ -94,28 +102,13 @@ const styles = stylex.create({
     height: '100%',
     minHeight: 0,
     minWidth: 0,
+    // The old visual header used to separate the transcript from the window
+    // edge; now that it is gone this keeps the first row off the top edge.
+    paddingBlockStart: spacingVars['--spacing-4'],
   },
   composerResizeHandle: {
     alignSelf: 'stretch',
     height: 'auto',
-  },
-  floatingWindow: {
-    position: 'absolute',
-    insetBlockStart: 0,
-    insetBlockEnd: 0,
-    insetInlineEnd: 0,
-    zIndex: 3,
-  },
-  floatingCard: {
-    flex: 1,
-    minWidth: 0,
-    height: '100%',
-    overflow: 'hidden',
-  },
-  inspectorStack: {
-    height: '100%',
-    minHeight: 0,
-    minWidth: 0,
   },
   sectionHeading: {
     minWidth: 0,
@@ -215,6 +208,15 @@ interface Session {
     provider?: string;
     model?: string;
   };
+  usage?: SessionSnapshot['usage'];
+  /** The run the server is executing for this session, when there is one. */
+  run?: SessionSnapshot['run'];
+}
+
+interface CompactionFeedback {
+  sessionRef: string;
+  kind: 'success' | 'noop' | 'error';
+  message: string;
 }
 
 interface ReasoningStep {
@@ -230,6 +232,20 @@ type MessageRecord = Omit<WebUiMessage, 'parts'> & {
 };
 
 const LIVE_SESSION_ID = appConfig.live_session_id;
+
+// Off-screen transcript rows are skipped by the renderer. Without this, every
+// keystroke in the composer costs a full layout of the scroll container's
+// contents (the composer dock is sticky inside the same scroller), which made
+// typing slow in long sessions — measured ~42ms of synchronous work per
+// keystroke against a 36k-pixel scroll height, versus ~10ms with this enabled.
+// The intrinsic size is only an estimate used until a row has been measured.
+const DEFERRED_ROW_STYLE: CSSProperties | undefined =
+  appConfig.defer_offscreen_transcript_rows
+    ? {
+        contentVisibility: 'auto',
+        containIntrinsicSize: `auto ${appConfig.transcript_row_estimate_px}px`,
+      }
+    : undefined;
 
 function messageTime(): string {
   return new Date().toLocaleTimeString([], {
@@ -297,16 +313,12 @@ const defaultTools: ChatToolCallItem[] = [
   },
 ];
 
+/**
+ * Demo sessions. Live sessions are deliberately absent: they are owned by the
+ * backend and arrive on every poll under their own names, so there is no
+ * placeholder row standing in for a session that may not exist.
+ */
 const initialSessions: Session[] = [
-  {
-    id: LIVE_SESSION_ID,
-    title: 'Session 1',
-    time: 'Ready',
-    turns: 0,
-    state: 'success',
-    source: 'live',
-    sessionRef: LIVE_SESSION_ID,
-  },
   {
     id: 'atlas',
     title: 'Atlas onboarding flow',
@@ -334,7 +346,6 @@ const initialSessions: Session[] = [
 ];
 
 const initialThreads: Record<string, MessageRecord[]> = {
-  [LIVE_SESSION_ID]: [],
   atlas: [
     {
       id: 'atlas-system',
@@ -421,6 +432,8 @@ function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
     sessionRef: snapshot.id,
     ...(snapshot.root_label ? {rootLabel: snapshot.root_label} : {}),
     model: snapshot.model,
+    ...(snapshot.usage ? {usage: snapshot.usage} : {}),
+    ...(snapshot.run ? {run: snapshot.run} : {}),
   };
 }
 
@@ -497,13 +510,13 @@ function ReasoningBlock({
     resultDetail: (
       <VStack gap={2} width="100%">
         {hasContent && (
-          <Markdown
+          <MarkdownText
             density="compact"
             contentWidth="100%"
             xstyle={styles.reasoningContent}
           >
             {content}
-          </Markdown>
+          </MarkdownText>
         )}
         {hasSteps && (
           <>
@@ -586,7 +599,12 @@ function resolveRowFont(font: RowTextFont): string {
       styles.textProbe,
       font === 'code' ? styles.textProbeCode : styles.textProbeBody,
     ).className ?? '';
-  document.body.appendChild(probe);
+  // Measure inside the theme, where the rows render: on `document.body` the
+  // `--font-family-*` tokens only see the :root defaults, so the budget would
+  // be computed from a different face than the row is drawn with.
+  const probeHost =
+    document.getElementById('root')?.firstElementChild ?? document.body;
+  probeHost.appendChild(probe);
   const probeStyles = getComputedStyle(probe);
   const resolved = `${probeStyles.fontWeight} ${probeStyles.fontSize} ${probeStyles.fontFamily}`;
   probe.remove();
@@ -706,6 +724,26 @@ function toolTarget(argumentsText: string, budgetPx: number): string {
   return cutRowText('arguments available', budgetPx);
 }
 
+/**
+ * The title of a call whose arguments are still streaming: the tool name is
+ * already known, and the first string field (usually `path`) plus the growing
+ * size tell the user which long `write`/`edit` body is arriving.
+ */
+function partialToolTarget(argumentsText: string, budgetPx: number): string {
+  if (budgetPx <= 0) {
+    return '';
+  }
+  const progress = argumentsText.length < 1000
+    ? `${argumentsText.length} chars received`
+    : `${(argumentsText.length / 1000).toFixed(1)}k chars received`;
+  const pathMatch = /"(?:path|file_path|file)"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(argumentsText);
+  const path = pathMatch?.[1];
+  if (path !== undefined && path.length > 0) {
+    return cutRowText(`${path} · ${progress}`, budgetPx);
+  }
+  return cutRowText(progress, budgetPx);
+}
+
 function visibleToolOutput(output: string): string {
   const limit = appConfig.tool_output_max_chars;
   if (output.length <= limit) {
@@ -725,7 +763,10 @@ function toolResultLabel(status: WebUiToolResult['status']): string {
 }
 
 function toolCallStatus(result?: WebUiToolResult): 'running' | 'complete' | 'error' {
-  if (!result || result.status === 'unknown') {
+  // A result part is only emitted once the call finished, so a missing result
+  // is the only "still running" case. An unclassifiable status means the tool
+  // returned output without a metadata line — finished, not running.
+  if (!result) {
     return 'running';
   }
   return result.status === 'error' ? 'error' : 'complete';
@@ -737,11 +778,17 @@ function toolCallItem(
   rowWidthPx: number,
 ): ChatToolCallItem {
   const resultStatus = result?.status;
+  const titleBudgetPx = toolTitleBudgetPx(rowWidthPx, call.name);
+  // A call is in progress while the arguments stream, and while the tool runs
+  // after that.
+  const isReceivingArguments = call.partial === true && result === undefined;
   return {
     key: `tool-${call.callId}`,
     name: call.name,
     status: toolCallStatus(result),
-    target: toolTarget(call.arguments, toolTitleBudgetPx(rowWidthPx, call.name)),
+    target: isReceivingArguments
+      ? partialToolTarget(call.arguments, titleBudgetPx)
+      : toolTarget(call.arguments, titleBudgetPx),
     errorMessage: resultStatus === 'error' ? 'The tool returned an error.' : undefined,
     resultDetail: (
       <VStack gap={2} width="100%">
@@ -1019,13 +1066,53 @@ function WebUiParts({
 }) {
   const segments = segmentWebUiGroups(groupWebUiParts(parts));
   const lastPartIndex = parts.length - 1;
+  const [revealedToolGroups, setRevealedToolGroups] = useState(0);
+
+  /**
+   * Tool steps are the heavy rows of a long turn — every call carries its own
+   * title and output. The window keeps the newest ones mounted and hides the
+   * rest behind a control, the same trade the transcript window makes one level
+   * up. Reasoning and text are never hidden, so the turn still reads in order.
+   */
+  const toolGroupKeys: string[] = [];
+  segments.forEach(segment => {
+    if (segment.type !== 'activity') {
+      return;
+    }
+    segment.items.forEach(({group, index}) => {
+      if (group.type === 'tools') {
+        toolGroupKeys.push(webUiGroupKey(group, index));
+      }
+    });
+  });
+  const visibleToolGroups = appConfig.message_tool_window + revealedToolGroups;
+  const hiddenToolGroupKeys = new Set(
+    toolGroupKeys.slice(0, Math.max(0, toolGroupKeys.length - visibleToolGroups)),
+  );
 
   return (
     <VStack gap={3} width="100%">
+      {hiddenToolGroupKeys.size > 0 ? (
+        <VStack align="center" gap={1} width="100%">
+          <Button
+            label="Load earlier steps"
+            variant="ghost"
+            size="sm"
+            icon={<Icon icon="arrowUp" size="sm" />}
+            onClick={() =>
+              setRevealedToolGroups(current => current + appConfig.message_tool_window_page)
+            }
+          />
+          <Text type="supporting" color="secondary">
+            {hiddenToolGroupKeys.size} earlier{' '}
+            {hiddenToolGroupKeys.size === 1 ? 'step is' : 'steps are'} not shown
+          </Text>
+        </VStack>
+      ) : null}
       {segments.map((segment, segmentIndex) => {
         if (segment.type === 'content') {
           return (
-            <Markdown
+            <MarkdownText
               key={webUiGroupKey(segment.item.group, segment.item.index)}
               density="compact"
               contentWidth="100%"
@@ -1035,22 +1122,28 @@ function WebUiParts({
               headingLevelStart={3}
             >
               {segment.item.group.item.part.text}
-            </Markdown>
+            </MarkdownText>
           );
         }
 
         return (
           <VStack key={`activity-${segmentIndex}`} gap={0} width="100%">
-            {segment.items.map(({group, index}) => (
-              <WebUiActivityGroup
-                key={webUiGroupKey(group, index)}
-                group={group}
-                rowWidthPx={rowWidthPx}
-                isStreaming={
-                  isStreaming && webUiGroupIndex(group) === lastPartIndex
-                }
-              />
-            ))}
+            {segment.items.map(({group, index}) => {
+              const groupKey = webUiGroupKey(group, index);
+              if (hiddenToolGroupKeys.has(groupKey)) {
+                return null;
+              }
+              return (
+                <WebUiActivityGroup
+                  key={groupKey}
+                  group={group}
+                  rowWidthPx={rowWidthPx}
+                  isStreaming={
+                    isStreaming && webUiGroupIndex(group) === lastPartIndex
+                  }
+                />
+              );
+            })}
           </VStack>
         );
       })}
@@ -1074,16 +1167,29 @@ function AgentAvatar({isRunning = false}: {isRunning?: boolean}) {
   );
 }
 
+/** Datasets the floating left panel can show. One slot, so only one at a time. */
+const LEFT_PANELS = {
+  prompts: {label: 'prompt library'},
+  search: {label: 'session search'},
+  settings: {label: 'run settings'},
+} as const;
+
+type LeftPanelId = keyof typeof LEFT_PANELS;
+
 function SessionNavigation({
   sessions,
   activeSessionId,
   onSelect,
   onNewSession,
+  openLeftPanel,
+  onSelectLeftPanel,
 }: {
   sessions: Session[];
   activeSessionId: string;
   onSelect: (sessionId: string) => void;
   onNewSession: () => void;
+  openLeftPanel: LeftPanelId | null;
+  onSelectLeftPanel: (panel: LeftPanelId) => void;
 }) {
   return (
     <SideNav
@@ -1114,17 +1220,19 @@ function SessionNavigation({
             </Text>
           </HStack>
           <Text type="supporting" color="secondary">
-            Session 1 uses the backend stream; seeded runs remain previews.
+            Live sessions stream from the backend; seeded runs remain previews.
           </Text>
         </VStack>
       }
       footerIcons={
         <HStack align="center" justify="between" gap={2} width="100%">
           <IconButton
+            data-panel-toggle=""
             label="Search sessions"
             icon={<Icon icon="search" size="sm" />}
-            variant="ghost"
+            variant={openLeftPanel === 'search' ? 'secondary' : 'ghost'}
             size="sm"
+            onClick={() => onSelectLeftPanel('search')}
           />
           <Avatar name="You" size="sm" />
         </HStack>
@@ -1149,8 +1257,20 @@ function SessionNavigation({
         ))}
       </SideNavSection>
       <SideNavSection title="Workspace">
-        <SideNavItem label="Prompt library" icon={<Icon icon="copy" size="sm" />} />
-        <SideNavItem label="Run settings" icon={<Icon icon="chevronDown" size="sm" />} />
+        <SideNavItem
+          data-panel-toggle=""
+          label="Prompt library"
+          icon={<Icon icon="copy" size="sm" />}
+          isSelected={openLeftPanel === 'prompts'}
+          onClick={() => onSelectLeftPanel('prompts')}
+        />
+        <SideNavItem
+          data-panel-toggle=""
+          label="Run settings"
+          icon={<Icon icon="funnel" size="sm" />}
+          isSelected={openLeftPanel === 'settings'}
+          onClick={() => onSelectLeftPanel('settings')}
+        />
       </SideNavSection>
     </SideNav>
   );
@@ -1184,44 +1304,14 @@ function RunInspector({
       : tools;
 
   return (
-    <HStack
-      as="aside"
-      align="stretch"
-      gap={0}
-      width={inspector.size}
-      height="100%"
-      maxWidth="100%"
-      role="complementary"
-      aria-label="Run inspector"
-      xstyle={styles.floatingWindow}
+    <FloatingPanel
+      side="end"
+      label="Run inspector"
+      title="Run inspector"
+      subtitle={activeSession.title}
+      region={inspector}
+      onClose={onClose}
     >
-      <ResizeHandle
-        direction="horizontal"
-        isReversed
-        hasDivider
-        isAlwaysVisible
-        label="Resize run inspector"
-        resizable={inspector.props}
-      />
-      <Card variant="default" elevation="med" padding={0} xstyle={styles.floatingCard}>
-        <VStack gap={5} padding={4} isScrollable xstyle={styles.inspectorStack}>
-        <HStack align="start" justify="between" gap={3}>
-          <VStack gap={0.5} xstyle={styles.sectionHeading}>
-            <Text type="label" weight="semibold">
-              Run inspector
-            </Text>
-            <Text type="supporting" color="secondary" xstyle={styles.singleLine}>
-              {activeSession.title}
-            </Text>
-          </VStack>
-          <IconButton
-            label="Hide run inspector"
-            icon={<Icon icon="close" size="sm" />}
-            variant="ghost"
-            size="sm"
-            onClick={onClose}
-          />
-        </HStack>
 
         <Card variant="muted" padding={3}>
           <VStack gap={2}>
@@ -1284,9 +1374,7 @@ function RunInspector({
               : 'The seeded preview keeps these regions as the contract for run state.'}
           </Text>
         </VStack>
-        </VStack>
-      </Card>
-    </HStack>
+    </FloatingPanel>
   );
 }
 
@@ -1428,6 +1516,7 @@ function AssistantMessage({
     <ChatMessage
       sender="assistant"
       avatar={<AgentAvatar />}
+      style={DEFERRED_ROW_STYLE}
     >
       <ChatMessageBubble
         ref={rowRef}
@@ -1439,17 +1528,21 @@ function AssistantMessage({
           <ChatMessageMetadata
             timestamp={message.timestamp}
             footer={
-              <HStack align="center" gap={2}>
-                <Text type="supporting" color="secondary">agent response</Text>
-                <Button
-                  label={copyActionLabel(copyState)}
-                  icon={<Icon icon={copyState === 'copied' ? 'check' : copyState === 'error' ? 'error' : 'copy'} size="sm" />}
-                  variant="ghost"
-                  size="sm"
-                  isDisabled={markdown.length === 0}
-                  onClick={() => { void copyAsMarkdown(); }}
-                />
-              </HStack>
+              <IconButton
+                label={copyActionLabel(copyState)}
+                tooltip={copyActionLabel(copyState)}
+                icon={
+                  <Icon
+                    icon={copyState === 'copied' ? 'check' : copyState === 'error' ? 'error' : 'copy'}
+                    size="xsm"
+                    color="secondary"
+                  />
+                }
+                variant="ghost"
+                size="sm"
+                isDisabled={markdown.length === 0}
+                onClick={() => { void copyAsMarkdown(); }}
+              />
             }
             status="delivered"
           />
@@ -1468,9 +1561,9 @@ function AssistantMessage({
                   isFlush
                 />
               )}
-              <Markdown density="compact" contentWidth="100%" headingLevelStart={3}>
+              <MarkdownText density="compact" contentWidth="100%" headingLevelStart={3}>
                 {message.text}
-              </Markdown>
+              </MarkdownText>
             </>
           )}
           {message.tools && message.tools.length > 0 && (
@@ -1490,56 +1583,82 @@ function AssistantMessage({
   );
 }
 
-function renderMessage(
-  message: MessageRecord,
-  model: Session['model'] | undefined,
-) {
-  if (message.sender === 'system') {
-    return (
-      <ChatSystemMessage
-        key={message.id}
-        variant="divider"
-        icon={<Icon icon="check" color="success" size="sm" />}
-      >
-        {message.text}
-      </ChatSystemMessage>
-    );
-  }
-
-  if (message.sender === 'user') {
-    return (
-      <ChatMessage
-        key={message.id}
-        sender="user"
-        avatar={<Avatar name="You" size="sm" />}
-      >
-        <ChatMessageBubble
-          metadata={<ChatMessageMetadata timestamp={message.timestamp} status="read" />}
+/**
+ * One transcript row, memoised.
+ *
+ * A few hundred turns render tens of thousands of DOM nodes, and every App
+ * state change — an outside click, a panel toggle, the session poll — used to
+ * rebuild all of them, because the rows were created inline during App's render.
+ * Only these two props drive a row's output, so React can skip the subtree
+ * whenever they are unchanged.
+ */
+const TranscriptRow = memo(
+  function TranscriptRow({
+    message,
+    model,
+  }: {
+    message: MessageRecord;
+    model: Session['model'] | undefined;
+  }) {
+    if (message.sender === 'system') {
+      return (
+        <ChatSystemMessage
+          variant="divider"
+          icon={<Icon icon="check" color="success" size="sm" />}
+          style={DEFERRED_ROW_STYLE}
         >
-          <Markdown density="compact" contentWidth="100%">{message.text}</Markdown>
-        </ChatMessageBubble>
-      </ChatMessage>
-    );
-  }
+          {message.text}
+        </ChatSystemMessage>
+      );
+    }
 
-  return (
-    <AssistantMessage key={message.id} message={message} model={model} />
-  );
-}
+    if (message.sender === 'user') {
+      return (
+        <ChatMessage sender="user" avatar={<Avatar name="You" size="sm" />} style={DEFERRED_ROW_STYLE}>
+          <ChatMessageBubble
+            metadata={<ChatMessageMetadata timestamp={message.timestamp} status="read" />}
+          >
+            <MarkdownText density="compact" contentWidth="100%">{message.text}</MarkdownText>
+          </ChatMessageBubble>
+        </ChatMessage>
+      );
+    }
+
+    return <AssistantMessage message={message} model={model} />;
+  },
+  // The poll and the session list rebuild messages and models as fresh objects,
+  // so fall back to a structural compare when the identities differ.
+  (previous, next) =>
+    (previous.message === next.message || deepEqual(previous.message, next.message)) &&
+    (previous.model === next.model || deepEqual(previous.model, next.model)),
+);
 
 function App() {
   const [sessions, setSessions] = useState<Session[]>(initialSessions);
+  // The configured live session is a preference, not a row: the sidebar lists
+  // whatever the backend reports, and this id is only used to choose which of
+  // those live sessions to open on.
   const [activeSessionId, setActiveSessionId] = useState(LIVE_SESSION_ID);
+  const hasChosenSessionRef = useRef(false);
   const [threads, setThreads] = useState<Record<string, MessageRecord[]>>(initialThreads);
-  const [composerValue, setComposerValue] = useState('');
   const [showInspector, setShowInspector] = useState(appConfig.show_inspector_by_default);
+  // One left slot, several datasets: the panel shows whichever workspace view
+  // was picked last, so two panels never stack on the same edge. The closed
+  // state remembers that choice, because the composer toggle reopens it.
+  const [leftPanel, setLeftPanel] = useState<LeftPanelId | null>(
+    appConfig.show_prompt_library_by_default ? 'prompts' : null,
+  );
+  const [lastLeftPanel, setLastLeftPanel] = useState<LeftPanelId>('prompts');
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
+  const [compactingSessionRef, setCompactingSessionRef] = useState<string | null>(null);
+  const [compactionFeedback, setCompactionFeedback] = useState<CompactionFeedback | null>(null);
+  const [isUsageDrawerCollapsed, setIsUsageDrawerCollapsed] = useState(true);
   const [runProgress, setRunProgress] = useState(baseReasoning.length);
   const [streamingMessage, setStreamingMessage] = useState<WebUiMessage | null>(null);
   const conversation = useResizable({
-    defaultSize: pixel(800),
-    minSize: pixel(520),
-    maxSize: pixel(1200),
+    defaultSize: pixel(appConfig.conversation_lane_default_size),
+    minSize: pixel(appConfig.conversation_lane_min_size),
+    maxSize: pixel(appConfig.conversation_lane_max_size),
     direction: 'horizontal',
     autoSaveId: 'agent-harness-conversation-width',
   });
@@ -1547,21 +1666,121 @@ function App() {
   // AssistantMessage, so it measures its own row width for title fitting.
   const [liveBubbleRef, liveBubbleWidthPx] = useRowWidth();
   const inspector = useResizable({
-    defaultSize: pixel(360),
-    minSize: pixel(280),
-    maxSize: pixel(640),
+    defaultSize: pixel(appConfig.inspector_default_size),
+    minSize: pixel(appConfig.inspector_min_size),
+    maxSize: pixel(appConfig.inspector_max_size),
     direction: 'horizontal',
     autoSaveId: 'agent-harness-run-inspector',
   });
+  // The left-hand counterpart of the inspector, hosting whichever workspace
+  // dataset is selected. One region serves them all, so the width the user
+  // dragged is the width every left-hand view opens at.
+  const leftPanelRegion = useResizable({
+    defaultSize: pixel(appConfig.left_panel_default_size),
+    minSize: pixel(appConfig.left_panel_min_size),
+    maxSize: pixel(appConfig.left_panel_max_size),
+    direction: 'horizontal',
+    autoSaveId: 'agent-harness-prompt-library',
+  });
+
+  // Filled by ComposerPane, which owns the drafts. Views outside the composer
+  // (the prompt library) write through this instead of lifting draft state back
+  // into App, which is what made typing slow on long sessions.
+  const insertIntoComposerRef = useRef<((text: string) => void) | null>(null);
+  const registerComposerInsert = useCallback(
+    (insert: ((text: string) => void) | null) => {
+      insertIntoComposerRef.current = insert;
+    },
+    [],
+  );
+  const toggleLeftPanel = useCallback(() => {
+    setLeftPanel(current => (current ? null : lastLeftPanel));
+  }, [lastLeftPanel]);
+  const selectLeftPanel = useCallback((panel: LeftPanelId) => {
+    setLastLeftPanel(panel);
+    setLeftPanel(current => (current === panel ? null : panel));
+  }, []);
+  const usePrompt = useCallback((prompt: PromptTemplate) => {
+    insertIntoComposerRef.current?.(prompt.body);
+  }, []);
+  // "Attach context" reads the chosen files in the browser and hands their text
+  // to the composer through the same registered insert the prompt library uses,
+  // so no draft state has to move back up into App.
+  const attachInputRef = useRef<HTMLInputElement | null>(null);
+  const handleAttachFiles = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (files.length === 0) {
+      return;
+    }
+    const limit = appConfig.attach_context_max_chars_per_file;
+    const blocks = await Promise.all(
+      files.map(async file => {
+        const text = await file.text();
+        const body =
+          text.length > limit
+            ? `${text.slice(0, limit)}\n\n… truncated at ${limit} characters`
+            : text;
+        return `**Attached: ${file.name}**\n\n\`\`\`\n${body}\n\`\`\``;
+      }),
+    );
+    insertIntoComposerRef.current?.(blocks.join('\n\n'));
+  }, []);
   const runAbortRef = useRef<AbortController | null>(null);
   const runTimeoutRef = useRef<number | null>(null);
   const activeRunSessionIdRef = useRef<string | null>(null);
+  // The run this client is streaming, if any. It is how a page reload
+  // re-attaches to a run it did not start.
+  const attachedTurnRef = useRef<string | null>(null);
+  const activeSessionIdRef = useRef<string>(activeSessionId);
+  const activeSessionEntryRef = useRef<Session | undefined>(undefined);
+  const refreshSessionsRef = useRef<(() => void) | null>(null);
+
+  // Live sessions come from the backend, so the active id can outlive its row —
+  // on the first paint (before the first poll answers) and after a session is
+  // deleted server-side. Reconcile instead of rendering a phantom: the
+  // configured live session when the backend has it, otherwise the first live
+  // session, otherwise whatever the list starts with. A session the user picked
+  // is never taken away from them.
+  useEffect(() => {
+    if (sessions.length === 0) {
+      return;
+    }
+    const preferredLive =
+      sessions.find(session => session.id === LIVE_SESSION_ID) ??
+      sessions.find(session => session.source === 'live');
+    if (!sessions.some(session => session.id === activeSessionId)) {
+      setActiveSessionId((preferredLive ?? sessions[0]).id);
+      hasChosenSessionRef.current = false;
+      return;
+    }
+    if (
+      !hasChosenSessionRef.current &&
+      preferredLive !== undefined &&
+      activeSessionId !== preferredLive.id
+    ) {
+      setActiveSessionId(preferredLive.id);
+    }
+  }, [activeSessionId, sessions]);
 
   const activeSession =
     sessions.find(session => session.id === activeSessionId) ?? sessions[0];
   const messages = threads[activeSessionId] ?? [];
+  const {visibleMessages, hiddenCount, revealEarlier} = useTranscriptWindow({
+    messages,
+    sessionId: activeSessionId,
+    initialCount: appConfig.transcript_window_messages,
+    pageSize: appConfig.transcript_window_page_messages,
+  });
   const isRunning = runningSessionId === activeSessionId;
   const isLiveSession = activeSession?.source === 'live';
+  const activeSessionRef = activeSession?.sessionRef;
+  const isCompactionInProgress = compactingSessionRef !== null;
+  const isActiveSessionCompacting = activeSessionRef !== undefined && compactingSessionRef === activeSessionRef;
+  const activeCompactionFeedback =
+    activeSessionRef !== undefined && compactionFeedback?.sessionRef === activeSessionRef
+      ? compactionFeedback
+      : null;
   const streamingMessageCommitted = streamingMessage !== null && messages.some(
     message => message.id === streamingMessage.id,
   );
@@ -1600,7 +1819,12 @@ function App() {
     );
   }, [isLiveSession, isRunning, messages]);
 
-  const stopRun = useCallback(() => {
+  /**
+   * Drops this client's view of a run without touching the run itself: the
+   * server keeps it, so switching sessions or reloading can pick it up again.
+   */
+  const detachRun = useCallback(() => {
+    attachedTurnRef.current = null;
     activeRunSessionIdRef.current = null;
     runAbortRef.current?.abort();
     runAbortRef.current = null;
@@ -1613,11 +1837,53 @@ function App() {
     setRunProgress(baseReasoning.length);
   }, []);
 
+  /**
+   * Stops the run for real. Unsubscribing only closes this client's stream —
+   * the server would keep running the turn — so a stop has to be asked for.
+   */
+  const stopRun = useCallback(() => {
+    const session = activeSessionEntryRef.current;
+    detachRun();
+    if (session?.source === 'live' && session.sessionRef) {
+      void stopSessionRun(session.sessionRef).catch(error => {
+        console.warn('Unable to stop the run:', error);
+      });
+    }
+  }, [detachRun]);
+
+  const compactActiveSession = useCallback(async () => {
+    const sessionRef = activeSession?.sessionRef;
+    if (!isLiveSession || !sessionRef || isRunning || isCompactionInProgress) {
+      return;
+    }
+
+    setCompactingSessionRef(sessionRef);
+    setCompactionFeedback(null);
+    try {
+      const result = await compactSession(sessionRef);
+      setCompactionFeedback({
+        sessionRef,
+        kind: result.compacted ? 'success' : 'noop',
+        message: result.compacted
+          ? `History compacted: retained ${result.retained_items} of ${result.compacted_items} items.`
+          : `No compaction needed; ${result.retained_items} items retained.`,
+      });
+    } catch (error) {
+      setCompactionFeedback({
+        sessionRef,
+        kind: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setCompactingSessionRef(current => current === sessionRef ? null : current);
+    }
+  }, [activeSession?.sessionRef, isCompactionInProgress, isLiveSession, isRunning]);
+
   const submitMessage = useCallback(
     (value: string) => {
       const trimmedValue = value.trim();
       if (!trimmedValue || isRunning) {
-        return;
+        return false;
       }
 
       const sessionId = activeSessionId;
@@ -1641,7 +1907,6 @@ function App() {
             : session,
         ),
       );
-      setComposerValue('');
       activeRunSessionIdRef.current = sessionId;
       setRunningSessionId(sessionId);
       setRunProgress(isLiveRun ? 0 : 1);
@@ -1659,6 +1924,11 @@ function App() {
           onCompleted: message => {
             setStreamingMessage(message);
             setRunProgress(2);
+          },
+          onUsage: usage => {
+            setSessions(current => current.map(session =>
+              session.id === sessionId ? {...session, usage} : session,
+            ));
           },
         })
           .then(result => {
@@ -1727,7 +1997,7 @@ function App() {
             setRunProgress(isLiveRun ? 0 : baseReasoning.length);
             setRunningSessionId(current => (current === sessionId ? null : current));
           });
-        return;
+        return true;
       }
 
       runTimeoutRef.current = window.setTimeout(() => {
@@ -1756,12 +2026,90 @@ function App() {
         setRunningSessionId(current => (current === sessionId ? null : current));
         runTimeoutRef.current = null;
       }, appConfig.mock_run_delay_ms);
+      return true;
     },
     [activeSession, activeSessionId, isRunning],
   );
 
+  /**
+   * Re-attaches to a run that is already in flight on the server — the case
+   * after a reload, where only the server still knows about it. The stream
+   * replays the current snapshot of the message, then continues live.
+   */
+  const attachToRun = useCallback(
+    (sessionId: string, sessionRef: string, turnId: string) => {
+      if (attachedTurnRef.current === turnId || runAbortRef.current !== null) {
+        return;
+      }
+      attachedTurnRef.current = turnId;
+      activeRunSessionIdRef.current = sessionId;
+      const controller = new AbortController();
+      runAbortRef.current = controller;
+      setRunningSessionId(sessionId);
+      setRunProgress(1);
+      setStreamingMessage(null);
+
+      void attachSessionRun(sessionRef, {
+        signal: controller.signal,
+        onMessage: message => setStreamingMessage(message),
+        onCompleted: message => setStreamingMessage(message),
+        onUsage: usage => {
+          setSessions(current =>
+            current.map(session =>
+              session.id === sessionId ? {...session, usage} : session,
+            ),
+          );
+        },
+      })
+        .then(result => {
+          if (controller.signal.aborted || runAbortRef.current !== controller) {
+            return;
+          }
+          if (result.message === undefined) {
+            return;
+          }
+          const completed = result.message;
+          setThreads(current => {
+            const existing = current[sessionId] ?? [];
+            if (existing.some(message => message.id === completed.id)) {
+              return current;
+            }
+            return {...current, [sessionId]: [...existing, completed]};
+          });
+          setSessions(current =>
+            current.map(session =>
+              session.id === sessionId ? {...session, state: 'success'} : session,
+            ),
+          );
+        })
+        .catch(error => {
+          if (controller.signal.aborted || runAbortRef.current !== controller) {
+            return;
+          }
+          console.warn('Unable to attach to the running session:', error);
+        })
+        .finally(() => {
+          if (runAbortRef.current !== controller) {
+            return;
+          }
+          // `attachedTurnRef` stays on this turn: the discovery effect clears it
+          // once the session reports the run as finished, which also prevents a
+          // re-attach loop while the run is still streaming for other clients.
+          runAbortRef.current = null;
+          activeRunSessionIdRef.current = null;
+          setStreamingMessage(null);
+          setRunProgress(baseReasoning.length);
+          setRunningSessionId(current => (current === sessionId ? null : current));
+          // The committed transcript is authoritative now: let the poll replace
+          // the locally appended copy instead of waiting for the next tick.
+          refreshSessionsRef.current?.();
+        });
+    },
+    [],
+  );
+
   const createSession = useCallback(() => {
-    stopRun();
+    detachRun();
     const sessionId = `run-${Date.now()}`;
     const newSession: Session = {
       id: sessionId,
@@ -1783,19 +2131,33 @@ function App() {
         },
       ],
     }));
+    hasChosenSessionRef.current = true;
     setActiveSessionId(sessionId);
     setRunProgress(0);
-    setComposerValue('');
-  }, [stopRun]);
+  }, [detachRun]);
 
   const selectSession = useCallback(
     (sessionId: string) => {
-      stopRun();
+      // Only this client detaches: a run in flight keeps going on the server and
+      // is picked up again when the session is selected once more.
+      detachRun();
+      hasChosenSessionRef.current = true;
       setActiveSessionId(sessionId);
       setRunProgress(baseReasoning.length);
     },
-    [stopRun],
+    [detachRun],
   );
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+    // Switching to a session that has a run in flight must attach at once: the
+    // transcript of that session is stale until the fresh snapshot arrives.
+    refreshSessionsRef.current?.();
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    activeSessionEntryRef.current = activeSession;
+  }, [activeSession]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1812,21 +2174,24 @@ function App() {
           const activeRunSessionId = activeRunSessionIdRef.current;
           setThreads(current => {
             const next = {...current};
+            let hasChange = false;
             for (const item of liveItems) {
               if (item.id === activeRunSessionId) {
                 continue;
               }
+              const previous = current[item.id];
+              // Reuse the existing array when the payload is structurally
+              // identical: a new identity re-renders every row of that thread.
+              if (previous !== undefined && deepEqual(previous, item.snapshot.messages)) {
+                continue;
+              }
               next[item.id] = item.snapshot.messages;
+              hasChange = true;
             }
-            return next;
+            return hasChange ? next : current;
           });
           setSessions(current => {
             const liveIds = new Set(liveItems.map(item => item.id));
-            const initialLiveIds = new Set(
-              initialSessions
-                .filter(session => session.source === 'live')
-                .map(session => session.id),
-            );
             const liveSessions = liveItems.map(item => {
               if (item.id === activeRunSessionId) {
                 const existing = current.find(session => session.id === item.id);
@@ -1836,16 +2201,13 @@ function App() {
               }
               return sessionFromSnapshot(item.snapshot, item.id);
             });
-            const existingLive = current.filter(
-              session =>
-                session.source === 'live' &&
-                initialLiveIds.has(session.id) &&
-                !liveIds.has(session.id),
-            );
             const samples = current.filter(
               session => session.source === 'sample' && !liveIds.has(session.id),
             );
-            return [...liveSessions, ...existingLive, ...samples];
+            const nextSessions = [...liveSessions, ...samples];
+            // Same reasoning as the threads above: the poll rebuilds every session
+            // object, so keep the previous array when nothing actually changed.
+            return deepEqual(current, nextSessions) ? current : nextSessions;
           });
         })
         .catch(error => {
@@ -1855,13 +2217,32 @@ function App() {
         });
     };
 
+    refreshSessionsRef.current = loadSessions;
     loadSessions();
     const refreshTimer = window.setInterval(loadSessions, appConfig.session_refresh_interval_ms);
     return () => {
       cancelled = true;
+      refreshSessionsRef.current = null;
       window.clearInterval(refreshTimer);
     };
   }, [isRunning]);
+
+  // The active session carries the run the server is executing, so a page that
+  // reloads mid-run attaches as soon as the session list has settled instead of
+  // waiting for the next poll.
+  useEffect(() => {
+    const run = activeSession?.run;
+    if (run === undefined || run.status !== 'running') {
+      if (attachedTurnRef.current !== null && runAbortRef.current === null) {
+        attachedTurnRef.current = null;
+      }
+      return;
+    }
+    if (activeSession.source !== 'live' || activeSession.sessionRef === undefined) {
+      return;
+    }
+    attachToRun(activeSessionId, activeSession.sessionRef, run.turn_id);
+  }, [activeSession, activeSessionId, attachToRun]);
 
   useEffect(() => {
     return () => {
@@ -1876,86 +2257,86 @@ function App() {
     return null;
   }
 
-  const header = (
-    <LayoutHeader hasDivider padding={4} xstyle={styles.header} label="Run header">
-      <HStack align="center" justify="between" gap={4}>
-        <VStack gap={0.5} xstyle={styles.headerTitle}>
-          <HStack align="center" gap={2}>
-            <Heading level={1} xstyle={styles.singleLine}>
-              {activeSession.title}
-            </Heading>
-            <Text type="supporting" color="secondary">
-              {activeSession.time}
-            </Text>
-          </HStack>
-          <Text type="supporting" color="secondary">
-            Agent workspace · {isLiveSession ? 'live Responses stream' : 'reasoning preview'}
-          </Text>
-        </VStack>
-        <HStack align="center" gap={2} xstyle={styles.headerActions}>
-          <HStack align="center" gap={2}>
-            <StatusDot
-              variant={isRunning ? 'accent' : 'success'}
-              label={isRunning ? 'Run in progress' : 'Run complete'}
-              isPulsing={isRunning}
-            />
-            <Text type="supporting" color="secondary">
-              {isRunning ? 'Working' : 'Ready'}
-            </Text>
-          </HStack>
-          <Button
-            label={isRunning ? 'Running…' : 'Run again'}
-            variant="secondary"
-            size="sm"
-            isDisabled={isRunning}
-            icon={<Icon icon="arrowUp" size="sm" />}
-            onClick={() => submitMessage('Run the default harness check again.')}
-          />
-          <IconButton
-            label={showInspector ? 'Hide run inspector' : 'Show run inspector'}
-            icon={<Icon icon="viewColumns" size="sm" />}
-            variant={showInspector ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={() => setShowInspector(current => !current)}
-          />
-        </HStack>
-      </HStack>
-    </LayoutHeader>
-  );
-
   const composer = (
-    <ChatComposer
-      value={composerValue}
-      onChange={setComposerValue}
+    <ComposerPane
+      activeSessionId={activeSessionId}
       onSubmit={submitMessage}
       onStop={stopRun}
-      isStopShown={isRunning}
+      isRunning={isRunning}
       placeholder="Ask the agent to inspect a task…"
-      headerActions={
-        <IconButton
-          label="Attach context"
-          icon={<Icon icon="copy" size="sm" />}
-          variant="ghost"
-          size="sm"
-        />
-      }
-      headerContext={
-        <HStack align="center" gap={2}>
-          <StatusDot
-            variant={isLiveSession ? 'success' : 'accent'}
-            label={isLiveSession ? 'Live backend transport' : 'Mock transport'}
+      showInspector={showInspector}
+      onToggleInspector={() => setShowInspector(current => !current)}
+      isLeftPanelOpen={leftPanel !== null}
+      leftPanelLabel={LEFT_PANELS[leftPanel ?? lastLeftPanel].label}
+      onToggleLeftPanel={toggleLeftPanel}
+      onRegisterInsert={registerComposerInsert}
+      drawer={
+        isUsageDrawerCollapsed ? null : (
+          <UsageDetailsDrawer
+            sessionName={activeSession.title}
+            usage={activeSession.usage}
           />
-          <Text type="supporting" color="secondary">
-            {isLiveSession ? 'live' : 'mock'}
-          </Text>
+        )
+      }
+      toolbarActions={
+        <HStack align="center" gap={1}>
+          {appConfig.attach_context_enabled ? (
+            <>
+              <IconButton
+                label="Attach context"
+                icon={<Icon icon="copy" size="sm" />}
+                variant="ghost"
+                size="sm"
+                onClick={() => attachInputRef.current?.click()}
+              />
+              <input
+                ref={attachInputRef}
+                type="file"
+                multiple
+                accept={appConfig.attach_context_accept}
+                onChange={handleAttachFiles}
+                hidden
+              />
+            </>
+          ) : null}
+          <IconButton
+            label={isUsageDrawerCollapsed ? 'Show usage details' : 'Hide usage details'}
+            icon={<Icon icon="info" size="sm" />}
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsUsageDrawerCollapsed(collapsed => !collapsed)}
+          />
+          {isLiveSession && activeSession.sessionRef && (
+            <IconButton
+              label={isActiveSessionCompacting ? 'Compacting conversation history' : 'Compact conversation history'}
+              icon={<Icon icon="arrowsUpDown" size="sm" />}
+              variant="ghost"
+              size="sm"
+              isDisabled={isRunning || isCompactionInProgress}
+              onClick={() => void compactActiveSession()}
+            />
+          )}
         </HStack>
       }
-      footerActions={
-        <Text type="supporting" color="secondary">
-          Enter to send · Shift+Enter for a new line
-        </Text>
+      footerNote={
+        <HStack align="center" gap={2}>
+          <Text type="supporting" color="secondary">
+            {appConfig.composer_markdown_shortcuts
+              ? 'Enter to send · Shift+Enter for a new line · Ctrl/⌘B, I, E, K to format'
+              : 'Enter to send · Shift+Enter for a new line'}
+          </Text>
+          {activeCompactionFeedback && activeCompactionFeedback.kind !== 'error' && (
+            <Text type="supporting" color="secondary" role="status" aria-live="polite">
+              {activeCompactionFeedback.message}
+            </Text>
+          )}
+        </HStack>
       }
-      elevation="low"
+      status={
+        activeCompactionFeedback?.kind === 'error'
+          ? {type: 'error', message: `Compaction failed: ${activeCompactionFeedback.message}`}
+          : undefined
+      }
     />
   );
   const centeredComposer = (
@@ -1998,13 +2379,14 @@ function App() {
           activeSessionId={activeSessionId}
           onSelect={selectSession}
           onNewSession={createSession}
+          openLeftPanel={leftPanel}
+          onSelectLeftPanel={selectLeftPanel}
         />
       }
     >
       <VStack xstyle={styles.shell}>
         <Layout
           height="fill"
-          header={header}
           content={
             <LayoutContent
               isScrollable={false}
@@ -2012,6 +2394,11 @@ function App() {
               role="region"
               label="Agent conversation"
             >
+              {/* The visual header is gone; this keeps the session title as the
+                  page's top-level heading for assistive technology. */}
+              <VisuallyHidden as="div">
+                <Heading level={1}>{activeSession.title}</Heading>
+              </VisuallyHidden>
               <ChatLayout
                 density="balanced"
                 xstyle={styles.chat}
@@ -2032,11 +2419,21 @@ function App() {
                     xstyle={styles.conversationLane}
                   >
                     <ChatMessageList density="balanced" align="top" isStreaming={isRunning}>
-                      {messages.map(message =>
-                        renderMessage(message, activeSession.model),
+                      {hiddenCount > 0 && (
+                        <EarlierMessagesControl
+                          hiddenCount={hiddenCount}
+                          onReveal={revealEarlier}
+                        />
                       )}
+                      {visibleMessages.map(message => (
+                        <TranscriptRow
+                          key={message.id}
+                          message={message}
+                          model={activeSession.model}
+                        />
+                      ))}
                       {isRunning && (!isLiveSession || streamingMessage) && !streamingMessageCommitted && (
-                        <ChatMessage sender="assistant" avatar={<AgentAvatar isRunning />}>
+                        <ChatMessage sender="assistant" avatar={<AgentAvatar isRunning />} style={DEFERRED_ROW_STYLE}>
                           <ChatMessageBubble
                             ref={liveBubbleRef}
                             variant="ghost"
@@ -2058,14 +2455,14 @@ function App() {
                                   isFlush
                                   isStreaming
                                 />
-                                <Markdown
+                                <MarkdownText
                                   density="compact"
                                   contentWidth="100%"
                                   isStreaming
                                   headingLevelStart={3}
                                 >
                                   Astra is working through the request…
-                                </Markdown>
+                                </MarkdownText>
                               </VStack>
                             )}
                           </ChatMessageBubble>
@@ -2078,6 +2475,34 @@ function App() {
             </LayoutContent>
           }
         />
+        {leftPanel === 'prompts' && (
+          <PromptLibraryPanel
+            region={leftPanelRegion}
+            onClose={() => setLeftPanel(null)}
+            onUsePrompt={usePrompt}
+          />
+        )}
+        {leftPanel === 'search' && (
+          <SessionSearchPanel
+            region={leftPanelRegion}
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            onSelectSession={sessionId => {
+              selectSession(sessionId);
+              setLeftPanel(null);
+            }}
+            onClose={() => setLeftPanel(null)}
+          />
+        )}
+        {leftPanel === 'settings' && (
+          <RunSettingsPanel
+            region={leftPanelRegion}
+            onClose={() => setLeftPanel(null)}
+            sessionTitle={activeSession.title}
+            sessionTurns={activeSession.turns}
+            isLiveSession={isLiveSession}
+          />
+        )}
         {showInspector && (
           <RunInspector
             activeSession={activeSession}

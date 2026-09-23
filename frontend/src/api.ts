@@ -13,6 +13,8 @@ export interface WebUiToolCallPart {
   callId: string;
   name: string;
   arguments: string;
+  /** True while the provider is still streaming this call's arguments. */
+  partial?: boolean;
 }
 
 export interface WebUiToolResultPart {
@@ -34,6 +36,39 @@ export interface WebUiMessage {
   reasoningContent?: string;
 }
 
+export interface ResponseTokenUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  cached_input_tokens?: number;
+}
+
+export interface CurrentResponseUsage extends ResponseTokenUsage {
+  turn: number;
+  step: number;
+  response_id?: string;
+}
+
+export interface SessionUsageSummary extends ResponseTokenUsage {
+  completed_responses: number;
+  responses_with_usage: number;
+  turn_count: number;
+  history_partial: boolean;
+  current?: CurrentResponseUsage;
+}
+
+export type SessionRunStatus = 'running' | 'completed' | 'failed' | 'aborted';
+
+/**
+ * The run a client can attach to for a session. It stays present while the turn
+ * is in flight and briefly after it ends, so a reload can still catch up.
+ */
+export interface SessionRunState {
+  turn_id: string;
+  started_at: string;
+  status: SessionRunStatus;
+}
+
 export interface SessionSnapshot {
   id: string;
   session_id?: string;
@@ -46,6 +81,8 @@ export interface SessionSnapshot {
     provider?: string;
     model?: string;
   };
+  usage?: SessionUsageSummary;
+  run?: SessionRunState;
 }
 
 export interface ToolDefinition {
@@ -114,6 +151,42 @@ export async function fetchSessionTools(sessionId: string): Promise<ToolDefiniti
     throw new Error('the server returned invalid tool definitions');
   }
   return value.tools as ToolDefinition[];
+}
+
+export interface SessionCompactionResult {
+  compacted: boolean;
+  compacted_items: number;
+  retained_items: number;
+}
+
+export async function compactSession(sessionId: string): Promise<SessionCompactionResult> {
+  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/compact`), {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  if (!isRecord(value) || !isRecord(value.compaction)) {
+    throw new Error('the server returned invalid compaction data');
+  }
+  const compaction = value.compaction;
+  if (
+    typeof compaction.compacted !== 'boolean' ||
+    typeof compaction.compacted_items !== 'number' ||
+    !Number.isSafeInteger(compaction.compacted_items) ||
+    compaction.compacted_items < 0 ||
+    typeof compaction.retained_items !== 'number' ||
+    !Number.isSafeInteger(compaction.retained_items) ||
+    compaction.retained_items < 0
+  ) {
+    throw new Error('the server returned invalid compaction data');
+  }
+  return {
+    compacted: compaction.compacted,
+    compacted_items: compaction.compacted_items,
+    retained_items: compaction.retained_items,
+  };
 }
 
 async function* readSse(response: Response): AsyncGenerator<SseMessage> {
@@ -206,14 +279,128 @@ function isWebUiMessage(value: unknown): value is WebUiMessage {
   );
 }
 
+function isNonnegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function hasValidTokenFields(value: Record<string, unknown>): boolean {
+  return ['input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens']
+    .every(field => value[field] === undefined || isNonnegativeSafeInteger(value[field]));
+}
+
+function isSessionUsageSummary(value: unknown): value is SessionUsageSummary {
+  if (
+    !isRecord(value) ||
+    !isNonnegativeSafeInteger(value.completed_responses) ||
+    !isNonnegativeSafeInteger(value.responses_with_usage) ||
+    value.responses_with_usage > value.completed_responses ||
+    !isNonnegativeSafeInteger(value.turn_count) ||
+    typeof value.history_partial !== 'boolean' ||
+    !hasValidTokenFields(value)
+  ) {
+    return false;
+  }
+  if (value.current === undefined) return true;
+  return (
+    isRecord(value.current) &&
+    Number.isSafeInteger(value.current.turn) &&
+    (value.current.turn as number) > 0 &&
+    Number.isSafeInteger(value.current.step) &&
+    (value.current.step as number) > 0 &&
+    (value.current.response_id === undefined || typeof value.current.response_id === 'string') &&
+    hasValidTokenFields(value.current)
+  );
+}
+
 export interface StreamSessionRunOptions {
   signal?: AbortSignal;
   onMessage?: (message: WebUiMessage) => void;
   onCompleted?: (message: WebUiMessage) => void;
+  onUsage?: (usage: SessionUsageSummary) => void;
+  onRun?: (run: SessionRunState) => void;
+  onIdle?: () => void;
 }
 
 export interface StreamSessionRunResult {
   message?: WebUiMessage;
+  usage?: SessionUsageSummary;
+  /** Whether the server reported a run for this session (attach path only). */
+  attached?: boolean;
+}
+
+function isSessionRunState(value: unknown): value is SessionRunState {
+  return (
+    isRecord(value) &&
+    typeof value.turn_id === 'string' &&
+    typeof value.started_at === 'string' &&
+    (value.status === 'running' ||
+      value.status === 'completed' ||
+      value.status === 'failed' ||
+      value.status === 'aborted')
+  );
+}
+
+/**
+ * Consumes the shared run event stream. `ui.message` payloads are complete
+ * snapshots of the message, so a stream that starts in the middle of a run only
+ * needs the newest snapshot to be correct.
+ */
+async function consumeRunStream(
+  response: Response,
+  options: StreamSessionRunOptions,
+): Promise<StreamSessionRunResult> {
+  let completedMessage: WebUiMessage | undefined;
+  let sessionUsage: SessionUsageSummary | undefined;
+  let attached = false;
+
+  for await (const message of readSse(response)) {
+    if (message.event === 'run') {
+      if (isSessionRunState(message.data)) {
+        attached = true;
+        options.onRun?.(message.data);
+      }
+      continue;
+    }
+    if (message.event === 'ui.message') {
+      if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
+        options.onMessage?.(message.data.message);
+        if (message.data.message.status === 'complete') {
+          completedMessage = message.data.message;
+        }
+      }
+      continue;
+    }
+    if (message.event === 'completed') {
+      if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
+        completedMessage = message.data.message;
+        options.onCompleted?.(completedMessage);
+      }
+      continue;
+    }
+    if (message.event === 'usage') {
+      if (isRecord(message.data) && isSessionUsageSummary(message.data.usage)) {
+        sessionUsage = message.data.usage;
+        options.onUsage?.(sessionUsage);
+      }
+      continue;
+    }
+    if (message.event === 'idle') {
+      options.onIdle?.();
+      continue;
+    }
+    if (message.event === 'error') {
+      throw new Error(errorText(message.data));
+    }
+    if (message.event === 'done') {
+      break;
+    }
+  }
+
+  return {
+    ...(completedMessage === undefined ? {} : {message: completedMessage}),
+    ...(sessionUsage === undefined ? {} : {usage: sessionUsage}),
+    ...(attached ? {attached: true} : {}),
+  };
 }
 
 export async function streamSessionRun(
@@ -231,31 +418,52 @@ export async function streamSessionRun(
     throw new Error(await readError(response));
   }
 
-  let completedMessage: WebUiMessage | undefined;
-  for await (const message of readSse(response)) {
-    if (message.event === 'ui.message') {
-      if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
-        options.onMessage?.(message.data.message);
-        if (message.data.message.status === 'complete') {
-          completedMessage = message.data.message;
-        }
-      }
-      continue;
-    }
-    if (message.event === 'completed') {
-      if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
-        completedMessage = message.data.message;
-        options.onCompleted?.(completedMessage);
-      }
-      continue;
-    }
-    if (message.event === 'error') {
-      throw new Error(errorText(message.data));
-    }
-    if (message.event === 'done') {
-      break;
-    }
+  return consumeRunStream(response, options);
+}
+
+/**
+ * Attaches to a run this client did not start — the case after a page reload or
+ * from a second tab. The server replays the current snapshot and continues with
+ * live events, and answers `idle` when nothing is running.
+ */
+export async function attachSessionRun(
+  sessionRef: string,
+  options: StreamSessionRunOptions = {},
+): Promise<StreamSessionRunResult> {
+  const response = await fetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stream`),
+    {
+      ...(options.signal ? {signal: options.signal} : {}),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
   }
 
-  return {message: completedMessage};
+  return consumeRunStream(response, options);
+}
+
+export interface StopSessionRunResult {
+  stopped: boolean;
+  turn_id?: string;
+}
+
+/** Stops the run in flight for a session; the run no longer commits a response. */
+export async function stopSessionRun(sessionRef: string): Promise<StopSessionRunResult> {
+  const response = await fetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stop`),
+    {method: 'POST'},
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  if (!isRecord(value) || !isRecord(value.stop) || typeof value.stop.stopped !== 'boolean') {
+    throw new Error('the server returned invalid stop data');
+  }
+  const turnId = value.stop.turn_id;
+  return {
+    stopped: value.stop.stopped,
+    ...(typeof turnId === 'string' ? {turn_id: turnId} : {}),
+  };
 }

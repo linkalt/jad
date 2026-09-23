@@ -59,6 +59,24 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@astryxdesign/core', '@astryxdesign/theme-neutral'],
   },
+  build: {
+    chunkSizeWarningLimit: appConfig.chunk_size_warning_limit_kb,
+    rolldownOptions: {
+      output: {
+        // A single 800 kB entry chunk means the whole app — including libraries
+        // that change far less often — is re-downloaded on every app edit, and
+        // it trips the size warning for no reason the code can act on. Splitting
+        // the vendors keeps the app chunk small and the libraries cacheable.
+        advancedChunks: {
+          groups: [
+            {name: 'vendor-react', test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/},
+            {name: 'vendor-astryx', test: /node_modules[\\/]@astryxdesign[\\/]/},
+            {name: 'vendor', test: /node_modules[\\/]/},
+          ],
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       [appConfig.api_base_path]: appConfig.dev_api_proxy_target,
