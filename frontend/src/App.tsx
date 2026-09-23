@@ -2255,6 +2255,13 @@ function App() {
     // The transcript of the session being viewed, fetched separately from the
     // list because only one transcript is ever needed at a time.
     const loadTranscript = (sessionRef: string, uiId: string) => {
+      // While this client streams (or is attached to) that session's run, the
+      // stream owns the transcript: a committed step of the same turn would
+      // render as a second assistant block next to the live one, and the turn's
+      // user message as a second user block. The finished run refreshes instead.
+      if (activeRunSessionIdRef.current === uiId) {
+        return;
+      }
       void fetchSession(sessionRef, {etag: snapshotEtagRef.current})
         .then(result => {
           if (cancelled || result.kind !== 'ok') {
