@@ -847,6 +847,7 @@ test("selects named path profiles, merges overrides, and pins the choice to the 
   const profileModelPath = join(sessionDir, "profiles/blue/model.json");
   const profileStagingPath = join(sessionDir, "profiles/blue/staging");
   const profileUsageCachePath = join(sessionDir, "profiles/blue/custom-usage-cache.json");
+  const profileCursorCachePath = join(sessionDir, "profiles/blue/custom-cursor-cache.json");
   try {
     await mkdir(dirname(profileModelPath), {recursive: true});
     await writeFile(profileModelPath, JSON.stringify({model: "profile-blue-model"}));
@@ -868,6 +869,7 @@ test("selects named path profiles, merges overrides, and pins the choice to the 
             compaction_cache: "profiles/blue/staging/compaction-cache.json",
             statecontext: "profiles/blue/staging/statecontext.json",
             usage_cache: profileUsageCachePath,
+            cursor_cache: profileCursorCachePath,
             model: "profiles/blue/model.json",
             staging: "profiles/blue/staging",
             http_debug: "profiles/blue/debug/http",
@@ -883,10 +885,12 @@ test("selects named path profiles, merges overrides, and pins the choice to the 
     assert.equal(settings.paths.messages, join(sessionDir, "profiles/blue/messages.jsonl"));
     assert.equal(settings.paths.history_cache, join(profileStagingPath, "history-cache.json"));
     assert.equal(settings.paths.usage_cache, profileUsageCachePath);
+    assert.equal(settings.paths.cursor_cache, profileCursorCachePath);
     assert.equal(settings.paths.http_debug, join(sessionDir, "profiles/blue/debug/http"));
     assert.equal((await loader.load()).model.model, "profile-blue-model");
     assert.equal(loader.paths.statecontext_path, join(profileStagingPath, "statecontext.json"));
     assert.equal(loader.paths.usage_cache_path, profileUsageCachePath);
+    assert.equal(loader.paths.cursor_cache_path, profileCursorCachePath);
     assert.equal(loader.paths.active_profile, "blue");
 
     await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
@@ -899,6 +903,23 @@ test("selects named path profiles, merges overrides, and pins the choice to the 
       },
     }));
     await assert.rejects(() => loader.loadSettings(), /paths cannot change while this config loader is active/);
+
+    // A profile that does not name the cursor cache still gets one in its own
+    // staging directory, so profiles keep separate read indexes.
+    const unselected = new SessionConfigLoader(sessionDir);
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      cwd: sessionDir,
+      paths: {
+        active_profile: "green",
+        profiles: {
+          green: {staging: "profiles/green/staging"},
+        },
+      },
+    }));
+    assert.equal(
+      (await unselected.loadSettings()).paths.cursor_cache,
+      join(sessionDir, "profiles/green/staging", "cursor-cache.json"),
+    );
   } finally {
     await removeSession(sessionDir);
   }
@@ -918,6 +939,22 @@ test("rejects malformed and conflicting path profiles", async () => {
       paths: {active_profile: "profile1", profiles: {profile1: {messages: "same.jsonl", messages_backup: "same.jsonl"}}},
     }));
     await assert.rejects(() => loader.loadSettings(), /must be different files/);
+
+    // The cursor index is a session file like any other: it may not alias one.
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      paths: {
+        active_profile: "profile1",
+        profiles: {profile1: {usage_cache: "staging/shared.json", cursor_cache: "staging/shared.json"}},
+      },
+    }));
+    await assert.rejects(() => loader.loadSettings(), /must be different files/);
+
+    // An unknown profile field is still rejected, so a typo cannot silently
+    // fall back to the flat path.
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      paths: {active_profile: "profile1", profiles: {profile1: {cursor_caches: "staging/cursor-cache.json"}}},
+    }));
+    await assert.rejects(() => loader.loadSettings(), /is not a supported session path/);
   } finally {
     await removeSession(sessionDir);
   }
