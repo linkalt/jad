@@ -104,6 +104,7 @@ interface SessionHandle {
 /** Everything a snapshot's content is derived from, so a change is visible. */
 interface SessionStatePaths {
   messages: string;
+  messagesBackup: string;
   compactionCache: string;
   usageCache: string;
   setting: string;
@@ -118,6 +119,7 @@ interface SessionPageInfo {
 function sessionStatePaths(paths: SessionConfigPaths): SessionStatePaths {
   return {
     messages: paths.messages_path,
+    messagesBackup: paths.messages_backup_path,
     compactionCache: paths.compaction_cache_path,
     usageCache: paths.usage_cache_path,
     setting: paths.setting_path,
@@ -141,6 +143,7 @@ async function sessionStateVersion(
   const parts: string[] = [];
   for (const path of [
     paths.messages,
+    paths.messagesBackup,
     paths.compactionCache,
     paths.usageCache,
     paths.setting,
@@ -689,13 +692,14 @@ class AgentHttpApplication {
       const loader = new SessionConfigLoader(directory, {
         globalJadRoot: location.root.globalJadRoot,
       });
-      const settings = await loader.loadSettings();
+      // Loading the settings rejects an unusable session before it is cached.
+      await loader.loadSettings();
       return {
         location,
         directory,
         session,
         loader,
-        view: new WebUiSessionViewCache(session.store, settings.paths.compaction_cache, {
+        view: new WebUiSessionViewCache(session.store, {
           snapshotTurns: this.snapshotTurns,
           maxPageTurns: this.maxPageTurns,
         }),
@@ -808,6 +812,7 @@ class AgentHttpApplication {
       handle.view.read({
         ...(before === undefined ? {} : {before}),
         ...(turns === undefined ? {} : {turns}),
+        backupTurns: config.settings.compaction.keepbackup.turns,
       }),
       handle.session.readUsageSummary(),
     ]);
@@ -844,7 +849,12 @@ class AgentHttpApplication {
   ): Promise<void> {
     const handle = await this.getSession(id);
     const cursor = parseCursorParameter(url.searchParams.get("cursor"), "cursor");
-    const message = await handle.view.readMessage(messageId, cursor);
+    const config = await handle.loader.load();
+    const message = await handle.view.readMessage(
+      messageId,
+      cursor,
+      config.settings.compaction.keepbackup.turns,
+    );
     if (message === undefined) {
       throw new HttpError(404, "message not found");
     }

@@ -676,6 +676,7 @@ test("loads model and session settings with normalized paths and hashes", async 
       auto_enabled: true,
       trigger_tokens: 200000,
       keepbatch: {tools: 0, turn: {type: "assistant_final", keep: 1}},
+      keepbackup: {turns: 20},
       backup_mode: "replace",
     });
     assert.deepEqual(config.settings.persistence, {
@@ -745,7 +746,7 @@ test("normalizes and validates compaction settings", async () => {
   const sessionDir = await makeSession();
   try {
     await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
-      compaction: {auto_enabled: false, trigger_tokens: 1234, backup_mode: "append", keepbatch: {tools: 2, turn: {type: "full", keep: 3}}},
+      compaction: {auto_enabled: false, trigger_tokens: 1234, backup_mode: "append", keepbatch: {tools: 2, turn: {type: "full", keep: 3}}, keepbackup: {turns: 5}},
     }));
     const settings = await new SessionConfigLoader(sessionDir).loadSettings();
     assert.deepEqual(settings.compaction, {
@@ -753,12 +754,16 @@ test("normalizes and validates compaction settings", async () => {
       trigger_tokens: 1234,
       backup_mode: "append",
       keepbatch: {tools: 2, turn: {type: "full", keep: 3}},
+      keepbackup: {turns: 5},
     });
     for (const compaction of [
       {trigger_tokens: 0},
       {keepbatch: {tools: -1}},
       {keepbatch: {turn: {type: "summary"}}},
       {backup_mode: "archive"},
+      {keepbackup: {turns: -1}},
+      {keepbackup: {turns: 2000}},
+      {keepbackup: 5},
     ]) {
       await writeFile(join(sessionDir, "setting.json"), JSON.stringify({compaction}));
       await assert.rejects(() => new SessionConfigLoader(sessionDir).loadSettings(), /compaction/);

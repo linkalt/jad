@@ -233,6 +233,14 @@ const LINE_BUFFER_SIZE = 64 * 1024;
  * may also have been written by something other than this store.
  */
 const COMPLETED_RECORD_MARKER = '"response.completed"';
+/** The same idea for a turn-opening record, counted when the UI walks back. */
+const USER_RECORD_MARKER = '"role":"user"';
+/** Bytes read per backward step while locating the backup's last turns. */
+const BACKUP_TAIL_WINDOW_BYTES = 256 * 1024;
+/** Transcript records the compaction seam compares against the backup's end. */
+const BACKUP_SEAM_RECORDS = 4;
+/** Ceiling for one seam line, so an unfinished record cannot stall the check. */
+const MAX_SEAM_LINE_BYTES = 64 * 1024 * 1024;
 
 export class PersistenceError extends Error {
   public override name = "PersistenceError";
@@ -1858,6 +1866,131 @@ export class SessionResponseStore {
    */
   public async readRecordStartBefore(offset: number): Promise<number | undefined> {
     this.assertOpen();
+    return this.recordStartBefore(this.messagesPath, offset);
+  }
+
+  /**
+   * Identity of the live transcript file, as opposed to its contents: it changes
+   * when compaction replaces the file, and not when a record is appended. Used
+   * to invalidate projections whose boundary is a compaction seam.
+   */
+  public async readTranscriptGeneration(): Promise<string | undefined> {
+    this.assertOpen();
+    const info = await stat(this.messagesPath).catch(() => undefined);
+    return info === undefined
+      ? undefined
+      : [info.dev, info.ino, Math.trunc(info.birthtimeMs)].join(":");
+  }
+
+  /** Identity of the pre-compaction backup, or `undefined` when there is none. */
+  public async readBackupStamp(): Promise<string | undefined> {
+    this.assertOpen();
+    const info = await stat(this.messagesBackupPath).catch(() => undefined);
+    return info === undefined || info.size <= 0
+      ? undefined
+      : [info.dev, info.ino, info.size, Math.trunc(info.mtimeMs)].join(":");
+  }
+
+  /**
+   * Byte range of the backup's last `turns` turns that the transcript does not
+   * already carry, or `undefined` when there is no backup.
+   *
+   * The end is the compaction seam: compaction rewrites the transcript with the
+   * records it kept in flight, and the backup still holds those records at its
+   * end, so rendering both would show the same message twice. The start is found
+   * by walking backwards from the seam in growing windows until `turns`
+   * turn-opening records are seen — proportional to the range that is about to
+   * be read anyway, and no index for a file that only changes on compaction.
+   */
+  public async readBackupTail(turns: number): Promise<{start: number; end: number} | undefined> {
+    this.assertOpen();
+    if (!Number.isSafeInteger(turns) || turns < 0) {
+      throw new PersistenceError("invalid backup tail length");
+    }
+    const info = await stat(this.messagesBackupPath).catch(() => undefined);
+    if (info === undefined || info.size <= 0) {
+      return undefined;
+    }
+    const end = await this.backupVisibleEnd(info.size);
+    if (turns === 0) {
+      return {start: end, end};
+    }
+    let upper = end;
+    let remaining = turns;
+    let window = BACKUP_TAIL_WINDOW_BYTES;
+    while (upper > 0) {
+      const from = Math.max(0, upper - window);
+      const starts: number[] = [];
+      await readTranscriptRecords(this.messagesBackupPath, from, upper, (offset, line) => {
+        if (!line.includes(USER_RECORD_MARKER)) {
+          return;
+        }
+        let value: unknown;
+        try {
+          value = JSON.parse(line) as unknown;
+        } catch {
+          return;
+        }
+        if (isRecord(value) && value.type === "message" && value.role === "user") {
+          starts.push(offset);
+        }
+      });
+      for (let index = starts.length - 1; index >= 0; index -= 1) {
+        remaining -= 1;
+        if (remaining === 0) {
+          return {start: starts[index]!, end};
+        }
+      }
+      if (from === 0) {
+        break;
+      }
+      upper = from;
+      window *= 2;
+    }
+    return {start: 0, end};
+  }
+
+  /** Reads complete records of the pre-compaction backup in `[start, end)`. */
+  public async readBackupRecords(
+    start: number,
+    end: number,
+    onRecord: (offset: number, line: string) => void | Promise<void>,
+  ): Promise<number> {
+    this.assertOpen();
+    return readTranscriptRecords(this.messagesBackupPath, start, end, onRecord);
+  }
+
+  /**
+   * End of the backup a reader may render.
+   *
+   * A compaction moves a suffix of the transcript into the new file verbatim,
+   * and the backup keeps its copy at the end. The transcript's leading records
+   * are compared with the backup's trailing ones byte for byte, and the matching
+   * suffix is left out of the visible range.
+   */
+  private async backupVisibleEnd(size: number): Promise<number> {
+    let end = size;
+    let offset = 0;
+    for (let matched = 0; matched < BACKUP_SEAM_RECORDS; matched += 1) {
+      const leading = await this.readLineAt(this.messagesPath, offset);
+      if (leading === undefined) {
+        break;
+      }
+      const trailing = await this.lastLineEndingAt(this.messagesBackupPath, end);
+      if (trailing === undefined || !leading.equals(trailing)) {
+        break;
+      }
+      end -= leading.length;
+      offset += leading.length;
+      if (end <= 0) {
+        break;
+      }
+    }
+    return end;
+  }
+
+  /** Backward newline scan shared by the transcript and its backup. */
+  private async recordStartBefore(path: string, offset: number): Promise<number | undefined> {
     if (!Number.isSafeInteger(offset) || offset <= 0) {
       return undefined;
     }
@@ -1867,7 +2000,7 @@ export class SessionResponseStore {
     if (limit <= 0) {
       return 0;
     }
-    const handle = await open(this.messagesPath, "r");
+    const handle = await open(path, "r");
     try {
       const buffer = Buffer.alloc(LINE_BUFFER_SIZE);
       let cursor = limit;
@@ -1885,6 +2018,70 @@ export class SessionResponseStore {
         cursor = start;
       }
       return 0;
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /** One record read from `offset`, including its newline; `undefined` at EOF. */
+  private async readLineAt(path: string, offset: number): Promise<Buffer | undefined> {
+    const handle = await open(path, "r");
+    try {
+      const chunks: Buffer[] = [];
+      const buffer = Buffer.alloc(LINE_BUFFER_SIZE);
+      let position = offset;
+      let total = 0;
+      while (total <= MAX_SEAM_LINE_BYTES) {
+        const read = await handle.read(buffer, 0, buffer.length, position);
+        if (read.bytesRead <= 0) {
+          break;
+        }
+        const newline = buffer.subarray(0, read.bytesRead).indexOf(0x0a);
+        const take = newline >= 0 ? newline + 1 : read.bytesRead;
+        chunks.push(Buffer.from(buffer.subarray(0, take)));
+        position += take;
+        total += take;
+        if (newline >= 0) {
+          return Buffer.concat(chunks, total);
+        }
+      }
+      return undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return undefined;
+      }
+      throw error;
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /** The last complete record ending at `end`, including its newline. */
+  private async lastLineEndingAt(path: string, end: number): Promise<Buffer | undefined> {
+    if (end <= 0) {
+      return undefined;
+    }
+    const start = await this.recordStartBefore(path, end);
+    if (start === undefined || start >= end) {
+      return undefined;
+    }
+    const handle = await open(path, "r");
+    try {
+      const bytes = Buffer.alloc(end - start);
+      let filled = 0;
+      while (filled < bytes.length) {
+        const read = await handle.read(bytes, filled, bytes.length - filled, start + filled);
+        if (read.bytesRead <= 0) {
+          break;
+        }
+        filled += read.bytesRead;
+      }
+      return filled === bytes.length ? bytes : undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return undefined;
+      }
+      throw error;
     } finally {
       await handle.close();
     }

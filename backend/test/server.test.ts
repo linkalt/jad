@@ -2426,6 +2426,27 @@ async function writeCompactedSession(
       active_tail: [],
     }),
   );
+  // The pre-compaction transcript: raw records, which is what the UI renders
+  // (the compacted request items above are for the model, not for the view).
+  await writeFile(
+    join(sessionDir, "messages.backup.jsonl"),
+    `${JSON.stringify({ type: "message", role: "user", content: [{ type: "input_text", text: "first question" }] })}\n${JSON.stringify({
+      ...completedEvent(
+        [
+          {type: "reasoning", summary: [{type: "summary_text", text: "first thinking"}]},
+          {
+            type: "message",
+            role: "assistant",
+            id: "gen-final-1",
+            content: [{ type: "output_text", text: finalText }],
+          },
+        ],
+        "gen-final-1",
+      ),
+      session_turn: 1,
+      session_step: 1,
+    })}\n`,
+  );
   await writeFile(
     join(sessionDir, "messages.jsonl"),
     `${JSON.stringify({ type: "message", role: "user", content: [{ type: "input_text", text: "second question" }] })}\n${JSON.stringify({

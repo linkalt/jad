@@ -6,8 +6,9 @@ Implemented as described below, with these decisions settled during the build:
 
 - **The reader pages by offset instead of caching a prefix.** A snapshot reads the
   turns it needs from the transcript, starting at a turn boundary, so the bytes
-  before the window are never read at all. The compacted prefix is the only piece
-  that is cached, keyed by the compaction cache's identity.
+  before the window are never read at all. History a compaction removed is folded
+  from the backup's tail, cached under the backup's identity plus the transcript's
+  generation.
 - **The table of turns is never materialized.** `turnStarts()` derives it per
   request from the cursor entries: a step-1 run marks a turn, and the user message
   in front of it (one backwards read) is where its records begin.
@@ -127,13 +128,21 @@ Validation mirrors `cacheMatches` (`persistence.ts:1566`): device/inode, `size >
 
 ## Readers
 
-**UI view cache (per session, in memory).** `messages = head + tail`, where:
-- `head` = the compacted prefix from `compaction-cache.json` `items` — this is what keeps
-  `messages.backup.jsonl` out of the read path. Request items are folded into the projection by
-  wrapping provider output items the way the provider would have produced them, so the same reducer
-  builds both parts. It is cached in memory under the compaction cache's identity;
+**UI view cache (per session, in memory).** `messages = history + tail`, where:
+- `history` = the backup's last `compaction.keepbackup.turns` turns (`0` hides them; `20` by
+  default). The backup holds raw records, so reasoning and tool calls survive; the compacted request
+  items keep only what the model was given, which is why the view no longer reads
+  `compaction-cache.json` at all. The block is cached in memory under the backup's identity plus the
+  transcript's generation — the window in which a seam can still move without the backup changing;
 - `tail` = records in `[start, end)` of the transcript, where `start` is the oldest turn in the
   window. Nothing before it is read.
+
+The backup's end is the **compaction seam**: compaction rewrites the transcript with the response it
+kept in flight, and the backup still holds that record at its end. The transcript's leading records
+are compared with the backup's trailing ones byte for byte, and the matching suffix is left out — the
+transcript's copy is the live one. The turn window before the seam is found by walking backwards in
+growing chunks, so the cost is proportional to the range that is about to be read, and the backup
+needs no index.
 
 A tool result attaches backwards to the message that opened the call, which is why a window always
 begins at a turn boundary: the reducer's state at that point is exactly "no calls pending", so a
@@ -145,10 +154,11 @@ and message ids are derived from byte offsets, so a message keeps its id between
 read.
 
 **HTTP.**
-- `ETag` fingerprint = transcript (device, inode, size, mtime) + compaction cache + usage cache +
-  setting + model + run descriptor `{turn_id, status, started_at}`. **The run's in-flight snapshot is
-  excluded** — it changes every few hundred ms and belongs to the SSE stream; the payload only ever
-  contains committed content, so the invariant is: *ETag ≡ committed state, SSE ≡ live state*.
+- `ETag` fingerprint = transcript (device, inode, size, mtime) + backup + compaction cache + usage
+  cache + setting + model + run descriptor `{turn_id, status, started_at}`. **The run's in-flight
+  snapshot is excluded** — it changes every few hundred ms and belongs to the SSE stream; the payload
+  only ever contains committed content, so the invariant is: *ETag ≡ committed state, SSE ≡ live
+  state*.
 - `If-None-Match` ⇒ `304` before anything is read; 200 responses carry `ETag` +
   `Cache-Control: no-cache`, so a client that stores the body revalidates instead of trusting it.
 - The session **list** ships metadata only (name, model, turns, usage, run); the transcript of the
@@ -175,7 +185,7 @@ full value beside a cut part would defeat the cap.
 
 - **with `?cursor=<offset>`** — the turn is re-read from the transcript through the cursor index, so
   the result is the same projection the snapshot would have produced, uncut;
-- **without it** — the message is served from the compacted head the view already holds (a compacted
+- **without it** — the message is served from the history block the view already holds (a backup
   message has no turn, which is why it publishes no cursor).
 
 Nothing is capped on the way out: returning another cut copy would leave the client where it
@@ -183,7 +193,10 @@ started. The client keeps what it fetched in a per-session overlay keyed by mess
 next snapshot still sends the capped copy and ids are stable (they come from the transcript offset).
 
 Measured on the live session (880 KB snapshot, cap 2 KiB): 22 of 46 messages capped, 81 parts,
-424 KB of part text — and cap + re-fetch reproduced the uncapped snapshot byte for byte.
+424 KB of part text — and cap + re-fetch reproduced the uncapped snapshot byte for byte. With the
+backup-tail history the same session's snapshot is 2.46 MB (cap 16 KiB, 20 capped parts), and one
+message's capped reasoning (16,276 of 38,500 B) came back whole — 38,254 chars — from
+`/messages/<id>`.
 
 ## Configuration
 
@@ -194,6 +207,7 @@ Measured on the live session (880 KB snapshot, cap 2 KiB): 22 of 46 messages cap
 | `server.snapshot_turns` | `24` | newest turns in a snapshot; `0` returns everything |
 | `server.max_page_turns` | `50` | largest page one cursor request may return |
 | `server.max_inline_part_bytes` | `16384` | inline text per part; `0` sends parts uncut |
+| `compaction.keepbackup.turns` | `20` | backup turns rendered as history; `0` hides them |
 | `session_refresh_interval_ms_streaming` | `30000` | frontend poll cadence while attached to a run |
 | `transcript_page_turns` | `5` | turns fetched per "load earlier messages" click |
 
@@ -210,8 +224,9 @@ Measured on the live session (880 KB snapshot, cap 2 KiB): 22 of 46 messages cap
 
 - Strip the provider request echo from stored records (`tools` et al. — 84–91% of bytes).
 - Per-message manifest for client-side delta sync (the `turnOffsets` data supports it later).
-- The compacted head is always sent whole, so a session whose head is large still pays for it; the
-  head has no cursor to page through, only part-level caps.
+- The history block is always sent whole, so a session whose backup is large pays for it whenever the
+  block changes; `compaction.keepbackup.turns` and `server.max_inline_part_bytes` are the levers until
+  the block gets a cursor of its own.
 
 ## Verification
 
@@ -227,3 +242,6 @@ Measured on the live session (880 KB snapshot, cap 2 KiB): 22 of 46 messages cap
 6. **Cap:** a snapshot cuts only oversized parts, keeps them valid UTF-8, reports full byte sizes and
    recomputes derived fields (`part-cap.test.ts`); a capped turn message and a capped compacted
    message both come back whole from the message endpoint (`server.test.ts`).
+7. **History source:** compacted history comes from the backup with reasoning and tool calls intact
+   while the compacted items do not carry them; a preserved response is trimmed at the seam and
+   rendered once; `keepbackup.turns` caps the block and `0` hides it (`cursor-cache.test.ts`).

@@ -1,12 +1,10 @@
-import { stat } from "node:fs/promises";
-
+import { DEFAULT_KEEP_BACKUP_TURNS } from "../../config.js";
 import type { JsonRecord, SessionResponseStore } from "../../persistence.js";
 import {
   createWebUiSessionState,
   isUserTurnRecord,
   reduceWebUiRecord,
 } from "./normalize-web-ui.js";
-import { inputItemRecord } from "./shared-web-ui.js";
 import type { WebUiMessage } from "./types.js";
 
 /** A slice of a session transcript projected for the web UI. */
@@ -14,7 +12,8 @@ export interface WebUiSessionView {
   messages: WebUiMessage[];
   /**
    * Turn cursor per transcript message — the offset that re-reads the turn the
-   * message came from. The compacted head has no entries: it is not a turn.
+   * message came from. Messages served from the backup have no entries: they are
+   * not turns of the live transcript.
    */
   cursors: Map<string, number>;
   /** Older turns exist in the transcript but are not part of this response. */
@@ -30,7 +29,7 @@ export interface WebUiViewOptions {
   maxPageTurns: number;
 }
 
-interface HeadCache {
+interface BackupBlock {
   key: string;
   messages: WebUiMessage[];
 }
@@ -49,10 +48,13 @@ function parseRecord(line: string): JsonRecord | undefined {
 /**
  * Projection of a session transcript for the web UI, addressed by byte offset.
  *
- * Two parts are read separately. The compacted prefix lives in the compaction
- * cache as request items and is folded once per compaction; the live tail is read
- * from the transcript in turn-sized slices, using the cursor index to find where
- * a turn starts without walking the file from the beginning.
+ * Two parts are read separately. History a compaction removed is folded from the
+ * backup's tail — raw records, so reasoning and tool calls survive, unlike the
+ * compacted request items, which keep only what the model was given. The live
+ * tail is read from the transcript in turn-sized slices, using the cursor index
+ * to find where a turn starts without walking the file from the beginning. The
+ * backup's end is trimmed at the compaction seam, because the transcript already
+ * re-emits the records that were in flight when it was written.
  *
  * Because every slice begins at a turn boundary and records are identified by
  * their offset, a page contains exactly the messages a full read would produce
@@ -60,40 +62,42 @@ function parseRecord(line: string): JsonRecord | undefined {
  * renumbering it.
  */
 export class WebUiSessionViewCache {
-  private head: HeadCache | undefined;
+  private backup: BackupBlock | undefined;
 
   public constructor(
     private readonly store: SessionResponseStore,
-    private readonly compactionCachePath: string,
     private readonly options: WebUiViewOptions,
   ) {}
 
-  public async read(options: {before?: number; turns?: number} = {}): Promise<WebUiSessionView> {
+  public async read(
+    options: {before?: number; turns?: number; backupTurns?: number} = {},
+  ): Promise<WebUiSessionView> {
     const stamp = await this.store.readTranscriptStamp();
-    const head = await this.readHead();
     const page = await this.readPage(stamp.size, options);
     // A cursor asks for older tail turns only: the caller already holds the head.
     if (options.before !== undefined) {
       return page;
     }
-    return {...page, messages: [...head.messages, ...page.messages]};
+    const history = await this.readBackupBlock(options.backupTurns ?? DEFAULT_KEEP_BACKUP_TURNS);
+    return {...page, messages: [...history, ...page.messages]};
   }
 
   /**
    * Re-reads one message whole, uncapped.
    *
    * A transcript message is addressed by the turn cursor a capped snapshot
-   * published for it; a compacted message has no turn and is served from the
-   * head the view already holds. The projection is deterministic, so the result
-   * carries the same id and parts — with the text the cap left out.
+   * published for it; a message served from the backup has no turn and is found
+   * in the block the view already holds. The projection is deterministic, so the
+   * result carries the same id and parts — with the text the cap left out.
    */
   public async readMessage(
     messageId: string,
     cursor?: number,
+    backupTurns?: number,
   ): Promise<WebUiMessage | undefined> {
     if (cursor === undefined) {
-      const head = await this.readHead();
-      return head.messages.find((message) => message.id === messageId);
+      const block = await this.readBackupBlock(backupTurns ?? DEFAULT_KEEP_BACKUP_TURNS);
+      return block.find((message) => message.id === messageId);
     }
     const stamp = await this.store.readTranscriptStamp();
     const starts = await this.turnStarts(stamp.size);
@@ -200,29 +204,42 @@ export class WebUiSessionViewCache {
     return record !== undefined && isUserTurnRecord(record) ? offset : runOffset;
   }
 
-  private async readHead(): Promise<HeadCache> {
-    const key = await this.compactionStamp();
-    if (this.head !== undefined && this.head.key === key) {
-      return this.head;
+  /**
+   * History the transcript no longer carries, folded from the backup's last
+   * turns.
+   *
+   * Cached by the backup's identity, the transcript's generation and the turn
+   * count: the backup only changes when history is compacted, and the generation
+   * separates the transcript a seam was computed against from the one a
+   * compaction replaced it with — the window in which the seam can still move
+   * without the backup changing.
+   */
+  private async readBackupBlock(turns: number): Promise<WebUiMessage[]> {
+    const limit = Number.isSafeInteger(turns) && turns > 0 ? turns : 0;
+    if (limit === 0) {
+      return [];
     }
-    const items = (await this.store.readCompactionItems()) ?? [];
+    const stamp = await this.store.readBackupStamp();
+    if (stamp === undefined) {
+      this.backup = undefined;
+      return [];
+    }
+    const generation = (await this.store.readTranscriptGeneration()) ?? "-";
+    const key = `${stamp}|${generation}|${limit}`;
+    if (this.backup !== undefined && this.backup.key === key) {
+      return this.backup.messages;
+    }
+    const range = await this.store.readBackupTail(limit);
     const state = createWebUiSessionState();
-    items.forEach((item, index) => {
-      const record = inputItemRecord(item);
-      if (record !== undefined) {
-        reduceWebUiRecord(state, record, `h${index}`);
-      }
-    });
-    this.head = {key, messages: state.messages};
-    return this.head;
-  }
-
-  private async compactionStamp(): Promise<string> {
-    try {
-      const info = await stat(this.compactionCachePath);
-      return [info.dev, info.ino, info.size, Math.trunc(info.mtimeMs)].join(":");
-    } catch {
-      return "none";
+    if (range !== undefined && range.end > range.start) {
+      await this.store.readBackupRecords(range.start, range.end, (offset, line) => {
+        const record = parseRecord(line);
+        if (record !== undefined) {
+          reduceWebUiRecord(state, record, `b${offset}`);
+        }
+      });
     }
+    this.backup = {key, messages: state.messages};
+    return this.backup.messages;
   }
 }

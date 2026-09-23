@@ -99,6 +99,15 @@
           },
           "additionalProperties": true,
           "default": {}
+        },
+        "keepbackup": {
+          "type": "object",
+          "description": "Turns of the pre-compaction backup kept visible in the web UI. The backup holds the raw records, so reasoning and tool calls survive; 0 hides it.",
+          "properties": {
+            "turns": {"type": "integer", "minimum": 0, "maximum": 1000, "default": 20}
+          },
+          "additionalProperties": true,
+          "default": {}
         }
       },
       "additionalProperties": true,

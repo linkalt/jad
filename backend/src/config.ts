@@ -317,6 +317,8 @@ export interface CompactionSettings extends JsonRecord {
     tools: number;
     turn: {type: "assistant_final" | "full"; keep: number};
   };
+  /** Turns of the pre-compaction backup the web UI shows; `0` hides them. */
+  keepbackup: {turns: number};
   backup_mode: "replace" | "append";
 }
 
@@ -387,6 +389,9 @@ export const DEFAULT_MAX_TOOL_ROUNDS = 8;
 export const MAX_CONFIGURED_TOOL_ROUNDS = 50_000;
 export const DEFAULT_PERSISTENCE_MAX_ITEM_BYTES = 10 * 1024 * 1024;
 export const MAX_CONFIGURED_PERSISTENCE_ITEM_BYTES = 64 * 1024 * 1024;
+/** Pre-compaction turns the web UI renders from the backup. */
+export const DEFAULT_KEEP_BACKUP_TURNS = 20;
+export const MAX_KEEP_BACKUP_TURNS = 1000;
 
 export class ConfigError extends Error {
   public override name = "ConfigError";
@@ -726,6 +731,21 @@ function normalizeCompaction(value: unknown, path: string): CompactionSettings {
   if (typeof keep !== "number" || !Number.isSafeInteger(keep) || keep < 1 || keep > 1000) {
     throw new ConfigError(`${path}: compaction.keepbatch.turn.keep must be an integer between 1 and 1000`);
   }
+  const keepbackup = raw.keepbackup ?? {};
+  if (!isRecord(keepbackup)) {
+    throw new ConfigError(`${path}: compaction.keepbackup must be an object`);
+  }
+  const backupTurns = keepbackup.turns ?? DEFAULT_KEEP_BACKUP_TURNS;
+  if (
+    typeof backupTurns !== "number" ||
+    !Number.isSafeInteger(backupTurns) ||
+    backupTurns < 0 ||
+    backupTurns > MAX_KEEP_BACKUP_TURNS
+  ) {
+    throw new ConfigError(
+      `${path}: compaction.keepbackup.turns must be an integer between 0 and ${MAX_KEEP_BACKUP_TURNS}`,
+    );
+  }
   const backupMode = raw.backup_mode ?? "replace";
   if (backupMode !== "replace" && backupMode !== "append") {
     throw new ConfigError(`${path}: compaction.backup_mode must be replace or append`);
@@ -735,6 +755,7 @@ function normalizeCompaction(value: unknown, path: string): CompactionSettings {
     auto_enabled: autoEnabled,
     trigger_tokens: triggerTokens,
     keepbatch: {tools, turn: {type, keep}},
+    keepbackup: {turns: backupTurns},
     backup_mode: backupMode,
   } as CompactionSettings;
 }

@@ -35,6 +35,10 @@ function toolOutput(callId: string, output = "ok"): JsonRecord {
   return { type: "function_call_output", call_id: callId, output };
 }
 
+function reasoningItem(text: string): JsonRecord {
+  return { type: "reasoning", summary: [{ type: "summary_text", text }] };
+}
+
 function completedRecord(
   responseId: string,
   turn: number,
@@ -248,7 +252,7 @@ test("ignores records without a session turn and text that mimics one", async ()
 test("projects the transcript identically to a full normalization", async () => {
   const { store, sessionDir, messagesPath } = await makeStore();
   try {
-    const cache = new WebUiSessionViewCache(store, join(sessionDir, "staging", "compaction-cache.json"), {
+    const cache = new WebUiSessionViewCache(store, {
       snapshotTurns: 0,
       maxPageTurns: 50,
     });
@@ -266,7 +270,7 @@ test("projects the transcript identically to a full normalization", async () => 
 test("pages the transcript by turn and tiles it exactly", async () => {
   const { store, sessionDir, messagesPath } = await makeStore();
   try {
-    const cache = new WebUiSessionViewCache(store, join(sessionDir, "staging", "compaction-cache.json"), {
+    const cache = new WebUiSessionViewCache(store, {
       snapshotTurns: 1,
       maxPageTurns: 50,
     });
@@ -299,7 +303,7 @@ test("pages the transcript by turn and tiles it exactly", async () => {
 test("keeps message ids stable between a page and a full read", async () => {
   const { store, sessionDir } = await makeStore();
   try {
-    const cache = new WebUiSessionViewCache(store, join(sessionDir, "staging", "compaction-cache.json"), {
+    const cache = new WebUiSessionViewCache(store, {
       snapshotTurns: 1,
       maxPageTurns: 50,
     });
@@ -319,33 +323,131 @@ test("keeps message ids stable between a page and a full read", async () => {
   }
 });
 
-test("renders compacted turns from the compaction cache, not the backup", async () => {
+test("renders compacted history from the backup, keeping reasoning and tool calls", async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-view-compaction-"));
   const messagesPath = join(sessionDir, "messages.jsonl");
-  const compactionCachePath = join(sessionDir, "staging", "compaction-cache.json");
-  await writeTranscript(messagesPath, TRANSCRIPT);
+  const records: JsonRecord[] = [
+    userRecord("first question"),
+    completedRecord("r-1-1", 1, 1, [reasoningItem("first thinking"), callItem("call-1")]),
+    toolOutput("call-1", "file contents"),
+    completedRecord("r-1-2", 1, 2, [assistantItem("first answer", "msg-1-2")]),
+  ];
+  await writeTranscript(messagesPath, records);
   const store = await SessionResponseStore.open(sessionDir, { messagesPath });
   try {
-    // Compaction keeps the turns it compressed as request items.
     await store.compactHistory({
       turnType: "assistant_final",
       keepTurns: 1,
       keepToolPairs: 0,
       backupMode: "replace",
     });
-    const cache = new WebUiSessionViewCache(store, compactionCachePath, {
+    // The compacted request items keep the user message and the final answer,
+    // but not the reasoning or the tool round — which is exactly what the view
+    // has to keep showing, so it reads the backup instead.
+    const items = (await store.readCompactionItems()) ?? [];
+    assert.equal(items.some((item) => item.type === "reasoning"), false);
+    assert.equal(items.some((item) => item.type === "function_call"), false);
+
+    const cache = new WebUiSessionViewCache(store, {
       snapshotTurns: 0,
       maxPageTurns: 50,
     });
     const view = await cache.read();
-    // The retained turn is the newest one; the older turn only survives as the
-    // backup, which the view no longer reads.
+    assert.deepEqual(plain(view.messages), plain(messagesOf(records) as never));
+    assert.equal(
+      view.messages.some((message) => message.parts.some((part) => part.type === "reasoning")),
+      true,
+    );
+    assert.equal(
+      view.messages.some((message) => message.parts.some((part) => part.type === "tool_result")),
+      true,
+    );
+  } finally {
+    await store.close();
+    await rm(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test("trims the backup at the seam so a preserved response stays one message", async () => {
+  const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-view-seam-"));
+  const messagesPath = join(sessionDir, "messages.jsonl");
+  const records: JsonRecord[] = [
+    userRecord("do the work"),
+    completedRecord("run-1", 1, 1, [reasoningItem("first thinking"), callItem("call-1")]),
+    toolOutput("call-1", "tool result"),
+    completedRecord("run-2", 1, 2, [
+      reasoningItem("second thinking"),
+      assistantItem("draft answer", "msg-1-2"),
+    ]),
+  ];
+  await writeTranscript(messagesPath, records);
+  const store = await SessionResponseStore.open(sessionDir, { messagesPath });
+  try {
+    // A mid-turn compaction keeps the in-flight response in the transcript and
+    // leaves the very same record at the end of the backup.
+    const compaction = await store.compactHistory({
+      turnType: "assistant_final",
+      keepTurns: 1,
+      keepToolPairs: 1,
+      backupMode: "replace",
+      preserveResponseId: "run-2",
+    });
+    assert.equal(compaction.compacted, true);
+    assert.equal((await readFile(messagesPath, "utf8")).startsWith('{"type":"response.completed"'), true);
+
+    const cache = new WebUiSessionViewCache(store, {
+      snapshotTurns: 0,
+      maxPageTurns: 50,
+    });
+    const view = await cache.read();
+    // run-2 comes from the transcript, everything before it from the backup.
+    // Without the seam the same record would be rendered twice.
     assert.deepEqual(
       view.messages.map((message) => message.sender),
-      ["user", "assistant"],
+      ["user", "assistant", "assistant"],
     );
-    assert.equal(view.messages[0]?.text, "second question");
-    assert.equal(view.messages[1]?.id, "msg-2-1");
+    assert.equal(view.messages.filter((message) => message.id === "run-2").length, 1);
+    assert.equal(view.messages.filter((message) => message.text === "draft answer").length, 1);
+    assert.equal(
+      view.messages[1]?.parts.some((part) => part.type === "tool_result"),
+      true,
+    );
+  } finally {
+    await store.close();
+    await rm(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test("caps the rendered backup at keepbackup.turns", async () => {
+  const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-view-backup-cap-"));
+  const messagesPath = join(sessionDir, "messages.jsonl");
+  await writeTranscript(messagesPath, TRANSCRIPT);
+  const store = await SessionResponseStore.open(sessionDir, { messagesPath });
+  try {
+    await store.compactHistory({
+      turnType: "assistant_final",
+      keepTurns: 1,
+      keepToolPairs: 0,
+      backupMode: "replace",
+    });
+    const cache = new WebUiSessionViewCache(store, {
+      snapshotTurns: 0,
+      maxPageTurns: 50,
+    });
+    // The transcript is empty after compaction, so the backup is the history.
+    const whole = await cache.read({backupTurns: 20});
+    assert.deepEqual(plain(whole.messages), plain(messagesOf(TRANSCRIPT) as never));
+
+    const capped = await cache.read({backupTurns: 1});
+    assert.deepEqual(
+      plain(capped.messages),
+      plain(messagesOf([TRANSCRIPT[4]!, TRANSCRIPT[5]!]) as never),
+    );
+    assert.equal(capped.messages[0]?.text, "second question");
+
+    const hidden = await cache.read({backupTurns: 0});
+    assert.deepEqual(hidden.messages, []);
+    assert.equal(hidden.hasMore, false);
   } finally {
     await store.close();
     await rm(sessionDir, { recursive: true, force: true });
@@ -355,7 +457,7 @@ test("renders compacted turns from the compaction cache, not the backup", async 
 test("serves the whole transcript when the snapshot cap is disabled", async () => {
   const { store, sessionDir } = await makeStore();
   try {
-    const cache = new WebUiSessionViewCache(store, join(sessionDir, "staging", "compaction-cache.json"), {
+    const cache = new WebUiSessionViewCache(store, {
       snapshotTurns: 0,
       maxPageTurns: 50,
     });
@@ -371,7 +473,7 @@ test("serves the whole transcript when the snapshot cap is disabled", async () =
 test("appends to an existing transcript without renumbering earlier messages", async () => {
   const { store, sessionDir, messagesPath } = await makeStore();
   try {
-    const cache = new WebUiSessionViewCache(store, join(sessionDir, "staging", "compaction-cache.json"), {
+    const cache = new WebUiSessionViewCache(store, {
       snapshotTurns: 0,
       maxPageTurns: 50,
     });
@@ -396,7 +498,7 @@ test("reads an empty transcript and a session without compaction as empty", asyn
   await mkdir(join(sessionDir, "staging"), { recursive: true });
   const store = await SessionResponseStore.open(sessionDir, { messagesPath });
   try {
-    const cache = new WebUiSessionViewCache(store, join(sessionDir, "staging", "compaction-cache.json"), {
+    const cache = new WebUiSessionViewCache(store, {
       snapshotTurns: 24,
       maxPageTurns: 50,
     });
@@ -404,7 +506,8 @@ test("reads an empty transcript and a session without compaction as empty", asyn
     assert.deepEqual(view.messages, []);
     assert.equal(view.hasMore, false);
     assert.deepEqual((await store.readCursorIndex()).runs, []);
-    assert.equal(await store.readCompactionItems(), undefined);
+    assert.equal(await store.readBackupStamp(), undefined);
+    assert.equal(await store.readBackupTail(20), undefined);
   } finally {
     await store.close();
     await rm(sessionDir, { recursive: true, force: true });
@@ -424,7 +527,7 @@ test("keeps the compaction prefix while the tail grows", async () => {
       backupMode: "replace",
     });
     assert.equal(compaction.compacted, true);
-    const cache = new WebUiSessionViewCache(store, join(sessionDir, "staging", "compaction-cache.json"), {
+    const cache = new WebUiSessionViewCache(store, {
       snapshotTurns: 24,
       maxPageTurns: 50,
     });
