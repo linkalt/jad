@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 
 import { DEFAULT_KEEP_BACKUP_TURNS } from "../../config.js";
-import type { JsonRecord, SessionResponseStore } from "../../persistence.js";
+import type {
+  JsonRecord,
+  SessionResponseStore,
+  TranscriptRunCursor,
+} from "../../persistence.js";
 import {
   createWebUiSessionState,
   isUserTurnRecord,
@@ -41,6 +45,30 @@ interface BackupBlock {
   messages: WebUiMessage[];
 }
 
+/**
+ * Resolved turn starts for one transcript: the runs already folded are counted,
+ * so an appending transcript only resolves the runs it added.
+ */
+interface TurnStartsCache {
+  generation: string;
+  /** Transcript size the offsets were resolved against; a shrink invalidates. */
+  size: number;
+  consumed: number;
+  /** Last folded run, so an index rebuilt under the cache is noticed. */
+  lastRun: TranscriptRunCursor | undefined;
+  starts: number[];
+}
+
+function sameRun(
+  left: TranscriptRunCursor | undefined,
+  right: TranscriptRunCursor | undefined,
+): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+  return left.offset === right.offset && left.turn === right.turn && left.step === right.step;
+}
+
 function parseRecord(line: string): JsonRecord | undefined {
   try {
     const value: unknown = JSON.parse(line);
@@ -70,6 +98,7 @@ function parseRecord(line: string): JsonRecord | undefined {
  */
 export class WebUiSessionViewCache {
   private backup: BackupBlock | undefined;
+  private turnStartsCache: TurnStartsCache | undefined;
 
   public constructor(
     private readonly store: SessionResponseStore,
@@ -200,32 +229,46 @@ export class WebUiSessionViewCache {
    * Offsets where each turn's records begin, oldest first. A turn opens with its
    * user message when the transcript has one, and with the provider run itself
    * otherwise (a transcript can start mid-turn after compaction).
+   *
+   * A turn's start is a property of the transcript, not of the request that asks
+   * for it, so resolved offsets are kept and only runs appended since the last
+   * call are resolved. The cache is dropped when the file behind the index is no
+   * longer the same one — a replacement changes its generation, a repair shrinks
+   * it — because then the offsets describe a transcript that is not there.
    */
   private async turnStarts(end: number): Promise<number[]> {
     const index = await this.store.readCursorIndex();
-    const starts: number[] = [0];
-    for (const run of index.runs) {
+    const generation = (await this.store.readTranscriptGeneration()) ?? "-";
+    let cache = this.turnStartsCache;
+    if (
+      cache === undefined ||
+      cache.generation !== generation ||
+      cache.size > index.size ||
+      cache.consumed > index.runs.length ||
+      !sameRun(cache.lastRun, index.runs[cache.consumed - 1])
+    ) {
+      cache = {generation, size: index.size, consumed: 0, starts: [0], lastRun: undefined};
+      this.turnStartsCache = cache;
+    }
+    cache.size = index.size;
+    for (; cache.consumed < index.runs.length; cache.consumed += 1) {
+      const run = index.runs[cache.consumed]!;
+      cache.lastRun = run;
       if (run.step !== 1 || run.offset <= 0 || run.offset >= end) {
         continue;
       }
-      const previous = await this.store.readRecordStartBefore(run.offset);
-      const start = previous === undefined
-        ? run.offset
-        : await this.readTurnStart(previous, run.offset);
-      if (start > starts[starts.length - 1]!) {
-        starts.push(start);
+      // The run may have a user message in front of it, which then opens the
+      // turn: one record read answers both questions.
+      const previous = await this.store.readRecordBefore(run.offset);
+      const record = previous === undefined ? undefined : parseRecord(previous.line);
+      const start = previous !== undefined && record !== undefined && isUserTurnRecord(record)
+        ? previous.offset
+        : run.offset;
+      if (start > cache.starts[cache.starts.length - 1]!) {
+        cache.starts.push(start);
       }
     }
-    return starts;
-  }
-
-  /** The turn's own offset: the user message in front of the run, when present. */
-  private async readTurnStart(offset: number, runOffset: number): Promise<number> {
-    let record: JsonRecord | undefined;
-    await this.store.readRecords(offset, runOffset, (_offset, line) => {
-      record ??= parseRecord(line);
-    });
-    return record !== undefined && isUserTurnRecord(record) ? offset : runOffset;
+    return cache.starts;
   }
 
   /**
@@ -256,13 +299,14 @@ export class WebUiSessionViewCache {
     }
     const range = await this.store.readBackupTail(limit);
     const state = createWebUiSessionState();
-    if (range !== undefined && range.end > range.start) {
-      await this.store.readBackupRecords(range.start, range.end, (offset, line) => {
+    if (range !== undefined) {
+      // The walk that found the range already read these records.
+      for (const {offset, line} of range.records) {
         const record = parseRecord(line);
         if (record !== undefined) {
           reduceWebUiRecord(state, record, `b${offset}`);
         }
-      });
+      }
     }
     this.backup = {key, messages: state.messages};
     return this.backup;

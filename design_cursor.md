@@ -9,9 +9,12 @@ Implemented as described below, with these decisions settled during the build:
   before the window are never read at all. History a compaction removed is folded
   from the backup's tail, cached under the backup's identity plus the transcript's
   generation.
-- **The table of turns is never materialized.** `turnStarts()` derives it per
-  request from the cursor entries: a step-1 run marks a turn, and the user message
-  in front of it (one backwards read) is where its records begin.
+- **The table of turns is never materialized.** `turnStarts()` derives it from the
+  cursor entries: a step-1 run marks a turn, and the user message in front of it
+  (one backwards read of that record) is where its records begin. A turn's start
+  belongs to the transcript rather than to the request that asks for it, so
+  resolved offsets are kept and only the runs appended since the last request are
+  resolved.
 - **Revalidation happens before the payload is built.** A `304` costs five `stat`
   calls plus the run descriptor — no transcript read, no usage refresh.
 - **`turns` counts user submissions** (from the usage summary), not provider
@@ -229,6 +232,8 @@ message's capped reasoning (16,276 of 38,500 B) came back whole — 38,254 chars
 | load an older turn | impossible | seek + one turn |
 | cold start | 160 ms | one scan of the transcript, then incremental |
 | stored bytes (`response_metadata: "minimal"`) | 1.51 MB transcript / 6.80 MB backup, 80–82% request echo | **0.26 MB / 1.29 MB** |
+| cold block build (6.8 MB backup, same reducer) | 78.1 ms | **71.9 ms** |
+| turn starts, 90-turn transcript, per request | 12.4 ms | **~2 ms** (the page itself) |
 
 ## Out of scope (follow-ups)
 
@@ -263,3 +268,10 @@ message's capped reasoning (16,276 of 38,500 B) came back whole — 38,254 chars
    `full` reproduces the pre-change record byte for byte (same sha256); the trimmed record still
    rebuilds request history, usage, and compaction (`persistence.test.ts`). One real turn through
    `AgentSession` with a live-size echo (35,190 B of `tools`) stored `361 B` instead of `35,622 B`.
+10. **Duplicated work removed:** the backup walk returns the records it read, so a block build reads
+    the backing range once — 78.1 ms to 71.9 ms on the 6.8 MB live backup, measured in one process
+    with the same reducer — and every window starts on a record boundary, so a record straddling one
+    is still rendered whole (`cursor-cache.test.ts` asserts the returned records cover the range byte
+    for byte, which fails without the alignment). Turn starts are resolved once and extended as the
+    transcript grows: on a 90-turn transcript a request spent 12.4 ms on boundary reads before and
+    ~2.0 ms — the page read itself — after, plus one further read per appended run.

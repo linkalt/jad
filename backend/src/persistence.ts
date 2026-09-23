@@ -29,6 +29,22 @@ export type DurabilityMode = "process" | "turn" | "strict";
  */
 export type ResponseMetadataMode = "minimal" | "full";
 
+/** A transcript or backup record, addressed by its byte offset. */
+export interface OffsetRecord {
+  offset: number;
+  line: string;
+}
+
+/** Byte range of the backup's last turns, with the records it holds. */
+export interface BackupTail {
+  /** Offset where the oldest returned turn starts. */
+  start: number;
+  /** Visible end of the backup — the compaction seam. */
+  end: number;
+  /** Complete records in `[start, end)`, in transcript order. */
+  records: OffsetRecord[];
+}
+
 export interface SessionResponseStoreOptions {
   /** Defaults to `turn`. */
   durability?: DurabilityMode;
@@ -262,7 +278,7 @@ const RESPONSE_METADATA_KEYS: readonly string[] = [
   "usage",
 ];
 /** Bytes read per backward step while locating the backup's last turns. */
-const BACKUP_TAIL_WINDOW_BYTES = 256 * 1024;
+export const BACKUP_TAIL_WINDOW_BYTES = 256 * 1024;
 /** Transcript records the compaction seam compares against the backup's end. */
 const BACKUP_SEAM_RECORDS = 4;
 /** Ceiling for one seam line, so an unfinished record cannot stall the check. */
@@ -1931,16 +1947,19 @@ export class SessionResponseStore {
 
   /**
    * Byte range of the backup's last `turns` turns that the transcript does not
-   * already carry, or `undefined` when there is no backup.
+   * already carry, together with the records it holds.
    *
    * The end is the compaction seam: compaction rewrites the transcript with the
    * records it kept in flight, and the backup still holds those records at its
    * end, so rendering both would show the same message twice. The start is found
    * by walking backwards from the seam in growing windows until `turns`
    * turn-opening records are seen — proportional to the range that is about to
-   * be read anyway, and no index for a file that only changes on compaction.
+   * be read anyway. Those windows are what the caller renders, so the walk
+   * returns them instead of leaving the caller to read the same bytes again;
+   * each window starts on a record boundary, so no record is read in halves.
+   * The records are held only for the call, and only for the returned range.
    */
-  public async readBackupTail(turns: number): Promise<{start: number; end: number} | undefined> {
+  public async readBackupTail(turns: number): Promise<BackupTail | undefined> {
     this.assertOpen();
     if (!Number.isSafeInteger(turns) || turns < 0) {
       throw new PersistenceError("invalid backup tail length");
@@ -1951,15 +1970,26 @@ export class SessionResponseStore {
     }
     const end = await this.backupVisibleEnd(info.size);
     if (turns === 0) {
-      return {start: end, end};
+      return {start: end, end, records: []};
     }
+
+    const records = new Map<number, string>();
+    const userOffsets = new Set<number>();
     let upper = end;
-    let remaining = turns;
     let window = BACKUP_TAIL_WINDOW_BYTES;
+    let start = 0;
     while (upper > 0) {
-      const from = Math.max(0, upper - window);
-      const starts: number[] = [];
+      const raw = Math.max(0, upper - window);
+      const from = raw === 0
+        ? 0
+        : (await this.recordStartBefore(this.messagesBackupPath, raw)) ?? 0;
       await readTranscriptRecords(this.messagesBackupPath, from, upper, (offset, line) => {
+        // Windows can overlap once a start is aligned to a record boundary; the
+        // first copy of a record is the one from the newer window.
+        if (records.has(offset)) {
+          return;
+        }
+        records.set(offset, line);
         if (!line.includes(USER_RECORD_MARKER)) {
           return;
         }
@@ -1970,14 +2000,14 @@ export class SessionResponseStore {
           return;
         }
         if (isRecord(value) && value.type === "message" && value.role === "user") {
-          starts.push(offset);
+          userOffsets.add(offset);
         }
       });
-      for (let index = starts.length - 1; index >= 0; index -= 1) {
-        remaining -= 1;
-        if (remaining === 0) {
-          return {start: starts[index]!, end};
-        }
+
+      const ordered = [...userOffsets].sort((left, right) => right - left);
+      if (ordered.length >= turns) {
+        start = ordered[turns - 1]!;
+        break;
       }
       if (from === 0) {
         break;
@@ -1985,17 +2015,33 @@ export class SessionResponseStore {
       upper = from;
       window *= 2;
     }
-    return {start: 0, end};
+
+    const tail: OffsetRecord[] = [];
+    for (const offset of [...records.keys()].sort((left, right) => left - right)) {
+      if (offset >= start) {
+        tail.push({offset, line: records.get(offset)!});
+      }
+    }
+    return {start, end, records: tail};
   }
 
-  /** Reads complete records of the pre-compaction backup in `[start, end)`. */
-  public async readBackupRecords(
-    start: number,
-    end: number,
-    onRecord: (offset: number, line: string) => void | Promise<void>,
-  ): Promise<number> {
+  /**
+   * The complete record ending just before `offset`, with its own offset.
+   *
+   * Readers that address the transcript by byte offset — a run cursor, a turn
+   * boundary — use this to see the record in front of a known boundary without
+   * walking the file from the beginning.
+   */
+  public async readRecordBefore(offset: number): Promise<OffsetRecord | undefined> {
     this.assertOpen();
-    return readTranscriptRecords(this.messagesBackupPath, start, end, onRecord);
+    const record = await this.readRecordEndingAt(this.messagesPath, offset);
+    if (record === undefined) {
+      return undefined;
+    }
+    const length = record.bytes[record.bytes.length - 1] === 0x0a
+      ? record.bytes.length - 1
+      : record.bytes.length;
+    return {offset: record.offset, line: record.bytes.subarray(0, length).toString("utf8")};
   }
 
   /**
@@ -2096,6 +2142,15 @@ export class SessionResponseStore {
 
   /** The last complete record ending at `end`, including its newline. */
   private async lastLineEndingAt(path: string, end: number): Promise<Buffer | undefined> {
+    const record = await this.readRecordEndingAt(path, end);
+    return record?.bytes;
+  }
+
+  /** Byte range of the last complete record ending at `end`, with its offset. */
+  private async readRecordEndingAt(
+    path: string,
+    end: number,
+  ): Promise<{offset: number; bytes: Buffer} | undefined> {
     if (end <= 0) {
       return undefined;
     }
@@ -2114,7 +2169,7 @@ export class SessionResponseStore {
         }
         filled += read.bytesRead;
       }
-      return filled === bytes.length ? bytes : undefined;
+      return filled === bytes.length ? {offset: start, bytes} : undefined;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return undefined;

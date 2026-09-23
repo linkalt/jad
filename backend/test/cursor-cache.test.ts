@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { SessionResponseStore } from "../src/persistence.js";
+import { BACKUP_TAIL_WINDOW_BYTES, SessionResponseStore } from "../src/persistence.js";
 import { normalizeWebUiSession } from "../src/plugins/web-ui/normalize-web-ui.js";
 import { WebUiSessionViewCache } from "../src/plugins/web-ui/view-cache.js";
 import type { JsonRecord, ResponseInputItem } from "../src/persistence.js";
@@ -317,6 +317,90 @@ test("projects the same messages whether or not records carry the provider reque
     await stripped.store.close();
     await rm(echoed.sessionDir, {recursive: true, force: true});
     await rm(stripped.sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("resolves each turn's start once, however often the view is read", async () => {
+  const { store, sessionDir, messagesPath } = await makeStore();
+  try {
+    const cache = new WebUiSessionViewCache(store, {snapshotTurns: 0, maxPageTurns: 50});
+    const original = store.readRecordBefore.bind(store);
+    let lookups = 0;
+    store.readRecordBefore = async (offset: number) => {
+      lookups += 1;
+      return original(offset);
+    };
+
+    // TRANSCRIPT opens two turns, each with a run of its own.
+    await cache.read();
+    assert.equal(lookups, 2);
+    await cache.read();
+    assert.equal(lookups, 2, "an unchanged transcript resolves nothing again");
+
+    // Appending a turn resolves the run it added, and nothing before it.
+    const appended: JsonRecord[] = [
+      userRecord("third question"),
+      completedRecord("r-3-1", 3, 1, [assistantItem("third answer", "msg-3-1")]),
+    ];
+    await appendFile(messagesPath, records(appended));
+    const grown = await cache.read();
+    assert.equal(lookups, 3);
+    assert.deepEqual(plain(grown.messages), plain(messagesOf([...TRANSCRIPT, ...appended]) as never));
+
+    // Replacing the transcript drops the resolved offsets with the index.
+    await writeTranscript(messagesPath, TRANSCRIPT);
+    await cache.read();
+    assert.equal(lookups, 5);
+    await store.close();
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("reads the backup's last turns once, in whole records", async () => {
+  const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-view-walk-"));
+  const messagesPath = join(sessionDir, "messages.jsonl");
+  const line = (record: JsonRecord) => `${JSON.stringify(record)}\n`;
+  const opening = [
+    userRecord("first question"),
+    completedRecord("r-1-1", 1, 1, [assistantItem("first answer", "msg-1-1")]),
+  ];
+  const closing = [
+    completedRecord("r-2-2", 2, 2, [assistantItem("second answer", "msg-2-2")]),
+    userRecord("third question"),
+    completedRecord("r-3-1", 3, 1, [assistantItem("third answer", "msg-3-1")]),
+  ];
+  // The second turn's opening record is sized to straddle the walk's first
+  // window, so a reader that does not start each window on a record boundary
+  // sees half of it.
+  const closingBytes = Buffer.byteLength(closing.map(line).join(""), "utf8");
+  const target = BACKUP_TAIL_WINDOW_BYTES - closingBytes + 1000;
+  const empty = line({...userRecord("second question"), content: [{type: "input_text", text: ""}]});
+  const padding = target - Buffer.byteLength(empty, "utf8");
+  const straddler = {...userRecord("second question"), content: [{type: "input_text", text: "x".repeat(padding)}]};
+  const written = [...opening, straddler, ...closing];
+  await writeFile(join(sessionDir, "messages.backup.jsonl"), written.map(line).join(""));
+
+  const store = await SessionResponseStore.open(sessionDir, {messagesPath});
+  try {
+    const tail = await store.readBackupTail(3);
+    assert.ok(tail !== undefined);
+    const bytes = await readFile(store.messagesBackupPath);
+    // The records cover the range exactly: no second read, and no record lost
+    // to a window boundary.
+    assert.equal(
+      tail.records.map((record) => `${record.line}\n`).join(""),
+      bytes.subarray(tail.start, tail.end).toString("utf8"),
+    );
+    assert.equal(tail.records[0]?.offset, tail.start);
+    assert.equal(tail.records.length, written.length);
+
+    const cache = new WebUiSessionViewCache(store, {snapshotTurns: 0, maxPageTurns: 50});
+    const history = await cache.readHistory(20);
+    assert.deepEqual(plain(history.messages), plain(messagesOf(written) as never));
+    await store.close();
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
   }
 });
 
