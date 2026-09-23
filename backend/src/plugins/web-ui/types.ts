@@ -64,6 +64,15 @@ export interface WebUiSessionRun {
   status: WebUiRunStatus;
 }
 
+/**
+ * Where the transcript of a snapshot stops: `has_more` reports that older turns
+ * exist, and `next_before` is the cursor that fetches them.
+ */
+export interface WebUiSessionPage {
+  has_more: boolean;
+  next_before: number | null;
+}
+
 export interface WebUiSessionSnapshot {
   id: string;
   session_id?: string;
@@ -78,4 +87,5 @@ export interface WebUiSessionSnapshot {
   };
   usage?: WebUiSessionUsage;
   run?: WebUiSessionRun;
+  page?: WebUiSessionPage;
 }

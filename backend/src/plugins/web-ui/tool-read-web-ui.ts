@@ -147,7 +147,7 @@ function toolOutputForUi(value: unknown): string {
 
 export function toolResultPartFromOutput(
   value: JsonRecord,
-  index: number,
+  key: string | number,
 ): WebUiToolResultPart | undefined {
   if (value.type !== "function_call_output") {
     return undefined;
@@ -156,7 +156,7 @@ export function toolResultPartFromOutput(
   const status = toolResultStatus(output, isMcpToolError(value.output));
   return {
     type: "tool_result",
-    callId: stringValue(value.call_id, `tool-call-${index}`),
+    callId: stringValue(value.call_id, `tool-call-${key}`),
     output,
     status: Array.isArray(value.output)
       ? status === "error" ? "error" : "success"

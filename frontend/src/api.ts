@@ -76,14 +76,30 @@ export interface SessionSnapshot {
   root_label?: string;
   session_name: string;
   turns: number;
-  messages: WebUiMessage[];
+  /** Absent in the session list: transcripts are fetched per session. */
+  messages?: WebUiMessage[];
   model?: {
     provider?: string;
     model?: string;
   };
   usage?: SessionUsageSummary;
   run?: SessionRunState;
+  /** Set when the transcript was capped; `next_before` fetches older turns. */
+  page?: SessionPage;
 }
+
+export interface SessionPage {
+  has_more: boolean;
+  next_before: number | null;
+}
+
+/**
+ * A response that may be answered with `304 Not Modified`: `value` is only
+ * present when the server had something new to send.
+ */
+export type ConditionalResult<T> =
+  | {kind: 'ok'; value: T; etag: string | undefined}
+  | {kind: 'not-modified'; etag: string | undefined};
 
 export interface ToolDefinition {
   id: string;
@@ -121,24 +137,61 @@ async function readError(response: Response): Promise<string> {
   }
 }
 
-export async function fetchSessions(): Promise<SessionSnapshot[]> {
-  const response = await fetch(apiUrl('/sessions'));
+/**
+ * Conditional request: the server is asked to revalidate a fingerprint the
+ * client already holds, and answers `304` when the state is unchanged.
+ */
+async function fetchConditional<T>(
+  path: string,
+  etag: string | undefined,
+  parse: (value: unknown) => T,
+): Promise<ConditionalResult<T>> {
+  const response = await fetch(apiUrl(path), {
+    headers: etag === undefined ? {} : {'If-None-Match': etag},
+  });
+  const responseEtag = response.headers.get('etag') ?? undefined;
+  if (response.status === 304) {
+    return {kind: 'not-modified', etag: responseEtag ?? etag};
+  }
   if (!response.ok) {
     throw new Error(await readError(response));
   }
-  const value = (await response.json()) as {sessions?: unknown};
-  if (!Array.isArray(value.sessions)) {
-    throw new Error('the server returned invalid sessions');
-  }
-  return value.sessions as SessionSnapshot[];
+  return {kind: 'ok', value: parse(await response.json()), etag: responseEtag};
 }
 
-export async function fetchSession(sessionId: string): Promise<SessionSnapshot> {
-  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}`));
-  if (!response.ok) {
-    throw new Error(await readError(response));
+export async function fetchSessions(
+  etag?: string,
+): Promise<ConditionalResult<SessionSnapshot[]>> {
+  return fetchConditional('/sessions', etag, value => {
+    if (!isRecord(value) || !Array.isArray(value.sessions)) {
+      throw new Error('the server returned invalid sessions');
+    }
+    return value.sessions as SessionSnapshot[];
+  });
+}
+
+export async function fetchSession(
+  sessionId: string,
+  options: {etag?: string; before?: number; turns?: number} = {},
+): Promise<ConditionalResult<SessionSnapshot>> {
+  const query = new URLSearchParams();
+  if (options.before !== undefined) {
+    query.set('before', String(options.before));
   }
-  return (await response.json()) as SessionSnapshot;
+  if (options.turns !== undefined) {
+    query.set('turns', String(options.turns));
+  }
+  const suffix = query.size === 0 ? '' : `?${query.toString()}`;
+  return fetchConditional(
+    `/sessions/${encodeURIComponent(sessionId)}${suffix}`,
+    options.etag,
+    value => {
+      if (!isRecord(value)) {
+        throw new Error('the server returned an invalid session');
+      }
+      return value as unknown as SessionSnapshot;
+    },
+  );
 }
 
 export async function fetchSessionTools(sessionId: string): Promise<ToolDefinition[]> {

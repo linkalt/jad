@@ -29,6 +29,40 @@ export function responseFromRecord(value: JsonRecord): JsonRecord {
   return isRecord(value.response) ? value.response : value;
 }
 
+/**
+ * Folds a compacted request item into the transcript shape the projection reads.
+ *
+ * Compaction stores turns as Responses API input items, which only occasionally
+ * look like a transcript record: the provider's own output items share the shape
+ * of `response.output` entries, so an assistant message, a function call, or a
+ * reasoning item is wrapped as the completed response that produced it. User
+ * messages and tool outputs are transcript records as they are.
+ */
+export function inputItemRecord(item: JsonRecord): JsonRecord | undefined {
+  if (typeof item.type !== "string") {
+    return undefined;
+  }
+  if (item.type === "message" && item.role === "user") {
+    return item;
+  }
+  if (item.type === "function_call_output") {
+    return item;
+  }
+  if (
+    item.type === "function_call" ||
+    item.type === "reasoning" ||
+    (item.type === "message" && item.role === "assistant")
+  ) {
+    const response: JsonRecord = {
+      output: [item],
+      ...(typeof item.id === "string" ? {id: item.id} : {}),
+      ...(typeof item.created_at === "number" ? {created_at: item.created_at} : {}),
+    };
+    return {type: "response.completed", response};
+  }
+  return undefined;
+}
+
 export function appendTextPart(
   parts: WebUiPart[],
   type: "reasoning" | "text",

@@ -133,6 +133,11 @@
           "pattern": "\\S",
           "description": "Durable per-session usage summary cache. Defaults to staging/usage-cache.json."
         },
+        "cursor_cache": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Provider-run offset index used to page the transcript. Defaults to staging/cursor-cache.json."
+        },
         "statecontext": {
           "type": "string",
           "pattern": "\\S",

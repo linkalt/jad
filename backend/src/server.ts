@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import {
   createServer,
@@ -14,6 +14,7 @@ import type OpenAI from "openai";
 import {
   ConfigError,
   SessionConfigLoader,
+  type SessionConfigPaths,
 } from "./config.js";
 import { AgentSession } from "./session.js";
 import {
@@ -28,16 +29,16 @@ import {
   loadSessionRoots,
   type SessionRoot,
 } from "./session-roots.js";
-import {
-  normalizeWebUiSession,
-  WebUiNormalizedRun,
-} from "./plugins/web-ui/normalize-web-ui.js";
+import {WebUiNormalizedRun} from "./plugins/web-ui/normalize-web-ui.js";
+import { sessionSettingsFromConfig } from "./plugins/web-ui/setting-web-ui.js";
+import { sessionUsageFromSummary } from "./plugins/web-ui/usage-web-ui.js";
 import type {
   WebUiMessage,
   WebUiSessionConfig,
   WebUiSessionRun,
   WebUiSessionSnapshot,
 } from "./plugins/web-ui/types.js";
+import {WebUiSessionViewCache} from "./plugins/web-ui/view-cache.js";
 import { SessionRunRegistry, type SessionRun } from "./run-registry.js";
 import { MessageStreamEmitter } from "./stream-emitter.js";
 
@@ -56,6 +57,12 @@ export interface AgentServerOptions {
   runStateRetentionMs?: number;
   /** Coalescing window for in-progress tool-call snapshots; 0 streams every delta. */
   toolStreamIntervalMs?: number;
+  /** Answer with `304` when a session snapshot is unchanged. */
+  conditionalRequests?: boolean;
+  /** Turns in a session snapshot; 0 returns the whole transcript. */
+  snapshotTurns?: number;
+  /** Largest number of turns one page request may return. */
+  maxPageTurns?: number;
 }
 
 export interface RunningAgentServer {
@@ -84,6 +91,69 @@ interface SessionHandle {
   directory: string;
   session: AgentSession;
   loader: SessionConfigLoader;
+  /** Incremental transcript projection, reused across snapshot requests. */
+  view: WebUiSessionViewCache;
+}
+
+/** Everything a snapshot's content is derived from, so a change is visible. */
+interface SessionStatePaths {
+  messages: string;
+  compactionCache: string;
+  usageCache: string;
+  setting: string;
+  model: string;
+}
+
+interface SessionPageInfo {
+  has_more: boolean;
+  next_before: number | null;
+}
+
+function sessionStatePaths(paths: SessionConfigPaths): SessionStatePaths {
+  return {
+    messages: paths.messages_path,
+    compactionCache: paths.compaction_cache_path,
+    usageCache: paths.usage_cache_path,
+    setting: paths.setting_path,
+    model: paths.model_path,
+  };
+}
+
+/**
+ * Fingerprint of the state a response was built from.
+ *
+ * Only `stat` is used, so revalidation costs a handful of syscalls instead of the
+ * transcript read it guards. The run descriptor is included because a run starts
+ * and stops without touching a file, but its in-flight snapshot is not: that
+ * belongs to the SSE stream, and the snapshot payload never contains live
+ * content.
+ */
+async function sessionStateVersion(
+  paths: SessionStatePaths,
+  run: WebUiSessionRun | undefined,
+): Promise<string> {
+  const parts: string[] = [];
+  for (const path of [
+    paths.messages,
+    paths.compactionCache,
+    paths.usageCache,
+    paths.setting,
+    paths.model,
+  ]) {
+    // A missing file is a state of its own: the payload omits whatever it holds.
+    let part = "-";
+    try {
+      const info = await stat(path);
+      part = `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+    } catch {
+      // Keep the placeholder.
+    }
+    parts.push(part);
+  }
+  parts.push(
+    run === undefined ? "-" : `${run.turn_id}:${run.status}:${run.started_at}`,
+  );
+  return `"${createHash("sha256").update(parts.join("|")).digest("hex")}"`;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -149,6 +219,88 @@ function sendJson(response: ServerResponse, statusCode: number, value: unknown):
     "Content-Length": Buffer.byteLength(body),
   });
   response.end(body);
+}
+
+function ifNoneMatchMatches(header: string | undefined, etag: string): boolean {
+  if (header === undefined) {
+    return false;
+  }
+  return header
+    .split(",")
+    .map((candidate) => candidate.trim())
+    .some((candidate) => candidate === "*" || candidate === etag || candidate === `W/${etag}`);
+}
+
+/**
+ * Answers `304` when the client already holds this state, without building the
+ * body. Returns true when the response was answered.
+ */
+function respondNotModified(
+  request: IncomingMessage,
+  response: ServerResponse,
+  etag: string,
+): boolean {
+  if (!ifNoneMatchMatches(request.headers["if-none-match"], etag)) {
+    return false;
+  }
+  response.writeHead(304, {
+    "ETag": etag,
+    "Cache-Control": "no-cache",
+  });
+  response.end();
+  return true;
+}
+
+/**
+ * Sends a body with the fingerprint it was built from. The response is
+ * storable-but-revalidating (`no-cache`) rather than `no-store`, because the body
+ * is only correct while that fingerprint still matches.
+ */
+function sendVersionedJson(
+  response: ServerResponse,
+  value: unknown,
+  etag: string,
+  conditional: boolean,
+): void {
+  if (response.writableEnded) {
+    return;
+  }
+  const body = JSON.stringify(value);
+  response.writeHead(200, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": conditional ? "no-cache" : "no-store",
+    ...(conditional ? {"ETag": etag} : {}),
+    "Content-Length": Buffer.byteLength(body),
+  });
+  response.end(body);
+}
+
+function parseCursorParameter(value: string | null, field: string): number | undefined {
+  if (value === null || value.length === 0) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new HttpError(400, `${field} must be a non-negative integer offset`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new HttpError(400, `${field} must be a non-negative integer offset`);
+  }
+  return parsed;
+}
+
+function parseTurnsParameter(value: string | null): number | undefined {
+  if (value === null || value.length === 0) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new HttpError(400, "turns must be a positive integer");
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new HttpError(400, "turns must be a positive integer");
+  }
+  return parsed;
 }
 
 function writeSse(response: ServerResponse, event: string, value: unknown): void {
@@ -218,7 +370,7 @@ async function sessionListingConfig(
   directory: string,
   sessionId: string,
   globalJadRoot: string,
-): Promise<{config: WebUiSessionConfig; messagesPath: string; messagesBackupPath: string; usageCachePath: string}> {
+): Promise<{config: WebUiSessionConfig; paths: SessionStatePaths; usageCachePath: string}> {
   const loader = new SessionConfigLoader(directory, {globalJadRoot});
   const settings = await loader.loadSettings();
   const model = await readJsonRecord(loader.paths.model_path);
@@ -237,62 +389,53 @@ async function sessionListingConfig(
             : sessionId,
       },
     },
-    messagesPath: loader.paths.messages_path,
-    messagesBackupPath: settings.paths.messages_backup,
+    paths: sessionStatePaths(loader.paths),
     usageCachePath: settings.paths.usage_cache,
   };
 }
 
-async function readListingMessages(messagesPath: string, backupPath?: string): Promise<JsonRecord[]> {
-  const [backup, active] = await Promise.all([
-    backupPath ? readJsonl(backupPath).catch(() => []) : Promise.resolve([]),
-    readJsonl(messagesPath).catch(() => []),
-  ]);
-  if (backup.length === active.length && backup.every((item, index) => JSON.stringify(item) === JSON.stringify(active[index]))) {
-    return active;
-  }
-  return [...backup, ...active];
-}
-
-async function readJsonl(path: string): Promise<JsonRecord[]> {
-  let contents: string;
-  try {
-    contents = await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-
-  const records: JsonRecord[] = [];
-  for (const line of contents.split(/\r?\n/)) {
-    if (line.trim().length === 0) {
-      continue;
-    }
-    let value: unknown;
-    try {
-      value = JSON.parse(line);
-    } catch (error) {
-      throw new Error(`invalid messages.jsonl record: ${errorMessage(error)}`);
-    }
-    if (!isRecord(value)) {
-      throw new Error("messages.jsonl record must be a JSON object");
-    }
-    records.push(value);
-  }
-  return records;
-}
-
+/** Session metadata plus whatever transcript the caller resolved. */
 function sessionSummary(
   location: SessionLocation,
   config: WebUiSessionConfig,
-  messages: JsonRecord[],
+  view: {messages: WebUiMessage[]; turns: number},
   usage?: SessionUsageSummary,
   run?: WebUiSessionRun,
+  page?: SessionPageInfo,
 ): WebUiSessionSnapshot {
+  const usageValue = sessionUsageFromSummary(usage);
   return {
-    ...normalizeWebUiSession(location.ref, config, messages, usage),
+    id: location.ref,
+    ...sessionSettingsFromConfig(config),
+    turns: view.turns,
+    messages: view.messages,
+    ...(usageValue === undefined ? {} : {usage: usageValue}),
+    ...(run === undefined ? {} : {run}),
+    ...(page === undefined ? {} : {page}),
+    session_id: location.sessionId,
+    root_id: location.root.id,
+    root_label: location.root.label,
+  };
+}
+
+/**
+ * A session without its transcript, which is what the list needs: the sidebar
+ * shows a name, a turn count, usage, and whether a run is live. Transcripts are
+ * fetched per session, and only for the one being viewed.
+ */
+function sessionListing(
+  location: SessionLocation,
+  config: WebUiSessionConfig,
+  turns: number,
+  usage?: SessionUsageSummary,
+  run?: WebUiSessionRun,
+): Omit<WebUiSessionSnapshot, "messages" | "page"> {
+  const usageValue = sessionUsageFromSummary(usage);
+  return {
+    id: location.ref,
+    ...sessionSettingsFromConfig(config),
+    turns,
+    ...(usageValue === undefined ? {} : {usage: usageValue}),
     ...(run === undefined ? {} : {run}),
     session_id: location.sessionId,
     root_id: location.root.id,
@@ -309,6 +452,9 @@ class AgentHttpApplication {
   };
   private readonly maxBodyBytes: number;
   private readonly toolStreamIntervalMs: number;
+  private readonly conditionalRequests: boolean;
+  private readonly snapshotTurns: number;
+  private readonly maxPageTurns: number;
   private readonly runs: SessionRunRegistry;
 
   public constructor(options: AgentServerOptions = {}) {
@@ -324,6 +470,10 @@ class AgentHttpApplication {
     this.maxBodyBytes = options.maxBodyBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.max_body_bytes;
     this.toolStreamIntervalMs =
       options.toolStreamIntervalMs ?? DEFAULT_ROOT_SERVER_SETTINGS.tool_stream_interval_ms;
+    this.conditionalRequests =
+      options.conditionalRequests ?? DEFAULT_ROOT_SERVER_SETTINGS.conditional_requests;
+    this.snapshotTurns = options.snapshotTurns ?? DEFAULT_ROOT_SERVER_SETTINGS.snapshot_turns;
+    this.maxPageTurns = options.maxPageTurns ?? DEFAULT_ROOT_SERVER_SETTINGS.max_page_turns;
     this.runs = new SessionRunRegistry(
       options.runStateRetentionMs ?? DEFAULT_ROOT_SERVER_SETTINGS.run_state_retention_ms,
     );
@@ -331,7 +481,8 @@ class AgentHttpApplication {
 
   public async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     response.setHeader("Access-Control-Allow-Origin", "*");
-    response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type, If-None-Match");
+    response.setHeader("Access-Control-Expose-Headers", "ETag");
     response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 
     if (request.method === "OPTIONS") {
@@ -363,13 +514,13 @@ class AgentHttpApplication {
       }
 
       if (request.method === "GET" && segments.length === 2) {
-        await this.handleSessionList(response);
+        await this.handleSessionList(request, response);
         return;
       }
 
       const sessionRef = validateSessionReference(segments[2] ?? "");
       if (request.method === "GET" && segments.length === 3) {
-        await this.handleSessionSnapshot(sessionRef, response);
+        await this.handleSessionSnapshot(sessionRef, request, response);
         return;
       }
 
@@ -517,12 +668,18 @@ class AgentHttpApplication {
         ...this.sessionOptions,
         globalJadRoot: location.root.globalJadRoot,
       });
+      const loader = new SessionConfigLoader(directory, {
+        globalJadRoot: location.root.globalJadRoot,
+      });
+      const settings = await loader.loadSettings();
       return {
         location,
         directory,
         session,
-        loader: new SessionConfigLoader(directory, {
-          globalJadRoot: location.root.globalJadRoot,
+        loader,
+        view: new WebUiSessionViewCache(session.store, settings.paths.compaction_cache, {
+          snapshotTurns: this.snapshotTurns,
+          maxPageTurns: this.maxPageTurns,
         }),
       };
     })();
@@ -535,9 +692,13 @@ class AgentHttpApplication {
     }
   }
 
-  private async handleSessionList(response: ServerResponse): Promise<void> {
+  private async handleSessionList(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
     const roots = await this.sessionRoots;
-    const sessions: WebUiSessionSnapshot[] = [];
+    const sessionLocations: Array<{location: SessionLocation; directory: string}> = [];
+    const versions: string[] = [];
     for (const root of roots) {
       const entries = await directoryEntries(root);
       for (const entry of entries) {
@@ -553,62 +714,95 @@ class AgentHttpApplication {
         if (!(await hasSessionSetting(directory))) {
           continue;
         }
-        try {
-          const listing = await sessionListingConfig(
-            directory,
-            entry.name,
-            root.globalJadRoot,
-          );
-          const [messages, usage] = await Promise.all([
-            readListingMessages(listing.messagesPath, listing.messagesBackupPath),
-            SessionResponseStore.readCachedUsageSummary(listing.usageCachePath),
-          ]);
-          sessions.push(
-            sessionSummary(
-              location,
-              listing.config,
-              messages,
-              usage,
-              this.runs.describe(location.ref),
-            ),
-          );
-        } catch (error) {
-          if (error instanceof ConfigError) {
-            console.warn(`Skipping invalid session ${location.ref}: ${error.message}`);
-            continue;
-          }
-          throw error;
+        sessionLocations.push({location, directory});
+        const loader = new SessionConfigLoader(directory, {
+          globalJadRoot: root.globalJadRoot,
+        });
+        versions.push(
+          `${location.ref}:${await sessionStateVersion(
+            sessionStatePaths(loader.paths),
+            this.runs.describe(location.ref),
+          )}`,
+        );
+      }
+    }
+    versions.sort();
+    const etag = `"${createHash("sha256").update(versions.join("|")).digest("hex")}"`;
+    // Revalidation comes first: an idle poll must not read any session config.
+    if (this.conditionalRequests && respondNotModified(request, response, etag)) {
+      return;
+    }
+
+    const sessions: Omit<WebUiSessionSnapshot, "messages" | "page">[] = [];
+    for (const {location, directory} of sessionLocations) {
+      try {
+        const listing = await sessionListingConfig(
+          directory,
+          location.sessionId,
+          location.root.globalJadRoot,
+        );
+        const usage = await SessionResponseStore.readCachedUsageSummary(
+          listing.usageCachePath,
+        );
+        sessions.push(
+          sessionListing(
+            location,
+            listing.config,
+            usage?.turn_count ?? 0,
+            usage,
+            this.runs.describe(location.ref),
+          ),
+        );
+      } catch (error) {
+        if (error instanceof ConfigError) {
+          console.warn(`Skipping invalid session ${location.ref}: ${error.message}`);
+          continue;
         }
+        throw error;
       }
     }
     sessions.sort((left, right) => String(left.id).localeCompare(String(right.id)));
-    sendJson(response, 200, { sessions });
+    sendVersionedJson(response, { sessions }, etag, this.conditionalRequests);
   }
 
   private async handleSessionSnapshot(
     id: string,
+    request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
+    const url = new URL(request.url ?? "/", "http://agent-harness.local");
+    const before = parseCursorParameter(url.searchParams.get("before"), "before");
+    const turns = parseTurnsParameter(url.searchParams.get("turns"));
     const handle = await this.getSession(id);
+    const run = this.runs.describe(handle.location.ref);
+    const etag = await sessionStateVersion(
+      sessionStatePaths(handle.loader.paths),
+      run,
+    );
+    // Revalidation comes first: answering `304` must not read the transcript,
+    // which is the whole point of a cheap poll.
+    if (this.conditionalRequests && respondNotModified(request, response, etag)) {
+      return;
+    }
+
     const config = await handle.loader.load();
-    const [messages, usage] = await Promise.all([
-      readListingMessages(
-        handle.loader.paths.messages_path,
-        config.settings.paths.messages_backup,
-      ),
+    const [view, usage] = await Promise.all([
+      handle.view.read({
+        ...(before === undefined ? {} : {before}),
+        ...(turns === undefined ? {} : {turns}),
+      }),
       handle.session.readUsageSummary(),
     ]);
-    sendJson(
-      response,
-      200,
-      sessionSummary(
-        handle.location,
-        config,
-        messages,
-        usage,
-        this.runs.describe(handle.location.ref),
-      ),
+    const page: SessionPageInfo = {has_more: view.hasMore, next_before: view.nextBefore};
+    const summary = sessionSummary(
+      handle.location,
+      config,
+      {messages: view.messages, turns: usage.turn_count},
+      usage,
+      run,
+      page,
     );
+    sendVersionedJson(response, summary, etag, this.conditionalRequests);
   }
 
   private async handleRunStream(id: string, response: ServerResponse): Promise<void> {
@@ -815,6 +1009,10 @@ export async function startAgentServer(
       options.runStateRetentionMs ?? serverSettings.run_state_retention_ms,
     toolStreamIntervalMs:
       options.toolStreamIntervalMs ?? serverSettings.tool_stream_interval_ms,
+    conditionalRequests:
+      options.conditionalRequests ?? serverSettings.conditional_requests,
+    snapshotTurns: options.snapshotTurns ?? serverSettings.snapshot_turns,
+    maxPageTurns: options.maxPageTurns ?? serverSettings.max_page_turns,
   });
   const environment = options.environment ?? process.env;
   const port = options.port ?? Number(environment.PORT ?? serverSettings.port);

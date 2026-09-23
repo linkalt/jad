@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -70,6 +70,9 @@ test("loads configurable root server settings", async () => {
       max_body_bytes: 2 * 1024 * 1024,
       run_state_retention_ms: 30_000,
       tool_stream_interval_ms: 120,
+      conditional_requests: true,
+      snapshot_turns: 24,
+      max_page_turns: 50,
     });
 
     await writeFile(
@@ -88,6 +91,40 @@ test("loads configurable root server settings", async () => {
     await assert.rejects(
       () => loadRootServerSettings({rootSettingPath: settingPath}),
       /server\.run_state_retention_ms/,
+    );
+
+    await writeFile(
+      settingPath,
+      JSON.stringify({
+        server: {conditional_requests: "yes", snapshot_turns: -1, max_page_turns: 0},
+        session_roots: [{path: ".jad/sessions"}],
+      }),
+    );
+    await assert.rejects(
+      () => loadRootServerSettings({rootSettingPath: settingPath}),
+      /server\.conditional_requests/,
+    );
+    await writeFile(
+      settingPath,
+      JSON.stringify({
+        server: {snapshot_turns: -1},
+        session_roots: [{path: ".jad/sessions"}],
+      }),
+    );
+    await assert.rejects(
+      () => loadRootServerSettings({rootSettingPath: settingPath}),
+      /server\.snapshot_turns/,
+    );
+    await writeFile(
+      settingPath,
+      JSON.stringify({
+        server: {max_page_turns: 0},
+        session_roots: [{path: ".jad/sessions"}],
+      }),
+    );
+    await assert.rejects(
+      () => loadRootServerSettings({rootSettingPath: settingPath}),
+      /server\.max_page_turns/,
     );
   } finally {
     await rm(root, {recursive: true, force: true});
@@ -745,17 +782,21 @@ test("serves sessions using configured model and transcript paths", async () => 
       type: "response.completed",
       response: {
         id: "configured-response",
+        status: "completed",
         usage: {
           input_tokens: 23,
           output_tokens: 7,
           total_tokens: 30,
           input_tokens_details: {cached_tokens: 3},
         },
-        output: [{
-          type: "message",
-          role: "assistant",
-          content: [{type: "output_text", text: "from configured transcript"}],
-        }],
+        output: [
+          {type: "reasoning", content: [{type: "reasoning_text", text: "configured reasoning"}]},
+          {
+            type: "message",
+            role: "assistant",
+            content: [{type: "output_text", text: "from configured transcript"}],
+          },
+        ],
       },
     })}\n`,
   );
@@ -782,7 +823,7 @@ test("serves sessions using configured model and transcript paths", async () => 
       sessions: Array<{
         id: string;
         model: {provider: string; model: string};
-        messages: Array<{text: string}>;
+        turns: number;
         usage?: Record<string, unknown>;
       }>;
     };
@@ -791,7 +832,11 @@ test("serves sessions using configured model and transcript paths", async () => 
       provider: "configured-provider",
       model: "configured-model",
     });
-    assert.equal(list.sessions[0]?.messages[0]?.text, "from configured transcript");
+    // The list is metadata only: a transcript is fetched per session.
+    assert.equal(
+      Object.hasOwn(list.sessions[0] ?? {}, "messages"),
+      false,
+    );
     assert.deepEqual(list.sessions[0]?.usage, {
       completed_responses: 1,
       responses_with_usage: 1,
@@ -1788,7 +1833,9 @@ test("stop aborts the run in flight and commits no response for it", async () =>
 
     const after = (await (await fetch(`${baseUrl}/api/sessions/session1`)).json()) as Record<string, unknown>;
     assert.equal((after.run as Record<string, unknown>).status, "aborted");
-    assert.equal(after.turns, 0);
+    // Turns count user submissions, so the stopped round still counts as one
+    // even though no response was committed for it.
+    assert.equal(after.turns, 1);
     // The user's own input stays in the transcript; only the assistant response
     // for the stopped round is missing.
     const afterMessages = after.messages as Record<string, unknown>[];
@@ -1961,5 +2008,160 @@ test("streams tool arguments over SSE before the call completes", async () => {
   } finally {
     await running.close();
     await rm(root, {recursive: true, force: true});
+  }
+});
+
+/** A session directory with two turns and no provider involvement. */
+async function writePagingSession(
+  root: string,
+): Promise<{sessionDir: string; messagesPath: string}> {
+  const sessionDir = join(root, "session1");
+  const messagesPath = join(sessionDir, "messages.jsonl");
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({ schema_version: 1, provider: "fake", model: "fake-model" }),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({ schema_version: 1, session_name: "paging", cwd: sessionDir }),
+  );
+  const turnRecord = (text: string, id: string, turn: number): Record<string, unknown> => ({
+    ...completedEvent(
+      [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }],
+      id,
+    ),
+    session_turn: turn,
+    session_step: 1,
+  });
+  const records = [
+    { type: "message", role: "user", content: [{ type: "input_text", text: "first question" }] },
+    turnRecord("first answer", "r-1-1", 1),
+    { type: "message", role: "user", content: [{ type: "input_text", text: "second question" }] },
+    turnRecord("second answer", "r-2-1", 2),
+  ];
+  await writeFile(messagesPath, records.map((record) => `${JSON.stringify(record)}\n`).join(""));
+  return { sessionDir, messagesPath };
+}
+
+test("revalidates session requests instead of resending unchanged transcripts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-conditional-"));
+  const { messagesPath } = await writePagingSession(root);
+  const running = createAgentServer({ sessionsDir: root, snapshotTurns: 1 });
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const first = await fetch(`${baseUrl}/api/sessions/session1`);
+    assert.equal(first.status, 200);
+    const etag = first.headers.get("etag");
+    assert.ok(etag);
+    assert.equal(first.headers.get("cache-control"), "no-cache");
+    const snapshot = (await first.json()) as {
+      messages: Array<{ text: string }>;
+      page: { has_more: boolean; next_before: number | null };
+    };
+    assert.equal(snapshot.page.has_more, true);
+    assert.equal(typeof snapshot.page.next_before, "number");
+
+    // Revalidation: unchanged state, no body.
+    const revalidated = await fetch(`${baseUrl}/api/sessions/session1`, {
+      headers: { "If-None-Match": etag },
+    });
+    assert.equal(revalidated.status, 304);
+    assert.equal(await revalidated.text(), "");
+    assert.equal(revalidated.headers.get("etag"), etag);
+    assert.equal(revalidated.headers.get("content-length"), null);
+
+    // The list revalidates the same way and carries no transcript.
+    const list = await fetch(`${baseUrl}/api/sessions`);
+    const listEtag = list.headers.get("etag");
+    assert.ok(listEtag);
+    const listBody = (await list.json()) as { sessions: Array<Record<string, unknown>> };
+    assert.equal(Object.hasOwn(listBody.sessions[0]!, "messages"), false);
+    assert.equal((listBody.sessions[0] as { turns: number }).turns, 2);
+    const listRevalidated = await fetch(`${baseUrl}/api/sessions`, {
+      headers: { "If-None-Match": listEtag },
+    });
+    assert.equal(listRevalidated.status, 304);
+
+    // A new turn changes both fingerprints.
+    await appendFile(messagesPath, `${JSON.stringify({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "third question" }],
+    })}\n`);
+    const changed = await fetch(`${baseUrl}/api/sessions/session1`, {
+      headers: { "If-None-Match": etag },
+    });
+    assert.equal(changed.status, 200);
+    assert.notEqual(changed.headers.get("etag"), etag);
+    const changedList = await fetch(`${baseUrl}/api/sessions`, {
+      headers: { "If-None-Match": listEtag },
+    });
+    assert.equal(changedList.status, 200);
+  } finally {
+    await running.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reads older turns through a cursor and rejects invalid cursors", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-paging-"));
+  await writePagingSession(root);
+  const running = createAgentServer({ sessionsDir: root, snapshotTurns: 1, maxPageTurns: 5 });
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const newest = (await (await fetch(`${baseUrl}/api/sessions/session1`)).json()) as {
+      messages: Array<{ text: string }>;
+      page: { has_more: boolean; next_before: number | null };
+    };
+    // A turn includes the user message that opens it.
+    assert.deepEqual(
+      newest.messages.map((message) => message.text),
+      ["second question", "second answer"],
+    );
+
+    const cursor = newest.page.next_before!;
+    const older = (await (await fetch(
+      `${baseUrl}/api/sessions/session1?before=${cursor}&turns=5`,
+    )).json()) as {
+      messages: Array<{ text: string }>;
+      page: { has_more: boolean; next_before: number | null };
+    };
+    assert.deepEqual(
+      older.messages.map((message) => message.text),
+      ["first question", "first answer"],
+    );
+    assert.equal(older.page.has_more, false);
+    assert.equal(older.page.next_before, null);
+
+    const invalid = await fetch(`${baseUrl}/api/sessions/session1?before=later`);
+    assert.equal(invalid.status, 400);
+    const invalidTurns = await fetch(`${baseUrl}/api/sessions/session1?turns=0`);
+    assert.equal(invalidTurns.status, 400);
+
+    // A page is limited by max_page_turns, so one request cannot pull the world.
+    const limited = (await (await fetch(
+      `${baseUrl}/api/sessions/session1?turns=100`,
+    )).json()) as { messages: unknown[]; page: { has_more: boolean } };
+    assert.equal(limited.page.has_more, false);
+  } finally {
+    await running.close();
+    await rm(root, { recursive: true, force: true });
   }
 });

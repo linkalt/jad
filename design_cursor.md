@@ -1,5 +1,41 @@
 # Cursor cache — one entry per provider run
 
+## Built
+
+Implemented as described below, with these decisions settled during the build:
+
+- **The reader pages by offset instead of caching a prefix.** A snapshot reads the
+  turns it needs from the transcript, starting at a turn boundary, so the bytes
+  before the window are never read at all. The compacted prefix is the only piece
+  that is cached, keyed by the compaction cache's identity.
+- **The table of turns is never materialized.** `turnStarts()` derives it per
+  request from the cursor entries: a step-1 run marks a turn, and the user message
+  in front of it (one backwards read) is where its records begin.
+- **Revalidation happens before the payload is built.** A `304` costs five `stat`
+  calls plus the run descriptor — no transcript read, no usage refresh.
+- **`turns` counts user submissions** (from the usage summary), not provider
+  rounds: it is the one number the list can produce without touching a transcript,
+  and it matches the transcript's own `session_turn` numbering.
+- **The scan tolerates JSON whitespace.** The cheap prefilter looks for the
+  `"response.completed"` literal rather than this store's compact serialization,
+  so a transcript written by something else is still indexed.
+
+Measured on a copy of the session in this repository (transcript 5.4 MB, 124 runs,
+`snapshot_turns` 3 / `max_page_turns` 4):
+
+| | before | after |
+|---|---|---|
+| `GET /api/sessions` | 2,554,719 B / 137 ms | **1,237 B / 3 ms** |
+| the same request, unchanged | 2,550,455 B / 124 ms | **304, 0 B / 2 ms** |
+| `GET /api/sessions/<ref>` | 2,550,455 B / 132 ms | 1,218,938 B / 63 ms |
+| the same request, unchanged | 2,550,455 B / 136 ms | **304, 0 B / 0.8 ms** |
+| cursor index, first build | — | 33 ms (one scan) |
+| cursor index, nothing changed | — | 0.08 ms |
+| cursor index, one round appended | — | skips unchanged bytes, rewrites 5 KB |
+
+The remaining snapshot cost is the newest turns' own bytes (reasoning, tool
+arguments, tool results); trimming those is the follow-up listed at the end.
+
 ## Problem
 
 Every UI read re-reads and re-parses the whole transcript, and the browser pulls the result every
@@ -92,25 +128,31 @@ Validation mirrors `cacheMatches` (`persistence.ts:1566`): device/inode, `size >
 ## Readers
 
 **UI view cache (per session, in memory).** `messages = head + tail`, where:
-- `head` = the compacted prefix from `compaction-cache.json` `items` / `assistant_final_items`
-  (immutable, 60 KB today) — this is what keeps `messages.backup.jsonl` out of the read path;
-- `tail` = records from `runs[0].offset`, normalized incrementally.
+- `head` = the compacted prefix from `compaction-cache.json` `items` — this is what keeps
+  `messages.backup.jsonl` out of the read path. Request items are folded into the projection by
+  wrapping provider output items the way the provider would have produced them, so the same reducer
+  builds both parts. It is cached in memory under the compaction cache's identity;
+- `tail` = records in `[start, end)` of the transcript, where `start` is the oldest turn in the
+  window. Nothing before it is read.
 
-Incremental normalize rule: reuse everything up to the **start of the last turn** and re-normalize
-only that turn, because a tool result attaches backwards to the message that opened the call.
+A tool result attaches backwards to the message that opened the call, which is why a window always
+begins at a turn boundary: the reducer's state at that point is exactly "no calls pending", so a
+window normalizes to the same messages as a full read.
 
-**Paging.** `before=<offset>` — binary search `runs` by offset, slice whole turns. The union of pages
-equals a full normalization.
+**Paging.** `before=<offset>&turns=<n>` — the cursor is a byte offset, and the window is the last
+`turns` turns that end before it. Pages tile the transcript exactly (union of pages == full read),
+and message ids are derived from byte offsets, so a message keeps its id between a page and a full
+read.
 
 **HTTP.**
-- `ETag` fingerprint = transcript (device, inode, size, mtimeNs) + cache offset + run descriptor
-  `{turn_id, status, started_at, finished_at}`. **The run's in-flight snapshot is excluded** — it
-  changes every few hundred ms and belongs to the SSE stream; the payload only ever contains
-  committed content, so the invariant is: *ETag ≡ committed state, SSE ≡ live state*.
-- `If-None-Match` ⇒ `304`, no body, no `Content-Length`; explicit handling in `fetchSessions`, plus
-  `ETag` + `Cache-Control: no-cache` so any client may revalidate.
-- The session **list** stops shipping messages (counts + last message id only); only the viewed
-  session's snapshot carries a transcript.
+- `ETag` fingerprint = transcript (device, inode, size, mtime) + compaction cache + usage cache +
+  setting + model + run descriptor `{turn_id, status, started_at}`. **The run's in-flight snapshot is
+  excluded** — it changes every few hundred ms and belongs to the SSE stream; the payload only ever
+  contains committed content, so the invariant is: *ETag ≡ committed state, SSE ≡ live state*.
+- `If-None-Match` ⇒ `304` before anything is read; 200 responses carry `ETag` +
+  `Cache-Control: no-cache`, so a client that stores the body revalidates instead of trusting it.
+- The session **list** ships metadata only (name, model, turns, usage, run); the transcript of the
+  viewed session is fetched from the snapshot endpoint.
 - While attached to a run, the poll backs off (`session_refresh_interval_ms_streaming`), because the
   SSE already delivers committed tool results; it refreshes once on `done`.
 
@@ -120,17 +162,19 @@ equals a full normalization.
 |---|---|---|
 | `paths.cursor_cache` | `staging/cursor-cache.json` | cache location, per path profile |
 | `server.conditional_requests` | `true` | ETag/304 |
-| `session_refresh_interval_ms_streaming` | `30000` | poll cadence while attached to a run |
-| `server.view_cache_sessions` | `4` | how many normalized views stay in memory |
+| `server.snapshot_turns` | `24` | newest turns in a snapshot; `0` returns everything |
+| `server.max_page_turns` | `50` | largest page one cursor request may return |
+| `session_refresh_interval_ms_streaming` | `30000` | frontend poll cadence while attached to a run |
+| `transcript_page_turns` | `5` | turns fetched per "load earlier messages" click |
 
 ## Effects
 
-| Case | Today | After |
+| Case | Before | After |
 |---|---|---|
-| idle poll | 160 ms, 3 MB | **304, 0 bytes** |
-| one step commits | 160 ms, 3 MB | ~1 ms, delta-sized body |
+| idle poll | 160 ms, 3 MB | **304, 0 bytes, ~1 ms** |
+| one step commits | 160 ms, 3 MB | the window's own bytes, index update is sub-ms |
 | load an older turn | impossible | seek + one turn |
-| cold start | 160 ms | one 85 ms scan, then incremental |
+| cold start | 160 ms | one scan of the transcript, then incremental |
 
 ## Out of scope (follow-ups)
 
@@ -140,11 +184,12 @@ equals a full normalization.
 
 ## Verification
 
-1. **A/B correctness:** normalized output of the cached reader must be identical to today's
-   implementation for the same transcript (byte-compare).
-2. **Work count:** instrument parsed records/bytes — expect **1 record per step commit**, not 841.
-3. **Paging:** union of pages == full normalization.
-4. **Invalidation:** simulate an inode change (compaction replace) and a truncation → rebuild, output
-   still identical, stale cursors rejected.
-5. **HTTP:** idle tab → `304`; a stepping turn on the playground → cheap 200s; attach/stop flows
-   unchanged.
+1. **A/B correctness:** the projection matches `normalizeWebUiSession` over the same records, and a
+   session without compaction matches the pre-change reader exactly (`cursor-cache.test.ts`).
+2. **Work count:** an unchanged transcript rewrites nothing; an appended round adds one entry and
+   reads only the appended bytes.
+3. **Paging:** union of pages == full normalization, and message ids stay stable across both.
+4. **Invalidation:** a replaced (inode change) or truncated transcript rebuilds; a torn trailing
+   record is left for the next read; records without a session turn are ignored.
+5. **HTTP:** idle tab → `304` with an empty body; an append → `200` with a new ETag; a cursor page →
+   the older turns; invalid cursors → `400` (`server.test.ts`).

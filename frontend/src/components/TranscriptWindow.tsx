@@ -99,9 +99,12 @@ export function useTranscriptWindow<Message extends {id: string}>({
 
 export function EarlierMessagesControl({
   hiddenCount,
+  hasMore,
   onReveal,
 }: {
   hiddenCount: number;
+  /** Older turns are on the server and still have to be fetched. */
+  hasMore?: boolean;
   onReveal: (node: HTMLElement | null) => void;
 }) {
   return (
@@ -114,7 +117,11 @@ export function EarlierMessagesControl({
         onClick={event => onReveal(event.currentTarget)}
       />
       <Text type="supporting" color="secondary">
-        {hiddenCount} older {hiddenCount === 1 ? 'message is' : 'messages are'} not shown
+        {hiddenCount > 0
+          ? `${hiddenCount} older ${hiddenCount === 1 ? 'message is' : 'messages are'} not shown`
+          : hasMore
+            ? 'Older turns are stored on the server'
+            : ''}
       </Text>
     </VStack>
   );

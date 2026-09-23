@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-import {HISTORY_CACHE_FILE, USAGE_CACHE_FILE} from "./persistence.js";
+import {CURSOR_CACHE_FILE, HISTORY_CACHE_FILE, USAGE_CACHE_FILE} from "./persistence.js";
 import type {DurabilityMode, JsonRecord} from "./persistence.js";
 import {
   SPILL_PLACEHOLDERS,
@@ -293,6 +293,7 @@ export interface SessionStoragePaths extends JsonRecord {
   compaction_cache: string;
   history_cache: string;
   usage_cache: string;
+  cursor_cache: string;
   model: string;
   staging: string;
   http_debug: string;
@@ -363,6 +364,7 @@ export interface SessionConfigPaths {
   compaction_cache_path: string;
   history_cache_path: string;
   usage_cache_path: string;
+  cursor_cache_path: string;
   statecontext_path: string;
   staging_dir: string;
   http_debug_dir: string;
@@ -2347,6 +2349,7 @@ const SESSION_PATH_FIELDS = [
   "compaction_cache",
   "history_cache",
   "usage_cache",
+  "cursor_cache",
   "statecontext",
   "model",
   "staging",
@@ -2386,11 +2389,12 @@ function normalizeStoragePaths(
     const compactionCache = pathValue("compaction_cache", "staging/compaction-cache.json");
     const historyCache = pathValue("history_cache", join(staging, HISTORY_CACHE_FILE));
     const usageCache = pathValue("usage_cache", join(staging, USAGE_CACHE_FILE));
+    const cursorCache = pathValue("cursor_cache", join(staging, CURSOR_CACHE_FILE));
     const statecontext = pathValue("statecontext", "staging/statecontext.json");
     const model = pathValue("model", "model.json");
-    const distinctFilePaths = new Set([messages, messagesBackup, compactionCache, historyCache, usageCache, statecontext, model]);
-    if (distinctFilePaths.size !== 7) {
-      throw new ConfigError(`${profilePath}: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.statecontext, and paths.model must be different files`);
+    const distinctFilePaths = new Set([messages, messagesBackup, compactionCache, historyCache, usageCache, cursorCache, statecontext, model]);
+    if (distinctFilePaths.size !== 8) {
+      throw new ConfigError(`${profilePath}: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.statecontext, and paths.model must be different files`);
     }
     const extras = Object.fromEntries(Object.entries(configuredPaths).filter(([field]) => !SESSION_PATH_FIELD_SET.has(field)));
     return {
@@ -2400,6 +2404,7 @@ function normalizeStoragePaths(
       compaction_cache: compactionCache,
       history_cache: historyCache,
       usage_cache: usageCache,
+      cursor_cache: cursorCache,
       statecontext,
       model,
       staging,
@@ -2593,6 +2598,7 @@ export class SessionConfigLoader {
       compaction_cache_path: join(absoluteSessionDir, "staging", "compaction-cache.json"),
       history_cache_path: join(absoluteSessionDir, "staging", HISTORY_CACHE_FILE),
       usage_cache_path: join(absoluteSessionDir, "staging", USAGE_CACHE_FILE),
+      cursor_cache_path: join(absoluteSessionDir, "staging", CURSOR_CACHE_FILE),
       statecontext_path: join(absoluteSessionDir, "staging", "statecontext.json"),
       staging_dir: join(absoluteSessionDir, "staging"),
       http_debug_dir: join(absoluteSessionDir, "debug", "http"),
@@ -2626,6 +2632,7 @@ export class SessionConfigLoader {
     this.paths.compaction_cache_path = storagePaths.compaction_cache;
     this.paths.history_cache_path = storagePaths.history_cache;
     this.paths.usage_cache_path = storagePaths.usage_cache;
+    this.paths.cursor_cache_path = storagePaths.cursor_cache;
     this.paths.statecontext_path = storagePaths.statecontext;
     this.paths.staging_dir = storagePaths.staging;
     this.paths.http_debug_dir = storagePaths.http_debug;

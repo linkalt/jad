@@ -103,7 +103,7 @@ function mergeCompletedParts(
   return parts;
 }
 
-function userMessage(value: JsonRecord, index: number): WebUiMessage | undefined {
+function userMessage(value: JsonRecord, key: string): WebUiMessage | undefined {
   if (value.type !== "message" || value.role !== "user") {
     return undefined;
   }
@@ -112,12 +112,163 @@ function userMessage(value: JsonRecord, index: number): WebUiMessage | undefined
     return undefined;
   }
   return {
-    id: `session-user-${index}`,
+    id: `session-user-${key}`,
     sender: "user",
     text,
     timestamp: timestampFromRecord(value),
     parts: [{ type: "text", text }],
   };
+}
+
+/**
+ * True for the record that opens a turn. A user message resets the reducer
+ * state, which is what makes turn boundaries reusable between incremental
+ * reads: everything before one is immutable.
+ */
+export function isUserTurnRecord(record: JsonRecord): boolean {
+  return record.type === "message" && record.role === "user";
+}
+
+/**
+ * Mutable reducer state for the transcript projection.
+ *
+ * Message indices are absolute, so a state captured at a turn boundary can be
+ * resumed later with more records.
+ */
+export interface WebUiSessionState {
+  messages: WebUiMessage[];
+  toolMessages: Map<string, number>;
+  activeToolMessageIndex: number | undefined;
+}
+
+export function createWebUiSessionState(): WebUiSessionState {
+  return {messages: [], toolMessages: new Map(), activeToolMessageIndex: undefined};
+}
+
+/** Copies the state so a cached view can be extended without being mutated. */
+export function cloneWebUiSessionState(state: WebUiSessionState): WebUiSessionState {
+  return {
+    messages: [...state.messages],
+    toolMessages: new Map(state.toolMessages),
+    activeToolMessageIndex: state.activeToolMessageIndex,
+  };
+}
+
+/**
+ * Folds one transcript record into the projection.
+ *
+ * `key` identifies the record for synthetic message ids; callers pass the record
+ * index, or the byte offset when reading the transcript incrementally, so ids
+ * stay stable no matter which slice produced them.
+ */
+export function reduceWebUiRecord(
+  state: WebUiSessionState,
+  record: JsonRecord,
+  key: string,
+): void {
+  const messages = state.messages;
+  const user = userMessage(record, key);
+  if (user) {
+    state.toolMessages.clear();
+    state.activeToolMessageIndex = undefined;
+    messages.push(user);
+    return;
+  }
+
+  const result = toolResultPartFromOutput(record, key);
+  if (result) {
+    const messageIndex = state.toolMessages.get(result.callId);
+    if (messageIndex !== undefined) {
+      const message = messages[messageIndex];
+      if (message) {
+        const parts = [...message.parts, result];
+        messages[messageIndex] = {
+          ...message,
+          parts,
+          ...fieldsFromParts(parts),
+        };
+      }
+    } else {
+      messages.push(
+        assistantMessage(
+          `session-tool-${key}`,
+          [result],
+          timestampFromRecord(record),
+          "complete",
+        ),
+      );
+    }
+    return;
+  }
+
+  if (record.type !== "response.completed") {
+    return;
+  }
+  const response = responseFromRecord(record);
+  const parts = responseParts(record);
+  if (parts.length === 0) {
+    return;
+  }
+
+  const callParts = parts.filter(
+    (part): part is WebUiToolCallPart => part.type === "tool_call",
+  );
+  if (callParts.length > 0) {
+    let messageIndex = state.activeToolMessageIndex;
+    const activeMessage =
+      messageIndex === undefined ? undefined : messages[messageIndex];
+    if (messageIndex === undefined || !activeMessage) {
+      messageIndex = messages.length;
+      messages.push(
+        assistantMessage(
+          typeof response.id === "string"
+            ? response.id
+            : `session-assistant-${key}`,
+          parts,
+          timestampFromRecord(response),
+          "complete",
+        ),
+      );
+    } else {
+      const mergedParts = [...activeMessage.parts, ...parts];
+      messages[messageIndex] = {
+        ...activeMessage,
+        parts: mergedParts,
+        ...fieldsFromParts(mergedParts),
+      };
+    }
+    state.activeToolMessageIndex = messageIndex;
+    for (const part of callParts) {
+      state.toolMessages.set(part.callId, messageIndex);
+    }
+    return;
+  }
+
+  if (state.activeToolMessageIndex !== undefined) {
+    const activeMessage = messages[state.activeToolMessageIndex];
+    if (activeMessage?.parts.some((part) => part.type === "tool_call")) {
+      const mergedParts = [...activeMessage.parts, ...parts];
+      messages[state.activeToolMessageIndex] = {
+        ...activeMessage,
+        parts: mergedParts,
+        ...fieldsFromParts(mergedParts),
+      };
+      state.toolMessages.clear();
+      state.activeToolMessageIndex = undefined;
+      return;
+    }
+  }
+
+  messages.push(
+    assistantMessage(
+      typeof response.id === "string"
+        ? response.id
+        : `session-assistant-${key}`,
+      parts,
+      timestampFromRecord(response),
+      "complete",
+    ),
+  );
 }
 
 export function normalizeWebUiSession(
@@ -126,113 +277,9 @@ export function normalizeWebUiSession(
   records: readonly JsonRecord[],
   usageSummary?: SessionUsageSummary,
 ): WebUiSessionSnapshot {
-  const messages: WebUiMessage[] = [];
-  const toolMessages = new Map<string, number>();
-  let activeToolMessageIndex: number | undefined;
-
+  const state = createWebUiSessionState();
   records.forEach((record, index) => {
-    const user = userMessage(record, index);
-    if (user) {
-      toolMessages.clear();
-      activeToolMessageIndex = undefined;
-      messages.push(user);
-      return;
-    }
-
-    const result = toolResultPartFromOutput(record, index);
-    if (result) {
-      const messageIndex = toolMessages.get(result.callId);
-      if (messageIndex !== undefined) {
-        const message = messages[messageIndex];
-        if (message) {
-          const parts = [...message.parts, result];
-          messages[messageIndex] = {
-            ...message,
-            parts,
-            ...fieldsFromParts(parts),
-          };
-        }
-      } else {
-        messages.push(
-          assistantMessage(
-            `session-tool-${index}`,
-            [result],
-            timestampFromRecord(record),
-            "complete",
-          ),
-        );
-      }
-      return;
-    }
-
-    if (record.type !== "response.completed") {
-      return;
-    }
-    const response = responseFromRecord(record);
-    const parts = responseParts(record);
-    if (parts.length === 0) {
-      return;
-    }
-
-    const callParts = parts.filter(
-      (part): part is WebUiToolCallPart => part.type === "tool_call",
-    );
-    if (callParts.length > 0) {
-      let messageIndex = activeToolMessageIndex;
-      const activeMessage =
-        messageIndex === undefined ? undefined : messages[messageIndex];
-      if (messageIndex === undefined || !activeMessage) {
-        messageIndex = messages.length;
-        messages.push(
-          assistantMessage(
-            typeof response.id === "string"
-              ? response.id
-              : `session-assistant-${index}`,
-            parts,
-            timestampFromRecord(response),
-            "complete",
-          ),
-        );
-      } else {
-        const mergedParts = [...activeMessage.parts, ...parts];
-        messages[messageIndex] = {
-          ...activeMessage,
-          parts: mergedParts,
-          ...fieldsFromParts(mergedParts),
-        };
-      }
-      activeToolMessageIndex = messageIndex;
-      for (const part of callParts) {
-        toolMessages.set(part.callId, messageIndex);
-      }
-      return;
-    }
-
-    if (activeToolMessageIndex !== undefined) {
-      const activeMessage = messages[activeToolMessageIndex];
-      if (activeMessage?.parts.some((part) => part.type === "tool_call")) {
-        const mergedParts = [...activeMessage.parts, ...parts];
-        messages[activeToolMessageIndex] = {
-          ...activeMessage,
-          parts: mergedParts,
-          ...fieldsFromParts(mergedParts),
-        };
-        toolMessages.clear();
-        activeToolMessageIndex = undefined;
-        return;
-      }
-    }
-
-    messages.push(
-      assistantMessage(
-        typeof response.id === "string"
-          ? response.id
-          : `session-assistant-${index}`,
-        parts,
-        timestampFromRecord(response),
-        "complete",
-      ),
-    );
+    reduceWebUiRecord(state, record, String(index));
   });
 
   const usage = sessionUsageFromSummary(usageSummary);
@@ -240,7 +287,7 @@ export function normalizeWebUiSession(
     id,
     ...sessionSettingsFromConfig(config),
     turns: records.filter((record) => record.type === "response.completed").length,
-    messages,
+    messages: state.messages,
     ...(usage === undefined ? {} : { usage }),
   };
 }

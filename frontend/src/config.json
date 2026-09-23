@@ -44,5 +44,7 @@
   "tool_title_value_max_chars": 24,
   "copy_feedback_duration_ms": 2000,
   "mock_run_delay_ms": 1100,
-  "session_refresh_interval_ms": 5000
+  "session_refresh_interval_ms": 5000,
+  "transcript_page_turns": 5,
+  "session_refresh_interval_ms_streaming": 30000
 }

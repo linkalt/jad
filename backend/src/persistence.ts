@@ -36,6 +36,8 @@ export interface SessionResponseStoreOptions {
   historyCachePath?: string;
   /** Durable usage-summary cache; relative paths resolve from the session directory. */
   usageCachePath?: string;
+  /** Replaceable provider-run offset index; relative paths resolve from the session directory. */
+  cursorCachePath?: string;
   /** Latest pre-compaction transcript backup. */
   messagesBackupPath?: string;
   /** Replaceable state-context snapshot file. */
@@ -180,6 +182,35 @@ interface InputHistoryCache {
   items: ResponseInputItem[];
 }
 
+/** One provider run: its start offset and the session turn/step it belongs to. */
+export interface TranscriptRunCursor {
+  offset: number;
+  turn: number;
+  step: number;
+}
+
+interface CursorCache {
+  schema_version: typeof CURSOR_CACHE_SCHEMA_VERSION;
+  transcript: {
+    device: number;
+    inode: number;
+    offset: number;
+    modified_at_ms: number;
+    changed_at_ms: number;
+    checkpoint_start: number;
+    checkpoint_sha256: string;
+  };
+  runs: TranscriptRunCursor[];
+}
+
+/** The provider runs recorded in a transcript, with the state they were read at. */
+export interface TranscriptCursorIndex {
+  device: number;
+  inode: number;
+  size: number;
+  runs: TranscriptRunCursor[];
+}
+
 const STAGING_DIRECTORY = "staging";
 const MESSAGES_FILE = "messages.jsonl";
 const MANIFEST_FILE = "manifest.json";
@@ -188,11 +219,20 @@ const ITEMS_INDEX_FILE = "items.index.jsonl";
 const FINAL_FILE = "final.jsonl";
 export const HISTORY_CACHE_FILE = "history-cache.json";
 export const USAGE_CACHE_FILE = "usage-cache.json";
+export const CURSOR_CACHE_FILE = "cursor-cache.json";
 const COMPACTION_CACHE_FILE = "compaction-cache.json";
 const HISTORY_CACHE_SCHEMA_VERSION = 1;
 const USAGE_CACHE_SCHEMA_VERSION = 1;
+const CURSOR_CACHE_SCHEMA_VERSION = 1;
 const HISTORY_CHECKPOINT_BYTES = 64 * 1024;
 const LINE_BUFFER_SIZE = 64 * 1024;
+/**
+ * Cheap prefilter for the run scan: a committed response always contains this
+ * literal somewhere in its line, so everything else can be skipped without a
+ * JSON parse. Whitespace inside the record is not assumed, because a transcript
+ * may also have been written by something other than this store.
+ */
+const COMPLETED_RECORD_MARKER = '"response.completed"';
 
 export class PersistenceError extends Error {
   public override name = "PersistenceError";
@@ -565,6 +605,71 @@ async function readJsonLines(
   }
 }
 
+/**
+ * Reads complete JSONL records in `[start, end)` and reports each one's byte
+ * offset, so callers can address records without scanning from the beginning.
+ *
+ * A record counts as complete only when its terminating newline was read: an
+ * appended-but-unfinished tail is left for the next call, which is what keeps an
+ * offset index valid while the writer is appending. Returns the offset just past
+ * the last complete record.
+ */
+export async function readTranscriptRecords(
+  path: string,
+  start: number,
+  end: number,
+  onRecord: (offset: number, line: string) => void | Promise<void>,
+): Promise<number> {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start) {
+    throw new PersistenceError("invalid transcript read range");
+  }
+  if (end === start) {
+    return start;
+  }
+
+  const handle = await open(path, "r");
+  const buffer = Buffer.alloc(LINE_BUFFER_SIZE);
+  try {
+    let position = start;
+    let lineStart = start;
+    let carry: Buffer = Buffer.alloc(0);
+    while (position < end) {
+      const length = Math.min(buffer.length, end - position);
+      const read = await handle.read(buffer, 0, length, position);
+      if (read.bytesRead <= 0) {
+        break;
+      }
+      position += read.bytesRead;
+      const chunk = carry.length === 0
+        ? buffer.subarray(0, read.bytesRead)
+        : Buffer.concat([carry, buffer.subarray(0, read.bytesRead)]);
+      const chunkStart = lineStart;
+      let consumed = 0;
+      let newline = chunk.indexOf(0x0a, consumed);
+      while (newline >= 0) {
+        await onRecord(lineStart, chunk.subarray(consumed, newline).toString("utf8"));
+        consumed = newline + 1;
+        lineStart = chunkStart + consumed;
+        newline = chunk.indexOf(0x0a, consumed);
+      }
+      carry = chunk.subarray(consumed);
+      // The remainder must not alias the shared read buffer: the next read
+      // overwrites it, and the carry-out line has to stay intact.
+      if (carry.length > 0 && chunk === buffer.subarray(0, read.bytesRead)) {
+        carry = Buffer.from(carry);
+      }
+    }
+    return lineStart;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return start;
+    }
+    throw error;
+  } finally {
+    await handle.close();
+  }
+}
+
 function expandTranscriptRecord(value: unknown): ResponseInputItem[] {
   const record = asObject(value, "messages.jsonl record");
   if (record.type === "response.completed") {
@@ -625,6 +730,74 @@ function parseHistoryCache(value: unknown): InputHistoryCache {
     },
     items: record.items.map((item) => validateInputItem(item)),
   };
+}
+
+function parseTranscriptCheckpoint(value: unknown, description: string): CursorCache["transcript"] {
+  const transcript = asObject(value, description);
+  if (
+    typeof transcript.device !== "number" ||
+    typeof transcript.inode !== "number" ||
+    typeof transcript.offset !== "number" ||
+    typeof transcript.modified_at_ms !== "number" ||
+    typeof transcript.changed_at_ms !== "number" ||
+    typeof transcript.checkpoint_start !== "number" ||
+    typeof transcript.checkpoint_sha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(transcript.checkpoint_sha256)
+  ) {
+    throw new PersistenceError(`invalid ${description}`);
+  }
+  for (const number of [
+    transcript.device,
+    transcript.inode,
+    transcript.offset,
+    transcript.modified_at_ms,
+    transcript.changed_at_ms,
+    transcript.checkpoint_start,
+  ]) {
+    if (!Number.isSafeInteger(number) || number < 0) {
+      throw new PersistenceError(`${description} has invalid transcript metadata`);
+    }
+  }
+  if (transcript.checkpoint_start > transcript.offset) {
+    throw new PersistenceError(`${description} begins after its offset`);
+  }
+  return {
+    device: transcript.device,
+    inode: transcript.inode,
+    offset: transcript.offset,
+    modified_at_ms: transcript.modified_at_ms,
+    changed_at_ms: transcript.changed_at_ms,
+    checkpoint_start: transcript.checkpoint_start,
+    checkpoint_sha256: transcript.checkpoint_sha256,
+  };
+}
+
+function parseCursorCache(value: unknown): CursorCache {
+  const record = asObject(value, "cursor cache");
+  if (record.schema_version !== CURSOR_CACHE_SCHEMA_VERSION || !Array.isArray(record.runs)) {
+    throw new PersistenceError("invalid cursor cache");
+  }
+  const transcript = parseTranscriptCheckpoint(record.transcript, "cursor cache transcript");
+  const runs: TranscriptRunCursor[] = [];
+  let previousOffset = -1;
+  for (const entry of record.runs) {
+    const run = asObject(entry, "cursor cache run");
+    if (
+      !Number.isSafeInteger(run.offset) ||
+      !Number.isSafeInteger(run.turn) ||
+      !Number.isSafeInteger(run.step) ||
+      (run.offset as number) < 0 ||
+      (run.turn as number) < 1 ||
+      (run.step as number) < 1 ||
+      (run.offset as number) <= previousOffset ||
+      (run.offset as number) >= transcript.offset
+    ) {
+      throw new PersistenceError("cursor cache run has invalid offset, turn, or step");
+    }
+    previousOffset = run.offset as number;
+    runs.push({offset: run.offset as number, turn: run.turn as number, step: run.step as number});
+  }
+  return {schema_version: CURSOR_CACHE_SCHEMA_VERSION, transcript, runs};
 }
 
 const USAGE_TOKEN_FIELDS = [
@@ -1048,6 +1221,7 @@ export class SessionResponseStore {
   public readonly stagingDir: string;
   public readonly historyCachePath: string;
   public readonly usageCachePath: string;
+  public readonly cursorCachePath: string;
   public readonly compactionCachePath: string;
   public readonly messagesBackupPath: string;
   public readonly stateContextPath: string;
@@ -1055,6 +1229,7 @@ export class SessionResponseStore {
   private readonly options: Required<Pick<SessionResponseStoreOptions, "durability" | "maxItemBytes">>;
   private historyCache: InputHistoryCache | undefined;
   private usageCache: UsageCache | undefined;
+  private cursorCache: CursorCache | undefined;
   private readonly messageMutex = new AsyncMutex();
   private readonly activeTurns = new Set<ResponseTurn>();
   private closed = false;
@@ -1082,6 +1257,11 @@ export class SessionResponseStore {
         ? resolve(options.usageCachePath)
         : resolve(absoluteSessionDir, options.usageCachePath)
       : join(this.stagingDir, USAGE_CACHE_FILE);
+    this.cursorCachePath = options.cursorCachePath
+      ? isAbsolute(options.cursorCachePath)
+        ? resolve(options.cursorCachePath)
+        : resolve(absoluteSessionDir, options.cursorCachePath)
+      : join(this.stagingDir, CURSOR_CACHE_FILE);
     this.compactionCachePath = options.compactionCachePath
       ? isAbsolute(options.compactionCachePath)
         ? resolve(options.compactionCachePath)
@@ -1452,14 +1632,7 @@ export class SessionResponseStore {
     cache: UsageCache,
     current: TranscriptMetadata,
   ): Promise<boolean> {
-    return this.cacheMatches(
-      {
-        schema_version: HISTORY_CACHE_SCHEMA_VERSION,
-        transcript: cache.transcript,
-        items: [],
-      },
-      current,
-    );
+    return this.cacheMatches({transcript: cache.transcript}, current);
   }
 
   private async refreshUsageCacheUnlocked(): Promise<void> {
@@ -1564,7 +1737,7 @@ export class SessionResponseStore {
   }
 
   private async cacheMatches(
-    cache: InputHistoryCache,
+    cache: {transcript: UsageTranscriptCheckpoint},
     current: TranscriptMetadata,
   ): Promise<boolean> {
     if (
@@ -1631,6 +1804,186 @@ export class SessionResponseStore {
       },
       items,
     };
+  }
+
+  /**
+   * Provider runs recorded in the transcript, one entry per committed response.
+   *
+   * Built once by a full scan, then maintained by reading only the bytes appended
+   * since the last read. A run's extent is the next run's offset, so appends do
+   * not invalidate existing entries and tool outputs need no entry of their own.
+   */
+  public async readCursorIndex(): Promise<TranscriptCursorIndex> {
+    this.assertOpen();
+    return this.messageMutex.runExclusive(async () => {
+      const current = await this.readTranscriptMetadata();
+      const cache = await this.refreshCursorCacheUnlocked(current);
+      return {
+        device: current.device,
+        inode: current.inode,
+        size: current.size,
+        runs: cache.runs.map((run) => ({...run})),
+      };
+    });
+  }
+
+  /** The compacted request prefix, or `undefined` when the session never compacted. */
+  public async readCompactionItems(): Promise<ResponseInputItem[] | undefined> {
+    this.assertOpen();
+    const cache = await this.readCompactionCache();
+    return cache?.items.map((item) => ({...item}));
+  }
+
+  /** Transcript identity and size; creates an empty transcript when absent. */
+  public async readTranscriptStamp(): Promise<TranscriptMetadata> {
+    this.assertOpen();
+    return this.readTranscriptMetadata();
+  }
+
+  /** Reads complete records in `[start, end)` with their byte offsets. */
+  public async readRecords(
+    start: number,
+    end: number,
+    onRecord: (offset: number, line: string) => void | Promise<void>,
+  ): Promise<number> {
+    this.assertOpen();
+    return readTranscriptRecords(this.messagesPath, start, end, onRecord);
+  }
+
+  /**
+   * Offset where the record preceding `offset` starts, found by scanning
+   * backwards for the newline that ends the record before it. Used to include
+   * the user message that opens a turn without walking the transcript from the
+   * beginning. Returns `0` for the first record of the file.
+   */
+  public async readRecordStartBefore(offset: number): Promise<number | undefined> {
+    this.assertOpen();
+    if (!Number.isSafeInteger(offset) || offset <= 0) {
+      return undefined;
+    }
+    // The byte before a record boundary terminates the previous record; the
+    // newline searched for is the one before *that*.
+    const limit = offset - 1;
+    if (limit <= 0) {
+      return 0;
+    }
+    const handle = await open(this.messagesPath, "r");
+    try {
+      const buffer = Buffer.alloc(LINE_BUFFER_SIZE);
+      let cursor = limit;
+      while (cursor > 0) {
+        const start = Math.max(0, cursor - buffer.length);
+        const length = cursor - start;
+        const read = await handle.read(buffer, 0, length, start);
+        if (read.bytesRead <= 0) {
+          break;
+        }
+        const newline = buffer.subarray(0, read.bytesRead).lastIndexOf(0x0a);
+        if (newline >= 0) {
+          return start + newline + 1;
+        }
+        cursor = start;
+      }
+      return 0;
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private async readCursorCacheFile(): Promise<CursorCache | undefined> {
+    try {
+      return parseCursorCache(JSON.parse(await readFile(this.cursorCachePath, "utf8")) as unknown);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async makeCursorCache(
+    runs: readonly TranscriptRunCursor[],
+    offset: number,
+    current: TranscriptMetadata,
+  ): Promise<CursorCache> {
+    const checkpointStart = Math.max(0, offset - HISTORY_CHECKPOINT_BYTES);
+    return {
+      schema_version: CURSOR_CACHE_SCHEMA_VERSION,
+      transcript: {
+        device: current.device,
+        inode: current.inode,
+        offset,
+        modified_at_ms: current.modifiedAt,
+        changed_at_ms: current.changedAt,
+        checkpoint_start: checkpointStart,
+        checkpoint_sha256: await hashFileRange(this.messagesPath, checkpointStart, offset),
+      },
+      runs: [...runs],
+    };
+  }
+
+  /** Collects `response.completed` records in `[start, end)` as run cursors. */
+  private async scanRuns(
+    start: number,
+    end: number,
+    onRun: (run: TranscriptRunCursor) => void,
+  ): Promise<number> {
+    return readTranscriptRecords(this.messagesPath, start, end, (offset, line) => {
+      // A committed response is the only record that opens a provider run, and
+      // the marker keeps the scan from parsing every other line.
+      if (!line.includes(COMPLETED_RECORD_MARKER)) {
+        return;
+      }
+      let value: unknown;
+      try {
+        value = JSON.parse(line) as unknown;
+      } catch {
+        return;
+      }
+      if (!isRecord(value) || value.type !== "response.completed") {
+        return;
+      }
+      const turn = value.session_turn;
+      const step = value.session_step;
+      if (
+        !Number.isSafeInteger(turn) ||
+        !Number.isSafeInteger(step) ||
+        (turn as number) < 1 ||
+        (step as number) < 1
+      ) {
+        return;
+      }
+      onRun({offset, turn: turn as number, step: step as number});
+    });
+  }
+
+  private async writeCursorCacheFile(cache: CursorCache): Promise<void> {
+    await mkdir(dirname(this.cursorCachePath), {recursive: true});
+    await writeJsonAtomic(this.cursorCachePath, cache, this.options.durability);
+  }
+
+  private async refreshCursorCacheUnlocked(current: TranscriptMetadata): Promise<CursorCache> {
+    const cached = this.cursorCache ?? (await this.readCursorCacheFile());
+    if (cached !== undefined && (await this.cacheMatches(cached, current))) {
+      if (current.size === cached.transcript.offset) {
+        this.cursorCache = cached;
+        return cached;
+      }
+      const runs = [...cached.runs];
+      const offset = await this.scanRuns(
+        cached.transcript.offset,
+        current.size,
+        (run) => runs.push(run),
+      );
+      const appended = await this.makeCursorCache(runs, offset, current);
+      this.cursorCache = appended;
+      await this.writeCursorCacheFile(appended);
+      return appended;
+    }
+
+    const runs: TranscriptRunCursor[] = [];
+    const offset = await this.scanRuns(0, current.size, (run) => runs.push(run));
+    const rebuilt = await this.makeCursorCache(runs, offset, current);
+    this.cursorCache = rebuilt;
+    await this.writeCursorCacheFile(rebuilt);
+    return rebuilt;
   }
 
   public async compactHistory(options: {
@@ -1761,7 +2114,9 @@ export class SessionResponseStore {
       await writeJsonAtomic(this.compactionCachePath, cache, this.options.durability);
       await this.replaceMessagesWithRecords(activeTail);
       this.historyCache = undefined;
+      this.cursorCache = undefined;
       await rm(this.historyCachePath, {force: true});
+      await rm(this.cursorCachePath, {force: true});
       await this.resetUsageCheckpointAfterCompactionUnlocked();
       return {compacted: true, compacted_items: history.length, retained_items: nextHistory.length, backup_path: this.messagesBackupPath};
     });

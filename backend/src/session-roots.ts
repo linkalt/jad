@@ -10,6 +10,8 @@ const MAX_SERVER_PORT = 65_535;
 const MAX_SERVER_BODY_BYTES = 64 * 1024 * 1024;
 const MAX_RUN_STATE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_TOOL_STREAM_INTERVAL_MS = 60 * 1000;
+const MAX_SNAPSHOT_TURNS = 100_000;
+const MAX_PAGE_TURNS = 1_000;
 
 export const DEFAULT_ROOT_SERVER_SETTINGS = {
   host: "127.0.0.1",
@@ -17,6 +19,9 @@ export const DEFAULT_ROOT_SERVER_SETTINGS = {
   max_body_bytes: 1024 * 1024,
   run_state_retention_ms: 30_000,
   tool_stream_interval_ms: 120,
+  conditional_requests: true,
+  snapshot_turns: 24,
+  max_page_turns: 50,
 } as const;
 
 export interface RootServerSettings {
@@ -26,6 +31,12 @@ export interface RootServerSettings {
   run_state_retention_ms: number;
   /** Coalescing window for in-progress tool-call snapshots; 0 streams every delta. */
   tool_stream_interval_ms: number;
+  /** Answer with `304` when a session snapshot is unchanged. */
+  conditional_requests: boolean;
+  /** Turns in a session snapshot; 0 returns the whole transcript. */
+  snapshot_turns: number;
+  /** Largest number of turns one page request may return. */
+  max_page_turns: number;
 }
 
 export interface SessionRoot {
@@ -158,12 +169,42 @@ function normalizeRootServerSettings(
       `${path}: server.tool_stream_interval_ms must be a safe integer between 0 and ${MAX_TOOL_STREAM_INTERVAL_MS}`,
     );
   }
+  const conditionalRequests =
+    value.conditional_requests ?? DEFAULT_ROOT_SERVER_SETTINGS.conditional_requests;
+  if (typeof conditionalRequests !== "boolean") {
+    throw new ConfigError(`${path}: server.conditional_requests must be a boolean`);
+  }
+  const snapshotTurns = value.snapshot_turns ?? DEFAULT_ROOT_SERVER_SETTINGS.snapshot_turns;
+  if (
+    typeof snapshotTurns !== "number" ||
+    !Number.isSafeInteger(snapshotTurns) ||
+    snapshotTurns < 0 ||
+    snapshotTurns > MAX_SNAPSHOT_TURNS
+  ) {
+    throw new ConfigError(
+      `${path}: server.snapshot_turns must be a safe integer between 0 and ${MAX_SNAPSHOT_TURNS}`,
+    );
+  }
+  const maxPageTurns = value.max_page_turns ?? DEFAULT_ROOT_SERVER_SETTINGS.max_page_turns;
+  if (
+    typeof maxPageTurns !== "number" ||
+    !Number.isSafeInteger(maxPageTurns) ||
+    maxPageTurns < 1 ||
+    maxPageTurns > MAX_PAGE_TURNS
+  ) {
+    throw new ConfigError(
+      `${path}: server.max_page_turns must be a safe integer between 1 and ${MAX_PAGE_TURNS}`,
+    );
+  }
   return {
     host,
     port,
     max_body_bytes: maxBodyBytes,
     run_state_retention_ms: runStateRetentionMs,
     tool_stream_interval_ms: toolStreamIntervalMs,
+    conditional_requests: conditionalRequests,
+    snapshot_turns: snapshotTurns,
+    max_page_turns: maxPageTurns,
   };
 }
 

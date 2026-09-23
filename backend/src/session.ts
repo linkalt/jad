@@ -214,7 +214,8 @@ export class AgentSession {
 
   private constructor(
     public readonly sessionDir: string,
-    private readonly store: SessionResponseStore,
+    /** Persistence for this session; readers that project the transcript use it. */
+    public readonly store: SessionResponseStore,
     private readonly loader: SessionConfigLoader,
     private readonly options: AgentSessionOptions,
     private readonly processManager: ProcessManager,
@@ -255,6 +256,7 @@ export class AgentSession {
       compactionCachePath: settings.paths.compaction_cache,
       historyCachePath: options.store?.historyCachePath ?? settings.paths.history_cache,
       usageCachePath: options.store?.usageCachePath ?? settings.paths.usage_cache,
+      cursorCachePath: options.store?.cursorCachePath ?? settings.paths.cursor_cache,
       messagesBackupPath: settings.paths.messages_backup,
       stateContextPath: options.store?.stateContextPath ?? settings.paths.statecontext,
       durability: options.store?.durability ?? settings.persistence.durability,

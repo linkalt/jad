@@ -37,9 +37,11 @@ import type {
 import {
   attachSessionRun,
   compactSession,
+  fetchSession,
   fetchSessions,
   stopSessionRun,
   streamSessionRun,
+  type SessionPage,
   type SessionSnapshot,
   type WebUiMessage,
   type WebUiPart,
@@ -1735,6 +1737,17 @@ function App() {
   const activeSessionIdRef = useRef<string>(activeSessionId);
   const activeSessionEntryRef = useRef<Session | undefined>(undefined);
   const refreshSessionsRef = useRef<(() => void) | null>(null);
+  // Conditional polling: each resource is revalidated with the fingerprint of
+  // the last body the client accepted.
+  const sessionsEtagRef = useRef<string | undefined>(undefined);
+  const snapshotEtagRef = useRef<string | undefined>(undefined);
+  const activeViewRef = useRef<{uiId: string; ref: string | undefined}>({
+    uiId: activeSessionId,
+    ref: undefined,
+  });
+  const loadingOlderRef = useRef(false);
+  // How much of the transcript is still on the server, per session.
+  const [sessionPages, setSessionPages] = useState<Record<string, SessionPage>>({});
 
   // Live sessions come from the backend, so the active id can outlive its row —
   // on the first paint (before the first poll answers) and after a session is
@@ -1775,6 +1788,77 @@ function App() {
   const isRunning = runningSessionId === activeSessionId;
   const isLiveSession = activeSession?.source === 'live';
   const activeSessionRef = activeSession?.sessionRef;
+  const activeSessionPage = sessionPages[activeSessionId];
+  // Older turns exist on the server but are not part of this client's copy yet.
+  const hasOlderTurns =
+    isLiveSession &&
+    activeSessionPage?.has_more === true &&
+    activeSessionPage.next_before !== null;
+
+  /**
+   * Fetches the turns before the oldest one this client holds. The cursor comes
+   * from the server, so the transcript is extended in place instead of being
+   * reloaded, and already-known messages are dropped by id.
+   */
+  const loadOlderMessages = useCallback(
+    (session: Session | undefined, uiId: string) => {
+      const page = sessionPages[uiId];
+      if (
+        session?.source !== 'live' ||
+        session.sessionRef === undefined ||
+        page === undefined ||
+        !page.has_more ||
+        page.next_before === null ||
+        loadingOlderRef.current
+      ) {
+        return;
+      }
+      loadingOlderRef.current = true;
+      void fetchSession(session.sessionRef, {
+        before: page.next_before,
+        turns: appConfig.transcript_page_turns,
+      })
+        .then(result => {
+          if (result.kind !== 'ok') {
+            return;
+          }
+          const older = result.value.messages ?? [];
+          setThreads(current => {
+            const existing = current[uiId] ?? [];
+            const known = new Set(existing.map(message => message.id));
+            const prepended = older.filter(message => !known.has(message.id));
+            if (prepended.length === 0) {
+              return current;
+            }
+            return {...current, [uiId]: [...prepended, ...existing]};
+          });
+          if (result.value.page !== undefined) {
+            const pageInfo = result.value.page;
+            setSessionPages(current => ({...current, [uiId]: pageInfo}));
+          }
+        })
+        .catch(error => {
+          console.warn('Unable to load earlier turns:', error);
+        })
+        .finally(() => {
+          loadingOlderRef.current = false;
+        });
+    },
+    [sessionPages],
+  );
+
+  const revealEarlierMessages = useCallback(
+    (node: HTMLElement | null) => {
+      if (hiddenCount > 0) {
+        revealEarlier(node);
+        return;
+      }
+      // Nothing loaded is hidden any more: the rest of the transcript has to be
+      // fetched before it can be revealed.
+      loadOlderMessages(activeSession, activeSessionId);
+    },
+    [activeSession, activeSessionId, hiddenCount, loadOlderMessages, revealEarlier],
+  );
   const isCompactionInProgress = compactingSessionRef !== null;
   const isActiveSessionCompacting = activeSessionRef !== undefined && compactingSessionRef === activeSessionRef;
   const activeCompactionFeedback =
@@ -2149,24 +2233,71 @@ function App() {
   );
 
   useEffect(() => {
+    const previous = activeViewRef.current;
+    activeViewRef.current = {uiId: activeSessionId, ref: activeSessionRef};
+    if (previous.ref !== activeSessionRef || previous.uiId !== activeSessionId) {
+      // A different session: nothing the client holds applies to it.
+      snapshotEtagRef.current = undefined;
+    }
     activeSessionIdRef.current = activeSessionId;
     // Switching to a session that has a run in flight must attach at once: the
     // transcript of that session is stale until the fresh snapshot arrives.
     refreshSessionsRef.current?.();
-  }, [activeSessionId]);
+  }, [activeSessionId, activeSessionRef]);
 
   useEffect(() => {
     activeSessionEntryRef.current = activeSession;
   }, [activeSession]);
 
+
   useEffect(() => {
     let cancelled = false;
+    // The transcript of the session being viewed, fetched separately from the
+    // list because only one transcript is ever needed at a time.
+    const loadTranscript = (sessionRef: string, uiId: string) => {
+      void fetchSession(sessionRef, {etag: snapshotEtagRef.current})
+        .then(result => {
+          if (cancelled || result.kind !== 'ok') {
+            return;
+          }
+          snapshotEtagRef.current = result.etag;
+          const snapshot = result.value;
+          const messages = snapshot.messages ?? [];
+          setThreads(current => {
+            const previous = current[uiId];
+            // Reuse the existing array when the payload is structurally
+            // identical: a new identity re-renders every row of that thread.
+            if (previous !== undefined && deepEqual(previous, messages)) {
+              return current;
+            }
+            return {...current, [uiId]: messages};
+          });
+          if (snapshot.page !== undefined) {
+            setSessionPages(current => ({...current, [uiId]: snapshot.page!}));
+          }
+        })
+        .catch(error => {
+          if (!cancelled) {
+            console.warn('Unable to load the session transcript:', error);
+          }
+        });
+    };
+
     const loadSessions = () => {
-      void fetchSessions()
-        .then(snapshots => {
+      void fetchSessions(sessionsEtagRef.current)
+        .then(result => {
           if (cancelled) {
             return;
           }
+          const view = activeViewRef.current;
+          if (view.ref !== undefined) {
+            loadTranscript(view.ref, view.uiId);
+          }
+          if (result.kind !== 'ok') {
+            return;
+          }
+          sessionsEtagRef.current = result.etag;
+          const snapshots = result.value;
           const liveItems = snapshots.map(snapshot => ({
             snapshot,
             id: sessionUiId(snapshot, initialSessions),
@@ -2176,16 +2307,19 @@ function App() {
             const next = {...current};
             let hasChange = false;
             for (const item of liveItems) {
-              if (item.id === activeRunSessionId) {
+              if (item.id === activeRunSessionId || view.uiId === item.id) {
+                // The run's own stream and the transcript request own these.
+                continue;
+              }
+              const messages = item.snapshot.messages;
+              if (messages === undefined) {
                 continue;
               }
               const previous = current[item.id];
-              // Reuse the existing array when the payload is structurally
-              // identical: a new identity re-renders every row of that thread.
-              if (previous !== undefined && deepEqual(previous, item.snapshot.messages)) {
+              if (previous !== undefined && deepEqual(previous, messages)) {
                 continue;
               }
-              next[item.id] = item.snapshot.messages;
+              next[item.id] = messages;
               hasChange = true;
             }
             return hasChange ? next : current;
@@ -2219,7 +2353,12 @@ function App() {
 
     refreshSessionsRef.current = loadSessions;
     loadSessions();
-    const refreshTimer = window.setInterval(loadSessions, appConfig.session_refresh_interval_ms);
+    // While this client streams a run, the stream already carries every commit,
+    // so the transcript only needs to catch up occasionally.
+    const refreshInterval = isRunning
+      ? appConfig.session_refresh_interval_ms_streaming
+      : appConfig.session_refresh_interval_ms;
+    const refreshTimer = window.setInterval(loadSessions, refreshInterval);
     return () => {
       cancelled = true;
       refreshSessionsRef.current = null;
@@ -2419,10 +2558,11 @@ function App() {
                     xstyle={styles.conversationLane}
                   >
                     <ChatMessageList density="balanced" align="top" isStreaming={isRunning}>
-                      {hiddenCount > 0 && (
+                      {(hiddenCount > 0 || hasOlderTurns) && (
                         <EarlierMessagesControl
                           hiddenCount={hiddenCount}
-                          onReveal={revealEarlier}
+                          hasMore={hasOlderTurns}
+                          onReveal={revealEarlierMessages}
                         />
                       )}
                       {visibleMessages.map(message => (
