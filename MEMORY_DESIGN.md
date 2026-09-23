@@ -1,68 +1,67 @@
 # Memory Tool — Design and Workflow
 
-**Status:** Draft  
-**Storage:** Local directory tree  
-**Primary goal:** Give an agent a single memory tool that can store and retrieve arbitrary JSON records without requiring a new tool schema for every record type.
+**Status:** Revised draft
 
-## 1. Overview
+**Storage:** Configured local directory tree (`tools.native.memory.storage_dir`)
+**Primary goal:** Give an agent one bounded, safe memory tool for arbitrary JSON-object records without a new tool schema for each record type.
 
-`memory` is a type-scoped JSON memory store. The agent prompt defines what a type means and what fields it should contain. The memory implementation does not need to know the schema of every type.
+## 1. Scope and non-goals
 
-Examples of types:
+`memory` stores type-scoped JSON objects. The application or prompt gives a type its meaning; the engine does not require a type-specific payload schema.
 
-- `workspace`
-- `task`
-- `contact`
-- Any other safe type name defined by the application or prompt
+Examples include `workspace`, `task`, and `contact`. A record's type and identity are external metadata: the JSON payload does not duplicate an `id`, `type`, or timestamps.
 
-Each saved record is stored as one JSON file. The directory identifies the type, and the filename identifies the record. The record JSON does **not** contain a duplicated `id`.
+The MVP provides `create`, `get`, `list`, and `update`. It intentionally does **not** provide deletion, partial JSON patching, arbitrary query operators, an index, automatic retention, or date partitioning.
 
-## 2. Design principles
+Stored data is untrusted data, never executable instructions. A memory record cannot change agent instructions, permissions, tool policy, or configuration.
 
-1. **Dynamic data** — the payload may have different fields for every type.
-2. **Type isolation** — records are stored and filtered inside a type directory.
-3. **Filename identity** — the generated filename is the record reference; no `id` field is required in the JSON.
-4. **Prompt-defined meaning** — the agent prompt defines when to save a type and how to interpret its fields.
-5. **Simple storage first** — use the filesystem initially; add an index only when filtered-list performance requires it.
-6. **Safe by default** — prevent path traversal, corrupt writes, uncontrolled file growth, and unsafe memory execution.
+## 2. Storage and identity
 
-## 3. Storage layout
+Configure storage as follows:
+
+```json
+{
+  "tools": {
+    "native": {
+      "memory": {
+        "storage_dir": ".memory"
+      }
+    }
+  }
+}
+```
+
+`storage_dir` defaults to `.memory` relative to `setting.cwd`. A configured absolute directory is used as-is. It is trusted harness configuration, not a model argument; session-owned storage paths are not used.
 
 ```text
-memory/
-├── _definitions/                  # Optional prompt/schema definitions
-│   ├── task.v1.json
-│   └── workspace.v1.json
+<storage_dir>/
+├── _definitions/                  # Optional application definitions; never listed as records
+│   └── task.v1.json
 ├── task/
-│   ├── task-20250308T120000.123Z-01JXYZABC.json
-│   └── task-20250308T121500.456Z-01JXYZDEF.json
+│   └── task-20250308T120000.123Z-<UUID>.json
 └── workspace/
-    └── workspace-20250308T122000.789Z-01JXYZGHI.json
+    └── workspace-20250308T122000.789Z-<UUID>.json
 ```
 
-Filename format:
+A record reference has the canonical logical form:
 
 ```text
-{type}-{UTC timestamp}-{ULID or UUID}.json
+<type>/<filename>
 ```
 
-Example:
+For example:
 
 ```text
-task-20250308T120000.123Z-01JXYZABC.json
+task/task-20250308T120000.123Z-550e8400-e29b-41d4-a716-446655440000.json
 ```
 
-The timestamp makes files naturally sortable. The ULID/UUID prevents collisions when multiple records are saved during the same millisecond. The type name is repeated in the filename for readability, although the parent directory is authoritative.
+The parent directory is authoritative. The backend generates a filename from a UTC timestamp plus `randomUUID()` and creates it only under the selected type directory. It validates both the selected `type` and `ref`; it never accepts a general filesystem path.
 
-For very large collections, use date partitioning:
+The timestamp makes newest-first ordering readable and deterministic. The UUID prevents collisions. Date partitioning is deferred: it would change reference resolution and requires a versioned ref format or index.
 
-```text
-memory/task/2025/03/08/task-120000.123Z-01JXYZABC.json
-```
+## 3. Payload format
 
-## 4. Record format
-
-The stored file contains only the dynamic application payload:
+Each file contains exactly one UTF-8 JSON object followed by a newline:
 
 ```json
 {
@@ -73,23 +72,33 @@ The stored file contains only the dynamic application payload:
 }
 ```
 
-The file does not need to contain:
+The payload is dynamic, but must be an object. Values can be any JSON values. The file does not contain `id`, `type`, `created_at`, `updated_at`, reference, or optimistic-concurrency metadata. The reference and creation time are derived externally; response metadata supplies the current content hash.
 
-- `id`
-- `type`
-- `created_at`
-- `updated_at`
+## 4. Tool contract
 
-The type is derived from the directory and the record reference is derived from the filename. The creation timestamp can be derived from the filename. If reliable update timestamps are needed later, they can be kept in an index or sidecar metadata store rather than mixed into the dynamic payload.
-
-The initial implementation should require the payload to be a JSON object. Its field values may be any valid JSON values: strings, numbers, booleans, arrays, objects, or `null`.
-
-## 5. Tool contract
-
-The fixed tool controls are small:
+Every request has a fixed, explicit operation. Dynamic fields are contained only in `data` and `filter`.
 
 ```json
 {
+  "operation": "create | get | list | update",
+  "type": "task",
+  "ref": "task/task-…json",
+  "data": {},
+  "filter": {},
+  "limit": 20,
+  "order": "newest | oldest",
+  "cursor": null,
+  "if_match": "sha256:…"
+}
+```
+
+Exactly the fields applicable to the operation are accepted. Unknown top-level fields are rejected. `data` and `filter` are objects; they are not fixed type-specific schemas.
+
+### 4.1 Create
+
+```json
+{
+  "operation": "create",
   "type": "task",
   "data": {
     "title": "Build memory tool",
@@ -98,115 +107,74 @@ The fixed tool controls are small:
 }
 ```
 
-`data` is dynamic JSON. It is not a type-specific schema.
-
-The recommended request modes are:
-
-### 5.1 Save
+The service validates the type and payload quotas, creates the type directory if allowed, atomically writes the generated file, and returns:
 
 ```json
 {
+  "operation": "create",
   "type": "task",
-  "data": {
-    "title": "Build memory tool",
-    "status": "open"
-  }
+  "ref": "task/task-20250308T120000.123Z-550e8400-e29b-41d4-a716-446655440000.json",
+  "etag": "sha256:…"
 }
 ```
 
-The service creates a new file and returns its reference:
+The agent never selects a filename.
+
+### 4.2 Get
 
 ```json
 {
-  "ok": true,
-  "operation": "save",
+  "operation": "get",
   "type": "task",
-  "ref": "task/task-20250308T120000.123Z-01JXYZABC.json"
+  "ref": "task/task-20250308T120000.123Z-550e8400-e29b-41d4-a716-446655440000.json"
 }
 ```
 
-The agent does not generate the filename.
+The selected type must match the type component of the canonical ref. A successful result returns `type`, `ref`, `data`, and the content `etag`. A missing or malformed record returns an operational not-found/error result without probing outside the memory root.
 
-### 5.2 List
+### 4.3 List
 
 ```json
 {
+  "operation": "list",
   "type": "task",
-  "list": true
+  "filter": {
+    "status": "open",
+    "priority": "high"
+  },
+  "limit": 20,
+  "order": "newest",
+  "cursor": null
 }
 ```
 
-Optional list controls may be supported without changing the data model:
-
-```json
-{
-  "type": "task",
-  "list": {
-    "limit": 20,
-    "order": "newest"
-  }
-}
-```
-
-The response contains references outside the payload:
+`filter`, `cursor`, and ordering are optional. Results contain the ref and current `etag` outside the stored payload:
 
 ```json
 {
   "type": "task",
   "items": [
     {
-      "ref": "task/task-20250308T120000.123Z-01JXYZABC.json",
-      "data": {
-        "title": "Build memory tool",
-        "status": "open"
-      }
+      "ref": "task/task-20250308T120000.123Z-550e8400-e29b-41d4-a716-446655440000.json",
+      "etag": "sha256:…",
+      "data": {"title": "Build memory tool", "status": "open"}
     }
   ],
-  "next_cursor": null
+  "next_cursor": null,
+  "warnings": []
 }
 ```
 
-### 5.3 Filtered list
+The MVP scans only the selected type directory. It sorts canonical filenames lexicographically, descending for `newest` and ascending for `oldest`; creation names are sortable by timestamp. A cursor encodes the version, type, order, filter fingerprint, and **last scanned** ref (not merely the last returned item), so filtered and corrupt-file scans can advance correctly. It is opaque to callers, bounded in length, and rejected if used with a different type, order, or filter. Pagination is not snapshot-isolated: records created before the cursor's position may appear on an earlier page, while records created after it appear on a later or fresh listing.
 
-`list` without a filter returns all records for the selected type. A filter limits the same list operation to records whose payload matches the supplied fields.
-
-```json
-{
-  "type": "task",
-  "list": {
-    "filter": {
-      "status": "open",
-      "priority": "high"
-    },
-    "limit": 20,
-    "order": "newest"
-  }
-}
-```
-
-The `filter` object is intentionally dynamic. The memory tool does not define a fixed set of filter fields; the active type definition defines the allowed parameters, value types, and comparison semantics.
-
-The first version should support exact field matching. Nested fields may use dot notation, such as `project.name`. More operators can be added later, for example `$in`, `$contains`, and date comparisons, when the type definition permits them.
-
-Filtering is restricted to `memory/{type}/`, so a task list cannot return workspace records. Unknown filter parameters should be rejected or ignored according to the type definition; the behavior must be consistent.
-
-### 5.4 Get and update
-
-A `ref` without `data` returns one record:
+### 4.4 Update
 
 ```json
 {
+  "operation": "update",
   "type": "task",
-  "ref": "task/task-20250308T120000.123Z-01JXYZABC.json"
-}
-```
-
-A `ref` with `data` replaces that record:
-
-```json
-{
-  "type": "task",
-  "ref": "task/task-20250308T120000.123Z-01JXYZABC.json",
+  "ref": "task/task-20250308T120000.123Z-550e8400-e29b-41d4-a716-446655440000.json",
+  "if_match": "sha256:…",
   "data": {
     "title": "Build memory tool",
     "status": "done"
@@ -214,197 +182,122 @@ A `ref` with `data` replaces that record:
 }
 ```
 
-The initial update operation replaces the complete payload rather than merging fields. The agent can use the data returned by `list` or `ref` as the basis for the replacement.
+`update` atomically replaces the complete payload while preserving the filename and ref. It does not merge or patch dynamic objects. `if_match` is required and must equal the current response `etag`; a mismatch returns a conflict and leaves the file unchanged. This prevents silent lost updates between agents or turns. The replacement must meet per-record and aggregate quota policy. A successful update returns the operation, type, ref, and new ETag without echoing the payload; call `get` to retrieve the updated data.
 
-### 5.5 Operation rules
+Deletion is deliberately unsupported in the MVP. Records can be updated but not removed by this tool.
 
-- `type` is required for every request.
-- One operation mode is allowed: create (`data`), list (`list`), get (`ref`), or update (`ref` + `data`).
-- `list` may be `true` or an options/filter object.
-- `ref` without `data` gets one record; `ref` with `data` updates it.
-- `data` without `ref` creates a new record.
-- `data` must be valid JSON and must satisfy any definition supplied by the application.
-- A user payload should not use the reserved top-level tool fields as controls. Using an explicit `data` object avoids ambiguity between payload fields named `list` or `ref` and tool operations.
+## 5. Types, definitions, and filters
 
-## 6. Type definitions
-
-The memory engine remains schema-flexible, but the prompt should define the meaning of each type. A definition should describe:
-
-- The purpose of the type
-- Fields and their meanings
-- Required and optional fields
-- When the agent should save a record
-- Which fields are safe and useful for filtering
-- Whether a record is append-only or may be updated
-
-Example prompt definition:
+A type is a safe logical identifier, not a path. The MVP accepts lowercase ASCII type names matching:
 
 ```text
-Type: task
-
-Purpose: Store actionable work items.
-
-Fields:
-- title: required short description
-- status: one of open, blocked, or done
-- priority: optional low, normal, or high
-- notes: optional context
-
-List filter parameters:
-- status: exact match; allowed values are open, blocked, or done
-- priority: exact match; allowed values are low, normal, or high
-
-Save a task when the user creates, changes, or explicitly asks to remember a work item.
-Do not save temporary reasoning or secrets.
+[a-z][a-z0-9_-]{0,63}
 ```
 
-Definitions may remain in the prompt. Optionally, a versioned copy can be stored in:
+Names beginning with `_`, containing path separators, `..`, NUL, or other characters are rejected. The configuration limits the number of created types and can optionally provide an allowlist. Without an allowlist, a valid type may be created only while the type quota permits it.
 
-```text
-memory/_definitions/task.v1.json
-```
+Application definitions may describe a type's purpose, payload fields, save criteria, and useful filters. They can be included in the agent prompt and optionally stored below `_definitions/`. Definitions are not records and are never returned from a normal list. Prompt-only definitions are guidance, not an authorization or validation boundary; any schema enforcement must be configured and implemented by the application.
 
-Definitions are not memory records and must not be returned by normal list or filtered-list operations.
+MVP filters use deterministic exact matching:
 
-## 7. End-to-end workflow
+- A filter contains at most the configured number of fields and nesting depth.
+- Each key is a dot path through JSON objects only, for example `project.name`.
+- Empty segments, array indexes, and prototype-like special keys are rejected.
+- The final value uses deep JSON equality: object keys are compared by value, array order matters, and `null` differs from a missing path.
+- Every filter field must match (AND semantics).
+- Unknown/missing paths simply do not match; malformed filters are rejected.
+- `$in`, containment, substring, numeric, and date operators are out of scope.
 
-### 7.1 Definition phase
+## 6. Limits and storage policy
 
-1. The application supplies the agent with the definition for available types.
-2. The agent learns the meaning and save criteria for each type.
-3. The application optionally registers or persists the definition.
-4. The agent chooses the type based on the user’s request.
+All limits are backend configuration, not model arguments. The initial native-memory settings should include sensible defaults for:
 
-### 7.2 Save workflow
-
-1. The agent identifies information that should persist beyond the current turn.
-2. The agent selects a type, such as `task` or `workspace`.
-3. The agent creates a JSON payload according to that type’s definition.
-4. The agent calls `memory` with `type` and `data`.
-5. The service validates the type name, payload size, JSON syntax, and optional definition.
-6. The service creates `memory/{type}/` if necessary.
-7. The service generates a UTC timestamp and a unique ULID/UUID.
-8. The service writes the JSON to a temporary file in the same directory.
-9. The service atomically renames the temporary file to the final filename.
-10. The service returns the generated `ref`.
-
-### 7.3 List workflow
-
-The agent retrieves memory by listing a type. An `id` field is not required in the stored payload.
-
-Example:
-
-```json
-{
-  "type": "task",
-  "list": {
-    "filter": {
-      "status": "open",
-      "priority": "high"
-    },
-    "limit": 20,
-    "order": "newest"
-  }
+```ts
+interface NativeMemoryToolSettings {
+  storage_dir: string;         // .memory relative to setting.cwd, or absolute
+  max_types: number;
+  max_type_chars: number;
+  allowed_types?: string[];
+  max_records_per_type: number;
+  max_total_records: number;
+  max_record_bytes: number;
+  max_total_bytes: number;
+  list_limit: number;
+  max_list_limit: number;
+  max_list_bytes: number;
+  max_scan_records: number;
+  max_scan_bytes: number;
+  max_filter_fields: number;
+  max_filter_depth: number;
+  max_json_depth: number;
 }
 ```
 
-1. The agent reads the type definition and chooses the relevant type and filter parameters.
-2. The agent calls `memory` with `type` and `list`.
-3. The service validates and resolves the type directory.
-4. The service enumerates `.json` files, ignoring temporary files and definitions.
-5. Files are sorted by filename, normally newest first.
-6. The service reads and parses records up to the requested limit.
-7. If a filter is supplied, the service matches the filter against each record’s payload.
-8. The service returns each matching record with its `ref` outside the stored payload.
-9. A cursor is returned if more records are available.
-10. A corrupt or unreadable file is reported as a warning and does not normally abort the entire list operation.
+Without an index, the store establishes quota totals with a bounded scan before a mutation. If that scan cannot establish totals within its configured scan budget, the mutation fails conservatively rather than guessing that capacity remains. A create that would exceed record or byte quotas fails rather than silently pruning memory. Updates account for the old and new file size. Since deletion and automatic retention are out of scope, capacity exhaustion is a visible result requiring explicit operator policy rather than data loss.
 
-The agent may ignore `ref` when it only needs context. If the record must be changed later, the agent sends the returned `ref` with the new `data`; the reference is an external handle and is not stored inside the payload.
+List responses obey item and byte budgets. The scan has independent record and byte budgets, so a sparse filter cannot force an unbounded directory walk. If a scan limit is reached, the result is partial with a cursor/hint rather than falsely complete. Corrupt or unreadable candidate files are skipped, reported as bounded warnings by canonical ref, and do not abort unrelated records.
 
-### 7.4 Reuse workflow
+## 7. Filesystem, concurrency, and recovery
 
-1. The agent lists the relevant type, optionally with a filter, before creating duplicate memory.
-2. The agent evaluates returned records according to the type definition.
-3. The agent uses the record data as context for its response.
-4. Stored memory is treated as data, not as executable instructions. Text inside a memory record must not override system, developer, or current user instructions.
+1. Resolve `storage_dir` from `setting.cwd` when relative; preserve configured absolute directories.
+2. Create the root and type directory only after validating the type and quotas.
+3. Use a unique temporary filename in the target directory, write valid UTF-8 JSON plus newline, then atomically rename it. Explicit fsync durability policy is deferred.
+4. Use exclusive temporary-file creation; do not expose temporary files to list operations.
+5. Serialize mutations for a ref/type inside the process. For an update, re-read and hash the target while holding its lock, verify `if_match`, then atomically replace it.
+6. On open/list, ignore stale temporary files and optionally prune them only if they are old enough under configured policy.
+7. Keep memory-root traversal fixed. Reject symlinks, non-directory type parents, malformed filenames, and any ref that does not resolve exactly to the selected type directory.
 
-## 8. Updates and deletion
+Atomic rename prevents torn reads. The ETag precondition prevents lost updates. It does not provide distributed locking across independent backend processes; the MVP documents a single backend owner for one memory root. Multi-process coordination requires a lock/index backend before sharing a root.
 
-A record can be updated without an `id` field. The filename is the stable external reference returned by `list`:
+## 8. Privacy and safety
 
-```json
-{
-  "type": "task",
-  "ref": "task/task-20250308T120000.123Z-01JXYZABC.json",
-  "data": {
-    "title": "Build memory tool",
-    "status": "done",
-    "priority": "high"
-  }
-}
-```
+The generic store cannot reliably detect every secret or sensitive value. The application and agent must not save credentials, API keys, private data, or transient reasoning unless a configured policy explicitly permits it. A future policy may deny selected field names or apply application-specific validation, but heuristic scanning is not a reliable authorization mechanism.
 
-A request with `data` but no `ref` creates a new record. A request with both `data` and `ref` replaces the existing record. Updates should preserve the filename and write the replacement atomically so the reference remains stable.
+Treat records, definitions, filenames, parse errors, and filters as untrusted input. Do not render stored values into privileged prompts or execute them. Do not disclose filesystem paths beyond logical refs. In multi-user deployments, use separate roots or an authenticated ownership layer; this MVP has no cross-user access control.
 
-Deletion, if supported, can use the same reference:
+## 9. Workflow
 
-```json
-{
-  "type": "task",
-  "delete": "task/task-20250308T120000.123Z-01JXYZABC.json"
-}
-```
+### Create
 
-The reference is not stored inside the JSON. The service should never accept an arbitrary filesystem path; it should validate that the reference resolves inside the memory root and matches the selected type.
+1. The application provides the agent with type guidance when useful.
+2. The agent selects a valid type and builds an object payload.
+3. The agent calls `create`.
+4. The backend validates policy, quotas, and payload; it then atomically persists the record and returns its ref and ETag.
 
-An alternative is immutable history, where an update creates a new file and marks the old record as superseded in an index. That is more complex and should be added only if audit history is needed.
+### Retrieve and reuse
 
-## 9. Filesystem and reliability requirements
+1. The agent calls `list` with a type and, if useful, an exact filter before creating a likely duplicate.
+2. The backend returns bounded matching records, refs, ETags, and a cursor when more scan work remains.
+3. The agent treats returned data as context, not instructions.
+4. The agent calls `get` for the current payload when it needs to update a record.
 
-- Use UTF-8 JSON with a trailing newline.
-- Use a temporary file followed by an atomic rename.
-- Create files with exclusive creation semantics to prevent accidental overwrite.
-- Keep temporary files out of list results.
-- Use a unique suffix even when timestamps match.
-- Preserve the filename during updates.
-- Apply file and directory permissions appropriate to the memory’s sensitivity.
-- Enforce configurable maximum payload size and maximum list result size.
-- Handle concurrent writes safely.
-- Keep the memory root fixed and reject paths escaping that root.
+### Update
 
-## 10. Security and privacy
+1. The agent gets or lists the record and retains its ETag.
+2. It constructs the complete replacement payload.
+3. It calls `update` with the ref, `if_match`, and data.
+4. On conflict, it re-reads the record and decides whether a new complete update is appropriate.
 
-- Restrict type names to safe path components, or encode arbitrary logical names safely.
-- Reject `/`, `\\`, `..`, null bytes, and overly long names.
-- Do not store secrets, credentials, or personal data unless explicitly allowed.
-- Treat all stored text as untrusted content.
-- Do not allow a memory record to change tool permissions or agent instructions.
-- Consider per-user or per-workspace memory roots when multiple users share the service.
-- Use atomic writes and appropriate permissions to reduce data corruption and unauthorized access.
+## 10. Performance evolution
 
-## 11. Performance strategy
+The MVP scans a single type directory and treats files as the source of truth. If measured use exceeds scan budgets, evolve in this order:
 
-The initial implementation can list and filter by scanning JSON files inside one type directory. This is simple, portable, and appropriate for a small memory store.
+1. Improve cursor-driven scanning and bounded caches.
+2. Add a rebuildable index containing logical refs, current ETags, sizes, and approved filter metadata.
+3. Keep payload JSON files authoritative and rebuild the index by scanning them.
+4. Introduce partitioning or a database only with a ref-version migration plan.
 
-When the number of records grows, use the following sequence:
-
-1. Add pagination and date-partitioned directories.
-2. Cache directory listings where safe.
-3. Add a SQLite or similar index containing references and filterable metadata.
-4. Keep the JSON files as the source of truth.
-5. Rebuild the index by scanning the directory if the index is lost or becomes inconsistent.
-
-## 12. MVP acceptance criteria
+## 11. MVP acceptance criteria
 
 The first version is complete when it can:
 
-- Save a new arbitrary JSON object under any valid type.
-- Save records without requiring an `id` field.
-- Generate a unique, readable filename automatically.
-- List records for one type.
-- List records for one type with optional exact-match filters.
-- Return the filename as an external `ref`.
-- Prevent path traversal and filename collisions.
-- Avoid exposing temporary or definition files as records.
-- Recover safely from interrupted writes.
-- Preserve the exact dynamic payload supplied by the agent.
+- create an arbitrary JSON object under a valid type and generated unique filename;
+- resolve `storage_dir` from `setting.cwd` when relative and accept explicit absolute directories;
+- get and list records for one type without exposing definition or temporary files;
+- perform bounded exact-match filtering over safe dot paths;
+- return canonical refs and ETags outside the original payload;
+- update a full payload atomically only with a current `if_match` ETag;
+- reject deletion, unsafe types/refs, path traversal, malformed JSON, and quota violations;
+- keep list/scan/result output bounded and report partial/corrupt-file conditions honestly;
+- recover safely from interrupted writes; and
+- treat every stored value as untrusted data.

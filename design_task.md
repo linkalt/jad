@@ -43,8 +43,8 @@ The canonical actions are `list`, `get`, `add`, `update`, `done`, and `delete`. 
 
 ## Persistence and safety
 
-State is stored in `tools.native.task.storage_path` (default `.tasks.json` relative to `setting.cwd`; absolute paths are used as configured) as an atomic JSON document, guarded by a session-local mutex. IDs are never reused after deletion. A malformed task file is never overwritten: reads and mutations return an operational storage error.
+State is stored as `tasks.json` inside `tools.native.task.storage_dir` (default `.tasks` relative to `setting.cwd`; absolute directories are used as configured) as an atomic JSON document, guarded by a session-local mutex. IDs are never reused after deletion. A malformed task file is never overwritten: reads and mutations return an operational storage error.
 
-`tools.native.task` configures `storage_path`, capacity, and output limits: task count, list count/bytes, title length, tag/document counts and lengths, and storage bytes. Relative storage paths resolve from `setting.cwd`; absolute paths are accepted as explicit harness configuration. These settings remain backend policy rather than routine model arguments.
+`tools.native.task` configures `storage_dir`, capacity, and output limits: task count, list count/bytes, title length, tag/document counts and lengths, and storage bytes. Relative storage directories resolve from `setting.cwd`; absolute directories are accepted as explicit harness configuration. These settings remain backend policy rather than routine model arguments.
 
 The definition is opt-in through `sample/tools/native/task.json` and must exactly match the in-code schema.

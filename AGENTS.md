@@ -153,7 +153,7 @@ Project-specific guidance for AI coding agents.
 
 <!-- ASTRYX:START -->
 Astryx v0.6.2 · 164 components
-CLI: run every command as `npx astryx <cmd>` (shown below as `astryx ...`).
+CLI: run every command as `astryx <cmd>` (shown below as `astryx ...`).
 
 SETUP (once, in your app entry e.g. main.tsx) — without these, components render unstyled:
   import "@astryxdesign/core/reset.css";
@@ -187,3 +187,5 @@ MORE CLI:
 - **DO NOT hardcode configurable values** such as limits, timeouts, feature flags, or enable/disable options. Put them in the configuration file with sensible defaults.
 - Tool implementation guidelines document @tools-guidelines.md.
 - Analyze code before propose/suggest an implementation idea.
+
+cwd: `/home/www/Downloads/tmp/myagent3`

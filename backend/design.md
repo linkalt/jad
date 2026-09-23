@@ -32,7 +32,7 @@ This document defines the first version of the response persistence protocol. Th
 `messages.jsonl` stores one compact JSON event for each committed model response:
 
 ```json
-{"type":"response.completed","response":{"id":"resp_123","status":"completed","model":"gpt-...","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}]}}
+{"type":"response.completed","session_turn":3,"session_step":2,"response":{"id":"resp_123","status":"completed","model":"gpt-...","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}]}}
 ```
 
 The exact fields inside `response` are those supplied by the Responses API. The example is illustrative; fields must not be invented or removed except that `response.output` is assembled from staged completed output items.
@@ -63,24 +63,78 @@ The transcript therefore has two canonical line categories:
 
 The history reader yields raw input items directly and expands each committed `response.completed.response.output` array into input items for the next request. This preserves output order and avoids a custom cache-relevant wrapper. `model.json`, `setting.json`, and tool definition documents remain separate configuration sources.
 
-### 2.2 Configuration loading
+### 2.2 Conversation compaction
+
+Compaction maintains one replaceable `compaction-cache.json`; it does not keep a checkpoint/version history. `paths.messages_backup` stores the pre-compaction `messages.jsonl` (replaced by default, or appended when `compaction.backup_mode` is `append`). `paths.compaction_cache` relocates the compaction cache. `paths.history_cache` relocates the normalized input-history cache and defaults to `history-cache.json` under the resolved `paths.staging` directory. `paths.usage_cache` independently relocates the durable usage summary and defaults to `usage-cache.json` in the same directory. Relative paths resolve from `setting.json`.
+
+Named path profiles use `paths.active_profile` and a `paths.profiles` map. A selected profile overlays matching flat path entries, then built-in defaults; this preserves existing flat configuration and permits shared paths when intentionally omitted. The loader pins the resolved paths for its lifetime; select another profile by reopening the session. Keep transcript/cache paths separate between profiles unless sharing is intentional. Example:
+
+```json
+{
+  "paths": {
+    "active_profile": "profile1",
+    "profiles": {
+      "profile1": {
+        "messages": "profiles/profile1/messages.jsonl",
+        "messages_backup": "profiles/profile1/messages.backup.jsonl",
+        "compaction_cache": "profiles/profile1/staging/compaction-cache.json",
+        "history_cache": "profiles/profile1/staging/history-cache.json",
+        "usage_cache": "profiles/profile1/staging/usage-cache.json",
+        "statecontext": "profiles/profile1/staging/statecontext.json",
+        "model": "profiles/profile1/model.json",
+        "staging": "profiles/profile1/staging",
+        "http_debug": "profiles/profile1/debug/http"
+      }
+    }
+  }
+}
+```
+
+Automatic compaction is evaluated after each completed provider response stream using `response.usage.input_tokens` and `compaction.trigger_tokens`. If the response contains tool calls, compaction removes older history while retaining that just-completed response as an active transcript tail; tool execution and matching outputs can then continue without orphaning calls. The active calls are not part of the compacted cache. Manual compaction is available at `POST /api/sessions/{id}/compact`; the session run lock queues it until active streaming/tool rounds finish. A compaction that would not reduce serialized request history is skipped to avoid repeated no-op compactions.
+
+Compaction first backs up the active transcript, atomically publishes a cache derived from the compactable request history, then atomically rewrites `messages.jsonl` to the preserved active tool-call response (or empties it when there is no in-flight call) and invalidates `history-cache.json`. The cache records the source transcript hash and active tail so startup can recover a crash after publishing the cache but before rewriting the transcript. Future requests are assembled as the configured prompt, compaction-cache items, then history reconstructed from the active transcript.
+
+`compaction.keepbatch.turn.keep` retains the latest user turns. `assistant_final` retains each selected user message and the last assistant message from the latest completed response without function calls (reasoning is omitted); `full` retains user/assistant messages and reasoning while always dropping tool calls/results. `compaction.keepbatch.tools` optionally retains the last N complete tool call/result pairs in `assistant_final` mode; its default is zero. Unmatched calls/results are never retained.
+
+### 2.3 Usage summary cache
+
+`usage-cache.json` is an atomic, incremental cache separate from `history-cache.json`. It stores cumulative token totals, the latest completed response's usage and turn/step, counters, and a transcript prefix checkpoint. Cached input tokens are shown separately but are included in input-token totals. Normal appends validate the checkpoint and process only the newly appended transcript bytes; a compaction advances the checkpoint without discarding accumulated usage. Session listings read the cached summary directly rather than re-aggregating usage from `messages.jsonl`; active snapshots refresh the cache incrementally through the session store. A missing/invalid cache or an unrecognized transcript rewrite triggers a rebuild from the transcript and available backup; ordinary appends process only new bytes. If compaction may have erased responses before a rebuild, `history_partial` signals that totals may be incomplete. `session_turn` counts submitted turns and `session_step` distinguishes model responses within one turn; older records without metadata receive best-effort positions during cache reconstruction. SSE `usage` events are emitted after each committed provider response and cache refresh, before tool execution or the next response round; committed `response.incomplete` events are included, with any absent usage fields left absent. Failed or uncommitted streams do not emit a response-level usage update.
+
+`statecontext.enabled` opts into tool-provided state snapshots. Currently `trigger: ["compaction"]` refreshes the snapshot after successful manual or automatic history compaction. With automatic compaction that preserves tool calls, refresh happens after their results are appended. The latest snapshot replaces the previous file at `paths.statecontext` (default `staging/statecontext.json`) and remains available on subsequent requests until the next successful trigger. It is appended after compacted history and active transcript/tool results, not before the cache-stable prompt; the snapshot is not written into the transcript or compaction cache. Its configured `role` is `system` or `developer`, and `max_bytes` bounds the rendered state data.
+
+Only `task`, `process`, and `memory` currently provide state context. Their options live with their native-tool settings: `tools.native.task.statecontext` chooses task statuses and a limit; `tools.native.process.statecontext` chooses process states and a limit; `tools.native.memory.statecontext` is a list of dynamic `{type, filter, limit}` selectors. Memory snapshots use read-only listing (no cursor creation). Rendered values are explicitly labeled as untrusted data and the model is told not to follow instructions or policy embedded in them. Example:
+
+```json
+{
+  "statecontext": {"enabled": true, "trigger": ["compaction"], "tools": ["task", "process", "memory"], "role": "developer"},
+  "paths": {"statecontext": "staging/statecontext.json"},
+  "tools": {"native": {
+    "task": {"statecontext": {"statuses": ["in-progress", "done"], "limit": 25}},
+    "process": {"statecontext": {"states": ["running"], "limit": 20}},
+    "memory": {"statecontext": [{"type": "project", "filter": {"status": "active"}, "limit": 10}]}
+  }}
+}
+```
+
+### 2.3 Configuration loading
 
 `src/config.ts` loads and validates the session configuration. JSON Schema definitions are kept in `sample/schemes/model.schema.json` and `sample/schemes/setting.schema.json`:
 
 - `model.json` is required and contains `provider`, `model`, optional `base_url`, an `api_key_env` name, and request-generation options;
 - `setting.json` is optional and defaults to the session directory name, the global JAD root as an absolute `cwd`, and an empty system prompt;
 - API keys are never read from JSON files;
+- `setting.json` is re-read from disk, so an edit applies to the next turn without restarting the backend; compiled source changes are not, and need a rebuild plus restart;
 - `cwd` must be an absolute existing directory; relative working directories are rejected;
-- unknown fields are preserved for forward compatibility;
+- unknown fields are preserved for forward compatibility, except under `tools.native.<tool>`, where an unsupported key (a singular `path` beside `paths`, or a `tools.native.mcp` block) is refused at load time with a suggestion;
 - normalized model and setting objects receive canonical SHA-256 hashes;
-- `setting.json.paths` optionally relocates the transcript, model file, staging directory, and HTTP debug directory; relative paths resolve from the session `setting.json` directory and absolute paths are used as-is;
+- `setting.json.paths` optionally relocates the transcript, transcript backup, compaction cache, model file, staging directory, and HTTP debug directory; relative paths resolve from the session `setting.json` directory and absolute paths are used as-is; a leading `~` expands to the process home directory in `cwd`, these paths, `tools.native.<tool>.storage_dir`, `tools.native.write|edit.backup_dir`, and native path rules;
 - `setting.json.http_debug` is disabled by default and controls native request/response diagnostics;
 - enabled diagnostics write numbered JSON records to the configured `paths.http_debug` directory, defaulting to `debug/http/request1`, `debug/http/response1`, and subsequent request/response files;
 - API-key and authorization headers are redacted, and bodies are opt-in and capped by `max_body_bytes`;
 - `tool_definition_paths` selects definition documents relative to the global JAD root; absolute paths are used as-is;
 - a tool must also be present in the per-session `tools` policy to be exposed, so omitted tools are disabled;
 - native `read` accepts request paths relative to `cwd` or as absolute paths;
-- `tools.native.read.paths` contains normalized `{action: "allow"|"deny", path}` rules, with relative rule paths resolved from the global JAD root; paths inside `cwd` are allowed by default, paths outside `cwd` require an allow rule, and deny rules take precedence;
+- `tools.native.read.paths` accepts either normalized `{action: "allow"|"deny", path}` rules or the `{allow: [...], deny: [...]}` object whose entries are path strings; relative rule paths resolve from the global JAD root. Paths inside `cwd` are always allowed, paths outside `cwd` require an allow rule, deny rules take precedence, and an object form with an empty `allow` list lifts the cwd restriction entirely (the tool may then reach any path the process can);
 - native `read` uses `max_bytes` as its output-content cap and defaults its optional `limit` to 250;
 - native `read` supports `includeContent: false` for stat-only file metadata without loading content;
 - native `read` chooses the representation itself: UTF-8 text when the bytes decode, base64 otherwise (reported as `encoding: base64` with `encoding_reason: invalid_utf8`); an explicit `contentEncoding` is honoured, and asking for `utf8` on binary content returns `unsupported_encoding` with `error_code: binary_file` and a suggestion;
@@ -98,7 +152,7 @@ The history reader yields raw input items directly and expands each committed `r
 - native `bash` guarantees apply to the process group: a command that moves itself into a new group (`setsid`) or a new session escapes the group kill, which is the documented limit of the mechanism (a cgroup would be needed to contain it);
 - native `bash` child environment = backend environment minus the harness credential (`model.api_key_env`, always removed) and `tools.native.bash.env_deny`, plus `tools.native.bash.env` additions (`NO_COLOR`, `TERM=dumb`, `GIT_TERMINAL_PROMPT=0`, pager settings); this keeps `bash: env` from printing the harness API key while leaving `PATH`, `HOME`, and toolchain tokens intact;
 - native `bash` bounds output per stream with four numbers that together fit `max_bytes` (stdout 16 KiB head / 32 KiB tail, stderr 4 KiB head / 12 KiB tail by default), cuts lines past `max_line_chars`, and strips ANSI escapes and control characters; stdout and stderr are kept in separate windows and rendered as labeled sections only when both wrote (`content_stream` reports `stdout`, `stderr`, or `mixed`), so a chatty stdout cannot evict stderr; truncation stays `status: ok` with `truncated`, `truncation_reason` (`max_bytes` or `timeout`), per-stream produced/shown/omitted byte counts, and a marker line, while `binary_output: true` flags output that is not valid text;
-- native `bash` tees each stream to a spill file while it is read, because the middle of a truncated stream exists nowhere else: `spill.stdout_full`/`stderr_full` (templates over `{cwd}`, `{session_dir}`, `{session_name}`, `{call_id}`, `{stream}`) name the complete files, `truncated_only` deletes a file whose output the model saw in full, `cap_bytes` stops the write and reports `stdout_full_capped`/`stderr_full_capped`, a write failure reports `spill_error` without changing the command's result, expired files are pruned by `spill.retention_days` matching only the template's own names, and a template resolving to a file the model could not read back is a configuration error unless `spill.allow_unreadable` is set;
+- native `bash` tees each stream to a spill file while it is read, because the middle of a truncated stream exists nowhere else: `spill.storage_dir` selects a cwd-relative directory and the tool generates a distinct per-call/per-stream filename; `truncated_only` deletes a file whose output the model saw in full, `cap_bytes` stops the write and reports `stdout_full_capped`/`stderr_full_capped`, a write failure reports `spill_error` without changing the command's result, expired generated files are pruned by `spill.retention_days` without touching unrelated files, and an unreadable target is a configuration error unless `spill.allow_unreadable` is set. Deprecated `spill.stdout_full`/`stderr_full` templates remain temporarily supported for existing settings and preserve their template-based behavior;
 - native `bash` replaces `capture_bytes` and `head_ratio` with the per-stream budgets and refuses a session that still sets either, because one shared window let either stream evict the other;
 - native `bash` reports `status: error` for a timeout (`timeout`), a non-zero exit (`nonzero_exit`, with the full output still returned and a hint for 126/127), a signal (`signaled`), an unusable shell (`shell_unavailable`), and spawn failures (`spawn_failed`); `cwd` problems reuse the shared path policy errors (`not_found`, `not_a_directory`, `path_outside_workspace`, `path_denied`);
 - native `bash` is not a sandbox: `tools.native.bash.paths` (defaulting to the write rules) only selects the starting directory, and the command itself runs with the backend user's rights, which is why the tool stays opt-in and its model-facing description promises no containment;
@@ -140,8 +194,16 @@ Example storage and HTTP debug paths:
     "durability": "turn",
     "max_item_bytes": 10485760
   },
+  "compaction": {
+    "auto_enabled": true,
+    "trigger_tokens": 200000,
+    "backup_mode": "replace",
+    "keepbatch": {"tools": 0, "turn": {"type": "assistant_final", "keep": 1}}
+  },
   "paths": {
     "messages": "data/messages.jsonl",
+    "messages_backup": "data/messages.backup.jsonl",
+    "compaction_cache": "data/compaction-cache.json",
     "model": "config/model.json",
     "staging": "runtime/staging",
     "http_debug": "/var/tmp/agent-harness/http"
@@ -197,7 +259,24 @@ Runs are serialized per `AgentSession` instance. Tool-call schema failures and e
 - `GET /api/health` checks that the server is available;
 - `GET /api/sessions/:id` returns the persisted transcript snapshot;
 - `GET /api/sessions/:id/tools` returns the effective provider-neutral tool definitions;
-- `POST /api/sessions/:id/run` accepts `{ "input": "..." }` and emits SSE `ui.message`, `completed`, `done`, or `error` events.
+- `POST /api/sessions/:id/run` accepts `{ "input": "..." }` and emits SSE `ui.message`, `completed`, `done`, or `error` events;
+- `GET /api/sessions/:id/run/stream` attaches to the run a session is executing, replaying its latest `ui.message` snapshot and then live events; it answers `event: idle` when nothing is running;
+- `POST /api/sessions/:id/run/stop` aborts the run in flight and returns `{ "stop": { "stopped": true, "turn_id": "..." } }`.
+
+### 2.4.1 Runs outlive their request
+
+A run stays registered in `src/run-registry.ts` after the request that started it disappears, because closing a browser tab must not discard an accepted turn. The registry keeps one entry per session with the newest normalized `WebUiMessage` snapshot plus a subscriber set, so:
+
+- the transcript snapshot and the session list report `run: { turn_id, started_at, status }` while a turn is in flight, which is how a reloaded page discovers a run it did not start;
+- attaching means replaying that snapshot (every `ui.message` payload is already a complete message, so no delta history has to be buffered) and then streaming the remaining events to any number of clients, including the request that started the run;
+- stopping is an explicit request, not a side effect of disconnecting: the abort signal cancels the provider request, so the stopped round commits no response while already-committed rounds stay in the transcript;
+- a finished run is retained for `server.run_state_retention_ms` (default 30000, `setting.json`) so a reload that lands just after completion still receives its `completed`/`done` pair.
+
+### 2.4.2 Streaming tool arguments
+
+A function call is announced by `response.output_item.added`, then its arguments arrive as `response.function_call_arguments.delta` events and are confirmed by `response.function_call_arguments.done`; the finished item arrives with `response.output_item.done`. The normalizer therefore appends the `tool_call` part as soon as the item is added (marking it `partial: true`), grows its `arguments` with each delta, and lets `done`/`output_item.done` replace the text and clear the marker — so a long `write`/`edit` body is visible while it streams, not only once the call is complete. `complete()` never leaves the marker set.
+
+Snapshots are cumulative, so forwarding one per delta would grow quadratically (a 5.9 KB `write` body produced 1244 snapshots and 4.8 MB). `src/stream-emitter.ts` coalesces the in-progress snapshots to at most one per `server.tool_stream_interval_ms` (default 120), emitting immediately when the window is open and flushing the newest state before a tool result or a terminal event.
 
 The session roots are configured by the system `setting.json` `session_roots` array. Each root path is resolved relative to the directory containing that file and contains session subdirectories; that same directory is the global JAD root used for other relative paths. The same file's `server` object controls host, port, and request-body size defaults; explicit server options and environment variables override those values. A future `jad --config <path-to-setting.json>` entry point will select the system setting explicitly. `JAD_ROOT_SETTING_PATH` selects another system setting file, while `JAD_SESSIONS_DIR` and the `sessionsDir` server option remain single-root compatibility overrides. The default fallback is `.jad/sessions` (or `../.jad/sessions`). When multiple roots are configured, API session references are namespaced as `root-id:session-id` to avoid collisions. The frontend Vite server proxy target is configured in `frontend/src/config.json`. Start the local integration with `npm run server --prefix backend` and `npm run dev --prefix frontend` from the project root. The backend owns its TypeScript compiler and Node types; the frontend is only an HTTP/SSE client and is not a backend build dependency.
 
@@ -422,6 +501,10 @@ Do not write a synthetic `response.completed` record. Retain the staged items an
 
 The local staging protocol can preserve completed items, but the Responses API stream should not be assumed to support arbitrary item-level resume. If the provider connection is lost, the harness may need to restart the entire request. It must not splice items from a new response into an old response unless response identity and output equivalence are explicitly proven.
 
+### Missing transcript file
+
+A session that has never committed a response has no `messages.jsonl` yet. Reading the usage checkpoint stats the transcript, so a missing file is treated as an empty transcript (and created lazily) instead of failing the request; an empty session must be able to answer `GET /api/sessions/:id` and accept a run.
+
 ## 9. Durability and performance
 
 The writer should support a configurable durability mode:
@@ -502,7 +585,7 @@ The first implementation should test at least:
 
 ## 12. Deliberate scope boundaries
 
-This design standardizes assistant response completion records, raw user/tool input items, and the initial native `read` tool. It does not yet implement MCP transport, destructive native tools, or automatic retry strategy.
+This design standardizes assistant response completion records, raw user/tool input items, and native tool execution. MCP client support is described below; destructive native tools and automatic retry strategy remain outside this design.
 
 The design also assumes that cache compatibility means stable structural/serialized response data. Provider prompt-cache hit rate additionally depends on stable input history, model settings, tools, and other request fields; storing the response event alone cannot guarantee a provider cache hit.
 
@@ -517,3 +600,41 @@ The design is complete when:
 - final response serialization does not require retaining the full response in application memory;
 - staging can be safely replayed or discarded without corrupting session history;
 - the final record remains compatible with the Responses API event shape.
+
+## 14. MCP client tools
+
+`setting.json.mcp_servers` is an opt-in list of server references. Each entry has a stable `id`, an absolute `config_path` or a path relative to the normalized session `cwd`, an `enabled` flag (default false), and exact remote tool names in `deny_tools`. Disabled entries are not read, connected, or launched. A server config file declares either an MCP stdio command or a Streamable HTTP URL. Stdio `transport.env` supplies literal process settings; use `env_from` for secrets referenced by environment-variable name. HTTP credentials use `headers_from`.
+
+The session-owned `McpServerManager` keeps enabled clients alive across provider tool rounds, refreshes tool discovery at the start of each run, and closes clients with the session. Provider-visible names are namespaced and mapped back to the original `(server id, tool name)` for dispatch. Deny filtering happens before tool definitions are advertised. MCP input schemas are compiled for runtime argument validation; server/config errors identify the server and config path.
+
+MCP text results become `input_text`; images become Responses `input_image` data URLs; embedded image resources become images and other binary resources become `input_file`; resource links are represented as text references. `structuredContent` is serialized as text. Audio is not enabled: audio blocks are represented by an explicit omission note. Per-server `timeout_ms` and `max_result_bytes` bound calls and model-bound output. The UI renders textual summaries/placeholders for image/file outputs and does not forward base64 media to the browser.
+
+Example session reference:
+
+```json
+{
+  "mcp_servers": [
+    {"id": "docs", "config_path": "mcp/docs.json", "enabled": true, "deny_tools": ["delete_document"]}
+  ]
+}
+```
+
+Example `mcp/docs.json` for a local server:
+
+```json
+{
+  "schema_version": 1,
+  "transport": {
+    "type": "stdio",
+    "command": "node",
+    "args": ["server.js"],
+    "cwd": "tools/docs-server",
+    "env": {"LOG_LEVEL": "warn"},
+    "env_from": {"DOCS_TOKEN": "DOCS_TOKEN"}
+  },
+  "timeout_ms": 30000,
+  "max_result_bytes": 1048576
+}
+```
+
+The server config's `cwd` is optional and relative to the session `cwd`. The equivalent remote transport uses `{"type":"streamable_http","url":"https://…","headers_from":{"Authorization":"MCP_AUTH_HEADER"}}`.

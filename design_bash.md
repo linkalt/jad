@@ -154,6 +154,7 @@ hint: the complete output is in .bash-output/bash-c1.stdout.log; read or grep it
 | Returned bytes | `max_bytes` | 65536 | Ceiling the four stream budgets must fit inside. |
 | stdout window | `stdout.head_bytes` / `stdout.tail_bytes` | 16384 / 32768 | What the model sees of stdout: its start and its end. |
 | stderr window | `stderr.head_bytes` / `stderr.tail_bytes` | 4096 / 12288 | Same for stderr, which noise from stdout can no longer evict. |
+| Spill directory | `spill.storage_dir` | `.bash-output` | Relative paths resolve from the session cwd; filenames are generated per call and stream. |
 | Spill file | `spill.cap_bytes` | 67108864 | Bytes per stream written to disk before the file is left incomplete. |
 | Spill retention | `spill.retention_days` | 14 | Expired spill files are pruned; 0 keeps them until the session directory goes. |
 | Line length | `max_line_chars` | 2000 | Cuts pathological single lines. |
@@ -175,9 +176,8 @@ hint: the complete output is in .bash-output/bash-c1.stdout.log; read or grep it
   there is still no cursor-based paging over the *content* block.
 * `spill.keep: "truncated_only"` (the default) deletes the file again when the model saw the whole
   stream, so a spill only survives when it is the only copy of something; `"always"` keeps one file per
-  call per stream as a durable log. Spill files are pruned by `spill.retention_days`, matching only names
-  the configured template could have produced, so a project directory the spill lives in never loses
-  unrelated files.
+  call per stream as a durable log. Spill files are pruned by `spill.retention_days`, matching only the
+  generated per-call/per-stream filename pattern, so a project directory never loses unrelated files.
 * Control characters: ANSI escape sequences and other C0 control bytes (except `\n`/`\t`) are stripped
   when `strip_ansi` is true, so colour codes cannot eat context or smuggle escape sequences into the UI.
   Output that still contains NUL or U+FFFD gets `binary_output: true` and a hint to use `read` with
@@ -236,7 +236,8 @@ Concrete hygiene the tool does own:
 * **Spill scope:** a spill file holds exactly what the command already printed, so it grants the model no
   capability the call did not already have. It is written only to a location the configuration proved
   readable through the session cwd or a `read`/`grep` allow rule (and not covered by a deny rule), unless
-  `spill.allow_unreadable` says otherwise; pruning matches only names the template itself could produce.
+  `spill.allow_unreadable` says otherwise; pruning matches only generated spill filenames. Legacy templates
+  remain accepted temporarily and retain their own matching/pruning rules.
 * **Bounded blast radius in rounds:** calls are sequential under the session mutex, and the timeout caps
   how long one command can hold the turn.
 
@@ -263,8 +264,7 @@ turn waits for `timeout_ms`. Wiring cancellation into `AgentSession.run` is a se
         "keep": "truncated_only",  // or "always": a file per call
         "cap_bytes": 67108864,
         "retention_days": 14,
-        "stdout_full": "{cwd}/.bash-output/bash-{call_id}.{stream}.log",
-        "stderr_full": "{cwd}/.bash-output/bash-{call_id}.{stream}.log",
+        "storage_dir": ".bash-output",
         "allow_unreadable": false   // false refuses a location read/grep could not open
       },
       "max_line_chars": 2000,
@@ -278,14 +278,18 @@ turn waits for `timeout_ms`. Wiring cancellation into `AgentSession.run` is a se
 }
 ```
 
-* Spill placeholders are `{cwd}` (the session cwd, the root every native tool can read),
-  `{session_dir}`, `{session_name}`, `{call_id}`, and `{stream}`. A template must contain `{call_id}`
-  (otherwise every call overwrites the last one) and, when both streams share one template, `{stream}`.
-  Relative templates resolve against the global jad root, like every other configured path.
-* Spill locations are validated so the model can retrieve them: the resolved file must be readable
-  through the session cwd or through a `tools.native.read`/`grep` allow rule, and not covered by a deny
-  rule, or the session refuses to load unless `spill.allow_unreadable` is set. A spill that the model
-  cannot read would be worse than no spill at all.
+* `spill.storage_dir` is a plain directory path, resolved relative to the session cwd (absolute paths are
+  accepted). The tool generates `bash-{call_id}.{stream}.log` names internally, encoding call IDs so they
+  cannot introduce path separators and bounding very long names. `stdout_full`/`stderr_full` remain result
+  metadata identifying retained files; they are no longer the normal configuration keys.
+* Legacy `stdout_full`/`stderr_full` path templates are accepted temporarily for existing settings and
+  marked deprecated in the schema. If either is configured, legacy mode takes precedence and an explicit
+  non-default `storage_dir` cannot be combined with them; remove both templates to migrate. Legacy
+  templates still support `{cwd}`, `{session_dir}`, `{session_name}`, `{call_id}`, and `{stream}`.
+* Spill locations are validated so the model can retrieve them: generated files (or legacy template
+  targets) must be readable through the session cwd or through a `tools.native.read`/`grep` allow rule,
+  and not covered by a deny rule, or the session refuses to load unless `spill.allow_unreadable` is set.
+  A spill that the model cannot read would be worse than no spill at all.
 * `capture_bytes` and `head_ratio` are gone: they described one shared window for both streams, which
   let a chatty stdout evict stderr. Sessions that still set them fail to load with the replacement named.
 
@@ -303,7 +307,7 @@ turn waits for `timeout_ms`. Wiring cancellation into `AgentSession.run` is a se
 | --- | --- |
 | `backend/src/tools/native/bash.ts` | Definition, normalization, `cwd` resolution against the policy, result rendering, metadata, error mapping. |
 | `backend/src/tools/native/child.ts` | Reusable child-process runner: spawn options, timeout timer, SIGTERM→SIGKILL ladder with the kill deadline, process-group kill, spawn-error classification, plus the per-stream `OutputCollector` (own head/tail windows per stream, streaming UTF-8 decode, line trimming, control-character stripping) and the `SpillWriter` tee. |
-| `backend/src/tools/native/spill.ts` | Spill templates: placeholder resolution, the prune matcher built from the template's own shape, directory preparation, and retention pruning. |
+| `backend/src/tools/native/spill.ts` | Spill filename safety, legacy template resolution, generated/legacy prune matchers, directory preparation, and retention pruning. |
 | `backend/src/tools/native/registry.ts` | `bashSpec`: `required: ["command"]`, `exampleOperation: {command: "npm test"}`, `configured`, `build`. |
 | `backend/src/config.ts` | `NativeBashToolSettings` + validation and defaults; `paths` inheritance from write. |
 | `sample/tools/native/bash.json` | Shipped definition document. |
