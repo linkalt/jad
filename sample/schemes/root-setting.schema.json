@@ -63,6 +63,13 @@
           "maximum": 1000,
           "default": 50,
           "description": "Largest number of turns one cursor page may return."
+        },
+        "max_inline_part_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216,
+          "default": 16384,
+          "description": "Inline text kept per transcript part, in bytes. A larger part is cut for transport, reports its full size, and is re-fetched whole through the message endpoint; 0 sends parts uncut."
         }
       },
       "additionalProperties": true,

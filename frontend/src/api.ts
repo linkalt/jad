@@ -4,9 +4,14 @@ function apiUrl(path: string): string {
   return `${appConfig.api_base_path.replace(/\/$/, '')}${path}`;
 }
 
+export interface WebUiPartTruncation {
+  /** Full UTF-8 size of the text before it was cut for transport. */
+  bytes: number;
+}
+
 export type WebUiTextPart =
-  | {type: 'reasoning'; text: string}
-  | {type: 'text'; text: string};
+  | {type: 'reasoning'; text: string; truncated?: WebUiPartTruncation}
+  | {type: 'text'; text: string; truncated?: WebUiPartTruncation};
 
 export interface WebUiToolCallPart {
   type: 'tool_call';
@@ -15,6 +20,7 @@ export interface WebUiToolCallPart {
   arguments: string;
   /** True while the provider is still streaming this call's arguments. */
   partial?: boolean;
+  truncated?: WebUiPartTruncation;
 }
 
 export interface WebUiToolResultPart {
@@ -22,6 +28,7 @@ export interface WebUiToolResultPart {
   callId: string;
   output: string;
   status: 'success' | 'error' | 'unknown';
+  truncated?: WebUiPartTruncation;
 }
 
 export type WebUiPart = WebUiTextPart | WebUiToolCallPart | WebUiToolResultPart;
@@ -34,6 +41,11 @@ export interface WebUiMessage {
   parts: WebUiPart[];
   status?: 'streaming' | 'complete';
   reasoningContent?: string;
+  /**
+   * Turn that produced this message, set when a part was capped. Passing it to
+   * `fetchSessionMessage` returns the message with its parts whole.
+   */
+  cursor?: number;
 }
 
 export interface ResponseTokenUsage {
@@ -194,8 +206,40 @@ export async function fetchSession(
   );
 }
 
-export async function fetchSessionTools(sessionId: string): Promise<ToolDefinition[]> {
-  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/tools`));
+/**
+ * One transcript message, whole.
+ *
+ * A snapshot caps the inline text of large parts, so a message it sent may carry
+ * a cut reasoning summary, call arguments or tool output. `cursor` is the turn
+ * the message came from, which a capped transcript message publishes; a message
+ * from the compacted prefix has none and is served from the compaction cache.
+ */
+export async function fetchSessionMessage(
+  sessionId: string,
+  messageId: string,
+  cursor?: number,
+): Promise<WebUiMessage> {
+  const query = new URLSearchParams();
+  if (cursor !== undefined) {
+    query.set('cursor', String(cursor));
+  }
+  const suffix = query.size === 0 ? '' : `?${query.toString()}`;
+  const response = await fetch(
+    apiUrl(
+      `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}${suffix}`,
+    ),
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  if (!isRecord(value) || !isRecord(value.message)) {
+    throw new Error('the server returned an invalid message');
+  }
+  return value.message as unknown as WebUiMessage;
+}
+
+export async function fetchSessionTools(sessionId: string): Promise<ToolDefinition[]> {  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/tools`));
   if (!response.ok) {
     throw new Error(await readError(response));
   }

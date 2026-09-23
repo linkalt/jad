@@ -73,6 +73,7 @@ test("loads configurable root server settings", async () => {
       conditional_requests: true,
       snapshot_turns: 24,
       max_page_turns: 50,
+      max_inline_part_bytes: 16 * 1024,
     });
 
     await writeFile(
@@ -125,6 +126,17 @@ test("loads configurable root server settings", async () => {
     await assert.rejects(
       () => loadRootServerSettings({rootSettingPath: settingPath}),
       /server\.max_page_turns/,
+    );
+    await writeFile(
+      settingPath,
+      JSON.stringify({
+        server: {max_inline_part_bytes: -1},
+        session_roots: [{path: ".jad/sessions"}],
+      }),
+    );
+    await assert.rejects(
+      () => loadRootServerSettings({rootSettingPath: settingPath}),
+      /server\.max_inline_part_bytes/,
     );
   } finally {
     await rm(root, {recursive: true, force: true});
@@ -2160,6 +2172,264 @@ test("reads older turns through a cursor and rejects invalid cursors", async () 
       `${baseUrl}/api/sessions/session1?turns=100`,
     )).json()) as { messages: unknown[]; page: { has_more: boolean } };
     assert.equal(limited.page.has_more, false);
+  } finally {
+    await running.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A transcript whose only turn produces a tool result far larger than the
+ * inline cap, so the snapshot has to cut it and the message endpoint has to
+ * hand it back whole.
+ */
+async function writeCappedSession(
+  root: string,
+  outputBytes: number,
+): Promise<{sessionDir: string; output: string}> {
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({ schema_version: 1, provider: "fake", model: "fake-model" }),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({ schema_version: 1, session_name: "capped", cwd: sessionDir }),
+  );
+  const output = `{"status":"ok","path":"big.txt"}\n${"x".repeat(outputBytes)}`;
+  const records = [
+    { type: "message", role: "user", content: [{ type: "input_text", text: "read big.txt" }] },
+    {
+      ...completedEvent(
+        [
+          {
+            type: "function_call",
+            call_id: "call-1",
+            name: "read",
+            arguments: JSON.stringify({ path: "big.txt" }),
+          },
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "done reading" }],
+          },
+        ],
+        "r-1-1",
+      ),
+      session_turn: 1,
+      session_step: 1,
+    },
+    { type: "function_call_output", call_id: "call-1", output },
+  ];
+  await writeFile(
+    join(sessionDir, "messages.jsonl"),
+    records.map((record) => `${JSON.stringify(record)}\n`).join(""),
+  );
+  return { sessionDir, output };
+}
+
+test("a snapshot caps large parts and the message endpoint returns them whole", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-capped-"));
+  const { output } = await writeCappedSession(root, 20_000);
+
+  const running = createAgentServer({ sessionsDir: root, maxInlinePartBytes: 64 });
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const snapshot = (await (await fetch(`${baseUrl}/api/sessions/session1`)).json()) as {
+      messages: Array<{
+        id: string;
+        cursor?: number;
+        text: string;
+        parts: Array<{ type: string; output?: string; truncated?: { bytes: number } }>;
+      }>;
+    };
+    const assistant = snapshot.messages.find((message) => message.id === "r-1-1");
+    assert.ok(assistant, "the response id names the assistant message");
+    const result = assistant.parts.find((part) => part.type === "tool_result");
+    assert.ok(result);
+    assert.equal(Buffer.byteLength(result.output ?? "", "utf8"), 64);
+    assert.deepEqual(result.truncated, { bytes: Buffer.byteLength(output, "utf8") });    assert.equal(assistant.cursor, 0, "the turn starts at the first record");
+    // The final text of the same message is small enough to stay inline.
+    assert.equal(assistant.text, "done reading");
+    const user = snapshot.messages.find((message) => message.text === "read big.txt");
+    assert.ok(user);
+    assert.equal(user.cursor, undefined, "nothing was capped for the user message");
+
+    // The rest of the part, fetched by the cursor the snapshot published.
+    const hydrated = (await (await fetch(
+      `${baseUrl}/api/sessions/session1/messages/r-1-1?cursor=${assistant.cursor}`,
+    )).json()) as {
+      message: {
+        id: string;
+        text: string;
+        parts: Array<{ type: string; output?: string; truncated?: { bytes: number } }>;
+      };
+    };
+    assert.equal(hydrated.message.id, "r-1-1");
+    assert.equal(hydrated.message.text, "done reading");
+    const hydratedResult = hydrated.message.parts.find((part) => part.type === "tool_result");
+    assert.ok(hydratedResult);
+    assert.equal(hydratedResult.output, output);
+    assert.equal(hydratedResult.truncated, undefined);
+
+    // A cursor that is not a turn start cannot address a message.
+    const staleCursor = await fetch(
+      `${baseUrl}/api/sessions/session1/messages/r-1-1?cursor=7`,
+    );
+    assert.equal(staleCursor.status, 404);
+    const unknownMessage = await fetch(
+      `${baseUrl}/api/sessions/session1/messages/r-9-9?cursor=0`,
+    );
+    assert.equal(unknownMessage.status, 404);
+    // Without a cursor the request is answered from the compacted prefix, which
+    // this transcript message is not part of.
+    const noCursor = await fetch(`${baseUrl}/api/sessions/session1/messages/r-1-1`);
+    assert.equal(noCursor.status, 404);
+    const badCursor = await fetch(`${baseUrl}/api/sessions/session1/messages/r-1-1?cursor=x`);
+    assert.equal(badCursor.status, 400);
+
+    // The cap is a transport concern only: the transcript keeps every byte.
+    const transcript = await readFile(join(root, "session1", "messages.jsonl"), "utf8");
+    const stored = transcript
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { type: string; output?: string });
+    const storedResult = stored.find((record) => record.type === "function_call_output");
+    assert.equal(storedResult?.output, output);
+  } finally {
+    await running.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a limit of zero disables the cap", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-uncapped-"));
+  const { output } = await writeCappedSession(root, 20_000);
+
+  const running = createAgentServer({ sessionsDir: root, maxInlinePartBytes: 0 });
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const snapshot = (await (await fetch(`${baseUrl}/api/sessions/session1`)).json()) as {
+      messages: Array<{ parts: Array<{ type: string; output?: string }>; cursor?: number }>;
+    };
+    const result = snapshot.messages
+      .flatMap((message) => message.parts)
+      .find((part) => part.type === "tool_result");
+    assert.ok(result);
+    assert.equal(result.output, output);
+    assert.equal(snapshot.messages.some((message) => message.cursor !== undefined), false);
+  } finally {
+    await running.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A session that has compacted: the transcript holds the retained tail and the
+ * compacted prefix lives in the staging cache, which is what a snapshot sends
+ * in front of it.
+ */
+async function writeCompactedSession(
+  root: string,
+  finalText: string,
+): Promise<{sessionDir: string}> {
+  const sessionDir = join(root, "session1");
+  const staging = join(sessionDir, "staging");
+  await mkdir(staging, { recursive: true });
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({ schema_version: 1, provider: "fake", model: "fake-model" }),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({ schema_version: 1, session_name: "compacted", cwd: sessionDir }),
+  );
+  // The prefix a compaction retained: the user turn and the assistant final.
+  await writeFile(
+    join(staging, "compaction-cache.json"),
+    JSON.stringify({
+      schema_version: 1,
+      source_sha256: "0".repeat(64),
+      items: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "first question" }] },
+        {
+          type: "message",
+          role: "assistant",
+          id: "gen-final-1",
+          content: [{ type: "output_text", text: finalText }],
+        },
+      ],
+      assistant_final_items: [],
+      active_tail: [],
+    }),
+  );
+  await writeFile(
+    join(sessionDir, "messages.jsonl"),
+    `${JSON.stringify({ type: "message", role: "user", content: [{ type: "input_text", text: "second question" }] })}\n${JSON.stringify({
+      ...completedEvent(
+        [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "second answer" }] }],
+        "r-2-1",
+      ),
+      session_turn: 2,
+      session_step: 1,
+    })}\n`,
+  );
+  return { sessionDir };
+}
+
+test("a capped message from the compacted prefix is returned whole", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-compacted-"));
+  const finalText = `{"status":"ok"}\n${"c".repeat(30_000)}`;
+  await writeCompactedSession(root, finalText);
+
+  const running = createAgentServer({ sessionsDir: root, maxInlinePartBytes: 128 });
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const snapshot = (await (await fetch(`${baseUrl}/api/sessions/session1`)).json()) as {
+      messages: Array<{
+        id: string;
+        cursor?: number;
+        parts: Array<{ type: string; text?: string; truncated?: { bytes: number } }>;
+      }>;
+    };
+    const final = snapshot.messages.find((message) => message.id === "gen-final-1");
+    assert.ok(final, "the compacted final is part of the snapshot");
+    const part = final.parts.find((candidate) => candidate.type === "text");
+    assert.ok(part);
+    assert.equal(Buffer.byteLength(part.text ?? "", "utf8"), 128);
+    assert.deepEqual(part.truncated, { bytes: Buffer.byteLength(finalText, "utf8") });
+    assert.equal(final.cursor, undefined, "a compacted message has no turn cursor");
+
+    // No cursor: the message is served from the head the view already holds.
+    const hydrated = (await (await fetch(
+      `${baseUrl}/api/sessions/session1/messages/gen-final-1`,
+    )).json()) as { message: { id: string; text: string } };
+    assert.equal(hydrated.message.id, "gen-final-1");
+    assert.equal(hydrated.message.text, finalText);
   } finally {
     await running.close();
     await rm(root, { recursive: true, force: true });

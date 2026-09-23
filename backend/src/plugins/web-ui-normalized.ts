@@ -8,3 +8,7 @@ export {
   responseParts,
   WebUiNormalizedRun,
 } from "./web-ui/normalize-web-ui.js";
+export {
+  capWebUiMessages,
+  type WebUiPartCapOptions,
+} from "./web-ui/part-cap-web-ui.js";

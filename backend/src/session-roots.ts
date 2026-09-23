@@ -12,6 +12,7 @@ const MAX_RUN_STATE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_TOOL_STREAM_INTERVAL_MS = 60 * 1000;
 const MAX_SNAPSHOT_TURNS = 100_000;
 const MAX_PAGE_TURNS = 1_000;
+const MAX_INLINE_PART_BYTES = 16 * 1024 * 1024;
 
 export const DEFAULT_ROOT_SERVER_SETTINGS = {
   host: "127.0.0.1",
@@ -22,6 +23,7 @@ export const DEFAULT_ROOT_SERVER_SETTINGS = {
   conditional_requests: true,
   snapshot_turns: 24,
   max_page_turns: 50,
+  max_inline_part_bytes: 16 * 1024,
 } as const;
 
 export interface RootServerSettings {
@@ -37,6 +39,11 @@ export interface RootServerSettings {
   snapshot_turns: number;
   /** Largest number of turns one page request may return. */
   max_page_turns: number;
+  /**
+   * Inline text kept per transcript part, in bytes. A larger part is cut for
+   * transport, reports its full size, and can be re-fetched whole.
+   */
+  max_inline_part_bytes: number;
 }
 
 export interface SessionRoot {
@@ -196,6 +203,18 @@ function normalizeRootServerSettings(
       `${path}: server.max_page_turns must be a safe integer between 1 and ${MAX_PAGE_TURNS}`,
     );
   }
+  const maxInlinePartBytes =
+    value.max_inline_part_bytes ?? DEFAULT_ROOT_SERVER_SETTINGS.max_inline_part_bytes;
+  if (
+    typeof maxInlinePartBytes !== "number" ||
+    !Number.isSafeInteger(maxInlinePartBytes) ||
+    maxInlinePartBytes < 0 ||
+    maxInlinePartBytes > MAX_INLINE_PART_BYTES
+  ) {
+    throw new ConfigError(
+      `${path}: server.max_inline_part_bytes must be a safe integer between 0 and ${MAX_INLINE_PART_BYTES}`,
+    );
+  }
   return {
     host,
     port,
@@ -205,6 +224,7 @@ function normalizeRootServerSettings(
     conditional_requests: conditionalRequests,
     snapshot_turns: snapshotTurns,
     max_page_turns: maxPageTurns,
+    max_inline_part_bytes: maxInlinePartBytes,
   };
 }
 

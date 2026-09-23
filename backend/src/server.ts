@@ -30,6 +30,7 @@ import {
   type SessionRoot,
 } from "./session-roots.js";
 import {WebUiNormalizedRun} from "./plugins/web-ui/normalize-web-ui.js";
+import { capWebUiMessages } from "./plugins/web-ui/part-cap-web-ui.js";
 import { sessionSettingsFromConfig } from "./plugins/web-ui/setting-web-ui.js";
 import { sessionUsageFromSummary } from "./plugins/web-ui/usage-web-ui.js";
 import type {
@@ -63,6 +64,11 @@ export interface AgentServerOptions {
   snapshotTurns?: number;
   /** Largest number of turns one page request may return. */
   maxPageTurns?: number;
+  /**
+   * Inline text kept per transcript part, in bytes. A larger part is cut for
+   * transport and can be re-fetched whole; `0` sends parts uncut.
+   */
+  maxInlinePartBytes?: number;
 }
 
 export interface RunningAgentServer {
@@ -455,6 +461,7 @@ class AgentHttpApplication {
   private readonly conditionalRequests: boolean;
   private readonly snapshotTurns: number;
   private readonly maxPageTurns: number;
+  private readonly maxInlinePartBytes: number;
   private readonly runs: SessionRunRegistry;
 
   public constructor(options: AgentServerOptions = {}) {
@@ -474,6 +481,8 @@ class AgentHttpApplication {
       options.conditionalRequests ?? DEFAULT_ROOT_SERVER_SETTINGS.conditional_requests;
     this.snapshotTurns = options.snapshotTurns ?? DEFAULT_ROOT_SERVER_SETTINGS.snapshot_turns;
     this.maxPageTurns = options.maxPageTurns ?? DEFAULT_ROOT_SERVER_SETTINGS.max_page_turns;
+    this.maxInlinePartBytes =
+      options.maxInlinePartBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.max_inline_part_bytes;
     this.runs = new SessionRunRegistry(
       options.runStateRetentionMs ?? DEFAULT_ROOT_SERVER_SETTINGS.run_state_retention_ms,
     );
@@ -530,6 +539,15 @@ class AgentHttpApplication {
         segments[3] === "tools"
       ) {
         await this.handleTools(sessionRef, response);
+        return;
+      }
+
+      if (
+        request.method === "GET" &&
+        segments.length === 5 &&
+        segments[3] === "messages"
+      ) {
+        await this.handleSessionMessage(sessionRef, segments[4] ?? "", url, response);
         return;
       }
 
@@ -793,16 +811,44 @@ class AgentHttpApplication {
       }),
       handle.session.readUsageSummary(),
     ]);
+    const messages = capWebUiMessages(view.messages, {
+      maxInlineBytes: this.maxInlinePartBytes,
+      cursors: view.cursors,
+    });
     const page: SessionPageInfo = {has_more: view.hasMore, next_before: view.nextBefore};
     const summary = sessionSummary(
       handle.location,
       config,
-      {messages: view.messages, turns: usage.turn_count},
+      {messages, turns: usage.turn_count},
       usage,
       run,
       page,
     );
     sendVersionedJson(response, summary, etag, this.conditionalRequests);
+  }
+
+  /**
+   * One transcript message, whole.
+   *
+   * A capped snapshot keeps a bounded prefix of a large part, so this is how a
+   * client asks for the rest: the message it already holds names the turn cursor
+   * that re-reads it, or — for a compacted message — nothing, because the view
+   * holds the head. Nothing is capped here: returning another capped copy would
+   * leave the client exactly where it started.
+   */
+  private async handleSessionMessage(
+    id: string,
+    messageId: string,
+    url: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const handle = await this.getSession(id);
+    const cursor = parseCursorParameter(url.searchParams.get("cursor"), "cursor");
+    const message = await handle.view.readMessage(messageId, cursor);
+    if (message === undefined) {
+      throw new HttpError(404, "message not found");
+    }
+    sendJson(response, 200, {message});
   }
 
   private async handleRunStream(id: string, response: ServerResponse): Promise<void> {
@@ -1013,6 +1059,7 @@ export async function startAgentServer(
       options.conditionalRequests ?? serverSettings.conditional_requests,
     snapshotTurns: options.snapshotTurns ?? serverSettings.snapshot_turns,
     maxPageTurns: options.maxPageTurns ?? serverSettings.max_page_turns,
+    maxInlinePartBytes: options.maxInlinePartBytes ?? serverSettings.max_inline_part_bytes,
   });
   const environment = options.environment ?? process.env;
   const port = options.port ?? Number(environment.PORT ?? serverSettings.port);

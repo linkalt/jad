@@ -156,6 +156,35 @@ read.
 - While attached to a run, the poll backs off (`session_refresh_interval_ms_streaming`), because the
   SSE already delivers committed tool results; it refreshes once on `done`.
 
+## Wire cap and re-fetch
+
+A snapshot carries every part of every message it covers, and one tool output can be hundreds of
+kilobytes. `server.max_inline_part_bytes` (default 16 KiB) keeps a bounded prefix of each part inline
+and reports the rest:
+
+```json
+{"type": "tool_result", "output": "…first 16 KiB…", "status": "success",
+ "truncated": {"bytes": 4194304}}
+```
+
+The prefix is cut on a code point boundary, and a capped message carries the cursor of its turn
+(`cursor: <offset>`), plus `text`/`reasoningContent` recomputed from the kept text — shipping the
+full value beside a cut part would defeat the cap.
+
+`GET /api/sessions/:ref/messages/:id` returns the message whole:
+
+- **with `?cursor=<offset>`** — the turn is re-read from the transcript through the cursor index, so
+  the result is the same projection the snapshot would have produced, uncut;
+- **without it** — the message is served from the compacted head the view already holds (a compacted
+  message has no turn, which is why it publishes no cursor).
+
+Nothing is capped on the way out: returning another cut copy would leave the client where it
+started. The client keeps what it fetched in a per-session overlay keyed by message id, because the
+next snapshot still sends the capped copy and ids are stable (they come from the transcript offset).
+
+Measured on the live session (880 KB snapshot, cap 2 KiB): 22 of 46 messages capped, 81 parts,
+424 KB of part text — and cap + re-fetch reproduced the uncapped snapshot byte for byte.
+
 ## Configuration
 
 | Key | Default | Purpose |
@@ -164,6 +193,7 @@ read.
 | `server.conditional_requests` | `true` | ETag/304 |
 | `server.snapshot_turns` | `24` | newest turns in a snapshot; `0` returns everything |
 | `server.max_page_turns` | `50` | largest page one cursor request may return |
+| `server.max_inline_part_bytes` | `16384` | inline text per part; `0` sends parts uncut |
 | `session_refresh_interval_ms_streaming` | `30000` | frontend poll cadence while attached to a run |
 | `transcript_page_turns` | `5` | turns fetched per "load earlier messages" click |
 
@@ -179,8 +209,9 @@ read.
 ## Out of scope (follow-ups)
 
 - Strip the provider request echo from stored records (`tools` et al. — 84–91% of bytes).
-- Cap parts on the wire (`max_inline_part_bytes`) with lazy full-output fetch.
 - Per-message manifest for client-side delta sync (the `turnOffsets` data supports it later).
+- The compacted head is always sent whole, so a session whose head is large still pays for it; the
+  head has no cursor to page through, only part-level caps.
 
 ## Verification
 
@@ -193,3 +224,6 @@ read.
    record is left for the next read; records without a session turn are ignored.
 5. **HTTP:** idle tab → `304` with an empty body; an append → `200` with a new ETag; a cursor page →
    the older turns; invalid cursors → `400` (`server.test.ts`).
+6. **Cap:** a snapshot cuts only oversized parts, keeps them valid UTF-8, reports full byte sizes and
+   recomputes derived fields (`part-cap.test.ts`); a capped turn message and a capped compacted
+   message both come back whole from the message endpoint (`server.test.ts`).

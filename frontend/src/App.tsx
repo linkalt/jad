@@ -38,6 +38,7 @@ import {
   attachSessionRun,
   compactSession,
   fetchSession,
+  fetchSessionMessage,
   fetchSessions,
   stopSessionRun,
   streamSessionRun,
@@ -754,6 +755,67 @@ function visibleToolOutput(output: string): string {
   return `${output.slice(0, limit)}\n\n[Output truncated in the UI]`;
 }
 
+/** The message a truncated part came from, with the action that loads it whole. */
+interface TruncatedSource {
+  message: MessageRecord;
+  onLoadFull: (message: MessageRecord) => void | Promise<void>;
+}
+
+function loadFullAction(
+  source: TruncatedSource | undefined,
+): (() => void | Promise<void>) | undefined {
+  if (source === undefined) {
+    return undefined;
+  }
+  return () => source.onLoadFull(source.message);
+}
+
+function truncatedSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+/**
+ * A part the server cut for transport. The text continues on the server, and
+ * the message carries the cursor that re-reads it whole.
+ */
+function TruncatedNotice({
+  bytes,
+  source,
+}: {
+  bytes: number;
+  source: TruncatedSource | undefined;
+}) {
+  const [isLoading, setIsLoading] = useState(false);
+  const onLoad = loadFullAction(source);
+  return (
+    <HStack align="center" gap={2}>
+      <Text type="supporting" color="secondary">
+        Truncated for transport · {truncatedSize(bytes)} total
+      </Text>
+      {onLoad !== undefined && (
+        <Button
+          label={isLoading ? 'Loading…' : 'Load full'}
+          variant="ghost"
+          size="sm"
+          isDisabled={isLoading}
+          onClick={() => {
+            // The notice unmounts when the whole message replaces the capped
+            // one; on failure it has to be usable again.
+            setIsLoading(true);
+            void Promise.resolve(onLoad()).finally(() => setIsLoading(false));
+          }}
+        />
+      )}
+    </HStack>
+  );
+}
+
 function toolResultLabel(status: WebUiToolResult['status']): string {
   if (status === 'success') {
     return 'Success';
@@ -778,6 +840,7 @@ function toolCallItem(
   call: WebUiToolCall,
   result: WebUiToolResult | undefined,
   rowWidthPx: number,
+  source?: TruncatedSource,
 ): ChatToolCallItem {
   const resultStatus = result?.status;
   const titleBudgetPx = toolTitleBudgetPx(rowWidthPx, call.name);
@@ -822,6 +885,9 @@ function toolCallItem(
               container="section"
               hasCopyButton
             />
+            {result.truncated !== undefined && (
+              <TruncatedNotice bytes={result.truncated.bytes} source={source} />
+            )}
           </VStack>
         )}
       </VStack>
@@ -829,7 +895,13 @@ function toolCallItem(
   };
 }
 
-function OrphanToolResultBlock({result}: {result: WebUiToolResult}) {
+function OrphanToolResultBlock({
+  result,
+  source,
+}: {
+  result: WebUiToolResult;
+  source?: TruncatedSource;
+}) {
   return (
     <Card variant="muted" padding={2}>
       <VStack gap={1} width="100%">
@@ -848,6 +920,9 @@ function OrphanToolResultBlock({result}: {result: WebUiToolResult}) {
           container="section"
           hasCopyButton
         />
+        {result.truncated !== undefined && (
+          <TruncatedNotice bytes={result.truncated.bytes} source={source} />
+        )}
       </VStack>
     </Card>
   );
@@ -884,8 +959,8 @@ function toolActivityForParts(
   return [...calls.values()];
 }
 
-type WebUiReasoningPart = {type: 'reasoning'; text: string};
-type WebUiContentPart = {type: 'text'; text: string};
+type WebUiReasoningPart = Extract<WebUiPart, {type: 'reasoning'}>;
+type WebUiContentPart = Extract<WebUiPart, {type: 'text'}>;
 type WebUiToolPart = WebUiToolCall | WebUiToolResult;
 type IndexedWebUiPart<T extends WebUiPart> = {part: T; index: number};
 type WebUiPartGroup =
@@ -990,20 +1065,28 @@ function WebUiActivityGroup({
   group,
   rowWidthPx,
   isStreaming,
+  source,
 }: {
   group: WebUiActivityGroupPart;
   rowWidthPx: number;
   isStreaming: boolean;
+  source?: TruncatedSource;
 }) {
   if (group.type === 'reasoning') {
+    const {part} = group.item;
     return (
-      <ReasoningBlock
-        steps={[]}
-        content={group.item.part.text}
-        rowWidthPx={rowWidthPx}
-        isFlush
-        isStreaming={isStreaming}
-      />
+      <VStack gap={1} width="100%">
+        <ReasoningBlock
+          steps={[]}
+          content={part.text}
+          rowWidthPx={rowWidthPx}
+          isFlush
+          isStreaming={isStreaming}
+        />
+        {part.truncated !== undefined && (
+          <TruncatedNotice bytes={part.truncated.bytes} source={source} />
+        )}
+      </VStack>
     );
   }
 
@@ -1021,7 +1104,7 @@ function WebUiActivityGroup({
           (candidate): candidate is WebUiToolResult =>
             candidate.type === 'tool_result' && candidate.callId === part.callId,
         );
-      return toolCallItem(part, result, rowWidthPx);
+      return toolCallItem(part, result, rowWidthPx, source);
     })
     .filter((item): item is ChatToolCallItem => item !== undefined);
   const firstToolCallIndex = group.items.find(
@@ -1050,6 +1133,7 @@ function WebUiActivityGroup({
           <OrphanToolResultBlock
             key={`tool-result-${part.callId}-${index}`}
             result={part}
+            source={source}
           />
         );
       })}
@@ -1061,10 +1145,12 @@ function WebUiParts({
   parts,
   rowWidthPx,
   isStreaming = false,
+  source,
 }: {
   parts: WebUiPart[];
   rowWidthPx: number;
   isStreaming?: boolean;
+  source?: TruncatedSource;
 }) {
   const segments = segmentWebUiGroups(groupWebUiParts(parts));
   const lastPartIndex = parts.length - 1;
@@ -1113,18 +1199,27 @@ function WebUiParts({
       ) : null}
       {segments.map((segment, segmentIndex) => {
         if (segment.type === 'content') {
+          const contentPart = segment.item.group.item.part;
           return (
-            <MarkdownText
+            <VStack
               key={webUiGroupKey(segment.item.group, segment.item.index)}
-              density="compact"
-              contentWidth="100%"
-              isStreaming={
-                isStreaming && segment.item.group.item.index === lastPartIndex
-              }
-              headingLevelStart={3}
+              gap={1}
+              width="100%"
             >
-              {segment.item.group.item.part.text}
-            </MarkdownText>
+              <MarkdownText
+                density="compact"
+                contentWidth="100%"
+                isStreaming={
+                  isStreaming && segment.item.group.item.index === lastPartIndex
+                }
+                headingLevelStart={3}
+              >
+                {contentPart.text}
+              </MarkdownText>
+              {contentPart.truncated !== undefined && (
+                <TruncatedNotice bytes={contentPart.truncated.bytes} source={source} />
+              )}
+            </VStack>
           );
         }
 
@@ -1143,6 +1238,7 @@ function WebUiParts({
                   isStreaming={
                     isStreaming && webUiGroupIndex(group) === lastPartIndex
                   }
+                  source={source}
                 />
               );
             })}
@@ -1477,9 +1573,11 @@ function copyActionLabel(state: CopyState): string {
 function AssistantMessage({
   message,
   model,
+  onLoadFull,
 }: {
   message: MessageRecord;
   model?: Session['model'];
+  onLoadFull?: (message: MessageRecord) => void | Promise<void>;
 }) {
   const [rowRef, rowWidthPx] = useRowWidth();
   const [copyState, setCopyState] = useState<CopyState>('idle');
@@ -1552,7 +1650,11 @@ function AssistantMessage({
       >
         <VStack gap={3} width="100%">
           {message.parts && message.parts.length > 0 ? (
-            <WebUiParts parts={message.parts} rowWidthPx={rowWidthPx} />
+            <WebUiParts
+              parts={message.parts}
+              rowWidthPx={rowWidthPx}
+              source={onLoadFull === undefined ? undefined : {message, onLoadFull}}
+            />
           ) : (
             <>
               {(message.reasoning || message.reasoningContent) && (
@@ -1598,9 +1700,11 @@ const TranscriptRow = memo(
   function TranscriptRow({
     message,
     model,
+    onLoadFull,
   }: {
     message: MessageRecord;
     model: Session['model'] | undefined;
+    onLoadFull?: (message: MessageRecord) => void | Promise<void>;
   }) {
     if (message.sender === 'system') {
       return (
@@ -1626,7 +1730,7 @@ const TranscriptRow = memo(
       );
     }
 
-    return <AssistantMessage message={message} model={model} />;
+    return <AssistantMessage message={message} model={model} onLoadFull={onLoadFull} />;
   },
   // The poll and the session list rebuild messages and models as fresh objects,
   // so fall back to a structural compare when the identities differ.
@@ -1688,8 +1792,7 @@ function App() {
   // Filled by ComposerPane, which owns the drafts. Views outside the composer
   // (the prompt library) write through this instead of lifting draft state back
   // into App, which is what made typing slow on long sessions.
-  const insertIntoComposerRef = useRef<((text: string) => void) | null>(null);
-  const registerComposerInsert = useCallback(
+  const insertIntoComposerRef = useRef<((text: string) => void) | null>(null);  const registerComposerInsert = useCallback(
     (insert: ((text: string) => void) | null) => {
       insertIntoComposerRef.current = insert;
     },
@@ -1746,6 +1849,63 @@ function App() {
     ref: undefined,
   });
   const loadingOlderRef = useRef(false);
+  /**
+   * Messages the client fetched whole, per session.
+   *
+   * The snapshot keeps sending the capped copy of a large part, so a hydrated
+   * message has to outlive the next poll: every server payload for a session is
+   * passed through this overlay, keyed by message id, which is stable because
+   * ids come from the transcript offset.
+   */
+  const hydratedMessagesRef = useRef<Map<string, Map<string, WebUiMessage>>>(new Map());
+  const applyHydrated = useCallback(
+    (uiId: string, messages: WebUiMessage[]): WebUiMessage[] => {
+      const overlay = hydratedMessagesRef.current.get(uiId);
+      if (overlay === undefined || overlay.size === 0) {
+        return messages;
+      }
+      let changed = false;
+      const next = messages.map(message => {
+        const full = overlay.get(message.id);
+        if (full === undefined || deepEqual(full, message)) {
+          return message;
+        }
+        changed = true;
+        return full;
+      });
+      return changed ? next : messages;
+    },
+    [],
+  );
+  const loadFullMessage = useCallback(
+    (message: MessageRecord) => {
+      const sessionRef = activeSessionEntryRef.current?.sessionRef;
+      if (sessionRef === undefined) {
+        return;
+      }
+      return fetchSessionMessage(sessionRef, message.id, message.cursor)
+        .then(full => {
+          const uiId = activeSessionIdRef.current;
+          const overlay = hydratedMessagesRef.current.get(uiId) ?? new Map();
+          overlay.set(message.id, full);
+          hydratedMessagesRef.current.set(uiId, overlay);
+          setThreads(current => {
+            const existing = current[uiId];
+            const index = existing?.findIndex(candidate => candidate.id === message.id) ?? -1;
+            if (existing === undefined || index < 0) {
+              return current;
+            }
+            const next = [...existing];
+            next[index] = full;
+            return {...current, [uiId]: next};
+          });
+        })
+        .catch(error => {
+          console.warn('Unable to load the full message:', error);
+        });
+    },
+    [],
+  );
   // How much of the transcript is still on the server, per session.
   const [sessionPages, setSessionPages] = useState<Record<string, SessionPage>>({});
 
@@ -1822,7 +1982,7 @@ function App() {
           if (result.kind !== 'ok') {
             return;
           }
-          const older = result.value.messages ?? [];
+          const older = applyHydrated(uiId, result.value.messages ?? []);
           setThreads(current => {
             const existing = current[uiId] ?? [];
             const known = new Set(existing.map(message => message.id));
@@ -1844,7 +2004,7 @@ function App() {
           loadingOlderRef.current = false;
         });
     },
-    [sessionPages],
+    [applyHydrated, sessionPages],
   );
 
   const revealEarlierMessages = useCallback(
@@ -2269,7 +2429,7 @@ function App() {
           }
           snapshotEtagRef.current = result.etag;
           const snapshot = result.value;
-          const messages = snapshot.messages ?? [];
+          const messages = applyHydrated(uiId, snapshot.messages ?? []);
           setThreads(current => {
             const previous = current[uiId];
             // Reuse the existing array when the payload is structurally
@@ -2371,7 +2531,7 @@ function App() {
       refreshSessionsRef.current = null;
       window.clearInterval(refreshTimer);
     };
-  }, [isRunning]);
+  }, [applyHydrated, isRunning]);
 
   // The active session carries the run the server is executing, so a page that
   // reloads mid-run attaches as soon as the session list has settled instead of
@@ -2577,6 +2737,7 @@ function App() {
                           key={message.id}
                           message={message}
                           model={activeSession.model}
+                          onLoadFull={loadFullMessage}
                         />
                       ))}
                       {isRunning && (!isLiveSession || streamingMessage) && !streamingMessageCommitted && (

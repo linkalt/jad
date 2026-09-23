@@ -12,6 +12,11 @@ import type { WebUiMessage } from "./types.js";
 /** A slice of a session transcript projected for the web UI. */
 export interface WebUiSessionView {
   messages: WebUiMessage[];
+  /**
+   * Turn cursor per transcript message — the offset that re-reads the turn the
+   * message came from. The compacted head has no entries: it is not a turn.
+   */
+  cursors: Map<string, number>;
   /** Older turns exist in the transcript but are not part of this response. */
   hasMore: boolean;
   /** Cursor for the next older page; `null` when the transcript is exhausted. */
@@ -75,6 +80,40 @@ export class WebUiSessionViewCache {
   }
 
   /**
+   * Re-reads one message whole, uncapped.
+   *
+   * A transcript message is addressed by the turn cursor a capped snapshot
+   * published for it; a compacted message has no turn and is served from the
+   * head the view already holds. The projection is deterministic, so the result
+   * carries the same id and parts — with the text the cap left out.
+   */
+  public async readMessage(
+    messageId: string,
+    cursor?: number,
+  ): Promise<WebUiMessage | undefined> {
+    if (cursor === undefined) {
+      const head = await this.readHead();
+      return head.messages.find((message) => message.id === messageId);
+    }
+    const stamp = await this.store.readTranscriptStamp();
+    const starts = await this.turnStarts(stamp.size);
+    const turn = starts.indexOf(cursor);
+    if (turn < 0) {
+      return undefined;
+    }
+    const start = starts[turn]!;
+    const stop = turn + 1 < starts.length ? starts[turn + 1]! : stamp.size;
+    const state = createWebUiSessionState();
+    await this.store.readRecords(start, stop, (offset, line) => {
+      const record = parseRecord(line);
+      if (record !== undefined) {
+        reduceWebUiRecord(state, record, `o${offset}`);
+      }
+    });
+    return state.messages.find((message) => message.id === messageId);
+  }
+
+  /**
    * Reads the turns that end at `end`, newest last.
    *
    * `before` selects the turns older than a previous page's start offset, and
@@ -95,22 +134,38 @@ export class WebUiSessionViewCache {
     const endIndex = last < 0 ? starts.length : last;
 
     if (endIndex <= 0) {
-      return {messages: [], hasMore: false, nextBefore: null};
+      return {messages: [], cursors: new Map(), hasMore: false, nextBefore: null};
     }
     const first = limit <= 0 || limit >= endIndex ? 0 : endIndex - limit;
-    const start = starts[first]!;
     const stop = endIndex >= starts.length ? end : starts[endIndex]!;
 
     const state = createWebUiSessionState();
-    await this.store.readRecords(start, stop, (offset, line) => {
-      const record = parseRecord(line);
-      if (record !== undefined) {
-        reduceWebUiRecord(state, record, `o${offset}`);
+    const cursors = new Map<string, number>();
+    // Turn by turn, so every message can report the turn it came from: the
+    // reducer never extends a message across a turn boundary, so the messages a
+    // turn adds are exactly the ones it owns.
+    for (let turn = first; turn < endIndex; turn += 1) {
+      const start = starts[turn]!;
+      const turnEnd = turn + 1 < endIndex ? starts[turn + 1]! : stop;
+      const known = state.messages.length;
+      await this.store.readRecords(start, turnEnd, (offset, line) => {
+        const record = parseRecord(line);
+        if (record !== undefined) {
+          reduceWebUiRecord(state, record, `o${offset}`);
+        }
+      });
+      for (let index = known; index < state.messages.length; index += 1) {
+        cursors.set(state.messages[index]!.id, start);
       }
-    });
+    }
 
     const hasMore = first > 0;
-    return {messages: state.messages, hasMore, nextBefore: hasMore ? start : null};
+    return {
+      messages: state.messages,
+      cursors,
+      hasMore,
+      nextBefore: hasMore ? starts[first]! : null,
+    };
   }
 
   /**

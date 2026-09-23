@@ -4,9 +4,18 @@ export type WebUiPartType = "reasoning" | "text" | "tool_call" | "tool_result";
 export type WebUiMessageStatus = "streaming" | "complete";
 export type WebUiToolResultStatus = "success" | "error" | "unknown";
 
+/**
+ * Present when a part's text was cut for transport: `bytes` is the full UTF-8
+ * size of the original, and the message's `cursor` re-fetches it whole.
+ */
+export interface WebUiPartTruncation {
+  bytes: number;
+}
+
 export interface WebUiTextPart {
   type: "reasoning" | "text";
   text: string;
+  truncated?: WebUiPartTruncation;
 }
 
 export interface WebUiToolCallPart {
@@ -19,6 +28,7 @@ export interface WebUiToolCallPart {
    * a long `write`/`edit` call is visible before its item completes.
    */
   partial?: boolean;
+  truncated?: WebUiPartTruncation;
 }
 
 export interface WebUiToolResultPart {
@@ -26,6 +36,7 @@ export interface WebUiToolResultPart {
   callId: string;
   output: string;
   status: WebUiToolResultStatus;
+  truncated?: WebUiPartTruncation;
 }
 
 export type WebUiPart = WebUiTextPart | WebUiToolCallPart | WebUiToolResultPart;
@@ -38,6 +49,11 @@ export interface WebUiMessage {
   parts: WebUiPart[];
   status?: WebUiMessageStatus;
   reasoningContent?: string;
+  /**
+   * Turn that produced this message, set only when a part was capped: passing it
+   * to the message endpoint returns the message with its parts whole.
+   */
+  cursor?: number;
 }
 
 export interface WebUiSessionConfig {
