@@ -1,4 +1,4 @@
-import {memo, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import type {ChangeEvent, CSSProperties} from 'react';
 import * as stylex from '@stylexjs/stylex';
 import {
@@ -50,6 +50,13 @@ import {
 } from './api';
 import appConfig from './config.json';
 import {deepEqual} from './deepEqual';
+import {
+  captureScrollPosition,
+  findScrollParent,
+  restoreScrollPosition,
+  type ScrollPositionSnapshot,
+} from './components/scroll-position';
+import {shouldSkipTranscriptLoad} from './transcript-load-policy';
 import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
 import {FloatingPanel} from './components/FloatingPanel';
@@ -1163,6 +1170,13 @@ function WebUiParts({
   const segments = segmentWebUiGroups(groupWebUiParts(parts));
   const lastPartIndex = parts.length - 1;
   const [revealedToolGroups, setRevealedToolGroups] = useState(0);
+  const revealScrollAnchorRef = useRef<ScrollPositionSnapshot | null>(null);
+
+  useLayoutEffect(() => {
+    const anchor = revealScrollAnchorRef.current;
+    revealScrollAnchorRef.current = null;
+    restoreScrollPosition(anchor);
+  }, [revealedToolGroups]);
 
   /**
    * Tool steps are the heavy rows of a long turn — every call carries its own
@@ -1195,9 +1209,12 @@ function WebUiParts({
             variant="ghost"
             size="sm"
             icon={<Icon icon="arrowUp" size="sm" />}
-            onClick={() =>
-              setRevealedToolGroups(current => current + appConfig.message_tool_window_page)
-            }
+            onClick={event => {
+              revealScrollAnchorRef.current = captureScrollPosition(
+                findScrollParent(event.currentTarget),
+              );
+              setRevealedToolGroups(current => current + appConfig.message_tool_window_page);
+            }}
           />
           <Text type="supporting" color="secondary">
             {hiddenToolGroupKeys.size} earlier{' '}
@@ -1867,6 +1884,8 @@ function App() {
   const runAbortRef = useRef<AbortController | null>(null);
   const runTimeoutRef = useRef<number | null>(null);
   const activeRunSessionIdRef = useRef<string | null>(null);
+  const attachedRunSessionIdRef = useRef<string | null>(null);
+  const hydratedTranscriptSessionIdsRef = useRef(new Set<string>());
   // The run this client is streaming, if any. It is how a page reload
   // re-attaches to a run it did not start.
   const attachedTurnRef = useRef<string | null>(null);
@@ -2123,6 +2142,7 @@ function App() {
    */
   const detachRun = useCallback(() => {
     attachedTurnRef.current = null;
+    attachedRunSessionIdRef.current = null;
     activeRunSessionIdRef.current = null;
     runAbortRef.current?.abort();
     runAbortRef.current = null;
@@ -2205,6 +2225,7 @@ function App() {
             : session,
         ),
       );
+      attachedRunSessionIdRef.current = null;
       activeRunSessionIdRef.current = sessionId;
       setRunningSessionId(sessionId);
       setRunProgress(isLiveRun ? 0 : 1);
@@ -2342,6 +2363,7 @@ function App() {
         return;
       }
       attachedTurnRef.current = turnId;
+      attachedRunSessionIdRef.current = sessionId;
       activeRunSessionIdRef.current = sessionId;
       const controller = new AbortController();
       runAbortRef.current = controller;
@@ -2398,6 +2420,7 @@ function App() {
           // once the session reports the run as finished, which also prevents a
           // re-attach loop while the run is still streaming for other clients.
           runAbortRef.current = null;
+          attachedRunSessionIdRef.current = null;
           activeRunSessionIdRef.current = null;
           setStreamingMessage(null);
           setRunProgress(baseReasoning.length);
@@ -2511,11 +2534,15 @@ function App() {
     };
 
     const loadTranscript = (sessionRef: string, uiId: string) => {
-      // While this client streams (or is attached to) that session's run, the
-      // stream owns the transcript: a committed step of the same turn would
-      // render as a second assistant block next to the live one, and the turn's
-      // user message as a second user block. The finished run refreshes instead.
-      if (activeRunSessionIdRef.current === uiId) {
+      // A client-owned run already has its optimistic turn in memory, so leave
+      // it alone. A fresh page attached to a run still needs one transcript
+      // snapshot; after that, the stream owns updates until the run completes.
+      if (shouldSkipTranscriptLoad({
+        sessionId: uiId,
+        activeRunSessionId: activeRunSessionIdRef.current,
+        attachedRunSessionId: attachedRunSessionIdRef.current,
+        transcriptHydrated: hydratedTranscriptSessionIdsRef.current.has(uiId),
+      })) {
         return;
       }
       void fetchSession(sessionRef, {etag: snapshotEtagRef.current})
@@ -2542,6 +2569,7 @@ function App() {
           if (snapshot.page !== undefined) {
             setSessionPages(current => ({...current, [uiId]: snapshot.page!}));
           }
+          hydratedTranscriptSessionIdsRef.current.add(uiId);
         })
         .catch(error => {
           if (!cancelled) {

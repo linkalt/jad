@@ -69,7 +69,7 @@ export const neutralTheme = defineTheme({
   name: 'neutral',
   localTokens: neutralLocalTokens,
 
-  // Typography: Figtree across body, heading, and display sizes (display
+  // Typography: Inter across body, heading, and display sizes (display
   // size tokens inherit from heading.family). Code uses JetBrains Mono, which
   // index.html loads from the CDN; Astryx never loads font files itself, so the
   // fallback stack covers any machine where the webfont is unavailable.
@@ -77,12 +77,12 @@ export const neutralTheme = defineTheme({
   typography: {
     scale: {base: 14, ratio: 1.2},
     body: {
-      family: 'Figtree',
+      family: 'Inter',
       fallbacks:
         '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
     },
     heading: {
-      family: 'Figtree',
+      family: 'Inter',
       fallbacks:
         '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
       weights: {3: 'bold', 4: 'bold'},

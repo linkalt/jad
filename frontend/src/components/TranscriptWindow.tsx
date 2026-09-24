@@ -1,26 +1,11 @@
 import {useCallback, useLayoutEffect, useRef, useState} from 'react';
 import {Button, Icon, Text, VStack} from '@astryxdesign/core';
+import {findScrollParent} from './scroll-position';
 
 /**
- * Nearest ancestor that can actually scroll. The transcript scroller belongs to
- * ChatLayout, so it is discovered from the DOM at reveal time instead of being
- * threaded down through the list.
+ * The transcript scroller belongs to ChatLayout, so findScrollParent discovers
+ * it at reveal time instead of threading it down through the list.
  */
-function findScrollParent(node: HTMLElement): HTMLElement | null {
-  let current = node.parentElement;
-  while (current !== null) {
-    const {overflowY} = getComputedStyle(current);
-    if (
-      (overflowY === 'auto' || overflowY === 'scroll') &&
-      current.scrollHeight > current.clientHeight
-    ) {
-      return current;
-    }
-    current = current.parentElement;
-  }
-  return null;
-}
-
 /**
  * Caps how much of a transcript is mounted.
  *
