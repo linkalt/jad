@@ -69,6 +69,8 @@ export async function persistResponseStream(
   options: PersistResponseStreamOptions = {},
 ): Promise<PersistedResponse> {
   const turn = await store.beginTurn(options.turnId);
+  const stagedOutputItems = new Map<number, JsonRecord>();
+  let nextOutputIndex = 0;
 
   try {
     for await (const rawEvent of stream) {
@@ -81,17 +83,33 @@ export async function persistResponseStream(
       if (type === "response.output_item.done") {
         const item = asRecord(event.item, "response.output_item.done.item");
         const outputIndex = event.output_index;
+        const stagedIndex = typeof outputIndex === "number" ? outputIndex : nextOutputIndex;
         const normalizedEvent: ResponseOutputItemDoneEvent = {
           type: "response.output_item.done",
           item,
           ...(typeof outputIndex === "number" ? { output_index: outputIndex } : {}),
         };
         await turn.stageOutputItem(normalizedEvent);
+        stagedOutputItems.set(stagedIndex, item);
+        nextOutputIndex = Math.max(nextOutputIndex, stagedIndex + 1);
         continue;
       }
 
       const completedEvent = completedEventFromTerminal(event);
       if (completedEvent) {
+        const responseOutput = completedEvent.response.output;
+        if (
+          stagedOutputItems.size > 0 &&
+          (responseOutput === undefined || (Array.isArray(responseOutput) && responseOutput.length === 0))
+        ) {
+          // Some Responses-compatible streaming providers emit output items as
+          // events but leave response.completed.response.output empty. Rebuild
+          // the envelope from the staged events so commits, tool execution, and
+          // transcript consumers all see the same completed response.
+          completedEvent.response.output = [...stagedOutputItems.entries()]
+            .sort(([left], [right]) => left - right)
+            .map(([, item]) => item);
+        }
         if (options.sessionTurn !== undefined) {
           completedEvent.session_turn = options.sessionTurn;
         }

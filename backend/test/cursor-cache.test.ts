@@ -420,7 +420,7 @@ test("pages the transcript by turn and tiles it exactly", async () => {
     assert.deepEqual(plain(newest.messages), plain(newestOnly as never));
 
     // Following the cursor yields the older turn, and then the transcript start.
-    const older = await cache.read({ before: newest.nextBefore! });
+    const older = await cache.read({ before: newest.nextBefore!, generation: newest.generation });
     assert.deepEqual(plain(older.messages), plain(messagesOf(TRANSCRIPT.slice(0, 4)) as never));
     assert.equal(older.hasMore, false);
     assert.equal(older.nextBefore, null);
@@ -434,6 +434,110 @@ test("pages the transcript by turn and tiles it exactly", async () => {
   } finally {
     await store.close();
     await rm(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test("keeps every user item from one multi-item submission in the same page", async () => {
+  const {store, sessionDir} = await makeStore([]);
+  try {
+    const first = userRecord("submission part one");
+    const second = userRecord("submission part two");
+    await store.appendInputItems([first, second]);
+    const answer = assistantItem("one answer", "multi-answer");
+    const turn = await store.beginTurn("multi-item-submission");
+    await turn.stageOutputItem({type: "response.output_item.done", output_index: 0, item: answer});
+    await turn.commit({
+      type: "response.completed",
+      session_turn: 1,
+      session_step: 1,
+      response: {id: "multi-item-response", status: "completed", output: [answer]},
+    });
+
+    const cache = new WebUiSessionViewCache(store, {snapshotTurns: 1, maxPageTurns: 50});
+    const page = await cache.read();
+    assert.deepEqual(plain(page.messages), plain(messagesOf([
+      first,
+      second,
+      completedRecord("multi-item-response", 1, 1, [answer]),
+    ]) as never));
+  } finally {
+    await store.close();
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("does not consume cursor runs beyond the transcript snapshot boundary", async () => {
+  const {store, sessionDir, messagesPath} = await makeStore([
+    userRecord("first question"),
+    completedRecord("race-first", 1, 1, [assistantItem("first answer")]),
+  ]);
+  try {
+    const cache = new WebUiSessionViewCache(store, {snapshotTurns: 1, maxPageTurns: 50});
+    const readCursorIndex = store.readCursorIndex.bind(store);
+    let appended = false;
+    store.readCursorIndex = async () => {
+      if (!appended) {
+        appended = true;
+        await appendFile(messagesPath, records([
+          userRecord("second question"),
+          completedRecord("race-second", 2, 1, [assistantItem("second answer")]),
+        ]));
+      }
+      return readCursorIndex();
+    };
+
+    const first = await cache.read();
+    assert.deepEqual(first.messages.map((message) => message.text), ["first question", "first answer"]);
+    const second = await cache.read();
+    assert.deepEqual(second.messages.map((message) => message.text), ["second question", "second answer"]);
+    assert.equal(second.hasMore, true);
+  } finally {
+    await store.close();
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("rejects a page cursor after compaction replaces its transcript generation", async () => {
+  const {store, sessionDir} = await makeStore();
+  try {
+    const cache = new WebUiSessionViewCache(store, {snapshotTurns: 1, maxPageTurns: 50});
+    const newest = await cache.read();
+    assert.notEqual(newest.nextBefore, null);
+    const compacted = await store.compactHistory({
+      turnType: "assistant_final", keepTurns: 1, keepToolPairs: 0, backupMode: "replace",
+    });
+    assert.equal(compacted.compacted, true);
+
+    const stale = await cache.read({before: newest.nextBefore!, generation: newest.generation});
+    assert.equal(stale.staleCursor, true);
+    assert.deepEqual(stale.messages, []);
+    assert.equal(stale.nextBefore, null);
+  } finally {
+    await store.close();
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("caps whitespace-formatted JSONL backups to the requested turns", async () => {
+  const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-spaced-backup-"));
+  const rows = [
+    userRecord("first"),
+    completedRecord("spaced-r1", 1, 1, [assistantItem('quoted marker {"role":"user"}')]),
+    userRecord("second"),
+    completedRecord("spaced-r2", 2, 1, [assistantItem("answer two")]),
+  ];
+  const backup = rows.map((record) => JSON.stringify(record).replace('"role":"user"', '"role": "user"')).join("\n") + "\n";
+  await writeFile(join(sessionDir, "messages.backup.jsonl"), backup);
+  const store = await SessionResponseStore.open(sessionDir);
+  try {
+    const cache = new WebUiSessionViewCache(store, {snapshotTurns: 0, maxPageTurns: 50});
+    const history = await cache.readHistory(1);
+    assert.deepEqual(plain(history.messages), plain(messagesOf(rows.slice(2)) as never));
+    const fullHistory = await cache.readHistory(2);
+    assert.deepEqual(plain(fullHistory.messages), plain(messagesOf(rows) as never));
+  } finally {
+    await store.close();
+    await rm(sessionDir, {recursive: true, force: true});
   }
 });
 

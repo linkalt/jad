@@ -49,6 +49,60 @@ test("normalizes memory storage relative to cwd and accepts absolute storage", a
   } finally { await rm(directory, {recursive: true, force: true}); }
 });
 
+test("create returns metadata without echoing data, which remains available from get", async () => {
+  const {directory, store, run} = await runner();
+  try {
+    const data = {title: "persisted", marker: "only-in-record"};
+    const createResult = await run({operation: "create", type: "task", data});
+    assert.match(createResult, /Memory record created/);
+    assert.doesNotMatch(createResult, /--- CONTENT token=|only-in-record/);
+
+    const listed = await store.list("task", undefined, 1, "newest", undefined, policy);
+    assert.equal(listed.items.length, 1);
+    const created = listed.items[0]!;
+    assert.deepEqual(created.data, data);
+    assert.ok(createResult.includes(`ref: ${created.ref}`));
+    assert.ok(createResult.includes(`etag: ${created.etag}`));
+
+    const getResult = await run({operation: "get", type: "task", ref: created.ref});
+    assert.match(getResult, /only-in-record/);
+  } finally { await rm(directory, {recursive: true, force: true}); }
+});
+
+test("stale updates report the current ETag and preserve the record until a fresh retry", async () => {
+  const {directory, store, run} = await runner();
+  try {
+    const created = await store.create("task", {value: "initial"}, policy);
+    const original = await store.get("task", created.ref, policy);
+    const winner = await store.update("task", created.ref, original.etag, {value: "winner"}, policy);
+
+    const conflict = await run({operation: "update", type: "task", ref: created.ref, if_match: original.etag, data: {value: "stale"}});
+    assert.match(conflict, /error_code: memory_conflict/);
+    assert.ok(conflict.includes(`current_etag: ${winner.etag}`));
+    assert.doesNotMatch(conflict, /--- CONTENT token=|stale/);
+    assert.deepEqual((await store.get("task", created.ref, policy)).data, winner.data);
+
+    const retry = await run({operation: "update", type: "task", ref: created.ref, if_match: winner.etag, data: {value: "retry"}});
+    assert.match(retry, /Memory record updated/);
+    assert.deepEqual((await store.get("task", created.ref, policy)).data, {value: "retry"});
+  } finally { await rm(directory, {recursive: true, force: true}); }
+});
+
+test("rejects stale ETags across store instances sharing a directory", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-memory-shared-store-"));
+  try {
+    const root = join(directory, "memory");
+    const firstStore = new MemoryStore(root);
+    const secondStore = new MemoryStore(root);
+    const created = await firstStore.create("task", {value: "initial"}, policy);
+    const stale = await secondStore.get("task", created.ref, policy);
+    const winner = await firstStore.update("task", created.ref, stale.etag, {value: "winner"}, policy);
+
+    await assert.rejects(secondStore.update("task", created.ref, stale.etag, {value: "stale"}, policy), /memory record changed/);
+    assert.deepEqual((await firstStore.get("task", created.ref, policy)).data, winner.data);
+  } finally { await rm(directory, {recursive: true, force: true}); }
+});
+
 test("creates, gets, filters, and ETag-updates dynamic memory records", async () => {
   const {directory, store, run} = await runner();
   try {

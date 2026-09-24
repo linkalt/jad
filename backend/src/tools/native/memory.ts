@@ -2,7 +2,7 @@ import type {NativeMemoryToolSettings} from "../../config.js";
 import type {JsonRecord} from "../../persistence.js";
 import {executionError, renderToolResult} from "../output.js";
 import type {ToolDefinition, ToolExecutionContext} from "../types.js";
-import {MemoryStore, MemoryStoreError, type MemoryItem} from "./memory-store.js";
+import {MemoryConflictError, MemoryStore, MemoryStoreError, type MemoryItem} from "./memory-store.js";
 
 export const NATIVE_MEMORY_ID = "native.memory";
 export const nativeMemoryDefinition: ToolDefinition = {
@@ -12,7 +12,7 @@ export const nativeMemoryDefinition: ToolDefinition = {
     operation: {type: "string", enum: ["create", "get", "list", "update"], description: "Create assigns and returns a ref for a new record. Use that exact returned ref for get/update; never invent a ref or create a duplicate just to obtain one. List first if checking for an existing record."},
     type: {type: "string", minLength: 1}, ref: {type: "string", minLength: 1, description: "For get/update, use the exact ref returned by create or list; never invent one. Create assigns and returns its ref."},
     data: {type: "object"}, filter: {type: "object", description: "Top-level or dotted-path exact-match filter; omitted values inherit from a persistent cursor."}, limit: {type: "integer", minimum: 1},
-    order: {type: "string", enum: ["newest", "oldest"], description: "List order; when omitted while continuing, the cursor order is used."}, cursor: {type: "string", minLength: 1, description: "Cursor returned by list; a cursor position must still exist."}, if_match: {type: "string", minLength: 1, description: "Optional current ETag; reject the update if the record changed."},
+    order: {type: "string", enum: ["newest", "oldest"], description: "List order; when omitted while continuing, the cursor order is used."}, cursor: {type: "string", minLength: 1, description: "Cursor returned by list; a cursor position must still exist."}, if_match: {type: "string", minLength: 1, description: "Optional current ETag for optimistic concurrency. On mismatch, the update is rejected and the current_etag is returned; omitted means an unconditional update."},
   }, allOf: [
     {if: {properties: {operation: {const: "create"}}}, then: {properties: {data: {}}, required: ["data"]}},
     {if: {properties: {operation: {const: "get"}}}, then: {properties: {ref: {}}, required: ["ref"]}},
@@ -51,9 +51,9 @@ function renderItem(id: string, operation: Operation, item: MemoryItem, summary:
     status: "ok",
     summary,
     information: itemInformation(item, operation),
-    ...(operation === "update" ? {} : {
+    ...(operation === "get" ? {
       content: {encoding: "utf8" as const, text: JSON.stringify(item.data, null, 2)},
-    }),
+    } : {}),
   });
 }
 function object(value: unknown): value is JsonRecord { return typeof value === "object" && value !== null && !Array.isArray(value); }
@@ -81,6 +81,9 @@ export async function executeNativeMemory(args: JsonRecord, context: MemoryConte
     const text = JSON.stringify({items: listed.items, ...(listed.nextCursor ? {next_cursor: listed.nextCursor} : {}), ...(listed.warnings.length ? {warnings: listed.warnings} : {})}, null, 2);
     return renderToolResult({id: context.callId, status: "ok", summary: `${listed.items.length} memory record${listed.items.length === 1 ? "" : "s"} listed`, information: [["operation", "list"], ["type", type], ["count", listed.items.length], ...(listed.nextCursor ? [["has_more", true] as [string, unknown]] : [])], content: {encoding: "utf8", text}});
   } catch (error) {
+    if (error instanceof MemoryConflictError) return executionError(context.callId, "error", "memory_conflict", error.message, [
+      ["operation", "update"], ["type", type], ["ref", args.ref], ["current_etag", error.currentEtag],
+    ]);
     if (error instanceof MemoryStoreError) return executionError(context.callId, error.message.includes("not found") ? "not_found" : "error", "memory_storage_error", error.message);
     return executionError(context.callId, "error", "memory_operation_failed", error instanceof Error ? error.message : String(error));
   }

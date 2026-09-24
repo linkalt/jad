@@ -78,10 +78,10 @@ export function RunSettingsPanel({
             }
           />
           <ListItem
-            label="Tool steps per message"
+            label="Tool steps visible per provider run"
             endContent={
               <Value>
-                {appConfig.message_tool_window} ({appConfig.message_tool_window_page} per reveal)
+                {appConfig.message_step_window} ({appConfig.message_step_window_page} per reveal)
               </Value>
             }
           />

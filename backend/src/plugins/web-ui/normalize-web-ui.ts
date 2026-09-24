@@ -29,6 +29,7 @@ import {
 } from "./tool-read-web-ui.js";
 import type {
   WebUiMessage,
+  WebUiMessageStep,
   WebUiPart,
   WebUiSessionConfig,
   WebUiSessionSnapshot,
@@ -70,6 +71,7 @@ export function responseParts(value: JsonRecord): WebUiPart[] {
 function mergeCompletedParts(
   streamedParts: WebUiPart[],
   completedParts: WebUiPart[],
+  currentStepStart: number,
 ): WebUiPart[] {
   if (streamedParts.length === 0) {
     return completedParts;
@@ -96,7 +98,7 @@ function mergeCompletedParts(
       }
       continue;
     }
-    if (!parts.some((part) => part.type === completedPart.type)) {
+    if (!parts.slice(currentStepStart).some((part) => part.type === completedPart.type)) {
       parts = appendTextPart(parts, completedPart.type, completedPart.text);
     }
   }
@@ -139,10 +141,16 @@ export interface WebUiSessionState {
   messages: WebUiMessage[];
   toolMessages: Map<string, number>;
   activeToolMessageIndex: number | undefined;
+  activeStepId: string | undefined;
 }
 
 export function createWebUiSessionState(): WebUiSessionState {
-  return {messages: [], toolMessages: new Map(), activeToolMessageIndex: undefined};
+  return {
+    messages: [],
+    toolMessages: new Map(),
+    activeToolMessageIndex: undefined,
+    activeStepId: undefined,
+  };
 }
 
 /** Copies the state so a cached view can be extended without being mutated. */
@@ -151,7 +159,42 @@ export function cloneWebUiSessionState(state: WebUiSessionState): WebUiSessionSt
     messages: [...state.messages],
     toolMessages: new Map(state.toolMessages),
     activeToolMessageIndex: state.activeToolMessageIndex,
+    activeStepId: state.activeStepId,
   };
+}
+
+function providerStepId(record: JsonRecord, response: JsonRecord, key: string): string {
+  if (typeof response.id === "string" && response.id.length > 0) {
+    return response.id;
+  }
+  if (Number.isSafeInteger(record.session_step) && (record.session_step as number) > 0) {
+    return `session-step-${record.session_step}`;
+  }
+  return `session-step-${key}`;
+}
+
+function appendMessageStep(
+  message: WebUiMessage,
+  previousStepId: string | undefined,
+  stepId: string,
+  partCount: number,
+  hasTools: boolean,
+): WebUiMessageStep[] {
+  const startPart = message.parts.length;
+  const previousSteps = message.steps === undefined
+    ? [{
+      id: previousStepId ?? `step-before-${stepId}`,
+      startPart: 0,
+      endPart: startPart,
+      hasTools: true,
+    }]
+    : message.steps.map((step, index) => index === message.steps!.length - 1
+      ? {...step, endPart: startPart}
+      : step);
+  return [
+    ...previousSteps,
+    {id: stepId, startPart, endPart: startPart + partCount, hasTools},
+  ];
 }
 
 /**
@@ -171,6 +214,7 @@ export function reduceWebUiRecord(
   if (user) {
     state.toolMessages.clear();
     state.activeToolMessageIndex = undefined;
+    state.activeStepId = undefined;
     messages.push(user);
     return;
   }
@@ -182,9 +226,13 @@ export function reduceWebUiRecord(
       const message = messages[messageIndex];
       if (message) {
         const parts = [...message.parts, result];
+        const steps = message.steps?.map((step, index) =>
+          index === message.steps!.length - 1 ? {...step, endPart: parts.length} : step,
+        );
         messages[messageIndex] = {
           ...message,
           parts,
+          ...(steps === undefined ? {} : {steps}),
           ...fieldsFromParts(parts),
         };
       }
@@ -205,6 +253,7 @@ export function reduceWebUiRecord(
     return;
   }
   const response = responseFromRecord(record);
+  const stepId = providerStepId(record, response, key);
   const parts = responseParts(record);
   if (parts.length === 0) {
     return;
@@ -231,13 +280,22 @@ export function reduceWebUiRecord(
       );
     } else {
       const mergedParts = [...activeMessage.parts, ...parts];
+      const steps = appendMessageStep(
+        activeMessage,
+        state.activeStepId,
+        stepId,
+        parts.length,
+        true,
+      );
       messages[messageIndex] = {
         ...activeMessage,
         parts: mergedParts,
+        steps,
         ...fieldsFromParts(mergedParts),
       };
     }
     state.activeToolMessageIndex = messageIndex;
+    state.activeStepId = stepId;
     for (const part of callParts) {
       state.toolMessages.set(part.callId, messageIndex);
     }
@@ -248,13 +306,22 @@ export function reduceWebUiRecord(
     const activeMessage = messages[state.activeToolMessageIndex];
     if (activeMessage?.parts.some((part) => part.type === "tool_call")) {
       const mergedParts = [...activeMessage.parts, ...parts];
+      const steps = appendMessageStep(
+        activeMessage,
+        state.activeStepId,
+        stepId,
+        parts.length,
+        false,
+      );
       messages[state.activeToolMessageIndex] = {
         ...activeMessage,
         parts: mergedParts,
+        steps,
         ...fieldsFromParts(mergedParts),
       };
       state.toolMessages.clear();
       state.activeToolMessageIndex = undefined;
+      state.activeStepId = undefined;
       return;
     }
   }
@@ -294,6 +361,8 @@ export function normalizeWebUiSession(
 
 export class WebUiNormalizedRun {
   private parts: WebUiPart[] = [];
+  private steps: WebUiMessageStep[] = [];
+  private currentStepWasFallback = false;
   private readonly timestamp: string;
   // Stream events identify an item by `item_id` (and `output_index`), while a
   // tool part is keyed by its call id, so the two have to be correlated.
@@ -308,24 +377,36 @@ export class WebUiNormalizedRun {
   }
 
   public update(event: JsonRecord): WebUiMessage | undefined {
+    if (event.type === "response.created") {
+      const response = isRecord(event.response) ? event.response : undefined;
+      this.ensureCurrentStep(typeof response?.id === "string" ? response.id : undefined);
+      return undefined;
+    }
+
     const textDelta = assistantTextDeltaFromEvent(event);
     if (textDelta !== undefined) {
+      this.ensureCurrentStep();
       this.parts = appendTextPart(this.parts, "text", textDelta);
+      this.updateCurrentStep();
       return this.streamingMessage();
     }
 
     const reasoningDelta = reasoningDeltaFromEvent(event);
     if (reasoningDelta !== undefined) {
+      this.ensureCurrentStep();
       this.parts = appendTextPart(this.parts, "reasoning", reasoningDelta);
+      this.updateCurrentStep();
       return this.streamingMessage();
     }
 
     if (event.type === "response.output_item.added" && isRecord(event.item)) {
+      this.ensureCurrentStep();
       const call = toolCallPartFromAddedItem(event.item, this.parts.length);
       if (call !== undefined) {
         this.rememberToolCall(call.callId, event, event.item);
         if (!this.hasToolCall(call.callId)) {
           this.parts = appendToolPart(this.parts, call);
+          this.updateCurrentStep(true);
           return this.streamingMessage();
         }
       }
@@ -353,6 +434,7 @@ export class WebUiNormalizedRun {
     }
 
     if (event.type === "response.output_item.done" && isRecord(event.item)) {
+      this.ensureCurrentStep();
       const call = toolCallPartFromAnyOutput(event.item, this.parts.length);
       if (call !== undefined) {
         this.rememberToolCall(call.callId, event, event.item);
@@ -363,11 +445,14 @@ export class WebUiNormalizedRun {
         } else {
           this.parts = appendToolPart(this.parts, call);
         }
+        this.updateCurrentStep(true);
         return this.streamingMessage();
       }
     }
 
     if (event.type === "response.completed") {
+      const response = responseFromRecord(event);
+      this.ensureCurrentStep(typeof response.id === "string" ? response.id : undefined);
       const completedParts = responseParts(event);
       const toolParts = completedParts.filter(
         (part): part is WebUiToolCallPart => part.type === "tool_call",
@@ -379,6 +464,9 @@ export class WebUiNormalizedRun {
         }
         this.parts = appendToolPart(this.parts, part);
         appended = true;
+      }
+      if (toolParts.length > 0) {
+        this.updateCurrentStep(true);
       }
       if (appended) {
         return this.streamingMessage();
@@ -392,14 +480,62 @@ export class WebUiNormalizedRun {
     if (!result) {
       return undefined;
     }
+    this.ensureCurrentStep();
     this.parts = appendToolPart(this.parts, result);
+    this.updateCurrentStep();
     return this.streamingMessage();
   }
 
   public complete(response: JsonRecord): WebUiMessage {
+    this.ensureCurrentStep(typeof response.id === "string" ? response.id : undefined);
     const completedParts = responseParts(response);
-    this.parts = clearPartialToolCalls(mergeCompletedParts(this.parts, completedParts));
-    return assistantMessage(this.messageId, this.parts, this.timestamp, "complete");
+    const currentStepStart = this.steps.at(-1)?.startPart ?? 0;
+    this.parts = clearPartialToolCalls(
+      mergeCompletedParts(this.parts, completedParts, currentStepStart),
+    );
+    this.updateCurrentStep(completedParts.some((part) => part.type === "tool_call"));
+    return this.message("complete");
+  }
+
+  private ensureCurrentStep(id?: string): WebUiMessageStep {
+    const current = this.steps.at(-1);
+    if (current !== undefined && (id === undefined || current.id === id)) {
+      return current;
+    }
+    if (current !== undefined && this.currentStepWasFallback && id !== undefined) {
+      current.id = id;
+      this.currentStepWasFallback = false;
+      return current;
+    }
+
+    if (current !== undefined) {
+      current.endPart = this.parts.length;
+    }
+    const step: WebUiMessageStep = {
+      id: id ?? `${this.messageId}-step-${this.steps.length + 1}`,
+      startPart: this.parts.length,
+      endPart: this.parts.length,
+      hasTools: false,
+    };
+    this.steps.push(step);
+    this.currentStepWasFallback = id === undefined;
+    return step;
+  }
+
+  private updateCurrentStep(hasTools = false): void {
+    const step = this.ensureCurrentStep();
+    step.endPart = this.parts.length;
+    if (hasTools) {
+      step.hasTools = true;
+    }
+  }
+
+  private message(status: "streaming" | "complete"): WebUiMessage {
+    const message = assistantMessage(this.messageId, this.parts, this.timestamp, status);
+    const steps = this.steps
+      .filter((step) => step.endPart > step.startPart)
+      .map((step) => ({...step}));
+    return steps.length > 1 ? {...message, steps} : message;
   }
 
   private hasToolCall(callId: string): boolean {
@@ -454,7 +590,7 @@ export class WebUiNormalizedRun {
   }
 
   private streamingMessage(): WebUiMessage {
-    return assistantMessage(this.messageId, this.parts, this.timestamp, "streaming");
+    return this.message("streaming");
   }
 }
 

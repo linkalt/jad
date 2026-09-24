@@ -41,12 +41,24 @@ export interface WebUiToolResultPart {
 
 export type WebUiPart = WebUiTextPart | WebUiToolCallPart | WebUiToolResultPart;
 
+export interface WebUiMessageStep {
+  id: string;
+  /** Inclusive index into WebUiMessage.parts. */
+  startPart: number;
+  /** Exclusive index into WebUiMessage.parts. */
+  endPart: number;
+  /** Tool-producing steps are eligible for the earlier-step window. */
+  hasTools: boolean;
+}
+
 export interface WebUiMessage {
   id: string;
   sender: "system" | "user" | "assistant";
   text: string;
   timestamp: string;
   parts: WebUiPart[];
+  /** Present when this message combines multiple provider response steps. */
+  steps?: WebUiMessageStep[];
   status?: WebUiMessageStatus;
   reasoningContent?: string;
   /**
@@ -87,6 +99,8 @@ export interface WebUiSessionRun {
 export interface WebUiSessionPage {
   has_more: boolean;
   next_before: number | null;
+  generation: string;
+  stale_cursor: boolean;
 }
 
 /**

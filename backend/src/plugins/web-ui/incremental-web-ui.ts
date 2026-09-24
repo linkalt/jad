@@ -1,4 +1,4 @@
-import type {WebUiMessage, WebUiPart} from "./types.js";
+import type {WebUiMessage, WebUiMessageStep, WebUiPart} from "./types.js";
 
 /** One event of a run stream: `ui.delta` appends to a part, `ui.part` sets one. */
 export interface WebUiStreamEvent {
@@ -18,11 +18,32 @@ export interface WebUiStreamEvent {
  * reasoning or tool arguments) becomes a suffix, and a replaced or added part is
  * sent once, as a part.
  */
+function sameSteps(
+  previous: readonly WebUiMessageStep[] | undefined,
+  next: readonly WebUiMessageStep[] | undefined,
+): boolean {
+  if (previous === undefined || next === undefined) {
+    return previous === next;
+  }
+  return previous.length === next.length && previous.every((step, index) => {
+    const other = next[index];
+    return other !== undefined &&
+      step.id === other.id &&
+      step.startPart === other.startPart &&
+      step.endPart === other.endPart &&
+      step.hasTools === other.hasTools;
+  });
+}
+
 export function messageIncrements(
   previous: WebUiMessage,
   next: WebUiMessage,
 ): WebUiStreamEvent[] | undefined {
-  if (previous.id !== next.id || previous.status !== next.status) {
+  if (
+    previous.id !== next.id ||
+    previous.status !== next.status ||
+    !sameSteps(previous.steps, next.steps)
+  ) {
     return undefined;
   }
   const before = previous.parts;

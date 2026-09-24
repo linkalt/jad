@@ -46,17 +46,23 @@ import {
   type SessionPage,
   type SessionSnapshot,
   type WebUiMessage,
+  type WebUiMessageStep,
   type WebUiPart,
 } from './api';
 import appConfig from './config.json';
 import {deepEqual} from './deepEqual';
 import {
   captureScrollPosition,
-  findScrollParent,
   restoreScrollPosition,
   type ScrollPositionSnapshot,
 } from './components/scroll-position';
 import {shouldSkipTranscriptLoad} from './transcript-load-policy';
+import {
+  hiddenWebUiStepIds,
+  isWebUiPartHidden,
+  visibleWebUiItems,
+  webUiStepAtPartIndex,
+} from './web-ui-steps';
 import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
 import {FloatingPanel} from './components/FloatingPanel';
@@ -65,6 +71,7 @@ import {PromptLibraryPanel} from './components/PromptLibraryPanel';
 import {RunSettingsPanel} from './components/RunSettingsPanel';
 import {SessionSearchPanel} from './components/SessionSearchPanel';
 import {EarlierMessagesControl, useTranscriptWindow} from './components/TranscriptWindow';
+import {findScrollParent} from './components/scroll-position';
 import {UsageDetailsDrawer} from './components/UsageDetailsDrawer';
 import type {PromptTemplate} from './promptLibrary';
 import {
@@ -996,7 +1003,10 @@ function isWebUiToolPart(part: WebUiPart): part is WebUiToolPart {
   return part.type === 'tool_call' || part.type === 'tool_result';
 }
 
-function groupWebUiParts(parts: WebUiPart[]): WebUiPartGroup[] {
+function groupWebUiParts(
+  parts: WebUiPart[],
+  steps?: readonly WebUiMessageStep[],
+): WebUiPartGroup[] {
   const groups: WebUiPartGroup[] = [];
   // Group only adjacent tool parts; reasoning and text always flush the tool run.
   let toolItems: IndexedWebUiPart<WebUiToolPart>[] = [];
@@ -1013,6 +1023,14 @@ function groupWebUiParts(parts: WebUiPart[]): WebUiPartGroup[] {
       return;
     }
     if (isWebUiToolPart(part)) {
+      const previousTool = toolItems[0];
+      if (
+        previousTool !== undefined &&
+        webUiStepAtPartIndex(steps, previousTool.index)?.id !==
+          webUiStepAtPartIndex(steps, index)?.id
+      ) {
+        flushTools();
+      }
       toolItems.push({part, index});
       return;
     }
@@ -1158,51 +1176,39 @@ function WebUiActivityGroup({
 
 function WebUiParts({
   parts,
+  steps,
   rowWidthPx,
   isStreaming = false,
   source,
 }: {
   parts: WebUiPart[];
+  steps?: WebUiMessageStep[];
   rowWidthPx: number;
   isStreaming?: boolean;
   source?: TruncatedSource;
 }) {
-  const segments = segmentWebUiGroups(groupWebUiParts(parts));
+  const segments = segmentWebUiGroups(groupWebUiParts(parts, steps));
   const lastPartIndex = parts.length - 1;
-  const [revealedToolGroups, setRevealedToolGroups] = useState(0);
+  const [revealedSteps, setRevealedSteps] = useState(0);
   const revealScrollAnchorRef = useRef<ScrollPositionSnapshot | null>(null);
 
   useLayoutEffect(() => {
     const anchor = revealScrollAnchorRef.current;
     revealScrollAnchorRef.current = null;
     restoreScrollPosition(anchor);
-  }, [revealedToolGroups]);
+  }, [revealedSteps]);
 
   /**
-   * Tool steps are the heavy rows of a long turn — every call carries its own
-   * title and output. The window keeps the newest ones mounted and hides the
-   * rest behind a control, the same trade the transcript window makes one level
-   * up. Reasoning and text are never hidden, so the turn still reads in order.
+   * A tool-producing provider response is one step. Hide its complete range —
+   * reasoning, assistant text, calls, and results — while keeping the terminal
+   * no-tool assistant summary visible.
    */
-  const toolGroupKeys: string[] = [];
-  segments.forEach(segment => {
-    if (segment.type !== 'activity') {
-      return;
-    }
-    segment.items.forEach(({group, index}) => {
-      if (group.type === 'tools') {
-        toolGroupKeys.push(webUiGroupKey(group, index));
-      }
-    });
-  });
-  const visibleToolGroups = appConfig.message_tool_window + revealedToolGroups;
-  const hiddenToolGroupKeys = new Set(
-    toolGroupKeys.slice(0, Math.max(0, toolGroupKeys.length - visibleToolGroups)),
-  );
+  const visibleSteps = appConfig.message_step_window + revealedSteps;
+  const hiddenStepIds = hiddenWebUiStepIds(steps, visibleSteps);
 
   return (
     <VStack gap={3} width="100%">
-      {hiddenToolGroupKeys.size > 0 ? (
+      {hiddenStepIds.size > 0 ? (
         <VStack align="center" gap={1} width="100%">
           <Button
             label="Load earlier steps"
@@ -1213,18 +1219,22 @@ function WebUiParts({
               revealScrollAnchorRef.current = captureScrollPosition(
                 findScrollParent(event.currentTarget),
               );
-              setRevealedToolGroups(current => current + appConfig.message_tool_window_page);
+              setRevealedSteps(current => current + appConfig.message_step_window_page);
             }}
           />
           <Text type="supporting" color="secondary">
-            {hiddenToolGroupKeys.size} earlier{' '}
-            {hiddenToolGroupKeys.size === 1 ? 'step is' : 'steps are'} not shown
+            {hiddenStepIds.size} earlier{' '}
+            {hiddenStepIds.size === 1 ? 'step is' : 'steps are'} not shown
           </Text>
         </VStack>
       ) : null}
       {segments.map((segment, segmentIndex) => {
         if (segment.type === 'content') {
           const contentPart = segment.item.group.item.part;
+          const partIndex = segment.item.group.item.index;
+          if (isWebUiPartHidden(steps, hiddenStepIds, partIndex)) {
+            return null;
+          }
           return (
             <VStack
               key={webUiGroupKey(segment.item.group, segment.item.index)}
@@ -1248,25 +1258,28 @@ function WebUiParts({
           );
         }
 
+        const visibleItems = visibleWebUiItems(
+          segment.items,
+          item => webUiGroupIndex(item.group),
+          steps,
+          hiddenStepIds,
+        );
+        if (visibleItems.length === 0) {
+          return null;
+        }
         return (
           <VStack key={`activity-${segmentIndex}`} gap={0} width="100%">
-            {segment.items.map(({group, index}) => {
-              const groupKey = webUiGroupKey(group, index);
-              if (hiddenToolGroupKeys.has(groupKey)) {
-                return null;
-              }
-              return (
-                <WebUiActivityGroup
-                  key={groupKey}
-                  group={group}
-                  rowWidthPx={rowWidthPx}
-                  isStreaming={
-                    isStreaming && webUiGroupIndex(group) === lastPartIndex
-                  }
-                  source={source}
-                />
-              );
-            })}
+            {visibleItems.map(({group, index}) => (
+              <WebUiActivityGroup
+                key={webUiGroupKey(group, index)}
+                group={group}
+                rowWidthPx={rowWidthPx}
+                isStreaming={
+                  isStreaming && webUiGroupIndex(group) === lastPartIndex
+                }
+                source={source}
+              />
+            ))}
           </VStack>
         );
       })}
@@ -1677,6 +1690,7 @@ function AssistantMessage({
           {message.parts && message.parts.length > 0 ? (
             <WebUiParts
               parts={message.parts}
+              steps={message.steps}
               rowWidthPx={rowWidthPx}
               source={onLoadFull === undefined ? undefined : {message, onLoadFull}}
             />
@@ -2049,10 +2063,17 @@ function App() {
       loadingOlderRef.current = true;
       void fetchSession(session.sessionRef, {
         before: page.next_before,
+        generation: page.generation,
         turns: appConfig.transcript_page_turns,
       })
         .then(result => {
           if (result.kind !== 'ok') {
+            return;
+          }
+          if (result.value.page?.stale_cursor) {
+            // Compaction replaced the transcript after this page was issued.
+            // A normal snapshot reload also refreshes the backup history block.
+            refreshSessionsRef.current?.();
             return;
           }
           const older = applyHydrated(uiId, result.value.messages ?? []);

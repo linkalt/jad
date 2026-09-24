@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
+import { AsyncMutex } from "../../concurrency.js";
 import { DEFAULT_KEEP_BACKUP_TURNS } from "../../config.js";
+import { SESSION_INPUT_BATCH_ID_FIELD, SESSION_INPUT_BATCH_INDEX_FIELD } from "../../persistence.js";
 import type {
   JsonRecord,
   SessionResponseStore,
@@ -26,6 +28,10 @@ export interface WebUiSessionView {
   hasMore: boolean;
   /** Cursor for the next older page; `null` when the transcript is exhausted. */
   nextBefore: number | null;
+  /** Transcript identity the next-before offset belongs to. */
+  generation: string;
+  /** True when the supplied page cursor belongs to a replaced transcript. */
+  staleCursor: boolean;
   /**
    * Reference to the history block this response left out. Present unless the
    * response is a page, which a client only asks for once it holds the block.
@@ -99,6 +105,7 @@ function parseRecord(line: string): JsonRecord | undefined {
 export class WebUiSessionViewCache {
   private backup: BackupBlock | undefined;
   private turnStartsCache: TurnStartsCache | undefined;
+  private readonly turnStartsMutex = new AsyncMutex();
 
   public constructor(
     private readonly store: SessionResponseStore,
@@ -106,7 +113,7 @@ export class WebUiSessionViewCache {
   ) {}
 
   public async read(
-    options: {before?: number; turns?: number; backupTurns?: number} = {},
+    options: {before?: number; generation?: string; turns?: number; backupTurns?: number} = {},
   ): Promise<WebUiSessionView> {
     const stamp = await this.store.readTranscriptStamp();
     const page = await this.readPage(stamp.size, options);
@@ -153,7 +160,7 @@ export class WebUiSessionViewCache {
       return block?.messages.find((message) => message.id === messageId);
     }
     const stamp = await this.store.readTranscriptStamp();
-    const starts = await this.turnStarts(stamp.size);
+    const {starts} = await this.turnStarts(stamp.size);
     const turn = starts.indexOf(cursor);
     if (turn < 0) {
       return undefined;
@@ -179,19 +186,37 @@ export class WebUiSessionViewCache {
    */
   private async readPage(
     end: number,
-    options: {before?: number; turns?: number},
+    options: {before?: number; generation?: string; turns?: number},
   ): Promise<WebUiSessionView> {
     const requested = options.turns ?? this.options.snapshotTurns;
     const limit = requested <= 0 ? 0 : Math.min(requested, this.options.maxPageTurns);
-    const starts = await this.turnStarts(end);
+    const resolved = await this.turnStarts(end);
+    const {starts, generation} = resolved;
     const before = options.before;
-    const last = before === undefined
-      ? starts.length
-      : starts.findIndex((start) => start >= before);
-    const endIndex = last < 0 ? starts.length : last;
+    if (
+      before !== undefined &&
+      ((options.generation !== undefined && options.generation !== generation) || !starts.includes(before))
+    ) {
+      return {
+        messages: [],
+        cursors: new Map(),
+        hasMore: false,
+        nextBefore: null,
+        generation,
+        staleCursor: true,
+      };
+    }
+    const endIndex = before === undefined ? starts.length : starts.indexOf(before);
 
     if (endIndex <= 0) {
-      return {messages: [], cursors: new Map(), hasMore: false, nextBefore: null};
+      return {
+        messages: [],
+        cursors: new Map(),
+        hasMore: false,
+        nextBefore: null,
+        generation,
+        staleCursor: false,
+      };
     }
     const first = limit <= 0 || limit >= endIndex ? 0 : endIndex - limit;
     const stop = endIndex >= starts.length ? end : starts[endIndex]!;
@@ -222,6 +247,8 @@ export class WebUiSessionViewCache {
       cursors,
       hasMore,
       nextBefore: hasMore ? starts[first]! : null,
+      generation,
+      staleCursor: false,
     };
   }
 
@@ -236,39 +263,65 @@ export class WebUiSessionViewCache {
    * longer the same one — a replacement changes its generation, a repair shrinks
    * it — because then the offsets describe a transcript that is not there.
    */
-  private async turnStarts(end: number): Promise<number[]> {
-    const index = await this.store.readCursorIndex();
-    const generation = (await this.store.readTranscriptGeneration()) ?? "-";
-    let cache = this.turnStartsCache;
-    if (
-      cache === undefined ||
-      cache.generation !== generation ||
-      cache.size > index.size ||
-      cache.consumed > index.runs.length ||
-      !sameRun(cache.lastRun, index.runs[cache.consumed - 1])
-    ) {
-      cache = {generation, size: index.size, consumed: 0, starts: [0], lastRun: undefined};
-      this.turnStartsCache = cache;
-    }
-    cache.size = index.size;
-    for (; cache.consumed < index.runs.length; cache.consumed += 1) {
-      const run = index.runs[cache.consumed]!;
-      cache.lastRun = run;
-      if (run.step !== 1 || run.offset <= 0 || run.offset >= end) {
-        continue;
+  private async turnStarts(end: number): Promise<{starts: number[]; generation: string}> {
+    return this.turnStartsMutex.runExclusive(async () => {
+      const index = await this.store.readCursorIndex();
+      const generation = (await this.store.readTranscriptGeneration()) ?? "-";
+      let cache = this.turnStartsCache;
+      if (
+        cache === undefined ||
+        cache.generation !== generation ||
+        cache.size > index.size ||
+        cache.consumed > index.runs.length ||
+        !sameRun(cache.lastRun, index.runs[cache.consumed - 1])
+      ) {
+        cache = {generation, size: index.size, consumed: 0, starts: [0], lastRun: undefined};
+        this.turnStartsCache = cache;
       }
-      // The run may have a user message in front of it, which then opens the
-      // turn: one record read answers both questions.
-      const previous = await this.store.readRecordBefore(run.offset);
-      const record = previous === undefined ? undefined : parseRecord(previous.line);
-      const start = previous !== undefined && record !== undefined && isUserTurnRecord(record)
-        ? previous.offset
-        : run.offset;
-      if (start > cache.starts[cache.starts.length - 1]!) {
-        cache.starts.push(start);
+      cache.size = index.size;
+      while (cache.consumed < index.runs.length) {
+        const run = index.runs[cache.consumed]!;
+        // The cursor index may be newer than the transcript snapshot that
+        // requested this page. Leave future runs unconsumed for the next read.
+        if (run.offset >= end) break;
+        cache.lastRun = run;
+        cache.consumed += 1;
+        if (run.step !== 1 || run.offset <= 0) continue;
+
+        const previous = await this.store.readRecordBefore(run.offset);
+        const previousRecord = previous === undefined ? undefined : parseRecord(previous.line);
+        let start = run.offset;
+        if (previous !== undefined && previousRecord !== undefined) {
+          const batchId = previousRecord[SESSION_INPUT_BATCH_ID_FIELD];
+          const batchIndex = previousRecord[SESSION_INPUT_BATCH_INDEX_FIELD];
+          if (typeof batchId === "string" && Number.isSafeInteger(batchIndex) && (batchIndex as number) >= 0) {
+            let current: {offset: number; line: string} | undefined = previous;
+            let expectedIndex = batchIndex as number;
+            let firstUser: number | undefined;
+            while (current !== undefined) {
+              const record = parseRecord(current.line);
+              if (
+                record === undefined ||
+                record[SESSION_INPUT_BATCH_ID_FIELD] !== batchId ||
+                record[SESSION_INPUT_BATCH_INDEX_FIELD] !== expectedIndex
+              ) break;
+              if (isUserTurnRecord(record)) firstUser = current.offset;
+              expectedIndex -= 1;
+              if (expectedIndex < 0 || current.offset === 0) break;
+              current = await this.store.readRecordBefore(current.offset);
+            }
+            if (firstUser !== undefined) start = firstUser;
+          } else if (isUserTurnRecord(previousRecord)) {
+            // Legacy unbatched inputs open a single-record turn.
+            start = previous.offset;
+          }
+        }
+        if (start > cache.starts[cache.starts.length - 1]!) {
+          cache.starts.push(start);
+        }
       }
-    }
-    return cache.starts;
+      return {starts: [...cache.starts], generation: cache.generation};
+    });
   }
 
   /**

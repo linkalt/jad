@@ -19,7 +19,7 @@
           "limit": {"type": "integer", "minimum": 1},
           "order": {"type": "string", "enum": ["newest", "oldest"], "description": "List order; when omitted while continuing, the cursor order is used."},
           "cursor": {"type": "string", "minLength": 1, "description": "Cursor returned by list; a cursor position must still exist."},
-          "if_match": {"type": "string", "minLength": 1, "description": "Optional current ETag; reject the update if the record changed."}
+          "if_match": {"type": "string", "minLength": 1, "description": "Optional current ETag for optimistic concurrency. On mismatch, the update is rejected and the current_etag is returned; omitted means an unconditional update."}
         },
         "allOf": [
           {"if": {"properties": {"operation": {"const": "create"}}}, "then": {"properties": {"data": {}}, "required": ["data"]}},

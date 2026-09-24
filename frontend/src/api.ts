@@ -33,12 +33,20 @@ export interface WebUiToolResultPart {
 
 export type WebUiPart = WebUiTextPart | WebUiToolCallPart | WebUiToolResultPart;
 
+export interface WebUiMessageStep {
+  id: string;
+  startPart: number;
+  endPart: number;
+  hasTools: boolean;
+}
+
 export interface WebUiMessage {
   id: string;
   sender: 'system' | 'user' | 'assistant';
   text: string;
   timestamp: string;
   parts: WebUiPart[];
+  steps?: WebUiMessageStep[];
   status?: 'streaming' | 'complete';
   reasoningContent?: string;
   /**
@@ -108,6 +116,8 @@ export interface SessionSnapshot {
 export interface SessionPage {
   has_more: boolean;
   next_before: number | null;
+  generation: string;
+  stale_cursor: boolean;
 }
 
 export interface SessionHistory {
@@ -194,11 +204,14 @@ export async function fetchSessions(
 
 export async function fetchSession(
   sessionId: string,
-  options: {etag?: string; before?: number; turns?: number} = {},
+  options: {etag?: string; before?: number; generation?: string; turns?: number} = {},
 ): Promise<ConditionalResult<SessionSnapshot>> {
   const query = new URLSearchParams();
   if (options.before !== undefined) {
     query.set('before', String(options.before));
+  }
+  if (options.generation !== undefined) {
+    query.set('cursor_generation', options.generation);
   }
   if (options.turns !== undefined) {
     query.set('turns', String(options.turns));
@@ -396,6 +409,34 @@ function isWebUiPart(value: unknown): value is WebUiPart {
   return false;
 }
 
+function isWebUiMessageStep(value: unknown): value is WebUiMessageStep {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    isNonnegativeSafeInteger(value.startPart) &&
+    isNonnegativeSafeInteger(value.endPart) &&
+    value.endPart > value.startPart &&
+    typeof value.hasTools === 'boolean'
+  );
+}
+
+function isWebUiMessageSteps(value: unknown, partCount: number): value is WebUiMessageStep[] {
+  if (value === undefined) {
+    return true;
+  }
+  if (!Array.isArray(value) || value.length < 2 || !value.every(isWebUiMessageStep)) {
+    return false;
+  }
+  let nextPart = 0;
+  for (const step of value) {
+    if (step.startPart !== nextPart || step.endPart > partCount) {
+      return false;
+    }
+    nextPart = step.endPart;
+  }
+  return nextPart === partCount;
+}
+
 function isWebUiMessage(value: unknown): value is WebUiMessage {
   if (!isRecord(value)) {
     return false;
@@ -406,7 +447,8 @@ function isWebUiMessage(value: unknown): value is WebUiMessage {
     typeof value.text === 'string' &&
     typeof value.timestamp === 'string' &&
     Array.isArray(value.parts) &&
-    value.parts.every(isWebUiPart)
+    value.parts.every(isWebUiPart) &&
+    isWebUiMessageSteps(value.steps, value.parts.length)
   );
 }
 

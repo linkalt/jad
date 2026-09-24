@@ -13,11 +13,22 @@ import {
   type SpillVars,
 } from "./tools/native/spill.js";
 
+export type ModelAuthMode = "api_key" | "openai_oauth";
+
+export const DEFAULT_OPENAI_OAUTH_AUTH_FILE = join(
+  homedir(),
+  ".jad",
+  "auth",
+  "openai-codex.json",
+);
+
 export interface ModelConfig extends JsonRecord {
   schema_version: 1;
   provider: string;
   model: string;
   api_key_env: string;
+  auth_mode: ModelAuthMode;
+  oauth_auth_file?: string;
   base_url?: string;
   request: JsonRecord;
 }
@@ -218,6 +229,10 @@ export interface NativeFetchToolSettings extends JsonRecord {
   max_storage_bytes: number;
   timeout_ms: number;
   max_redirects: number;
+  /** Include converter-extracted HTML metadata in the Markdown content. */
+  include_metadata: boolean;
+  /** Preserve <img> elements as Markdown image links. */
+  include_images: boolean;
   allowed_hosts: string[];
   denied_hosts: string[];
 }
@@ -482,6 +497,21 @@ function normalizeModel(raw: JsonRecord, path: string): ModelConfig {
   const provider = requiredString(raw.provider ?? "openai", "provider", path);
   const model = requiredString(raw.model, "model", path);
   const baseUrl = normalizeBaseUrl(raw.base_url, path);
+  const authMode = raw.auth_mode ?? "api_key";
+  if (authMode !== "api_key" && authMode !== "openai_oauth") {
+    throw new ConfigError(`${path}: auth_mode must be api_key or openai_oauth`);
+  }
+  if (authMode === "openai_oauth" && baseUrl !== undefined) {
+    throw new ConfigError(
+      `${path}: base_url is managed by the OpenAI OAuth adapter and cannot be set with auth_mode openai_oauth`,
+    );
+  }
+  if (authMode === "api_key" && raw.oauth_auth_file !== undefined) {
+    throw new ConfigError(`${path}: oauth_auth_file requires auth_mode openai_oauth`);
+  }
+  const oauthAuthFile = authMode === "openai_oauth"
+    ? resolveOpenAIOAuthAuthFilePath(raw.oauth_auth_file, path)
+    : undefined;
   const apiKeyEnv = requiredString(
     raw.api_key_env ?? defaultApiKeyEnv(provider, baseUrl),
     "api_key_env",
@@ -507,14 +537,37 @@ function normalizeModel(raw: JsonRecord, path: string): ModelConfig {
     provider,
     model,
     api_key_env: apiKeyEnv,
+    auth_mode: authMode,
     request,
   };
+  if (oauthAuthFile === undefined) {
+    delete normalized.oauth_auth_file;
+  } else {
+    normalized.oauth_auth_file = oauthAuthFile;
+  }
   if (baseUrl === undefined) {
     delete normalized.base_url;
   } else {
     normalized.base_url = baseUrl;
   }
   return normalized as ModelConfig;
+}
+
+export function resolveOpenAIOAuthAuthFilePath(
+  value?: unknown,
+  configPath = "oauth_auth_file",
+): string {
+  if (value === undefined) {
+    return DEFAULT_OPENAI_OAUTH_AUTH_FILE;
+  }
+  const configured = requiredString(value, "oauth_auth_file", configPath);
+  const expanded = expandHomePrefix(configured);
+  if (!isAbsolute(expanded)) {
+    throw new ConfigError(
+      `${configPath}: oauth_auth_file must be absolute or start with ~`,
+    );
+  }
+  return resolve(expanded);
 }
 
 async function normalizeCwd(value: unknown, path: string): Promise<string> {
@@ -606,6 +659,8 @@ export const DEFAULT_NATIVE_BASH_SPILL_PATH = "{cwd}/.bash-output/bash-{call_id}
 export const DEFAULT_NATIVE_BASH_MAX_LINE_CHARS = 2000;
 export const DEFAULT_NATIVE_BASH_STRIP_ANSI = true;
 export const DEFAULT_NATIVE_FETCH_STORAGE_DIR = ".fetch";
+export const DEFAULT_NATIVE_FETCH_INCLUDE_METADATA = false;
+export const DEFAULT_NATIVE_FETCH_INCLUDE_IMAGES = false;
 export const DEFAULT_NATIVE_FETCH_LIMIT = 12_000;
 export const DEFAULT_NATIVE_FETCH_MAX_LIMIT = 50_000;
 export const DEFAULT_NATIVE_FETCH_MAX_RESPONSE_BYTES = 2_000_000;
@@ -1522,8 +1577,9 @@ const NATIVE_TOOL_KEYS: Record<NativeToolName, readonly string[]> = {
     "statecontext", "storage_dir", "storage_path",
   ],
   fetch: [
-    "allowed_hosts", "default_limit", "denied_hosts", "max_document_chars", "max_limit",
-    "max_redirects", "max_response_bytes", "max_storage_bytes", "storage_dir", "timeout_ms",
+    "allowed_hosts", "default_limit", "denied_hosts", "include_images", "include_metadata",
+    "max_document_chars", "max_limit", "max_redirects", "max_response_bytes",
+    "max_storage_bytes", "storage_dir", "timeout_ms",
   ],
 };
 
@@ -2144,6 +2200,13 @@ async function normalizeTools(
       }
       return value;
     };
+    const booleanSetting = (field: "include_metadata" | "include_images", fallback: boolean): boolean => {
+      const value = fetchValue[field] ?? fallback;
+      if (typeof value !== "boolean") {
+        throw new ConfigError(`${path}: tools.native.fetch.${field} must be a boolean`);
+      }
+      return value;
+    };
     const normalizeHosts = (field: "allowed_hosts" | "denied_hosts"): string[] => {
       const value = fetchValue[field] ?? [];
       if (!Array.isArray(value) || value.some((host) => typeof host !== "string" || !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/i.test(host))) {
@@ -2161,6 +2224,8 @@ async function normalizeTools(
       max_storage_bytes: positiveInteger("max_storage_bytes", DEFAULT_NATIVE_FETCH_MAX_STORAGE_BYTES, MAX_NATIVE_TOOL_BYTES * 100),
       timeout_ms: positiveInteger("timeout_ms", DEFAULT_NATIVE_FETCH_TIMEOUT_MS, 300_000),
       max_redirects: positiveInteger("max_redirects", DEFAULT_NATIVE_FETCH_MAX_REDIRECTS, 20),
+      include_metadata: booleanSetting("include_metadata", DEFAULT_NATIVE_FETCH_INCLUDE_METADATA),
+      include_images: booleanSetting("include_images", DEFAULT_NATIVE_FETCH_INCLUDE_IMAGES),
       allowed_hosts: normalizeHosts("allowed_hosts"),
       denied_hosts: normalizeHosts("denied_hosts"),
     };
@@ -2406,7 +2471,11 @@ function normalizeStoragePaths(
     throw new ConfigError(`${path}: paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir`);
   }
 
-  const normalizePathSet = (configuredPaths: JsonRecord, profilePath: string): SessionStoragePaths => {
+  const normalizePathSet = (
+    configuredPaths: JsonRecord,
+    profilePath: string,
+    profileScoped = false,
+  ): SessionStoragePaths => {
     if (configuredPaths.processes !== undefined || configuredPaths.tasks !== undefined) {
       throw new ConfigError(`${profilePath}: paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir`);
     }
@@ -2417,16 +2486,20 @@ function normalizeStoragePaths(
 
     const staging = pathValue("staging", "staging");
     const messages = pathValue("messages", "messages.jsonl");
-    const messagesBackup = pathValue("messages_backup", "messages.backup.jsonl");
-    const compactionCache = pathValue("compaction_cache", "staging/compaction-cache.json");
+    const messagesBackup = pathValue(
+      "messages_backup",
+      profileScoped ? join(dirname(messages), "messages.backup.jsonl") : "messages.backup.jsonl",
+    );
+    const compactionCache = pathValue("compaction_cache", join(staging, "compaction-cache.json"));
     const historyCache = pathValue("history_cache", join(staging, HISTORY_CACHE_FILE));
     const usageCache = pathValue("usage_cache", join(staging, USAGE_CACHE_FILE));
     const cursorCache = pathValue("cursor_cache", join(staging, CURSOR_CACHE_FILE));
-    const statecontext = pathValue("statecontext", "staging/statecontext.json");
+    const statecontext = pathValue("statecontext", join(staging, "statecontext.json"));
     const model = pathValue("model", "model.json");
     const distinctFilePaths = new Set([messages, messagesBackup, compactionCache, historyCache, usageCache, cursorCache, statecontext, model]);
-    if (distinctFilePaths.size !== 8) {
-      throw new ConfigError(`${profilePath}: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.statecontext, and paths.model must be different files`);
+    const compactionCacheBackup = `${compactionCache}.backup`;
+    if (distinctFilePaths.size !== 8 || distinctFilePaths.has(compactionCacheBackup)) {
+      throw new ConfigError(`${profilePath}: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.statecontext, paths.model, and the compaction-cache backup must be different files`);
     }
     const extras = Object.fromEntries(Object.entries(configuredPaths).filter(([field]) => !SESSION_PATH_FIELD_SET.has(field)));
     return {
@@ -2479,7 +2552,11 @@ function normalizeStoragePaths(
       }
       requiredString(fieldValue, field, `${path}: paths.profiles.${profileName}`);
     }
-    const normalized = normalizePathSet({...basePaths, ...profileValue}, `${path}: paths.profiles.${profileName}`);
+    const normalized = normalizePathSet(
+      {...basePaths, ...profileValue},
+      `${path}: paths.profiles.${profileName}`,
+      true,
+    );
     if (profileName === activeProfile) normalizedSelectedProfile = normalized;
   }
 

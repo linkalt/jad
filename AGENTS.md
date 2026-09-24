@@ -187,5 +187,7 @@ MORE CLI:
 - **DO NOT hardcode configurable values** such as limits, timeouts, feature flags, or enable/disable options. Put them in the configuration file with sensible defaults.
 - Tool implementation guidelines document @tools-guidelines.md.
 - Analyze code before propose/suggest an implementation idea.
+- Do not finish after implementation. Finish only after the result is demonstrated to work and, where relevant, demonstrated to meet acceptable performance. Workflow: IMPLEMENT → RUN → TEST → MEASURE → FIX → REPEAT.
+ 
 
 cwd: `/home/www/Downloads/tmp/myagent3`

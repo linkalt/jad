@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,7 +7,11 @@ import test from "node:test";
 import type OpenAI from "openai";
 
 import { createAgentServer } from "../src/server.js";
-import {SessionResponseStore} from "../src/persistence.js";
+import {
+  SESSION_INPUT_BATCH_ID_FIELD,
+  SESSION_INPUT_BATCH_INDEX_FIELD,
+  SessionResponseStore,
+} from "../src/persistence.js";
 import {
   normalizeWebUiSession,
   WebUiNormalizedRun,
@@ -562,6 +566,82 @@ test("normalizes tool call and result parts for snapshots and live runs", () => 
   ]);
 });
 
+test("preserves provider step ranges and leaves the final assistant summary visible", () => {
+  const config = {
+    model: {provider: "fake", model: "fake-model"},
+    settings: {session_name: "step-ranges"},
+  } as unknown as LoadedSessionConfig;
+  const firstCall = {
+    type: "function_call",
+    call_id: "call-step-one",
+    name: "read",
+    arguments: "{}",
+  };
+  const secondCall = {
+    type: "function_call",
+    call_id: "call-step-two",
+    name: "grep",
+    arguments: "{}",
+  };
+  const snapshot = normalizeWebUiSession("session1", config, [
+    completedEvent([
+      {type: "reasoning", summary: [{type: "summary_text", text: "Plan one"}]},
+      {type: "message", role: "assistant", content: [{type: "output_text", text: "Checking one"}]},
+      firstCall,
+    ], "response-step-one"),
+    {type: "function_call_output", call_id: "call-step-one", output: "first result"},
+    completedEvent([
+      {type: "reasoning", summary: [{type: "summary_text", text: "Plan two"}]},
+      {type: "message", role: "assistant", content: [{type: "output_text", text: "Checking two"}]},
+      secondCall,
+    ], "response-step-two"),
+    {type: "function_call_output", call_id: "call-step-two", output: "second result"},
+    completedEvent([
+      {type: "message", role: "assistant", content: [{type: "output_text", text: "Final summary"}]},
+    ], "response-summary"),
+  ]);
+  const message = snapshot.messages[0];
+  assert.ok(message);
+  assert.deepEqual(message.steps, [
+    {id: "response-step-one", startPart: 0, endPart: 4, hasTools: true},
+    {id: "response-step-two", startPart: 4, endPart: 8, hasTools: true},
+    {id: "response-summary", startPart: 8, endPart: 9, hasTools: false},
+  ]);
+  assert.deepEqual(message.parts.slice(0, 4).map((part) => part.type), [
+    "reasoning", "text", "tool_call", "tool_result",
+  ]);
+  assert.deepEqual(message.parts.slice(8).map((part) => part.type), ["text"]);
+
+  const normalizedRun = new WebUiNormalizedRun("live-step-ranges");
+  normalizedRun.update({type: "response.created", response: {id: "live-step-one"}});
+  normalizedRun.update({type: "response.reasoning_summary_text.delta", delta: "Plan"});
+  normalizedRun.update({type: "response.output_text.delta", delta: "Checking"});
+  normalizedRun.update({
+    type: "response.output_item.added",
+    output_index: 0,
+    item: {...firstCall, id: "fc-live-step-one"},
+  });
+  normalizedRun.toolResult({
+    type: "function_call_output",
+    call_id: "call-step-one",
+    output: "first result",
+  });
+  normalizedRun.update({type: "response.created", response: {id: "live-summary"}});
+  normalizedRun.update({type: "response.output_text.delta", delta: "Final summary"});
+  const live = normalizedRun.complete({
+    id: "live-summary",
+    output: [{
+      type: "message",
+      role: "assistant",
+      content: [{type: "output_text", text: "Final summary"}],
+    }],
+  });
+  assert.deepEqual(live.steps, [
+    {id: "live-step-one", startPart: 0, endPart: 4, hasTools: true},
+    {id: "live-summary", startPart: 4, endPart: 5, hasTools: false},
+  ]);
+});
+
 test("streams function-call arguments before the item completes", () => {
   const call = {
     id: "fc_1",
@@ -1022,10 +1102,14 @@ test("persists user input before a tool configuration failure", async () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const batchId = records[0]?.[SESSION_INPUT_BATCH_ID_FIELD];
+    assert.equal(typeof batchId, "string");
     assert.deepEqual(records[0], {
       type: "message",
       role: "user",
       content: [{type: "input_text", text: "persist this input"}],
+      [SESSION_INPUT_BATCH_ID_FIELD]: batchId,
+      [SESSION_INPUT_BATCH_INDEX_FIELD]: 0,
     });
   } finally {
     await running.close();
@@ -2132,7 +2216,7 @@ test("revalidates session requests instead of resending unchanged transcripts", 
     assert.equal(first.headers.get("cache-control"), "no-cache");
     const snapshot = (await first.json()) as {
       messages: Array<{ text: string }>;
-      page: { has_more: boolean; next_before: number | null };
+      page: { has_more: boolean; next_before: number | null; generation: string; stale_cursor: boolean };
     };
     assert.equal(snapshot.page.has_more, true);
     assert.equal(typeof snapshot.page.next_before, "number");
@@ -2181,7 +2265,7 @@ test("revalidates session requests instead of resending unchanged transcripts", 
 
 test("reads older turns through a cursor and rejects invalid cursors", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-paging-"));
-  await writePagingSession(root);
+  const {messagesPath} = await writePagingSession(root);
   const running = createAgentServer({ sessionsDir: root, snapshotTurns: 1, maxPageTurns: 5 });
   await new Promise<void>((resolve, reject) => {
     running.server.once("error", reject);
@@ -2195,7 +2279,7 @@ test("reads older turns through a cursor and rejects invalid cursors", async () 
 
     const newest = (await (await fetch(`${baseUrl}/api/sessions/session1`)).json()) as {
       messages: Array<{ text: string }>;
-      page: { has_more: boolean; next_before: number | null };
+      page: { has_more: boolean; next_before: number | null; generation: string; stale_cursor: boolean };
     };
     // A turn includes the user message that opens it.
     assert.deepEqual(
@@ -2205,10 +2289,10 @@ test("reads older turns through a cursor and rejects invalid cursors", async () 
 
     const cursor = newest.page.next_before!;
     const older = (await (await fetch(
-      `${baseUrl}/api/sessions/session1?before=${cursor}&turns=5`,
+      `${baseUrl}/api/sessions/session1?before=${cursor}&cursor_generation=${encodeURIComponent(newest.page.generation)}&turns=5`,
     )).json()) as {
       messages: Array<{ text: string }>;
-      page: { has_more: boolean; next_before: number | null };
+      page: { has_more: boolean; next_before: number | null; generation: string; stale_cursor: boolean };
     };
     assert.deepEqual(
       older.messages.map((message) => message.text),
@@ -2216,6 +2300,25 @@ test("reads older turns through a cursor and rejects invalid cursors", async () 
     );
     assert.equal(older.page.has_more, false);
     assert.equal(older.page.next_before, null);
+
+    const replacementPath = `${messagesPath}.replacement`;
+    const replacement = [
+      {type: "message", role: "user", content: [{type: "input_text", text: "replacement question"}]},
+      {
+        ...completedEvent([{
+          type: "message", role: "assistant", content: [{type: "output_text", text: "replacement answer"}],
+        }], "replacement-response"),
+        session_turn: 1,
+        session_step: 1,
+      },
+    ];
+    await writeFile(replacementPath, replacement.map((record) => `${JSON.stringify(record)}\n`).join(""));
+    await rename(replacementPath, messagesPath);
+    const stale = (await (await fetch(
+      `${baseUrl}/api/sessions/session1?before=${cursor}&cursor_generation=${encodeURIComponent(newest.page.generation)}`,
+    )).json()) as {messages: unknown[]; page: {stale_cursor: boolean}};
+    assert.equal(stale.page.stale_cursor, true);
+    assert.deepEqual(stale.messages, []);
 
     const invalid = await fetch(`${baseUrl}/api/sessions/session1?before=later`);
     assert.equal(invalid.status, 400);

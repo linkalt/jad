@@ -10,6 +10,12 @@ const TYPE = /^[a-z][a-z0-9_-]{0,63}$/;
 const SEGMENT = /^(?!__proto__$|prototype$|constructor$)[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 export class MemoryStoreError extends Error { public override name = "MemoryStoreError"; }
+export class MemoryConflictError extends MemoryStoreError {
+  public override name = "MemoryConflictError";
+  public constructor(public readonly currentEtag: string) {
+    super("memory record changed; retrieve it before updating");
+  }
+}
 export interface MemoryItem { ref: string; etag: string; data: JsonRecord; }
 export interface MemoryListResult { items: MemoryItem[]; nextCursor?: string; warnings: string[]; hasMore: boolean; }
 interface Totals { types: number; records: number; bytes: number; typeRecords: number; }
@@ -129,7 +135,7 @@ export class MemoryStore {
 
   public async create(type: string, data: unknown, policy: NativeMemoryToolSettings): Promise<MemoryItem> { return this.mutex.runExclusive(async () => { this.checkType(type, policy); this.checkData(data, policy); const total = await this.totals(type, policy); const text = serialize(data); if (total.typeRecords >= policy.max_records_per_type || total.records >= policy.max_total_records || total.bytes + Buffer.byteLength(text) > policy.max_total_bytes || (total.typeRecords === 0 && total.types >= policy.max_types)) throw new MemoryStoreError("memory capacity has been reached"); const name = filename(type, await this.nextSequence(), this.now()); await this.typeDirectory(type, true); await this.write(join(this.root, type, name), text); return {ref: `${type}/${name}`, etag: etag(text), data}; }); }
   public async get(type: string, ref: string, policy: NativeMemoryToolSettings): Promise<MemoryItem> { return this.mutex.runExclusive(async () => { this.checkType(type, policy); const record = await this.load(type, ref); return {ref, etag: etag(record.text), data: record.data}; }); }
-  public async update(type: string, ref: string, ifMatch: string | undefined, data: unknown, policy: NativeMemoryToolSettings): Promise<MemoryItem> { return this.mutex.runExclusive(async () => { this.checkType(type, policy); this.checkData(data, policy); const current = await this.load(type, ref); if (ifMatch !== undefined && etag(current.text) !== ifMatch) throw new MemoryStoreError("memory record changed; retrieve it before updating"); const next = serialize(data); const total = await this.totals(type, policy); if (total.bytes - Buffer.byteLength(current.text) + Buffer.byteLength(next) > policy.max_total_bytes) throw new MemoryStoreError("memory capacity has been reached"); await this.write(current.path, next); return {ref, etag: etag(next), data}; }); }
+  public async update(type: string, ref: string, ifMatch: string | undefined, data: unknown, policy: NativeMemoryToolSettings): Promise<MemoryItem> { return this.mutex.runExclusive(async () => { this.checkType(type, policy); this.checkData(data, policy); const current = await this.load(type, ref); const currentEtag = etag(current.text); if (ifMatch !== undefined && currentEtag !== ifMatch) throw new MemoryConflictError(currentEtag); const next = serialize(data); const total = await this.totals(type, policy); if (total.bytes - Buffer.byteLength(current.text) + Buffer.byteLength(next) > policy.max_total_bytes) throw new MemoryStoreError("memory capacity has been reached"); await this.write(current.path, next); return {ref, etag: etag(next), data}; }); }
   public async list(type: string, requestedFilter: JsonRecord | undefined, limit: number, requestedOrder: unknown, token: unknown, policy: NativeMemoryToolSettings, options: {createCursor?: boolean} = {}): Promise<MemoryListResult> { return this.mutex.runExclusive(async () => {
     this.checkType(type, policy);
     const legacy = token === undefined ? undefined : legacyCursor(token);

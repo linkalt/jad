@@ -115,6 +115,8 @@ interface SessionStatePaths {
 interface SessionPageInfo {
   has_more: boolean;
   next_before: number | null;
+  generation: string;
+  stale_cursor: boolean;
 }
 
 function sessionStatePaths(paths: SessionConfigPaths): SessionStatePaths {
@@ -297,6 +299,14 @@ function parseCursorParameter(value: string | null, field: string): number | und
     throw new HttpError(400, `${field} must be a non-negative integer offset`);
   }
   return parsed;
+}
+
+function parseCursorGenerationParameter(value: string | null): string | undefined {
+  if (value === null || value.length === 0) return undefined;
+  if (!/^\d+:\d+:\d+$/.test(value)) {
+    throw new HttpError(400, "cursor_generation must be a transcript generation");
+  }
+  return value;
 }
 
 function parseTurnsParameter(value: string | null): number | undefined {
@@ -805,6 +815,7 @@ class AgentHttpApplication {
   ): Promise<void> {
     const url = new URL(request.url ?? "/", "http://agent-harness.local");
     const before = parseCursorParameter(url.searchParams.get("before"), "before");
+    const cursorGeneration = parseCursorGenerationParameter(url.searchParams.get("cursor_generation"));
     const turns = parseTurnsParameter(url.searchParams.get("turns"));
     const handle = await this.getSession(id);
     const run = this.runs.describe(handle.location.ref);
@@ -822,6 +833,7 @@ class AgentHttpApplication {
     const [view, usage] = await Promise.all([
       handle.view.read({
         ...(before === undefined ? {} : {before}),
+        ...(cursorGeneration === undefined ? {} : {generation: cursorGeneration}),
         ...(turns === undefined ? {} : {turns}),
         backupTurns: config.settings.compaction.keepbackup.turns,
       }),
@@ -831,7 +843,12 @@ class AgentHttpApplication {
       maxInlineBytes: this.maxInlinePartBytes,
       cursors: view.cursors,
     });
-    const page: SessionPageInfo = {has_more: view.hasMore, next_before: view.nextBefore};
+    const page: SessionPageInfo = {
+      has_more: view.hasMore,
+      next_before: view.nextBefore,
+      generation: view.generation,
+      stale_cursor: view.staleCursor,
+    };
     const summary = sessionSummary(
       handle.location,
       config,

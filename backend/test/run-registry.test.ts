@@ -241,6 +241,42 @@ test("publishes growth as a suffix, a new or replaced part once, and the rest as
   registry.clear();
 });
 
+test("publishes a full snapshot when step ranges change, then keeps text growth incremental", () => {
+  const registry = new SessionRunRegistry(60_000);
+  const run = registry.begin("session1", "web-step-window", new AbortController());
+  const events: Array<{event: string; data: unknown}> = [];
+  run.subscribe((event) => events.push({event: event.event, data: event.data}));
+
+  const earlierParts: WebUiPart[] = [
+    {type: "reasoning", text: "Thinking"},
+    {type: "tool_call", callId: "call-1", name: "read", arguments: "{}"},
+    {type: "tool_result", callId: "call-1", output: "result", status: "success"},
+  ];
+  run.publishMessage(withParts("web-step-window", earlierParts));
+  events.length = 0;
+
+  const withSummary = {
+    ...withParts("web-step-window", [...earlierParts, {type: "text", text: "Summary"}]),
+    steps: [
+      {id: "response-tool", startPart: 0, endPart: 3, hasTools: true},
+      {id: "response-final", startPart: 3, endPart: 4, hasTools: false},
+    ],
+  };
+  run.publishMessage(withSummary);
+  assert.deepEqual(events.map((event) => event.event), ["ui.message"]);
+  assert.deepEqual(appliedMessage(events), withSummary);
+  events.length = 0;
+
+  const summaryGrowth = {
+    ...withParts("web-step-window", [...earlierParts, {type: "text", text: "Summary is ready"}]),
+    steps: withSummary.steps,
+  };
+  run.publishMessage(summaryGrowth);
+  assert.deepEqual(events.map((event) => event.event), ["ui.delta"]);
+  assert.deepEqual(events[0]?.data, {id: "web-step-window", index: 3, append: " is ready"});
+  registry.clear();
+});
+
 test("applying every event lands on the message the run holds", () => {
   const registry = new SessionRunRegistry(60_000);
   const run = registry.begin("session1", "web-turn-1", new AbortController());

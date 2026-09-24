@@ -22,10 +22,11 @@ export type ResponseInputItem = JsonRecord;
 export type DurabilityMode = "process" | "turn" | "strict";
 
 /**
- * How much of the provider response is stored beside its output items.
+ * How much provider response metadata is stored beside its output items.
  *
- * Providers echo the whole request (tool catalog included) on every completed
- * response; `minimal` keeps only the fields this store and its readers use.
+ * Usage is compacted in both modes to the counters used by the usage cache.
+ * `minimal` also filters other response metadata; `full` keeps other provider
+ * fields, including the request echo.
  */
 export type ResponseMetadataMode = "minimal" | "full";
 
@@ -48,7 +49,7 @@ export interface BackupTail {
 export interface SessionResponseStoreOptions {
   /** Defaults to `turn`. */
   durability?: DurabilityMode;
-  /** Provider response fields kept in each stored record. Defaults to `minimal`. */
+  /** Provider response metadata mode; usage counters are compacted in both modes. Defaults to `minimal`. */
   responseMetadata?: ResponseMetadataMode;
   /** Maximum serialized output-item size in bytes. */
   maxItemBytes?: number;
@@ -260,12 +261,15 @@ const LINE_BUFFER_SIZE = 64 * 1024;
  */
 const COMPLETED_RECORD_MARKER = '"response.completed"';
 /** The same idea for a turn-opening record, counted when the UI walks back. */
-const USER_RECORD_MARKER = '"role":"user"';
+const USER_RECORD_MARKER = /"role"\s*:\s*"user"/;
+/** Internal transcript metadata, stripped before items are sent back to a provider. */
+export const SESSION_INPUT_BATCH_ID_FIELD = "__agent_session_input_batch_id";
+export const SESSION_INPUT_BATCH_INDEX_FIELD = "__agent_session_input_batch_index";
 /**
  * Completed-response fields the transcript and its readers use: identity,
- * status, timing, and usage. Every other field of a completed response is
- * request echo — the provider repeats the request (tool definitions included)
- * on each response, and nothing reads it back.
+ * status, timing, and compact usage counters. Every other field of a completed
+ * response is request echo — the provider repeats the request (tool definitions
+ * included) on each response, and nothing reads it back.
  */
 const RESPONSE_METADATA_KEYS: readonly string[] = [
   "id",
@@ -720,6 +724,16 @@ export async function readTranscriptRecords(
   }
 }
 
+function isUserTurnRecordLine(line: string): boolean {
+  if (!USER_RECORD_MARKER.test(line)) return false;
+  try {
+    const value = JSON.parse(line) as unknown;
+    return isRecord(value) && value.type === "message" && value.role === "user";
+  } catch {
+    return false;
+  }
+}
+
 function expandTranscriptRecord(value: unknown): ResponseInputItem[] {
   const record = asObject(value, "messages.jsonl record");
   if (record.type === "response.completed") {
@@ -731,6 +745,15 @@ function expandTranscriptRecord(value: unknown): ResponseInputItem[] {
   }
   if (typeof record.type === "string" && record.type.startsWith("response.")) {
     throw new PersistenceError(`unsupported response event in messages.jsonl: ${record.type}`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(record, SESSION_INPUT_BATCH_ID_FIELD) ||
+    Object.prototype.hasOwnProperty.call(record, SESSION_INPUT_BATCH_INDEX_FIELD)
+  ) {
+    const item = {...record};
+    delete item[SESSION_INPUT_BATCH_ID_FIELD];
+    delete item[SESSION_INPUT_BATCH_INDEX_FIELD];
+    return [validateInputItem(item)];
   }
   return [validateInputItem(record)];
 }
@@ -1037,10 +1060,15 @@ function addUsageTranscriptRecord(
   record: JsonRecord,
   seenResponses?: Set<string>,
   countUserMessage = true,
+  seenInputBatches?: Set<string>,
 ): void {
   const summary = cache.summary;
   if (countUserMessage && record.role === "user" && summary.turn_count < Number.MAX_SAFE_INTEGER) {
-    summary.turn_count += 1;
+    const batchId = record[SESSION_INPUT_BATCH_ID_FIELD];
+    if (typeof batchId !== "string" || !seenInputBatches?.has(batchId)) {
+      if (typeof batchId === "string") seenInputBatches?.add(batchId);
+      summary.turn_count += 1;
+    }
   }
   if (record.type !== "response.completed" || !isRecord(record.response)) return;
 
@@ -1150,6 +1178,19 @@ async function readStagedItem(
   }
 }
 
+function compactUsageMetadata(value: unknown): JsonRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  const compact: JsonRecord = {};
+  for (const key of ["input_tokens", "output_tokens", "total_tokens"] as const) {
+    const count = value[key];
+    if (isUsageTokenCount(count)) compact[key] = count;
+  }
+  const inputDetails = isRecord(value.input_tokens_details) ? value.input_tokens_details : undefined;
+  const cachedTokens = inputDetails?.cached_tokens;
+  if (isUsageTokenCount(cachedTokens)) compact.input_tokens_details = {cached_tokens: cachedTokens};
+  return Object.keys(compact).length > 0 ? compact : undefined;
+}
+
 async function renderCanonicalCompletion(
   response: JsonRecord,
   itemIndex: Map<number, StagedItemIndexEntry>,
@@ -1164,6 +1205,11 @@ async function renderCanonicalCompletion(
   const metadata: JsonRecord = {};
   for (const [key, value] of Object.entries(response)) {
     if (key === "output") {
+      continue;
+    }
+    if (key === "usage") {
+      const compactUsage = compactUsageMetadata(value);
+      if (compactUsage !== undefined) metadata[key] = compactUsage;
       continue;
     }
     if (responseMetadata === "minimal" && !RESPONSE_METADATA_KEYS.includes(key)) {
@@ -1278,6 +1324,7 @@ export class SessionResponseStore {
   public readonly usageCachePath: string;
   public readonly cursorCachePath: string;
   public readonly compactionCachePath: string;
+  public readonly compactionCacheBackupPath: string;
   public readonly messagesBackupPath: string;
   public readonly stateContextPath: string;
 
@@ -1322,6 +1369,7 @@ export class SessionResponseStore {
         ? resolve(options.compactionCachePath)
         : resolve(absoluteSessionDir, options.compactionCachePath)
       : join(this.stagingDir, COMPACTION_CACHE_FILE);
+    this.compactionCacheBackupPath = `${this.compactionCachePath}.backup`;
     this.messagesBackupPath = options.messagesBackupPath
       ? isAbsolute(options.messagesBackupPath)
         ? resolve(options.messagesBackupPath)
@@ -1429,9 +1477,9 @@ export class SessionResponseStore {
   }
 
   /**
-   * Appends raw Responses API input items. Input lines intentionally have no
-   * harness envelope so they can be used directly when reconstructing the next
-   * Responses API request.
+   * Appends Responses API input items with an internal submission id used for
+   * usage reconstruction and pagination. The id is stripped when history is
+   * reconstructed for the provider.
    */
   public async appendInputItem(item: ResponseInputItem): Promise<void> {
     await this.appendInputItems([item]);
@@ -1447,11 +1495,23 @@ export class SessionResponseStore {
     }
 
     const validatedItems = items.map((item) => validateInputItem(item));
+    if (validatedItems.some((item) =>
+      Object.prototype.hasOwnProperty.call(item, SESSION_INPUT_BATCH_ID_FIELD) ||
+      Object.prototype.hasOwnProperty.call(item, SESSION_INPUT_BATCH_INDEX_FIELD)
+    )) {
+      throw new PersistenceError("input items may not use reserved session batch metadata fields");
+    }
+    const batchId = randomBytes(16).toString("hex");
+    const persistedItems = validatedItems.map((item, index) => ({
+      ...item,
+      [SESSION_INPUT_BATCH_ID_FIELD]: batchId,
+      [SESSION_INPUT_BATCH_INDEX_FIELD]: index,
+    }));
     await this.messageMutex.runExclusive(async () => {
       await repairJsonlTail(this.messagesPath);
       const handle = await open(this.messagesPath, "a");
       try {
-        for (const item of validatedItems) {
+        for (const item of persistedItems) {
           const line = `${stringifyJson(item, "input item")}\n`;
           await writeAll(handle, Buffer.from(line, "utf8"));
         }
@@ -1474,9 +1534,9 @@ export class SessionResponseStore {
         throw error;
       }
       let value: unknown;
-      try { value = JSON.parse(text); } catch { throw new PersistenceError("state-context snapshot is not valid JSON"); }
+      try { value = JSON.parse(text); } catch { return undefined; }
       if (!isRecord(value) || value.schema_version !== 1 || typeof value.generated_at !== "string" || typeof value.trigger !== "string" || typeof value.text !== "string") {
-        throw new PersistenceError("state-context snapshot has an unsupported or invalid format");
+        return undefined;
       }
       return value as StateContextSnapshot;
     });
@@ -1531,11 +1591,28 @@ export class SessionResponseStore {
       await writeJsonAtomic(this.historyCachePath, historyCache, this.options.durability);
       tail = historyCache.items;
     }
-    if (compaction === undefined) return tail;
+    if (compaction === undefined) {
+      if (await this.hasUnrestoredCompactionHistory()) {
+        throw new PersistenceError(
+          "compacted request history is unavailable; restore the compaction cache or its backup before continuing",
+        );
+      }
+      return tail;
+    }
     if ((await hashFile(this.messagesPath).catch(() => "")) === compaction.source_sha256) {
       return [...compaction.items, ...compaction.active_tail.flatMap((record) => expandTranscriptRecord(record))];
     }
     return [...compaction.items, ...tail];
+  }
+
+  private async hasUnrestoredCompactionHistory(): Promise<boolean> {
+    const backup = await stat(this.messagesBackupPath).catch(() => undefined);
+    if (backup === undefined || backup.size === 0) return false;
+    const [backupHash, transcriptHash] = await Promise.all([
+      hashFile(this.messagesBackupPath).catch(() => ""),
+      hashFile(this.messagesPath).catch(() => ""),
+    ]);
+    return backupHash.length > 0 && backupHash !== transcriptHash;
   }
 
   private async finishPendingCompaction(): Promise<void> {
@@ -1571,8 +1648,13 @@ export class SessionResponseStore {
   }
 
   private async readCompactionCache(): Promise<CompactionCache | undefined> {
+    return await this.readCompactionCacheAt(this.compactionCachePath)
+      ?? await this.readCompactionCacheAt(this.compactionCacheBackupPath);
+  }
+
+  private async readCompactionCacheAt(path: string): Promise<CompactionCache | undefined> {
     try {
-      const value = JSON.parse(await readFile(this.compactionCachePath, "utf8")) as unknown;
+      const value = JSON.parse(await readFile(path, "utf8")) as unknown;
       if (
         !isRecord(value) ||
         value.schema_version !== 1 ||
@@ -1668,12 +1750,13 @@ export class SessionResponseStore {
       summary,
     };
     const seenResponses = new Set<string>();
+    const seenInputBatches = new Set<string>();
     const processFile = async (path: string): Promise<void> => {
       try {
         await readJsonLines(path, (line) => {
           try {
             const record = asObject(JSON.parse(line) as unknown, "usage transcript record");
-            addUsageTranscriptRecord(cache, record, seenResponses);
+            addUsageTranscriptRecord(cache, record, seenResponses, true, seenInputBatches);
           } catch {
             summary.history_partial = true;
           }
@@ -1990,16 +2073,7 @@ export class SessionResponseStore {
           return;
         }
         records.set(offset, line);
-        if (!line.includes(USER_RECORD_MARKER)) {
-          return;
-        }
-        let value: unknown;
-        try {
-          value = JSON.parse(line) as unknown;
-        } catch {
-          return;
-        }
-        if (isRecord(value) && value.type === "message" && value.role === "user") {
+        if (isUserTurnRecordLine(line)) {
           userOffsets.add(offset);
         }
       });
@@ -2284,6 +2358,18 @@ export class SessionResponseStore {
     preserveResponseId?: string;
   }): Promise<{compacted: boolean; compacted_items: number; retained_items: number; backup_path: string}> {
     this.assertOpen();
+    if (!Number.isSafeInteger(options.keepTurns) || options.keepTurns < 0) {
+      throw new PersistenceError("keepTurns must be a non-negative safe integer");
+    }
+    if (!Number.isSafeInteger(options.keepToolPairs) || options.keepToolPairs < 0) {
+      throw new PersistenceError("keepToolPairs must be a non-negative safe integer");
+    }
+    if (options.turnType !== "assistant_final" && options.turnType !== "full") {
+      throw new PersistenceError("turnType must be assistant_final or full");
+    }
+    if (options.backupMode !== "replace" && options.backupMode !== "append") {
+      throw new PersistenceError("backupMode must be replace or append");
+    }
     if (this.activeTurns.size > 0) throw new PersistenceError("cannot compact while a response turn is active");
     return this.messageMutex.runExclusive(async () => {
       await repairJsonlTail(this.messagesPath);
@@ -2351,7 +2437,7 @@ export class SessionResponseStore {
         if (turns.length === 0) turns.push([]);
         turns[turns.length - 1]!.push(item);
       }
-      const selectedTurns = turns.slice(-options.keepTurns);
+      const selectedTurns = options.keepTurns === 0 ? [] : turns.slice(-options.keepTurns);
       const callById = new Map<string, ResponseInputItem>();
       const outputById = new Map<string, ResponseInputItem>();
       for (const turn of selectedTurns) for (const item of turn) {
@@ -2401,6 +2487,9 @@ export class SessionResponseStore {
         active_tail: activeTail,
       };
       await mkdir(dirname(this.compactionCachePath), {recursive: true});
+      // Publish the recovery copy before the primary cache. If the transcript
+      // replacement is interrupted, either valid cache can finish the transaction.
+      await writeJsonAtomic(this.compactionCacheBackupPath, cache, this.options.durability);
       await writeJsonAtomic(this.compactionCachePath, cache, this.options.durability);
       await this.replaceMessagesWithRecords(activeTail);
       this.historyCache = undefined;

@@ -13,13 +13,13 @@ export const nativeFetchDefinition: ToolDefinition = {
   id: NATIVE_FETCH_ID,
   source: "native",
   name: "fetch",
-  description: "Fetch a public HTML page as Markdown; use cursor to continue.",
+  description: "Fetch a public text or HTML page; HTML is converted to Markdown and other text is returned as-is. Use cursor to continue.",
   inputSchema: {
     type: "object",
     properties: {
       url: {type: "string", minLength: 1, description: "Public http or https URL to fetch when cursor is absent or no longer available."},
       cursor: {type: "string", minLength: 1, description: "Cursor returned by a previous fetch call. A valid cursor takes precedence over url."},
-      limit: {type: "integer", minimum: 1, description: "Optional Markdown-character limit for this page."},
+      limit: {type: "integer", minimum: 1, description: "Optional character limit for this page."},
     },
     additionalProperties: false,
     anyOf: [
@@ -113,6 +113,36 @@ function title(html: string): string | undefined {
   return value || undefined;
 }
 
+const KNOWN_TEXT_APPLICATION_TYPES = new Set([
+  "application/markdown",
+  "application/x-markdown",
+  "application/json",
+  "application/xml",
+  "application/yaml",
+  "application/x-yaml",
+  "application/toml",
+  "application/x-toml",
+  "application/javascript",
+  "application/x-javascript",
+  "application/ecmascript",
+  "application/sql",
+  "application/graphql",
+  "application/ndjson",
+  "application/x-ndjson",
+  "application/rtf",
+  "application/x-www-form-urlencoded",
+]);
+
+function isSupportedTextContentType(contentType: string): boolean {
+  return contentType.startsWith("text/") ||
+    KNOWN_TEXT_APPLICATION_TYPES.has(contentType) ||
+    /^application\/[^/]+\+(?:json|xml)$/.test(contentType);
+}
+
+function isHtmlContentType(contentType: string): boolean {
+  return contentType === "text/html" || contentType === "application/xhtml+xml";
+}
+
 async function retrieve(urlValue: string, context: FetchContext): Promise<Omit<FetchDocument, "id" | "fetchedAt">> {
   let url = await validateUrl(urlValue, context.policy);
   const fetchFn = context.fetchFn ?? globalThis.fetch;
@@ -121,7 +151,7 @@ async function retrieve(urlValue: string, context: FetchContext): Promise<Omit<F
     const timeout = setTimeout(() => controller.abort(), context.policy.timeout_ms);
     let response: Response;
     try {
-      response = await fetchFn(url, {redirect: "manual", signal: controller.signal, headers: {accept: "text/html,application/xhtml+xml"}});
+      response = await fetchFn(url, {redirect: "manual", signal: controller.signal, headers: {accept: "text/*, application/*"}});
     } catch (error) {
       if ((error as {name?: string}).name === "AbortError") throw new FetchRequestError("fetch timed out", "timeout");
       throw new FetchRequestError("web request failed", "request_failed");
@@ -134,12 +164,22 @@ async function retrieve(urlValue: string, context: FetchContext): Promise<Omit<F
       continue;
     }
     if (!response.ok) throw new FetchRequestError(`web request returned HTTP ${response.status}`, "http_error");
-    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase() ?? "";
-    if (contentType !== "text/html" && contentType !== "application/xhtml+xml") throw new FetchRequestError("response is not HTML", "unsupported_content_type");
-    const html = await responseText(response, context.policy.max_response_bytes);
-    const markdown = convert(html).content ?? "";
-    if (markdown.length > context.policy.max_document_chars) throw new FetchRequestError("converted document exceeds configured character limit", "document_too_large");
-    const pageTitle = title(html);
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    if (!isSupportedTextContentType(contentType)) {
+      throw new FetchRequestError("response content type is not a supported text format", "unsupported_content_type");
+    }
+    const body = await responseText(response, context.policy.max_response_bytes);
+    const isHtml = isHtmlContentType(contentType);
+    const markdown = isHtml
+      ? convert(body, {
+          extractMetadata: context.policy.include_metadata,
+          skipImages: !context.policy.include_images,
+          extractImages: false,
+          includeDocumentStructure: false,
+        }).content ?? ""
+      : body;
+    if (markdown.length > context.policy.max_document_chars) throw new FetchRequestError("document exceeds configured character limit", "document_too_large");
+    const pageTitle = isHtml ? title(body) : undefined;
     return {url: urlValue, finalUrl: url.toString(), ...(pageTitle ? {title: pageTitle} : {}), contentType, status: response.status, markdown};
   }
 }
@@ -153,7 +193,7 @@ function render(context: FetchContext, page: {document: FetchDocument; content: 
   return renderToolResult({
     id: context.callId,
     status: "ok",
-    summary: page.nextCursor ? "Web page fetched; more content is available" : "Web page fetched",
+    summary: page.nextCursor ? "Document fetched; more content is available" : "Document fetched",
     information: [
       ["url", document.url], ["final_url", document.finalUrl], ["status", document.status], ["content_type", document.contentType],
       ...(document.title ? [["title", document.title] as [string, unknown]] : []),

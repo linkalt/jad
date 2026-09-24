@@ -1,3 +1,5 @@
+import { openaiCredentials } from "@openai-oauth/local";
+import { createOpenAIOptions } from "@openai-oauth/openai-client";
 import OpenAI from "openai";
 import {stat} from "node:fs/promises";
 import {join} from "node:path";
@@ -7,6 +9,7 @@ import {
   DEFAULT_NATIVE_MEMORY_STORAGE_DIR,
   DEFAULT_NATIVE_PROCESS_STORAGE_DIR,
   DEFAULT_NATIVE_TASK_STORAGE_DIR,
+  DEFAULT_OPENAI_OAUTH_AUTH_FILE,
   MAX_CONFIGURED_TOOL_ROUNDS,
   SessionConfigLoader,
   resolveApiKey,
@@ -190,15 +193,37 @@ export function buildResponseRequest(
   return request as unknown as ResponseCreateParamsStreaming;
 }
 
-function createClient(
+export function createClient(
   config: LoadedSessionConfig,
   environment: NodeJS.ProcessEnv,
+  nativeFetch?: typeof fetch,
 ): OpenAI {
+  if (config.model.auth_mode === "openai_oauth") {
+    const options = createOpenAIOptions(
+      openaiCredentials({
+        authFilePath: config.model.oauth_auth_file ?? DEFAULT_OPENAI_OAUTH_AUTH_FILE,
+        ...(nativeFetch ? {fetch: nativeFetch} : {}),
+      }),
+    );
+    // Wrap the adapter, not its upstream fetch: the latter also refreshes OAuth
+    // tokens, whose request bodies must never be written to HTTP debug logs.
+    const debugFetch = createHttpDebugFetch(
+      config.paths.session_dir,
+      config.settings.http_debug,
+      options.fetch,
+      config.paths.http_debug_dir,
+    );
+    return new OpenAI({
+      ...options,
+      ...(debugFetch ? {fetch: debugFetch} : {}),
+    });
+  }
+
   const apiKey = resolveApiKey(config.model, environment);
   const debugFetch = createHttpDebugFetch(
     config.paths.session_dir,
     config.settings.http_debug,
-    undefined,
+    nativeFetch,
     config.paths.http_debug_dir,
   );
   return new OpenAI({

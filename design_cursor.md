@@ -219,7 +219,7 @@ message's capped reasoning (16,276 of 38,500 B) came back whole — 38,254 chars
 | `server.max_page_turns` | `50` | largest page one cursor request may return |
 | `server.max_inline_part_bytes` | `16384` | inline text per part; `0` sends parts uncut |
 | `compaction.keepbackup.turns` | `20` | backup turns rendered as history; `0` hides them |
-| `persistence.response_metadata` | `minimal` | response fields stored per completed record; `full` keeps the provider's request echo |
+| `persistence.response_metadata` | `minimal` | response fields stored per completed record; usage stays compact in both modes, while `full` keeps other provider metadata and the request echo |
 | `session_refresh_interval_ms_streaming` | `30000` | frontend poll cadence while attached to a run |
 | `transcript_page_turns` | `5` | turns fetched per "load earlier messages" click |
 

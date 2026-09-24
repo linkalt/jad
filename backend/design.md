@@ -65,9 +65,9 @@ The history reader yields raw input items directly and expands each committed `r
 
 ### 2.2 Conversation compaction
 
-Compaction maintains one replaceable `compaction-cache.json`; it does not keep a checkpoint/version history. `paths.messages_backup` stores the pre-compaction `messages.jsonl` (replaced by default, or appended when `compaction.backup_mode` is `append`). `paths.compaction_cache` relocates the compaction cache. `paths.history_cache` relocates the normalized input-history cache and defaults to `history-cache.json` under the resolved `paths.staging` directory. `paths.usage_cache` independently relocates the durable usage summary and defaults to `usage-cache.json` in the same directory. Relative paths resolve from `setting.json`.
+Compaction maintains the active `compaction-cache.json` plus an atomically published `.backup` copy used to recover a missing or invalid active cache; it does not keep an unbounded checkpoint history. If both copies are unavailable while the backup transcript differs from the live transcript, request-history reads fail visibly rather than silently omitting compacted context. `paths.messages_backup` stores the pre-compaction `messages.jsonl` (replaced by default, or appended when `compaction.backup_mode` is `append`). `paths.compaction_cache` relocates the compaction cache. Unless explicitly overridden, compaction, history, usage, cursor, and statecontext files live under the resolved `paths.staging` directory. For named path profiles, the default messages backup lives beside that profile's messages file; flat configurations retain the session-level backup default. Relative paths resolve from `setting.json`.
 
-Named path profiles use `paths.active_profile` and a `paths.profiles` map. A selected profile overlays matching flat path entries, then built-in defaults; this preserves existing flat configuration and permits shared paths when intentionally omitted. The loader pins the resolved paths for its lifetime; select another profile by reopening the session. Keep transcript/cache paths separate between profiles unless sharing is intentional. Example:
+Named path profiles use `paths.active_profile` and a `paths.profiles` map. A selected profile overlays matching flat path entries, then built-in defaults; this preserves existing flat configuration and permits shared paths when intentionally configured. Default cache paths follow the selected profile's staging directory, and its default transcript backup follows its messages directory. The loader pins the resolved paths for its lifetime; select another profile by reopening the session. Explicitly shared paths are still shared, so keep transcript/cache paths separate unless that is intentional. Example:
 
 ```json
 {
@@ -563,14 +563,17 @@ persistOpenAIResponse(client, store, streamingRequest, { turnId });
 
 The official SDK dependency is limited to the adapter; the file format and staging implementation do not import SDK response classes.
 
-The final event type should remain extensible. Under `persistence.response_metadata: "full"` unknown API
+The final event type should remain extensible. `usage` is normalized in both metadata modes to the
+counters used by the usage cache (`input_tokens`, `output_tokens`, `total_tokens`, and
+`input_tokens_details.cached_tokens`); provider-specific details such as per-item attribution maps are
+not stored in the transcript. This keeps the usage cache rebuildable without duplicating growing
+provider metadata on every response. Under `persistence.response_metadata: "full"`, other unknown API
 fields survive persistence verbatim, so adding a newer Responses API field requires no migration. The
 default `"minimal"` stores only the fields the store and its readers use (`id`, `object`, `status`,
-`model`, `created_at`, `completed_at`, `incomplete_details`, `usage`, `output`) because providers echo
-the whole request — tool definitions included — on every completed response, which measured 80–82% of
-all stored bytes in this workspace (`tools` alone is 84% of a record). A reader never needs that echo:
-the request context is rebuilt from configuration, and `http_debug` records the wire traffic when the
-echo is wanted for auditing. Set `"full"` to restore verbatim storage.
+`model`, `created_at`, `completed_at`, `incomplete_details`, compact `usage`, `output`) because
+providers echo the whole request — tool definitions included — on every completed response. A reader
+never needs that echo: the request context is rebuilt from configuration, and `http_debug` records the
+wire traffic when the echo is wanted for auditing. Set `"full"` to restore other response metadata.
 
 ## 11. Validation and tests
 

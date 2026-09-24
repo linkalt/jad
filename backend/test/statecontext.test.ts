@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {SessionConfigLoader, type LoadedSessionConfig, type NativeMemoryToolSettings, type NativeProcessToolSettings, type NativeTaskToolSettings} from "../src/config.js";
 import {collectStateContextSnapshot} from "../src/statecontext.js";
+import {SessionResponseStore} from "../src/persistence.js";
 import {buildResponseRequest} from "../src/session.js";
 import {collectMemoryStateContext} from "../src/tools/native/memory.js";
 import {MemoryStore} from "../src/tools/native/memory-store.js";
@@ -64,6 +65,29 @@ test("normalizes statecontext options and its setting.paths snapshot path", asyn
     assert.deepEqual(settings.tools.native.task?.statecontext, {statuses: ["in-progress", "done"], limit: 7});
     assert.deepEqual(settings.tools.native.process?.statecontext, {states: ["running"], limit: 4});
     assert.deepEqual(settings.tools.native.memory?.statecontext, [{type: "project", filter: {status: "active"}, limit: 3}]);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("treats malformed statecontext snapshots as cache misses", async () => {
+  const directory = await tempDirectory("agent-statecontext-cache-recovery-");
+  const snapshotPath = join(directory, "staging", "statecontext.json");
+  try {
+    const store = await SessionResponseStore.open(directory);
+    await writeFile(snapshotPath, "{not valid json");
+    assert.equal(await store.readStateContextSnapshot(), undefined);
+    await writeFile(snapshotPath, JSON.stringify({schema_version: 99, text: "stale"}));
+    assert.equal(await store.readStateContextSnapshot(), undefined);
+    const valid = {
+      schema_version: 1 as const,
+      generated_at: "2026-01-01T00:00:00.000Z",
+      trigger: "compaction",
+      text: "fresh",
+    };
+    await store.writeStateContextSnapshot(valid);
+    assert.deepEqual(await store.readStateContextSnapshot(), valid);
+    await store.close();
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
