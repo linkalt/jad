@@ -56,6 +56,7 @@ import {
   restoreScrollPosition,
   type ScrollPositionSnapshot,
 } from './components/scroll-position';
+import {suppressAttachedRunTranscriptTail} from './active-run-transcript';
 import {shouldSkipTranscriptLoad} from './transcript-load-policy';
 import {
   hiddenWebUiStepIds,
@@ -1218,6 +1219,7 @@ function WebUiParts({
             onClick={event => {
               revealScrollAnchorRef.current = captureScrollPosition(
                 findScrollParent(event.currentTarget),
+                event.currentTarget,
               );
               setRevealedSteps(current => current + appConfig.message_step_window_page);
             }}
@@ -2026,8 +2028,14 @@ function App() {
       ? threadMessages
       : [...block, ...threadMessages];
   }, [threadMessages, activeSessionId, historyBlock]);
+  const hasLiveAttachedRun =
+    attachedRunSessionIdRef.current === activeSessionId && streamingMessage !== null;
+  const transcriptMessages = useMemo(
+    () => suppressAttachedRunTranscriptTail(messages, hasLiveAttachedRun),
+    [messages, hasLiveAttachedRun],
+  );
   const {visibleMessages, hiddenCount, revealEarlier} = useTranscriptWindow({
-    messages,
+    messages: transcriptMessages,
     sessionId: activeSessionId,
     initialCount: appConfig.transcript_window_messages,
     pageSize: appConfig.transcript_window_page_messages,
@@ -2119,7 +2127,7 @@ function App() {
     activeSessionRef !== undefined && compactionFeedback?.sessionRef === activeSessionRef
       ? compactionFeedback
       : null;
-  const streamingMessageCommitted = streamingMessage !== null && messages.some(
+  const streamingMessageCommitted = streamingMessage !== null && transcriptMessages.some(
     message => message.id === streamingMessage.id,
   );
 
@@ -2901,6 +2909,7 @@ function App() {
                             {isLiveSession && streamingMessage ? (
                               <WebUiParts
                                 parts={streamingMessage.parts}
+                                steps={streamingMessage.steps}
                                 rowWidthPx={liveBubbleWidthPx}
                                 isStreaming
                               />
