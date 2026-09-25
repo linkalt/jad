@@ -58,3 +58,37 @@ export function restoreScrollPosition(snapshot: ScrollPositionSnapshot | null): 
 
   scroller.scrollTop = snapshot.scrollTop;
 }
+
+/**
+ * Revealing history is explicit reader intent. ChatLayout's follow hook unlocks
+ * on an upward scroll event, so nudge the scroller and notify it before its
+ * ResizeObserver follows the expanded content. At scrollTop 0, create a
+ * temporary one-pixel range and return to the top so the hook sees an upward
+ * move. The captured anchor restores any nudge after React commits the reveal.
+ */
+export function unlockScrollFollower(
+  scroller: Pick<
+    HTMLElement,
+    'scrollTop' | 'scrollHeight' | 'clientHeight' | 'dispatchEvent'
+  > | null,
+): void {
+  if (scroller === null) {
+    return;
+  }
+
+  const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  if (maxScrollTop < 1) {
+    return;
+  }
+
+  if (scroller.scrollTop > 0) {
+    scroller.scrollTop = Math.max(0, scroller.scrollTop - 1);
+    scroller.dispatchEvent(new Event('scroll'));
+    return;
+  }
+
+  scroller.scrollTop = 1;
+  scroller.dispatchEvent(new Event('scroll'));
+  scroller.scrollTop = 0;
+  scroller.dispatchEvent(new Event('scroll'));
+}

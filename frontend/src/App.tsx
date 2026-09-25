@@ -53,7 +53,9 @@ import appConfig from './config.json';
 import {deepEqual} from './deepEqual';
 import {
   captureScrollPosition,
+  findScrollParent,
   restoreScrollPosition,
+  unlockScrollFollower,
   type ScrollPositionSnapshot,
 } from './components/scroll-position';
 import {suppressAttachedRunTranscriptTail} from './active-run-transcript';
@@ -77,7 +79,6 @@ import {PromptLibraryPanel} from './components/PromptLibraryPanel';
 import {RunSettingsPanel} from './components/RunSettingsPanel';
 import {SessionSearchPanel} from './components/SessionSearchPanel';
 import {EarlierMessagesControl, useTranscriptWindow} from './components/TranscriptWindow';
-import {findScrollParent} from './components/scroll-position';
 import {UsageDetailsDrawer} from './components/UsageDetailsDrawer';
 import type {PromptTemplate} from './promptLibrary';
 import {
@@ -1197,10 +1198,14 @@ function WebUiParts({
   const lastPartIndex = parts.length - 1;
   const [revealedSteps, setRevealedSteps] = useState(0);
   const revealScrollAnchorRef = useRef<ScrollPositionSnapshot | null>(null);
+  const revealScrollContainerRef = useRef<HTMLElement | null>(null);
 
   useLayoutEffect(() => {
     const anchor = revealScrollAnchorRef.current;
+    const scroller = revealScrollContainerRef.current;
     revealScrollAnchorRef.current = null;
+    revealScrollContainerRef.current = null;
+    unlockScrollFollower(scroller);
     restoreScrollPosition(anchor);
   }, [revealedSteps]);
 
@@ -1222,10 +1227,12 @@ function WebUiParts({
             size="sm"
             icon={<Icon icon="arrowUp" size="sm" />}
             onClick={event => {
+              const scroller = findScrollParent(event.currentTarget);
               revealScrollAnchorRef.current = captureScrollPosition(
-                findScrollParent(event.currentTarget),
+                scroller,
                 event.currentTarget,
               );
+              revealScrollContainerRef.current = scroller;
               setRevealedSteps(current => current + appConfig.message_step_window_page);
             }}
           />
