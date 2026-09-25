@@ -57,6 +57,11 @@ import {
   type ScrollPositionSnapshot,
 } from './components/scroll-position';
 import {suppressAttachedRunTranscriptTail} from './active-run-transcript';
+import {
+  isSessionRunning,
+  sessionUiStateForRun,
+  type SessionUiState,
+} from './session-run-status';
 import {shouldSkipTranscriptLoad} from './transcript-load-policy';
 import {
   hiddenWebUiStepIds,
@@ -213,7 +218,7 @@ const styles = stylex.create({
   },
 });
 
-type SessionState = 'success' | 'warning' | 'accent';
+type SessionState = SessionUiState;
 type TraceState = 'complete' | 'running' | 'pending';
 interface Session {
   id: string;
@@ -453,7 +458,7 @@ function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
     title: oneLine(snapshot.session_name) || snapshot.session_id || snapshot.id,
     time: snapshot.turns > 0 ? 'Local transcript' : 'Ready',
     turns: snapshot.turns,
-    state: 'success',
+    state: sessionUiStateForRun(snapshot.run?.status),
     source: 'live',
     sessionRef: snapshot.id,
     ...(snapshot.root_label ? {rootLabel: snapshot.root_label} : {}),
@@ -2028,8 +2033,15 @@ function App() {
       ? threadMessages
       : [...block, ...threadMessages];
   }, [threadMessages, activeSessionId, historyBlock]);
+  const isLiveSession = activeSession?.source === 'live';
+  const isRunning = isSessionRunning(
+    runningSessionId === activeSessionId,
+    activeSession?.run?.status,
+  );
   const hasLiveAttachedRun =
-    attachedRunSessionIdRef.current === activeSessionId && streamingMessage !== null;
+    isLiveSession &&
+    (activeSession?.run?.status === 'running' ||
+      attachedRunSessionIdRef.current === activeSessionId);
   const transcriptMessages = useMemo(
     () => suppressAttachedRunTranscriptTail(messages, hasLiveAttachedRun),
     [messages, hasLiveAttachedRun],
@@ -2040,8 +2052,6 @@ function App() {
     initialCount: appConfig.transcript_window_messages,
     pageSize: appConfig.transcript_window_page_messages,
   });
-  const isRunning = runningSessionId === activeSessionId;
-  const isLiveSession = activeSession?.source === 'live';
   const activeSessionRef = activeSession?.sessionRef;
   const activeSessionPage = sessionPages[activeSessionId];
   // Older turns exist on the server but are not part of this client's copy yet.
@@ -2897,7 +2907,9 @@ function App() {
                           onLoadFull={loadFullMessage}
                         />
                       ))}
-                      {isRunning && (!isLiveSession || streamingMessage) && !streamingMessageCommitted && (
+                      {isRunning &&
+                        (!isLiveSession || streamingMessage !== null || hasLiveAttachedRun) &&
+                        !streamingMessageCommitted && (
                         <ChatMessage sender="assistant" avatar={<AgentAvatar isRunning />} style={DEFERRED_ROW_STYLE}>
                           <ChatMessageBubble
                             ref={liveBubbleRef}
