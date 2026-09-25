@@ -1,0 +1,283 @@
+/**
+ * The composer's `@` file menu — and the shape a `/` command menu will take.
+ *
+ * Astryx renders the menu itself: `ChatComposerInput` takes trigger definitions,
+ * detects the character at a word boundary, searches the trigger's
+ * `SearchSource` and inserts whatever `onSelect` returns — plain text, or an
+ * inline badge chip. What it does not own is the file list, so this module does:
+ * a checked-in list of workspace paths (static for now; a backend listing can
+ * replace it without touching the composer), the ranking that answers a typed
+ * query, and the trigger definitions themselves.
+ *
+ * A selected chip serializes to `@<path>` — the path reference the agent's own
+ * `read`/`grep`/`glob` tools act on — so nothing downstream has to understand
+ * mentions beyond the path text.
+ *
+ * Two behaviours of 0.6.2 worth knowing before extending this:
+ * - `deserialize` is declared on a trigger but never called by the component
+ *   (grep: zero occurrences in the compiled JS), so a chip that outlives the
+ *   element — a reload, or an external rewrite of the composer value — stays
+ *   plain `@path` text. It still reads correctly; it just loses its badge.
+ * - The menu only opens when the trigger character starts a word, so `@` typed
+ *   mid-word (an email address, say) leaves the menu closed.
+ */
+
+import type {
+  ChatComposerToken,
+  ChatComposerTrigger,
+  SearchableItem,
+  SearchSource,
+} from '@astryxdesign/core';
+
+/** Character that opens the file menu. */
+export const FILE_TRIGGER_CHARACTER = '@';
+/** Character that opens the command menu. */
+export const COMMAND_TRIGGER_CHARACTER = '/';
+
+export type ComposerCommand = {
+  /** Command name without the leading slash, e.g. `compact`. */
+  name: string;
+  /** Extra match terms, so a command is still found by an alias. */
+  keywords?: readonly string[];
+};
+
+/**
+ * Paths offered by the `@` menu when the app ships without a listing service.
+ *
+ * They are repository-relative — the same form the agent's tools take — and are
+ * ordered roughly by how often a prompt refers to them, because that order is
+ * what a bare `@` shows. `resolveMentionFiles` lets `mention_files` in
+ * config.json replace the whole list without a code change, and the eventual
+ * backend listing swaps in at the same seam.
+ */
+export const BUILTIN_MENTION_FILES: readonly string[] = [
+  'AGENTS_jad.md',
+  'setting.json',
+  'tools-guidelines.md',
+  'MEMORY_DESIGN.md',
+  'design_cursor.md',
+  'design_bash.md',
+  'design_edit.md',
+  'design_glob.md',
+  'design_grep.md',
+  'design_process.md',
+  'design_task.md',
+  'backend/package.json',
+  'backend/design.md',
+  'backend/AUTH.md',
+  'backend/src/server.ts',
+  'backend/src/session.ts',
+  'backend/src/config.ts',
+  'backend/src/persistence.ts',
+  'backend/src/run-registry.ts',
+  'backend/src/stream-emitter.ts',
+  'backend/src/concurrency.ts',
+  'backend/src/statecontext.ts',
+  'backend/src/session-path-profiles.ts',
+  'backend/src/plugins/web-ui-normalized.ts',
+  'backend/src/tools/catalog.ts',
+  'backend/src/tools/native/read.ts',
+  'backend/src/tools/native/write.ts',
+  'backend/src/tools/native/edit.ts',
+  'backend/src/tools/native/grep.ts',
+  'backend/src/tools/native/glob.ts',
+  'backend/src/tools/native/bash.ts',
+  'backend/src/tools/native/process.ts',
+  'backend/src/tools/native/task.ts',
+  'backend/src/tools/native/memory.ts',
+  'backend/src/tools/native/registry.ts',
+  'frontend/package.json',
+  'frontend/src/App.tsx',
+  'frontend/src/api.ts',
+  'frontend/src/config.json',
+  'frontend/src/composer-triggers.ts',
+  'frontend/src/draftStore.ts',
+  'frontend/src/promptLibrary.ts',
+  'frontend/src/row-heights.ts',
+  'frontend/src/components/ComposerPane.tsx',
+  'frontend/src/components/TranscriptWindow.tsx',
+  'frontend/src/components/scroll-position.ts',
+  'frontend/src/components/MarkdownText.tsx',
+  'frontend/src/components/PromptLibraryPanel.tsx',
+  'frontend/src/themes/neutral/neutralTheme.ts',
+  'frontend/src/themes/neutral/icons.tsx',
+  'sample/schemes/setting.schema.json',
+  'sample/tools/native/read.json',
+];
+
+/** A configured list wins once it has entries; otherwise the built-in one stands. */
+export function resolveMentionFiles(
+  configured: readonly string[] | undefined,
+  builtin: readonly string[] = BUILTIN_MENTION_FILES,
+): readonly string[] {
+  return configured && configured.length > 0 ? configured : builtin;
+}
+
+/**
+ * How well a path answers a query — lower is better, `null` means no match.
+ *
+ * A file's own name beats the directories it sits in: typing `composer` should
+ * reach `ComposerPane.tsx` before something that merely lives under a
+ * `composer/` folder.
+ */
+function matchScore(path: string, needle: string): number | null {
+  const lowerPath = path.toLowerCase();
+  if (lowerPath === needle) {
+    return 0;
+  }
+  const base = lowerPath.slice(lowerPath.lastIndexOf('/') + 1);
+  if (base === needle) {
+    return 1;
+  }
+  if (base.startsWith(needle)) {
+    return 2;
+  }
+  if (base.includes(needle)) {
+    return 3;
+  }
+  return lowerPath.includes(needle) ? 4 : null;
+}
+
+/**
+ * The paths a query matches, best first and capped.
+ *
+ * Ties keep the list's own order, which is its curated order, so the ranking
+ * only ever reorders for a reason. An empty query is "show me the list" and
+ * returns that order unchanged.
+ */
+export function rankMentionFiles(
+  files: readonly string[],
+  query: string,
+  maxResults: number,
+): string[] {
+  const limit = Math.max(0, Math.floor(maxResults));
+  const needle = query.trim().toLowerCase();
+  if (needle === '') {
+    return files.slice(0, limit);
+  }
+  const ranked: {path: string; score: number; index: number}[] = [];
+  files.forEach((path, index) => {
+    const score = matchScore(path, needle);
+    if (score !== null) {
+      ranked.push({path, score, index});
+    }
+  });
+  ranked.sort((a, b) => a.score - b.score || a.index - b.index);
+  return ranked.slice(0, limit).map(entry => entry.path);
+}
+
+/** The menu's items. The path is both the id and what the menu shows. */
+export function mentionItems(
+  files: readonly string[],
+  query: string,
+  maxResults: number,
+): SearchableItem[] {
+  return rankMentionFiles(files, query, maxResults).map(path => ({
+    id: path,
+    label: path,
+  }));
+}
+
+/** A `SearchSource` over a fixed list — the whole list is local, so search is sync. */
+export function createFileMentionSource(
+  files: readonly string[],
+  maxResults: number,
+): SearchSource {
+  return {
+    search: query => mentionItems(files, query, maxResults),
+    bootstrap: () => mentionItems(files, '', maxResults),
+  };
+}
+
+/**
+ * What a selected file becomes: a chip that shows the path and serializes to
+ * `@path`. The chip is blue so it is not mistaken for a pasted-text token,
+ * which is neutral.
+ */
+function mentionToken(path: string): ChatComposerToken {
+  return {
+    value: `${FILE_TRIGGER_CHARACTER}${path}`,
+    label: path,
+    variant: 'blue',
+  };
+}
+
+/** The `@` trigger over a fixed list of paths. */
+export function fileMentionTrigger(
+  files: readonly string[],
+  maxResults: number,
+): ChatComposerTrigger {
+  return {
+    character: FILE_TRIGGER_CHARACTER,
+    searchSource: createFileMentionSource(files, maxResults),
+    menuLabel: 'Files',
+    emptySearchResultsText: 'No matching files',
+    onSelect: item => mentionToken(item.id),
+  };
+}
+
+/**
+ * The `/` trigger. Nothing selects one yet — the app has no command layer — but
+ * the definition is complete, so `createComposerTriggers` only needs a list of
+ * commands to put the menu on screen.
+ */
+export function commandTrigger(
+  commands: readonly ComposerCommand[],
+  maxResults: number,
+): ChatComposerTrigger {
+  const limit = Math.max(0, Math.floor(maxResults));
+  const entries = commands.map(command => ({
+    item: {id: command.name, label: `${COMMAND_TRIGGER_CHARACTER}${command.name}`},
+    keywords: command.keywords ?? [],
+  }));
+  const matched = (query: string): SearchableItem[] => {
+    const needle = query.trim().toLowerCase();
+    return entries
+      .filter(
+        ({item, keywords}) =>
+          needle === '' ||
+          item.label.toLowerCase().includes(needle) ||
+          keywords.some(keyword => keyword.toLowerCase().includes(needle)),
+      )
+      .slice(0, limit)
+      .map(({item}) => item);
+  };
+  return {
+    character: COMMAND_TRIGGER_CHARACTER,
+    searchSource: {
+      search: matched,
+      bootstrap: () => matched(''),
+    },
+    menuLabel: 'Commands',
+    emptySearchResultsText: 'No matching commands',
+    onSelect: item => ({
+      value: `${COMMAND_TRIGGER_CHARACTER}${item.id}`,
+      label: `${COMMAND_TRIGGER_CHARACTER}${item.id}`,
+      variant: 'yellow',
+    }),
+  };
+}
+
+export type ComposerTriggerOptions = {
+  files: readonly string[];
+  /** Cap on menu entries, from `mention_max_results`. */
+  maxResults: number;
+  /**
+   * Slash commands. Empty — the default — leaves the `/` menu out entirely,
+   * rather than opening a menu whose only possible answer is "no matches".
+   */
+  commands?: readonly ComposerCommand[];
+};
+
+/** Every trigger the composer should carry, in menu-character order. */
+export function createComposerTriggers({
+  files,
+  maxResults,
+  commands = [],
+}: ComposerTriggerOptions): ChatComposerTrigger[] {
+  const triggers = [fileMentionTrigger(files, maxResults)];
+  if (commands.length > 0) {
+    triggers.push(commandTrigger(commands, maxResults));
+  }
+  return triggers;
+}

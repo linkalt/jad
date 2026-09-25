@@ -10,6 +10,7 @@ import {
 } from '@astryxdesign/core';
 import type {ChatComposerInputHandle} from '@astryxdesign/core';
 import appConfig from '../config.json';
+import {createComposerTriggers, resolveMentionFiles} from '../composer-triggers';
 import {loadDrafts, saveDrafts} from '../draftStore';
 import {ComposerPreview} from './ComposerPreview';
 import {
@@ -49,6 +50,20 @@ type ComposerPaneProps = {
   footerNote?: ReactNode;
   status?: ComponentProps<typeof ChatComposer>['status'];
 };
+
+/**
+ * The composer's trigger menus, built once from configuration.
+ *
+ * A module constant on purpose: the definitions are static, and handing the
+ * composer a fresh array on every render would restart its trigger search
+ * while the user is still typing the query.
+ */
+const composerTriggers = appConfig.mention_files_enabled
+  ? createComposerTriggers({
+      files: resolveMentionFiles(appConfig.mention_files),
+      maxResults: appConfig.mention_max_results,
+    })
+  : [];
 
 /**
  * The semantic icon set ships no preview/eye glyph (`eyeSlash` only), so the
@@ -227,6 +242,7 @@ export function ComposerPane({
         <ChatComposerInput
           ref={inputRootRef}
           handleRef={inputRef}
+          triggers={composerTriggers.length > 0 ? composerTriggers : undefined}
           onKeyDown={handleKeyDown}
           pasteAsToken={appConfig.paste_as_token_enabled ? pasteAsToken : false}
         />

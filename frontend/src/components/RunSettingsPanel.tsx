@@ -23,6 +23,12 @@ function Value({children}: {children: ReactNode}) {
 
 const onOff = (value: boolean) => (value ? 'on' : 'off');
 
+/** Where the `@` menu's paths come from: the checked-in list, or config.json. */
+const mentionSource =
+  appConfig.mention_files.length > 0
+    ? `${appConfig.mention_files.length} configured`
+    : 'built-in list';
+
 /**
  * Second dataset for the shared left panel: the configuration the running app
  * actually uses, read straight from `config.json` plus the active session.
@@ -126,6 +132,16 @@ export function RunSettingsPanel({
               <Value>
                 {appConfig.paste_as_token_enabled
                   ? `over ${appConfig.paste_as_token_threshold} chars`
+                  : 'off'}
+              </Value>
+            }
+          />
+          <ListItem
+            label="File mentions (@)"
+            endContent={
+              <Value>
+                {appConfig.mention_files_enabled
+                  ? `${mentionSource}, max ${appConfig.mention_max_results}`
                   : 'off'}
               </Value>
             }
