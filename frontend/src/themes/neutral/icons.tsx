@@ -15,9 +15,11 @@ import React from 'react';
 // as unused, so the reference below keeps both compilers happy.
 void React;
 
-import type {IconRegistry} from '@astryxdesign/core/Icon';
+import type {IconRegistry, NamespacedIconName} from '@astryxdesign/core/Icon';
 
 import {
+  Brain,
+  SlidersHorizontal,
   X,
   ChevronDown,
   ChevronLeft,
@@ -53,7 +55,11 @@ const iconProps = {
   'aria-hidden': true as const,
 };
 
-export const neutralIconRegistry: IconRegistry = {
+// Namespaced keys sit outside Astryx's semantic set, so the registry is typed
+// the way the library types its own defaults: the full built-in set plus any
+// `<namespace>:<name>` extension. They keep `size`, `color` and `xstyle`.
+export const neutralIconRegistry: IconRegistry &
+  Partial<Record<NamespacedIconName, React.ReactNode>> = {
   close: <X {...iconProps} />,
   chevronDown: <ChevronDown {...iconProps} />,
   chevronLeft: <ChevronLeft {...iconProps} />,
@@ -82,4 +88,11 @@ export const neutralIconRegistry: IconRegistry = {
   wrench: <Wrench {...iconProps} />,
   stop: <Square {...iconProps} />,
   microphone: <Mic {...iconProps} />,
+
+  // App vocabulary for the two composer pickers, which have no Astryx semantic
+  // name: `app:model` is the model that answers a turn, `app:profile` is the
+  // session's path/config profile. `funnel` is the run-settings panel and
+  // `viewColumns` the run inspector, so neither could be reused.
+  'app:profile': <SlidersHorizontal {...iconProps} />,
+  'app:model': <Brain {...iconProps} />,
 };
