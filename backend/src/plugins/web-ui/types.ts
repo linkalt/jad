@@ -73,9 +73,11 @@ export interface WebUiSessionConfig {
     provider: string;
     model: string;
   };
+  pathProfiles?: string[];
   settings: {
     session_name: string;
     paths?: {
+      active_profile?: string;
       model_default?: string;
       models?: string[];
     };
@@ -126,6 +128,8 @@ export interface WebUiSessionSnapshot {
   session_id?: string;
   root_id?: string;
   root_label?: string;
+  active_profile?: string;
+  path_profiles?: string[];
   model_default?: string;
   models?: string[];
   session_name: string;

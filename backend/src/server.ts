@@ -23,6 +23,11 @@ import {
   type SessionUsageSummary,
 } from "./persistence.js";
 import {
+  readSessionPathProfiles,
+  SessionPathProfileError,
+  setSessionPathProfile,
+} from "./session-path-profiles.js";
+import {
   DEFAULT_ROOT_SERVER_SETTINGS,
   directoryEntries,
   loadRootServerSettings,
@@ -393,11 +398,13 @@ async function sessionListingConfig(
 ): Promise<{config: WebUiSessionConfig; paths: SessionStatePaths; usageCachePath: string}> {
   const loader = new SessionConfigLoader(directory, {globalJadRoot});
   const settings = await loader.loadSettings();
+  const pathProfileInfo = await readSessionPathProfiles(loader.paths.setting_path);
   const model = await readJsonRecord(loader.paths.model_path);
   const provider = model.provider;
   return {
     config: {
       settings,
+      pathProfiles: pathProfileInfo.path_profiles,
       model: {
         provider:
           typeof provider === "string" && provider.trim().length > 0
@@ -466,6 +473,8 @@ function sessionListing(
 
 class AgentHttpApplication {
   private readonly sessions = new Map<string, Promise<SessionHandle>>();
+  private readonly changingSessionProfiles = new Set<string>();
+  private readonly compactingSessions = new Set<string>();
   private readonly sessionRoots: Promise<SessionRoot[]>;
   private readonly sessionOptions: {
     client?: OpenAI;
@@ -543,6 +552,15 @@ class AgentHttpApplication {
       }
 
       const sessionRef = validateSessionReference(segments[2] ?? "");
+      const isSessionProfileRequest =
+        request.method === "POST" && segments.length === 4 && segments[3] === "profile";
+      if (this.changingSessionProfiles.has(sessionRef) && !isSessionProfileRequest) {
+        throw new HttpError(409, "session path profile is changing");
+      }
+      if (isSessionProfileRequest) {
+        await this.handleSessionProfile(sessionRef, request, response);
+        return;
+      }
       if (request.method === "GET" && segments.length === 3) {
         await this.handleSessionSnapshot(sessionRef, request, response);
         return;
@@ -830,6 +848,8 @@ class AgentHttpApplication {
     }
 
     const config = await handle.loader.load();
+    const pathProfileInfo = await readSessionPathProfiles(handle.loader.paths.setting_path);
+    const sessionConfig = {...config, pathProfiles: pathProfileInfo.path_profiles};
     const [view, usage] = await Promise.all([
       handle.view.read({
         ...(before === undefined ? {} : {before}),
@@ -851,7 +871,7 @@ class AgentHttpApplication {
     };
     const summary = sessionSummary(
       handle.location,
-      config,
+      sessionConfig,
       {
         messages,
         turns: usage.turn_count,
@@ -965,9 +985,20 @@ class AgentHttpApplication {
   }
 
   private async handleCompact(id: string, response: ServerResponse): Promise<void> {
-    const handle = await this.getSession(id);
-    const {compacted, compacted_items, retained_items} = await handle.session.compact();
-    sendJson(response, 200, {compaction: {compacted, compacted_items, retained_items}});
+    if (this.changingSessionProfiles.has(id) || this.compactingSessions.has(id)) {
+      throw new HttpError(409, "session profile or compaction is already changing");
+    }
+    this.compactingSessions.add(id);
+    try {
+      const handle = await this.getSession(id);
+      if (this.changingSessionProfiles.has(id)) {
+        throw new HttpError(409, "session path profile is changing");
+      }
+      const {compacted, compacted_items, retained_items} = await handle.session.compact();
+      sendJson(response, 200, {compaction: {compacted, compacted_items, retained_items}});
+    } finally {
+      this.compactingSessions.delete(id);
+    }
   }
 
   private async handleTools(
@@ -976,6 +1007,74 @@ class AgentHttpApplication {
   ): Promise<void> {
     const handle = await this.getSession(id);
     sendJson(response, 200, {tools: await handle.session.listTools()});
+  }
+
+  private async handleSessionProfile(
+    reference: string,
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    const body = await readJsonBody(request, this.maxBodyBytes);
+    if (
+      !isRecord(body) ||
+      typeof body.active_profile !== "string" ||
+      body.active_profile.trim().length === 0
+    ) {
+      throw new HttpError(400, "active_profile must be a non-empty string");
+    }
+    const profileName = body.active_profile.trim();
+    if (this.changingSessionProfiles.has(reference)) {
+      throw new HttpError(409, "session path profile is already changing");
+    }
+    const handle = await this.getSession(reference);
+    if (this.changingSessionProfiles.has(reference)) {
+      throw new HttpError(409, "session path profile is already changing");
+    }
+    if (this.runs.current(reference)?.status === "running") {
+      throw new HttpError(409, "cannot change the session path profile while a run is active");
+    }
+    if (this.compactingSessions.has(reference)) {
+      throw new HttpError(409, "cannot change the session path profile during compaction");
+    }
+
+    this.changingSessionProfiles.add(reference);
+    try {
+      const settings = await handle.loader.loadSettings();
+      let update;
+      try {
+        update = await setSessionPathProfile(
+          handle.loader.paths.setting_path,
+          profileName,
+          settings.persistence.durability,
+        );
+      } catch (error) {
+        if (error instanceof SessionPathProfileError) {
+          throw new HttpError(400, error.message);
+        }
+        throw error;
+      }
+
+      let currentHandle = handle;
+      if (update.changed) {
+        this.sessions.delete(reference);
+        await handle.session.close();
+        currentHandle = await this.getSession(reference);
+      }
+      const currentSettings = await currentHandle.loader.loadSettings();
+      const profileInfo = await readSessionPathProfiles(currentHandle.loader.paths.setting_path);
+      sendJson(response, 200, {
+        ...profileInfo,
+        ...(currentSettings.paths.model_default === undefined
+          ? {}
+          : {model_default: currentSettings.paths.model_default}),
+        ...(currentSettings.paths.models === undefined
+          ? {}
+          : {models: currentSettings.paths.models}),
+        changed: update.changed,
+      });
+    } finally {
+      this.changingSessionProfiles.delete(reference);
+    }
   }
 
   private async handleRun(
@@ -993,7 +1092,13 @@ class AgentHttpApplication {
     }
     const requestedModelPath = typeof body.model === "string" ? body.model.trim() : undefined;
     const handle = await this.getSession(id);
+    if (this.changingSessionProfiles.has(id)) {
+      throw new HttpError(409, "session path profile is changing");
+    }
     const settings = await handle.loader.loadSettings();
+    if (this.changingSessionProfiles.has(id)) {
+      throw new HttpError(409, "session path profile is changing");
+    }
     if (requestedModelPath !== undefined && !settings.paths.models?.includes(requestedModelPath)) {
       throw new HttpError(400, "model config path is not available in the active session path profile");
     }

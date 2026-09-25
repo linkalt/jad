@@ -428,7 +428,7 @@ async function syncIfRequired(
   }
 }
 
-async function writeJsonAtomic(
+export async function writeJsonAtomic(
   path: string,
   value: unknown,
   durability: DurabilityMode,

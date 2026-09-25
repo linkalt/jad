@@ -50,6 +50,7 @@ import {
   fetchSessionHistory,
   fetchSessionMessage,
   fetchSessions,
+  updateSessionPathProfile,
   stopSessionRun,
   streamSessionRun,
   type SessionPage,
@@ -89,6 +90,7 @@ import {
 import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
 import {ModelPicker} from './components/ModelPicker';
+import {SessionProfilePicker} from './components/SessionProfilePicker';
 import {FloatingPanel} from './components/FloatingPanel';
 import {NotificationPanel} from './components/NotificationPanel';
 import {MarkdownText} from './components/MarkdownText';
@@ -247,6 +249,8 @@ interface Session {
   source: 'live' | 'sample';
   sessionRef?: string;
   rootLabel?: string;
+  activeProfile?: string;
+  pathProfiles?: string[];
   modelDefault?: string;
   models?: string[];
   model?: {
@@ -476,6 +480,8 @@ function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
     source: 'live',
     sessionRef: snapshot.id,
     ...(snapshot.root_label ? {rootLabel: snapshot.root_label} : {}),
+    ...(snapshot.active_profile === undefined ? {} : {activeProfile: snapshot.active_profile}),
+    ...(snapshot.path_profiles === undefined ? {} : {pathProfiles: snapshot.path_profiles}),
     ...(snapshot.model_default === undefined ? {} : {modelDefault: snapshot.model_default}),
     ...(snapshot.models === undefined ? {} : {models: snapshot.models}),
     model: snapshot.model,
@@ -1859,6 +1865,7 @@ function App() {
   const [modelSelections, setModelSelections] = useState<ModelSelectionBySession>(
     () => loadModelSelectionBySession(),
   );
+  const [isProfileSwitching, setIsProfileSwitching] = useState(false);
   useEffect(() => {
     saveModelSelectionBySession(modelSelections);
   }, [modelSelections]);
@@ -2271,6 +2278,75 @@ function App() {
     [activeSession, activeSessionId, hiddenCount, loadOlderMessages, revealEarlier],
   );
   const isCompactionInProgress = compactingSessionRef !== null;
+  const selectSessionPathProfile = useCallback(
+    async (profile: string) => {
+      const sessionRef = activeSession?.sessionRef;
+      if (
+        sessionRef === undefined ||
+        activeSession.activeProfile === profile ||
+        isRunning ||
+        isCompactionInProgress ||
+        isProfileSwitching
+      ) {
+        return;
+      }
+      setIsProfileSwitching(true);
+      try {
+        const result = await updateSessionPathProfile(sessionRef, profile);
+        setSessions(current =>
+          current.map(session => {
+            if (session.sessionRef !== sessionRef) {
+              return session;
+            }
+            const next = {
+              ...session,
+              activeProfile: result.active_profile,
+              pathProfiles: result.path_profiles,
+            };
+            if (result.model_default === undefined) {
+              delete next.modelDefault;
+            } else {
+              next.modelDefault = result.model_default;
+            }
+            if (result.models === undefined) {
+              delete next.models;
+            } else {
+              next.models = result.models;
+            }
+            return next;
+          }),
+        );
+        setModelSelections(current => {
+          if (current[sessionRef] === undefined) {
+            return current;
+          }
+          const next = {...current};
+          delete next[sessionRef];
+          return next;
+        });
+        snapshotEtagRef.current = undefined;
+        refreshSessionsRef.current?.();
+      } catch (error) {
+        recordNotification({
+          sessionId: activeSessionId,
+          sessionTitle: activeSession?.title ?? 'Session',
+          kind: 'error',
+          title: 'Unable to change session profile',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        setIsProfileSwitching(false);
+      }
+    },
+    [
+      activeSession,
+      activeSessionId,
+      isCompactionInProgress,
+      isProfileSwitching,
+      isRunning,
+      recordNotification,
+    ],
+  );
   const isActiveSessionCompacting = activeSessionRef !== undefined && compactingSessionRef === activeSessionRef;
   const unreadNotificationCount = unreadActivityNotificationCount(notifications);
   const hasUnreadError = hasUnreadActivityError(notifications);
@@ -2917,6 +2993,16 @@ function App() {
       }
       toolbarActions={
         <HStack align="center" gap={1}>
+          {activeSession.sessionRef &&
+          activeSession.pathProfiles &&
+          activeSession.pathProfiles.length > 0 ? (
+            <SessionProfilePicker
+              profiles={activeSession.pathProfiles}
+              activeProfile={activeSession.activeProfile}
+              isDisabled={isRunning || isCompactionInProgress || isProfileSwitching}
+              onSelect={profile => { void selectSessionPathProfile(profile); }}
+            />
+          ) : null}
           {activeSession.models && activeSession.models.length > 0 ? (
             <ModelPicker
               models={activeSession.models}

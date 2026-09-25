@@ -1158,6 +1158,10 @@ test("loads active path-profile model configs for defaults and selections", asyn
           model_default: "chatgpt/model.json",
           models: ["chatgpt/model.json", "openai/model.json"],
         },
+        alternate: {
+          model_default: "openai/model.json",
+          models: ["openai/model.json"],
+        },
       },
     },
   }));
@@ -1195,9 +1199,18 @@ test("loads active path-profile model configs for defaults and selections", asyn
     const listResponse = await fetch(`${baseUrl}/api/sessions`);
     assert.equal(listResponse.status, 200);
     const list = (await listResponse.json()) as {
-      sessions: Array<{id: string; model_default?: string; models?: string[]; model?: {model: string}}>;
+      sessions: Array<{
+        id: string;
+        active_profile?: string;
+        path_profiles?: string[];
+        model_default?: string;
+        models?: string[];
+        model?: {model: string};
+      }>;
     };
     const listedSession = list.sessions.find((session) => session.id === "session1");
+    assert.equal(listedSession?.active_profile, "primary");
+    assert.deepEqual(listedSession?.path_profiles, ["primary", "alternate"]);
     assert.equal(listedSession?.model_default, "chatgpt/model.json");
     assert.deepEqual(listedSession?.models, ["chatgpt/model.json", "openai/model.json"]);
     assert.equal(listedSession?.model?.model, "chatgpt-configured-model");
@@ -1205,10 +1218,14 @@ test("loads active path-profile model configs for defaults and selections", asyn
     const snapshotResponse = await fetch(`${baseUrl}/api/sessions/session1`);
     assert.equal(snapshotResponse.status, 200);
     const snapshot = (await snapshotResponse.json()) as {
+      active_profile?: string;
+      path_profiles?: string[];
       model_default?: string;
       models?: string[];
       model?: {model: string};
     };
+    assert.equal(snapshot.active_profile, "primary");
+    assert.deepEqual(snapshot.path_profiles, ["primary", "alternate"]);
     assert.equal(snapshot.model_default, "chatgpt/model.json");
     assert.deepEqual(snapshot.models, ["chatgpt/model.json", "openai/model.json"]);
     assert.equal(snapshot.model?.model, "chatgpt-configured-model");
@@ -1239,6 +1256,53 @@ test("loads active path-profile model configs for defaults and selections", asyn
     });
     assert.equal(invalidRun.status, 400);
     assert.deepEqual(requestedModels, ["chatgpt-configured-model", "openai-configured-model"]);
+
+    const profileResponse = await fetch(`${baseUrl}/api/sessions/session1/profile`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({active_profile: "alternate"}),
+    });
+    assert.equal(profileResponse.status, 200);
+    const profile = (await profileResponse.json()) as {
+      active_profile: string;
+      path_profiles: string[];
+      model_default?: string;
+      models?: string[];
+      changed: boolean;
+    };
+    assert.equal(profile.active_profile, "alternate");
+    assert.deepEqual(profile.path_profiles, ["primary", "alternate"]);
+    assert.equal(profile.model_default, "openai/model.json");
+    assert.deepEqual(profile.models, ["openai/model.json"]);
+    assert.equal(profile.changed, true);
+    const savedSettings = JSON.parse(await readFile(join(sessionDir, "setting.json"), "utf8")) as {
+      paths: {active_profile: string};
+    };
+    assert.equal(savedSettings.paths.active_profile, "alternate");
+
+    const alternateRun = await fetch(runUrl, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "use the alternate profile default"}),
+    });
+    assert.equal(alternateRun.status, 200);
+    await alternateRun.text();
+    assert.deepEqual(requestedModels, [
+      "chatgpt-configured-model",
+      "openai-configured-model",
+      "openai-configured-model",
+    ]);
+
+    const invalidProfile = await fetch(`${baseUrl}/api/sessions/session1/profile`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({active_profile: "missing"}),
+    });
+    assert.equal(invalidProfile.status, 400);
+    const unchangedSettings = JSON.parse(await readFile(join(sessionDir, "setting.json"), "utf8")) as {
+      paths: {active_profile: string};
+    };
+    assert.equal(unchangedSettings.paths.active_profile, "alternate");
   } finally {
     await running.close();
     await rm(root, {recursive: true, force: true});

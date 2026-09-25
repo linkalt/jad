@@ -94,6 +94,8 @@ export interface SessionSnapshot {
   session_id?: string;
   root_id?: string;
   root_label?: string;
+  active_profile?: string;
+  path_profiles?: string[];
   model_default?: string;
   models?: string[];
   session_name: string;
@@ -113,6 +115,14 @@ export interface SessionSnapshot {
    * removed, served from the backup by `fetchSessionHistory`.
    */
   history?: SessionHistory;
+}
+
+export interface SessionPathProfileUpdate {
+  active_profile: string;
+  path_profiles: string[];
+  model_default?: string;
+  models?: string[];
+  changed: boolean;
 }
 
 export interface SessionPage {
@@ -239,6 +249,37 @@ export async function fetchSession(
  * snapshot a committed step produces. A `304` means the held copy is still the
  * one the server would send.
  */
+export async function updateSessionPathProfile(
+  sessionRef: string,
+  activeProfile: string,
+): Promise<SessionPathProfileUpdate> {
+  const response = await fetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/profile`),
+    {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({active_profile: activeProfile}),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  if (
+    !isRecord(value) ||
+    typeof value.active_profile !== 'string' ||
+    !Array.isArray(value.path_profiles) ||
+    !value.path_profiles.every(profile => typeof profile === 'string') ||
+    typeof value.changed !== 'boolean' ||
+    (value.model_default !== undefined && typeof value.model_default !== 'string') ||
+    (value.models !== undefined &&
+      (!Array.isArray(value.models) || !value.models.every(model => typeof model === 'string')))
+  ) {
+    throw new Error('the server returned invalid session path profile settings');
+  }
+  return value as unknown as SessionPathProfileUpdate;
+}
+
 export async function fetchSessionHistory(
   sessionId: string,
   etag?: string,
