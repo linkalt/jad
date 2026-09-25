@@ -14,6 +14,7 @@ import type OpenAI from "openai";
 import {
   ConfigError,
   SessionConfigLoader,
+  type ModelConfig,
   type SessionConfigPaths,
 } from "./config.js";
 import { AgentSession } from "./session.js";
@@ -25,6 +26,7 @@ import {
 import {
   readSessionPathProfiles,
   SessionPathProfileError,
+  setSessionPathModelDefault,
   setSessionPathProfile,
 } from "./session-path-profiles.js";
 import {
@@ -473,7 +475,7 @@ function sessionListing(
 
 class AgentHttpApplication {
   private readonly sessions = new Map<string, Promise<SessionHandle>>();
-  private readonly changingSessionProfiles = new Set<string>();
+  private readonly changingSessionSettings = new Set<string>();
   private readonly compactingSessions = new Set<string>();
   private readonly sessionRoots: Promise<SessionRoot[]>;
   private readonly sessionOptions: {
@@ -554,11 +556,18 @@ class AgentHttpApplication {
       const sessionRef = validateSessionReference(segments[2] ?? "");
       const isSessionProfileRequest =
         request.method === "POST" && segments.length === 4 && segments[3] === "profile";
-      if (this.changingSessionProfiles.has(sessionRef) && !isSessionProfileRequest) {
-        throw new HttpError(409, "session path profile is changing");
+      const isSessionModelDefaultRequest =
+        request.method === "POST" && segments.length === 4 && segments[3] === "model-default";
+      const isSessionSettingsUpdateRequest = isSessionProfileRequest || isSessionModelDefaultRequest;
+      if (this.changingSessionSettings.has(sessionRef) && !isSessionSettingsUpdateRequest) {
+        throw new HttpError(409, "session settings are changing");
       }
       if (isSessionProfileRequest) {
         await this.handleSessionProfile(sessionRef, request, response);
+        return;
+      }
+      if (isSessionModelDefaultRequest) {
+        await this.handleSessionModelDefault(sessionRef, request, response);
         return;
       }
       if (request.method === "GET" && segments.length === 3) {
@@ -985,14 +994,14 @@ class AgentHttpApplication {
   }
 
   private async handleCompact(id: string, response: ServerResponse): Promise<void> {
-    if (this.changingSessionProfiles.has(id) || this.compactingSessions.has(id)) {
+    if (this.changingSessionSettings.has(id) || this.compactingSessions.has(id)) {
       throw new HttpError(409, "session profile or compaction is already changing");
     }
     this.compactingSessions.add(id);
     try {
       const handle = await this.getSession(id);
-      if (this.changingSessionProfiles.has(id)) {
-        throw new HttpError(409, "session path profile is changing");
+      if (this.changingSessionSettings.has(id)) {
+        throw new HttpError(409, "session settings are changing");
       }
       const {compacted, compacted_items, retained_items} = await handle.session.compact();
       sendJson(response, 200, {compaction: {compacted, compacted_items, retained_items}});
@@ -1023,11 +1032,11 @@ class AgentHttpApplication {
       throw new HttpError(400, "active_profile must be a non-empty string");
     }
     const profileName = body.active_profile.trim();
-    if (this.changingSessionProfiles.has(reference)) {
+    if (this.changingSessionSettings.has(reference)) {
       throw new HttpError(409, "session path profile is already changing");
     }
     const handle = await this.getSession(reference);
-    if (this.changingSessionProfiles.has(reference)) {
+    if (this.changingSessionSettings.has(reference)) {
       throw new HttpError(409, "session path profile is already changing");
     }
     if (this.runs.current(reference)?.status === "running") {
@@ -1037,7 +1046,7 @@ class AgentHttpApplication {
       throw new HttpError(409, "cannot change the session path profile during compaction");
     }
 
-    this.changingSessionProfiles.add(reference);
+    this.changingSessionSettings.add(reference);
     try {
       const settings = await handle.loader.loadSettings();
       let update;
@@ -1073,7 +1082,76 @@ class AgentHttpApplication {
         changed: update.changed,
       });
     } finally {
-      this.changingSessionProfiles.delete(reference);
+      this.changingSessionSettings.delete(reference);
+    }
+  }
+
+  private async handleSessionModelDefault(
+    reference: string,
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    const body = await readJsonBody(request, this.maxBodyBytes);
+    if (
+      !isRecord(body) ||
+      typeof body.model_default !== "string" ||
+      body.model_default.trim().length === 0
+    ) {
+      throw new HttpError(400, "model_default must be a non-empty string");
+    }
+    const modelConfigPath = body.model_default.trim();
+    if (this.changingSessionSettings.has(reference)) {
+      throw new HttpError(409, "session settings are already changing");
+    }
+    const handle = await this.getSession(reference);
+    if (this.changingSessionSettings.has(reference)) {
+      throw new HttpError(409, "session settings are already changing");
+    }
+
+    this.changingSessionSettings.add(reference);
+    try {
+      const settings = await handle.loader.loadSettings();
+      const activeProfile = settings.paths.active_profile;
+      if (activeProfile === undefined || !settings.paths.models?.includes(modelConfigPath)) {
+        throw new HttpError(400, "model config path is not available in the active session path profile");
+      }
+
+      let model: ModelConfig;
+      try {
+        model = await handle.loader.loadModel(modelConfigPath);
+      } catch (error) {
+        if (error instanceof ConfigError) {
+          throw new HttpError(400, error.message);
+        }
+        throw error;
+      }
+
+      let update;
+      try {
+        update = await setSessionPathModelDefault(
+          handle.loader.paths.setting_path,
+          activeProfile,
+          modelConfigPath,
+          settings.persistence.durability,
+        );
+      } catch (error) {
+        if (error instanceof SessionPathProfileError) {
+          throw new HttpError(400, error.message);
+        }
+        throw error;
+      }
+
+      const currentSettings = await handle.loader.loadSettings();
+      const profileInfo = await readSessionPathProfiles(handle.loader.paths.setting_path);
+      sendJson(response, 200, {
+        ...profileInfo,
+        model_default: update.model_default,
+        models: currentSettings.paths.models ?? [update.model_default],
+        model: {provider: model.provider, model: model.model},
+        changed: update.changed,
+      });
+    } finally {
+      this.changingSessionSettings.delete(reference);
     }
   }
 
@@ -1092,12 +1170,12 @@ class AgentHttpApplication {
     }
     const requestedModelPath = typeof body.model === "string" ? body.model.trim() : undefined;
     const handle = await this.getSession(id);
-    if (this.changingSessionProfiles.has(id)) {
-      throw new HttpError(409, "session path profile is changing");
+    if (this.changingSessionSettings.has(id)) {
+      throw new HttpError(409, "session settings are changing");
     }
     const settings = await handle.loader.loadSettings();
-    if (this.changingSessionProfiles.has(id)) {
-      throw new HttpError(409, "session path profile is changing");
+    if (this.changingSessionSettings.has(id)) {
+      throw new HttpError(409, "session settings are changing");
     }
     if (requestedModelPath !== undefined && !settings.paths.models?.includes(requestedModelPath)) {
       throw new HttpError(400, "model config path is not available in the active session path profile");

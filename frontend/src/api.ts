@@ -125,6 +125,15 @@ export interface SessionPathProfileUpdate {
   changed: boolean;
 }
 
+export interface SessionPathModelDefaultUpdate {
+  active_profile: string;
+  path_profiles: string[];
+  model_default: string;
+  models: string[];
+  model: {provider: string; model: string};
+  changed: boolean;
+}
+
 export interface SessionPage {
   has_more: boolean;
   next_before: number | null;
@@ -278,6 +287,40 @@ export async function updateSessionPathProfile(
     throw new Error('the server returned invalid session path profile settings');
   }
   return value as unknown as SessionPathProfileUpdate;
+}
+
+export async function updateSessionProfileModelDefault(
+  sessionRef: string,
+  modelDefault: string,
+): Promise<SessionPathModelDefaultUpdate> {
+  const response = await fetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/model-default`),
+    {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({model_default: modelDefault}),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  if (
+    !isRecord(value) ||
+    typeof value.active_profile !== 'string' ||
+    !Array.isArray(value.path_profiles) ||
+    !value.path_profiles.every(profile => typeof profile === 'string') ||
+    typeof value.model_default !== 'string' ||
+    !Array.isArray(value.models) ||
+    !value.models.every(model => typeof model === 'string') ||
+    !isRecord(value.model) ||
+    typeof value.model.provider !== 'string' ||
+    typeof value.model.model !== 'string' ||
+    typeof value.changed !== 'boolean'
+  ) {
+    throw new Error('the server returned invalid session model settings');
+  }
+  return value as unknown as SessionPathModelDefaultUpdate;
 }
 
 export async function fetchSessionHistory(

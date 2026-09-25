@@ -1035,6 +1035,13 @@ test("serves sessions using profile model-config and transcript paths", async ()
     assert.equal(compacted.compaction.compacted, true);
     assert.equal(await readFile(messagesPath, "utf8"), "");
     assert.match(await readFile(join(sessionDir, "data/messages.backup.jsonl"), "utf8"), /configured transcript/);
+    const compactionCachePath = join(sessionDir, "runtime/staging/compaction-cache.json");
+    const cachedContext = await readFile(compactionCachePath, "utf8");
+    const noOpCompactResponse = await fetch(`${baseUrl}/api/sessions/session1/compact`, {method: "POST"});
+    assert.equal(noOpCompactResponse.status, 200);
+    const noOpCompacted = await noOpCompactResponse.json() as {compaction: {compacted: boolean}};
+    assert.equal(noOpCompacted.compaction.compacted, false);
+    assert.equal(await readFile(compactionCachePath, "utf8"), cachedContext);
     const compactedSnapshot = await fetch(`${baseUrl}/api/sessions/session1`);
     const compactedBody = await compactedSnapshot.json() as {
       messages: Array<{text: string}>;
@@ -1249,13 +1256,95 @@ test("loads active path-profile model configs for defaults and selections", asyn
     await selectedRun.text();
     assert.deepEqual(requestedModels, ["chatgpt-configured-model", "openai-configured-model"]);
 
+    const updatedSettings = JSON.parse(await readFile(join(sessionDir, "setting.json"), "utf8")) as {
+      paths: {profiles: Record<string, {model_default: string}>};
+    };
+    updatedSettings.paths.profiles.primary!.model_default = "openai/model.json";
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify(updatedSettings));
+
+    const etag = listResponse.headers.get("etag");
+    assert.ok(etag);
+    const refreshedListResponse = await fetch(`${baseUrl}/api/sessions`, {
+      headers: {"if-none-match": etag},
+    });
+    assert.equal(refreshedListResponse.status, 200);
+    const refreshedList = (await refreshedListResponse.json()) as {
+      sessions: Array<{id: string; model_default?: string}>;
+    };
+    assert.equal(
+      refreshedList.sessions.find((session) => session.id === "session1")?.model_default,
+      "openai/model.json",
+    );
+
+    const updatedDefaultRun = await fetch(runUrl, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "use the changed profile default"}),
+    });
+    assert.equal(updatedDefaultRun.status, 200);
+    await updatedDefaultRun.text();
+    assert.deepEqual(requestedModels, [
+      "chatgpt-configured-model",
+      "openai-configured-model",
+      "openai-configured-model",
+    ]);
+
+    const modelDefaultResponse = await fetch(`${baseUrl}/api/sessions/session1/model-default`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({model_default: "chatgpt/model.json"}),
+    });
+    assert.equal(modelDefaultResponse.status, 200);
+    const modelDefaultUpdate = (await modelDefaultResponse.json()) as {
+      active_profile: string;
+      model_default: string;
+      models: string[];
+      model: {provider: string; model: string};
+      changed: boolean;
+    };
+    assert.equal(modelDefaultUpdate.active_profile, "primary");
+    assert.equal(modelDefaultUpdate.model_default, "chatgpt/model.json");
+    assert.deepEqual(modelDefaultUpdate.models, ["chatgpt/model.json", "openai/model.json"]);
+    assert.deepEqual(modelDefaultUpdate.model, {provider: "fake", model: "chatgpt-configured-model"});
+    assert.equal(modelDefaultUpdate.changed, true);
+    const savedModelSettings = JSON.parse(await readFile(join(sessionDir, "setting.json"), "utf8")) as {
+      paths: {profiles: Record<string, {model_default: string}>};
+    };
+    assert.equal(savedModelSettings.paths.profiles.primary?.model_default, "chatgpt/model.json");
+
+    const selectedDefaultRun = await fetch(runUrl, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "use the persisted model default"}),
+    });
+    assert.equal(selectedDefaultRun.status, 200);
+    await selectedDefaultRun.text();
+    assert.deepEqual(requestedModels, [
+      "chatgpt-configured-model",
+      "openai-configured-model",
+      "openai-configured-model",
+      "chatgpt-configured-model",
+    ]);
+
+    const invalidModelDefault = await fetch(`${baseUrl}/api/sessions/session1/model-default`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({model_default: "missing/model.json"}),
+    });
+    assert.equal(invalidModelDefault.status, 400);
+
     const invalidRun = await fetch(runUrl, {
       method: "POST",
       headers: {"content-type": "application/json"},
       body: JSON.stringify({input: "reject this model", model: "missing/model.json"}),
     });
     assert.equal(invalidRun.status, 400);
-    assert.deepEqual(requestedModels, ["chatgpt-configured-model", "openai-configured-model"]);
+    assert.deepEqual(requestedModels, [
+      "chatgpt-configured-model",
+      "openai-configured-model",
+      "openai-configured-model",
+      "chatgpt-configured-model",
+    ]);
 
     const profileResponse = await fetch(`${baseUrl}/api/sessions/session1/profile`, {
       method: "POST",
@@ -1290,6 +1379,8 @@ test("loads active path-profile model configs for defaults and selections", asyn
     assert.deepEqual(requestedModels, [
       "chatgpt-configured-model",
       "openai-configured-model",
+      "openai-configured-model",
+      "chatgpt-configured-model",
       "openai-configured-model",
     ]);
 

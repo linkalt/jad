@@ -2606,15 +2606,8 @@ function normalizeStoragePaths(
   return {...normalizedSelectedProfile!, active_profile: activeProfile};
 }
 
-function sameResolvedStoragePaths(left: SessionStoragePaths, right: SessionStoragePaths): boolean {
-  const sameModels = left.models === undefined
-    ? right.models === undefined
-    : right.models !== undefined
-      && left.models.length === right.models.length
-      && left.models.every((model, index) => model === right.models?.[index]);
+function samePinnedStoragePaths(left: SessionStoragePaths, right: SessionStoragePaths): boolean {
   return left.active_profile === right.active_profile
-    && left.model_default === right.model_default
-    && sameModels
     && SESSION_PATH_FIELDS.every((field) => left[field] === right[field]);
 }
 
@@ -2796,10 +2789,11 @@ export class SessionConfigLoader {
       this.paths.setting_path,
       this.paths.setting_path,
     );
-    if (this.resolvedStoragePaths && !sameResolvedStoragePaths(this.resolvedStoragePaths, resolvedStoragePaths)) {
-      throw new ConfigError(`${this.paths.setting_path}: session paths cannot change while this config loader is active; reopen the session to select new paths`);
+    if (this.resolvedStoragePaths && !samePinnedStoragePaths(this.resolvedStoragePaths, resolvedStoragePaths)) {
+      throw new ConfigError(`${this.paths.setting_path}: session storage paths cannot change while this config loader is active; reopen the session to select new paths`);
     }
-    const storagePaths = this.resolvedStoragePaths ?? (this.resolvedStoragePaths = resolvedStoragePaths);
+    this.resolvedStoragePaths = resolvedStoragePaths;
+    const storagePaths = resolvedStoragePaths;
     this.paths.model_path = this.resolveModelConfigPath(storagePaths.model_default);
     this.paths.messages_path = storagePaths.messages;
     this.paths.messages_backup_path = storagePaths.messages_backup;

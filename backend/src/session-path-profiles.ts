@@ -12,6 +12,12 @@ export interface SessionPathProfileUpdate extends SessionPathProfileInfo {
   changed: boolean;
 }
 
+export interface SessionPathModelDefaultUpdate extends SessionPathProfileInfo {
+  active_profile: string;
+  model_default: string;
+  changed: boolean;
+}
+
 export class SessionPathProfileError extends Error {
   public constructor(message: string) {
     super(message);
@@ -69,6 +75,59 @@ export async function readSessionPathProfiles(
   settingPath: string,
 ): Promise<SessionPathProfileInfo> {
   return pathProfilesFromSetting(await readSetting(settingPath));
+}
+
+export async function setSessionPathModelDefault(
+  settingPath: string,
+  profileName: string,
+  modelConfigPath: string,
+  durability: DurabilityMode,
+): Promise<SessionPathModelDefaultUpdate> {
+  const setting = await readSetting(settingPath);
+  const current = pathProfilesFromSetting(setting);
+  if (current.active_profile !== profileName) {
+    throw new SessionPathProfileError("active session path profile changed; retry the model selection");
+  }
+  const paths = setting.paths;
+  if (!isRecord(paths) || !isRecord(paths.profiles)) {
+    throw new SessionPathProfileError("session has no configured path profiles");
+  }
+  const profiles = paths.profiles;
+  const profile = profiles[profileName];
+  if (!isRecord(profile)) {
+    throw new SessionPathProfileError(`path profile '${profileName}' is not defined in session setting paths.profiles`);
+  }
+  const configuredModels = Array.isArray(profile.models)
+    ? profile.models.flatMap((model) => typeof model === "string" ? [model.trim()] : [])
+    : typeof profile.model_default === "string"
+      ? [profile.model_default.trim()]
+      : [];
+  if (!configuredModels.includes(modelConfigPath)) {
+    throw new SessionPathProfileError("model config path is not available in the active session path profile");
+  }
+  const changed = profile.model_default !== modelConfigPath;
+  if (changed) {
+    await writeJsonAtomic(
+      settingPath,
+      {
+        ...setting,
+        paths: {
+          ...paths,
+          profiles: {
+            ...profiles,
+            [profileName]: {...profile, model_default: modelConfigPath},
+          },
+        },
+      },
+      durability,
+    );
+  }
+  return {
+    active_profile: profileName,
+    path_profiles: current.path_profiles,
+    model_default: modelConfigPath,
+    changed,
+  };
 }
 
 export async function setSessionPathProfile(

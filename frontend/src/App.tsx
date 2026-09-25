@@ -51,6 +51,7 @@ import {
   fetchSessionMessage,
   fetchSessions,
   updateSessionPathProfile,
+  updateSessionProfileModelDefault,
   stopSessionRun,
   streamSessionRun,
   type SessionPage,
@@ -61,12 +62,7 @@ import {
 } from './api';
 import appConfig from './config.json';
 import {deepEqual} from './deepEqual';
-import {
-  loadModelSelectionBySession,
-  saveModelSelectionBySession,
-  selectedModelForSession,
-  type ModelSelectionBySession,
-} from './model-selection';
+import {selectedModelForSession} from './model-selection';
 import {selectionAfterPanelToggle, type RightPanelId} from './right-panel';
 import {createRowHeightStore, type RowHeightStore} from './row-heights';
 import {
@@ -1949,13 +1945,9 @@ function App() {
   // whatever the backend reports, and this id is only used to choose which of
   // those live sessions to open on.
   const [activeSessionId, setActiveSessionId] = useState(LIVE_SESSION_ID);
-  const [modelSelections, setModelSelections] = useState<ModelSelectionBySession>(
-    () => loadModelSelectionBySession(),
-  );
   const [isProfileSwitching, setIsProfileSwitching] = useState(false);
-  useEffect(() => {
-    saveModelSelectionBySession(modelSelections);
-  }, [modelSelections]);
+  const [isModelDefaultUpdating, setIsModelDefaultUpdating] = useState(false);
+  const isModelDefaultUpdatingRef = useRef(false);
   const hasChosenSessionRef = useRef(false);
   const [threads, setThreads] = useState<Record<string, MessageRecord[]>>(initialThreads);
 
@@ -2250,24 +2242,58 @@ function App() {
   const activeSession =
     sessions.find(session => session.id === activeSessionId) ?? sessions[0];
   const selectedModel = selectedModelForSession(
-    activeSession?.sessionRef,
     activeSession?.models,
     activeSession?.modelDefault,
     activeSession?.model?.model,
-    modelSelections,
   );
-  const modelForRun = activeSession?.models?.includes(selectedModel ?? '')
-    ? selectedModel
-    : undefined;
-  const selectSessionModel = useCallback((model: string) => {
+  const selectSessionModel = useCallback(async (modelDefault: string) => {
     const sessionRef = activeSession?.sessionRef;
-    if (sessionRef === undefined) {
+    if (
+      sessionRef === undefined ||
+      activeSession?.modelDefault === modelDefault ||
+      isProfileSwitching ||
+      isModelDefaultUpdatingRef.current
+    ) {
       return;
     }
-    setModelSelections(current =>
-      current[sessionRef] === model ? current : {...current, [sessionRef]: model},
-    );
-  }, [activeSession?.sessionRef]);
+    isModelDefaultUpdatingRef.current = true;
+    setIsModelDefaultUpdating(true);
+    try {
+      const result = await updateSessionProfileModelDefault(sessionRef, modelDefault);
+      setSessions(current => current.map(session => {
+        if (session.sessionRef !== sessionRef) {
+          return session;
+        }
+        return {
+          ...session,
+          activeProfile: result.active_profile,
+          pathProfiles: result.path_profiles,
+          modelDefault: result.model_default,
+          models: result.models,
+          model: result.model,
+        };
+      }));
+      sessionsEtagRef.current = undefined;
+      snapshotEtagRef.current = undefined;
+      refreshSessionsRef.current?.();
+    } catch (error) {
+      recordNotification({
+        sessionId: activeSessionId,
+        sessionTitle: activeSession?.title ?? 'Session',
+        kind: 'error',
+        title: 'Unable to change the profile model',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      isModelDefaultUpdatingRef.current = false;
+      setIsModelDefaultUpdating(false);
+    }
+  }, [
+    activeSession,
+    activeSessionId,
+    isProfileSwitching,
+    recordNotification,
+  ]);
   const threadMessages = threads[activeSessionId] ?? [];
   // The history block renders ahead of the transcript: it holds the turns a
   // compaction removed, which are older than everything the transcript carries.
@@ -2402,7 +2428,8 @@ function App() {
         activeSession.activeProfile === profile ||
         isRunning ||
         isCompactionInProgress ||
-        isProfileSwitching
+        isProfileSwitching ||
+        isModelDefaultUpdating
       ) {
         return;
       }
@@ -2432,14 +2459,6 @@ function App() {
             return next;
           }),
         );
-        setModelSelections(current => {
-          if (current[sessionRef] === undefined) {
-            return current;
-          }
-          const next = {...current};
-          delete next[sessionRef];
-          return next;
-        });
         snapshotEtagRef.current = undefined;
         refreshSessionsRef.current?.();
       } catch (error) {
@@ -2458,6 +2477,7 @@ function App() {
       activeSession,
       activeSessionId,
       isCompactionInProgress,
+      isModelDefaultUpdating,
       isProfileSwitching,
       isRunning,
       recordNotification,
@@ -2622,7 +2642,6 @@ function App() {
         const controller = new AbortController();
         runAbortRef.current = controller;
         void streamSessionRun(sessionRef, trimmedValue, {
-          ...(modelForRun === undefined ? {} : {model: modelForRun}),
           signal: controller.signal,
           onMessage: message => {
             setStreamingMessage(message);
@@ -2732,7 +2751,7 @@ function App() {
       }, appConfig.mock_run_delay_ms);
       return true;
     },
-    [activeSession, activeSessionId, isRunning, modelForRun, recordNotification],
+    [activeSession, activeSessionId, isRunning, recordNotification],
   );
 
   /**
@@ -3126,7 +3145,7 @@ function App() {
             <SessionProfilePicker
               profiles={activeSession.pathProfiles}
               activeProfile={activeSession.activeProfile}
-              isDisabled={isRunning || isCompactionInProgress || isProfileSwitching}
+              isDisabled={isRunning || isCompactionInProgress || isProfileSwitching || isModelDefaultUpdating}
               onSelect={profile => { void selectSessionPathProfile(profile); }}
             />
           ) : null}
@@ -3134,7 +3153,14 @@ function App() {
             <ModelPicker
               models={activeSession.models}
               selectedModel={selectedModel}
-              onSelect={selectSessionModel}
+              isDisabled={
+                activeSession.sessionRef === undefined ||
+                isRunning ||
+                isCompactionInProgress ||
+                isProfileSwitching ||
+                isModelDefaultUpdating
+              }
+              onSelect={model => { void selectSessionModel(model); }}
             />
           ) : null}
           {appConfig.attach_context_enabled ? (

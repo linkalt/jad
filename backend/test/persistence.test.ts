@@ -1121,7 +1121,7 @@ test("selects named path profiles, merges overrides, and pins the choice to the 
   }
 });
 
-test("normalizes model-config paths from the active path profile and pins them to the loader", async () => {
+test("refreshes model-config paths while pinning storage paths to the loader", async () => {
   const sessionDir = await makeSession();
   const settingPath = join(sessionDir, "setting.json");
   try {
@@ -1141,10 +1141,28 @@ test("normalizes model-config paths from the active path profile and pins them t
       cwd: sessionDir,
       paths: {
         active_profile: "blue",
-        profiles: {blue: {model_default: "openai/model.json", models: ["chatgpt/model.json", "openai/model.json"]}},
+        profiles: {blue: {model_default: "openai/model.json", models: ["openai/model.json", "chatgpt/model.json"]}},
       },
     }));
-    await assert.rejects(() => loader.loadSettings(), /paths cannot change while this config loader is active/);
+    const updatedModelSettings = await loader.loadSettings();
+    assert.equal(updatedModelSettings.paths.model_default, "openai/model.json");
+    assert.deepEqual(updatedModelSettings.paths.models, ["openai/model.json", "chatgpt/model.json"]);
+    assert.equal(loader.paths.model_path, join(sessionDir, "openai/model.json"));
+
+    await writeFile(settingPath, JSON.stringify({
+      cwd: sessionDir,
+      paths: {
+        active_profile: "blue",
+        profiles: {
+          blue: {
+            model_default: "openai/model.json",
+            models: ["chatgpt/model.json", "openai/model.json"],
+            messages: "changed/messages.jsonl",
+          },
+        },
+      },
+    }));
+    await assert.rejects(() => loader.loadSettings(), /session storage paths cannot change while this config loader is active/);
 
     await writeFile(settingPath, JSON.stringify({
       cwd: sessionDir,
@@ -1268,6 +1286,12 @@ test("compacts to the final assistant response, backs up transcript, and rebuild
     for await (const item of store.readInputItems()) history.push(item);
     assert.deepEqual(history, [user, final]);
     assert.equal((await readFile(store.compactionCacheBackupPath, "utf8")).length > 0, true);
+    const compactionCache = await readFile(store.compactionCachePath, "utf8");
+    const noOpCompaction = await store.compactHistory({
+      turnType: "assistant_final", keepTurns: 1, keepToolPairs: 0, backupMode: "replace",
+    });
+    assert.equal(noOpCompaction.compacted, false);
+    assert.equal(await readFile(store.compactionCachePath, "utf8"), compactionCache);
     await rm(store.compactionCachePath);
     const recoveredHistory = [];
     for await (const item of store.readInputItems()) recoveredHistory.push(item);
