@@ -79,6 +79,7 @@ import {
 import {suppressAttachedRunTranscriptTail} from './active-run-transcript';
 import {
   isSessionRunning,
+  reconcileDetachedRunSessionIds,
   sessionUiStateForRun,
   type SessionUiState,
 } from './session-run-status';
@@ -1442,6 +1443,7 @@ function NotificationBellIcon(props: SVGProps<SVGSVGElement>) {
 
 function SessionNavigation({
   sessions,
+  runningSessionIds,
   activeSessionId,
   onSelect,
   onNewSession,
@@ -1453,6 +1455,7 @@ function SessionNavigation({
   onToggleNotifications,
 }: {
   sessions: Session[];
+  runningSessionIds: ReadonlySet<string>;
   activeSessionId: string;
   onSelect: (sessionId: string) => void;
   onNewSession: () => void;
@@ -1512,21 +1515,19 @@ function SessionNavigation({
       collapsible
     >
       <SideNavSection title="Recent runs">
-        {sessions.map(session => (
-          <SideNavItem
-            key={session.id}
-            label={session.title}
-            isSelected={session.id === activeSessionId}
-            onClick={() => onSelect(session.id)}
-            icon={
-              <StatusDot
-                variant={session.state}
-                label={`${session.title} ${session.state}`}
-              />
-            }
-            endContent={<Badge label={String(session.turns)} />}
-          />
-        ))}
+        {sessions.map(session => {
+          const state = runningSessionIds.has(session.id) ? 'accent' : session.state;
+          return (
+            <SideNavItem
+              key={session.id}
+              label={session.title}
+              isSelected={session.id === activeSessionId}
+              onClick={() => onSelect(session.id)}
+              icon={<StatusDot variant={state} label={`${session.title} ${state}`} />}
+              endContent={<Badge label={String(session.turns)} />}
+            />
+          );
+        })}
       </SideNavSection>
       <SideNavSection title="Workspace">
         <SideNavItem
@@ -1988,6 +1989,9 @@ function App() {
   );
   const [lastLeftPanel, setLastLeftPanel] = useState<LeftPanelId>('prompts');
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
+  const [detachedRunSessionIds, setDetachedRunSessionIds] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   const [compactingSessionRef, setCompactingSessionRef] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<ActivityNotification[]>([]);
   const notificationSequenceRef = useRef(0);
@@ -2280,11 +2284,26 @@ function App() {
   const isRunning = isSessionRunning(
     runningSessionId === activeSessionId,
     activeSession?.run?.status,
+    detachedRunSessionIds.has(activeSessionId),
   );
   const hasLiveAttachedRun =
     isLiveSession &&
     (activeSession?.run?.status === 'running' ||
+      detachedRunSessionIds.has(activeSessionId) ||
       attachedRunSessionIdRef.current === activeSessionId);
+  const rememberDetachedRun = useCallback(() => {
+    if (!isRunning || !isLiveSession) {
+      return;
+    }
+    setDetachedRunSessionIds(current => {
+      if (current.has(activeSessionId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(activeSessionId);
+      return next;
+    });
+  }, [activeSessionId, isLiveSession, isRunning]);
   const transcriptMessages = useMemo(
     () => suppressAttachedRunTranscriptTail(messages, hasLiveAttachedRun),
     [messages, hasLiveAttachedRun],
@@ -2810,6 +2829,7 @@ function App() {
   );
 
   const createSession = useCallback(() => {
+    rememberDetachedRun();
     detachRun();
     const sessionId = `run-${Date.now()}`;
     const newSession: Session = {
@@ -2835,18 +2855,19 @@ function App() {
     hasChosenSessionRef.current = true;
     setActiveSessionId(sessionId);
     setRunProgress(0);
-  }, [detachRun]);
+  }, [detachRun, rememberDetachedRun]);
 
   const selectSession = useCallback(
     (sessionId: string) => {
       // Only this client detaches: a run in flight keeps going on the server and
       // is picked up again when the session is selected once more.
+      rememberDetachedRun();
       detachRun();
       hasChosenSessionRef.current = true;
       setActiveSessionId(sessionId);
       setRunProgress(baseReasoning.length);
     },
-    [detachRun],
+    [detachRun, rememberDetachedRun],
   );
 
   useEffect(() => {
@@ -2973,6 +2994,15 @@ function App() {
             snapshot,
             id: sessionUiId(snapshot, initialSessions),
           }));
+          setDetachedRunSessionIds(current =>
+            reconcileDetachedRunSessionIds(
+              current,
+              liveItems.map(item => ({
+                id: item.id,
+                status: item.snapshot.run?.status,
+              })),
+            ),
+          );
           const activeRunSessionId = activeRunSessionIdRef.current;
           setThreads(current => {
             const next = {...current};
@@ -3193,6 +3223,7 @@ function App() {
       sideNav={
         <SessionNavigation
           sessions={sessions}
+          runningSessionIds={detachedRunSessionIds}
           activeSessionId={activeSessionId}
           onSelect={selectSession}
           onNewSession={createSession}

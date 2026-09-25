@@ -6,8 +6,36 @@ export type SessionUiState = 'success' | 'warning' | 'accent';
 export function isSessionRunning(
   locallyRunning: boolean,
   serverRunStatus: SessionRunStatus | undefined,
+  detachedRunKnownActive = false,
 ): boolean {
-  return locallyRunning || serverRunStatus === 'running';
+  return locallyRunning || detachedRunKnownActive || serverRunStatus === 'running';
+}
+
+export interface DetachedRunSessionSnapshot {
+  id: string;
+  status?: SessionRunStatus;
+}
+
+/** Keep detached runs active until a fresh session-list snapshot reports a terminal state. */
+export function reconcileDetachedRunSessionIds(
+  detachedSessionIds: ReadonlySet<string>,
+  snapshots: readonly DetachedRunSessionSnapshot[],
+): ReadonlySet<string> {
+  if (detachedSessionIds.size === 0) {
+    return detachedSessionIds;
+  }
+
+  const statusById = new Map(snapshots.map(({id, status}) => [id, status]));
+  const hasTerminalRun = [...detachedSessionIds].some(
+    sessionId => statusById.get(sessionId) !== 'running',
+  );
+  if (!hasTerminalRun) {
+    return detachedSessionIds;
+  }
+
+  return new Set(
+    [...detachedSessionIds].filter(sessionId => statusById.get(sessionId) === 'running'),
+  );
 }
 
 export function sessionUiStateForRun(
