@@ -8,6 +8,7 @@
     "safari_minor": 5
   },
   "live_session_id": "playground",
+  "notification_history_limit": 100,
   "show_inspector_by_default": false,
   "show_prompt_library_by_default": false,
   "close_panels_on_outside_click": true,

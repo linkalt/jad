@@ -1,5 +1,5 @@
 import {memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
-import type {ChangeEvent, CSSProperties} from 'react';
+import type {ChangeEvent, CSSProperties, SVGProps} from 'react';
 import * as stylex from '@stylexjs/stylex';
 import {
   AppShell,
@@ -34,6 +34,15 @@ import type {
   ChatToolCallItem,
   StatusDotVariant,
 } from '@astryxdesign/core';
+import {useToast} from '@astryxdesign/core/Toast';
+import {
+  hasUnreadActivityError,
+  markActivityNotificationsRead,
+  prependActivityNotification,
+  unreadActivityNotificationCount,
+  type ActivityNotification,
+  type NewActivityNotification,
+} from './activity-notifications';
 import {
   attachSessionRun,
   compactSession,
@@ -81,6 +90,7 @@ import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
 import {ModelPicker} from './components/ModelPicker';
 import {FloatingPanel} from './components/FloatingPanel';
+import {NotificationPanel} from './components/NotificationPanel';
 import {MarkdownText} from './components/MarkdownText';
 import {PromptLibraryPanel} from './components/PromptLibraryPanel';
 import {RunSettingsPanel} from './components/RunSettingsPanel';
@@ -246,12 +256,6 @@ interface Session {
   usage?: SessionSnapshot['usage'];
   /** The run the server is executing for this session, when there is one. */
   run?: SessionSnapshot['run'];
-}
-
-interface CompactionFeedback {
-  sessionRef: string;
-  kind: 'success' | 'noop' | 'error';
-  message: string;
 }
 
 interface ReasoningStep {
@@ -1336,6 +1340,24 @@ const LEFT_PANELS = {
 } as const;
 
 type LeftPanelId = keyof typeof LEFT_PANELS;
+type RightPanelId = 'inspector' | 'notifications';
+
+function NotificationBellIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      {...props}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+      <path d="M10 21h4" />
+    </svg>
+  );
+}
 
 function SessionNavigation({
   sessions,
@@ -1344,6 +1366,10 @@ function SessionNavigation({
   onNewSession,
   openLeftPanel,
   onSelectLeftPanel,
+  rightPanel,
+  unreadCount,
+  hasUnreadError,
+  onOpenNotifications,
 }: {
   sessions: Session[];
   activeSessionId: string;
@@ -1351,6 +1377,10 @@ function SessionNavigation({
   onNewSession: () => void;
   openLeftPanel: LeftPanelId | null;
   onSelectLeftPanel: (panel: LeftPanelId) => void;
+  rightPanel: RightPanelId | null;
+  unreadCount: number;
+  hasUnreadError: boolean;
+  onOpenNotifications: () => void;
 }) {
   return (
     <SideNav
@@ -1431,6 +1461,18 @@ function SessionNavigation({
           icon={<Icon icon="funnel" size="sm" />}
           isSelected={openLeftPanel === 'settings'}
           onClick={() => onSelectLeftPanel('settings')}
+        />
+      </SideNavSection>
+      <SideNavSection title="Activity">
+        <SideNavItem
+          data-panel-toggle=""
+          label="Notifications"
+          icon={<Icon icon={NotificationBellIcon} size="sm" />}
+          isSelected={rightPanel === 'notifications'}
+          endContent={unreadCount > 0 ? (
+            <Badge label={String(unreadCount)} variant={hasUnreadError ? 'error' : 'info'} />
+          ) : undefined}
+          onClick={onOpenNotifications}
         />
       </SideNavSection>
     </SideNav>
@@ -1804,6 +1846,11 @@ const TranscriptRow = memo(
 );
 
 function App() {
+  const showToast = useToast();
+  const showToastRef = useRef(showToast);
+  useEffect(() => {
+    showToastRef.current = showToast;
+  }, [showToast]);
   const [sessions, setSessions] = useState<Session[]>(initialSessions);
   // The configured live session is a preference, not a row: the sidebar lists
   // whatever the backend reports, and this id is only used to choose which of
@@ -1829,7 +1876,17 @@ function App() {
     historyRef.current = next;
     setHistoryBlock(next);
   }, []);
-  const [showInspector, setShowInspector] = useState(appConfig.show_inspector_by_default);
+  const [rightPanel, setRightPanel] = useState<RightPanelId | null>(
+    appConfig.show_inspector_by_default ? 'inspector' : null,
+  );
+  const rightPanelRef = useRef<RightPanelId | null>(rightPanel);
+  const setRightPanelMode = useCallback((nextPanel: RightPanelId | null) => {
+    rightPanelRef.current = nextPanel;
+    setRightPanel(nextPanel);
+  }, []);
+  const toggleInspector = useCallback(() => {
+    setRightPanelMode(rightPanelRef.current === 'inspector' ? null : 'inspector');
+  }, [setRightPanelMode]);
   // One left slot, several datasets: the panel shows whichever workspace view
   // was picked last, so two panels never stack on the same edge. The closed
   // state remembers that choice, because the composer toggle reopens it.
@@ -1839,7 +1896,46 @@ function App() {
   const [lastLeftPanel, setLastLeftPanel] = useState<LeftPanelId>('prompts');
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
   const [compactingSessionRef, setCompactingSessionRef] = useState<string | null>(null);
-  const [compactionFeedback, setCompactionFeedback] = useState<CompactionFeedback | null>(null);
+  const [notifications, setNotifications] = useState<ActivityNotification[]>([]);
+  const notificationSequenceRef = useRef(0);
+  const openNotifications = useCallback(() => {
+    setRightPanelMode('notifications');
+    setNotifications(current => markActivityNotificationsRead(current));
+  }, [setRightPanelMode]);
+  const recordNotification = useCallback((details: NewActivityNotification) => {
+    const createdAt = Date.now();
+    const id = `notification-${createdAt}-${++notificationSequenceRef.current}`;
+    const notification: ActivityNotification = {
+      ...details,
+      id,
+      createdAt,
+      isRead: rightPanelRef.current === 'notifications',
+    };
+    setNotifications(current =>
+      prependActivityNotification(current, notification, appConfig.notification_history_limit),
+    );
+    const isError = details.kind === 'error';
+    let dismissToast: (() => void) | undefined;
+    dismissToast = showToastRef.current({
+      body: isError ? details.title : details.message,
+      type: details.kind,
+      uniqueID: id,
+      ...(isError ? {
+        isAutoHide: false,
+        endContent: (
+          <Button
+            label="Review activity"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              openNotifications();
+              dismissToast?.();
+            }}
+          />
+        ),
+      } : {}),
+    });
+  }, [openNotifications]);
   const [isUsageDrawerCollapsed, setIsUsageDrawerCollapsed] = useState(true);
   const [runProgress, setRunProgress] = useState(baseReasoning.length);
   const [streamingMessage, setStreamingMessage] = useState<WebUiMessage | null>(null);
@@ -2176,10 +2272,8 @@ function App() {
   );
   const isCompactionInProgress = compactingSessionRef !== null;
   const isActiveSessionCompacting = activeSessionRef !== undefined && compactingSessionRef === activeSessionRef;
-  const activeCompactionFeedback =
-    activeSessionRef !== undefined && compactionFeedback?.sessionRef === activeSessionRef
-      ? compactionFeedback
-      : null;
+  const unreadNotificationCount = unreadActivityNotificationCount(notifications);
+  const hasUnreadError = hasUnreadActivityError(notifications);
   const streamingMessageCommitted = streamingMessage !== null && transcriptMessages.some(
     message => message.id === streamingMessage.id,
   );
@@ -2246,10 +2340,17 @@ function App() {
     detachRun();
     if (session?.source === 'live' && session.sessionRef) {
       void stopSessionRun(session.sessionRef).catch(error => {
+        recordNotification({
+          sessionId: session.id,
+          sessionTitle: session.title,
+          kind: 'error',
+          title: 'Unable to stop run',
+          message: error instanceof Error ? error.message : String(error),
+        });
         console.warn('Unable to stop the run:', error);
       });
     }
-  }, [detachRun]);
+  }, [detachRun, recordNotification]);
 
   const compactActiveSession = useCallback(async () => {
     const sessionRef = activeSession?.sessionRef;
@@ -2258,26 +2359,38 @@ function App() {
     }
 
     setCompactingSessionRef(sessionRef);
-    setCompactionFeedback(null);
     try {
       const result = await compactSession(sessionRef);
-      setCompactionFeedback({
-        sessionRef,
-        kind: result.compacted ? 'success' : 'noop',
-        message: result.compacted
-          ? `History compacted: retained ${result.retained_items} of ${result.compacted_items} items.`
-          : `No compaction needed; ${result.retained_items} items retained.`,
+      const message = result.compacted
+        ? `History compacted: retained ${result.retained_items} of ${result.compacted_items} items.`
+        : `No compaction needed; ${result.retained_items} items retained.`;
+      recordNotification({
+        sessionId: activeSessionId,
+        sessionTitle: activeSession.title,
+        kind: 'info',
+        title: result.compacted ? 'History compacted' : 'No compaction needed',
+        message,
       });
     } catch (error) {
-      setCompactionFeedback({
-        sessionRef,
+      recordNotification({
+        sessionId: activeSessionId,
+        sessionTitle: activeSession.title,
         kind: 'error',
+        title: 'Compaction failed',
         message: error instanceof Error ? error.message : String(error),
       });
     } finally {
       setCompactingSessionRef(current => current === sessionRef ? null : current);
     }
-  }, [activeSession?.sessionRef, isCompactionInProgress, isLiveSession, isRunning]);
+  }, [
+    activeSession?.sessionRef,
+    activeSession.title,
+    activeSessionId,
+    isCompactionInProgress,
+    isLiveSession,
+    isRunning,
+    recordNotification,
+  ]);
 
   const submitMessage = useCallback(
     (value: string) => {
@@ -2373,18 +2486,13 @@ function App() {
               return;
             }
             const message = error instanceof Error ? error.message : String(error);
-            setThreads(current => ({
-              ...current,
-              [sessionId]: [
-                ...(current[sessionId] ?? []),
-                {
-                  id: `${sessionId}-error-${Date.now()}`,
-                  sender: 'assistant',
-                  text: `The run failed: ${message}`,
-                  timestamp: messageTime(),
-                },
-              ],
-            }));
+            recordNotification({
+              sessionId,
+              sessionTitle: activeSession.title,
+              kind: 'error',
+              title: 'Run failed',
+              message,
+            });
             setSessions(current =>
               current.map(session =>
                 session.id === sessionId ? {...session, state: 'warning'} : session,
@@ -2432,7 +2540,7 @@ function App() {
       }, appConfig.mock_run_delay_ms);
       return true;
     },
-    [activeSession, activeSessionId, isRunning, modelForRun],
+    [activeSession, activeSessionId, isRunning, modelForRun, recordNotification],
   );
 
   /**
@@ -2441,7 +2549,7 @@ function App() {
    * replays the current snapshot of the message, then continues live.
    */
   const attachToRun = useCallback(
-    (sessionId: string, sessionRef: string, turnId: string) => {
+    (sessionId: string, sessionRef: string, turnId: string, sessionTitle: string) => {
       if (attachedTurnRef.current === turnId || runAbortRef.current !== null) {
         return;
       }
@@ -2493,6 +2601,18 @@ function App() {
           if (controller.signal.aborted || runAbortRef.current !== controller) {
             return;
           }
+          recordNotification({
+            sessionId,
+            sessionTitle,
+            kind: 'error',
+            title: 'Live run connection failed',
+            message: error instanceof Error ? error.message : String(error),
+          });
+          setSessions(current =>
+            current.map(session =>
+              session.id === sessionId ? {...session, state: 'warning'} : session,
+            ),
+          );
           console.warn('Unable to attach to the running session:', error);
         })
         .finally(() => {
@@ -2513,7 +2633,7 @@ function App() {
           refreshSessionsRef.current?.();
         });
     },
-    [],
+    [recordNotification],
   );
 
   const createSession = useCallback(() => {
@@ -2758,7 +2878,7 @@ function App() {
     if (activeSession.source !== 'live' || activeSession.sessionRef === undefined) {
       return;
     }
-    attachToRun(activeSessionId, activeSession.sessionRef, run.turn_id);
+    attachToRun(activeSessionId, activeSession.sessionRef, run.turn_id, activeSession.title);
   }, [activeSession, activeSessionId, attachToRun]);
 
   useEffect(() => {
@@ -2781,8 +2901,8 @@ function App() {
       onStop={stopRun}
       isRunning={isRunning}
       placeholder="Ask the agent to inspect a task…"
-      showInspector={showInspector}
-      onToggleInspector={() => setShowInspector(current => !current)}
+      showInspector={rightPanel === 'inspector'}
+      onToggleInspector={toggleInspector}
       isLeftPanelOpen={leftPanel !== null}
       leftPanelLabel={LEFT_PANELS[leftPanel ?? lastLeftPanel].label}
       onToggleLeftPanel={toggleLeftPanel}
@@ -2849,17 +2969,7 @@ function App() {
               ? 'Enter to send · Shift+Enter for a new line · Ctrl/⌘B, I, E, K to format'
               : 'Enter to send · Shift+Enter for a new line'}
           </Text>
-          {activeCompactionFeedback && activeCompactionFeedback.kind !== 'error' && (
-            <Text type="supporting" color="secondary" role="status" aria-live="polite">
-              {activeCompactionFeedback.message}
-            </Text>
-          )}
         </HStack>
-      }
-      status={
-        activeCompactionFeedback?.kind === 'error'
-          ? {type: 'error', message: `Compaction failed: ${activeCompactionFeedback.message}`}
-          : undefined
       }
     />
   );
@@ -2905,6 +3015,10 @@ function App() {
           onNewSession={createSession}
           openLeftPanel={leftPanel}
           onSelectLeftPanel={selectLeftPanel}
+          rightPanel={rightPanel}
+          unreadCount={unreadNotificationCount}
+          hasUnreadError={hasUnreadError}
+          onOpenNotifications={openNotifications}
         />
       }
     >
@@ -3032,7 +3146,7 @@ function App() {
             isLiveSession={isLiveSession}
           />
         )}
-        {showInspector && (
+        {rightPanel === 'inspector' && (
           <RunInspector
             activeSession={activeSession}
             steps={reasoningSteps}
@@ -3040,7 +3154,19 @@ function App() {
             liveToolParts={liveToolParts}
             inspector={inspector}
             isRunning={isRunning}
-            onClose={() => setShowInspector(false)}
+            onClose={() => setRightPanelMode(null)}
+          />
+        )}
+        {rightPanel === 'notifications' && (
+          <NotificationPanel
+            notifications={notifications}
+            region={inspector}
+            onClose={() => setRightPanelMode(null)}
+            onClear={() => setNotifications([])}
+            onSelectSession={sessionId => {
+              selectSession(sessionId);
+              setRightPanelMode(null);
+            }}
           />
         )}
       </VStack>
