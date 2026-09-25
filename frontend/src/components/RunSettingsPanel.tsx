@@ -98,6 +98,14 @@ export function RunSettingsPanel({
             endContent={<Value>{appConfig.transcript_row_estimate_px}px</Value>}
           />
           <ListItem
+            label="Reveal settle"
+            endContent={<Value>{appConfig.scroll_settle_frames} frames</Value>}
+          />
+          <ListItem
+            label="Scroll probe"
+            endContent={<Value>{onOff(appConfig.scroll_debug)}</Value>}
+          />
+          <ListItem
             label="Tool output cap"
             endContent={<Value>{appConfig.tool_output_max_chars} chars</Value>}
           />

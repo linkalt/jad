@@ -1,11 +1,23 @@
 import {useCallback, useLayoutEffect, useRef, useState} from 'react';
 import {Button, Icon, Text, VStack} from '@astryxdesign/core';
-import {findScrollParent} from './scroll-position';
+import appConfig from '../config.json';
+import {
+  captureGrowthPosition,
+  findScrollParent,
+  holdGrowthPosition,
+  revealScrollOptions,
+  type GrowthSnapshot,
+} from './scroll-position';
 
 /**
  * The transcript scroller belongs to ChatLayout, so findScrollParent discovers
  * it at reveal time instead of threading it down through the list.
  */
+
+// Older rows are inserted above the reader, so the position is held by the
+// distance from the bottom rather than by a control that may unmount.
+const REVEAL_MESSAGES_SCROLL_OPTIONS = revealScrollOptions('messages', appConfig);
+
 /**
  * Caps how much of a transcript is mounted.
  *
@@ -40,17 +52,11 @@ export function useTranscriptWindow<Message extends {id: string}>({
   const visibleMessages =
     hiddenCount > 0 ? messages.slice(messages.length - visibleCount) : messages;
 
-  const scrollerRef = useRef<HTMLElement | null>(null);
-  const anchorRef = useRef<{scrollTop: number; scrollHeight: number} | null>(null);
+  const growthRef = useRef<GrowthSnapshot | null>(null);
 
   const revealEarlier = useCallback(
     (node: HTMLElement | null) => {
-      const scroller = node === null ? null : findScrollParent(node);
-      scrollerRef.current = scroller;
-      anchorRef.current =
-        scroller === null
-          ? null
-          : {scrollTop: scroller.scrollTop, scrollHeight: scroller.scrollHeight};
+      growthRef.current = captureGrowthPosition(node === null ? null : findScrollParent(node));
       setRevealedBySession(current => ({
         ...current,
         [sessionId]: (current[sessionId] ?? 0) + pageSize,
@@ -60,23 +66,14 @@ export function useTranscriptWindow<Message extends {id: string}>({
   );
 
   // Older rows are inserted above the viewport, which would otherwise shove the
-  // content the user was reading off screen. Browsers already compensate for that
-  // on their own (scroll anchoring), so the correction has to be the *remaining*
-  // difference: how much taller the scroller got, minus how much it already
-  // scrolled. When the browser did the work this is a no-op.
+  // content the user was reading off screen. The window holds the distance from
+  // the bottom until the inserted rows stop changing size, so the reveal lands
+  // the same way whether the engine finishes its layout in this frame or a
+  // later one.
   useLayoutEffect(() => {
-    const scroller = scrollerRef.current;
-    const anchor = anchorRef.current;
-    scrollerRef.current = null;
-    anchorRef.current = null;
-    if (scroller === null || anchor === null) {
-      return;
-    }
-    const grew = scroller.scrollHeight - anchor.scrollHeight;
-    const moved = scroller.scrollTop - anchor.scrollTop;
-    if (grew !== moved) {
-      scroller.scrollTop = anchor.scrollTop + grew;
-    }
+    const snapshot = growthRef.current;
+    growthRef.current = null;
+    holdGrowthPosition(snapshot, REVEAL_MESSAGES_SCROLL_OPTIONS);
   }, [revealed]);
 
   return {visibleMessages, hiddenCount, revealEarlier};

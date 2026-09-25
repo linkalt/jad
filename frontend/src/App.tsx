@@ -67,11 +67,12 @@ import {
   selectedModelForSession,
   type ModelSelectionBySession,
 } from './model-selection';
+import {createRowHeightStore, type RowHeightStore} from './row-heights';
 import {
   captureScrollPosition,
   findScrollParent,
-  restoreScrollPosition,
-  unlockScrollFollower,
+  holdAnchorPosition,
+  revealScrollOptions,
   type ScrollPositionSnapshot,
 } from './components/scroll-position';
 import {suppressAttachedRunTranscriptTail} from './active-run-transcript';
@@ -287,14 +288,93 @@ const LIVE_SESSION_ID = appConfig.live_session_id;
 // contents (the composer dock is sticky inside the same scroller), which made
 // typing slow in long sessions — measured ~42ms of synchronous work per
 // keystroke against a 36k-pixel scroll height, versus ~10ms with this enabled.
-// The intrinsic size is only an estimate used until a row has been measured.
-const DEFERRED_ROW_STYLE: CSSProperties | undefined =
-  appConfig.defer_offscreen_transcript_rows
-    ? {
-        contentVisibility: 'auto',
-        containIntrinsicSize: `auto ${appConfig.transcript_row_estimate_px}px`,
+//
+// The intrinsic size is the part that has to be right. A deferred row renders
+// at that size until the engine lays it out, and the scroll *range* changes by
+// the difference when it does — measured on a long session, 695–927px per row,
+// one row every 200–1500ms of scrolling, in both directions as rows are
+// re-created by a re-render. Firefox does not compensate that change (the
+// content travels with the range), so it reads as the transcript jumping while
+// you scroll. The engine's own `auto` keyword only remembers a size while the
+// DOM element lives, which a re-render ends, so the height every row was last
+// measured at is kept in `row-heights.ts` and fed back here.
+let rowHeightStore: RowHeightStore | null = null;
+let rowHeightObserver: ResizeObserver | null = null;
+/** The width rows are rendering at, learned from the rows themselves. */
+let latestRowWidthPx = 0;
+const rowHeightIds = new WeakMap<Element, string>();
+
+function rowHeights(): RowHeightStore {
+  rowHeightStore ??= createRowHeightStore({
+    storage: window.localStorage,
+    storageKey: appConfig.row_height_storage_key,
+    maxEntries: appConfig.row_height_max_entries,
+    saveDelayMs: appConfig.row_height_save_delay_ms,
+    widthBucketPx: appConfig.row_height_width_bucket_px,
+  });
+  return rowHeightStore;
+}
+
+/** Skip-this-row styling, at the height this row had the last time we saw it. */
+function deferredRowStyle(messageId: string | null): CSSProperties | undefined {
+  if (!appConfig.defer_offscreen_transcript_rows) {
+    return undefined;
+  }
+  const remembered =
+    messageId === null ? null : rowHeights().heightFor(messageId, latestRowWidthPx);
+  return {
+    contentVisibility: 'auto',
+    containIntrinsicSize: `auto ${remembered ?? appConfig.transcript_row_estimate_px}px`,
+  };
+}
+
+/**
+ * Measures a row as the engine lays it out, so the next render can skip it at
+ * that height. One observer serves every row.
+ */
+function useRowHeightRef(messageId: string | null): (node: HTMLElement | null) => void {
+  const observedRef = useRef<Element | null>(null);
+  return useCallback(
+    (node: HTMLElement | null) => {
+      if (observedRef.current !== null) {
+        rowHeightObserver?.unobserve(observedRef.current);
+        observedRef.current = null;
       }
-    : undefined;
+      if (node === null || messageId === null || !appConfig.defer_offscreen_transcript_rows) {
+        return;
+      }
+      rowHeightObserver ??= new ResizeObserver(entries => {
+        for (const entry of entries) {
+          const id = rowHeightIds.get(entry.target);
+          if (id === undefined) {
+            continue;
+          }
+          const width = entry.contentRect.width;
+          if (width > 0) {
+            latestRowWidthPx = width;
+          }
+          const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+          // A row the engine has not laid out yet reports its own intrinsic
+          // size, which is what we already assume for it; storing that would
+          // turn the estimate into a "measurement".
+          const assumed = rowHeights().heightFor(id, width) ?? appConfig.transcript_row_estimate_px;
+          if (Math.abs(height - assumed) < 1) {
+            continue;
+          }
+          rowHeights().remember(id, height, width);
+        }
+      });
+      rowHeightIds.set(node, messageId);
+      rowHeightObserver.observe(node);
+      observedRef.current = node;
+    },
+    [messageId],
+  );
+}
+
+// Revealing steps inserts content next to the control that was pressed, so the
+// reader is held on that control until the rows around it stop changing size.
+const REVEAL_STEPS_SCROLL_OPTIONS = revealScrollOptions('steps', appConfig);
 
 function messageTime(): string {
   return new Date().toLocaleTimeString([], {
@@ -1219,15 +1299,11 @@ function WebUiParts({
   const lastPartIndex = parts.length - 1;
   const [revealedSteps, setRevealedSteps] = useState(0);
   const revealScrollAnchorRef = useRef<ScrollPositionSnapshot | null>(null);
-  const revealScrollContainerRef = useRef<HTMLElement | null>(null);
 
   useLayoutEffect(() => {
-    const anchor = revealScrollAnchorRef.current;
-    const scroller = revealScrollContainerRef.current;
+    const snapshot = revealScrollAnchorRef.current;
     revealScrollAnchorRef.current = null;
-    revealScrollContainerRef.current = null;
-    unlockScrollFollower(scroller);
-    restoreScrollPosition(anchor);
+    holdAnchorPosition(snapshot, REVEAL_STEPS_SCROLL_OPTIONS);
   }, [revealedSteps]);
 
   /**
@@ -1253,7 +1329,6 @@ function WebUiParts({
                 scroller,
                 event.currentTarget,
               );
-              revealScrollContainerRef.current = scroller;
               setRevealedSteps(current => current + appConfig.message_step_window_page);
             }}
           />
@@ -1691,6 +1766,7 @@ function AssistantMessage({
   onLoadFull?: (message: MessageRecord) => void | Promise<void>;
 }) {
   const [rowRef, rowWidthPx] = useRowWidth();
+  const rowHeightRef = useRowHeightRef(message.id);
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const resetTimerRef = useRef<number | null>(null);
   const markdown = assistantOutputMarkdown(message);
@@ -1727,7 +1803,8 @@ function AssistantMessage({
     <ChatMessage
       sender="assistant"
       avatar={<AgentAvatar />}
-      style={DEFERRED_ROW_STYLE}
+      ref={rowHeightRef}
+      style={deferredRowStyle(message.id)}
     >
       <ChatMessageBubble
         ref={rowRef}
@@ -1818,12 +1895,16 @@ const TranscriptRow = memo(
     model: Session['model'] | undefined;
     onLoadFull?: (message: MessageRecord) => void | Promise<void>;
   }) {
+    const rowHeightRef = useRowHeightRef(
+      message.sender === 'assistant' ? null : message.id,
+    );
     if (message.sender === 'system') {
       return (
         <ChatSystemMessage
           variant="divider"
           icon={<Icon icon="check" color="success" size="sm" />}
-          style={DEFERRED_ROW_STYLE}
+          ref={rowHeightRef}
+          style={deferredRowStyle(message.id)}
         >
           {message.text}
         </ChatSystemMessage>
@@ -1832,7 +1913,12 @@ const TranscriptRow = memo(
 
     if (message.sender === 'user') {
       return (
-        <ChatMessage sender="user" avatar={<Avatar name="You" size="sm" />} style={DEFERRED_ROW_STYLE}>
+        <ChatMessage
+          sender="user"
+          avatar={<Avatar name="You" size="sm" />}
+          ref={rowHeightRef}
+          style={deferredRowStyle(message.id)}
+        >
           <ChatMessageBubble
             metadata={<ChatMessageMetadata timestamp={message.timestamp} status="read" />}
           >
@@ -1969,6 +2055,7 @@ function App() {
   // The in-flight assistant bubble is rendered here rather than through
   // AssistantMessage, so it measures its own row width for title fitting.
   const [liveBubbleRef, liveBubbleWidthPx] = useRowWidth();
+  const liveRowHeightRef = useRowHeightRef(null);
   const inspector = useResizable({
     defaultSize: pixel(appConfig.inspector_default_size),
     minSize: pixel(appConfig.inspector_min_size),
@@ -3161,7 +3248,12 @@ function App() {
                       {isRunning &&
                         (!isLiveSession || streamingMessage !== null || hasLiveAttachedRun) &&
                         !streamingMessageCommitted && (
-                        <ChatMessage sender="assistant" avatar={<AgentAvatar isRunning />} style={DEFERRED_ROW_STYLE}>
+                        <ChatMessage
+                          sender="assistant"
+                          avatar={<AgentAvatar isRunning />}
+                          ref={liveRowHeightRef}
+                          style={deferredRowStyle(null)}
+                        >
                           <ChatMessageBubble
                             ref={liveBubbleRef}
                             variant="ghost"
