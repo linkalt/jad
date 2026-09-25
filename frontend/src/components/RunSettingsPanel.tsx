@@ -23,11 +23,15 @@ function Value({children}: {children: ReactNode}) {
 
 const onOff = (value: boolean) => (value ? 'on' : 'off');
 
-/** Where the `@` menu's paths come from: the checked-in list, or config.json. */
-const mentionSource =
+/** What the `@` menu falls back to when the session listing is unavailable. */
+const mentionFallback =
   appConfig.mention_files.length > 0
     ? `${appConfig.mention_files.length} configured`
     : 'built-in list';
+
+/** Where the `@` menu's paths come from, and what stands in when that fails. */
+const mentionSource =
+  appConfig.mention_source === 'cwd' ? `session files, else ${mentionFallback}` : mentionFallback;
 
 /**
  * Second dataset for the shared left panel: the configuration the running app

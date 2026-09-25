@@ -6,6 +6,7 @@ import {
   BUILTIN_MENTION_FILES,
   commandTrigger,
   createComposerTriggers,
+  createSessionFileSource,
   mentionItems,
   rankMentionFiles,
   resolveMentionFiles,
@@ -135,4 +136,119 @@ test('every built-in path is relative, unique, and exists in this repository', (
     BUILTIN_MENTION_FILES.filter(path => !existsSync(new URL(path, repoRoot))),
     [],
   );
+});
+
+test('the session source lists what its loader returns, and filters it locally', async () => {
+  let loads = 0;
+  const source = createSessionFileSource({
+    loadFiles: async () => {
+      loads += 1;
+      return FILES;
+    },
+    fallbackFiles: ['fallback.ts'],
+    maxResults: 10,
+  });
+
+  assert.deepEqual((await source.bootstrap()).map(item => item.id), FILES);
+  assert.deepEqual(
+    (await source.search('composer')).map(item => item.id),
+    ['frontend/src/components/ComposerPane.tsx'],
+  );
+  assert.equal(loads, 1, 'search answers from the list bootstrap fetched');
+});
+
+test('every menu open asks the server again, so new files appear', async () => {
+  let version = 1;
+  const source = createSessionFileSource({
+    loadFiles: async () => [`v${version}.ts`],
+    fallbackFiles: [],
+    maxResults: 10,
+  });
+
+  assert.deepEqual((await source.bootstrap()).map(item => item.id), ['v1.ts']);
+  version = 2;
+  assert.deepEqual((await source.bootstrap()).map(item => item.id), ['v2.ts']);
+});
+
+test('a search before bootstrap still loads once', async () => {
+  let loads = 0;
+  const source = createSessionFileSource({
+    loadFiles: async () => {
+      loads += 1;
+      return FILES;
+    },
+    fallbackFiles: [],
+    maxResults: 10,
+  });
+
+  assert.deepEqual(
+    (await source.search('row-heights')).map(item => item.id),
+    ['frontend/src/row-heights.ts'],
+  );
+  assert.equal(loads, 1);
+});
+
+test('a failing listing falls back to the static list instead of an empty menu', async () => {
+  let offline = true;
+  const source = createSessionFileSource({
+    loadFiles: async () => {
+      if (offline) {
+        throw new Error('listing unavailable');
+      }
+      return FILES;
+    },
+    fallbackFiles: ['fallback.ts'],
+    maxResults: 10,
+  });
+
+  assert.deepEqual((await source.bootstrap()).map(item => item.id), ['fallback.ts']);
+  offline = false;
+  assert.deepEqual((await source.bootstrap()).map(item => item.id), FILES);
+});
+
+test('cancel aborts the request in flight and the menu keeps a usable list', async () => {
+  let seen;
+  const source = createSessionFileSource({
+    loadFiles: signal => {
+      seen = signal;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('aborted')), {once: true});
+      });
+    },
+    fallbackFiles: ['fallback.ts'],
+    maxResults: 10,
+  });
+
+  const pending = source.bootstrap();
+  assert.equal(seen.aborted, false);
+  source.cancel();
+  assert.equal(seen.aborted, true);
+  assert.deepEqual((await pending).map(item => item.id), ['fallback.ts']);
+});
+
+test('the results cap applies to a fetched list too', async () => {
+  const source = createSessionFileSource({
+    loadFiles: async () => FILES,
+    fallbackFiles: [],
+    maxResults: 2,
+  });
+  assert.deepEqual((await source.bootstrap()).map(item => item.id), FILES.slice(0, 2));
+});
+
+test('a trigger built over a session source reports its loading state', async () => {
+  const triggers = createComposerTriggers({
+    files: ['static.ts'],
+    maxResults: 10,
+    sessionFiles: async () => FILES,
+  });
+  const mention = triggers.find(trigger => trigger.character === '@');
+  assert.ok(mention);
+  assert.equal(mention.loadingText, 'Loading files…');
+  assert.deepEqual((await mention.searchSource.bootstrap()).map(item => item.id), FILES);
+});
+
+test('without a session loader the trigger stays on the static list', async () => {
+  const triggers = createComposerTriggers({files: FILES, maxResults: 10});
+  const mention = triggers.find(trigger => trigger.character === '@');
+  assert.deepEqual((await mention.searchSource.bootstrap()).map(item => item.id), FILES);
 });

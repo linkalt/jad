@@ -5,9 +5,9 @@
  * detects the character at a word boundary, searches the trigger's
  * `SearchSource` and inserts whatever `onSelect` returns — plain text, or an
  * inline badge chip. What it does not own is the file list, so this module does:
- * a checked-in list of workspace paths (static for now; a backend listing can
- * replace it without touching the composer), the ranking that answers a typed
- * query, and the trigger definitions themselves.
+ * the source the menu searches (the active session's file listing, with the
+ * checked-in list as the fallback when that listing fails), the ranking that
+ * answers a typed query, and the trigger definitions themselves.
  *
  * A selected chip serializes to `@<path>` — the path reference the agent's own
  * `read`/`grep`/`glob` tools act on — so nothing downstream has to understand
@@ -202,16 +202,75 @@ function mentionToken(path: string): ChatComposerToken {
   };
 }
 
-/** The `@` trigger over a fixed list of paths. */
-export function fileMentionTrigger(
-  files: readonly string[],
-  maxResults: number,
-): ChatComposerTrigger {
+/** Loads the `@` menu's paths for a session; rejects when the listing is unavailable. */
+export type SessionFilesLoader = (signal?: AbortSignal) => Promise<readonly string[]>;
+
+export type SessionFileSourceOptions = {
+  loadFiles: SessionFilesLoader;
+  /** Answered when the listing fails, so `@` keeps working with the backend down. */
+  fallbackFiles: readonly string[];
+  maxResults: number;
+};
+
+/**
+ * The `@` menu's source over a session's file listing.
+ *
+ * `bootstrap` runs once per menu open and always asks again, so files the agent
+ * created since the last open appear. `search` then filters the fetched list in
+ * memory, which keeps typing off the network. A failed or aborted load answers
+ * the configured static list rather than an empty menu the user cannot explain.
+ */
+export function createSessionFileSource({
+  loadFiles,
+  fallbackFiles,
+  maxResults,
+}: SessionFileSourceOptions): SearchSource {
+  let controller: AbortController | null = null;
+  let inFlight: Promise<readonly string[]> | null = null;
+  let loaded: readonly string[] | null = null;
+
+  const load = (): Promise<readonly string[]> => {
+    if (inFlight) {
+      return inFlight;
+    }
+    controller = new AbortController();
+    const signal = controller.signal;
+    inFlight = (async () => {
+      try {
+        loaded = await loadFiles(signal);
+      } catch {
+        // Aborts and transport failures land here together: keep whatever the
+        // menu already has instead of replacing it with nothing.
+        loaded = loaded ?? fallbackFiles;
+      } finally {
+        inFlight = null;
+      }
+      return loaded ?? fallbackFiles;
+    })();
+    return inFlight;
+  };
+
+  return {
+    bootstrap: () => {
+      loaded = null;
+      return load().then(files => mentionItems(files, '', maxResults));
+    },
+    search: async query => mentionItems(loaded ?? (await load()), query, maxResults),
+    cancel: () => {
+      controller?.abort();
+      controller = null;
+    },
+  };
+}
+
+/** The `@` trigger over a path source. */
+export function fileMentionTrigger(searchSource: SearchSource): ChatComposerTrigger {
   return {
     character: FILE_TRIGGER_CHARACTER,
-    searchSource: createFileMentionSource(files, maxResults),
+    searchSource,
     menuLabel: 'Files',
     emptySearchResultsText: 'No matching files',
+    loadingText: 'Loading files…',
     onSelect: item => mentionToken(item.id),
   };
 }
@@ -263,6 +322,11 @@ export type ComposerTriggerOptions = {
   /** Cap on menu entries, from `mention_max_results`. */
   maxResults: number;
   /**
+   * When set, the `@` menu lists this session's files instead of the static
+   * list, which stays behind as the fallback for a listing that fails.
+   */
+  sessionFiles?: SessionFilesLoader;
+  /**
    * Slash commands. Empty — the default — leaves the `/` menu out entirely,
    * rather than opening a menu whose only possible answer is "no matches".
    */
@@ -273,9 +337,13 @@ export type ComposerTriggerOptions = {
 export function createComposerTriggers({
   files,
   maxResults,
+  sessionFiles,
   commands = [],
 }: ComposerTriggerOptions): ChatComposerTrigger[] {
-  const triggers = [fileMentionTrigger(files, maxResults)];
+  const mentionSource = sessionFiles
+    ? createSessionFileSource({loadFiles: sessionFiles, fallbackFiles: files, maxResults})
+    : createFileMentionSource(files, maxResults);
+  const triggers = [fileMentionTrigger(mentionSource)];
   if (commands.length > 0) {
     triggers.push(commandTrigger(commands, maxResults));
   }

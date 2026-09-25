@@ -372,6 +372,38 @@ export async function fetchSessionMessage(
   return value.message as unknown as WebUiMessage;
 }
 
+export interface SessionFileListing {
+  /** cwd-relative paths, shallow files first. */
+  files: string[];
+  /** True when the server stopped at a cap, so the list is known to be incomplete. */
+  truncated: boolean;
+}
+
+/**
+ * The session's cwd listing for the `@` menu: the paths the agent's own tools
+ * accept, relative to the session's working directory. Names only — the
+ * endpoint never returns file contents.
+ */
+export async function fetchSessionFiles(
+  sessionRef: string,
+  signal?: AbortSignal,
+): Promise<SessionFileListing> {
+  const response = await fetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/files`),
+    {signal},
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const body = (await response.json()) as {files?: unknown; truncated?: unknown};
+  return {
+    files: Array.isArray(body.files)
+      ? body.files.filter((file): file is string => typeof file === 'string')
+      : [],
+    truncated: body.truncated === true,
+  };
+}
+
 export async function fetchSessionTools(sessionId: string): Promise<ToolDefinition[]> {  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/tools`));
   if (!response.ok) {
     throw new Error(await readError(response));
