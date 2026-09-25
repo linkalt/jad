@@ -161,11 +161,6 @@
           "pattern": "\\S",
           "description": "Replaceable state-context snapshot. Defaults to staging/statecontext.json."
         },
-        "model": {
-          "type": "string",
-          "pattern": "\\S",
-          "description": "Model configuration path. Defaults to model.json."
-        },
         "staging": {
           "type": "string",
           "pattern": "\\S",
@@ -196,13 +191,30 @@
               "cursor_cache": {"type": "string", "pattern": "\\S"},
               "history_cache": {"type": "string", "pattern": "\\S"},
               "statecontext": {"type": "string", "pattern": "\\S"},
-              "model": {"type": "string", "pattern": "\\S"},
+              "model_default": {
+                "type": "string",
+                "pattern": "\\S",
+                "description": "Default model configuration path for this profile. Relative paths resolve from setting.json; when models is provided, this value must appear in the array. Without models, it is the only available model."
+              },
+              "models": {
+                "type": "array",
+                "description": "Selectable model configuration JSON paths for this profile. Relative paths resolve from setting.json; if model_default is omitted, the first entry is the default.",
+                "items": {"type": "string", "pattern": "\\S"},
+                "uniqueItems": true
+              },
               "staging": {"type": "string", "pattern": "\\S"},
               "http_debug": {"type": "string", "pattern": "\\S"}
             },
             "additionalProperties": false
           }
         }
+      },
+      "not": {
+        "anyOf": [
+          {"required": ["model_default"]},
+          {"required": ["models"]},
+          {"required": ["model"]}
+        ]
       },
       "dependentRequired": {
         "active_profile": ["profiles"],

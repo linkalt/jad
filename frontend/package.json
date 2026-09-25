@@ -8,7 +8,7 @@
     "theme:build": "astryx theme build src/themes/neutral/neutralTheme.ts -o src/themes/neutral/theme.css",
     "theme:check": "astryx theme build -c -o src/themes/neutral/theme.css src/themes/neutral/neutralTheme.ts",
     "build": "npm run theme:build && tsc -b && vite build",
-    "test": "node --test src/active-run-transcript.test.mjs src/web-ui-steps.test.mjs src/transcript-load-policy.test.mjs src/scroll-position.test.mjs src/session-run-status.test.mjs",
+    "test": "node --test src/active-run-transcript.test.mjs src/web-ui-steps.test.mjs src/transcript-load-policy.test.mjs src/scroll-position.test.mjs src/session-run-status.test.mjs src/model-selection.test.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false"
   },

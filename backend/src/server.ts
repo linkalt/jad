@@ -988,7 +988,16 @@ class AgentHttpApplication {
       throw new HttpError(400, "input must be a non-empty string");
     }
 
+    if (body.model !== undefined && (typeof body.model !== "string" || body.model.trim().length === 0)) {
+      throw new HttpError(400, "model must be a non-empty string");
+    }
+    const requestedModelPath = typeof body.model === "string" ? body.model.trim() : undefined;
     const handle = await this.getSession(id);
+    const settings = await handle.loader.loadSettings();
+    if (requestedModelPath !== undefined && !settings.paths.models?.includes(requestedModelPath)) {
+      throw new HttpError(400, "model config path is not available in the active session path profile");
+    }
+    const modelConfigPath = requestedModelPath ?? settings.paths.model_default;
     response.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -1037,6 +1046,7 @@ class AgentHttpApplication {
       const result = await handle.session.run(body.input, {
         turnId,
         signal: controller.signal,
+        ...(modelConfigPath === undefined ? {} : {modelConfigPath}),
         onEvent: (event) => {
           const message = normalizedRun.update(event);
           if (message) {

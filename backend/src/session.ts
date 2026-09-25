@@ -55,6 +55,8 @@ export interface AgentRunOptions {
   signal?: AbortSignal;
   /** Override setting.json max_tool_rounds for this run. */
   maxToolRounds?: number;
+  /** Select a model config path allowed by the active path profile. */
+  modelConfigPath?: string;
   onEvent?: (event: JsonRecord) => void | Promise<void>;
   /** Called after each completed or incomplete provider response is committed. */
   onResponseCommitted?: (response: PersistedResponse) => void | Promise<void>;
@@ -333,7 +335,7 @@ export class AgentSession {
       const sessionTurn = priorUsage.turn_count + 1;
       await this.store.appendInputItems(inputItems);
       throwIfAborted(options.signal);
-      const config = await this.loader.load();
+      const config = await this.loader.load(options.modelConfigPath);
       const catalog = await loadToolCatalog(config, {processManager: this.processManager, taskStore: this.taskStore, memoryStore: this.memoryStore, mcpManager: this.mcpManager});
       const client = this.options.client ?? createClient(config, this.options.environment ?? process.env);
       const maxToolRounds = validateMaxToolRounds(
@@ -346,7 +348,12 @@ export class AgentSession {
           history.push(item);
         }
         const stateContext = await this.readActiveStateContext(config);
-        const request = buildResponseRequest(config, history, catalog.responseTools(), stateContext);
+        const request = buildResponseRequest(
+          config,
+          history,
+          catalog.responseTools(),
+          stateContext,
+        );
         const response = await persistOpenAIResponse(client, this.store, request, {
           turnId: options.turnId ? `${options.turnId}-${round}` : undefined,
           sessionTurn,

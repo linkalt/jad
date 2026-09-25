@@ -903,13 +903,13 @@ test("lists sessions with valid settings and namespaces duplicate ids", async ()
   }
 });
 
-test("serves sessions using configured model and transcript paths", async () => {
+test("serves sessions using profile model-config and transcript paths", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-configured-paths-"));
   const sessionDir = join(root, "session1");
-  const modelPath = join(sessionDir, "config", "provider.json");
+  const modelPath = join(sessionDir, "chatgpt", "model.json");
   const messagesPath = join(sessionDir, "data", "transcript.jsonl");
   await mkdir(sessionDir, {recursive: true});
-  await mkdir(join(sessionDir, "config"), {recursive: true});
+  await mkdir(join(sessionDir, "chatgpt"), {recursive: true});
   await mkdir(join(sessionDir, "data"), {recursive: true});
   await writeFile(
     modelPath,
@@ -922,9 +922,15 @@ test("serves sessions using configured model and transcript paths", async () => 
       cwd: sessionDir,
       paths: {
         messages: "data/transcript.jsonl",
-        model: "config/provider.json",
         staging: "runtime/staging",
         http_debug: "diagnostics/http",
+        active_profile: "chatgpt",
+        profiles: {
+          chatgpt: {
+            model_default: "chatgpt/model.json",
+            models: ["chatgpt/model.json"],
+          },
+        },
       },
     }),
   );
@@ -1028,7 +1034,7 @@ test("serves sessions using configured model and transcript paths", async () => 
     const compacted = await compactResponse.json() as {compaction: {compacted: boolean}};
     assert.equal(compacted.compaction.compacted, true);
     assert.equal(await readFile(messagesPath, "utf8"), "");
-    assert.match(await readFile(join(sessionDir, "messages.backup.jsonl"), "utf8"), /configured transcript/);
+    assert.match(await readFile(join(sessionDir, "data/messages.backup.jsonl"), "utf8"), /configured transcript/);
     const compactedSnapshot = await fetch(`${baseUrl}/api/sessions/session1`);
     const compactedBody = await compactedSnapshot.json() as {
       messages: Array<{text: string}>;
@@ -1111,6 +1117,128 @@ test("persists user input before a tool configuration failure", async () => {
       [SESSION_INPUT_BATCH_ID_FIELD]: batchId,
       [SESSION_INPUT_BATCH_INDEX_FIELD]: 0,
     });
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("loads active path-profile model configs for defaults and selections", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-model-profile-"));
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, {recursive: true});
+  await writeFile(join(sessionDir, "model.json"), JSON.stringify({
+    schema_version: 1,
+    provider: "fake",
+    api_key_env: "FAKE_API_KEY",
+    model: "configured-model",
+  }));
+  await mkdir(join(sessionDir, "chatgpt"), {recursive: true});
+  await mkdir(join(sessionDir, "openai"), {recursive: true});
+  await writeFile(join(sessionDir, "chatgpt/model.json"), JSON.stringify({
+    schema_version: 1,
+    provider: "fake",
+    api_key_env: "FAKE_API_KEY",
+    model: "chatgpt-configured-model",
+  }));
+  await writeFile(join(sessionDir, "openai/model.json"), JSON.stringify({
+    schema_version: 1,
+    provider: "fake",
+    api_key_env: "FAKE_API_KEY",
+    model: "openai-configured-model",
+  }));
+  await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+    schema_version: 1,
+    session_name: "model-profile",
+    cwd: sessionDir,
+    paths: {
+      active_profile: "primary",
+      profiles: {
+        primary: {
+          model_default: "chatgpt/model.json",
+          models: ["chatgpt/model.json", "openai/model.json"],
+        },
+      },
+    },
+  }));
+
+  const requestedModels: string[] = [];
+  let responseIndex = 0;
+  const output = {
+    type: "message",
+    role: "assistant",
+    content: [{type: "output_text", text: "done"}],
+  };
+  const fakeClient = {
+    responses: {
+      create: async (request: {model?: string}) => {
+        requestedModels.push(request.model ?? "");
+        const responseId = `resp_model_profile_${responseIndex++}`;
+        return (async function* () {
+          yield {type: "response.output_item.done", output_index: 0, item: output};
+          yield completedEvent([output], responseId);
+        })();
+      },
+    },
+  } as unknown as OpenAI;
+
+  const running = createAgentServer({sessionsDir: root, client: fakeClient});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const listResponse = await fetch(`${baseUrl}/api/sessions`);
+    assert.equal(listResponse.status, 200);
+    const list = (await listResponse.json()) as {
+      sessions: Array<{id: string; model_default?: string; models?: string[]; model?: {model: string}}>;
+    };
+    const listedSession = list.sessions.find((session) => session.id === "session1");
+    assert.equal(listedSession?.model_default, "chatgpt/model.json");
+    assert.deepEqual(listedSession?.models, ["chatgpt/model.json", "openai/model.json"]);
+    assert.equal(listedSession?.model?.model, "chatgpt-configured-model");
+
+    const snapshotResponse = await fetch(`${baseUrl}/api/sessions/session1`);
+    assert.equal(snapshotResponse.status, 200);
+    const snapshot = (await snapshotResponse.json()) as {
+      model_default?: string;
+      models?: string[];
+      model?: {model: string};
+    };
+    assert.equal(snapshot.model_default, "chatgpt/model.json");
+    assert.deepEqual(snapshot.models, ["chatgpt/model.json", "openai/model.json"]);
+    assert.equal(snapshot.model?.model, "chatgpt-configured-model");
+
+    const runUrl = `${baseUrl}/api/sessions/session1/run`;
+    const defaultRun = await fetch(runUrl, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "use the profile default"}),
+    });
+    assert.equal(defaultRun.status, 200);
+    await defaultRun.text();
+    assert.deepEqual(requestedModels, ["chatgpt-configured-model"]);
+
+    const selectedRun = await fetch(runUrl, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "use my selection", model: "openai/model.json"}),
+    });
+    assert.equal(selectedRun.status, 200);
+    await selectedRun.text();
+    assert.deepEqual(requestedModels, ["chatgpt-configured-model", "openai-configured-model"]);
+
+    const invalidRun = await fetch(runUrl, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "reject this model", model: "missing/model.json"}),
+    });
+    assert.equal(invalidRun.status, 400);
+    assert.deepEqual(requestedModels, ["chatgpt-configured-model", "openai-configured-model"]);
   } finally {
     await running.close();
     await rm(root, {recursive: true, force: true});

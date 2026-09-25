@@ -52,6 +52,12 @@ import {
 import appConfig from './config.json';
 import {deepEqual} from './deepEqual';
 import {
+  loadModelSelectionBySession,
+  saveModelSelectionBySession,
+  selectedModelForSession,
+  type ModelSelectionBySession,
+} from './model-selection';
+import {
   captureScrollPosition,
   findScrollParent,
   restoreScrollPosition,
@@ -73,6 +79,7 @@ import {
 } from './web-ui-steps';
 import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
+import {ModelPicker} from './components/ModelPicker';
 import {FloatingPanel} from './components/FloatingPanel';
 import {MarkdownText} from './components/MarkdownText';
 import {PromptLibraryPanel} from './components/PromptLibraryPanel';
@@ -230,6 +237,8 @@ interface Session {
   source: 'live' | 'sample';
   sessionRef?: string;
   rootLabel?: string;
+  modelDefault?: string;
+  models?: string[];
   model?: {
     provider?: string;
     model?: string;
@@ -463,6 +472,8 @@ function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
     source: 'live',
     sessionRef: snapshot.id,
     ...(snapshot.root_label ? {rootLabel: snapshot.root_label} : {}),
+    ...(snapshot.model_default === undefined ? {} : {modelDefault: snapshot.model_default}),
+    ...(snapshot.models === undefined ? {} : {models: snapshot.models}),
     model: snapshot.model,
     ...(snapshot.usage ? {usage: snapshot.usage} : {}),
     ...(snapshot.run ? {run: snapshot.run} : {}),
@@ -1798,6 +1809,12 @@ function App() {
   // whatever the backend reports, and this id is only used to choose which of
   // those live sessions to open on.
   const [activeSessionId, setActiveSessionId] = useState(LIVE_SESSION_ID);
+  const [modelSelections, setModelSelections] = useState<ModelSelectionBySession>(
+    () => loadModelSelectionBySession(),
+  );
+  useEffect(() => {
+    saveModelSelectionBySession(modelSelections);
+  }, [modelSelections]);
   const hasChosenSessionRef = useRef(false);
   const [threads, setThreads] = useState<Record<string, MessageRecord[]>>(initialThreads);
 
@@ -2028,6 +2045,25 @@ function App() {
 
   const activeSession =
     sessions.find(session => session.id === activeSessionId) ?? sessions[0];
+  const selectedModel = selectedModelForSession(
+    activeSession?.sessionRef,
+    activeSession?.models,
+    activeSession?.modelDefault,
+    activeSession?.model?.model,
+    modelSelections,
+  );
+  const modelForRun = activeSession?.models?.includes(selectedModel ?? '')
+    ? selectedModel
+    : undefined;
+  const selectSessionModel = useCallback((model: string) => {
+    const sessionRef = activeSession?.sessionRef;
+    if (sessionRef === undefined) {
+      return;
+    }
+    setModelSelections(current =>
+      current[sessionRef] === model ? current : {...current, [sessionRef]: model},
+    );
+  }, [activeSession?.sessionRef]);
   const threadMessages = threads[activeSessionId] ?? [];
   // The history block renders ahead of the transcript: it holds the turns a
   // compaction removed, which are older than everything the transcript carries.
@@ -2281,6 +2317,7 @@ function App() {
         const controller = new AbortController();
         runAbortRef.current = controller;
         void streamSessionRun(sessionRef, trimmedValue, {
+          ...(modelForRun === undefined ? {} : {model: modelForRun}),
           signal: controller.signal,
           onMessage: message => {
             setStreamingMessage(message);
@@ -2395,7 +2432,7 @@ function App() {
       }, appConfig.mock_run_delay_ms);
       return true;
     },
-    [activeSession, activeSessionId, isRunning],
+    [activeSession, activeSessionId, isRunning, modelForRun],
   );
 
   /**
@@ -2760,6 +2797,13 @@ function App() {
       }
       toolbarActions={
         <HStack align="center" gap={1}>
+          {activeSession.models && activeSession.models.length > 0 ? (
+            <ModelPicker
+              models={activeSession.models}
+              selectedModel={selectedModel}
+              onSelect={selectSessionModel}
+            />
+          ) : null}
           {appConfig.attach_context_enabled ? (
             <>
               <IconButton

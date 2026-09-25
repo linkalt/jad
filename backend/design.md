@@ -67,7 +67,7 @@ The history reader yields raw input items directly and expands each committed `r
 
 Compaction maintains the active `compaction-cache.json` plus an atomically published `.backup` copy used to recover a missing or invalid active cache; it does not keep an unbounded checkpoint history. If both copies are unavailable while the backup transcript differs from the live transcript, request-history reads fail visibly rather than silently omitting compacted context. `paths.messages_backup` stores the pre-compaction `messages.jsonl` (replaced by default, or appended when `compaction.backup_mode` is `append`). `paths.compaction_cache` relocates the compaction cache. Unless explicitly overridden, compaction, history, usage, cursor, and statecontext files live under the resolved `paths.staging` directory. For named path profiles, the default messages backup lives beside that profile's messages file; flat configurations retain the session-level backup default. Relative paths resolve from `setting.json`.
 
-Named path profiles use `paths.active_profile` and a `paths.profiles` map. A selected profile overlays matching flat path entries, then built-in defaults; this preserves existing flat configuration and permits shared paths when intentionally configured. Default cache paths follow the selected profile's staging directory, and its default transcript backup follows its messages directory. The loader pins the resolved paths for its lifetime; select another profile by reopening the session. Explicitly shared paths are still shared, so keep transcript/cache paths separate unless that is intentional. Example:
+Named path profiles use `paths.active_profile` and a `paths.profiles` map. A selected profile overlays matching flat path entries, then built-in defaults; this preserves existing flat configuration and permits shared paths when intentionally configured. Default cache paths follow the selected profile's staging directory, and its default transcript backup follows its messages directory. The loader pins the resolved paths for its lifetime; select another profile by reopening the session. Explicitly shared paths are still shared, so keep transcript/cache paths separate unless that is intentional. A profile may set `models` to model-configuration JSON paths (relative to `setting.json`, or absolute) and `model_default` to one of those paths; if only `model_default` is set it is the sole choice, and if only `models` is set its first path is the default. Selecting an entry loads that file's provider, credentials configuration, request defaults, and API model; the per-session path selection is persisted in the browser. `paths.model` and `paths.profiles.<name>.model` are not supported. Profiles without `models` or `model_default` continue using the session-level `model.json`. Example:
 
 ```json
 {
@@ -81,7 +81,8 @@ Named path profiles use `paths.active_profile` and a `paths.profiles` map. A sel
         "history_cache": "profiles/profile1/staging/history-cache.json",
         "usage_cache": "profiles/profile1/staging/usage-cache.json",
         "statecontext": "profiles/profile1/staging/statecontext.json",
-        "model": "profiles/profile1/model.json",
+        "model_default": "chatgpt/model.json",
+        "models": ["chatgpt/model.json", "openai/model.json"],
         "staging": "profiles/profile1/staging",
         "http_debug": "profiles/profile1/debug/http"
       }

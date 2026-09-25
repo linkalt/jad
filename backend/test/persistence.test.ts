@@ -956,13 +956,13 @@ test("normalizes and validates compaction settings", async () => {
 test("resolves configurable session storage paths relative to setting.json", async () => {
   const sessionDir = await makeSession();
   const externalDir = await makeSession();
-  const modelPath = join(externalDir, "provider-model.json");
+  const defaultModelPath = join(sessionDir, "model.json");
   const stagingPath = join(externalDir, "response-staging");
   const messagesPath = join(sessionDir, "data", "transcript.jsonl");
   const usageCachePath = join(sessionDir, "data", "usage-summary.json");
   const httpDebugPath = join(sessionDir, "diagnostics", "http");
   try {
-    await writeFile(modelPath, JSON.stringify({model: "configured-model"}));
+    await writeFile(defaultModelPath, JSON.stringify({model: "configured-model"}));
     await writeFile(
       join(sessionDir, "setting.json"),
       JSON.stringify({
@@ -973,7 +973,6 @@ test("resolves configurable session storage paths relative to setting.json", asy
           compaction_cache: "data/compact.json",
           history_cache: "data/input-history.json",
           usage_cache: "data/usage-summary.json",
-          model: modelPath,
           staging: stagingPath,
           http_debug: "diagnostics/http",
         },
@@ -987,7 +986,6 @@ test("resolves configurable session storage paths relative to setting.json", asy
     assert.equal(settings.paths.compaction_cache, join(sessionDir, "data/compact.json"));
     assert.equal(settings.paths.history_cache, join(sessionDir, "data/input-history.json"));
     assert.equal(settings.paths.usage_cache, usageCachePath);
-    assert.equal(settings.paths.model, modelPath);
     assert.equal(settings.paths.staging, stagingPath);
     assert.equal(settings.paths.http_debug, httpDebugPath);
 
@@ -998,7 +996,7 @@ test("resolves configurable session storage paths relative to setting.json", asy
     assert.equal(config.paths.compaction_cache_path, join(sessionDir, "data/compact.json"));
     assert.equal(config.paths.history_cache_path, join(sessionDir, "data/input-history.json"));
     assert.equal(config.paths.usage_cache_path, usageCachePath);
-    assert.equal(config.paths.model_path, modelPath);
+    assert.equal(config.paths.model_path, defaultModelPath);
     assert.equal(config.paths.staging_dir, stagingPath);
     assert.equal(config.paths.http_debug_dir, httpDebugPath);
 
@@ -1028,13 +1026,16 @@ test("resolves configurable session storage paths relative to setting.json", asy
 
 test("selects named path profiles, merges overrides, and pins the choice to the loader", async () => {
   const sessionDir = await makeSession();
-  const profileModelPath = join(sessionDir, "profiles/blue/model.json");
+  const profileModelPath = join(sessionDir, "chatgpt/model.json");
+  const alternateModelPath = join(sessionDir, "alternate/model.json");
   const profileStagingPath = join(sessionDir, "profiles/blue/staging");
   const profileUsageCachePath = join(sessionDir, "profiles/blue/custom-usage-cache.json");
   const profileCursorCachePath = join(sessionDir, "profiles/blue/custom-cursor-cache.json");
   try {
     await mkdir(dirname(profileModelPath), {recursive: true});
+    await mkdir(dirname(alternateModelPath), {recursive: true});
     await writeFile(profileModelPath, JSON.stringify({model: "profile-blue-model"}));
+    await writeFile(alternateModelPath, JSON.stringify({model: "profile-alternate-model"}));
     await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
       cwd: sessionDir,
       paths: {
@@ -1042,7 +1043,6 @@ test("selects named path profiles, merges overrides, and pins the choice to the 
         messages_backup: "base/messages.backup.jsonl",
         compaction_cache: "base/staging/compaction-cache.json",
         statecontext: "base/staging/statecontext.json",
-        model: "base/model.json",
         staging: "base/staging",
         http_debug: "base/debug/http",
         active_profile: "blue",
@@ -1054,11 +1054,12 @@ test("selects named path profiles, merges overrides, and pins the choice to the 
             statecontext: "profiles/blue/staging/statecontext.json",
             usage_cache: profileUsageCachePath,
             cursor_cache: profileCursorCachePath,
-            model: "profiles/blue/model.json",
+            model_default: "chatgpt/model.json",
+            models: ["chatgpt/model.json", "alternate/model.json"],
             staging: "profiles/blue/staging",
             http_debug: "profiles/blue/debug/http",
           },
-          green: {model: "profiles/green/model.json"},
+          green: {},
         },
       },
     }));
@@ -1066,12 +1067,16 @@ test("selects named path profiles, merges overrides, and pins the choice to the 
     const loader = new SessionConfigLoader(sessionDir);
     const settings = await loader.loadSettings();
     assert.equal(settings.paths.active_profile, "blue");
+    assert.equal(settings.paths.model_default, "chatgpt/model.json");
+    assert.deepEqual(settings.paths.models, ["chatgpt/model.json", "alternate/model.json"]);
     assert.equal(settings.paths.messages, join(sessionDir, "profiles/blue/messages.jsonl"));
     assert.equal(settings.paths.history_cache, join(profileStagingPath, "history-cache.json"));
     assert.equal(settings.paths.usage_cache, profileUsageCachePath);
     assert.equal(settings.paths.cursor_cache, profileCursorCachePath);
     assert.equal(settings.paths.http_debug, join(sessionDir, "profiles/blue/debug/http"));
+    assert.equal(loader.paths.model_path, profileModelPath);
     assert.equal((await loader.load()).model.model, "profile-blue-model");
+    assert.equal((await loader.load("alternate/model.json")).model.model, "profile-alternate-model");
     assert.equal(loader.paths.statecontext_path, join(profileStagingPath, "statecontext.json"));
     assert.equal(loader.paths.usage_cache_path, profileUsageCachePath);
     assert.equal(loader.paths.cursor_cache_path, profileCursorCachePath);
@@ -1082,7 +1087,7 @@ test("selects named path profiles, merges overrides, and pins the choice to the 
       paths: {
         active_profile: "green",
         profiles: {
-          green: {model: "profiles/green/model.json"},
+          green: {},
         },
       },
     }));
@@ -1110,6 +1115,47 @@ test("selects named path profiles, merges overrides, and pins the choice to the 
     assert.equal(greenPaths.history_cache, join(sessionDir, "profiles/green/staging", "history-cache.json"));
     assert.equal(greenPaths.usage_cache, join(sessionDir, "profiles/green/staging", "usage-cache.json"));
     assert.equal(greenPaths.cursor_cache, join(sessionDir, "profiles/green/staging", "cursor-cache.json"));
+    assert.equal(unselected.paths.model_path, join(sessionDir, "model.json"));
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
+test("normalizes model-config paths from the active path profile and pins them to the loader", async () => {
+  const sessionDir = await makeSession();
+  const settingPath = join(sessionDir, "setting.json");
+  try {
+    const loader = new SessionConfigLoader(sessionDir);
+    await writeFile(settingPath, JSON.stringify({
+      cwd: sessionDir,
+      paths: {
+        active_profile: "blue",
+        profiles: {blue: {models: ["chatgpt/model.json", "openai/model.json"]}},
+      },
+    }));
+    const settings = await loader.loadSettings();
+    assert.equal(settings.paths.model_default, "chatgpt/model.json");
+    assert.deepEqual(settings.paths.models, ["chatgpt/model.json", "openai/model.json"]);
+
+    await writeFile(settingPath, JSON.stringify({
+      cwd: sessionDir,
+      paths: {
+        active_profile: "blue",
+        profiles: {blue: {model_default: "openai/model.json", models: ["chatgpt/model.json", "openai/model.json"]}},
+      },
+    }));
+    await assert.rejects(() => loader.loadSettings(), /paths cannot change while this config loader is active/);
+
+    await writeFile(settingPath, JSON.stringify({
+      cwd: sessionDir,
+      paths: {
+        active_profile: "single",
+        profiles: {single: {model_default: "solo/model.json"}},
+      },
+    }));
+    const singleChoice = await new SessionConfigLoader(sessionDir).loadSettings();
+    assert.equal(singleChoice.paths.model_default, "solo/model.json");
+    assert.deepEqual(singleChoice.paths.models, ["solo/model.json"]);
   } finally {
     await removeSession(sessionDir);
   }
@@ -1145,6 +1191,39 @@ test("rejects malformed and conflicting path profiles", async () => {
       paths: {active_profile: "profile1", profiles: {profile1: {cursor_caches: "staging/cursor-cache.json"}}},
     }));
     await assert.rejects(() => loader.loadSettings(), /is not a supported session path/);
+
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      paths: {active_profile: "profile1", profiles: {profile1: {models: "model-a"}}},
+    }));
+    await assert.rejects(() => loader.loadSettings(), /models must be an array/);
+
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      paths: {
+        active_profile: "profile1",
+        profiles: {profile1: {model_default: "chatgpt/model.json", models: ["other/model.json"]}},
+      },
+    }));
+    await assert.rejects(() => loader.loadSettings(), /model_default must be included in models/);
+
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      paths: {active_profile: "profile1", profiles: {profile1: {models: ["chatgpt/model.json", "chatgpt/model.json"]}}},
+    }));
+    await assert.rejects(() => loader.loadSettings(), /duplicate paths/);
+
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      paths: {model_default: "model-a", models: ["model-a"]},
+    }));
+    await assert.rejects(() => loader.loadSettings(), /must be configured within paths\.profiles/);
+
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      paths: {model: "chatgpt/model.json"},
+    }));
+    await assert.rejects(() => loader.loadSettings(), /paths\.model was removed/);
+
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      paths: {active_profile: "profile1", profiles: {profile1: {model: "chatgpt/model.json"}}},
+    }));
+    await assert.rejects(() => loader.loadSettings(), /profile1\.model was removed/);
   } finally {
     await removeSession(sessionDir);
   }

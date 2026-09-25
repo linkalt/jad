@@ -303,13 +303,14 @@ export interface ToolSettings extends JsonRecord {
 
 export interface SessionStoragePaths extends JsonRecord {
   active_profile?: string;
+  model_default?: string;
+  models?: string[];
   messages: string;
   messages_backup: string;
   compaction_cache: string;
   history_cache: string;
   usage_cache: string;
   cursor_cache: string;
-  model: string;
   staging: string;
   http_debug: string;
   statecontext: string;
@@ -2448,12 +2449,22 @@ const SESSION_PATH_FIELDS = [
   "usage_cache",
   "cursor_cache",
   "statecontext",
-  "model",
   "staging",
   "http_debug",
 ] as const;
 const SESSION_PATH_FIELD_SET = new Set<string>(SESSION_PATH_FIELDS);
 const SESSION_PATH_PROFILE_NAME = /^[A-Za-z0-9_-]+$/;
+
+function normalizeProfileModelPaths(value: unknown, path: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new ConfigError(`${path}: models must be an array of model configuration paths`);
+  }
+  const models = value.map((model, index) => requiredString(model, `models[${index}]`, path));
+  if (new Set(models).size !== models.length) {
+    throw new ConfigError(`${path}: models must not contain duplicate paths`);
+  }
+  return models;
+}
 
 function normalizeStoragePaths(
   value: unknown,
@@ -2467,6 +2478,12 @@ function normalizeStoragePaths(
   const profilesValue = paths.profiles;
   const activeProfileValue = paths.active_profile;
   const basePaths = Object.fromEntries(Object.entries(paths).filter(([field]) => field !== "profiles" && field !== "active_profile"));
+  if (basePaths.model !== undefined) {
+    throw new ConfigError(`${path}: paths.model was removed; configure model config paths with paths.profiles.<name>.model_default/models, or use the session model.json default`);
+  }
+  if (basePaths.model_default !== undefined || basePaths.models !== undefined) {
+    throw new ConfigError(`${path}: model_default and models must be configured within paths.profiles`);
+  }
   if (basePaths.processes !== undefined || basePaths.tasks !== undefined) {
     throw new ConfigError(`${path}: paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir`);
   }
@@ -2495,11 +2512,10 @@ function normalizeStoragePaths(
     const usageCache = pathValue("usage_cache", join(staging, USAGE_CACHE_FILE));
     const cursorCache = pathValue("cursor_cache", join(staging, CURSOR_CACHE_FILE));
     const statecontext = pathValue("statecontext", join(staging, "statecontext.json"));
-    const model = pathValue("model", "model.json");
-    const distinctFilePaths = new Set([messages, messagesBackup, compactionCache, historyCache, usageCache, cursorCache, statecontext, model]);
+    const distinctFilePaths = new Set([messages, messagesBackup, compactionCache, historyCache, usageCache, cursorCache, statecontext]);
     const compactionCacheBackup = `${compactionCache}.backup`;
-    if (distinctFilePaths.size !== 8 || distinctFilePaths.has(compactionCacheBackup)) {
-      throw new ConfigError(`${profilePath}: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.statecontext, paths.model, and the compaction-cache backup must be different files`);
+    if (distinctFilePaths.size !== 7 || distinctFilePaths.has(compactionCacheBackup)) {
+      throw new ConfigError(`${profilePath}: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.statecontext, and the compaction-cache backup must be different files`);
     }
     const extras = Object.fromEntries(Object.entries(configuredPaths).filter(([field]) => !SESSION_PATH_FIELD_SET.has(field)));
     return {
@@ -2511,7 +2527,6 @@ function normalizeStoragePaths(
       usage_cache: usageCache,
       cursor_cache: cursorCache,
       statecontext,
-      model,
       staging,
       http_debug: pathValue("http_debug", "debug/http"),
     } as SessionStoragePaths;
@@ -2543,18 +2558,46 @@ function normalizeStoragePaths(
     if (!isRecord(profileValue)) {
       throw new ConfigError(`${path}: paths.profiles.${profileName} must be an object`);
     }
+    const profilePath = `${path}: paths.profiles.${profileName}`;
+    let modelDefault: string | undefined;
+    let models: string[] | undefined;
     for (const [field, fieldValue] of Object.entries(profileValue)) {
       if (field === "processes" || field === "tasks") {
         throw new ConfigError(`${path}: paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir`);
       }
-      if (!SESSION_PATH_FIELD_SET.has(field)) {
-        throw new ConfigError(`${path}: paths.profiles.${profileName}.${field} is not a supported session path`);
+      if (field === "model") {
+        throw new ConfigError(`${profilePath}.model was removed; use model_default and models for model config paths`);
       }
-      requiredString(fieldValue, field, `${path}: paths.profiles.${profileName}`);
+      if (field === "model_default") {
+        modelDefault = requiredString(fieldValue, "model_default", profilePath);
+        continue;
+      }
+      if (field === "models") {
+        models = normalizeProfileModelPaths(fieldValue, profilePath);
+        continue;
+      }
+      if (!SESSION_PATH_FIELD_SET.has(field)) {
+        throw new ConfigError(`${profilePath}.${field} is not a supported session path or profile model setting`);
+      }
+      requiredString(fieldValue, field, profilePath);
     }
+    if (models === undefined && modelDefault !== undefined) {
+      models = [modelDefault];
+    }
+    if (modelDefault === undefined && models !== undefined && models.length > 0) {
+      modelDefault = models[0];
+    }
+    if (modelDefault !== undefined && (models === undefined || !models.includes(modelDefault))) {
+      throw new ConfigError(`${profilePath}.model_default must be included in models`);
+    }
+    const normalizedProfile: JsonRecord = {
+      ...profileValue,
+      ...(modelDefault === undefined ? {} : {model_default: modelDefault}),
+      ...(models === undefined ? {} : {models}),
+    };
     const normalized = normalizePathSet(
-      {...basePaths, ...profileValue},
-      `${path}: paths.profiles.${profileName}`,
+      {...basePaths, ...normalizedProfile},
+      profilePath,
       true,
     );
     if (profileName === activeProfile) normalizedSelectedProfile = normalized;
@@ -2564,7 +2607,14 @@ function normalizeStoragePaths(
 }
 
 function sameResolvedStoragePaths(left: SessionStoragePaths, right: SessionStoragePaths): boolean {
+  const sameModels = left.models === undefined
+    ? right.models === undefined
+    : right.models !== undefined
+      && left.models.length === right.models.length
+      && left.models.every((model, index) => model === right.models?.[index]);
   return left.active_profile === right.active_profile
+    && left.model_default === right.model_default
+    && sameModels
     && SESSION_PATH_FIELDS.every((field) => left[field] === right[field]);
 }
 
@@ -2714,14 +2764,29 @@ export class SessionConfigLoader {
     };
   }
 
-  private async loadModelAtResolvedPath(): Promise<ModelConfig> {
-    const raw = await readObject(this.paths.model_path, false);
-    return normalizeModel(raw!, this.paths.model_path);
+  private resolveModelConfigPath(modelConfigPath: string | undefined): string {
+    const configuredPath = modelConfigPath ?? "model.json";
+    const expandedPath = expandHomePrefix(configuredPath);
+    return isAbsolute(expandedPath)
+      ? resolve(expandedPath)
+      : resolve(dirname(this.paths.setting_path), expandedPath);
   }
 
-  public async loadModel(): Promise<ModelConfig> {
-    await this.loadSettings();
-    return this.loadModelAtResolvedPath();
+  private selectedModelConfigPath(settings: SessionSettings, requestedPath?: string): string {
+    if (requestedPath !== undefined && !settings.paths.models?.includes(requestedPath)) {
+      throw new ConfigError(`${this.paths.setting_path}: model config path is not available in the active session path profile`);
+    }
+    return this.resolveModelConfigPath(requestedPath ?? settings.paths.model_default);
+  }
+
+  private async loadModelAtResolvedPath(modelPath: string): Promise<ModelConfig> {
+    const raw = await readObject(modelPath, false);
+    return normalizeModel(raw!, modelPath);
+  }
+
+  public async loadModel(modelConfigPath?: string): Promise<ModelConfig> {
+    const settings = await this.loadSettings();
+    return this.loadModelAtResolvedPath(this.selectedModelConfigPath(settings, modelConfigPath));
   }
 
   public async loadSettings(): Promise<SessionSettings> {
@@ -2735,7 +2800,7 @@ export class SessionConfigLoader {
       throw new ConfigError(`${this.paths.setting_path}: session paths cannot change while this config loader is active; reopen the session to select new paths`);
     }
     const storagePaths = this.resolvedStoragePaths ?? (this.resolvedStoragePaths = resolvedStoragePaths);
-    this.paths.model_path = storagePaths.model;
+    this.paths.model_path = this.resolveModelConfigPath(storagePaths.model_default);
     this.paths.messages_path = storagePaths.messages;
     this.paths.messages_backup_path = storagePaths.messages_backup;
     this.paths.compaction_cache_path = storagePaths.compaction_cache;
@@ -2759,13 +2824,14 @@ export class SessionConfigLoader {
     );
   }
 
-  public async load(): Promise<LoadedSessionConfig> {
+  public async load(modelConfigPath?: string): Promise<LoadedSessionConfig> {
     const settings = await this.loadSettings();
-    const model = await this.loadModelAtResolvedPath();
+    const modelPath = this.selectedModelConfigPath(settings, modelConfigPath);
+    const model = await this.loadModelAtResolvedPath(modelPath);
     return {
       model,
       settings,
-      paths: this.paths,
+      paths: {...this.paths, model_path: modelPath},
       model_sha256: sha256Json(model),
       settings_sha256: sha256Json(settings),
     };

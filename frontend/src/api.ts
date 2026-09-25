@@ -94,6 +94,8 @@ export interface SessionSnapshot {
   session_id?: string;
   root_id?: string;
   root_label?: string;
+  model_default?: string;
+  models?: string[];
   session_name: string;
   turns: number;
   /** Absent in the session list: transcripts are fetched per session. */
@@ -486,6 +488,8 @@ function isSessionUsageSummary(value: unknown): value is SessionUsageSummary {
 }
 
 export interface StreamSessionRunOptions {
+  /** Model identifier selected for the new run. */
+  model?: string;
   signal?: AbortSignal;
   onMessage?: (message: WebUiMessage) => void;
   /**
@@ -614,7 +618,10 @@ export async function streamSessionRun(
   const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/run`), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({input}),
+    body: JSON.stringify({
+      input,
+      ...(options.model === undefined ? {} : {model: options.model}),
+    }),
     signal: options.signal,
   });
   if (!response.ok) {
