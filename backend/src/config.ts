@@ -42,6 +42,21 @@ export interface HttpDebugSettings extends JsonRecord {
   max_body_bytes: number;
 }
 
+export interface SessionFileListingSettings extends JsonRecord {
+  /** When false the files endpoint answers 403 and the `@` menu falls back to its static list. */
+  enabled: boolean;
+  /** Directory levels walked below cwd; cwd's own entries are depth 1. */
+  max_depth: number;
+  /** Entries inspected before the walk stops, which caps the cost of a huge tree. */
+  max_entries: number;
+  /** Paths returned; the list is truncated beyond this, shallow files first. */
+  max_results: number;
+  /** When false, entries whose name starts with `.` are skipped. */
+  include_hidden: boolean;
+  /** Directory names never walked, matched against the directory's own name. */
+  ignore_directories: string[];
+}
+
 export type NativeReadPathAction = "allow" | "deny";
 
 export interface NativePathRule extends JsonRecord {
@@ -367,6 +382,7 @@ export interface SessionSettings extends JsonRecord {
   compaction: CompactionSettings;
   statecontext: StateContextSettings;
   http_debug: HttpDebugSettings;
+  session_files: SessionFileListingSettings;
   paths: SessionStoragePaths;
   tool_definition_paths: string[];
   mcp_servers: McpServerReference[];
@@ -891,6 +907,104 @@ function normalizeHttpDebug(value: unknown, path: string): HttpDebugSettings {
     include_response_body: booleanOption("include_response_body"),
     max_body_bytes: maxBodyBytes,
   } as HttpDebugSettings;
+}
+
+const MAX_SESSION_FILE_DEPTH = 64;
+const MAX_SESSION_FILE_ENTRIES = 1_000_000;
+const MAX_SESSION_FILE_RESULTS = 100_000;
+
+const DEFAULT_SESSION_FILE_LISTING: SessionFileListingSettings = {
+  enabled: true,
+  max_depth: 12,
+  max_entries: 5000,
+  max_results: 2000,
+  include_hidden: false,
+  ignore_directories: [
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    "coverage",
+    ".next",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".cache",
+  ],
+};
+
+/**
+ * `session_files` configures the list the web UI's `@` menu offers.
+ *
+ * The walk it describes stays inside the session cwd and its results are still
+ * filtered through `tools.native.read`, so these values are about reach and cost
+ * rather than permissions: how deep to look, how much work to spend, and which
+ * bulky directories to skip.
+ */
+function normalizeSessionFileListing(
+  value: unknown,
+  path: string,
+): SessionFileListingSettings {
+  const defaultIgnores = (): string[] => [...DEFAULT_SESSION_FILE_LISTING.ignore_directories];
+  if (value === undefined) {
+    return {...DEFAULT_SESSION_FILE_LISTING, ignore_directories: defaultIgnores()};
+  }
+  if (!isRecord(value)) {
+    throw new ConfigError(`${path}: session_files must be a JSON object`);
+  }
+
+  const booleanOption = (field: "enabled" | "include_hidden"): boolean => {
+    const option = value[field];
+    if (option === undefined) {
+      return DEFAULT_SESSION_FILE_LISTING[field];
+    }
+    if (typeof option !== "boolean") {
+      throw new ConfigError(`${path}: session_files.${field} must be a boolean`);
+    }
+    return option;
+  };
+
+  const integerOption = (
+    field: "max_depth" | "max_entries" | "max_results",
+    maximum: number,
+  ): number => {
+    const option = value[field];
+    if (option === undefined) {
+      return DEFAULT_SESSION_FILE_LISTING[field];
+    }
+    if (
+      typeof option !== "number" ||
+      !Number.isSafeInteger(option) ||
+      option < 0 ||
+      option > maximum
+    ) {
+      throw new ConfigError(
+        `${path}: session_files.${field} must be a safe integer between 0 and ${maximum}`,
+      );
+    }
+    return option;
+  };
+
+  const ignoreValue = value.ignore_directories;
+  let ignoreDirectories = defaultIgnores();
+  if (ignoreValue !== undefined) {
+    if (!Array.isArray(ignoreValue)) {
+      throw new ConfigError(`${path}: session_files.ignore_directories must be an array`);
+    }
+    ignoreDirectories = ignoreValue.map((item, index) =>
+      requiredString(item, `ignore_directories[${index}]`, path),
+    );
+  }
+
+  return {
+    ...value,
+    enabled: booleanOption("enabled"),
+    max_depth: integerOption("max_depth", MAX_SESSION_FILE_DEPTH),
+    max_entries: integerOption("max_entries", MAX_SESSION_FILE_ENTRIES),
+    max_results: integerOption("max_results", MAX_SESSION_FILE_RESULTS),
+    include_hidden: booleanOption("include_hidden"),
+    ignore_directories: ignoreDirectories,
+  } as SessionFileListingSettings;
 }
 
 function normalizeToolDefinitionPaths(
@@ -2655,6 +2769,7 @@ async function normalizeSettings(
   const persistence = normalizePersistence(raw.persistence, path);
   const compaction = normalizeCompaction(raw.compaction, path);
   const httpDebug = normalizeHttpDebug(raw.http_debug, path);
+  const sessionFiles = normalizeSessionFileListing(raw.session_files, path);
   const toolDefinitionPaths = normalizeToolDefinitionPaths(
     raw.tool_definition_paths,
     path,
@@ -2677,6 +2792,7 @@ async function normalizeSettings(
     compaction,
     statecontext,
     http_debug: httpDebug,
+    session_files: sessionFiles,
     paths: storagePaths,
     tool_definition_paths: toolDefinitionPaths,
     mcp_servers: mcpServers,

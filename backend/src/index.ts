@@ -46,6 +46,7 @@ export type {
   NativeReadToolSettings,
   SessionConfigLoaderOptions,
   SessionConfigPaths,
+  SessionFileListingSettings,
   SessionSettings,
   ToolSettings,
 } from "./config.js";

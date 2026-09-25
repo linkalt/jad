@@ -15,6 +15,7 @@ import {
   ConfigError,
   SessionConfigLoader,
   type ModelConfig,
+  type NativePathPolicy,
   type SessionConfigPaths,
 } from "./config.js";
 import { AgentSession } from "./session.js";
@@ -49,6 +50,7 @@ import type {
 } from "./plugins/web-ui/types.js";
 import {WebUiSessionViewCache} from "./plugins/web-ui/view-cache.js";
 import { SessionRunRegistry, type SessionRun } from "./run-registry.js";
+import { collectSessionFiles } from "./session-files.js";
 import { MessageStreamEmitter } from "./stream-emitter.js";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -586,6 +588,15 @@ class AgentHttpApplication {
 
       if (
         request.method === "GET" &&
+        segments.length === 4 &&
+        segments[3] === "files"
+      ) {
+        await this.handleSessionFiles(sessionRef, response);
+        return;
+      }
+
+      if (
+        request.method === "GET" &&
         segments.length === 5 &&
         segments[3] === "messages"
       ) {
@@ -1016,6 +1027,30 @@ class AgentHttpApplication {
   ): Promise<void> {
     const handle = await this.getSession(id);
     sendJson(response, 200, {tools: await handle.session.listTools()});
+  }
+
+  /**
+   * The `@` menu's file list: names inside the session cwd, filtered through the
+   * read tool's path policy so the menu never offers what the agent would refuse.
+   * Contents are never returned — only paths, relative to cwd.
+   */
+  private async handleSessionFiles(
+    id: string,
+    response: ServerResponse,
+  ): Promise<void> {
+    const handle = await this.getSession(id);
+    const settings = await handle.loader.loadSettings();
+    if (!settings.session_files.enabled) {
+      throw new HttpError(403, "file listing is disabled");
+    }
+    // A session that configures no read tool has no policy to apply; the
+    // workspace-only default is the same one the tool would use.
+    const policy: NativePathPolicy = settings.tools.native.read ?? {
+      paths: [],
+      unrestricted_paths: false,
+    };
+    const listing = await collectSessionFiles(settings.cwd, settings.session_files, policy);
+    sendJson(response, 200, listing);
   }
 
   private async handleSessionProfile(
