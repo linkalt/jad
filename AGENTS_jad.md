@@ -196,7 +196,7 @@ When context has been compacted or continuation context is missing:
 7. If the repository contradicts the checkpoint, trust the repository.
 8. Update memory later only if the recovered state materially changes.
 
-## Memory Storage
+## Memory Storage For `RESUME_STATE`
 
 Maintain at most one shared memory record with:
 
@@ -291,7 +291,7 @@ MORE CLI:
 - **DO NOT hardcode configurable values** such as limits, timeouts, feature flags, or enable/disable options. Put them in the configuration file with sensible defaults.
 - Tool implementation guidelines document @tools-guidelines.md.
 - Analyze code before propose/suggest an implementation idea.
-- Before reading multiple files to understand how code connects, query Codebase Memory first.
+- Before reading multiple files to understand code, query Codebase Memory first. Use code snippets for local implementation details and trace path for callers, callees, dependencies, and cross-file execution flow. Read source files only when the result is insufficient or exact verification is needed.
 - If you discover a separate bug or issue while working on the requested task, do not silently fix or ignore it. Tell me what you found, where it is, and whether it affects the current task.
 - Preserve `messages.jsonl` as a golden-output compatibility contract. Code may be refactored or extended, but generated `messages.jsonl` must retain the same observable representation unless the task explicitly requires an output-format change. After changes, regenerate and diff `messages.jsonl`. Treat unrelated differences as regressions.
 - Do not finish after implementation. Finish only after the result is demonstrated to work and, where relevant, demonstrated to meet acceptable performance. Workflow: IMPLEMENT → RUN → TEST → MEASURE → FIX → REPEAT.
