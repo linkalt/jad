@@ -67,6 +67,7 @@ import {
   selectedModelForSession,
   type ModelSelectionBySession,
 } from './model-selection';
+import {selectionAfterPanelToggle, type RightPanelId} from './right-panel';
 import {createRowHeightStore, type RowHeightStore} from './row-heights';
 import {
   captureScrollPosition,
@@ -1421,7 +1422,6 @@ const LEFT_PANELS = {
 } as const;
 
 type LeftPanelId = keyof typeof LEFT_PANELS;
-type RightPanelId = 'inspector' | 'notifications';
 
 function NotificationBellIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -1450,7 +1450,7 @@ function SessionNavigation({
   rightPanel,
   unreadCount,
   hasUnreadError,
-  onOpenNotifications,
+  onToggleNotifications,
 }: {
   sessions: Session[];
   activeSessionId: string;
@@ -1461,7 +1461,7 @@ function SessionNavigation({
   rightPanel: RightPanelId | null;
   unreadCount: number;
   hasUnreadError: boolean;
-  onOpenNotifications: () => void;
+  onToggleNotifications: () => void;
 }) {
   return (
     <SideNav
@@ -1553,7 +1553,7 @@ function SessionNavigation({
           endContent={unreadCount > 0 ? (
             <Badge label={String(unreadCount)} variant={hasUnreadError ? 'error' : 'info'} />
           ) : undefined}
-          onClick={onOpenNotifications}
+          onClick={onToggleNotifications}
         />
       </SideNavSection>
     </SideNav>
@@ -1978,7 +1978,7 @@ function App() {
     setRightPanel(nextPanel);
   }, []);
   const toggleInspector = useCallback(() => {
-    setRightPanelMode(rightPanelRef.current === 'inspector' ? null : 'inspector');
+    setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'inspector'));
   }, [setRightPanelMode]);
   // One left slot, several datasets: the panel shows whichever workspace view
   // was picked last, so two panels never stack on the same edge. The closed
@@ -1995,6 +1995,16 @@ function App() {
     setRightPanelMode('notifications');
     setNotifications(current => markActivityNotificationsRead(current));
   }, [setRightPanelMode]);
+  // The Activity item toggles; the toast action below stays open-only, so a live
+  // event can never close the panel it was announcing.
+  const toggleNotifications = useCallback(() => {
+    const nextPanel = selectionAfterPanelToggle(rightPanelRef.current, 'notifications');
+    if (nextPanel === null) {
+      setRightPanelMode(null);
+      return;
+    }
+    openNotifications();
+  }, [openNotifications, setRightPanelMode]);
   const recordNotification = useCallback((details: NewActivityNotification) => {
     const createdAt = Date.now();
     const id = `notification-${createdAt}-${++notificationSequenceRef.current}`;
@@ -3191,7 +3201,7 @@ function App() {
           rightPanel={rightPanel}
           unreadCount={unreadNotificationCount}
           hasUnreadError={hasUnreadError}
-          onOpenNotifications={openNotifications}
+          onToggleNotifications={toggleNotifications}
         />
       }
     >
