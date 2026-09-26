@@ -77,6 +77,7 @@ import {
   isSessionRunning,
   reconcileDetachedRunSessionIds,
   sessionUiStateForRun,
+  withSnapshotRun,
   type SessionUiState,
 } from './session-run-status';
 import {shouldSkipTranscriptLoad} from './transcript-load-policy';
@@ -2878,11 +2879,17 @@ function App() {
 
   const selectSession = useCallback(
     (sessionId: string) => {
+      hasChosenSessionRef.current = true;
+      if (sessionId === activeSessionIdRef.current) {
+        // Selecting the session already on screen must not tear down its live
+        // stream: the attach effect sees no change to re-run, so the run would
+        // sit behind a placeholder nothing ever fills until a reload.
+        return;
+      }
       // Only this client detaches: a run in flight keeps going on the server and
       // is picked up again when the session is selected once more.
       rememberDetachedRun();
       detachRun();
-      hasChosenSessionRef.current = true;
       setActiveSessionId(sessionId);
       setRunProgress(baseReasoning.length);
     },
@@ -2893,8 +2900,11 @@ function App() {
     const previous = activeViewRef.current;
     activeViewRef.current = {uiId: activeSessionId, ref: activeSessionRef};
     if (previous.ref !== activeSessionRef || previous.uiId !== activeSessionId) {
-      // A different session: nothing the client holds applies to it.
+      // A different session: nothing the client holds applies to it. The list
+      // is revalidated in full too — a run detached on the way here may have
+      // been dropped from this client's copy of that session.
       snapshotEtagRef.current = undefined;
+      sessionsEtagRef.current = undefined;
     }
     activeSessionIdRef.current = activeSessionId;
     // Switching to a session that has a run in flight must attach at once: the
@@ -3050,7 +3060,9 @@ function App() {
               if (item.id === activeRunSessionId) {
                 const existing = current.find(session => session.id === item.id);
                 if (existing) {
-                  return existing;
+                  // The stream owns the rest of this object, but never the run:
+                  // without the fresh `turn_id` a detached client cannot attach.
+                  return withSnapshotRun(existing, item.snapshot);
                 }
               }
               return sessionFromSnapshot(item.snapshot, item.id);

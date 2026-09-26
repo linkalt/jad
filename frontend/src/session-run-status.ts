@@ -1,4 +1,4 @@
-import type {SessionRunStatus} from './api';
+import type {SessionRunState, SessionRunStatus} from './api';
 
 export type SessionUiState = 'success' | 'warning' | 'accent';
 
@@ -36,6 +36,41 @@ export function reconcileDetachedRunSessionIds(
   return new Set(
     [...detachedSessionIds].filter(sessionId => statusById.get(sessionId) === 'running'),
   );
+}
+
+/**
+ * Refresh the run a session object carries while leaving every field the local
+ * stream owns (`state`, `turns`, `usage`) alone.
+ *
+ * The session poll keeps the previous object for the session this client is
+ * streaming, so its fresh `run` used to be dropped — leaving the client unable
+ * to re-attach (it needs `turn_id`) after the run was detached by a session
+ * switch, with a placeholder no stream could ever finish.
+ */
+export function withSnapshotRun<Session extends {run?: SessionRunState}>(
+  session: Session,
+  snapshot: {run?: SessionRunState},
+): Session {
+  const run = snapshot.run;
+  if (run === undefined) {
+    if (session.run === undefined) {
+      return session;
+    }
+    const next = {...session} as Session & {run?: SessionRunState};
+    delete next.run;
+    return next;
+  }
+
+  const current = session.run;
+  if (
+    current !== undefined &&
+    current.turn_id === run.turn_id &&
+    current.status === run.status &&
+    current.started_at === run.started_at
+  ) {
+    return session;
+  }
+  return {...session, run};
 }
 
 export function sessionUiStateForRun(
