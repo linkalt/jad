@@ -97,6 +97,9 @@ import {SessionProfilePicker} from './components/SessionProfilePicker';
 import {FloatingPanel} from './components/FloatingPanel';
 import {NotificationPanel} from './components/NotificationPanel';
 import {MarkdownText} from './components/MarkdownText';
+import {SelectionMenu} from './components/SelectionMenu';
+import type {QuoteAnchor} from './components/SelectionMenu';
+import {quoteDraftForSelection} from './selection-quote';
 import {PromptLibraryPanel} from './components/PromptLibraryPanel';
 import {RunSettingsPanel} from './components/RunSettingsPanel';
 import {SessionSearchPanel} from './components/SessionSearchPanel';
@@ -2205,6 +2208,71 @@ const TranscriptRow = memo(
     previous.onSelectFrontCompaction === next.onSelectFrontCompaction,
 );
 
+/**
+ * The assistant's own words live in an Astryx message bubble. The row's
+ * controls, the user's own messages and the tool documents all sit outside it,
+ * so the quote action is offered from inside that bubble and nowhere else.
+ */
+const ASSISTANT_BUBBLE_SELECTOR = '.astryx-chat-message-bubble.assistant';
+
+/** Tool call rows and their result detail are the tool's output, not a reply. */
+const TOOL_OUTPUT_SELECTOR = '.astryx-chat-tool-calls';
+
+/** Clearance between the selection and its menu. */
+const SELECTION_MENU_GAP_PX = 8;
+
+/** With less room than this above the selection, the menu opens below it. */
+const SELECTION_MENU_MIN_TOP_PX = 56;
+
+function elementOf(node: Node): Element | null {
+  return node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+}
+
+/**
+ * The draft a selection should insert, with the place its menu belongs.
+ *
+ * Both ends of the range are checked: a selection that starts in the agent's
+ * answer and ends in a tool document would quote raw tool text, and one that
+ * reaches across messages would quote timestamps and controls into the draft.
+ */
+function selectionQuoteTarget(): {draft: string; anchor: QuoteAnchor} | null {
+  const selection = window.getSelection();
+  if (selection === null || selection.isCollapsed || selection.rangeCount === 0) {
+    return null;
+  }
+  const range = selection.getRangeAt(0);
+  const start = elementOf(range.startContainer);
+  const end = elementOf(range.endContainer);
+  if (start === null || end === null) {
+    return null;
+  }
+  const draft = quoteDraftForSelection(
+    {
+      text: selection.toString(),
+      isInsideAssistantMessage:
+        start.closest(ASSISTANT_BUBBLE_SELECTOR) !== null &&
+        end.closest(ASSISTANT_BUBBLE_SELECTOR) !== null,
+      isInsideToolOutput:
+        start.closest(TOOL_OUTPUT_SELECTOR) !== null ||
+        end.closest(TOOL_OUTPUT_SELECTOR) !== null,
+    },
+    appConfig.selection_quote_max_chars,
+  );
+  if (draft === null) {
+    return null;
+  }
+  const rect = range.getBoundingClientRect();
+  const isAbove = rect.top - SELECTION_MENU_GAP_PX >= SELECTION_MENU_MIN_TOP_PX;
+  return {
+    draft,
+    anchor: {
+      x: rect.left,
+      y: isAbove ? rect.top - SELECTION_MENU_GAP_PX : rect.bottom + SELECTION_MENU_GAP_PX,
+      isAbove,
+    },
+  };
+}
+
 function App() {
   const showToast = useToast();
   const showToastRef = useRef(showToast);
@@ -2397,6 +2465,51 @@ function App() {
   const usePrompt = useCallback((prompt: PromptTemplate) => {
     insertIntoComposerRef.current?.(prompt.body);
   }, []);
+  /**
+   * The quote action for a selection in the conversation: the draft it would
+   * insert, and where its menu belongs on screen.
+   */
+  const [quoteTarget, setQuoteTarget] = useState<{
+    draft: string;
+    anchor: QuoteAnchor;
+  } | null>(null);
+  const dismissQuote = useCallback(() => setQuoteTarget(null), []);
+  const quoteSelectionIntoComposer = useCallback(() => {
+    if (quoteTarget !== null) {
+      insertIntoComposerRef.current?.(quoteTarget.draft);
+    }
+    setQuoteTarget(null);
+  }, [quoteTarget]);
+  useEffect(() => {
+    if (!appConfig.selection_quote_enabled) {
+      return;
+    }
+    const readSelection = () => setQuoteTarget(selectionQuoteTarget());
+    // A selection is made with the pointer or with the keyboard, so both ends
+    // of the gesture are watched.
+    document.addEventListener('mouseup', readSelection);
+    document.addEventListener('keyup', readSelection);
+    /*
+     * Scrolling moves the text out from under the menu, and a live run re-pins
+     * the transcript on every token, so clearing on scroll would drop the menu
+     * the moment it appeared. The selection itself survives a scroll, so the
+     * menu is re-measured against it instead — and only while there is one to
+     * move.
+     */
+    const handleScroll = () =>
+      setQuoteTarget(current => (current === null ? current : selectionQuoteTarget()));
+    window.addEventListener('scroll', handleScroll, true);
+    return () => {
+      document.removeEventListener('mouseup', readSelection);
+      document.removeEventListener('keyup', readSelection);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, []);
+  // Switching rows changes what is on screen, and a menu kept from the previous
+  // row would insert text the user is no longer looking at.
+  useEffect(() => {
+    setQuoteTarget(null);
+  }, [activeViewKey]);
   // "Attach context" reads the chosen files in the browser and hands their text
   // to the composer through the same registered insert the prompt library uses,
   // so no draft state has to move back up into App.
@@ -4399,6 +4512,13 @@ function App() {
       }
     >
       <VStack xstyle={styles.shell}>
+        {/* The quote action for a selection in the conversation. A hidden layer
+            takes no room in the stack, so it sits with the shell's children. */}
+        <SelectionMenu
+          anchor={quoteTarget?.anchor ?? null}
+          onQuote={quoteSelectionIntoComposer}
+          onDismiss={dismissQuote}
+        />
         <Layout
           height="fill"
           content={

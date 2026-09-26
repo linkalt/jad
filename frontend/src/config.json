@@ -47,6 +47,8 @@
   "composer_preview_enabled": true,
   "composer_draft_storage_key": "agent-harness.composer-drafts",
   "composer_draft_save_delay_ms": 300,
+  "selection_quote_enabled": true,
+  "selection_quote_max_chars": 2000,
   "attach_context_enabled": true,
   "attach_context_accept": ".txt,.md,.markdown,.json,.jsonl,.csv,.log,.yml,.yaml,.ts,.tsx,.js,.jsx,.py,.css,.html,.sh",
   "attach_context_max_chars_per_file": 20000,
