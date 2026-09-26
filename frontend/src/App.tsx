@@ -2341,6 +2341,9 @@ function App() {
   );
   const [compactingSessionRef, setCompactingSessionRef] = useState<string | null>(null);
   const [resetDrawerViewKey, setResetDrawerViewKey] = useState<string | null>(null);
+  // The two destructive conversation actions live in a composer drawer rather
+  // than in the toolbar row, where each sat one mis-click away from Compact.
+  const [composerActionsViewKey, setComposerActionsViewKey] = useState<string | null>(null);
   const [resettingViewKey, setResettingViewKey] = useState<string | null>(null);
   const [resetError, setResetError] = useState<string | null>(null);
   const [frontCompactionInfoViewKey, setFrontCompactionInfoViewKey] = useState<string | null>(null);
@@ -2983,6 +2986,7 @@ function App() {
   );
   const isCompactionInProgress = compactingSessionRef !== null;
   const isResetDrawerOpen = resetDrawerViewKey === activeViewKey;
+  const isComposerActionsDrawerOpen = composerActionsViewKey === activeViewKey;
   const isCurrentViewResetting = resettingViewKey === activeViewKey;
   const frontCompactionSettings = activeRowSession.frontCompaction ?? {
     enabled: true,
@@ -4140,6 +4144,20 @@ function App() {
     return null;
   }
 
+  /**
+   * Both destructive conversation actions are refused while a run, a
+   * compaction or a settings write is in flight — the conditions the two
+   * toolbar buttons used to carry, now shared by the menu's items so the pair
+   * cannot drift apart.
+   */
+  const isDestructiveActionDisabled =
+    isRunning ||
+    isCompactionInProgress ||
+    isProfileSwitching ||
+    isModelDefaultUpdating ||
+    resettingViewKey !== null ||
+    frontCompactingViewKey !== null;
+
   const composer = (
     <ComposerPane
       activeSessionId={activeSessionId}
@@ -4155,7 +4173,72 @@ function App() {
       onToggleLeftPanel={toggleLeftPanel}
       onRegisterInsert={registerComposerInsert}
       drawer={
-        isResetDrawerOpen ? (
+        isComposerActionsDrawerOpen ? (
+          <ChatComposerDrawer>
+            <VStack gap={1} width="100%">
+              <Text type="supporting" color="secondary">
+                Both actions change data in this profile row, and each asks for confirmation before it runs. Other profile rows, model settings and your unsent draft are untouched.
+              </Text>
+              <HStack align="center" gap={1}>
+                {frontCompactionSettings.enabled ? (
+                  <Button
+                    label={
+                      !isFrontCompactionWorkflowOpen
+                        ? 'Delete a run'
+                        : isFrontCompactionSelectionMode
+                          ? 'Exit delete-run selection'
+                          : 'Cancel delete-run workflow'
+                    }
+                    icon={<Icon icon={FrontCompactionIcon} size="sm" />}
+                    variant="destructive"
+                    size="sm"
+                    isDisabled={isDestructiveActionDisabled}
+                    onClick={() => {
+                      setComposerActionsViewKey(null);
+                      setFrontCompactionError(null);
+                      setResetDrawerViewKey(null);
+                      if (isFrontCompactionWorkflowOpen) {
+                        setFrontCompactionInfoViewKey(null);
+                        setFrontCompactionModeViewKey(null);
+                        setFrontCompactionTarget(null);
+                        return;
+                      }
+                      setIsUsageDrawerCollapsed(true);
+                      setFrontCompactionInfoViewKey(activeViewKey);
+                      setFrontCompactionModeViewKey(null);
+                      setFrontCompactionTarget(null);
+                    }}
+                  />
+                ) : null}
+                <Button
+                  label="Reset conversation"
+                  icon={<Icon icon={ResetChatIcon} size="sm" />}
+                  variant="destructive"
+                  size="sm"
+                  isDisabled={isDestructiveActionDisabled}
+                  onClick={() => {
+                    setComposerActionsViewKey(null);
+                    setIsUsageDrawerCollapsed(true);
+                    setFrontCompactionInfoViewKey(null);
+                    setFrontCompactionTarget(null);
+                    setFrontCompactionModeViewKey(null);
+                    setFrontCompactionError(null);
+                    setResetError(null);
+                    setResetDrawerViewKey(current =>
+                      current === activeViewKey ? null : activeViewKey,
+                    );
+                  }}
+                />
+                <Button
+                  label="Cancel"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setComposerActionsViewKey(null)}
+                />
+              </HStack>
+            </VStack>
+          </ChatComposerDrawer>
+        ) : isResetDrawerOpen ? (
           <ChatComposerDrawer>
             <VStack gap={1} width="100%">
               <Text type="supporting" color="secondary">
@@ -4365,41 +4448,6 @@ function App() {
             size="sm"
             onClick={() => setIsUsageDrawerCollapsed(collapsed => !collapsed)}
           />
-          {isLiveSession && activeSession.sessionRef && frontCompactionSettings.enabled ? (
-            <IconButton
-              label={!isFrontCompactionWorkflowOpen
-                ? 'Delete a run'
-                : isFrontCompactionSelectionMode
-                  ? 'Exit delete-run selection'
-                  : 'Cancel delete-run workflow'}
-              tooltip="Choose an active user message to delete that provider run and later messages"
-              icon={<Icon icon={FrontCompactionIcon} size="sm" />}
-              variant={isFrontCompactionWorkflowOpen ? 'secondary' : 'ghost'}
-              size="sm"
-              isDisabled={
-                isRunning ||
-                isCompactionInProgress ||
-                isProfileSwitching ||
-                isModelDefaultUpdating ||
-                resettingViewKey !== null ||
-                frontCompactingViewKey !== null
-              }
-              onClick={() => {
-                setFrontCompactionError(null);
-                setResetDrawerViewKey(null);
-                if (isFrontCompactionWorkflowOpen) {
-                  setFrontCompactionInfoViewKey(null);
-                  setFrontCompactionModeViewKey(null);
-                  setFrontCompactionTarget(null);
-                  return;
-                }
-                setIsUsageDrawerCollapsed(true);
-                setFrontCompactionInfoViewKey(activeViewKey);
-                setFrontCompactionModeViewKey(null);
-                setFrontCompactionTarget(null);
-              }}
-            />
-          ) : null}
           {isLiveSession && activeSession.sessionRef && (
             <IconButton
               label={isActiveSessionCompacting ? 'Compacting conversation history' : 'Compact conversation history'}
@@ -4416,28 +4464,27 @@ function App() {
             />
           )}
           {isLiveSession && activeSession.sessionRef && (
+            /*
+             * The two destructive actions share one trigger, last in the row.
+             * Neither is a stray click away from the compact button any more,
+             * and each still asks for confirmation in the composer drawer.
+             */
             <IconButton
-              label="Reset chat"
-              tooltip="Clear this profile row's conversation"
-              icon={<Icon icon={ResetChatIcon} size="sm" />}
-              variant={isResetDrawerOpen ? 'secondary' : 'ghost'}
-              size="sm"
-              isDisabled={
-                isRunning ||
-                isCompactionInProgress ||
-                isProfileSwitching ||
-                isModelDefaultUpdating ||
-                resettingViewKey !== null ||
-                frontCompactingViewKey !== null
+              label="Conversation actions"
+              tooltip="Reset this conversation or delete a run"
+              icon={<Icon icon="moreHorizontal" size="sm" />}
+              variant={
+                isComposerActionsDrawerOpen ||
+                isResetDrawerOpen ||
+                isFrontCompactionWorkflowOpen
+                  ? 'secondary'
+                  : 'ghost'
               }
+              size="sm"
               onClick={() => {
-                setIsUsageDrawerCollapsed(true);
-                setFrontCompactionInfoViewKey(null);
-                setFrontCompactionTarget(null);
-                setFrontCompactionModeViewKey(null);
                 setFrontCompactionError(null);
                 setResetError(null);
-                setResetDrawerViewKey(current =>
+                setComposerActionsViewKey(current =>
                   current === activeViewKey ? null : activeViewKey,
                 );
               }}
