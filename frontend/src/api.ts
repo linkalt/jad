@@ -375,7 +375,7 @@ export async function fetchSessionMessage(
 export interface SessionFileListing {
   /** cwd-relative paths, shallow files first. */
   files: string[];
-  /** True when the server stopped at a cap, so the list is known to be incomplete. */
+  /** True when a cap, inaccessible branch, or unsafe path left the list incomplete. */
   truncated: boolean;
 }
 

@@ -55,6 +55,31 @@ test("lists cwd files shallow-first, skipping hidden entries, ignored directorie
   });
 });
 
+test("does not list paths through a directory symlink outside cwd", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-files-symlink-root-"));
+  const outside = await mkdtemp(join(tmpdir(), "agent-harness-files-symlink-outside-"));
+  try {
+    await writeFile(join(outside, "secret-name.txt"), "secret\n");
+    try {
+      await symlink(
+        outside,
+        join(root, "external"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch {
+      t.skip("directory symlinks are unavailable on this platform");
+      return;
+    }
+    const listing = await collectSessionFiles(root, LISTING, OPEN_POLICY);
+    assert.deepEqual(listing, { files: [], truncated: false });
+  } finally {
+    await Promise.all([
+      rm(root, { recursive: true, force: true }),
+      rm(outside, { recursive: true, force: true }),
+    ]);
+  }
+});
+
 test("include_hidden reaches dot-files and dot-directories but still skips symlinks", async () => {
   await withTree(async (root) => {
     const listing = await collectSessionFiles(root, { ...LISTING, include_hidden: true }, OPEN_POLICY);
@@ -89,10 +114,18 @@ test("a deny rule in the read policy removes the files it covers", async () => {
   });
 });
 
-test("max_depth stops the walk after the configured number of levels", async () => {
+test("max_depth stops the walk and reports unvisited directories", async () => {
   await withTree(async (root) => {
     const listing = await collectSessionFiles(root, { ...LISTING, max_depth: 1 }, OPEN_POLICY);
     assert.deepEqual(listing.files, ["README.md"]);
+    assert.equal(listing.truncated, true);
+  });
+});
+
+test("a zero depth cap reports that the root was not walked", async () => {
+  await withTree(async (root) => {
+    const listing = await collectSessionFiles(root, { ...LISTING, max_depth: 0 }, OPEN_POLICY);
+    assert.deepEqual(listing, { files: [], truncated: true });
   });
 });
 
@@ -110,6 +143,40 @@ test("an entry cap truncates without visiting the rest of the tree", async () =>
     assert.equal(listing.truncated, true);
     assert.ok(listing.files.length <= 1);
   });
+});
+
+test("max_entries counts hidden entries that are omitted from the result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-files-hidden-cap-"));
+  try {
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        writeFile(join(root, `.hidden-${index}.txt`), "hidden\n"),
+      ),
+    );
+    const listing = await collectSessionFiles(
+      root,
+      { ...LISTING, max_depth: 1, max_entries: 1 },
+      OPEN_POLICY,
+    );
+    assert.deepEqual(listing, { files: [], truncated: true });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an exact entry cap does not report truncation when the directory is exhausted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-files-exact-cap-"));
+  try {
+    await writeFile(join(root, "only.txt"), "only\n");
+    const listing = await collectSessionFiles(
+      root,
+      { ...LISTING, max_depth: 1, max_entries: 1 },
+      OPEN_POLICY,
+    );
+    assert.deepEqual(listing, { files: ["only.txt"], truncated: false });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("a missing directory answers with an empty listing rather than an error", async () => {
@@ -240,7 +307,7 @@ test("session_files defaults come from configuration, not the file", async () =>
     await withServer(root, async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/sessions/session1/files`);
       assert.equal(response.status, 200);
-      assert.deepEqual(await response.json(), { files: ["README.md"], truncated: false });
+      assert.deepEqual(await response.json(), { files: ["README.md"], truncated: true });
     });
   } finally {
     await rm(root, { recursive: true, force: true });

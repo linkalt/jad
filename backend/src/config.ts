@@ -47,7 +47,7 @@ export interface SessionFileListingSettings extends JsonRecord {
   enabled: boolean;
   /** Directory levels walked below cwd; cwd's own entries are depth 1. */
   max_depth: number;
-  /** Entries inspected before the walk stops, which caps the cost of a huge tree. */
+  /** Entries inspected across the walk; one lookahead may be read to detect truncation. */
   max_entries: number;
   /** Paths returned; the list is truncated beyond this, shallow files first. */
   max_results: number;
