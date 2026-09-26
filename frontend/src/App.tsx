@@ -1931,6 +1931,29 @@ function copyActionLabel(state: CopyState): string {
   return 'Copy as Markdown';
 }
 
+/**
+ * Delivery status on a message row.
+ *
+ * Astryx's `ChatMessageMetadata` separates its slots — and prefixes its
+ * `status` slot — with a `·`, so a row that fills more than one slot can't be
+ * separator-free. Both rows here put their whole line in the `footer` slot,
+ * which the component renders verbatim: `6:16 PM  📋 ✓✓ Delivered` on an
+ * assistant row, `✓✓ Read` on a user row.
+ */
+function DeliveryStatus({status}: {status: 'read' | 'delivered'}) {
+  const label = status === 'read' ? 'Read' : 'Delivered';
+  return (
+    <HStack
+      align="center"
+      gap={1}
+      aria-label={`Message ${label.toLowerCase()}`}
+    >
+      <Icon icon="checkDouble" size="xsm" color="inherit" />
+      <Text type="inherit" color="inherit">{label}</Text>
+    </HStack>
+  );
+}
+
 function AssistantMessage({
   message,
   model,
@@ -1989,25 +2012,29 @@ function AssistantMessage({
         name={<AssistantIdentity model={model} />}
         metadata={
           <ChatMessageMetadata
-            timestamp={message.timestamp}
             footer={
-              <IconButton
-                label={copyActionLabel(copyState)}
-                tooltip={copyActionLabel(copyState)}
-                icon={
-                  <Icon
-                    icon={copyState === 'copied' ? 'check' : copyState === 'error' ? 'error' : 'copy'}
-                    size="xsm"
-                    color="secondary"
-                  />
-                }
-                variant="ghost"
-                size="sm"
-                isDisabled={markdown.length === 0}
-                onClick={() => { void copyAsMarkdown(); }}
-              />
+              <HStack align="center" gap={2}>
+                {message.timestamp ? (
+                  <Text type="inherit" color="inherit">{message.timestamp}</Text>
+                ) : null}
+                <IconButton
+                  label={copyActionLabel(copyState)}
+                  tooltip={copyActionLabel(copyState)}
+                  icon={
+                    <Icon
+                      icon={copyState === 'copied' ? 'check' : copyState === 'error' ? 'error' : 'copy'}
+                      size="xsm"
+                      color="secondary"
+                    />
+                  }
+                  variant="ghost"
+                  size="sm"
+                  isDisabled={markdown.length === 0}
+                  onClick={() => { void copyAsMarkdown(); }}
+                />
+                <DeliveryStatus status="delivered" />
+              </HStack>
             }
-            status="delivered"
           />
         }
       >
@@ -2150,7 +2177,16 @@ const TranscriptRow = memo(
               <ChatMessageBubble>
                 <MarkdownText density="compact" contentWidth="100%">{message.text}</MarkdownText>
               </ChatMessageBubble>
-              <ChatMessageMetadata timestamp={message.timestamp} status="read" />
+              <ChatMessageMetadata
+                footer={
+                  <HStack align="center" gap={2}>
+                    {message.timestamp ? (
+                      <Text type="inherit" color="inherit">{message.timestamp}</Text>
+                    ) : null}
+                    <DeliveryStatus status="read" />
+                  </HStack>
+                }
+              />
             </VStack>
             <Avatar name="You" size="sm" />
           </HStack>
