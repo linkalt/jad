@@ -891,10 +891,11 @@ export interface StopSessionRunResult {
 export async function stopSessionRun(
   sessionRef: string,
   profile?: string,
+  signal?: AbortSignal,
 ): Promise<StopSessionRunResult> {
   const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stop${profileQuery(profile)}`),
-    {method: 'POST'},
+    {method: 'POST', ...(signal === undefined ? {} : {signal})},
   );
   if (!response.ok) {
     throw new Error(await readError(response));

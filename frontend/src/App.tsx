@@ -76,6 +76,7 @@ import {
   type ScrollPositionSnapshot,
 } from './components/scroll-position';
 import {suppressAttachedRunTranscriptTail} from './active-run-transcript';
+import {stopRunAfterConfirmation} from './stop-run';
 import {
   isSessionRunning,
   reconcileDetachedRunSessionIds,
@@ -2537,6 +2538,7 @@ function App() {
     insertIntoComposerRef.current?.(blocks.join('\n\n'));
   }, []);
   const runAbortRef = useRef<AbortController | null>(null);
+  const stopPendingRef = useRef(false);
   const runTimeoutRef = useRef<number | null>(null);
   const activeRunSessionIdRef = useRef<string | null>(null);
   const attachedRunSessionIdRef = useRef<string | null>(null);
@@ -3175,19 +3177,66 @@ function App() {
    */
   const stopRun = useCallback(() => {
     const session = activeSessionEntryRef.current;
-    detachRun();
-    if (session?.source === 'live' && session.sessionRef) {
-      void stopSessionRun(session.sessionRef, activeProfileRef.current).catch(error => {
+    if (session?.source !== 'live' || !session.sessionRef) {
+      detachRun();
+      return;
+    }
+    if (stopPendingRef.current) return;
+
+    stopPendingRef.current = true;
+    const sessionRef = session.sessionRef;
+    const profile = activeProfileRef.current;
+    const targetViewKey = activeViewKeyRef.current;
+    const targetController = runAbortRef.current;
+    const stopSignal = AbortSignal.timeout(appConfig.stop_request_timeout_ms);
+    void stopRunAfterConfirmation(
+      () => stopSessionRun(sessionRef, profile, stopSignal),
+      () => {
+        // A stop response can arrive after the user switches views or another
+        // run has started. Detach only the exact stream that was stopped.
+        if (
+          activeViewKeyRef.current === targetViewKey &&
+          targetController !== null &&
+          runAbortRef.current === targetController
+        ) {
+          detachRun();
+        } else {
+          refreshSessionsRef.current?.();
+        }
+      },
+    ).then(stopped => {
+      if (!stopped) {
+        if (
+          activeViewKeyRef.current === targetViewKey &&
+          targetController !== null &&
+          runAbortRef.current === targetController
+        ) {
+          // The server confirms there is no active run for this profile; clear
+          // a stale local spinner instead of leaving a dead stop control behind.
+          detachRun();
+        } else {
+          refreshSessionsRef.current?.();
+        }
         recordNotification({
           sessionId: session.id,
           sessionTitle: activeRowSession.title,
-          kind: 'error',
-          title: 'Unable to stop run',
-          message: error instanceof Error ? error.message : String(error),
+          kind: 'info',
+          title: 'No active run to stop',
+          message: 'The server did not find a running request for this profile. Its status was refreshed; try Stop again if it is still working.',
         });
-        console.warn('Unable to stop the run:', error);
+      }
+    }).catch(error => {
+      recordNotification({
+        sessionId: session.id,
+        sessionTitle: activeRowSession.title,
+        kind: 'error',
+        title: 'Unable to stop run',
+        message: error instanceof Error ? error.message : String(error),
       });
-    }
+      console.warn('Unable to stop the run:', error);
+    }).finally(() => {
+      stopPendingRef.current = false;
+    });
   }, [activeRowSession.title, detachRun, recordNotification]);
 
   const compactActiveSession = useCallback(async () => {
