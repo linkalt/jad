@@ -108,24 +108,26 @@ export function prunePinnedViews(
 }
 
 /**
- * The profiles the composer's picker offers, for the row on screen.
+ * What picking a profile in the composer means for the row on screen.
  *
- * The session's own row offers every profile, as it always did: picking one
- * changes the profile the session follows. A pinned row offers the session's
- * profiles *except* the stored default — that conversation is the session's own
- * row — and when nothing but this row's own profile is left there is nothing to
- * switch to, so the picker is not shown at all.
+ * Every control of the composer acts on the view, not on the session behind it,
+ * so the choice lands where the pointer is:
+ *
+ * - the session's own row follows whichever profile it is given — that is the
+ *   stored default every other client sees (`'session'`);
+ * - a pinned row shows the picked profile in that row (`'repin'`), except when
+ *   the pick is the stored default: that conversation *is* the session's own row,
+ *   so the row is dropped and `'session'` says where to go.
  */
-export function profilePickerProfiles(
-  session: {profiles?: readonly string[]; activeProfile?: string},
+export function profileSelection(
   row: {profile?: string},
-): string[] {
-  const profiles = session.profiles ?? [];
-  if (row.profile === undefined) {
-    return [...profiles];
+  picked: string,
+  session: {activeProfile?: string},
+): "session" | "repin" {
+  if (row.profile === undefined || picked === session.activeProfile) {
+    return "session";
   }
-  const others = profiles.filter(profile => profile !== session.activeProfile);
-  return others.length > 1 ? others : [];
+  return "repin";
 }
 
 /** One row of the left list. */

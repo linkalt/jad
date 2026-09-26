@@ -464,10 +464,14 @@ export interface SessionCompactionResult {
   retained_items: number;
 }
 
-export async function compactSession(sessionId: string): Promise<SessionCompactionResult> {
-  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/compact`), {
-    method: 'POST',
-  });
+export async function compactSession(
+  sessionId: string,
+  profile?: string,
+): Promise<SessionCompactionResult> {
+  const response = await fetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/compact${profileQuery(profile)}`),
+    {method: 'POST'},
+  );
   if (!response.ok) {
     throw new Error(await readError(response));
   }

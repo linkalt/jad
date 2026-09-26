@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   addPinnedView,
-  profilePickerProfiles,
+  profileSelection,
   hasPinnedView,
   isPinnedViewKey,
   parseStoredViews,
@@ -177,18 +177,15 @@ test('a fresh page follows the configured seed, else the live session', () => {
   );
 });
 
-test('a pinned row offers the picker only when another profile is left', () => {
-  const session = {profiles: ['default', 'chatgpt', 'alternate'], activeProfile: 'default'};
-  // The session's own row keeps the whole list, current profile included.
-  assert.deepEqual(profilePickerProfiles(session, {}), ['default', 'chatgpt', 'alternate']);
-  // A pinned row drops the stored default: that conversation is the session row.
-  assert.deepEqual(profilePickerProfiles(session, {profile: 'chatgpt'}), ['chatgpt', 'alternate']);
-  // Two profiles leave nothing to switch to, so the picker disappears.
-  assert.deepEqual(
-    profilePickerProfiles({profiles: ['default', 'chatgpt'], activeProfile: 'default'}, {profile: 'chatgpt'}),
-    [],
-  );
-  // A session without profiles offers nothing either way.
-  assert.deepEqual(profilePickerProfiles({}, {}), []);
-  assert.deepEqual(profilePickerProfiles({}, {profile: 'chatgpt'}), []);
+test('picking a profile lands on the row on screen', () => {
+  const session = {activeProfile: 'default'};
+  // The session's own row follows the profile it is given.
+  assert.equal(profileSelection({}, 'chatgpt', session), 'session');
+  assert.equal(profileSelection({}, 'default', session), 'session');
+  // A pinned row shows the pick in that row.
+  assert.equal(profileSelection({profile: 'chatgpt'}, 'alternate', session), 'repin');
+  assert.equal(profileSelection({profile: 'chatgpt'}, 'chatgpt', session), 'repin');
+  // Picking the stored default from a pinned row goes to the session's own row:
+  // the same conversation must not exist twice in the list.
+  assert.equal(profileSelection({profile: 'chatgpt'}, 'default', session), 'session');
 });

@@ -122,7 +122,7 @@ import {
   isPinnedViewKey,
   profileMenuTargets,
   profileOfViewKey,
-  profilePickerProfiles,
+  profileSelection,
   prunePinnedViews,
   removePinnedView,
   restoreViews,
@@ -2471,19 +2471,6 @@ function App() {
   const activeRow = listRows.find(row => row.key === activeViewKey);
   const profileRowLimitReached = pinnedViews.length >= appConfig.session_views_max;
 
-  // What this row's profile picker offers: the whole list for the session's own
-  // row, and everything but the stored default for a pinned one.
-  const profileRowProfiles = useMemo(
-    () =>
-      profilePickerProfiles(
-        {
-          ...(activeSession?.pathProfiles === undefined ? {} : {profiles: activeSession.pathProfiles}),
-          ...(activeSession?.activeProfile === undefined ? {} : {activeProfile: activeSession.activeProfile}),
-        },
-        {...(isPinnedView ? {profile: activeProfile} : {})},
-      ),
-    [activeProfile, activeSession?.activeProfile, activeSession?.pathProfiles, isPinnedView],
-  );
 
   const isLiveSession = activeSession?.source === 'live';
   const isRunning = isSessionRunning(
@@ -2751,7 +2738,9 @@ function App() {
 
     setCompactingSessionRef(sessionRef);
     try {
-      const result = await compactSession(sessionRef);
+      // Compaction rewrites one profile's transcript, so it must be the profile
+      // this view is showing — not the session's stored default.
+      const result = await compactSession(sessionRef, activeProfileRef.current);
       const message = result.compacted
         ? `History compacted: retained ${result.retained_items} of ${result.compacted_items} items.`
         : `No compaction needed; ${result.retained_items} items retained.`;
@@ -3445,12 +3434,26 @@ function App() {
           activeSession.pathProfiles &&
           activeSession.pathProfiles.length > 0 ? (
             <SessionProfilePicker
-              profiles={profileRowProfiles}
+              profiles={activeSession.pathProfiles}
               activeProfile={isPinnedView ? activeProfile : activeSession.activeProfile}
               isDisabled={isRunning || isCompactionInProgress || isProfileSwitching || isModelDefaultUpdating}
               onSelect={profile => {
-                if (isPinnedView) {
+                // The choice lands on the row on screen: a pinned row shows the
+                // profile, the session's own row follows it. Picking the profile
+                // the session already follows from a pinned row goes to that row
+                // instead of leaving the same conversation in the list twice.
+                const view = {...(isPinnedView ? {profile: activeProfile} : {})};
+                const target = {
+                  ...(activeSession.activeProfile === undefined
+                    ? {}
+                    : {activeProfile: activeSession.activeProfile}),
+                };
+                if (profileSelection(view, profile, target) === 'repin') {
                   repinRow(activeViewKey, profile);
+                  return;
+                }
+                if (isPinnedView) {
+                  removePinnedRow(activeViewKey);
                   return;
                 }
                 void selectSessionPathProfile(profile);
