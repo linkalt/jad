@@ -4,13 +4,16 @@ export function sessionSettingsFromConfig(
   config: WebUiSessionConfig,
 ): Pick<
   WebUiSessionSnapshot,
-  "session_name" | "model" | "model_default" | "models" | "active_profile" | "path_profiles"
+  "session_name" | "model" | "model_default" | "models" | "active_profile" | "default_profile" | "path_profiles"
 > {
   return {
     session_name: config.settings.session_name,
     ...(config.settings.paths?.active_profile === undefined
       ? {}
       : {active_profile: config.settings.paths.active_profile}),
+    ...(config.settings.paths?.default_profile === undefined
+      ? {}
+      : {default_profile: config.settings.paths.default_profile}),
     ...(config.pathProfiles === undefined || config.pathProfiles.length === 0
       ? {}
       : {path_profiles: config.pathProfiles}),

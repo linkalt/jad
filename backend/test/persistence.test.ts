@@ -1024,6 +1024,102 @@ test("resolves configurable session storage paths relative to setting.json", asy
   }
 });
 
+test("resolves a requested path profile without moving the session default", async () => {
+  const sessionDir = await makeSession();
+  await mkdir(join(sessionDir, "chatgpt"), {recursive: true});
+  await writeFile(join(sessionDir, "chatgpt/model.json"), JSON.stringify({model: "blue-model"}));
+  await mkdir(join(sessionDir, "alternate"), {recursive: true});
+  await writeFile(join(sessionDir, "alternate/model.json"), JSON.stringify({model: "green-model"}));
+  await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+    cwd: sessionDir,
+    paths: {
+      active_profile: "blue",
+      profiles: {
+        blue: {
+          messages: "profiles/blue/messages.jsonl",
+          staging: "profiles/blue/staging",
+          model_default: "chatgpt/model.json",
+        },
+        green: {
+          messages: "profiles/green/messages.jsonl",
+          staging: "profiles/green/staging",
+          model_default: "alternate/model.json",
+        },
+      },
+    },
+  }));
+
+  try {
+    const blue = new SessionConfigLoader(sessionDir, {profile: "blue"});
+    const green = new SessionConfigLoader(sessionDir, {profile: "green"});
+    const blueSettings = await blue.loadSettings();
+    const greenSettings = await green.loadSettings();
+
+    assert.equal(blueSettings.paths.active_profile, "blue");
+    assert.equal(greenSettings.paths.active_profile, "green");
+    // Both loaders report the same stored default: only the resolved profile differs.
+    assert.equal(blueSettings.paths.default_profile, "blue");
+    assert.equal(greenSettings.paths.default_profile, "blue");
+    assert.equal(blueSettings.paths.messages, join(sessionDir, "profiles/blue/messages.jsonl"));
+    assert.equal(greenSettings.paths.messages, join(sessionDir, "profiles/green/messages.jsonl"));
+    assert.notEqual(blueSettings.paths.staging, greenSettings.paths.staging);
+    assert.equal((await blue.load()).model.model, "blue-model");
+    assert.equal((await green.load()).model.model, "green-model");
+
+    // An unqualified loader still follows the stored default, and a switch of it
+    // does not disturb a loader pinned to a profile — that is what lets two
+    // profiles of one session stay open at the same time.
+    const stored = new SessionConfigLoader(sessionDir);
+    assert.equal((await stored.loadSettings()).paths.active_profile, "blue");
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      cwd: sessionDir,
+      paths: {
+        active_profile: "green",
+        profiles: {
+          blue: {
+            messages: "profiles/blue/messages.jsonl",
+            staging: "profiles/blue/staging",
+            model_default: "chatgpt/model.json",
+          },
+          green: {
+            messages: "profiles/green/messages.jsonl",
+            staging: "profiles/green/staging",
+            model_default: "alternate/model.json",
+          },
+        },
+      },
+    }));
+    const blueAfterSwitch = await blue.loadSettings();
+    assert.equal(blueAfterSwitch.paths.active_profile, "blue");
+    assert.equal(blueAfterSwitch.paths.messages, join(sessionDir, "profiles/blue/messages.jsonl"));
+    assert.equal((await green.loadSettings()).paths.default_profile, "green");
+    // The unqualified loader pinned the old default, exactly as before profiles
+    // were addressable: it refuses rather than silently reading another profile.
+    await assert.rejects(() => stored.loadSettings(), /paths cannot change while this config loader is active/);
+
+    // A requested profile must exist, and a session without profiles has none.
+    await assert.rejects(
+      () => new SessionConfigLoader(sessionDir, {profile: "missing"}).loadSettings(),
+      /path profile 'missing' is not defined/,
+    );
+    await assert.rejects(
+      () => new SessionConfigLoader(sessionDir, {profile: "bad name"}).loadSettings(),
+      /must contain only letters, numbers, underscores, or hyphens/,
+    );
+    const plainDir = await makeSession();
+    try {
+      await assert.rejects(
+        () => new SessionConfigLoader(plainDir, {profile: "blue"}).loadSettings(),
+        /configures no paths\.profiles/,
+      );
+    } finally {
+      await removeSession(plainDir);
+    }
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("selects named path profiles, merges overrides, and pins the choice to the loader", async () => {
   const sessionDir = await makeSession();
   const profileModelPath = join(sessionDir, "chatgpt/model.json");

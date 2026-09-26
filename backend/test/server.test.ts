@@ -1973,6 +1973,388 @@ function createManualProviderStream(): ManualProviderStream {
   };
 }
 
+/**
+ * A session with two path profiles, each with its own transcript and its own
+ * model config, and `primary` stored as the default.
+ */
+async function writeProfileSession(root: string): Promise<string> {
+  const sessionDir = join(root, "session1");
+  await mkdir(join(sessionDir, "primary"), {recursive: true});
+  await mkdir(join(sessionDir, "alternate"), {recursive: true});
+  await writeFile(
+    join(sessionDir, "primary", "model.json"),
+    JSON.stringify({
+      schema_version: 1,
+      provider: "fake",
+      api_key_env: "FAKE_API_KEY",
+      model: "primary-model",
+    }),
+  );
+  await writeFile(
+    join(sessionDir, "alternate", "model.json"),
+    JSON.stringify({
+      schema_version: 1,
+      provider: "fake",
+      api_key_env: "FAKE_API_KEY",
+      model: "alternate-model",
+    }),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({
+      schema_version: 1,
+      session_name: "profiles",
+      cwd: sessionDir,
+      paths: {
+        active_profile: "primary",
+        profiles: {
+          primary: {
+            messages: "profiles/primary/messages.jsonl",
+            staging: "profiles/primary/staging",
+            model_default: "primary/model.json",
+            models: ["primary/model.json"],
+          },
+          alternate: {
+            messages: "profiles/alternate/messages.jsonl",
+            staging: "profiles/alternate/staging",
+            model_default: "alternate/model.json",
+            models: ["alternate/model.json"],
+          },
+        },
+      },
+    }),
+  );
+  return sessionDir;
+}
+
+/** One answer per provider request, so two runs can be driven independently. */
+function createManualProviderStreams(): {
+  streams: ManualProviderStream[];
+  client: OpenAI;
+  openResponses: Response[];
+} {
+  const streams: ManualProviderStream[] = [];
+  const openResponses: Response[] = [];
+  const client = {
+    responses: {
+      create: async () => {
+        const stream = createManualProviderStream();
+        streams.push(stream);
+        return stream.iterator;
+      },
+    },
+  } as unknown as OpenAI;
+  return {streams, client, openResponses};
+}
+
+/**
+ * Ends every provider stream and cancels any run response still being read.
+ * A held SSE connection keeps `server.close()` waiting, so a failing assertion
+ * must not leave one behind.
+ */
+async function closeRuns(
+  streams: ManualProviderStream[],
+  openResponses: Response[],
+  running: {close: () => Promise<void>},
+): Promise<void> {
+  for (const stream of streams) {
+    stream.end();
+  }
+  await Promise.allSettled(
+    openResponses.map(async (response) => {
+      await response.body?.cancel();
+    }),
+  );
+  await running.close();
+}
+
+function assistantOutput(text: string): Record<string, unknown> {
+  return {
+    type: "message",
+    role: "assistant",
+    content: [{type: "output_text", text}],
+  };
+}
+
+test("runs two profiles of one session at the same time, on separate transcripts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-profiles-"));
+  const sessionDir = await writeProfileSession(root);
+  const {streams, client, openResponses} = createManualProviderStreams();
+  const running = createAgentServer({sessionsDir: root, client});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const runUrl = `${baseUrl}/api/sessions/session1/run`;
+    const post = (url: string, input: string): Promise<Response> =>
+      fetch(url, {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({input}),
+      });
+
+    // The stored default (primary) and the other profile run concurrently: the
+    // second is accepted while the first is still in flight.
+    const primaryRequest = post(runUrl, "primary input");
+    await waitForCondition(() => streams.length === 1, "the primary run to reach the provider");
+    const alternateRequest = post(`${runUrl}?profile=alternate`, "alternate input");
+    await waitForCondition(() => streams.length === 2, "the alternate run to reach the provider");
+    const [primaryResponse, alternateResponse] = await Promise.all([
+      primaryRequest,
+      alternateRequest,
+    ]);
+    openResponses.push(primaryResponse, alternateResponse);
+    assert.equal(primaryResponse.status, 200);
+    assert.equal(alternateResponse.status, 200);
+
+    streams[0]!.push({type: "response.output_text.delta", delta: "PRIMARY_TEXT"});
+    streams[1]!.push({type: "response.output_text.delta", delta: "ALTERNATE_TEXT"});
+
+    // Both runs are registered under their own profile while both are in flight.
+    const listResponse = await fetch(`${baseUrl}/api/sessions`);
+    const list = (await listResponse.json()) as {
+      sessions: Array<{
+        id: string;
+        active_profile?: string;
+        run?: {status: string; turn_id: string};
+        runs_by_profile?: Record<string, {status: string; turn_id: string}>;
+      }>;
+    };
+    const listed = list.sessions.find((session) => session.id === "session1");
+    assert.equal(listed?.active_profile, "primary");
+    assert.equal(listed?.run?.status, "running");
+    assert.equal(listed?.runs_by_profile?.primary?.status, "running");
+    assert.equal(listed?.runs_by_profile?.alternate?.status, "running");
+    assert.notEqual(listed?.run?.turn_id, listed?.runs_by_profile?.alternate?.turn_id);
+
+    // Finishing one profile leaves the other streaming.
+    streams[0]!.push({type: "response.output_item.done", output_index: 0, item: assistantOutput("PRIMARY_TEXT")});
+    streams[0]!.push(completedEvent([assistantOutput("PRIMARY_TEXT")], "resp_primary"));
+    streams[0]!.end();
+    const primaryStream = await (await primaryResponse).text();
+    assert.match(primaryStream, /PRIMARY_TEXT/);
+    const midway = await (await fetch(`${baseUrl}/api/sessions`)).json() as {
+      sessions: Array<{run?: {status: string}; runs_by_profile?: Record<string, {status: string}>}>;
+    };
+    assert.equal(midway.sessions[0]?.run?.status, "completed");
+    assert.equal(midway.sessions[0]?.runs_by_profile?.alternate?.status, "running");
+
+    // Each profile's transcript holds its own turn and nothing of the other's.
+    const primarySnapshot = await (
+      await fetch(`${baseUrl}/api/sessions/session1?profile=primary`)
+    ).json() as {messages: Array<{text: string}>; active_profile?: string; default_profile?: string};
+    assert.equal(primarySnapshot.active_profile, "primary");
+    assert.equal(primarySnapshot.default_profile, "primary");
+    assert.deepEqual(
+      primarySnapshot.messages.map((message) => message.text),
+      ["primary input", "PRIMARY_TEXT"],
+    );
+    const primaryTranscript = await readFile(
+      join(sessionDir, "profiles/primary/messages.jsonl"),
+      "utf8",
+    );
+    assert.match(primaryTranscript, /primary input/);
+    assert.doesNotMatch(primaryTranscript, /alternate input/);
+
+    streams[1]!.push({type: "response.output_item.done", output_index: 0, item: assistantOutput("ALTERNATE_TEXT")});
+    streams[1]!.push(completedEvent([assistantOutput("ALTERNATE_TEXT")], "resp_alternate"));
+    streams[1]!.end();
+    const alternateStream = await (await alternateResponse).text();
+    assert.match(alternateStream, /ALTERNATE_TEXT/);
+
+    const alternateSnapshot = await (
+      await fetch(`${baseUrl}/api/sessions/session1?profile=alternate`)
+    ).json() as {messages: Array<{text: string}>; active_profile?: string; default_profile?: string};
+    assert.equal(alternateSnapshot.active_profile, "alternate");
+    assert.equal(alternateSnapshot.default_profile, "primary");
+    assert.deepEqual(
+      alternateSnapshot.messages.map((message) => message.text),
+      ["alternate input", "ALTERNATE_TEXT"],
+    );
+    const alternateTranscript = await readFile(
+      join(sessionDir, "profiles/alternate/messages.jsonl"),
+      "utf8",
+    );
+    assert.match(alternateTranscript, /alternate input/);
+    assert.doesNotMatch(alternateTranscript, /primary input/);
+
+    // The unqualified snapshot is still the stored default's transcript.
+    const defaultSnapshot = await (
+      await fetch(`${baseUrl}/api/sessions/session1`)
+    ).json() as {messages: Array<{text: string}>};
+    assert.deepEqual(
+      defaultSnapshot.messages.map((message) => message.text),
+      ["primary input", "PRIMARY_TEXT"],
+    );
+  } finally {
+    await closeRuns(streams, openResponses, running);
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("switching the stored profile refuses only the profile being switched away from", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-profile-switch-"));
+  const sessionDir = await writeProfileSession(root);
+  const {streams, client, openResponses} = createManualProviderStreams();
+  const running = createAgentServer({sessionsDir: root, client});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const switchTo = (activeProfile: string): Promise<Response> =>
+      fetch(`${baseUrl}/api/sessions/session1/profile`, {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({active_profile: activeProfile}),
+      });
+
+    // A run in `alternate`, which is not the stored default.
+    const heldRequest = fetch(`${baseUrl}/api/sessions/session1/run?profile=alternate`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "held alternate input"}),
+    });
+    await waitForCondition(() => streams.length === 1, "the held run to reach the provider");
+
+    // Moving the stored default to `alternate` is allowed: neither profile's
+    // handle is disturbed, so the run keeps going.
+    const switched = await switchTo("alternate");
+    assert.equal(switched.status, 200);
+    const switchedBody = await switched.json() as {active_profile: string; changed: boolean};
+    assert.equal(switchedBody.active_profile, "alternate");
+    assert.equal(switchedBody.changed, true);
+    const heldResponse = await heldRequest;
+    assert.equal(heldResponse.status, 200);
+    openResponses.push(heldResponse);
+
+    const afterSwitch = JSON.parse(await readFile(join(sessionDir, "setting.json"), "utf8")) as {
+      paths: {active_profile: string};
+    };
+    assert.equal(afterSwitch.paths.active_profile, "alternate");
+    // The unqualified view follows the new default without a reopen, and the
+    // held run is still attached to the same turn.
+    const list = await (await fetch(`${baseUrl}/api/sessions`)).json() as {
+      sessions: Array<{active_profile?: string; run?: {status: string}}>;
+    };
+    assert.equal(list.sessions[0]?.active_profile, "alternate");
+    assert.equal(list.sessions[0]?.run?.status, "running");
+
+    // Switching away from a profile with a run in flight is still refused: that
+    // handle is the one whose paths would move under the run.
+    const refused = await switchTo("primary");
+    assert.equal(refused.status, 409);
+    const afterRefusal = JSON.parse(await readFile(join(sessionDir, "setting.json"), "utf8")) as {
+      paths: {active_profile: string};
+    };
+    assert.equal(afterRefusal.paths.active_profile, "alternate");
+
+    streams[0]!.push({type: "response.output_item.done", output_index: 0, item: assistantOutput("ALTERNATE_DONE")});
+    streams[0]!.push(completedEvent([assistantOutput("ALTERNATE_DONE")], "resp_held"));
+    streams[0]!.end();
+    const heldStream = await (await heldResponse).text();
+    assert.match(heldStream, /ALTERNATE_DONE/);
+
+    // With nothing running, the switch back is allowed.
+    const back = await switchTo("primary");
+    assert.equal(back.status, 200);
+    const backBody = await back.json() as {changed: boolean};
+    assert.equal(backBody.changed, true);
+  } finally {
+    await closeRuns(streams, openResponses, running);
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("addresses one profile's model and settings through the profile parameter", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-profile-address-"));
+  await writeProfileSession(root);
+  const running = createAgentServer({sessionsDir: root});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const primary = await (await fetch(`${baseUrl}/api/sessions/session1`)).json() as {
+      active_profile?: string;
+      default_profile?: string;
+      path_profiles?: string[];
+      model?: {model: string};
+      model_default?: string;
+    };
+    assert.equal(primary.active_profile, "primary");
+    assert.equal(primary.default_profile, "primary");
+    assert.deepEqual(primary.path_profiles, ["primary", "alternate"]);
+    assert.equal(primary.model?.model, "primary-model");
+    assert.equal(primary.model_default, "primary/model.json");
+
+    const alternate = await (
+      await fetch(`${baseUrl}/api/sessions/session1?profile=alternate`)
+    ).json() as {
+      active_profile?: string;
+      default_profile?: string;
+      model?: {model: string};
+      model_default?: string;
+    };
+    assert.equal(alternate.active_profile, "alternate");
+    // The stored default is reported beside the resolved profile.
+    assert.equal(alternate.default_profile, "primary");
+    assert.equal(alternate.model?.model, "alternate-model");
+    assert.equal(alternate.model_default, "alternate/model.json");
+
+    // The list keeps reporting the stored default's model and profile.
+    const list = await (await fetch(`${baseUrl}/api/sessions`)).json() as {
+      sessions: Array<{active_profile?: string; model?: {model: string}; runs_by_profile?: unknown}>;
+    };
+    assert.equal(list.sessions[0]?.active_profile, "primary");
+    assert.equal(list.sessions[0]?.model?.model, "primary-model");
+    assert.equal(list.sessions[0]?.runs_by_profile, undefined);
+
+    // A profile the session does not configure cannot be addressed, and a
+    // malformed name never reaches the config.
+    const unknown = await fetch(`${baseUrl}/api/sessions/session1?profile=missing`);
+    assert.equal(unknown.status, 422);
+    const malformed = await fetch(`${baseUrl}/api/sessions/session1?profile=bad%20name`);
+    assert.equal(malformed.status, 400);
+
+    // A pinned request may select the model inside its own profile.
+    const modelDefault = await fetch(
+      `${baseUrl}/api/sessions/session1/model-default?profile=alternate`,
+      {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({model_default: "alternate/model.json"}),
+      },
+    );
+    assert.equal(modelDefault.status, 200);
+    const modelDefaultBody = await modelDefault.json() as {
+      active_profile: string;
+      model_default: string;
+      changed: boolean;
+    };
+    assert.equal(modelDefaultBody.active_profile, "alternate");
+    assert.equal(modelDefaultBody.model_default, "alternate/model.json");
+    assert.equal(modelDefaultBody.changed, false);
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 async function writePlainSession(root: string): Promise<string> {
   const sessionDir = join(root, "session1");
   await mkdir(sessionDir, {recursive: true});

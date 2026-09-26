@@ -317,7 +317,10 @@ export interface ToolSettings extends JsonRecord {
 }
 
 export interface SessionStoragePaths extends JsonRecord {
+  /** The profile these paths were resolved for — the requested one, else the stored default. */
   active_profile?: string;
+  /** The session's stored default profile; unchanged by a per-request profile. */
+  default_profile?: string;
   model_default?: string;
   models?: string[];
   messages: string;
@@ -403,11 +406,21 @@ export interface SessionConfigPaths {
   statecontext_path: string;
   staging_dir: string;
   http_debug_dir: string;
+  /** The profile these paths were resolved for, when the session configures profiles. */
   active_profile?: string;
+  /** The profile stored in `setting.json` as the session default. */
+  default_profile?: string;
 }
 
 export interface SessionConfigLoaderOptions {
   globalJadRoot?: string;
+  /**
+   * Resolve the storage paths of this profile instead of the stored default.
+   *
+   * One loader pins the paths of one profile, which is what lets two profiles of
+   * one session be open at the same time; omit it to follow `active_profile`.
+   */
+  profile?: string;
 }
 
 export interface LoadedSessionConfig {
@@ -2584,6 +2597,7 @@ function normalizeStoragePaths(
   value: unknown,
   path: string,
   settingPath: string,
+  requestedProfile?: string,
 ): SessionStoragePaths {
   if (value !== undefined && !isRecord(value)) {
     throw new ConfigError(`${path}: paths must be a JSON object`);
@@ -2650,6 +2664,11 @@ function normalizeStoragePaths(
     if (activeProfileValue !== undefined) {
       throw new ConfigError(`${path}: paths.active_profile requires paths.profiles`);
     }
+    if (requestedProfile !== undefined) {
+      throw new ConfigError(
+        `${path}: profile '${requestedProfile}' was requested but the session configures no paths.profiles`,
+      );
+    }
     return normalizePathSet(basePaths, `${path}: paths`);
   }
   if (!isRecord(profilesValue) || Object.keys(profilesValue).length === 0) {
@@ -2659,9 +2678,13 @@ function normalizeStoragePaths(
   if (!SESSION_PATH_PROFILE_NAME.test(activeProfile)) {
     throw new ConfigError(`${path}: paths.active_profile must contain only letters, numbers, underscores, or hyphens`);
   }
-  const selectedProfile = profilesValue[activeProfile];
+  const selectedProfileName = requestedProfile ?? activeProfile;
+  if (!SESSION_PATH_PROFILE_NAME.test(selectedProfileName)) {
+    throw new ConfigError(`${path}: path profile '${selectedProfileName}' must contain only letters, numbers, underscores, or hyphens`);
+  }
+  const selectedProfile = profilesValue[selectedProfileName];
   if (selectedProfile === undefined) {
-    throw new ConfigError(`${path}: paths.active_profile '${activeProfile}' is not defined in paths.profiles`);
+    throw new ConfigError(`${path}: path profile '${selectedProfileName}' is not defined in paths.profiles`);
   }
 
   let normalizedSelectedProfile: SessionStoragePaths | undefined;
@@ -2714,13 +2737,21 @@ function normalizeStoragePaths(
       profilePath,
       true,
     );
-    if (profileName === activeProfile) normalizedSelectedProfile = normalized;
+    if (profileName === selectedProfileName) normalizedSelectedProfile = normalized;
   }
 
-  return {...normalizedSelectedProfile!, active_profile: activeProfile};
+  return {
+    ...normalizedSelectedProfile!,
+    active_profile: selectedProfileName,
+    // The stored default is reported beside the resolved profile so a client can
+    // tell "this session usually runs green" from "this request asked for green".
+    default_profile: activeProfile,
+  };
 }
 
 function samePinnedStoragePaths(left: SessionStoragePaths, right: SessionStoragePaths): boolean {
+  // `default_profile` is deliberately not compared: a loader pinned to one
+  // profile keeps working when the session's stored default moves to another.
   return left.active_profile === right.active_profile
     && SESSION_PATH_FIELDS.every((field) => left[field] === right[field]);
 }
@@ -2848,6 +2879,7 @@ export function resolveApiKey(
 
 export class SessionConfigLoader {
   public readonly paths: SessionConfigPaths;
+  private readonly profile: string | undefined;
   private resolvedStoragePaths: SessionStoragePaths | undefined;
 
   public constructor(
@@ -2856,6 +2888,7 @@ export class SessionConfigLoader {
   ) {
     const absoluteSessionDir = resolve(sessionDir);
     const globalJadRoot = resolve(options.globalJadRoot ?? process.cwd());
+    this.profile = options.profile;
     this.paths = {
       global_jad_root: globalJadRoot,
       session_dir: absoluteSessionDir,
@@ -2904,6 +2937,7 @@ export class SessionConfigLoader {
       raw.paths,
       this.paths.setting_path,
       this.paths.setting_path,
+      this.profile,
     );
     if (this.resolvedStoragePaths && !samePinnedStoragePaths(this.resolvedStoragePaths, resolvedStoragePaths)) {
       throw new ConfigError(`${this.paths.setting_path}: session storage paths cannot change while this config loader is active; reopen the session to select new paths`);
@@ -2924,6 +2958,11 @@ export class SessionConfigLoader {
       this.paths.active_profile = storagePaths.active_profile;
     } else {
       delete this.paths.active_profile;
+    }
+    if (storagePaths.default_profile !== undefined) {
+      this.paths.default_profile = storagePaths.default_profile;
+    } else {
+      delete this.paths.default_profile;
     }
     return normalizeSettings(
       raw,

@@ -78,6 +78,7 @@ export interface WebUiSessionConfig {
     session_name: string;
     paths?: {
       active_profile?: string;
+      default_profile?: string;
       model_default?: string;
       models?: string[];
     };
@@ -129,6 +130,11 @@ export interface WebUiSessionSnapshot {
   root_id?: string;
   root_label?: string;
   active_profile?: string;
+  /**
+   * The profile the session's `setting.json` stores as its default. It is what an
+   * unqualified request resolves to, and what a client names when switching.
+   */
+  default_profile?: string;
   path_profiles?: string[];
   model_default?: string;
   models?: string[];
@@ -141,6 +147,12 @@ export interface WebUiSessionSnapshot {
   };
   usage?: WebUiSessionUsage;
   run?: WebUiSessionRun;
+  /**
+   * The run of every profile that has one, keyed by profile name — omitted for a
+   * session that configures no profiles. `run` is the stored default's; the rest
+   * let a client show a status per profile without opening the session.
+   */
+  runs_by_profile?: Record<string, WebUiSessionRun>;
   page?: WebUiSessionPage;
   history?: WebUiSessionHistory;
 }

@@ -47,6 +47,33 @@ export interface AgentSessionOptions {
   environment?: NodeJS.ProcessEnv;
   globalJadRoot?: string;
   store?: SessionResponseStoreOptions;
+  /**
+   * Open the session on this path profile instead of the stored default.
+   *
+   * Two sessions opened on two profiles of one session directory keep separate
+   * transcripts, staging and caches, so they can run concurrently.
+   */
+  profile?: string;
+  /**
+   * Session-scoped stores shared with another session opened on the same
+   * directory (a second profile). The owner creates and, at refcount zero,
+   * closes them — a shared process manager must not be recovered twice, and
+   * closing one profile's session must not stop the other's processes.
+   */
+  shared?: AgentSessionSharedStores;
+  /** Called when this session closes, so the owner can release shared stores. */
+  onClosed?: () => void | Promise<void>;
+}
+
+/**
+ * The stores derived from `cwd` rather than from a profile: every profile of one
+ * session directory shares them, because storage directories configured for the
+ * process, task and memory tools are session-scoped.
+ */
+export interface AgentSessionSharedStores {
+  processManager: ProcessManager;
+  taskStore: TaskStore;
+  memoryStore: MemoryStore;
 }
 
 export interface AgentRunOptions {
@@ -274,6 +301,7 @@ export class AgentSession {
   ): Promise<AgentSession> {
     const loader = new SessionConfigLoader(sessionDir, {
       globalJadRoot: options.globalJadRoot,
+      ...(options.profile === undefined ? {} : {profile: options.profile}),
     });
     const settings = await loader.loadSettings();
     const store = await SessionResponseStore.open(loader.paths.session_dir, {
@@ -290,14 +318,20 @@ export class AgentSession {
       maxItemBytes: options.store?.maxItemBytes ?? settings.persistence.max_item_bytes,
       responseMetadata: options.store?.responseMetadata ?? settings.persistence.response_metadata,
     });
-    const processManager = new ProcessManager(
+    const processManager = options.shared?.processManager ?? new ProcessManager(
       settings.tools.native.process?.storage_dir ?? join(settings.cwd, DEFAULT_NATIVE_PROCESS_STORAGE_DIR),
     );
-    await processManager.recover();
-    const taskStore = new TaskStore(
+    if (options.shared === undefined) {
+      // Recovery is a session-startup action: a shared manager was already
+      // recovered by the owner, and recovering again would mark the other
+      // profile's live processes lost.
+      await processManager.recover();
+    }
+    const shared = options.shared;
+    const taskStore = shared?.taskStore ?? new TaskStore(
       settings.tools.native.task?.storage_dir ?? join(settings.cwd, DEFAULT_NATIVE_TASK_STORAGE_DIR),
     );
-    const memoryStore = new MemoryStore(
+    const memoryStore = shared?.memoryStore ?? new MemoryStore(
       settings.tools.native.memory?.storage_dir ?? join(settings.cwd, DEFAULT_NATIVE_MEMORY_STORAGE_DIR),
     );
     const mcpManager = new McpServerManager(options.environment ?? process.env);
@@ -532,10 +566,15 @@ export class AgentSession {
   public async close(): Promise<void> {
     await this.runMutex.runExclusive(async () => {
       if (this.closed) return;
-      await this.processManager.close();
+      // A shared manager belongs to the session directory, not to this profile:
+      // its owner closes it when the last profile's session is gone.
+      if (this.options.shared === undefined) {
+        await this.processManager.close();
+      }
       await this.mcpManager.close();
       await this.store.close();
       this.closed = true;
+      await this.options.onClosed?.();
     });
   }
 

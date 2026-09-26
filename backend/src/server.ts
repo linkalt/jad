@@ -17,8 +17,17 @@ import {
   type ModelConfig,
   type NativePathPolicy,
   type SessionConfigPaths,
+  type SessionSettings,
 } from "./config.js";
 import { AgentSession } from "./session.js";
+import { ProcessManager } from "./tools/native/process-manager.js";
+import { TaskStore } from "./tools/native/task-store.js";
+import { MemoryStore } from "./tools/native/memory-store.js";
+import {
+  DEFAULT_NATIVE_MEMORY_STORAGE_DIR,
+  DEFAULT_NATIVE_PROCESS_STORAGE_DIR,
+  DEFAULT_NATIVE_TASK_STORAGE_DIR,
+} from "./config.js";
 import {
   SessionResponseStore,
   type JsonRecord,
@@ -55,6 +64,8 @@ import { MessageStreamEmitter } from "./stream-emitter.js";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SESSION_ROOT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** Session path profiles are named exactly like the keys `setting.json` accepts. */
+const PROFILE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export interface AgentServerOptions {
   sessionsDir?: string;
@@ -107,8 +118,31 @@ interface SessionHandle {
   directory: string;
   session: AgentSession;
   loader: SessionConfigLoader;
+  /**
+   * The profile this handle is pinned to, or undefined when the session
+   * configures no profiles. One handle exists per `(session, profile)`.
+   */
+  profile?: string;
   /** Incremental transcript projection, reused across snapshot requests. */
   view: WebUiSessionViewCache;
+}
+
+/** Everything the stores derived from `cwd` rather than from a profile. */
+interface SessionSharedStores {
+  processManager: ProcessManager;
+  taskStore: TaskStore;
+  memoryStore: MemoryStore;
+  refs: number;
+}
+
+/**
+ * The registry and handle-cache key of one `(session, profile)` pair.
+ *
+ * A profile-less session keeps its plain reference, so every request that does
+ * not name a profile behaves exactly as it did before profiles were addressable.
+ */
+function profileKey(sessionRef: string, profile: string | undefined): string {
+  return profile === undefined ? sessionRef : `${sessionRef}|${profile}`;
 }
 
 /** Everything a snapshot's content is derived from, so a change is visible. */
@@ -150,7 +184,7 @@ function sessionStatePaths(paths: SessionConfigPaths): SessionStatePaths {
  */
 async function sessionStateVersion(
   paths: SessionStatePaths,
-  run: WebUiSessionRun | undefined,
+  runs: readonly WebUiSessionRun[],
 ): Promise<string> {
   const parts: string[] = [];
   for (const path of [
@@ -171,8 +205,15 @@ async function sessionStateVersion(
     }
     parts.push(part);
   }
+  // A run starts and stops without touching a file; every profile's run is part
+  // of the fingerprint, because the list carries all of them.
   parts.push(
-    run === undefined ? "-" : `${run.turn_id}:${run.status}:${run.started_at}`,
+    runs.length === 0
+      ? "-"
+      : runs
+          .map((run) => `${run.turn_id}:${run.status}:${run.started_at}`)
+          .sort()
+          .join(","),
   );
   return `"${createHash("sha256").update(parts.join("|")).digest("hex")}"`;
 }
@@ -318,6 +359,24 @@ function parseCursorGenerationParameter(value: string | null): string | undefine
   return value;
 }
 
+/**
+ * The `profile` query parameter, which addresses one path profile of a session.
+ *
+ * Silence means "the session's stored default", which is what every existing
+ * client sends; a profile that the session does not configure is rejected by the
+ * config loader when the handle is built.
+ */
+function parseProfileParameter(url: URL): string | undefined {
+  const value = url.searchParams.get("profile");
+  if (value === null || value.length === 0) {
+    return undefined;
+  }
+  if (!PROFILE_NAME_PATTERN.test(value)) {
+    throw new HttpError(400, "profile must contain only letters, numbers, underscores, or hyphens");
+  }
+  return value;
+}
+
 function parseTurnsParameter(value: string | null): number | undefined {
   if (value === null || value.length === 0) {
     return undefined;
@@ -399,7 +458,12 @@ async function sessionListingConfig(
   directory: string,
   sessionId: string,
   globalJadRoot: string,
-): Promise<{config: WebUiSessionConfig; paths: SessionStatePaths; usageCachePath: string}> {
+): Promise<{
+  config: WebUiSessionConfig;
+  paths: SessionStatePaths;
+  usageCachePath: string;
+  profile?: string;
+}> {
   const loader = new SessionConfigLoader(directory, {globalJadRoot});
   const settings = await loader.loadSettings();
   const pathProfileInfo = await readSessionPathProfiles(loader.paths.setting_path);
@@ -422,6 +486,9 @@ async function sessionListingConfig(
     },
     paths: sessionStatePaths(loader.paths),
     usageCachePath: settings.paths.usage_cache,
+    ...(settings.paths.active_profile === undefined
+      ? {}
+      : {profile: settings.paths.active_profile}),
   };
 }
 
@@ -433,6 +500,7 @@ function sessionSummary(
   usage?: SessionUsageSummary,
   run?: WebUiSessionRun,
   page?: SessionPageInfo,
+  runsByProfile?: Record<string, WebUiSessionRun>,
 ): WebUiSessionSnapshot {
   const usageValue = sessionUsageFromSummary(usage);
   return {
@@ -442,6 +510,7 @@ function sessionSummary(
     messages: view.messages,
     ...(usageValue === undefined ? {} : {usage: usageValue}),
     ...(run === undefined ? {} : {run}),
+    ...(runsByProfile === undefined ? {} : {runs_by_profile: runsByProfile}),
     ...(page === undefined ? {} : {page}),
     ...(view.history === undefined ? {} : {history: view.history}),
     session_id: location.sessionId,
@@ -461,6 +530,7 @@ function sessionListing(
   turns: number,
   usage?: SessionUsageSummary,
   run?: WebUiSessionRun,
+  runsByProfile?: Record<string, WebUiSessionRun>,
 ): Omit<WebUiSessionSnapshot, "messages" | "page"> {
   const usageValue = sessionUsageFromSummary(usage);
   return {
@@ -469,6 +539,7 @@ function sessionListing(
     turns,
     ...(usageValue === undefined ? {} : {usage: usageValue}),
     ...(run === undefined ? {} : {run}),
+    ...(runsByProfile === undefined ? {} : {runs_by_profile: runsByProfile}),
     session_id: location.sessionId,
     root_id: location.root.id,
     root_label: location.root.label,
@@ -476,8 +547,19 @@ function sessionListing(
 }
 
 class AgentHttpApplication {
+  /** One entry per `(session, profile)`: the key is `profileKey(location.ref, profile)`. */
   private readonly sessions = new Map<string, Promise<SessionHandle>>();
+  /**
+   * The handle an unqualified request (no `?profile=`) resolves to, so the common
+   * path stays a map lookup instead of reading `setting.json` per request. The
+   * stored default decides what it means; a write that changes the default drops
+   * the entry, exactly as the profile switch did when it reopened the session.
+   */
+  private readonly defaultHandles = new Map<string, Promise<SessionHandle>>();
+  /** Stores derived from `cwd`, shared by every profile of one session directory. */
+  private readonly sharedStores = new Map<string, Promise<SessionSharedStores>>();
   private readonly changingSessionSettings = new Set<string>();
+  /** Keyed like the handles: compaction is per `(session, profile)`. */
   private readonly compactingSessions = new Set<string>();
   private readonly sessionRoots: Promise<SessionRoot[]>;
   private readonly sessionOptions: {
@@ -556,6 +638,10 @@ class AgentHttpApplication {
       }
 
       const sessionRef = validateSessionReference(segments[2] ?? "");
+      // One profile of the session, or the stored default when the request is
+      // silent — which is what every client sent before profiles were
+      // addressable, so an unqualified request keeps its exact meaning.
+      const profile = parseProfileParameter(url);
       const isSessionProfileRequest =
         request.method === "POST" && segments.length === 4 && segments[3] === "profile";
       const isSessionModelDefaultRequest =
@@ -569,11 +655,11 @@ class AgentHttpApplication {
         return;
       }
       if (isSessionModelDefaultRequest) {
-        await this.handleSessionModelDefault(sessionRef, request, response);
+        await this.handleSessionModelDefault(sessionRef, request, response, profile);
         return;
       }
       if (request.method === "GET" && segments.length === 3) {
-        await this.handleSessionSnapshot(sessionRef, request, response);
+        await this.handleSessionSnapshot(sessionRef, request, response, profile);
         return;
       }
 
@@ -582,7 +668,7 @@ class AgentHttpApplication {
         segments.length === 4 &&
         segments[3] === "tools"
       ) {
-        await this.handleTools(sessionRef, response);
+        await this.handleTools(sessionRef, response, profile);
         return;
       }
 
@@ -591,7 +677,7 @@ class AgentHttpApplication {
         segments.length === 4 &&
         segments[3] === "files"
       ) {
-        await this.handleSessionFiles(sessionRef, response);
+        await this.handleSessionFiles(sessionRef, response, profile);
         return;
       }
 
@@ -600,7 +686,7 @@ class AgentHttpApplication {
         segments.length === 5 &&
         segments[3] === "messages"
       ) {
-        await this.handleSessionMessage(sessionRef, segments[4] ?? "", url, response);
+        await this.handleSessionMessage(sessionRef, segments[4] ?? "", url, response, profile);
         return;
       }
 
@@ -609,7 +695,7 @@ class AgentHttpApplication {
         segments.length === 4 &&
         segments[3] === "history"
       ) {
-        await this.handleSessionHistory(sessionRef, request, response);
+        await this.handleSessionHistory(sessionRef, request, response, profile);
         return;
       }
 
@@ -618,7 +704,7 @@ class AgentHttpApplication {
         segments.length === 4 &&
         segments[3] === "compact"
       ) {
-        await this.handleCompact(sessionRef, response);
+        await this.handleCompact(sessionRef, response, profile);
         return;
       }
 
@@ -628,7 +714,7 @@ class AgentHttpApplication {
         segments[3] === "run" &&
         segments[4] === "stream"
       ) {
-        await this.handleRunStream(sessionRef, response);
+        await this.handleRunStream(sessionRef, response, profile);
         return;
       }
 
@@ -638,7 +724,7 @@ class AgentHttpApplication {
         segments[3] === "run" &&
         segments[4] === "stop"
       ) {
-        await this.handleRunStop(sessionRef, response);
+        await this.handleRunStop(sessionRef, response, profile);
         return;
       }
 
@@ -647,7 +733,7 @@ class AgentHttpApplication {
         segments.length === 4 &&
         segments[3] === "run"
       ) {
-        await this.handleRun(sessionRef, request, response);
+        await this.handleRun(sessionRef, request, response, profile);
         return;
       }
 
@@ -735,42 +821,161 @@ class AgentHttpApplication {
     };
   }
 
-  private async getSession(reference: string): Promise<SessionHandle> {
-    const location = await this.resolveSessionLocation(reference);
-    const existing = this.sessions.get(location.ref);
-    if (existing) {
-      return existing;
+  /**
+   * The handle of a request.
+   *
+   * Without a profile it follows the session's stored default and is cached per
+   * reference; with one it is the handle of that profile, which may coexist with
+   * the same session's other profiles and run at the same time.
+   */
+  private async getSession(reference: string, profile?: string): Promise<SessionHandle> {
+    if (profile !== undefined) {
+      const location = await this.resolveSessionLocation(reference);
+      return this.acquireHandle(location, profile);
     }
-
-    const directory = join(location.root.directory, location.sessionId);
+    const cached = this.defaultHandles.get(reference);
+    if (cached !== undefined) {
+      return cached;
+    }
     const pending = (async (): Promise<SessionHandle> => {
-      const session = await AgentSession.open(directory, {
-        ...this.sessionOptions,
-        globalJadRoot: location.root.globalJadRoot,
-      });
+      const location = await this.resolveSessionLocation(reference);
+      const directory = join(location.root.directory, location.sessionId);
       const loader = new SessionConfigLoader(directory, {
         globalJadRoot: location.root.globalJadRoot,
       });
-      // Loading the settings rejects an unusable session before it is cached.
-      await loader.loadSettings();
-      return {
-        location,
-        directory,
-        session,
-        loader,
-        view: new WebUiSessionViewCache(session.store, {
-          snapshotTurns: this.snapshotTurns,
-          maxPageTurns: this.maxPageTurns,
-        }),
-      };
+      const settings = await loader.loadSettings();
+      // The stored default is resolved once, then pinned by name: a later switch
+      // of `active_profile` cannot invalidate this handle.
+      return this.acquireHandle(location, settings.paths.active_profile);
     })();
-    this.sessions.set(location.ref, pending);
+    this.defaultHandles.set(reference, pending);
     try {
       return await pending;
     } catch (error) {
-      this.sessions.delete(location.ref);
+      this.defaultHandles.delete(reference);
       throw error;
     }
+  }
+
+  private async acquireHandle(
+    location: SessionLocation,
+    profile: string | undefined,
+  ): Promise<SessionHandle> {
+    const key = profileKey(location.ref, profile);
+    const existing = this.sessions.get(key);
+    if (existing) {
+      return existing;
+    }
+    const pending = this.openHandle(location, profile);
+    this.sessions.set(key, pending);
+    try {
+      return await pending;
+    } catch (error) {
+      if (this.sessions.get(key) === pending) {
+        this.sessions.delete(key);
+      }
+      throw error;
+    }
+  }
+
+  private async openHandle(
+    location: SessionLocation,
+    profile: string | undefined,
+  ): Promise<SessionHandle> {
+    const directory = join(location.root.directory, location.sessionId);
+    const loader = new SessionConfigLoader(directory, {
+      globalJadRoot: location.root.globalJadRoot,
+      ...(profile === undefined ? {} : {profile}),
+    });
+    // Loading the settings rejects an unusable session (and an unknown profile)
+    // before it is cached.
+    const settings = await loader.loadSettings();
+    const shared = await this.acquireSharedStores(directory, settings);
+    let session: AgentSession;
+    try {
+      session = await AgentSession.open(directory, {
+        ...this.sessionOptions,
+        globalJadRoot: location.root.globalJadRoot,
+        ...(profile === undefined ? {} : {profile}),
+        shared,
+        onClosed: () => this.releaseSharedStores(directory),
+      });
+    } catch (error) {
+      this.releaseSharedStores(directory);
+      throw error;
+    }
+    return {
+      location,
+      directory,
+      session,
+      loader,
+      ...(profile === undefined ? {} : {profile}),
+      view: new WebUiSessionViewCache(session.store, {
+        snapshotTurns: this.snapshotTurns,
+        maxPageTurns: this.maxPageTurns,
+      }),
+    };
+  }
+
+  /**
+   * The process, task and memory stores of a session directory.
+   *
+   * They are derived from `cwd`, not from a profile, so every profile of one
+   * session shares one set: a second process manager on the same directory would
+   * recover the first one's live processes and mark them lost.
+   */
+  private async acquireSharedStores(
+    directory: string,
+    settings: SessionSettings,
+  ): Promise<SessionSharedStores> {
+    const key = resolve(directory);
+    const existing = this.sharedStores.get(key);
+    if (existing !== undefined) {
+      const stores = await existing;
+      stores.refs += 1;
+      return stores;
+    }
+    const pending = (async (): Promise<SessionSharedStores> => {
+      const processManager = new ProcessManager(
+        settings.tools.native.process?.storage_dir
+          ?? join(settings.cwd, DEFAULT_NATIVE_PROCESS_STORAGE_DIR),
+      );
+      await processManager.recover();
+      return {
+        processManager,
+        taskStore: new TaskStore(
+          settings.tools.native.task?.storage_dir
+            ?? join(settings.cwd, DEFAULT_NATIVE_TASK_STORAGE_DIR),
+        ),
+        memoryStore: new MemoryStore(
+          settings.tools.native.memory?.storage_dir
+            ?? join(settings.cwd, DEFAULT_NATIVE_MEMORY_STORAGE_DIR),
+        ),
+        refs: 1,
+      };
+    })();
+    this.sharedStores.set(key, pending);
+    try {
+      return await pending;
+    } catch (error) {
+      this.sharedStores.delete(key);
+      throw error;
+    }
+  }
+
+  private async releaseSharedStores(directory: string): Promise<void> {
+    const key = resolve(directory);
+    const pending = this.sharedStores.get(key);
+    if (pending === undefined) {
+      return;
+    }
+    const stores = await pending;
+    stores.refs -= 1;
+    if (stores.refs > 0) {
+      return;
+    }
+    this.sharedStores.delete(key);
+    await stores.processManager.close();
   }
 
   private async handleSessionList(
@@ -802,7 +1007,7 @@ class AgentHttpApplication {
         versions.push(
           `${location.ref}:${await sessionStateVersion(
             sessionStatePaths(loader.paths),
-            this.runs.describe(location.ref),
+            this.runs.runsOf(location.ref),
           )}`,
         );
       }
@@ -831,7 +1036,8 @@ class AgentHttpApplication {
             listing.config,
             usage?.turn_count ?? 0,
             usage,
-            this.runs.describe(location.ref),
+            this.runs.describe(location.ref, listing.profile),
+            this.runs.describeAll(location.ref),
           ),
         );
       } catch (error) {
@@ -850,16 +1056,17 @@ class AgentHttpApplication {
     id: string,
     request: IncomingMessage,
     response: ServerResponse,
+    profile?: string,
   ): Promise<void> {
     const url = new URL(request.url ?? "/", "http://agent-harness.local");
     const before = parseCursorParameter(url.searchParams.get("before"), "before");
     const cursorGeneration = parseCursorGenerationParameter(url.searchParams.get("cursor_generation"));
     const turns = parseTurnsParameter(url.searchParams.get("turns"));
-    const handle = await this.getSession(id);
-    const run = this.runs.describe(handle.location.ref);
+    const handle = await this.getSession(id, profile);
+    const run = this.runs.describe(handle.location.ref, handle.profile);
     const etag = await sessionStateVersion(
       sessionStatePaths(handle.loader.paths),
-      run,
+      run === undefined ? [] : [run],
     );
     // Revalidation comes first: answering `304` must not read the transcript,
     // which is the whole point of a cheap poll.
@@ -900,6 +1107,7 @@ class AgentHttpApplication {
       usage,
       run,
       page,
+      this.runs.describeAll(handle.location.ref),
     );
     sendVersionedJson(response, summary, etag, this.conditionalRequests);
   }
@@ -918,8 +1126,9 @@ class AgentHttpApplication {
     messageId: string,
     url: URL,
     response: ServerResponse,
+    profile?: string,
   ): Promise<void> {
-    const handle = await this.getSession(id);
+    const handle = await this.getSession(id, profile);
     const cursor = parseCursorParameter(url.searchParams.get("cursor"), "cursor");
     const config = await handle.loader.load();
     const message = await handle.view.readMessage(
@@ -945,8 +1154,9 @@ class AgentHttpApplication {
     id: string,
     request: IncomingMessage,
     response: ServerResponse,
+    profile?: string,
   ): Promise<void> {
-    const handle = await this.getSession(id);
+    const handle = await this.getSession(id, profile);
     const config = await handle.loader.load();
     const history = await handle.view.readHistory(config.settings.compaction.keepbackup.turns);
     if (history.etag === null) {
@@ -964,10 +1174,10 @@ class AgentHttpApplication {
     sendVersionedJson(response, {messages}, etag, this.conditionalRequests);
   }
 
-  private async handleRunStream(id: string, response: ServerResponse): Promise<void> {
+  private async handleRunStream(id: string, response: ServerResponse, profile?: string): Promise<void> {
     // Resolving the session first keeps unknown references a 404 instead of an
     // empty stream.
-    await this.getSession(id);
+    const handle = await this.getSession(id, profile);
     response.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -976,7 +1186,7 @@ class AgentHttpApplication {
     });
     response.flushHeaders();
 
-    const run = this.runs.current(id);
+    const run = this.runs.current(handle.location.ref, handle.profile);
     if (run === undefined) {
       writeSse(response, "idle", {});
       response.end();
@@ -999,33 +1209,40 @@ class AgentHttpApplication {
     }
   }
 
-  private async handleRunStop(id: string, response: ServerResponse): Promise<void> {
-    await this.getSession(id);
-    sendJson(response, 200, {stop: this.runs.stop(id)});
+  private async handleRunStop(id: string, response: ServerResponse, profile?: string): Promise<void> {
+    const handle = await this.getSession(id, profile);
+    sendJson(response, 200, {stop: this.runs.stop(handle.location.ref, handle.profile)});
   }
 
-  private async handleCompact(id: string, response: ServerResponse): Promise<void> {
-    if (this.changingSessionSettings.has(id) || this.compactingSessions.has(id)) {
+  private async handleCompact(id: string, response: ServerResponse, profile?: string): Promise<void> {
+    if (this.changingSessionSettings.has(id)) {
       throw new HttpError(409, "session profile or compaction is already changing");
     }
-    this.compactingSessions.add(id);
+    const handle = await this.getSession(id, profile);
+    // Compaction rewrites one profile's transcript, so the guard is per profile:
+    // two profiles of one session may compact at the same time.
+    const key = profileKey(handle.location.ref, handle.profile);
+    if (this.compactingSessions.has(key)) {
+      throw new HttpError(409, "session profile or compaction is already changing");
+    }
+    this.compactingSessions.add(key);
     try {
-      const handle = await this.getSession(id);
       if (this.changingSessionSettings.has(id)) {
         throw new HttpError(409, "session settings are changing");
       }
       const {compacted, compacted_items, retained_items} = await handle.session.compact();
       sendJson(response, 200, {compaction: {compacted, compacted_items, retained_items}});
     } finally {
-      this.compactingSessions.delete(id);
+      this.compactingSessions.delete(key);
     }
   }
 
   private async handleTools(
     id: string,
     response: ServerResponse,
+    profile?: string,
   ): Promise<void> {
-    const handle = await this.getSession(id);
+    const handle = await this.getSession(id, profile);
     sendJson(response, 200, {tools: await handle.session.listTools()});
   }
 
@@ -1037,8 +1254,9 @@ class AgentHttpApplication {
   private async handleSessionFiles(
     id: string,
     response: ServerResponse,
+    profile?: string,
   ): Promise<void> {
-    const handle = await this.getSession(id);
+    const handle = await this.getSession(id, profile);
     const settings = await handle.loader.loadSettings();
     if (!settings.session_files.enabled) {
       throw new HttpError(403, "file listing is disabled");
@@ -1053,6 +1271,14 @@ class AgentHttpApplication {
     sendJson(response, 200, listing);
   }
 
+  /**
+   * Moves the session's *stored* default profile.
+   *
+   * The write touches one line of `setting.json`; the open handles of either
+   * profile stay pinned and alive, so a run in another profile keeps going. Only
+   * the alias an unqualified request resolves through is dropped, so the next one
+   * builds (or reuses) the handle of the new default.
+   */
   private async handleSessionProfile(
     reference: string,
     request: IncomingMessage,
@@ -1067,27 +1293,38 @@ class AgentHttpApplication {
       throw new HttpError(400, "active_profile must be a non-empty string");
     }
     const profileName = body.active_profile.trim();
+    if (!PROFILE_NAME_PATTERN.test(profileName)) {
+      throw new HttpError(
+        400,
+        "active_profile must contain only letters, numbers, underscores, or hyphens",
+      );
+    }
     if (this.changingSessionSettings.has(reference)) {
       throw new HttpError(409, "session path profile is already changing");
     }
-    const handle = await this.getSession(reference);
-    if (this.changingSessionSettings.has(reference)) {
-      throw new HttpError(409, "session path profile is already changing");
-    }
-    if (this.runs.current(reference)?.status === "running") {
-      throw new HttpError(409, "cannot change the session path profile while a run is active");
-    }
-    if (this.compactingSessions.has(reference)) {
-      throw new HttpError(409, "cannot change the session path profile during compaction");
-    }
+    const location = await this.resolveSessionLocation(reference);
+    const directory = join(location.root.directory, location.sessionId);
 
     this.changingSessionSettings.add(reference);
     try {
-      const settings = await handle.loader.loadSettings();
+      const loader = new SessionConfigLoader(directory, {
+        globalJadRoot: location.root.globalJadRoot,
+      });
+      const settings = await loader.loadSettings();
+      const stored = settings.paths.active_profile;
+      // Only the profile being switched away from is affected: its handle keeps
+      // the paths it was opened on, so its in-flight run must not be disturbed.
+      if (stored !== undefined && this.runs.current(reference, stored)?.status === "running") {
+        throw new HttpError(409, "cannot change the session path profile while a run is active");
+      }
+      if (stored !== undefined && this.compactingSessions.has(profileKey(reference, stored))) {
+        throw new HttpError(409, "cannot change the session path profile during compaction");
+      }
+
       let update;
       try {
         update = await setSessionPathProfile(
-          handle.loader.paths.setting_path,
+          loader.paths.setting_path,
           profileName,
           settings.persistence.durability,
         );
@@ -1098,22 +1335,23 @@ class AgentHttpApplication {
         throw error;
       }
 
-      let currentHandle = handle;
       if (update.changed) {
-        this.sessions.delete(reference);
-        await handle.session.close();
-        currentHandle = await this.getSession(reference);
+        this.defaultHandles.delete(reference);
       }
-      const currentSettings = await currentHandle.loader.loadSettings();
-      const profileInfo = await readSessionPathProfiles(currentHandle.loader.paths.setting_path);
+      const target = new SessionConfigLoader(directory, {
+        globalJadRoot: location.root.globalJadRoot,
+        profile: profileName,
+      });
+      const targetSettings = await target.loadSettings();
+      const profileInfo = await readSessionPathProfiles(target.paths.setting_path);
       sendJson(response, 200, {
         ...profileInfo,
-        ...(currentSettings.paths.model_default === undefined
+        ...(targetSettings.paths.model_default === undefined
           ? {}
-          : {model_default: currentSettings.paths.model_default}),
-        ...(currentSettings.paths.models === undefined
+          : {model_default: targetSettings.paths.model_default}),
+        ...(targetSettings.paths.models === undefined
           ? {}
-          : {models: currentSettings.paths.models}),
+          : {models: targetSettings.paths.models}),
         changed: update.changed,
       });
     } finally {
@@ -1125,6 +1363,7 @@ class AgentHttpApplication {
     reference: string,
     request: IncomingMessage,
     response: ServerResponse,
+    profile?: string,
   ): Promise<void> {
     const body = await readJsonBody(request, this.maxBodyBytes);
     if (
@@ -1138,7 +1377,7 @@ class AgentHttpApplication {
     if (this.changingSessionSettings.has(reference)) {
       throw new HttpError(409, "session settings are already changing");
     }
-    const handle = await this.getSession(reference);
+    const handle = await this.getSession(reference, profile);
     if (this.changingSessionSettings.has(reference)) {
       throw new HttpError(409, "session settings are already changing");
     }
@@ -1146,7 +1385,7 @@ class AgentHttpApplication {
     this.changingSessionSettings.add(reference);
     try {
       const settings = await handle.loader.loadSettings();
-      const activeProfile = settings.paths.active_profile;
+      const activeProfile = profile ?? settings.paths.active_profile;
       if (activeProfile === undefined || !settings.paths.models?.includes(modelConfigPath)) {
         throw new HttpError(400, "model config path is not available in the active session path profile");
       }
@@ -1180,6 +1419,9 @@ class AgentHttpApplication {
       const profileInfo = await readSessionPathProfiles(handle.loader.paths.setting_path);
       sendJson(response, 200, {
         ...profileInfo,
+        // The profile the selection landed in, which a pinned request names
+        // itself and the stored default may not be.
+        active_profile: update.active_profile,
         model_default: update.model_default,
         models: currentSettings.paths.models ?? [update.model_default],
         model: {provider: model.provider, model: model.model},
@@ -1194,6 +1436,7 @@ class AgentHttpApplication {
     id: string,
     request: IncomingMessage,
     response: ServerResponse,
+    profile?: string,
   ): Promise<void> {
     const body = await readJsonBody(request, this.maxBodyBytes);
     if (!isRecord(body) || typeof body.input !== "string" || body.input.trim().length === 0) {
@@ -1204,18 +1447,15 @@ class AgentHttpApplication {
       throw new HttpError(400, "model must be a non-empty string");
     }
     const requestedModelPath = typeof body.model === "string" ? body.model.trim() : undefined;
-    const handle = await this.getSession(id);
-    if (this.changingSessionSettings.has(id)) {
-      throw new HttpError(409, "session settings are changing");
-    }
-    const settings = await handle.loader.loadSettings();
-    if (this.changingSessionSettings.has(id)) {
-      throw new HttpError(409, "session settings are changing");
-    }
-    if (requestedModelPath !== undefined && !settings.paths.models?.includes(requestedModelPath)) {
-      throw new HttpError(400, "model config path is not available in the active session path profile");
-    }
-    const modelConfigPath = requestedModelPath ?? settings.paths.model_default;
+    let connected = true;
+    const started = await this.startSessionRun({
+      reference: id,
+      ...(profile === undefined ? {} : {profile}),
+      input: body.input,
+      ...(requestedModelPath === undefined ? {} : {modelConfigPath: requestedModelPath}),
+      isConnected: () => connected,
+    });
+
     response.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -1223,14 +1463,55 @@ class AgentHttpApplication {
       "X-Accel-Buffering": "no",
     });
     response.flushHeaders();
-
-    let connected = true;
-    const turnId = `web-${randomUUID()}`;
     response.once("close", () => {
       // Disconnecting a browser does not discard an accepted, persisted run: the
       // run stays registered so a reload can attach to it again.
       connected = false;
     });
+
+    // The response that started the run is one subscriber among others, so a
+    // second tab (or the same tab after a reload) can attach to the same run.
+    const detach = started.run.subscribe((event) => {
+      writeSse(response, event.event, event.data);
+      if (event.event === "done") {
+        response.end();
+      }
+    });
+    response.once("close", detach);
+    await started.completion;
+    if (!response.writableEnded && !response.destroyed) {
+      response.end();
+    }
+  }
+
+  /**
+   * Accepts and registers a run in one `(session, profile)`.
+   *
+   * The route that a browser posts to and an in-process caller that starts a
+   * sub-agent run share this: both get a run the registry exposes, so any client
+   * can discover, attach to, or stop it — including after a reload. The run is
+   * already executing when this resolves; `completion` settles with it.
+   */
+  private async startSessionRun(options: {
+    reference: string;
+    profile?: string;
+    input: string;
+    modelConfigPath?: string;
+    isConnected?: () => boolean;
+  }): Promise<{run: SessionRun; turnId: string; handle: SessionHandle; completion: Promise<void>}> {
+    const handle = await this.getSession(options.reference, options.profile);
+    if (this.changingSessionSettings.has(options.reference)) {
+      throw new HttpError(409, "session settings are changing");
+    }
+    const settings = await handle.loader.loadSettings();
+    if (this.changingSessionSettings.has(options.reference)) {
+      throw new HttpError(409, "session settings are changing");
+    }
+    if (options.modelConfigPath !== undefined && !settings.paths.models?.includes(options.modelConfigPath)) {
+      throw new HttpError(400, "model config path is not available in the active session path profile");
+    }
+    const modelConfigPath = options.modelConfigPath ?? settings.paths.model_default;
+    const turnId = `web-${randomUUID()}`;
     const controller = new AbortController();
     controller.signal.addEventListener(
       "abort",
@@ -1239,32 +1520,49 @@ class AgentHttpApplication {
         const detail = reason instanceof Error
           ? `${reason.name}: ${reason.message}`
           : String(reason ?? "unspecified");
-        console.warn(`[agent-run] aborted session=${id} turn=${turnId} reason=${detail}`);
+        console.warn(
+          `[agent-run] aborted session=${options.reference} profile=${handle.profile ?? "-"} turn=${turnId} reason=${detail}`,
+        );
       },
       {once: true},
     );
-    const run = this.runs.begin(id, turnId, controller);
+    const run = this.runs.begin(handle.location.ref, handle.profile, turnId, controller);
     const emitter = new MessageStreamEmitter(
       this.toolStreamIntervalMs,
       (message) => run.publishMessage(message),
     );
+    const completion = this.executeSessionRun({
+      handle,
+      run,
+      emitter,
+      controller,
+      input: options.input,
+      turnId,
+      ...(modelConfigPath === undefined ? {} : {modelConfigPath}),
+      isConnected: options.isConnected ?? (() => true),
+    });
+    return {run, turnId, handle, completion};
+  }
 
+  /** Runs one accepted turn and closes its registry entry either way. */
+  private async executeSessionRun(options: {
+    handle: SessionHandle;
+    run: SessionRun;
+    emitter: MessageStreamEmitter;
+    controller: AbortController;
+    input: string;
+    turnId: string;
+    modelConfigPath?: string;
+    isConnected: () => boolean;
+  }): Promise<void> {
+    const {handle, run, emitter, controller, turnId} = options;
+    const reference = handle.location.ref;
     try {
       const normalizedRun = new WebUiNormalizedRun(turnId);
-      // The response that started the run is one subscriber among others, so a
-      // second tab (or the same tab after a reload) can attach to the same run.
-      const detach = run.subscribe((event) => {
-        writeSse(response, event.event, event.data);
-        if (event.event === "done") {
-          response.end();
-        }
-      });
-      response.once("close", detach);
-
-      const result = await handle.session.run(body.input, {
+      const result = await handle.session.run(options.input, {
         turnId,
         signal: controller.signal,
-        ...(modelConfigPath === undefined ? {} : {modelConfigPath}),
+        ...(options.modelConfigPath === undefined ? {} : {modelConfigPath: options.modelConfigPath}),
         onEvent: (event) => {
           const message = normalizedRun.update(event);
           if (message) {
@@ -1277,7 +1575,7 @@ class AgentHttpApplication {
             run.publish("usage", {usage});
           } catch (error) {
             console.warn(
-              `[agent-run] failed to publish usage session=${id} turn=${turnId}: ${errorMessage(error)}`,
+              `[agent-run] failed to publish usage session=${reference} turn=${turnId}: ${errorMessage(error)}`,
             );
           }
         },
@@ -1301,7 +1599,7 @@ class AgentHttpApplication {
       const aborted = controller.signal.aborted;
       emitter.discard();
       console.error(
-        `[agent-run] failed session=${id} turn=${turnId} connected=${connected} aborted=${aborted}: ${errorMessage(error)}`,
+        `[agent-run] failed session=${reference} profile=${handle.profile ?? "-"} turn=${turnId} connected=${options.isConnected()} aborted=${aborted}: ${errorMessage(error)}`,
         error,
       );
       run.finish(aborted ? "aborted" : "failed", [
@@ -1315,10 +1613,6 @@ class AgentHttpApplication {
         },
         {event: "done", data: {}},
       ]);
-    } finally {
-      if (!response.writableEnded && !response.destroyed) {
-        response.end();
-      }
     }
   }
 }

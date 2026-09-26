@@ -121,15 +121,25 @@ export class SessionRun {
  * Tracks the runs of every session so a client can discover an in-flight run,
  * attach to its event stream, and stop it explicitly — none of which is possible
  * from the request that started it once that request is gone.
+ *
+ * A run belongs to a `(session, profile)` pair: two profiles of one session keep
+ * separate transcripts and separate run slots, so both can run at the same time.
+ * An absent profile means "this session configures no profiles" and is the shape
+ * every session had before profiles were addressable.
  */
 export class SessionRunRegistry {
-  private readonly runs = new Map<string, SessionRun[]>();
+  private readonly runs = new Map<string, SessionRunSlot>();
   private readonly timers = new Set<NodeJS.Timeout>();
 
   public constructor(private readonly retentionMs: number) {}
 
+  private static key(sessionRef: string, profile: string | undefined): string {
+    return profile === undefined ? sessionRef : `${sessionRef}|${profile}`;
+  }
+
   public begin(
     sessionRef: string,
+    profile: string | undefined,
     turnId: string,
     controller: AbortController,
   ): SessionRun {
@@ -137,13 +147,14 @@ export class SessionRunRegistry {
       turnId,
       controller,
       new Date().toISOString(),
-      (retired) => this.retire(sessionRef, retired),
+      (retired) => this.retire(sessionRef, profile, retired),
     );
-    const existing = this.runs.get(sessionRef);
+    const key = SessionRunRegistry.key(sessionRef, profile);
+    const existing = this.runs.get(key);
     if (existing === undefined) {
-      this.runs.set(sessionRef, [run]);
+      this.runs.set(key, {sessionRef, profile, list: [run]});
     } else {
-      existing.push(run);
+      existing.list.push(run);
     }
     return run;
   }
@@ -152,24 +163,65 @@ export class SessionRunRegistry {
    * The run a client should attach to: the active one when a run is in flight,
    * otherwise the most recently finished one that is still retained.
    */
-  public current(sessionRef: string): SessionRun | undefined {
-    const list = this.runs.get(sessionRef);
-    if (list === undefined || list.length === 0) {
+  public current(sessionRef: string, profile: string | undefined): SessionRun | undefined {
+    const slot = this.runs.get(SessionRunRegistry.key(sessionRef, profile));
+    if (slot === undefined || slot.list.length === 0) {
       return undefined;
     }
     // A queued run has not started yet, so the one that is executing is the
     // first running entry.
     return (
-      list.find((run) => run.status === "running") ?? list[list.length - 1]
+      slot.list.find((run) => run.status === "running") ?? slot.list[slot.list.length - 1]
     );
   }
 
-  public describe(sessionRef: string): WebUiSessionRun | undefined {
-    return this.current(sessionRef)?.summary();
+  public describe(sessionRef: string, profile: string | undefined): WebUiSessionRun | undefined {
+    return this.current(sessionRef, profile)?.summary();
   }
 
-  public stop(sessionRef: string): StopRunResult {
-    const run = this.current(sessionRef);
+  /**
+   * Every run of a session that is running or still retained, keyed by profile.
+   *
+   * The list endpoint needs this: a session with runs in two profiles shows one
+   * `run` for its stored default plus the rest here, so a client can render a
+   * status per profile without opening the session.
+   */
+  public describeAll(sessionRef: string): Record<string, WebUiSessionRun> | undefined {
+    let runs: Record<string, WebUiSessionRun> | undefined;
+    for (const slot of this.runs.values()) {
+      if (slot.sessionRef !== sessionRef || slot.profile === undefined) {
+        continue;
+      }
+      const current = this.current(sessionRef, slot.profile);
+      if (current === undefined) {
+        continue;
+      }
+      runs ??= {};
+      runs[slot.profile] = current.summary();
+    }
+    return runs;
+  }
+
+  /**
+   * Every run of a session in any profile, for a fingerprint that must notice a
+   * run starting or stopping in a profile the caller does not address.
+   */
+  public runsOf(sessionRef: string): WebUiSessionRun[] {
+    const runs: WebUiSessionRun[] = [];
+    for (const slot of this.runs.values()) {
+      if (slot.sessionRef !== sessionRef) {
+        continue;
+      }
+      const current = this.current(sessionRef, slot.profile);
+      if (current !== undefined) {
+        runs.push(current.summary());
+      }
+    }
+    return runs;
+  }
+
+  public stop(sessionRef: string, profile: string | undefined): StopRunResult {
+    const run = this.current(sessionRef, profile);
     if (run === undefined || run.status !== "running") {
       return {stopped: false};
     }
@@ -178,8 +230,8 @@ export class SessionRunRegistry {
   }
 
   public abortAll(reason: Error): void {
-    for (const list of this.runs.values()) {
-      for (const run of list) {
+    for (const slot of this.runs.values()) {
+      for (const run of slot.list) {
         if (run.status === "running") {
           run.controller.abort(reason);
         }
@@ -195,17 +247,18 @@ export class SessionRunRegistry {
     this.runs.clear();
   }
 
-  private retire(sessionRef: string, run: SessionRun): void {
+  private retire(sessionRef: string, profile: string | undefined, run: SessionRun): void {
     const remove = (): void => {
-      const list = this.runs.get(sessionRef);
-      if (list === undefined) {
+      const key = SessionRunRegistry.key(sessionRef, profile);
+      const slot = this.runs.get(key);
+      if (slot === undefined) {
         return;
       }
-      const remaining = list.filter((candidate) => candidate !== run);
+      const remaining = slot.list.filter((candidate) => candidate !== run);
       if (remaining.length === 0) {
-        this.runs.delete(sessionRef);
+        this.runs.delete(key);
       } else {
-        this.runs.set(sessionRef, remaining);
+        slot.list = remaining;
       }
     };
 
@@ -220,4 +273,11 @@ export class SessionRunRegistry {
     timer.unref?.();
     this.timers.add(timer);
   }
+}
+
+interface SessionRunSlot {
+  sessionRef: string;
+  /** Absent when the session configures no path profiles. */
+  profile: string | undefined;
+  list: SessionRun[];
 }

@@ -85,9 +85,8 @@ export async function setSessionPathModelDefault(
 ): Promise<SessionPathModelDefaultUpdate> {
   const setting = await readSetting(settingPath);
   const current = pathProfilesFromSetting(setting);
-  if (current.active_profile !== profileName) {
-    throw new SessionPathProfileError("active session path profile changed; retry the model selection");
-  }
+  // The write targets the named profile, which need not be the stored default:
+  // a client pinned to one profile selects the model inside that profile.
   const paths = setting.paths;
   if (!isRecord(paths) || !isRecord(paths.profiles)) {
     throw new SessionPathProfileError("session has no configured path profiles");
