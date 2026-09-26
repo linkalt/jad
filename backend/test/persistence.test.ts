@@ -1120,6 +1120,58 @@ test("resolves a requested path profile without moving the session default", asy
   }
 });
 
+test("profile storage defaults are isolated while the stored default keeps legacy paths", async () => {
+  const sessionDir = await makeSession();
+  try {
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      cwd: sessionDir,
+      paths: {
+        active_profile: "primary",
+        profiles: {primary: {}, alternate: {}},
+      },
+    }));
+
+    const primary = new SessionConfigLoader(sessionDir, {profile: "primary"});
+    const alternate = new SessionConfigLoader(sessionDir, {profile: "alternate"});
+    const primaryPaths = (await primary.loadSettings()).paths;
+    const alternatePaths = (await alternate.loadSettings()).paths;
+
+    assert.equal(primaryPaths.messages, join(sessionDir, "messages.jsonl"));
+    assert.equal(primaryPaths.staging, join(sessionDir, "staging"));
+    assert.equal(alternatePaths.messages, join(sessionDir, "profiles/alternate/messages.jsonl"));
+    assert.equal(alternatePaths.staging, join(sessionDir, "profiles/alternate/staging"));
+    assert.notEqual(primaryPaths.messages, alternatePaths.messages);
+    assert.notEqual(primaryPaths.compaction_cache, alternatePaths.compaction_cache);
+    assert.notEqual(primaryPaths.history_cache, alternatePaths.history_cache);
+    assert.notEqual(primaryPaths.usage_cache, alternatePaths.usage_cache);
+    assert.notEqual(primaryPaths.cursor_cache, alternatePaths.cursor_cache);
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
+test("rejects path profiles that explicitly share transcript or cache storage", async () => {
+  const sessionDir = await makeSession();
+  try {
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      paths: {
+        active_profile: "primary",
+        profiles: {
+          primary: {messages: "shared/messages.jsonl", staging: "shared/staging"},
+          alternate: {messages: "shared/messages.jsonl", staging: "shared/staging"},
+        },
+      },
+    }));
+
+    await assert.rejects(
+      () => new SessionConfigLoader(sessionDir).loadSettings(),
+      /same storage path/,
+    );
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("selects named path profiles, merges overrides, and pins the choice to the loader", async () => {
   const sessionDir = await makeSession();
   const profileModelPath = join(sessionDir, "chatgpt/model.json");

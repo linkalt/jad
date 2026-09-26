@@ -2620,6 +2620,7 @@ function normalizeStoragePaths(
     configuredPaths: JsonRecord,
     profilePath: string,
     profileScoped = false,
+    profileStorageDirectory = dirname(settingPath),
   ): SessionStoragePaths => {
     if (configuredPaths.processes !== undefined || configuredPaths.tasks !== undefined) {
       throw new ConfigError(`${profilePath}: paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir`);
@@ -2629,8 +2630,14 @@ function normalizeStoragePaths(
       expandHomePrefix(requiredString(configuredPaths[field] ?? fallback, field, profilePath)),
     );
 
-    const staging = pathValue("staging", "staging");
-    const messages = pathValue("messages", "messages.jsonl");
+    const staging = pathValue(
+      "staging",
+      profileScoped ? join(profileStorageDirectory, "staging") : "staging",
+    );
+    const messages = pathValue(
+      "messages",
+      profileScoped ? join(profileStorageDirectory, "messages.jsonl") : "messages.jsonl",
+    );
     const messagesBackup = pathValue(
       "messages_backup",
       profileScoped ? join(dirname(messages), "messages.backup.jsonl") : "messages.backup.jsonl",
@@ -2656,7 +2663,10 @@ function normalizeStoragePaths(
       cursor_cache: cursorCache,
       statecontext,
       staging,
-      http_debug: pathValue("http_debug", "debug/http"),
+      http_debug: pathValue(
+        "http_debug",
+        profileScoped ? join(profileStorageDirectory, "debug", "http") : "debug/http",
+      ),
     } as SessionStoragePaths;
   };
 
@@ -2688,6 +2698,7 @@ function normalizeStoragePaths(
   }
 
   let normalizedSelectedProfile: SessionStoragePaths | undefined;
+  const normalizedProfiles = new Map<string, SessionStoragePaths>();
   for (const [profileName, profileValue] of Object.entries(profilesValue)) {
     if (!SESSION_PATH_PROFILE_NAME.test(profileName)) {
       throw new ConfigError(`${path}: invalid paths.profiles key '${profileName}'`);
@@ -2732,12 +2743,42 @@ function normalizeStoragePaths(
       ...(modelDefault === undefined ? {} : {model_default: modelDefault}),
       ...(models === undefined ? {} : {models}),
     };
+    const isStoredDefaultProfile = profileName === activeProfile;
+    // Keep the currently stored default on its legacy paths, so existing
+    // transcripts remain visible. Other profiles get stable, profile-owned
+    // storage by default instead of silently sharing that transcript and cache.
+    const sharedBasePaths = isStoredDefaultProfile
+      ? basePaths
+      : Object.fromEntries(
+          Object.entries(basePaths).filter(([field]) => !SESSION_PATH_FIELD_SET.has(field)),
+        );
+    const hasProfileScopedStorage =
+      profileValue.messages !== undefined || profileValue.staging !== undefined;
+    const profileStorageDirectory = isStoredDefaultProfile && !hasProfileScopedStorage
+      ? dirname(settingPath)
+      : join(dirname(settingPath), "profiles", profileName);
     const normalized = normalizePathSet(
-      {...basePaths, ...normalizedProfile},
+      {...sharedBasePaths, ...normalizedProfile},
       profilePath,
       true,
+      profileStorageDirectory,
     );
+    normalizedProfiles.set(profileName, normalized);
     if (profileName === selectedProfileName) normalizedSelectedProfile = normalized;
+  }
+
+  const storagePathOwners = new Map<string, {profile: string; field: string}>();
+  for (const [profileName, profilePaths] of normalizedProfiles) {
+    for (const field of SESSION_PATH_FIELDS) {
+      const resolvedPath = profilePaths[field];
+      const owner = storagePathOwners.get(resolvedPath);
+      if (owner !== undefined && owner.profile !== profileName) {
+        throw new ConfigError(
+          `${path}: path profiles '${owner.profile}' and '${profileName}' resolve to the same storage path (${owner.field} and ${field}); each profile must use distinct transcript and cache paths`,
+        );
+      }
+      storagePathOwners.set(resolvedPath, {profile: profileName, field});
+    }
   }
 
   return {

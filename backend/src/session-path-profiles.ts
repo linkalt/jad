@@ -18,6 +18,19 @@ export interface SessionPathModelDefaultUpdate extends SessionPathProfileInfo {
   changed: boolean;
 }
 
+/** Storage paths pinned to one profile when the stored default changes. */
+export interface SessionProfileStoragePaths {
+  messages: string;
+  messages_backup: string;
+  compaction_cache: string;
+  history_cache: string;
+  usage_cache: string;
+  cursor_cache: string;
+  statecontext: string;
+  staging: string;
+  http_debug: string;
+}
+
 export class SessionPathProfileError extends Error {
   public constructor(message: string) {
     super(message);
@@ -133,6 +146,7 @@ export async function setSessionPathProfile(
   settingPath: string,
   profileName: string,
   durability: DurabilityMode,
+  storagePathsByProfile?: Readonly<Record<string, SessionProfileStoragePaths>>,
 ): Promise<SessionPathProfileUpdate> {
   const setting = await readSetting(settingPath);
   const current = pathProfilesFromSetting(setting);
@@ -145,11 +159,42 @@ export async function setSessionPathProfile(
     );
   }
   const changed = current.active_profile !== profileName;
-  if (changed) {
-    const paths = setting.paths as JsonRecord;
+  const paths = setting.paths as JsonRecord;
+  const profiles = paths.profiles as JsonRecord;
+  const nextProfiles: JsonRecord = {...profiles};
+  let storagePathsChanged = false;
+  for (const [name, storagePaths] of Object.entries(storagePathsByProfile ?? {})) {
+    if (!current.path_profiles.includes(name)) {
+      throw new SessionPathProfileError(
+        `path profile '${name}' is not defined in session setting paths.profiles`,
+      );
+    }
+    const configuredProfile = profiles[name];
+    if (!isRecord(configuredProfile)) {
+      throw new SessionPathProfileError(
+        `path profile '${name}' is not defined in session setting paths.profiles`,
+      );
+    }
+    const nextProfile = {...configuredProfile};
+    for (const [field, value] of Object.entries(storagePaths)) {
+      if (nextProfile[field] !== value) {
+        nextProfile[field] = value;
+        storagePathsChanged = true;
+      }
+    }
+    nextProfiles[name] = nextProfile;
+  }
+  if (changed || storagePathsChanged) {
     await writeJsonAtomic(
       settingPath,
-      {...setting, paths: {...paths, active_profile: profileName}},
+      {
+        ...setting,
+        paths: {
+          ...paths,
+          profiles: nextProfiles,
+          ...(changed ? {active_profile: profileName} : {}),
+        },
+      },
       durability,
     );
   }

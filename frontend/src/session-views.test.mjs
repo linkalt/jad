@@ -12,6 +12,7 @@ import {
   prunePinnedViews,
   removePinnedView,
   restoreViews,
+  rowHasRunningRun,
   rowRunStatus,
   sessionListRows,
   sessionRefOfViewKey,
@@ -118,6 +119,34 @@ test('a row shows the run of its own profile, not the session default', () => {
   assert.deepEqual(rowRunStatus(rows[1], session), run);
   assert.equal(rowRunStatus(undefined, session), undefined);
   assert.equal(rowRunStatus(rows[0], undefined), undefined);
+});
+
+test('run markers stay profile-specific while the session row aggregates pinned runs', () => {
+  const rows = sessionListRows(
+    [{id: 'session1', title: 'One'}],
+    [{sessionRef: 'session1', profile: 'chatgpt'}, {sessionRef: 'session1', profile: 'alternate'}],
+  );
+  const session = {
+    activeProfile: 'default',
+    run: {status: 'completed'},
+    runsByProfile: {
+      default: {status: 'completed'},
+      chatgpt: {status: 'running'},
+      alternate: {status: 'completed'},
+    },
+  };
+
+  assert.equal(rowHasRunningRun(rows[0], session, new Set()), true);
+  assert.equal(rowHasRunningRun(rows[1], session, new Set()), true);
+  assert.equal(rowHasRunningRun(rows[2], session, new Set()), false);
+  assert.equal(
+    rowHasRunningRun(rows[0], {...session, runsByProfile: {}}, new Set([rows[1].key])),
+    true,
+  );
+  assert.equal(
+    rowHasRunningRun(rows[1], {...session, runsByProfile: {}}, new Set([rows[2].key])),
+    false,
+  );
 });
 
 test('a stored arrangement is restored as it was, defensively', () => {

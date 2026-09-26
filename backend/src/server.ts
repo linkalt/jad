@@ -38,6 +38,7 @@ import {
   SessionPathProfileError,
   setSessionPathModelDefault,
   setSessionPathProfile,
+  type SessionProfileStoragePaths,
 } from "./session-path-profiles.js";
 import {
   DEFAULT_ROOT_SERVER_SETTINGS,
@@ -170,6 +171,22 @@ function sessionStatePaths(paths: SessionConfigPaths): SessionStatePaths {
     usageCache: paths.usage_cache_path,
     setting: paths.setting_path,
     model: paths.model_path,
+  };
+}
+
+function sessionProfileStoragePaths(
+  paths: SessionSettings["paths"],
+): SessionProfileStoragePaths {
+  return {
+    messages: paths.messages,
+    messages_backup: paths.messages_backup,
+    compaction_cache: paths.compaction_cache,
+    history_cache: paths.history_cache,
+    usage_cache: paths.usage_cache,
+    cursor_cache: paths.cursor_cache,
+    statecontext: paths.statecontext,
+    staging: paths.staging,
+    http_debug: paths.http_debug,
   };
 }
 
@@ -1066,7 +1083,7 @@ class AgentHttpApplication {
     const run = this.runs.describe(handle.location.ref, handle.profile);
     const etag = await sessionStateVersion(
       sessionStatePaths(handle.loader.paths),
-      run === undefined ? [] : [run],
+      this.runs.runsOf(handle.location.ref),
     );
     // Revalidation comes first: answering `304` must not read the transcript,
     // which is the whole point of a cheap poll.
@@ -1302,11 +1319,14 @@ class AgentHttpApplication {
     if (this.changingSessionSettings.has(reference)) {
       throw new HttpError(409, "session path profile is already changing");
     }
-    const location = await this.resolveSessionLocation(reference);
-    const directory = join(location.root.directory, location.sessionId);
 
+    // Acquire the per-session settings guard before the first await. Otherwise
+    // simultaneous requests can both pass the check while resolving the session
+    // location, then race their read-modify-write updates to setting.json.
     this.changingSessionSettings.add(reference);
     try {
+      const location = await this.resolveSessionLocation(reference);
+      const directory = join(location.root.directory, location.sessionId);
       const loader = new SessionConfigLoader(directory, {
         globalJadRoot: location.root.globalJadRoot,
       });
@@ -1321,12 +1341,37 @@ class AgentHttpApplication {
         throw new HttpError(409, "cannot change the session path profile during compaction");
       }
 
+      const target = new SessionConfigLoader(directory, {
+        globalJadRoot: location.root.globalJadRoot,
+        profile: profileName,
+      });
+      let targetSettings: SessionSettings;
+      try {
+        targetSettings = await target.loadSettings();
+      } catch (error) {
+        if (error instanceof ConfigError) {
+          throw new HttpError(400, error.message);
+        }
+        throw error;
+      }
+      // A profile that has never been the stored default uses its own derived
+      // directory. Pin both resolved path sets before switching so neither
+      // profile's storage changes when their roles reverse.
+      const storagePathsByProfile: Record<string, SessionProfileStoragePaths> | undefined =
+        stored === undefined || stored === profileName
+          ? undefined
+          : {
+              [stored]: sessionProfileStoragePaths(settings.paths),
+              [profileName]: sessionProfileStoragePaths(targetSettings.paths),
+            };
+
       let update;
       try {
         update = await setSessionPathProfile(
           loader.paths.setting_path,
           profileName,
           settings.persistence.durability,
+          storagePathsByProfile,
         );
       } catch (error) {
         if (error instanceof SessionPathProfileError) {
@@ -1338,11 +1383,9 @@ class AgentHttpApplication {
       if (update.changed) {
         this.defaultHandles.delete(reference);
       }
-      const target = new SessionConfigLoader(directory, {
-        globalJadRoot: location.root.globalJadRoot,
-        profile: profileName,
-      });
-      const targetSettings = await target.loadSettings();
+      // Refresh the default_profile field after the stored default changes; the
+      // target's selected storage paths remain pinned to the same profile.
+      targetSettings = await target.loadSettings();
       const profileInfo = await readSessionPathProfiles(target.paths.setting_path);
       sendJson(response, 200, {
         ...profileInfo,

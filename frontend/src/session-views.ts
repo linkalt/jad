@@ -200,6 +200,41 @@ export function rowRunStatus<T>(
   return row.profile === undefined ? session.run : session.runsByProfile?.[row.profile];
 }
 
+/**
+ * Whether a row should show an active-run marker.
+ *
+ * A pinned row only reflects its own profile's run. The session's stored-default
+ * row also acts as an aggregate indicator for detached or remotely running
+ * pinned profiles, without making sibling pinned rows look active.
+ */
+export function rowHasRunningRun(
+  row: SessionListRow | undefined,
+  session: {
+    activeProfile?: string;
+    run?: {status?: string};
+    runsByProfile?: Record<string, {status?: string}>;
+  } | undefined,
+  locallyRunningViewKeys: ReadonlySet<string>,
+): boolean {
+  if (row === undefined || session === undefined) {
+    return false;
+  }
+  if (locallyRunningViewKeys.has(row.key) || rowRunStatus(row, session)?.status === "running") {
+    return true;
+  }
+  if (row.profile !== undefined) {
+    return false;
+  }
+  if (Object.entries(session.runsByProfile ?? {}).some(
+    ([profile, run]) => profile !== session.activeProfile && run.status === "running",
+  )) {
+    return true;
+  }
+  return [...locallyRunningViewKeys].some(
+    (key) => sessionRefOfViewKey(key) === row.sessionRef && profileOfViewKey(key) !== undefined,
+  );
+}
+
 export type StoredViews = {
   views: PinnedView[];
   activeViewKey: string;

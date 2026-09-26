@@ -126,6 +126,7 @@ import {
   prunePinnedViews,
   removePinnedView,
   restoreViews,
+  rowHasRunningRun,
   rowRunStatus,
   sessionListRows,
   sessionRefOfViewKey,
@@ -1501,7 +1502,7 @@ function SessionNavigation({
   rows,
   rowTurns,
   sessions,
-  runningSessionIds,
+  runningViewKeys,
   activeViewKey,
   onSelect,
   onOpenProfile,
@@ -1520,7 +1521,7 @@ function SessionNavigation({
   /** What each row's own transcript holds, when its snapshot has reported it. */
   rowTurns: Readonly<Record<string, number>>;
   sessions: Session[];
-  runningSessionIds: ReadonlySet<string>;
+  runningViewKeys: ReadonlySet<string>;
   activeViewKey: string;
   onSelect: (viewKey: string) => void;
   onOpenProfile: (sessionRef: string, profile: string) => void;
@@ -1592,7 +1593,12 @@ function SessionNavigation({
           if (session === undefined) {
             return null;
           }
-          const state = runningSessionIds.has(row.sessionRef) ? 'accent' : session.state;
+          const run = rowRunStatus(row, session);
+          const state = rowHasRunningRun(row, session, runningViewKeys)
+            ? 'accent'
+            : row.profile === undefined
+              ? session.state
+              : sessionUiStateForRun(run?.status);
           // A session row offers its other profiles; the profile it already
           // shows is left out, because its row is this one.
           const pinnedProfiles = profileMenuTargets({
@@ -2289,7 +2295,7 @@ function App() {
     ref: undefined,
     profile: activeProfile,
   });
-  const loadingOlderRef = useRef(false);
+  const loadingOlderRef = useRef(new Set<string>());
   /**
    * Messages the client fetched whole, per session.
    *
@@ -2320,6 +2326,8 @@ function App() {
   );
   const loadFullMessage = useCallback(
     (message: MessageRecord) => {
+      const uiId = activeViewKeyRef.current;
+      const profile = profileOfViewKey(uiId);
       const sessionRef = activeSessionEntryRef.current?.sessionRef;
       if (sessionRef === undefined) {
         return;
@@ -2328,10 +2336,9 @@ function App() {
         sessionRef,
         message.id,
         message.cursor,
-        activeProfileRef.current,
+        profile,
       )
         .then(full => {
-          const uiId = activeViewKeyRef.current;
           const overlay = hydratedMessagesRef.current.get(uiId) ?? new Map();
           overlay.set(message.id, full);
           hydratedMessagesRef.current.set(uiId, overlay);
@@ -2435,6 +2442,43 @@ function App() {
           : {pathProfiles: activeSession.pathProfiles}),
       };
 
+  /** Apply a live result to the row that initiated it, not its master session. */
+  const updateViewSessionRecord = useCallback(
+    (
+      key: string,
+      update: (session: Session) => Session,
+      fallback?: Session,
+    ) => {
+      const sessionRef = sessionRefOfViewKey(key);
+      if (isPinnedViewKey(key)) {
+        setRowSessions(current => {
+          const existing = current[key] ?? fallback;
+          if (existing === undefined) {
+            return current;
+          }
+          const next = update(existing);
+          return current[key] === next ? current : {...current, [key]: next};
+        });
+        return;
+      }
+      setSessions(current => {
+        let changed = false;
+        const next = current.map(session => {
+          if (session.id !== sessionRef) {
+            return session;
+          }
+          const updated = update(session);
+          if (updated !== session) {
+            changed = true;
+          }
+          return updated;
+        });
+        return changed ? next : current;
+      });
+    },
+    [],
+  );
+
   /**
    * Fills a pinned row's record from its own snapshot.
    *
@@ -2478,9 +2522,12 @@ function App() {
   );
   const selectSessionModel = useCallback(async (modelDefault: string) => {
     const sessionRef = activeSession?.sessionRef;
+    const targetViewKey = activeViewKey;
+    const targetProfile = activeProfile;
+    const targetRowSession = activeRowSession;
     if (
       sessionRef === undefined ||
-      activeSession?.modelDefault === modelDefault ||
+      targetRowSession.modelDefault === modelDefault ||
       isProfileSwitching ||
       isModelDefaultUpdatingRef.current
     ) {
@@ -2489,33 +2536,28 @@ function App() {
     isModelDefaultUpdatingRef.current = true;
     setIsModelDefaultUpdating(true);
     try {
-      // The model belongs to the profile this view shows, which for a pinned row
-      // is not the session's stored default.
       const result = await updateSessionProfileModelDefault(
         sessionRef,
         modelDefault,
-        activeProfileRef.current,
+        targetProfile,
       );
-      setSessions(current => current.map(session => {
-        if (session.sessionRef !== sessionRef) {
-          return session;
-        }
-        return {
-          ...session,
-          activeProfile: result.active_profile,
-          pathProfiles: result.path_profiles,
-          modelDefault: result.model_default,
-          models: result.models,
-          model: result.model,
-        };
-      }));
+      updateViewSessionRecord(targetViewKey, session => ({
+        ...session,
+        activeProfile: result.active_profile,
+        pathProfiles: result.path_profiles,
+        modelDefault: result.model_default,
+        models: result.models,
+        model: result.model,
+      }), targetRowSession);
       sessionsEtagRef.current = undefined;
-      snapshotEtagRef.current = undefined;
+      if (activeViewKeyRef.current === targetViewKey) {
+        snapshotEtagRef.current = undefined;
+      }
       refreshSessionsRef.current?.();
     } catch (error) {
       recordNotification({
         sessionId: activeSessionId,
-        sessionTitle: activeSession?.title ?? 'Session',
+        sessionTitle: targetRowSession.title,
         kind: 'error',
         title: 'Unable to change the profile model',
         message: error instanceof Error ? error.message : String(error),
@@ -2527,8 +2569,12 @@ function App() {
   }, [
     activeSession,
     activeSessionId,
+    activeViewKey,
+    activeProfile,
+    activeRowSession,
     isProfileSwitching,
     recordNotification,
+    updateViewSessionRecord,
   ]);
   const threadMessages = threads[activeViewKey] ?? [];
   // The history block renders ahead of the transcript: it holds the turns a
@@ -2541,7 +2587,7 @@ function App() {
     return block === undefined || block.length === 0
       ? threadMessages
       : [...block, ...threadMessages];
-  }, [threadMessages, activeSessionId, historyBlock]);
+  }, [threadMessages, activeViewKey, historyBlock]);
 
   const isLiveSession = activeSession?.source === 'live';
   const isRunning = isSessionRunning(
@@ -2553,7 +2599,7 @@ function App() {
     isLiveSession &&
     (rowRunStatus(activeRow, activeSession)?.status === 'running' ||
       detachedRunSessionIds.has(activeViewKey) ||
-      attachedRunSessionIdRef.current === activeSessionId);
+      attachedRunSessionIdRef.current === activeViewKey);
   const rememberDetachedRun = useCallback(() => {
     if (!isRunning || !isLiveSession) {
       return;
@@ -2563,17 +2609,17 @@ function App() {
         return current;
       }
       const next = new Set(current);
-      next.add(activeSessionId);
+      next.add(activeViewKey);
       return next;
     });
-  }, [activeSessionId, isLiveSession, isRunning]);
+  }, [activeViewKey, isLiveSession, isRunning]);
   const transcriptMessages = useMemo(
     () => suppressAttachedRunTranscriptTail(messages, hasLiveAttachedRun),
     [messages, hasLiveAttachedRun],
   );
   const {visibleMessages, hiddenCount, revealEarlier} = useTranscriptWindow({
     messages: transcriptMessages,
-    sessionId: activeSessionId,
+    sessionId: activeViewKey,
     initialCount: appConfig.transcript_window_messages,
     pageSize: appConfig.transcript_window_page_messages,
   });
@@ -2599,15 +2645,17 @@ function App() {
         page === undefined ||
         !page.has_more ||
         page.next_before === null ||
-        loadingOlderRef.current
+        loadingOlderRef.current.has(uiId)
       ) {
         return;
       }
-      loadingOlderRef.current = true;
+      loadingOlderRef.current.add(uiId);
+      const profile = profileOfViewKey(uiId);
       void fetchSession(session.sessionRef, {
         before: page.next_before,
         generation: page.generation,
         turns: appConfig.transcript_page_turns,
+        ...(profile === undefined ? {} : {profile}),
       })
         .then(result => {
           if (result.kind !== 'ok') {
@@ -2638,7 +2686,7 @@ function App() {
           console.warn('Unable to load earlier turns:', error);
         })
         .finally(() => {
-          loadingOlderRef.current = false;
+          loadingOlderRef.current.delete(uiId);
         });
     },
     [applyHydrated, sessionPages],
@@ -2652,9 +2700,9 @@ function App() {
       }
       // Nothing loaded is hidden any more: the rest of the transcript has to be
       // fetched before it can be revealed.
-      loadOlderMessages(activeSession, activeSessionId);
+      loadOlderMessages(activeSession, activeViewKey);
     },
-    [activeSession, activeSessionId, hiddenCount, loadOlderMessages, revealEarlier],
+    [activeSession, activeViewKey, hiddenCount, loadOlderMessages, revealEarlier],
   );
   const isCompactionInProgress = compactingSessionRef !== null;
   const selectSessionPathProfile = useCallback(
@@ -2791,7 +2839,7 @@ function App() {
       void stopSessionRun(session.sessionRef, activeProfileRef.current).catch(error => {
         recordNotification({
           sessionId: session.id,
-          sessionTitle: session.title,
+          sessionTitle: activeRowSession.title,
           kind: 'error',
           title: 'Unable to stop run',
           message: error instanceof Error ? error.message : String(error),
@@ -2799,7 +2847,7 @@ function App() {
         console.warn('Unable to stop the run:', error);
       });
     }
-  }, [detachRun, recordNotification]);
+  }, [activeRowSession.title, detachRun, recordNotification]);
 
   const compactActiveSession = useCallback(async () => {
     const sessionRef = activeSession?.sessionRef;
@@ -2817,7 +2865,7 @@ function App() {
         : `No compaction needed; ${result.retained_items} items retained.`;
       recordNotification({
         sessionId: activeSessionId,
-        sessionTitle: activeSession.title,
+        sessionTitle: activeRowSession.title,
         kind: 'info',
         title: result.compacted ? 'History compacted' : 'No compaction needed',
         message,
@@ -2825,7 +2873,7 @@ function App() {
     } catch (error) {
       recordNotification({
         sessionId: activeSessionId,
-        sessionTitle: activeSession.title,
+        sessionTitle: activeRowSession.title,
         kind: 'error',
         title: 'Compaction failed',
         message: error instanceof Error ? error.message : String(error),
@@ -2835,7 +2883,7 @@ function App() {
     }
   }, [
     activeSession?.sessionRef,
-    activeSession.title,
+    activeRowSession.title,
     activeSessionId,
     isCompactionInProgress,
     isLiveSession,
@@ -2866,12 +2914,10 @@ function App() {
         ...current,
         [sessionId]: [...(current[sessionId] ?? []), userMessage],
       }));
-      setSessions(current =>
-        current.map(session =>
-          session.id === sessionRefOfViewKey(sessionId)
-            ? {...session, turns: session.turns + 1, state: 'accent'}
-            : session,
-        ),
+      updateViewSessionRecord(
+        sessionId,
+        session => ({...session, turns: session.turns + 1, state: 'accent'}),
+        activeRowSession,
       );
       attachedRunSessionIdRef.current = null;
       activeRunSessionIdRef.current = sessionId;
@@ -2896,9 +2942,11 @@ function App() {
             setRunProgress(2);
           },
           onUsage: usage => {
-            setSessions(current => current.map(session =>
-              session.id === sessionRefOfViewKey(sessionId) ? {...session, usage} : session,
-            ));
+            updateViewSessionRecord(
+              sessionId,
+              session => ({...session, usage}),
+              activeRowSession,
+            );
           },
         })
           .then(result => {
@@ -2928,10 +2976,10 @@ function App() {
               next[existingIndex] = assistantMessage;
               return {...current, [sessionId]: next};
             });
-            setSessions(current =>
-              current.map(session =>
-                session.id === sessionRefOfViewKey(sessionId) ? {...session, state: 'success'} : session,
-              ),
+            updateViewSessionRecord(
+              sessionId,
+              session => ({...session, state: 'success'}),
+              activeRowSession,
             );
           })
           .catch(error => {
@@ -2941,15 +2989,15 @@ function App() {
             const message = error instanceof Error ? error.message : String(error);
             recordNotification({
               sessionId,
-              sessionTitle: activeSession.title,
+              sessionTitle: activeRowSession.title,
               kind: 'error',
               title: 'Run failed',
               message,
             });
-            setSessions(current =>
-              current.map(session =>
-                session.id === sessionRefOfViewKey(sessionId) ? {...session, state: 'warning'} : session,
-              ),
+            updateViewSessionRecord(
+              sessionId,
+              session => ({...session, state: 'warning'}),
+              activeRowSession,
             );
           })
           .finally(() => {
@@ -2979,12 +3027,10 @@ function App() {
           ...current,
           [sessionId]: [...(current[sessionId] ?? []), assistantMessage],
         }));
-        setSessions(current =>
-          current.map(session =>
-            session.id === sessionRefOfViewKey(sessionId)
-              ? {...session, state: 'success'}
-              : session,
-          ),
+        updateViewSessionRecord(
+          sessionId,
+          session => ({...session, state: 'success'}),
+          activeRowSession,
         );
         activeRunSessionIdRef.current = null;
         setRunProgress(baseReasoning.length);
@@ -2993,7 +3039,16 @@ function App() {
       }, appConfig.mock_run_delay_ms);
       return true;
     },
-    [activeSession, activeSessionId, isRunning, recordNotification],
+    [
+      activeSession,
+      activeSessionId,
+      activeViewKey,
+      activeProfile,
+      activeRowSession,
+      isRunning,
+      recordNotification,
+      updateViewSessionRecord,
+    ],
   );
 
   /**
@@ -3008,6 +3063,7 @@ function App() {
       turnId: string,
       sessionTitle: string,
       profile: string | undefined,
+      fallbackSession: Session,
     ) => {
       if (attachedTurnRef.current === turnId || runAbortRef.current !== null) {
         return;
@@ -3029,10 +3085,10 @@ function App() {
         onPart: applyRunPart,
         onCompleted: message => setStreamingMessage(message),
         onUsage: usage => {
-          setSessions(current =>
-            current.map(session =>
-              session.id === sessionRefOfViewKey(sessionId) ? {...session, usage} : session,
-            ),
+          updateViewSessionRecord(
+            sessionId,
+            session => ({...session, usage}),
+            fallbackSession,
           );
         },
       })
@@ -3051,10 +3107,10 @@ function App() {
             }
             return {...current, [sessionId]: [...existing, completed]};
           });
-          setSessions(current =>
-            current.map(session =>
-              session.id === sessionRefOfViewKey(sessionId) ? {...session, state: 'success'} : session,
-            ),
+          updateViewSessionRecord(
+            sessionId,
+            session => ({...session, state: 'success'}),
+            fallbackSession,
           );
         })
         .catch(error => {
@@ -3068,10 +3124,10 @@ function App() {
             title: 'Live run connection failed',
             message: error instanceof Error ? error.message : String(error),
           });
-          setSessions(current =>
-            current.map(session =>
-              session.id === sessionRefOfViewKey(sessionId) ? {...session, state: 'warning'} : session,
-            ),
+          updateViewSessionRecord(
+            sessionId,
+            session => ({...session, state: 'warning'}),
+            fallbackSession,
           );
           console.warn('Unable to attach to the running session:', error);
         })
@@ -3093,7 +3149,7 @@ function App() {
           refreshSessionsRef.current?.();
         });
     },
-    [recordNotification],
+    [recordNotification, updateViewSessionRecord],
   );
 
   const createSession = useCallback(() => {
@@ -3195,12 +3251,15 @@ function App() {
     [activateView],
   );
 
-  // The sidebar marks a session when any of its views has a run this client is
-  // not showing, so a pinned row's run is still visible from the session row.
-  const sidebarRunningSessionIds = useMemo(
-    () => new Set([...detachedRunSessionIds].map(sessionRefOfViewKey)),
-    [detachedRunSessionIds],
-  );
+  // The sidebar gets exact view identities so one profile's detached run marks
+  // its own row. The session row can still aggregate runs from pinned profiles.
+  const sidebarRunningViewKeys = useMemo(() => {
+    const viewKeys = new Set(detachedRunSessionIds);
+    if (runningSessionId !== null) {
+      viewKeys.add(runningSessionId);
+    }
+    return viewKeys;
+  }, [detachedRunSessionIds, runningSessionId]);
 
   // A row whose session disappeared server-side is dropped. Only a list that came
   // from the server can say that: pruning against the placeholders of the first
@@ -3461,10 +3520,11 @@ function App() {
       activeViewKey,
       activeSession.sessionRef,
       run.turn_id,
-      activeSession.title,
+      activeRowSession.title,
       activeProfile,
+      activeRowSession,
     );
-  }, [activeProfile, activeSession, activeViewKey, attachToRun]);
+  }, [activeProfile, activeRowSession, activeSession, activeViewKey, attachToRun]);
 
   useEffect(() => {
     return () => {
@@ -3482,6 +3542,7 @@ function App() {
   const composer = (
     <ComposerPane
       activeSessionId={activeSessionId}
+      draftKey={activeViewKey}
       onSubmit={submitMessage}
       onStop={stopRun}
       isRunning={isRunning}
@@ -3634,7 +3695,7 @@ function App() {
           rows={listRows}
           rowTurns={rowTurns}
           sessions={sessions}
-          runningSessionIds={sidebarRunningSessionIds}
+          runningViewKeys={sidebarRunningViewKeys}
           activeViewKey={activeViewKey}
           onSelect={activateView}
           onOpenProfile={openProfileView}
@@ -3696,7 +3757,7 @@ function App() {
                         <TranscriptRow
                           key={message.id}
                           message={message}
-                          model={activeSession.model}
+                          model={activeRowSession.model}
                           onLoadFull={loadFullMessage}
                         />
                       ))}
@@ -3714,7 +3775,7 @@ function App() {
                             variant="ghost"
                             width="100%"
                             xstyle={styles.assistantBubble}
-                            name={<AssistantIdentity model={activeSession.model} />}
+                            name={<AssistantIdentity model={activeRowSession.model} />}
                           >
                             {isLiveSession && streamingMessage ? (
                               <WebUiParts
@@ -3774,8 +3835,8 @@ function App() {
           <RunSettingsPanel
             region={leftPanelRegion}
             onClose={() => setLeftPanel(null)}
-            sessionTitle={activeSession.title}
-            sessionTurns={activeSession.turns}
+            sessionTitle={activeRowSession.title}
+            sessionTurns={activeRowSession.turns}
             isLiveSession={isLiveSession}
           />
         )}

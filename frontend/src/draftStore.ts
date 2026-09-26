@@ -8,9 +8,9 @@ import appConfig from './config.json';
  * it lives in `localStorage` under a configured key rather than in memory
  * alone, where a reload would discard it.
  *
- * Drafts are keyed by session id because the composer keeps one draft per
- * session; restoring them all is what makes switching sessions and reloading
- * keep each draft separate.
+ * Drafts are keyed by the session-view key: the main row keeps the legacy
+ * session-id key, while each pinned profile row has its own independent draft.
+ * Restoring them all keeps switching views and reloading from mixing drafts.
  */
 const STORAGE_KEY = appConfig.composer_draft_storage_key;
 

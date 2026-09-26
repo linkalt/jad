@@ -38,39 +38,75 @@ export function reconcileDetachedRunSessionIds(
   );
 }
 
+function sameRun(
+  left: SessionRunState | undefined,
+  right: SessionRunState | undefined,
+): boolean {
+  return left === right || (
+    left !== undefined &&
+    right !== undefined &&
+    left.turn_id === right.turn_id &&
+    left.status === right.status &&
+    left.started_at === right.started_at
+  );
+}
+
+function sameProfileRuns(
+  left: Readonly<Record<string, SessionRunState>> | undefined,
+  right: Readonly<Record<string, SessionRunState>> | undefined,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (left === undefined || right === undefined) {
+    return false;
+  }
+  const leftProfiles = Object.keys(left);
+  const rightProfiles = Object.keys(right);
+  return leftProfiles.length === rightProfiles.length && leftProfiles.every(
+    profile => Object.hasOwn(right, profile) && sameRun(left[profile], right[profile]),
+  );
+}
+
 /**
- * Refresh the run a session object carries while leaving every field the local
- * stream owns (`state`, `turns`, `usage`) alone.
+ * Refresh the run descriptors a session object carries while leaving every field
+ * the local stream owns (`state`, `turns`, `usage`) alone.
  *
- * The session poll keeps the previous object for the session this client is
- * streaming, so its fresh `run` used to be dropped — leaving the client unable
- * to re-attach (it needs `turn_id`) after the run was detached by a session
- * switch, with a placeholder no stream could ever finish.
+ * A poll preserves the previous session object while this client streams. Its
+ * default and per-profile run descriptors still need refreshing, or a detached
+ * row can show an old status or lose the `turn_id` needed to re-attach.
  */
-export function withSnapshotRun<Session extends {run?: SessionRunState}>(
+export function withSnapshotRun<Session extends {
+  run?: SessionRunState;
+  runsByProfile?: Record<string, SessionRunState>;
+}>(
   session: Session,
-  snapshot: {run?: SessionRunState},
+  snapshot: {
+    run?: SessionRunState;
+    runs_by_profile?: Record<string, SessionRunState>;
+  },
 ): Session {
   const run = snapshot.run;
-  if (run === undefined) {
-    if (session.run === undefined) {
-      return session;
-    }
-    const next = {...session} as Session & {run?: SessionRunState};
-    delete next.run;
-    return next;
-  }
-
-  const current = session.run;
-  if (
-    current !== undefined &&
-    current.turn_id === run.turn_id &&
-    current.status === run.status &&
-    current.started_at === run.started_at
-  ) {
+  const runsByProfile = snapshot.runs_by_profile;
+  if (sameRun(session.run, run) && sameProfileRuns(session.runsByProfile, runsByProfile)) {
     return session;
   }
-  return {...session, run};
+
+  const next = {...session} as Session & {
+    run?: SessionRunState;
+    runsByProfile?: Record<string, SessionRunState>;
+  };
+  if (run === undefined) {
+    delete next.run;
+  } else {
+    next.run = run;
+  }
+  if (runsByProfile === undefined) {
+    delete next.runsByProfile;
+  } else {
+    next.runsByProfile = runsByProfile;
+  }
+  return next;
 }
 
 export function sessionUiStateForRun(

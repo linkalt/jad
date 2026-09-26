@@ -80,6 +80,33 @@ test('a polled snapshot refreshes the run a streamed session carries', () => {
   assert.equal(merged.id, 'session-a');
 });
 
+test('a snapshot refreshes per-profile run states without replacing stream-owned fields', () => {
+  const session = {
+    id: 'session-a',
+    state: 'accent',
+    turns: 7,
+    usage: {total_tokens: 10},
+    run: {turn_id: 'default-turn', started_at: '2026-01-01T00:00:00.000Z', status: 'completed'},
+    runsByProfile: {
+      default: {turn_id: 'default-turn', started_at: '2026-01-01T00:00:00.000Z', status: 'completed'},
+      alternate: {turn_id: 'alternate-turn', started_at: '2026-01-02T00:00:00.000Z', status: 'running'},
+    },
+  };
+  const snapshot = {
+    run: session.run,
+    runs_by_profile: {
+      default: session.run,
+      alternate: {turn_id: 'alternate-turn', started_at: '2026-01-02T00:00:00.000Z', status: 'completed'},
+    },
+  };
+  const merged = withSnapshotRun(session, snapshot);
+
+  assert.equal(merged.runsByProfile.alternate.status, 'completed');
+  assert.equal(merged.state, 'accent');
+  assert.equal(merged.turns, 7);
+  assert.deepEqual(merged.usage, {total_tokens: 10});
+});
+
 test('an unchanged run keeps the session identity', () => {
   const run = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
   const session = {id: 'session-a', run};
@@ -87,6 +114,16 @@ test('an unchanged run keeps the session identity', () => {
   assert.equal(withSnapshotRun(session, {run}), session);
   assert.equal(withSnapshotRun(session, {run: {...run}}), session);
   assert.equal(withSnapshotRun({id: 'session-a'}, {}).run, undefined);
+});
+
+test('unchanged per-profile runs keep the session identity', () => {
+  const run = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  const session = {id: 'session-a', run, runsByProfile: {alternate: run}};
+
+  assert.equal(
+    withSnapshotRun(session, {run: {...run}, runs_by_profile: {alternate: {...run}}}),
+    session,
+  );
 });
 
 test('a snapshot without a run clears a stale one', () => {

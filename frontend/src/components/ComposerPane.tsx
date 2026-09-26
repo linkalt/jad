@@ -23,8 +23,10 @@ import {
 } from './composerMarkdown';
 
 type ComposerPaneProps = {
-  /** Drafts are scoped per session, so switching sessions keeps each one separate. */
+  /** The session reference used for session-scoped features such as @ file search. */
   activeSessionId: string;
+  /** The row identity used to keep each profile view's draft independent. */
+  draftKey: string;
   /** Returns true when the message was accepted, so the draft is only cleared on a real send. */
   onSubmit: (value: string) => boolean;
   onStop: () => void;
@@ -86,6 +88,7 @@ function PreviewIcon(props: SVGProps<SVGSVGElement>) {
  */
 export function ComposerPane({
   activeSessionId,
+  draftKey,
   onSubmit,
   onStop,
   isRunning,
@@ -103,7 +106,7 @@ export function ComposerPane({
 }: ComposerPaneProps) {
   const [drafts, setDrafts] = useState<Record<string, string>>(() => loadDrafts());
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  const value = drafts[activeSessionId] ?? '';
+  const value = drafts[draftKey] ?? '';
   const isPreviewEnabled = appConfig.composer_preview_enabled;
 
   /**
@@ -169,18 +172,18 @@ export function ComposerPane({
 
   const handleChange = useCallback(
     (next: string) => {
-      setDraft(activeSessionId, next);
+      setDraft(draftKey, next);
     },
-    [activeSessionId, setDraft],
+    [draftKey, setDraft],
   );
 
   const handleSubmit = useCallback(
     (text: string) => {
       if (onSubmit(text)) {
-        setDraft(activeSessionId, '');
+        setDraft(draftKey, '');
       }
     },
-    [activeSessionId, onSubmit, setDraft],
+    [draftKey, onSubmit, setDraft],
   );
 
   /**
@@ -191,15 +194,15 @@ export function ComposerPane({
   const insertIntoDraft = useCallback(
     (text: string) => {
       setDrafts(current => {
-        const existing = current[activeSessionId] ?? '';
+        const existing = current[draftKey] ?? '';
         return {
           ...current,
-          [activeSessionId]: existing ? `${existing}\n\n${text}` : text,
+          [draftKey]: existing ? `${existing}\n\n${text}` : text,
         };
       });
       focusAfterInsertRef.current = true;
     },
-    [activeSessionId],
+    [draftKey],
   );
 
   useEffect(() => {
