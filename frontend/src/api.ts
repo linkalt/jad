@@ -89,6 +89,28 @@ export interface SessionRunState {
   status: SessionRunStatus;
 }
 
+/**
+ * The `profile` query parameter.
+ *
+ * A session's path profiles are addressed per request: a tab pinned to one
+ * profile sends it on every session-scoped request, so the server resolves that
+ * profile's transcript, model and run slot instead of the stored default. An
+ * absent profile means "the session's stored default", which is what an
+ * unqualified view shows.
+ */
+export function profileQuery(profile: string | undefined): string {
+  return profile === undefined || profile.length === 0
+    ? ''
+    : `profile=${encodeURIComponent(profile)}`;
+}
+
+function withProfile(query: URLSearchParams, profile: string | undefined): string {
+  if (profile !== undefined && profile.length > 0) {
+    query.set('profile', profile);
+  }
+  return query.size === 0 ? '' : `?${query.toString()}`;
+}
+
 export interface SessionSnapshot {
   id: string;
   session_id?: string;
@@ -108,6 +130,13 @@ export interface SessionSnapshot {
   };
   usage?: SessionUsageSummary;
   run?: SessionRunState;
+  /**
+   * The run of every profile that has one, keyed by profile name; `run` is the
+   * stored default's. A tab pinned to a profile reads its status here.
+   */
+  runs_by_profile?: Record<string, SessionRunState>;
+  /** The profile the session stores as its default; `active_profile` is the one this response resolved. */
+  default_profile?: string;
   /** Set when the transcript was capped; `next_before` fetches older turns. */
   page?: SessionPage;
   /**
@@ -225,7 +254,14 @@ export async function fetchSessions(
 
 export async function fetchSession(
   sessionId: string,
-  options: {etag?: string; before?: number; generation?: string; turns?: number} = {},
+  options: {
+    etag?: string;
+    before?: number;
+    generation?: string;
+    turns?: number;
+    /** One path profile of the session; absent follows its stored default. */
+    profile?: string;
+  } = {},
 ): Promise<ConditionalResult<SessionSnapshot>> {
   const query = new URLSearchParams();
   if (options.before !== undefined) {
@@ -237,7 +273,7 @@ export async function fetchSession(
   if (options.turns !== undefined) {
     query.set('turns', String(options.turns));
   }
-  const suffix = query.size === 0 ? '' : `?${query.toString()}`;
+  const suffix = withProfile(query, options.profile);
   return fetchConditional(
     `/sessions/${encodeURIComponent(sessionId)}${suffix}`,
     options.etag,
@@ -326,9 +362,10 @@ export async function updateSessionProfileModelDefault(
 export async function fetchSessionHistory(
   sessionId: string,
   etag?: string,
+  profile?: string,
 ): Promise<ConditionalResult<{messages: WebUiMessage[]}>> {
   return fetchConditional(
-    `/sessions/${encodeURIComponent(sessionId)}/history`,
+    `/sessions/${encodeURIComponent(sessionId)}/history${profileQuery(profile)}`,
     etag,
     value => {
       if (!isRecord(value) || !Array.isArray(value.messages)) {
@@ -351,10 +388,14 @@ export async function fetchSessionMessage(
   sessionId: string,
   messageId: string,
   cursor?: number,
+  profile?: string,
 ): Promise<WebUiMessage> {
   const query = new URLSearchParams();
   if (cursor !== undefined) {
     query.set('cursor', String(cursor));
+  }
+  if (profile !== undefined && profile.length > 0) {
+    query.set('profile', profile);
   }
   const suffix = query.size === 0 ? '' : `?${query.toString()}`;
   const response = await fetch(
@@ -387,9 +428,10 @@ export interface SessionFileListing {
 export async function fetchSessionFiles(
   sessionRef: string,
   signal?: AbortSignal,
+  profile?: string,
 ): Promise<SessionFileListing> {
   const response = await fetch(
-    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/files`),
+    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/files${profileQuery(profile)}`),
     {signal},
   );
   if (!response.ok) {
@@ -404,7 +446,7 @@ export async function fetchSessionFiles(
   };
 }
 
-export async function fetchSessionTools(sessionId: string): Promise<ToolDefinition[]> {  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/tools`));
+export async function fetchSessionTools(sessionId: string, profile?: string): Promise<ToolDefinition[]> {  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/tools${profileQuery(profile)}`));
   if (!response.ok) {
     throw new Error(await readError(response));
   }
@@ -606,6 +648,11 @@ function isSessionUsageSummary(value: unknown): value is SessionUsageSummary {
 export interface StreamSessionRunOptions {
   /** Model identifier selected for the new run. */
   model?: string;
+  /**
+   * The path profile to run in. A tab pinned to one profile must run there, so
+   * its transcript, model default and run slot are that profile's.
+   */
+  profile?: string;
   signal?: AbortSignal;
   onMessage?: (message: WebUiMessage) => void;
   /**
@@ -731,7 +778,7 @@ export async function streamSessionRun(
   input: string,
   options: StreamSessionRunOptions = {},
 ): Promise<StreamSessionRunResult> {
-  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/run`), {
+  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/run${profileQuery(options.profile)}`), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -757,7 +804,7 @@ export async function attachSessionRun(
   options: StreamSessionRunOptions = {},
 ): Promise<StreamSessionRunResult> {
   const response = await fetch(
-    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stream`),
+    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stream${profileQuery(options.profile)}`),
     {
       ...(options.signal ? {signal: options.signal} : {}),
     },
@@ -775,9 +822,12 @@ export interface StopSessionRunResult {
 }
 
 /** Stops the run in flight for a session; the run no longer commits a response. */
-export async function stopSessionRun(sessionRef: string): Promise<StopSessionRunResult> {
+export async function stopSessionRun(
+  sessionRef: string,
+  profile?: string,
+): Promise<StopSessionRunResult> {
   const response = await fetch(
-    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stop`),
+    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stop${profileQuery(profile)}`),
     {method: 'POST'},
   );
   if (!response.ok) {
