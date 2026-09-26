@@ -130,6 +130,7 @@ import {
   sessionListRows,
   sessionRefOfViewKey,
   viewKey,
+  viewLabel,
   type PinnedView,
   type SessionListRow,
 } from './session-views';
@@ -279,6 +280,12 @@ interface Session {
   run?: SessionSnapshot['run'];
   /** The run of each path profile that has one, keyed by profile name. */
   runsByProfile?: SessionSnapshot['runs_by_profile'];
+  /**
+   * The profile this row is pinned to. A row without one is the session's own
+   * row and follows the stored default; a pinned row is a session of its own
+   * that shares the session's `setting.json`.
+   */
+  profile?: string;
 }
 
 interface ReasoningStep {
@@ -1492,6 +1499,7 @@ function NotificationBellIcon(props: SVGProps<SVGSVGElement>) {
 
 function SessionNavigation({
   rows,
+  rowTurns,
   sessions,
   runningSessionIds,
   activeViewKey,
@@ -1509,6 +1517,8 @@ function SessionNavigation({
 }: {
   /** Every session, each followed by the profile rows pinned to it. */
   rows: SessionListRow[];
+  /** What each row's own transcript holds, when its snapshot has reported it. */
+  rowTurns: Readonly<Record<string, number>>;
   sessions: Session[];
   runningSessionIds: ReadonlySet<string>;
   activeViewKey: string;
@@ -1632,10 +1642,7 @@ function SessionNavigation({
                       />
                     ) : undefined
                   ) : (
-                    // The badge is the session's turn count. A pinned row has its
-                    // own transcript and the list does not count it per profile,
-                    // so it shows no number rather than the session's.
-                    <Badge label={String(session.turns)} />
+                    <Badge label={String(rowTurns[row.key] ?? session.turns)} />
                   )
                 }
               />
@@ -2392,10 +2399,82 @@ function App() {
 
   const activeSession =
     sessions.find(session => session.id === activeSessionId) ?? sessions[0];
+
+  /** The rows the list shows: every session, and the profiles pinned to it. */
+  const listRows = useMemo(
+    () => sessionListRows(sessions, pinnedViews),
+    [pinnedViews, sessions],
+  );
+  const activeRow = listRows.find(row => row.key === activeViewKey);
+  const profileRowLimitReached = pinnedViews.length >= appConfig.session_views_max;
+
+  /**
+   * What each row's own snapshot reported about it, keyed by row.
+   *
+   * The session's own row is the list's record; a pinned row keeps one here, and
+   * its snapshot fills it. That record is what a row *is* to the rest of the app:
+   * its own transcript, model, profiles and usage, sharing the session's
+   * `setting.json` with the other rows.
+   */
+  const [rowSessions, setRowSessions] = useState<Record<string, Session>>({});
+
+  const activeRowSession: Session = !isPinnedView
+    ? activeSession
+    : rowSessions[activeViewKey] ?? {
+        id: activeViewKey,
+        sessionRef: activeSessionId,
+        profile: activeProfile,
+        title: viewLabel(activeSession.title, activeProfile),
+        time: activeSession.time,
+        turns: 0,
+        state: sessionUiStateForRun(rowRunStatus(activeRow, activeSession)?.status),
+        source: 'live',
+        activeProfile,
+        ...(activeSession.pathProfiles === undefined
+          ? {}
+          : {pathProfiles: activeSession.pathProfiles}),
+      };
+
+  /**
+   * Fills a pinned row's record from its own snapshot.
+   *
+   * `sessionFromSnapshot` is the same builder the list uses, so a row is a
+   * session in every respect — except that the name it shows is the session's
+   * name plus the profile it is pinned to.
+   */
+  const applyRowSnapshot = useCallback(
+    (key: string, sessionRef: string, profile: string | undefined, snapshot: SessionSnapshot) => {
+      if (profile === undefined) {
+        return;
+      }
+      setRowSessions(current => {
+        const fromSnapshot = sessionFromSnapshot(snapshot, key);
+        const record: Session = {
+          ...fromSnapshot,
+          id: key,
+          sessionRef,
+          profile,
+          title: viewLabel(fromSnapshot.title, profile),
+        };
+        return deepEqual(current[key], record) ? current : {...current, [key]: record};
+      });
+    },
+    [],
+  );
+
+  const rowTurns = useMemo(() => {
+    const turns: Record<string, number> = {};
+    for (const [key, record] of Object.entries(rowSessions)) {
+      turns[key] = record.turns;
+    }
+    return turns;
+  }, [rowSessions]);
+
+  // A session of its own: the picker shows the model this row runs.
   const selectedModel = selectedModelForSession(
-    activeSession?.models,
-    activeSession?.modelDefault,
-    activeSession?.model?.model,
+    activeRowSession.models,
+    activeRowSession.modelDefault,
+    activeRowSession.model?.model,
   );
   const selectSessionModel = useCallback(async (modelDefault: string) => {
     const sessionRef = activeSession?.sessionRef;
@@ -2463,14 +2542,6 @@ function App() {
       ? threadMessages
       : [...block, ...threadMessages];
   }, [threadMessages, activeSessionId, historyBlock]);
-  /** The rows the list shows: every session, and the profiles pinned to it. */
-  const listRows = useMemo(
-    () => sessionListRows(sessions, pinnedViews),
-    [pinnedViews, sessions],
-  );
-  const activeRow = listRows.find(row => row.key === activeViewKey);
-  const profileRowLimitReached = pinnedViews.length >= appConfig.session_views_max;
-
 
   const isLiveSession = activeSession?.source === 'live';
   const isRunning = isSessionRunning(
@@ -3259,6 +3330,7 @@ function App() {
             setSessionPages(current => ({...current, [uiId]: snapshot.page!}));
           }
           hydratedTranscriptSessionIdsRef.current.add(uiId);
+          applyRowSnapshot(uiId, sessionRef, profile, snapshot);
         })
         .catch(error => {
           if (!cancelled) {
@@ -3369,7 +3441,7 @@ function App() {
       refreshSessionsRef.current = null;
       window.clearInterval(refreshTimer);
     };
-  }, [applyHydrated, isRunning, setHistory]);
+  }, [applyHydrated, applyRowSnapshot, isRunning, setHistory]);
 
   // The active session carries the run the server is executing, so a page that
   // reloads mid-run attaches as soon as the session list has settled instead of
@@ -3423,19 +3495,19 @@ function App() {
       drawer={
         isUsageDrawerCollapsed ? null : (
           <UsageDetailsDrawer
-            sessionName={activeSession.title}
-            usage={activeSession.usage}
+            sessionName={activeRowSession.title}
+            usage={activeRowSession.usage}
           />
         )
       }
       toolbarActions={
         <HStack align="center" gap={1}>
           {activeSession.sessionRef &&
-          activeSession.pathProfiles &&
-          activeSession.pathProfiles.length > 0 ? (
+          activeRowSession.pathProfiles &&
+          activeRowSession.pathProfiles.length > 0 ? (
             <SessionProfilePicker
-              profiles={activeSession.pathProfiles}
-              activeProfile={isPinnedView ? activeProfile : activeSession.activeProfile}
+              profiles={activeRowSession.pathProfiles}
+              activeProfile={activeRowSession.activeProfile}
               isDisabled={isRunning || isCompactionInProgress || isProfileSwitching || isModelDefaultUpdating}
               onSelect={profile => {
                 // The choice lands on the row on screen: a pinned row shows the
@@ -3460,9 +3532,9 @@ function App() {
               }}
             />
           ) : null}
-          {activeSession.models && activeSession.models.length > 0 ? (
+          {activeRowSession.models && activeRowSession.models.length > 0 ? (
             <ModelPicker
-              models={activeSession.models}
+              models={activeRowSession.models}
               selectedModel={selectedModel}
               isDisabled={
                 activeSession.sessionRef === undefined ||
@@ -3560,6 +3632,7 @@ function App() {
       sideNav={
         <SessionNavigation
           rows={listRows}
+          rowTurns={rowTurns}
           sessions={sessions}
           runningSessionIds={sidebarRunningSessionIds}
           activeViewKey={activeViewKey}
@@ -3590,7 +3663,7 @@ function App() {
               {/* The visual header is gone; this keeps the session title as the
                   page's top-level heading for assistive technology. */}
               <VisuallyHidden as="div">
-                <Heading level={1}>{activeSession.title}</Heading>
+                <Heading level={1}>{activeRowSession.title}</Heading>
               </VisuallyHidden>
               <ChatLayout
                 density="balanced"
@@ -3708,7 +3781,7 @@ function App() {
         )}
         {rightPanel === 'inspector' && (
           <RunInspector
-            activeSession={activeSession}
+            activeSession={activeRowSession}
             steps={reasoningSteps}
             tools={tools}
             liveToolParts={liveToolParts}
