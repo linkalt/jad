@@ -60,7 +60,7 @@
   "session_refresh_interval_ms": 5000,
   "transcript_page_turns": 5,
   "session_refresh_interval_ms_streaming": 30000,
-  "session_tabs": [],
-  "session_tabs_storage_key": "agent-harness.session-tabs",
-  "session_tabs_max": 8
+  "session_views": [],
+  "session_views_storage_key": "agent-harness.session-views",
+  "session_views_max": 8
 }

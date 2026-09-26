@@ -116,26 +116,22 @@ import {
   typeScaleVars,
   typographyVars,
 } from '@astryxdesign/core/theme/tokens.stylex';
-import {DropdownMenu} from '@astryxdesign/core/DropdownMenu';
-import {Tab, TabList} from '@astryxdesign/core/TabList';
+import {ContextMenu} from '@astryxdesign/core/ContextMenu';
 import {
-  addTab,
-  closeOtherTabs,
-  closeTab,
-  findTab,
-  neighbourTabId,
-  pruneTabs,
-  restoreTabs,
-  retargetTab,
+  addPinnedView,
+  isPinnedViewKey,
+  profileMenuTargets,
+  profileOfViewKey,
+  prunePinnedViews,
+  removePinnedView,
+  restoreViews,
+  rowRunStatus,
+  sessionListRows,
   sessionRefOfViewKey,
-  tabFromTarget,
-  tabId,
-  tabLabel,
-  tabMenuTargets,
-  tabRunStatus,
-  type SessionTab,
-  type SessionTabTarget,
-} from './session-tabs';
+  viewKey,
+  type PinnedView,
+  type SessionListRow,
+} from './session-views';
 
 const styles = stylex.create({
   shell: {
@@ -305,19 +301,19 @@ type HistoryBlock = {uiId: string; etag: string; messages: MessageRecord[]};
 const LIVE_SESSION_ID = appConfig.live_session_id;
 
 /**
- * The views this page opens with: the tabs left from last time, else the
- * configured seed, else the live session — which is what the app opened before
- * tabs existed.
+ * The rows this page opens with: the profile rows pinned last time, else the
+ * configured seed, with the selection falling back to the live session — which
+ * is what the app opened before a session could be viewed per profile.
  */
-const INITIAL_TABS = restoreTabs({
-  stored: readStoredTabs(appConfig.session_tabs_storage_key),
-  seed: appConfig.session_tabs,
+const INITIAL_VIEWS = restoreViews({
+  stored: readStoredViews(appConfig.session_views_storage_key),
+  seed: appConfig.session_views,
   liveSessionId: LIVE_SESSION_ID,
-  limit: appConfig.session_tabs_max,
+  limit: appConfig.session_views_max,
 });
 
-/** Storage is best effort: a blocked or full store must not break the strip. */
-function readStoredTabs(key: string): unknown {
+/** Storage is best effort: a blocked or full store must not break the list. */
+function readStoredViews(key: string): unknown {
   try {
     const raw = window.localStorage.getItem(key);
     return raw === null ? undefined : JSON.parse(raw);
@@ -326,11 +322,11 @@ function readStoredTabs(key: string): unknown {
   }
 }
 
-function writeStoredTabs(key: string, value: {tabs: SessionTab[]; activeTabId: string}): void {
+function writeStoredViews(key: string, value: {views: PinnedView[]; activeViewKey: string}): void {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    // Ignored: the tabs live for this page even when they cannot be persisted.
+    // Ignored: the rows live for this page even when they cannot be persisted.
   }
 }
 
@@ -1494,10 +1490,14 @@ function NotificationBellIcon(props: SVGProps<SVGSVGElement>) {
 }
 
 function SessionNavigation({
+  rows,
   sessions,
   runningSessionIds,
-  activeSessionId,
+  activeViewKey,
   onSelect,
+  onOpenProfile,
+  onRemoveView,
+  canPinProfile,
   onNewSession,
   openLeftPanel,
   onSelectLeftPanel,
@@ -1506,10 +1506,15 @@ function SessionNavigation({
   hasUnreadError,
   onToggleNotifications,
 }: {
+  /** Every session, each followed by the profile rows pinned to it. */
+  rows: SessionListRow[];
   sessions: Session[];
   runningSessionIds: ReadonlySet<string>;
-  activeSessionId: string;
-  onSelect: (sessionId: string) => void;
+  activeViewKey: string;
+  onSelect: (viewKey: string) => void;
+  onOpenProfile: (sessionRef: string, profile: string) => void;
+  onRemoveView: (viewKey: string) => void;
+  canPinProfile: boolean;
   onNewSession: () => void;
   openLeftPanel: LeftPanelId | null;
   onSelectLeftPanel: (panel: LeftPanelId) => void;
@@ -1518,6 +1523,10 @@ function SessionNavigation({
   hasUnreadError: boolean;
   onToggleNotifications: () => void;
 }) {
+  // The ✕ of a pinned row appears while the pointer is over that row, so the
+  // list stays quiet; the row's context menu is the keyboard path to the same
+  // removal.
+  const [hoveredViewKey, setHoveredViewKey] = useState<string | null>(null);
   return (
     <SideNav
       aria-label="Agent sessions"
@@ -1567,17 +1576,69 @@ function SessionNavigation({
       collapsible
     >
       <SideNavSection title="Recent runs">
-        {sessions.map(session => {
-          const state = runningSessionIds.has(session.id) ? 'accent' : session.state;
+        {rows.map(row => {
+          const session = sessions.find(candidate => candidate.id === row.sessionRef);
+          if (session === undefined) {
+            return null;
+          }
+          const state = runningSessionIds.has(row.sessionRef) ? 'accent' : session.state;
+          // A session row offers its other profiles; the profile it already
+          // shows is left out, because its row is this one.
+          const pinnedProfiles = profileMenuTargets({
+            id: session.id,
+            title: session.title,
+            ...(session.pathProfiles === undefined ? {} : {profiles: session.pathProfiles}),
+            ...(session.activeProfile === undefined ? {} : {activeProfile: session.activeProfile}),
+          });
+          const menuItems = row.isPinned
+            ? [
+                {
+                  id: `remove-${row.key}`,
+                  label: `Remove ${row.label}`,
+                  onClick: () => onRemoveView(row.key),
+                },
+              ]
+            : pinnedProfiles.length === 0
+              ? [{id: 'no-profiles', label: 'No other profiles', isDisabled: true}]
+              : pinnedProfiles.map(target => ({
+                  id: `pin-${target.profile}`,
+                  label: target.label,
+                  isDisabled: !canPinProfile,
+                  onClick: () => onOpenProfile(row.sessionRef, target.profile),
+                }));
           return (
-            <SideNavItem
-              key={session.id}
-              label={session.title}
-              isSelected={session.id === activeSessionId}
-              onClick={() => onSelect(session.id)}
-              icon={<StatusDot variant={state} label={`${session.title} ${state}`} />}
-              endContent={<Badge label={String(session.turns)} />}
-            />
+            <ContextMenu
+              key={row.key}
+              label={`${row.label} actions`}
+              items={menuItems}
+            >
+              <SideNavItem
+                label={row.label}
+                isSelected={row.key === activeViewKey}
+                onClick={() => onSelect(row.key)}
+                onMouseEnter={() => setHoveredViewKey(row.key)}
+                onMouseLeave={() => setHoveredViewKey(current => (current === row.key ? null : current))}
+                icon={<StatusDot variant={state} label={`${row.label} ${state}`} />}
+                endContent={
+                  row.isPinned ? (
+                    hoveredViewKey === row.key ? (
+                      <IconButton
+                        label={`Remove ${row.label}`}
+                        icon={<Icon icon="close" size="sm" />}
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onRemoveView(row.key)}
+                      />
+                    ) : undefined
+                  ) : (
+                    // The badge is the session's turn count. A pinned row has its
+                    // own transcript and the list does not count it per profile,
+                    // so it shows no number rather than the session's.
+                    <Badge label={String(session.turns)} />
+                  )
+                }
+              />
+            </ContextMenu>
           );
         })}
       </SideNavSection>
@@ -2000,23 +2061,20 @@ function App() {
   // The configured live session is a preference, not a row: the sidebar lists
   // whatever the backend reports, and this id is only used to choose which of
   // those live sessions to open on.
-  // A tab is one session, optionally pinned to one of its path profiles. Each
-  // view owns a transcript, a run and a scroll position, so switching tabs never
-  // disturbs the one left behind.
-  const [tabs, setTabs] = useState<SessionTab[]>(INITIAL_TABS.tabs);
-  const [activeTabId, setActiveTabId] = useState<string>(INITIAL_TABS.activeTabId);
-  const activeTab = tabs.find(tab => tab.id === activeTabId) ?? tabs[0]!;
-  const activeSessionId = activeTab.sessionRef;
-  const activeProfile = activeTab.profile;
-  // The identity of the view on screen: every per-view cache hangs off it, and
-  // it is what the server addresses (`?profile=`) when the view is pinned.
-  const activeViewKey = activeTab.id;
+  // The rows this client pinned to a session, and the view on screen. A pinned
+  // row is a conversation of its own, so switching between rows never disturbs
+  // the transcript or the run of the one left behind.
+  const [pinnedViews, setPinnedViews] = useState<PinnedView[]>(INITIAL_VIEWS.views);
+  const [activeViewKey, setActiveViewKey] = useState<string>(INITIAL_VIEWS.activeViewKey);
+  const activeSessionId = sessionRefOfViewKey(activeViewKey);
+  const activeProfile = profileOfViewKey(activeViewKey);
+  const isPinnedView = isPinnedViewKey(activeViewKey);
   const [isProfileSwitching, setIsProfileSwitching] = useState(false);
   const [isModelDefaultUpdating, setIsModelDefaultUpdating] = useState(false);
   const isModelDefaultUpdatingRef = useRef(false);
-  // A restored tab set is the user's own arrangement: the "open the configured
-  // session" preference only applies to a set that starts from nothing.
-  const hasChosenSessionRef = useRef(INITIAL_TABS.restored);
+  // A restored arrangement is the user's own: the "open the configured session"
+  // preference only applies to a page that starts from nothing.
+  const hasChosenSessionRef = useRef(INITIAL_VIEWS.restored);
   /**
    * Whether a session list has actually arrived from the server.
    *
@@ -2207,9 +2265,7 @@ function App() {
   const attachedTurnRef = useRef<string | null>(null);
   const activeSessionIdRef = useRef<string>(activeSessionId);
   const activeViewKeyRef = useRef<string>(activeViewKey);
-  const activeTabRef = useRef<SessionTab>(activeTab);
-  const tabsRef = useRef<SessionTab[]>(tabs);
-  const activeTabIdRef = useRef<string>(activeTabId);
+  const activeProfileRef = useRef<string | undefined>(activeProfile);
   const activeSessionEntryRef = useRef<Session | undefined>(undefined);
   const refreshSessionsRef = useRef<(() => void) | null>(null);
   // Conditional polling: each resource is revalidated with the fingerprint of
@@ -2264,7 +2320,7 @@ function App() {
         sessionRef,
         message.id,
         message.cursor,
-        activeTabRef.current.profile,
+        activeProfileRef.current,
       )
         .then(full => {
           const uiId = activeViewKeyRef.current;
@@ -2317,20 +2373,19 @@ function App() {
       sessions.find(session => session.id === LIVE_SESSION_ID) ??
       sessions.find(session => session.source === 'live');
     if (!sessions.some(session => session.id === activeSessionId)) {
-      // The view on screen is gone: this tab points at a session that exists.
+      // The view on screen is gone: fall back to a session that exists.
       const fallback = (preferredLive ?? sessions[0]).id;
-      setTabs(current => retargetTab(current, activeTabIdRef.current, {sessionRef: fallback}));
-      setActiveTabId(fallback);
+      setActiveViewKey(prev => (isPinnedViewKey(prev) ? viewKey(fallback, profileOfViewKey(prev)) : fallback));
       hasChosenSessionRef.current = false;
       return;
     }
     if (
+      !isPinnedView &&
       !hasChosenSessionRef.current &&
       preferredLive !== undefined &&
       activeSessionId !== preferredLive.id
     ) {
-      setTabs(current => retargetTab(current, activeTabIdRef.current, {sessionRef: preferredLive.id}));
-      setActiveTabId(preferredLive.id);
+      setActiveViewKey(preferredLive.id);
     }
   }, [activeSessionId, sessions]);
 
@@ -2354,7 +2409,13 @@ function App() {
     isModelDefaultUpdatingRef.current = true;
     setIsModelDefaultUpdating(true);
     try {
-      const result = await updateSessionProfileModelDefault(sessionRef, modelDefault);
+      // The model belongs to the profile this view shows, which for a pinned row
+      // is not the session's stored default.
+      const result = await updateSessionProfileModelDefault(
+        sessionRef,
+        modelDefault,
+        activeProfileRef.current,
+      );
       setSessions(current => current.map(session => {
         if (session.sessionRef !== sessionRef) {
           return session;
@@ -2401,15 +2462,23 @@ function App() {
       ? threadMessages
       : [...block, ...threadMessages];
   }, [threadMessages, activeSessionId, historyBlock]);
+  /** The rows the list shows: every session, and the profiles pinned to it. */
+  const listRows = useMemo(
+    () => sessionListRows(sessions, pinnedViews),
+    [pinnedViews, sessions],
+  );
+  const activeRow = listRows.find(row => row.key === activeViewKey);
+  const profileRowLimitReached = pinnedViews.length >= appConfig.session_views_max;
+
   const isLiveSession = activeSession?.source === 'live';
   const isRunning = isSessionRunning(
     runningSessionId === activeViewKey,
-    tabRunStatus(activeTab, activeSession)?.status,
+    rowRunStatus(activeRow, activeSession)?.status,
     detachedRunSessionIds.has(activeViewKey),
   );
   const hasLiveAttachedRun =
     isLiveSession &&
-    (tabRunStatus(activeTab, activeSession)?.status === 'running' ||
+    (rowRunStatus(activeRow, activeSession)?.status === 'running' ||
       detachedRunSessionIds.has(activeViewKey) ||
       attachedRunSessionIdRef.current === activeSessionId);
   const rememberDetachedRun = useCallback(() => {
@@ -2646,7 +2715,7 @@ function App() {
     const session = activeSessionEntryRef.current;
     detachRun();
     if (session?.source === 'live' && session.sessionRef) {
-      void stopSessionRun(session.sessionRef, activeTabRef.current.profile).catch(error => {
+      void stopSessionRun(session.sessionRef, activeProfileRef.current).catch(error => {
         recordNotification({
           sessionId: session.id,
           sessionTitle: session.title,
@@ -2977,8 +3046,7 @@ function App() {
       ],
     }));
     hasChosenSessionRef.current = true;
-    setTabs(current => addTab(current, {sessionRef: sessionId}, appConfig.session_tabs_max));
-    setActiveTabId(sessionId);
+    setActiveViewKey(sessionId);
     setRunProgress(0);
   }, [detachRun, rememberDetachedRun]);
 
@@ -2986,124 +3054,79 @@ function App() {
    * Moves this client to another view.
    *
    * The view left behind detaches only here: a run in flight keeps going on the
-   * server and is picked up again when its view is selected once more. Selecting
+   * server and is picked up again when its row is selected once more. Selecting
    * what is already on screen is a no-op, so a click can never tear down the
    * stream a view owns.
    */
   const activateView = useCallback(
-    (nextTabId: string) => {
+    (nextViewKey: string) => {
       hasChosenSessionRef.current = true;
-      if (nextTabId === activeTabIdRef.current) {
+      if (nextViewKey === activeViewKeyRef.current) {
         return;
       }
       rememberDetachedRun();
       detachRun();
-      setActiveTabId(nextTabId);
+      setActiveViewKey(nextViewKey);
       setRunProgress(baseReasoning.length);
     },
     [detachRun, rememberDetachedRun],
   );
 
-  /** A sidebar click: the active tab becomes that session at its stored default. */
+  /** A list click: the session's own row, following its stored default profile. */
   const selectSession = useCallback(
     (sessionId: string) => {
-      const target: SessionTabTarget = {sessionRef: sessionId};
-      setTabs(current => retargetTab(current, activeTabIdRef.current, target));
-      activateView(tabId(target));
+      activateView(viewKey(sessionId));
     },
     [activateView],
   );
 
-  /** The `+` menu: a new tab, or the existing one when that view is already open. */
-  const openTab = useCallback(
-    (target: SessionTabTarget) => {
-      setTabs(current => addTab(current, target, appConfig.session_tabs_max));
-      activateView(tabId(target));
+  /** The profile menu: pin that profile to a row of its own and open it. */
+  const openProfileView = useCallback(
+    (sessionRef: string, profile: string) => {
+      setPinnedViews(current =>
+        addPinnedView(current, {sessionRef, profile}, appConfig.session_views_max),
+      );
+      activateView(viewKey(sessionRef, profile));
     },
     [activateView],
   );
 
-  const closeTabById = useCallback(
-    (tabIdToClose: string) => {
-      const next = neighbourTabId(tabsRef.current, tabIdToClose);
-      const isActive = tabIdToClose === activeTabIdRef.current;
-      if (isActive && next !== tabIdToClose) {
-        rememberDetachedRun();
-        detachRun();
+  /** The row's ✕: drop the row. Nothing on the server is touched. */
+  const removePinnedRow = useCallback(
+    (key: string) => {
+      if (key === activeViewKeyRef.current) {
+        // Fall back to the session's own row before the row disappears.
+        activateView(viewKey(sessionRefOfViewKey(key)));
       }
-      setTabs(current => closeTab(current, tabIdToClose));
-      if (isActive) {
-        setActiveTabId(next);
-        setRunProgress(baseReasoning.length);
-      }
+      setPinnedViews(current => removePinnedView(current, key));
     },
-    [detachRun, rememberDetachedRun],
-  );
-
-  const closeOtherTabsById = useCallback(
-    (keepTabId: string) => {
-      if (keepTabId !== activeTabIdRef.current) {
-        rememberDetachedRun();
-        detachRun();
-      }
-      setTabs(current => closeOtherTabs(current, keepTabId));
-      setActiveTabId(keepTabId);
-    },
-    [detachRun, rememberDetachedRun],
-  );
-
-  const tabTitle = useCallback(
-    (tab: SessionTabTarget) =>
-      tabLabel(tab, sessions.find(session => session.id === tab.sessionRef)?.title),
-    [sessions],
-  );
-
-  /** What the `+` menu offers: every live session, and every profile of one. */
-  const liveTabTargets = useMemo(
-    () =>
-      tabMenuTargets(
-        sessions
-          .filter(session => session.source === 'live' && session.sessionRef !== undefined)
-          .map(session => ({
-            sessionRef: session.sessionRef!,
-            label: session.title,
-            ...(session.pathProfiles === undefined ? {} : {profiles: session.pathProfiles}),
-          })),
-      ),
-    [sessions],
+    [activateView],
   );
 
   // The sidebar marks a session when any of its views has a run this client is
-  // not showing, so a pinned tab's run is still visible from the list.
+  // not showing, so a pinned row's run is still visible from the session row.
   const sidebarRunningSessionIds = useMemo(
     () => new Set([...detachedRunSessionIds].map(sessionRefOfViewKey)),
     [detachedRunSessionIds],
   );
 
-  // A tab whose session disappeared server-side is dropped; the derived active
-  // tab then hands the strip to whatever is left, so it never comes up empty.
+  // A row whose session disappeared server-side is dropped. Only a list that came
+  // from the server can say that: pruning against the placeholders of the first
+  // paint would drop the rows that were just restored, and persist that loss.
   useEffect(() => {
-    // Only a list that came from the server can say that a session is gone:
-    // pruning against the placeholders of the first paint would drop the tabs
-    // that were just restored, and persist that loss.
     if (!hasLoadedSessionsRef.current) {
       return;
     }
-    // Every row counts, including a session this client invented: only a tab
-    // whose row is gone is dropped.
     const knownIds = sessions.map(session => session.id);
-    setTabs(current => {
-      const pruned = pruneTabs(current, knownIds);
-      if (pruned.length === current.length) {
-        return current;
-      }
-      return pruned.length > 0 ? pruned : [tabFromTarget({sessionRef: knownIds[0]!})];
+    setPinnedViews(current => {
+      const pruned = prunePinnedViews(current, knownIds);
+      return pruned.length === current.length ? current : pruned;
     });
   }, [sessions]);
 
   useEffect(() => {
-    writeStoredTabs(appConfig.session_tabs_storage_key, {tabs, activeTabId: activeTab.id});
-  }, [activeTab.id, tabs]);
+    writeStoredViews(appConfig.session_views_storage_key, {views: pinnedViews, activeViewKey});
+  }, [activeViewKey, pinnedViews]);
 
   useEffect(() => {
     const previous = activeViewRef.current;
@@ -3121,18 +3144,11 @@ function App() {
     }
     activeSessionIdRef.current = activeSessionId;
     activeViewKeyRef.current = activeViewKey;
-    activeTabRef.current = activeTab;
-    tabsRef.current = tabs;
-    activeTabIdRef.current = activeTabId;
-    if (activeTab.id !== activeTabId) {
-      // The active view was closed or its session disappeared: hand the strip to
-      // the neighbour that took over.
-      setActiveTabId(activeTab.id);
-    }
+    activeProfileRef.current = activeProfile;
     // Switching to a session that has a run in flight must attach at once: the
     // transcript of that session is stale until the fresh snapshot arrives.
     refreshSessionsRef.current?.();
-  }, [activeProfile, activeSessionId, activeSessionRef, activeTab, activeTabId, activeViewKey, tabs]);
+  }, [activeProfile, activeSessionId, activeSessionRef, activeViewKey]);
 
   useEffect(() => {
     activeSessionEntryRef.current = activeSession;
@@ -3262,7 +3278,7 @@ function App() {
           const liveRunKeys = liveItems.flatMap(item => [
             {id: item.id, status: item.snapshot.run?.status},
             ...Object.entries(item.snapshot.runs_by_profile ?? {}).map(([profile, run]) => ({
-              id: tabId({sessionRef: item.id, profile}),
+              id: viewKey(item.id, profile),
               status: run.status,
             })),
           ]);
@@ -3338,7 +3354,7 @@ function App() {
   // reloads mid-run attaches as soon as the session list has settled instead of
   // waiting for the next poll.
   useEffect(() => {
-    const run = tabRunStatus(activeTab, activeSession);
+    const run = rowRunStatus(activeRow, activeSession);
     if (run === undefined || run.status !== 'running') {
       if (attachedTurnRef.current !== null && runAbortRef.current === null) {
         attachedTurnRef.current = null;
@@ -3353,9 +3369,9 @@ function App() {
       activeSession.sessionRef,
       run.turn_id,
       activeSession.title,
-      activeTab.profile,
+      activeProfile,
     );
-  }, [activeSession, activeTab, activeViewKey, attachToRun]);
+  }, [activeProfile, activeSession, activeViewKey, attachToRun]);
 
   useEffect(() => {
     return () => {
@@ -3400,16 +3416,7 @@ function App() {
               profiles={activeSession.pathProfiles}
               activeProfile={activeSession.activeProfile}
               isDisabled={isRunning || isCompactionInProgress || isProfileSwitching || isModelDefaultUpdating}
-              onSelect={profile => {
-                // In a pinned tab the picker chooses which profile this view
-                // shows; only an unpinned view changes the session's stored
-                // default, which is what every other client follows.
-                if (activeTab.profile === undefined) {
-                  void selectSessionPathProfile(profile);
-                  return;
-                }
-                activateView(tabId({sessionRef: activeSessionId, profile}));
-              }}
+              onSelect={profile => { void selectSessionPathProfile(profile); }}
             />
           ) : null}
           {activeSession.models && activeSession.models.length > 0 ? (
@@ -3511,10 +3518,14 @@ function App() {
       contentPadding={0}
       sideNav={
         <SessionNavigation
+          rows={listRows}
           sessions={sessions}
           runningSessionIds={sidebarRunningSessionIds}
-          activeSessionId={activeSessionId}
-          onSelect={selectSession}
+          activeViewKey={activeViewKey}
+          onSelect={activateView}
+          onOpenProfile={openProfileView}
+          onRemoveView={removePinnedRow}
+          canPinProfile={!profileRowLimitReached}
           onNewSession={createSession}
           openLeftPanel={leftPanel}
           onSelectLeftPanel={selectLeftPanel}
@@ -3540,70 +3551,6 @@ function App() {
               <VisuallyHidden as="div">
                 <Heading level={1}>{activeSession.title}</Heading>
               </VisuallyHidden>
-              <HStack align="center" gap={2}>
-                <TabList value={activeViewKey} onChange={activateView} size="sm" hasDivider>
-                  {tabs.map(tab => {
-                    const status = tabRunStatus(
-                      tab,
-                      sessions.find(session => session.id === tab.sessionRef),
-                    );
-                    return (
-                      <Tab
-                        key={tab.id}
-                        value={tab.id}
-                        label={tabTitle(tab)}
-                        endContent={
-                          status === undefined ? undefined : (
-                            <StatusDot
-                              variant={sessionUiStateForRun(status.status)}
-                              label={`${tabTitle(tab)}: ${status.status}`}
-                            />
-                          )
-                        }
-                      />
-                    );
-                  })}
-                </TabList>
-                <DropdownMenu
-                  button={{
-                    label: 'New tab',
-                    tooltip: 'Open a session view in its own tab',
-                    variant: 'ghost',
-                    size: 'sm',
-                  }}
-                  placement="below"
-                  menuWidth="max-content"
-                  items={liveTabTargets.map(target => ({
-                    id: tabId(target),
-                    label: target.label,
-                    ...(findTab(tabs, target) === undefined ? {} : {isDisabled: true}),
-                    onClick: () => openTab(target),
-                  }))}
-                />
-                <DropdownMenu
-                  button={{
-                    label: 'Close',
-                    tooltip: 'Close this tab',
-                    variant: 'ghost',
-                    size: 'sm',
-                    isDisabled: tabs.length <= 1,
-                  }}
-                  placement="below"
-                  menuWidth="max-content"
-                  items={[
-                    {
-                      id: 'close',
-                      label: `Close ${tabTitle(activeTab)}`,
-                      onClick: () => closeTabById(activeViewKey),
-                    },
-                    {
-                      id: 'close-others',
-                      label: 'Close other tabs',
-                      onClick: () => closeOtherTabsById(activeViewKey),
-                    },
-                  ]}
-                />
-              </HStack>
               <ChatLayout
                 density="balanced"
                 xstyle={styles.chat}

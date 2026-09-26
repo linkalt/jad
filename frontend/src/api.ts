@@ -328,9 +328,10 @@ export async function updateSessionPathProfile(
 export async function updateSessionProfileModelDefault(
   sessionRef: string,
   modelDefault: string,
+  profile?: string,
 ): Promise<SessionPathModelDefaultUpdate> {
   const response = await fetch(
-    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/model-default`),
+    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/model-default${profileQuery(profile)}`),
     {
       method: 'POST',
       headers: {'content-type': 'application/json'},
