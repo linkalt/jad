@@ -56,6 +56,17 @@ test('opening a target never duplicates a view and stops at the limit', () => {
   assert.deepEqual(full, two);
 });
 
+test('a tab holds its target only, never the menu labels it was built from', () => {
+  const target = {sessionRef: 'session1', profile: 'chatgpt', label: 'One: chatgpt', sessionLabel: 'One'};
+  assert.deepEqual(tabFromTarget(target), {
+    sessionRef: 'session1',
+    profile: 'chatgpt',
+    id: `session1\u0000chatgpt`,
+  });
+  const opened = addTab([], target, 4);
+  assert.deepEqual(Object.keys(opened[0] ?? {}).sort(), ['id', 'profile', 'sessionRef']);
+});
+
 test('a sidebar click retargets the open tab and folds a duplicate view', () => {
   const tabs = [session('session1'), session('session2')];
   const retargeted = retargetTab(tabs, 'session1', {sessionRef: 'session3'});
@@ -137,6 +148,8 @@ test('a stored set is restored as it was, defensively', () => {
   assert.deepEqual(restoreTabs({stored, liveSessionId: 'live', limit: 8}), {
     tabs: [session('session1'), session('session2', 'chatgpt')],
     activeTabId: `session2\u0000chatgpt`,
+    // A set that was restored is a choice the user already made.
+    restored: true,
   });
 
   // An active id that no longer exists falls back to the first tab.
@@ -161,15 +174,16 @@ test('a stored set is restored as it was, defensively', () => {
 test('a fresh page follows the configured seed, else the live session', () => {
   assert.deepEqual(
     restoreTabs({seed: [{sessionRef: 'session1', profile: 'chatgpt'}], liveSessionId: 'live', limit: 8}),
-    {tabs: [session('session1', 'chatgpt')], activeTabId: `session1\u0000chatgpt`},
+    {tabs: [session('session1', 'chatgpt')], activeTabId: `session1\u0000chatgpt`, restored: false},
   );
   assert.deepEqual(restoreTabs({liveSessionId: 'live', limit: 8}), {
     tabs: [session('live')],
     activeTabId: 'live',
+    restored: false,
   });
   // The seed is capped and junk targets are ignored.
   assert.deepEqual(
     restoreTabs({seed: [{sessionRef: 'a'}, {sessionRef: 'b'}, {sessionRef: ''}], liveSessionId: 'live', limit: 1}),
-    {tabs: [session('a')], activeTabId: 'a'},
+    {tabs: [session('a')], activeTabId: 'a', restored: false},
   );
 });

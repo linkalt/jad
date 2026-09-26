@@ -101,7 +101,7 @@ export interface SessionRunState {
 export function profileQuery(profile: string | undefined): string {
   return profile === undefined || profile.length === 0
     ? ''
-    : `profile=${encodeURIComponent(profile)}`;
+    : `?profile=${encodeURIComponent(profile)}`;
 }
 
 function withProfile(query: URLSearchParams, profile: string | undefined): string {

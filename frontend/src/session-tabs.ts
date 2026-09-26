@@ -67,7 +67,11 @@ export function isPinnedViewKey(key: string): boolean {
 }
 
 export function tabFromTarget(target: SessionTabTarget): SessionTab {
-  return {...target, id: tabId(target)};
+  // Only the target is kept: a menu entry carries presentation fields of its
+  // own, and a tab must not accumulate them (they would be persisted with it).
+  return target.profile === undefined
+    ? {sessionRef: target.sessionRef, id: target.sessionRef}
+    : {sessionRef: target.sessionRef, profile: target.profile, id: tabId(target)};
 }
 
 function sameTarget(left: SessionTabTarget, right: SessionTabTarget): boolean {
@@ -217,9 +221,18 @@ export function tabRunStatus<T>(
   return session.runsByProfile?.[tab.profile];
 }
 
-export type StoredTabs = {
+export type ParsedTabs = {
   tabs: SessionTab[];
   activeTabId: string;
+};
+
+export type StoredTabs = ParsedTabs & {
+  /**
+   * True when the stored set was used. A restored set is a choice the user
+   * already made, so a preference like "open the configured session" must not
+   * move it.
+   */
+  restored: boolean;
 };
 
 /**
@@ -237,17 +250,17 @@ export function restoreTabs(input: {
 }): StoredTabs {
   const stored = parseStoredTabs(input.stored, input.limit);
   if (stored.tabs.length > 0) {
-    return stored;
+    return {...stored, restored: true};
   }
   const seed = (input.seed ?? [])
     .filter(target => typeof target?.sessionRef === 'string' && target.sessionRef.length > 0)
     .slice(0, input.limit);
   const tabs = (seed.length > 0 ? seed : [{sessionRef: input.liveSessionId}]).map(tabFromTarget);
-  return {tabs, activeTabId: tabs[0]!.id};
+  return {tabs, activeTabId: tabs[0]!.id, restored: false};
 }
 
 /** The persisted shape, defended against anything a storage key may hold. */
-export function parseStoredTabs(value: unknown, limit: number): StoredTabs {
+export function parseStoredTabs(value: unknown, limit: number): ParsedTabs {
   if (typeof value !== 'object' || value === null) {
     return {tabs: [], activeTabId: ''};
   }

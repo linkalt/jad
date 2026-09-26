@@ -116,6 +116,26 @@ import {
   typeScaleVars,
   typographyVars,
 } from '@astryxdesign/core/theme/tokens.stylex';
+import {DropdownMenu} from '@astryxdesign/core/DropdownMenu';
+import {Tab, TabList} from '@astryxdesign/core/TabList';
+import {
+  addTab,
+  closeOtherTabs,
+  closeTab,
+  findTab,
+  neighbourTabId,
+  pruneTabs,
+  restoreTabs,
+  retargetTab,
+  sessionRefOfViewKey,
+  tabFromTarget,
+  tabId,
+  tabLabel,
+  tabMenuTargets,
+  tabRunStatus,
+  type SessionTab,
+  type SessionTabTarget,
+} from './session-tabs';
 
 const styles = stylex.create({
   shell: {
@@ -260,6 +280,8 @@ interface Session {
   usage?: SessionSnapshot['usage'];
   /** The run the server is executing for this session, when there is one. */
   run?: SessionSnapshot['run'];
+  /** The run of each path profile that has one, keyed by profile name. */
+  runsByProfile?: SessionSnapshot['runs_by_profile'];
 }
 
 interface ReasoningStep {
@@ -281,6 +303,36 @@ type MessageRecord = Omit<WebUiMessage, 'parts'> & {
 type HistoryBlock = {uiId: string; etag: string; messages: MessageRecord[]};
 
 const LIVE_SESSION_ID = appConfig.live_session_id;
+
+/**
+ * The views this page opens with: the tabs left from last time, else the
+ * configured seed, else the live session — which is what the app opened before
+ * tabs existed.
+ */
+const INITIAL_TABS = restoreTabs({
+  stored: readStoredTabs(appConfig.session_tabs_storage_key),
+  seed: appConfig.session_tabs,
+  liveSessionId: LIVE_SESSION_ID,
+  limit: appConfig.session_tabs_max,
+});
+
+/** Storage is best effort: a blocked or full store must not break the strip. */
+function readStoredTabs(key: string): unknown {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw === null ? undefined : JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function writeStoredTabs(key: string, value: {tabs: SessionTab[]; activeTabId: string}): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignored: the tabs live for this page even when they cannot be persisted.
+  }
+}
 
 // Off-screen transcript rows are skipped by the renderer. Without this, every
 // keystroke in the composer costs a full layout of the scroll container's
@@ -558,6 +610,9 @@ function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
     state: sessionUiStateForRun(snapshot.run?.status),
     source: 'live',
     sessionRef: snapshot.id,
+    ...(snapshot.runs_by_profile === undefined
+      ? {}
+      : {runsByProfile: snapshot.runs_by_profile}),
     ...(snapshot.root_label ? {rootLabel: snapshot.root_label} : {}),
     ...(snapshot.active_profile === undefined ? {} : {activeProfile: snapshot.active_profile}),
     ...(snapshot.path_profiles === undefined ? {} : {pathProfiles: snapshot.path_profiles}),
@@ -1945,11 +2000,30 @@ function App() {
   // The configured live session is a preference, not a row: the sidebar lists
   // whatever the backend reports, and this id is only used to choose which of
   // those live sessions to open on.
-  const [activeSessionId, setActiveSessionId] = useState(LIVE_SESSION_ID);
+  // A tab is one session, optionally pinned to one of its path profiles. Each
+  // view owns a transcript, a run and a scroll position, so switching tabs never
+  // disturbs the one left behind.
+  const [tabs, setTabs] = useState<SessionTab[]>(INITIAL_TABS.tabs);
+  const [activeTabId, setActiveTabId] = useState<string>(INITIAL_TABS.activeTabId);
+  const activeTab = tabs.find(tab => tab.id === activeTabId) ?? tabs[0]!;
+  const activeSessionId = activeTab.sessionRef;
+  const activeProfile = activeTab.profile;
+  // The identity of the view on screen: every per-view cache hangs off it, and
+  // it is what the server addresses (`?profile=`) when the view is pinned.
+  const activeViewKey = activeTab.id;
   const [isProfileSwitching, setIsProfileSwitching] = useState(false);
   const [isModelDefaultUpdating, setIsModelDefaultUpdating] = useState(false);
   const isModelDefaultUpdatingRef = useRef(false);
-  const hasChosenSessionRef = useRef(false);
+  // A restored tab set is the user's own arrangement: the "open the configured
+  // session" preference only applies to a set that starts from nothing.
+  const hasChosenSessionRef = useRef(INITIAL_TABS.restored);
+  /**
+   * Whether a session list has actually arrived from the server.
+   *
+   * Until it has, the rows on screen are local placeholders: a tab that names a
+   * live session would look stale and be dropped — and that loss persisted.
+   */
+  const hasLoadedSessionsRef = useRef(false);
   const [threads, setThreads] = useState<Record<string, MessageRecord[]>>(initialThreads);
 
   /**
@@ -2132,15 +2206,24 @@ function App() {
   // re-attaches to a run it did not start.
   const attachedTurnRef = useRef<string | null>(null);
   const activeSessionIdRef = useRef<string>(activeSessionId);
+  const activeViewKeyRef = useRef<string>(activeViewKey);
+  const activeTabRef = useRef<SessionTab>(activeTab);
+  const tabsRef = useRef<SessionTab[]>(tabs);
+  const activeTabIdRef = useRef<string>(activeTabId);
   const activeSessionEntryRef = useRef<Session | undefined>(undefined);
   const refreshSessionsRef = useRef<(() => void) | null>(null);
   // Conditional polling: each resource is revalidated with the fingerprint of
   // the last body the client accepted.
   const sessionsEtagRef = useRef<string | undefined>(undefined);
   const snapshotEtagRef = useRef<string | undefined>(undefined);
-  const activeViewRef = useRef<{uiId: string; ref: string | undefined}>({
-    uiId: activeSessionId,
+  const activeViewRef = useRef<{
+    viewKey: string;
+    ref: string | undefined;
+    profile: string | undefined;
+  }>({
+    viewKey: activeViewKey,
     ref: undefined,
+    profile: activeProfile,
   });
   const loadingOlderRef = useRef(false);
   /**
@@ -2177,9 +2260,14 @@ function App() {
       if (sessionRef === undefined) {
         return;
       }
-      return fetchSessionMessage(sessionRef, message.id, message.cursor)
+      return fetchSessionMessage(
+        sessionRef,
+        message.id,
+        message.cursor,
+        activeTabRef.current.profile,
+      )
         .then(full => {
-          const uiId = activeSessionIdRef.current;
+          const uiId = activeViewKeyRef.current;
           const overlay = hydratedMessagesRef.current.get(uiId) ?? new Map();
           overlay.set(message.id, full);
           hydratedMessagesRef.current.set(uiId, overlay);
@@ -2220,14 +2308,19 @@ function App() {
   // session, otherwise whatever the list starts with. A session the user picked
   // is never taken away from them.
   useEffect(() => {
-    if (sessions.length === 0) {
+    if (sessions.length === 0 || !hasLoadedSessionsRef.current) {
+      // The rows of the first paint are placeholders: retargeting a tab against
+      // them would fold the views this page just restored.
       return;
     }
     const preferredLive =
       sessions.find(session => session.id === LIVE_SESSION_ID) ??
       sessions.find(session => session.source === 'live');
     if (!sessions.some(session => session.id === activeSessionId)) {
-      setActiveSessionId((preferredLive ?? sessions[0]).id);
+      // The view on screen is gone: this tab points at a session that exists.
+      const fallback = (preferredLive ?? sessions[0]).id;
+      setTabs(current => retargetTab(current, activeTabIdRef.current, {sessionRef: fallback}));
+      setActiveTabId(fallback);
       hasChosenSessionRef.current = false;
       return;
     }
@@ -2236,7 +2329,8 @@ function App() {
       preferredLive !== undefined &&
       activeSessionId !== preferredLive.id
     ) {
-      setActiveSessionId(preferredLive.id);
+      setTabs(current => retargetTab(current, activeTabIdRef.current, {sessionRef: preferredLive.id}));
+      setActiveTabId(preferredLive.id);
     }
   }, [activeSessionId, sessions]);
 
@@ -2295,12 +2389,12 @@ function App() {
     isProfileSwitching,
     recordNotification,
   ]);
-  const threadMessages = threads[activeSessionId] ?? [];
+  const threadMessages = threads[activeViewKey] ?? [];
   // The history block renders ahead of the transcript: it holds the turns a
   // compaction removed, which are older than everything the transcript carries.
   const messages = useMemo(() => {
     const block =
-      historyBlock !== null && historyBlock.uiId === activeSessionId
+      historyBlock !== null && historyBlock.uiId === activeViewKey
         ? historyBlock.messages
         : undefined;
     return block === undefined || block.length === 0
@@ -2309,21 +2403,21 @@ function App() {
   }, [threadMessages, activeSessionId, historyBlock]);
   const isLiveSession = activeSession?.source === 'live';
   const isRunning = isSessionRunning(
-    runningSessionId === activeSessionId,
-    activeSession?.run?.status,
-    detachedRunSessionIds.has(activeSessionId),
+    runningSessionId === activeViewKey,
+    tabRunStatus(activeTab, activeSession)?.status,
+    detachedRunSessionIds.has(activeViewKey),
   );
   const hasLiveAttachedRun =
     isLiveSession &&
-    (activeSession?.run?.status === 'running' ||
-      detachedRunSessionIds.has(activeSessionId) ||
+    (tabRunStatus(activeTab, activeSession)?.status === 'running' ||
+      detachedRunSessionIds.has(activeViewKey) ||
       attachedRunSessionIdRef.current === activeSessionId);
   const rememberDetachedRun = useCallback(() => {
     if (!isRunning || !isLiveSession) {
       return;
     }
     setDetachedRunSessionIds(current => {
-      if (current.has(activeSessionId)) {
+      if (current.has(activeViewKey)) {
         return current;
       }
       const next = new Set(current);
@@ -2342,7 +2436,7 @@ function App() {
     pageSize: appConfig.transcript_window_page_messages,
   });
   const activeSessionRef = activeSession?.sessionRef;
-  const activeSessionPage = sessionPages[activeSessionId];
+  const activeSessionPage = sessionPages[activeViewKey];
   // Older turns exist on the server but are not part of this client's copy yet.
   const hasOlderTurns =
     isLiveSession &&
@@ -2552,7 +2646,7 @@ function App() {
     const session = activeSessionEntryRef.current;
     detachRun();
     if (session?.source === 'live' && session.sessionRef) {
-      void stopSessionRun(session.sessionRef).catch(error => {
+      void stopSessionRun(session.sessionRef, activeTabRef.current.profile).catch(error => {
         recordNotification({
           sessionId: session.id,
           sessionTitle: session.title,
@@ -2612,7 +2706,9 @@ function App() {
         return false;
       }
 
-      const sessionId = activeSessionId;
+      // The view's own transcript and run slot: a pinned tab must not write into
+      // the session's default profile.
+      const sessionId = activeViewKey;
       const sessionRef = activeSession?.sessionRef;
       const isLiveRun = activeSession?.source === 'live' && typeof sessionRef === 'string';
       const userMessage: MessageRecord = {
@@ -2628,7 +2724,7 @@ function App() {
       }));
       setSessions(current =>
         current.map(session =>
-          session.id === sessionId
+          session.id === sessionRefOfViewKey(sessionId)
             ? {...session, turns: session.turns + 1, state: 'accent'}
             : session,
         ),
@@ -2644,6 +2740,7 @@ function App() {
         runAbortRef.current = controller;
         void streamSessionRun(sessionRef, trimmedValue, {
           signal: controller.signal,
+          ...(activeProfile === undefined ? {} : {profile: activeProfile}),
           onMessage: message => {
             setStreamingMessage(message);
             setRunProgress(1);
@@ -2656,7 +2753,7 @@ function App() {
           },
           onUsage: usage => {
             setSessions(current => current.map(session =>
-              session.id === sessionId ? {...session, usage} : session,
+              session.id === sessionRefOfViewKey(sessionId) ? {...session, usage} : session,
             ));
           },
         })
@@ -2689,7 +2786,7 @@ function App() {
             });
             setSessions(current =>
               current.map(session =>
-                session.id === sessionId ? {...session, state: 'success'} : session,
+                session.id === sessionRefOfViewKey(sessionId) ? {...session, state: 'success'} : session,
               ),
             );
           })
@@ -2707,7 +2804,7 @@ function App() {
             });
             setSessions(current =>
               current.map(session =>
-                session.id === sessionId ? {...session, state: 'warning'} : session,
+                session.id === sessionRefOfViewKey(sessionId) ? {...session, state: 'warning'} : session,
               ),
             );
           })
@@ -2740,7 +2837,7 @@ function App() {
         }));
         setSessions(current =>
           current.map(session =>
-            session.id === sessionId
+            session.id === sessionRefOfViewKey(sessionId)
               ? {...session, state: 'success'}
               : session,
           ),
@@ -2761,7 +2858,13 @@ function App() {
    * replays the current snapshot of the message, then continues live.
    */
   const attachToRun = useCallback(
-    (sessionId: string, sessionRef: string, turnId: string, sessionTitle: string) => {
+    (
+      sessionId: string,
+      sessionRef: string,
+      turnId: string,
+      sessionTitle: string,
+      profile: string | undefined,
+    ) => {
       if (attachedTurnRef.current === turnId || runAbortRef.current !== null) {
         return;
       }
@@ -2776,6 +2879,7 @@ function App() {
 
       void attachSessionRun(sessionRef, {
         signal: controller.signal,
+        ...(profile === undefined ? {} : {profile}),
         onMessage: message => setStreamingMessage(message),
         onDelta: applyRunDelta,
         onPart: applyRunPart,
@@ -2783,7 +2887,7 @@ function App() {
         onUsage: usage => {
           setSessions(current =>
             current.map(session =>
-              session.id === sessionId ? {...session, usage} : session,
+              session.id === sessionRefOfViewKey(sessionId) ? {...session, usage} : session,
             ),
           );
         },
@@ -2805,7 +2909,7 @@ function App() {
           });
           setSessions(current =>
             current.map(session =>
-              session.id === sessionId ? {...session, state: 'success'} : session,
+              session.id === sessionRefOfViewKey(sessionId) ? {...session, state: 'success'} : session,
             ),
           );
         })
@@ -2822,7 +2926,7 @@ function App() {
           });
           setSessions(current =>
             current.map(session =>
-              session.id === sessionId ? {...session, state: 'warning'} : session,
+              session.id === sessionRefOfViewKey(sessionId) ? {...session, state: 'warning'} : session,
             ),
           );
           console.warn('Unable to attach to the running session:', error);
@@ -2873,44 +2977,162 @@ function App() {
       ],
     }));
     hasChosenSessionRef.current = true;
-    setActiveSessionId(sessionId);
+    setTabs(current => addTab(current, {sessionRef: sessionId}, appConfig.session_tabs_max));
+    setActiveTabId(sessionId);
     setRunProgress(0);
   }, [detachRun, rememberDetachedRun]);
 
-  const selectSession = useCallback(
-    (sessionId: string) => {
+  /**
+   * Moves this client to another view.
+   *
+   * The view left behind detaches only here: a run in flight keeps going on the
+   * server and is picked up again when its view is selected once more. Selecting
+   * what is already on screen is a no-op, so a click can never tear down the
+   * stream a view owns.
+   */
+  const activateView = useCallback(
+    (nextTabId: string) => {
       hasChosenSessionRef.current = true;
-      if (sessionId === activeSessionIdRef.current) {
-        // Selecting the session already on screen must not tear down its live
-        // stream: the attach effect sees no change to re-run, so the run would
-        // sit behind a placeholder nothing ever fills until a reload.
+      if (nextTabId === activeTabIdRef.current) {
         return;
       }
-      // Only this client detaches: a run in flight keeps going on the server and
-      // is picked up again when the session is selected once more.
       rememberDetachedRun();
       detachRun();
-      setActiveSessionId(sessionId);
+      setActiveTabId(nextTabId);
       setRunProgress(baseReasoning.length);
     },
     [detachRun, rememberDetachedRun],
   );
 
+  /** A sidebar click: the active tab becomes that session at its stored default. */
+  const selectSession = useCallback(
+    (sessionId: string) => {
+      const target: SessionTabTarget = {sessionRef: sessionId};
+      setTabs(current => retargetTab(current, activeTabIdRef.current, target));
+      activateView(tabId(target));
+    },
+    [activateView],
+  );
+
+  /** The `+` menu: a new tab, or the existing one when that view is already open. */
+  const openTab = useCallback(
+    (target: SessionTabTarget) => {
+      setTabs(current => addTab(current, target, appConfig.session_tabs_max));
+      activateView(tabId(target));
+    },
+    [activateView],
+  );
+
+  const closeTabById = useCallback(
+    (tabIdToClose: string) => {
+      const next = neighbourTabId(tabsRef.current, tabIdToClose);
+      const isActive = tabIdToClose === activeTabIdRef.current;
+      if (isActive && next !== tabIdToClose) {
+        rememberDetachedRun();
+        detachRun();
+      }
+      setTabs(current => closeTab(current, tabIdToClose));
+      if (isActive) {
+        setActiveTabId(next);
+        setRunProgress(baseReasoning.length);
+      }
+    },
+    [detachRun, rememberDetachedRun],
+  );
+
+  const closeOtherTabsById = useCallback(
+    (keepTabId: string) => {
+      if (keepTabId !== activeTabIdRef.current) {
+        rememberDetachedRun();
+        detachRun();
+      }
+      setTabs(current => closeOtherTabs(current, keepTabId));
+      setActiveTabId(keepTabId);
+    },
+    [detachRun, rememberDetachedRun],
+  );
+
+  const tabTitle = useCallback(
+    (tab: SessionTabTarget) =>
+      tabLabel(tab, sessions.find(session => session.id === tab.sessionRef)?.title),
+    [sessions],
+  );
+
+  /** What the `+` menu offers: every live session, and every profile of one. */
+  const liveTabTargets = useMemo(
+    () =>
+      tabMenuTargets(
+        sessions
+          .filter(session => session.source === 'live' && session.sessionRef !== undefined)
+          .map(session => ({
+            sessionRef: session.sessionRef!,
+            label: session.title,
+            ...(session.pathProfiles === undefined ? {} : {profiles: session.pathProfiles}),
+          })),
+      ),
+    [sessions],
+  );
+
+  // The sidebar marks a session when any of its views has a run this client is
+  // not showing, so a pinned tab's run is still visible from the list.
+  const sidebarRunningSessionIds = useMemo(
+    () => new Set([...detachedRunSessionIds].map(sessionRefOfViewKey)),
+    [detachedRunSessionIds],
+  );
+
+  // A tab whose session disappeared server-side is dropped; the derived active
+  // tab then hands the strip to whatever is left, so it never comes up empty.
+  useEffect(() => {
+    // Only a list that came from the server can say that a session is gone:
+    // pruning against the placeholders of the first paint would drop the tabs
+    // that were just restored, and persist that loss.
+    if (!hasLoadedSessionsRef.current) {
+      return;
+    }
+    // Every row counts, including a session this client invented: only a tab
+    // whose row is gone is dropped.
+    const knownIds = sessions.map(session => session.id);
+    setTabs(current => {
+      const pruned = pruneTabs(current, knownIds);
+      if (pruned.length === current.length) {
+        return current;
+      }
+      return pruned.length > 0 ? pruned : [tabFromTarget({sessionRef: knownIds[0]!})];
+    });
+  }, [sessions]);
+
+  useEffect(() => {
+    writeStoredTabs(appConfig.session_tabs_storage_key, {tabs, activeTabId: activeTab.id});
+  }, [activeTab.id, tabs]);
+
   useEffect(() => {
     const previous = activeViewRef.current;
-    activeViewRef.current = {uiId: activeSessionId, ref: activeSessionRef};
-    if (previous.ref !== activeSessionRef || previous.uiId !== activeSessionId) {
-      // A different session: nothing the client holds applies to it. The list
-      // is revalidated in full too — a run detached on the way here may have
-      // been dropped from this client's copy of that session.
+    activeViewRef.current = {viewKey: activeViewKey, ref: activeSessionRef, profile: activeProfile};
+    if (
+      previous.ref !== activeSessionRef ||
+      previous.viewKey !== activeViewKey ||
+      previous.profile !== activeProfile
+    ) {
+      // A different view: nothing the client holds applies to it. The list is
+      // revalidated in full too — a run detached on the way here may have been
+      // dropped from this client's copy of that session.
       snapshotEtagRef.current = undefined;
       sessionsEtagRef.current = undefined;
     }
     activeSessionIdRef.current = activeSessionId;
+    activeViewKeyRef.current = activeViewKey;
+    activeTabRef.current = activeTab;
+    tabsRef.current = tabs;
+    activeTabIdRef.current = activeTabId;
+    if (activeTab.id !== activeTabId) {
+      // The active view was closed or its session disappeared: hand the strip to
+      // the neighbour that took over.
+      setActiveTabId(activeTab.id);
+    }
     // Switching to a session that has a run in flight must attach at once: the
     // transcript of that session is stale until the fresh snapshot arrives.
     refreshSessionsRef.current?.();
-  }, [activeSessionId, activeSessionRef]);
+  }, [activeProfile, activeSessionId, activeSessionRef, activeTab, activeTabId, activeViewKey, tabs]);
 
   useEffect(() => {
     activeSessionEntryRef.current = activeSession;
@@ -2928,6 +3150,7 @@ function App() {
       sessionRef: string,
       uiId: string,
       reference: SessionSnapshot['history'],
+      profile: string | undefined,
     ): Promise<HistoryBlock | null> => {
       const held = historyRef.current !== null && historyRef.current.uiId === uiId
         ? historyRef.current
@@ -2945,7 +3168,7 @@ function App() {
       if (held !== null && held.etag === reference.etag) {
         return held;
       }
-      const result = await fetchSessionHistory(sessionRef, held?.etag);
+      const result = await fetchSessionHistory(sessionRef, held?.etag, profile);
       if (result.kind === 'ok') {
         const next = {uiId, etag: reference.etag, messages: result.value.messages};
         setHistory(next);
@@ -2959,7 +3182,7 @@ function App() {
       return held;
     };
 
-    const loadTranscript = (sessionRef: string, uiId: string) => {
+    const loadTranscript = (sessionRef: string, uiId: string, profile: string | undefined) => {
       // A client-owned run already has its optimistic turn in memory, so leave
       // it alone. A fresh page attached to a run still needs one transcript
       // snapshot; after that, the stream owns updates until the run completes.
@@ -2971,14 +3194,17 @@ function App() {
       })) {
         return;
       }
-      void fetchSession(sessionRef, {etag: snapshotEtagRef.current})
+      void fetchSession(sessionRef, {
+        etag: snapshotEtagRef.current,
+        ...(profile === undefined ? {} : {profile}),
+      })
         .then(async result => {
           if (cancelled || result.kind !== 'ok') {
             return;
           }
           snapshotEtagRef.current = result.etag;
           const snapshot = result.value;
-          await ensureHistory(sessionRef, uiId, snapshot.history);
+          await ensureHistory(sessionRef, uiId, snapshot.history, profile);
           if (cancelled) {
             return;
           }
@@ -3012,11 +3238,12 @@ function App() {
           }
           const view = activeViewRef.current;
           if (view.ref !== undefined) {
-            loadTranscript(view.ref, view.uiId);
+            loadTranscript(view.ref, view.viewKey, view.profile);
           }
           if (result.kind !== 'ok') {
             return;
           }
+          hasLoadedSessionsRef.current = true;
           sessionsEtagRef.current = result.etag;
           const snapshots = result.value;
           const liveItems = snapshots.map(snapshot => ({
@@ -3026,18 +3253,27 @@ function App() {
           setDetachedRunSessionIds(current =>
             reconcileDetachedRunSessionIds(
               current,
-              liveItems.map(item => ({
-                id: item.id,
-                status: item.snapshot.run?.status,
-              })),
+              liveRunKeys,
             ),
           );
           const activeRunSessionId = activeRunSessionIdRef.current;
+          // Every view of these sessions that has a run: the stored default's,
+          // plus one per profile the server reports.
+          const liveRunKeys = liveItems.flatMap(item => [
+            {id: item.id, status: item.snapshot.run?.status},
+            ...Object.entries(item.snapshot.runs_by_profile ?? {}).map(([profile, run]) => ({
+              id: tabId({sessionRef: item.id, profile}),
+              status: run.status,
+            })),
+          ]);
           setThreads(current => {
             const next = {...current};
             let hasChange = false;
             for (const item of liveItems) {
-              if (item.id === activeRunSessionId || view.uiId === item.id) {
+              if (
+                item.id === (activeRunSessionId === null ? null : sessionRefOfViewKey(activeRunSessionId)) ||
+                sessionRefOfViewKey(view.viewKey) === item.id
+              ) {
                 // The run's own stream and the transcript request own these.
                 continue;
               }
@@ -3057,7 +3293,7 @@ function App() {
           setSessions(current => {
             const liveIds = new Set(liveItems.map(item => item.id));
             const liveSessions = liveItems.map(item => {
-              if (item.id === activeRunSessionId) {
+              if (item.id === (activeRunSessionId === null ? null : sessionRefOfViewKey(activeRunSessionId))) {
                 const existing = current.find(session => session.id === item.id);
                 if (existing) {
                   // The stream owns the rest of this object, but never the run:
@@ -3102,7 +3338,7 @@ function App() {
   // reloads mid-run attaches as soon as the session list has settled instead of
   // waiting for the next poll.
   useEffect(() => {
-    const run = activeSession?.run;
+    const run = tabRunStatus(activeTab, activeSession);
     if (run === undefined || run.status !== 'running') {
       if (attachedTurnRef.current !== null && runAbortRef.current === null) {
         attachedTurnRef.current = null;
@@ -3112,8 +3348,14 @@ function App() {
     if (activeSession.source !== 'live' || activeSession.sessionRef === undefined) {
       return;
     }
-    attachToRun(activeSessionId, activeSession.sessionRef, run.turn_id, activeSession.title);
-  }, [activeSession, activeSessionId, attachToRun]);
+    attachToRun(
+      activeViewKey,
+      activeSession.sessionRef,
+      run.turn_id,
+      activeSession.title,
+      activeTab.profile,
+    );
+  }, [activeSession, activeTab, activeViewKey, attachToRun]);
 
   useEffect(() => {
     return () => {
@@ -3158,7 +3400,16 @@ function App() {
               profiles={activeSession.pathProfiles}
               activeProfile={activeSession.activeProfile}
               isDisabled={isRunning || isCompactionInProgress || isProfileSwitching || isModelDefaultUpdating}
-              onSelect={profile => { void selectSessionPathProfile(profile); }}
+              onSelect={profile => {
+                // In a pinned tab the picker chooses which profile this view
+                // shows; only an unpinned view changes the session's stored
+                // default, which is what every other client follows.
+                if (activeTab.profile === undefined) {
+                  void selectSessionPathProfile(profile);
+                  return;
+                }
+                activateView(tabId({sessionRef: activeSessionId, profile}));
+              }}
             />
           ) : null}
           {activeSession.models && activeSession.models.length > 0 ? (
@@ -3261,7 +3512,7 @@ function App() {
       sideNav={
         <SessionNavigation
           sessions={sessions}
-          runningSessionIds={detachedRunSessionIds}
+          runningSessionIds={sidebarRunningSessionIds}
           activeSessionId={activeSessionId}
           onSelect={selectSession}
           onNewSession={createSession}
@@ -3289,6 +3540,70 @@ function App() {
               <VisuallyHidden as="div">
                 <Heading level={1}>{activeSession.title}</Heading>
               </VisuallyHidden>
+              <HStack align="center" gap={2}>
+                <TabList value={activeViewKey} onChange={activateView} size="sm" hasDivider>
+                  {tabs.map(tab => {
+                    const status = tabRunStatus(
+                      tab,
+                      sessions.find(session => session.id === tab.sessionRef),
+                    );
+                    return (
+                      <Tab
+                        key={tab.id}
+                        value={tab.id}
+                        label={tabTitle(tab)}
+                        endContent={
+                          status === undefined ? undefined : (
+                            <StatusDot
+                              variant={sessionUiStateForRun(status.status)}
+                              label={`${tabTitle(tab)}: ${status.status}`}
+                            />
+                          )
+                        }
+                      />
+                    );
+                  })}
+                </TabList>
+                <DropdownMenu
+                  button={{
+                    label: 'New tab',
+                    tooltip: 'Open a session view in its own tab',
+                    variant: 'ghost',
+                    size: 'sm',
+                  }}
+                  placement="below"
+                  menuWidth="max-content"
+                  items={liveTabTargets.map(target => ({
+                    id: tabId(target),
+                    label: target.label,
+                    ...(findTab(tabs, target) === undefined ? {} : {isDisabled: true}),
+                    onClick: () => openTab(target),
+                  }))}
+                />
+                <DropdownMenu
+                  button={{
+                    label: 'Close',
+                    tooltip: 'Close this tab',
+                    variant: 'ghost',
+                    size: 'sm',
+                    isDisabled: tabs.length <= 1,
+                  }}
+                  placement="below"
+                  menuWidth="max-content"
+                  items={[
+                    {
+                      id: 'close',
+                      label: `Close ${tabTitle(activeTab)}`,
+                      onClick: () => closeTabById(activeViewKey),
+                    },
+                    {
+                      id: 'close-others',
+                      label: 'Close other tabs',
+                      onClick: () => closeOtherTabsById(activeViewKey),
+                    },
+                  ]}
+                />
+              </HStack>
               <ChatLayout
                 density="balanced"
                 xstyle={styles.chat}
