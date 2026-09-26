@@ -456,7 +456,7 @@ test("validates the working directory against the path policy", {skip: bashSkip}
 test("keeps the harness credential and denied variables out of the environment", {skip: bashSkip}, async () => {
   const {sessionDir, run} = await openBashSession(
     {
-      env: {HARNESS_ADDED: "added-value", HARNESS_TEST_SECRET: "must-not-return"},
+      env: {HARNESS_ADDED: "added-value", HARNESS_TEST_SECRET: "must-not-return", AGENT_API_TOKEN: "server-secret-must-not-return"},
       env_deny: ["HARNESS_OTHER_SECRET"],
     },
     {api_key_env: "HARNESS_TEST_SECRET"},
@@ -465,7 +465,9 @@ test("keeps the harness credential and denied variables out of the environment",
     credential: process.env.HARNESS_TEST_SECRET,
     other: process.env.HARNESS_OTHER_SECRET,
     unlisted: process.env.HARNESS_UNLISTED_SECRET,
+    apiToken: process.env.AGENT_API_TOKEN,
   };
+  process.env.AGENT_API_TOKEN = "base-server-secret";
   process.env.HARNESS_TEST_SECRET = "hunter2-secret";
   process.env.HARNESS_OTHER_SECRET = "other-secret";
   process.env.HARNESS_UNLISTED_SECRET = "unlisted-secret";
@@ -479,6 +481,7 @@ test("keeps the harness credential and denied variables out of the environment",
     assert.doesNotMatch(output, /unlisted-secret/);
     assert.doesNotMatch(output, /HARNESS_UNLISTED_SECRET/);
     assert.doesNotMatch(output, /must-not-return/);
+    assert.doesNotMatch(output, /server-secret-must-not-return|base-server-secret|AGENT_API_TOKEN/);
     assert.match(output, /HARNESS_ADDED=added-value/);
     assert.match(output, /NO_COLOR=1/);
     assert.match(output, /PATH=/);
@@ -498,6 +501,8 @@ test("keeps the harness credential and denied variables out of the environment",
     } else {
       process.env.HARNESS_UNLISTED_SECRET = previous.unlisted;
     }
+    if (previous.apiToken === undefined) delete process.env.AGENT_API_TOKEN;
+    else process.env.AGENT_API_TOKEN = previous.apiToken;
     await rm(sessionDir, {recursive: true, force: true});
   }
 });

@@ -34,6 +34,7 @@ import type {
   ChatToolCallItem,
   StatusDotVariant,
 } from '@astryxdesign/core';
+import {ChatComposerDrawer} from '@astryxdesign/core/Chat';
 import {useToast} from '@astryxdesign/core/Toast';
 import {
   hasUnreadActivityError,
@@ -46,6 +47,8 @@ import {
 import {
   attachSessionRun,
   compactSession,
+  frontCompactSessionFromMessage,
+  resetSession,
   fetchSession,
   fetchSessionHistory,
   fetchSessionMessage,
@@ -135,6 +138,46 @@ import {
   type PinnedView,
   type SessionListRow,
 } from './session-views';
+
+function ResetChatIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <path d="M4 7h16" />
+      <path d="M10 11v6M14 11v6" />
+      <path d="M5.5 7l1 13h11l1-13M9 7V4h6v3" />
+    </svg>
+  );
+}
+
+function FrontCompactionIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <circle cx="5" cy="12" r="1" />
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+    </svg>
+  );
+}
+
+function isActiveTranscriptUserMessage(message: MessageRecord): boolean {
+  return message.sender === 'user' && /^session-user-o(0|[1-9][0-9]*)$/.test(message.id);
+}
 
 const styles = stylex.create({
   shell: {
@@ -272,6 +315,7 @@ interface Session {
   pathProfiles?: string[];
   modelDefault?: string;
   models?: string[];
+  frontCompaction?: SessionSnapshot['front_compaction'];
   model?: {
     provider?: string;
     model?: string;
@@ -623,6 +667,9 @@ function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
     ...(snapshot.path_profiles === undefined ? {} : {pathProfiles: snapshot.path_profiles}),
     ...(snapshot.model_default === undefined ? {} : {modelDefault: snapshot.model_default}),
     ...(snapshot.models === undefined ? {} : {models: snapshot.models}),
+    ...(snapshot.front_compaction === undefined
+      ? {}
+      : {frontCompaction: snapshot.front_compaction}),
     model: snapshot.model,
     ...(snapshot.usage ? {usage: snapshot.usage} : {}),
     ...(snapshot.run ? {run: snapshot.run} : {}),
@@ -2018,10 +2065,16 @@ const TranscriptRow = memo(
     message,
     model,
     onLoadFull,
+    isFrontCompactionSelectable = false,
+    isFrontCompactionSelected = false,
+    onSelectFrontCompaction,
   }: {
     message: MessageRecord;
     model: Session['model'] | undefined;
     onLoadFull?: (message: MessageRecord) => void | Promise<void>;
+    isFrontCompactionSelectable?: boolean;
+    isFrontCompactionSelected?: boolean;
+    onSelectFrontCompaction?: (message: MessageRecord) => void;
   }) {
     const rowHeightRef = useRowHeightRef(
       message.sender === 'assistant' ? null : message.id,
@@ -2040,18 +2093,67 @@ const TranscriptRow = memo(
     }
 
     if (message.sender === 'user') {
+      const isSelectable =
+        isFrontCompactionSelectable &&
+        isActiveTranscriptUserMessage(message) &&
+        onSelectFrontCompaction !== undefined;
+      const isSelected =
+        isFrontCompactionSelected && isActiveTranscriptUserMessage(message);
+      const selectionStyle: CSSProperties | undefined = isSelectable
+        ? {
+            backgroundColor: 'var(--color-background-blue)',
+            border: 'var(--border-width) solid var(--color-border-blue)',
+            borderRadius: 'var(--radius-container)',
+            cursor: 'pointer',
+            padding: 'var(--spacing-2)',
+          }
+        : isSelected
+          ? {
+              backgroundColor: 'var(--color-background-cyan)',
+              border: 'var(--border-width) solid var(--color-border-blue)',
+              borderRadius: 'var(--radius-container)',
+              padding: 'var(--spacing-2)',
+            }
+          : undefined;
+      const rowStyle = selectionStyle === undefined
+        ? deferredRowStyle(message.id)
+        : {...deferredRowStyle(message.id), ...selectionStyle};
+
       return (
         <ChatMessage
           sender="user"
-          avatar={<Avatar name="You" size="sm" />}
           ref={rowHeightRef}
-          style={deferredRowStyle(message.id)}
+          style={rowStyle}
+          role={isSelectable ? 'group' : undefined}
+          tabIndex={isSelectable ? 0 : undefined}
+          aria-description={isSelectable
+            ? 'Selectable user message. Press Enter or Space to review deleting this provider run and later active messages.'
+            : undefined}
+          onClick={isSelectable ? event => {
+            const target = event.target;
+            if (target instanceof Element && target.closest('a, button, input, textarea, select')) {
+              return;
+            }
+            if (window.getSelection()?.toString()) return;
+            onSelectFrontCompaction?.(message);
+          } : undefined}
+          onKeyDown={isSelectable ? event => {
+            if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) {
+              return;
+            }
+            event.preventDefault();
+            onSelectFrontCompaction?.(message);
+          } : undefined}
         >
-          <ChatMessageBubble
-            metadata={<ChatMessageMetadata timestamp={message.timestamp} status="read" />}
-          >
-            <MarkdownText density="compact" contentWidth="100%">{message.text}</MarkdownText>
-          </ChatMessageBubble>
+          <HStack align="start" gap={1} justify="end" width="100%">
+            <VStack align="end" gap={0.5}>
+              <ChatMessageBubble>
+                <MarkdownText density="compact" contentWidth="100%">{message.text}</MarkdownText>
+              </ChatMessageBubble>
+              <ChatMessageMetadata timestamp={message.timestamp} status="read" />
+            </VStack>
+            <Avatar name="You" size="sm" />
+          </HStack>
         </ChatMessage>
       );
     }
@@ -2059,10 +2161,13 @@ const TranscriptRow = memo(
     return <AssistantMessage message={message} model={model} onLoadFull={onLoadFull} />;
   },
   // The poll and the session list rebuild messages and models as fresh objects,
-  // so fall back to a structural compare when the identities differ.
+  // so fall back to a structural compare when identities differ.
   (previous, next) =>
     (previous.message === next.message || deepEqual(previous.message, next.message)) &&
-    (previous.model === next.model || deepEqual(previous.model, next.model)),
+    (previous.model === next.model || deepEqual(previous.model, next.model)) &&
+    previous.isFrontCompactionSelectable === next.isFrontCompactionSelectable &&
+    previous.isFrontCompactionSelected === next.isFrontCompactionSelected &&
+    previous.onSelectFrontCompaction === next.onSelectFrontCompaction,
 );
 
 function App() {
@@ -2132,6 +2237,17 @@ function App() {
     new Set(),
   );
   const [compactingSessionRef, setCompactingSessionRef] = useState<string | null>(null);
+  const [resetDrawerViewKey, setResetDrawerViewKey] = useState<string | null>(null);
+  const [resettingViewKey, setResettingViewKey] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [frontCompactionInfoViewKey, setFrontCompactionInfoViewKey] = useState<string | null>(null);
+  const [frontCompactionModeViewKey, setFrontCompactionModeViewKey] = useState<string | null>(null);
+  const [frontCompactionTarget, setFrontCompactionTarget] = useState<{
+    viewKey: string;
+    message: MessageRecord;
+  } | null>(null);
+  const [frontCompactionError, setFrontCompactionError] = useState<string | null>(null);
+  const [frontCompactingViewKey, setFrontCompactingViewKey] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<ActivityNotification[]>([]);
   const notificationSequenceRef = useRef(0);
   const openNotifications = useCallback(() => {
@@ -2305,6 +2421,7 @@ function App() {
    * ids come from the transcript offset.
    */
   const hydratedMessagesRef = useRef<Map<string, Map<string, WebUiMessage>>>(new Map());
+  const transcriptResetEpochRef = useRef(new Map<string, number>());
   const applyHydrated = useCallback(
     (uiId: string, messages: WebUiMessage[]): WebUiMessage[] => {
       const overlay = hydratedMessagesRef.current.get(uiId);
@@ -2327,6 +2444,7 @@ function App() {
   const loadFullMessage = useCallback(
     (message: MessageRecord) => {
       const uiId = activeViewKeyRef.current;
+      const resetEpoch = transcriptResetEpochRef.current.get(uiId) ?? 0;
       const profile = profileOfViewKey(uiId);
       const sessionRef = activeSessionEntryRef.current?.sessionRef;
       if (sessionRef === undefined) {
@@ -2339,6 +2457,9 @@ function App() {
         profile,
       )
         .then(full => {
+          if ((transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch) {
+            return;
+          }
           const overlay = hydratedMessagesRef.current.get(uiId) ?? new Map();
           overlay.set(message.id, full);
           hydratedMessagesRef.current.set(uiId, overlay);
@@ -2529,6 +2650,8 @@ function App() {
       sessionRef === undefined ||
       targetRowSession.modelDefault === modelDefault ||
       isProfileSwitching ||
+      resettingViewKey !== null ||
+      frontCompactingViewKey !== null ||
       isModelDefaultUpdatingRef.current
     ) {
       return;
@@ -2574,6 +2697,8 @@ function App() {
     activeRowSession,
     isProfileSwitching,
     recordNotification,
+    resettingViewKey,
+    frontCompactingViewKey,
     updateViewSessionRecord,
   ]);
   const threadMessages = threads[activeViewKey] ?? [];
@@ -2650,6 +2775,7 @@ function App() {
         return;
       }
       loadingOlderRef.current.add(uiId);
+      const resetEpoch = transcriptResetEpochRef.current.get(uiId) ?? 0;
       const profile = profileOfViewKey(uiId);
       void fetchSession(session.sessionRef, {
         before: page.next_before,
@@ -2658,7 +2784,10 @@ function App() {
         ...(profile === undefined ? {} : {profile}),
       })
         .then(result => {
-          if (result.kind !== 'ok') {
+          if (
+            (transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch ||
+            result.kind !== 'ok'
+          ) {
             return;
           }
           if (result.value.page?.stale_cursor) {
@@ -2705,6 +2834,62 @@ function App() {
     [activeSession, activeViewKey, hiddenCount, loadOlderMessages, revealEarlier],
   );
   const isCompactionInProgress = compactingSessionRef !== null;
+  const isResetDrawerOpen = resetDrawerViewKey === activeViewKey;
+  const isCurrentViewResetting = resettingViewKey === activeViewKey;
+  const frontCompactionSettings = activeRowSession.frontCompaction ?? {
+    enabled: true,
+    delete_mode: 'permanent' as const,
+  };
+  const isFrontCompactionInfoDrawerOpen = frontCompactionInfoViewKey === activeViewKey;
+  const isFrontCompactionConfirmationOpen = frontCompactionTarget?.viewKey === activeViewKey;
+  const isFrontCompactionMode =
+    frontCompactionModeViewKey === activeViewKey &&
+    frontCompactionSettings.enabled &&
+    isLiveSession &&
+    !isRunning &&
+    !isCompactionInProgress &&
+    !isProfileSwitching &&
+    !isModelDefaultUpdating &&
+    resettingViewKey === null &&
+    frontCompactingViewKey === null;
+  const isFrontCompactionSelectionMode =
+    isFrontCompactionMode && !isFrontCompactionConfirmationOpen;
+  const isFrontCompactionWorkflowOpen =
+    frontCompactionModeViewKey === activeViewKey ||
+    isFrontCompactionInfoDrawerOpen ||
+    isFrontCompactionConfirmationOpen;
+  const isCurrentViewFrontCompacting = frontCompactingViewKey === activeViewKey;
+  const openFrontCompactionConfirmation = useCallback((message: MessageRecord) => {
+    if (
+      !isFrontCompactionSelectionMode ||
+      !frontCompactionSettings.enabled ||
+      !isLiveSession ||
+      isRunning ||
+      isCompactionInProgress ||
+      isProfileSwitching ||
+      isModelDefaultUpdating ||
+      resettingViewKey !== null ||
+      frontCompactingViewKey !== null
+    ) {
+      return;
+    }
+    setIsUsageDrawerCollapsed(true);
+    setResetDrawerViewKey(null);
+    setFrontCompactionInfoViewKey(null);
+    setFrontCompactionError(null);
+    setFrontCompactionTarget({viewKey: activeViewKey, message});
+  }, [
+    activeViewKey,
+    frontCompactingViewKey,
+    frontCompactionSettings.enabled,
+    isCompactionInProgress,
+    isFrontCompactionSelectionMode,
+    isLiveSession,
+    isModelDefaultUpdating,
+    isProfileSwitching,
+    isRunning,
+    resettingViewKey,
+  ]);
   const selectSessionPathProfile = useCallback(
     async (profile: string) => {
       const sessionRef = activeSession?.sessionRef;
@@ -2714,7 +2899,9 @@ function App() {
         isRunning ||
         isCompactionInProgress ||
         isProfileSwitching ||
-        isModelDefaultUpdating
+        isModelDefaultUpdating ||
+        resettingViewKey !== null ||
+        frontCompactingViewKey !== null
       ) {
         return;
       }
@@ -2766,6 +2953,8 @@ function App() {
       isProfileSwitching,
       isRunning,
       recordNotification,
+      resettingViewKey,
+      frontCompactingViewKey,
     ],
   );
   const isActiveSessionCompacting = activeSessionRef !== undefined && compactingSessionRef === activeSessionRef;
@@ -2851,7 +3040,14 @@ function App() {
 
   const compactActiveSession = useCallback(async () => {
     const sessionRef = activeSession?.sessionRef;
-    if (!isLiveSession || !sessionRef || isRunning || isCompactionInProgress) {
+    if (
+      !isLiveSession ||
+      !sessionRef ||
+      isRunning ||
+      isCompactionInProgress ||
+      resettingViewKey !== null ||
+      frontCompactingViewKey !== null
+    ) {
       return;
     }
 
@@ -2860,6 +3056,13 @@ function App() {
       // Compaction rewrites one profile's transcript, so it must be the profile
       // this view is showing — not the session's stored default.
       const result = await compactSession(sessionRef, activeProfileRef.current);
+      if (result.usage !== undefined) {
+        updateViewSessionRecord(
+          activeViewKey,
+          session => ({...session, usage: result.usage}),
+          activeRowSession,
+        );
+      }
       const message = result.compacted
         ? `History compacted: retained ${result.retained_items} of ${result.compacted_items} items.`
         : `No compaction needed; ${result.retained_items} items retained.`;
@@ -2883,18 +3086,236 @@ function App() {
     }
   }, [
     activeSession?.sessionRef,
+    activeRowSession,
     activeRowSession.title,
     activeSessionId,
+    activeViewKey,
     isCompactionInProgress,
     isLiveSession,
     isRunning,
     recordNotification,
+    resettingViewKey,
+    frontCompactingViewKey,
+    updateViewSessionRecord,
+  ]);
+
+  const resetActiveSession = useCallback(async () => {
+    const sessionRef = activeSession?.sessionRef;
+    const targetViewKey = activeViewKey;
+    const targetProfile = profileOfViewKey(targetViewKey);
+    const targetRowSession = activeRowSession;
+    if (
+      !isLiveSession ||
+      !sessionRef ||
+      isRunning ||
+      isCompactionInProgress ||
+      isProfileSwitching ||
+      isModelDefaultUpdating ||
+      resettingViewKey !== null ||
+      frontCompactingViewKey !== null
+    ) {
+      return;
+    }
+
+    setResettingViewKey(targetViewKey);
+    setResetError(null);
+    try {
+      await resetSession(sessionRef, targetProfile);
+      transcriptResetEpochRef.current.set(
+        targetViewKey,
+        (transcriptResetEpochRef.current.get(targetViewKey) ?? 0) + 1,
+      );
+      hydratedMessagesRef.current.delete(targetViewKey);
+      hydratedTranscriptSessionIdsRef.current.delete(targetViewKey);
+      loadingOlderRef.current.delete(targetViewKey);
+      setThreads(current => ({...current, [targetViewKey]: []}));
+      setSessionPages(current => {
+        if (!(targetViewKey in current)) {
+          return current;
+        }
+        const next = {...current};
+        delete next[targetViewKey];
+        return next;
+      });
+      if (historyRef.current?.uiId === targetViewKey) {
+        setHistory(null);
+      }
+      updateViewSessionRecord(
+        targetViewKey,
+        session => ({
+          ...session,
+          turns: 0,
+          usage: {
+            completed_responses: 0,
+            responses_with_usage: 0,
+            turn_count: 0,
+            history_partial: false,
+          },
+        }),
+        targetRowSession,
+      );
+      setResetDrawerViewKey(null);
+      setFrontCompactionInfoViewKey(current => current === targetViewKey ? null : current);
+      setFrontCompactionTarget(current => current?.viewKey === targetViewKey ? null : current);
+      setFrontCompactionModeViewKey(current => current === targetViewKey ? null : current);
+      setFrontCompactionError(null);
+      sessionsEtagRef.current = undefined;
+      if (activeViewKeyRef.current === targetViewKey) {
+        snapshotEtagRef.current = undefined;
+      }
+      recordNotification({
+        sessionId: targetViewKey,
+        sessionTitle: targetRowSession.title,
+        kind: 'info',
+        title: 'Chat reset',
+        message: 'The selected profile row was cleared.',
+      });
+      refreshSessionsRef.current?.();
+    } catch (error) {
+      transcriptResetEpochRef.current.set(
+        targetViewKey,
+        (transcriptResetEpochRef.current.get(targetViewKey) ?? 0) + 1,
+      );
+      const message = error instanceof Error ? error.message : String(error);
+      setResetError(message);
+      sessionsEtagRef.current = undefined;
+      if (activeViewKeyRef.current === targetViewKey) {
+        snapshotEtagRef.current = undefined;
+      }
+      recordNotification({
+        sessionId: targetViewKey,
+        sessionTitle: targetRowSession.title,
+        kind: 'error',
+        title: 'Chat reset failed',
+        message,
+      });
+      refreshSessionsRef.current?.();
+    } finally {
+      setResettingViewKey(current => current === targetViewKey ? null : current);
+    }
+  }, [
+    activeRowSession,
+    activeSession?.sessionRef,
+    activeViewKey,
+    isCompactionInProgress,
+    isLiveSession,
+    isModelDefaultUpdating,
+    isProfileSwitching,
+    isRunning,
+    recordNotification,
+    resettingViewKey,
+    frontCompactingViewKey,
+    setHistory,
+    updateViewSessionRecord,
+  ]);
+
+  const frontCompactActiveSession = useCallback(async (message: MessageRecord) => {
+    const sessionRef = activeSession?.sessionRef;
+    const targetViewKey = activeViewKey;
+    const targetProfile = profileOfViewKey(targetViewKey);
+    const targetRowSession = activeRowSession;
+    if (
+      !isLiveSession ||
+      !sessionRef ||
+      !frontCompactionSettings.enabled ||
+      !isActiveTranscriptUserMessage(message) ||
+      isRunning ||
+      isCompactionInProgress ||
+      isProfileSwitching ||
+      isModelDefaultUpdating ||
+      resettingViewKey !== null ||
+      frontCompactingViewKey !== null
+    ) {
+      return;
+    }
+
+    setFrontCompactingViewKey(targetViewKey);
+    setFrontCompactionError(null);
+    transcriptResetEpochRef.current.set(
+      targetViewKey,
+      (transcriptResetEpochRef.current.get(targetViewKey) ?? 0) + 1,
+    );
+    try {
+      const result = await frontCompactSessionFromMessage(
+        sessionRef,
+        message.id,
+        targetProfile,
+      );
+      hydratedMessagesRef.current.delete(targetViewKey);
+      hydratedTranscriptSessionIdsRef.current.delete(targetViewKey);
+      loadingOlderRef.current.delete(targetViewKey);
+      setThreads(current => ({...current, [targetViewKey]: []}));
+      setSessionPages(current => {
+        if (!(targetViewKey in current)) {
+          return current;
+        }
+        const next = {...current};
+        delete next[targetViewKey];
+        return next;
+      });
+      if (historyRef.current?.uiId === targetViewKey) {
+        setHistory(null);
+      }
+      setFrontCompactionInfoViewKey(null);
+      setFrontCompactionTarget(null);
+      setFrontCompactionModeViewKey(null);
+      sessionsEtagRef.current = undefined;
+      if (activeViewKeyRef.current === targetViewKey) {
+        snapshotEtagRef.current = undefined;
+      }
+      recordNotification({
+        sessionId: targetViewKey,
+        sessionTitle: targetRowSession.title,
+        kind: 'info',
+        title: 'History trimmed',
+        message: result.delete_mode === 'recoverable'
+          ? `Removed messages were archived as ${result.archive_name}.`
+          : 'The selected provider run and all later active messages were removed.',
+      });
+      refreshSessionsRef.current?.();
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setFrontCompactionError(messageText);
+      sessionsEtagRef.current = undefined;
+      if (activeViewKeyRef.current === targetViewKey) {
+        snapshotEtagRef.current = undefined;
+      }
+      recordNotification({
+        sessionId: targetViewKey,
+        sessionTitle: targetRowSession.title,
+        kind: 'error',
+        title: 'History trim failed',
+        message: messageText,
+      });
+      refreshSessionsRef.current?.();
+    } finally {
+      setFrontCompactingViewKey(current => current === targetViewKey ? null : current);
+    }
+  }, [
+    activeRowSession,
+    activeSession?.sessionRef,
+    activeViewKey,
+    frontCompactionSettings.enabled,
+    frontCompactingViewKey,
+    isCompactionInProgress,
+    isLiveSession,
+    isModelDefaultUpdating,
+    isProfileSwitching,
+    isRunning,
+    recordNotification,
+    resettingViewKey,
+    setHistory,
   ]);
 
   const submitMessage = useCallback(
     (value: string) => {
       const trimmedValue = value.trim();
-      if (!trimmedValue || isRunning) {
+      if (
+        !trimmedValue ||
+        isRunning ||
+        resettingViewKey === activeViewKey ||
+        frontCompactingViewKey === activeViewKey
+      ) {
         return false;
       }
 
@@ -3047,6 +3468,8 @@ function App() {
       activeRowSession,
       isRunning,
       recordNotification,
+      resettingViewKey,
+      frontCompactingViewKey,
       updateViewSessionRecord,
     ],
   );
@@ -3280,6 +3703,15 @@ function App() {
   }, [activeViewKey, pinnedViews]);
 
   useEffect(() => {
+    setResetDrawerViewKey(null);
+    setResetError(null);
+    setFrontCompactionInfoViewKey(null);
+    setFrontCompactionTarget(null);
+    setFrontCompactionModeViewKey(null);
+    setFrontCompactionError(null);
+  }, [activeProfile, activeViewKey]);
+
+  useEffect(() => {
     const previous = activeViewRef.current;
     activeViewRef.current = {viewKey: activeViewKey, ref: activeSessionRef, profile: activeProfile};
     if (
@@ -3319,6 +3751,7 @@ function App() {
       reference: SessionSnapshot['history'],
       profile: string | undefined,
     ): Promise<HistoryBlock | null> => {
+      const resetEpoch = transcriptResetEpochRef.current.get(uiId) ?? 0;
       const held = historyRef.current !== null && historyRef.current.uiId === uiId
         ? historyRef.current
         : null;
@@ -3336,6 +3769,9 @@ function App() {
         return held;
       }
       const result = await fetchSessionHistory(sessionRef, held?.etag, profile);
+      if ((transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch) {
+        return null;
+      }
       if (result.kind === 'ok') {
         const next = {uiId, etag: reference.etag, messages: result.value.messages};
         setHistory(next);
@@ -3350,6 +3786,7 @@ function App() {
     };
 
     const loadTranscript = (sessionRef: string, uiId: string, profile: string | undefined) => {
+      const resetEpoch = transcriptResetEpochRef.current.get(uiId) ?? 0;
       // A client-owned run already has its optimistic turn in memory, so leave
       // it alone. A fresh page attached to a run still needs one transcript
       // snapshot; after that, the stream owns updates until the run completes.
@@ -3366,13 +3803,20 @@ function App() {
         ...(profile === undefined ? {} : {profile}),
       })
         .then(async result => {
-          if (cancelled || result.kind !== 'ok') {
+          if (
+            cancelled ||
+            (transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch ||
+            result.kind !== 'ok'
+          ) {
             return;
           }
           snapshotEtagRef.current = result.etag;
           const snapshot = result.value;
           await ensureHistory(sessionRef, uiId, snapshot.history, profile);
-          if (cancelled) {
+          if (
+            cancelled ||
+            (transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch
+          ) {
             return;
           }
           const messages = applyHydrated(uiId, snapshot.messages ?? []);
@@ -3399,6 +3843,10 @@ function App() {
     };
 
     const loadSessions = () => {
+      const resetEpochsAtStart = new Map(transcriptResetEpochRef.current);
+      const wasResetDuringRequest = (uiId: string) =>
+        (resetEpochsAtStart.get(uiId) ?? 0) !==
+        (transcriptResetEpochRef.current.get(uiId) ?? 0);
       void fetchSessions(sessionsEtagRef.current)
         .then(result => {
           if (cancelled) {
@@ -3439,6 +3887,7 @@ function App() {
             let hasChange = false;
             for (const item of liveItems) {
               if (
+                wasResetDuringRequest(item.id) ||
                 item.id === (activeRunSessionId === null ? null : sessionRefOfViewKey(activeRunSessionId)) ||
                 sessionRefOfViewKey(view.viewKey) === item.id
               ) {
@@ -3461,6 +3910,10 @@ function App() {
           setSessions(current => {
             const liveIds = new Set(liveItems.map(item => item.id));
             const liveSessions = liveItems.map(item => {
+              if (wasResetDuringRequest(item.id)) {
+                return current.find(session => session.id === item.id) ??
+                  sessionFromSnapshot(item.snapshot, item.id);
+              }
               if (item.id === (activeRunSessionId === null ? null : sessionRefOfViewKey(activeRunSessionId))) {
                 const existing = current.find(session => session.id === item.id);
                 if (existing) {
@@ -3554,7 +4007,136 @@ function App() {
       onToggleLeftPanel={toggleLeftPanel}
       onRegisterInsert={registerComposerInsert}
       drawer={
-        isUsageDrawerCollapsed ? null : (
+        isResetDrawerOpen ? (
+          <ChatComposerDrawer>
+            <VStack gap={1} width="100%">
+              <Text type="supporting" color="secondary">
+                This permanently clears the messages, compacted history, recovery archives, and transcript caches and backups for this profile row. Other profile rows, model settings, and your unsent draft are unchanged.
+              </Text>
+              {resetError ? (
+                <Text type="supporting" color="secondary">{resetError}</Text>
+              ) : null}
+              <HStack align="center" gap={1}>
+                <Button
+                  label="Cancel"
+                  variant="ghost"
+                  size="sm"
+                  isDisabled={isCurrentViewResetting}
+                  onClick={() => setResetDrawerViewKey(null)}
+                />
+                <Button
+                  label="Reset chat"
+                  variant="destructive"
+                  size="sm"
+                  isLoading={isCurrentViewResetting}
+                  isDisabled={
+                    !isLiveSession ||
+                    activeSession.sessionRef === undefined ||
+                    isRunning ||
+                    isCompactionInProgress ||
+                    isProfileSwitching ||
+                    isModelDefaultUpdating ||
+                    frontCompactingViewKey !== null
+                  }
+                  onClick={() => void resetActiveSession()}
+                />
+              </HStack>
+            </VStack>
+          </ChatComposerDrawer>
+        ) : isFrontCompactionInfoDrawerOpen ? (
+          <ChatComposerDrawer>
+            <VStack gap={1} width="100%">
+              <Text type="supporting" color="secondary">
+                Choose a user message in this profile row's active transcript. Selecting one opens a confirmation to remove that provider run and all later active messages. Compacted backup history is read-only and cannot be selected.
+              </Text>
+              <HStack align="center" gap={1}>
+                <Button
+                  label="Cancel"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setFrontCompactionInfoViewKey(null)}
+                />
+                <Button
+                  label="Select a user message"
+                  variant="secondary"
+                  size="sm"
+                  isDisabled={
+                    !isLiveSession ||
+                    activeSession.sessionRef === undefined ||
+                    !frontCompactionSettings.enabled ||
+                    isRunning ||
+                    isCompactionInProgress ||
+                    isProfileSwitching ||
+                    isModelDefaultUpdating ||
+                    resettingViewKey !== null ||
+                    frontCompactingViewKey !== null
+                  }
+                  onClick={() => {
+                    setFrontCompactionInfoViewKey(null);
+                    setFrontCompactionModeViewKey(activeViewKey);
+                    setFrontCompactionError(null);
+                  }}
+                />
+              </HStack>
+            </VStack>
+          </ChatComposerDrawer>
+        ) : isFrontCompactionConfirmationOpen && frontCompactionTarget ? (
+          <ChatComposerDrawer>
+            <VStack gap={1} width="100%">
+              <Text type="supporting" color="secondary">
+                This removes the provider run containing the selected user message and every later active message from this profile row only. Compacted backup history is read-only and cannot be selected here.
+              </Text>
+              {frontCompactionSettings.delete_mode === 'recoverable' ? (
+                <Text type="supporting" color="secondary">
+                  A dated JSONL archive will be saved outside the active transcript before removal.
+                </Text>
+              ) : (
+                <Text type="supporting" color="secondary">
+                  No recovery archive will be created.
+                </Text>
+              )}
+              {frontCompactionError ? (
+                <Text type="supporting" color="secondary">{frontCompactionError}</Text>
+              ) : null}
+              <HStack align="center" gap={1}>
+                <Button
+                  label="Cancel"
+                  variant="ghost"
+                  size="sm"
+                  isDisabled={isCurrentViewFrontCompacting}
+                  onClick={() => {
+                    setFrontCompactionTarget(null);
+                    setFrontCompactionError(null);
+                  }}
+                />
+                <Button
+                  label={frontCompactionSettings.delete_mode === 'recoverable'
+                    ? 'Archive and delete from here'
+                    : 'Delete from here onward'}
+                  variant="destructive"
+                  size="sm"
+                  isLoading={isCurrentViewFrontCompacting}
+                  isDisabled={
+                    !isLiveSession ||
+                    activeSession.sessionRef === undefined ||
+                    isRunning ||
+                    isCompactionInProgress ||
+                    isProfileSwitching ||
+                    isModelDefaultUpdating ||
+                    resettingViewKey !== null ||
+                    frontCompactingViewKey !== null
+                  }
+                  onClick={() => {
+                    const target = frontCompactionTarget;
+                    if (target?.viewKey === activeViewKey) {
+                      void frontCompactActiveSession(target.message);
+                    }
+                  }}
+                />
+              </HStack>
+            </VStack>
+          </ChatComposerDrawer>
+        ) : isUsageDrawerCollapsed ? null : (
           <UsageDetailsDrawer
             sessionName={activeRowSession.title}
             usage={activeRowSession.usage}
@@ -3569,7 +4151,7 @@ function App() {
             <SessionProfilePicker
               profiles={activeRowSession.pathProfiles}
               activeProfile={activeRowSession.activeProfile}
-              isDisabled={isRunning || isCompactionInProgress || isProfileSwitching || isModelDefaultUpdating}
+              isDisabled={isRunning || isCompactionInProgress || isProfileSwitching || isModelDefaultUpdating || resettingViewKey !== null || frontCompactingViewKey !== null}
               onSelect={profile => {
                 // The choice lands on the row on screen: a pinned row shows the
                 // profile, the session's own row follows it. Picking the profile
@@ -3602,7 +4184,9 @@ function App() {
                 isRunning ||
                 isCompactionInProgress ||
                 isProfileSwitching ||
-                isModelDefaultUpdating
+                isModelDefaultUpdating ||
+                resettingViewKey !== null ||
+                frontCompactingViewKey !== null
               }
               onSelect={model => { void selectSessionModel(model); }}
             />
@@ -3633,14 +4217,82 @@ function App() {
             size="sm"
             onClick={() => setIsUsageDrawerCollapsed(collapsed => !collapsed)}
           />
+          {isLiveSession && activeSession.sessionRef && frontCompactionSettings.enabled ? (
+            <IconButton
+              label={!isFrontCompactionWorkflowOpen
+                ? 'Delete a run'
+                : isFrontCompactionSelectionMode
+                  ? 'Exit delete-run selection'
+                  : 'Cancel delete-run workflow'}
+              tooltip="Choose an active user message to delete that provider run and later messages"
+              icon={<Icon icon={FrontCompactionIcon} size="sm" />}
+              variant={isFrontCompactionWorkflowOpen ? 'secondary' : 'ghost'}
+              size="sm"
+              isDisabled={
+                isRunning ||
+                isCompactionInProgress ||
+                isProfileSwitching ||
+                isModelDefaultUpdating ||
+                resettingViewKey !== null ||
+                frontCompactingViewKey !== null
+              }
+              onClick={() => {
+                setFrontCompactionError(null);
+                setResetDrawerViewKey(null);
+                if (isFrontCompactionWorkflowOpen) {
+                  setFrontCompactionInfoViewKey(null);
+                  setFrontCompactionModeViewKey(null);
+                  setFrontCompactionTarget(null);
+                  return;
+                }
+                setIsUsageDrawerCollapsed(true);
+                setFrontCompactionInfoViewKey(activeViewKey);
+                setFrontCompactionModeViewKey(null);
+                setFrontCompactionTarget(null);
+              }}
+            />
+          ) : null}
           {isLiveSession && activeSession.sessionRef && (
             <IconButton
               label={isActiveSessionCompacting ? 'Compacting conversation history' : 'Compact conversation history'}
               icon={<Icon icon="arrowsUpDown" size="sm" />}
               variant="ghost"
               size="sm"
-              isDisabled={isRunning || isCompactionInProgress}
+              isDisabled={
+                isRunning ||
+                isCompactionInProgress ||
+                resettingViewKey !== null ||
+                frontCompactingViewKey !== null
+              }
               onClick={() => void compactActiveSession()}
+            />
+          )}
+          {isLiveSession && activeSession.sessionRef && (
+            <IconButton
+              label="Reset chat"
+              tooltip="Clear this profile row's conversation"
+              icon={<Icon icon={ResetChatIcon} size="sm" />}
+              variant={isResetDrawerOpen ? 'secondary' : 'ghost'}
+              size="sm"
+              isDisabled={
+                isRunning ||
+                isCompactionInProgress ||
+                isProfileSwitching ||
+                isModelDefaultUpdating ||
+                resettingViewKey !== null ||
+                frontCompactingViewKey !== null
+              }
+              onClick={() => {
+                setIsUsageDrawerCollapsed(true);
+                setFrontCompactionInfoViewKey(null);
+                setFrontCompactionTarget(null);
+                setFrontCompactionModeViewKey(null);
+                setFrontCompactionError(null);
+                setResetError(null);
+                setResetDrawerViewKey(current =>
+                  current === activeViewKey ? null : activeViewKey,
+                );
+              }}
             />
           )}
         </HStack>
@@ -3759,6 +4411,14 @@ function App() {
                           message={message}
                           model={activeRowSession.model}
                           onLoadFull={loadFullMessage}
+                          isFrontCompactionSelectable={isFrontCompactionSelectionMode}
+                          isFrontCompactionSelected={
+                            isFrontCompactionConfirmationOpen &&
+                            frontCompactionTarget?.message.id === message.id
+                          }
+                          onSelectFrontCompaction={isFrontCompactionSelectionMode
+                            ? openFrontCompactionConfirmation
+                            : undefined}
                         />
                       ))}
                       {isRunning &&

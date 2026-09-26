@@ -1,4 +1,5 @@
 import {randomUUID} from "node:crypto";
+import {environmentWithoutApiToken} from "../../server-secrets.js";
 import {spawn, type ChildProcess} from "node:child_process";
 import {mkdir, open, readdir, readFile, rename, rm, stat, writeFile} from "node:fs/promises";
 import {join} from "node:path";
@@ -154,7 +155,7 @@ export class ProcessManager {
     this.entries.set(id, entry);
     this.manifests.set(id, manifest);
 
-    const environment: NodeJS.ProcessEnv = {...input.environment, ...input.policy.env};
+    const environment = environmentWithoutApiToken({...input.environment, ...input.policy.env});
     delete environment[input.apiKeyEnv];
     for (const name of input.policy.env_deny) delete environment[name];
     let child: ChildProcess;

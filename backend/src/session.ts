@@ -87,6 +87,8 @@ export interface AgentRunOptions {
   onEvent?: (event: JsonRecord) => void | Promise<void>;
   /** Called after each completed or incomplete provider response is committed. */
   onResponseCommitted?: (response: PersistedResponse) => void | Promise<void>;
+  /** Called after successful automatic compaction changes usage state. */
+  onUsageChanged?: () => void | Promise<void>;
   onToolResult?: (item: ResponseInputItem) => void | Promise<void>;
 }
 
@@ -414,6 +416,7 @@ export class AgentSession {
           refreshStateContext = compaction.compacted
             && config.settings.statecontext.enabled
             && config.settings.statecontext.trigger.includes("compaction");
+          if (compaction.compacted) await options.onUsageChanged?.();
         }
         if (calls.length === 0) {
           if (refreshStateContext) await this.refreshStateContext(config, "compaction");
@@ -539,6 +542,23 @@ export class AgentSession {
       const result = await this.compactWithSettings(config.settings.compaction);
       if (result.compacted) await this.refreshStateContext(config, "compaction");
       return result;
+    });
+  }
+
+  public async frontCompactFromMessage(
+    messageId: string,
+    deleteMode: "permanent" | "recoverable",
+  ): Promise<{delete_mode: "permanent" | "recoverable"; archive_name?: string}> {
+    return this.runMutex.runExclusive(async () => {
+      this.assertOpen();
+      return this.store.frontCompactFromMessage(messageId, deleteMode);
+    });
+  }
+
+  public async reset(): Promise<void> {
+    await this.runMutex.runExclusive(async () => {
+      this.assertOpen();
+      await this.store.reset();
     });
   }
 

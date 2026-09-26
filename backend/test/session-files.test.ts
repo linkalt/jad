@@ -8,6 +8,12 @@ import type { NativePathPolicy, SessionFileListingSettings } from "../src/config
 import { createAgentServer } from "../src/server.js";
 import { collectSessionFiles } from "../src/session-files.js";
 
+const fetch: typeof globalThis.fetch = (input, init) => {
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", "Bearer test-api-token-0123456789abcdef0123456789abcdef");
+  return globalThis.fetch(input, {...init, headers});
+};
+
 const LISTING: SessionFileListingSettings = {
   enabled: true,
   max_depth: 12,
@@ -215,7 +221,7 @@ async function withServer(
   root: string,
   run: (baseUrl: string) => Promise<void>,
 ): Promise<void> {
-  const running = createAgentServer({ sessionsDir: root });
+  const running = createAgentServer({ sessionsDir: root, apiToken: "test-api-token-0123456789abcdef0123456789abcdef" });
   await new Promise<void>((resolve, reject) => {
     running.server.once("error", reject);
     running.server.listen(0, "127.0.0.1", () => resolve());

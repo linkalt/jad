@@ -6,7 +6,15 @@ import test from "node:test";
 
 import type OpenAI from "openai";
 
-import { createAgentServer } from "../src/server.js";
+import {createAgentServer as createServer, type AgentServerOptions} from "../src/server.js";
+
+const TEST_API_TOKEN = "test-api-token-0123456789abcdef0123456789abcdef";
+const createAgentServer = (options: AgentServerOptions) => createServer({...options, apiToken: TEST_API_TOKEN});
+const fetch: typeof globalThis.fetch = (input, init) => {
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", `Bearer ${TEST_API_TOKEN}`);
+  return globalThis.fetch(input, {...init, headers});
+};
 import {
   SESSION_INPUT_BATCH_ID_FIELD,
   SESSION_INPUT_BATCH_INDEX_FIELD,
@@ -138,6 +146,7 @@ test("loads configurable root server settings", async () => {
       snapshot_turns: 24,
       max_page_turns: 50,
       max_inline_part_bytes: 16 * 1024,
+      allowed_origins: [],
     });
 
     await writeFile(
@@ -202,7 +211,42 @@ test("loads configurable root server settings", async () => {
       () => loadRootServerSettings({rootSettingPath: settingPath}),
       /server\.max_inline_part_bytes/,
     );
+    await writeFile(settingPath, JSON.stringify({server: {allowed_origins: ["*", "http://localhost:5173"]}}));
+    await assert.rejects(
+      () => loadRootServerSettings({rootSettingPath: settingPath}),
+      /server\.allowed_origins/,
+    );
   } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("requires an API token and an explicitly allowed browser origin", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-api-auth-"));
+  assert.throws(() => createServer({sessionsDir: root, environment: {}}), /AGENT_API_TOKEN/);
+  const running = createServer({sessionsDir: root, environment: {AGENT_API_TOKEN: TEST_API_TOKEN}, allowedOrigins: ["http://localhost:5173"]});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const base = `http://127.0.0.1:${address.port}/api`;
+    assert.equal((await globalThis.fetch(`${base}/health`)).status, 200);
+    assert.equal((await globalThis.fetch(`${base}/sessions`)).status, 401);
+    assert.equal((await globalThis.fetch(`${base}/sessions`, {headers: {Authorization: "Bearer wrong"}})).status, 401);
+    const hostile = await globalThis.fetch(`${base}/sessions`, {headers: {Origin: "https://hostile.example", Authorization: `Bearer ${TEST_API_TOKEN}`}});
+    assert.equal(hostile.status, 403);
+    assert.equal(hostile.headers.get("access-control-allow-origin"), null);
+    const preflight = await globalThis.fetch(`${base}/sessions`, {method: "OPTIONS", headers: {Origin: "http://localhost:5173", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization,content-type"}});
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), "http://localhost:5173");
+    assert.match(preflight.headers.get("access-control-allow-headers") ?? "", /Authorization/);
+    const authorized = await globalThis.fetch(`${base}/sessions`, {headers: {Origin: "http://localhost:5173", Authorization: `Bearer ${TEST_API_TOKEN}`}});
+    assert.equal(authorized.status, 200);
+  } finally {
+    await running.close();
     await rm(root, {recursive: true, force: true});
   }
 });
@@ -1031,8 +1075,31 @@ test("serves sessions using profile model-config and transcript paths", async ()
 
     const compactResponse = await fetch(`${baseUrl}/api/sessions/session1/compact`, {method: "POST"});
     assert.equal(compactResponse.status, 200);
-    const compacted = await compactResponse.json() as {compaction: {compacted: boolean}};
+    const compacted = await compactResponse.json() as {
+      compaction: {compacted: boolean};
+      usage: {
+        input_tokens?: number;
+        output_tokens?: number;
+        total_tokens?: number;
+        cached_input_tokens?: number;
+        current?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          total_tokens?: number;
+          cached_input_tokens?: number;
+          turn: number;
+          step: number;
+        };
+      };
+    };
     assert.equal(compacted.compaction.compacted, true);
+    assert.equal(compacted.usage.input_tokens, list.sessions[0]?.usage?.input_tokens);
+    assert.equal(compacted.usage.output_tokens, list.sessions[0]?.usage?.output_tokens);
+    assert.equal(compacted.usage.total_tokens, list.sessions[0]?.usage?.total_tokens);
+    assert.equal(compacted.usage.current?.input_tokens, 0);
+    assert.equal(compacted.usage.current?.output_tokens, 0);
+    assert.equal(compacted.usage.current?.total_tokens, 0);
+    assert.equal(compacted.usage.current?.cached_input_tokens, 0);
     assert.equal(await readFile(messagesPath, "utf8"), "");
     assert.match(await readFile(join(sessionDir, "data/messages.backup.jsonl"), "utf8"), /configured transcript/);
     const compactionCachePath = join(sessionDir, "runtime/staging/compaction-cache.json");
@@ -1056,7 +1123,7 @@ test("serves sessions using profile model-config and transcript paths", async ()
     assert.equal(historyResponse.status, 200);
     const history = await historyResponse.json() as {messages: Array<{text: string}>};
     assert.equal(history.messages[0]?.text, "from configured transcript");
-    assert.deepEqual(compactedBody.usage, list.sessions[0]?.usage);
+    assert.deepEqual(compactedBody.usage, compacted.usage);
   } finally {
     await running.close();
     await rm(root, {recursive: true, force: true});
@@ -1109,7 +1176,9 @@ test("persists user input before a tool configuration failure", async () => {
       },
     );
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /missing-tools\.json/);
+    const errorStream = await response.text();
+    assert.match(errorStream, /The run failed\. Response details were withheld/);
+    assert.doesNotMatch(errorStream, /missing-tools\.json/);
 
     const records = (await readFile(join(sessionDir, "messages.jsonl"), "utf8"))
       .trim()
@@ -1657,6 +1726,153 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
   }
 });
 
+test("publishes zero latest-response usage after automatic compaction", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-auto-compaction-usage-"));
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, {recursive: true});
+  await writeFile(join(sessionDir, "model.json"), JSON.stringify({model: "fake-model"}));
+  await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+    session_name: "auto-compaction-usage-test",
+    cwd: sessionDir,
+    compaction: {
+      trigger_tokens: 1,
+      keepbatch: {tools: 0, turn: {type: "assistant_final", keep: 1}},
+    },
+  }));
+
+  const reasoning = {type: "reasoning", summary: [{type: "summary_text", text: "internal notes"}]};
+  const answer = {type: "message", role: "assistant", content: [{type: "output_text", text: "Answer"}]};
+  const fakeClient = {
+    responses: {
+      create: async () => (async function* () {
+        yield {type: "response.output_item.done", output_index: 0, item: reasoning};
+        yield {type: "response.output_item.done", output_index: 1, item: answer};
+        yield completedEvent([reasoning, answer], "response-after-compaction", {
+          input_tokens: 21,
+          output_tokens: 7,
+          total_tokens: 28,
+        });
+      })(),
+    },
+  } as unknown as OpenAI;
+  const running = createAgentServer({sessionsDir: root, client: fakeClient});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", resolve);
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "answer briefly"}),
+    });
+    assert.equal(response.status, 200);
+    const events = ssePayloads(await response.text(), "usage");
+    assert.equal(events.length, 2);
+    assert.deepEqual(events[0]?.usage, {
+      completed_responses: 1,
+      responses_with_usage: 1,
+      turn_count: 1,
+      history_partial: false,
+      input_tokens: 21,
+      output_tokens: 7,
+      total_tokens: 28,
+      current: {
+        input_tokens: 21,
+        output_tokens: 7,
+        total_tokens: 28,
+        turn: 1,
+        step: 1,
+        response_id: "response-after-compaction",
+      },
+    });
+    assert.deepEqual(events[1]?.usage, {
+      completed_responses: 1,
+      responses_with_usage: 1,
+      turn_count: 1,
+      history_partial: false,
+      input_tokens: 21,
+      output_tokens: 7,
+      total_tokens: 28,
+      current: {
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        turn: 1,
+        step: 1,
+        response_id: "response-after-compaction",
+        cached_input_tokens: 0,
+      },
+    });
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("sanitizes provider error details before sending a run failure over SSE", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-provider-error-"));
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, {recursive: true});
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({
+      schema_version: 1,
+      provider: "fake",
+      api_key_env: "FAKE_API_KEY",
+      model: "fake-model",
+    }),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({schema_version: 1, session_name: "provider-error-test", cwd: sessionDir}),
+  );
+
+  const privateMarker = "private-provider-body-and-header-marker";
+  const providerError = Object.assign(
+    new Error(`status: 401,\\n headers: Headers {\\n 'x-codex-plan-type': 'plus'\\n}\\n${privateMarker}`),
+    {status: 401},
+  );
+  const fakeClient = {
+    responses: {
+      create: async () => {
+        throw providerError;
+      },
+    },
+  } as unknown as OpenAI;
+  const running = createAgentServer({sessionsDir: root, client: fakeClient});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const response = await fetch(`${baseUrl}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "trigger provider error"}),
+    });
+    assert.equal(response.status, 200);
+    const stream = await response.text();
+    const errors = ssePayloads(stream, "error");
+    assert.deepEqual(errors, [{
+      message: "The provider request failed (HTTP 401). Response details were withheld.",
+    }]);
+    assert.match(stream, /event: done/);
+    assert.doesNotMatch(stream, /private-provider-body-and-header-marker|x-codex-plan-type|Headers/);
+    assert.doesNotMatch(stream, /event: ui\.message|event: completed/);
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test("streams per-response usage, including incomplete responses, with tool blocks over SSE", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-server-tools-"));
   const sessionDir = join(root, "session1");
@@ -2098,6 +2314,161 @@ function assistantOutput(text: string): Record<string, unknown> {
   };
 }
 
+test("resets only the selected profile row and rejects reset during its run", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-reset-profile-"));
+  const sessionDir = await writeProfileSession(root);
+  const primaryMessagesPath = join(sessionDir, "profiles", "primary", "messages.jsonl");
+  const alternateMessagesPath = join(sessionDir, "profiles", "alternate", "messages.jsonl");
+  const alternateBefore = `${JSON.stringify({
+    type: "message",
+    role: "user",
+    content: [{type: "input_text", text: "alternate before reset"}],
+  })}\n`;
+  await mkdir(join(sessionDir, "profiles", "alternate"), {recursive: true});
+  await writeFile(alternateMessagesPath, alternateBefore);
+
+  const {streams, client, openResponses} = createManualProviderStreams();
+  const running = createAgentServer({sessionsDir: root, client});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const primaryRun = fetch(`${baseUrl}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "primary run stays"}),
+    });
+    await waitForCondition(() => streams.length === 1, "the primary run to reach the provider");
+    const primaryResponse = await primaryRun;
+    openResponses.push(primaryResponse);
+    assert.equal(primaryResponse.status, 200);
+
+    const runningReset = await fetch(`${baseUrl}/api/sessions/session1/reset?profile=primary`, {
+      method: "POST",
+    });
+    assert.equal(runningReset.status, 409);
+
+    const alternateReset = await fetch(`${baseUrl}/api/sessions/session1/reset?profile=alternate`, {
+      method: "POST",
+    });
+    assert.equal(alternateReset.status, 200);
+    assert.deepEqual(await alternateReset.json(), {reset: true});
+    assert.equal(await readFile(alternateMessagesPath, "utf8"), "");
+    await assert.rejects(readFile(alternateMessagesPath.replace("messages.jsonl", "messages.backup.jsonl"), "utf8"), {code: "ENOENT"});
+
+    const primaryText = await readFile(primaryMessagesPath, "utf8");
+    assert.match(primaryText, /primary run stays/);
+    assert.equal(primaryText.includes("alternate before reset"), false);
+
+    const alternateSnapshot = await fetch(`${baseUrl}/api/sessions/session1?profile=alternate`);
+    assert.equal(alternateSnapshot.status, 200);
+    const alternateBody = await alternateSnapshot.json() as {
+      messages: Array<{text: string}>;
+      usage: {turn_count: number};
+      history?: {count: number; etag: string | null};
+    };
+    assert.deepEqual(alternateBody.messages, []);
+    assert.equal(alternateBody.usage.turn_count, 0);
+    assert.equal(alternateBody.history?.count ?? 0, 0);
+    assert.equal(alternateBody.history?.etag ?? null, null);
+  } finally {
+    await closeRuns(streams, openResponses, running);
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("front compaction truncates only the selected profile and honors session settings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-front-compaction-profile-"));
+  const sessionDir = await writeProfileSession(root);
+  const settingPath = join(sessionDir, "setting.json");
+  const settings = JSON.parse(await readFile(settingPath, "utf8")) as Record<string, unknown>;
+  settings.front_compaction = {enabled: true, delete_mode: "recoverable"};
+  await writeFile(settingPath, JSON.stringify(settings));
+
+  const primaryMessagesPath = join(sessionDir, "profiles", "primary", "messages.jsonl");
+  const alternateMessagesPath = join(sessionDir, "profiles", "alternate", "messages.jsonl");
+  const user = (text: string): Record<string, unknown> => ({
+    type: "message",
+    role: "user",
+    content: [{type: "input_text", text}],
+  });
+  const assistantEvent = (id: string, text: string): Record<string, unknown> => ({
+    type: "response.completed",
+    response: {
+      id,
+      object: "response",
+      status: "completed",
+      model: "fake-model",
+      usage: {input_tokens: 10, output_tokens: 2},
+      output: [{type: "message", role: "assistant", content: [{type: "output_text", text}]}],
+    },
+  });
+  const primaryTranscript = `${JSON.stringify(user("primary stays"))}\n${JSON.stringify(assistantEvent("primary-response", "primary answer"))}\n`;
+  const alternateRecords = [
+    user("alternate stays"),
+    assistantEvent("alternate-one", "alternate answer one"),
+    user("alternate removed"),
+    assistantEvent("alternate-two", "alternate answer two"),
+  ];
+  const alternateTranscript = `${alternateRecords.map(record => JSON.stringify(record)).join("\n")}\n`;
+  const preservedAlternatePrefix = `${alternateRecords.slice(0, 2).map(record => JSON.stringify(record)).join("\n")}\n`;
+  const removedAlternateTail = alternateTranscript.slice(Buffer.byteLength(preservedAlternatePrefix, "utf8"));
+  const removedUserOffset = Buffer.byteLength(preservedAlternatePrefix, "utf8");
+  await mkdir(join(sessionDir, "profiles", "primary"), {recursive: true});
+  await mkdir(join(sessionDir, "profiles", "alternate"), {recursive: true});
+  await writeFile(primaryMessagesPath, primaryTranscript);
+  await writeFile(alternateMessagesPath, alternateTranscript);
+
+  const {client} = createManualProviderStreams();
+  const running = createAgentServer({sessionsDir: root, client});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const httpResponse = await fetch(`${baseUrl}/api/sessions/session1/front-compact?profile=alternate`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({message_id: `session-user-o${removedUserOffset}`}),
+    });
+    const responseText = await httpResponse.text();
+    assert.equal(httpResponse.status, 200, responseText);
+    const result = JSON.parse(responseText) as {
+      front_compaction: {delete_mode: string; archive_name?: string};
+    };
+    assert.equal(result.front_compaction.delete_mode, "recoverable");
+    assert.match(result.front_compaction.archive_name ?? "", /^messages-\d{8}T\d{9}Z-[0-9a-f]{8}\.jsonl$/);
+    assert.equal(await readFile(alternateMessagesPath, "utf8"), preservedAlternatePrefix);
+    assert.equal(await readFile(primaryMessagesPath, "utf8"), primaryTranscript);
+    assert.equal(
+      await readFile(join(`${alternateMessagesPath}.deleted-history`, result.front_compaction.archive_name!), "utf8"),
+      removedAlternateTail,
+    );
+
+    settings.front_compaction = {enabled: false, delete_mode: "permanent"};
+    await writeFile(settingPath, JSON.stringify(settings));
+    const disabledResponse = await fetch(`${baseUrl}/api/sessions/session1/front-compact?profile=primary`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({message_id: "session-user-o0"}),
+    });
+    assert.equal(disabledResponse.status, 403);
+    assert.equal(await readFile(primaryMessagesPath, "utf8"), primaryTranscript);
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test("runs two profiles of one session at the same time, on separate transcripts", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-profiles-"));
   const sessionDir = await writeProfileSession(root);
@@ -2293,6 +2664,12 @@ test("switching the stored profile refuses only the profile being switched away 
     // handle is the one whose paths would move under the run.
     const refused = await switchTo("primary");
     assert.equal(refused.status, 409);
+    const aliasRefused = await fetch(`${baseUrl}/api/sessions/default%3Asession1/profile`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({active_profile: "primary"}),
+    });
+    assert.equal(aliasRefused.status, 409, "root-qualified alias must see the same running profile");
     const afterRefusal = JSON.parse(await readFile(join(sessionDir, "setting.json"), "utf8")) as {
       paths: {active_profile: string};
     };
@@ -2305,10 +2682,18 @@ test("switching the stored profile refuses only the profile being switched away 
     assert.match(heldStream, /ALTERNATE_DONE/);
 
     // With nothing running, the switch back is allowed.
-    const back = await switchTo("primary");
+    const beforeAliasSwitch = await (await fetch(`${baseUrl}/api/sessions/session1`)).json() as {active_profile?: string};
+    assert.equal(beforeAliasSwitch.active_profile, "alternate");
+    const back = await fetch(`${baseUrl}/api/sessions/default%3Asession1/profile`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({active_profile: "primary"}),
+    });
     assert.equal(back.status, 200);
     const backBody = await back.json() as {changed: boolean};
     assert.equal(backBody.changed, true);
+    const afterAliasSwitch = await (await fetch(`${baseUrl}/api/sessions/session1`)).json() as {active_profile?: string};
+    assert.equal(afterAliasSwitch.active_profile, "primary", "canonical default handle must be invalidated by alias switch");
   } finally {
     await closeRuns(streams, openResponses, running);
     await rm(root, {recursive: true, force: true});

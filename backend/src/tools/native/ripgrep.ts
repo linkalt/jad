@@ -12,6 +12,7 @@
  */
 
 import {spawn} from "node:child_process";
+import {environmentWithoutApiToken} from "../../server-secrets.js";
 
 import {MAX_DIAGNOSTIC_CHARS} from "./text.js";
 
@@ -183,6 +184,7 @@ export function runRipgrep(search: RipgrepSearch): Promise<RipgrepResult> {
 
     const child = spawn(search.binary, argv, {
       cwd: search.cwd,
+      env: environmentWithoutApiToken(process.env),
       stdio: ["ignore", "pipe", "pipe"],
       // A separate group lets cleanup cover a wrapped or misbehaving binary.
       detached: true,

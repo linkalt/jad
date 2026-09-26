@@ -356,6 +356,13 @@ export interface CompactionSettings extends JsonRecord {
   backup_mode: "replace" | "append";
 }
 
+export interface FrontCompactionSettings extends JsonRecord {
+  /** When false, the composer does not offer delete-from-here actions. */
+  enabled: boolean;
+  /** Whether deleting a tail creates a date-named recovery archive. */
+  delete_mode: "permanent" | "recoverable";
+}
+
 export interface PersistenceSettings extends JsonRecord {
   durability: DurabilityMode;
   max_item_bytes: number;
@@ -383,6 +390,7 @@ export interface SessionSettings extends JsonRecord {
   max_tool_rounds: number;
   persistence: PersistenceSettings;
   compaction: CompactionSettings;
+  front_compaction: FrontCompactionSettings;
   statecontext: StateContextSettings;
   http_debug: HttpDebugSettings;
   session_files: SessionFileListingSettings;
@@ -854,6 +862,22 @@ function normalizeCompaction(value: unknown, path: string): CompactionSettings {
     keepbackup: {turns: backupTurns},
     backup_mode: backupMode,
   } as CompactionSettings;
+}
+
+function normalizeFrontCompaction(value: unknown, path: string): FrontCompactionSettings {
+  if (value !== undefined && !isRecord(value)) {
+    throw new ConfigError(`${path}: front_compaction must be an object`);
+  }
+  const raw = value ?? {};
+  const enabled = raw.enabled ?? true;
+  if (typeof enabled !== "boolean") {
+    throw new ConfigError(`${path}: front_compaction.enabled must be a boolean`);
+  }
+  const deleteMode = raw.delete_mode ?? "permanent";
+  if (deleteMode !== "permanent" && deleteMode !== "recoverable") {
+    throw new ConfigError(`${path}: front_compaction.delete_mode must be permanent or recoverable`);
+  }
+  return {...raw, enabled, delete_mode: deleteMode} as FrontCompactionSettings;
 }
 
 function normalizeMaxToolRounds(value: unknown, path: string): number {
@@ -2840,6 +2864,7 @@ async function normalizeSettings(
   const maxToolRounds = normalizeMaxToolRounds(raw.max_tool_rounds, path);
   const persistence = normalizePersistence(raw.persistence, path);
   const compaction = normalizeCompaction(raw.compaction, path);
+  const frontCompaction = normalizeFrontCompaction(raw.front_compaction, path);
   const httpDebug = normalizeHttpDebug(raw.http_debug, path);
   const sessionFiles = normalizeSessionFileListing(raw.session_files, path);
   const toolDefinitionPaths = normalizeToolDefinitionPaths(
@@ -2862,6 +2887,7 @@ async function normalizeSettings(
     max_tool_rounds: maxToolRounds,
     persistence,
     compaction,
+    front_compaction: frontCompaction,
     statecontext,
     http_debug: httpDebug,
     session_files: sessionFiles,

@@ -20,6 +20,7 @@ import type {JsonRecord} from "../../persistence.js";
 import {executionError, renderToolResult} from "../output.js";
 import type {ToolDefinition, ToolExecutionContext} from "../types.js";
 import {runChildProcess} from "./child.js";
+import {environmentWithoutApiToken} from "../../server-secrets.js";
 import {displayPath, pathPolicyError, resolveExistingTarget} from "./path.js";
 
 export const NATIVE_GLOB_ID = "native.glob";
@@ -254,7 +255,7 @@ export async function executeNativeGlob(
     ],
     // Paths come back relative to this directory, which is also the policy root.
     cwd: realRoot,
-    env: process.env,
+    env: environmentWithoutApiToken(process.env),
     timeoutMs: policy.timeout_ms,
     killGraceMs: GLOB_KILL_GRACE_MS,
     // Listing is foreground work: also remove descendants that inherited a

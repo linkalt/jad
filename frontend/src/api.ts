@@ -1,4 +1,7 @@
 import appConfig from './config.json';
+import {createAuthenticatedFetch} from './api-auth';
+
+const authenticatedFetch = createAuthenticatedFetch(appConfig.api_token_storage_key);
 
 function apiUrl(path: string): string {
   return `${appConfig.api_base_path.replace(/\/$/, '')}${path}`;
@@ -120,6 +123,7 @@ export interface SessionSnapshot {
   path_profiles?: string[];
   model_default?: string;
   models?: string[];
+  front_compaction?: {enabled: boolean; delete_mode: 'permanent' | 'recoverable'};
   session_name: string;
   turns: number;
   /** Absent in the session list: transcripts are fetched per session. */
@@ -228,7 +232,7 @@ async function fetchConditional<T>(
   etag: string | undefined,
   parse: (value: unknown) => T,
 ): Promise<ConditionalResult<T>> {
-  const response = await fetch(apiUrl(path), {
+  const response = await authenticatedFetch(apiUrl(path), {
     headers: etag === undefined ? {} : {'If-None-Match': etag},
   });
   const responseEtag = response.headers.get('etag') ?? undefined;
@@ -298,7 +302,7 @@ export async function updateSessionPathProfile(
   sessionRef: string,
   activeProfile: string,
 ): Promise<SessionPathProfileUpdate> {
-  const response = await fetch(
+  const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/profile`),
     {
       method: 'POST',
@@ -330,7 +334,7 @@ export async function updateSessionProfileModelDefault(
   modelDefault: string,
   profile?: string,
 ): Promise<SessionPathModelDefaultUpdate> {
-  const response = await fetch(
+  const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/model-default${profileQuery(profile)}`),
     {
       method: 'POST',
@@ -399,7 +403,7 @@ export async function fetchSessionMessage(
     query.set('profile', profile);
   }
   const suffix = query.size === 0 ? '' : `?${query.toString()}`;
-  const response = await fetch(
+  const response = await authenticatedFetch(
     apiUrl(
       `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}${suffix}`,
     ),
@@ -431,7 +435,7 @@ export async function fetchSessionFiles(
   signal?: AbortSignal,
   profile?: string,
 ): Promise<SessionFileListing> {
-  const response = await fetch(
+  const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/files${profileQuery(profile)}`),
     {signal},
   );
@@ -447,7 +451,7 @@ export async function fetchSessionFiles(
   };
 }
 
-export async function fetchSessionTools(sessionId: string, profile?: string): Promise<ToolDefinition[]> {  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/tools${profileQuery(profile)}`));
+export async function fetchSessionTools(sessionId: string, profile?: string): Promise<ToolDefinition[]> {  const response = await authenticatedFetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/tools${profileQuery(profile)}`));
   if (!response.ok) {
     throw new Error(await readError(response));
   }
@@ -462,13 +466,14 @@ export interface SessionCompactionResult {
   compacted: boolean;
   compacted_items: number;
   retained_items: number;
+  usage?: SessionUsageSummary;
 }
 
 export async function compactSession(
   sessionId: string,
   profile?: string,
 ): Promise<SessionCompactionResult> {
-  const response = await fetch(
+  const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionId)}/compact${profileQuery(profile)}`),
     {method: 'POST'},
   );
@@ -487,7 +492,8 @@ export async function compactSession(
     compaction.compacted_items < 0 ||
     typeof compaction.retained_items !== 'number' ||
     !Number.isSafeInteger(compaction.retained_items) ||
-    compaction.retained_items < 0
+    compaction.retained_items < 0 ||
+    (value.usage !== undefined && !isSessionUsageSummary(value.usage))
   ) {
     throw new Error('the server returned invalid compaction data');
   }
@@ -495,7 +501,62 @@ export async function compactSession(
     compacted: compaction.compacted,
     compacted_items: compaction.compacted_items,
     retained_items: compaction.retained_items,
+    ...(value.usage === undefined ? {} : {usage: value.usage}),
   };
+}
+
+export interface FrontCompactionResult {
+  delete_mode: 'permanent' | 'recoverable';
+  archive_name?: string;
+}
+
+export async function frontCompactSessionFromMessage(
+  sessionId: string,
+  messageId: string,
+  profile?: string,
+): Promise<FrontCompactionResult> {
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/front-compact${profileQuery(profile)}`),
+    {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({message_id: messageId}),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  if (!isRecord(value) || !isRecord(value.front_compaction)) {
+    throw new Error('the server returned invalid front compaction data');
+  }
+  const frontCompaction = value.front_compaction;
+  if (
+    (frontCompaction.delete_mode !== 'permanent' && frontCompaction.delete_mode !== 'recoverable') ||
+    (frontCompaction.archive_name !== undefined && typeof frontCompaction.archive_name !== 'string')
+  ) {
+    throw new Error('the server returned invalid front compaction data');
+  }
+  return {
+    delete_mode: frontCompaction.delete_mode,
+    ...(typeof frontCompaction.archive_name === 'string'
+      ? {archive_name: frontCompaction.archive_name}
+      : {}),
+  };
+}
+
+export async function resetSession(sessionId: string, profile?: string): Promise<void> {
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/reset${profileQuery(profile)}`),
+    {method: 'POST'},
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  if (!isRecord(value) || value.reset !== true) {
+    throw new Error('the server returned invalid reset data');
+  }
 }
 
 async function* readSse(response: Response): AsyncGenerator<SseMessage> {
@@ -783,7 +844,7 @@ export async function streamSessionRun(
   input: string,
   options: StreamSessionRunOptions = {},
 ): Promise<StreamSessionRunResult> {
-  const response = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/run${profileQuery(options.profile)}`), {
+  const response = await authenticatedFetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/run${profileQuery(options.profile)}`), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -808,7 +869,7 @@ export async function attachSessionRun(
   sessionRef: string,
   options: StreamSessionRunOptions = {},
 ): Promise<StreamSessionRunResult> {
-  const response = await fetch(
+  const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stream${profileQuery(options.profile)}`),
     {
       ...(options.signal ? {signal: options.signal} : {}),
@@ -831,7 +892,7 @@ export async function stopSessionRun(
   sessionRef: string,
   profile?: string,
 ): Promise<StopSessionRunResult> {
-  const response = await fetch(
+  const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stop${profileQuery(profile)}`),
     {method: 'POST'},
   );

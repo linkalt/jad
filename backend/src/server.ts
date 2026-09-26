@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import {
   createServer,
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 
 import type OpenAI from "openai";
+import {API_TOKEN_ENV_NAME, environmentWithoutApiToken} from "./server-secrets.js";
 
 import {
   ConfigError,
@@ -29,6 +30,7 @@ import {
   DEFAULT_NATIVE_TASK_STORAGE_DIR,
 } from "./config.js";
 import {
+  PersistenceError,
   SessionResponseStore,
   type JsonRecord,
   type SessionUsageSummary,
@@ -42,6 +44,7 @@ import {
 } from "./session-path-profiles.js";
 import {
   DEFAULT_ROOT_SERVER_SETTINGS,
+  MIN_API_TOKEN_LENGTH,
   directoryEntries,
   loadRootServerSettings,
   loadSessionRoots,
@@ -91,6 +94,10 @@ export interface AgentServerOptions {
    * transport and can be re-fetched whole; `0` sends parts uncut.
    */
   maxInlinePartBytes?: number;
+  /** Secret required on every session route; defaults to AGENT_API_TOKEN. */
+  apiToken?: string;
+  /** Exact browser origins that may call session routes. */
+  allowedOrigins?: readonly string[];
 }
 
 export interface RunningAgentServer {
@@ -285,6 +292,24 @@ function validateSessionReference(value: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isAuthorized(request: IncomingMessage, tokenHash: Buffer): boolean {
+  const authorization = request.headers.authorization;
+  if (authorization === undefined || !authorization.startsWith("Bearer ")) return false;
+  const suppliedHash = createHash("sha256").update(authorization.slice("Bearer ".length)).digest();
+  return timingSafeEqual(suppliedHash, tokenHash);
+}
+
+function clientRunErrorMessage(error: unknown): string {
+  const status =
+    error !== null && typeof error === "object" && "status" in error
+      ? (error as {status?: unknown}).status
+      : undefined;
+  if (typeof status === "number" && Number.isSafeInteger(status) && status >= 100 && status <= 599) {
+    return `The provider request failed (HTTP ${status}). Response details were withheld.`;
+  }
+  return "The run failed. Response details were withheld; check server logs for diagnostics.";
 }
 
 function sendJson(response: ServerResponse, statusCode: number, value: unknown): void {
@@ -573,11 +598,15 @@ class AgentHttpApplication {
    * the entry, exactly as the profile switch did when it reopened the session.
    */
   private readonly defaultHandles = new Map<string, Promise<SessionHandle>>();
+  /** Resolved aliases; failed lookups are evicted so newly created sessions can appear. */
+  private readonly locations = new Map<string, Promise<SessionLocation>>();
   /** Stores derived from `cwd`, shared by every profile of one session directory. */
   private readonly sharedStores = new Map<string, Promise<SessionSharedStores>>();
   private readonly changingSessionSettings = new Set<string>();
   /** Keyed like the handles: compaction is per `(session, profile)`. */
   private readonly compactingSessions = new Set<string>();
+  /** Transcript rewrites are serialized with runs and compactions for one profile row. */
+  private readonly changingTranscripts = new Set<string>();
   private readonly sessionRoots: Promise<SessionRoot[]>;
   private readonly sessionOptions: {
     client?: OpenAI;
@@ -590,8 +619,17 @@ class AgentHttpApplication {
   private readonly maxPageTurns: number;
   private readonly maxInlinePartBytes: number;
   private readonly runs: SessionRunRegistry;
+  private readonly apiTokenHash: Buffer;
+  private readonly allowedOrigins: ReadonlySet<string>;
 
   public constructor(options: AgentServerOptions = {}) {
+    const environment = options.environment ?? process.env;
+    const token = options.apiToken ?? environment[API_TOKEN_ENV_NAME];
+    if (typeof token !== "string" || token.length < MIN_API_TOKEN_LENGTH || /[\r\n]/.test(token)) {
+      throw new ConfigError(`${API_TOKEN_ENV_NAME} must be a secret of at least ${MIN_API_TOKEN_LENGTH} characters`);
+    }
+    this.apiTokenHash = createHash("sha256").update(token).digest();
+    this.allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_ROOT_SERVER_SETTINGS.allowed_origins);
     this.sessionRoots = loadSessionRoots({
       sessionsDir: options.sessionsDir,
       rootSettingPath: options.rootSettingPath,
@@ -599,7 +637,7 @@ class AgentHttpApplication {
     });
     this.sessionOptions = {
       ...(options.client ? { client: options.client } : {}),
-      ...(options.environment ? { environment: options.environment } : {}),
+      environment: environmentWithoutApiToken(environment),
     };
     this.maxBodyBytes = options.maxBodyBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.max_body_bytes;
     this.toolStreamIntervalMs =
@@ -616,18 +654,22 @@ class AgentHttpApplication {
   }
 
   public async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    response.setHeader("Access-Control-Allow-Origin", "*");
-    response.setHeader("Access-Control-Allow-Headers", "Content-Type, If-None-Match");
-    response.setHeader("Access-Control-Expose-Headers", "ETag");
-    response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-
-    if (request.method === "OPTIONS") {
-      response.writeHead(204);
-      response.end();
-      return;
-    }
-
     try {
+      const origin = request.headers.origin;
+      if (origin !== undefined) {
+        if (!this.allowedOrigins.has(origin)) throw new HttpError(403, "origin is not allowed");
+        response.setHeader("Access-Control-Allow-Origin", origin);
+        response.setHeader("Vary", "Origin");
+        response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, If-None-Match");
+        response.setHeader("Access-Control-Expose-Headers", "ETag");
+        response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      }
+      if (request.method === "OPTIONS") {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+
       const url = new URL(request.url ?? "/", "http://agent-harness.local");
       const segments = url.pathname
         .split("/")
@@ -648,13 +690,20 @@ class AgentHttpApplication {
       if (segments[0] !== "api" || segments[1] !== "sessions") {
         throw new HttpError(404, "not found");
       }
+      if (!isAuthorized(request, this.apiTokenHash)) {
+        response.setHeader("WWW-Authenticate", 'Bearer realm="agent-harness"');
+        throw new HttpError(401, "API token required");
+      }
 
       if (request.method === "GET" && segments.length === 2) {
         await this.handleSessionList(request, response);
         return;
       }
 
-      const sessionRef = validateSessionReference(segments[2] ?? "");
+      const requestedRef = validateSessionReference(segments[2] ?? "");
+      // Aliases (root-qualified and unqualified) must share locks and cached
+      // default handles. Never use an unnormalized request reference as a key.
+      const sessionRef = (await this.cachedSessionLocation(requestedRef)).ref;
       // One profile of the session, or the stored default when the request is
       // silent — which is what every client sent before profiles were
       // addressable, so an unqualified request keeps its exact meaning.
@@ -726,6 +775,24 @@ class AgentHttpApplication {
       }
 
       if (
+        request.method === "POST" &&
+        segments.length === 4 &&
+        segments[3] === "front-compact"
+      ) {
+        await this.handleFrontCompact(sessionRef, request, response, profile);
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        segments.length === 4 &&
+        segments[3] === "reset"
+      ) {
+        await this.handleReset(sessionRef, response, profile);
+        return;
+      }
+
+      if (
         request.method === "GET" &&
         segments.length === 5 &&
         segments[3] === "run" &&
@@ -793,6 +860,20 @@ class AgentHttpApplication {
     );
   }
 
+  private async cachedSessionLocation(reference: string): Promise<SessionLocation> {
+    let pending = this.locations.get(reference);
+    if (pending === undefined) {
+      pending = this.resolveSessionLocation(reference);
+      this.locations.set(reference, pending);
+    }
+    try {
+      return await pending;
+    } catch (error) {
+      if (this.locations.get(reference) === pending) this.locations.delete(reference);
+      throw error;
+    }
+  }
+
   private async resolveSessionLocation(reference: string): Promise<SessionLocation> {
     const roots = await this.sessionRoots;
     const parsed = parseSessionReference(reference);
@@ -847,7 +928,7 @@ class AgentHttpApplication {
    */
   private async getSession(reference: string, profile?: string): Promise<SessionHandle> {
     if (profile !== undefined) {
-      const location = await this.resolveSessionLocation(reference);
+      const location = await this.cachedSessionLocation(reference);
       return this.acquireHandle(location, profile);
     }
     const cached = this.defaultHandles.get(reference);
@@ -855,7 +936,7 @@ class AgentHttpApplication {
       return cached;
     }
     const pending = (async (): Promise<SessionHandle> => {
-      const location = await this.resolveSessionLocation(reference);
+      const location = await this.cachedSessionLocation(reference);
       const directory = join(location.root.directory, location.sessionId);
       const loader = new SessionConfigLoader(directory, {
         globalJadRoot: location.root.globalJadRoot,
@@ -1231,6 +1312,15 @@ class AgentHttpApplication {
     sendJson(response, 200, {stop: this.runs.stop(handle.location.ref, handle.profile)});
   }
 
+  private isTranscriptChanging(reference: string): boolean {
+    for (const key of this.changingTranscripts) {
+      if (key === reference || key.startsWith(`${reference}|`)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private async handleCompact(id: string, response: ServerResponse, profile?: string): Promise<void> {
     if (this.changingSessionSettings.has(id)) {
       throw new HttpError(409, "session profile or compaction is already changing");
@@ -1239,18 +1329,112 @@ class AgentHttpApplication {
     // Compaction rewrites one profile's transcript, so the guard is per profile:
     // two profiles of one session may compact at the same time.
     const key = profileKey(handle.location.ref, handle.profile);
-    if (this.compactingSessions.has(key)) {
+    if (this.compactingSessions.has(key) || this.changingTranscripts.has(key)) {
       throw new HttpError(409, "session profile or compaction is already changing");
     }
     this.compactingSessions.add(key);
     try {
-      if (this.changingSessionSettings.has(id)) {
+      if (this.changingSessionSettings.has(id) || this.changingTranscripts.has(key)) {
         throw new HttpError(409, "session settings are changing");
       }
       const {compacted, compacted_items, retained_items} = await handle.session.compact();
-      sendJson(response, 200, {compaction: {compacted, compacted_items, retained_items}});
+      const usage = await handle.session.readUsageSummary();
+      sendJson(response, 200, {compaction: {compacted, compacted_items, retained_items}, usage});
     } finally {
       this.compactingSessions.delete(key);
+    }
+  }
+
+  private async handleFrontCompact(
+    id: string,
+    request: IncomingMessage,
+    response: ServerResponse,
+    profile?: string,
+  ): Promise<void> {
+    if (this.changingSessionSettings.has(id)) {
+      throw new HttpError(409, "session settings are changing");
+    }
+    const body = await readJsonBody(request, this.maxBodyBytes);
+    if (
+      !isRecord(body) ||
+      typeof body.message_id !== "string" ||
+      !/^session-user-o(0|[1-9][0-9]*)$/.test(body.message_id)
+    ) {
+      throw new HttpError(400, "message_id must identify an active transcript user message");
+    }
+    const handle = await this.getSession(id, profile);
+    const key = profileKey(handle.location.ref, handle.profile);
+    if (
+      this.changingSessionSettings.has(id) ||
+      this.compactingSessions.has(key) ||
+      this.changingTranscripts.has(key)
+    ) {
+      throw new HttpError(409, "session profile or transcript is already changing");
+    }
+    if (this.runs.current(handle.location.ref, handle.profile)?.status === "running") {
+      throw new HttpError(409, "cannot front compact a profile while a run is active");
+    }
+
+    this.changingTranscripts.add(key);
+    try {
+      if (
+        this.changingSessionSettings.has(id) ||
+        this.compactingSessions.has(key) ||
+        this.runs.current(handle.location.ref, handle.profile)?.status === "running"
+      ) {
+        throw new HttpError(409, "cannot front compact a profile while it is changing or running");
+      }
+      const settings = await handle.loader.loadSettings();
+      if (!settings.front_compaction.enabled) {
+        throw new HttpError(403, "front compaction is disabled for this session");
+      }
+      try {
+        const result = await handle.session.frontCompactFromMessage(
+          body.message_id,
+          settings.front_compaction.delete_mode,
+        );
+        sendJson(response, 200, {front_compaction: result});
+      } catch (error) {
+        if (error instanceof PersistenceError) {
+          throw new HttpError(409, error.message);
+        }
+        throw error;
+      }
+    } finally {
+      this.changingTranscripts.delete(key);
+    }
+  }
+
+  private async handleReset(id: string, response: ServerResponse, profile?: string): Promise<void> {
+    if (this.changingSessionSettings.has(id)) {
+      throw new HttpError(409, "session settings are changing");
+    }
+    const handle = await this.getSession(id, profile);
+    const key = profileKey(handle.location.ref, handle.profile);
+    if (
+      this.changingSessionSettings.has(id) ||
+      this.compactingSessions.has(key) ||
+      this.changingTranscripts.has(key)
+    ) {
+      throw new HttpError(409, "session profile is already changing");
+    }
+    if (this.runs.current(handle.location.ref, handle.profile)?.status === "running") {
+      throw new HttpError(409, "cannot reset a profile while a run is active");
+    }
+
+    this.changingTranscripts.add(key);
+    try {
+      if (
+        this.changingSessionSettings.has(id) ||
+        this.compactingSessions.has(key) ||
+        this.runs.current(handle.location.ref, handle.profile)?.status === "running"
+      ) {
+        throw new HttpError(409, "cannot reset a profile while it is changing or running");
+      }
+      await handle.session.reset();
+      sendJson(response, 200, {reset: true});
+    } finally {
+      this.changingTranscripts.delete(key);
     }
   }
 
@@ -1316,7 +1500,7 @@ class AgentHttpApplication {
         "active_profile must contain only letters, numbers, underscores, or hyphens",
       );
     }
-    if (this.changingSessionSettings.has(reference)) {
+    if (this.changingSessionSettings.has(reference) || this.isTranscriptChanging(reference)) {
       throw new HttpError(409, "session path profile is already changing");
     }
 
@@ -1325,7 +1509,10 @@ class AgentHttpApplication {
     // location, then race their read-modify-write updates to setting.json.
     this.changingSessionSettings.add(reference);
     try {
-      const location = await this.resolveSessionLocation(reference);
+      const location = await this.cachedSessionLocation(reference);
+      if (this.isTranscriptChanging(location.ref)) {
+        throw new HttpError(409, "session path profile cannot change during a transcript update");
+      }
       const directory = join(location.root.directory, location.sessionId);
       const loader = new SessionConfigLoader(directory, {
         globalJadRoot: location.root.globalJadRoot,
@@ -1417,11 +1604,11 @@ class AgentHttpApplication {
       throw new HttpError(400, "model_default must be a non-empty string");
     }
     const modelConfigPath = body.model_default.trim();
-    if (this.changingSessionSettings.has(reference)) {
+    if (this.changingSessionSettings.has(reference) || this.isTranscriptChanging(reference)) {
       throw new HttpError(409, "session settings are already changing");
     }
     const handle = await this.getSession(reference, profile);
-    if (this.changingSessionSettings.has(reference)) {
+    if (this.changingSessionSettings.has(reference) || this.isTranscriptChanging(handle.location.ref)) {
       throw new HttpError(409, "session settings are already changing");
     }
 
@@ -1543,12 +1730,13 @@ class AgentHttpApplication {
     isConnected?: () => boolean;
   }): Promise<{run: SessionRun; turnId: string; handle: SessionHandle; completion: Promise<void>}> {
     const handle = await this.getSession(options.reference, options.profile);
-    if (this.changingSessionSettings.has(options.reference)) {
-      throw new HttpError(409, "session settings are changing");
+    const key = profileKey(handle.location.ref, handle.profile);
+    if (this.changingSessionSettings.has(options.reference) || this.changingTranscripts.has(key)) {
+      throw new HttpError(409, "session settings or transcript are changing");
     }
     const settings = await handle.loader.loadSettings();
-    if (this.changingSessionSettings.has(options.reference)) {
-      throw new HttpError(409, "session settings are changing");
+    if (this.changingSessionSettings.has(options.reference) || this.changingTranscripts.has(key)) {
+      throw new HttpError(409, "session settings or transcript are changing");
     }
     if (options.modelConfigPath !== undefined && !settings.paths.models?.includes(options.modelConfigPath)) {
       throw new HttpError(400, "model config path is not available in the active session path profile");
@@ -1602,6 +1790,16 @@ class AgentHttpApplication {
     const reference = handle.location.ref;
     try {
       const normalizedRun = new WebUiNormalizedRun(turnId);
+      const publishUsage = async () => {
+        try {
+          const usage = await handle.session.readUsageSummary();
+          run.publish("usage", {usage});
+        } catch (error) {
+          console.warn(
+            `[agent-run] failed to publish usage session=${reference} turn=${turnId}: ${errorMessage(error)}`,
+          );
+        }
+      };
       const result = await handle.session.run(options.input, {
         turnId,
         signal: controller.signal,
@@ -1612,16 +1810,8 @@ class AgentHttpApplication {
             emitter.push(message);
           }
         },
-        onResponseCommitted: async () => {
-          try {
-            const usage = await handle.session.readUsageSummary();
-            run.publish("usage", {usage});
-          } catch (error) {
-            console.warn(
-              `[agent-run] failed to publish usage session=${reference} turn=${turnId}: ${errorMessage(error)}`,
-            );
-          }
-        },
+        onResponseCommitted: publishUsage,
+        onUsageChanged: publishUsage,
         onToolResult: (item) => {
           const message = normalizedRun.toolResult(item);
           if (message) {
@@ -1651,7 +1841,7 @@ class AgentHttpApplication {
           data: {
             message: aborted
               ? "The run was stopped before it completed."
-              : errorMessage(error),
+              : clientRunErrorMessage(error),
           },
         },
         {event: "done", data: {}},
@@ -1698,6 +1888,7 @@ export async function startAgentServer(
     snapshotTurns: options.snapshotTurns ?? serverSettings.snapshot_turns,
     maxPageTurns: options.maxPageTurns ?? serverSettings.max_page_turns,
     maxInlinePartBytes: options.maxInlinePartBytes ?? serverSettings.max_inline_part_bytes,
+    allowedOrigins: options.allowedOrigins ?? serverSettings.allowed_origins,
   });
   const environment = options.environment ?? process.env;
   const port = options.port ?? Number(environment.PORT ?? serverSettings.port);

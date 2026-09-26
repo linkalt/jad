@@ -68,6 +68,11 @@ export interface WebUiMessage {
   cursor?: number;
 }
 
+export interface WebUiFrontCompactionSettings {
+  enabled: boolean;
+  delete_mode: "permanent" | "recoverable";
+}
+
 export interface WebUiSessionConfig {
   model: {
     provider: string;
@@ -76,6 +81,7 @@ export interface WebUiSessionConfig {
   pathProfiles?: string[];
   settings: {
     session_name: string;
+    front_compaction?: WebUiFrontCompactionSettings;
     paths?: {
       active_profile?: string;
       default_profile?: string;
@@ -138,6 +144,7 @@ export interface WebUiSessionSnapshot {
   path_profiles?: string[];
   model_default?: string;
   models?: string[];
+  front_compaction?: WebUiFrontCompactionSettings;
   session_name: string;
   turns: number;
   messages: WebUiMessage[];

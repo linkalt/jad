@@ -1,4 +1,8 @@
 import {lookup} from "node:dns/promises";
+import {request as httpRequest, type IncomingMessage} from "node:http";
+import {request as httpsRequest} from "node:https";
+import {Readable} from "node:stream";
+import {createBrotliDecompress, createGunzip, createInflate} from "node:zlib";
 
 import {convert} from "@xberg-io/html-to-markdown";
 
@@ -56,7 +60,17 @@ class FetchRequestError extends Error {
 function privateAddress(address: string): boolean {
   const value = address.toLowerCase();
   if (value.includes(":")) {
-    if (value.startsWith("::ffff:") && value.slice(7).includes(".")) return privateAddress(value.slice(7));
+    if (value.startsWith("::ffff:")) {
+      const mapped = value.slice(7);
+      if (mapped.includes(".")) return privateAddress(mapped);
+      const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(mapped);
+      if (hex) {
+        const high = Number.parseInt(hex[1]!, 16);
+        const low = Number.parseInt(hex[2]!, 16);
+        return privateAddress(`${high >>> 8}.${high & 255}.${low >>> 8}.${low & 255}`);
+      }
+      return true;
+    }
     return value === "::" || value === "::1" || value.startsWith("fc") || value.startsWith("fd") || /^fe[89ab]/.test(value) || value.startsWith("2001:db8:");
   }
   const parts = value.split(".").map(Number);
@@ -72,34 +86,121 @@ function hostnameAllowed(hostname: string, policy: NativeFetchToolSettings): voi
   if (policy.allowed_hosts.length > 0 && !policy.allowed_hosts.includes(host)) throw new FetchRequestError("URL host is not allowed by fetch policy", "host_denied");
 }
 
-async function validateUrl(value: string, policy: NativeFetchToolSettings): Promise<URL> {
+interface ValidatedUrl {
+  url: URL;
+  address: string;
+  family: 4 | 6;
+}
+
+async function validateUrl(value: string, policy: NativeFetchToolSettings, signal: AbortSignal): Promise<ValidatedUrl> {
   let url: URL;
   try { url = new URL(value); } catch { throw new FetchRequestError("url must be an absolute http or https URL", "invalid_url"); }
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new FetchRequestError("url must use http or https", "invalid_url");
   if (url.username || url.password) throw new FetchRequestError("url must not include credentials", "invalid_url");
-  hostnameAllowed(url.hostname, policy);
-  let addresses: Array<{address: string}>;
-  try { addresses = await lookup(url.hostname, {all: true, verbatim: true}); } catch { throw new FetchRequestError("URL host could not be resolved", "unresolvable_host"); }
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  hostnameAllowed(hostname, policy);
+  let addresses: Array<{address: string; family: number}>;
+  if (signal.aborted) throw new FetchRequestError("fetch timed out or was cancelled", "timeout");
+  let rejectAbort: (error: Error) => void = () => {};
+  const aborted = new Promise<never>((_, reject) => { rejectAbort = reject; });
+  const onAbort = () => rejectAbort(new FetchRequestError("fetch timed out or was cancelled", "timeout"));
+  signal.addEventListener("abort", onAbort, {once: true});
+  try {
+    if (signal.aborted) onAbort();
+    addresses = await Promise.race([lookup(hostname, {all: true, verbatim: true}), aborted]);
+  } catch (error) {
+    if (error instanceof FetchRequestError) throw error;
+    throw new FetchRequestError("URL host could not be resolved", "unresolvable_host");
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
   if (addresses.length === 0 || addresses.some(({address}) => privateAddress(address))) throw new FetchRequestError("URL resolves to a private or reserved address", "unsafe_url");
-  return url;
+  const selected = addresses[0]!;
+  if (selected.family !== 4 && selected.family !== 6) throw new FetchRequestError("URL host returned an invalid address", "unsafe_url");
+  return {url, address: selected.address, family: selected.family};
 }
 
-async function responseText(response: Response, maximum: number): Promise<string> {
+/** Connect to the validated IP while preserving the URL hostname for Host and TLS SNI. */
+export function pinnedFetch(target: ValidatedUrl, signal: AbortSignal): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const request = (target.url.protocol === "https:" ? httpsRequest : httpRequest)(target.url, {
+      signal,
+      headers: {accept: "text/*, application/*", "accept-encoding": "gzip, deflate, br"},
+      lookup: (_hostname, options, callback) => {
+        if (options.all) callback(null, [{address: target.address, family: target.family}]);
+        else callback(null, target.address, target.family);
+      },
+    }, (incoming: IncomingMessage) => {
+      const headers = new Headers();
+      for (const [key, value] of Object.entries(incoming.headers)) {
+        if (typeof value === "string") headers.set(key, value);
+        else if (Array.isArray(value)) for (const entry of value) headers.append(key, entry);
+      }
+      const status = incoming.statusCode ?? 500;
+      const noBody = status === 204 || status === 205 || status === 304;
+      const encoding = headers.get("content-encoding")?.trim().toLowerCase();
+      let body: Readable = incoming;
+      if (!noBody && encoding && encoding !== "identity") {
+        const decoder = encoding === "gzip" ? createGunzip()
+          : encoding === "deflate" ? createInflate()
+          : encoding === "br" ? createBrotliDecompress()
+          : undefined;
+        if (!decoder) {
+          incoming.destroy();
+          reject(new FetchRequestError("response content encoding is not supported", "unsupported_content_encoding"));
+          return;
+        }
+        incoming.once("error", (error) => decoder.destroy(error));
+        decoder.once("close", () => incoming.destroy());
+        body = incoming.pipe(decoder);
+        headers.delete("content-encoding");
+        // The compressed wire length is not the limit for the decoded text.
+        headers.delete("content-length");
+      }
+      try {
+        resolve(new Response(noBody ? null : Readable.toWeb(body) as ReadableStream<Uint8Array>, {status, headers}));
+        if (noBody) incoming.resume();
+      } catch (error) {
+        incoming.destroy();
+        reject(error);
+      }
+    });
+    request.once("error", reject);
+    request.end();
+  });
+}
+
+async function responseText(response: Response, maximum: number, signal: AbortSignal): Promise<string> {
   const declared = response.headers.get("content-length");
-  if (declared && Number(declared) > maximum) throw new FetchRequestError("response exceeds configured byte limit", "response_too_large");
+  if (declared && Number(declared) > maximum) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new FetchRequestError("response exceeds configured byte limit", "response_too_large");
+  }
   if (!response.body) return "";
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let bytes = 0;
-  while (true) {
-    const {done, value} = await reader.read();
-    if (done) break;
-    bytes += value.byteLength;
-    if (bytes > maximum) {
-      await reader.cancel();
-      throw new FetchRequestError("response exceeds configured byte limit", "response_too_large");
+  let rejectAbort: (error: Error) => void = () => {};
+  const aborted = new Promise<never>((_, reject) => { rejectAbort = reject; });
+  const onAbort = () => {
+    rejectAbort(new FetchRequestError("fetch timed out or was cancelled", "timeout"));
+    void reader.cancel().catch(() => undefined);
+  };
+  signal.addEventListener("abort", onAbort, {once: true});
+  if (signal.aborted) onAbort();
+  try {
+    while (true) {
+      const {done, value} = await Promise.race([reader.read(), aborted]);
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maximum) {
+        void reader.cancel().catch(() => undefined);
+        throw new FetchRequestError("response exceeds configured byte limit", "response_too_large");
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
   }
   const body = new Uint8Array(bytes);
   let offset = 0;
@@ -144,43 +245,64 @@ function isHtmlContentType(contentType: string): boolean {
 }
 
 async function retrieve(urlValue: string, context: FetchContext): Promise<Omit<FetchDocument, "id" | "fetchedAt">> {
-  let url = await validateUrl(urlValue, context.policy);
-  const fetchFn = context.fetchFn ?? globalThis.fetch;
-  for (let redirects = 0; ; redirects += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), context.policy.timeout_ms);
-    let response: Response;
-    try {
-      response = await fetchFn(url, {redirect: "manual", signal: controller.signal, headers: {accept: "text/*, application/*"}});
-    } catch (error) {
-      if ((error as {name?: string}).name === "AbortError") throw new FetchRequestError("fetch timed out", "timeout");
-      throw new FetchRequestError("web request failed", "request_failed");
-    } finally { clearTimeout(timeout); }
-    if (response.status >= 300 && response.status < 400) {
-      if (redirects >= context.policy.max_redirects) throw new FetchRequestError("fetch exceeded configured redirect limit", "too_many_redirects");
-      const location = response.headers.get("location");
-      if (!location) throw new FetchRequestError("redirect response has no location", "invalid_redirect");
-      url = await validateUrl(new URL(location, url).toString(), context.policy);
-      continue;
+  const controller = new AbortController();
+  const onRunAbort = () => controller.abort(context.signal?.reason);
+  context.signal?.addEventListener("abort", onRunAbort, {once: true});
+  if (context.signal?.aborted) onRunAbort();
+  // One wall-clock deadline covers DNS, redirects, response headers and body.
+  const timeout = setTimeout(() => controller.abort(new Error("fetch deadline exceeded")), context.policy.timeout_ms);
+  let nextUrl = urlValue;
+  try {
+    for (let redirects = 0; ; redirects += 1) {
+      const target = await validateUrl(nextUrl, context.policy, controller.signal);
+      if (controller.signal.aborted) throw new FetchRequestError("fetch timed out or was cancelled", "timeout");
+      const response = context.fetchFn
+        ? await context.fetchFn(target.url, {redirect: "manual", signal: controller.signal, headers: {accept: "text/*, application/*"}})
+        : await pinnedFetch(target, controller.signal);
+      if (controller.signal.aborted) {
+        if (!context.fetchFn) void response.body?.cancel().catch(() => undefined);
+        throw new FetchRequestError("fetch timed out or was cancelled", "timeout");
+      }
+      if (response.status >= 300 && response.status < 400) {
+        if (redirects >= context.policy.max_redirects) throw new FetchRequestError("fetch exceeded configured redirect limit", "too_many_redirects");
+        const location = response.headers.get("location");
+        if (!location) throw new FetchRequestError("redirect response has no location", "invalid_redirect");
+        if (!context.fetchFn) void response.body?.cancel().catch(() => undefined);
+        nextUrl = new URL(location, target.url).toString();
+        continue;
+      }
+      if (!response.ok) {
+        if (!context.fetchFn) void response.body?.cancel().catch(() => undefined);
+        throw new FetchRequestError(`web request returned HTTP ${response.status}`, "http_error");
+      }
+      const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+      if (!isSupportedTextContentType(contentType)) {
+        if (!context.fetchFn) void response.body?.cancel().catch(() => undefined);
+        throw new FetchRequestError("response content type is not a supported text format", "unsupported_content_type");
+      }
+      const body = await responseText(response, context.policy.max_response_bytes, controller.signal);
+      const isHtml = isHtmlContentType(contentType);
+      const markdown = isHtml
+        ? convert(body, {
+            extractMetadata: context.policy.include_metadata,
+            skipImages: !context.policy.include_images,
+            extractImages: false,
+            includeDocumentStructure: false,
+          }).content ?? ""
+        : body;
+      if (markdown.length > context.policy.max_document_chars) throw new FetchRequestError("document exceeds configured character limit", "document_too_large");
+      const pageTitle = isHtml ? title(body) : undefined;
+      return {url: urlValue, finalUrl: target.url.toString(), ...(pageTitle ? {title: pageTitle} : {}), contentType, status: response.status, markdown};
     }
-    if (!response.ok) throw new FetchRequestError(`web request returned HTTP ${response.status}`, "http_error");
-    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-    if (!isSupportedTextContentType(contentType)) {
-      throw new FetchRequestError("response content type is not a supported text format", "unsupported_content_type");
+  } catch (error) {
+    if (error instanceof FetchRequestError) throw error;
+    if (controller.signal.aborted || (error as {name?: string}).name === "AbortError") {
+      throw new FetchRequestError("fetch timed out or was cancelled", "timeout");
     }
-    const body = await responseText(response, context.policy.max_response_bytes);
-    const isHtml = isHtmlContentType(contentType);
-    const markdown = isHtml
-      ? convert(body, {
-          extractMetadata: context.policy.include_metadata,
-          skipImages: !context.policy.include_images,
-          extractImages: false,
-          includeDocumentStructure: false,
-        }).content ?? ""
-      : body;
-    if (markdown.length > context.policy.max_document_chars) throw new FetchRequestError("document exceeds configured character limit", "document_too_large");
-    const pageTitle = isHtml ? title(body) : undefined;
-    return {url: urlValue, finalUrl: url.toString(), ...(pageTitle ? {title: pageTitle} : {}), contentType, status: response.status, markdown};
+    throw new FetchRequestError("web request failed", "request_failed");
+  } finally {
+    clearTimeout(timeout);
+    context.signal?.removeEventListener("abort", onRunAbort);
   }
 }
 

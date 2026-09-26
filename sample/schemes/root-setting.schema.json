@@ -70,6 +70,12 @@
           "maximum": 16777216,
           "default": 16384,
           "description": "Inline text kept per transcript part, in bytes. A larger part is cut for transport, reports its full size, and is re-fetched whole through the message endpoint; 0 sends parts uncut."
+        },
+        "allowed_origins": {
+          "type": "array",
+          "items": {"type": "string", "format": "uri", "pattern": "^https?://[^/]+$"},
+          "default": [],
+          "description": "Exact browser origins permitted to call the API; configure the frontend dev-server origin when using its proxy. The server also requires AGENT_API_TOKEN in the environment."
         }
       },
       "additionalProperties": true,

@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 
 import {
   PersistenceError,
+  SESSION_INPUT_BATCH_ID_FIELD,
+  SESSION_INPUT_BATCH_INDEX_FIELD,
   SessionResponseStore,
   readTranscriptRecords,
   type ResponseCompletedEvent,
@@ -58,6 +60,262 @@ function usageEvent(
     response: {...event.response, usage},
   };
 }
+
+test("resets a profile transcript and derived artifacts but retains run journals", async () => {
+  const sessionDir = await makeSession();
+  const messagesBackupPath = join(sessionDir, "profile", "messages.backup.jsonl");
+  const compactionCachePath = join(sessionDir, "profile", "staging", "compaction-cache.json");
+  const compactionCacheBackupPath = `${compactionCachePath}.backup`;
+  const historyCachePath = join(sessionDir, "profile", "staging", "history-cache.json");
+  const usageCachePath = join(sessionDir, "profile", "staging", "usage-cache.json");
+  const cursorCachePath = join(sessionDir, "profile", "staging", "cursor-cache.json");
+  const stateContextPath = join(sessionDir, "profile", "staging", "statecontext.json");
+  const deletedHistoryArchivePath = join(
+    sessionDir,
+    "profile",
+    "messages.jsonl.deleted-history",
+    "messages-20260926T040306587Z-12345678.jsonl",
+  );
+  const runJournalPath = join(sessionDir, "profile", "staging", "run-1", "manifest.json");
+  try {
+    const store = await SessionResponseStore.open(sessionDir, {
+      messagesPath: "profile/messages.jsonl",
+      stagingDir: "profile/staging",
+      messagesBackupPath: "profile/messages.backup.jsonl",
+      compactionCachePath: "profile/staging/compaction-cache.json",
+      historyCachePath: "profile/staging/history-cache.json",
+      usageCachePath: "profile/staging/usage-cache.json",
+      cursorCachePath: "profile/staging/cursor-cache.json",
+      stateContextPath: "profile/staging/statecontext.json",
+    });
+    await store.appendInputItem({
+      type: "message",
+      role: "user",
+      content: [{type: "input_text", text: "before reset"}],
+    });
+    assert.equal((await store.readUsageSummary()).turn_count, 1);
+
+    for (const path of [
+      messagesBackupPath,
+      compactionCachePath,
+      compactionCacheBackupPath,
+      historyCachePath,
+      usageCachePath,
+      cursorCachePath,
+      stateContextPath,
+    ]) {
+      await mkdir(dirname(path), {recursive: true});
+      await writeFile(path, "stale artifact");
+    }
+    await mkdir(dirname(runJournalPath), {recursive: true});
+    await writeFile(runJournalPath, "preserve recovery record");
+    await mkdir(dirname(deletedHistoryArchivePath), {recursive: true});
+    await writeFile(deletedHistoryArchivePath, "recoverable front-compaction tail");
+
+    await store.reset();
+
+    assert.equal(await readFile(store.messagesPath, "utf8"), "");
+    assert.deepEqual(await store.readUsageSummary(), {
+      completed_responses: 0,
+      responses_with_usage: 0,
+      turn_count: 0,
+      history_partial: false,
+    });
+    for (const path of [
+      messagesBackupPath,
+      compactionCachePath,
+      compactionCacheBackupPath,
+      historyCachePath,
+      usageCachePath,
+      cursorCachePath,
+      stateContextPath,
+    ]) {
+      await assert.rejects(readFile(path, "utf8"), {code: "ENOENT"});
+    }
+    assert.equal(await readFile(runJournalPath, "utf8"), "preserve recovery record");
+    await assert.rejects(readFile(deletedHistoryArchivePath, "utf8"), {code: "ENOENT"});
+    await store.close();
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
+test("front compaction truncates from the start of the active user batch and rejects backup ids", async () => {
+  const sessionDir = await makeSession();
+  const messagesBackupPath = join(sessionDir, "messages.backup.jsonl");
+  const user = (
+    text: string,
+    batch?: {id: string; index: number},
+  ): Record<string, unknown> => ({
+    type: "message",
+    role: "user",
+    content: [{type: "input_text", text}],
+    ...(batch === undefined ? {} : {
+      [SESSION_INPUT_BATCH_ID_FIELD]: batch.id,
+      [SESSION_INPUT_BATCH_INDEX_FIELD]: batch.index,
+    }),
+  });
+  const response = (id: string, text: string): Record<string, unknown> => ({
+    type: "response.completed",
+    response: {
+      id,
+      object: "response",
+      status: "completed",
+      model: "gpt-test",
+      usage: {input_tokens: 10, output_tokens: 2},
+      output: [{type: "message", role: "assistant", content: [{type: "output_text", text}]}],
+    },
+  });
+  const records = [
+    user("run one"),
+    response("resp_one", "answer one"),
+    user("run two part one", {id: "batch-two", index: 0}),
+    user("run two part two", {id: "batch-two", index: 1}),
+    response("resp_two", "answer two"),
+    user("run three"),
+    response("resp_three", "answer three"),
+  ];
+  const transcript = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+  const runTwoSecondInputOffset = Buffer.byteLength(
+    `${records.slice(0, 3).map((record) => JSON.stringify(record)).join("\n")}\n`,
+    "utf8",
+  );
+  const preservedPrefix = `${records.slice(0, 2).map((record) => JSON.stringify(record)).join("\n")}\n`;
+  let store: SessionResponseStore | undefined;
+  try {
+    store = await SessionResponseStore.open(sessionDir, {messagesBackupPath});
+    await writeFile(store.messagesPath, transcript);
+    await writeFile(messagesBackupPath, "backup history remains read-only\n");
+
+    await assert.rejects(
+      store.frontCompactFromMessage(`session-user-b${runTwoSecondInputOffset}`, "permanent"),
+      PersistenceError,
+    );
+    assert.equal(await readFile(store.messagesPath, "utf8"), transcript);
+
+    const result = await store.frontCompactFromMessage(
+      `session-user-o${runTwoSecondInputOffset}`,
+      "permanent",
+    );
+    assert.deepEqual(result, {delete_mode: "permanent"});
+    assert.equal(await readFile(store.messagesPath, "utf8"), preservedPrefix);
+    assert.equal(await readFile(messagesBackupPath, "utf8"), "backup history remains read-only\n");
+    assert.equal((await store.readUsageSummary()).turn_count, 1);
+  } finally {
+    await store?.close();
+    await removeSession(sessionDir);
+  }
+});
+
+test("recoverable front compaction archives the removed active JSONL tail with a date name", async () => {
+  const sessionDir = await makeSession();
+  let store: SessionResponseStore | undefined;
+  try {
+    store = await SessionResponseStore.open(sessionDir);
+    const records = [
+      {
+        type: "message",
+        role: "user",
+        content: [{type: "input_text", text: "keep this run"}],
+      },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_keep",
+          object: "response",
+          status: "completed",
+          model: "gpt-test",
+          usage: {input_tokens: 10, output_tokens: 2},
+          output: [{type: "message", role: "assistant", content: [{type: "output_text", text: "kept"}]}],
+        },
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{type: "input_text", text: "archive this run"}],
+      },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_remove",
+          object: "response",
+          status: "completed",
+          model: "gpt-test",
+          usage: {input_tokens: 15, output_tokens: 3},
+          output: [{type: "message", role: "assistant", content: [{type: "output_text", text: "removed"}]}],
+        },
+      },
+    ];
+    const transcript = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+    const firstRemovedOffset = Buffer.byteLength(
+      `${records.slice(0, 2).map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+    const preservedPrefix = `${records.slice(0, 2).map((record) => JSON.stringify(record)).join("\n")}\n`;
+    const removedTail = transcript.slice(Buffer.byteLength(preservedPrefix, "utf8"));
+    await writeFile(store.messagesPath, transcript);
+
+    const result = await store.frontCompactFromMessage(
+      `session-user-o${firstRemovedOffset}`,
+      "recoverable",
+    );
+
+    assert.equal(result.delete_mode, "recoverable");
+    assert.match(result.archive_name ?? "", /^messages-\d{8}T\d{9}Z-[0-9a-f]{8}\.jsonl$/);
+    assert.equal(await readFile(store.messagesPath, "utf8"), preservedPrefix);
+    assert.equal(
+      await readFile(join(store.deletedHistoryDir, result.archive_name!), "utf8"),
+      removedTail,
+    );
+  } finally {
+    await store?.close();
+    await removeSession(sessionDir);
+  }
+});
+
+test("front compaction does not replay deleted active records from the compaction cache", async () => {
+  const sessionDir = await makeSession();
+  let store: SessionResponseStore | undefined;
+  try {
+    store = await SessionResponseStore.open(sessionDir);
+    const user = (text: string): Record<string, unknown> => ({
+      type: "message",
+      role: "user",
+      content: [{type: "input_text", text}],
+    });
+    const records = [
+      user("kept active turn"),
+      completedEvent([
+        {type: "message", role: "assistant", content: [{type: "output_text", text: "kept answer"}]},
+      ], "kept-response"),
+      user("deleted active turn"),
+      completedEvent([
+        {type: "message", role: "assistant", content: [{type: "output_text", text: "deleted answer"}]},
+      ], "deleted-response"),
+    ];
+    const transcript = `${records.map(record => JSON.stringify(record)).join("\n")}\n`;
+    const boundary = Buffer.byteLength(`${records.slice(0, 2).map(record => JSON.stringify(record)).join("\n")}\n`, "utf8");
+    await writeFile(store.messagesPath, transcript);
+    await writeFile(store.compactionCachePath, JSON.stringify({
+      schema_version: 1,
+      source_sha256: createHash("sha256").update(transcript).digest("hex"),
+      items: [{type: "message", role: "user", content: [{type: "input_text", text: "older compacted context"}]}],
+      assistant_final_items: [],
+      active_tail: records.slice(2),
+    }));
+
+    await store.frontCompactFromMessage(`session-user-o${boundary}`, "permanent");
+    const requestItems: unknown[] = [];
+    for await (const item of store.readInputItems()) requestItems.push(item);
+    const requestHistory = JSON.stringify(requestItems);
+    assert.match(requestHistory, /older compacted context/);
+    assert.match(requestHistory, /kept active turn/);
+    assert.doesNotMatch(requestHistory, /deleted active turn|deleted answer/);
+  } finally {
+    await store?.close();
+    await removeSession(sessionDir);
+  }
+});
 
 test("stages completed items and commits one canonical response event", async () => {
   const sessionDir = await makeSession();
@@ -319,12 +577,13 @@ test("refreshes uncheckpointed usage before compaction moves the transcript chec
       output_tokens: 12,
       total_tokens: 54,
       current: {
-        input_tokens: 12,
-        output_tokens: 4,
-        total_tokens: 16,
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
         turn: 1,
         step: 2,
         response_id: "usage-compact-two",
+        cached_input_tokens: 0,
       },
     });
     await store.close();
@@ -953,6 +1212,37 @@ test("normalizes and validates compaction settings", async () => {
   }
 });
 
+test("normalizes and validates front-compaction settings", async () => {
+  const sessionDir = await makeSession();
+  try {
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      front_compaction: {enabled: false, delete_mode: "recoverable"},
+    }));
+    const settings = await new SessionConfigLoader(sessionDir).loadSettings();
+    assert.deepEqual(settings.front_compaction, {enabled: false, delete_mode: "recoverable"});
+
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({}));
+    assert.deepEqual(
+      (await new SessionConfigLoader(sessionDir).loadSettings()).front_compaction,
+      {enabled: true, delete_mode: "permanent"},
+    );
+
+    for (const front_compaction of [
+      {enabled: "yes"},
+      {delete_mode: "backup"},
+      1,
+    ]) {
+      await writeFile(join(sessionDir, "setting.json"), JSON.stringify({front_compaction}));
+      await assert.rejects(
+        () => new SessionConfigLoader(sessionDir).loadSettings(),
+        (error: unknown) => error instanceof ConfigError && /front_compaction/.test(error.message),
+      );
+    }
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("resolves configurable session storage paths relative to setting.json", async () => {
   const sessionDir = await makeSession();
   const externalDir = await makeSession();
@@ -1428,7 +1718,20 @@ test("compacts to the final assistant response, backs up transcript, and rebuild
     const result = await store.compactHistory({turnType: "assistant_final", keepTurns: 1, keepToolPairs: 0, backupMode: "replace"});
     assert.equal(result.compacted, true);
     assert.equal((await readFile(store.messagesPath, "utf8")), "");
-    assert.deepEqual(await store.readUsageSummary(), beforeUsage);
+    const afterCompaction = await store.readUsageSummary();
+    assert.equal(afterCompaction.completed_responses, beforeUsage.completed_responses);
+    assert.equal(afterCompaction.responses_with_usage, beforeUsage.responses_with_usage);
+    assert.equal(afterCompaction.turn_count, beforeUsage.turn_count);
+    assert.equal(afterCompaction.input_tokens, beforeUsage.input_tokens);
+    assert.equal(afterCompaction.output_tokens, beforeUsage.output_tokens);
+    assert.equal(afterCompaction.total_tokens, beforeUsage.total_tokens);
+    assert.equal(afterCompaction.cached_input_tokens, beforeUsage.cached_input_tokens);
+    assert.equal(afterCompaction.current?.input_tokens, 0);
+    assert.equal(afterCompaction.current?.output_tokens, 0);
+    assert.equal(afterCompaction.current?.total_tokens, 0);
+    assert.equal(afterCompaction.current?.cached_input_tokens, 0);
+    assert.equal(afterCompaction.current?.turn, beforeUsage.current?.turn);
+    assert.equal(afterCompaction.current?.step, beforeUsage.current?.step);
     assert.equal(await readFile(store.messagesBackupPath, "utf8"), before);
     const history = [];
     for await (const item of store.readInputItems()) history.push(item);
@@ -1439,6 +1742,7 @@ test("compacts to the final assistant response, backs up transcript, and rebuild
       turnType: "assistant_final", keepTurns: 1, keepToolPairs: 0, backupMode: "replace",
     });
     assert.equal(noOpCompaction.compacted, false);
+    assert.deepEqual(await store.readUsageSummary(), afterCompaction);
     assert.equal(await readFile(store.compactionCachePath, "utf8"), compactionCache);
     await rm(store.compactionCachePath);
     const recoveredHistory = [];
@@ -1470,10 +1774,39 @@ test("compacts to the final assistant response, backs up transcript, and rebuild
     assert.equal(rebuiltUsage.output_tokens, 25);
     assert.equal(rebuiltUsage.total_tokens, 155);
     assert.equal(rebuiltUsage.cached_input_tokens, 7);
+    assert.equal(rebuiltUsage.current?.input_tokens, 0);
+    assert.equal(rebuiltUsage.current?.output_tokens, 0);
+    assert.equal(rebuiltUsage.current?.total_tokens, 0);
+    assert.equal(rebuiltUsage.current?.cached_input_tokens, 0);
     assert.equal(rebuiltUsage.current?.turn, 1);
     assert.equal(rebuiltUsage.current?.step, 2);
     assert.equal(rebuiltUsage.history_partial, true);
+
+    const postCompactionTurn = await rebuilt.beginTurn("post-compaction-response");
+    await postCompactionTurn.stageOutputItem({type: "response.output_item.done", output_index: 0, item: final});
+    await postCompactionTurn.commit(usageEvent([final], "resp-post-compaction", {
+      input_tokens: 8,
+      output_tokens: 3,
+    }, 3, 1));
+    const afterPostCompactionResponse = await rebuilt.readUsageSummary();
+    assert.equal(afterPostCompactionResponse.current?.input_tokens, 8);
+    assert.equal(afterPostCompactionResponse.current?.output_tokens, 3);
+    assert.equal(afterPostCompactionResponse.current?.total_tokens, 11);
+    assert.equal(afterPostCompactionResponse.input_tokens, 138);
+    assert.equal(afterPostCompactionResponse.output_tokens, 28);
+    assert.equal(afterPostCompactionResponse.total_tokens, 166);
     await rebuilt.close();
+
+    await rm(store.usageCachePath);
+    const rebuiltAgain = await SessionResponseStore.open(sessionDir);
+    const rebuiltAgainUsage = await rebuiltAgain.readUsageSummary();
+    assert.equal(rebuiltAgainUsage.current?.input_tokens, 8);
+    assert.equal(rebuiltAgainUsage.current?.output_tokens, 3);
+    assert.equal(rebuiltAgainUsage.current?.total_tokens, 11);
+    assert.equal(rebuiltAgainUsage.input_tokens, 138);
+    assert.equal(rebuiltAgainUsage.output_tokens, 28);
+    assert.equal(rebuiltAgainUsage.total_tokens, 166);
+    await rebuiltAgain.close();
   } finally {
     await removeSession(sessionDir);
   }
@@ -1488,6 +1821,16 @@ test("compacts at a tool-call boundary while leaving that response active for it
     const oldOutput = {type: "function_call_output", call_id: "old-call", output: "large tool data ".repeat(500)};
     const oldFinal = {type: "message", role: "assistant", content: [{type: "output_text", text: "old answer"}]};
     const currentUser = {type: "message", role: "user", content: [{type: "input_text", text: "new turn"}]};
+    const currentReasoning = {
+      type: "reasoning",
+      summary: [{type: "summary_text", text: "private reasoning"}],
+      encrypted_content: "encrypted-reasoning-payload".repeat(100),
+    };
+    const currentPartial = {
+      type: "message",
+      role: "assistant",
+      content: [{type: "output_text", text: "partial assistant response ".repeat(100)}],
+    };
     const currentCall = {type: "function_call", call_id: "current-call", name: "lookup", arguments: "{}"};
     await store.appendInputItem(oldUser);
     const oldToolTurn = await store.beginTurn("old-tool-response");
@@ -1499,23 +1842,57 @@ test("compacts at a tool-call boundary while leaving that response active for it
     await oldFinalTurn.commit(completedEvent([oldFinal], "resp-old-final"));
     await store.appendInputItem(currentUser);
     const currentToolTurn = await store.beginTurn("current-tool-response");
-    await currentToolTurn.stageOutputItem({type: "response.output_item.done", output_index: 0, item: currentCall});
-    await currentToolTurn.commit(completedEvent([currentCall], "resp-current-call"));
+    const currentOutput = [currentReasoning, currentPartial, currentCall];
+    for (const [output_index, item] of currentOutput.entries()) {
+      await currentToolTurn.stageOutputItem({type: "response.output_item.done", output_index, item});
+    }
+    const currentResponse = completedEvent(currentOutput, "resp-current-call");
+    Object.assign(currentResponse.response, {output_text: "partial response convenience field"});
+    await currentToolTurn.commit(currentResponse);
+    const originalTranscript = await readFile(store.messagesPath, "utf8");
 
     const compacted = await store.compactHistory({
-      turnType: "assistant_final", keepTurns: 1, keepToolPairs: 0, backupMode: "replace",
+      turnType: "assistant_final", keepTurns: 2, keepToolPairs: 1, backupMode: "replace",
       preserveResponseId: "resp-current-call",
     });
     assert.equal(compacted.compacted, true);
     const history = [];
     for await (const item of store.readInputItems()) history.push(item);
-    assert.deepEqual(history, [currentUser, currentCall]);
-    assert.doesNotMatch(await readFile(store.messagesPath, "utf8"), /old-call|large tool data/);
-    assert.match(await readFile(store.messagesPath, "utf8"), /resp-current-call/);
+    assert.deepEqual(history, [oldUser, oldCall, oldOutput, oldFinal, currentUser, currentCall]);
+
+    const activeTranscript = await readFile(store.messagesPath, "utf8");
+    assert.doesNotMatch(activeTranscript, /old-call|large tool data|encrypted-reasoning-payload|partial assistant response/);
+    assert.match(activeTranscript, /resp-current-call/);
+    const activeResponse = JSON.parse(activeTranscript.trim()) as {
+      response: {output: unknown[]; output_text?: unknown};
+    };
+    assert.deepEqual(activeResponse.response.output, [currentCall]);
+    assert.equal(Object.hasOwn(activeResponse.response, "output_text"), false);
+
+    const backupTranscript = await readFile(store.messagesBackupPath, "utf8");
+    assert.equal(backupTranscript, originalTranscript);
+    assert.match(backupTranscript, /encrypted-reasoning-payload/);
+    const compactionCache = JSON.parse(await readFile(store.compactionCachePath, "utf8")) as {
+      items: unknown[];
+      active_tail: Array<{response: {output: unknown[]; output_text?: unknown}}>;
+    };
+    assert.deepEqual(compactionCache.items, [oldUser, oldCall, oldOutput, oldFinal, currentUser]);
+    assert.deepEqual(compactionCache.active_tail[0]?.response.output, [currentCall]);
+    assert.equal(Object.hasOwn(compactionCache.active_tail[0]!.response, "output_text"), false);
+    assert.doesNotMatch(JSON.stringify(compactionCache), /encrypted-reasoning-payload|partial assistant response/);
+
     await store.appendInputItem({type: "function_call_output", call_id: "current-call", output: "result"});
     const nextRequestHistory = [];
     for await (const item of store.readInputItems()) nextRequestHistory.push(item);
-    assert.deepEqual(nextRequestHistory, [currentUser, currentCall, {type: "function_call_output", call_id: "current-call", output: "result"}]);
+    assert.deepEqual(nextRequestHistory, [
+      oldUser,
+      oldCall,
+      oldOutput,
+      oldFinal,
+      currentUser,
+      currentCall,
+      {type: "function_call_output", call_id: "current-call", output: "result"},
+    ]);
     await store.close();
   } finally {
     await removeSession(sessionDir);
@@ -1804,8 +2181,25 @@ test("auto-compacts at a tool-call stream end and preserves the in-flight call",
     assert.equal(history[1]?.type, "function_call");
     assert.equal(history[1]?.call_id, "current-call");
     assert.equal(history[2]?.type, "function_call_output");
+    const usageAfterCompaction = await session.readUsageSummary();
+    assert.equal(usageAfterCompaction.input_tokens, 10);
+    assert.equal(usageAfterCompaction.output_tokens, 4);
+    assert.equal(usageAfterCompaction.total_tokens, 14);
+    assert.equal(usageAfterCompaction.current?.input_tokens, 0);
+    assert.equal(usageAfterCompaction.current?.output_tokens, 0);
+    assert.equal(usageAfterCompaction.current?.total_tokens, 0);
     await store.close();
     await session.close();
+    await rm(store.usageCachePath, {force: true});
+    const rebuiltStore = await SessionResponseStore.open(sessionDir);
+    const rebuiltUsage = await rebuiltStore.readUsageSummary();
+    assert.equal(rebuiltUsage.input_tokens, 10);
+    assert.equal(rebuiltUsage.output_tokens, 4);
+    assert.equal(rebuiltUsage.total_tokens, 14);
+    assert.equal(rebuiltUsage.current?.input_tokens, 0);
+    assert.equal(rebuiltUsage.current?.output_tokens, 0);
+    assert.equal(rebuiltUsage.current?.total_tokens, 0);
+    await rebuiltStore.close();
   } finally {
     await removeSession(sessionDir);
   }
@@ -1843,7 +2237,16 @@ test("auto-compacts after a completed response and reuses the compacted context"
       }},
     } as unknown as OpenAI;
     const session = await AgentSession.open(sessionDir, {client: fakeClient});
-    await session.run("first request");
+    let usageChangeCount = 0;
+    await session.run("first request", {onUsageChanged: () => { usageChangeCount += 1; }});
+    assert.equal(usageChangeCount, 1);
+    const usageAfterCompaction = await session.readUsageSummary();
+    assert.equal(usageAfterCompaction.input_tokens, 10);
+    assert.equal(usageAfterCompaction.output_tokens, 4);
+    assert.equal(usageAfterCompaction.total_tokens, 14);
+    assert.equal(usageAfterCompaction.current?.input_tokens, 0);
+    assert.equal(usageAfterCompaction.current?.output_tokens, 0);
+    assert.equal(usageAfterCompaction.current?.total_tokens, 0);
     assert.equal(await readFile(join(sessionDir, "messages.jsonl"), "utf8"), "");
     assert.match(await readFile(join(sessionDir, "snapshots/statecontext.json"), "utf8"), /Keep the feature in progress/);
     await taskStore.update(task.id, {title: "Replaced after the next compaction"}, taskPolicy);

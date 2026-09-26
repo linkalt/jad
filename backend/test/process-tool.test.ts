@@ -36,7 +36,10 @@ function resultId(text: string): string {
   return match[1]!;
 }
 
-async function makeRunner(overrides: Partial<NativeProcessToolSettings> = {}) {
+async function makeRunner(
+  overrides: Partial<NativeProcessToolSettings> = {},
+  environment: NodeJS.ProcessEnv = process.env,
+) {
   const appliedPolicy: NativeProcessToolSettings = {...policy, ...overrides};
   const directory = await mkdtemp(join(tmpdir(), "agent-process-tool-"));
   const manager = new ProcessManager(join(directory, "processes"));
@@ -49,7 +52,7 @@ async function makeRunner(overrides: Partial<NativeProcessToolSettings> = {}) {
     policy: appliedPolicy,
     manager,
     apiKeyEnv: "PROCESS_TOOL_TEST_SECRET",
-    environment: process.env,
+    environment,
   });
   return {directory, manager, run, policy: appliedPolicy};
 }
@@ -98,6 +101,20 @@ test("starts, waits for, lists, and reports bounded process logs", async () => {
     assert.doesNotMatch(listed, /--- CONTENT/);
     const status = await run({id});
     assert.match(status, /state: exited/);
+  } finally {
+    await manager.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("does not expose the HTTP API token to managed child processes", async () => {
+  const {directory, manager, run} = await makeRunner({}, {...process.env, AGENT_API_TOKEN: "never-inherit-this-secret"});
+  try {
+    const started = await run({command: "test -z \"${AGENT_API_TOKEN-}\" && printf clean"});
+    const id = resultId(started);
+    const completed = await run({action: "wait", id, timeout_ms: 1_000});
+    assert.match(completed, /clean/);
+    assert.doesNotMatch(completed, /leaked|never-inherit-this-secret/);
   } finally {
     await manager.close();
     await rm(directory, {recursive: true, force: true});

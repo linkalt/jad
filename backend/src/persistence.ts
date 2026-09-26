@@ -193,6 +193,8 @@ interface CompactionCache {
   items: ResponseInputItem[];
   assistant_final_items: string[];
   active_tail: JsonRecord[];
+  /** Preserve the post-compaction zero baseline when the usage cache is rebuilt. */
+  reset_latest_response_usage?: boolean;
 }
 
 interface InputHistoryCache {
@@ -294,6 +296,28 @@ export class PersistenceError extends Error {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sameBackupSeamRecord(left: Buffer, right: Buffer): boolean {
+  if (left.equals(right)) return true;
+  try {
+    const leftRecord = JSON.parse(left.toString("utf8")) as unknown;
+    const rightRecord = JSON.parse(right.toString("utf8")) as unknown;
+    if (
+      !isRecord(leftRecord) ||
+      !isRecord(rightRecord) ||
+      leftRecord.type !== "response.completed" ||
+      rightRecord.type !== "response.completed" ||
+      !isRecord(leftRecord.response) ||
+      !isRecord(rightRecord.response)
+    ) {
+      return false;
+    }
+    return typeof leftRecord.response.id === "string" &&
+      leftRecord.response.id === rightRecord.response.id;
+  } catch {
+    return false;
+  }
 }
 
 function asObject(value: unknown, description: string): JsonRecord {
@@ -417,6 +441,52 @@ async function readExactly(
     offset += read.bytesRead;
   }
   return result;
+}
+
+async function copyFileRange(
+  sourcePath: string,
+  destination: FileHandle,
+  start: number,
+  end: number,
+): Promise<void> {
+  const source = await open(sourcePath, "r");
+  const buffer = Buffer.alloc(LINE_BUFFER_SIZE);
+  try {
+    let position = start;
+    while (position < end) {
+      const length = Math.min(buffer.length, end - position);
+      const result = await source.read(buffer, 0, length, position);
+      if (result.bytesRead <= 0) {
+        throw new PersistenceError("transcript changed while copying a byte range");
+      }
+      await writeAll(destination, buffer.subarray(0, result.bytesRead));
+      position += result.bytesRead;
+    }
+  } finally {
+    await source.close();
+  }
+}
+
+async function writeFileRangeAtomic(
+  targetPath: string,
+  sourcePath: string,
+  start: number,
+  end: number,
+  durability: DurabilityMode,
+): Promise<void> {
+  const temporaryPath = `${targetPath}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(temporaryPath, "wx");
+    await copyFileRange(sourcePath, handle, start, end);
+    await syncIfRequired(handle, durability);
+    await handle.close();
+    handle = undefined;
+    await rename(temporaryPath, targetPath);
+  } finally {
+    if (handle !== undefined) await handle.close().catch(() => undefined);
+    await rm(temporaryPath, {force: true}).catch(() => undefined);
+  }
 }
 
 async function syncIfRequired(
@@ -758,6 +828,32 @@ function expandTranscriptRecord(value: unknown): ResponseInputItem[] {
   return [validateInputItem(record)];
 }
 
+/**
+ * Preserve in-flight tool calls or the final assistant message across
+ * assistant-final compaction, but not encrypted reasoning or partial text.
+ */
+function assistantFinalActiveTailRecord(record: JsonRecord): JsonRecord {
+  if (!isRecord(record.response) || !Array.isArray(record.response.output)) {
+    return record;
+  }
+  const functionCalls = record.response.output.filter(
+    (item) => isRecord(item) && item.type === "function_call",
+  );
+  const assistantFinal = [...record.response.output].reverse().find(
+    (item) => isRecord(item) && item.type === "message" && item.role === "assistant",
+  );
+  const response: JsonRecord = {
+    ...record.response,
+    output: functionCalls.length > 0
+      ? functionCalls
+      : assistantFinal === undefined
+        ? []
+        : [assistantFinal],
+  };
+  delete response.output_text;
+  return {...record, response};
+}
+
 function parseHistoryCache(value: unknown): InputHistoryCache {
   const record = asObject(value, "history cache");
   const transcript = asObject(record.transcript, "history cache transcript");
@@ -1055,6 +1151,17 @@ function addUsageValue(
   else delete summary[field];
 }
 
+function resetLatestResponseUsage(summary: SessionUsageSummary): void {
+  if (summary.current === undefined) return;
+  summary.current = {
+    ...summary.current,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    cached_input_tokens: 0,
+  };
+}
+
 function addUsageTranscriptRecord(
   cache: UsageCache,
   record: JsonRecord,
@@ -1319,6 +1426,7 @@ function parseManifest(value: unknown, path: string): TurnManifest {
 export class SessionResponseStore {
   public readonly sessionDir: string;
   public readonly messagesPath: string;
+  public readonly deletedHistoryDir: string;
   public readonly stagingDir: string;
   public readonly historyCachePath: string;
   public readonly usageCachePath: string;
@@ -1344,6 +1452,7 @@ export class SessionResponseStore {
         ? resolve(options.messagesPath)
         : resolve(absoluteSessionDir, options.messagesPath)
       : join(absoluteSessionDir, MESSAGES_FILE);
+    this.deletedHistoryDir = `${this.messagesPath}.deleted-history`;
     this.stagingDir = options.stagingDir
       ? isAbsolute(options.stagingDir)
         ? resolve(options.stagingDir)
@@ -1666,10 +1775,12 @@ export class SessionResponseStore {
       }
       const assistantFinalItems = value.assistant_final_items ?? [];
       const activeTail = value.active_tail ?? [];
+      const resetLatestResponseUsage = value.reset_latest_response_usage;
       if (
         !Array.isArray(assistantFinalItems) ||
         assistantFinalItems.some((item) => typeof item !== "string") ||
         !Array.isArray(activeTail) ||
+        (resetLatestResponseUsage !== undefined && typeof resetLatestResponseUsage !== "boolean") ||
         activeTail.some((record) => {
           try { expandTranscriptRecord(record); return !isRecord(record); } catch { return true; }
         })
@@ -1682,6 +1793,9 @@ export class SessionResponseStore {
         items: value.items.map((item) => validateInputItem(item)),
         assistant_final_items: assistantFinalItems as string[],
         active_tail: activeTail as JsonRecord[],
+        ...(resetLatestResponseUsage === undefined
+          ? {}
+          : {reset_latest_response_usage: resetLatestResponseUsage}),
       };
     } catch {
       return undefined;
@@ -1738,11 +1852,12 @@ export class SessionResponseStore {
   }
 
   private async rebuildUsageCache(): Promise<UsageCache> {
+    const compaction = await this.readCompactionCache();
     const summary: SessionUsageSummary = {
       completed_responses: 0,
       responses_with_usage: 0,
       turn_count: 0,
-      history_partial: (await this.readCompactionCache()) !== undefined,
+      history_partial: compaction !== undefined,
     };
     const cache: UsageCache = {
       schema_version: USAGE_CACHE_SCHEMA_VERSION,
@@ -1751,15 +1866,22 @@ export class SessionResponseStore {
     };
     const seenResponses = new Set<string>();
     const seenInputBatches = new Set<string>();
-    const processFile = async (path: string): Promise<void> => {
+    const processFile = async (
+      path: string,
+      afterRecord?: (record: JsonRecord | undefined, index: number) => void,
+    ): Promise<void> => {
+      let index = 0;
       try {
         await readJsonLines(path, (line) => {
+          index += 1;
+          let record: JsonRecord | undefined;
           try {
-            const record = asObject(JSON.parse(line) as unknown, "usage transcript record");
+            record = asObject(JSON.parse(line) as unknown, "usage transcript record");
             addUsageTranscriptRecord(cache, record, seenResponses, true, seenInputBatches);
           } catch {
             summary.history_partial = true;
           }
+          afterRecord?.(record, index);
         });
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -1768,7 +1890,40 @@ export class SessionResponseStore {
       }
     };
     await processFile(this.messagesBackupPath);
-    await processFile(this.messagesPath);
+    // Backup history predates compaction. Reset current usage after the exact
+    // active-tail prefix, then let later appended responses establish it again.
+    const resetRecords = compaction?.reset_latest_response_usage === true
+      ? compaction.active_tail
+      : undefined;
+    let resetPrefixMatches = resetRecords !== undefined;
+    let resetApplied = false;
+    if (resetRecords?.length === 0) {
+      resetLatestResponseUsage(summary);
+      resetApplied = true;
+    }
+    await processFile(this.messagesPath, (record, index) => {
+      if (
+        resetRecords === undefined ||
+        resetApplied ||
+        !resetPrefixMatches ||
+        index > resetRecords.length
+      ) {
+        return;
+      }
+      const matches = record !== undefined &&
+        stringifyJson(record, "usage transcript record") ===
+          stringifyJson(resetRecords[index - 1], "compaction cache record");
+      if (!matches) {
+        resetPrefixMatches = false;
+        summary.history_partial = true;
+        return;
+      }
+      if (index === resetRecords.length) {
+        resetLatestResponseUsage(summary);
+        resetApplied = true;
+      }
+    });
+    if (resetRecords !== undefined && !resetApplied) summary.history_partial = true;
     cache.transcript = await this.makeUsageCheckpoint(await this.readTranscriptMetadata());
     return cache;
   }
@@ -1854,6 +2009,7 @@ export class SessionResponseStore {
 
   private async resetUsageCheckpointAfterCompactionUnlocked(): Promise<void> {
     if (this.usageCache === undefined) return;
+    resetLatestResponseUsage(this.usageCache.summary);
     this.usageCache.transcript = await this.makeUsageCheckpoint(await this.readTranscriptMetadata());
     await this.writeUsageCache();
   }
@@ -1867,6 +2023,168 @@ export class SessionResponseStore {
         ...summary,
         ...(summary.current === undefined ? {} : {current: {...summary.current}}),
       };
+    });
+  }
+
+  /**
+   * Clears this profile's transcript and transcript-derived artifacts.
+   * Per-run staging journals are deliberately retained for recovery.
+   */
+  public async frontCompactFromMessage(
+    messageId: string,
+    deleteMode: "permanent" | "recoverable",
+  ): Promise<{delete_mode: "permanent" | "recoverable"; archive_name?: string}> {
+    this.assertOpen();
+    if (deleteMode !== "permanent" && deleteMode !== "recoverable") {
+      throw new PersistenceError("invalid front-compaction delete mode");
+    }
+    const match = /^session-user-o(0|[1-9][0-9]*)$/.exec(messageId);
+    if (match === null) {
+      throw new PersistenceError("front compaction only accepts an active transcript user message");
+    }
+    const requestedOffset = Number(match[1]);
+    if (!Number.isSafeInteger(requestedOffset)) {
+      throw new PersistenceError("invalid front-compaction message offset");
+    }
+
+    return this.messageMutex.runExclusive(async () => {
+      if (this.activeTurns.size > 0) {
+        throw new PersistenceError("cannot front compact while response turns are active");
+      }
+      await repairJsonlTail(this.messagesPath);
+      const size = (await this.readTranscriptMetadata()).size;
+      if (requestedOffset >= size) {
+        throw new PersistenceError("front-compaction message is not in the active transcript");
+      }
+      if (requestedOffset > 0) {
+        const previous = await this.readRecordBefore(requestedOffset);
+        const nextOffset = previous === undefined
+          ? 0
+          : previous.offset + Buffer.byteLength(previous.line, "utf8") + 1;
+        if (nextOffset !== requestedOffset) {
+          throw new PersistenceError("front-compaction message offset is not a record boundary");
+        }
+      }
+      const target = await this.readRecordAt(requestedOffset);
+      if (target === undefined || target.offset !== requestedOffset) {
+        throw new PersistenceError("front-compaction message is not in the active transcript");
+      }
+      let targetRecord: JsonRecord;
+      try {
+        targetRecord = asObject(JSON.parse(target.line) as unknown, "front-compaction target");
+      } catch {
+        throw new PersistenceError("front-compaction target is not a valid transcript record");
+      }
+      if (!isUserTurnRecordLine(target.line)) {
+        throw new PersistenceError("front compaction must start at an active user message");
+      }
+
+      // A provider run can contain a batch of adjacent user records. Start at
+      // the first one so the resulting transcript never retains half a request.
+      let boundary = requestedOffset;
+      const batchId = targetRecord[SESSION_INPUT_BATCH_ID_FIELD];
+      const rawBatchIndex = targetRecord[SESSION_INPUT_BATCH_INDEX_FIELD];
+      if (typeof batchId === "string" && Number.isSafeInteger(rawBatchIndex) && (rawBatchIndex as number) > 0) {
+        let expectedIndex = rawBatchIndex as number;
+        while (expectedIndex > 0) {
+          const previous = await this.readRecordBefore(boundary);
+          if (previous === undefined) break;
+          let previousRecord: JsonRecord;
+          try {
+            previousRecord = asObject(JSON.parse(previous.line) as unknown, "front-compaction batch record");
+          } catch {
+            break;
+          }
+          if (
+            previousRecord[SESSION_INPUT_BATCH_ID_FIELD] !== batchId ||
+            previousRecord[SESSION_INPUT_BATCH_INDEX_FIELD] !== expectedIndex - 1 ||
+            !isUserTurnRecordLine(previous.line)
+          ) {
+            break;
+          }
+          boundary = previous.offset;
+          expectedIndex -= 1;
+        }
+      }
+
+      let archiveName: string | undefined;
+      if (deleteMode === "recoverable") {
+        await mkdir(this.deletedHistoryDir, {recursive: true});
+        const timestamp = new Date().toISOString().replace(/[-:.]/g, "");
+        archiveName = `messages-${timestamp}-${randomBytes(4).toString("hex")}.jsonl`;
+        await writeFileRangeAtomic(
+          join(this.deletedHistoryDir, archiveName),
+          this.messagesPath,
+          boundary,
+          size,
+          this.options.durability,
+        );
+      }
+
+      await writeFileRangeAtomic(
+        this.messagesPath,
+        this.messagesPath,
+        0,
+        boundary,
+        this.options.durability,
+      );
+      this.historyCache = undefined;
+      this.cursorCache = undefined;
+      this.usageCache = undefined;
+      for (const path of [
+        this.historyCachePath,
+        this.usageCachePath,
+        this.cursorCachePath,
+        this.stateContextPath,
+      ]) {
+        await rm(path, {force: true});
+      }
+      this.usageCache = await this.rebuildUsageCache();
+      await this.writeUsageCache();
+
+      return {
+        delete_mode: deleteMode,
+        ...(archiveName === undefined ? {} : {archive_name: archiveName}),
+      };
+    });
+  }
+
+  public async reset(): Promise<void> {
+    this.assertOpen();
+    await this.messageMutex.runExclusive(async () => {
+      if (this.activeTurns.size > 0) {
+        throw new PersistenceError("cannot reset while response turns are active");
+      }
+
+      await this.replaceMessagesWithRecords([]);
+      this.historyCache = undefined;
+      this.cursorCache = undefined;
+      this.usageCache = {
+        schema_version: USAGE_CACHE_SCHEMA_VERSION,
+        transcript: await this.makeUsageCheckpoint(await this.readTranscriptMetadata()),
+        summary: {
+          completed_responses: 0,
+          responses_with_usage: 0,
+          turn_count: 0,
+          history_partial: false,
+        },
+      };
+
+      const derivedPaths = new Set([
+        this.messagesBackupPath,
+        this.compactionCachePath,
+        this.compactionCacheBackupPath,
+        this.historyCachePath,
+        this.usageCachePath,
+        this.cursorCachePath,
+        this.stateContextPath,
+      ]);
+      for (const path of derivedPaths) {
+        if (path !== this.messagesPath) {
+          await rm(path, {force: true});
+        }
+      }
+      await rm(this.deletedHistoryDir, {recursive: true, force: true});
     });
   }
 
@@ -1995,6 +2313,27 @@ export class SessionResponseStore {
     return readTranscriptRecords(this.messagesPath, start, end, onRecord);
   }
 
+  /** Reads one record beginning at a byte offset, without scanning the rest. */
+  public async readRecordAt(offset: number): Promise<OffsetRecord | undefined> {
+    this.assertOpen();
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new PersistenceError("invalid transcript record offset");
+    }
+    const size = (await this.readTranscriptMetadata()).size;
+    if (offset >= size) return undefined;
+    const stop = {};
+    let found: OffsetRecord | undefined;
+    try {
+      await readTranscriptRecords(this.messagesPath, offset, size, (recordOffset, line) => {
+        found = {offset: recordOffset, line};
+        throw stop;
+      });
+    } catch (error) {
+      if (error !== stop) throw error;
+    }
+    return found;
+  }
+
   /**
    * Offset where the record preceding `offset` starts, found by scanning
    * backwards for the newline that ends the record before it. Used to include
@@ -2121,10 +2460,10 @@ export class SessionResponseStore {
   /**
    * End of the backup a reader may render.
    *
-   * A compaction moves a suffix of the transcript into the new file verbatim,
-   * and the backup keeps its copy at the end. The transcript's leading records
-   * are compared with the backup's trailing ones byte for byte, and the matching
-   * suffix is left out of the visible range.
+   * A compaction moves a suffix of the transcript into the new file, and the
+   * backup keeps its original copy at the end. Most records match byte for byte;
+   * assistant-final compaction can sanitize a preserved response, so completed
+   * response records also match by their stable response id.
    */
   private async backupVisibleEnd(size: number): Promise<number> {
     let end = size;
@@ -2135,7 +2474,7 @@ export class SessionResponseStore {
         break;
       }
       const trailing = await this.lastLineEndingAt(this.messagesBackupPath, end);
-      if (trailing === undefined || !leading.equals(trailing)) {
+      if (trailing === undefined || !sameBackupSeamRecord(leading, trailing)) {
         break;
       }
       end -= leading.length;
@@ -2429,7 +2768,10 @@ export class SessionResponseStore {
         excludedCounts.set(key, remaining - 1);
         return false;
       });
-      const activeTailItems = activeTail.flatMap((record) => expandTranscriptRecord(record));
+      const compactedActiveTail = options.turnType === "assistant_final"
+        ? activeTail.map(assistantFinalActiveTailRecord)
+        : activeTail;
+      const activeTailItems = compactedActiveTail.flatMap((record) => expandTranscriptRecord(record));
 
       const turns: ResponseInputItem[][] = [];
       for (const item of compactableHistory) {
@@ -2484,14 +2826,15 @@ export class SessionResponseStore {
         source_sha256: sourceHash,
         items: retained,
         assistant_final_items: retainedAssistantFinals,
-        active_tail: activeTail,
+        active_tail: compactedActiveTail,
+        reset_latest_response_usage: true,
       };
       await mkdir(dirname(this.compactionCachePath), {recursive: true});
       // Publish the recovery copy before the primary cache. If the transcript
       // replacement is interrupted, either valid cache can finish the transaction.
       await writeJsonAtomic(this.compactionCacheBackupPath, cache, this.options.durability);
       await writeJsonAtomic(this.compactionCachePath, cache, this.options.durability);
-      await this.replaceMessagesWithRecords(activeTail);
+      await this.replaceMessagesWithRecords(compactedActiveTail);
       this.historyCache = undefined;
       this.cursorCache = undefined;
       await rm(this.historyCachePath, {force: true});

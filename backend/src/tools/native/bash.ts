@@ -29,6 +29,7 @@ import {
 import type {JsonRecord} from "../../persistence.js";
 import {executionError, renderToolResult} from "../output.js";
 import type {ToolDefinition, ToolExecutionContext} from "../types.js";
+import {API_TOKEN_ENV_NAME} from "../../server-secrets.js";
 import {type ChildProcessResult, type ChildStream, runChildProcess, type SpillTarget, type StreamLimits} from "./child.js";
 import {displayPath, resolveExistingTarget} from "./path.js";
 import {
@@ -129,7 +130,7 @@ export function buildCommandEnvironment(
   settings: NativeBashToolSettings,
   apiKeyEnv: string,
 ): NodeJS.ProcessEnv {
-  const denied = new Set([apiKeyEnv, ...settings.env_deny]);
+  const denied = new Set([API_TOKEN_ENV_NAME, apiKeyEnv, ...settings.env_deny]);
   const env: NodeJS.ProcessEnv = {};
   for (const name of COMMAND_ENV_ALLOWLIST) {
     const value = base[name];

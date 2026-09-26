@@ -13,6 +13,8 @@ const MAX_TOOL_STREAM_INTERVAL_MS = 60 * 1000;
 const MAX_SNAPSHOT_TURNS = 100_000;
 const MAX_PAGE_TURNS = 1_000;
 const MAX_INLINE_PART_BYTES = 16 * 1024 * 1024;
+/** Security floor, not a tunable feature flag. */
+export const MIN_API_TOKEN_LENGTH = 32;
 
 export const DEFAULT_ROOT_SERVER_SETTINGS = {
   host: "127.0.0.1",
@@ -24,6 +26,7 @@ export const DEFAULT_ROOT_SERVER_SETTINGS = {
   snapshot_turns: 24,
   max_page_turns: 50,
   max_inline_part_bytes: 16 * 1024,
+  allowed_origins: [] as string[],
 } as const;
 
 export interface RootServerSettings {
@@ -44,6 +47,8 @@ export interface RootServerSettings {
    * transport, reports its full size, and can be re-fetched whole.
    */
   max_inline_part_bytes: number;
+  /** Browser origins permitted to call the API. Empty means no cross-origin browser access. */
+  allowed_origins: string[];
 }
 
 export interface SessionRoot {
@@ -215,6 +220,20 @@ function normalizeRootServerSettings(
       `${path}: server.max_inline_part_bytes must be a safe integer between 0 and ${MAX_INLINE_PART_BYTES}`,
     );
   }
+  const allowedOrigins = value.allowed_origins ?? DEFAULT_ROOT_SERVER_SETTINGS.allowed_origins;
+  if (!Array.isArray(allowedOrigins) || !allowedOrigins.every((origin) => {
+    if (typeof origin !== "string") return false;
+    try {
+      const url = new URL(origin);
+      return (url.protocol === "http:" || url.protocol === "https:") &&
+        !url.username && !url.password && url.origin === origin && url.pathname === "/" &&
+        !url.search && !url.hash;
+    } catch {
+      return false;
+    }
+  })) {
+    throw new ConfigError(`${path}: server.allowed_origins must be an array of exact http(s) origins`);
+  }
   return {
     host,
     port,
@@ -225,6 +244,7 @@ function normalizeRootServerSettings(
     snapshot_turns: snapshotTurns,
     max_page_turns: maxPageTurns,
     max_inline_part_bytes: maxInlinePartBytes,
+    allowed_origins: [...allowedOrigins],
   };
 }
 

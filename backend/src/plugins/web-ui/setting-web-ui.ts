@@ -1,10 +1,10 @@
-import type { WebUiSessionConfig, WebUiSessionSnapshot } from "./types.js";
+import type { WebUiFrontCompactionSettings, WebUiSessionConfig, WebUiSessionSnapshot } from "./types.js";
 
 export function sessionSettingsFromConfig(
   config: WebUiSessionConfig,
 ): Pick<
   WebUiSessionSnapshot,
-  "session_name" | "model" | "model_default" | "models" | "active_profile" | "default_profile" | "path_profiles"
+  "session_name" | "model" | "model_default" | "models" | "active_profile" | "default_profile" | "path_profiles" | "front_compaction"
 > {
   return {
     session_name: config.settings.session_name,
@@ -23,6 +23,9 @@ export function sessionSettingsFromConfig(
     ...(config.settings.paths?.models === undefined
       ? {}
       : {models: config.settings.paths.models}),
+    ...(config.settings.front_compaction === undefined
+      ? {}
+      : {front_compaction: config.settings.front_compaction as WebUiFrontCompactionSettings}),
     model: {
       provider: config.model.provider,
       model: config.model.model,

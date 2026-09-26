@@ -85,6 +85,21 @@
       "additionalProperties": true,
       "default": {}
     },
+    "front_compaction": {
+      "type": "object",
+      "description": "Delete a selected active-transcript user turn and every later turn. Backup history is read-only; actions are available only on the selected profile's active messages.jsonl.",
+      "properties": {
+        "enabled": {"type": "boolean", "default": true},
+        "delete_mode": {
+          "type": "string",
+          "enum": ["permanent", "recoverable"],
+          "description": "Permanent removes the deleted tail without a recovery archive. Recoverable writes the removed tail to a date-named JSONL archive in a profile-local directory adjacent to the configured transcript path.",
+          "default": "permanent"
+        }
+      },
+      "additionalProperties": true,
+      "default": {}
+    },
     "compaction": {
       "type": "object",
       "description": "Automatic and manual request-history compaction. The cache is replaced rather than versioned.",

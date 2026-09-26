@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import {mkdir, mkdtemp, rm, writeFile} from "node:fs/promises";
+import {createServer} from "node:http";
+import {gzipSync} from "node:zlib";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
 
 import {SessionConfigLoader, type NativeFetchToolSettings} from "../src/config.js";
-import {executeNativeFetch} from "../src/tools/native/fetch.js";
+import {executeNativeFetch, pinnedFetch} from "../src/tools/native/fetch.js";
 import {FetchStore} from "../src/tools/native/fetch-store.js";
 
 const policy: NativeFetchToolSettings = {
@@ -23,7 +25,7 @@ async function runner(responses: Response[], settings: Partial<NativeFetchToolSe
     if (!response) throw new Error("unexpected request");
     return response;
   };
-  const run = (args: Record<string, unknown>) => executeNativeFetch(args, {callId: `call-${sequence += 1}`, workspaceRoot: directory, sessionDir: directory, policy: {...policy, ...settings}, store, fetchFn});
+  const run = (args: Record<string, unknown>, signal?: AbortSignal) => executeNativeFetch(args, {callId: `call-${sequence += 1}`, workspaceRoot: directory, sessionDir: directory, policy: {...policy, ...settings}, store, fetchFn, ...(signal ? {signal} : {})});
   return {directory, run};
 }
 
@@ -142,6 +144,64 @@ test("uses a URL when its supplied cursor is unavailable", async () => {
   } finally { await rm(directory, {recursive: true, force: true}); }
 });
 
+test("validated-address transport connects to the pinned IP, not a second DNS result", async () => {
+  const server = createServer((request, response) => {
+    assert.match(request.headers.host ?? "", /^unresolvable\.invalid:/);
+    const compressed = gzipSync("pinned connection");
+    response.writeHead(200, {"content-type": "text/plain", "content-encoding": "gzip", "content-length": compressed.length});
+    response.end(compressed);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const response = await pinnedFetch({
+      url: new URL(`http://unresolvable.invalid:${address.port}/`),
+      address: "127.0.0.1",
+      family: 4,
+    }, new AbortController().signal);
+    assert.equal(await response.text(), "pinned connection");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test("the fetch deadline covers a stalled response body", async () => {
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode("partial")); },
+    cancel() { cancelled = true; },
+  });
+  const {directory, run} = await runner([
+    new Response(stream, {status: 200, headers: {"content-type": "text/plain"}}),
+  ], {timeout_ms: 25});
+  try {
+    assert.match(await run({url: "https://93.184.216.34/stall"}), /timeout/);
+    assert.equal(cancelled, true);
+  } finally { await rm(directory, {recursive: true, force: true}); }
+});
+
+test("stopping a run cancels a fetch with a pending body", async () => {
+  const aborter = new AbortController();
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode("partial")); },
+    cancel() { cancelled = true; },
+  });
+  const {directory, run} = await runner([
+    new Response(stream, {status: 200, headers: {"content-type": "text/plain"}}),
+  ]);
+  try {
+    const result = run({url: "https://93.184.216.34/held"}, aborter.signal);
+    setImmediate(() => aborter.abort());
+    assert.match(await result, /timeout/);
+    assert.equal(cancelled, true);
+  } finally { await rm(directory, {recursive: true, force: true}); }
+});
+
 test("follows public redirects and rejects unsafe URLs without requesting them", async () => {
   const {directory, run} = await runner([
     new Response(null, {status: 302, headers: {location: "/next"}}),
@@ -150,6 +210,7 @@ test("follows public redirects and rejects unsafe URLs without requesting them",
   try {
     assert.match(await run({url: "https://93.184.216.34/start"}), /final_url: https:\/\/93\.184\.216\.34\/next/);
     assert.match(await run({url: "http://127.0.0.1/private"}), /unsafe_url/);
+    assert.match(await run({url: "http://[::ffff:7f00:1]/private"}), /unsafe_url/);
     assert.match(await run({cursor: "bad"}), /fetch_storage_error/);
   } finally { await rm(directory, {recursive: true, force: true}); }
 });
