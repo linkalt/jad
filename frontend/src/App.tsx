@@ -122,6 +122,7 @@ import {
   isPinnedViewKey,
   profileMenuTargets,
   profileOfViewKey,
+  profilePickerProfiles,
   prunePinnedViews,
   removePinnedView,
   restoreViews,
@@ -2470,6 +2471,20 @@ function App() {
   const activeRow = listRows.find(row => row.key === activeViewKey);
   const profileRowLimitReached = pinnedViews.length >= appConfig.session_views_max;
 
+  // What this row's profile picker offers: the whole list for the session's own
+  // row, and everything but the stored default for a pinned one.
+  const profileRowProfiles = useMemo(
+    () =>
+      profilePickerProfiles(
+        {
+          ...(activeSession?.pathProfiles === undefined ? {} : {profiles: activeSession.pathProfiles}),
+          ...(activeSession?.activeProfile === undefined ? {} : {activeProfile: activeSession.activeProfile}),
+        },
+        {...(isPinnedView ? {profile: activeProfile} : {})},
+      ),
+    [activeProfile, activeSession?.activeProfile, activeSession?.pathProfiles, isPinnedView],
+  );
+
   const isLiveSession = activeSession?.source === 'live';
   const isRunning = isSessionRunning(
     runningSessionId === activeViewKey,
@@ -3091,6 +3106,23 @@ function App() {
     [activateView],
   );
 
+  /**
+   * The picker inside a pinned row: show another profile in it.
+   *
+   * The session's stored default is untouched — that is the session's own row —
+   * so the row becomes the view of the profile that was picked.
+   */
+  const repinRow = useCallback(
+    (key: string, profile: string) => {
+      const sessionRef = sessionRefOfViewKey(key);
+      setPinnedViews(current =>
+        addPinnedView(removePinnedView(current, key), {sessionRef, profile}, appConfig.session_views_max),
+      );
+      activateView(viewKey(sessionRef, profile));
+    },
+    [activateView],
+  );
+
   /** The row's ✕: drop the row. Nothing on the server is touched. */
   const removePinnedRow = useCallback(
     (key: string) => {
@@ -3413,10 +3445,16 @@ function App() {
           activeSession.pathProfiles &&
           activeSession.pathProfiles.length > 0 ? (
             <SessionProfilePicker
-              profiles={activeSession.pathProfiles}
-              activeProfile={activeSession.activeProfile}
+              profiles={profileRowProfiles}
+              activeProfile={isPinnedView ? activeProfile : activeSession.activeProfile}
               isDisabled={isRunning || isCompactionInProgress || isProfileSwitching || isModelDefaultUpdating}
-              onSelect={profile => { void selectSessionPathProfile(profile); }}
+              onSelect={profile => {
+                if (isPinnedView) {
+                  repinRow(activeViewKey, profile);
+                  return;
+                }
+                void selectSessionPathProfile(profile);
+              }}
             />
           ) : null}
           {activeSession.models && activeSession.models.length > 0 ? (

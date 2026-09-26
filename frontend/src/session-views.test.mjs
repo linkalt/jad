@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   addPinnedView,
+  profilePickerProfiles,
   hasPinnedView,
   isPinnedViewKey,
   parseStoredViews,
@@ -174,4 +175,20 @@ test('a fresh page follows the configured seed, else the live session', () => {
     restoreViews({seed: [{sessionRef: 'a'}, {sessionRef: 'b', profile: 'p'}], liveSessionId: 'live', limit: 8}),
     {views: [{sessionRef: 'b', profile: 'p'}], activeViewKey: 'live', restored: false},
   );
+});
+
+test('a pinned row offers the picker only when another profile is left', () => {
+  const session = {profiles: ['default', 'chatgpt', 'alternate'], activeProfile: 'default'};
+  // The session's own row keeps the whole list, current profile included.
+  assert.deepEqual(profilePickerProfiles(session, {}), ['default', 'chatgpt', 'alternate']);
+  // A pinned row drops the stored default: that conversation is the session row.
+  assert.deepEqual(profilePickerProfiles(session, {profile: 'chatgpt'}), ['chatgpt', 'alternate']);
+  // Two profiles leave nothing to switch to, so the picker disappears.
+  assert.deepEqual(
+    profilePickerProfiles({profiles: ['default', 'chatgpt'], activeProfile: 'default'}, {profile: 'chatgpt'}),
+    [],
+  );
+  // A session without profiles offers nothing either way.
+  assert.deepEqual(profilePickerProfiles({}, {}), []);
+  assert.deepEqual(profilePickerProfiles({}, {profile: 'chatgpt'}), []);
 });

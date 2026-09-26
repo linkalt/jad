@@ -107,6 +107,27 @@ export function prunePinnedViews(
   return views.filter(view => known.has(view.sessionRef));
 }
 
+/**
+ * The profiles the composer's picker offers, for the row on screen.
+ *
+ * The session's own row offers every profile, as it always did: picking one
+ * changes the profile the session follows. A pinned row offers the session's
+ * profiles *except* the stored default — that conversation is the session's own
+ * row — and when nothing but this row's own profile is left there is nothing to
+ * switch to, so the picker is not shown at all.
+ */
+export function profilePickerProfiles(
+  session: {profiles?: readonly string[]; activeProfile?: string},
+  row: {profile?: string},
+): string[] {
+  const profiles = session.profiles ?? [];
+  if (row.profile === undefined) {
+    return [...profiles];
+  }
+  const others = profiles.filter(profile => profile !== session.activeProfile);
+  return others.length > 1 ? others : [];
+}
+
 /** One row of the left list. */
 export type SessionListRow = {
   /** The view this row opens: `session` or `session\u0000profile`. */
