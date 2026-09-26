@@ -1093,38 +1093,36 @@ function toolCallItem(
     errorMessage: resultStatus === 'error' ? 'The tool returned an error.' : undefined,
     resultDetail: (
       <VStack gap={2} width="100%">
-        <VStack gap={1} width="100%">
-          <Text type="supporting" color="secondary">Arguments</Text>
+        {result && (
+          <HStack align="center" gap={2}>
+            <Badge
+              label={toolResultLabel(result.status)}
+              variant={result.status === 'error' ? 'error' : result.status === 'success' ? 'success' : 'neutral'}
+            />
+          </HStack>
+        )}
+        <CodeBlock
+          code={prettyToolArguments(call.arguments)}
+          language="json"
+          size="sm"
+          width="100%"
+          container="card"
+          maxHeight={appConfig.tool_arguments_max_height_px}
+          hasCopyButton
+        />
+        {result && (
           <CodeBlock
-            code={prettyToolArguments(call.arguments)}
-            language="json"
+            code={visibleToolOutput(result.output)}
+            language="text"
             size="sm"
             width="100%"
-            container="section"
+            container="card"
+            maxHeight={appConfig.tool_result_max_height_px}
             hasCopyButton
           />
-        </VStack>
-        {result && (
-          <VStack gap={1} width="100%">
-            <HStack align="center" gap={2}>
-              <Text type="supporting" color="secondary">Result</Text>
-              <Badge
-                label={toolResultLabel(result.status)}
-                variant={result.status === 'error' ? 'error' : result.status === 'success' ? 'success' : 'neutral'}
-              />
-            </HStack>
-            <CodeBlock
-              code={visibleToolOutput(result.output)}
-              language="text"
-              size="sm"
-              width="100%"
-              container="section"
-              hasCopyButton
-            />
-            {result.truncated !== undefined && (
-              <TruncatedNotice bytes={result.truncated.bytes} source={source} />
-            )}
-          </VStack>
+        )}
+        {result?.truncated !== undefined && (
+          <TruncatedNotice bytes={result.truncated.bytes} source={source} />
         )}
       </VStack>
     ),
@@ -1154,6 +1152,7 @@ function OrphanToolResultBlock({
           size="sm"
           width="100%"
           container="section"
+          maxHeight={appConfig.tool_result_max_height_px}
           hasCopyButton
         />
         {result.truncated !== undefined && (
