@@ -53,6 +53,8 @@ export interface SessionResponseStoreOptions {
   responseMetadata?: ResponseMetadataMode;
   /** Maximum serialized output-item size in bytes. */
   maxItemBytes?: number;
+  /** Persist the cursor index after this much transcript growth. Defaults to 1 MiB. */
+  cursorCacheCheckpointBytes?: number;
   /** Transcript path; relative values resolve from the session directory. */
   messagesPath?: string;
   /** Staging directory; relative values resolve from the session directory. */
@@ -240,6 +242,14 @@ export interface TranscriptCursorIndex {
   runs: TranscriptRunCursor[];
 }
 
+/** A stable, zero-copy, read-only view of the in-memory cursor index. */
+export interface TranscriptCursorIndexSnapshot {
+  readonly device: number;
+  readonly inode: number;
+  readonly size: number;
+  readonly runs: readonly Readonly<TranscriptRunCursor>[];
+}
+
 const STAGING_DIRECTORY = "staging";
 const MESSAGES_FILE = "messages.jsonl";
 const MANIFEST_FILE = "manifest.json";
@@ -249,6 +259,8 @@ const FINAL_FILE = "final.jsonl";
 export const HISTORY_CACHE_FILE = "history-cache.json";
 export const USAGE_CACHE_FILE = "usage-cache.json";
 export const CURSOR_CACHE_FILE = "cursor-cache.json";
+export const DEFAULT_CURSOR_CACHE_CHECKPOINT_BYTES = 1024 * 1024;
+export const MAX_CURSOR_CACHE_CHECKPOINT_BYTES = 64 * 1024 * 1024;
 const COMPACTION_CACHE_FILE = "compaction-cache.json";
 const HISTORY_CACHE_SCHEMA_VERSION = 1;
 const USAGE_CACHE_SCHEMA_VERSION = 1;
@@ -1436,10 +1448,15 @@ export class SessionResponseStore {
   public readonly messagesBackupPath: string;
   public readonly stateContextPath: string;
 
-  private readonly options: Required<Pick<SessionResponseStoreOptions, "durability" | "maxItemBytes" | "responseMetadata">>;
+  private readonly options: Required<Pick<
+    SessionResponseStoreOptions,
+    "durability" | "maxItemBytes" | "responseMetadata" | "cursorCacheCheckpointBytes"
+  >>;
   private historyCache: InputHistoryCache | undefined;
+  private historyCacheNeedsPersistence = false;
   private usageCache: UsageCache | undefined;
   private cursorCache: CursorCache | undefined;
+  private cursorCachePersistedOffset: number | undefined;
   private readonly messageMutex = new AsyncMutex();
   private readonly activeTurns = new Set<ResponseTurn>();
   private closed = false;
@@ -1493,10 +1510,21 @@ export class SessionResponseStore {
       durability: options.durability ?? "turn",
       maxItemBytes: options.maxItemBytes ?? Number.MAX_SAFE_INTEGER,
       responseMetadata: options.responseMetadata ?? "minimal",
+      cursorCacheCheckpointBytes:
+        options.cursorCacheCheckpointBytes ?? DEFAULT_CURSOR_CACHE_CHECKPOINT_BYTES,
     };
 
     if (!Number.isSafeInteger(this.options.maxItemBytes) || this.options.maxItemBytes <= 0) {
       throw new PersistenceError("maxItemBytes must be a positive safe integer");
+    }
+    if (
+      !Number.isSafeInteger(this.options.cursorCacheCheckpointBytes) ||
+      this.options.cursorCacheCheckpointBytes < 1 ||
+      this.options.cursorCacheCheckpointBytes > MAX_CURSOR_CACHE_CHECKPOINT_BYTES
+    ) {
+      throw new PersistenceError(
+        `cursorCacheCheckpointBytes must be a safe integer between 1 and ${MAX_CURSOR_CACHE_CHECKPOINT_BYTES}`,
+      );
     }
     if (
       this.options.responseMetadata !== "minimal" &&
@@ -1662,22 +1690,26 @@ export class SessionResponseStore {
   /**
    * Reconstructs request history from the replaceable compaction prefix and
    * active transcript. Raw input items are yielded as-is; each committed
-   * response contributes its ordered `response.output` items.
+   * response contributes its ordered `response.output` items. Set
+   * `persistCache` to false for request-loop reads to defer derived-cache I/O;
+   * a later default read persists the updated cache.
    */
-  public async *readInputItems(): AsyncGenerator<ResponseInputItem> {
+  public async *readInputItems(
+    options: {persistCache?: boolean} = {},
+  ): AsyncGenerator<ResponseInputItem> {
     this.assertOpen();
-    const items = await this.loadInputHistory();
+    const items = await this.loadInputHistory(options.persistCache ?? true);
     yield* items;
   }
 
-  private async loadInputHistory(): Promise<ResponseInputItem[]> {
+  private async loadInputHistory(persistCache: boolean): Promise<ResponseInputItem[]> {
     return this.messageMutex.runExclusive(async () => {
       await repairJsonlTail(this.messagesPath);
-      return this.loadInputHistoryUnlocked();
+      return this.loadInputHistoryUnlocked(persistCache);
     });
   }
 
-  private async loadInputHistoryUnlocked(): Promise<ResponseInputItem[]> {
+  private async loadInputHistoryUnlocked(persistCache = true): Promise<ResponseInputItem[]> {
     await repairJsonlTail(this.messagesPath);
     const current = await this.readTranscriptMetadata();
     const compaction = await this.readCompactionCache();
@@ -1686,9 +1718,13 @@ export class SessionResponseStore {
     let tail: ResponseInputItem[];
     if (valid && current.size === cached!.transcript.offset) {
       tail = cached!.items;
+      if (persistCache && this.historyCacheNeedsPersistence) {
+        await writeJsonAtomic(this.historyCachePath, cached, this.options.durability);
+        this.historyCacheNeedsPersistence = false;
+      }
     } else {
       const start = valid ? cached!.transcript.offset : 0;
-      // Never mutate the prior cache until its replacement is durable.
+      // Preserve the prior cache when a durable replacement fails.
       const items = valid ? [...cached!.items] : [];
 
       if (current.size > start) {
@@ -1696,8 +1732,13 @@ export class SessionResponseStore {
       }
 
       const historyCache = await this.makeHistoryCache(items, current);
+      if (persistCache) {
+        await writeJsonAtomic(this.historyCachePath, historyCache, this.options.durability);
+        this.historyCacheNeedsPersistence = false;
+      } else {
+        this.historyCacheNeedsPersistence = true;
+      }
       this.historyCache = historyCache;
-      await writeJsonAtomic(this.historyCachePath, historyCache, this.options.durability);
       tail = historyCache.items;
     }
     if (compaction === undefined) {
@@ -2129,7 +2170,9 @@ export class SessionResponseStore {
         this.options.durability,
       );
       this.historyCache = undefined;
+      this.historyCacheNeedsPersistence = false;
       this.cursorCache = undefined;
+      this.cursorCachePersistedOffset = undefined;
       this.usageCache = undefined;
       for (const path of [
         this.historyCachePath,
@@ -2158,7 +2201,9 @@ export class SessionResponseStore {
 
       await this.replaceMessagesWithRecords([]);
       this.historyCache = undefined;
+      this.historyCacheNeedsPersistence = false;
       this.cursorCache = undefined;
+      this.cursorCachePersistedOffset = undefined;
       this.usageCache = {
         schema_version: USAGE_CACHE_SCHEMA_VERSION,
         transcript: await this.makeUsageCheckpoint(await this.readTranscriptMetadata()),
@@ -2277,6 +2322,21 @@ export class SessionResponseStore {
    * not invalidate existing entries and tool outputs need no entry of their own.
    */
   public async readCursorIndex(): Promise<TranscriptCursorIndex> {
+    const snapshot = await this.readCursorIndexSnapshot();
+    return {
+      device: snapshot.device,
+      inode: snapshot.inode,
+      size: snapshot.size,
+      runs: snapshot.runs.map((run) => ({...run})),
+    };
+  }
+
+  /**
+   * A stable, zero-copy view for internal projection code. The cache replaces
+   * the run array on refresh and never mutates prior entries, so callers may
+   * safely retain this read-only snapshot while a later index is built.
+   */
+  public async readCursorIndexSnapshot(): Promise<TranscriptCursorIndexSnapshot> {
     this.assertOpen();
     return this.messageMutex.runExclusive(async () => {
       const current = await this.readTranscriptMetadata();
@@ -2285,7 +2345,7 @@ export class SessionResponseStore {
         device: current.device,
         inode: current.inode,
         size: current.size,
-        runs: cache.runs.map((run) => ({...run})),
+        runs: cache.runs,
       };
     });
   }
@@ -2662,11 +2722,31 @@ export class SessionResponseStore {
     await writeJsonAtomic(this.cursorCachePath, cache, this.options.durability);
   }
 
+  private cursorCacheCheckpointDue(transcriptSize: number): boolean {
+    const persistedOffset = this.cursorCachePersistedOffset;
+    return (
+      persistedOffset === undefined ||
+      transcriptSize - persistedOffset >= this.options.cursorCacheCheckpointBytes
+    );
+  }
+
+  private async persistCursorCacheCheckpoint(cache: CursorCache): Promise<void> {
+    await this.writeCursorCacheFile(cache);
+    this.cursorCachePersistedOffset = cache.transcript.offset;
+  }
+
   private async refreshCursorCacheUnlocked(current: TranscriptMetadata): Promise<CursorCache> {
-    const cached = this.cursorCache ?? (await this.readCursorCacheFile());
+    const inMemory = this.cursorCache;
+    const cached = inMemory ?? (await this.readCursorCacheFile());
     if (cached !== undefined && (await this.cacheMatches(cached, current))) {
+      if (inMemory === undefined) {
+        this.cursorCachePersistedOffset = cached.transcript.offset;
+      }
+      this.cursorCache = cached;
       if (current.size === cached.transcript.offset) {
-        this.cursorCache = cached;
+        if (this.cursorCacheCheckpointDue(current.size)) {
+          await this.persistCursorCacheCheckpoint(cached);
+        }
         return cached;
       }
       const runs = [...cached.runs];
@@ -2677,15 +2757,18 @@ export class SessionResponseStore {
       );
       const appended = await this.makeCursorCache(runs, offset, current);
       this.cursorCache = appended;
-      await this.writeCursorCacheFile(appended);
+      if (this.cursorCacheCheckpointDue(current.size)) {
+        await this.persistCursorCacheCheckpoint(appended);
+      }
       return appended;
     }
 
+    this.cursorCachePersistedOffset = undefined;
     const runs: TranscriptRunCursor[] = [];
     const offset = await this.scanRuns(0, current.size, (run) => runs.push(run));
     const rebuilt = await this.makeCursorCache(runs, offset, current);
     this.cursorCache = rebuilt;
-    await this.writeCursorCacheFile(rebuilt);
+    await this.persistCursorCacheCheckpoint(rebuilt);
     return rebuilt;
   }
 
@@ -2836,7 +2919,9 @@ export class SessionResponseStore {
       await writeJsonAtomic(this.compactionCachePath, cache, this.options.durability);
       await this.replaceMessagesWithRecords(compactedActiveTail);
       this.historyCache = undefined;
+      this.historyCacheNeedsPersistence = false;
       this.cursorCache = undefined;
+      this.cursorCachePersistedOffset = undefined;
       await rm(this.historyCachePath, {force: true});
       await rm(this.cursorCachePath, {force: true});
       await this.resetUsageCheckpointAfterCompactionUnlocked();

@@ -7,6 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  MAX_CURSOR_CACHE_CHECKPOINT_BYTES,
   PersistenceError,
   SESSION_INPUT_BATCH_ID_FIELD,
   SESSION_INPUT_BATCH_INDEX_FIELD,
@@ -700,6 +701,74 @@ test("persists normalized request history and refreshes only appended transcript
   }
 });
 
+test("defers request history-cache writes and recovers deferred items from the transcript", async () => {
+  const sessionDir = await makeSession();
+  let store: SessionResponseStore | undefined;
+  try {
+    store = await SessionResponseStore.open(sessionDir);
+    const first = {
+      type: "message",
+      role: "user",
+      content: [{type: "input_text", text: "first"}],
+    };
+    const second = {
+      type: "message",
+      role: "user",
+      content: [{type: "input_text", text: "second"}],
+    };
+    const third = {
+      type: "message",
+      role: "user",
+      content: [{type: "input_text", text: "third"}],
+    };
+    const cachePath = join(sessionDir, "staging", "history-cache.json");
+    const messagesPath = join(sessionDir, "messages.jsonl");
+
+    await store.appendInputItem(first);
+    const initialHistory = [];
+    for await (const item of store.readInputItems()) initialHistory.push(item);
+    assert.deepEqual(initialHistory, [first]);
+    const initialCache = await readFile(cachePath, "utf8");
+
+    await store.appendInputItem(second);
+    const secondTranscript = await readFile(messagesPath);
+    const deferredHistory = [];
+    for await (const item of store.readInputItems({persistCache: false})) deferredHistory.push(item);
+    assert.deepEqual(deferredHistory, [first, second]);
+    assert.deepEqual(await readFile(messagesPath), secondTranscript);
+    assert.equal(await readFile(cachePath, "utf8"), initialCache);
+
+    const persistedHistory = [];
+    for await (const item of store.readInputItems()) persistedHistory.push(item);
+    assert.deepEqual(persistedHistory, [first, second]);
+    const secondCache = await readFile(cachePath, "utf8");
+    assert.deepEqual((JSON.parse(secondCache) as {items: unknown[]}).items, [first, second]);
+
+    await store.appendInputItem(third);
+    const thirdTranscript = await readFile(messagesPath);
+    const latestHistory = [];
+    for await (const item of store.readInputItems({persistCache: false})) latestHistory.push(item);
+    assert.deepEqual(latestHistory, [first, second, third]);
+    assert.deepEqual(await readFile(messagesPath), thirdTranscript);
+    assert.equal(await readFile(cachePath, "utf8"), secondCache);
+    await store.close();
+    store = await SessionResponseStore.open(sessionDir);
+
+    const recoveredHistory = [];
+    for await (const item of store.readInputItems()) recoveredHistory.push(item);
+    assert.deepEqual(recoveredHistory, [first, second, third]);
+    const recoveredCache = JSON.parse(await readFile(cachePath, "utf8")) as {
+      transcript: {offset: number};
+      items: unknown[];
+    };
+    assert.deepEqual(recoveredCache.items, [first, second, third]);
+    assert.equal(recoveredCache.transcript.offset, (await readFile(join(sessionDir, "messages.jsonl"))).length);
+  } finally {
+    await store?.close();
+    await removeSession(sessionDir);
+  }
+});
+
 test("rebuilds cached history when the transcript prefix changes", async () => {
   const sessionDir = await makeSession();
   try {
@@ -952,6 +1021,56 @@ test("rejects an unsupported persistence.response_metadata and threads a configu
   }
 });
 
+test("validates and threads the cursor-cache checkpoint byte threshold", async () => {
+  const sessionDir = await makeSession();
+  try {
+    await writeFile(join(sessionDir, "model.json"), JSON.stringify({model: "gpt-test"}));
+    for (const value of [0, MAX_CURSOR_CACHE_CHECKPOINT_BYTES + 1, 1.5, "1024"]) {
+      await writeFile(
+        join(sessionDir, "setting.json"),
+        JSON.stringify({cwd: sessionDir, persistence: {cursor_cache_checkpoint_bytes: value}}),
+      );
+      await assert.rejects(
+        () => new SessionConfigLoader(sessionDir).loadSettings(),
+        /persistence\.cursor_cache_checkpoint_bytes must be a safe integer/,
+      );
+    }
+
+    await writeFile(
+      join(sessionDir, "setting.json"),
+      JSON.stringify({cwd: sessionDir, persistence: {cursor_cache_checkpoint_bytes: 1}}),
+    );
+    const config = await new SessionConfigLoader(sessionDir).load();
+    assert.equal(config.settings.persistence.cursor_cache_checkpoint_bytes, 1);
+
+    const session = await AgentSession.open(sessionDir);
+    try {
+      await session.store.readCursorIndexSnapshot();
+      const completed = {
+        type: "response.completed",
+        session_turn: 1,
+        session_step: 1,
+        response: {id: "checkpoint-run", status: "completed", output: []},
+      };
+      await appendFile(session.store.messagesPath, `${JSON.stringify(completed)}\n`);
+      const index = await session.store.readCursorIndexSnapshot();
+      assert.equal(index.runs.length, 1);
+
+      const cached = JSON.parse(await readFile(session.store.cursorCachePath, "utf8")) as {
+        transcript: {offset: number};
+      };
+      assert.equal(
+        cached.transcript.offset,
+        Buffer.byteLength(await readFile(session.store.messagesPath, "utf8")),
+      );
+    } finally {
+      await session.close();
+    }
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("rejects incomplete output sets and oversized items without committing", async () => {
   const sessionDir = await makeSession();
   try {
@@ -1119,6 +1238,7 @@ test("loads model and session settings with normalized paths and hashes", async 
       durability: "turn",
       max_item_bytes: 10 * 1024 * 1024,
       response_metadata: "minimal",
+      cursor_cache_checkpoint_bytes: 1024 * 1024,
     });
     assert.deepEqual(config.settings.http_debug, {
       enabled: false,
@@ -2027,6 +2147,7 @@ test("defaults empty settings and rejects missing or unsafe model configuration"
       durability: "turn",
       max_item_bytes: 10 * 1024 * 1024,
       response_metadata: "minimal",
+      cursor_cache_checkpoint_bytes: 1024 * 1024,
     });
     assert.equal(settings.http_debug.enabled, false);
     assert.equal(settings.paths.history_cache, join(sessionDir, "staging/history-cache.json"));

@@ -80,6 +80,13 @@
           ],
           "description": "Provider response fields kept beside the output items. Both modes compact usage to input_tokens, output_tokens, total_tokens, and input_tokens_details.cached_tokens. `minimal` (default) keeps id, object, status, model, created_at, completed_at, incomplete_details, and compact usage; `full` also stores other provider metadata, including the request echo repeated on every response (tool definitions included).",
           "default": "minimal"
+        },
+        "cursor_cache_checkpoint_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864,
+          "description": "Transcript bytes accumulated since the last cursor-index checkpoint. Defaults to 1048576.",
+          "default": 1048576
         }
       },
       "additionalProperties": true,

@@ -132,7 +132,12 @@ test("loads configurable root server settings", async () => {
     await writeFile(
       settingPath,
       JSON.stringify({
-        server: {host: "0.0.0.0", port: 9876, max_body_bytes: 2 * 1024 * 1024},
+        server: {
+          host: "0.0.0.0",
+          port: 9876,
+          max_body_bytes: 2 * 1024 * 1024,
+          sse_max_buffered_bytes: 4096,
+        },
         session_roots: [{path: ".jad/sessions"}],
       }),
     );
@@ -142,6 +147,7 @@ test("loads configurable root server settings", async () => {
       max_body_bytes: 2 * 1024 * 1024,
       run_state_retention_ms: 30_000,
       tool_stream_interval_ms: 120,
+      sse_max_buffered_bytes: 4096,
       conditional_requests: true,
       snapshot_turns: 24,
       max_page_turns: 50,
@@ -210,6 +216,17 @@ test("loads configurable root server settings", async () => {
     await assert.rejects(
       () => loadRootServerSettings({rootSettingPath: settingPath}),
       /server\.max_inline_part_bytes/,
+    );
+    await writeFile(
+      settingPath,
+      JSON.stringify({
+        server: {sse_max_buffered_bytes: 1023},
+        session_roots: [{path: ".jad/sessions"}],
+      }),
+    );
+    await assert.rejects(
+      () => loadRootServerSettings({rootSettingPath: settingPath}),
+      /server\.sse_max_buffered_bytes/,
     );
     await writeFile(settingPath, JSON.stringify({server: {allowed_origins: ["*", "http://localhost:5173"]}}));
     await assert.rejects(

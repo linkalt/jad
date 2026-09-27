@@ -319,6 +319,9 @@ export class AgentSession {
       durability: options.store?.durability ?? settings.persistence.durability,
       maxItemBytes: options.store?.maxItemBytes ?? settings.persistence.max_item_bytes,
       responseMetadata: options.store?.responseMetadata ?? settings.persistence.response_metadata,
+      cursorCacheCheckpointBytes:
+        options.store?.cursorCacheCheckpointBytes ??
+        settings.persistence.cursor_cache_checkpoint_bytes,
     });
     const processManager = options.shared?.processManager ?? new ProcessManager(
       settings.tools.native.process?.storage_dir ?? join(settings.cwd, DEFAULT_NATIVE_PROCESS_STORAGE_DIR),
@@ -379,8 +382,9 @@ export class AgentSession {
       );
 
       for (let round = 0; ; round += 1) {
+        // messages.jsonl is authoritative; avoid rewriting the full derived cache each tool round.
         const history: ResponseInputItem[] = [];
-        for await (const item of this.store.readInputItems()) {
+        for await (const item of this.store.readInputItems({persistCache: false})) {
           history.push(item);
         }
         const stateContext = await this.readActiveStateContext(config);

@@ -194,7 +194,8 @@ Example storage and HTTP debug paths:
   "persistence": {
     "durability": "turn",
     "max_item_bytes": 10485760,
-    "response_metadata": "minimal"
+    "response_metadata": "minimal",
+    "cursor_cache_checkpoint_bytes": 1048576
   },
   "compaction": {
     "auto_enabled": true,
@@ -250,7 +251,7 @@ The loader rejects runner-owned request fields such as `input`, `instructions`, 
 8. execute returned function calls, append `function_call_output` items, and continue until a response has no tool calls;
 9. if execution is interrupted, the round limit is reached, or an older transcript contains an unanswered `function_call`, append an explicit error `function_call_output` before the next provider request. This prevents a committed function call from becoming an invalid provider history; missing results are not rerun automatically because a previous tool may already have had side effects.
 
-`setting.json` controls the hard limit with `max_tool_rounds` (default `8`, range `0..50000`). The initial provider request is not counted; each tool-execution continuation consumes one round. A final tool result receives its follow-up provider request before the limit is enforced. `AgentRunOptions.maxToolRounds` can override the session setting for one run. The same file controls persistence `durability` (`process`, `turn`, or `strict`) and `max_item_bytes`.
+`setting.json` controls the hard limit with `max_tool_rounds` (default `8`, range `0..50000`). The initial provider request is not counted; each tool-execution continuation consumes one round. A final tool result receives its follow-up provider request before the limit is enforced. `AgentRunOptions.maxToolRounds` can override the session setting for one run. The same file controls persistence `durability` (`process`, `turn`, or `strict`), `max_item_bytes`, and `cursor_cache_checkpoint_bytes` (default `1048576`, range `1..67108864`). When a cursor index is read, it is atomically checkpointed after at least this much transcript growth; after a restart, any uncheckpointed tail is rebuilt from authoritative `messages.jsonl`.
 
 Runs are serialized per `AgentSession` instance. Tool-call schema failures and execution failures are returned as compact tool output text; they do not cause an unnecessary duplicate provider request.
 

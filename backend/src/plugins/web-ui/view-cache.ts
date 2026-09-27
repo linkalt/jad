@@ -55,19 +55,31 @@ interface BackupBlock {
  * Resolved turn starts for one transcript: the runs already folded are counted,
  * so an appending transcript only resolves the runs it added.
  */
+interface PreviousRecordState {
+  offset: number;
+  isUserTurn: boolean;
+  batchId: string | undefined;
+  batchIndex: number | undefined;
+  firstUserOffset: number | undefined;
+}
+
 interface TurnStartsCache {
   generation: string;
   /** Transcript size the offsets were resolved against; a shrink invalidates. */
   size: number;
   consumed: number;
   /** Last folded run, so an index rebuilt under the cache is noticed. */
-  lastRun: TranscriptRunCursor | undefined;
-  starts: number[];
+  lastRun: Readonly<TranscriptRunCursor> | undefined;
+  /** Start of the next sequential transcript scan. */
+  scanOffset: number;
+  /** Context needed to resolve an input batch split across scan ranges. */
+  previousRecord: PreviousRecordState | undefined;
+  starts: readonly number[];
 }
 
 function sameRun(
-  left: TranscriptRunCursor | undefined,
-  right: TranscriptRunCursor | undefined,
+  left: Readonly<TranscriptRunCursor> | undefined,
+  right: Readonly<TranscriptRunCursor> | undefined,
 ): boolean {
   if (left === undefined || right === undefined) {
     return left === right;
@@ -86,15 +98,54 @@ function parseRecord(line: string): JsonRecord | undefined {
   }
 }
 
+function previousRecordState(
+  record: JsonRecord | undefined,
+  offset: number,
+  previous: PreviousRecordState | undefined,
+): PreviousRecordState | undefined {
+  if (record === undefined) return undefined;
+  const userTurn = isUserTurnRecord(record);
+  const batchId = record[SESSION_INPUT_BATCH_ID_FIELD];
+  const batchIndex = record[SESSION_INPUT_BATCH_INDEX_FIELD];
+  if (
+    typeof batchId !== "string" ||
+    typeof batchIndex !== "number" ||
+    !Number.isSafeInteger(batchIndex) ||
+    batchIndex < 0
+  ) {
+    return {
+      offset,
+      isUserTurn: userTurn,
+      batchId: undefined,
+      batchIndex: undefined,
+      firstUserOffset: undefined,
+    };
+  }
+
+  const continuesBatch =
+    previous?.batchId === batchId &&
+    previous.batchIndex !== undefined &&
+    previous.batchIndex + 1 === batchIndex;
+  const firstUserOffset = continuesBatch ? previous.firstUserOffset : undefined;
+  return {
+    offset,
+    isUserTurn: userTurn,
+    batchId,
+    batchIndex,
+    firstUserOffset: firstUserOffset ?? (userTurn ? offset : undefined),
+  };
+}
+
 /**
  * Projection of a session transcript for the web UI, addressed by byte offset.
  *
  * Two parts are read separately. History a compaction removed is folded from the
  * backup's tail — raw records, so reasoning and tool calls survive, unlike the
  * compacted request items, which keep only what the model was given. The live
- * tail is read from the transcript in turn-sized slices, using the cursor index
- * to find where a turn starts without walking the file from the beginning. The
- * backup's end is trimmed at the compaction seam, because the transcript already
+ * tail is read from the transcript in turn-sized slices. A cursor-index-guided
+ * sequential scan resolves turn starts once, then reads only appended records on
+ * later snapshots, avoiding a backwards file open for every run. The backup's end
+ * is trimmed at the compaction seam, because the transcript already
  * re-emits the records that were in flight when it was written.
  *
  * Because every slice begins at a turn boundary and records are identified by
@@ -263,64 +314,69 @@ export class WebUiSessionViewCache {
    * longer the same one — a replacement changes its generation, a repair shrinks
    * it — because then the offsets describe a transcript that is not there.
    */
-  private async turnStarts(end: number): Promise<{starts: number[]; generation: string}> {
+  private async turnStarts(end: number): Promise<{starts: readonly number[]; generation: string}> {
     return this.turnStartsMutex.runExclusive(async () => {
-      const index = await this.store.readCursorIndex();
+      const index = await this.store.readCursorIndexSnapshot();
       const generation = (await this.store.readTranscriptGeneration()) ?? "-";
+      const scanEnd = Math.min(end, index.size);
       let cache = this.turnStartsCache;
       if (
         cache === undefined ||
         cache.generation !== generation ||
         cache.size > index.size ||
+        cache.scanOffset > scanEnd ||
         cache.consumed > index.runs.length ||
+        (cache.consumed < index.runs.length && index.runs[cache.consumed]!.offset < cache.scanOffset) ||
         !sameRun(cache.lastRun, index.runs[cache.consumed - 1])
       ) {
-        cache = {generation, size: index.size, consumed: 0, starts: [0], lastRun: undefined};
+        cache = {
+          generation,
+          size: index.size,
+          consumed: 0,
+          starts: [0],
+          lastRun: undefined,
+          scanOffset: 0,
+          previousRecord: undefined,
+        };
         this.turnStartsCache = cache;
       }
-      cache.size = index.size;
-      while (cache.consumed < index.runs.length) {
-        const run = index.runs[cache.consumed]!;
-        // The cursor index may be newer than the transcript snapshot that
-        // requested this page. Leave future runs unconsumed for the next read.
-        if (run.offset >= end) break;
-        cache.lastRun = run;
-        cache.consumed += 1;
-        if (run.step !== 1 || run.offset <= 0) continue;
 
-        const previous = await this.store.readRecordBefore(run.offset);
-        const previousRecord = previous === undefined ? undefined : parseRecord(previous.line);
-        let start = run.offset;
-        if (previous !== undefined && previousRecord !== undefined) {
-          const batchId = previousRecord[SESSION_INPUT_BATCH_ID_FIELD];
-          const batchIndex = previousRecord[SESSION_INPUT_BATCH_INDEX_FIELD];
-          if (typeof batchId === "string" && Number.isSafeInteger(batchIndex) && (batchIndex as number) >= 0) {
-            let current: {offset: number; line: string} | undefined = previous;
-            let expectedIndex = batchIndex as number;
-            let firstUser: number | undefined;
-            while (current !== undefined) {
-              const record = parseRecord(current.line);
-              if (
-                record === undefined ||
-                record[SESSION_INPUT_BATCH_ID_FIELD] !== batchId ||
-                record[SESSION_INPUT_BATCH_INDEX_FIELD] !== expectedIndex
-              ) break;
-              if (isUserTurnRecord(record)) firstUser = current.offset;
-              expectedIndex -= 1;
-              if (expectedIndex < 0 || current.offset === 0) break;
-              current = await this.store.readRecordBefore(current.offset);
+      let consumed = cache.consumed;
+      let lastRun = cache.lastRun;
+      let previous = cache.previousRecord;
+      const appendedStarts: number[] = [];
+      const scannedTo = await this.store.readRecords(cache.scanOffset, scanEnd, (offset, line) => {
+        const record = parseRecord(line);
+        const run = index.runs[consumed];
+        if (run !== undefined && run.offset === offset) {
+          lastRun = run;
+          consumed += 1;
+          if (run.step === 1 && run.offset > 0) {
+            let start = run.offset;
+            if (previous !== undefined && previous.batchId !== undefined && previous.batchIndex !== undefined) {
+              if (previous.firstUserOffset !== undefined) start = previous.firstUserOffset;
+            } else if (previous?.isUserTurn) {
+              // Legacy unbatched inputs open a single-record turn.
+              start = previous.offset;
             }
-            if (firstUser !== undefined) start = firstUser;
-          } else if (isUserTurnRecord(previousRecord)) {
-            // Legacy unbatched inputs open a single-record turn.
-            start = previous.offset;
+            const lastStart = appendedStarts[appendedStarts.length - 1]
+              ?? cache.starts[cache.starts.length - 1]!;
+            if (start > lastStart) appendedStarts.push(start);
           }
         }
-        if (start > cache.starts[cache.starts.length - 1]!) {
-          cache.starts.push(start);
-        }
+        previous = previousRecordState(record, offset, previous);
+      });
+
+      if (appendedStarts.length > 0) {
+        // Replacing rather than mutating keeps snapshots held by active pages stable.
+        cache.starts = [...cache.starts, ...appendedStarts];
       }
-      return {starts: [...cache.starts], generation: cache.generation};
+      cache.size = index.size;
+      cache.consumed = consumed;
+      cache.lastRun = lastRun;
+      cache.scanOffset = scannedTo;
+      cache.previousRecord = previous;
+      return {starts: cache.starts, generation: cache.generation};
     });
   }
 

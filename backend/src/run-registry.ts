@@ -32,6 +32,7 @@ export interface StopRunResult {
 export class SessionRun {
   public status: WebUiRunStatus = "running";
   public latest?: WebUiMessage;
+  private latestUsage: RunStreamEvent | undefined;
   private readonly listeners = new Set<RunListener>();
   private terminal: RunStreamEvent[] = [];
 
@@ -76,7 +77,11 @@ export class SessionRun {
   }
 
   public publish(event: string, data: unknown): void {
-    this.emit({event, data});
+    const published = {event, data};
+    if (event === "usage") {
+      this.latestUsage = published;
+    }
+    this.emit(published);
   }
 
   /**
@@ -108,6 +113,9 @@ export class SessionRun {
    */
   public subscribe(listener: RunListener): () => void {
     if (this.status !== "running") {
+      if (this.latestUsage !== undefined) {
+        listener(this.latestUsage);
+      }
       for (const event of this.terminal) {
         listener(event);
       }
@@ -116,6 +124,9 @@ export class SessionRun {
     this.listeners.add(listener);
     if (this.latest !== undefined) {
       listener({event: "ui.message", data: {message: this.latest}});
+    }
+    if (this.latestUsage !== undefined) {
+      listener(this.latestUsage);
     }
     return () => {
       this.listeners.delete(listener);

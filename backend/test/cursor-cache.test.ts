@@ -5,10 +5,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { BACKUP_TAIL_WINDOW_BYTES, SessionResponseStore } from "../src/persistence.js";
+import {
+  BACKUP_TAIL_WINDOW_BYTES,
+  SESSION_INPUT_BATCH_ID_FIELD,
+  SESSION_INPUT_BATCH_INDEX_FIELD,
+  SessionResponseStore,
+} from "../src/persistence.js";
 import { normalizeWebUiSession } from "../src/plugins/web-ui/normalize-web-ui.js";
 import { WebUiSessionViewCache } from "../src/plugins/web-ui/view-cache.js";
-import type { JsonRecord, ResponseInputItem } from "../src/persistence.js";
+import type { JsonRecord, ResponseInputItem, SessionResponseStoreOptions } from "../src/persistence.js";
 
 function userRecord(text: string): JsonRecord {
   return {
@@ -69,11 +74,12 @@ async function writeTranscript(path: string, records: readonly JsonRecord[]): Pr
 
 async function makeStore(
   records: readonly JsonRecord[] = TRANSCRIPT,
+  options: Pick<SessionResponseStoreOptions, "cursorCacheCheckpointBytes"> = {},
 ): Promise<{store: SessionResponseStore; sessionDir: string; messagesPath: string}> {
   const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-cursor-"));
   const messagesPath = join(sessionDir, "messages.jsonl");
   await writeTranscript(messagesPath, records);
-  const store = await SessionResponseStore.open(sessionDir, { messagesPath });
+  const store = await SessionResponseStore.open(sessionDir, { messagesPath, ...options });
   return { store, sessionDir, messagesPath };
 }
 
@@ -130,6 +136,31 @@ test("indexes one cursor per completed response and reads it back from disk", as
   }
 });
 
+test("keeps cursor snapshots stable and public index results defensive", async () => {
+  const {store, sessionDir, messagesPath} = await makeStore();
+  try {
+    const snapshot = await store.readCursorIndexSnapshot();
+    assert.equal(snapshot.runs.length, 3);
+
+    const defensive = await store.readCursorIndex();
+    const firstRun = {...defensive.runs[0]!};
+    defensive.runs[0]!.offset = -1;
+    assert.deepEqual((await store.readCursorIndex()).runs[0], firstRun);
+
+    await appendFile(
+      messagesPath,
+      `${JSON.stringify(completedRecord("r-2-2", 2, 2, [assistantItem("third")]))}\n`,
+    );
+    const updated = await store.readCursorIndexSnapshot();
+    assert.equal(updated.runs.length, 4);
+    assert.equal(snapshot.runs.length, 3);
+    assert.deepEqual(snapshot.runs[0], firstRun);
+  } finally {
+    await store.close();
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
 test("reads only appended bytes and skips work when nothing changed", async () => {
   const { store, sessionDir, messagesPath } = await makeStore();
   try {
@@ -159,6 +190,82 @@ test("reads only appended bytes and skips work when nothing changed", async () =
   } finally {
     await store.close();
     await rm(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test("checkpoints cursor cache after configured transcript growth and recovers stale state", async () => {
+  const checkpointBytes = 512;
+  const {store: initialStore, sessionDir, messagesPath} = await makeStore(TRANSCRIPT, {
+    cursorCacheCheckpointBytes: checkpointBytes,
+  });
+  let activeStore: SessionResponseStore | undefined = initialStore;
+  try {
+    const initialIndex = await initialStore.readCursorIndexSnapshot();
+    assert.equal(initialIndex.runs.length, 3);
+    const cachePath = initialStore.cursorCachePath;
+    const originalCheckpoint = await readFile(cachePath, "utf8");
+    const firstAppend = `${JSON.stringify(
+      completedRecord("r-3-1", 3, 1, [assistantItem("first", "msg-3-1")]),
+    )}\n`;
+    assert.ok(Buffer.byteLength(firstAppend) < checkpointBytes);
+
+    await appendFile(messagesPath, firstAppend);
+    const pendingIndex = await initialStore.readCursorIndexSnapshot();
+    assert.equal(pendingIndex.runs.length, 4);
+    assert.equal(await readFile(cachePath, "utf8"), originalCheckpoint);
+
+    await initialStore.close();
+    activeStore = undefined;
+    const reopenedStore = await SessionResponseStore.open(sessionDir, {
+      messagesPath,
+      cursorCacheCheckpointBytes: checkpointBytes,
+    });
+    activeStore = reopenedStore;
+    const recoveredIndex = await reopenedStore.readCursorIndexSnapshot();
+    assert.deepEqual(
+      recoveredIndex.runs.map(({turn, step}) => ({turn, step})),
+      [
+        {turn: 1, step: 1},
+        {turn: 1, step: 2},
+        {turn: 2, step: 1},
+        {turn: 3, step: 1},
+      ],
+    );
+    assert.equal(await readFile(cachePath, "utf8"), originalCheckpoint);
+
+    const additionalRecords = [
+      completedRecord("r-3-2", 3, 2, [assistantItem("second", "msg-3-2")]),
+      completedRecord("r-3-3", 3, 3, [assistantItem("third", "msg-3-3")]),
+      completedRecord("r-3-4", 3, 4, [assistantItem("fourth", "msg-3-4")]),
+    ];
+    const additionalBytes = `${additionalRecords.map((record) => JSON.stringify(record)).join("\n")}\n`;
+    assert.ok(Buffer.byteLength(firstAppend + additionalBytes) >= checkpointBytes);
+    await appendFile(messagesPath, additionalBytes);
+
+    const checkpointedIndex = await reopenedStore.readCursorIndexSnapshot();
+    assert.equal(checkpointedIndex.runs.length, 7);
+    const checkpointedCache = JSON.parse(await readFile(cachePath, "utf8")) as {
+      transcript: {offset: number};
+    };
+    assert.equal(
+      checkpointedCache.transcript.offset,
+      Buffer.byteLength(await readFile(messagesPath, "utf8")),
+    );
+  } finally {
+    await activeStore?.close();
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("rejects invalid cursor-cache checkpoint byte options", async () => {
+  const sessionDir = await mkdtemp(join(tmpdir(), "agent-harness-cursor-options-"));
+  try {
+    await assert.rejects(
+      () => SessionResponseStore.open(sessionDir, {cursorCacheCheckpointBytes: 0}),
+      /cursorCacheCheckpointBytes must be a safe integer/,
+    );
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
   }
 });
 
@@ -320,39 +427,93 @@ test("projects the same messages whether or not records carry the provider reque
   }
 });
 
-test("resolves each turn's start once, however often the view is read", async () => {
+test("resolves turn starts with sequential scans and reuses the offsets", async () => {
   const { store, sessionDir, messagesPath } = await makeStore();
   try {
     const cache = new WebUiSessionViewCache(store, {snapshotTurns: 0, maxPageTurns: 50});
     const original = store.readRecordBefore.bind(store);
-    let lookups = 0;
+    let backwardLookups = 0;
     store.readRecordBefore = async (offset: number) => {
-      lookups += 1;
+      backwardLookups += 1;
       return original(offset);
     };
 
-    // TRANSCRIPT opens two turns, each with a run of its own.
+    // TRANSCRIPT opens two turns, each with a run of its own. Resolving them
+    // scans sequentially instead of opening the file once per run.
     await cache.read();
-    assert.equal(lookups, 2);
+    assert.equal(backwardLookups, 0);
     await cache.read();
-    assert.equal(lookups, 2, "an unchanged transcript resolves nothing again");
+    assert.equal(backwardLookups, 0, "an unchanged transcript reuses resolved offsets");
 
-    // Appending a turn resolves the run it added, and nothing before it.
     const appended: JsonRecord[] = [
       userRecord("third question"),
       completedRecord("r-3-1", 3, 1, [assistantItem("third answer", "msg-3-1")]),
     ];
     await appendFile(messagesPath, records(appended));
     const grown = await cache.read();
-    assert.equal(lookups, 3);
+    assert.equal(backwardLookups, 0);
     assert.deepEqual(plain(grown.messages), plain(messagesOf([...TRANSCRIPT, ...appended]) as never));
 
     // Replacing the transcript drops the resolved offsets with the index.
     await writeTranscript(messagesPath, TRANSCRIPT);
-    await cache.read();
-    assert.equal(lookups, 5);
+    const replaced = await cache.read();
+    assert.equal(backwardLookups, 0);
+    assert.deepEqual(plain(replaced.messages), plain(messagesOf(TRANSCRIPT) as never));
     await store.close();
   } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("finds the first user record in a batched input while scanning turn starts", async () => {
+  const batchId = "batch-turn-start";
+  const rows: JsonRecord[] = [
+    {
+      type: "message",
+      role: "developer",
+      content: [{type: "input_text", text: "developer context"}],
+      [SESSION_INPUT_BATCH_ID_FIELD]: batchId,
+      [SESSION_INPUT_BATCH_INDEX_FIELD]: 0,
+    },
+    {
+      ...userRecord("first batched question"),
+      [SESSION_INPUT_BATCH_ID_FIELD]: batchId,
+      [SESSION_INPUT_BATCH_INDEX_FIELD]: 1,
+    },
+    {
+      ...userRecord("second batched question"),
+      [SESSION_INPUT_BATCH_ID_FIELD]: batchId,
+      [SESSION_INPUT_BATCH_INDEX_FIELD]: 2,
+    },
+    completedRecord("r-batch-1", 1, 1, [assistantItem("batched answer", "batch-answer")]),
+  ];
+  const {store, sessionDir, messagesPath} = await makeStore(rows);
+  try {
+    const text = await readFile(messagesPath, "utf8");
+    const userOffsets: number[] = [];
+    let offset = 0;
+    for (const line of text.split("\n")) {
+      if (line.length === 0) continue;
+      const record = JSON.parse(line) as JsonRecord;
+      if (record.role === "user") userOffsets.push(offset);
+      offset += Buffer.byteLength(`${line}\n`, "utf8");
+    }
+    assert.equal(userOffsets.length, 2);
+    const [firstUserOffset, secondUserOffset] = userOffsets;
+    assert.ok(firstUserOffset !== undefined && secondUserOffset !== undefined);
+
+    const view = await new WebUiSessionViewCache(store, {
+      snapshotTurns: 0,
+      maxPageTurns: 50,
+    }).read({turns: 1});
+    const firstUser = view.messages.find((message) => message.text === "first batched question");
+    const secondUser = view.messages.find((message) => message.text === "second batched question");
+    assert.ok(firstUser !== undefined && secondUser !== undefined);
+    assert.equal(view.cursors.get(firstUser.id), firstUserOffset);
+    assert.equal(view.cursors.get(secondUser.id), firstUserOffset);
+    assert.equal(view.cursors.get("r-batch-1"), firstUserOffset);
+  } finally {
+    await store.close();
     await rm(sessionDir, {recursive: true, force: true});
   }
 });
@@ -473,9 +634,9 @@ test("does not consume cursor runs beyond the transcript snapshot boundary", asy
   ]);
   try {
     const cache = new WebUiSessionViewCache(store, {snapshotTurns: 1, maxPageTurns: 50});
-    const readCursorIndex = store.readCursorIndex.bind(store);
+    const readCursorIndexSnapshot = store.readCursorIndexSnapshot.bind(store);
     let appended = false;
-    store.readCursorIndex = async () => {
+    store.readCursorIndexSnapshot = async () => {
       if (!appended) {
         appended = true;
         await appendFile(messagesPath, records([
@@ -483,7 +644,7 @@ test("does not consume cursor runs beyond the transcript snapshot boundary", asy
           completedRecord("race-second", 2, 1, [assistantItem("second answer")]),
         ]));
       }
-      return readCursorIndex();
+      return readCursorIndexSnapshot();
     };
 
     const first = await cache.read();

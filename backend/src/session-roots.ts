@@ -13,6 +13,8 @@ const MAX_TOOL_STREAM_INTERVAL_MS = 60 * 1000;
 const MAX_SNAPSHOT_TURNS = 100_000;
 const MAX_PAGE_TURNS = 1_000;
 const MAX_INLINE_PART_BYTES = 16 * 1024 * 1024;
+const MIN_SSE_BUFFERED_BYTES = 1024;
+const MAX_SSE_BUFFERED_BYTES = 64 * 1024 * 1024;
 /** Security floor, not a tunable feature flag. */
 export const MIN_API_TOKEN_LENGTH = 32;
 
@@ -22,6 +24,7 @@ export const DEFAULT_ROOT_SERVER_SETTINGS = {
   max_body_bytes: 1024 * 1024,
   run_state_retention_ms: 30_000,
   tool_stream_interval_ms: 120,
+  sse_max_buffered_bytes: 1024 * 1024,
   conditional_requests: true,
   snapshot_turns: 24,
   max_page_turns: 50,
@@ -48,6 +51,8 @@ export interface RootServerSettings {
   run_state_retention_ms: number;
   /** Coalescing window for in-progress tool-call snapshots; 0 streams every delta. */
   tool_stream_interval_ms: number;
+  /** Maximum response-buffered SSE bytes per subscriber, before reconnecting to a snapshot. */
+  sse_max_buffered_bytes: number;
   /** Answer with `304` when a session snapshot is unchanged. */
   conditional_requests: boolean;
   /** Turns in a session snapshot; 0 returns the whole transcript. */
@@ -194,6 +199,18 @@ function normalizeRootServerSettings(
       `${path}: server.tool_stream_interval_ms must be a safe integer between 0 and ${MAX_TOOL_STREAM_INTERVAL_MS}`,
     );
   }
+  const sseMaxBufferedBytes =
+    value.sse_max_buffered_bytes ?? DEFAULT_ROOT_SERVER_SETTINGS.sse_max_buffered_bytes;
+  if (
+    typeof sseMaxBufferedBytes !== "number" ||
+    !Number.isSafeInteger(sseMaxBufferedBytes) ||
+    sseMaxBufferedBytes < MIN_SSE_BUFFERED_BYTES ||
+    sseMaxBufferedBytes > MAX_SSE_BUFFERED_BYTES
+  ) {
+    throw new ConfigError(
+      `${path}: server.sse_max_buffered_bytes must be a safe integer between ${MIN_SSE_BUFFERED_BYTES} and ${MAX_SSE_BUFFERED_BYTES}`,
+    );
+  }
   const conditionalRequests =
     value.conditional_requests ?? DEFAULT_ROOT_SERVER_SETTINGS.conditional_requests;
   if (typeof conditionalRequests !== "boolean") {
@@ -253,6 +270,7 @@ function normalizeRootServerSettings(
     max_body_bytes: maxBodyBytes,
     run_state_retention_ms: runStateRetentionMs,
     tool_stream_interval_ms: toolStreamIntervalMs,
+    sse_max_buffered_bytes: sseMaxBufferedBytes,
     conditional_requests: conditionalRequests,
     snapshot_turns: snapshotTurns,
     max_page_turns: maxPageTurns,

@@ -111,6 +111,33 @@ test("a subscriber that attaches mid-run replays the newest message, then receiv
   registry.clear();
 });
 
+test("replays the latest usage summary when a subscriber reconnects", () => {
+  const registry = new SessionRunRegistry(60_000);
+  const run = registry.begin("session1", undefined, "web-turn-1", new AbortController());
+  const firstUsage = {completed_responses: 1, responses_with_usage: 0, turn_count: 1, history_partial: false};
+  const latestUsage = {completed_responses: 2, responses_with_usage: 1, turn_count: 1, history_partial: false};
+  run.publish("usage", {usage: firstUsage});
+  run.publish("usage", {usage: latestUsage});
+  run.publishMessage(message("web-turn-1", "partial", "streaming"));
+
+  const liveEvents: {event: string; data: unknown}[] = [];
+  run.subscribe(event => liveEvents.push(event));
+  assert.deepEqual(liveEvents.map(event => event.event), ["ui.message", "usage"]);
+  assert.deepEqual(liveEvents[1]?.data, {usage: latestUsage});
+
+  const final = message("web-turn-1", "answer", "complete");
+  run.finish("completed", [
+    {event: "ui.message", data: {message: final}},
+    {event: "completed", data: {message: final, committed: true}},
+    {event: "done", data: {}},
+  ], final);
+  const replayedEvents: {event: string; data: unknown}[] = [];
+  run.subscribe(event => replayedEvents.push(event));
+  assert.deepEqual(replayedEvents.map(event => event.event), ["usage", "ui.message", "completed", "done"]);
+  assert.deepEqual(replayedEvents[0]?.data, {usage: latestUsage});
+  registry.clear();
+});
+
 test("a subscriber that attaches after the run ended replays the terminal events", () => {
   const registry = new SessionRunRegistry(60_000);
   const run = registry.begin("session1", undefined, "web-turn-1", new AbortController());

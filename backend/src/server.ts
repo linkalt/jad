@@ -67,6 +67,7 @@ import {WebUiSessionViewCache} from "./plugins/web-ui/view-cache.js";
 import { SessionRunRegistry, type SessionRun } from "./run-registry.js";
 import { collectSessionFiles } from "./session-files.js";
 import { MessageStreamEmitter } from "./stream-emitter.js";
+import {writeSse} from "./sse-writer.js";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SESSION_ROOT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -85,6 +86,8 @@ export interface AgentServerOptions {
   runStateRetentionMs?: number;
   /** Coalescing window for in-progress tool-call snapshots; 0 streams every delta. */
   toolStreamIntervalMs?: number;
+  /** Maximum queued SSE response bytes per subscriber before it must resynchronize. */
+  sseMaxBufferedBytes?: number;
   /** Answer with `304` when a session snapshot is unchanged. */
   conditionalRequests?: boolean;
   /** Turns in a session snapshot; 0 returns the whole transcript. */
@@ -212,25 +215,25 @@ async function sessionStateVersion(
   paths: SessionStatePaths,
   runs: readonly WebUiSessionRun[],
 ): Promise<string> {
-  const parts: string[] = [];
-  for (const path of [
+  // These six metadata reads are independent. Keep the fan-out bounded to this
+  // fixed per-session set while avoiding six serial filesystem round-trips.
+  const parts = await Promise.all([
     paths.messages,
     paths.messagesBackup,
     paths.compactionCache,
     paths.usageCache,
     paths.setting,
     paths.model,
-  ]) {
+  ].map(async (path) => {
     // A missing file is a state of its own: the payload omits whatever it holds.
-    let part = "-";
     try {
       const info = await stat(path);
-      part = `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+      return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
     } catch {
       // Keep the placeholder.
+      return "-";
     }
-    parts.push(part);
-  }
+  }));
   // A run starts and stops without touching a file; every profile's run is part
   // of the fingerprint, because the list carries all of them.
   parts.push(
@@ -435,17 +438,6 @@ function parseTurnsParameter(value: string | null): number | undefined {
   return parsed;
 }
 
-function writeSse(response: ServerResponse, event: string, value: unknown): void {
-  if (response.writableEnded || response.destroyed) {
-    return;
-  }
-  try {
-    response.write(`event: ${event}\ndata: ${JSON.stringify(value)}\n\n`);
-  } catch {
-    // A disconnected browser must not abort the provider request or persistence.
-  }
-}
-
 async function readJsonBody(
   request: IncomingMessage,
   maxBodyBytes: number,
@@ -617,6 +609,7 @@ class AgentHttpApplication {
   };
   private readonly maxBodyBytes: number;
   private readonly toolStreamIntervalMs: number;
+  private readonly sseMaxBufferedBytes: number;
   private readonly conditionalRequests: boolean;
   private readonly snapshotTurns: number;
   private readonly maxPageTurns: number;
@@ -646,6 +639,8 @@ class AgentHttpApplication {
     this.maxBodyBytes = options.maxBodyBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.max_body_bytes;
     this.toolStreamIntervalMs =
       options.toolStreamIntervalMs ?? DEFAULT_ROOT_SERVER_SETTINGS.tool_stream_interval_ms;
+    this.sseMaxBufferedBytes =
+      options.sseMaxBufferedBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.sse_max_buffered_bytes;
     this.conditionalRequests =
       options.conditionalRequests ?? DEFAULT_ROOT_SERVER_SETTINGS.conditional_requests;
     this.snapshotTurns = options.snapshotTurns ?? DEFAULT_ROOT_SERVER_SETTINGS.snapshot_turns;
@@ -856,8 +851,10 @@ class AgentHttpApplication {
     } catch (error) {
       if (response.headersSent) {
         if (!response.writableEnded && !response.destroyed) {
-          writeSse(response, "error", { message: errorMessage(error) });
-          response.end();
+          writeSse(response, "error", { message: errorMessage(error) }, this.sseMaxBufferedBytes);
+          if (!response.writableEnded && !response.destroyed) {
+            response.end();
+          }
         }
         return;
       }
@@ -1317,21 +1314,21 @@ class AgentHttpApplication {
 
     const run = this.runs.current(handle.location.ref, handle.profile);
     if (run === undefined) {
-      writeSse(response, "idle", {});
+      writeSse(response, "idle", {}, this.sseMaxBufferedBytes);
       response.end();
       return;
     }
 
-    writeSse(response, "run", run.summary());
+    writeSse(response, "run", run.summary(), this.sseMaxBufferedBytes);
     let detach = (): void => {};
     response.once("close", () => detach());
     detach = run.subscribe((event) => {
-      writeSse(response, event.event, event.data);
-      if (event.event === "done") {
+      writeSse(response, event.event, event.data, this.sseMaxBufferedBytes);
+      if (event.event === "done" && !response.writableEnded && !response.destroyed) {
         response.end();
       }
     });
-    if (run.status !== "running") {
+    if (run.status !== "running" && !response.writableEnded && !response.destroyed) {
       // The retained terminal events were replayed synchronously; the stream is
       // complete.
       response.end();
@@ -1733,8 +1730,8 @@ class AgentHttpApplication {
     // The response that started the run is one subscriber among others, so a
     // second tab (or the same tab after a reload) can attach to the same run.
     const detach = started.run.subscribe((event) => {
-      writeSse(response, event.event, event.data);
-      if (event.event === "done") {
+      writeSse(response, event.event, event.data, this.sseMaxBufferedBytes);
+      if (event.event === "done" && !response.writableEnded && !response.destroyed) {
         response.end();
       }
     });
@@ -1914,6 +1911,8 @@ export async function startAgentServer(
       options.runStateRetentionMs ?? serverSettings.run_state_retention_ms,
     toolStreamIntervalMs:
       options.toolStreamIntervalMs ?? serverSettings.tool_stream_interval_ms,
+    sseMaxBufferedBytes:
+      options.sseMaxBufferedBytes ?? serverSettings.sse_max_buffered_bytes,
     conditionalRequests:
       options.conditionalRequests ?? serverSettings.conditional_requests,
     snapshotTurns: options.snapshotTurns ?? serverSettings.snapshot_turns,

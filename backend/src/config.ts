@@ -3,7 +3,13 @@ import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-import {CURSOR_CACHE_FILE, HISTORY_CACHE_FILE, USAGE_CACHE_FILE} from "./persistence.js";
+import {
+  CURSOR_CACHE_FILE,
+  DEFAULT_CURSOR_CACHE_CHECKPOINT_BYTES,
+  HISTORY_CACHE_FILE,
+  MAX_CURSOR_CACHE_CHECKPOINT_BYTES,
+  USAGE_CACHE_FILE,
+} from "./persistence.js";
 import type {DurabilityMode, JsonRecord, ResponseMetadataMode} from "./persistence.js";
 import {
   SPILL_PLACEHOLDERS,
@@ -367,6 +373,7 @@ export interface PersistenceSettings extends JsonRecord {
   durability: DurabilityMode;
   max_item_bytes: number;
   response_metadata: ResponseMetadataMode;
+  cursor_cache_checkpoint_bytes: number;
 }
 
 export type PromptRole = "system" | "developer";
@@ -798,11 +805,24 @@ function normalizePersistence(
   if (responseMetadata !== "minimal" && responseMetadata !== "full") {
     throw new ConfigError(`${path}: persistence.response_metadata must be minimal or full`);
   }
+  const cursorCacheCheckpointBytes =
+    persistence.cursor_cache_checkpoint_bytes ?? DEFAULT_CURSOR_CACHE_CHECKPOINT_BYTES;
+  if (
+    typeof cursorCacheCheckpointBytes !== "number" ||
+    !Number.isSafeInteger(cursorCacheCheckpointBytes) ||
+    cursorCacheCheckpointBytes < 1 ||
+    cursorCacheCheckpointBytes > MAX_CURSOR_CACHE_CHECKPOINT_BYTES
+  ) {
+    throw new ConfigError(
+      `${path}: persistence.cursor_cache_checkpoint_bytes must be a safe integer between 1 and ${MAX_CURSOR_CACHE_CHECKPOINT_BYTES}`,
+    );
+  }
   return {
     ...persistence,
     durability,
     max_item_bytes: maxItemBytes,
     response_metadata: responseMetadata,
+    cursor_cache_checkpoint_bytes: cursorCacheCheckpointBytes,
   } as PersistenceSettings;
 }
 
