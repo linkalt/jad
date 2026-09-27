@@ -4070,13 +4070,6 @@ function App() {
             snapshot,
             id: sessionUiId(snapshot, initialSessions),
           }));
-          setDetachedRunSessionIds(current =>
-            reconcileDetachedRunSessionIds(
-              current,
-              liveRunKeys,
-            ),
-          );
-          const activeRunSessionId = activeRunSessionIdRef.current;
           // Every view of these sessions that has a run: the stored default's,
           // plus one per profile the server reports.
           const liveRunKeys = liveItems.flatMap(item => [
@@ -4086,6 +4079,13 @@ function App() {
               status: run.status,
             })),
           ]);
+          setDetachedRunSessionIds(current =>
+            reconcileDetachedRunSessionIds(
+              current,
+              liveRunKeys,
+            ),
+          );
+          const activeRunSessionId = activeRunSessionIdRef.current;
           setThreads(current => {
             const next = {...current};
             let hasChange = false;
