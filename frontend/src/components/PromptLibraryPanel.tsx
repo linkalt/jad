@@ -1,91 +1,111 @@
-import {useCallback, useState} from 'react';
-import {Button, HStack, List, ListItem, Text, TextInput, Token, VStack} from '@astryxdesign/core';
-import {TextArea} from '@astryxdesign/core/TextArea';
-import {Selector} from '@astryxdesign/core/Selector';
-import type {ResizableRegion} from '@astryxdesign/core/Resizable';
-import type {PromptCategory, PromptTemplate} from '../promptLibrary';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {
-  createPromptId,
-  loadPrompts,
-  PROMPT_CATEGORIES,
-  savePrompts,
-  seedLibrary,
-} from '../promptStore';
+  Button,
+  HStack,
+  List,
+  ListItem,
+  Text,
+  VStack,
+} from '@astryxdesign/core';
+import type {ResizableRegion} from '@astryxdesign/core/Resizable';
+import {
+  fetchRootLibrary,
+  fetchRootLibraryAsset,
+  type RootLibraryAsset,
+  type RootLibraryAssetSummary,
+  type RootLibraryCatalog,
+} from '../api';
 import {FloatingPanel} from './FloatingPanel';
+
+type LibraryTab = 'prompts' | 'templates' | 'skills';
 
 type PromptLibraryPanelProps = {
   region: ResizableRegion;
   onClose: () => void;
-  /** Called with the chosen prompt when a row is used. */
-  onUsePrompt: (prompt: PromptTemplate) => void;
+  onUsePrompt: (asset: RootLibraryAsset) => void;
+  onUseTemplate: (asset: RootLibraryAsset) => void;
+  onUseSkill: (asset: RootLibraryAsset) => void;
 };
 
-type PanelMode = 'browse' | 'manage';
+const LIBRARY_TABS: ReadonlyArray<{id: LibraryTab; label: string}> = [
+  {id: 'prompts', label: 'Prompts'},
+  {id: 'templates', label: 'Templates'},
+  {id: 'skills', label: 'Skills'},
+];
 
-/**
- * First occupant of the shared floating panel shell, now with an owner.
- *
- * Prompts are user content: they are stored through `promptStore` (localStorage)
- * rather than shipped as constants, and the panel can add, edit, delete and
- * restore them. Two modes keep the row contract clean — in `browse` a row's
- * click loads the prompt into the composer; in `manage` the rows are inert and
- * carry their own Edit/Delete buttons, so no interactive control ever nests
- * inside the list item's own clickable surface.
- */
+/** Reads the shared, file-backed library; the root setting and Markdown are refreshed on demand. */
 export function PromptLibraryPanel({
   region,
   onClose,
   onUsePrompt,
+  onUseTemplate,
+  onUseSkill,
 }: PromptLibraryPanelProps) {
-  const [prompts, setPrompts] = useState<PromptTemplate[]>(loadPrompts);
-  const [mode, setMode] = useState<PanelMode>('browse');
-  // A draft with an empty id is a new prompt; otherwise it edits that row.
-  const [draft, setDraft] = useState<PromptTemplate | null>(null);
+  const [catalog, setCatalog] = useState<RootLibraryCatalog | null>(null);
+  const [tab, setTab] = useState<LibraryTab>('prompts');
+  const [isLoading, setIsLoading] = useState(false);
+  const [usingId, setUsingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
 
-  const commit = useCallback((next: PromptTemplate[]) => {
-    setPrompts(next);
-    savePrompts(next);
+  const refresh = useCallback(async () => {
+    requestRef.current?.abort();
+    const request = new AbortController();
+    requestRef.current = request;
+    setIsLoading(true);
+    try {
+      const next = await fetchRootLibrary(request.signal);
+      if (!request.signal.aborted) {
+        setCatalog(next);
+        setError(null);
+      }
+    } catch (reason) {
+      if (!request.signal.aborted) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
+    } finally {
+      if (!request.signal.aborted) setIsLoading(false);
+    }
   }, []);
 
-  const isValidDraft =
-    draft !== null && draft.title.trim().length > 0 && draft.body.trim().length > 0;
+  useEffect(() => {
+    void refresh();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      requestRef.current?.abort();
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [refresh]);
 
-  const saveDraft = useCallback(() => {
-    if (draft === null) {
-      return;
+  const items: RootLibraryAssetSummary[] = catalog?.[tab] ?? [];
+  const count = catalog === null
+    ? 0
+    : catalog.prompts.length + catalog.templates.length + catalog.skills.length;
+
+  const useAsset = useCallback(async (summary: RootLibraryAssetSummary) => {
+    setUsingId(summary.id);
+    setError(null);
+    try {
+      // Detail is read separately so selecting an item always picks up the latest file contents.
+      const asset = await fetchRootLibraryAsset(summary.kind, summary.id);
+      if (asset.kind === 'prompt') onUsePrompt(asset);
+      else if (asset.kind === 'template') onUseTemplate(asset);
+      else onUseSkill(asset);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setUsingId(null);
     }
-    const title = draft.title.trim();
-    const body = draft.body.trim();
-    if (title.length === 0 || body.length === 0) {
-      return;
-    }
-    const next =
-      draft.id.length > 0
-        ? prompts.map(prompt =>
-            prompt.id === draft.id ? {...prompt, title, body, category: draft.category} : prompt,
-          )
-        : [
-            ...prompts,
-            {id: createPromptId(title, prompts), title, category: draft.category, body},
-          ];
-    commit(next);
-    setDraft(null);
-    setMode('browse');
-  }, [commit, draft, prompts]);
+  }, [onUsePrompt, onUseSkill, onUseTemplate]);
 
-  const deletePrompt = useCallback(
-    (id: string) => {
-      commit(prompts.filter(prompt => prompt.id !== id));
-    },
-    [commit, prompts],
-  );
-
-  const subtitle =
-    draft !== null
-      ? draft.id.length > 0
-        ? 'Editing prompt'
-        : 'New prompt'
-      : `${prompts.length} ${prompts.length === 1 ? 'reusable prompt' : 'reusable prompts'}`;
+  const subtitle = catalog === null
+    ? 'Shared Markdown library'
+    : `${count} shared ${count === 1 ? 'item' : 'items'}`;
 
   return (
     <FloatingPanel
@@ -96,138 +116,71 @@ export function PromptLibraryPanel({
       region={region}
       onClose={onClose}
     >
-      {draft !== null ? (
-        <VStack gap={4}>
-          <TextInput
-            label="Title"
-            placeholder="What this prompt does"
-            value={draft.title}
-            onChange={title => setDraft(current => (current ? {...current, title} : current))}
+      <VStack gap={4}>
+        <HStack align="center" justify="between" gap={2}>
+          <HStack align="center" gap={1}>
+            {LIBRARY_TABS.map(option => (
+              <Button
+                key={option.id}
+                label={option.label}
+                variant={tab === option.id ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => setTab(option.id)}
+              />
+            ))}
+          </HStack>
+          <Button
+            label={isLoading ? 'Refreshing…' : 'Refresh'}
+            variant="ghost"
+            size="sm"
+            isDisabled={isLoading}
+            onClick={() => void refresh()}
           />
-          <Selector
-            label="Category"
-            options={[...PROMPT_CATEGORIES]}
-            value={draft.category}
-            onChange={value =>
-              setDraft(current =>
-                current ? {...current, category: value as PromptCategory} : current,
-              )
+        </HStack>
+        <Text type="supporting" color="secondary">
+          Edit the Markdown files or directory arrays in the global setting.json; refresh to load saved changes.
+        </Text>
+        {error !== null ? (
+          <Text type="supporting" color="secondary">{error}</Text>
+        ) : null}
+        {isLoading && catalog === null ? (
+          <Text type="supporting" color="secondary">Loading shared library…</Text>
+        ) : items.length === 0 ? (
+          <Text type="supporting" color="secondary">
+            No {tab} found. Configure libraries.{tab === 'prompts' ? 'prompt_dirs' : tab === 'templates' ? 'template_dirs' : 'skill_dirs'} in the global setting.json.
+          </Text>
+        ) : (
+          <List
+            hasDividers
+            header={
+              <Text type="supporting" color="secondary">
+                {tab === 'templates'
+                  ? 'Selecting a template inserts its full text into the composer.'
+                  : tab === 'skills'
+                    ? 'Selecting a skill adds its SKILL.md instructions as a badge.'
+                    : 'Selecting a prompt inserts its text; long prompts use the composer badge threshold.'}
+              </Text>
             }
-          />
-          <TextArea
-            label="Prompt"
-            rows={8}
-            placeholder="The text that lands in the composer"
-            value={draft.body}
-            onChange={body => setDraft(current => (current ? {...current, body} : current))}
-          />
-          <HStack align="center" gap={2}>
-            <Button
-              label="Save prompt"
-              variant="primary"
-              size="sm"
-              isDisabled={!isValidDraft}
-              onClick={saveDraft}
-            />
-            <Button
-              label="Cancel"
-              variant="ghost"
-              size="sm"
-              onClick={() => setDraft(null)}
-            />
-            {draft.id.length > 0 ? (
-              <Button
-                label="Delete"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  deletePrompt(draft.id);
-                  setDraft(null);
-                }}
-              />
-            ) : null}
-          </HStack>
-        </VStack>
-      ) : (
-        <VStack gap={4}>
-          <HStack align="center" justify="between" gap={2}>
-            <HStack align="center" gap={1}>
-              <Button
-                label="New prompt"
-                variant="secondary"
-                size="sm"
-                onClick={() =>
-                  setDraft({id: '', title: '', category: 'Writing', body: ''})
+          >
+            {items.map(item => (
+              <ListItem
+                key={item.id}
+                label={item.name}
+                description={
+                  <VStack gap={1}>
+                    {item.description.length > 0 ? (
+                      <Text type="supporting" color="secondary">{item.description}</Text>
+                    ) : null}
+                    <Text type="supporting" color="secondary">{item.source}</Text>
+                  </VStack>
                 }
+                endContent={usingId === item.id ? <Text type="supporting">Loading…</Text> : undefined}
+                onClick={() => void useAsset(item)}
               />
-              <Button
-                label={mode === 'manage' ? 'Done' : 'Manage'}
-                variant="ghost"
-                size="sm"
-                onClick={() => setMode(current => (current === 'manage' ? 'browse' : 'manage'))}
-              />
-            </HStack>
-            {mode === 'manage' ? (
-              <Button
-                label="Restore defaults"
-                variant="ghost"
-                size="sm"
-                onClick={() => commit(seedLibrary())}
-              />
-            ) : null}
-          </HStack>
-          {prompts.length === 0 ? (
-            <Text type="supporting" color="secondary">
-              No prompts saved. Add one with “New prompt”, or bring the starter set back
-              with “Manage” → “Restore defaults”.
-            </Text>
-          ) : (
-            <List
-              hasDividers
-              header={
-                <Text type="supporting" color="secondary">
-                  {mode === 'manage'
-                    ? 'Edit or delete a prompt.'
-                    : 'Select a prompt to load it into the composer.'}
-                </Text>
-              }
-            >
-              {prompts.map(prompt => (
-                <ListItem
-                  key={prompt.id}
-                  label={prompt.title}
-                  description={
-                    <Text type="supporting" color="secondary">
-                      {prompt.body}
-                    </Text>
-                  }
-                  endContent={
-                    mode === 'manage' ? (
-                      <HStack align="center" gap={1}>
-                        <Button
-                          label="Edit"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setDraft({...prompt})}
-                        />
-                        <Button
-                          label="Delete"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => deletePrompt(prompt.id)}
-                        />
-                      </HStack>
-                    ) : (
-                      <Token label={prompt.category} size="sm" />
-                    )
-                  }
-                  onClick={mode === 'manage' ? undefined : () => onUsePrompt(prompt)}
-                />
-              ))}
-            </List>
-          )}
-        </VStack>
-      )}
+            ))}
+          </List>
+        )}
+      </VStack>
     </FloatingPanel>
   );
 }

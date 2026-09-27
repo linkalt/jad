@@ -251,6 +251,76 @@ test("requires an API token and an explicitly allowed browser origin", async () 
   }
 });
 
+test("serves file-backed libraries with live setting and Markdown edits", async () => {
+  const globalRoot = await mkdtemp(join(tmpdir(), "agent-library-api-"));
+  const settingPath = join(globalRoot, "setting.json");
+  const promptRoot = join(globalRoot, ".agent/prompts");
+  const replacementRoot = join(globalRoot, "shared-prompts");
+  await mkdir(promptRoot, {recursive: true});
+  await mkdir(replacementRoot, {recursive: true});
+  const promptPath = join(promptRoot, "first.md");
+  await writeFile(promptPath, "---\nname: First prompt\n---\nInitial content.");
+  await writeFile(
+    settingPath,
+    JSON.stringify({
+      schema_version: 1,
+      session_roots: [],
+      libraries: {
+        prompt_dirs: [".agent/prompts"],
+        template_dirs: [],
+        skill_dirs: [],
+      },
+    }),
+  );
+  const running = createAgentServer({rootSettingPath: settingPath, environment: {}});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const base = `http://127.0.0.1:${address.port}/api/library`;
+    assert.equal((await globalThis.fetch(base)).status, 401);
+
+    const initialResponse = await fetch(base);
+    assert.equal(initialResponse.status, 200);
+    assert.equal(initialResponse.headers.get("cache-control"), "no-store");
+    const initial = (await initialResponse.json()) as {
+      prompts: Array<{id: string; name: string}>;
+      templates: unknown[];
+      skills: unknown[];
+    };
+    assert.deepEqual(initial.prompts.map((item) => item.name), ["First prompt"]);
+
+    await writeFile(promptPath, "---\nname: First prompt\n---\nUpdated content.");
+    const updatedBody = await fetch(`${base}/prompt/${initial.prompts[0]!.id}`);
+    assert.equal(updatedBody.status, 200);
+    assert.equal(((await updatedBody.json()) as {asset: {content: string}}).asset.content, "Updated content.");
+
+    await writeFile(join(replacementRoot, "second.md"), "Second prompt content.");
+    await writeFile(
+      settingPath,
+      JSON.stringify({
+        schema_version: 1,
+        session_roots: [],
+        libraries: {
+          prompt_dirs: [replacementRoot],
+          template_dirs: [],
+          skill_dirs: [],
+        },
+      }),
+    );
+    const reloaded = (await (await fetch(base)).json()) as {
+      prompts: Array<{name: string}>;
+    };
+    assert.deepEqual(reloaded.prompts.map((item) => item.name), ["second"]);
+  } finally {
+    await running.close();
+    await rm(globalRoot, {recursive: true, force: true});
+  }
+});
+
 test("preserves interleaved reasoning and assistant parts", () => {
   const normalizedRun = new WebUiNormalizedRun("interleaved-turn");
   const events = [

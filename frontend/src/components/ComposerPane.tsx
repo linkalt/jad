@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {ComponentProps, KeyboardEvent, ReactNode, SVGProps} from 'react';
 import {
+  Badge,
   ChatComposer,
   ChatComposerInput,
   HStack,
@@ -8,11 +9,17 @@ import {
   IconButton,
   useChatPasteAsToken,
 } from '@astryxdesign/core';
-import type {ChatComposerInputHandle} from '@astryxdesign/core';
+import type {ChatComposerInputHandle} from '@astryxdesign/core/Chat';
 import appConfig from '../config.json';
 import {fetchSessionFiles} from '../api';
 import {createComposerTriggers, resolveMentionFiles} from '../composer-triggers';
 import {loadDrafts, saveDrafts} from '../draftStore';
+import {
+  composerBadgeInsertionSeparator,
+  composerInsertionSeparator,
+  composerPlaceholderForDraft,
+  promptNeedsBadge,
+} from '../library-insertion';
 import {ComposerPreview} from './ComposerPreview';
 import {
   applyInlineMarker,
@@ -21,6 +28,12 @@ import {
   INLINE_MARKERS,
   LINK_KEY,
 } from './composerMarkdown';
+
+export type ComposerInsertActions = {
+  text: (value: string) => void;
+  prompt: (value: string, name: string) => void;
+  skill: (value: string, name: string) => void;
+};
 
 type ComposerPaneProps = {
   /** The session reference used for session-scoped features such as @ file search. */
@@ -45,7 +58,7 @@ type ComposerPaneProps = {
    * stay in this component — see the note below — so they cannot be set from
    * outside without a registered writer like this one.
    */
-  onRegisterInsert?: (insert: ((text: string) => void) | null) => void;
+  onRegisterInsert?: (insert: ComposerInsertActions | null) => void;
   drawer?: ReactNode;
   /** Content actions (attach, usage, compact), placed in the bottom action bar. */
   toolbarActions?: ReactNode;
@@ -70,6 +83,19 @@ function PreviewIcon(props: SVGProps<SVGSVGElement>) {
       <circle cx="12" cy="12" r="2.75" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
+}
+
+/** Put the caret at the end before using the input handle's cursor-based insert APIs. */
+function placeCaretAtEnd(root: HTMLElement | null): void {
+  const editable = findEditable(root);
+  const selection = window.getSelection();
+  if (!editable || !selection) return;
+
+  const range = document.createRange();
+  range.selectNodeContents(editable);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
 }
 
 /**
@@ -187,28 +213,70 @@ export function ComposerPane({
   );
 
   /**
-   * Append text to the active draft. Appending rather than replacing means a
-   * half-written message survives picking a prompt; an empty draft just becomes
-   * the text.
+   * Append through the Astryx input handle so existing inline badges remain
+   * rendered. The serialized value is still the full text sent with the user
+   * message, which preserves the existing transcript contract.
    */
-  const insertIntoDraft = useCallback(
-    (text: string) => {
-      setDrafts(current => {
-        const existing = current[draftKey] ?? '';
-        return {
-          ...current,
-          [draftKey]: existing ? `${existing}\n\n${text}` : text,
-        };
-      });
+  const insertAtEnd = useCallback(
+    (
+      insert: (input: ChatComposerInputHandle) => void,
+      separatorForDraft: (existing: string) => string = composerInsertionSeparator,
+    ) => {
+      const input = inputRef.current;
+      if (input === null) return;
+      window.getSelection()?.removeAllRanges();
+      input.focus();
+      // The handle inserts at the selection; force it to the end so a stale
+      // caret from before opening the library cannot replace the first line.
+      placeCaretAtEnd(inputRootRef.current);
+      const existing = input.getValue();
+      const separator = separatorForDraft(existing);
+      if (separator.length > 0) input.insertText(separator);
+      insert(input);
+      setDraft(draftKey, input.getValue());
       focusAfterInsertRef.current = true;
     },
-    [draftKey],
+    [draftKey, setDraft],
+  );
+
+  const insertText = useCallback(
+    (text: string) => insertAtEnd(input => input.insertText(text)),
+    [insertAtEnd],
+  );
+
+  const insertPrompt = useCallback(
+    (text: string, name: string) => {
+      if (promptNeedsBadge(text.length, appConfig.paste_as_token_enabled, appConfig.paste_as_token_threshold)) {
+        insertAtEnd(
+          input => input.insertToken({value: text, label: name}),
+          composerBadgeInsertionSeparator,
+        );
+      } else {
+        insertText(text);
+      }
+    },
+    [insertAtEnd, insertText],
+  );
+
+  const insertSkill = useCallback(
+    (text: string, name: string) =>
+      insertAtEnd(
+        input =>
+          input.insertToken({value: text, render: () => <Badge label={name} />}),
+        composerBadgeInsertionSeparator,
+      ),
+    [insertAtEnd],
+  );
+
+  const insertActions = useMemo(
+    () => ({text: insertText, prompt: insertPrompt, skill: insertSkill}),
+    [insertPrompt, insertSkill, insertText],
   );
 
   useEffect(() => {
-    onRegisterInsert?.(insertIntoDraft);
+    onRegisterInsert?.(insertActions);
     return () => onRegisterInsert?.(null);
-  }, [insertIntoDraft, onRegisterInsert]);
+  }, [insertActions, onRegisterInsert]);
 
   /**
    * Drafts are user content, so they outlive the tab: the newest draft is
@@ -253,6 +321,7 @@ export function ComposerPane({
         <ChatComposerInput
           ref={inputRootRef}
           handleRef={inputRef}
+          placeholder={composerPlaceholderForDraft(value, placeholder)}
           triggers={composerTriggers.length > 0 ? composerTriggers : undefined}
           onKeyDown={handleKeyDown}
           pasteAsToken={appConfig.paste_as_token_enabled ? pasteAsToken : false}

@@ -59,6 +59,7 @@ import {
   streamSessionRun,
   type SessionPage,
   type SessionSnapshot,
+  type RootLibraryAsset,
   type WebUiMessage,
   type WebUiMessageStep,
   type WebUiPart,
@@ -93,6 +94,7 @@ import {
 } from './web-ui-steps';
 import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
+import type {ComposerInsertActions} from './components/ComposerPane';
 import {ModelPicker} from './components/ModelPicker';
 import {SessionProfilePicker} from './components/SessionProfilePicker';
 import {FloatingPanel} from './components/FloatingPanel';
@@ -106,7 +108,6 @@ import {RunSettingsPanel} from './components/RunSettingsPanel';
 import {SessionSearchPanel} from './components/SessionSearchPanel';
 import {EarlierMessagesControl, useTranscriptWindow} from './components/TranscriptWindow';
 import {UsageDetailsDrawer} from './components/UsageDetailsDrawer';
-import type {PromptTemplate} from './promptLibrary';
 import {
   ResizeHandle,
   useResizable,
@@ -251,10 +252,9 @@ const styles = stylex.create({
   toolCallsFlush: {
     marginBlockStart: spacingVars['--spacing-0'],
   },
-  // Off-screen probes used only to resolve the fonts a tool row renders with.
+  // Hidden probes used only to resolve the fonts a tool row renders with.
   textProbe: {
     position: 'absolute',
-    insetInlineStart: '-10000px',
     insetBlockStart: 0,
     visibility: 'hidden',
     pointerEvents: 'none',
@@ -2451,14 +2451,11 @@ function App() {
   });
 
   // Filled by ComposerPane, which owns the drafts. Views outside the composer
-  // (the prompt library) write through this instead of lifting draft state back
-  // into App, which is what made typing slow on long sessions.
-  const insertIntoComposerRef = useRef<((text: string) => void) | null>(null);  const registerComposerInsert = useCallback(
-    (insert: ((text: string) => void) | null) => {
-      insertIntoComposerRef.current = insert;
-    },
-    [],
-  );
+  // write through this instead of lifting draft state back into App.
+  const insertIntoComposerRef = useRef<ComposerInsertActions | null>(null);
+  const registerComposerInsert = useCallback((insert: ComposerInsertActions | null) => {
+    insertIntoComposerRef.current = insert;
+  }, []);
   const toggleLeftPanel = useCallback(() => {
     setLeftPanel(current => (current ? null : lastLeftPanel));
   }, [lastLeftPanel]);
@@ -2466,8 +2463,14 @@ function App() {
     setLastLeftPanel(panel);
     setLeftPanel(current => (current === panel ? null : panel));
   }, []);
-  const usePrompt = useCallback((prompt: PromptTemplate) => {
-    insertIntoComposerRef.current?.(prompt.body);
+  const usePrompt = useCallback((prompt: RootLibraryAsset) => {
+    insertIntoComposerRef.current?.prompt(prompt.content, prompt.name);
+  }, []);
+  const useTemplate = useCallback((template: RootLibraryAsset) => {
+    insertIntoComposerRef.current?.text(template.content);
+  }, []);
+  const useSkill = useCallback((skill: RootLibraryAsset) => {
+    insertIntoComposerRef.current?.skill(skill.content, skill.name);
   }, []);
   /**
    * The quote action for a selection in the conversation: the draft it would
@@ -2480,7 +2483,7 @@ function App() {
   const dismissQuote = useCallback(() => setQuoteTarget(null), []);
   const quoteSelectionIntoComposer = useCallback(() => {
     if (quoteTarget !== null) {
-      insertIntoComposerRef.current?.(quoteTarget.draft);
+      insertIntoComposerRef.current?.text(quoteTarget.draft);
     }
     setQuoteTarget(null);
   }, [quoteTarget]);
@@ -2535,7 +2538,7 @@ function App() {
         return `**Attached: ${file.name}**\n\n\`\`\`\n${body}\n\`\`\``;
       }),
     );
-    insertIntoComposerRef.current?.(blocks.join('\n\n'));
+    insertIntoComposerRef.current?.text(blocks.join('\n\n'));
   }, []);
   const runAbortRef = useRef<AbortController | null>(null);
   const stopPendingRef = useRef(false);
@@ -4728,6 +4731,8 @@ function App() {
             region={leftPanelRegion}
             onClose={() => setLeftPanel(null)}
             onUsePrompt={usePrompt}
+            onUseTemplate={useTemplate}
+            onUseSkill={useSkill}
           />
         )}
         {leftPanel === 'search' && (

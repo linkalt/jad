@@ -29,6 +29,18 @@ export const DEFAULT_ROOT_SERVER_SETTINGS = {
   allowed_origins: [] as string[],
 } as const;
 
+export const DEFAULT_ROOT_LIBRARY_DIRECTORIES = {
+  prompt_dirs: [".agent/prompts"],
+  template_dirs: [".agent/templates"],
+  skill_dirs: [".agent/skills"],
+} as const;
+
+export interface RootLibraryDirectories {
+  prompt_dirs: string[];
+  template_dirs: string[];
+  skill_dirs: string[];
+}
+
 export interface RootServerSettings {
   host: string;
   port: number;
@@ -69,6 +81,7 @@ interface RootSettingRecord {
   session_roots?: unknown;
   session_paths?: unknown;
   server?: unknown;
+  libraries?: unknown;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -376,6 +389,63 @@ async function findRootSettingPath(
     resolve(process.cwd(), "setting.json"),
     resolve(process.cwd(), "../setting.json"),
   ]);
+}
+
+async function findRootLibrarySettingPath(
+  options: SessionRootOptions,
+): Promise<string | undefined> {
+  const environment = options.environment ?? process.env;
+  const configuredSettingPath = options.rootSettingPath?.trim() || environment.JAD_ROOT_SETTING_PATH?.trim();
+  if (configuredSettingPath) {
+    return resolve(configuredSettingPath);
+  }
+  if (options.sessionsDir !== undefined || environment.JAD_SESSIONS_DIR?.trim()) {
+    return undefined;
+  }
+  return firstExistingPath([
+    resolve(process.cwd(), "setting.json"),
+    resolve(process.cwd(), "../setting.json"),
+  ]);
+}
+
+function normalizeRootLibraryDirectories(
+  value: unknown,
+  settingPath: string,
+  globalRoot: string,
+): RootLibraryDirectories {
+  if (value !== undefined && !isRecord(value)) {
+    throw new ConfigError(`${settingPath}: libraries must be an object`);
+  }
+  const libraries = isRecord(value) ? value : {};
+  const normalize = (key: keyof RootLibraryDirectories): string[] => {
+    const configured = libraries[key] ?? DEFAULT_ROOT_LIBRARY_DIRECTORIES[key];
+    if (!Array.isArray(configured)) {
+      throw new ConfigError(`${settingPath}: libraries.${key} must be an array of directories`);
+    }
+    const directories = configured.map((entry, index) => {
+      const path = requiredString(entry, `libraries.${key}[${index}]`, settingPath);
+      return resolve(globalRoot, path);
+    });
+    return [...new Set(directories)];
+  };
+  return {
+    prompt_dirs: normalize("prompt_dirs"),
+    template_dirs: normalize("template_dirs"),
+    skill_dirs: normalize("skill_dirs"),
+  };
+}
+
+/**
+ * Re-reads global library directories on every call so changes to setting.json
+ * take effect without restarting the backend.
+ */
+export async function loadRootLibraryDirectories(
+  options: SessionRootOptions = {},
+): Promise<RootLibraryDirectories> {
+  const settingPath = await findRootLibrarySettingPath(options);
+  const globalRoot = settingPath === undefined ? resolve(process.cwd()) : dirname(settingPath);
+  const setting = settingPath === undefined ? {} : await readRootSetting(settingPath);
+  return normalizeRootLibraryDirectories(setting.libraries, settingPath ?? globalRoot, globalRoot);
 }
 
 export async function loadRootServerSettings(

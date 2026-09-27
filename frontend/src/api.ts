@@ -418,6 +418,87 @@ export async function fetchSessionMessage(
   return value.message as unknown as WebUiMessage;
 }
 
+export type RootLibraryKind = 'prompt' | 'template' | 'skill';
+
+export interface RootLibraryAssetSummary {
+  id: string;
+  kind: RootLibraryKind;
+  name: string;
+  description: string;
+  source: string;
+}
+
+export interface RootLibraryAsset extends RootLibraryAssetSummary {
+  content: string;
+}
+
+export interface RootLibraryCatalog {
+  prompts: RootLibraryAssetSummary[];
+  templates: RootLibraryAssetSummary[];
+  skills: RootLibraryAssetSummary[];
+}
+
+function isRootLibraryAssetSummary(
+  value: unknown,
+  kind: RootLibraryKind,
+): value is RootLibraryAssetSummary {
+  return isRecord(value) &&
+    typeof value.id === 'string' &&
+    value.kind === kind &&
+    typeof value.name === 'string' &&
+    typeof value.description === 'string' &&
+    typeof value.source === 'string';
+}
+
+export async function fetchRootLibrary(signal?: AbortSignal): Promise<RootLibraryCatalog> {
+  const response = await authenticatedFetch(apiUrl('/library'), {signal, cache: 'no-store'});
+  if (!response.ok) throw new Error(await readError(response));
+  const value: unknown = await response.json();
+  if (!isRecord(value)) throw new Error('the server returned invalid library data');
+  const prompts = value.prompts;
+  const templates = value.templates;
+  const skills = value.skills;
+  if (
+    !Array.isArray(prompts) || !prompts.every(item => isRootLibraryAssetSummary(item, 'prompt')) ||
+    !Array.isArray(templates) || !templates.every(item => isRootLibraryAssetSummary(item, 'template')) ||
+    !Array.isArray(skills) || !skills.every(item => isRootLibraryAssetSummary(item, 'skill'))
+  ) {
+    throw new Error('the server returned invalid library data');
+  }
+  return {prompts, templates, skills};
+}
+
+export async function fetchRootLibraryAsset(
+  kind: RootLibraryKind,
+  id: string,
+  signal?: AbortSignal,
+): Promise<RootLibraryAsset> {
+  const response = await authenticatedFetch(
+    apiUrl(`/library/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`),
+    {signal, cache: 'no-store'},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  const value: unknown = await response.json();
+  if (!isRecord(value) || !isRecord(value.asset)) {
+    throw new Error('the server returned invalid library item data');
+  }
+  const asset = value.asset;
+  if (
+    !isRootLibraryAssetSummary(asset, kind) ||
+    typeof asset.content !== 'string'
+  ) {
+    throw new Error('the server returned invalid library item data');
+  }
+  return {
+    id: asset.id,
+    kind: asset.kind,
+    name: asset.name,
+    description: asset.description,
+    source: asset.source,
+    content: asset.content,
+  };
+}
+
 export interface SessionFileListing {
   /** cwd-relative paths, shallow files first. */
   files: string[];

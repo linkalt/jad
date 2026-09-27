@@ -49,7 +49,9 @@ import {
   loadRootServerSettings,
   loadSessionRoots,
   type SessionRoot,
+  type SessionRootOptions,
 } from "./session-roots.js";
+import {listRootLibrary, readRootLibraryAsset} from "./content-library.js";
 import {WebUiNormalizedRun} from "./plugins/web-ui/normalize-web-ui.js";
 import { capWebUiMessages } from "./plugins/web-ui/part-cap-web-ui.js";
 import { sessionSettingsFromConfig } from "./plugins/web-ui/setting-web-ui.js";
@@ -608,6 +610,7 @@ class AgentHttpApplication {
   /** Transcript rewrites are serialized with runs and compactions for one profile row. */
   private readonly changingTranscripts = new Set<string>();
   private readonly sessionRoots: Promise<SessionRoot[]>;
+  private readonly rootLibraryOptions: SessionRootOptions;
   private readonly sessionOptions: {
     client?: OpenAI;
     environment?: NodeJS.ProcessEnv;
@@ -630,11 +633,12 @@ class AgentHttpApplication {
     }
     this.apiTokenHash = createHash("sha256").update(token).digest();
     this.allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_ROOT_SERVER_SETTINGS.allowed_origins);
-    this.sessionRoots = loadSessionRoots({
-      sessionsDir: options.sessionsDir,
-      rootSettingPath: options.rootSettingPath,
-      environment: options.environment,
-    });
+    this.rootLibraryOptions = {
+      ...(options.sessionsDir === undefined ? {} : {sessionsDir: options.sessionsDir}),
+      ...(options.rootSettingPath === undefined ? {} : {rootSettingPath: options.rootSettingPath}),
+      ...(options.environment === undefined ? {} : {environment: options.environment}),
+    };
+    this.sessionRoots = loadSessionRoots(this.rootLibraryOptions);
     this.sessionOptions = {
       ...(options.client ? { client: options.client } : {}),
       environment: environmentWithoutApiToken(environment),
@@ -685,6 +689,33 @@ class AgentHttpApplication {
       if (request.method === "GET" && url.pathname === "/api/health") {
         sendJson(response, 200, { ok: true });
         return;
+      }
+
+      if (segments[0] === "api" && segments[1] === "library") {
+        if (!isAuthorized(request, this.apiTokenHash)) {
+          response.setHeader("WWW-Authenticate", 'Bearer realm="agent-harness"');
+          throw new HttpError(401, "API token required");
+        }
+        response.setHeader("Cache-Control", "no-store");
+        if (request.method === "GET" && segments.length === 2) {
+          sendJson(response, 200, await listRootLibrary(this.rootLibraryOptions));
+          return;
+        }
+        if (request.method === "GET" && segments.length === 4) {
+          const kindValue = segments[2];
+          if (kindValue !== "prompt" && kindValue !== "template" && kindValue !== "skill") {
+            throw new HttpError(404, "not found");
+          }
+          const asset = await readRootLibraryAsset(
+            kindValue,
+            segments[3] ?? "",
+            this.rootLibraryOptions,
+          );
+          if (asset === undefined) throw new HttpError(404, "library item not found");
+          sendJson(response, 200, {asset});
+          return;
+        }
+        throw new HttpError(404, "not found");
       }
 
       if (segments[0] !== "api" || segments[1] !== "sessions") {
