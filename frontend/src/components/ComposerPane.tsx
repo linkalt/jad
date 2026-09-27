@@ -15,10 +15,20 @@ import {fetchSessionFiles} from '../api';
 import {createComposerTriggers, resolveMentionFiles} from '../composer-triggers';
 import {loadDrafts, saveDrafts} from '../draftStore';
 import {
-  composerBadgeInsertionSeparator,
-  composerInsertionSeparator,
+  composerBadgeInsertionPlan,
+  composerBadgeSharesLine,
+  composerBadgeStartsDraft,
+  composerCaretAfterGlue,
   composerPlaceholderForDraft,
+  composerTail,
+  composerTextInsertionPlan,
   promptNeedsBadge,
+} from '../library-insertion';
+import type {
+  ComposerInsertionPlan,
+  ComposerLineBefore,
+  ComposerTail,
+  ComposerTailNode,
 } from '../library-insertion';
 import {ComposerPreview} from './ComposerPreview';
 import {
@@ -98,6 +108,256 @@ function placeCaretAtEnd(root: HTMLElement | null): void {
   selection.addRange(range);
 }
 
+/** Select the whole draft, so an insert on an empty draft replaces the placeholder break. */
+function selectComposerContents(editable: HTMLElement): void {
+  const selection = window.getSelection();
+  if (!selection) return;
+
+  const range = document.createRange();
+  range.selectNodeContents(editable);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+/**
+ * Drop the nodes Chromium keeps for the caret's empty last line.
+ *
+ * An insert must take the caret's place rather than stack another blank line on
+ * top of the placeholder, so the draft is stripped of them before the payload is
+ * measured and placed.
+ */
+function clearTrailingPlaceholder(editable: HTMLElement | null): void {
+  if (editable === null) return;
+  for (;;) {
+    const last = editable.lastChild;
+    if (!(last instanceof Text)) return;
+    const text = last.textContent ?? '';
+    if (text !== '' && text !== '\n') return;
+    last.remove();
+  }
+}
+
+/**
+ * End the insert's line so the caret waits on the next one.
+ *
+ * A trailing newline on its own does not hold a caret: the next keystroke is
+ * appended to the nearest preceding text node, which puts the user's text back
+ * on the payload's line. Chromium's own Shift+Enter leaves a newline *plus* an
+ * empty final line and puts the caret in that line, so the insert leaves the
+ * same shape — the following keystroke then starts a new line.
+ */
+function endLineAtCursor(editable: HTMLElement | null): void {
+  const selection = window.getSelection();
+  if (editable === null || !selection) return;
+
+  const home = document.createTextNode('\n');
+  editable.append('\n', home);
+  const range = document.createRange();
+  range.setStart(home, 0);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+/** Reduce one composer child node to the fact an insert cares about. */
+function describeTailNode(node: ChildNode | null): ComposerTailNode | null {
+  if (node === null) return null;
+  if (node.nodeType === Node.TEXT_NODE) return {kind: 'text', text: node.textContent ?? ''};
+  if (!(node instanceof HTMLElement)) return null;
+  if (node.hasAttribute('data-astryx-token')) return {kind: 'token', text: ''};
+  if (node.tagName === 'BR') return {kind: 'br', text: ''};
+  return {kind: 'text', text: node.textContent ?? ''};
+}
+
+function isBadge(node: Node | null): node is HTMLElement {
+  return node instanceof HTMLElement && node.hasAttribute('data-astryx-token');
+}
+
+/** Which side of a badge the caret sits on. */
+type BadgeSide = 'before' | 'after';
+
+/** The badge the caret is parked at, and the side it is parked on. */
+interface BadgeAtCaret {
+  badge: HTMLElement;
+  side: BadgeSide;
+}
+
+/**
+ * The badge the caret is parked at.
+ *
+ * A badge cannot hold a caret, so every position the browser leaves beside one is
+ * spacer: its glue, or the line its own break opened. Both sides count — the
+ * caret at a badge's last character and the caret at its first character are the
+ * same place as far as the user is concerned.
+ */
+function badgeAtCaret(editable: HTMLElement): BadgeAtCaret | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return null;
+  const node = selection.anchorNode;
+  const offset = selection.anchorOffset;
+  if (node === null || !editable.contains(node)) return null;
+  if (isBadge(node)) {
+    // A caret anchored inside the token draws at its first character, because a
+    // token cannot hold a caret of its own.
+    return badgeBeforeCaret(node, offset === 0 ? 'before' : 'after');
+  }
+
+  if (node === editable) {
+    // A caret on an element boundary: the badge right after it (the caret at the
+    // badge's first character) or the one before it, across its glue.
+    return badgeAfterCaret(editable.childNodes[offset] ?? null)
+      ?? badgeBeforeCaret(editable.childNodes[offset - 1] ?? null, 'after');
+  }
+  if (node.nodeType !== Node.TEXT_NODE) return null;
+
+  const text = node as Text;
+  // Only spacer may sit between the badge and the caret in the caret's own node.
+  if (composerCaretAfterGlue(text.data.slice(0, offset))) {
+    const behind = badgeBeforeCaret(text.previousSibling, 'after');
+    if (behind !== null) return behind;
+  }
+  // The caret at the badge's first character: right before a badge that starts
+  // where the caret's own node ends.
+  if (offset !== text.data.length) return null;
+  return badgeAfterCaret(text.nextSibling);
+}
+
+/**
+ * The badge a node follows, across its glue and the line its own break opened.
+ *
+ * Both are positions the browser leaves beside a token, so a caret there still
+ * belongs to that badge — while any text in between means the caret moved on.
+ */
+function badgeBefore(node: Node | null): HTMLElement | null {
+  let crossedBreak = false;
+  for (let current = node; current !== null; current = current.previousSibling) {
+    if (isBadge(current)) return current;
+    if (current.nodeType !== Node.TEXT_NODE) return null;
+    const content = current.textContent ?? '';
+    if (content === '' || content === '\u00A0') continue;
+    if (content === '\n' && !crossedBreak) {
+      crossedBreak = true;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+/** The badge a node starts with, across the spacer in front of it. */
+function badgeAhead(node: Node | null): HTMLElement | null {
+  for (let current = node; current !== null; current = current.nextSibling) {
+    if (isBadge(current)) return current;
+    if (current.nodeType !== Node.TEXT_NODE) return null;
+    const content = current.textContent ?? '';
+    if (content === '' || content === '\u00A0') continue;
+    return null;
+  }
+  return null;
+}
+
+/** The badge behind the caret — only while it is the last thing in the draft. */
+function badgeBeforeCaret(node: Node | null, side: BadgeSide): BadgeAtCaret | null {
+  const badge = badgeBefore(node);
+  return badge !== null && !hasContentAfterBadge(badge) ? {badge, side} : null;
+}
+
+/** The badge ahead of the caret — only while it is the last thing in the draft. */
+function badgeAfterCaret(node: Node | null): BadgeAtCaret | null {
+  const badge = badgeAhead(node);
+  return badge !== null && !hasContentAfterBadge(badge) ? {badge, side: 'before'} : null;
+}
+
+/** Whether a node holds something the user can see. */
+function holdsContent(node: Node): boolean {
+  return node.nodeType !== Node.TEXT_NODE || !composerCaretAfterGlue(node.textContent ?? '');
+}
+
+/** Whether anything the user can see follows the badge in the draft. */
+function hasContentAfterBadge(badge: HTMLElement): boolean {
+  const after: Node[] = [];
+  for (let next = badge.nextSibling; next !== null; next = next.nextSibling) after.push(next);
+  return after.some(holdsContent);
+}
+
+/** What sits between a badge and the start of its line. */
+function lineBeforeBadge(badge: HTMLElement): ComposerLineBefore {
+  let text = '';
+  let hasInlineBefore = false;
+  for (let node: Node | null = badge.previousSibling; node !== null; node = node.previousSibling) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const content = node.textContent ?? '';
+      const lineBreak = content.lastIndexOf('\n');
+      if (lineBreak >= 0) return {text: content.slice(lineBreak + 1) + text, hasInlineBefore, hasBreak: true};
+      text = content + text;
+      continue;
+    }
+    if (node.nodeName === 'BR') return {text, hasInlineBefore, hasBreak: true};
+    // Another badge, or an element the composer put inline: same line, no break.
+    hasInlineBefore = true;
+  }
+  return {text, hasInlineBefore, hasBreak: false};
+}
+
+/** Put a collapsed caret at one offset of a node. */
+function setCaretAt(node: Node, offset: number): void {
+  const selection = window.getSelection();
+  if (selection === null) return;
+  const range = document.createRange();
+  range.setStart(node, offset);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+/**
+ * Push the badge at the caret one line down, into the shape a badge insert
+ * leaves: the badge ends its line and the caret keeps the side of it the user had.
+ *
+ * The break goes in front of the badge, because behind it is the one place the
+ * browser allows the caret and a break there only pushes the badge's glue around.
+ *
+ * Returns false when the caret is nowhere near a badge, or when the badge already
+ * owns a line of its own below something: then a plain Shift+Enter still breaks
+ * the line where the caret is, instead of dragging the badge along.
+ */
+function moveBadgeToOwnLine(editable: HTMLElement | null): boolean {
+  if (editable === null) return false;
+  const caret = badgeAtCaret(editable);
+  if (caret === null) return false;
+  const before = lineBeforeBadge(caret.badge);
+  if (!composerBadgeSharesLine(before) && !composerBadgeStartsDraft(before)) return false;
+
+  const lineBreak = document.createTextNode('\n');
+  caret.badge.parentNode?.insertBefore(lineBreak, caret.badge);
+  if (caret.side === 'before') {
+    // The caret was at the badge's first character, so it keeps the line above.
+    setCaretAt(lineBreak, 0);
+    return true;
+  }
+  clearTrailingPlaceholder(editable);
+  endLineAtCursor(editable);
+  return true;
+}
+
+/**
+ * Where an insert lands, read from the composer's nodes rather than from its
+ * serialized draft. A badge serializes as the whole prompt and library files end
+ * with a newline, so the serialized text of a draft whose badge is still on an
+ * open line ends with "\n" — and reading that as a line break is what leaves the
+ * next badge sharing the line.
+ */
+function readComposerTail(editable: HTMLElement | null): ComposerTail {
+  if (editable === null) return 'empty';
+  const children = Array.from(editable.childNodes);
+  const hasContent = children.some(child =>
+    child.nodeType === Node.TEXT_NODE
+      ? (child.textContent ?? '').trim().length > 0
+      : child instanceof HTMLElement && child.tagName !== 'BR',
+  );
+  return composerTail(describeTailNode(children[children.length - 1] ?? null), hasContent);
+}
+
 /**
  * Owns the composer's draft state.
  *
@@ -166,7 +426,38 @@ export function ComposerPane({
     threshold: appConfig.paste_as_token_threshold,
   });
 
+  const setDraft = useCallback((sessionId: string, next: string) => {
+    setDrafts(current =>
+      (current[sessionId] ?? '') === next ? current : {...current, [sessionId]: next},
+    );
+  }, []);
+
+  /**
+   * Shift+Enter next to a badge moves that badge onto its own line.
+   *
+   * The browser cannot place a caret before a token, so a break typed beside one
+   * can only ever land behind it and the badge itself stays put; the composer
+   * puts the break in front instead. A badge that already owns its line is left
+   * alone, so Shift+Enter still just breaks the line.
+   */
+  const handleShiftEnter = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>): boolean => {
+      if (!appConfig.paste_as_token_enabled) return false;
+      if (event.key !== 'Enter' || !event.shiftKey) return false;
+      if (event.altKey || event.ctrlKey || event.metaKey) return false;
+      if (!moveBadgeToOwnLine(findEditable(inputRootRef.current))) return false;
+      event.preventDefault();
+      const input = inputRef.current;
+      if (input !== null) setDraft(draftKey, input.getValue());
+      return true;
+    },
+    [draftKey, setDraft],
+  );
+
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (handleShiftEnter(event)) {
+      return;
+    }
     if (!appConfig.composer_markdown_shortcuts) {
       return;
     }
@@ -188,13 +479,7 @@ export function ComposerPane({
       event.preventDefault();
       applyInlineMarker(editable, marker);
     }
-  }, []);
-
-  const setDraft = useCallback((sessionId: string, next: string) => {
-    setDrafts(current =>
-      (current[sessionId] ?? '') === next ? current : {...current, [sessionId]: next},
-    );
-  }, []);
+  }, [handleShiftEnter]);
 
   const handleChange = useCallback(
     (next: string) => {
@@ -216,46 +501,62 @@ export function ComposerPane({
    * Append through the Astryx input handle so existing inline badges remain
    * rendered. The serialized value is still the full text sent with the user
    * message, which preserves the existing transcript contract.
+   *
+   * The plan decides the text around the payload, from the composer's own
+   * nodes: a badge takes a line of its own with the caret on the line below it,
+   * and an insert into an otherwise empty draft replaces the placeholder break
+   * the browser leaves behind instead of landing under an empty first line.
    */
   const insertAtEnd = useCallback(
     (
       insert: (input: ChatComposerInputHandle) => void,
-      separatorForDraft: (existing: string) => string = composerInsertionSeparator,
+      planFor: (existing: string, tail: ComposerTail) => ComposerInsertionPlan,
     ) => {
       const input = inputRef.current;
       if (input === null) return;
       window.getSelection()?.removeAllRanges();
       input.focus();
-      // The handle inserts at the selection; force it to the end so a stale
-      // caret from before opening the library cannot replace the first line.
-      placeCaretAtEnd(inputRootRef.current);
-      const existing = input.getValue();
-      const separator = separatorForDraft(existing);
-      if (separator.length > 0) input.insertText(separator);
+      const editable = findEditable(inputRootRef.current);
+      // The caret's placeholder line is the insert's position: measure and place
+      // the payload from the visible draft, not from the placeholder.
+      clearTrailingPlaceholder(editable);
+      const plan = planFor(input.getValue(), readComposerTail(editable));
+      if (plan.replacesDraft && plan.before.length === 0 && editable !== null) {
+        selectComposerContents(editable);
+      } else {
+        // The handle inserts at the selection; force it to the end so a stale
+        // caret from before opening the library cannot replace the first line.
+        placeCaretAtEnd(inputRootRef.current);
+      }
+      if (plan.before.length > 0) input.insertText(plan.before);
       insert(input);
+      if (plan.endsLine) endLineAtCursor(editable);
       setDraft(draftKey, input.getValue());
       focusAfterInsertRef.current = true;
     },
     [draftKey, setDraft],
   );
 
+  /** Badges only need the tail; the serialized draft is what lies to them. */
+  const badgePlan = useCallback(
+    (_existing: string, tail: ComposerTail) => composerBadgeInsertionPlan(tail),
+    [],
+  );
+
   const insertText = useCallback(
-    (text: string) => insertAtEnd(input => input.insertText(text)),
+    (text: string) => insertAtEnd(input => input.insertText(text), composerTextInsertionPlan),
     [insertAtEnd],
   );
 
   const insertPrompt = useCallback(
     (text: string, name: string) => {
       if (promptNeedsBadge(text.length, appConfig.paste_as_token_enabled, appConfig.paste_as_token_threshold)) {
-        insertAtEnd(
-          input => input.insertToken({value: text, label: name}),
-          composerBadgeInsertionSeparator,
-        );
+        insertAtEnd(input => input.insertToken({value: text, label: name}), badgePlan);
       } else {
         insertText(text);
       }
     },
-    [insertAtEnd, insertText],
+    [badgePlan, insertAtEnd, insertText],
   );
 
   const insertSkill = useCallback(
@@ -263,9 +564,9 @@ export function ComposerPane({
       insertAtEnd(
         input =>
           input.insertToken({value: text, render: () => <Badge label={name} />}),
-        composerBadgeInsertionSeparator,
+        badgePlan,
       ),
-    [insertAtEnd],
+    [badgePlan, insertAtEnd],
   );
 
   const insertActions = useMemo(
