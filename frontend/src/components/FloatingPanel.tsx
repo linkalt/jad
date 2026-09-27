@@ -1,6 +1,6 @@
 import {useEffect, useRef, type ReactNode} from 'react';
 import * as stylex from '@stylexjs/stylex';
-import {Card, HStack, Icon, IconButton, Text, VStack} from '@astryxdesign/core';
+import {Card, Divider, HStack, Icon, IconButton, Text, VStack} from '@astryxdesign/core';
 import {ResizeHandle, type ResizableRegion} from '@astryxdesign/core/Resizable';
 import appConfig from '../config.json';
 
@@ -24,10 +24,28 @@ const styles = stylex.create({
     minWidth: 0,
     height: '100%',
     overflow: 'hidden',
+    // A column so the scrolling viewport and an optional footer bar share the card.
+    display: 'flex',
+    flexDirection: 'column',
   },
-  stack: {
-    height: '100%',
+  viewport: {
+    flex: 1,
     minHeight: 0,
+    minWidth: 0,
+  },
+  footer: {
+    flexShrink: 0,
+  },
+  /**
+   * The native scrollbar follows the viewport's inline direction, so `rtl` is
+   * what puts a panel's scrollbar on its left edge. The content box restores
+   * `ltr`, which keeps text, icons and row order exactly as they were.
+   */
+  scrollbarAtStartEdge: {
+    direction: 'rtl',
+  },
+  content: {
+    direction: 'ltr',
     minWidth: 0,
   },
   heading: {
@@ -55,6 +73,8 @@ type FloatingPanelProps = {
   /** Size and drag props from `useResizable`. */
   region: ResizableRegion;
   onClose: () => void;
+  /** Fixed bar pinned below the scrolling content, e.g. the library control bar. */
+  footer?: ReactNode;
   children: ReactNode;
 };
 
@@ -74,6 +94,9 @@ type FloatingPanelProps = {
  *
  * Both sides use this one shell, so a new dataset only has to supply content:
  * the run inspector fills the right edge, the prompt library the left.
+ *
+ * Each panel's scrollbar sits on its outer edge — the window edge — so the
+ * `start` panels put it on the left and the `end` panels keep it on the right.
  */
 export function FloatingPanel({
   side,
@@ -82,6 +105,7 @@ export function FloatingPanel({
   subtitle,
   region,
   onClose,
+  footer,
   children,
 }: FloatingPanelProps) {
   const accessibleName = label.toLowerCase();
@@ -144,28 +168,43 @@ export function FloatingPanel({
     >
       {side === 'end' ? resizeHandle : null}
       <Card variant="default" elevation="med" padding={0} xstyle={styles.card}>
-        <VStack gap={5} padding={4} isScrollable xstyle={styles.stack}>
-          <HStack align="start" justify="between" gap={3}>
-            <VStack gap={0.5} xstyle={styles.heading}>
-              <Text type="label" weight="semibold">
-                {title}
-              </Text>
-              {subtitle ? (
-                <Text type="supporting" color="secondary" xstyle={styles.subtitle}>
-                  {subtitle}
+        <VStack
+          isScrollable
+          xstyle={[styles.viewport, side === 'start' && styles.scrollbarAtStartEdge]}
+        >
+          {/* One content box inside the viewport: the padding and spacing live
+              here so the viewport itself stays a pure scroll container. */}
+          <VStack gap={5} padding={4} xstyle={styles.content}>
+            <HStack align="start" justify="between" gap={3}>
+              <VStack gap={0.5} xstyle={styles.heading}>
+                <Text type="label" weight="semibold">
+                  {title}
                 </Text>
-              ) : null}
-            </VStack>
-            <IconButton
-              label={`Hide ${accessibleName}`}
-              icon={<Icon icon="close" size="sm" />}
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-            />
-          </HStack>
-          {children}
+                {subtitle ? (
+                  <Text type="supporting" color="secondary" xstyle={styles.subtitle}>
+                    {subtitle}
+                  </Text>
+                ) : null}
+              </VStack>
+              <IconButton
+                label={`Hide ${accessibleName}`}
+                icon={<Icon icon="close" size="sm" />}
+                variant="ghost"
+                size="sm"
+                onClick={onClose}
+              />
+            </HStack>
+            {children}
+          </VStack>
         </VStack>
+        {footer ? (
+          <VStack gap={0} xstyle={styles.footer}>
+            <Divider variant="subtle" />
+            <HStack align="center" gap={2} paddingInline={4} paddingBlock={3}>
+              {footer}
+            </HStack>
+          </VStack>
+        ) : null}
       </Card>
       {side === 'start' ? resizeHandle : null}
     </HStack>
