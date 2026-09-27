@@ -44,7 +44,7 @@ test("coalesces a burst of growing tool arguments into one emit", () => {
   emitter.push(toolCall(argumentsText, true));
   for (const chunk of ['"path"', ':"notes.md"', "}"]) {
     argumentsText += chunk;
-    emitter.push(toolCall(argumentsText, true));
+    emitter.push(toolCall(argumentsText, true), {index: 0, append: chunk});
   }
 
   // The first snapshot goes out immediately; the growth waits for the interval.
@@ -65,7 +65,7 @@ test("coalesces streamed text and publishes a new part at once", () => {
   const emitter = new MessageStreamEmitter(60_000, (value) => sent.push(value));
 
   emitter.push(message([{type: "text", text: "hello"}]));
-  emitter.push(message([{type: "text", text: "hello world"}]));
+  emitter.push(message([{type: "text", text: "hello world"}]), {index: 0, append: " world"});
   assert.equal(sent.length, 1, "growth waits for the interval");
 
   emitter.push(
@@ -79,6 +79,29 @@ test("coalesces streamed text and publishes a new part at once", () => {
   assert.equal(sent.length, 3);
   assert.equal((sent[1]?.parts[0] as {text?: string}).text, "hello world");
   assert.equal(sent[2]?.parts[1]?.type, "tool_result");
+  emitter.discard();
+});
+
+test("flushes a pending append before another part grows", () => {
+  const sent: WebUiMessage[] = [];
+  const emitter = new MessageStreamEmitter(60_000, (value) => sent.push(value));
+
+  emitter.push(message([
+    {type: "text", text: "first"},
+    {type: "text", text: "second"},
+  ]));
+  emitter.push(message([
+    {type: "text", text: "first!"},
+    {type: "text", text: "second"},
+  ]), {index: 0, append: "!"});
+  emitter.push(message([
+    {type: "text", text: "first!"},
+    {type: "text", text: "second?"},
+  ]), {index: 1, append: "?"});
+
+  assert.equal(sent.length, 3);
+  assert.equal((sent[1]?.parts[0] as {text?: string}).text, "first!");
+  assert.equal((sent[2]?.parts[1] as {text?: string}).text, "second?");
   emitter.discard();
 });
 
@@ -102,7 +125,7 @@ test("discard drops a coalesced snapshot that a newer state replaced", () => {
   const emitter = new MessageStreamEmitter(60_000, (value) => sent.push(value));
 
   emitter.push(toolCall("{", true));
-  emitter.push(toolCall('{"path":', true));
+  emitter.push(toolCall('{"path":', true), {index: 0, append: '"path":'});
   emitter.discard();
   emitter.flush();
 
@@ -115,7 +138,7 @@ test("an interval of zero streams every snapshot", () => {
   const emitter = new MessageStreamEmitter(0, (value) => sent.push(value));
 
   emitter.push(toolCall("{", true));
-  emitter.push(toolCall('{"path"', true));
+  emitter.push(toolCall('{"path"', true), {index: 0, append: '"path"'});
 
   assert.equal(sent.length, 2);
   emitter.discard();
@@ -126,7 +149,7 @@ test("a scheduled flush delivers the newest snapshot without an explicit flush",
   const emitter = new MessageStreamEmitter(20, (value) => sent.push(value));
 
   emitter.push(toolCall("{", true));
-  emitter.push(toolCall('{"path":"notes.md"', true));
+  emitter.push(toolCall('{"path":"notes.md"', true), {index: 0, append: '"path":"notes.md"'});
   await new Promise((resolve) => setTimeout(resolve, 80));
 
   assert.equal(sent.length, 2);

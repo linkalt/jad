@@ -1791,7 +1791,7 @@ class AgentHttpApplication {
     const run = this.runs.begin(handle.location.ref, handle.profile, turnId, controller);
     const emitter = new MessageStreamEmitter(
       this.toolStreamIntervalMs,
-      (message) => run.publishMessage(message),
+      (message, append) => run.publishMessage(message, append),
     );
     const completion = this.executeSessionRun({
       handle,
@@ -1836,9 +1836,9 @@ class AgentHttpApplication {
         signal: controller.signal,
         ...(options.modelConfigPath === undefined ? {} : {modelConfigPath: options.modelConfigPath}),
         onEvent: (event) => {
-          const message = normalizedRun.update(event);
-          if (message) {
-            emitter.push(message);
+          const update = normalizedRun.updateForStream(event);
+          if (update) {
+            emitter.push(update.message, update.append);
           }
         },
         onResponseCommitted: publishUsage,

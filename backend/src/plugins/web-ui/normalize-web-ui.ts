@@ -19,6 +19,7 @@ import {
 } from "./reasoning-web-ui.js";
 import { sessionSettingsFromConfig } from "./setting-web-ui.js";
 import {sessionUsageFromSummary} from "./usage-web-ui.js";
+import type {WebUiMessageAppend} from "./incremental-web-ui.js";
 import {
   toolCallArgumentsDeltaFromEvent,
   toolCallArgumentsFromEvent,
@@ -359,6 +360,11 @@ export function normalizeWebUiSession(
   };
 }
 
+export interface WebUiNormalizedStreamUpdate {
+  message: WebUiMessage;
+  append?: WebUiMessageAppend;
+}
+
 export class WebUiNormalizedRun {
   private parts: WebUiPart[] = [];
   private steps: WebUiMessageStep[] = [];
@@ -377,6 +383,10 @@ export class WebUiNormalizedRun {
   }
 
   public update(event: JsonRecord): WebUiMessage | undefined {
+    return this.updateForStream(event)?.message;
+  }
+
+  public updateForStream(event: JsonRecord): WebUiNormalizedStreamUpdate | undefined {
     if (event.type === "response.created") {
       const response = isRecord(event.response) ? event.response : undefined;
       this.ensureCurrentStep(typeof response?.id === "string" ? response.id : undefined);
@@ -385,18 +395,26 @@ export class WebUiNormalizedRun {
 
     const textDelta = assistantTextDeltaFromEvent(event);
     if (textDelta !== undefined) {
+      const previousPart = this.parts.at(-1);
       this.ensureCurrentStep();
       this.parts = appendTextPart(this.parts, "text", textDelta);
       this.updateCurrentStep();
-      return this.streamingMessage();
+      const append = previousPart?.type === "text" && textDelta.trim().length > 0
+        ? {index: this.parts.length - 1, append: textDelta}
+        : undefined;
+      return this.streamingUpdate(append);
     }
 
     const reasoningDelta = reasoningDeltaFromEvent(event);
     if (reasoningDelta !== undefined) {
+      const previousPart = this.parts.at(-1);
       this.ensureCurrentStep();
       this.parts = appendTextPart(this.parts, "reasoning", reasoningDelta);
       this.updateCurrentStep();
-      return this.streamingMessage();
+      const append = previousPart?.type === "reasoning" && reasoningDelta.trim().length > 0
+        ? {index: this.parts.length - 1, append: reasoningDelta}
+        : undefined;
+      return this.streamingUpdate(append);
     }
 
     if (event.type === "response.output_item.added" && isRecord(event.item)) {
@@ -407,7 +425,7 @@ export class WebUiNormalizedRun {
         if (!this.hasToolCall(call.callId)) {
           this.parts = appendToolPart(this.parts, call);
           this.updateCurrentStep(true);
-          return this.streamingMessage();
+          return this.streamingUpdate();
         }
       }
       return undefined;
@@ -416,9 +434,18 @@ export class WebUiNormalizedRun {
     const argumentsDelta = toolCallArgumentsDeltaFromEvent(event);
     if (argumentsDelta !== undefined) {
       const callId = this.toolCallIdForEvent(event);
-      if (callId !== undefined && this.hasToolCall(callId)) {
-        this.updateToolArguments(callId, (current) => `${current}${argumentsDelta}`, true);
-        return this.streamingMessage();
+      if (callId !== undefined) {
+        const index = this.parts.findIndex(
+          (part) => part.type === "tool_call" && part.callId === callId,
+        );
+        const previousPart = this.parts[index];
+        if (previousPart?.type === "tool_call") {
+          const append = previousPart.partial === true && argumentsDelta.length > 0
+            ? {index, append: argumentsDelta}
+            : undefined;
+          this.updateToolArguments(callId, (current) => `${current}${argumentsDelta}`, true);
+          return this.streamingUpdate(append);
+        }
       }
       return undefined;
     }
@@ -428,7 +455,7 @@ export class WebUiNormalizedRun {
       const callId = this.toolCallIdForEvent(event);
       if (callId !== undefined && this.hasToolCall(callId)) {
         this.updateToolArguments(callId, () => argumentsDone, false);
-        return this.streamingMessage();
+        return this.streamingUpdate();
       }
       return undefined;
     }
@@ -446,7 +473,7 @@ export class WebUiNormalizedRun {
           this.parts = appendToolPart(this.parts, call);
         }
         this.updateCurrentStep(true);
-        return this.streamingMessage();
+        return this.streamingUpdate();
       }
     }
 
@@ -469,7 +496,7 @@ export class WebUiNormalizedRun {
         this.updateCurrentStep(true);
       }
       if (appended) {
-        return this.streamingMessage();
+        return this.streamingUpdate();
       }
     }
     return undefined;
@@ -587,6 +614,11 @@ export class WebUiNormalizedRun {
       };
       return partial ? {...next, partial: true} : next;
     });
+  }
+
+  private streamingUpdate(append?: WebUiMessageAppend): WebUiNormalizedStreamUpdate {
+    const message = this.streamingMessage();
+    return append === undefined ? {message} : {message, append};
   }
 
   private streamingMessage(): WebUiMessage {

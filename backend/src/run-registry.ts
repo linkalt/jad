@@ -3,7 +3,8 @@ import type {
   WebUiRunStatus,
   WebUiSessionRun,
 } from "./plugins/web-ui/types.js";
-import { messageIncrements } from "./plugins/web-ui/incremental-web-ui.js";
+import { messageAppendIncrement, messageIncrements } from "./plugins/web-ui/incremental-web-ui.js";
+import type {WebUiMessageAppend} from "./plugins/web-ui/incremental-web-ui.js";
 
 export interface RunStreamEvent {
   event: string;
@@ -50,10 +51,21 @@ export class SessionRun {
   }
 
   /** Records the newest state and forwards what changed to every subscriber. */
-  public publishMessage(message: WebUiMessage): void {
+  public publishMessage(message: WebUiMessage, append?: WebUiMessageAppend): void {
     const previous = this.latest;
     this.latest = message;
-    const increments = previous === undefined ? undefined : messageIncrements(previous, message);
+    if (previous === undefined) {
+      this.publish("ui.message", {message});
+      return;
+    }
+    const appended = append === undefined
+      ? undefined
+      : messageAppendIncrement(previous, message, append);
+    if (appended !== undefined) {
+      this.publish(appended.event, appended.data);
+      return;
+    }
+    const increments = messageIncrements(previous, message);
     if (increments === undefined) {
       this.publish("ui.message", {message});
       return;

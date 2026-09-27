@@ -535,6 +535,46 @@ test("preserves interleaved reasoning and tool-call order in the live UI stream"
   );
 });
 
+test("marks only append-only normalizer updates for the streaming fast path", () => {
+  const normalizedRun = new WebUiNormalizedRun("explicit-stream-update");
+  const firstText = normalizedRun.updateForStream({
+    type: "response.output_text.delta",
+    delta: "hello",
+  });
+  assert.equal(firstText?.append, undefined);
+
+  const textGrowth = normalizedRun.updateForStream({
+    type: "response.output_text.delta",
+    delta: " world",
+  });
+  assert.deepEqual(textGrowth?.append, {index: 0, append: " world"});
+
+  const firstReasoning = normalizedRun.updateForStream({
+    type: "response.reasoning_summary_text.delta",
+    delta: "thinking",
+  });
+  assert.equal(firstReasoning?.append, undefined);
+  const reasoningGrowth = normalizedRun.updateForStream({
+    type: "response.reasoning_summary_text.delta",
+    delta: " more",
+  });
+  assert.deepEqual(reasoningGrowth?.append, {index: 1, append: " more"});
+
+  const addedTool = normalizedRun.updateForStream({
+    type: "response.output_item.added",
+    output_index: 0,
+    item: {id: "fc-explicit", type: "function_call", call_id: "call-explicit", name: "read", arguments: ""},
+  });
+  assert.equal(addedTool?.append, undefined);
+  const argumentGrowth = normalizedRun.updateForStream({
+    type: "response.function_call_arguments.delta",
+    item_id: "fc-explicit",
+    output_index: 0,
+    delta: "{}",
+  });
+  assert.deepEqual(argumentGrowth?.append, {index: 2, append: "{}"});
+});
+
 test("ignores encrypted or empty reasoning summaries in the UI stream", () => {
   const normalizedRun = new WebUiNormalizedRun("opaque-reasoning-turn");
   assert.equal(

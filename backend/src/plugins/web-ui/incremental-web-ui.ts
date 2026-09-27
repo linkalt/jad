@@ -35,6 +35,53 @@ function sameSteps(
   });
 }
 
+export interface WebUiMessageAppend {
+  index: number;
+  append: string;
+}
+
+export function messageAppendIncrement(
+  previous: WebUiMessage,
+  next: WebUiMessage,
+  change: WebUiMessageAppend,
+): WebUiStreamEvent | undefined {
+  if (
+    change.append.length === 0 ||
+    previous.id !== next.id ||
+    previous.status !== next.status ||
+    !sameSteps(previous.steps, next.steps) ||
+    previous.parts.length !== next.parts.length
+  ) {
+    return undefined;
+  }
+  const before = previous.parts[change.index];
+  const after = next.parts[change.index];
+  if (
+    before === undefined ||
+    after === undefined ||
+    before.type !== after.type ||
+    before.truncated !== undefined ||
+    after.truncated !== undefined
+  ) {
+    return undefined;
+  }
+  if (before.type === "tool_call" && after.type === "tool_call") {
+    if (
+      before.callId !== after.callId ||
+      before.name !== after.name ||
+      before.partial !== after.partial
+    ) {
+      return undefined;
+    }
+  } else if (before.type !== "text" && before.type !== "reasoning") {
+    return undefined;
+  }
+  return {
+    event: "ui.delta",
+    data: {id: next.id, index: change.index, append: change.append},
+  };
+}
+
 export function messageIncrements(
   previous: WebUiMessage,
   next: WebUiMessage,

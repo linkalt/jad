@@ -207,7 +207,7 @@ test("publishes growth as a suffix, a new or replaced part once, and the rest as
 
   // Growth — streamed text, reasoning and tool arguments — is the appended suffix.
   const grown: WebUiPart = {...partial, arguments: '{"path":"sample.txt"}'};
-  run.publishMessage(withParts("web-turn-1", [grown]));
+  run.publishMessage(withParts("web-turn-1", [grown]), {index: 0, append: 'th":"sample.txt"}'});
   assert.deepEqual(events, [
     {event: "ui.delta", data: {id: "web-turn-1", index: 0, append: 'th":"sample.txt"}'}},
   ]);
@@ -271,9 +271,28 @@ test("publishes a full snapshot when step ranges change, then keeps text growth 
     ...withParts("web-step-window", [...earlierParts, {type: "text", text: "Summary is ready"}]),
     steps: withSummary.steps,
   };
-  run.publishMessage(summaryGrowth);
+  run.publishMessage(summaryGrowth, {index: 3, append: " is ready"});
   assert.deepEqual(events.map((event) => event.event), ["ui.delta"]);
   assert.deepEqual(events[0]?.data, {id: "web-step-window", index: 3, append: " is ready"});
+  registry.clear();
+});
+
+test("rejects append metadata when the message step shape changes", () => {
+  const registry = new SessionRunRegistry(60_000);
+  const run = registry.begin("session1", undefined, "web-step-shape", new AbortController());
+  const events: Array<{event: string; data: unknown}> = [];
+  run.subscribe((event) => events.push({event: event.event, data: event.data}));
+
+  run.publishMessage(withParts("web-step-shape", [{type: "text", text: "answer"}]));
+  events.length = 0;
+  const next = {
+    ...withParts("web-step-shape", [{type: "text", text: "answer ready"}]),
+    steps: [{id: "step-1", startPart: 0, endPart: 1, hasTools: false}],
+  };
+  run.publishMessage(next, {index: 0, append: " ready"});
+
+  assert.deepEqual(events.map((event) => event.event), ["ui.message"]);
+  assert.deepEqual(appliedMessage(events), next);
   registry.clear();
 });
 
