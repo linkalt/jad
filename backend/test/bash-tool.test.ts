@@ -952,6 +952,43 @@ test("keeps generated spill filenames inside storage_dir for unusual call IDs", 
   }
 });
 
+test("roots relative legacy spill templates under profile tool_storage", async () => {
+  const sessionDir = await makeBashToolSession();
+  const settingPath = join(sessionDir, "setting.json");
+  try {
+    await writeFile(settingPath, JSON.stringify({
+      cwd: sessionDir,
+      paths: {
+        active_profile: "reviewer",
+        profiles: {reviewer: {tool_storage: "profile-tools"}},
+      },
+      tools: {
+        native: {
+          bash: {
+            spill: {
+              stdout_full: "legacy/stdout-{call_id}.log",
+              stderr_full: "legacy/stderr-{call_id}.log",
+            },
+          },
+        },
+      },
+    }));
+    const settings = await new SessionConfigLoader(sessionDir).loadSettings();
+    const profileToolRoot = join(sessionDir, "profile-tools");
+    assert.equal(settings.paths.tool_storage, profileToolRoot);
+    assert.equal(
+      settings.tools.native.bash?.spill.stdout_full,
+      join(profileToolRoot, "legacy/stdout-{call_id}.log"),
+    );
+    assert.equal(
+      settings.tools.native.bash?.spill.stderr_full,
+      join(profileToolRoot, "legacy/stderr-{call_id}.log"),
+    );
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
 test("continues accepting legacy per-stream spill templates", {skip: bashSkip}, async () => {
   const {sessionDir, run} = await openBashSession({
     spill: {

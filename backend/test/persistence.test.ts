@@ -1625,6 +1625,113 @@ test("profile storage defaults are isolated while the stored default keeps legac
   }
 });
 
+test("resolves native tool storage under the selected profile root", async () => {
+  const sessionDir = await makeSession();
+  const settingPath = join(sessionDir, "setting.json");
+  const cwd = join(sessionDir, "workspace");
+  const sharedMemoryStorage = join(sessionDir, "shared-memory");
+  const absoluteToolRoot = join(sessionDir, "absolute-tools");
+  try {
+    await mkdir(cwd);
+    await writeFile(settingPath, JSON.stringify({
+      cwd,
+      paths: {
+        active_profile: "primary",
+        profiles: {
+          primary: {},
+          alternate: {tool_storage: "custom/alternate-tools"},
+          absolute: {tool_storage: absoluteToolRoot},
+        },
+      },
+      tools: {
+        native: {
+          bash: {spill: {storage_dir: "bash-results", allow_unreadable: true}},
+          task: {storage_dir: "task-results"},
+          memory: {storage_dir: sharedMemoryStorage},
+          fetch: {},
+          process: {},
+        },
+      },
+    }));
+
+    const primary = new SessionConfigLoader(sessionDir, {profile: "primary"});
+    const alternate = new SessionConfigLoader(sessionDir, {profile: "alternate"});
+    const absolute = new SessionConfigLoader(sessionDir, {profile: "absolute"});
+    const primarySettings = await primary.loadSettings();
+    const alternateSettings = await alternate.loadSettings();
+    const absoluteSettings = await absolute.loadSettings();
+    const primaryRoot = join(cwd, ".jad", "profiles", "primary", "tools");
+    const alternateRoot = join(cwd, "custom", "alternate-tools");
+
+    assert.equal(primarySettings.paths.tool_storage, primaryRoot);
+    assert.equal(alternateSettings.paths.tool_storage, alternateRoot);
+    assert.equal(absoluteSettings.paths.tool_storage, absoluteToolRoot);
+    for (const settings of [primarySettings, alternateSettings, absoluteSettings]) {
+      const toolRoot = settings.paths.tool_storage;
+      assert.ok(toolRoot, "profile tool_storage root should be set");
+      assert.equal(settings.tools.native.bash?.spill.storage_dir, join(toolRoot, "bash-results"));
+      assert.equal(settings.tools.native.task?.storage_dir, join(toolRoot, "task-results"));
+      assert.equal(settings.tools.native.memory?.storage_dir, sharedMemoryStorage);
+      assert.equal(settings.tools.native.fetch?.storage_dir, join(toolRoot, ".fetch"));
+      assert.equal(settings.tools.native.process?.storage_dir, join(toolRoot, ".processes"));
+    }
+
+    await writeFile(settingPath, JSON.stringify({
+      cwd,
+      paths: {
+        active_profile: "primary",
+        profiles: {
+          primary: {tool_storage: "moved-tools"},
+          alternate: {tool_storage: "custom/alternate-tools"},
+          absolute: {tool_storage: absoluteToolRoot},
+        },
+      },
+    }));
+    await assert.rejects(
+      () => primary.loadSettings(),
+      /session storage paths cannot change while this config loader is active/,
+    );
+
+    await writeFile(settingPath, JSON.stringify({
+      cwd,
+      tools: {native: {task: {storage_dir: "task-results"}}},
+    }));
+    const unprofiledSettings = await new SessionConfigLoader(sessionDir).loadSettings();
+    assert.equal(unprofiledSettings.paths.tool_storage, undefined);
+    assert.equal(unprofiledSettings.tools.native.task?.storage_dir, join(cwd, "task-results"));
+
+    await writeFile(settingPath, JSON.stringify({cwd, paths: {tool_storage: "top-level-tools"}}));
+    await assert.rejects(
+      () => new SessionConfigLoader(sessionDir).loadSettings(),
+      /paths\.tool_storage must be configured within paths\.profiles/,
+    );
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
+test("scopes default and relative mutation backups to profile tool_storage", async () => {
+  const sessionDir = await makeSession();
+  const cwd = join(sessionDir, "workspace");
+  try {
+    await mkdir(cwd);
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      cwd,
+      paths: {
+        active_profile: "reviewer",
+        profiles: {reviewer: {}},
+      },
+      tools: {native: {write: {}, edit: {backup_dir: "edit-backups"}}},
+    }));
+    const settings = await new SessionConfigLoader(sessionDir).loadSettings();
+    const toolRoot = join(cwd, ".jad", "profiles", "reviewer", "tools");
+    assert.equal(settings.tools.native.write?.backup_dir, join(toolRoot, "backups"));
+    assert.equal(settings.tools.native.edit?.backup_dir, join(toolRoot, "edit-backups"));
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("rejects path profiles that explicitly share transcript or cache storage", async () => {
   const sessionDir = await makeSession();
   try {

@@ -146,7 +146,7 @@
     },
     "paths": {
       "type": "object",
-      "description": "Session storage paths and named profile options. Relative storage paths resolve from the directory containing this setting.json; absolute paths are used as-is. Named profiles override matching flat path fields and may select models or add prompt documents; the selected profile is fixed when the session config loader opens.",
+      "description": "Session storage paths and named profile options. Session storage paths resolve relative to the directory containing this setting.json; relative native-tool storage paths resolve from cwd or the selected profile's tool_storage root. Absolute paths are used as-is. Named profiles override matching flat path fields and may select models, add prompt documents, or set a tool_storage root; the selected profile is fixed when the session config loader opens.",
       "properties": {
         "messages": {
           "type": "string",
@@ -202,7 +202,7 @@
           "type": "object",
           "minProperties": 1,
           "propertyNames": {"pattern": "^[A-Za-z0-9_-]+$"},
-          "description": "Named path overrides. Each profile is merged over the flat paths settings and built-in defaults.",
+          "description": "Named path overrides. Each profile is merged over the flat paths settings and built-in defaults; tool_storage sets the root for relative native-tool storage paths in that profile.",
           "additionalProperties": {
             "type": "object",
             "properties": {
@@ -213,6 +213,11 @@
               "cursor_cache": {"type": "string", "pattern": "\\S"},
               "history_cache": {"type": "string", "pattern": "\\S"},
               "statecontext": {"type": "string", "pattern": "\\S"},
+              "tool_storage": {
+                "type": "string",
+                "pattern": "\\S",
+                "description": "Root for relative native-tool storage_dir and backup_dir values in this profile. Relative paths resolve from setting.cwd; absolute paths are used as-is. Defaults to .jad/profiles/<profile-name>/tools under setting.cwd."
+              },
               "model_default": {
                 "type": "string",
                 "pattern": "\\S",
@@ -240,7 +245,8 @@
         "anyOf": [
           {"required": ["model_default"]},
           {"required": ["models"]},
-          {"required": ["model"]}
+          {"required": ["model"]},
+          {"required": ["tool_storage"]}
         ]
       },
       "dependentRequired": {
@@ -376,7 +382,7 @@
             },
             "write": {
               "type": "object",
-              "description": "Native file writes. Parent directories are created automatically; backups default to true and collect in backup_dir (the session's backups directory unless configured); identical content is left unchanged.",
+              "description": "Native file writes. Parent directories are created automatically; backups default to true and collect in backup_dir (the active profile's tool_storage/backups directory, or the session's backups directory without a profile); identical content is left unchanged.",
               "properties": {
                 "max_bytes": {
                   "type": "integer",
@@ -403,7 +409,7 @@
                     "string",
                     "null"
                   ],
-                  "description": "Directory that collects the backups of every replaced file: an absolute path, or a path relative to the session cwd. Defaults to the session's backups directory. Relative paths resolve from cwd, not from the global JAD root. null keeps each backup beside its own file."
+                  "description": "Directory that collects the backups of every replaced file. Relative paths resolve beneath the selected profile's tool_storage root, or from the session cwd without a profile; absolute paths are used as-is. Defaults to tool_storage/backups for a profile, otherwise the session's backups directory. null keeps each backup beside its own file."
                 },
                 "fsync": {
                   "type": "boolean",
@@ -505,7 +511,7 @@
                     "string",
                     "null"
                   ],
-                  "description": "Directory that collects the backups of every replaced file: an absolute path, or a path relative to the session cwd. Defaults to the tools.native.write setting (the session's backups directory). null keeps each backup beside its own file."
+                  "description": "Directory that collects the backups of every replaced file. Relative paths resolve beneath the selected profile's tool_storage root, or from the session cwd without a profile; absolute paths are used as-is. Defaults to tools.native.write.backup_dir (tool_storage/backups for a profile, or the session's backups directory without a profile). null keeps each backup beside its own file."
                 },
                 "fsync": {
                   "type": "boolean",
@@ -828,7 +834,7 @@
                       "type": "string",
                       "minLength": 1,
                       "default": ".bash-output",
-                      "description": "Directory for complete streams. Relative paths resolve from the session cwd; generated filenames are unique per call and stream."
+                      "description": "Directory for complete streams. Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; absolute paths are used as-is. Generated filenames are unique per call and stream."
                     },
                     "stdout_full": {
                       "type": "string",
@@ -1243,7 +1249,7 @@
                   "type": "string",
                   "pattern": "\\S",
                   "default": ".processes",
-                  "description": "Managed-process manifests and full logs. Relative values resolve from setting.cwd; absolute paths are used as-is."
+                  "description": "Managed-process manifests and full logs. Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; absolute paths are used as-is."
                 }
               },
               "additionalProperties": false
@@ -1325,7 +1331,7 @@
                   "type": "string",
                   "pattern": "\\S",
                   "default": ".tasks",
-                  "description": "Persistent task-plan directory. The harness stores tasks.json inside it. Relative values resolve from setting.cwd; absolute paths are used as-is."
+                  "description": "Persistent task-plan directory. The harness stores tasks.json inside it. Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; absolute paths are used as-is."
                 }
               },
               "additionalProperties": false
@@ -1334,7 +1340,7 @@
               "type": "object",
               "description": "Public web-page fetch policy. The fetch tool is exposed only when configured and its definition manifest is supplied.",
               "properties": {
-                "storage_dir": {"type": "string", "pattern": "\\S", "default": ".fetch", "description": "Stored Markdown documents and opaque cursor state. Relative values resolve from setting.cwd."},
+                "storage_dir": {"type": "string", "pattern": "\\S", "default": ".fetch", "description": "Stored Markdown documents and opaque cursor state. Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; absolute paths are used as-is."},
                 "default_limit": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 12000},
                 "max_limit": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 50000},
                 "max_response_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 2000000},
@@ -1369,7 +1375,7 @@
                   "type": "string",
                   "pattern": "\\S",
                   "default": ".memory",
-                  "description": "Memory root directory; relative values resolve from setting.cwd and absolute values are used as-is."
+                  "description": "Memory root directory; relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected. Absolute paths are used as-is."
                 },
                 "max_types": {
                   "type": "integer",

@@ -339,6 +339,8 @@ export interface SessionStoragePaths extends JsonRecord {
   staging: string;
   http_debug: string;
   statecontext: string;
+  /** Root for this profile's relative native-tool storage directories. */
+  tool_storage?: string;
 }
 
 export type StateContextToolName = "task" | "memory" | "process";
@@ -1126,9 +1128,10 @@ function resolveToolStoragePath(
   fallback: string,
   cwd: string,
   path: string,
+  relativeTo = cwd,
 ): string {
   const configured = expandHomePrefix(requiredString(value ?? fallback, "storage path", path));
-  return isAbsolute(configured) ? resolve(configured) : resolve(cwd, configured);
+  return isAbsolute(configured) ? resolve(configured) : resolve(relativeTo, configured);
 }
 
 function normalizeBashStreamBudget(
@@ -1164,6 +1167,7 @@ function normalizeByteBudget(value: unknown, fallback: number, path: string): nu
 interface BashSpillContext {
   cwd: string;
   sessionDir: string;
+  toolStorageDir?: string;
   readPaths: NativePathRule[];
   grepPaths: NativePathRule[];
   readUnrestricted: boolean;
@@ -1239,7 +1243,10 @@ function normalizeBashSpill(
         `${stream}_full`,
         `${path}: tools.native.bash.spill`,
       );
-      templates[stream] = template;
+      const samplePath = resolveSpillPath(template, spillSampleVars(stream, context));
+      templates[stream] = context.toolStorageDir !== undefined && !isAbsolute(samplePath)
+        ? resolve(context.toolStorageDir, template)
+        : template;
       const names = spillPlaceholders(template);
       const unknown = names.filter(
         (name) => !(SPILL_PLACEHOLDERS as readonly string[]).includes(name),
@@ -1254,7 +1261,7 @@ function normalizeBashSpill(
           `${field} must contain {call_id}, otherwise every call overwrites the previous call's file`,
         );
       }
-      resolved[stream] = resolveSpillPath(template, spillSampleVars(stream, context));
+      resolved[stream] = resolveSpillPath(templates[stream], spillSampleVars(stream, context));
     }
     if (resolved.stdout === resolved.stderr) {
       throw new ConfigError(
@@ -1285,6 +1292,7 @@ function normalizeBashSpill(
     DEFAULT_NATIVE_BASH_SPILL_STORAGE_DIR,
     context.cwd,
     `${path}: tools.native.bash.spill.storage_dir`,
+    context.toolStorageDir,
   );
   if (!allowUnreadable) {
     for (const stream of streams) {
@@ -1506,8 +1514,9 @@ function mutationFsync(
 
 /**
  * Resolves the backup directory: a configured relative path is interpreted
- * against the session cwd (the workspace the tools see), an absolute path is
- * used as given, and null keeps every backup beside its own file.
+ * against the selected profile's tool storage root when available, otherwise
+ * against the session cwd. Absolute paths are used as given, and null keeps
+ * every backup beside its own file.
  */
 function mutationBackupDir(
   value: unknown,
@@ -1515,6 +1524,7 @@ function mutationBackupDir(
   toolName: "write" | "edit",
   fallback: string | null,
   cwd: string,
+  relativeTo = cwd,
 ): string | null {
   if (value === undefined) {
     return fallback;
@@ -1534,7 +1544,7 @@ function mutationBackupDir(
     );
   }
   const expanded = expandHomePrefix(configured);
-  return isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
+  return isAbsolute(expanded) ? resolve(expanded) : resolve(relativeTo, expanded);
 }
 
 function parseBashEnvValue(value: string, path: string, lineNumber: number): string {
@@ -1828,8 +1838,11 @@ async function normalizeTools(
   globalJadRoot: string,
   sessionDir: string,
   cwd: string,
+  toolStorageDir?: string,
 ): Promise<ToolSettings> {
-  const defaultBackupDir = join(sessionDir, SESSION_BACKUP_DIRECTORY_NAME);
+  const defaultBackupDir = toolStorageDir === undefined
+    ? join(sessionDir, SESSION_BACKUP_DIRECTORY_NAME)
+    : join(toolStorageDir, SESSION_BACKUP_DIRECTORY_NAME);
   if (value !== undefined && !isRecord(value)) {
     throw new ConfigError(`${path}: tools must be an object`);
   }
@@ -2033,6 +2046,7 @@ async function normalizeTools(
         "write",
         defaultBackupDir,
         cwd,
+        toolStorageDir,
       ),
       fsync: mutationFsync(writeValue.fsync, path, "write", DEFAULT_NATIVE_WRITE_FSYNC),
       ...normalizeNativePathPolicy(writeValue.paths, path, globalJadRoot, "write"),
@@ -2086,6 +2100,7 @@ async function normalizeTools(
         "edit",
         mutation.backup_dir,
         cwd,
+        toolStorageDir,
       ),
       fsync: mutationFsync(editValue.fsync, path, "edit", mutation.fsync),
       ...(editValue.paths === undefined
@@ -2198,6 +2213,7 @@ async function normalizeTools(
     const spill = normalizeBashSpill(bashValue.spill, path, {
       cwd,
       sessionDir,
+      toolStorageDir,
       readPaths: read?.paths ?? [],
       grepPaths: grep?.paths ?? [],
       readUnrestricted: read?.unrestricted_paths ?? false,
@@ -2304,6 +2320,7 @@ async function normalizeTools(
       DEFAULT_NATIVE_TASK_STORAGE_DIR,
       cwd,
       `${path}: tools.native.task.storage_dir`,
+      toolStorageDir,
     );
     const taskMaxListLimit = positiveInteger("max_list_limit", DEFAULT_NATIVE_TASK_MAX_LIST_LIMIT, MAX_NATIVE_TASK_LIST_LIMIT);
     task = {
@@ -2351,7 +2368,7 @@ async function normalizeTools(
     const allowedTypes = allowed ? [...new Set(allowed as string[])] : undefined;
     memory = {
       ...memoryValue,
-      storage_dir: resolveToolStoragePath(memoryValue.storage_dir, DEFAULT_NATIVE_MEMORY_STORAGE_DIR, cwd, `${path}: tools.native.memory.storage_dir`),
+      storage_dir: resolveToolStoragePath(memoryValue.storage_dir, DEFAULT_NATIVE_MEMORY_STORAGE_DIR, cwd, `${path}: tools.native.memory.storage_dir`, toolStorageDir),
       statecontext: normalizeMemoryStateContext(memoryValue.statecontext, `${path}: tools.native.memory.statecontext`, memoryMaxListLimit, memoryMaxFilterFields, memoryMaxFilterDepth, allowedTypes),
       max_types: positiveInteger("max_types", DEFAULT_NATIVE_MEMORY_MAX_TYPES, MAX_NATIVE_TASKS),
       max_records_per_type: positiveInteger("max_records_per_type", DEFAULT_NATIVE_MEMORY_MAX_RECORDS_PER_TYPE, MAX_NATIVE_TASKS),
@@ -2404,7 +2421,7 @@ async function normalizeTools(
     };
     fetchTool = {
       ...fetchValue,
-      storage_dir: resolveToolStoragePath(fetchValue.storage_dir, DEFAULT_NATIVE_FETCH_STORAGE_DIR, cwd, `${path}: tools.native.fetch.storage_dir`),
+      storage_dir: resolveToolStoragePath(fetchValue.storage_dir, DEFAULT_NATIVE_FETCH_STORAGE_DIR, cwd, `${path}: tools.native.fetch.storage_dir`, toolStorageDir),
       default_limit: positiveInteger("default_limit", DEFAULT_NATIVE_FETCH_LIMIT, DEFAULT_NATIVE_FETCH_MAX_DOCUMENT_CHARS),
       max_limit: positiveInteger("max_limit", DEFAULT_NATIVE_FETCH_MAX_LIMIT, DEFAULT_NATIVE_FETCH_MAX_DOCUMENT_CHARS),
       max_response_bytes: positiveInteger("max_response_bytes", DEFAULT_NATIVE_FETCH_MAX_RESPONSE_BYTES, MAX_NATIVE_TOOL_BYTES),
@@ -2496,6 +2513,7 @@ async function normalizeTools(
       DEFAULT_NATIVE_PROCESS_STORAGE_DIR,
       cwd,
       `${path}: tools.native.process.storage_dir`,
+      toolStorageDir,
     );
     processTool = {
       ...processValue,
@@ -2639,7 +2657,7 @@ const SESSION_PATH_FIELDS = [
   "staging",
   "http_debug",
 ] as const;
-const SESSION_PATH_FIELD_SET = new Set<string>(SESSION_PATH_FIELDS);
+const SESSION_PATH_FIELD_SET = new Set<string>([...SESSION_PATH_FIELDS, "tool_storage"]);
 const SESSION_PATH_PROFILE_NAME = /^[A-Za-z0-9_-]+$/;
 
 function normalizeProfileModelPaths(value: unknown, path: string): string[] {
@@ -2657,7 +2675,8 @@ function normalizeStoragePaths(
   value: unknown,
   path: string,
   settingPath: string,
-  requestedProfile?: string,
+  requestedProfile: string | undefined,
+  cwd: string,
 ): SessionStoragePaths {
   if (value !== undefined && !isRecord(value)) {
     throw new ConfigError(`${path}: paths must be a JSON object`);
@@ -2675,12 +2694,16 @@ function normalizeStoragePaths(
   if (basePaths.processes !== undefined || basePaths.tasks !== undefined) {
     throw new ConfigError(`${path}: paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir`);
   }
+  if (basePaths.tool_storage !== undefined) {
+    throw new ConfigError(`${path}: paths.tool_storage must be configured within paths.profiles.<name>`);
+  }
 
   const normalizePathSet = (
     configuredPaths: JsonRecord,
     profilePath: string,
     profileScoped = false,
     profileStorageDirectory = dirname(settingPath),
+    profileName?: string,
   ): SessionStoragePaths => {
     if (configuredPaths.processes !== undefined || configuredPaths.tasks !== undefined) {
       throw new ConfigError(`${profilePath}: paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir`);
@@ -2689,6 +2712,14 @@ function normalizeStoragePaths(
       dirname(settingPath),
       expandHomePrefix(requiredString(configuredPaths[field] ?? fallback, field, profilePath)),
     );
+    const toolStorage = profileName === undefined
+      ? undefined
+      : resolveToolStoragePath(
+          configuredPaths.tool_storage,
+          join(".jad", "profiles", profileName, "tools"),
+          cwd,
+          `${profilePath}.tool_storage`,
+        );
 
     const staging = pathValue(
       "staging",
@@ -2715,6 +2746,7 @@ function normalizeStoragePaths(
     const extras = Object.fromEntries(Object.entries(configuredPaths).filter(([field]) => !SESSION_PATH_FIELD_SET.has(field)));
     return {
       ...extras,
+      ...(toolStorage === undefined ? {} : {tool_storage: toolStorage}),
       messages,
       messages_backup: messagesBackup,
       compaction_cache: compactionCache,
@@ -2833,6 +2865,7 @@ function normalizeStoragePaths(
       profilePath,
       true,
       profileStorageDirectory,
+      profileName,
     );
     normalizedProfiles.set(profileName, normalized);
     if (profileName === selectedProfileName) normalizedSelectedProfile = normalized;
@@ -2865,6 +2898,7 @@ function samePinnedStoragePaths(left: SessionStoragePaths, right: SessionStorage
   // `default_profile` is deliberately not compared: a loader pinned to one
   // profile keeps working when the session's stored default moves to another.
   return left.active_profile === right.active_profile
+    && left.tool_storage === right.tool_storage
     && SESSION_PATH_FIELDS.every((field) => left[field] === right[field]);
 }
 
@@ -2892,6 +2926,7 @@ async function normalizeSettings(
   sessionDir: string,
   globalJadRoot: string,
   storagePaths: SessionStoragePaths,
+  cwd: string,
 ): Promise<SessionSettings> {
   const version = schemaVersion(raw.schema_version, path);
   const sessionName = requiredString(
@@ -2899,7 +2934,6 @@ async function normalizeSettings(
     "session_name",
     path,
   );
-  const cwd = await normalizeCwd(raw.cwd ?? globalJadRoot, path);
   if (raw.system_prompt !== undefined) {
     throw new ConfigError(`${path}: system_prompt was removed; use prompt_documents and prompt_role`);
   }
@@ -2940,7 +2974,14 @@ async function normalizeSettings(
     path,
     globalJadRoot,
   );
-  const tools = await normalizeTools(raw.tools, path, globalJadRoot, sessionDir, cwd);
+  const tools = await normalizeTools(
+    raw.tools,
+    path,
+    globalJadRoot,
+    sessionDir,
+    cwd,
+    storagePaths.tool_storage,
+  );
   const statecontext = normalizeStateContext(raw.statecontext, path, tools);
   const mcpServers = normalizeMcpServers(raw.mcp_servers, cwd, path);
 
@@ -3068,11 +3109,13 @@ export class SessionConfigLoader {
 
   public async loadSettings(): Promise<SessionSettings> {
     const raw = (await readObject(this.paths.setting_path, true)) ?? {};
+    const cwd = await normalizeCwd(raw.cwd ?? this.paths.global_jad_root, this.paths.setting_path);
     const resolvedStoragePaths = normalizeStoragePaths(
       raw.paths,
       this.paths.setting_path,
       this.paths.setting_path,
       this.profile,
+      cwd,
     );
     if (this.resolvedStoragePaths && !samePinnedStoragePaths(this.resolvedStoragePaths, resolvedStoragePaths)) {
       throw new ConfigError(`${this.paths.setting_path}: session storage paths cannot change while this config loader is active; reopen the session to select new paths`);
@@ -3105,6 +3148,7 @@ export class SessionConfigLoader {
       this.paths.session_dir,
       this.paths.global_jad_root,
       storagePaths,
+      cwd,
     );
   }
 

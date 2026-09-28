@@ -146,7 +146,7 @@ A stream whose disk cap was reached includes `stored_bytes`, `produced_bytes`, a
 
 ## 5. Configuration
 
-Add `tools.native.process.storage_dir` to session settings. The directory is resolved from `setting.cwd` when relative, or accepted as an explicit absolute path. All limits are configuration, not call-site constants. The process policy inherits `bash` values where that produces consistent behavior; explicit process values override them.
+Add `tools.native.process.storage_dir` to session settings. Relative directories resolve beneath the selected profile's `paths.profiles.<name>.tool_storage` root, or from `setting.cwd` when no profile is selected; absolute paths are used as-is. The profile root defaults to `<cwd>/.jad/profiles/<profile-name>/tools`. Same-profile sessions and explicit shared paths still share storage without write coordination. All limits are configuration, not call-site constants. The process policy inherits `bash` values where that produces consistent behavior; explicit process values override them.
 
 ```ts
 interface NativeProcessToolSettings extends NativePathPolicy {
@@ -166,12 +166,12 @@ interface NativeProcessToolSettings extends NativePathPolicy {
   env_deny: string[];               // default: bash setting; API key always denied
   retention_days: number;           // default: 14; 0 disables pruning
   max_completed: number;            // default: 100 retained terminal records
-  storage_dir: string;              // default: .processes relative to setting.cwd
+  storage_dir: string;              // default: .processes under profile tool_storage (or setting.cwd without a profile)
   paths: NativePathRule[];          // default: bash paths, then write paths
 }
 ```
 
-`storage_dir` defaults to `.processes` below `setting.cwd`; absolute paths are used as configured. It is harness-configured storage, not a model argument. `retention_days`/`max_completed` prune terminal records and their log directories only; they never prune `running` records.
+`storage_dir` defaults to `.processes` below the active profile's `tool_storage` root, or below `setting.cwd` when no profile is selected; absolute paths are used as configured. It is harness-configured storage, not a model argument. `retention_days`/`max_completed` prune terminal records and their log directories only; they never prune `running` records.
 
 The configuration validator must reject incompatible bounds (for example `max_wait_timeout_ms < wait_timeout_ms`, zero capacities, oversized log/status limits, invalid paths, or a retention policy that could remove active records). The legacy `status_log_bytes` setting remains tail-only compatibility input and cannot be combined with explicit stream budgets. The shipped setting schema must document every default and the native definition manifest must exactly match the in-code tool schema.
 

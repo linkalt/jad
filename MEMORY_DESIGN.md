@@ -31,7 +31,7 @@ Configure storage as follows:
 }
 ```
 
-`storage_dir` defaults to `.memory` relative to `setting.cwd`. A configured absolute directory is used as-is. It is trusted harness configuration, not a model argument; session-owned storage paths are not used.
+`storage_dir` defaults to `.memory` beneath the selected profile's `paths.profiles.<name>.tool_storage` root, or beneath `setting.cwd` when no profile is selected. Relative configured directories use that same base; absolute paths are used as-is. Profile roots default to `<cwd>/.jad/profiles/<profile-name>/tools`; existing data is not migrated. Different profiles receive separate roots, but sessions using the same profile or an explicit shared path still share storage without write coordination.
 
 ```text
 <storage_dir>/
@@ -214,7 +214,7 @@ All limits are backend configuration, not model arguments. The initial native-me
 
 ```ts
 interface NativeMemoryToolSettings {
-  storage_dir: string;         // .memory relative to setting.cwd, or absolute
+  storage_dir: string;         // .memory under profile tool_storage (or setting.cwd without a profile), or absolute
   max_types: number;
   max_type_chars: number;
   allowed_types?: string[];
@@ -239,7 +239,7 @@ List responses obey item and byte budgets. The scan has independent record and b
 
 ## 7. Filesystem, concurrency, and recovery
 
-1. Resolve `storage_dir` from `setting.cwd` when relative; preserve configured absolute directories.
+1. Resolve relative `storage_dir` from the selected profile's `tool_storage` root, or from `setting.cwd` when no profile is selected; preserve configured absolute directories.
 2. Create the root and type directory only after validating the type and quotas.
 3. Use a unique temporary filename in the target directory, write valid UTF-8 JSON plus newline, then atomically rename it. Explicit fsync durability policy is deferred.
 4. Use exclusive temporary-file creation; do not expose temporary files to list operations.
@@ -292,7 +292,7 @@ The MVP scans a single type directory and treats files as the source of truth. I
 The first version is complete when it can:
 
 - create an arbitrary JSON object under a valid type and generated unique filename;
-- resolve `storage_dir` from `setting.cwd` when relative and accept explicit absolute directories;
+- resolve relative `storage_dir` from the selected profile's `tool_storage` root, or from `setting.cwd` when no profile is selected, and accept explicit absolute directories;
 - get and list records for one type without exposing definition or temporary files;
 - perform bounded exact-match filtering over safe dot paths;
 - return canonical refs and ETags outside the original payload;

@@ -43,8 +43,8 @@ The canonical actions are `list`, `get`, `add`, `update`, `done`, and `delete`. 
 
 ## Persistence and safety
 
-State is stored as `tasks.json` inside `tools.native.task.storage_dir` (default `.tasks` relative to `setting.cwd`; absolute directories are used as configured) as an atomic JSON document, guarded by a session-local mutex. IDs are never reused after deletion. A malformed task file is never overwritten: reads and mutations return an operational storage error.
+State is stored as `tasks.json` inside `tools.native.task.storage_dir` (default `.tasks` beneath the selected profile's `paths.profiles.<name>.tool_storage` root, or relative to `setting.cwd` when no profile is selected; absolute directories are used as configured) as an atomic JSON document, guarded by a session-local mutex. The mutex does not coordinate separate sessions sharing the same profile root, so this path-scoping change does not make same-profile concurrent writes safe. IDs are never reused after deletion. A malformed task file is never overwritten: reads and mutations return an operational storage error.
 
-`tools.native.task` configures `storage_dir`, capacity, and output limits: task count, list count/bytes, title length, tag/document counts and lengths, and storage bytes. Relative storage directories resolve from `setting.cwd`; absolute directories are accepted as explicit harness configuration. These settings remain backend policy rather than routine model arguments.
+`tools.native.task` configures `storage_dir`, capacity, and output limits: task count, list count/bytes, title length, tag/document counts and lengths, and storage bytes. Relative storage directories resolve from the selected profile's `tool_storage` root, or from `setting.cwd` when no profile is selected; absolute directories are accepted as explicit harness configuration and bypass the profile root. These settings remain backend policy rather than routine model arguments.
 
 The definition is opt-in through `sample/tools/native/task.json` and must exactly match the in-code schema.

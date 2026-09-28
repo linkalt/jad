@@ -153,7 +153,7 @@ backup_path: backups/src/app.ts.bak-1789994906472-00f123bb126c656b
 
 * `tools.native.edit.max_bytes` is edit-specific.
 * `tools.native.edit.paths` falls back to `tools.native.write.paths` when omitted (one path policy for file mutation), and can be overridden per session.
-* `tools.native.write.backup_dir` is absolute or relative to the session cwd and defaults to the session's own `backups` directory, so backups never litter the edited tree; `null` keeps them beside each file. The `tools.native.edit` values default to the write settings and can be overridden per tool.
+* `tools.native.write.backup_dir` is absolute or relative to the selected profile's `tool_storage` root (or the session cwd without a profile). It defaults to `tool_storage/backups` for named profiles and the session's own `backups` directory otherwise, so backups never litter the edited tree; `null` keeps them beside each file. The `tools.native.edit` values default to the write settings and can be overridden per tool.
 * As with `read` and `write`, the tool is only exposed when `tools.native.edit` is configured **and** `native.edit` is present in `tool_definition_paths` (`sample/tools/native/edit.json`).
 
 ## 10. Implementation map

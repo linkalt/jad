@@ -154,9 +154,9 @@ hint: the complete output is in .bash-output/bash-c1.stdout.log; read or grep it
 | Returned bytes | `max_bytes` | 65536 | Ceiling the four stream budgets must fit inside. |
 | stdout window | `stdout.head_bytes` / `stdout.tail_bytes` | 16384 / 32768 | What the model sees of stdout: its start and its end. |
 | stderr window | `stderr.head_bytes` / `stderr.tail_bytes` | 4096 / 12288 | Same for stderr, which noise from stdout can no longer evict. |
-| Spill directory | `spill.storage_dir` | `.bash-output` | Relative paths resolve from the session cwd; filenames are generated per call and stream. |
+| Spill directory | `spill.storage_dir` | `.bash-output` | Relative paths resolve from the selected profile's `tool_storage` root, or the session cwd without a profile; absolute paths are used as-is. |
 | Spill file | `spill.cap_bytes` | 67108864 | Bytes per stream written to disk before the file is left incomplete. |
-| Spill retention | `spill.retention_days` | 14 | Expired spill files are pruned; 0 keeps them until the session directory goes. |
+| Spill retention | `spill.retention_days` | 14 | Expired spill files are pruned; 0 disables age-based pruning. |
 | Line length | `max_line_chars` | 2000 | Cuts pathological single lines. |
 
 * Each stream keeps its own *head* window (the start) and *tail* window (the end), so a chatty build
@@ -278,14 +278,17 @@ turn waits for `timeout_ms`. Wiring cancellation into `AgentSession.run` is a se
 }
 ```
 
-* `spill.storage_dir` is a plain directory path, resolved relative to the session cwd (absolute paths are
-  accepted). The tool generates `bash-{call_id}.{stream}.log` names internally, encoding call IDs so they
-  cannot introduce path separators and bounding very long names. `stdout_full`/`stderr_full` remain result
+* `spill.storage_dir` is a plain directory path. Relative values resolve beneath the selected profile's
+  `tool_storage` root, or relative to the session cwd without a profile; absolute paths are accepted as-is.
+  The tool generates `bash-{call_id}.{stream}.log` names internally, encoding call IDs so they cannot
+  introduce path separators and bounding very long names. `stdout_full`/`stderr_full` remain result
   metadata identifying retained files; they are no longer the normal configuration keys.
 * Legacy `stdout_full`/`stderr_full` path templates are accepted temporarily for existing settings and
   marked deprecated in the schema. If either is configured, legacy mode takes precedence and an explicit
   non-default `storage_dir` cannot be combined with them; remove both templates to migrate. Legacy
-  templates still support `{cwd}`, `{session_dir}`, `{session_name}`, `{call_id}`, and `{stream}`.
+  templates still support `{cwd}`, `{session_dir}`, `{session_name}`, `{call_id}`, and `{stream}`. With a
+  named profile, relative template targets are resolved under its `tool_storage` root; targets resolving
+  to absolute paths remain direct. Without a profile, existing template behavior is preserved.
 * Spill locations are validated so the model can retrieve them: generated files (or legacy template
   targets) must be readable through the session cwd or through a `tools.native.read`/`grep` allow rule,
   and not covered by a deny rule, or the session refuses to load unless `spill.allow_unreadable` is set.
