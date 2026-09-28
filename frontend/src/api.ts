@@ -231,9 +231,11 @@ async function fetchConditional<T>(
   path: string,
   etag: string | undefined,
   parse: (value: unknown) => T,
+  signal?: AbortSignal,
 ): Promise<ConditionalResult<T>> {
   const response = await authenticatedFetch(apiUrl(path), {
     headers: etag === undefined ? {} : {'If-None-Match': etag},
+    ...(signal === undefined ? {} : {signal}),
   });
   const responseEtag = response.headers.get('etag') ?? undefined;
   if (response.status === 304) {
@@ -247,13 +249,14 @@ async function fetchConditional<T>(
 
 export async function fetchSessions(
   etag?: string,
+  signal?: AbortSignal,
 ): Promise<ConditionalResult<SessionSnapshot[]>> {
   return fetchConditional('/sessions', etag, value => {
     if (!isRecord(value) || !Array.isArray(value.sessions)) {
       throw new Error('the server returned invalid sessions');
     }
     return value.sessions as SessionSnapshot[];
-  });
+  }, signal);
 }
 
 export async function fetchSession(
@@ -265,6 +268,7 @@ export async function fetchSession(
     turns?: number;
     /** One path profile of the session; absent follows its stored default. */
     profile?: string;
+    signal?: AbortSignal;
   } = {},
 ): Promise<ConditionalResult<SessionSnapshot>> {
   const query = new URLSearchParams();
@@ -287,6 +291,7 @@ export async function fetchSession(
       }
       return value as unknown as SessionSnapshot;
     },
+    options.signal,
   );
 }
 
@@ -368,6 +373,7 @@ export async function fetchSessionHistory(
   sessionId: string,
   etag?: string,
   profile?: string,
+  signal?: AbortSignal,
 ): Promise<ConditionalResult<{messages: WebUiMessage[]}>> {
   return fetchConditional(
     `/sessions/${encodeURIComponent(sessionId)}/history${profileQuery(profile)}`,
@@ -378,6 +384,7 @@ export async function fetchSessionHistory(
       }
       return {messages: value.messages as WebUiMessage[]};
     },
+    signal,
   );
 }
 

@@ -65,6 +65,8 @@ import {
   type WebUiPart,
 } from './api';
 import appConfig from './config.json';
+import {readAttachmentBlocks} from './attachment-reading';
+import {createCoalescedRefresh} from './coalesced-refresh';
 import {deepEqual} from './deepEqual';
 import {selectedModelForSession} from './model-selection';
 import {selectionAfterPanelToggle, type RightPanelId} from './right-panel';
@@ -143,6 +145,7 @@ import {
   type PinnedView,
   type SessionListRow,
 } from './session-views';
+import {removeViewKeys, removedViewKeys} from './view-cache';
 
 function ResetChatIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -2292,6 +2295,14 @@ function App() {
   const activeSessionId = sessionRefOfViewKey(activeViewKey);
   const activeProfile = profileOfViewKey(activeViewKey);
   const isPinnedView = isPinnedViewKey(activeViewKey);
+  const previousViewKeysRef = useRef<Set<string> | null>(null);
+  if (previousViewKeysRef.current === null) {
+    previousViewKeysRef.current = new Set([
+      ...initialSessions.map(session => session.id),
+      ...INITIAL_VIEWS.views.map(view => viewKey(view.sessionRef, view.profile)),
+      INITIAL_VIEWS.activeViewKey,
+    ]);
+  }
   const [isProfileSwitching, setIsProfileSwitching] = useState(false);
   const [isModelDefaultUpdating, setIsModelDefaultUpdating] = useState(false);
   const isModelDefaultUpdatingRef = useRef(false);
@@ -2527,16 +2538,10 @@ function App() {
     if (files.length === 0) {
       return;
     }
-    const limit = appConfig.attach_context_max_chars_per_file;
-    const blocks = await Promise.all(
-      files.map(async file => {
-        const text = await file.text();
-        const body =
-          text.length > limit
-            ? `${text.slice(0, limit)}\n\n… truncated at ${limit} characters`
-            : text;
-        return `**Attached: ${file.name}**\n\n\`\`\`\n${body}\n\`\`\``;
-      }),
+    const blocks = await readAttachmentBlocks(
+      files,
+      appConfig.attach_context_max_chars_per_file,
+      appConfig.attach_context_read_concurrency,
     );
     insertIntoComposerRef.current?.text(blocks.join('\n\n'));
   }, []);
@@ -2600,6 +2605,9 @@ function App() {
   const loadFullMessage = useCallback(
     (message: MessageRecord) => {
       const uiId = activeViewKeyRef.current;
+      if (!previousViewKeysRef.current?.has(uiId)) {
+        return;
+      }
       const resetEpoch = transcriptResetEpochRef.current.get(uiId) ?? 0;
       const profile = profileOfViewKey(uiId);
       const sessionRef = activeSessionEntryRef.current?.sessionRef;
@@ -2701,6 +2709,31 @@ function App() {
    * `setting.json` with the other rows.
    */
   const [rowSessions, setRowSessions] = useState<Record<string, Session>>({});
+
+  const forgetViewCaches = useCallback((viewKeys: ReadonlySet<string>) => {
+    if (viewKeys.size === 0) {
+      return;
+    }
+    for (const key of viewKeys) {
+      transcriptResetEpochRef.current.set(
+        key,
+        (transcriptResetEpochRef.current.get(key) ?? 0) + 1,
+      );
+      hydratedMessagesRef.current.delete(key);
+      hydratedTranscriptSessionIdsRef.current.delete(key);
+    }
+    if (viewKeys.has(activeViewKeyRef.current)) {
+      snapshotEtagRef.current = undefined;
+    }
+    if (historyRef.current !== null && viewKeys.has(historyRef.current.uiId)) {
+      setHistory(null);
+    }
+    setThreads(current => removeViewKeys(current, viewKeys));
+    setSessionPages(current => removeViewKeys(current, viewKeys));
+    setRowSessions(current => removeViewKeys(current, viewKeys));
+    // Keep loadingOlderRef entries until their requests settle; their captured
+    // reset epoch now prevents an evicted result from repopulating the cache.
+  }, [setHistory]);
 
   const activeRowSession: Session = !isPinnedView
     ? activeSession
@@ -2921,6 +2954,7 @@ function App() {
     (session: Session | undefined, uiId: string) => {
       const page = sessionPages[uiId];
       if (
+        !previousViewKeysRef.current?.has(uiId) ||
         session?.source !== 'live' ||
         session.sessionRef === undefined ||
         page === undefined ||
@@ -3888,19 +3922,37 @@ function App() {
     return viewKeys;
   }, [detachedRunSessionIds, runningSessionId]);
 
-  // A row whose session disappeared server-side is dropped. Only a list that came
-  // from the server can say that: pruning against the placeholders of the first
-  // paint would drop the rows that were just restored, and persist that loss.
+  // A server-confirmed session list owns which view caches are still useful.
+  // Keep first-paint placeholders until that list arrives, then evict unpinned
+  // views and sessions that disappeared. Their next visit can hydrate from the
+  // authoritative transcript again.
   useEffect(() => {
     if (!hasLoadedSessionsRef.current) {
       return;
     }
-    const knownIds = sessions.map(session => session.id);
-    setPinnedViews(current => {
-      const pruned = prunePinnedViews(current, knownIds);
-      return pruned.length === current.length ? current : pruned;
-    });
-  }, [sessions]);
+    const knownIds = new Set(sessions.map(session => session.id));
+    const prunedPinnedViews = prunePinnedViews(pinnedViews, [...knownIds]);
+    const retainedPinnedViews = prunedPinnedViews.length === pinnedViews.length
+      ? pinnedViews
+      : prunedPinnedViews;
+    if (retainedPinnedViews !== pinnedViews) {
+      setPinnedViews(retainedPinnedViews);
+    }
+
+    const retainedViewKeys = new Set(knownIds);
+    for (const view of retainedPinnedViews) {
+      retainedViewKeys.add(viewKey(view.sessionRef, view.profile));
+    }
+    const activeSessionRef = sessionRefOfViewKey(activeViewKey);
+    if (knownIds.has(activeSessionRef)) {
+      retainedViewKeys.add(activeViewKey);
+    }
+    const previousViewKeys = previousViewKeysRef.current;
+    previousViewKeysRef.current = retainedViewKeys;
+    if (previousViewKeys !== null) {
+      forgetViewCaches(removedViewKeys(previousViewKeys, retainedViewKeys));
+    }
+  }, [activeViewKey, forgetViewCaches, pinnedViews, sessions]);
 
   useEffect(() => {
     writeStoredViews(appConfig.session_views_storage_key, {views: pinnedViews, activeViewKey});
@@ -3944,6 +3996,8 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    const sessionRefreshController = new AbortController();
+    const transcriptRefreshController = new AbortController();
     // The transcript of the session being viewed, fetched separately from the
     // list because only one transcript is ever needed at a time.
     // The block is fetched only when the snapshot's reference names a copy other
@@ -3954,6 +4008,7 @@ function App() {
       uiId: string,
       reference: SessionSnapshot['history'],
       profile: string | undefined,
+      signal: AbortSignal,
     ): Promise<HistoryBlock | null> => {
       const resetEpoch = transcriptResetEpochRef.current.get(uiId) ?? 0;
       const held = historyRef.current !== null && historyRef.current.uiId === uiId
@@ -3972,8 +4027,8 @@ function App() {
       if (held !== null && held.etag === reference.etag) {
         return held;
       }
-      const result = await fetchSessionHistory(sessionRef, held?.etag, profile);
-      if ((transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch) {
+      const result = await fetchSessionHistory(sessionRef, held?.etag, profile, signal);
+      if (cancelled || (transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch) {
         return null;
       }
       if (result.kind === 'ok') {
@@ -3989,7 +4044,21 @@ function App() {
       return held;
     };
 
-    const loadTranscript = (sessionRef: string, uiId: string, profile: string | undefined) => {
+    let requestedTranscript: {
+      sessionRef: string;
+      uiId: string;
+      profile: string | undefined;
+    } | null = null;
+    const transcriptRefresh = createCoalescedRefresh(async () => {
+      const request = requestedTranscript;
+      if (
+        cancelled ||
+        request === null ||
+        !previousViewKeysRef.current?.has(request.uiId)
+      ) {
+        return;
+      }
+      const {sessionRef, uiId, profile} = request;
       const resetEpoch = transcriptResetEpochRef.current.get(uiId) ?? 0;
       // A client-owned run already has its optimistic turn in memory, so leave
       // it alone. A fresh page attached to a run still needs one transcript
@@ -4002,56 +4071,68 @@ function App() {
       })) {
         return;
       }
-      void fetchSession(sessionRef, {
+      const result = await fetchSession(sessionRef, {
         etag: snapshotEtagRef.current,
         ...(profile === undefined ? {} : {profile}),
-      })
-        .then(async result => {
-          if (
-            cancelled ||
-            (transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch ||
-            result.kind !== 'ok'
-          ) {
-            return;
-          }
-          snapshotEtagRef.current = result.etag;
-          const snapshot = result.value;
-          await ensureHistory(sessionRef, uiId, snapshot.history, profile);
-          if (
-            cancelled ||
-            (transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch
-          ) {
-            return;
-          }
-          const messages = applyHydrated(uiId, snapshot.messages ?? []);
-          setThreads(current => {
-            const previous = current[uiId];
-            // Reuse the existing array when the payload is structurally
-            // identical: a new identity re-renders every row of that thread.
-            if (previous !== undefined && deepEqual(previous, messages)) {
-              return current;
-            }
-            return {...current, [uiId]: messages};
-          });
-          if (snapshot.page !== undefined) {
-            setSessionPages(current => ({...current, [uiId]: snapshot.page!}));
-          }
-          hydratedTranscriptSessionIdsRef.current.add(uiId);
-          applyRowSnapshot(uiId, sessionRef, profile, snapshot);
-        })
-        .catch(error => {
-          if (!cancelled) {
-            console.warn('Unable to load the session transcript:', error);
-          }
-        });
+        signal: transcriptRefreshController.signal,
+      });
+      if (
+        cancelled ||
+        (transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch ||
+        result.kind !== 'ok'
+      ) {
+        return;
+      }
+      // A prior view's request can finish after a switch. Keep its useful cached
+      // transcript, but do not overwrite the active view's conditional token.
+      if (activeViewRef.current.viewKey === uiId) {
+        snapshotEtagRef.current = result.etag;
+      }
+      const snapshot = result.value;
+      await ensureHistory(
+        sessionRef,
+        uiId,
+        snapshot.history,
+        profile,
+        transcriptRefreshController.signal,
+      );
+      if (
+        cancelled ||
+        (transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch
+      ) {
+        return;
+      }
+      const messages = applyHydrated(uiId, snapshot.messages ?? []);
+      setThreads(current => {
+        const previous = current[uiId];
+        // Reuse the existing array when the payload is structurally
+        // identical: a new identity re-renders every row of that thread.
+        if (previous !== undefined && deepEqual(previous, messages)) {
+          return current;
+        }
+        return {...current, [uiId]: messages};
+      });
+      if (snapshot.page !== undefined) {
+        setSessionPages(current => ({...current, [uiId]: snapshot.page!}));
+      }
+      hydratedTranscriptSessionIdsRef.current.add(uiId);
+      applyRowSnapshot(uiId, sessionRef, profile, snapshot);
+    }, error => {
+      if (!cancelled) {
+        console.warn('Unable to load the session transcript:', error);
+      }
+    });
+    const loadTranscript = (sessionRef: string, uiId: string, profile: string | undefined) => {
+      requestedTranscript = {sessionRef, uiId, profile};
+      transcriptRefresh.request();
     };
 
-    const loadSessions = () => {
+    const refreshSessionList = () => {
       const resetEpochsAtStart = new Map(transcriptResetEpochRef.current);
       const wasResetDuringRequest = (uiId: string) =>
         (resetEpochsAtStart.get(uiId) ?? 0) !==
         (transcriptResetEpochRef.current.get(uiId) ?? 0);
-      void fetchSessions(sessionsEtagRef.current)
+      return fetchSessions(sessionsEtagRef.current, sessionRefreshController.signal)
         .then(result => {
           if (cancelled) {
             return;
@@ -4136,13 +4217,14 @@ function App() {
             // object, so keep the previous array when nothing actually changed.
             return deepEqual(current, nextSessions) ? current : nextSessions;
           });
-        })
-        .catch(error => {
-          if (!cancelled) {
-            console.warn('Unable to load configured sessions:', error);
-          }
         });
     };
+    const sessionRefresh = createCoalescedRefresh(refreshSessionList, error => {
+      if (!cancelled) {
+        console.warn('Unable to load configured sessions:', error);
+      }
+    });
+    const loadSessions = () => sessionRefresh.request();
 
     refreshSessionsRef.current = loadSessions;
     loadSessions();
@@ -4154,6 +4236,10 @@ function App() {
     const refreshTimer = window.setInterval(loadSessions, refreshInterval);
     return () => {
       cancelled = true;
+      sessionRefresh.dispose();
+      transcriptRefresh.dispose();
+      sessionRefreshController.abort();
+      transcriptRefreshController.abort();
       refreshSessionsRef.current = null;
       window.clearInterval(refreshTimer);
     };

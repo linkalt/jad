@@ -53,6 +53,7 @@
   "attach_context_enabled": true,
   "attach_context_accept": ".txt,.md,.markdown,.json,.jsonl,.csv,.log,.yml,.yaml,.ts,.tsx,.js,.jsx,.py,.css,.html,.sh",
   "attach_context_max_chars_per_file": 20000,
+  "attach_context_read_concurrency": 4,
   "prompt_library_storage_key": "agent-harness.prompt-library",
   "session_search_max_results": 50,
   "chunk_size_warning_limit_kb": 600,
