@@ -39,6 +39,10 @@ import {TaskStore} from "./tools/native/task-store.js";
 import {MemoryStore} from "./tools/native/memory-store.js";
 import {McpServerManager} from "./tools/mcp/manager.js";
 import {collectStateContextSnapshot} from "./statecontext.js";
+import {
+  providerRunMemoryTrace,
+  type RunMemoryTraceHandle,
+} from "./run-memory-trace.js";
 
 export type SessionUserInput = string | ResponseInputItem | readonly ResponseInputItem[];
 
@@ -363,120 +367,166 @@ export class AgentSession {
     options: AgentRunOptions = {},
   ): Promise<AgentRunResult> {
     return this.runMutex.runExclusive(async () => {
-      this.assertOpen();
-      throwIfAborted(options.signal);
-      const inputItems = normalizeSessionInput(input);
-      await this.repairPendingToolCalls();
-      const priorUsage = await this.store.readUsageSummary();
-      if (priorUsage.turn_count >= Number.MAX_SAFE_INTEGER) {
-        throw new Error("session turn counter is exhausted");
-      }
-      const sessionTurn = priorUsage.turn_count + 1;
-      await this.store.appendInputItems(inputItems);
-      throwIfAborted(options.signal);
-      const config = await this.loader.load(options.modelConfigPath);
-      const catalog = await loadToolCatalog(config, {processManager: this.processManager, taskStore: this.taskStore, memoryStore: this.memoryStore, mcpManager: this.mcpManager});
-      const client = this.options.client ?? createClient(config, this.options.environment ?? process.env);
-      const maxToolRounds = validateMaxToolRounds(
-        options.maxToolRounds ?? config.settings.max_tool_rounds,
-      );
-
-      for (let round = 0; ; round += 1) {
-        // messages.jsonl is authoritative; avoid rewriting the full derived cache each tool round.
-        const history: ResponseInputItem[] = [];
-        for await (const item of this.store.readInputItems({persistCache: false})) {
-          history.push(item);
-        }
-        const stateContext = await this.readActiveStateContext(config);
-        const request = buildResponseRequest(
-          config,
-          history,
-          catalog.responseTools(),
-          stateContext,
-        );
-        const response = await persistOpenAIResponse(client, this.store, request, {
-          turnId: options.turnId ? `${options.turnId}-${round}` : undefined,
-          sessionTurn,
-          sessionStep: round + 1,
-          onEvent: options.onEvent,
-          signal: options.signal,
-        });
-        await options.onResponseCommitted?.(response);
-        const calls = responseFunctionCalls(response.event.response);
-        const usage = response.event.response.usage;
-        let refreshStateContext = false;
-        if (
-          config.settings.compaction.auto_enabled &&
-          response.event.response.status === "completed" &&
-          isRecord(usage) &&
-          typeof usage.input_tokens === "number" &&
-          usage.input_tokens >= config.settings.compaction.trigger_tokens
-        ) {
-          const responseId = response.event.response.id;
-          const compaction = await this.compactWithSettings(
-            config.settings.compaction,
-            calls.length > 0 && typeof responseId === "string" ? responseId : undefined,
-          );
-          refreshStateContext = compaction.compacted
-            && config.settings.statecontext.enabled
-            && config.settings.statecontext.trigger.includes("compaction");
-          if (compaction.compacted) await options.onUsageChanged?.();
-        }
-        if (calls.length === 0) {
-          if (refreshStateContext) await this.refreshStateContext(config, "compaction");
-          throwIfAborted(options.signal);
-          return {config, response};
-        }
-        if (round >= maxToolRounds) {
-          await this.appendToolOutputs(
-            calls,
-            [],
-            "tool_round_limit",
-            `Tool execution was not started because the ${maxToolRounds}-round limit was reached.`,
-          );
-          if (refreshStateContext) await this.refreshStateContext(config, "compaction");
-          throw new Error(`tool execution exceeded ${maxToolRounds} tool rounds`);
-        }
-
-        const toolOutputsByCallId = new Map<string, ResponseInputItem>();
-        let executionError: unknown;
-        try {
-          for (const call of calls) {
-            throwIfAborted(options.signal);
-            const toolOutput = await catalog.executeFunctionCall(call, {
-              workspaceRoot: config.settings.cwd,
-              sessionDir: config.paths.session_dir,
-              signal: options.signal,
-            });
-            const callId = functionCallId(toolOutput);
-            if (callId !== undefined) {
-              toolOutputsByCallId.set(callId, toolOutput);
-            }
-          }
-        } catch (error) {
-          executionError = error;
-        }
-
-        const toolOutputs = await this.appendToolOutputs(
-          calls,
-          [...toolOutputsByCallId.values()],
-          options.signal?.aborted
-            ? "tool_execution_cancelled"
-            : "tool_execution_failed",
-          options.signal?.aborted
-            ? "Tool execution was cancelled before every call produced a persisted result."
-            : "Tool execution failed before every call produced a persisted result.",
-        );
-        if (refreshStateContext) await this.refreshStateContext(config, "compaction");
-        for (const toolOutput of toolOutputs) {
-          await options.onToolResult?.(toolOutput);
-        }
-        if (executionError !== undefined) {
-          throw executionError;
-        }
-        throwIfAborted(options.signal);
+      const memoryTrace = providerRunMemoryTrace.beginRun();
+      try {
+        return await this.runUnlocked(input, options, memoryTrace);
+      } finally {
+        memoryTrace.stop();
       }
     });
+  }
+
+  private async runUnlocked(
+    input: SessionUserInput,
+    options: AgentRunOptions,
+    memoryTrace: RunMemoryTraceHandle,
+  ): Promise<AgentRunResult> {
+    this.assertOpen();
+    throwIfAborted(options.signal);
+    const inputItems = normalizeSessionInput(input);
+    memoryTrace.mark("input-normalized", {input_items: inputItems.length});
+    await this.repairPendingToolCalls();
+    const priorUsage = await this.store.readUsageSummary();
+    if (priorUsage.turn_count >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("session turn counter is exhausted");
+    }
+    const sessionTurn = priorUsage.turn_count + 1;
+    await this.store.appendInputItems(inputItems);
+    throwIfAborted(options.signal);
+    const config = await this.loader.load(options.modelConfigPath);
+    const catalog = await loadToolCatalog(config, {processManager: this.processManager, taskStore: this.taskStore, memoryStore: this.memoryStore, mcpManager: this.mcpManager});
+    const client = this.options.client ?? createClient(config, this.options.environment ?? process.env);
+    const maxToolRounds = validateMaxToolRounds(
+      options.maxToolRounds ?? config.settings.max_tool_rounds,
+    );
+
+    for (let round = 0; ; round += 1) {
+      // messages.jsonl is authoritative; avoid rewriting the full derived cache each tool round.
+      const history: ResponseInputItem[] = [];
+      for await (const item of this.store.readInputItems({persistCache: false})) {
+        history.push(item);
+      }
+      const transcriptBytes = memoryTrace.enabled
+        ? await stat(this.store.messagesPath).then(({size}) => size, () => undefined)
+        : undefined;
+      memoryTrace.mark("history-loaded", {
+        round,
+        history_items: history.length,
+        ...(transcriptBytes === undefined ? {} : {transcript_bytes: transcriptBytes}),
+      });
+      const stateContext = await this.readActiveStateContext(config);
+      const responseTools = catalog.responseTools();
+      const request = buildResponseRequest(
+        config,
+        history,
+        responseTools,
+        stateContext,
+      );
+      memoryTrace.mark("request-built", {
+        round,
+        history_items: history.length,
+        tool_count: responseTools.length,
+        has_state_context: stateContext !== undefined,
+      });
+      const response = await persistOpenAIResponse(client, this.store, request, {
+        turnId: options.turnId ? `${options.turnId}-${round}` : undefined,
+        sessionTurn,
+        sessionStep: round + 1,
+        onEvent: options.onEvent,
+        signal: options.signal,
+      });
+      await options.onResponseCommitted?.(response);
+      const calls = responseFunctionCalls(response.event.response);
+      const usage = response.event.response.usage;
+      memoryTrace.mark("provider-response-complete", {
+        round,
+        output_items: Array.isArray(response.event.response.output)
+          ? response.event.response.output.length
+          : 0,
+        ...(isRecord(usage) && typeof usage.input_tokens === "number"
+          ? {input_tokens: usage.input_tokens}
+          : {}),
+        ...(isRecord(usage) && typeof usage.output_tokens === "number"
+          ? {output_tokens: usage.output_tokens}
+          : {}),
+      });
+      let refreshStateContext = false;
+      if (
+        config.settings.compaction.auto_enabled &&
+        response.event.response.status === "completed" &&
+        isRecord(usage) &&
+        typeof usage.input_tokens === "number" &&
+        usage.input_tokens >= config.settings.compaction.trigger_tokens
+      ) {
+        const responseId = response.event.response.id;
+        const compaction = await this.compactWithSettings(
+          config.settings.compaction,
+          calls.length > 0 && typeof responseId === "string" ? responseId : undefined,
+        );
+        refreshStateContext = compaction.compacted
+          && config.settings.statecontext.enabled
+          && config.settings.statecontext.trigger.includes("compaction");
+        if (compaction.compacted) await options.onUsageChanged?.();
+      }
+      if (calls.length === 0) {
+        if (refreshStateContext) await this.refreshStateContext(config, "compaction");
+        throwIfAborted(options.signal);
+        return {config, response};
+      }
+      if (round >= maxToolRounds) {
+        await this.appendToolOutputs(
+          calls,
+          [],
+          "tool_round_limit",
+          `Tool execution was not started because the ${maxToolRounds}-round limit was reached.`,
+        );
+        if (refreshStateContext) await this.refreshStateContext(config, "compaction");
+        throw new Error(`tool execution exceeded ${maxToolRounds} tool rounds`);
+      }
+
+      const toolOutputsByCallId = new Map<string, ResponseInputItem>();
+      let executionError: unknown;
+      try {
+        for (const call of calls) {
+          throwIfAborted(options.signal);
+          const toolOutput = await catalog.executeFunctionCall(call, {
+            workspaceRoot: config.settings.cwd,
+            sessionDir: config.paths.session_dir,
+            signal: options.signal,
+          });
+          const callId = functionCallId(toolOutput);
+          if (callId !== undefined) {
+            toolOutputsByCallId.set(callId, toolOutput);
+          }
+        }
+      } catch (error) {
+        executionError = error;
+      }
+
+      const toolOutputs = await this.appendToolOutputs(
+        calls,
+        [...toolOutputsByCallId.values()],
+        options.signal?.aborted
+          ? "tool_execution_cancelled"
+          : "tool_execution_failed",
+        options.signal?.aborted
+          ? "Tool execution was cancelled before every call produced a persisted result."
+          : "Tool execution failed before every call produced a persisted result.",
+      );
+      memoryTrace.mark("tool-results-persisted", {
+        round,
+        tool_calls: calls.length,
+        tool_results: toolOutputs.length,
+      });
+      if (refreshStateContext) await this.refreshStateContext(config, "compaction");
+      for (const toolOutput of toolOutputs) {
+        await options.onToolResult?.(toolOutput);
+      }
+      if (executionError !== undefined) {
+        throw executionError;
+      }
+      throwIfAborted(options.signal);
+    }
   }
 
   private async repairPendingToolCalls(): Promise<void> {
