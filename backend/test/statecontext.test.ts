@@ -163,12 +163,12 @@ test("memory statecontext excludes only matching values while retaining other st
     await store.create("bug_report", {component: "frontend", title: "legacy"}, memoryPolicy);
     await store.create("bug_report", {status: "open", component: "backend", title: "other component"}, memoryPolicy);
     const state = await collectMemoryStateContext(store, memoryPolicy, [
-      {type: "bug_report", filter: {component: "frontend"}, exclude: {status: "closed"}, limit: 10},
+      {type: "bug_report", filter: {component: "frontend"}, exclude_any: [{status: "closed"}], limit: 10},
     ]);
-    const items = state.items as Array<{data: {title: string}; exclude?: {status: string}} >;
+    const items = state.items as Array<{data: {title: string}; exclude_any?: Array<{status: string}>}>;
     assert.deepEqual(items.map(({data}) => data.title).sort(), ["future", "legacy", "open"]);
-    assert.ok(items.every((item) => item.exclude?.status === "closed"));
-    assert.deepEqual(state.queries, [{type: "bug_report", filter: {component: "frontend"}, exclude: {status: "closed"}, returned: 3, has_more: false}]);
+    assert.ok(items.every((item) => item.exclude_any?.length === 1));
+    assert.deepEqual(state.queries, [{type: "bug_report", filter: {component: "frontend"}, exclude_any: [{status: "closed"}], returned: 3, has_more: false}]);
     assert.equal(state.has_more, false);
     await assert.rejects(() => stat(join(root, ".memory-cursors")), {code: "ENOENT"});
   } finally {
@@ -214,8 +214,7 @@ test("memory list retains exclusion clauses when resuming a cursor", async () =>
     await store.create("bug_report", {status: "fixed"}, memoryPolicy);
     await store.create("bug_report", {status: "in_progress"}, memoryPolicy);
     const first = await store.list("bug_report", undefined, 1, "newest", undefined, memoryPolicy, {
-      exclude: {status: "closed"},
-      excludeAny: [{status: "fixed"}],
+      excludeAny: [{status: "closed"}, {status: "fixed"}],
     });
     assert.deepEqual(first.items.map(({data}) => data.status), ["in_progress"]);
     assert.equal(first.hasMore, true);

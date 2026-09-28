@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {execFileSync} from "node:child_process";
-import {access, chmod, mkdir, rm, symlink, writeFile} from "node:fs/promises";
+import {access, chmod, mkdir, mkdtemp, rm, symlink, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
@@ -348,15 +348,21 @@ test("stops at the byte budget and says so", {skip: ripgrepSkip}, async () => {
   }
 });
 
-test("reports a timeout as a truncated success", {skip: ripgrepSkip}, async () => {
-  const {sessionDir, run} = await openGlobSession({timeout_ms: 1});
+test("reports a timeout as a truncated success", {skip: process.platform === "win32" ? "uses a POSIX executable fixture" : false}, async () => {
+  const binaryDir = await mkdtemp(join(tmpdir(), "agent-glob-timeout-bin-"));
+  let sessionDir: string | undefined;
   try {
-    await writeTree(sessionDir);
-    const output = await run("glob-timeout", {pattern: "*"});
+    const binary = join(binaryDir, "rg-timeout");
+    await writeFile(binary, "#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n", "utf8");
+    await chmod(binary, 0o755);
+    const session = await openGlobSession({binary, timeout_ms: 100});
+    sessionDir = session.sessionDir;
+    const output = await session.run("glob-timeout", {pattern: "*"});
     assert.equal(firstLine(output).status, "ok");
     assert.equal(informationFields(output).truncation_reason, "timeout");
   } finally {
-    await rm(sessionDir, {recursive: true, force: true});
+    if (sessionDir) await rm(sessionDir, {recursive: true, force: true});
+    await rm(binaryDir, {recursive: true, force: true});
   }
 });
 

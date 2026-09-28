@@ -222,7 +222,6 @@ export interface NativeProcessStateContextSettings extends JsonRecord {
 export interface NativeMemoryStateContextSelector extends JsonRecord {
   type: string;
   filter: JsonRecord;
-  exclude?: JsonRecord;
   exclude_any?: JsonRecord[];
   limit: number;
 }
@@ -1652,8 +1651,6 @@ function normalizeMemoryStateContext(value: unknown, path: string, maxLimit: num
     if (allowedTypes && !allowedTypes.includes(type)) throw new ConfigError(`${entryPath}.type is not in tools.native.memory.allowed_types`);
     const filter = entry.filter ?? {};
     if (!isRecord(filter)) throw new ConfigError(`${entryPath}.filter must be an object`);
-    const exclude = entry.exclude ?? {};
-    if (!isRecord(exclude)) throw new ConfigError(`${entryPath}.exclude must be an object`);
     const rawExcludeAny = entry.exclude_any ?? [];
     if (!Array.isArray(rawExcludeAny) || rawExcludeAny.length > maxFilterFields) {
       throw new ConfigError(`${entryPath}.exclude_any must be an array within tools.native.memory filter limits`);
@@ -1664,9 +1661,9 @@ function normalizeMemoryStateContext(value: unknown, path: string, maxLimit: num
       }
       return clause;
     });
-    const filterKeys = [...Object.keys(filter), ...Object.keys(exclude), ...excludeAny.flatMap(Object.keys)];
+    const filterKeys = [...Object.keys(filter), ...excludeAny.flatMap(Object.keys)];
     if (filterKeys.length > maxFilterFields || filterKeys.some((key) => key.split(".").length > maxFilterDepth || key.split(".").some((part) => !/^[A-Za-z0-9_-]+$/.test(part)))) {
-      throw new ConfigError(`${entryPath}.filter/exclude/exclude_any exceeds tools.native.memory filter limits`);
+      throw new ConfigError(`${entryPath}.filter/exclude_any exceeds tools.native.memory filter limits`);
     }
     const limit = entry.limit ?? Math.min(DEFAULT_NATIVE_MEMORY_STATECONTEXT_LIMIT, maxLimit);
     if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > maxLimit) {
@@ -1675,7 +1672,6 @@ function normalizeMemoryStateContext(value: unknown, path: string, maxLimit: num
     return {
       type,
       filter,
-      ...(Object.keys(exclude).length ? {exclude} : {}),
       ...(excludeAny.length ? {exclude_any: excludeAny} : {}),
       limit,
     };

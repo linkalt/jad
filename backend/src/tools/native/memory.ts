@@ -30,19 +30,13 @@ export async function collectMemoryStateContext(
   const items: JsonRecord[] = [];
   const queries: JsonRecord[] = [];
   for (const selector of selectors) {
-    const exclude = selector.exclude ?? {};
     const excludeAny = selector.exclude_any ?? [];
-    const hasExclude = Object.keys(exclude).length > 0;
     const hasExcludeAny = excludeAny.length > 0;
     const listed = await store.list(selector.type, selector.filter, selector.limit, "newest", undefined, policy, {
       createCursor: false,
-      ...(hasExclude ? {exclude} : {}),
       ...(hasExcludeAny ? {excludeAny} : {}),
     });
-    const exclusion = {
-      ...(hasExclude ? {exclude} : {}),
-      ...(hasExcludeAny ? {exclude_any: excludeAny} : {}),
-    };
+    const exclusion = hasExcludeAny ? {exclude_any: excludeAny} : {};
     items.push(...listed.items.map(({ref, data}) => ({type: selector.type, ref, filter: selector.filter, ...exclusion, data})));
     queries.push({type: selector.type, filter: selector.filter, ...exclusion, returned: listed.items.length, has_more: listed.hasMore});
   }

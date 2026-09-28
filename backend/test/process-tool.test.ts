@@ -205,6 +205,38 @@ test("retains only the configured number of completed process records", async ()
   }
 });
 
+test("wait does not report completion until retention pruning finishes", async () => {
+  const {directory, manager, run} = await makeRunner({max_completed: 1});
+  let releasePrune!: () => void;
+  let signalPrune!: () => void;
+  const blockedPrune = new Promise<void>((resolve) => { releasePrune = resolve; });
+  const pruneEntered = new Promise<void>((resolve) => { signalPrune = resolve; });
+  const internals = manager as unknown as {
+    prune: (maxCompleted: number, retentionDays: number) => Promise<void>;
+  };
+  const originalPrune = internals.prune.bind(manager);
+  internals.prune = async (maxCompleted, retentionDays) => {
+    signalPrune();
+    await blockedPrune;
+    await originalPrune(maxCompleted, retentionDays);
+  };
+  try {
+    const id = resultId(await run({command: "true"}));
+    await pruneEntered;
+    const whilePruning = await manager.wait(id, 10);
+    assert.equal(whilePruning.waited, false);
+    releasePrune();
+    const finalized = await manager.wait(id, 1_000);
+    assert.equal(finalized.waited, true);
+    assert.equal(finalized.snapshot?.state, "exited");
+  } finally {
+    releasePrune();
+    internals.prune = originalPrune;
+    await manager.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test("normalizes process aliases and marks unclean-running records lost on recovery", async () => {
   assert.deepEqual(normalizeProcessArguments({action: "KILL", id: " abc "}), {action: "stop", id: "abc"});
   assert.deepEqual(normalizeProcessArguments({filter: "ALL"}), {action: "list"});

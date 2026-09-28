@@ -237,9 +237,10 @@ export class ProcessManager {
 
   public async wait(id: string, timeoutMs: number): Promise<{snapshot?: ProcessSnapshot; waited: boolean}> {
     const entry = this.entries.get(id);
-    if (!entry || terminal(entry.manifest.state)) return {snapshot: this.snapshot(id), waited: true};
+    if (!entry) return {snapshot: this.snapshot(id), waited: true};
     let timer: NodeJS.Timeout | undefined;
     const timedOut = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), timeoutMs); });
+    // A terminal manifest may be visible before persistence and retention pruning finish.
     const finished = entry.done.then(() => false);
     const timeout = await Promise.race([timedOut, finished]);
     if (timer) clearTimeout(timer);
