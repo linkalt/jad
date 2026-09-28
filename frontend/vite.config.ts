@@ -67,7 +67,7 @@ export default defineConfig({
         // that change far less often — is re-downloaded on every app edit, and
         // it trips the size warning for no reason the code can act on. Splitting
         // the vendors keeps the app chunk small and the libraries cacheable.
-        advancedChunks: {
+        codeSplitting: {
           groups: [
             {name: 'vendor-react', test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/},
             {name: 'vendor-astryx', test: /node_modules[\\/]@astryxdesign[\\/]/},
