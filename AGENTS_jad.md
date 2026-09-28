@@ -1,102 +1,21 @@
 # Conversation Continuity
 
-You are operating inside a custom agent harness where older conversation history may be compacted.
+Older conversation history may be compacted. Use one small `RESUME_STATE` for the latest logical task only when needed to preserve unfinished multi-step work; it is a checkpoint, not a history of edits. The repository, files, recent conversation, and tool results remain the source of truth.
 
-Maintain a small `RESUME_STATE` only when necessary to preserve continuity of an unfinished task.
+## Decision Rules
 
-The repository, files, and tool results are the source of truth. `RESUME_STATE` is only a lightweight checkpoint for recovering after compaction.
+Read and update are separate decisions; needing one does not automatically imply the other.
 
-## Core Rule
+### Read existing state
+Read `resume_state` only when its contents are needed to continue work and cannot be reliably reconstructed from recent conversation and the repository. A new turn, task, or compaction alone does not require a read when the needed context is already available. Reuse a known ref; do not list records to rediscover it.
 
-Do **not** read or write memory on every turn.
+### Create a checkpoint
+Create one shared record only when a multi-step task is likely to outlive the current context and no suitable record exists. Do not create a record for a short task that can finish in this context.
 
-Only access `resume_state` when one of these conditions is true:
+### Update a checkpoint
+Update the existing record once after a meaningful batch when its goal, status, current state, next action, durable decisions, unresolved issues, blockers, or useful continuation context materially changes. Do not update after individual edits, routine tests, or other substeps in the same batch. A reason to update does not by itself require reading first if the new state is clear from the repository and recent conversation. Increment `revision` only on an actual write. A changed file alone is not enough to justify an update.
 
-1. Resuming after compaction or when required task context is missing.
-2. Starting a new multi-step task that is likely to continue across multiple turns.
-3. The active task materially changes.
-4. A significant implementation milestone is reached.
-5. `nextAction` materially changes.
-6. A durable architectural or implementation decision is made.
-7. A new unresolved issue or blocker affects future work.
-8. The task becomes blocked or completed.
-9. The current state would be difficult or expensive to reconstruct from the remaining conversation.
-
-Do **not** update `resume_state` for:
-
-* small edits
-* typo fixes
-* formatting changes
-* minor refactors that do not change the plan
-* repeated verification
-* routine tool calls
-* intermediate observations
-* changes already obvious from the immediately preserved conversation
-* multiple edits that are part of the same current implementation step
-
-Prefer one checkpoint after a meaningful batch of work rather than one checkpoint per edit.
-
-## Avoid Unnecessary Reads
-
-If the current conversation already contains a valid and recent `RESUME_STATE` or enough context to continue correctly, do not retrieve it from memory again.
-
-Retrieve `resume_state` only when its contents are actually needed.
-
-If the memory record `ref` is already known, reuse it. Do not list memory records again.
-
-## Avoid Unnecessary Writes
-
-Before updating memory, compare the proposed state conceptually with the existing checkpoint.
-
-Do not write an update unless at least one of these materially changed:
-
-* task goal
-* task status
-* current implementation state
-* next action
-* important decisions
-* unresolved issues
-* blockers
-* relevant continuation files or symbols
-
-A changed file alone is not sufficient reason to update memory.
-
-A completed small substep is not sufficient reason to update memory if `currentState` and `nextAction` remain effectively the same.
-
-Increase `revision` only when a memory write is actually performed.
-
-## Checkpoint Granularity
-
-`RESUME_STATE` represents the latest logical task, not individual edits.
-
-Example:
-
-Bad:
-
-```text
-edit function A
-→ update memory
-
-fix type error
-→ update memory
-
-rename variable
-→ update memory
-
-run test
-→ update memory
-```
-
-Good:
-
-```text
-edit function A
-fix type error
-rename variable
-run test
-
-→ update memory once because the implementation milestone and nextAction changed
-```
+When a task is blocked or completed, update an existing record only if that status change helps future continuation; do not create a record solely to log completion of a short task.
 
 ## RESUME_STATE Structure
 
@@ -185,7 +104,7 @@ Store only issues currently preventing progress.
 
 ## Resuming After Compaction
 
-When context has been compacted or continuation context is missing:
+When continuation context is missing and the decision rules above call for recovery:
 
 1. Retrieve the latest `resume_state`.
 2. Read its task goal, current state, and `nextAction`.
@@ -224,32 +143,38 @@ If the `ref` is unknown and the state is actually needed:
 2. reuse the existing record if present
 3. create one only if none exists
 
-## Request-Minimization Priority
+## Bug Report Memory
 
-Memory calls are optional bookkeeping, not part of normal execution.
+Store one record per bug using `type: "bug_report"`. If an integration requires `type: "memory"`, add `kind: "bug_report"` in `data`. Keep observations separate from diagnosis, and use references or short excerpts instead of full logs. Do not duplicate the memory system's `ref`.
 
-Prioritize:
+Example:
 
-```text
-perform useful work
-→ accumulate meaningful state changes
-→ checkpoint only when continuity value justifies the memory request
+```json
+{
+  "type": "bug_report",
+  "data": {
+    "schema_version": 1,
+    "title": "",
+    "status": "investigating",
+    "severity": "medium",
+    "summary": "",
+    "component": "",
+    "environment": {},
+    "reproduction": {
+      "preconditions": [],
+      "steps": [],
+      "expected": "",
+      "actual": ""
+    },
+    "evidence": [],
+    "diagnosis": {"confidence": "unknown", "notes": ""},
+    "workaround": null,
+    "resolution": {"commit": null, "verification": []}
+  }
+}
 ```
 
-instead of:
-
-```text
-read memory
-→ perform one small action
-→ write memory
-→ repeat
-```
-
-For short tasks that can reasonably finish within the current context, do not create or update `resume_state` unless there is important unfinished state worth preserving.
-
-For long tasks, checkpoint at logical boundaries rather than turn boundaries.
-
-The goal is to minimize memory requests while still allowing reliable recovery after compaction.
+Use status values `open`, `investigating`, `confirmed`, `fixed`, `closed`, or `cannot_reproduce`; severity values `critical`, `high`, `medium`, or `low`; and diagnosis confidence `unknown`, `hypothesis`, or `confirmed`.
 
 # Frontend Guidelines
 
@@ -292,7 +217,7 @@ MORE CLI:
 - Tool implementation guidelines document @tools-guidelines.md.
 - Analyze code before propose/suggest an implementation idea.
 - Before reading multiple files to understand code, query Codebase Memory first. Use code snippets for local implementation details and trace path for callers, callees, dependencies, and cross-file execution flow. Read source files only when the result is insufficient or exact verification is needed.
-- If you discover a separate bug or issue while working on the requested task, do not silently fix or ignore it. Tell me what you found, where it is, and whether it affects the current task.
+- If you discover a separate bug or issue while working on the requested task, do not silently fix or ignore it. Tell me what you found, where it is, and whether it affects the current task. Stored it in `memory`.
 - Preserve `messages.jsonl` as a golden-output compatibility contract. Code may be refactored or extended, but generated `messages.jsonl` must retain the same observable representation unless the task explicitly requires an output-format change. After changes, regenerate and diff `messages.jsonl`. Treat unrelated differences as regressions.
 - Do not finish after implementation. Finish only after the result is demonstrated to work and, where relevant, demonstrated to meet acceptable performance. Workflow: IMPLEMENT → RUN → TEST → MEASURE → FIX → REPEAT.
  

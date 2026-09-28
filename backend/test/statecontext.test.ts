@@ -55,7 +55,10 @@ test("normalizes statecontext options and its setting.paths snapshot path", asyn
       tools: {native: {
         task: {statecontext: {statuses: ["in-progress", "done"], limit: 7}},
         process: {statecontext: {states: ["running"], limit: 4}},
-        memory: {statecontext: [{type: "project", filter: {status: "active"}, limit: 3}]},
+        memory: {statecontext: [
+          {type: "project", filter: {status: "active"}, limit: 3},
+          {type: "bug_report", exclude_any: [{status: "closed"}, {status: "fixed"}], limit: 10},
+        ]},
       }},
     }));
     const settings = await new SessionConfigLoader(directory).loadSettings();
@@ -64,7 +67,26 @@ test("normalizes statecontext options and its setting.paths snapshot path", asyn
     assert.equal(settings.paths.statecontext, join(directory, "runtime/current-state.json"));
     assert.deepEqual(settings.tools.native.task?.statecontext, {statuses: ["in-progress", "done"], limit: 7});
     assert.deepEqual(settings.tools.native.process?.statecontext, {states: ["running"], limit: 4});
-    assert.deepEqual(settings.tools.native.memory?.statecontext, [{type: "project", filter: {status: "active"}, limit: 3}]);
+    assert.deepEqual(settings.tools.native.memory?.statecontext, [
+      {type: "project", filter: {status: "active"}, limit: 3},
+      {type: "bug_report", filter: {}, exclude_any: [{status: "closed"}, {status: "fixed"}], limit: 10},
+    ]);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("rejects empty memory statecontext exclude_any clauses", async () => {
+  const directory = await tempDirectory("agent-statecontext-exclude-any-config-");
+  const cwd = join(directory, "workspace");
+  try {
+    await mkdir(cwd);
+    await writeFile(join(directory, "model.json"), JSON.stringify({model: "gpt-test"}));
+    await writeFile(join(directory, "setting.json"), JSON.stringify({
+      cwd,
+      tools: {native: {memory: {statecontext: [{type: "bug_report", exclude_any: [{}]}]}}},
+    }));
+    await assert.rejects(() => new SessionConfigLoader(directory).loadSettings(), /exclude_any\[0\] must be a non-empty object/);
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
@@ -125,6 +147,82 @@ test("memory statecontext dynamically selects types and filters without creating
     assert.equal((state.items as Array<{type: string; data: {name: string}}>)[0]?.data.name, "current");
     assert.equal(state.has_more, false);
     await assert.rejects(() => stat(join(root, ".cursors")), {code: "ENOENT"});
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("memory statecontext excludes only matching values while retaining other statuses", async () => {
+  const directory = await tempDirectory("agent-statecontext-memory-exclude-");
+  const root = join(directory, "memory");
+  const store = new MemoryStore(root);
+  try {
+    await store.create("bug_report", {status: "open", component: "frontend", title: "open"}, memoryPolicy);
+    await store.create("bug_report", {status: "closed", component: "frontend", title: "closed"}, memoryPolicy);
+    await store.create("bug_report", {status: "future", component: "frontend", title: "future"}, memoryPolicy);
+    await store.create("bug_report", {component: "frontend", title: "legacy"}, memoryPolicy);
+    await store.create("bug_report", {status: "open", component: "backend", title: "other component"}, memoryPolicy);
+    const state = await collectMemoryStateContext(store, memoryPolicy, [
+      {type: "bug_report", filter: {component: "frontend"}, exclude: {status: "closed"}, limit: 10},
+    ]);
+    const items = state.items as Array<{data: {title: string}; exclude?: {status: string}} >;
+    assert.deepEqual(items.map(({data}) => data.title).sort(), ["future", "legacy", "open"]);
+    assert.ok(items.every((item) => item.exclude?.status === "closed"));
+    assert.deepEqual(state.queries, [{type: "bug_report", filter: {component: "frontend"}, exclude: {status: "closed"}, returned: 3, has_more: false}]);
+    assert.equal(state.has_more, false);
+    await assert.rejects(() => stat(join(root, ".memory-cursors")), {code: "ENOENT"});
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("memory statecontext excludes any matching clause", async () => {
+  const directory = await tempDirectory("agent-statecontext-memory-exclude-any-");
+  const root = join(directory, "memory");
+  const store = new MemoryStore(root);
+  try {
+    await store.create("bug_report", {status: "open", title: "open"}, memoryPolicy);
+    await store.create("bug_report", {status: "closed", title: "closed"}, memoryPolicy);
+    await store.create("bug_report", {status: "fixed", title: "fixed"}, memoryPolicy);
+    await store.create("bug_report", {status: "future", title: "future"}, memoryPolicy);
+    await store.create("bug_report", {title: "legacy"}, memoryPolicy);
+    const state = await collectMemoryStateContext(store, memoryPolicy, [
+      {type: "bug_report", filter: {}, exclude_any: [{status: "closed"}, {status: "fixed"}], limit: 10},
+    ]);
+    const items = state.items as Array<{data: {title: string}; exclude_any?: Array<{status: string}>}>;
+    assert.deepEqual(items.map(({data}) => data.title).sort(), ["future", "legacy", "open"]);
+    assert.ok(items.every((item) => item.exclude_any?.length === 2));
+    assert.deepEqual(state.queries, [{
+      type: "bug_report",
+      filter: {},
+      exclude_any: [{status: "closed"}, {status: "fixed"}],
+      returned: 3,
+      has_more: false,
+    }]);
+    await assert.rejects(() => stat(join(root, ".memory-cursors")), {code: "ENOENT"});
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("memory list retains exclusion clauses when resuming a cursor", async () => {
+  const directory = await tempDirectory("agent-memory-exclude-cursor-");
+  const store = new MemoryStore(join(directory, "memory"));
+  try {
+    await store.create("bug_report", {status: "open"}, memoryPolicy);
+    await store.create("bug_report", {status: "closed"}, memoryPolicy);
+    await store.create("bug_report", {status: "fixed"}, memoryPolicy);
+    await store.create("bug_report", {status: "in_progress"}, memoryPolicy);
+    const first = await store.list("bug_report", undefined, 1, "newest", undefined, memoryPolicy, {
+      exclude: {status: "closed"},
+      excludeAny: [{status: "fixed"}],
+    });
+    assert.deepEqual(first.items.map(({data}) => data.status), ["in_progress"]);
+    assert.equal(first.hasMore, true);
+    assert.ok(first.nextCursor);
+    const second = await store.list("bug_report", undefined, 1, undefined, first.nextCursor, memoryPolicy);
+    assert.deepEqual(second.items.map(({data}) => data.status), ["open"]);
+    assert.equal(second.hasMore, false);
   } finally {
     await rm(directory, {recursive: true, force: true});
   }

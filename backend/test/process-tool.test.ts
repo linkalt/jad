@@ -189,9 +189,13 @@ test("retains only the configured number of completed process records", async ()
   const {directory, manager, run} = await makeRunner({max_completed: 1});
   try {
     const first = resultId(await run({command: "true"}));
-    await manager.wait(first, 1_000);
+    const firstWait = await manager.wait(first, 1_000);
+    assert.equal(firstWait.waited, true);
+    assert.equal(firstWait.snapshot?.state, "exited");
     const second = resultId(await run({command: "true"}));
-    await manager.wait(second, 1_000);
+    const secondWait = await manager.wait(second, 1_000);
+    assert.equal(secondWait.waited, true);
+    assert.equal(secondWait.snapshot?.state, "exited");
     const listed = await run({action: "list", filter: "exited"});
     assert.match(listed, new RegExp(second));
     assert.doesNotMatch(listed, new RegExp(first));

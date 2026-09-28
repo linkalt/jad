@@ -172,7 +172,6 @@ export class ProcessManager {
     }
     entry.child = child;
     if (typeof child.pid === "number") manifest.pid = child.pid;
-    await this.persistManifest(manifest);
     this.attachStream(child.stdout, "stdout", entry);
     this.attachStream(child.stderr, "stderr", entry);
     child.once("error", (error) => { void this.finish(entry, "failed", {stop_reason: error.message}); });
@@ -182,6 +181,7 @@ export class ProcessManager {
         signal: exitSignal,
       });
     });
+    await this.persistManifest(manifest);
     return this.snapshotEntry(entry);
   }
 

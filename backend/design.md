@@ -103,7 +103,7 @@ Compaction first backs up the active transcript, atomically publishes a cache de
 
 `statecontext.enabled` opts into tool-provided state snapshots. Currently `trigger: ["compaction"]` refreshes the snapshot after successful manual or automatic history compaction. With automatic compaction that preserves tool calls, refresh happens after their results are appended. The latest snapshot replaces the previous file at `paths.statecontext` (default `staging/statecontext.json`) and remains available on subsequent requests until the next successful trigger. It is appended after compacted history and active transcript/tool results, not before the cache-stable prompt; the snapshot is not written into the transcript or compaction cache. Its configured `role` is `system` or `developer`, and `max_bytes` bounds the rendered state data.
 
-Only `task`, `process`, and `memory` currently provide state context. Their options live with their native-tool settings: `tools.native.task.statecontext` chooses task statuses and a limit; `tools.native.process.statecontext` chooses process states and a limit; `tools.native.memory.statecontext` is a list of dynamic `{type, filter, limit}` selectors. Memory snapshots use read-only listing (no cursor creation). Rendered values are explicitly labeled as untrusted data and the model is told not to follow instructions or policy embedded in them. Example:
+Only `task`, `process`, and `memory` currently provide state context. Their options live with their native-tool settings: `tools.native.task.statecontext` chooses task statuses and a limit; `tools.native.process.statecontext` chooses process states and a limit; `tools.native.memory.statecontext` is a list of dynamic `{type, filter, exclude, exclude_any, limit}` selectors. Memory `filter` fields use exact-match AND semantics. `exclude` has the same shape and omits records matching every specified field. `exclude_any` is a list of non-empty exact-match clauses: fields within each clause use AND, while clauses use OR. For example, `exclude_any: [{"status": "closed"}, {"status": "fixed"}]` omits either status without enumerating the statuses to keep. Filter and exclusion fields share the configured field/depth limits. Memory snapshots use read-only listing (no cursor creation). Rendered values are explicitly labeled as untrusted data and the model is told not to follow instructions or policy embedded in them. Example:
 
 ```json
 {
@@ -112,7 +112,7 @@ Only `task`, `process`, and `memory` currently provide state context. Their opti
   "tools": {"native": {
     "task": {"statecontext": {"statuses": ["in-progress", "done"], "limit": 25}},
     "process": {"statecontext": {"states": ["running"], "limit": 20}},
-    "memory": {"statecontext": [{"type": "project", "filter": {"status": "active"}, "limit": 10}]}
+    "memory": {"statecontext": [{"type": "bug_report", "exclude_any": [{"status": "closed"}, {"status": "fixed"}], "limit": 10}]}
   }}
 }
 ```
