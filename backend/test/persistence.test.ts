@@ -1436,12 +1436,16 @@ test("resolves configurable session storage paths relative to setting.json", asy
 
 test("resolves a requested path profile without moving the session default", async () => {
   const sessionDir = await makeSession();
+  await writeFile(join(sessionDir, "shared.md"), "Shared project guidance.");
+  await writeFile(join(sessionDir, "blue.md"), "Blue profile guidance.");
+  await writeFile(join(sessionDir, "green.md"), "Green profile guidance.");
   await mkdir(join(sessionDir, "chatgpt"), {recursive: true});
   await writeFile(join(sessionDir, "chatgpt/model.json"), JSON.stringify({model: "blue-model"}));
   await mkdir(join(sessionDir, "alternate"), {recursive: true});
   await writeFile(join(sessionDir, "alternate/model.json"), JSON.stringify({model: "green-model"}));
   await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
     cwd: sessionDir,
+    prompt_documents: ["shared.md"],
     paths: {
       active_profile: "blue",
       profiles: {
@@ -1449,11 +1453,13 @@ test("resolves a requested path profile without moving the session default", asy
           messages: "profiles/blue/messages.jsonl",
           staging: "profiles/blue/staging",
           model_default: "chatgpt/model.json",
+          prompt_documents: ["blue.md"],
         },
         green: {
           messages: "profiles/green/messages.jsonl",
           staging: "profiles/green/staging",
           model_default: "alternate/model.json",
+          prompt_documents: ["green.md"],
         },
       },
     },
@@ -1470,6 +1476,16 @@ test("resolves a requested path profile without moving the session default", asy
     // Both loaders report the same stored default: only the resolved profile differs.
     assert.equal(blueSettings.paths.default_profile, "blue");
     assert.equal(greenSettings.paths.default_profile, "blue");
+    assert.deepEqual(blueSettings.prompt_documents, [
+      join(sessionDir, "shared.md"),
+      join(sessionDir, "blue.md"),
+    ]);
+    assert.equal(blueSettings.prompt_text, "Shared project guidance.\n\nBlue profile guidance.");
+    assert.deepEqual(greenSettings.prompt_documents, [
+      join(sessionDir, "shared.md"),
+      join(sessionDir, "green.md"),
+    ]);
+    assert.equal(greenSettings.prompt_text, "Shared project guidance.\n\nGreen profile guidance.");
     assert.equal(blueSettings.paths.messages, join(sessionDir, "profiles/blue/messages.jsonl"));
     assert.equal(greenSettings.paths.messages, join(sessionDir, "profiles/green/messages.jsonl"));
     assert.notEqual(blueSettings.paths.staging, greenSettings.paths.staging);
@@ -1525,6 +1541,55 @@ test("resolves a requested path profile without moving the session default", asy
     } finally {
       await removeSession(plainDir);
     }
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
+test("validates prompt documents configured on path profiles", async () => {
+  const sessionDir = await makeSession();
+  const settingPath = join(sessionDir, "setting.json");
+  try {
+    await writeFile(settingPath, JSON.stringify({
+      cwd: sessionDir,
+      paths: {
+        active_profile: "primary",
+        profiles: {primary: {prompt_documents: "instructions.md"}},
+      },
+    }));
+    await assert.rejects(
+      () => new SessionConfigLoader(sessionDir).loadSettings(),
+      /paths\.profiles\.primary: prompt_documents must be an array/,
+    );
+
+    await writeFile(settingPath, JSON.stringify({
+      cwd: sessionDir,
+      paths: {
+        active_profile: "primary",
+        profiles: {primary: {prompt_documents: [42]}},
+      },
+    }));
+    await assert.rejects(
+      () => new SessionConfigLoader(sessionDir).loadSettings(),
+      /prompt_documents\[0\] must be a non-empty string/,
+    );
+
+    await writeFile(settingPath, JSON.stringify({
+      cwd: sessionDir,
+      paths: {
+        active_profile: "primary",
+        profiles: {
+          primary: {prompt_documents: []},
+          alternate: {prompt_documents: ["missing.md"]},
+        },
+      },
+    }));
+    const primarySettings = await new SessionConfigLoader(sessionDir, {profile: "primary"}).loadSettings();
+    assert.deepEqual(primarySettings.prompt_documents, []);
+    await assert.rejects(
+      () => new SessionConfigLoader(sessionDir, {profile: "alternate"}).loadSettings(),
+      /paths\.profiles\.alternate: prompt_documents\[0\] could not be read/,
+    );
   } finally {
     await removeSession(sessionDir);
   }

@@ -146,7 +146,7 @@
     },
     "paths": {
       "type": "object",
-      "description": "Session storage paths. Relative paths resolve from the directory containing this setting.json; absolute paths are used as-is. Named profiles override matching flat path fields; the selected profile is fixed when the session config loader opens.",
+      "description": "Session storage paths and named profile options. Relative storage paths resolve from the directory containing this setting.json; absolute paths are used as-is. Named profiles override matching flat path fields and may select models or add prompt documents; the selected profile is fixed when the session config loader opens.",
       "properties": {
         "messages": {
           "type": "string",
@@ -223,6 +223,11 @@
                 "description": "Selectable model configuration JSON paths for this profile. Relative paths resolve from setting.json; if model_default is omitted, the first entry is the default.",
                 "items": {"type": "string", "pattern": "\\S"},
                 "uniqueItems": true
+              },
+              "prompt_documents": {
+                "type": "array",
+                "description": "Additional ordered prompt documents for this profile. Loaded after the session-level prompt_documents when this profile is selected; relative paths resolve from cwd.",
+                "items": {"type": "string", "pattern": "\\S"}
               },
               "staging": {"type": "string", "pattern": "\\S"},
               "http_debug": {"type": "string", "pattern": "\\S"}

@@ -2784,6 +2784,15 @@ function normalizeStoragePaths(
         models = normalizeProfileModelPaths(fieldValue, profilePath);
         continue;
       }
+      if (field === "prompt_documents") {
+        if (!Array.isArray(fieldValue)) {
+          throw new ConfigError(`${profilePath}: prompt_documents must be an array`);
+        }
+        fieldValue.forEach((document, index) =>
+          requiredString(document, `prompt_documents[${index}]`, profilePath),
+        );
+        continue;
+      }
       if (!SESSION_PATH_FIELD_SET.has(field)) {
         throw new ConfigError(`${profilePath}.${field} is not a supported session path or profile model setting`);
       }
@@ -2799,7 +2808,9 @@ function normalizeStoragePaths(
       throw new ConfigError(`${profilePath}.model_default must be included in models`);
     }
     const normalizedProfile: JsonRecord = {
-      ...profileValue,
+      ...Object.fromEntries(
+        Object.entries(profileValue).filter(([field]) => field !== "prompt_documents"),
+      ),
       ...(modelDefault === undefined ? {} : {model_default: modelDefault}),
       ...(models === undefined ? {} : {models}),
     };
@@ -2892,7 +2903,28 @@ async function normalizeSettings(
   if (raw.system_prompt !== undefined) {
     throw new ConfigError(`${path}: system_prompt was removed; use prompt_documents and prompt_role`);
   }
-  const promptDocuments = await normalizePromptDocuments(raw.prompt_documents, cwd, path);
+  const sharedPromptDocuments = await normalizePromptDocuments(raw.prompt_documents, cwd, path);
+  let profilePromptDocumentConfig: unknown;
+  const selectedProfile = storagePaths.active_profile;
+  if (selectedProfile !== undefined && isRecord(raw.paths) && isRecord(raw.paths.profiles)) {
+    const selectedProfileSettings = raw.paths.profiles[selectedProfile];
+    if (isRecord(selectedProfileSettings)) {
+      profilePromptDocumentConfig = selectedProfileSettings.prompt_documents;
+    }
+  }
+  const profilePromptDocuments = await normalizePromptDocuments(
+    profilePromptDocumentConfig,
+    cwd,
+    selectedProfile === undefined
+      ? path
+      : `${path}: paths.profiles.${selectedProfile}`,
+  );
+  const promptDocuments = {
+    paths: [...sharedPromptDocuments.paths, ...profilePromptDocuments.paths],
+    text: [sharedPromptDocuments.text, profilePromptDocuments.text]
+      .filter((text) => text.length > 0)
+      .join("\n\n"),
+  };
   const promptRole = raw.prompt_role ?? "system";
   if (promptRole !== "system" && promptRole !== "developer") {
     throw new ConfigError(`${path}: prompt_role must be system or developer`);
