@@ -2441,6 +2441,84 @@ function assistantOutput(text: string): Record<string, unknown> {
   };
 }
 
+test("uses separate native memory stores for each session profile", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-profile-memory-storage-"));
+  const sessionDir = await writeProfileSession(root);
+  const settingPath = join(sessionDir, "setting.json");
+  const settings = JSON.parse(await readFile(settingPath, "utf8")) as Record<string, unknown>;
+  const profiles = (settings.paths as {profiles: Record<string, Record<string, unknown>>}).profiles;
+  profiles.primary!.tool_storage = "runtime/primary-tools";
+  profiles.alternate!.tool_storage = "runtime/alternate-tools";
+  settings.tool_definition_paths = [join(process.cwd(), "../sample/tools/native/memory.json")];
+  settings.tools = {native: {memory: {storage_dir: "memory"}}};
+  await writeFile(settingPath, JSON.stringify(settings));
+
+  const callsByModel = new Map<string, number>();
+  const client = {
+    responses: {
+      create: async (request: {model?: string}) => {
+        const model = request.model ?? "unknown";
+        const round = callsByModel.get(model) ?? 0;
+        callsByModel.set(model, round + 1);
+        const output = round % 2 === 0
+          ? [{
+              type: "function_call",
+              call_id: `call-memory-${model}`,
+              name: "memory",
+              arguments: JSON.stringify({
+                operation: "create",
+                type: "profile_test",
+                data: {model},
+              }),
+            }]
+          : [assistantOutput(`stored memory for ${model}`)];
+        return (async function* () {
+          for (const [output_index, item] of output.entries()) {
+            yield {type: "response.output_item.done", output_index, item};
+          }
+          yield completedEvent(output, `response-memory-${model}-${round}`);
+        })();
+      },
+    },
+  } as unknown as OpenAI;
+  const running = createAgentServer({sessionsDir: root, client});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const primaryResponse = await fetch(`${baseUrl}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "store primary memory"}),
+    });
+    assert.equal(primaryResponse.status, 200);
+    const primaryBody = await primaryResponse.text();
+    assert.ok(primaryBody.includes("Memory record created"), primaryBody);
+
+    const alternateResponse = await fetch(`${baseUrl}/api/sessions/session1/run?profile=alternate`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "store alternate memory"}),
+    });
+    assert.equal(alternateResponse.status, 200);
+    const alternateBody = await alternateResponse.text();
+    assert.ok(alternateBody.includes("Memory record created"), alternateBody);
+
+    const primarySequence = join(sessionDir, "runtime", "primary-tools", "memory", ".memory-sequence");
+    const alternateSequence = join(sessionDir, "runtime", "alternate-tools", "memory", ".memory-sequence");
+    assert.equal(await readFile(primarySequence, "utf8"), "1\n");
+    assert.equal(await readFile(alternateSequence, "utf8"), "1\n");
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test("resets only the selected profile row and rejects reset during its run", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-reset-profile-"));
   const sessionDir = await writeProfileSession(root);

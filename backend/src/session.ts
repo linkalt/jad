@@ -59,21 +59,16 @@ export interface AgentSessionOptions {
    */
   profile?: string;
   /**
-   * Session-scoped stores shared with another session opened on the same
-   * directory (a second profile). The owner creates and, at refcount zero,
-   * closes them — a shared process manager must not be recovered twice, and
-   * closing one profile's session must not stop the other's processes.
+   * Stores shared by handles for the same session/profile pair. The owner
+   * creates and closes them when the last handle releases them; separate
+   * profiles receive separate stores and process managers.
    */
   shared?: AgentSessionSharedStores;
   /** Called when this session closes, so the owner can release shared stores. */
   onClosed?: () => void | Promise<void>;
 }
 
-/**
- * The stores derived from `cwd` rather than from a profile: every profile of one
- * session directory shares them, because storage directories configured for the
- * process, task and memory tools are session-scoped.
- */
+/** Tool stores scoped to one profile; their storage roots come from its settings. */
 export interface AgentSessionSharedStores {
   processManager: ProcessManager;
   taskStore: TaskStore;
@@ -331,9 +326,9 @@ export class AgentSession {
       settings.tools.native.process?.storage_dir ?? join(settings.cwd, DEFAULT_NATIVE_PROCESS_STORAGE_DIR),
     );
     if (options.shared === undefined) {
-      // Recovery is a session-startup action: a shared manager was already
-      // recovered by the owner, and recovering again would mark the other
-      // profile's live processes lost.
+      // Recovery is owned by the shared-store registry. A shared manager was
+      // already recovered by its owner, and recovering it again would mark its
+      // tracked live processes lost.
       await processManager.recover();
     }
     const shared = options.shared;

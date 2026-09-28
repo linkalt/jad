@@ -140,7 +140,7 @@ interface SessionHandle {
   view: WebUiSessionViewCache;
 }
 
-/** Everything the stores derived from `cwd` rather than from a profile. */
+/** Tool stores shared by handles for one `(session, profile)` pair. */
 interface SessionSharedStores {
   processManager: ProcessManager;
   taskStore: TaskStore;
@@ -156,6 +156,11 @@ interface SessionSharedStores {
  */
 function profileKey(sessionRef: string, profile: string | undefined): string {
   return profile === undefined ? sessionRef : `${sessionRef}|${profile}`;
+}
+
+/** Canonical storage registry key; the JSON tuple avoids delimiter collisions. */
+function sharedStoresKey(directory: string, profile: string | undefined): string {
+  return JSON.stringify([resolve(directory), profile ?? null]);
 }
 
 /** Everything a snapshot's content is derived from, so a change is visible. */
@@ -594,7 +599,7 @@ class AgentHttpApplication {
   private readonly defaultHandles = new Map<string, Promise<SessionHandle>>();
   /** Resolved aliases; failed lookups are evicted so newly created sessions can appear. */
   private readonly locations = new Map<string, Promise<SessionLocation>>();
-  /** Stores derived from `cwd`, shared by every profile of one session directory. */
+  /** Tool stores shared only by handles for the same session and profile. */
   private readonly sharedStores = new Map<string, Promise<SessionSharedStores>>();
   private readonly changingSessionSettings = new Set<string>();
   /** Keyed like the handles: compaction is per `(session, profile)`. */
@@ -1016,7 +1021,10 @@ class AgentHttpApplication {
     // Loading the settings rejects an unusable session (and an unknown profile)
     // before it is cached.
     const settings = await loader.loadSettings();
-    const shared = await this.acquireSharedStores(directory, settings);
+    // Use the resolved profile so the implicit default handle and an explicitly
+    // selected handle for that same profile share one set of store instances.
+    const storageProfile = settings.paths.active_profile;
+    const shared = await this.acquireSharedStores(directory, storageProfile, settings);
     let session: AgentSession;
     try {
       session = await AgentSession.open(directory, {
@@ -1024,10 +1032,10 @@ class AgentHttpApplication {
         globalJadRoot: location.root.globalJadRoot,
         ...(profile === undefined ? {} : {profile}),
         shared,
-        onClosed: () => this.releaseSharedStores(directory),
+        onClosed: () => this.releaseSharedStores(directory, storageProfile),
       });
     } catch (error) {
-      this.releaseSharedStores(directory);
+      this.releaseSharedStores(directory, storageProfile);
       throw error;
     }
     return {
@@ -1043,18 +1051,13 @@ class AgentHttpApplication {
     };
   }
 
-  /**
-   * The process, task and memory stores of a session directory.
-   *
-   * They are derived from `cwd`, not from a profile, so every profile of one
-   * session shares one set: a second process manager on the same directory would
-   * recover the first one's live processes and mark them lost.
-   */
+  /** The process, task and memory stores for one session/profile pair. */
   private async acquireSharedStores(
     directory: string,
+    profile: string | undefined,
     settings: SessionSettings,
   ): Promise<SessionSharedStores> {
-    const key = resolve(directory);
+    const key = sharedStoresKey(directory, profile);
     const existing = this.sharedStores.get(key);
     if (existing !== undefined) {
       const stores = await existing;
@@ -1089,8 +1092,11 @@ class AgentHttpApplication {
     }
   }
 
-  private async releaseSharedStores(directory: string): Promise<void> {
-    const key = resolve(directory);
+  private async releaseSharedStores(
+    directory: string,
+    profile: string | undefined,
+  ): Promise<void> {
+    const key = sharedStoresKey(directory, profile);
     const pending = this.sharedStores.get(key);
     if (pending === undefined) {
       return;
