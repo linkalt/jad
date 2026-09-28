@@ -1,5 +1,5 @@
-import appConfig from './config.json';
-import {createAuthenticatedFetch} from './api-auth';
+import appConfig from './config.json' with {type: 'json'};
+import {createAuthenticatedFetch} from './api-auth.ts';
 
 const authenticatedFetch = createAuthenticatedFetch(appConfig.api_token_storage_key);
 
@@ -647,7 +647,14 @@ export async function resetSession(sessionId: string, profile?: string): Promise
   }
 }
 
-async function* readSse(response: Response): AsyncGenerator<SseMessage> {
+class RunStreamConnectionError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'RunStreamConnectionError';
+  }
+}
+
+async function* readSse(response: Response, signal?: AbortSignal): AsyncGenerator<SseMessage> {
   if (!response.body) {
     throw new Error('the server did not return a stream');
   }
@@ -672,30 +679,47 @@ async function* readSse(response: Response): AsyncGenerator<SseMessage> {
     try {
       return {event, data: JSON.parse(data.join('\n'))};
     } catch {
-      throw new Error('the server returned invalid stream data');
+      throw new RunStreamConnectionError('the server returned invalid stream data');
     }
   };
 
-  while (true) {
-    const chunk = await reader.read();
-    buffer += decoder.decode(chunk.value, {stream: !chunk.done}).replace(/\r\n/g, '\n');
-    let separator = buffer.indexOf('\n\n');
-    while (separator >= 0) {
-      const block = buffer.slice(0, separator);
-      buffer = buffer.slice(separator + 2);
-      const message = parseBlock(block);
-      if (message) {
-        yield message;
+  try {
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (error) {
+        if (signal?.aborted) {
+          throw error;
+        }
+        throw new RunStreamConnectionError('the run stream connection was interrupted');
       }
-      separator = buffer.indexOf('\n\n');
-    }
-    if (chunk.done) {
-      const message = parseBlock(buffer.trim());
-      if (message) {
-        yield message;
+      buffer += decoder.decode(chunk.value, {stream: !chunk.done}).replace(/\r\n/g, '\n');
+      let separator = buffer.indexOf('\n\n');
+      while (separator >= 0) {
+        const block = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        const message = parseBlock(block);
+        if (message) {
+          yield message;
+        }
+        separator = buffer.indexOf('\n\n');
       }
-      return;
+      if (chunk.done) {
+        const message = parseBlock(buffer.trim());
+        if (message) {
+          yield message;
+        }
+        return;
+      }
     }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // The connection may already be closed or aborted.
+    }
+    reader.releaseLock();
   }
 }
 
@@ -847,84 +871,240 @@ function isSessionRunState(value: unknown): value is SessionRunState {
  * snapshots of the message, so a stream that starts in the middle of a run only
  * needs the newest snapshot to be correct.
  */
+interface ConsumedRunStream {
+  result: StreamSessionRunResult;
+  finished: boolean;
+  idle: boolean;
+}
+
 async function consumeRunStream(
   response: Response,
   options: StreamSessionRunOptions,
-): Promise<StreamSessionRunResult> {
+): Promise<ConsumedRunStream> {
   let completedMessage: WebUiMessage | undefined;
   let sessionUsage: SessionUsageSummary | undefined;
   let attached = false;
+  let finished = false;
+  let idle = false;
+  let completionNotified = false;
 
-  for await (const message of readSse(response)) {
-    if (message.event === 'run') {
-      if (isSessionRunState(message.data)) {
-        attached = true;
-        options.onRun?.(message.data);
-      }
-      continue;
+  const rememberCompletion = (message: WebUiMessage): void => {
+    completedMessage = message;
+    if (!completionNotified) {
+      completionNotified = true;
+      options.onCompleted?.(message);
     }
-    if (message.event === 'ui.message') {
-      if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
-        options.onMessage?.(message.data.message);
-        if (message.data.message.status === 'complete') {
-          completedMessage = message.data.message;
+  };
+
+  try {
+    for await (const message of readSse(response, options.signal)) {
+      if (message.event === 'run') {
+        if (isSessionRunState(message.data)) {
+          attached = true;
+          options.onRun?.(message.data);
         }
+        continue;
       }
-      continue;
-    }
-    if (message.event === 'ui.delta') {
-      if (
-        isRecord(message.data) &&
-        typeof message.data.id === 'string' &&
-        isNonnegativeSafeInteger(message.data.index) &&
-        typeof message.data.append === 'string'
-      ) {
-        options.onDelta?.(message.data.id, message.data.index, message.data.append);
+      if (message.event === 'ui.message') {
+        if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
+          options.onMessage?.(message.data.message);
+          if (message.data.message.status === 'complete') {
+            rememberCompletion(message.data.message);
+          }
+        }
+        continue;
       }
-      continue;
-    }
-    if (message.event === 'ui.part') {
-      if (
-        isRecord(message.data) &&
-        typeof message.data.id === 'string' &&
-        isNonnegativeSafeInteger(message.data.index) &&
-        isWebUiPart(message.data.part)
-      ) {
-        options.onPart?.(message.data.id, message.data.index, message.data.part);
+      if (message.event === 'ui.delta') {
+        if (
+          isRecord(message.data) &&
+          typeof message.data.id === 'string' &&
+          isNonnegativeSafeInteger(message.data.index) &&
+          typeof message.data.append === 'string'
+        ) {
+          options.onDelta?.(message.data.id, message.data.index, message.data.append);
+        }
+        continue;
       }
-      continue;
-    }
-    if (message.event === 'completed') {
-      if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
-        completedMessage = message.data.message;
-        options.onCompleted?.(completedMessage);
+      if (message.event === 'ui.part') {
+        if (
+          isRecord(message.data) &&
+          typeof message.data.id === 'string' &&
+          isNonnegativeSafeInteger(message.data.index) &&
+          isWebUiPart(message.data.part)
+        ) {
+          options.onPart?.(message.data.id, message.data.index, message.data.part);
+        }
+        continue;
       }
-      continue;
-    }
-    if (message.event === 'usage') {
-      if (isRecord(message.data) && isSessionUsageSummary(message.data.usage)) {
-        sessionUsage = message.data.usage;
-        options.onUsage?.(sessionUsage);
+      if (message.event === 'completed') {
+        if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
+          rememberCompletion(message.data.message);
+        }
+        continue;
       }
-      continue;
+      if (message.event === 'usage') {
+        if (isRecord(message.data) && isSessionUsageSummary(message.data.usage)) {
+          sessionUsage = message.data.usage;
+          options.onUsage?.(sessionUsage);
+        }
+        continue;
+      }
+      if (message.event === 'idle') {
+        idle = true;
+        options.onIdle?.();
+        continue;
+      }
+      if (message.event === 'error') {
+        throw new Error(errorText(message.data));
+      }
+      if (message.event === 'done') {
+        finished = true;
+        break;
+      }
     }
-    if (message.event === 'idle') {
-      options.onIdle?.();
-      continue;
+  } catch (error) {
+    if (!(error instanceof RunStreamConnectionError) || completedMessage?.status !== 'complete') {
+      throw error;
     }
-    if (message.event === 'error') {
-      throw new Error(errorText(message.data));
-    }
-    if (message.event === 'done') {
-      break;
-    }
+    finished = true;
   }
 
+  if (completedMessage?.status === 'complete') {
+    finished = true;
+  }
   return {
-    ...(completedMessage === undefined ? {} : {message: completedMessage}),
-    ...(sessionUsage === undefined ? {} : {usage: sessionUsage}),
+    result: {
+      ...(completedMessage === undefined ? {} : {message: completedMessage}),
+      ...(sessionUsage === undefined ? {} : {usage: sessionUsage}),
+      ...(attached ? {attached: true} : {}),
+    },
+    finished,
+    idle,
+  };
+}
+
+function mergeRunStreamResults(
+  previous: StreamSessionRunResult,
+  next: StreamSessionRunResult,
+): StreamSessionRunResult {
+  const message = next.message ?? previous.message;
+  const usage = next.usage ?? previous.usage;
+  const attached = next.attached === true || previous.attached === true;
+  return {
+    ...(message === undefined ? {} : {message}),
+    ...(usage === undefined ? {} : {usage}),
     ...(attached ? {attached: true} : {}),
   };
+}
+
+function reconnectDelayMs(attempt: number): number {
+  return Math.min(
+    appConfig.run_stream_reconnect_base_delay_ms * 2 ** attempt,
+    appConfig.run_stream_reconnect_max_delay_ms,
+  );
+}
+
+function waitForRunStreamReconnect(delayMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = (): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const onAbort = (): void => {
+      cleanup();
+      reject(new Error('the run stream was aborted'));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, {once: true});
+    timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, delayMs);
+  });
+}
+
+async function fetchAttachedRunStream(
+  sessionRef: string,
+  options: StreamSessionRunOptions,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await authenticatedFetch(
+      apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stream${profileQuery(options.profile)}`),
+      {
+        ...(options.signal ? {signal: options.signal} : {}),
+      },
+    );
+  } catch (error) {
+    if (options.signal?.aborted) {
+      throw error;
+    }
+    throw new RunStreamConnectionError('the run stream connection was interrupted');
+  }
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return response;
+}
+
+async function reconnectRunStream(
+  sessionRef: string,
+  options: StreamSessionRunOptions,
+  previous: StreamSessionRunResult,
+  initialError?: Error,
+): Promise<StreamSessionRunResult> {
+  let result = previous;
+  let lastConnectionError = initialError;
+  for (let attempt = 0; attempt < appConfig.run_stream_reconnect_max_attempts; attempt += 1) {
+    await waitForRunStreamReconnect(reconnectDelayMs(attempt), options.signal);
+    let response: Response;
+    try {
+      response = await fetchAttachedRunStream(sessionRef, options);
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw error;
+      }
+      if (!(error instanceof RunStreamConnectionError)) {
+        throw error;
+      }
+      lastConnectionError = error;
+      continue;
+    }
+
+    let consumed: ConsumedRunStream;
+    try {
+      consumed = await consumeRunStream(response, options);
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw error;
+      }
+      if (!(error instanceof RunStreamConnectionError)) {
+        throw error;
+      }
+      lastConnectionError = error;
+      continue;
+    }
+
+    result = mergeRunStreamResults(result, consumed.result);
+    if (consumed.finished) {
+      return result;
+    }
+    if (consumed.idle) {
+      throw new Error('the run is no longer available to reconnect to');
+    }
+    lastConnectionError = undefined;
+  }
+
+  if (lastConnectionError instanceof Error) {
+    throw new Error(`the run stream could not be restored: ${lastConnectionError.message}`);
+  }
+  throw new Error('the run stream ended before completion and could not be restored');
 }
 
 export async function streamSessionRun(
@@ -932,20 +1112,44 @@ export async function streamSessionRun(
   input: string,
   options: StreamSessionRunOptions = {},
 ): Promise<StreamSessionRunResult> {
-  const response = await authenticatedFetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/run${profileQuery(options.profile)}`), {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      input,
-      ...(options.model === undefined ? {} : {model: options.model}),
-    }),
-    signal: options.signal,
-  });
+  let response: Response;
+  try {
+    response = await authenticatedFetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/run${profileQuery(options.profile)}`), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        input,
+        ...(options.model === undefined ? {} : {model: options.model}),
+      }),
+      signal: options.signal,
+    });
+  } catch (error) {
+    if (options.signal?.aborted) {
+      throw error;
+    }
+    const connectionError = new RunStreamConnectionError('the run stream connection was interrupted');
+    return reconnectRunStream(sessionId, options, {}, connectionError);
+  }
   if (!response.ok) {
     throw new Error(await readError(response));
   }
 
-  return consumeRunStream(response, options);
+  let consumed: ConsumedRunStream;
+  try {
+    consumed = await consumeRunStream(response, options);
+  } catch (error) {
+    if (!(error instanceof RunStreamConnectionError) || options.signal?.aborted) {
+      throw error;
+    }
+    return reconnectRunStream(sessionId, options, {}, error);
+  }
+  if (consumed.finished) {
+    return consumed.result;
+  }
+  if (consumed.idle) {
+    throw new Error('the run stream ended before the run started');
+  }
+  return reconnectRunStream(sessionId, options, consumed.result);
 }
 
 /**
@@ -957,17 +1161,29 @@ export async function attachSessionRun(
   sessionRef: string,
   options: StreamSessionRunOptions = {},
 ): Promise<StreamSessionRunResult> {
-  const response = await authenticatedFetch(
-    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stream${profileQuery(options.profile)}`),
-    {
-      ...(options.signal ? {signal: options.signal} : {}),
-    },
-  );
-  if (!response.ok) {
-    throw new Error(await readError(response));
+  let response: Response;
+  try {
+    response = await fetchAttachedRunStream(sessionRef, options);
+  } catch (error) {
+    if (!(error instanceof RunStreamConnectionError) || options.signal?.aborted) {
+      throw error;
+    }
+    return reconnectRunStream(sessionRef, options, {}, error);
   }
 
-  return consumeRunStream(response, options);
+  let consumed: ConsumedRunStream;
+  try {
+    consumed = await consumeRunStream(response, options);
+  } catch (error) {
+    if (!(error instanceof RunStreamConnectionError) || options.signal?.aborted) {
+      throw error;
+    }
+    return reconnectRunStream(sessionRef, options, {}, error);
+  }
+  if (consumed.finished || consumed.idle) {
+    return consumed.result;
+  }
+  return reconnectRunStream(sessionRef, options, consumed.result);
 }
 
 export interface StopSessionRunResult {

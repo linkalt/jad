@@ -2,6 +2,9 @@
   "api_base_path": "/api",
   "api_token_storage_key": "agent-harness.api-token",
   "stop_request_timeout_ms": 15000,
+  "run_stream_reconnect_base_delay_ms": 250,
+  "run_stream_reconnect_max_delay_ms": 2000,
+  "run_stream_reconnect_max_attempts": 8,
   "dev_api_proxy_target": "http://127.0.0.1:8787",
   "browser_targets": {
     "chrome_major": 123,
