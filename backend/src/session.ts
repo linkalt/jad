@@ -361,6 +361,10 @@ export class AgentSession {
       cursorCachePath: options.store?.cursorCachePath ?? settings.paths.cursor_cache,
       messagesBackupPath: settings.paths.messages_backup,
       stateContextPath: options.store?.stateContextPath ?? settings.paths.statecontext,
+      acceptedRequestPath: options.store?.acceptedRequestPath
+        ?? (settings.paths.active_profile === undefined
+          ? join(loader.paths.session_dir, "accepted-request.json")
+          : join(settings.paths.staging, "accepted-request.json")),
       durability: options.store?.durability ?? settings.persistence.durability,
       maxItemBytes: options.store?.maxItemBytes ?? settings.persistence.max_item_bytes,
       responseMetadata: options.store?.responseMetadata ?? settings.persistence.response_metadata,

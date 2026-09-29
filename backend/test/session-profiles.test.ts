@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { AgentSession, type AgentSessionSharedStores } from "../src/session.js";
+import { AgentSession, buildResponseRequest, type AgentSessionSharedStores } from "../src/session.js";
+import type {LoadedSessionConfig} from "../src/config.js";
 import { MemoryStore } from "../src/tools/native/memory-store.js";
 import { TaskStore } from "../src/tools/native/task-store.js";
 
@@ -73,6 +74,65 @@ test("opens two profiles of one session on separate transcripts", async () => {
       () => AgentSession.open(sessionDir, {profile: "missing"}),
       /path profile 'missing' is not defined/,
     );
+  } finally {
+    await primary?.close();
+    await alternate?.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("restores accepted request context from the matching profile after compaction", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-session-profile-request-context-"));
+  const sessionDir = await writeSession(root);
+  let primary: AgentSession | undefined;
+  let alternate: AgentSession | undefined;
+  const config = {
+    model: {model: "test-model", request: {}},
+    settings: {prompt_text: "", prompt_role: "system"},
+  } as unknown as LoadedSessionConfig;
+
+  const requestContext = async (session: AgentSession): Promise<string> => {
+    const history = [];
+    for await (const item of session.store.readInputItems({persistCache: false})) history.push(item);
+    const request = buildResponseRequest(config, history, [], {
+      role: "developer",
+      acceptedRequest: await session.store.readAcceptedRequest(),
+    });
+    const input = request.input as unknown as Array<{
+      content?: Array<{text?: string}>;
+    }>;
+    return input.flatMap((item) => item.content?.map((part) => part.text ?? "") ?? []).join("\n");
+  };
+
+  try {
+    primary = await AgentSession.open(sessionDir, {profile: "primary"});
+    alternate = await AgentSession.open(sessionDir, {profile: "alternate"});
+    assert.notEqual(primary.store.acceptedRequestPath, alternate.store.acceptedRequestPath);
+
+    for (const [session, profile] of [[primary, "primary"], [alternate, "alternate"]] as const) {
+      const callId = `call-${profile}`;
+      const draft = {goal: `approved for ${profile}`};
+      await session.store.writeAcceptedRequest(draft, "user", "accept", callId);
+      await session.store.appendInputItems([
+        {type: "message", role: "user", content: [{type: "input_text", text: `Start ${profile}`}]},
+        {type: "function_call", call_id: callId, name: "request_draft", arguments: JSON.stringify({draft})},
+        {type: "function_call_output", call_id: callId, output: JSON.stringify({decision: "accept", draft})},
+      ]);
+      const result = await session.store.compactHistory({
+        turnType: "assistant_final",
+        keepTurns: 1,
+        keepToolPairs: 0,
+        backupMode: "replace",
+      });
+      assert.equal(result.compacted, true);
+    }
+
+    const primaryContext = await requestContext(primary);
+    const alternateContext = await requestContext(alternate);
+    assert.match(primaryContext, /approved for primary/);
+    assert.doesNotMatch(primaryContext, /approved for alternate/);
+    assert.match(alternateContext, /approved for alternate/);
+    assert.doesNotMatch(alternateContext, /approved for primary/);
   } finally {
     await primary?.close();
     await alternate?.close();

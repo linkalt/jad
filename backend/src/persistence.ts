@@ -71,6 +71,8 @@ export interface SessionResponseStoreOptions {
   messagesBackupPath?: string;
   /** Replaceable state-context snapshot file. */
   stateContextPath?: string;
+  /** Accepted-request snapshot; relative values resolve from the session directory. */
+  acceptedRequestPath?: string;
 }
 
 export interface AcceptedRequestSnapshot extends JsonRecord {
@@ -1530,7 +1532,11 @@ export class SessionResponseStore {
         ? resolve(options.stateContextPath)
         : resolve(absoluteSessionDir, options.stateContextPath)
       : join(this.stagingDir, "statecontext.json");
-    this.acceptedRequestPath = join(absoluteSessionDir, "accepted-request.json");
+    this.acceptedRequestPath = options.acceptedRequestPath
+      ? isAbsolute(options.acceptedRequestPath)
+        ? resolve(options.acceptedRequestPath)
+        : resolve(absoluteSessionDir, options.acceptedRequestPath)
+      : join(absoluteSessionDir, "accepted-request.json");
     this.options = {
       durability: options.durability ?? "turn",
       maxItemBytes: options.maxItemBytes ?? Number.MAX_SAFE_INTEGER,
