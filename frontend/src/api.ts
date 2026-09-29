@@ -680,7 +680,11 @@ class RunStreamConnectionError extends Error {
   }
 }
 
-async function* readSse(response: Response, signal?: AbortSignal): AsyncGenerator<SseMessage> {
+async function* readSse(
+  response: Response,
+  signal?: AbortSignal,
+  stallTimeoutMs?: number,
+): AsyncGenerator<SseMessage> {
   if (!response.body) {
     throw new Error('the server did not return a stream');
   }
@@ -688,6 +692,34 @@ async function* readSse(response: Response, signal?: AbortSignal): AsyncGenerato
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+
+  /**
+   * A socket that stops delivering frames — a sleeping laptop, a dropped
+   * connection — neither errors nor ends, so reading would wait forever.
+   * Only *silence* counts: a slow provider that keeps sending deltas resets it
+   * with every chunk.
+   */
+  const readChunk = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    if (stallTimeoutMs === undefined || stallTimeoutMs <= 0) {
+      return reader.read();
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        reader.read(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new RunStreamConnectionError('the run stream went silent')),
+            stallTimeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+  };
 
   const parseBlock = (block: string): SseMessage | undefined => {
     let event = 'message';
@@ -713,9 +745,12 @@ async function* readSse(response: Response, signal?: AbortSignal): AsyncGenerato
     while (true) {
       let chunk: ReadableStreamReadResult<Uint8Array>;
       try {
-        chunk = await reader.read();
+        chunk = await readChunk();
       } catch (error) {
         if (signal?.aborted) {
+          throw error;
+        }
+        if (error instanceof RunStreamConnectionError) {
           throw error;
         }
         throw new RunStreamConnectionError('the run stream connection was interrupted');
@@ -871,6 +906,12 @@ export interface StreamSessionRunOptions {
   onUsage?: (usage: SessionUsageSummary) => void;
   onRun?: (run: SessionRunState) => void;
   onIdle?: () => void;
+  /**
+   * How long the stream may stay silent before it counts as broken and is
+   * reconnected. Tests set this small; the app takes
+   * `run_stream_stall_timeout_ms`.
+   */
+  stallTimeoutMs?: number;
 }
 
 export interface StreamSessionRunResult {
@@ -913,6 +954,7 @@ async function consumeRunStream(
   let finished = false;
   let idle = false;
   let completionNotified = false;
+  const stallTimeoutMs = options.stallTimeoutMs ?? appConfig.run_stream_stall_timeout_ms;
 
   const rememberCompletion = (message: WebUiMessage): void => {
     completedMessage = message;
@@ -923,7 +965,7 @@ async function consumeRunStream(
   };
 
   try {
-    for await (const message of readSse(response, options.signal)) {
+    for await (const message of readSse(response, options.signal, stallTimeoutMs)) {
       if (message.event === 'run') {
         if (isSessionRunState(message.data)) {
           attached = true;

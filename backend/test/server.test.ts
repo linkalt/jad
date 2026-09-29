@@ -1853,6 +1853,59 @@ test("serves a session snapshot and streams a committed run over SSE", async () 
   }
 });
 
+test("a started run names its own turn on the stream that carries it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-run-frame-"));
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, {recursive: true});
+  await writeFile(join(sessionDir, "model.json"), JSON.stringify({model: "fake-model"}));
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({session_name: "run-frame-test", cwd: sessionDir}),
+  );
+
+  const answer = {type: "message", role: "assistant", content: [{type: "output_text", text: "Ok"}]};
+  const fakeClient = {
+    responses: {
+      create: async () => (async function* () {
+        yield {type: "response.output_item.done", output_index: 0, item: answer};
+        yield completedEvent([answer], "response-run-frame");
+      })(),
+    },
+  } as unknown as OpenAI;
+  const running = createAgentServer({sessionsDir: root, client: fakeClient});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", resolve);
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "say ok"}),
+    });
+    assert.equal(response.status, 200);
+    const stream = await response.text();
+    const names = stream
+      .split("\n\n")
+      .map((block) => block.split("\n").find((line) => line.startsWith("event:"))?.slice("event:".length).trim())
+      .filter((name): name is string => name !== undefined && name.length > 0);
+    // The stream names the run it carries before anything else, exactly like the
+    // attach route: a client that later reads a session snapshot has to recognize
+    // which run the status it sees belongs to.
+    assert.equal(names[0], "run");
+    const runFrame = ssePayloads(stream, "run")[0];
+    assert.equal(typeof runFrame?.turn_id, "string");
+    assert.equal(runFrame?.status, "running");
+    assert.deepEqual(names, ["run", "usage", "ui.message", "completed", "done"]);
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test("publishes zero latest-response usage after automatic compaction", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-auto-compaction-usage-"));
   const sessionDir = join(root, "session1");

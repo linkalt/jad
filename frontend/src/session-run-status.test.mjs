@@ -5,6 +5,7 @@ import {
   isSessionRunning,
   reconcileDetachedRunSessionIds,
   sessionUiStateForRun,
+  snapshotEndsLocalRun,
   withSnapshotRun,
 } from './session-run-status.ts';
 
@@ -15,6 +16,19 @@ test('server run state keeps the UI active before stream attachment completes', 
 
 test('local run state remains active until its stream settles', () => {
   assert.equal(isSessionRunning(true, 'completed'), true);
+});
+
+test('only this client\'s own turn, ending, drops the local run', () => {
+  const run = (turnId, status) => ({turn_id: turnId, started_at: '2026-01-01T00:00:00.000Z', status});
+  // The snapshot's own run finished: the backstop for a stream gone quiet.
+  assert.equal(snapshotEndsLocalRun('turn-1', run('turn-1', 'completed')), true);
+  assert.equal(snapshotEndsLocalRun('turn-1', run('turn-1', 'failed')), true);
+  assert.equal(snapshotEndsLocalRun('turn-1', run('turn-1', 'aborted')), true);
+  // Still running, another run's status, or nothing at all: never ours to end.
+  assert.equal(snapshotEndsLocalRun('turn-1', run('turn-1', 'running')), false);
+  assert.equal(snapshotEndsLocalRun('turn-1', run('turn-2', 'completed')), false);
+  assert.equal(snapshotEndsLocalRun('turn-1', undefined), false);
+  assert.equal(snapshotEndsLocalRun(null, run('turn-1', 'completed')), false);
 });
 
 test('a detached run stays active until a fresh snapshot reports it ended', () => {

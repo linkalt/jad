@@ -87,6 +87,7 @@ import {
   isSessionRunning,
   reconcileDetachedRunSessionIds,
   sessionUiStateForRun,
+  snapshotEndsLocalRun,
   withSnapshotRun,
   type SessionUiState,
 } from './session-run-status';
@@ -2588,6 +2589,12 @@ function App() {
   // The run this client is streaming, if any. It is how a page reload
   // re-attaches to a run it did not start.
   const attachedTurnRef = useRef<string | null>(null);
+  /**
+   * The turn of the run this client streams, with the view it belongs to. A
+   * session snapshot names runs by turn, so this is what lets the poll recognise
+   * this client's own run finishing when the stream itself goes quiet.
+   */
+  const activeRunTurnRef = useRef<{viewKey: string; turnId: string} | null>(null);
   const activeSessionIdRef = useRef<string>(activeSessionId);
   const activeViewKeyRef = useRef<string>(activeViewKey);
   const activeProfileRef = useRef<string | undefined>(activeProfile);
@@ -3236,6 +3243,7 @@ function App() {
     attachedTurnRef.current = null;
     attachedRunSessionIdRef.current = null;
     activeRunSessionIdRef.current = null;
+    activeRunTurnRef.current = null;
     runAbortRef.current?.abort();
     runAbortRef.current = null;
     if (runTimeoutRef.current !== null) {
@@ -3711,6 +3719,9 @@ function App() {
         void streamSessionRun(sessionRef, trimmedValue, {
           signal: controller.signal,
           ...(activeProfile === undefined ? {} : {profile: activeProfile}),
+          onRun: run => {
+            activeRunTurnRef.current = {viewKey: sessionId, turnId: run.turn_id};
+          },
           onMessage: message => {
             setStreamingMessage(message);
             setRunProgress(1);
@@ -3786,9 +3797,14 @@ function App() {
             }
             runAbortRef.current = null;
             activeRunSessionIdRef.current = null;
+            activeRunTurnRef.current = null;
             setStreamingMessage(null);
             setRunProgress(isLiveRun ? 0 : baseReasoning.length);
             setRunningSessionId(current => (current === sessionId ? null : current));
+            // The committed transcript is authoritative now: refresh instead of
+            // waiting for the next poll, which this run had slowed to the
+            // streaming cadence.
+            refreshSessionsRef.current?.();
           });
         return true;
       }
@@ -3862,6 +3878,9 @@ function App() {
       void attachSessionRun(sessionRef, {
         signal: controller.signal,
         ...(profile === undefined ? {} : {profile}),
+        onRun: run => {
+          activeRunTurnRef.current = {viewKey: sessionId, turnId: run.turn_id};
+        },
         onMessage: message => setStreamingMessage(message),
         onDelta: applyRunDelta,
         onPart: applyRunPart,
@@ -4385,7 +4404,10 @@ function App() {
     refreshSessionsRef.current = loadSessions;
     loadSessions();
     // While this client streams a run, the stream already carries every commit,
-    // so the transcript only needs to catch up occasionally.
+    // so the transcript only needs to catch up occasionally. The session poll is
+    // different: it is the backstop that recognizes a run finishing when the
+    // stream goes quiet, so it keeps the fast cadence while a run is believed
+    // active — `session_refresh_interval_ms_streaming` is that cadence.
     const refreshInterval = isRunning
       ? appConfig.session_refresh_interval_ms_streaming
       : appConfig.session_refresh_interval_ms;
@@ -4424,6 +4446,29 @@ function App() {
       activeRowSession,
     );
   }, [activeProfile, activeRowSession, activeSession, activeViewKey, attachToRun]);
+
+  /**
+   * The stream is the fast path to completion; the poll is the backstop.
+   *
+   * A connection that stops delivering frames — a sleeping laptop, a dropped
+   * network — neither errors nor ends, so the stream promise stays pending and
+   * the composer would stay blocked until a reload. A session snapshot names the
+   * run it reports by turn, so a fresh one that says this client's own turn has
+   * finished is authoritative: drop the local run rather than wait for a stream
+   * that may never speak again. The committed transcript takes over.
+   */
+  useEffect(() => {
+    const local = activeRunTurnRef.current;
+    if (local === null || local.viewKey !== activeViewKey) {
+      return;
+    }
+    if (!snapshotEndsLocalRun(local.turnId, rowRunStatus(activeRow, activeSession))) {
+      return;
+    }
+    activeRunTurnRef.current = null;
+    detachRun();
+    refreshSessionsRef.current?.();
+  }, [activeRow, activeSession, activeViewKey, detachRun]);
 
   useEffect(() => {
     return () => {

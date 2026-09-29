@@ -8,6 +8,7 @@
   "run_stream_reconnect_base_delay_ms": 250,
   "run_stream_reconnect_max_delay_ms": 2000,
   "run_stream_reconnect_max_attempts": 8,
+  "run_stream_stall_timeout_ms": 20000,
   "dev_api_proxy_target": "http://127.0.0.1:8787",
   "browser_targets": {
     "chrome_major": 123,
@@ -74,7 +75,7 @@
   "mock_run_delay_ms": 1100,
   "session_refresh_interval_ms": 5000,
   "transcript_page_turns": 5,
-  "session_refresh_interval_ms_streaming": 30000,
+  "session_refresh_interval_ms_streaming": 5000,
   "session_views": [],
   "session_views_storage_key": "agent-harness.session-views",
   "session_views_max": 8

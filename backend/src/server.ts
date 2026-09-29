@@ -1851,6 +1851,11 @@ class AgentHttpApplication {
       connected = false;
     });
 
+    // The stream names the run it carries, exactly like the attach route: a
+    // client that later reads a session snapshot has to recognize which run the
+    // status it sees belongs to.
+    writeSse(response, "run", started.run.summary(), this.sseMaxBufferedBytes);
+
     // The response that started the run is one subscriber among others, so a
     // second tab (or the same tab after a reload) can attach to the same run.
     const detach = started.run.subscribe((event) => {

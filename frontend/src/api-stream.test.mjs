@@ -26,6 +26,35 @@ function streamResponse(events) {
   return new Response(body, {headers: {'Content-Type': 'text/event-stream'}});
 }
 
+/** A connection that delivers its frames and then stays open, silent, forever. */
+function stalledStream(events) {
+  const encoder = new TextEncoder();
+  const body = events.map(({event, data}) => sse(event, data)).join('');
+  return new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(body));
+      // Never closed: this is the sleeping-laptop socket the watchdog exists for.
+    },
+  }), {headers: {'Content-Type': 'text/event-stream'}});
+}
+
+/** A connection whose frames arrive `gapMs` apart, each inside the stall window. */
+function slowStream(events, gapMs) {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      events.forEach(({event, data}, index) => {
+        setTimeout(() => {
+          controller.enqueue(encoder.encode(sse(event, data)));
+          if (index === events.length - 1) {
+            controller.close();
+          }
+        }, gapMs * (index + 1));
+      });
+    },
+  }), {headers: {'Content-Type': 'text/event-stream'}});
+}
+
 function message(status, text) {
   return {
     id: 'turn-1',
@@ -84,6 +113,37 @@ test('reconnects an attached run after an incomplete stream and preserves its sn
   assert.deepEqual(requests.map(request => request.method), ['GET', 'GET']);
   assert.equal(result.attached, true);
   assert.equal(result.message?.text, 'the complete response');
+});
+
+test('replaces a stream that goes silent instead of waiting forever', async () => {
+  requests.length = 0;
+  responses.push(
+    stalledStream([{event: 'ui.message', data: {message: message('streaming', 'partial')}}]),
+    completedStream(),
+  );
+
+  const result = await streamSessionRun('session-1', 'hello', {stallTimeoutMs: 30});
+
+  assert.deepEqual(requests.map(request => request.method), ['POST', 'GET']);
+  assert.equal(result.message?.text, 'the complete response');
+});
+
+test('a stream that keeps sending frames is never treated as stalled', async () => {
+  requests.length = 0;
+  const finalMessage = message('complete', 'kept alive');
+  responses.push(
+    slowStream([
+      {event: 'ui.message', data: {message: message('streaming', 'partial')}},
+      {event: 'ui.message', data: {message: finalMessage}},
+      {event: 'completed', data: {message: finalMessage, committed: true}},
+      {event: 'done', data: {}},
+    ], 15),
+  );
+
+  const result = await streamSessionRun('session-1', 'hello', {stallTimeoutMs: 60});
+
+  assert.deepEqual(requests.map(request => request.method), ['POST']);
+  assert.equal(result.message?.text, 'kept alive');
 });
 
 test('does not reconnect after caller cancellation', async () => {

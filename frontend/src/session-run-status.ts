@@ -11,6 +11,25 @@ export function isSessionRunning(
   return locallyRunning || detachedRunKnownActive || serverRunStatus === 'running';
 }
 
+/**
+ * Whether a fresh session snapshot proves the run this client streams is over.
+ *
+ * A run's identity is its turn: only a snapshot whose run carries the same
+ * `turn_id` can speak for this client's own run, and only a terminal status ends
+ * it. This is the way out the local running state has no other form of: when the
+ * stream stops delivering frames without ever erroring, nothing else would clear
+ * it and the composer would stay blocked until a reload.
+ */
+export function snapshotEndsLocalRun(
+  localTurnId: string | null | undefined,
+  snapshotRun: SessionRunState | undefined,
+): boolean {
+  if (localTurnId === null || localTurnId === undefined || snapshotRun === undefined) {
+    return false;
+  }
+  return snapshotRun.turn_id === localTurnId && snapshotRun.status !== 'running';
+}
+
 export interface DetachedRunSessionSnapshot {
   id: string;
   status?: SessionRunStatus;
