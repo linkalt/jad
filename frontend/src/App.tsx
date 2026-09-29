@@ -45,8 +45,10 @@ import {
   type NewActivityNotification,
 } from './activity-notifications';
 import {
+  answerSessionRunInteraction,
   attachSessionRun,
   compactSession,
+  extendSessionRunInteraction,
   frontCompactSessionFromMessage,
   resetSession,
   fetchSession,
@@ -60,6 +62,7 @@ import {
   type SessionPage,
   type SessionSnapshot,
   type RootLibraryAsset,
+  type WebUiInteraction,
   type WebUiMessage,
   type WebUiMessageStep,
   type WebUiPart,
@@ -96,6 +99,8 @@ import {
 } from './web-ui-steps';
 import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
+import {DraftRequestDrawer} from './components/DraftRequestDrawer';
+import type {DraftDecision} from './draft-answer';
 import type {ComposerInsertActions} from './components/ComposerPane';
 import {ModelPicker} from './components/ModelPicker';
 import {SessionProfilePicker} from './components/SessionProfilePicker';
@@ -2419,6 +2424,10 @@ function App() {
   const [isUsageDrawerCollapsed, setIsUsageDrawerCollapsed] = useState(true);
   const [runProgress, setRunProgress] = useState(baseReasoning.length);
   const [streamingMessage, setStreamingMessage] = useState<WebUiMessage | null>(null);
+  /** The question currently being answered, so its buttons show a single flight. */
+  const [answeringInteractionId, setAnsweringInteractionId] = useState<string | null>(null);
+  const [extendingInteractionId, setExtendingInteractionId] = useState<string | null>(null);
+  const [interactionAnswerError, setInteractionAnswerError] = useState<string | null>(null);
   // The run stream sends increments instead of a snapshot per provider delta, so
   // the message on screen is merged here; the id check keeps a stale stream from
   // patching the message a newer run already replaced.
@@ -2547,6 +2556,9 @@ function App() {
   }, []);
   const runAbortRef = useRef<AbortController | null>(null);
   const stopPendingRef = useRef(false);
+  /** The interaction id whose answer is in flight, so one click is one request. */
+  const answeringInteractionRef = useRef<string | null>(null);
+  const extendingInteractionRef = useRef<string | null>(null);
   const runTimeoutRef = useRef<number | null>(null);
   const activeRunSessionIdRef = useRef<string | null>(null);
   const attachedRunSessionIdRef = useRef<string | null>(null);
@@ -3155,6 +3167,18 @@ function App() {
     message => message.id === streamingMessage.id,
   );
 
+  /**
+   * The question this composer can answer.
+   *
+   * A question is answered where the run is: another profile row waiting for input
+   * must not put its draft into this row's composer, and the sidebar keeps showing
+   * that row as running while it waits.
+   */
+  const pendingInteraction =
+    streamingMessage !== null && runningSessionId !== null && runningSessionId === activeViewKey
+      ? streamingMessage.pending
+      : undefined;
+
   const reasoningSteps = useMemo(() => {
     const steps = isLiveSession ? [] : baseReasoning;
     return getTraceForSteps(steps, isRunning ? runProgress : steps.length);
@@ -3275,6 +3299,92 @@ function App() {
       stopPendingRef.current = false;
     });
   }, [activeRowSession.title, detachRun, recordNotification]);
+
+  /**
+   * Answers the question a run is waiting on.
+   *
+   * A refusal — the deadline passed, or the run is no longer waiting for that
+   * question — is reported as a notification, and nothing is undone locally: the
+   * run's own stream publishes the question's end, so the drawer closes from the
+   * server's state rather than from an assumption here.
+   */
+  const answerInteraction = useCallback((
+    interaction: WebUiInteraction,
+    body: {decision: DraftDecision; draft?: unknown; reason?: string},
+  ) => {
+    const session = activeSessionEntryRef.current;
+    if (session?.source !== 'live' || !session.sessionRef) {
+      return;
+    }
+    if (answeringInteractionRef.current !== null) {
+      return;
+    }
+    answeringInteractionRef.current = interaction.id;
+    setAnsweringInteractionId(interaction.id);
+    setInteractionAnswerError(null);
+    const signal = AbortSignal.timeout(appConfig.interaction_answer_timeout_ms);
+    void answerSessionRunInteraction(
+      session.sessionRef,
+      {interaction_id: interaction.id, ...body},
+      activeProfileRef.current,
+      signal,
+    ).catch(error => {
+      const message = error instanceof Error ? error.message : String(error);
+      setInteractionAnswerError(message);
+      recordNotification({
+        sessionId: session.id,
+        sessionTitle: activeRowSession.title,
+        kind: 'error',
+        title: 'Unable to answer the draft',
+        message,
+      });
+      console.warn('Unable to answer the draft:', error);
+    }).finally(() => {
+      answeringInteractionRef.current = null;
+      setAnsweringInteractionId(null);
+    });
+  }, [activeRowSession.title, recordNotification]);
+
+  /**
+   * Pushes the question's deadline out by the session's own step.
+   *
+   * The new deadline is not computed here: the run republishes the question with
+   * its own `expires_at`, so the countdown follows the server's record and every
+   * open tab shows the same time left.
+   */
+  const extendInteraction = useCallback((interaction: WebUiInteraction) => {
+    const session = activeSessionEntryRef.current;
+    if (session?.source !== 'live' || !session.sessionRef) {
+      return;
+    }
+    if (extendingInteractionRef.current !== null) {
+      return;
+    }
+    extendingInteractionRef.current = interaction.id;
+    setExtendingInteractionId(interaction.id);
+    setInteractionAnswerError(null);
+    const signal = AbortSignal.timeout(appConfig.interaction_answer_timeout_ms);
+    void extendSessionRunInteraction(
+      session.sessionRef,
+      {interaction_id: interaction.id},
+      activeProfileRef.current,
+      signal,
+    ).catch(error => {
+      const message = error instanceof Error ? error.message : String(error);
+      setInteractionAnswerError(message);
+      recordNotification({
+        sessionId: session.id,
+        sessionTitle: activeRowSession.title,
+        kind: 'error',
+        title: 'Unable to extend the draft',
+        message,
+      });
+      console.warn('Unable to extend the draft:', error);
+    }).finally(() => {
+      extendingInteractionRef.current = null;
+      setExtendingInteractionId(null);
+    });
+  }, [activeRowSession.title, recordNotification]);
 
   const compactActiveSession = useCallback(async () => {
     const sessionRef = activeSession?.sessionRef;
@@ -4311,7 +4421,18 @@ function App() {
       onToggleLeftPanel={toggleLeftPanel}
       onRegisterInsert={registerComposerInsert}
       drawer={
-        isComposerActionsDrawerOpen ? (
+        pendingInteraction !== undefined ? (
+          <DraftRequestDrawer
+            pending={pendingInteraction}
+            isSubmitting={answeringInteractionId === pendingInteraction.id}
+            isExtending={extendingInteractionId === pendingInteraction.id}
+            error={interactionAnswerError}
+            reasonMaxLength={appConfig.interaction_reason_max_length}
+            deadlineTickMs={appConfig.interaction_deadline_tick_ms}
+            onAnswer={body => answerInteraction(pendingInteraction, body)}
+            onExtend={() => extendInteraction(pendingInteraction)}
+          />
+        ) : isComposerActionsDrawerOpen ? (
           <ChatComposerDrawer>
             <VStack gap={1} width="100%">
               <Text type="supporting" color="secondary">

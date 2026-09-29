@@ -36,6 +36,30 @@ export interface WebUiToolResultPart {
 
 export type WebUiPart = WebUiTextPart | WebUiToolCallPart | WebUiToolResultPart;
 
+export type WebUiInteractionDecision = 'accept' | 'update' | 'decline';
+
+/**
+ * A tool call waiting on the user's decision. It is run state, not an event:
+ * the run publishes it inside its message, so a reload that lands mid-wait still
+ * shows the question and can still answer it.
+ */
+export interface WebUiInteraction {
+  id: string;
+  /** Name of the native tool that asked, e.g. `request_draft`. */
+  tool: string;
+  tool_call_id: string;
+  /** The tool's proposal; any JSON object the tool defines. */
+  draft: Record<string, unknown>;
+  title?: string;
+  created_at: string;
+  /** When the run stops waiting and reports the question as unanswered. */
+  expires_at: string;
+  /** The latest deadline an extension may push to. */
+  max_expires_at: string;
+  /** How much one extension adds to the deadline; zero when extending is off. */
+  extend_ms: number;
+}
+
 export interface WebUiMessageStep {
   id: string;
   startPart: number;
@@ -52,6 +76,8 @@ export interface WebUiMessage {
   steps?: WebUiMessageStep[];
   status?: 'streaming' | 'complete';
   reasoningContent?: string;
+  /** The question a tool is waiting on, while a run holds the turn open for it. */
+  pending?: WebUiInteraction;
   /**
    * Turn that produced this message, set when a part was capped. Passing it to
    * `fetchSessionMessage` returns the message with its parts whole.
@@ -1184,6 +1210,109 @@ export async function attachSessionRun(
     return consumed.result;
   }
   return reconnectRunStream(sessionRef, options, consumed.result);
+}
+
+export interface AnswerSessionRunInteractionResult {
+  interaction_id: string;
+  decision: WebUiInteractionDecision;
+  status: 'answered';
+}
+
+/**
+ * Answers the question a run is waiting on.
+ *
+ * The reply names the question it answers: a stale tab, a repeated click, or an
+ * answer sent after the deadline all come back as a refusal instead of answering
+ * whatever question happens to be pending.
+ */
+export async function answerSessionRunInteraction(
+  sessionRef: string,
+  body: {
+    interaction_id: string;
+    decision: WebUiInteractionDecision;
+    draft?: unknown;
+    reason?: string;
+  },
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<AnswerSessionRunInteractionResult> {
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/interaction${profileQuery(profile)}`),
+    {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(body),
+      ...(signal === undefined ? {} : {signal}),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  const interaction = isRecord(value) ? value.interaction : undefined;
+  if (
+    !isRecord(interaction) ||
+    typeof interaction.interaction_id !== 'string' ||
+    (interaction.decision !== 'accept' && interaction.decision !== 'update' && interaction.decision !== 'decline')
+  ) {
+    throw new Error('the server returned invalid interaction data');
+  }
+  return {
+    interaction_id: interaction.interaction_id,
+    decision: interaction.decision,
+    status: 'answered',
+  };
+}
+
+export interface ExtendSessionRunInteractionResult {
+  interaction_id: string;
+  status: 'pending';
+  expires_at: string;
+  max_expires_at: string;
+}
+
+/**
+ * Pushes the question's deadline out by the session's own step.
+ *
+ * The amount is not in the body: the step and the ceiling belong to the session,
+ * not to the caller. The run republishes the question with its new deadline, so
+ * this response and every open tab show the same time left.
+ */
+export async function extendSessionRunInteraction(
+  sessionRef: string,
+  body: {interaction_id: string},
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<ExtendSessionRunInteractionResult> {
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/interaction/extend${profileQuery(profile)}`),
+    {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(body),
+      ...(signal === undefined ? {} : {signal}),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  const interaction = isRecord(value) ? value.interaction : undefined;
+  if (
+    !isRecord(interaction) ||
+    typeof interaction.interaction_id !== 'string' ||
+    interaction.status !== 'pending' ||
+    typeof interaction.expires_at !== 'string' ||
+    typeof interaction.max_expires_at !== 'string'
+  ) {
+    throw new Error('the server returned invalid interaction data');
+  }
+  return {
+    interaction_id: interaction.interaction_id,
+    status: 'pending',
+    expires_at: interaction.expires_at,
+    max_expires_at: interaction.max_expires_at,
+  };
 }
 
 export interface StopSessionRunResult {
