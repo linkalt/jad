@@ -6,6 +6,7 @@ import {
   forgetHistoryBlock,
   forgetHistoryBlocks,
   historyBlockFor,
+  historyEtagFromHeader,
   historyMessagesFor,
   putHistoryBlock,
 } from './history-blocks.ts';
@@ -45,6 +46,25 @@ test('renders only the block of the view being shown', () => {
 test('an empty block adds nothing to the transcript', () => {
   const blocks = putHistoryBlock(EMPTY_HISTORY_BLOCKS, 'a', {etag: 'a', messages: []});
   assert.equal(historyMessagesFor(blocks, 'a'), undefined);
+});
+
+test('remembers that a view has no block', () => {
+  // A transcript refresh the stream owns must not ask the endpoint again on
+  // every poll: the answer is kept, in the shape a snapshot would have given.
+  const none = putHistoryBlock(EMPTY_HISTORY_BLOCKS, 'a', {etag: null, messages: []});
+  assert.equal(historyMessagesFor(none, 'a'), undefined);
+  assert.notEqual(historyBlockFor(none, 'a'), undefined);
+  assert.equal(putHistoryBlock(none, 'a', {etag: null, messages: []}), none);
+  assert.notEqual(putHistoryBlock(none, 'a', {etag: 'a', messages: []}), none);
+});
+
+test('stores the identity a snapshot publishes, given the HTTP header', () => {
+  assert.equal(historyEtagFromHeader('"abc"'), 'abc');
+  assert.equal(historyEtagFromHeader('W/"abc"'), 'abc');
+  assert.equal(historyEtagFromHeader('abc'), 'abc');
+  assert.equal(historyEtagFromHeader('""'), null);
+  assert.equal(historyEtagFromHeader('  '), null);
+  assert.equal(historyEtagFromHeader(undefined), null);
 });
 
 test('storing an unchanged block keeps the record identity', () => {

@@ -96,6 +96,7 @@ import {
   forgetHistoryBlock,
   forgetHistoryBlocks,
   historyBlockFor,
+  historyEtagFromHeader,
   historyMessagesFor,
   putHistoryBlock,
   type HistoryBlock,
@@ -4129,15 +4130,16 @@ function App() {
         return held;
       }
       if (reference.etag === null) {
-        if (held !== undefined) {
-          updateHistoryBlocks(blocks => forgetHistoryBlock(blocks, uiId));
-        }
+        // The snapshot says there is no block. The messages go — they are gone
+        // server-side too — but the answer stays as a record, so a transcript
+        // refresh that gets skipped does not ask the endpoint for it again.
+        updateHistoryBlocks(blocks => putHistoryBlock(blocks, uiId, {etag: null, messages: []}));
         return undefined;
       }
       if (held !== undefined && held.etag === reference.etag) {
         return held;
       }
-      const result = await fetchSessionHistory(sessionRef, held?.etag, profile, signal);
+      const result = await fetchSessionHistory(sessionRef, held?.etag ?? undefined, profile, signal);
       if (cancelled || (transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch) {
         return undefined;
       }
@@ -4152,6 +4154,38 @@ function App() {
         return next;
       }
       return held;
+    };
+
+    /**
+     * The block of a view whose transcript a stream owns.
+     *
+     * The snapshot that would name the block is the very fetch the policy skips,
+     * so a view whose transcript has never been hydrated has nothing to
+     * revalidate against — and waiting for the run to end would leave the row
+     * without its history for as long as it streams. The endpoint itself is the
+     * answer: it serves the block and names it, and the answer is recorded in
+     * the shape a snapshot would have used, so no later poll asks again.
+     */
+    const lookUpHistoryBlock = async (
+      sessionRef: string,
+      uiId: string,
+      profile: string | undefined,
+      signal: AbortSignal,
+    ): Promise<void> => {
+      if (historyBlockFor(historyBlocksRef.current, uiId) !== undefined) {
+        return;
+      }
+      const resetEpoch = transcriptResetEpochRef.current.get(uiId) ?? 0;
+      const result = await fetchSessionHistory(sessionRef, undefined, profile, signal);
+      if (
+        cancelled ||
+        (transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch ||
+        result.kind !== 'ok'
+      ) {
+        return;
+      }
+      const next = {etag: historyEtagFromHeader(result.etag), messages: result.value.messages};
+      updateHistoryBlocks(blocks => putHistoryBlock(blocks, uiId, next));
     };
 
     let requestedTranscript: {
@@ -4179,6 +4213,10 @@ function App() {
         attachedRunSessionId: attachedRunSessionIdRef.current,
         transcriptHydrated: hydratedTranscriptSessionIdsRef.current.has(uiId),
       })) {
+        // The stream owns the transcript, but not the backup: a view whose first
+        // snapshot never landed still needs its history, and it cannot wait for a
+        // run that may stream for minutes.
+        await lookUpHistoryBlock(sessionRef, uiId, profile, transcriptRefreshController.signal);
         return;
       }
       const result = await fetchSession(sessionRef, {
