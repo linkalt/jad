@@ -64,6 +64,7 @@ import type {
   WebUiSessionSnapshot,
 } from "./plugins/web-ui/types.js";
 import {WebUiSessionViewCache} from "./plugins/web-ui/view-cache.js";
+import {parseInteractionExtendRequest, parseInteractionReplyRequest} from "./interactions.js";
 import { SessionRunRegistry, type SessionRun } from "./run-registry.js";
 import { collectSessionFiles } from "./session-files.js";
 import { MessageStreamEmitter } from "./stream-emitter.js";
@@ -845,6 +846,27 @@ class AgentHttpApplication {
 
       if (
         request.method === "POST" &&
+        segments.length === 6 &&
+        segments[3] === "run" &&
+        segments[4] === "interaction" &&
+        segments[5] === "extend"
+      ) {
+        await this.handleRunInteractionExtend(sessionRef, request, response, profile);
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        segments.length === 5 &&
+        segments[3] === "run" &&
+        segments[4] === "interaction"
+      ) {
+        await this.handleRunInteraction(sessionRef, request, response, profile);
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
         segments.length === 4 &&
         segments[3] === "run"
       ) {
@@ -1346,6 +1368,97 @@ class AgentHttpApplication {
     sendJson(response, 200, {stop: this.runs.stop(handle.location.ref, handle.profile)});
   }
 
+  /**
+   * Answers the question a run is waiting on.
+   *
+   * The reply names the question it answers, so a stale tab, a retry, or a
+   * second click after the deadline resolves to "nothing changed" instead of
+   * answering whatever question happens to be pending. The edited draft is
+   * measured against the limits that travelled with the question.
+   */
+  private async handleRunInteraction(
+    id: string,
+    request: IncomingMessage,
+    response: ServerResponse,
+    profile?: string,
+  ): Promise<void> {
+    const handle = await this.getSession(id, profile);
+    const run = this.runs.current(handle.location.ref, handle.profile);
+    if (run === undefined) {
+      throw new HttpError(404, "no run of this session is waiting for an answer");
+    }
+    const parsed = parseInteractionReplyRequest(
+      await readJsonBody(request, this.maxBodyBytes),
+      run.interactions.limits,
+    );
+    if ("error" in parsed) {
+      throw new HttpError(400, parsed.error);
+    }
+    const status = run.interactions.reply(parsed.interaction_id, parsed);
+    if (status !== "answered") {
+      throw new HttpError(
+        409,
+        status === "expired"
+          ? "the draft expired before the answer arrived"
+          : "the run is not waiting for that question",
+      );
+    }
+    sendJson(response, 200, {
+      interaction: {
+        interaction_id: parsed.interaction_id,
+        decision: parsed.decision,
+        status,
+      },
+    });
+  }
+
+  /**
+   * Pushes a waiting question's deadline out by the session's own step. The
+   * amount is not in the body: the step and the ceiling are the session's, so a
+   * caller cannot ask for an arbitrary wait.
+   */
+  private async handleRunInteractionExtend(
+    sessionRef: string,
+    request: IncomingMessage,
+    response: ServerResponse,
+    profile: string | undefined,
+  ): Promise<void> {
+    const handle = await this.getSession(sessionRef, profile);
+    const run = this.runs.current(handle.location.ref, handle.profile);
+    if (run === undefined) {
+      throw new HttpError(404, "no run of this session is waiting for an answer");
+    }
+    const parsed = parseInteractionExtendRequest(await readJsonBody(request, this.maxBodyBytes));
+    if ("error" in parsed) {
+      throw new HttpError(400, parsed.error);
+    }
+    const status = run.interactions.extend(parsed.interaction_id);
+    if (status !== "extended") {
+      throw new HttpError(
+        409,
+        status === "expired"
+          ? "the draft expired before it could be extended"
+          : status === "at_max"
+            ? "the draft is already at the longest wait this session allows"
+            : "the run is not waiting for that question",
+      );
+    }
+    const pending = run.interactions.pending;
+    if (pending === undefined) {
+      throw new HttpError(409, "the run is not waiting for that question");
+    }
+    // The run republished the question with its new deadline; the response is the
+    // same value, so a caller that cannot watch the stream still learns it.
+    sendJson(response, 200, {
+      interaction: {
+        interaction_id: parsed.interaction_id,
+        status: "pending",
+        expires_at: pending.expires_at,
+        max_expires_at: pending.max_expires_at,
+      },
+    });
+  }
+
   private isTranscriptChanging(reference: string): boolean {
     for (const key of this.changingTranscripts) {
       if (key === reference || key.startsWith(`${reference}|`)) {
@@ -1837,6 +1950,10 @@ class AgentHttpApplication {
       const result = await handle.session.run(options.input, {
         turnId,
         signal: controller.signal,
+        // A tool that must ask the user gets the run's channel: the question
+        // becomes message state, and the answer arrives over HTTP.
+        requestInteraction: ({tool, tool_call_id, ...question}) =>
+          run.interactions.begin(question, {tool, tool_call_id}, controller.signal),
         ...(options.modelConfigPath === undefined ? {} : {modelConfigPath: options.modelConfigPath}),
         onEvent: (event) => {
           const update = normalizedRun.updateForStream(event);

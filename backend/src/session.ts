@@ -32,6 +32,8 @@ import {
   loadToolCatalog,
   responseFunctionCalls,
   type ToolDefinition,
+  type ToolInteractionAnswer,
+  type ToolInteractionQuestion,
 } from "./tools/index.js";
 import {renderToolResult} from "./tools/output.js";
 import {ProcessManager} from "./tools/native/process-manager.js";
@@ -89,6 +91,14 @@ export interface AgentRunOptions {
   /** Called after successful automatic compaction changes usage state. */
   onUsageChanged?: () => void | Promise<void>;
   onToolResult?: (item: ResponseInputItem) => void | Promise<void>;
+  /**
+   * Asks the user to decide on data a tool produced. Present only when the run
+   * can reach a client; a tool that needs an answer checks for its absence
+   * rather than failing.
+   */
+  requestInteraction?: (
+    request: ToolInteractionQuestion & {tool: string; tool_call_id: string},
+  ) => Promise<ToolInteractionAnswer>;
 }
 
 export interface AgentRunResult {
@@ -481,6 +491,7 @@ export class AgentSession {
 
       const toolOutputsByCallId = new Map<string, ResponseInputItem>();
       let executionError: unknown;
+      const requestInteraction = options.requestInteraction;
       try {
         for (const call of calls) {
           throwIfAborted(options.signal);
@@ -488,6 +499,18 @@ export class AgentSession {
             workspaceRoot: config.settings.cwd,
             sessionDir: config.paths.session_dir,
             signal: options.signal,
+            ...(requestInteraction === undefined
+              ? {}
+              : {
+                  // The tool asks a question; the identity of the call that asked
+                  // travels with it, because the run publishes it to the client.
+                  requestInteraction: (question: ToolInteractionQuestion) =>
+                    requestInteraction({
+                      ...question,
+                      tool: typeof call.name === "string" ? call.name : "",
+                      tool_call_id: typeof call.call_id === "string" ? call.call_id : "",
+                    }),
+                }),
           });
           const callId = functionCallId(toolOutput);
           if (callId !== undefined) {

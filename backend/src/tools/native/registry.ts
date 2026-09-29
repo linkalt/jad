@@ -26,6 +26,7 @@ import {MemoryStore} from "./memory-store.js";
 import {ProcessManager} from "./process-manager.js";
 import {executeNativeTask, NATIVE_TASK_ID, nativeTaskDefinition, normalizeTaskArguments} from "./task.js";
 import {TaskStore} from "./task-store.js";
+import {executeNativeRequestDraft, NATIVE_REQUEST_DRAFT_ID, nativeRequestDraftDefinition} from "./request-draft.js";
 import {normalizeEncoding, normalizeRangeType} from "./text.js";
 import {executeNativeWrite, NATIVE_WRITE_ID, nativeWriteDefinition} from "./write.js";
 
@@ -177,7 +178,37 @@ function grepSpec(): NativeToolSpec {
 }
 
 export function nativeToolSpecs(): NativeToolSpec[] {
-  return [readSpec(), writeSpec(), editSpec(), grepSpec(), bashSpec(), globSpec(), processSpec(), taskSpec(), memorySpec(), fetchSpec()];
+  return [readSpec(), writeSpec(), editSpec(), grepSpec(), bashSpec(), globSpec(), processSpec(), taskSpec(), memorySpec(), fetchSpec(), requestDraftSpec()];
+}
+
+/**
+ * The draft tool has no storage and no path policy: its whole behaviour is the
+ * question it publishes and the answer it reads back, so the only setting is
+ * how long the run waits for that answer.
+ */
+function requestDraftSpec(): NativeToolSpec {
+  return {
+    id: NATIVE_REQUEST_DRAFT_ID,
+    settingName: "request_draft",
+    definition: nativeRequestDraftDefinition,
+    required: ["draft"],
+    exampleOperation: {title: "How I read your request", draft: {goal: "..."}},
+    normalizeArguments: (args) => args,
+    configured: (config) => config.settings.tools.native.request_draft !== undefined,
+    build: (definition, config, validate) => {
+      const policy = config.settings.tools.native.request_draft;
+      if (!policy) {
+        return {error: `tool ${definition.id} is not exposed in tools.native`};
+      }
+      return {
+        tool: {
+          definition,
+          validate,
+          execute: (args, context) => executeNativeRequestDraft(args, context, policy),
+        },
+      };
+    },
+  };
 }
 
 function fetchSpec(): NativeToolSpec {

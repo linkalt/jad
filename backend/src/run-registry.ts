@@ -1,10 +1,13 @@
 import type {
+  WebUiInteraction,
   WebUiMessage,
   WebUiRunStatus,
   WebUiSessionRun,
 } from "./plugins/web-ui/types.js";
 import { messageAppendIncrement, messageIncrements } from "./plugins/web-ui/incremental-web-ui.js";
 import type {WebUiMessageAppend} from "./plugins/web-ui/incremental-web-ui.js";
+
+import {InteractionBroker} from "./interactions.js";
 
 export interface RunStreamEvent {
   event: string;
@@ -41,7 +44,12 @@ export class SessionRun {
     public readonly controller: AbortController,
     private readonly startedAt: string,
     private readonly onRetire: (run: SessionRun) => void,
-  ) {}
+  ) {
+    this.interactions = new InteractionBroker((pending) => this.setPending(pending));
+  }
+
+  /** The question a tool is waiting on; its answer arrives over HTTP. */
+  public readonly interactions: InteractionBroker;
 
   public summary(): WebUiSessionRun {
     return {
@@ -76,6 +84,28 @@ export class SessionRun {
     }
   }
 
+  /**
+   * Publishes the question a tool is waiting on, or clears it.
+   *
+   * A question is message state rather than a stream event: it has to survive a
+   * reload, and a client that missed the event could not answer it. A change to
+   * a message-level field has no incremental form — `messageIncrements` reports
+   * "nothing changed" while the parts are identical — so this always sends the
+   * whole snapshot.
+   */
+  public setPending(pending: WebUiInteraction | undefined): void {
+    const current = this.latest;
+    if (current === undefined) {
+      return;
+    }
+    const next = pending === undefined ? withoutPending(current) : {...current, pending};
+    if (next === current) {
+      return;
+    }
+    this.latest = next;
+    this.publish("ui.message", {message: next});
+  }
+
   public publish(event: string, data: unknown): void {
     const published = {event, data};
     if (event === "usage") {
@@ -95,9 +125,15 @@ export class SessionRun {
     events: readonly RunStreamEvent[],
     finalMessage?: WebUiMessage,
   ): void {
+    // A question this run can no longer answer must settle before the terminal
+    // events: the waiting tool has to return instead of holding the turn open.
+    this.interactions.cancel("The run ended before the draft was answered.");
     this.status = status;
     if (finalMessage !== undefined) {
-      this.latest = finalMessage;
+      this.latest = withoutPending(finalMessage);
+    } else if (this.latest !== undefined) {
+      // A question nobody can answer any more must not replay to a late subscriber.
+      this.latest = withoutPending(this.latest);
     }
     this.terminal = [...events];
     for (const event of events) {
@@ -296,6 +332,15 @@ export class SessionRunRegistry {
     timer.unref?.();
     this.timers.add(timer);
   }
+}
+
+/** The message without its pending question, or the same message when it has none. */
+function withoutPending(message: WebUiMessage): WebUiMessage {
+  if (message.pending === undefined) {
+    return message;
+  }
+  const {pending: _pending, ...rest} = message;
+  return rest;
 }
 
 interface SessionRunSlot {

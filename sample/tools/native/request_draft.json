@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.request_draft",
+      "source": "native",
+      "name": "request_draft",
+      "description": "Present how you read the user's request as a JSON draft and wait for them to accept, edit or decline it. Call it before starting work when the request could reasonably be read in more than one way, or when a wrong reading would waste the turn. Do not start the work before it returns. The result carries `decision` (accept = proceed as drafted, update = proceed with `draft`, the user's edited version, decline = do not proceed), `status` (answered, timed_out or cancelled) and, when the user changed something, `changed` — the paths they added, removed or corrected. Treat anything but `answered` as a decline.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "One line naming what the draft decides, shown above it."
+          },
+          "draft": {
+            "type": "object",
+            "description": "Your structured understanding: the fields the user should confirm or correct (goal, scope, constraints, assumptions, open questions, …). Any shape is allowed; keep it small enough to read at a glance.",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "draft"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

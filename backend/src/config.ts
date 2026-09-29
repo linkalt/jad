@@ -259,6 +259,21 @@ export interface NativeFetchToolSettings extends JsonRecord {
   denied_hosts: string[];
 }
 
+export interface NativeRequestDraftToolSettings extends JsonRecord {
+  /** How long the run waits for the user before the tool reports a timeout. */
+  timeout_ms: number;
+  /** Ceiling for the whole wait, extensions included. */
+  max_timeout_ms: number;
+  /** How much one extension adds to the deadline when the user asks for more time. */
+  extend_ms: number;
+  /** Largest draft, in bytes of JSON, the tool will publish as a question. */
+  max_draft_bytes: number;
+  /** Deepest draft the tool will publish, counted as memory counts its records. */
+  max_draft_depth: number;
+  /** Longest title the tool accepts; longer ones come back as a refusal. */
+  max_title_chars: number;
+}
+
 export interface NativeMemoryToolSettings extends JsonRecord {
   /** Resolved memory-root directory, relative to cwd when configured relatively. */
   storage_dir: string;
@@ -316,6 +331,7 @@ export interface NativeToolSettings extends JsonRecord {
   task?: NativeTaskToolSettings;
   memory?: NativeMemoryToolSettings;
   fetch?: NativeFetchToolSettings;
+  request_draft?: NativeRequestDraftToolSettings;
 }
 
 export interface ToolSettings extends JsonRecord {
@@ -715,6 +731,34 @@ export const DEFAULT_NATIVE_FETCH_MAX_RESPONSE_BYTES = 2_000_000;
 export const DEFAULT_NATIVE_FETCH_MAX_DOCUMENT_CHARS = 1_000_000;
 export const DEFAULT_NATIVE_FETCH_MAX_STORAGE_BYTES = 64 * 1024 * 1024;
 export const DEFAULT_NATIVE_FETCH_TIMEOUT_MS = 15_000;
+/**
+ * How long a `request_draft` question waits for the user. Five minutes is the
+ * product default: long enough to read a draft and correct it, short enough that
+ * a run nobody is watching cannot hold a turn open indefinitely.
+ */
+export const DEFAULT_NATIVE_REQUEST_DRAFT_TIMEOUT_MS = 300_000;
+export const MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS = 1_800_000;
+export const DEFAULT_NATIVE_REQUEST_DRAFT_MAX_TIMEOUT_MS = MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS;
+/**
+ * How much one press of the drawer's extend control adds to the deadline. The
+ * wait itself is the session's, not the model's — and the operator decides how
+ * far a user can push the deadline out.
+ */
+export const DEFAULT_NATIVE_REQUEST_DRAFT_EXTEND_MS = 300_000;
+export const MIN_NATIVE_REQUEST_DRAFT_EXTEND_MS = 1_000;
+/**
+ * A draft is a question read at a glance and re-published in every message
+ * snapshot, not a stored record: two orders of magnitude below memory's 256 KiB
+ * record cap, which is still thousands of tokens of JSON.
+ */
+export const DEFAULT_NATIVE_REQUEST_DRAFT_MAX_DRAFT_BYTES = 32 * 1024;
+export const MIN_NATIVE_REQUEST_DRAFT_MAX_DRAFT_BYTES = 1024;
+export const MAX_NATIVE_REQUEST_DRAFT_MAX_DRAFT_BYTES = 1_048_576;
+export const DEFAULT_NATIVE_REQUEST_DRAFT_MAX_DRAFT_DEPTH = 8;
+export const MAX_NATIVE_REQUEST_DRAFT_MAX_DRAFT_DEPTH = 32;
+export const DEFAULT_NATIVE_REQUEST_DRAFT_MAX_TITLE_CHARS = 200;
+export const MIN_NATIVE_REQUEST_DRAFT_MAX_TITLE_CHARS = 8;
+export const MAX_NATIVE_REQUEST_DRAFT_MAX_TITLE_CHARS = 1_000;
 export const DEFAULT_NATIVE_FETCH_MAX_REDIRECTS = 5;
 export const DEFAULT_NATIVE_MEMORY_STORAGE_DIR = ".memory";
 export const DEFAULT_NATIVE_MEMORY_MAX_TYPES = 64;
@@ -1735,7 +1779,8 @@ type NativeToolName =
   | "process"
   | "task"
   | "memory"
-  | "fetch";
+  | "fetch"
+  | "request_draft";
 
 /**
  * Every key each native tool reads. A key outside this list is refused at load
@@ -1778,6 +1823,9 @@ const NATIVE_TOOL_KEYS: Record<NativeToolName, readonly string[]> = {
     "allowed_hosts", "default_limit", "denied_hosts", "include_images", "include_metadata",
     "max_document_chars", "max_limit", "max_redirects", "max_response_bytes",
     "max_storage_bytes", "storage_dir", "timeout_ms",
+  ],
+  request_draft: [
+    "extend_ms", "max_draft_bytes", "max_draft_depth", "max_timeout_ms", "max_title_chars", "timeout_ms",
   ],
 };
 
@@ -2439,6 +2487,71 @@ async function normalizeTools(
     }
   }
 
+  const requestDraftValue = nativeValue.request_draft;
+  let requestDraft: NativeRequestDraftToolSettings | undefined;
+  if (requestDraftValue !== undefined) {
+    if (!isRecord(requestDraftValue)) {
+      throw new ConfigError(`${path}: tools.native.request_draft must be an object`);
+    }
+    assertSupportedKeys(requestDraftValue, NATIVE_TOOL_KEYS.request_draft, `${path}: tools.native.request_draft`);
+    const bounded = (field: string, fallback: number, minimum: number, maximum: number): number => {
+      const value = requestDraftValue[field] ?? fallback;
+      if (
+        typeof value !== "number" ||
+        !Number.isSafeInteger(value) ||
+        value < minimum ||
+        value > maximum
+      ) {
+        throw new ConfigError(
+          `${path}: tools.native.request_draft.${field} must be a safe integer between ${minimum} and ${maximum}`,
+        );
+      }
+      return value;
+    };
+    const timeoutMs = bounded(
+      "timeout_ms",
+      DEFAULT_NATIVE_REQUEST_DRAFT_TIMEOUT_MS,
+      1,
+      MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS,
+    );
+    const maxTimeoutMs = bounded("max_timeout_ms", DEFAULT_NATIVE_REQUEST_DRAFT_MAX_TIMEOUT_MS, 1, MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS);
+    if (timeoutMs > maxTimeoutMs) {
+      throw new ConfigError(
+        `${path}: tools.native.request_draft.timeout_ms must not exceed max_timeout_ms`,
+      );
+    }
+    const extendMs = bounded(
+      "extend_ms",
+      DEFAULT_NATIVE_REQUEST_DRAFT_EXTEND_MS,
+      MIN_NATIVE_REQUEST_DRAFT_EXTEND_MS,
+      MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS,
+    );
+    requestDraft = {
+      ...requestDraftValue,
+      timeout_ms: timeoutMs,
+      max_timeout_ms: maxTimeoutMs,
+      extend_ms: extendMs,
+      max_draft_bytes: bounded(
+        "max_draft_bytes",
+        DEFAULT_NATIVE_REQUEST_DRAFT_MAX_DRAFT_BYTES,
+        MIN_NATIVE_REQUEST_DRAFT_MAX_DRAFT_BYTES,
+        MAX_NATIVE_REQUEST_DRAFT_MAX_DRAFT_BYTES,
+      ),
+      max_draft_depth: bounded(
+        "max_draft_depth",
+        DEFAULT_NATIVE_REQUEST_DRAFT_MAX_DRAFT_DEPTH,
+        1,
+        MAX_NATIVE_REQUEST_DRAFT_MAX_DRAFT_DEPTH,
+      ),
+      max_title_chars: bounded(
+        "max_title_chars",
+        DEFAULT_NATIVE_REQUEST_DRAFT_MAX_TITLE_CHARS,
+        MIN_NATIVE_REQUEST_DRAFT_MAX_TITLE_CHARS,
+        MAX_NATIVE_REQUEST_DRAFT_MAX_TITLE_CHARS,
+      ),
+    };
+  }
+
   const processValue = nativeValue.process;
   let processTool: NativeProcessToolSettings | undefined;
   if (processValue !== undefined) {
@@ -2641,6 +2754,7 @@ async function normalizeTools(
       ...(task ? {task} : {}),
       ...(memory ? {memory} : {}),
       ...(fetchTool ? {fetch: fetchTool} : {}),
+      ...(requestDraft ? {request_draft: requestDraft} : {}),
     },
     mcp: mcpValue,
   } as ToolSettings;

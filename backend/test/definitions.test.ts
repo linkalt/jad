@@ -15,6 +15,7 @@ import {nativeProcessDefinition, normalizeProcessArguments} from "../src/tools/n
 import {nativeTaskDefinition, normalizeTaskArguments} from "../src/tools/native/task.js";
 import {nativeMemoryDefinition, normalizeMemoryArguments} from "../src/tools/native/memory.js";
 import {nativeFetchDefinition, normalizeFetchArguments} from "../src/tools/native/fetch.js";
+import {nativeRequestDraftDefinition} from "../src/tools/native/request-draft.js";
 
 const sampleDirectory = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -41,6 +42,7 @@ test("shipped definition documents match the code definitions", async () => {
     ["task.json", nativeTaskDefinition],
     ["memory.json", nativeMemoryDefinition],
     ["fetch.json", nativeFetchDefinition],
+    ["request_draft.json", nativeRequestDraftDefinition],
   ] as const;
   for (const [file, definition] of definitions) {
     const document = JSON.parse(

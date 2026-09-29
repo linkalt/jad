@@ -1,4 +1,4 @@
-import type {SessionUsageSummary} from "../../persistence.js";
+import type {JsonRecord, SessionUsageSummary} from "../../persistence.js";
 
 export type WebUiPartType = "reasoning" | "text" | "tool_call" | "tool_result";
 export type WebUiMessageStatus = "streaming" | "complete";
@@ -51,6 +51,30 @@ export interface WebUiMessageStep {
   hasTools: boolean;
 }
 
+/**
+ * A tool call waiting on the user.
+ *
+ * The shape mirrors what the run publishes from its interaction broker: the
+ * server assigns the broker's pending question to `WebUiMessage.pending`, so a
+ * drifted field fails to compile there rather than silently losing a question.
+ */
+export interface WebUiInteraction {
+  id: string;
+  /** Name of the native tool that asked, e.g. `request_draft`. */
+  tool: string;
+  tool_call_id: string;
+  /** The tool's proposal, shown to the user; any JSON object the tool defines. */
+  draft: JsonRecord;
+  title?: string;
+  created_at: string;
+  /** When the run stops waiting and reports the question as unanswered. */
+  expires_at: string;
+  /** The latest deadline an extension may push to; equals `expires_at` when extending is off. */
+  max_expires_at: string;
+  /** How much one extension adds to the deadline; zero when the session offers no more time. */
+  extend_ms: number;
+}
+
 export interface WebUiMessage {
   id: string;
   sender: "system" | "user" | "assistant";
@@ -61,6 +85,12 @@ export interface WebUiMessage {
   steps?: WebUiMessageStep[];
   status?: WebUiMessageStatus;
   reasoningContent?: string;
+  /**
+   * The question a tool is waiting on, while a run holds the turn open for it.
+   * Message state rather than a stream event: a question has to survive a
+   * reload, and a client that missed an event could not answer it.
+   */
+  pending?: WebUiInteraction;
   /**
    * Turn that produced this message, set only when a part was capped: passing it
    * to the message endpoint returns the message with its parts whole.
