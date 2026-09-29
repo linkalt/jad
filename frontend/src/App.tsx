@@ -92,6 +92,16 @@ import {
 } from './session-run-status';
 import {shouldSkipTranscriptLoad} from './transcript-load-policy';
 import {
+  EMPTY_HISTORY_BLOCKS,
+  forgetHistoryBlock,
+  forgetHistoryBlocks,
+  historyBlockFor,
+  historyMessagesFor,
+  putHistoryBlock,
+  type HistoryBlock,
+  type HistoryBlocks,
+} from './history-blocks';
+import {
   hiddenWebUiStepIds,
   isWebUiPartHidden,
   visibleWebUiItems,
@@ -356,12 +366,6 @@ type MessageRecord = Omit<WebUiMessage, 'parts'> & {
   reasoning?: ReasoningStep[];
   tools?: ChatToolCallItem[];
 };
-
-/**
- * History the snapshot left out: the turns a compaction removed, served from the
- * backup. `etag` is the identity the server published for it.
- */
-type HistoryBlock = {uiId: string; etag: string; messages: MessageRecord[]};
 
 const LIVE_SESSION_ID = appConfig.live_session_id;
 
@@ -2325,15 +2329,24 @@ function App() {
 
   /**
    * Turns a compaction removed, folded from the backup. They are static between
-   * compactions, so the block is fetched once per identity the snapshot hands
-   * out — a committed step re-sends the live tail, not the history.
+   * compactions, so a block is fetched once per identity the snapshot hands out
+   * — a committed step re-sends the live tail, not the history. One block per
+   * view: leaving a row must not take that row's history with it.
    */
-  const [historyBlock, setHistoryBlock] = useState<HistoryBlock | null>(null);
-  const historyRef = useRef<HistoryBlock | null>(null);
-  const setHistory = useCallback((next: HistoryBlock | null) => {
-    historyRef.current = next;
-    setHistoryBlock(next);
-  }, []);
+  const [historyBlocks, setHistoryBlocks] =
+    useState<HistoryBlocks<MessageRecord>>(EMPTY_HISTORY_BLOCKS);
+  const historyBlocksRef = useRef<HistoryBlocks<MessageRecord>>(EMPTY_HISTORY_BLOCKS);
+  const updateHistoryBlocks = useCallback(
+    (update: (blocks: HistoryBlocks<MessageRecord>) => HistoryBlocks<MessageRecord>) => {
+      const next = update(historyBlocksRef.current);
+      if (next === historyBlocksRef.current) {
+        return;
+      }
+      historyBlocksRef.current = next;
+      setHistoryBlocks(next);
+    },
+    [],
+  );
   const [rightPanel, setRightPanel] = useState<RightPanelId | null>(
     appConfig.show_inspector_by_default ? 'inspector' : null,
   );
@@ -2650,13 +2663,13 @@ function App() {
             return {...current, [uiId]: next};
           });
           // A message from the history block is not part of the thread.
-          const block = historyRef.current;
-          if (block !== null && block.uiId === uiId) {
+          const block = historyBlocksRef.current[uiId];
+          if (block !== undefined) {
             const index = block.messages.findIndex(candidate => candidate.id === message.id);
             if (index >= 0) {
               const messages = [...block.messages];
               messages[index] = full;
-              setHistory({...block, messages});
+              updateHistoryBlocks(blocks => putHistoryBlock(blocks, uiId, {...block, messages}));
             }
           }
         })
@@ -2664,7 +2677,7 @@ function App() {
           console.warn('Unable to load the full message:', error);
         });
     },
-    [setHistory],
+    [updateHistoryBlocks],
   );
   // How much of the transcript is still on the server, per session.
   const [sessionPages, setSessionPages] = useState<Record<string, SessionPage>>({});
@@ -2737,15 +2750,13 @@ function App() {
     if (viewKeys.has(activeViewKeyRef.current)) {
       snapshotEtagRef.current = undefined;
     }
-    if (historyRef.current !== null && viewKeys.has(historyRef.current.uiId)) {
-      setHistory(null);
-    }
+    updateHistoryBlocks(blocks => forgetHistoryBlocks(blocks, viewKeys));
     setThreads(current => removeViewKeys(current, viewKeys));
     setSessionPages(current => removeViewKeys(current, viewKeys));
     setRowSessions(current => removeViewKeys(current, viewKeys));
     // Keep loadingOlderRef entries until their requests settle; their captured
     // reset epoch now prevents an evicted result from repopulating the cache.
-  }, [setHistory]);
+  }, [updateHistoryBlocks]);
 
   const activeRowSession: Session = !isPinnedView
     ? activeSession
@@ -2906,14 +2917,9 @@ function App() {
   // The history block renders ahead of the transcript: it holds the turns a
   // compaction removed, which are older than everything the transcript carries.
   const messages = useMemo(() => {
-    const block =
-      historyBlock !== null && historyBlock.uiId === activeViewKey
-        ? historyBlock.messages
-        : undefined;
-    return block === undefined || block.length === 0
-      ? threadMessages
-      : [...block, ...threadMessages];
-  }, [threadMessages, activeViewKey, historyBlock]);
+    const block = historyMessagesFor(historyBlocks, activeViewKey);
+    return block === undefined ? threadMessages : [...block, ...threadMessages];
+  }, [threadMessages, activeViewKey, historyBlocks]);
 
   const isLiveSession = activeSession?.source === 'live';
   const isRunning = isSessionRunning(
@@ -3485,9 +3491,7 @@ function App() {
         delete next[targetViewKey];
         return next;
       });
-      if (historyRef.current?.uiId === targetViewKey) {
-        setHistory(null);
-      }
+      updateHistoryBlocks(blocks => forgetHistoryBlock(blocks, targetViewKey));
       updateViewSessionRecord(
         targetViewKey,
         session => ({
@@ -3553,7 +3557,7 @@ function App() {
     recordNotification,
     resettingViewKey,
     frontCompactingViewKey,
-    setHistory,
+    updateHistoryBlocks,
     updateViewSessionRecord,
   ]);
 
@@ -3601,9 +3605,7 @@ function App() {
         delete next[targetViewKey];
         return next;
       });
-      if (historyRef.current?.uiId === targetViewKey) {
-        setHistory(null);
-      }
+      updateHistoryBlocks(blocks => forgetHistoryBlock(blocks, targetViewKey));
       setFrontCompactionInfoViewKey(null);
       setFrontCompactionTarget(null);
       setFrontCompactionModeViewKey(null);
@@ -3652,7 +3654,7 @@ function App() {
     isRunning,
     recordNotification,
     resettingViewKey,
-    setHistory,
+    updateHistoryBlocks,
   ]);
 
   const submitMessage = useCallback(
@@ -4119,36 +4121,34 @@ function App() {
       reference: SessionSnapshot['history'],
       profile: string | undefined,
       signal: AbortSignal,
-    ): Promise<HistoryBlock | null> => {
+    ): Promise<HistoryBlock<MessageRecord> | undefined> => {
       const resetEpoch = transcriptResetEpochRef.current.get(uiId) ?? 0;
-      const held = historyRef.current !== null && historyRef.current.uiId === uiId
-        ? historyRef.current
-        : null;
+      const held = historyBlockFor(historyBlocksRef.current, uiId);
       if (reference === undefined) {
         // A page: the caller already holds the block, and it is not restated.
         return held;
       }
       if (reference.etag === null) {
-        if (held !== null) {
-          setHistory(null);
+        if (held !== undefined) {
+          updateHistoryBlocks(blocks => forgetHistoryBlock(blocks, uiId));
         }
-        return null;
+        return undefined;
       }
-      if (held !== null && held.etag === reference.etag) {
+      if (held !== undefined && held.etag === reference.etag) {
         return held;
       }
       const result = await fetchSessionHistory(sessionRef, held?.etag, profile, signal);
       if (cancelled || (transcriptResetEpochRef.current.get(uiId) ?? 0) !== resetEpoch) {
-        return null;
+        return undefined;
       }
       if (result.kind === 'ok') {
-        const next = {uiId, etag: reference.etag, messages: result.value.messages};
-        setHistory(next);
+        const next = {etag: reference.etag, messages: result.value.messages};
+        updateHistoryBlocks(blocks => putHistoryBlock(blocks, uiId, next));
         return next;
       }
-      if (result.kind === 'not-modified' && held !== null) {
+      if (result.kind === 'not-modified' && held !== undefined) {
         const next = {...held, etag: reference.etag};
-        setHistory(next);
+        updateHistoryBlocks(blocks => putHistoryBlock(blocks, uiId, next));
         return next;
       }
       return held;
@@ -4353,7 +4353,7 @@ function App() {
       refreshSessionsRef.current = null;
       window.clearInterval(refreshTimer);
     };
-  }, [applyHydrated, applyRowSnapshot, isRunning, setHistory]);
+  }, [applyHydrated, applyRowSnapshot, isRunning, updateHistoryBlocks]);
 
   // The active session carries the run the server is executing, so a page that
   // reloads mid-run attaches as soon as the session list has settled instead of
