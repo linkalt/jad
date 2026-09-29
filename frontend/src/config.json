@@ -12,6 +12,7 @@
     "safari_major": 17,
     "safari_minor": 5
   },
+  "astryx_source_in_dev": true,
   "live_session_id": "playground",
   "notification_history_limit": 100,
   "show_inspector_by_default": false,

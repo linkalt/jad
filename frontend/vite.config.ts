@@ -13,7 +13,7 @@ const lightningcssTargets = {
   safari: (appConfig.browser_targets.safari_major << 16) | (appConfig.browser_targets.safari_minor << 8),
 };
 
-export default defineConfig({
+export default defineConfig(({command}) => ({
   plugins: [
     {
       name: 'astryx-css-layer-order',
@@ -54,6 +54,26 @@ export default defineConfig({
         __dirname,
         'node_modules/@astryxdesign/core/dist/astryx.css',
       ),
+      // Dev serves Astryx from its source; the build serves the prebuilt dist.
+      //
+      // Compiling the package's StyleX source on every *build* cost ~4 s of a
+      // ~5 s build and emitted a second copy of the CSS the prebuilt
+      // `dist/astryx.css` already ships (~130 kB of duplicates), so builds let
+      // the package's own `exports` map resolve each subpath to `dist/` — the
+      // same files `tsc` checks the app against.
+      //
+      // Dev keeps the source path: it is the rendering this UI was tuned
+      // against, and — measured — dev on it matches a production build exactly.
+      // Dev on the prebuilt pair does not (8 px taller transcript rows, 1 px
+      // larger icons): the prebuilt CSS is not byte-equal to what this path
+      // compiles — it also emits unlayered rules, and uses layers
+      // priority1…priority5 where the source path uses priority1…priority10.
+      // `astryx_source_in_dev: false` in src/config.json therefore inspects the
+      // prebuilt path rather than previewing a build; use
+      // `npm run build && npm run preview` for that.
+      ...(command === 'serve' && appConfig.astryx_source_in_dev
+        ? {'@astryxdesign/core': path.resolve(__dirname, 'node_modules/@astryxdesign/core/src')}
+        : {}),
     },
   },
   optimizeDeps: {
@@ -82,4 +102,4 @@ export default defineConfig({
       [appConfig.api_base_path]: appConfig.dev_api_proxy_target,
     },
   },
-});
+}));
