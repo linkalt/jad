@@ -61,7 +61,7 @@ test("publishes the question and settles it with the user's decision", async () 
   assert.deepEqual(seen, [pending], "the question reaches the run once it is pending");
 
   assert.equal(broker.reply(pending.id, {decision: "accept"}), "answered");
-  assert.deepEqual(await answer, {decision: "accept", outcome: "answered"});
+  assert.deepEqual(await answer, {decision: "accept", outcome: "answered", source: "user"});
   assert.equal(broker.pending, undefined);
   assert.equal(seen.length, 2);
   assert.equal(seen[1], undefined, "clearing the question is published too");
@@ -72,7 +72,7 @@ test("carries the user's edited draft and their reason back to the tool", async 
   const updated = broker.begin(QUESTION, IDENTITY);
   const edited = {goal: "Rewrite the intro", scope: ["intro"]};
   broker.reply(broker.pending!.id, {decision: "update", draft: edited});
-  assert.deepEqual(await updated, {decision: "update", draft: edited, outcome: "answered"});
+  assert.deepEqual(await updated, {decision: "update", draft: edited, outcome: "answered", source: "user"});
 
   const declined = broker.begin(QUESTION, IDENTITY);
   broker.reply(broker.pending!.id, {decision: "decline", reason: "too broad"});
@@ -80,6 +80,7 @@ test("carries the user's edited draft and their reason back to the tool", async 
     decision: "decline",
     reason: "too broad",
     outcome: "answered",
+    source: "user",
   });
 });
 
@@ -134,6 +135,7 @@ test("nobody answering ends the wait as a decline that names the deadline", asyn
   const settled = await answer;
   assert.equal(settled.outcome, "timed_out");
   assert.equal(settled.decision, "decline");
+  assert.equal(settled.source, "timeout");
   assert.match(settled.reason ?? "", /No answer within/);
   assert.equal(broker.pending, undefined);
 });
@@ -168,7 +170,7 @@ test("a run publishes the question as message state and replays the cleared stat
   assert.equal(published.pending.tool_call_id, "call_1");
 
   run.interactions.reply(published.pending.id, {decision: "accept"});
-  assert.deepEqual(await answer, {decision: "accept", outcome: "answered"});
+  assert.deepEqual(await answer, {decision: "accept", outcome: "answered", source: "user"});
   const cleared = snapshotOf(events.filter((event) => event.event === "ui.message").at(-1));
   assert.equal(cleared?.pending, undefined);
 
@@ -221,7 +223,7 @@ test("an extension moves the deadline by its step, up to the session's ceiling",
   assert.equal(Date.parse(broker.pending!.expires_at) - created, 120_000);
 
   assert.equal(broker.reply(id, {decision: "accept"}), "answered");
-  assert.deepEqual(await answer, {decision: "accept", outcome: "answered"});
+  assert.deepEqual(await answer, {decision: "accept", outcome: "answered", source: "user"});
 });
 
 test("the timer follows the extended deadline instead of the first one", async (context) => {
@@ -347,6 +349,15 @@ test("an edited draft beyond the question's bounds is refused before it is appli
     {decision: "update", draft: {goal: "shorter"}, interaction_id: "i1"},
     "an edit inside the bounds still passes",
   );
+
+  let extremelyDeep: unknown = {leaf: true};
+  for (let depth = 0; depth < 4_000; depth += 1) extremelyDeep = {a: extremelyDeep};
+  const stackSafe = parseInteractionReplyRequest(
+    {interaction_id: "i1", decision: "update", draft: extremelyDeep},
+    {max_draft_bytes: 100_000, max_draft_depth: 8},
+  );
+  assert.ok("error" in stackSafe);
+  assert.match(stackSafe.error, /nests 4001 levels; the limit is 8/);
   // Without limits the parser validates shape only; the tool's own policy is what
   // a live session always sends.
   assert.ok(

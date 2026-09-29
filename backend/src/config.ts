@@ -260,9 +260,11 @@ export interface NativeFetchToolSettings extends JsonRecord {
 }
 
 export interface NativeRequestDraftToolSettings extends JsonRecord {
-  /** How long the run waits for the user before the tool reports a timeout. */
+  /** How long an interactive run waits for the user before reporting a timeout. */
   timeout_ms: number;
-  /** Ceiling for the whole wait, extensions included. */
+  /** Headless runs accept the draft after this delay without a frontend decision. */
+  headless_auto_accept_timeout_ms: number;
+  /** Ceiling for the whole interactive wait, extensions included. */
   max_timeout_ms: number;
   /** How much one extension adds to the deadline when the user asks for more time. */
   extend_ms: number;
@@ -738,6 +740,8 @@ export const DEFAULT_NATIVE_FETCH_TIMEOUT_MS = 15_000;
  */
 export const DEFAULT_NATIVE_REQUEST_DRAFT_TIMEOUT_MS = 300_000;
 export const MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS = 1_800_000;
+/** Headless runs auto-accept after ten minutes when no user-facing client can answer. */
+export const DEFAULT_NATIVE_REQUEST_DRAFT_HEADLESS_AUTO_ACCEPT_TIMEOUT_MS = 600_000;
 export const DEFAULT_NATIVE_REQUEST_DRAFT_MAX_TIMEOUT_MS = MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS;
 /**
  * How much one press of the drawer's extend control adds to the deadline. The
@@ -1825,7 +1829,7 @@ const NATIVE_TOOL_KEYS: Record<NativeToolName, readonly string[]> = {
     "max_storage_bytes", "storage_dir", "timeout_ms",
   ],
   request_draft: [
-    "extend_ms", "max_draft_bytes", "max_draft_depth", "max_timeout_ms", "max_title_chars", "timeout_ms",
+    "extend_ms", "headless_auto_accept_timeout_ms", "max_draft_bytes", "max_draft_depth", "max_timeout_ms", "max_title_chars", "timeout_ms",
   ],
 };
 
@@ -2514,6 +2518,12 @@ async function normalizeTools(
       1,
       MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS,
     );
+    const headlessAutoAcceptTimeoutMs = bounded(
+      "headless_auto_accept_timeout_ms",
+      DEFAULT_NATIVE_REQUEST_DRAFT_HEADLESS_AUTO_ACCEPT_TIMEOUT_MS,
+      1,
+      MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS,
+    );
     const maxTimeoutMs = bounded("max_timeout_ms", DEFAULT_NATIVE_REQUEST_DRAFT_MAX_TIMEOUT_MS, 1, MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS);
     if (timeoutMs > maxTimeoutMs) {
       throw new ConfigError(
@@ -2529,6 +2539,7 @@ async function normalizeTools(
     requestDraft = {
       ...requestDraftValue,
       timeout_ms: timeoutMs,
+      headless_auto_accept_timeout_ms: headlessAutoAcceptTimeoutMs,
       max_timeout_ms: maxTimeoutMs,
       extend_ms: extendMs,
       max_draft_bytes: bounded(

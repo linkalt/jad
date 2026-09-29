@@ -11,6 +11,7 @@ export type ToolSource = "native" | "mcp";
 
 /** What the user decided about a tool's question. */
 export type ToolDecision = "accept" | "update" | "decline";
+export type ToolInteractionSource = "user" | "timeout";
 
 /** Why the wait ended: the user answered, the deadline passed, or the run stopped. */
 export type ToolInteractionOutcome = "answered" | "timed_out" | "cancelled";
@@ -38,6 +39,8 @@ export interface ToolInteractionAnswer {
   draft?: JsonRecord;
   reason?: string;
   outcome: ToolInteractionOutcome;
+  /** Who resolved the wait; omitted for cancellation. */
+  source?: ToolInteractionSource;
 }
 
 /**
@@ -66,11 +69,18 @@ export interface ToolExecutionContext {
   signal?: AbortSignal;
   /** Present when a client can answer; see `ToolInteractionHandler`. */
   requestInteraction?: ToolInteractionHandler;
+  /** Host persistence hook called after a user/headless decision is settled. */
+  onInteractionResolved?: (
+    answer: ToolInteractionAnswer,
+    proposed: JsonRecord,
+  ) => void | Promise<void>;
 }
 
 export interface LoadedTool {
   definition: ToolDefinition;
   validate: ValidateFunction<unknown>;
+  /** Scheduler policy: resolve this call before running co-batched calls. */
+  requiresUserDecision?: boolean;
   /** Tolerant pre-validation normalization (enum aliases, harmless variants). */
   normalizeArguments?(args: JsonRecord): JsonRecord;
   execute(

@@ -1145,6 +1145,7 @@ export async function streamSessionRun(
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         input,
+        supports_interaction: true,
         ...(options.model === undefined ? {} : {model: options.model}),
       }),
       signal: options.signal,

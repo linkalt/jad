@@ -74,6 +74,8 @@ export interface InteractionAnswer {
   draft?: JsonRecord;
   reason?: string;
   outcome: InteractionOutcome;
+  /** Who resolved the wait; omitted for cancellation. */
+  source?: "user" | "timeout";
 }
 
 export interface InteractionReply {
@@ -214,6 +216,7 @@ export class InteractionBroker {
       ...(reply.draft === undefined ? {} : {draft: reply.draft}),
       ...(reply.reason === undefined ? {} : {reason: reply.reason}),
       outcome: "answered",
+      source: "user",
     });
     return "answered";
   }
@@ -266,6 +269,7 @@ function timedOutAnswer(pending: PendingInteraction): InteractionAnswer {
     decision: "decline",
     outcome: "timed_out",
     reason: `No answer within ${formatWait(waited)}; the draft was not confirmed.`,
+    source: "timeout",
   };
 }
 

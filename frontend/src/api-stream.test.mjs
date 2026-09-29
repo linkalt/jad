@@ -5,7 +5,7 @@ const originalFetch = globalThis.fetch;
 const requests = [];
 const responses = [];
 globalThis.fetch = async (input, init = {}) => {
-  requests.push({url: String(input), method: init.method ?? 'GET'});
+  requests.push({url: String(input), method: init.method ?? 'GET', body: init.body});
   const response = responses.shift();
   assert.ok(response, 'unexpected API request');
   return response;
@@ -62,6 +62,7 @@ test('resumes an interrupted new run by attaching instead of posting again', asy
   });
 
   assert.deepEqual(requests.map(request => request.method), ['POST', 'GET']);
+  assert.equal(JSON.parse(requests[0].body).supports_interaction, true);
   assert.match(requests[1].url, /\/sessions\/session-1\/run\/stream/);
   assert.deepEqual(messages, ['partial', 'the complete response']);
   assert.deepEqual(completions, ['the complete response']);

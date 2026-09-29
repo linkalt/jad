@@ -117,7 +117,11 @@ function buildNativeTool(
   if ("error" in built) {
     throw configError(config.paths.setting_path, built.error);
   }
-  return {...built.tool, normalizeArguments: spec.normalizeArguments};
+  return {
+    ...built.tool,
+    normalizeArguments: spec.normalizeArguments,
+    ...(spec.requiresUserDecision ? {requiresUserDecision: true} : {}),
+  };
 }
 
 export class ToolCatalog {
@@ -137,6 +141,12 @@ export class ToolCatalog {
 
   public definitions(): ToolDefinition[] {
     return this.tools.map((tool) => tool.definition);
+  }
+
+  /** Whether a provider call must be resolved before its co-batched calls run. */
+  public isUserDecisionCall(call: JsonRecord): boolean {
+    const name = typeof call.name === "string" ? call.name : "";
+    return this.byName.get(name)?.requiresUserDecision === true;
   }
 
   public responseTools(): JsonRecord[] {

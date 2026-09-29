@@ -38,7 +38,9 @@ import {
   draftExtendLabel,
   draftFields,
   hasDraftChanges,
+  hasJsonDraftChanges,
   reviewDraftAnswer,
+  reviewDraftJsonAnswer,
   type DraftAddedField,
   type DraftAddedFieldKind,
   type DraftDecision,
@@ -70,9 +72,12 @@ export function DraftRequestDrawer({
   onAnswer,
   onExtend,
 }: DraftRequestDrawerProps) {
-  const fields = useMemo(() => draftFields(pending.draft), [pending.draft]);
+  const [draftBase, setDraftBase] = useState<unknown>(pending.draft);
+  const fields = useMemo(() => draftFields(draftBase), [draftBase]);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [added, setAdded] = useState<DraftAddedField[]>([]);
+  const [jsonText, setJsonText] = useState(() => JSON.stringify(pending.draft, null, 2));
+  const [isJsonMode, setIsJsonMode] = useState(false);
   const [reason, setReason] = useState('');
   const [isDeclining, setIsDeclining] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -86,20 +91,35 @@ export function DraftRequestDrawer({
 
   // A new question starts from its own proposal, never from the last answer's edits.
   useEffect(() => {
+    setDraftBase(pending.draft);
     setEdits({});
     setAdded([]);
+    setJsonText(JSON.stringify(pending.draft, null, 2));
+    setIsJsonMode(false);
     setReason('');
     setIsDeclining(false);
     setProblem(null);
   }, [pending.id]);
 
-  const isEdited = hasDraftChanges(fields, edits, added);
+  const isEdited = isJsonMode
+    ? hasJsonDraftChanges(jsonText, pending.draft)
+    : JSON.stringify(draftBase) !== JSON.stringify(pending.draft) || hasDraftChanges(fields, edits, added);
   const deadline = draftDeadlineLabel(pending.expires_at, now);
   const extendable = canExtendDraft(pending.expires_at, pending.max_expires_at, now);
 
   const submit = (decision: DraftDecision): void => {
+    if (decision === 'update' && isJsonMode) {
+      const reviewed = reviewDraftJsonAnswer(jsonText);
+      if ('error' in reviewed) {
+        setProblem(reviewed.error);
+        return;
+      }
+      setProblem(null);
+      onAnswer(reviewed.body);
+      return;
+    }
     const reviewed = reviewDraftAnswer({
-      draft: pending.draft,
+      draft: draftBase,
       fields,
       edits,
       added,
@@ -113,6 +133,42 @@ export function DraftRequestDrawer({
     }
     setProblem(null);
     onAnswer(reviewed.body);
+  };
+
+  const switchToJson = (): void => {
+    const reviewed = reviewDraftAnswer({
+      draft: draftBase,
+      fields,
+      edits,
+      added,
+      decision: 'update',
+      reason: '',
+      reasonMaxLength,
+    });
+    if ('error' in reviewed) {
+      setProblem(reviewed.error);
+      return;
+    }
+    const nextDraft = reviewed.body.draft ?? draftBase;
+    setDraftBase(nextDraft);
+    setEdits({});
+    setAdded([]);
+    setJsonText(JSON.stringify(nextDraft, null, 2));
+    setIsJsonMode(true);
+    setProblem(null);
+  };
+
+  const switchToFields = (): void => {
+    const reviewed = reviewDraftJsonAnswer(jsonText);
+    if ('error' in reviewed) {
+      setProblem(reviewed.error);
+      return;
+    }
+    setDraftBase(reviewed.body.draft);
+    setEdits({});
+    setAdded([]);
+    setIsJsonMode(false);
+    setProblem(null);
   };
 
   const textFor = (key: string, fallback: string): string => edits[key] ?? fallback;
@@ -139,7 +195,7 @@ export function DraftRequestDrawer({
         <VStack gap={1} width="100%">
           <Text type="label">{pending.title ?? 'Confirm what the agent understood'}</Text>
           <Text type="supporting" color="secondary">
-            {`${pending.tool} is waiting for your answer${deadline === '' ? '' : ` — ${deadline}`}. Accept to run as drafted, edit any field and accept to run with your version, or decline with a reason. Typing below is not blocked.`}
+            {`${pending.tool} is waiting for your answer${deadline === '' ? '' : ` — ${deadline}`}. Accept to run as drafted, edit fields or the full JSON and accept to run with your version, or decline with a reason. Typing below is not blocked.`}
           </Text>
           {pending.extend_ms > 0 ? (
             <HStack align="center" gap={1}>
@@ -159,104 +215,133 @@ export function DraftRequestDrawer({
             </HStack>
           ) : null}
         </VStack>
-        {fields.length === 0 ? (
-          <Text type="supporting" color="secondary">
-            The draft has no fields to confirm; accepting proceeds with it as it stands, or add a
-            field the agent missed.
-          </Text>
+        {isJsonMode ? (
+          <VStack gap={1} width="100%">
+            <TextArea
+              label="Full draft (JSON)"
+              value={jsonText}
+              rows={8}
+              size="sm"
+              isDisabled={isSubmitting}
+              onChange={(value: string) => setJsonText(value)}
+            />
+            <Button
+              label="Use field editor"
+              variant="ghost"
+              size="sm"
+              isDisabled={isSubmitting}
+              onClick={switchToFields}
+            />
+          </VStack>
         ) : (
-          fields.map((field) =>
-            field.kind === 'json' || field.kind === 'string' ? (
-              <TextArea
-                key={field.key}
-                label={field.label}
-                value={textFor(field.key, field.text)}
-                rows={field.kind === 'json' ? 4 : 3}
-                size="sm"
-                isDisabled={isSubmitting}
-                onChange={(value: string) => editTo(field.key, value)}
-              />
+          <>
+            {fields.length === 0 ? (
+              <Text type="supporting" color="secondary">
+                The draft has no fields to confirm; accepting proceeds with it as it stands, or add a
+                field the agent missed.
+              </Text>
             ) : (
-              <TextInput
-                key={field.key}
-                label={field.label}
-                value={textFor(field.key, field.text)}
-                size="sm"
-                isDisabled={isSubmitting}
-                onChange={(value: string) => editTo(field.key, value)}
-              />
-            ),
-          )
-        )}
-        {added.map((field) => (
-          <VStack key={field.id} gap={1} width="100%">
-            <HStack gap={1} align="end" width="100%">
-              <StackItem size="fill">
-                <TextInput
-                  label="New field"
-                  placeholder="field name"
-                  value={field.name}
-                  size="sm"
-                  isDisabled={isSubmitting}
-                  onChange={(value: string) => updateAdded(field.id, {name: value})}
-                />
-              </StackItem>
-              <Button
-                label="Remove field"
-                variant="ghost"
-                size="sm"
-                isDisabled={isSubmitting}
-                onClick={() => removeAdded(field.id)}
-              />
-            </HStack>
-            <HStack gap={1} align="end" width="100%">
-              <StackItem size="fill">
-                {field.kind === 'json' || field.kind === 'string' ? (
+              fields.map((field) =>
+                field.kind === 'json' || field.kind === 'string' ? (
                   <TextArea
-                    label={field.kind === 'json' ? 'Value (JSON)' : 'Value'}
-                    value={field.text}
-                    rows={field.kind === 'json' ? 3 : 2}
+                    key={field.key}
+                    label={field.label}
+                    value={textFor(field.key, field.text)}
+                    rows={field.kind === 'json' ? 4 : 3}
                     size="sm"
                     isDisabled={isSubmitting}
-                    onChange={(value: string) => updateAdded(field.id, {text: value})}
+                    onChange={(value: string) => editTo(field.key, value)}
                   />
                 ) : (
                   <TextInput
-                    label="Value"
-                    value={field.text}
+                    key={field.key}
+                    label={field.label}
+                    value={textFor(field.key, field.text)}
                     size="sm"
                     isDisabled={isSubmitting}
-                    onChange={(value: string) => updateAdded(field.id, {text: value})}
+                    onChange={(value: string) => editTo(field.key, value)}
                   />
-                )}
-              </StackItem>
-              <SegmentedControl
-                label="New field type"
+                ),
+              )
+            )}
+            {added.map((field) => (
+              <VStack key={field.id} gap={1} width="100%">
+                <HStack gap={1} align="end" width="100%">
+                  <StackItem size="fill">
+                    <TextInput
+                      label="New field"
+                      placeholder="field name"
+                      value={field.name}
+                      size="sm"
+                      isDisabled={isSubmitting}
+                      onChange={(value: string) => updateAdded(field.id, {name: value})}
+                    />
+                  </StackItem>
+                  <Button
+                    label="Remove field"
+                    variant="ghost"
+                    size="sm"
+                    isDisabled={isSubmitting}
+                    onClick={() => removeAdded(field.id)}
+                  />
+                </HStack>
+                <HStack gap={1} align="end" width="100%">
+                  <StackItem size="fill">
+                    {field.kind === 'json' || field.kind === 'string' ? (
+                      <TextArea
+                        label={field.kind === 'json' ? 'Value (JSON)' : 'Value'}
+                        value={field.text}
+                        rows={field.kind === 'json' ? 3 : 2}
+                        size="sm"
+                        isDisabled={isSubmitting}
+                        onChange={(value: string) => updateAdded(field.id, {text: value})}
+                      />
+                    ) : (
+                      <TextInput
+                        label="Value"
+                        value={field.text}
+                        size="sm"
+                        isDisabled={isSubmitting}
+                        onChange={(value: string) => updateAdded(field.id, {text: value})}
+                      />
+                    )}
+                  </StackItem>
+                  <SegmentedControl
+                    label="New field type"
+                    size="sm"
+                    value={field.kind}
+                    onChange={(value) => updateAdded(field.id, {kind: value as DraftAddedFieldKind})}
+                  >
+                    {DRAFT_ADDED_FIELD_KINDS.map((kind) => (
+                      <SegmentedControlItem key={kind.id} value={kind.id} label={kind.label} />
+                    ))}
+                  </SegmentedControl>
+                </HStack>
+              </VStack>
+            ))}
+            <HStack gap={1} align="center">
+              <Button
+                label="Add field"
+                variant="ghost"
                 size="sm"
-                value={field.kind}
-                onChange={(value) => updateAdded(field.id, {kind: value as DraftAddedFieldKind})}
-              >
-                {DRAFT_ADDED_FIELD_KINDS.map((kind) => (
-                  <SegmentedControlItem key={kind.id} value={kind.id} label={kind.label} />
-                ))}
-              </SegmentedControl>
+                isDisabled={isSubmitting}
+                onClick={addField}
+              />
+              <Button
+                label="Edit full JSON"
+                variant="ghost"
+                size="sm"
+                isDisabled={isSubmitting}
+                onClick={switchToJson}
+              />
+              {added.length > 0 ? (
+                <Text type="supporting" color="secondary">
+                  Added fields travel with Update &amp; accept.
+                </Text>
+              ) : null}
             </HStack>
-          </VStack>
-        ))}
-        <HStack gap={1} align="center">
-          <Button
-            label="Add field"
-            variant="ghost"
-            size="sm"
-            isDisabled={isSubmitting}
-            onClick={addField}
-          />
-          {added.length > 0 ? (
-            <Text type="supporting" color="secondary">
-              Added fields travel with Update &amp; accept.
-            </Text>
-          ) : null}
-        </HStack>
+          </>
+        )}
         {isDeclining ? (
           <TextArea
             label="Why are you declining?"

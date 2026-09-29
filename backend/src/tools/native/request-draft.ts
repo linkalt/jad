@@ -35,14 +35,16 @@ export const nativeRequestDraftDefinition: ToolDefinition = {
   source: "native",
   name: "request_draft",
   description:
-    "Present how you read the user's request as a JSON draft and wait for them to " +
-    "accept, edit or decline it. Call it before starting work when the request could " +
-    "reasonably be read in more than one way, or when a wrong reading would waste the " +
-    "turn. Do not start the work before it returns. The result carries `decision` " +
-    "(accept = proceed as drafted, update = proceed with `draft`, the user's edited " +
-    "version, decline = do not proceed), `status` (answered, timed_out or cancelled) " +
-    "and, when the user changed something, `changed` — the paths they added, removed " +
-    "or corrected. Treat anything but `answered` as a decline.",
+    "Present how you read the user's request as a JSON draft and wait for an interactive " +
+    "user to accept, edit or decline it. Call it alone before starting work when the " +
+    "request could reasonably be read in more than one way, or when a wrong reading " +
+    "would waste the turn. The backend will defer other calls from the same response " +
+    "until after the decision and a fresh plan. Without an interactive client, the " +
+    "backend accepts the draft after its configured headless timeout. The result carries " +
+    "`decision` (accept = proceed as drafted, update = proceed with `draft`, the user's " +
+    "edited version, decline = do not proceed), `status` (answered, timed_out or " +
+    "cancelled) and, when the user changed something, `changed` — the paths they added, " +
+    "removed or corrected. Treat decline, timeout or cancellation as no approval; do not proceed.",
   inputSchema: {
     type: "object",
     properties: {
@@ -148,21 +150,51 @@ export async function executeNativeRequestDraft(
     );
   }
   const requestInteraction = context.requestInteraction;
-  if (requestInteraction === undefined) {
-    return renderRefusal(
-      "no_client",
-      "This run cannot reach a client that could answer a draft; continue without confirming it.",
-    );
-  }
-  const answer = await requestInteraction({
-    draft,
-    ...(title.length === 0 ? {} : {title}),
-    timeout_ms: policy.timeout_ms,
-    extend_ms: policy.extend_ms,
-    max_timeout_ms: policy.max_timeout_ms,
-    limits: {max_draft_bytes: policy.max_draft_bytes, max_draft_depth: policy.max_draft_depth},
-  });
+  const answer = requestInteraction === undefined
+    ? await autoAcceptAfterTimeout(policy.headless_auto_accept_timeout_ms, context.signal)
+    : await requestInteraction({
+        draft,
+        ...(title.length === 0 ? {} : {title}),
+        timeout_ms: policy.timeout_ms,
+        extend_ms: policy.extend_ms,
+        max_timeout_ms: policy.max_timeout_ms,
+        limits: {max_draft_bytes: policy.max_draft_bytes, max_draft_depth: policy.max_draft_depth},
+      });
+  await context.onInteractionResolved?.(answer, draft);
   return renderDraftAnswer(answer, draft);
+}
+
+function autoAcceptAfterTimeout(
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<ToolInteractionAnswer> {
+  return new Promise((resolve) => {
+    let timer: NodeJS.Timeout | undefined;
+    let settled = false;
+    const finish = (answer: ToolInteractionAnswer): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(answer);
+    };
+    const onAbort = (): void => finish({
+      decision: "decline",
+      outcome: "cancelled",
+      reason: "The run was stopped before the draft was answered.",
+    });
+
+    if (signal?.aborted === true) {
+      onAbort();
+      return;
+    }
+    timer = setTimeout(() => finish({
+      decision: "accept",
+      outcome: "answered",
+      source: "timeout",
+    }), timeoutMs);
+    signal?.addEventListener("abort", onAbort, {once: true});
+  });
 }
 
 function renderRefusal(code: string, message: string, details: JsonRecord = {}): string {

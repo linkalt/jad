@@ -129,7 +129,7 @@ test("a run publishes the draft question, waits, and continues with the user's a
     const runResponse = await fetch(`${baseUrl}/api/sessions/session1/run`, {
       method: "POST",
       headers: authorized,
-      body: JSON.stringify({input: "make the page better"}),
+      body: JSON.stringify({input: "make the page better", supports_interaction: true}),
     });
     assert.equal(runResponse.status, 200);
     const reader = runResponse.body!.getReader();
@@ -272,6 +272,16 @@ test("a run publishes the draft question, waits, and continues with the user's a
       draft: edited,
       changed: ["goal"],
     });
+    const accepted = JSON.parse(await readFile(join(sessionDir, "accepted-request.json"), "utf8")) as {
+      source: string;
+      action: string;
+      call_id: string;
+      draft: Record<string, unknown>;
+    };
+    assert.equal(accepted.source, "user");
+    assert.equal(accepted.action, "update");
+    assert.equal(accepted.call_id, "call_draft");
+    assert.deepEqual(accepted.draft, edited);
 
     // A second answer for the same question changes nothing.
     const repeated = await fetch(`${baseUrl}/api/sessions/session1/run/interaction`, {
@@ -376,7 +386,7 @@ test("the configured wait is published and an edit beyond the session's bounds i
     const runResponse = await fetch(`${baseUrl}/api/sessions/session1/run`, {
       method: "POST",
       headers: authorized,
-      body: JSON.stringify({input: "make it better"}),
+      body: JSON.stringify({input: "make it better", supports_interaction: true}),
     });
     assert.equal(runResponse.status, 200);
     const reader = runResponse.body!.getReader();

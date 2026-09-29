@@ -149,7 +149,12 @@ export function buildEditedDraft(
     if ('error' in parsed) {
       return {error: {key: field.id, label: name, message: parsed.error}};
     }
-    value[name] = parsed.value;
+    Object.defineProperty(value, name, {
+      value: parsed.value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return {value};
 }
@@ -218,6 +223,28 @@ export function reviewDraftAnswer(options: {
     return {error: `${edited.error.label} ${edited.error.message}.`};
   }
   return {body: {decision: 'update', draft: edited.value}};
+}
+
+/** Parses the full-JSON editor's value and enforces the dynamic object envelope. */
+export function reviewDraftJsonAnswer(
+  text: string,
+): {body: {decision: 'update'; draft: Record<string, unknown>}} | {error: string} {
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch {
+    return {error: 'Draft must be valid JSON.'};
+  }
+  if (!isRecord(value)) {
+    return {error: 'Draft must be a JSON object.'};
+  }
+  return {body: {decision: 'update', draft: value}};
+}
+
+/** True when the raw editor contains a semantic object change or invalid text. */
+export function hasJsonDraftChanges(text: string, original: unknown): boolean {
+  const reviewed = reviewDraftJsonAnswer(text);
+  return 'error' in reviewed || JSON.stringify(reviewed.body.draft) !== JSON.stringify(original);
 }
 
 /** How long the run keeps waiting, as the drawer's own line of text. */

@@ -1467,6 +1467,20 @@
                 }
               },
               "additionalProperties": false
+            },
+            "request_draft": {
+              "type": "object",
+              "description": "User approval timeout and draft-size policy for request_draft.",
+              "properties": {
+                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 300000},
+                "headless_auto_accept_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 600000},
+                "max_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 1800000},
+                "extend_ms": {"type": "integer", "minimum": 1000, "maximum": 1800000, "default": 300000},
+                "max_draft_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576, "default": 32768},
+                "max_draft_depth": {"type": "integer", "minimum": 1, "maximum": 32, "default": 8},
+                "max_title_chars": {"type": "integer", "minimum": 8, "maximum": 1000, "default": 200}
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false

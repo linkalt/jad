@@ -73,6 +73,16 @@ export interface SessionResponseStoreOptions {
   stateContextPath?: string;
 }
 
+export interface AcceptedRequestSnapshot extends JsonRecord {
+  schema_version: 1;
+  version: number;
+  accepted_at: string;
+  source: "user" | "timeout";
+  action: "accept" | "update";
+  call_id: string;
+  draft: JsonRecord;
+}
+
 export interface StateContextSnapshot extends JsonRecord {
   schema_version: 1;
   generated_at: string;
@@ -308,6 +318,19 @@ export class PersistenceError extends Error {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isAcceptedRequestSnapshot(value: unknown): value is AcceptedRequestSnapshot {
+  return isRecord(value)
+    && value.schema_version === 1
+    && Number.isSafeInteger(value.version)
+    && (value.version as number) > 0
+    && typeof value.accepted_at === "string"
+    && (value.source === "user" || value.source === "timeout")
+    && (value.action === "accept" || value.action === "update")
+    && typeof value.call_id === "string"
+    && value.call_id.length > 0
+    && isRecord(value.draft);
 }
 
 function sameBackupSeamRecord(left: Buffer, right: Buffer): boolean {
@@ -1447,6 +1470,7 @@ export class SessionResponseStore {
   public readonly compactionCacheBackupPath: string;
   public readonly messagesBackupPath: string;
   public readonly stateContextPath: string;
+  public readonly acceptedRequestPath: string;
 
   private readonly options: Required<Pick<
     SessionResponseStoreOptions,
@@ -1506,6 +1530,7 @@ export class SessionResponseStore {
         ? resolve(options.stateContextPath)
         : resolve(absoluteSessionDir, options.stateContextPath)
       : join(this.stagingDir, "statecontext.json");
+    this.acceptedRequestPath = join(absoluteSessionDir, "accepted-request.json");
     this.options = {
       durability: options.durability ?? "turn",
       maxItemBytes: options.maxItemBytes ?? Number.MAX_SAFE_INTEGER,
@@ -1684,6 +1709,61 @@ export class SessionResponseStore {
     await this.messageMutex.runExclusive(async () => {
       await mkdir(dirname(this.stateContextPath), {recursive: true});
       await writeJsonAtomic(this.stateContextPath, snapshot, this.options.durability);
+    });
+  }
+
+  public async readAcceptedRequest(): Promise<AcceptedRequestSnapshot | undefined> {
+    this.assertOpen();
+    return this.messageMutex.runExclusive(async () => {
+      let text: string;
+      try {
+        text = await readFile(this.acceptedRequestPath, "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+      try {
+        const value: unknown = JSON.parse(text);
+        return isAcceptedRequestSnapshot(value) ? value : undefined;
+      } catch {
+        return undefined;
+      }
+    });
+  }
+
+  public async writeAcceptedRequest(
+    draft: JsonRecord,
+    source: AcceptedRequestSnapshot["source"],
+    action: AcceptedRequestSnapshot["action"],
+    callId: string,
+  ): Promise<AcceptedRequestSnapshot> {
+    this.assertOpen();
+    return this.messageMutex.runExclusive(async () => {
+      const previousText = await readFile(this.acceptedRequestPath, "utf8").catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      });
+      let previous: AcceptedRequestSnapshot | undefined;
+      if (previousText !== undefined) {
+        try {
+          const value: unknown = JSON.parse(previousText);
+          if (isAcceptedRequestSnapshot(value)) previous = value;
+        } catch {
+          // A corrupt derived snapshot is replaced by the next valid approval.
+        }
+      }
+      const snapshot: AcceptedRequestSnapshot = {
+        schema_version: 1,
+        version: (previous?.version ?? 0) + 1,
+        accepted_at: new Date().toISOString(),
+        source,
+        action,
+        call_id: callId,
+        draft,
+      };
+      await mkdir(dirname(this.acceptedRequestPath), {recursive: true});
+      await writeJsonAtomic(this.acceptedRequestPath, snapshot, this.options.durability);
+      return snapshot;
     });
   }
 
@@ -2223,6 +2303,7 @@ export class SessionResponseStore {
         this.usageCachePath,
         this.cursorCachePath,
         this.stateContextPath,
+        this.acceptedRequestPath,
       ]);
       for (const path of derivedPaths) {
         if (path !== this.messagesPath) {

@@ -10,7 +10,9 @@ import {
   hasAddedFields,
   hasDraftChanges,
   hasDraftEdits,
+  hasJsonDraftChanges,
   reviewDraftAnswer,
+  reviewDraftJsonAnswer,
 } from './draft-answer.ts';
 
 const DRAFT = {
@@ -195,6 +197,16 @@ test('the drawer labels the extension step and stops at the ceiling', () => {
   assert.equal(canExtendDraft('not a date', '2026-09-29T10:30:00.000Z', now), false);
 });
 
+test('the full JSON editor can remove fields and change nested or array structure', () => {
+  const changed = {goal: 'Keep only the requested item', scope: {include: ['one']}, steps: []};
+  const text = JSON.stringify(changed, null, 2);
+  assert.deepEqual(reviewDraftJsonAnswer(text), {body: {decision: 'update', draft: changed}});
+  assert.equal(hasJsonDraftChanges(text, DRAFT), true);
+  assert.equal(hasJsonDraftChanges(JSON.stringify(DRAFT, null, 2), DRAFT), false);
+  assert.deepEqual(reviewDraftJsonAnswer('{invalid'), {error: 'Draft must be valid JSON.'});
+  assert.deepEqual(reviewDraftJsonAnswer('[]'), {error: 'Draft must be a JSON object.'});
+});
+
 const added = (name, kind, text) => ({id: `added-${name}`, name, kind, text});
 
 test('a field the user adds is written at the root with the type they chose', () => {
@@ -218,6 +230,13 @@ test('a field the user adds is written at the root with the type they chose', ()
       options: {a: [1, 2]},
     },
   });
+});
+
+test('adding a __proto__ field preserves it as JSON data without mutating the prototype', () => {
+  const built = buildEditedDraft({}, {}, [added('__proto__', 'json', '{"safe":true}')]);
+  assert.ok('value' in built);
+  assert.deepEqual(JSON.parse(JSON.stringify(built.value)), JSON.parse('{"__proto__":{"safe":true}}'));
+  assert.equal(Object.getPrototypeOf(built.value), Object.prototype);
 });
 
 test('an added row the user opened and left empty is not a change', () => {

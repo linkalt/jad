@@ -16,6 +16,7 @@ import type {
 
 const POLICY: NativeRequestDraftToolSettings = {
   timeout_ms: 300_000,
+  headless_auto_accept_timeout_ms: 600_000,
   max_timeout_ms: 600_000,
   extend_ms: 120_000,
   max_draft_bytes: 4096,
@@ -49,7 +50,9 @@ test("describes itself so the model can call it before starting work", () => {
   assert.equal(schema.properties.timeout_ms, undefined);
   assert.deepEqual(Object.keys(schema.properties).sort(), ["draft", "title"]);
   assert.match(nativeRequestDraftDefinition.description, /accept, edit or decline/);
-  assert.match(nativeRequestDraftDefinition.description, /Do not start the work before it returns/);
+  assert.match(nativeRequestDraftDefinition.description, /Call it alone before starting work/);
+  assert.match(nativeRequestDraftDefinition.description, /defer other calls from the same response/);
+  assert.match(nativeRequestDraftDefinition.description, /configured headless timeout/);
   assert.match(nativeRequestDraftDefinition.description, /`changed`/);
 });
 
@@ -237,11 +240,22 @@ test("an unanswered draft reads as a decline the model can act on", () => {
   );
 });
 
-test("a run with no client to answer is refused instead of hanging", async () => {
-  const output = await executeNativeRequestDraft({draft: {goal: "Improve the page"}}, CONTEXT, POLICY);
-  const parsed = JSON.parse(String(output)) as {error: string; message: string};
-  assert.equal(parsed.error, "no_client");
-  assert.match(parsed.message, /continue without confirming/);
+test("a headless run accepts after the configured fallback and reports its source", async () => {
+  let resolved: ToolInteractionAnswer | undefined;
+  const output = await executeNativeRequestDraft(
+    {draft: {goal: "Improve the page"}},
+    {
+      ...CONTEXT,
+      onInteractionResolved: async (answer) => { resolved = answer; },
+    },
+    {...POLICY, headless_auto_accept_timeout_ms: 5},
+  );
+  assert.deepEqual(JSON.parse(String(output)), {decision: "accept", status: "answered"});
+  assert.deepEqual(resolved, {
+    decision: "accept",
+    outcome: "answered",
+    source: "timeout",
+  });
 });
 
 test("a draft that is not a JSON object is refused", async () => {

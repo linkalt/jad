@@ -21,6 +21,7 @@ import {
   type SessionSettings,
 } from "./config.js";
 import { AgentSession } from "./session.js";
+import type {ToolInteractionQuestion} from "./tools/types.js";
 import { ProcessManager } from "./tools/native/process-manager.js";
 import { TaskStore } from "./tools/native/task-store.js";
 import { MemoryStore } from "./tools/native/memory-store.js";
@@ -1823,12 +1824,16 @@ class AgentHttpApplication {
     if (body.model !== undefined && (typeof body.model !== "string" || body.model.trim().length === 0)) {
       throw new HttpError(400, "model must be a non-empty string");
     }
+    if (body.supports_interaction !== undefined && typeof body.supports_interaction !== "boolean") {
+      throw new HttpError(400, "supports_interaction must be a boolean");
+    }
     const requestedModelPath = typeof body.model === "string" ? body.model.trim() : undefined;
     let connected = true;
     const started = await this.startSessionRun({
       reference: id,
       ...(profile === undefined ? {} : {profile}),
       input: body.input,
+      supportsInteraction: body.supports_interaction === true,
       ...(requestedModelPath === undefined ? {} : {modelConfigPath: requestedModelPath}),
       isConnected: () => connected,
     });
@@ -1873,6 +1878,7 @@ class AgentHttpApplication {
     reference: string;
     profile?: string;
     input: string;
+    supportsInteraction: boolean;
     modelConfigPath?: string;
     isConnected?: () => boolean;
   }): Promise<{run: SessionRun; turnId: string; handle: SessionHandle; completion: Promise<void>}> {
@@ -1916,6 +1922,7 @@ class AgentHttpApplication {
       controller,
       input: options.input,
       turnId,
+      supportsInteraction: options.supportsInteraction,
       ...(modelConfigPath === undefined ? {} : {modelConfigPath}),
       isConnected: options.isConnected ?? (() => true),
     });
@@ -1930,10 +1937,11 @@ class AgentHttpApplication {
     controller: AbortController;
     input: string;
     turnId: string;
+    supportsInteraction: boolean;
     modelConfigPath?: string;
     isConnected: () => boolean;
   }): Promise<void> {
-    const {handle, run, emitter, controller, turnId} = options;
+    const {handle, run, emitter, controller, turnId, supportsInteraction} = options;
     const reference = handle.location.ref;
     try {
       const normalizedRun = new WebUiNormalizedRun(turnId);
@@ -1950,10 +1958,14 @@ class AgentHttpApplication {
       const result = await handle.session.run(options.input, {
         turnId,
         signal: controller.signal,
-        // A tool that must ask the user gets the run's channel: the question
-        // becomes message state, and the answer arrives over HTTP.
-        requestInteraction: ({tool, tool_call_id, ...question}) =>
-          run.interactions.begin(question, {tool, tool_call_id}, controller.signal),
+        // Only a frontend-capable run publishes a pending question. Headless runs
+        // use the tool's configured auto-accept fallback instead.
+        ...(supportsInteraction
+          ? {
+              requestInteraction: ({tool, tool_call_id, ...question}: ToolInteractionQuestion & {tool: string; tool_call_id: string}) =>
+                run.interactions.begin(question, {tool, tool_call_id}, controller.signal),
+            }
+          : {}),
         ...(options.modelConfigPath === undefined ? {} : {modelConfigPath: options.modelConfigPath}),
         onEvent: (event) => {
           const update = normalizedRun.updateForStream(event);

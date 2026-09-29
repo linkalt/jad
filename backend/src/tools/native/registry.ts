@@ -35,6 +35,8 @@ export interface NativeToolSpec {
   /** Key under `tools.native` that enables the tool. */
   readonly settingName: string;
   readonly definition: ToolDefinition;
+  /** If set, the session resolves this call before executing co-batched calls. */
+  readonly requiresUserDecision?: boolean;
   /** Required input fields, in the order the definition must declare them. */
   readonly required: readonly string[];
   readonly exampleOperation: JsonRecord;
@@ -191,6 +193,7 @@ function requestDraftSpec(): NativeToolSpec {
     id: NATIVE_REQUEST_DRAFT_ID,
     settingName: "request_draft",
     definition: nativeRequestDraftDefinition,
+    requiresUserDecision: true,
     required: ["draft"],
     exampleOperation: {title: "How I read your request", draft: {goal: "..."}},
     normalizeArguments: (args) => args,

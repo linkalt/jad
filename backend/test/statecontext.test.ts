@@ -263,6 +263,68 @@ test("statecontext is appended after the cached history and tool results, not af
   assert.equal(input[3]?.role, "developer");
 });
 
+test("accepted request remains in state context after compaction drops its tool result", async () => {
+  const directory = await tempDirectory("agent-statecontext-approved-request-");
+  const store = await SessionResponseStore.open(directory);
+  const callId = "request-draft-approved";
+  const draft = {goal: "continue the approved work", scope: {include: ["the accepted scope"]}};
+  try {
+    const accepted = await store.writeAcceptedRequest(draft, "user", "update", callId);
+    await store.appendInputItems([
+      {type: "message", role: "user", content: [{type: "input_text", text: "Start this task"}]},
+      {type: "function_call", call_id: callId, name: "request_draft", arguments: JSON.stringify({draft})},
+      {type: "function_call_output", call_id: callId, output: JSON.stringify({decision: "update", draft})},
+    ]);
+
+    const config = {
+      model: {model: "test-model", request: {}},
+      settings: {prompt_text: "", prompt_role: "system", statecontext: {role: "developer"}},
+    } as unknown as LoadedSessionConfig;
+    const historyBefore = [];
+    for await (const item of store.readInputItems({persistCache: false})) historyBefore.push(item);
+    const beforeCompaction = buildResponseRequest(config, historyBefore, [], {
+      role: "developer",
+      acceptedRequest: accepted,
+    });
+    assert.equal(
+      (beforeCompaction.input as unknown as Array<Record<string, unknown>>).length,
+      historyBefore.length,
+      "the transcript tool result is not duplicated while it remains in history",
+    );
+
+    const result = await store.compactHistory({
+      turnType: "assistant_final",
+      keepTurns: 1,
+      keepToolPairs: 0,
+      backupMode: "replace",
+    });
+    assert.equal(result.compacted, true);
+    const compactedHistory = [];
+    for await (const item of store.readInputItems({persistCache: false})) compactedHistory.push(item);
+    assert.equal(compactedHistory.some((item) => item.type === "function_call_output"), false);
+
+    const afterCompaction = buildResponseRequest(config, compactedHistory, [], {
+      role: "developer",
+      acceptedRequest: await store.readAcceptedRequest(),
+    });
+    const input = afterCompaction.input as unknown as Array<{
+      role?: string;
+      content?: Array<{text?: string}>;
+    }>;
+    const restored = input.at(-1);
+    assert.equal(restored?.role, "developer", "the accepted request is not fabricated as a user message");
+    const restoredText = restored?.content?.[0]?.text ?? "";
+    assert.match(restoredText, /User-approved request/);
+    assert.deepEqual(JSON.parse(restoredText.slice(restoredText.indexOf("\n") + 1)), draft);
+
+    await store.reset();
+    assert.equal(await store.readAcceptedRequest(), undefined, "reset clears host-owned approved-request context");
+  } finally {
+    await store.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test("statecontext aggregator emits bounded, delimited provider data", async () => {
   const directory = await tempDirectory("agent-statecontext-aggregate-");
   try {
