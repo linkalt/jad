@@ -907,8 +907,8 @@ export interface StreamSessionRunOptions {
   onRun?: (run: SessionRunState) => void;
   onIdle?: () => void;
   /**
-   * How long the stream may stay silent before it counts as broken and is
-   * reconnected. Tests set this small; the app takes
+   * How long the run response or event stream may stay silent before it counts
+   * as broken and is reconnected. Tests set this small; the app takes
    * `run_stream_stall_timeout_ms`.
    */
   stallTimeoutMs?: number;
@@ -1097,17 +1097,70 @@ function waitForRunStreamReconnect(delayMs: number, signal?: AbortSignal): Promi
   });
 }
 
+async function fetchRunStreamResponse(
+  path: string,
+  init: RequestInit,
+  options: StreamSessionRunOptions,
+): Promise<Response> {
+  const timeoutMs = options.stallTimeoutMs ?? appConfig.run_stream_stall_timeout_ms;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return authenticatedFetch(apiUrl(path), {
+      ...init,
+      ...(options.signal === undefined ? {} : {signal: options.signal}),
+    });
+  }
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const relayAbort = (): void => controller.abort(options.signal?.reason);
+  if (options.signal?.aborted) {
+    relayAbort();
+  } else {
+    options.signal?.addEventListener('abort', relayAbort, {once: true});
+  }
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const response = await authenticatedFetch(apiUrl(path), {
+      ...init,
+      signal: controller.signal,
+    });
+    if (timedOut) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new RunStreamConnectionError('the run stream response did not arrive in time');
+    }
+    return response;
+  } catch (error) {
+    if (options.signal?.aborted) {
+      throw error;
+    }
+    if (timedOut) {
+      throw new RunStreamConnectionError('the run stream response did not arrive in time');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', relayAbort);
+  }
+}
+
+function isRetryableRunStreamStatus(status: number): boolean {
+  return status === 408 || status >= 500;
+}
+
 async function fetchAttachedRunStream(
   sessionRef: string,
   options: StreamSessionRunOptions,
 ): Promise<Response> {
   let response: Response;
   try {
-    response = await authenticatedFetch(
-      apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/run/stream${profileQuery(options.profile)}`),
-      {
-        ...(options.signal ? {signal: options.signal} : {}),
-      },
+    response = await fetchRunStreamResponse(
+      `/sessions/${encodeURIComponent(sessionRef)}/run/stream${profileQuery(options.profile)}`,
+      {},
+      options,
     );
   } catch (error) {
     if (options.signal?.aborted) {
@@ -1116,7 +1169,11 @@ async function fetchAttachedRunStream(
     throw new RunStreamConnectionError('the run stream connection was interrupted');
   }
   if (!response.ok) {
-    throw new Error(await readError(response));
+    const error = await readError(response);
+    if (isRetryableRunStreamStatus(response.status)) {
+      throw new RunStreamConnectionError(error);
+    }
+    throw new Error(error);
   }
   return response;
 }
@@ -1129,11 +1186,25 @@ async function reconnectRunStream(
 ): Promise<StreamSessionRunResult> {
   let result = previous;
   let lastConnectionError = initialError;
-  for (let attempt = 0; attempt < appConfig.run_stream_reconnect_max_attempts; attempt += 1) {
+  let attached = previous.attached === true;
+  let attempt = 0;
+  const trackedOptions: StreamSessionRunOptions = {
+    ...options,
+    onRun: run => {
+      attached = true;
+      options.onRun?.(run);
+    },
+  };
+
+  // Once the server has identified this run, retry until it finishes or the
+  // caller detaches. A bounded batch alone leaves an active run looking stuck
+  // after every connection in that batch is interrupted.
+  while (attempt < appConfig.run_stream_reconnect_max_attempts || attached) {
     await waitForRunStreamReconnect(reconnectDelayMs(attempt), options.signal);
+    attempt += 1;
     let response: Response;
     try {
-      response = await fetchAttachedRunStream(sessionRef, options);
+      response = await fetchAttachedRunStream(sessionRef, trackedOptions);
     } catch (error) {
       if (options.signal?.aborted) {
         throw error;
@@ -1147,7 +1218,7 @@ async function reconnectRunStream(
 
     let consumed: ConsumedRunStream;
     try {
-      consumed = await consumeRunStream(response, options);
+      consumed = await consumeRunStream(response, trackedOptions);
     } catch (error) {
       if (options.signal?.aborted) {
         throw error;
@@ -1160,6 +1231,7 @@ async function reconnectRunStream(
     }
 
     result = mergeRunStreamResults(result, consumed.result);
+    attached ||= result.attached === true;
     if (consumed.finished) {
       return result;
     }
@@ -1180,37 +1252,67 @@ export async function streamSessionRun(
   input: string,
   options: StreamSessionRunOptions = {},
 ): Promise<StreamSessionRunResult> {
+  let attached = false;
+  const runOptions: StreamSessionRunOptions = {
+    ...options,
+    onRun: run => {
+      attached = true;
+      options.onRun?.(run);
+    },
+  };
   let response: Response;
   try {
-    response = await authenticatedFetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/run${profileQuery(options.profile)}`), {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        input,
-        supports_interaction: true,
-        ...(options.model === undefined ? {} : {model: options.model}),
-      }),
-      signal: options.signal,
-    });
+    response = await fetchRunStreamResponse(
+      `/sessions/${encodeURIComponent(sessionId)}/run${profileQuery(options.profile)}`,
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          input,
+          supports_interaction: true,
+          ...(options.model === undefined ? {} : {model: options.model}),
+        }),
+      },
+      runOptions,
+    );
   } catch (error) {
     if (options.signal?.aborted) {
       throw error;
     }
     const connectionError = new RunStreamConnectionError('the run stream connection was interrupted');
-    return reconnectRunStream(sessionId, options, {}, connectionError);
+    return reconnectRunStream(
+      sessionId,
+      runOptions,
+      attached ? {attached: true} : {},
+      connectionError,
+    );
   }
   if (!response.ok) {
-    throw new Error(await readError(response));
+    const error = await readError(response);
+    if (!isRetryableRunStreamStatus(response.status)) {
+      throw new Error(error);
+    }
+    return reconnectRunStream(
+      sessionId,
+      runOptions,
+      attached ? {attached: true} : {},
+      new RunStreamConnectionError(error),
+    );
   }
 
   let consumed: ConsumedRunStream;
   try {
-    consumed = await consumeRunStream(response, options);
+    consumed = await consumeRunStream(response, runOptions);
   } catch (error) {
     if (!(error instanceof RunStreamConnectionError) || options.signal?.aborted) {
       throw error;
     }
-    return reconnectRunStream(sessionId, options, {}, error);
+    return reconnectRunStream(
+      sessionId,
+      runOptions,
+      attached ? {attached: true} : {},
+      error,
+    );
   }
   if (consumed.finished) {
     return consumed.result;
@@ -1218,7 +1320,7 @@ export async function streamSessionRun(
   if (consumed.idle) {
     throw new Error('the run stream ended before the run started');
   }
-  return reconnectRunStream(sessionId, options, consumed.result);
+  return reconnectRunStream(sessionId, runOptions, consumed.result);
 }
 
 /**
@@ -1230,29 +1332,47 @@ export async function attachSessionRun(
   sessionRef: string,
   options: StreamSessionRunOptions = {},
 ): Promise<StreamSessionRunResult> {
+  let attached = false;
+  const runOptions: StreamSessionRunOptions = {
+    ...options,
+    onRun: run => {
+      attached = true;
+      options.onRun?.(run);
+    },
+  };
   let response: Response;
   try {
-    response = await fetchAttachedRunStream(sessionRef, options);
+    response = await fetchAttachedRunStream(sessionRef, runOptions);
   } catch (error) {
     if (!(error instanceof RunStreamConnectionError) || options.signal?.aborted) {
       throw error;
     }
-    return reconnectRunStream(sessionRef, options, {}, error);
+    return reconnectRunStream(
+      sessionRef,
+      runOptions,
+      attached ? {attached: true} : {},
+      error,
+    );
   }
 
   let consumed: ConsumedRunStream;
   try {
-    consumed = await consumeRunStream(response, options);
+    consumed = await consumeRunStream(response, runOptions);
   } catch (error) {
     if (!(error instanceof RunStreamConnectionError) || options.signal?.aborted) {
       throw error;
     }
-    return reconnectRunStream(sessionRef, options, {}, error);
+    return reconnectRunStream(
+      sessionRef,
+      runOptions,
+      attached ? {attached: true} : {},
+      error,
+    );
   }
   if (consumed.finished || consumed.idle) {
     return consumed.result;
   }
-  return reconnectRunStream(sessionRef, options, consumed.result);
+  return reconnectRunStream(sessionRef, runOptions, consumed.result);
 }
 
 export interface AnswerSessionRunInteractionResult {

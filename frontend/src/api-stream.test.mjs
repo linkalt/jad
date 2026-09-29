@@ -8,10 +8,11 @@ globalThis.fetch = async (input, init = {}) => {
   requests.push({url: String(input), method: init.method ?? 'GET', body: init.body});
   const response = responses.shift();
   assert.ok(response, 'unexpected API request');
-  return response;
+  return typeof response === 'function' ? response(init) : response;
 };
 
 const {attachSessionRun, streamSessionRun} = await import('./api.ts');
+const {default: appConfig} = await import('./config.json', {with: {type: 'json'}});
 
 after(() => {
   globalThis.fetch = originalFetch;
@@ -112,6 +113,116 @@ test('reconnects an attached run after an incomplete stream and preserves its sn
 
   assert.deepEqual(requests.map(request => request.method), ['GET', 'GET']);
   assert.equal(result.attached, true);
+  assert.equal(result.message?.text, 'the complete response');
+});
+
+test('keeps reconnecting after the configured batch when the run is known active', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const originalConfig = {
+    attempts: appConfig.run_stream_reconnect_max_attempts,
+    baseDelay: appConfig.run_stream_reconnect_base_delay_ms,
+    maxDelay: appConfig.run_stream_reconnect_max_delay_ms,
+  };
+  appConfig.run_stream_reconnect_max_attempts = 1;
+  appConfig.run_stream_reconnect_base_delay_ms = 0;
+  appConfig.run_stream_reconnect_max_delay_ms = 0;
+  const runningRun = {
+    turn_id: 'turn-1',
+    started_at: '2026-01-01T00:00:00.000Z',
+    status: 'running',
+  };
+  const observedRuns = [];
+  responses.push(
+    stalledStream([{event: 'run', data: runningRun}]),
+    stalledStream([{event: 'run', data: runningRun}]),
+    completedStream(),
+  );
+
+  try {
+    const result = await streamSessionRun('session-1', 'hello', {
+      stallTimeoutMs: 5,
+      onRun: run => observedRuns.push(run.turn_id),
+    });
+
+    assert.deepEqual(requests.map(request => request.method), ['POST', 'GET', 'GET']);
+    assert.deepEqual(observedRuns, ['turn-1', 'turn-1', 'turn-1']);
+    assert.equal(result.message?.text, 'the complete response');
+  } finally {
+    appConfig.run_stream_reconnect_max_attempts = originalConfig.attempts;
+    appConfig.run_stream_reconnect_base_delay_ms = originalConfig.baseDelay;
+    appConfig.run_stream_reconnect_max_delay_ms = originalConfig.maxDelay;
+  }
+});
+
+test('retries a temporary server error when attaching to a run', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  responses.push(new Response('temporarily unavailable', {status: 503}), completedStream());
+
+  const result = await attachSessionRun('session-1');
+
+  assert.deepEqual(requests.map(request => request.method), ['GET', 'GET']);
+  assert.equal(result.message?.text, 'the complete response');
+});
+
+test('keeps an attached run connected after the retry batch limit', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const originalConfig = {
+    attempts: appConfig.run_stream_reconnect_max_attempts,
+    baseDelay: appConfig.run_stream_reconnect_base_delay_ms,
+    maxDelay: appConfig.run_stream_reconnect_max_delay_ms,
+  };
+  appConfig.run_stream_reconnect_max_attempts = 1;
+  appConfig.run_stream_reconnect_base_delay_ms = 0;
+  appConfig.run_stream_reconnect_max_delay_ms = 0;
+  const runningRun = {
+    turn_id: 'turn-1',
+    started_at: '2026-01-01T00:00:00.000Z',
+    status: 'running',
+  };
+  responses.push(
+    stalledStream([{event: 'run', data: runningRun}]),
+    stalledStream([{event: 'run', data: runningRun}]),
+    completedStream(),
+  );
+
+  try {
+    const result = await attachSessionRun('session-1', {stallTimeoutMs: 5});
+
+    assert.deepEqual(requests.map(request => request.method), ['GET', 'GET', 'GET']);
+    assert.equal(result.attached, true);
+    assert.equal(result.message?.text, 'the complete response');
+  } finally {
+    appConfig.run_stream_reconnect_max_attempts = originalConfig.attempts;
+    appConfig.run_stream_reconnect_base_delay_ms = originalConfig.baseDelay;
+    appConfig.run_stream_reconnect_max_delay_ms = originalConfig.maxDelay;
+  }
+});
+
+test('reconnects when the initial run response never sends headers', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  let aborted = false;
+  responses.push(
+    init => new Promise((_resolve, reject) => {
+      const signal = init.signal;
+      assert.ok(signal, 'the request must have a timeout signal');
+      const onAbort = () => {
+        aborted = true;
+        reject(signal.reason ?? new Error('aborted'));
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, {once: true});
+    }),
+    completedStream(),
+  );
+
+  const result = await streamSessionRun('session-1', 'hello', {stallTimeoutMs: 30});
+
+  assert.equal(aborted, true);
+  assert.deepEqual(requests.map(request => request.method), ['POST', 'GET']);
   assert.equal(result.message?.text, 'the complete response');
 });
 
