@@ -48,6 +48,7 @@
   "message_step_window": 0,
   "message_step_window_page": 10,
   "scroll_debug": false,
+  "composer_desync_watch": true,
   "scroll_settle_frames": 16,
   "scroll_drift_slack_px": 300,
   "scroll_unlock_attempts": 3,

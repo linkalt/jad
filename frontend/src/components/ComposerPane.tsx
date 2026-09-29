@@ -14,6 +14,7 @@ import appConfig from '../config.json';
 import {fetchSessionFiles} from '../api';
 import {createComposerTriggers, resolveMentionFiles} from '../composer-triggers';
 import {loadDrafts, saveDrafts} from '../draftStore';
+import {carriesReactInternals, noteComposerOperation} from '../desync-watch';
 import {
   composerBadgeInsertionPlan,
   composerBadgeSharesLine,
@@ -128,11 +129,15 @@ function selectComposerContents(editable: HTMLElement): void {
  */
 function clearTrailingPlaceholder(editable: HTMLElement | null): void {
   if (editable === null) return;
+  noteComposerOperation('clearTrailingPlaceholder');
   for (;;) {
     const last = editable.lastChild;
     if (!(last instanceof Text)) return;
     const text = last.textContent ?? '';
     if (text !== '' && text !== '\n') return;
+    // Only the composer's own text nodes go: the editable's children are its
+    // textual content and Astryx's token spans, and the loop never qualifies an
+    // element. Nothing React rendered lives at this level.
     last.remove();
   }
 }
@@ -150,6 +155,7 @@ function endLineAtCursor(editable: HTMLElement | null): void {
   const selection = window.getSelection();
   if (editable === null || !selection) return;
 
+  noteComposerOperation('endLineAtCursor');
   const home = document.createTextNode('\n');
   editable.append('\n', home);
   const range = document.createRange();
@@ -325,9 +331,14 @@ function moveBadgeToOwnLine(editable: HTMLElement | null): boolean {
   if (editable === null) return false;
   const caret = badgeAtCaret(editable);
   if (caret === null) return false;
+  // The token span is Astryx's own node — verified, it carries no React markers.
+  // If a version ever rendered it through React, hand-moving it would be the
+  // invariant break, so refuse instead of moving what React owns.
+  if (carriesReactInternals(caret.badge)) return false;
   const before = lineBeforeBadge(caret.badge);
   if (!composerBadgeSharesLine(before) && !composerBadgeStartsDraft(before)) return false;
 
+  noteComposerOperation('moveBadgeToOwnLine');
   const lineBreak = document.createTextNode('\n');
   caret.badge.parentNode?.insertBefore(lineBreak, caret.badge);
   if (caret.side === 'before') {
@@ -551,6 +562,7 @@ export function ComposerPane({
   const insertPrompt = useCallback(
     (text: string, name: string) => {
       if (promptNeedsBadge(text.length, appConfig.paste_as_token_enabled, appConfig.paste_as_token_threshold)) {
+        noteComposerOperation('insertPromptBadge');
         insertAtEnd(input => input.insertToken({value: text, label: name}), badgePlan);
       } else {
         insertText(text);
@@ -560,12 +572,14 @@ export function ComposerPane({
   );
 
   const insertSkill = useCallback(
-    (text: string, name: string) =>
-      insertAtEnd(
+    (text: string, name: string) => {
+      noteComposerOperation('insertSkillBadge');
+      return insertAtEnd(
         input =>
           input.insertToken({value: text, render: () => <Badge label={name} />}),
         badgePlan,
-      ),
+      );
+    },
     [badgePlan, insertAtEnd],
   );
 

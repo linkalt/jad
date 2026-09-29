@@ -110,6 +110,14 @@ import {
 } from './web-ui-steps';
 import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
+import {ComposerErrorBoundary} from './components/ComposerErrorBoundary';
+import {
+  COMPOSER_DESYNC_EVENT,
+  describeDesync,
+  installDesyncWatch,
+  shouldInstallDesyncWatch,
+  type ComposerDesync,
+} from './desync-watch';
 import {DraftRequestDrawer} from './components/DraftRequestDrawer';
 import type {DraftDecision} from './draft-answer';
 import type {ComposerInsertActions} from './components/ComposerPane';
@@ -4426,6 +4434,47 @@ function App() {
     };
   }, []);
 
+  /**
+   * Dev builds watch the composer's DOM for edits React did not make — the
+   * divergence report 0005 ends in a blank page. The evidence goes to the
+   * notifications, which outlive a tab the crash would otherwise empty.
+   */
+  useEffect(() => {
+    if (!shouldInstallDesyncWatch(appConfig.composer_desync_watch)) {
+      return;
+    }
+    const dispose = installDesyncWatch();
+    const onDesync = (event: Event) => {
+      const desync = (event as CustomEvent<ComposerDesync>).detail;
+      recordNotification({
+        sessionId: activeViewKeyRef.current,
+        sessionTitle: 'Composer',
+        kind: 'error',
+        title: 'Composer DOM desync (dev)',
+        message: describeDesync(desync),
+      });
+    };
+    window.addEventListener(COMPOSER_DESYNC_EVENT, onDesync);
+    return () => {
+      window.removeEventListener(COMPOSER_DESYNC_EVENT, onDesync);
+      dispose();
+    };
+  }, [recordNotification]);
+
+  /** A contained composer crash is evidence too: record it where the others are. */
+  const reportComposerError = useCallback(
+    (error: unknown) => {
+      recordNotification({
+        sessionId: activeViewKeyRef.current,
+        sessionTitle: 'Composer',
+        kind: 'error',
+        title: 'The composer was replaced after an error',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    },
+    [recordNotification],
+  );
+
   if (!activeSession) {
     return null;
   }
@@ -4444,7 +4493,7 @@ function App() {
     resettingViewKey !== null ||
     frontCompactingViewKey !== null;
 
-  const composer = (
+  const composerPane = (
     <ComposerPane
       activeSessionId={activeSessionId}
       draftKey={activeViewKey}
@@ -4799,6 +4848,13 @@ function App() {
         </HStack>
       }
     />
+  );
+  /**
+   * The composer, contained: an error thrown while React patches its DOM must
+   * take the composer instead of the page — report 0005's blank screen.
+   */
+  const composer = (
+    <ComposerErrorBoundary onError={reportComposerError}>{composerPane}</ComposerErrorBoundary>
   );
   const centeredComposer = (
     <HStack align="stretch" justify="center" width="100%">
