@@ -1,3 +1,7 @@
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import './themes/neutral/theme.css';
+
 :root {
   --stylex-injection: 0;
 }

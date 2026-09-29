@@ -50,9 +50,9 @@ export default defineConfig({
         __dirname,
         'node_modules/@astryxdesign/core/src/theme/tokens.stylex.ts',
       ),
-      '@astryxdesign/core': path.resolve(
+      '@astryxdesign/core/astryx.css': path.resolve(
         __dirname,
-        'node_modules/@astryxdesign/core/src',
+        'node_modules/@astryxdesign/core/dist/astryx.css',
       ),
     },
   },

@@ -1,8 +1,6 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Theme} from '@astryxdesign/core/theme';
-import '@astryxdesign/core/reset.css';
-import './themes/neutral/theme.css';
 import './index.css';
 import App from './App';
 import {neutralTheme} from './themes/neutral/neutral';
