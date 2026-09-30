@@ -380,6 +380,7 @@ export interface CompactionSettings extends JsonRecord {
   };
   /** Turns of the pre-compaction backup the web UI shows; `0` hides them. */
   keepbackup: {turns: number};
+  /** Append backups to preserve history across compactions, or replace to keep only the latest backup. */
   backup_mode: "replace" | "append";
 }
 
@@ -921,7 +922,7 @@ function normalizeCompaction(value: unknown, path: string): CompactionSettings {
       `${path}: compaction.keepbackup.turns must be an integer between 0 and ${MAX_KEEP_BACKUP_TURNS}`,
     );
   }
-  const backupMode = raw.backup_mode ?? "replace";
+  const backupMode = raw.backup_mode ?? "append";
   if (backupMode !== "replace" && backupMode !== "append") {
     throw new ConfigError(`${path}: compaction.backup_mode must be replace or append`);
   }

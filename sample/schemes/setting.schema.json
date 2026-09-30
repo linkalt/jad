@@ -113,7 +113,7 @@
       "properties": {
         "auto_enabled": {"type": "boolean", "default": true},
         "trigger_tokens": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 200000},
-        "backup_mode": {"type": "string", "enum": ["replace", "append"], "default": "replace"},
+        "backup_mode": {"type": "string", "enum": ["replace", "append"], "default": "append", "description": "Append preserves provider-run history across compactions but grows the backup; replace keeps only the latest compaction backup."},
         "keepbatch": {
           "type": "object",
           "properties": {

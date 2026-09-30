@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { SessionConfigLoader } from "../src/config.js";
 import {
   BACKUP_TAIL_WINDOW_BYTES,
   SESSION_INPUT_BATCH_ID_FIELD,
@@ -772,6 +773,41 @@ test("renders compacted history from the backup, keeping reasoning and tool call
   } finally {
     await store.close();
     await rm(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test("keeps provider-run history across repeated default compactions", async () => {
+  const {store, sessionDir, messagesPath} = await makeStore();
+  try {
+    const settings = await new SessionConfigLoader(sessionDir).loadSettings();
+    const compaction = settings.compaction;
+    const compact = () => store.compactHistory({
+      turnType: compaction.keepbatch.turn.type,
+      keepTurns: compaction.keepbatch.turn.keep,
+      keepToolPairs: compaction.keepbatch.tools,
+      backupMode: compaction.backup_mode,
+    });
+    const cache = new WebUiSessionViewCache(store, {snapshotTurns: 0, maxPageTurns: 50});
+
+    assert.equal((await compact()).compacted, true);
+    const firstHistory = await cache.readHistory(compaction.keepbackup.turns);
+    assert.deepEqual(plain(firstHistory.messages), plain(messagesOf(TRANSCRIPT) as never));
+
+    const followUp: JsonRecord[] = [
+      userRecord("third question"),
+      completedRecord("r-3-1", 3, 1, [assistantItem("third answer", "msg-3-1")]),
+    ];
+    await appendFile(messagesPath, records(followUp));
+    assert.equal((await compact()).compacted, true);
+
+    const history = await cache.readHistory(compaction.keepbackup.turns);
+    assert.notEqual(history.etag, firstHistory.etag);
+    assert.deepEqual(plain(history.messages), plain(messagesOf([...TRANSCRIPT, ...followUp]) as never));
+    const view = await cache.read({backupTurns: compaction.keepbackup.turns});
+    assert.deepEqual(view.history, {etag: history.etag, count: history.messages.length});
+  } finally {
+    await store.close();
+    await rm(sessionDir, {recursive: true, force: true});
   }
 });
 

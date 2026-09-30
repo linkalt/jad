@@ -1232,7 +1232,7 @@ test("loads model and session settings with normalized paths and hashes", async 
       trigger_tokens: 200000,
       keepbatch: {tools: 0, turn: {type: "assistant_final", keep: 1}},
       keepbackup: {turns: 20},
-      backup_mode: "replace",
+      backup_mode: "append",
     });
     assert.deepEqual(config.settings.persistence, {
       durability: "turn",
@@ -1313,6 +1313,8 @@ test("normalizes and validates compaction settings", async () => {
       keepbatch: {tools: 2, turn: {type: "full", keep: 3}},
       keepbackup: {turns: 5},
     });
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({compaction: {backup_mode: "replace"}}));
+    assert.equal((await new SessionConfigLoader(sessionDir).loadSettings()).compaction.backup_mode, "replace");
     for (const compaction of [
       {trigger_tokens: 0},
       {keepbatch: {tools: -1}},
