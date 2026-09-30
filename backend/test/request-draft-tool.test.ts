@@ -54,6 +54,8 @@ test("describes itself so the model can call it before starting work", () => {
   assert.match(nativeRequestDraftDefinition.description, /defer other calls from the same response/);
   assert.match(nativeRequestDraftDefinition.description, /configured headless timeout/);
   assert.match(nativeRequestDraftDefinition.description, /`changed`/);
+  assert.match(nativeRequestDraftDefinition.description, /`answered` alone does not mean approval/);
+  assert.match(nativeRequestDraftDefinition.description, /the user's `reason` when they decline/);
 });
 
 test("asks the user with the draft, the session's wait and its bounds", async () => {

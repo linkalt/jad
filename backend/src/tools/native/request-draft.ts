@@ -43,8 +43,10 @@ export const nativeRequestDraftDefinition: ToolDefinition = {
     "backend accepts the draft after its configured headless timeout. The result carries " +
     "`decision` (accept = proceed as drafted, update = proceed with `draft`, the user's " +
     "edited version, decline = do not proceed), `status` (answered, timed_out or " +
-    "cancelled) and, when the user changed something, `changed` — the paths they added, " +
-    "removed or corrected. Treat decline, timeout or cancellation as no approval; do not proceed.",
+    "cancelled; `answered` alone does not mean approval), the user's `reason` when they " +
+    "decline, and, when the user changed something, `changed` — the paths they added, " +
+    "removed or corrected. Consider the decline reason as context, but treat decline, " +
+    "timeout or cancellation as no approval; do not proceed.",
   inputSchema: {
     type: "object",
     properties: {

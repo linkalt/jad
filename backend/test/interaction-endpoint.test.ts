@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {mkdir, mkdtemp, readFile, writeFile} from "node:fs/promises";
+import {mkdir, mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
@@ -302,6 +302,123 @@ test("a run publishes the draft question, waits, and continues with the user's a
     await new Promise<void>((resolve) => {
       running.server.close(() => resolve());
     });
+  }
+});
+
+test("a declined request_draft keeps the user's reason in its agent-facing tool result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-interaction-decline-"));
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, {recursive: true});
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({schema_version: 1, provider: "fake", api_key_env: "FAKE_API_KEY", model: "fake-model"}),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({
+      schema_version: 1,
+      session_name: "interaction-decline",
+      cwd: sessionDir,
+      tool_definition_paths: ["request_draft.json"],
+      tools: {native: {request_draft: {timeout_ms: 30_000}}},
+    }),
+  );
+  await writeFile(
+    join(root, "request_draft.json"),
+    JSON.stringify({schema_version: 1, tools: [nativeRequestDraftDefinition]}),
+  );
+
+  const toolCall = {
+    id: "fc_decline",
+    type: "function_call",
+    call_id: "call_decline",
+    name: "request_draft",
+    arguments: JSON.stringify({draft: {goal: "Make the page better"}}),
+  };
+  const fakeClient = {
+    responses: {
+      create: async () => (async function* () {
+        yield {type: "response.output_item.done", output_index: 0, item: toolCall};
+        yield completedEvent([toolCall], "response-decline");
+      })(),
+    },
+  } as unknown as OpenAI;
+
+  const running = createAgentServer({sessionsDir: root, client: fakeClient});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address !== null && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const authorized = {authorization: `Bearer ${TEST_API_TOKEN}`, "content-type": "application/json"};
+    const runResponse = await fetch(`${baseUrl}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: authorized,
+      body: JSON.stringify({input: "make the page better", supports_interaction: true}),
+    });
+    assert.equal(runResponse.status, 200);
+
+    const reader = runResponse.body!.getReader();
+    const decoder = new TextDecoder();
+    let stream = "";
+    const readUntil = async (
+      stop: (events: SseEvent[]) => boolean,
+      label: string,
+    ): Promise<SseEvent[]> => {
+      for (;;) {
+        const {value, done} = await reader.read();
+        if (done) break;
+        stream += decoder.decode(value, {stream: true});
+        const events = parseSse(stream);
+        if (stop(events)) return events;
+      }
+      throw new Error(`the stream ended before ${label}`);
+    };
+    const waiting = await readUntil((events) => events.some((event) =>
+      event.event === "ui.message" &&
+      (event.data.message as WebUiMessage | undefined)?.pending !== undefined,
+    ), "the question was asked");
+    const question = waiting
+      .filter((event) => event.event === "ui.message")
+      .map((event) => (event.data.message as WebUiMessage | undefined)?.pending)
+      .find((pending) => pending !== undefined);
+    assert.ok(question);
+
+    const reason = "The requested scope is too broad to approve.";
+    const answer = await fetch(`${baseUrl}/api/sessions/session1/run/interaction`, {
+      method: "POST",
+      headers: authorized,
+      body: JSON.stringify({interaction_id: question.id, decision: "decline", reason}),
+    });
+    assert.equal(answer.status, 200);
+    assert.deepEqual(await answer.json(), {
+      interaction: {interaction_id: question.id, decision: "decline", status: "answered"},
+    });
+    await readUntil((events) => events.some((event) => event.event === "done"), "the declined result was recorded");
+
+    const transcript = (await readFile(join(sessionDir, "messages.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const toolResult = transcript.find((item) =>
+      item.type === "function_call_output" && item.call_id === "call_decline",
+    );
+    assert.ok(toolResult, "the tool result is persisted for the agent");
+    assert.deepEqual(JSON.parse(String(toolResult.output)), {
+      decision: "decline",
+      status: "answered",
+      reason,
+    });
+  } finally {
+    await running.close();
+    await new Promise<void>((resolve) => {
+      running.server.close(() => resolve());
+    });
+    await rm(root, {recursive: true, force: true});
   }
 });
 
