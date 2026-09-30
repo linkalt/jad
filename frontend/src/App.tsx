@@ -171,6 +171,7 @@ import {
   type SessionListRow,
 } from './session-views';
 import {removeViewKeys, removedViewKeys} from './view-cache';
+import {canAttachRunToView, updateViewState} from './view-state';
 
 function ResetChatIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -330,9 +331,27 @@ const styles = stylex.create({
     borderBlockStart: `${borderVars['--border-width']} solid ${colorVars['--color-border']}`,
     paddingBlockStart: spacingVars['--spacing-3'],
   },
+  // The ✕ of a pinned row lives in the item's `actions` slot: a sibling of the
+  // row button, never a child of it. The slot stays mounted so the row's shape
+  // never changes under the pointer; only this control's own display toggles,
+  // which keeps the idle row at the exact geometry it has always had.
+  rowActionHidden: {
+    display: 'none',
+  },
 });
 
 type SessionState = SessionUiState;
+interface RunInteractionState {
+  viewKey: string;
+  turnId: string;
+  pending: WebUiInteraction | undefined;
+  received: boolean;
+}
+interface InteractionUiState {
+  answeringInteractionId?: string;
+  extendingInteractionId?: string;
+  error?: string;
+}
 type TraceState = 'complete' | 'running' | 'pending';
 interface Session {
   id: string;
@@ -1609,7 +1628,9 @@ function SessionNavigation({
 }) {
   // The ✕ of a pinned row appears while the pointer is over that row, so the
   // list stays quiet; the row's context menu is the keyboard path to the same
-  // removal.
+  // removal. Hover is tracked on the row itself (the context-menu trigger), not
+  // on the row button: the ✕ sits beside that button, so a leave fired by the
+  // button would hide the control the moment the pointer reached it.
   const [hoveredViewKey, setHoveredViewKey] = useState<string | null>(null);
   return (
     <SideNav
@@ -1695,31 +1716,39 @@ function SessionNavigation({
                   isDisabled: !canPinProfile,
                   onClick: () => onOpenProfile(row.sessionRef, target.profile),
                 }));
+          // The ✕ is a row control, so it renders in the item's `actions` slot
+          // beside the row button — never in `endContent`, which renders inside
+          // the button: invalid HTML for a button, and the ✕'s click would also
+          // bubble into the row's select. The slot is always mounted so the
+          // row's shape never changes while the pointer moves within it; only
+          // the control's own display toggles.
           return (
             <ContextMenu
               key={row.key}
               label={`${row.label} actions`}
               items={menuItems}
+              onMouseEnter={() => setHoveredViewKey(row.key)}
+              onMouseLeave={() => setHoveredViewKey(current => (current === row.key ? null : current))}
             >
               <SideNavItem
                 label={row.label}
                 isSelected={row.key === activeViewKey}
                 onClick={() => onSelect(row.key)}
-                onMouseEnter={() => setHoveredViewKey(row.key)}
-                onMouseLeave={() => setHoveredViewKey(current => (current === row.key ? null : current))}
                 icon={<StatusDot variant={state} label={`${row.label} ${state}`} />}
-                endContent={
+                actions={
                   row.isPinned ? (
-                    hoveredViewKey === row.key ? (
-                      <IconButton
-                        label={`Remove ${row.label}`}
-                        icon={<Icon icon="close" size="sm" />}
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => onRemoveView(row.key)}
-                      />
-                    ) : undefined
-                  ) : (
+                    <IconButton
+                      label={`Remove ${row.label}`}
+                      icon={<Icon icon="close" size="sm" />}
+                      variant="ghost"
+                      size="sm"
+                      xstyle={hoveredViewKey === row.key ? undefined : styles.rowActionHidden}
+                      onClick={() => onRemoveView(row.key)}
+                    />
+                  ) : undefined
+                }
+                endContent={
+                  row.isPinned ? undefined : (
                     <Badge label={String(rowTurns[row.key] ?? session.turns)} />
                   )
                 }
@@ -2375,7 +2404,9 @@ function App() {
     appConfig.show_prompt_library_by_default ? 'prompts' : null,
   );
   const [lastLeftPanel, setLastLeftPanel] = useState<LeftPanelId>('prompts');
-  const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
+  const [runningViewKeys, setRunningViewKeys] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   const [detachedRunSessionIds, setDetachedRunSessionIds] = useState<ReadonlySet<string>>(
     new Set(),
   );
@@ -2445,24 +2476,64 @@ function App() {
     });
   }, [openNotifications]);
   const [isUsageDrawerCollapsed, setIsUsageDrawerCollapsed] = useState(true);
-  const [runProgress, setRunProgress] = useState(baseReasoning.length);
-  const [streamingMessage, setStreamingMessage] = useState<WebUiMessage | null>(null);
-  /** The question currently being answered, so its buttons show a single flight. */
-  const [answeringInteractionId, setAnsweringInteractionId] = useState<string | null>(null);
-  const [extendingInteractionId, setExtendingInteractionId] = useState<string | null>(null);
-  const [interactionAnswerError, setInteractionAnswerError] = useState<string | null>(null);
-  // The run stream sends increments instead of a snapshot per provider delta, so
-  // the message on screen is merged here; the id check keeps a stale stream from
-  // patching the message a newer run already replaced.
-  const applyRunDelta = useCallback((messageId: string, index: number, append: string) => {
-    setStreamingMessage(current =>
-      current !== null && current.id === messageId ? applyPartDelta(current, index, append) : current,
+  const [runProgressByView, setRunProgressByView] = useState<Record<string, number>>({});
+  const runProgress = runProgressByView[activeViewKey] ?? baseReasoning.length;
+  const setRunProgressForView = useCallback((viewKey: string, progress: number) => {
+    setRunProgressByView(current => updateViewState(current, viewKey, () => progress));
+  }, []);
+  const [streamingMessagesByView, setStreamingMessagesByView] =
+    useState<Record<string, WebUiMessage>>({});
+  const streamingMessage = streamingMessagesByView[activeViewKey] ?? null;
+  const setStreamingMessageForView = useCallback((viewKey: string, message: WebUiMessage | null) => {
+    setStreamingMessagesByView(current =>
+      updateViewState(current, viewKey, () => message ?? undefined),
     );
   }, []);
-  const applyRunPart = useCallback((messageId: string, index: number, part: WebUiPart) => {
-    setStreamingMessage(current =>
-      current !== null && current.id === messageId ? applyPart(current, index, part) : current,
-    );
+  const [runInteractionStatesByView, setRunInteractionStatesByView] =
+    useState<Record<string, RunInteractionState>>({});
+  const [interactionUiByView, setInteractionUiByView] =
+    useState<Record<string, InteractionUiState>>({});
+  const activeInteractionUi = interactionUiByView[activeViewKey];
+  const answeringInteractionId = activeInteractionUi?.answeringInteractionId ?? null;
+  const extendingInteractionId = activeInteractionUi?.extendingInteractionId ?? null;
+  const interactionAnswerError = activeInteractionUi?.error ?? null;
+  const updateInteractionUiForView = useCallback((
+    viewKey: string,
+    update: (current: InteractionUiState) => InteractionUiState,
+  ) => {
+    setInteractionUiByView(current => updateViewState(current, viewKey, previous => {
+      const next = update(previous ?? {});
+      return next.answeringInteractionId === undefined &&
+        next.extendingInteractionId === undefined && next.error === undefined
+        ? undefined
+        : next;
+    }));
+  }, []);
+  // The run stream sends increments instead of a snapshot per provider delta, so
+  // patches must be applied only to the message owned by the same view.
+  const applyRunDelta = useCallback((
+    viewKey: string,
+    messageId: string,
+    index: number,
+    append: string,
+  ) => {
+    setStreamingMessagesByView(current => updateViewState(current, viewKey, message =>
+      message !== undefined && message.id === messageId
+        ? applyPartDelta(message, index, append)
+        : message,
+    ));
+  }, []);
+  const applyRunPart = useCallback((
+    viewKey: string,
+    messageId: string,
+    index: number,
+    part: WebUiPart,
+  ) => {
+    setStreamingMessagesByView(current => updateViewState(current, viewKey, message =>
+      message !== undefined && message.id === messageId
+        ? applyPart(message, index, part)
+        : message,
+    ));
   }, []);
   const conversation = useResizable({
     defaultSize: pixel(appConfig.conversation_lane_default_size),
@@ -2577,24 +2648,68 @@ function App() {
     );
     insertIntoComposerRef.current?.text(blocks.join('\n\n'));
   }, []);
-  const runAbortRef = useRef<AbortController | null>(null);
-  const stopPendingRef = useRef(false);
-  /** The interaction id whose answer is in flight, so one click is one request. */
-  const answeringInteractionRef = useRef<string | null>(null);
-  const extendingInteractionRef = useRef<string | null>(null);
-  const runTimeoutRef = useRef<number | null>(null);
-  const activeRunSessionIdRef = useRef<string | null>(null);
-  const attachedRunSessionIdRef = useRef<string | null>(null);
+  const runAbortRefs = useRef(new Map<string, AbortController>());
+  const stopPendingViewKeysRef = useRef(new Set<string>());
+  /** Interaction work is keyed by view so another profile can answer independently. */
+  const answeringInteractionRefs = useRef(new Map<string, string>());
+  const extendingInteractionRefs = useRef(new Map<string, string>());
+  const runTimeoutRefs = useRef(new Map<string, number>());
+  const activeRunViewKeysRef = useRef(new Set<string>());
+  const attachedRunViewKeysRef = useRef(new Set<string>());
   const hydratedTranscriptSessionIdsRef = useRef(new Set<string>());
-  // The run this client is streaming, if any. It is how a page reload
-  // re-attaches to a run it did not start.
-  const attachedTurnRef = useRef<string | null>(null);
-  /**
-   * The turn of the run this client streams, with the view it belongs to. A
-   * session snapshot names runs by turn, so this is what lets the poll recognise
-   * this client's own run finishing when the stream itself goes quiet.
-   */
-  const activeRunTurnRef = useRef<{viewKey: string; turnId: string} | null>(null);
+  // The turn and stream attachment each belong to a specific profile view.
+  const attachedTurnRefs = useRef(new Map<string, string>());
+  const activeRunTurnRefs = useRef(new Map<string, string>());
+  const setRunRunningForView = useCallback((viewKey: string, running: boolean) => {
+    if (running) {
+      activeRunViewKeysRef.current.add(viewKey);
+    } else {
+      activeRunViewKeysRef.current.delete(viewKey);
+    }
+    setRunningViewKeys(current => {
+      if (current.has(viewKey) === running) return current;
+      const next = new Set(current);
+      if (running) next.add(viewKey);
+      else next.delete(viewKey);
+      return next;
+    });
+  }, []);
+  const recordRunStarted = useCallback((viewKey: string, turnId: string) => {
+    activeRunTurnRefs.current.set(viewKey, turnId);
+    setRunInteractionStatesByView(current => updateViewState(current, viewKey, existing =>
+      existing?.turnId === turnId
+        ? existing
+        : {viewKey, turnId, pending: undefined, received: false},
+    ));
+  }, []);
+  const recordRunInteraction = useCallback((
+    viewKey: string,
+    turnId: string,
+    pending: WebUiInteraction | undefined,
+  ) => {
+    if (activeRunTurnRefs.current.get(viewKey) !== turnId) return;
+    setRunInteractionStatesByView(current => updateViewState(current, viewKey, () => ({
+      viewKey,
+      turnId,
+      pending,
+      received: true,
+    })));
+  }, []);
+  const clearRunInteraction = useCallback((viewKey: string, turnId?: string) => {
+    const activeTurnId = activeRunTurnRefs.current.get(viewKey);
+    if (turnId !== undefined && activeTurnId !== undefined && activeTurnId !== turnId) return;
+    activeRunTurnRefs.current.delete(viewKey);
+    setRunInteractionStatesByView(current => updateViewState(current, viewKey, state =>
+      state !== undefined && turnId !== undefined && state.turnId !== turnId
+        ? state
+        : undefined,
+    ));
+  }, []);
+  const clearInteractionUiForView = useCallback((viewKey: string) => {
+    answeringInteractionRefs.current.delete(viewKey);
+    extendingInteractionRefs.current.delete(viewKey);
+    setInteractionUiByView(current => updateViewState(current, viewKey, () => undefined));
+  }, []);
   const activeSessionIdRef = useRef<string>(activeSessionId);
   const activeViewKeyRef = useRef<string>(activeViewKey);
   const activeProfileRef = useRef<string | undefined>(activeProfile);
@@ -2939,7 +3054,7 @@ function App() {
 
   const isLiveSession = activeSession?.source === 'live';
   const isRunning = isSessionRunning(
-    runningSessionId === activeViewKey,
+    runningViewKeys.has(activeViewKey),
     rowRunStatus(activeRow, activeSession)?.status,
     detachedRunSessionIds.has(activeViewKey),
   );
@@ -2947,20 +3062,7 @@ function App() {
     isLiveSession &&
     (rowRunStatus(activeRow, activeSession)?.status === 'running' ||
       detachedRunSessionIds.has(activeViewKey) ||
-      attachedRunSessionIdRef.current === activeViewKey);
-  const rememberDetachedRun = useCallback(() => {
-    if (!isRunning || !isLiveSession) {
-      return;
-    }
-    setDetachedRunSessionIds(current => {
-      if (current.has(activeViewKey)) {
-        return current;
-      }
-      const next = new Set(current);
-      next.add(activeViewKey);
-      return next;
-    });
-  }, [activeViewKey, isLiveSession, isRunning]);
+      attachedRunViewKeysRef.current.has(activeViewKey));
   const transcriptMessages = useMemo(
     () => suppressAttachedRunTranscriptTail(messages, hasLiveAttachedRun),
     [messages, hasLiveAttachedRun],
@@ -3190,16 +3292,14 @@ function App() {
   );
 
   /**
-   * The question this composer can answer.
-   *
-   * A question is answered where the run is: another profile row waiting for input
-   * must not put its draft into this row's composer, and the sidebar keeps showing
-   * that row as running while it waits.
+   * The question this composer can answer. Prefer independent run state so the
+   * prompt is not gated on a message completing; message.pending remains a
+   * compatibility fallback. The question stays on the view where its run waits.
    */
-  const pendingInteraction =
-    streamingMessage !== null && runningSessionId !== null && runningSessionId === activeViewKey
-      ? streamingMessage.pending
-      : undefined;
+  const activeRunInteractionState = runInteractionStatesByView[activeViewKey];
+  const pendingInteraction = activeRunInteractionState?.received
+    ? activeRunInteractionState.pending
+    : streamingMessage?.pending;
 
   const reasoningSteps = useMemo(() => {
     const steps = isLiveSession ? [] : baseReasoning;
@@ -3239,68 +3339,66 @@ function App() {
    * Drops this client's view of a run without touching the run itself: the
    * server keeps it, so switching sessions or reloading can pick it up again.
    */
-  const detachRun = useCallback(() => {
-    attachedTurnRef.current = null;
-    attachedRunSessionIdRef.current = null;
-    activeRunSessionIdRef.current = null;
-    activeRunTurnRef.current = null;
-    runAbortRef.current?.abort();
-    runAbortRef.current = null;
-    if (runTimeoutRef.current !== null) {
-      window.clearTimeout(runTimeoutRef.current);
-      runTimeoutRef.current = null;
+  const detachRun = useCallback((viewKey: string = activeViewKeyRef.current) => {
+    const controller = runAbortRefs.current.get(viewKey);
+    if (controller !== undefined) {
+      runAbortRefs.current.delete(viewKey);
+      controller.abort();
     }
-    setStreamingMessage(null);
-    setRunningSessionId(null);
-    setRunProgress(baseReasoning.length);
-  }, []);
+    attachedTurnRefs.current.delete(viewKey);
+    attachedRunViewKeysRef.current.delete(viewKey);
+    const timeout = runTimeoutRefs.current.get(viewKey);
+    if (timeout !== undefined) {
+      window.clearTimeout(timeout);
+      runTimeoutRefs.current.delete(viewKey);
+    }
+    setStreamingMessageForView(viewKey, null);
+    clearRunInteraction(viewKey);
+    clearInteractionUiForView(viewKey);
+    setRunRunningForView(viewKey, false);
+    setRunProgressForView(viewKey, baseReasoning.length);
+  }, [
+    clearInteractionUiForView,
+    clearRunInteraction,
+    setRunProgressForView,
+    setRunRunningForView,
+    setStreamingMessageForView,
+  ]);
 
   /**
    * Stops the run for real. Unsubscribing only closes this client's stream —
    * the server would keep running the turn — so a stop has to be asked for.
    */
   const stopRun = useCallback(() => {
+    const targetViewKey = activeViewKeyRef.current;
     const session = activeSessionEntryRef.current;
     if (session?.source !== 'live' || !session.sessionRef) {
-      detachRun();
+      detachRun(targetViewKey);
       return;
     }
-    if (stopPendingRef.current) return;
+    if (stopPendingViewKeysRef.current.has(targetViewKey)) return;
 
-    stopPendingRef.current = true;
+    stopPendingViewKeysRef.current.add(targetViewKey);
     const sessionRef = session.sessionRef;
-    const profile = activeProfileRef.current;
-    const targetViewKey = activeViewKeyRef.current;
-    const targetController = runAbortRef.current;
+    const profile = profileOfViewKey(targetViewKey);
+    const targetController = runAbortRefs.current.get(targetViewKey) ?? null;
     const stopSignal = AbortSignal.timeout(appConfig.stop_request_timeout_ms);
+    const detachStoppedView = () => {
+      if (
+        targetController !== null &&
+        runAbortRefs.current.get(targetViewKey) === targetController
+      ) {
+        detachRun(targetViewKey);
+      } else {
+        refreshSessionsRef.current?.();
+      }
+    };
     void stopRunAfterConfirmation(
       () => stopSessionRun(sessionRef, profile, stopSignal),
-      () => {
-        // A stop response can arrive after the user switches views or another
-        // run has started. Detach only the exact stream that was stopped.
-        if (
-          activeViewKeyRef.current === targetViewKey &&
-          targetController !== null &&
-          runAbortRef.current === targetController
-        ) {
-          detachRun();
-        } else {
-          refreshSessionsRef.current?.();
-        }
-      },
+      detachStoppedView,
     ).then(stopped => {
       if (!stopped) {
-        if (
-          activeViewKeyRef.current === targetViewKey &&
-          targetController !== null &&
-          runAbortRef.current === targetController
-        ) {
-          // The server confirms there is no active run for this profile; clear
-          // a stale local spinner instead of leaving a dead stop control behind.
-          detachRun();
-        } else {
-          refreshSessionsRef.current?.();
-        }
+        detachStoppedView();
         recordNotification({
           sessionId: session.id,
           sessionTitle: activeRowSession.title,
@@ -3319,7 +3417,7 @@ function App() {
       });
       console.warn('Unable to stop the run:', error);
     }).finally(() => {
-      stopPendingRef.current = false;
+      stopPendingViewKeysRef.current.delete(targetViewKey);
     });
   }, [activeRowSession.title, detachRun, recordNotification]);
 
@@ -3335,25 +3433,30 @@ function App() {
     interaction: WebUiInteraction,
     body: {decision: DraftDecision; draft?: unknown; reason?: string},
   ) => {
-    const session = activeSessionEntryRef.current;
+    const session = activeSession;
+    const viewKey = activeViewKey;
+    const profile = activeProfile;
     if (session?.source !== 'live' || !session.sessionRef) {
       return;
     }
-    if (answeringInteractionRef.current !== null) {
+    if (answeringInteractionRefs.current.has(viewKey)) {
       return;
     }
-    answeringInteractionRef.current = interaction.id;
-    setAnsweringInteractionId(interaction.id);
-    setInteractionAnswerError(null);
+    answeringInteractionRefs.current.set(viewKey, interaction.id);
+    updateInteractionUiForView(viewKey, current => ({
+      ...current,
+      answeringInteractionId: interaction.id,
+      error: undefined,
+    }));
     const signal = AbortSignal.timeout(appConfig.interaction_answer_timeout_ms);
     void answerSessionRunInteraction(
       session.sessionRef,
       {interaction_id: interaction.id, ...body},
-      activeProfileRef.current,
+      profile,
       signal,
     ).catch(error => {
       const message = error instanceof Error ? error.message : String(error);
-      setInteractionAnswerError(message);
+      updateInteractionUiForView(viewKey, current => ({...current, error: message}));
       recordNotification({
         sessionId: session.id,
         sessionTitle: activeRowSession.title,
@@ -3363,10 +3466,22 @@ function App() {
       });
       console.warn('Unable to answer the draft:', error);
     }).finally(() => {
-      answeringInteractionRef.current = null;
-      setAnsweringInteractionId(null);
+      if (answeringInteractionRefs.current.get(viewKey) === interaction.id) {
+        answeringInteractionRefs.current.delete(viewKey);
+        updateInteractionUiForView(viewKey, current => ({
+          ...current,
+          answeringInteractionId: undefined,
+        }));
+      }
     });
-  }, [activeRowSession.title, recordNotification]);
+  }, [
+    activeRowSession.title,
+    activeSession,
+    activeProfile,
+    activeViewKey,
+    recordNotification,
+    updateInteractionUiForView,
+  ]);
 
   /**
    * Pushes the question's deadline out by the session's own step.
@@ -3376,25 +3491,30 @@ function App() {
    * open tab shows the same time left.
    */
   const extendInteraction = useCallback((interaction: WebUiInteraction) => {
-    const session = activeSessionEntryRef.current;
+    const session = activeSession;
+    const viewKey = activeViewKey;
+    const profile = activeProfile;
     if (session?.source !== 'live' || !session.sessionRef) {
       return;
     }
-    if (extendingInteractionRef.current !== null) {
+    if (extendingInteractionRefs.current.has(viewKey)) {
       return;
     }
-    extendingInteractionRef.current = interaction.id;
-    setExtendingInteractionId(interaction.id);
-    setInteractionAnswerError(null);
+    extendingInteractionRefs.current.set(viewKey, interaction.id);
+    updateInteractionUiForView(viewKey, current => ({
+      ...current,
+      extendingInteractionId: interaction.id,
+      error: undefined,
+    }));
     const signal = AbortSignal.timeout(appConfig.interaction_answer_timeout_ms);
     void extendSessionRunInteraction(
       session.sessionRef,
       {interaction_id: interaction.id},
-      activeProfileRef.current,
+      profile,
       signal,
     ).catch(error => {
       const message = error instanceof Error ? error.message : String(error);
-      setInteractionAnswerError(message);
+      updateInteractionUiForView(viewKey, current => ({...current, error: message}));
       recordNotification({
         sessionId: session.id,
         sessionTitle: activeRowSession.title,
@@ -3404,10 +3524,22 @@ function App() {
       });
       console.warn('Unable to extend the draft:', error);
     }).finally(() => {
-      extendingInteractionRef.current = null;
-      setExtendingInteractionId(null);
+      if (extendingInteractionRefs.current.get(viewKey) === interaction.id) {
+        extendingInteractionRefs.current.delete(viewKey);
+        updateInteractionUiForView(viewKey, current => ({
+          ...current,
+          extendingInteractionId: undefined,
+        }));
+      }
     });
-  }, [activeRowSession.title, recordNotification]);
+  }, [
+    activeRowSession.title,
+    activeSession,
+    activeProfile,
+    activeViewKey,
+    recordNotification,
+    updateInteractionUiForView,
+  ]);
 
   const compactActiveSession = useCallback(async () => {
     const sessionRef = activeSession?.sessionRef;
@@ -3707,30 +3839,33 @@ function App() {
         session => ({...session, turns: session.turns + 1, state: 'accent'}),
         activeRowSession,
       );
-      attachedRunSessionIdRef.current = null;
-      activeRunSessionIdRef.current = sessionId;
-      setRunningSessionId(sessionId);
-      setRunProgress(isLiveRun ? 0 : 1);
-      setStreamingMessage(null);
+      attachedRunViewKeysRef.current.delete(sessionId);
+      setRunRunningForView(sessionId, true);
+      setRunProgressForView(sessionId, isLiveRun ? 0 : 1);
+      setStreamingMessageForView(sessionId, null);
+      clearRunInteraction(sessionId);
+      clearInteractionUiForView(sessionId);
 
       if (isLiveRun && sessionRef) {
         const controller = new AbortController();
-        runAbortRef.current = controller;
+        runAbortRefs.current.set(sessionId, controller);
         void streamSessionRun(sessionRef, trimmedValue, {
           signal: controller.signal,
           ...(activeProfile === undefined ? {} : {profile: activeProfile}),
-          onRun: run => {
-            activeRunTurnRef.current = {viewKey: sessionId, turnId: run.turn_id};
-          },
+          onRun: run => recordRunStarted(sessionId, run.turn_id),
+          onInteraction: (turnId, interaction) =>
+            recordRunInteraction(sessionId, turnId, interaction),
           onMessage: message => {
-            setStreamingMessage(message);
-            setRunProgress(1);
+            setStreamingMessageForView(sessionId, message);
+            setRunProgressForView(sessionId, 1);
           },
-          onDelta: applyRunDelta,
-          onPart: applyRunPart,
+          onDelta: (messageId, index, append) =>
+            applyRunDelta(sessionId, messageId, index, append),
+          onPart: (messageId, index, part) =>
+            applyRunPart(sessionId, messageId, index, part),
           onCompleted: message => {
-            setStreamingMessage(message);
-            setRunProgress(2);
+            setStreamingMessageForView(sessionId, message);
+            setRunProgressForView(sessionId, 2);
           },
           onUsage: usage => {
             updateViewSessionRecord(
@@ -3741,7 +3876,7 @@ function App() {
           },
         })
           .then(result => {
-            if (controller.signal.aborted || runAbortRef.current !== controller) {
+            if (controller.signal.aborted || runAbortRefs.current.get(sessionId) !== controller) {
               return;
             }
             const assistantMessage: MessageRecord = result.message ?? {
@@ -3774,7 +3909,7 @@ function App() {
             );
           })
           .catch(error => {
-            if (controller.signal.aborted || runAbortRef.current !== controller) {
+            if (controller.signal.aborted || runAbortRefs.current.get(sessionId) !== controller) {
               return;
             }
             const message = error instanceof Error ? error.message : String(error);
@@ -3792,15 +3927,16 @@ function App() {
             );
           })
           .finally(() => {
-            if (runAbortRef.current !== controller) {
+            if (runAbortRefs.current.get(sessionId) !== controller) {
               return;
             }
-            runAbortRef.current = null;
-            activeRunSessionIdRef.current = null;
-            activeRunTurnRef.current = null;
-            setStreamingMessage(null);
-            setRunProgress(isLiveRun ? 0 : baseReasoning.length);
-            setRunningSessionId(current => (current === sessionId ? null : current));
+            runAbortRefs.current.delete(sessionId);
+            attachedRunViewKeysRef.current.delete(sessionId);
+            clearRunInteraction(sessionId);
+            clearInteractionUiForView(sessionId);
+            setStreamingMessageForView(sessionId, null);
+            setRunProgressForView(sessionId, isLiveRun ? 0 : baseReasoning.length);
+            setRunRunningForView(sessionId, false);
             // The committed transcript is authoritative now: refresh instead of
             // waiting for the next poll, which this run had slowed to the
             // streaming cadence.
@@ -3809,7 +3945,9 @@ function App() {
         return true;
       }
 
-      runTimeoutRef.current = window.setTimeout(() => {
+      const timeout = window.setTimeout(() => {
+        if (runTimeoutRefs.current.get(sessionId) !== timeout) return;
+        runTimeoutRefs.current.delete(sessionId);
         const assistantMessage: MessageRecord = {
           id: `${sessionId}-assistant-${Date.now()}`,
           sender: 'assistant',
@@ -3828,11 +3966,12 @@ function App() {
           session => ({...session, state: 'success'}),
           activeRowSession,
         );
-        activeRunSessionIdRef.current = null;
-        setRunProgress(baseReasoning.length);
-        setRunningSessionId(current => (current === sessionId ? null : current));
-        runTimeoutRef.current = null;
+        clearRunInteraction(sessionId);
+        clearInteractionUiForView(sessionId);
+        setRunProgressForView(sessionId, baseReasoning.length);
+        setRunRunningForView(sessionId, false);
       }, appConfig.mock_run_delay_ms);
+      runTimeoutRefs.current.set(sessionId, timeout);
       return true;
     },
     [
@@ -3845,6 +3984,15 @@ function App() {
       recordNotification,
       resettingViewKey,
       frontCompactingViewKey,
+      applyRunDelta,
+      applyRunPart,
+      recordRunStarted,
+      recordRunInteraction,
+      clearRunInteraction,
+      clearInteractionUiForView,
+      setRunProgressForView,
+      setRunRunningForView,
+      setStreamingMessageForView,
       updateViewSessionRecord,
     ],
   );
@@ -3863,28 +4011,32 @@ function App() {
       profile: string | undefined,
       fallbackSession: Session,
     ) => {
-      if (attachedTurnRef.current === turnId || runAbortRef.current !== null) {
+      if (!canAttachRunToView(attachedTurnRefs.current, runAbortRefs.current, sessionId, turnId)) {
         return;
       }
-      attachedTurnRef.current = turnId;
-      attachedRunSessionIdRef.current = sessionId;
-      activeRunSessionIdRef.current = sessionId;
+      attachedTurnRefs.current.set(sessionId, turnId);
+      attachedRunViewKeysRef.current.add(sessionId);
       const controller = new AbortController();
-      runAbortRef.current = controller;
-      setRunningSessionId(sessionId);
-      setRunProgress(1);
-      setStreamingMessage(null);
+      runAbortRefs.current.set(sessionId, controller);
+      setRunRunningForView(sessionId, true);
+      setRunProgressForView(sessionId, 1);
+      setStreamingMessageForView(sessionId, null);
+      clearRunInteraction(sessionId);
+      clearInteractionUiForView(sessionId);
+      recordRunStarted(sessionId, turnId);
 
       void attachSessionRun(sessionRef, {
         signal: controller.signal,
         ...(profile === undefined ? {} : {profile}),
-        onRun: run => {
-          activeRunTurnRef.current = {viewKey: sessionId, turnId: run.turn_id};
-        },
-        onMessage: message => setStreamingMessage(message),
-        onDelta: applyRunDelta,
-        onPart: applyRunPart,
-        onCompleted: message => setStreamingMessage(message),
+        onRun: run => recordRunStarted(sessionId, run.turn_id),
+        onInteraction: (pendingTurnId, interaction) =>
+          recordRunInteraction(sessionId, pendingTurnId, interaction),
+        onMessage: message => setStreamingMessageForView(sessionId, message),
+        onDelta: (messageId, index, append) =>
+          applyRunDelta(sessionId, messageId, index, append),
+        onPart: (messageId, index, part) =>
+          applyRunPart(sessionId, messageId, index, part),
+        onCompleted: message => setStreamingMessageForView(sessionId, message),
         onUsage: usage => {
           updateViewSessionRecord(
             sessionId,
@@ -3894,7 +4046,7 @@ function App() {
         },
       })
         .then(result => {
-          if (controller.signal.aborted || runAbortRef.current !== controller) {
+          if (controller.signal.aborted || runAbortRefs.current.get(sessionId) !== controller) {
             return;
           }
           if (result.message === undefined) {
@@ -3915,7 +4067,7 @@ function App() {
           );
         })
         .catch(error => {
-          if (controller.signal.aborted || runAbortRef.current !== controller) {
+          if (controller.signal.aborted || runAbortRefs.current.get(sessionId) !== controller) {
             return;
           }
           recordNotification({
@@ -3933,29 +4085,39 @@ function App() {
           console.warn('Unable to attach to the running session:', error);
         })
         .finally(() => {
-          if (runAbortRef.current !== controller) {
+          if (runAbortRefs.current.get(sessionId) !== controller) {
             return;
           }
-          // `attachedTurnRef` stays on this turn: the discovery effect clears it
-          // once the session reports the run as finished, which also prevents a
-          // re-attach loop while the run is still streaming for other clients.
-          runAbortRef.current = null;
-          attachedRunSessionIdRef.current = null;
-          activeRunSessionIdRef.current = null;
-          setStreamingMessage(null);
-          setRunProgress(baseReasoning.length);
-          setRunningSessionId(current => (current === sessionId ? null : current));
+          // Keep the discovered turn until the next snapshot reports that it
+          // finished, preventing an attach loop while another client streams it.
+          runAbortRefs.current.delete(sessionId);
+          attachedRunViewKeysRef.current.delete(sessionId);
+          clearRunInteraction(sessionId);
+          clearInteractionUiForView(sessionId);
+          setStreamingMessageForView(sessionId, null);
+          setRunProgressForView(sessionId, baseReasoning.length);
+          setRunRunningForView(sessionId, false);
           // The committed transcript is authoritative now: let the poll replace
           // the locally appended copy instead of waiting for the next tick.
           refreshSessionsRef.current?.();
         });
     },
-    [recordNotification, updateViewSessionRecord],
+    [
+      applyRunDelta,
+      applyRunPart,
+      clearInteractionUiForView,
+      clearRunInteraction,
+      recordNotification,
+      recordRunInteraction,
+      recordRunStarted,
+      setRunProgressForView,
+      setRunRunningForView,
+      setStreamingMessageForView,
+      updateViewSessionRecord,
+    ],
   );
 
   const createSession = useCallback(() => {
-    rememberDetachedRun();
-    detachRun();
     const sessionId = `run-${Date.now()}`;
     const newSession: Session = {
       id: sessionId,
@@ -3979,30 +4141,17 @@ function App() {
     }));
     hasChosenSessionRef.current = true;
     setActiveViewKey(sessionId);
-    setRunProgress(0);
-  }, [detachRun, rememberDetachedRun]);
+    setRunProgressForView(sessionId, 0);
+  }, [setRunProgressForView]);
 
-  /**
-   * Moves this client to another view.
-   *
-   * The view left behind detaches only here: a run in flight keeps going on the
-   * server and is picked up again when its row is selected once more. Selecting
-   * what is already on screen is a no-op, so a click can never tear down the
-   * stream a view owns.
-   */
-  const activateView = useCallback(
-    (nextViewKey: string) => {
-      hasChosenSessionRef.current = true;
-      if (nextViewKey === activeViewKeyRef.current) {
-        return;
-      }
-      rememberDetachedRun();
-      detachRun();
-      setActiveViewKey(nextViewKey);
-      setRunProgress(baseReasoning.length);
-    },
-    [detachRun, rememberDetachedRun],
-  );
+  /** Move the visible composer and transcript without disturbing another view's run. */
+  const activateView = useCallback((nextViewKey: string) => {
+    hasChosenSessionRef.current = true;
+    if (nextViewKey === activeViewKeyRef.current) {
+      return;
+    }
+    setActiveViewKey(nextViewKey);
+  }, []);
 
   /** A list click: the session's own row, following its stored default profile. */
   const selectSession = useCallback(
@@ -4056,11 +4205,11 @@ function App() {
   // its own row. The session row can still aggregate runs from pinned profiles.
   const sidebarRunningViewKeys = useMemo(() => {
     const viewKeys = new Set(detachedRunSessionIds);
-    if (runningSessionId !== null) {
-      viewKeys.add(runningSessionId);
+    for (const viewKey of runningViewKeys) {
+      viewKeys.add(viewKey);
     }
     return viewKeys;
-  }, [detachedRunSessionIds, runningSessionId]);
+  }, [detachedRunSessionIds, runningViewKeys]);
 
   // A server-confirmed session list owns which view caches are still useful.
   // Keep first-paint placeholders until that list arrives, then evict unpinned
@@ -4236,8 +4385,8 @@ function App() {
       // snapshot; after that, the stream owns updates until the run completes.
       if (shouldSkipTranscriptLoad({
         sessionId: uiId,
-        activeRunSessionId: activeRunSessionIdRef.current,
-        attachedRunSessionId: attachedRunSessionIdRef.current,
+        activeRunSessionId: activeRunViewKeysRef.current.has(uiId) ? uiId : null,
+        attachedRunSessionId: attachedRunViewKeysRef.current.has(uiId) ? uiId : null,
         transcriptHydrated: hydratedTranscriptSessionIdsRef.current.has(uiId),
       })) {
         // The stream owns the transcript, but not the backup: a view whose first
@@ -4341,15 +4490,18 @@ function App() {
               liveRunKeys,
             ),
           );
-          const activeRunSessionId = activeRunSessionIdRef.current;
+          const activeRunViewKeys = new Set(activeRunViewKeysRef.current);
+          const activeRunSessionRefs = new Set(
+            [...activeRunViewKeys].map(sessionRefOfViewKey),
+          );
           setThreads(current => {
             const next = {...current};
             let hasChange = false;
             for (const item of liveItems) {
               if (
                 wasResetDuringRequest(item.id) ||
-                item.id === (activeRunSessionId === null ? null : sessionRefOfViewKey(activeRunSessionId)) ||
-                sessionRefOfViewKey(view.viewKey) === item.id
+                activeRunViewKeys.has(item.id) ||
+                view.viewKey === item.id
               ) {
                 // The run's own stream and the transcript request own these.
                 continue;
@@ -4374,7 +4526,7 @@ function App() {
                 return current.find(session => session.id === item.id) ??
                   sessionFromSnapshot(item.snapshot, item.id);
               }
-              if (item.id === (activeRunSessionId === null ? null : sessionRefOfViewKey(activeRunSessionId))) {
+              if (activeRunSessionRefs.has(item.id)) {
                 const existing = current.find(session => session.id === item.id);
                 if (existing) {
                   // The stream owns the rest of this object, but never the run:
@@ -4429,8 +4581,8 @@ function App() {
   useEffect(() => {
     const run = rowRunStatus(activeRow, activeSession);
     if (run === undefined || run.status !== 'running') {
-      if (attachedTurnRef.current !== null && runAbortRef.current === null) {
-        attachedTurnRef.current = null;
+      if (attachedTurnRefs.current.has(activeViewKey) && !runAbortRefs.current.has(activeViewKey)) {
+        attachedTurnRefs.current.delete(activeViewKey);
       }
       return;
     }
@@ -4445,7 +4597,7 @@ function App() {
       activeProfile,
       activeRowSession,
     );
-  }, [activeProfile, activeRowSession, activeSession, activeViewKey, attachToRun]);
+  }, [activeProfile, activeRowSession, activeSession, activeRow, activeViewKey, attachToRun]);
 
   /**
    * The stream is the fast path to completion; the poll is the backstop.
@@ -4458,24 +4610,27 @@ function App() {
    * that may never speak again. The committed transcript takes over.
    */
   useEffect(() => {
-    const local = activeRunTurnRef.current;
-    if (local === null || local.viewKey !== activeViewKey) {
+    const localTurnId = activeRunTurnRefs.current.get(activeViewKey);
+    if (localTurnId === undefined) {
       return;
     }
-    if (!snapshotEndsLocalRun(local.turnId, rowRunStatus(activeRow, activeSession))) {
+    if (!snapshotEndsLocalRun(localTurnId, rowRunStatus(activeRow, activeSession))) {
       return;
     }
-    activeRunTurnRef.current = null;
-    detachRun();
+    detachRun(activeViewKey);
     refreshSessionsRef.current?.();
   }, [activeRow, activeSession, activeViewKey, detachRun]);
 
   useEffect(() => {
     return () => {
-      runAbortRef.current?.abort();
-      if (runTimeoutRef.current !== null) {
-        window.clearTimeout(runTimeoutRef.current);
+      for (const controller of runAbortRefs.current.values()) {
+        controller.abort();
       }
+      runAbortRefs.current.clear();
+      for (const timeout of runTimeoutRefs.current.values()) {
+        window.clearTimeout(timeout);
+      }
+      runTimeoutRefs.current.clear();
     };
   }, []);
 
@@ -4997,7 +5152,11 @@ function App() {
                     height="100%"
                     xstyle={styles.conversationLane}
                   >
-                    <ChatMessageList density="balanced" align="top" isStreaming={isRunning}>
+                    <ChatMessageList
+                      density="balanced"
+                      align="top"
+                      isStreaming={isRunning && pendingInteraction === undefined}
+                    >
                       {(hiddenCount > 0 || hasOlderTurns) && (
                         <EarlierMessagesControl
                           hiddenCount={hiddenCount}
@@ -5026,7 +5185,7 @@ function App() {
                         !streamingMessageCommitted && (
                         <ChatMessage
                           sender="assistant"
-                          avatar={<AgentAvatar isRunning />}
+                          avatar={<AgentAvatar isRunning={pendingInteraction === undefined} />}
                           ref={liveRowHeightRef}
                           style={deferredRowStyle(null)}
                         >
@@ -5042,7 +5201,7 @@ function App() {
                                 parts={streamingMessage.parts}
                                 steps={streamingMessage.steps}
                                 rowWidthPx={liveBubbleWidthPx}
-                                isStreaming
+                                isStreaming={pendingInteraction === undefined}
                               />
                             ) : (
                               <VStack gap={3} width="100%">
@@ -5050,15 +5209,17 @@ function App() {
                                   steps={reasoningSteps}
                                   rowWidthPx={liveBubbleWidthPx}
                                   isFlush
-                                  isStreaming
+                                  isStreaming={pendingInteraction === undefined}
                                 />
                                 <MarkdownText
                                   density="compact"
                                   contentWidth="100%"
-                                  isStreaming
+                                  isStreaming={pendingInteraction === undefined}
                                   headingLevelStart={3}
                                 >
-                                  Astra is working through the request…
+                                  {pendingInteraction === undefined
+                                    ? 'Astra is working through the request…'
+                                    : 'Astra is waiting for your approval…'}
                                 </MarkdownText>
                               </VStack>
                             )}

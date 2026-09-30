@@ -174,8 +174,9 @@ async function startInteractiveRun(baseUrl: string, input: string) {
 async function readPending(events: ReturnType<typeof sseReader>): Promise<{id: string}> {
   for (;;) {
     const event = await events.next();
-    if (event.event !== "ui.message" || !isRecord(event.data.message)) continue;
-    const pending = event.data.message.pending;
+    if (event.event !== "interaction" || !isRecord(event.data)) continue;
+    if (typeof event.data.turn_id !== "string") continue;
+    const pending = event.data.pending;
     if (isRecord(pending) && typeof pending.id === "string") return {id: pending.id};
   }
 }

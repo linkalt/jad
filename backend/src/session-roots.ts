@@ -10,6 +10,8 @@ const MAX_SERVER_PORT = 65_535;
 const MAX_SERVER_BODY_BYTES = 64 * 1024 * 1024;
 const MAX_RUN_STATE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_TOOL_STREAM_INTERVAL_MS = 60 * 1000;
+const MAX_RUN_CONTENT_MEMORY_BYTES = 16 * 1024 * 1024;
+export const DEFAULT_RUN_CONTENT_MEMORY_BYTES = 100 * 1024;
 const MAX_SNAPSHOT_TURNS = 100_000;
 const MAX_PAGE_TURNS = 1_000;
 const MAX_INLINE_PART_BYTES = 16 * 1024 * 1024;
@@ -24,6 +26,7 @@ export const DEFAULT_ROOT_SERVER_SETTINGS = {
   max_body_bytes: 1024 * 1024,
   run_state_retention_ms: 30_000,
   tool_stream_interval_ms: 120,
+  run_content_memory_bytes: DEFAULT_RUN_CONTENT_MEMORY_BYTES,
   sse_max_buffered_bytes: 1024 * 1024,
   conditional_requests: true,
   snapshot_turns: 24,
@@ -51,6 +54,8 @@ export interface RootServerSettings {
   run_state_retention_ms: number;
   /** Coalescing window for in-progress tool-call snapshots; 0 streams every delta. */
   tool_stream_interval_ms: number;
+  /** UTF-8 content bytes retained per live-run cache before content spills to a temporary file. */
+  run_content_memory_bytes: number;
   /** Maximum response-buffered SSE bytes per subscriber, before reconnecting to a snapshot. */
   sse_max_buffered_bytes: number;
   /** Answer with `304` when a session snapshot is unchanged. */
@@ -199,6 +204,18 @@ function normalizeRootServerSettings(
       `${path}: server.tool_stream_interval_ms must be a safe integer between 0 and ${MAX_TOOL_STREAM_INTERVAL_MS}`,
     );
   }
+  const runContentMemoryBytes =
+    value.run_content_memory_bytes ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_memory_bytes;
+  if (
+    typeof runContentMemoryBytes !== "number" ||
+    !Number.isSafeInteger(runContentMemoryBytes) ||
+    runContentMemoryBytes < 0 ||
+    runContentMemoryBytes > MAX_RUN_CONTENT_MEMORY_BYTES
+  ) {
+    throw new ConfigError(
+      `${path}: server.run_content_memory_bytes must be a safe integer between 0 and ${MAX_RUN_CONTENT_MEMORY_BYTES}`,
+    );
+  }
   const sseMaxBufferedBytes =
     value.sse_max_buffered_bytes ?? DEFAULT_ROOT_SERVER_SETTINGS.sse_max_buffered_bytes;
   if (
@@ -270,6 +287,7 @@ function normalizeRootServerSettings(
     max_body_bytes: maxBodyBytes,
     run_state_retention_ms: runStateRetentionMs,
     tool_stream_interval_ms: toolStreamIntervalMs,
+    run_content_memory_bytes: runContentMemoryBytes,
     sse_max_buffered_bytes: sseMaxBufferedBytes,
     conditional_requests: conditionalRequests,
     snapshot_turns: snapshotTurns,

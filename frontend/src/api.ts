@@ -38,11 +38,7 @@ export type WebUiPart = WebUiTextPart | WebUiToolCallPart | WebUiToolResultPart;
 
 export type WebUiInteractionDecision = 'accept' | 'update' | 'decline';
 
-/**
- * A tool call waiting on the user's decision. It is run state, not an event:
- * the run publishes it inside its message, so a reload that lands mid-wait still
- * shows the question and can still answer it.
- */
+/** A tool call waiting on the user's decision, published as first-class run state. */
 export interface WebUiInteraction {
   id: string;
   /** Name of the native tool that asked, e.g. `request_draft`. */
@@ -76,7 +72,7 @@ export interface WebUiMessage {
   steps?: WebUiMessageStep[];
   status?: 'streaming' | 'complete';
   reasoningContent?: string;
-  /** The question a tool is waiting on, while a run holds the turn open for it. */
+  /** Compatibility mirror of the run's pending interaction while it holds the turn open. */
   pending?: WebUiInteraction;
   /**
    * Turn that produced this message, set when a part was capped. Passing it to
@@ -836,6 +832,21 @@ function isWebUiMessageSteps(value: unknown, partCount: number): value is WebUiM
   return nextPart === partCount;
 }
 
+function isWebUiInteraction(value: unknown): value is WebUiInteraction {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.tool === 'string' &&
+    typeof value.tool_call_id === 'string' &&
+    isRecord(value.draft) &&
+    (value.title === undefined || typeof value.title === 'string') &&
+    typeof value.created_at === 'string' &&
+    typeof value.expires_at === 'string' &&
+    typeof value.max_expires_at === 'string' &&
+    isNonnegativeSafeInteger(value.extend_ms)
+  );
+}
+
 function isWebUiMessage(value: unknown): value is WebUiMessage {
   if (!isRecord(value)) {
     return false;
@@ -905,6 +916,8 @@ export interface StreamSessionRunOptions {
   onCompleted?: (message: WebUiMessage) => void;
   onUsage?: (usage: SessionUsageSummary) => void;
   onRun?: (run: SessionRunState) => void;
+  /** A pending user decision for this run; `undefined` clears the interaction. */
+  onInteraction?: (turnId: string, interaction: WebUiInteraction | undefined) => void;
   onIdle?: () => void;
   /**
    * How long the run response or event stream may stay silent before it counts
@@ -934,9 +947,8 @@ function isSessionRunState(value: unknown): value is SessionRunState {
 }
 
 /**
- * Consumes the shared run event stream. `ui.message` payloads are complete
- * snapshots of the message, so a stream that starts in the middle of a run only
- * needs the newest snapshot to be correct.
+ * `ui.message` completion is message-level only; a run can still be waiting on
+ * a user decision. Only run terminal events finish the stream.
  */
 interface ConsumedRunStream {
   result: StreamSessionRunResult;
@@ -949,9 +961,11 @@ async function consumeRunStream(
   options: StreamSessionRunOptions,
 ): Promise<ConsumedRunStream> {
   let completedMessage: WebUiMessage | undefined;
+  let lastCompleteMessage: WebUiMessage | undefined;
   let sessionUsage: SessionUsageSummary | undefined;
   let attached = false;
   let finished = false;
+  let runCompleted = false;
   let idle = false;
   let completionNotified = false;
   const stallTimeoutMs = options.stallTimeoutMs ?? appConfig.run_stream_stall_timeout_ms;
@@ -973,11 +987,24 @@ async function consumeRunStream(
         }
         continue;
       }
+      if (message.event === 'interaction') {
+        if (
+          isRecord(message.data) &&
+          typeof message.data.turn_id === 'string' &&
+          (message.data.pending === null || isWebUiInteraction(message.data.pending))
+        ) {
+          options.onInteraction?.(
+            message.data.turn_id,
+            message.data.pending === null ? undefined : message.data.pending,
+          );
+        }
+        continue;
+      }
       if (message.event === 'ui.message') {
         if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
           options.onMessage?.(message.data.message);
           if (message.data.message.status === 'complete') {
-            rememberCompletion(message.data.message);
+            lastCompleteMessage = message.data.message;
           }
         }
         continue;
@@ -1006,6 +1033,7 @@ async function consumeRunStream(
       }
       if (message.event === 'completed') {
         if (isRecord(message.data) && isWebUiMessage(message.data.message)) {
+          runCompleted = true;
           rememberCompletion(message.data.message);
         }
         continue;
@@ -1026,18 +1054,21 @@ async function consumeRunStream(
         throw new Error(errorText(message.data));
       }
       if (message.event === 'done') {
+        if (completedMessage === undefined && lastCompleteMessage !== undefined) {
+          rememberCompletion(lastCompleteMessage);
+        }
         finished = true;
         break;
       }
     }
   } catch (error) {
-    if (!(error instanceof RunStreamConnectionError) || completedMessage?.status !== 'complete') {
+    if (!(error instanceof RunStreamConnectionError) || !runCompleted) {
       throw error;
     }
     finished = true;
   }
 
-  if (completedMessage?.status === 'complete') {
+  if (runCompleted) {
     finished = true;
   }
   return {

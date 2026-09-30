@@ -1,6 +1,7 @@
 import type {
   WebUiInteraction,
   WebUiMessage,
+  WebUiPart,
   WebUiRunStatus,
   WebUiSessionRun,
 } from "./plugins/web-ui/types.js";
@@ -8,6 +9,8 @@ import { messageAppendIncrement, messageIncrements } from "./plugins/web-ui/incr
 import type {WebUiMessageAppend} from "./plugins/web-ui/incremental-web-ui.js";
 
 import {InteractionBroker} from "./interactions.js";
+import {RunContentCache} from "./run-content-cache.js";
+import {DEFAULT_ROOT_SERVER_SETTINGS} from "./session-roots.js";
 
 export interface RunStreamEvent {
   event: string;
@@ -15,6 +18,20 @@ export interface RunStreamEvent {
 }
 
 export type RunListener = (event: RunStreamEvent) => void;
+
+/** Callable detach handle; `ready` resolves after a disk-backed snapshot replays. */
+export type RunSubscription = (() => void) & {ready: Promise<void>};
+
+interface RunSubscriber {
+  listener: RunListener;
+  active: boolean;
+  initializing: boolean;
+  queued: RunStreamEvent[];
+}
+
+interface RetainedTerminalEvent extends RunStreamEvent {
+  hasMessage: boolean;
+}
 
 export interface StopRunResult {
   stopped: boolean;
@@ -28,28 +45,44 @@ export interface StopRunResult {
  * newest normalized message. Subscribers receive only what changed since the
  * last published state — an appended part as `ui.delta`, a replaced or added
  * part as `ui.part` — and a full `ui.message` snapshot whenever the change has
- * no incremental form (the first state, a status change). Attaching after a
- * reload replays the newest snapshot, so a client that missed every delta is
- * still correct from that point on.
+ * no incremental form (the first state, a status change). Pending user decisions
+ * are separate run state, replayed as `interaction` events and mirrored onto the
+ * latest message for clients that consume message snapshots.
  */
 export class SessionRun {
   public status: WebUiRunStatus = "running";
-  public latest?: WebUiMessage;
+  private pendingInteraction: WebUiInteraction | undefined;
+  private interactionKnown = false;
   private latestUsage: RunStreamEvent | undefined;
-  private readonly listeners = new Set<RunListener>();
-  private terminal: RunStreamEvent[] = [];
+  private readonly listeners = new Set<RunSubscriber>();
+  private terminal: RetainedTerminalEvent[] = [];
+  private readonly contentCache: RunContentCache;
 
   public constructor(
     public readonly turnId: string,
     public readonly controller: AbortController,
     private readonly startedAt: string,
     private readonly onRetire: (run: SessionRun) => void,
+    cache: {directory?: string; memoryBytes: number} = {
+      memoryBytes: DEFAULT_ROOT_SERVER_SETTINGS.run_content_memory_bytes,
+    },
   ) {
+    this.contentCache = new RunContentCache(cache);
     this.interactions = new InteractionBroker((pending) => this.setPending(pending));
   }
 
   /** The question a tool is waiting on; its answer arrives over HTTP. */
   public readonly interactions: InteractionBroker;
+
+  /** Latest cached state; content is blank only after the cache spills to disk. */
+  public get latest(): WebUiMessage | undefined {
+    return this.contentCache.metadata();
+  }
+
+  /** Read the complete latest message, including content held in the spill file. */
+  public readLatestMessage(): Promise<WebUiMessage | undefined> {
+    return this.contentCache.read();
+  }
 
   public summary(): WebUiSessionRun {
     return {
@@ -61,22 +94,39 @@ export class SessionRun {
 
   /** Records the newest state and forwards what changed to every subscriber. */
   public publishMessage(message: WebUiMessage, append?: WebUiMessageAppend): void {
-    const previous = this.latest;
-    this.latest = message;
+    const nextMessage = this.pendingInteraction === undefined
+      ? message
+      : {...message, pending: this.pendingInteraction};
+    const previous = this.contentCache.metadata();
+    const wasSpilled = this.contentCache.isSpilled;
+    const update = this.contentCache.update(nextMessage, append);
+    const stored = update.metadata;
     if (previous === undefined) {
-      this.publish("ui.message", {message});
+      this.publish("ui.message", {message: nextMessage});
       return;
     }
+
+    if (wasSpilled) {
+      if (!this.contentCache.isSpilled) {
+        // The spill failed; the cache deliberately falls back to a complete
+        // in-memory snapshot so the live response remains usable.
+        this.publish("ui.message", {message: nextMessage});
+      } else {
+        this.publishSpilledUpdates(previous, stored, nextMessage, append, update.changedContent);
+      }
+      return;
+    }
+
     const appended = append === undefined
       ? undefined
-      : messageAppendIncrement(previous, message, append);
+      : messageAppendIncrement(previous, nextMessage, append);
     if (appended !== undefined) {
       this.publish(appended.event, appended.data);
       return;
     }
-    const increments = messageIncrements(previous, message);
+    const increments = messageIncrements(previous, nextMessage);
     if (increments === undefined) {
-      this.publish("ui.message", {message});
+      this.publish("ui.message", {message: nextMessage});
       return;
     }
     for (const increment of increments) {
@@ -84,17 +134,63 @@ export class SessionRun {
     }
   }
 
+  private publishSpilledUpdates(
+    previous: WebUiMessage,
+    stored: WebUiMessage,
+    nextMessage: WebUiMessage,
+    append: WebUiMessageAppend | undefined,
+    changedContent: ReadonlySet<number>,
+  ): void {
+    if (messageIncrements(previous, stored) === undefined) {
+      this.publish("ui.message", {message: nextMessage});
+      return;
+    }
+
+    for (let index = 0; index < stored.parts.length; index += 1) {
+      const before = previous.parts[index];
+      const after = stored.parts[index];
+      const livePart = nextMessage.parts[index];
+      if (after === undefined || livePart === undefined) {
+        continue;
+      }
+      const metadataChanged = before === undefined || !samePartMetadata(before, after);
+      const contentChanged = changedContent.has(index);
+      if (!metadataChanged && !contentChanged) {
+        continue;
+      }
+
+      const appended = append?.index === index && contentChanged
+        ? messageAppendIncrement(previous, stored, append)
+        : undefined;
+      if (appended !== undefined) {
+        this.publish(appended.event, appended.data);
+      } else {
+        this.publish("ui.part", {
+          id: nextMessage.id,
+          index,
+          part: livePart,
+        });
+      }
+    }
+  }
+
   /**
-   * Publishes the question a tool is waiting on, or clears it.
-   *
-   * A question is message state rather than a stream event: it has to survive a
-   * reload, and a client that missed the event could not answer it. A change to
-   * a message-level field has no incremental form — `messageIncrements` reports
-   * "nothing changed" while the parts are identical — so this always sends the
-   * whole snapshot.
+   * Publishes the run-level interaction state and mirrors it onto the latest
+   * message when available for clients that still consume message snapshots.
+   * The dedicated event is retained even before the first message exists.
    */
   public setPending(pending: WebUiInteraction | undefined): void {
-    const current = this.latest;
+    if (pending === this.pendingInteraction) {
+      return;
+    }
+    if (pending === undefined && this.pendingInteraction === undefined) {
+      return;
+    }
+    this.pendingInteraction = pending;
+    this.interactionKnown = true;
+    this.publish("interaction", {turn_id: this.turnId, pending: pending ?? null});
+
+    const current = this.contentCache.metadata();
     if (current === undefined) {
       return;
     }
@@ -102,8 +198,20 @@ export class SessionRun {
     if (next === current) {
       return;
     }
-    this.latest = next;
-    this.publish("ui.message", {message: next});
+    this.contentCache.setMetadata(next);
+    if (!this.contentCache.isSpilled) {
+      this.publish("ui.message", {message: next});
+      return;
+    }
+
+    const snapshot = this.contentCache.read();
+    void snapshot.then((message) => {
+      if (message !== undefined && this.status === "running" && this.pendingInteraction === pending) {
+        this.publish("ui.message", {message});
+      }
+    }).catch((error: unknown) => {
+      console.warn(`[web-ui-run-cache] pending snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   public publish(event: string, data: unknown): void {
@@ -115,27 +223,22 @@ export class SessionRun {
   }
 
   /**
-   * Records the end of the run. The terminal events are replayed to listeners
-   * that attach afterwards, so a reload that lands just after completion still
-   * receives the final message and the `completed`/`done` pair instead of
-   * silence.
+   * Records the end of the run. Terminal snapshots retain message metadata but
+   * leave large content in the same cache file used for mid-run reattachment.
    */
   public finish(
     status: Exclude<WebUiRunStatus, "running">,
     events: readonly RunStreamEvent[],
     finalMessage?: WebUiMessage,
   ): void {
-    // A question this run can no longer answer must settle before the terminal
-    // events: the waiting tool has to return instead of holding the turn open.
     this.interactions.cancel("The run ended before the draft was answered.");
     this.status = status;
     if (finalMessage !== undefined) {
-      this.latest = withoutPending(finalMessage);
+      this.contentCache.update(withoutPending(finalMessage));
     } else if (this.latest !== undefined) {
-      // A question nobody can answer any more must not replay to a late subscriber.
-      this.latest = withoutPending(this.latest);
+      this.contentCache.setMetadata(withoutPending(this.latest));
     }
-    this.terminal = [...events];
+    this.terminal = events.map(retainTerminalEvent);
     for (const event of events) {
       this.emit(event);
     }
@@ -144,34 +247,135 @@ export class SessionRun {
   }
 
   /**
-   * A running run replays its latest snapshot and then streams new events; a
-   * finished one replays its recorded terminal events and produces nothing else.
+   * A running run replays its latest message, known interaction state and usage,
+   * then streams new events. A finished run replays its terminal events.
+   * `ready` resolves when a disk-backed initial snapshot has been hydrated.
    */
-  public subscribe(listener: RunListener): () => void {
+  public subscribe(listener: RunListener): RunSubscription {
+    const subscriptionState: {active: boolean; subscriber?: RunSubscriber} = {active: true};
+    const subscription = (() => {
+      subscriptionState.active = false;
+      if (subscriptionState.subscriber !== undefined) {
+        subscriptionState.subscriber.active = false;
+        this.listeners.delete(subscriptionState.subscriber);
+      }
+    }) as RunSubscription;
+    subscription.ready = Promise.resolve();
+
     if (this.status !== "running") {
       if (this.latestUsage !== undefined) {
         listener(this.latestUsage);
       }
-      for (const event of this.terminal) {
-        listener(event);
+      if (this.contentCache.isSpilled && this.terminal.some((event) => event.hasMessage)) {
+        subscription.ready = this.contentCache.read().then((message) => {
+          if (subscriptionState.active) {
+            this.replayTerminal(listener, message);
+          }
+        }).catch((error: unknown) => {
+          console.warn(`[web-ui-run-cache] terminal snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`);
+          if (subscriptionState.active) {
+            this.replayTerminal(listener, this.latest);
+          }
+        });
+      } else {
+        this.replayTerminal(listener, this.latest);
       }
-      return () => {};
+      return subscription;
     }
-    this.listeners.add(listener);
-    if (this.latest !== undefined) {
-      listener({event: "ui.message", data: {message: this.latest}});
-    }
-    if (this.latestUsage !== undefined) {
-      listener(this.latestUsage);
-    }
-    return () => {
-      this.listeners.delete(listener);
+
+    const subscriber: RunSubscriber = {
+      listener,
+      active: true,
+      initializing: this.contentCache.isSpilled,
+      queued: [],
     };
+    subscriptionState.subscriber = subscriber;
+    this.listeners.add(subscriber);
+    if (!subscriber.initializing) {
+      this.replayLiveState(listener, this.latest, this.interactionKnown, this.pendingInteraction, this.latestUsage);
+      return subscription;
+    }
+
+    const snapshot = this.contentCache.read();
+    const interactionKnown = this.interactionKnown;
+    const pendingInteraction = this.pendingInteraction;
+    const latestUsage = this.latestUsage;
+    subscription.ready = this.replayRunning(subscriber, snapshot, interactionKnown, pendingInteraction, latestUsage);
+    return subscription;
+  }
+
+  /** Release the temporary run cache when retention ends or the registry closes. */
+  public dispose(): void {
+    this.contentCache.dispose();
+  }
+
+  private async replayRunning(
+    subscriber: RunSubscriber,
+    snapshot: Promise<WebUiMessage | undefined>,
+    interactionKnown: boolean,
+    pendingInteraction: WebUiInteraction | undefined,
+    latestUsage: RunStreamEvent | undefined,
+  ): Promise<void> {
+    let message: WebUiMessage | undefined;
+    try {
+      message = await snapshot;
+    } catch (error) {
+      console.warn(`[web-ui-run-cache] running snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      message = this.latest;
+    }
+    if (!subscriber.active) {
+      return;
+    }
+    this.replayLiveState(subscriber.listener, message, interactionKnown, pendingInteraction, latestUsage);
+    subscriber.initializing = false;
+    for (const event of subscriber.queued.splice(0)) {
+      if (subscriber.active) {
+        subscriber.listener(event);
+      }
+    }
+  }
+
+  private replayLiveState(
+    listener: RunListener,
+    message: WebUiMessage | undefined,
+    interactionKnown: boolean,
+    pendingInteraction: WebUiInteraction | undefined,
+    latestUsage: RunStreamEvent | undefined,
+  ): void {
+    if (message !== undefined) {
+      listener({event: "ui.message", data: {message}});
+    }
+    if (interactionKnown) {
+      listener({
+        event: "interaction",
+        data: {turn_id: this.turnId, pending: pendingInteraction ?? null},
+      });
+    }
+    if (latestUsage !== undefined) {
+      listener(latestUsage);
+    }
+  }
+
+  private replayTerminal(listener: RunListener, message: WebUiMessage | undefined): void {
+    for (const event of this.terminal) {
+      if (!event.hasMessage || message === undefined || !isRecord(event.data)) {
+        listener({event: event.event, data: event.data});
+        continue;
+      }
+      listener({event: event.event, data: {...event.data, message}});
+    }
   }
 
   private emit(event: RunStreamEvent): void {
-    for (const listener of [...this.listeners]) {
-      listener(event);
+    for (const subscriber of [...this.listeners]) {
+      if (!subscriber.active) {
+        continue;
+      }
+      if (subscriber.initializing) {
+        subscriber.queued.push(event);
+      } else {
+        subscriber.listener(event);
+      }
     }
   }
 }
@@ -190,7 +394,10 @@ export class SessionRunRegistry {
   private readonly runs = new Map<string, SessionRunSlot>();
   private readonly timers = new Set<NodeJS.Timeout>();
 
-  public constructor(private readonly retentionMs: number) {}
+  public constructor(
+    private readonly retentionMs: number,
+    private readonly runContentMemoryBytes = DEFAULT_ROOT_SERVER_SETTINGS.run_content_memory_bytes,
+  ) {}
 
   private static key(sessionRef: string, profile: string | undefined): string {
     return profile === undefined ? sessionRef : `${sessionRef}|${profile}`;
@@ -201,12 +408,17 @@ export class SessionRunRegistry {
     profile: string | undefined,
     turnId: string,
     controller: AbortController,
+    cacheDirectory?: string,
   ): SessionRun {
     const run = new SessionRun(
       turnId,
       controller,
       new Date().toISOString(),
       (retired) => this.retire(sessionRef, profile, retired),
+      {
+        ...(cacheDirectory === undefined ? {} : {directory: cacheDirectory}),
+        memoryBytes: this.runContentMemoryBytes,
+      },
     );
     const key = SessionRunRegistry.key(sessionRef, profile);
     const existing = this.runs.get(key);
@@ -303,6 +515,11 @@ export class SessionRunRegistry {
       clearTimeout(timer);
     }
     this.timers.clear();
+    for (const slot of this.runs.values()) {
+      for (const run of slot.list) {
+        run.dispose();
+      }
+    }
     this.runs.clear();
   }
 
@@ -310,15 +527,15 @@ export class SessionRunRegistry {
     const remove = (): void => {
       const key = SessionRunRegistry.key(sessionRef, profile);
       const slot = this.runs.get(key);
-      if (slot === undefined) {
-        return;
+      if (slot !== undefined) {
+        const remaining = slot.list.filter((candidate) => candidate !== run);
+        if (remaining.length === 0) {
+          this.runs.delete(key);
+        } else {
+          slot.list = remaining;
+        }
       }
-      const remaining = slot.list.filter((candidate) => candidate !== run);
-      if (remaining.length === 0) {
-        this.runs.delete(key);
-      } else {
-        slot.list = remaining;
-      }
+      run.dispose();
     };
 
     if (this.retentionMs <= 0) {
@@ -331,6 +548,47 @@ export class SessionRunRegistry {
     }, this.retentionMs);
     timer.unref?.();
     this.timers.add(timer);
+  }
+}
+
+function retainTerminalEvent(event: RunStreamEvent): RetainedTerminalEvent {
+  if (isRecord(event.data) && isWebUiMessage(event.data.message)) {
+    const {message: _message, ...data} = event.data;
+    return {event: event.event, data, hasMessage: true};
+  }
+  return {event: event.event, data: event.data, hasMessage: false};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isWebUiMessage(value: unknown): value is WebUiMessage {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.text === "string" &&
+    Array.isArray(value.parts);
+}
+
+function samePartMetadata(left: WebUiPart, right: WebUiPart): boolean {
+  return JSON.stringify(partMetadata(left)) === JSON.stringify(partMetadata(right));
+}
+
+function partMetadata(part: WebUiPart): unknown {
+  switch (part.type) {
+    case "text":
+    case "reasoning": {
+      const {text: _text, ...metadata} = part;
+      return metadata;
+    }
+    case "tool_call": {
+      const {arguments: _arguments, ...metadata} = part;
+      return metadata;
+    }
+    case "tool_result": {
+      const {output: _output, ...metadata} = part;
+      return metadata;
+    }
   }
 }
 

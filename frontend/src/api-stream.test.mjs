@@ -116,6 +116,91 @@ test('reconnects an attached run after an incomplete stream and preserves its sn
   assert.equal(result.message?.text, 'the complete response');
 });
 
+test('keeps a pending interaction open until the run explicitly completes', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const runningRun = {
+    turn_id: 'turn-1',
+    started_at: '2026-01-01T00:00:00.000Z',
+    status: 'running',
+  };
+  const pending = {
+    id: 'interaction-1',
+    tool: 'request_draft',
+    tool_call_id: 'call-draft',
+    draft: {goal: 'write a file'},
+    created_at: '2026-01-01T00:00:00.000Z',
+    expires_at: '2026-01-01T00:01:00.000Z',
+    max_expires_at: '2026-01-01T00:02:00.000Z',
+    extend_ms: 30000,
+  };
+  const pendingMessage = {...message('complete', 'Draft proposed'), pending};
+  const finalMessage = message('complete', 'The approved plan is ready');
+  responses.push(
+    stalledStream([
+      {event: 'run', data: runningRun},
+      {event: 'interaction', data: {turn_id: 'turn-1', pending}},
+      {event: 'ui.message', data: {message: pendingMessage}},
+    ]),
+    streamResponse([
+      {event: 'run', data: runningRun},
+      {event: 'interaction', data: {turn_id: 'turn-1', pending}},
+      {event: 'ui.message', data: {message: pendingMessage}},
+      {event: 'completed', data: {message: finalMessage, committed: true}},
+      {event: 'done', data: {}},
+    ]),
+  );
+  const interactions = [];
+  const completions = [];
+
+  const result = await streamSessionRun('session-1', 'hello', {
+    stallTimeoutMs: 5,
+    onInteraction: (turnId, value) => interactions.push({turnId, id: value?.id}),
+    onCompleted: value => completions.push(value.text),
+  });
+
+  assert.deepEqual(requests.map(request => request.method), ['POST', 'GET']);
+  assert.deepEqual(interactions, [
+    {turnId: 'turn-1', id: 'interaction-1'},
+    {turnId: 'turn-1', id: 'interaction-1'},
+  ]);
+  assert.deepEqual(completions, ['The approved plan is ready']);
+  assert.equal(result.message?.text, 'The approved plan is ready');
+});
+
+test('delivers a pending interaction before any message snapshot', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const pending = {
+    id: 'interaction-2',
+    tool: 'request_draft',
+    tool_call_id: 'call-draft-2',
+    draft: {goal: 'review a plan'},
+    created_at: '2026-01-01T00:00:00.000Z',
+    expires_at: '2026-01-01T00:01:00.000Z',
+    max_expires_at: '2026-01-01T00:02:00.000Z',
+    extend_ms: 30000,
+  };
+  const finalMessage = message('complete', 'The run continued after approval');
+  responses.push(streamResponse([
+    {event: 'run', data: {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'}},
+    {event: 'interaction', data: {turn_id: 'turn-1', pending}},
+    {event: 'completed', data: {message: finalMessage, committed: true}},
+    {event: 'done', data: {}},
+  ]));
+  const interactions = [];
+  const messages = [];
+
+  const result = await streamSessionRun('session-1', 'hello', {
+    onInteraction: (turnId, value) => interactions.push({turnId, id: value?.id}),
+    onMessage: value => messages.push(value.text),
+  });
+
+  assert.deepEqual(interactions, [{turnId: 'turn-1', id: 'interaction-2'}]);
+  assert.deepEqual(messages, []);
+  assert.equal(result.message?.text, 'The run continued after approval');
+});
+
 test('keeps reconnecting after the configured batch when the run is known active', async () => {
   requests.length = 0;
   responses.length = 0;

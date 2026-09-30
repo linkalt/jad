@@ -52,11 +52,8 @@ export interface WebUiMessageStep {
 }
 
 /**
- * A tool call waiting on the user.
- *
- * The shape mirrors what the run publishes from its interaction broker: the
- * server assigns the broker's pending question to `WebUiMessage.pending`, so a
- * drifted field fails to compile there rather than silently losing a question.
+ * A tool call waiting on the user, published as run-level interaction state and
+ * mirrored on `WebUiMessage.pending` for message-based clients.
  */
 export interface WebUiInteraction {
   id: string;
@@ -85,11 +82,7 @@ export interface WebUiMessage {
   steps?: WebUiMessageStep[];
   status?: WebUiMessageStatus;
   reasoningContent?: string;
-  /**
-   * The question a tool is waiting on, while a run holds the turn open for it.
-   * Message state rather than a stream event: a question has to survive a
-   * reload, and a client that missed an event could not answer it.
-   */
+  /** Compatibility mirror of the run's pending interaction for message-based clients. */
   pending?: WebUiInteraction;
   /**
    * Turn that produced this message, set only when a part was capped: passing it

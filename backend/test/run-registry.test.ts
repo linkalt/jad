@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import {mkdtemp, readdir, rm} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
 import test from "node:test";
 
+import {RunContentCache} from "../src/run-content-cache.js";
 import { SessionRunRegistry } from "../src/run-registry.js";
 import { assistantMessage, fieldsFromParts } from "../src/plugins/web-ui/shared-web-ui.js";
-import type { WebUiMessage, WebUiPart } from "../src/plugins/web-ui/types.js";
+import type { WebUiInteraction, WebUiMessage, WebUiPart } from "../src/plugins/web-ui/types.js";
 
 function message(id: string, text: string, status: "streaming" | "complete"): WebUiMessage {
   return {
@@ -61,6 +65,49 @@ function appliedMessage(events: readonly {event: string; data: unknown}[]): WebU
   }
   return current;
 }
+
+test("publishes and replays a pending interaction without requiring a UI message", () => {
+  const registry = new SessionRunRegistry(60_000);
+  const run = registry.begin("session1", undefined, "web-turn-1", new AbortController());
+  const pending: WebUiInteraction = {
+    id: "interaction-1",
+    tool: "request_draft",
+    tool_call_id: "call-draft",
+    draft: {goal: "write a file"},
+    created_at: "2026-01-01T00:00:00.000Z",
+    expires_at: "2026-01-01T00:01:00.000Z",
+    max_expires_at: "2026-01-01T00:02:00.000Z",
+    extend_ms: 30_000,
+  };
+  const live: Array<{event: string; data: unknown}> = [];
+  const detach = run.subscribe(event => live.push(event));
+
+  run.setPending(pending);
+  assert.deepEqual(live, [{event: "interaction", data: {turn_id: "web-turn-1", pending}}]);
+
+  const reattached: Array<{event: string; data: unknown}> = [];
+  run.subscribe(event => reattached.push(event));
+  assert.deepEqual(reattached, [{event: "interaction", data: {turn_id: "web-turn-1", pending}}]);
+
+  const proposal = message("web-turn-1", "proposal", "streaming");
+  run.publishMessage(proposal);
+  assert.equal(run.latest?.pending?.id, pending.id);
+  run.setPending(undefined);
+  assert.deepEqual(live.slice(-2), [
+    {event: "interaction", data: {turn_id: "web-turn-1", pending: null}},
+    {event: "ui.message", data: {message: proposal}},
+  ]);
+  const afterClear: Array<{event: string; data: unknown}> = [];
+  run.subscribe(event => afterClear.push(event));
+  assert.deepEqual(afterClear, [
+    {event: "ui.message", data: {message: proposal}},
+    {event: "interaction", data: {turn_id: "web-turn-1", pending: null}},
+  ]);
+
+  detach();
+  run.finish("aborted", [{event: "done", data: {}}]);
+  registry.clear();
+});
 
 test("describes a run while it is in flight and after it finishes", () => {
   const registry = new SessionRunRegistry(60_000);
@@ -396,6 +443,127 @@ test("a long stream costs the appended text, not the whole message", () => {
   // A snapshot per delta re-sent the 120 KB part every time — ~240 MB here.
   assert.ok(bytes < 256 * 1024, `streamed ${bytes} bytes for ${deltas} deltas`);
   registry.clear();
+});
+
+test("spills content after its UTF-8 budget and restores split surrogate appends", async () => {
+  const root = await mkdtemp(join(tmpdir(), "web-ui-run-content-cache-"));
+  const cacheDirectory = join(root, "profile-a", "staging", "web-ui-runs");
+  const cache = new RunContentCache({directory: cacheDirectory, memoryBytes: 4});
+  try {
+    const partial = message("turn-cache", "prefix \\ud83d", "streaming");
+    cache.update(partial);
+    assert.equal(cache.isSpilled, true);
+    assert.equal(cache.metadata()?.text, "");
+    const cachedPart = cache.metadata()?.parts[0];
+    assert.equal(cachedPart?.type === "text" ? cachedPart.text : undefined, "");
+
+    const complete = message("turn-cache", "prefix 😀", "streaming");
+    cache.update(complete, {index: 0, append: "\\ude00"});
+    assert.deepEqual(await cache.read(), complete);
+    assert.equal((await readdir(cacheDirectory)).length, 1);
+
+    cache.dispose();
+    assert.deepEqual(await readdir(cacheDirectory), []);
+  } finally {
+    cache.dispose();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("spilled profile run snapshots replay independently and survive terminal retention", async () => {
+  const root = await mkdtemp(join(tmpdir(), "web-ui-run-profile-cache-"));
+  const masterDirectory = join(root, "master", "staging", "web-ui-runs");
+  const alternateDirectory = join(root, "alternate", "staging", "web-ui-runs");
+  const registry = new SessionRunRegistry(60_000, 8);
+  try {
+    const master = registry.begin(
+      "session1", "master", "turn-master", new AbortController(), masterDirectory,
+    );
+    const alternate = registry.begin(
+      "session1", "alternate", "turn-alternate", new AbortController(), alternateDirectory,
+    );
+    const masterText = "master stream with enough content to spill";
+    const alternateText = "alternate stream remains private";
+    master.publishMessage(message("turn-master", masterText, "streaming"));
+    alternate.publishMessage(message("turn-alternate", alternateText, "streaming"));
+    assert.equal(master.latest?.text, "");
+    assert.equal(alternate.latest?.text, "");
+
+    const masterEvents: Array<{event: string; data: unknown}> = [];
+    const masterSubscription = master.subscribe((event) => masterEvents.push(event));
+    const masterNext = `${masterText} plus more`;
+    master.publishMessage(
+      message("turn-master", masterNext, "streaming"),
+      {index: 0, append: " plus more"},
+    );
+
+    const alternateEvents: Array<{event: string; data: unknown}> = [];
+    const alternateSubscription = alternate.subscribe((event) => alternateEvents.push(event));
+    await Promise.all([masterSubscription.ready, alternateSubscription.ready]);
+    assert.deepEqual(appliedMessage(masterEvents), message("turn-master", masterNext, "streaming"));
+    assert.deepEqual(
+      (alternateEvents[0]?.data as {message: WebUiMessage}).message,
+      message("turn-alternate", alternateText, "streaming"),
+    );
+
+    const final = message("turn-master", masterNext, "complete");
+    master.finish("completed", [
+      {event: "ui.message", data: {message: final}},
+      {event: "completed", data: {message: final, committed: true}},
+      {event: "done", data: {}},
+    ], final);
+    const terminalEvents: Array<{event: string; data: unknown}> = [];
+    const terminalSubscription = master.subscribe((event) => terminalEvents.push(event));
+    await terminalSubscription.ready;
+    assert.deepEqual(terminalEvents.map((event) => event.event), ["ui.message", "completed", "done"]);
+    assert.deepEqual(
+      (terminalEvents[0]?.data as {message: WebUiMessage}).message,
+      final,
+    );
+    assert.deepEqual(
+      (terminalEvents[1]?.data as {message: WebUiMessage; committed: boolean}).message,
+      final,
+    );
+
+    registry.clear();
+    assert.deepEqual(await readdir(masterDirectory), []);
+    assert.deepEqual(await readdir(alternateDirectory), []);
+  } finally {
+    registry.clear();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("spilled non-append updates publish only the changed full part", async () => {
+  const root = await mkdtemp(join(tmpdir(), "web-ui-run-part-update-"));
+  const cacheDirectory = join(root, "profile", "staging", "web-ui-runs");
+  const registry = new SessionRunRegistry(60_000, 4);
+  try {
+    const run = registry.begin(
+      "session1", "profile", "turn-parts", new AbortController(), cacheDirectory,
+    );
+    const existing: WebUiPart = {type: "text", text: "a long enough streamed answer"};
+    run.publishMessage(withParts("turn-parts", [existing]));
+
+    const events: Array<{event: string; data: unknown}> = [];
+    const subscription = run.subscribe((event) => events.push(event));
+    await subscription.ready;
+    events.length = 0;
+
+    const result: WebUiPart = {
+      type: "tool_result",
+      callId: "call-1",
+      output: "tool output",
+      status: "success",
+    };
+    run.publishMessage(withParts("turn-parts", [existing, result]));
+    assert.deepEqual(events, [
+      {event: "ui.part", data: {id: "turn-parts", index: 1, part: result}},
+    ]);
+  } finally {
+    registry.clear();
+    await rm(root, {recursive: true, force: true});
+  }
 });
 
 test("keeps one run slot per session profile so two profiles run at once", () => {

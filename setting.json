@@ -6,6 +6,7 @@
     "max_body_bytes": 1048576,
     "run_state_retention_ms": 30000,
     "tool_stream_interval_ms": 120,
+    "run_content_memory_bytes": 102400,
     "conditional_requests": true,
     "snapshot_turns": 24,
     "max_page_turns": 50,

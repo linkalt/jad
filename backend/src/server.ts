@@ -88,6 +88,8 @@ export interface AgentServerOptions {
   runStateRetentionMs?: number;
   /** Coalescing window for in-progress tool-call snapshots; 0 streams every delta. */
   toolStreamIntervalMs?: number;
+  /** UTF-8 bytes retained in memory per live-run content cache before spilling to disk. */
+  runContentMemoryBytes?: number;
   /** Maximum queued SSE response bytes per subscriber before it must resynchronize. */
   sseMaxBufferedBytes?: number;
   /** Answer with `304` when a session snapshot is unchanged. */
@@ -131,6 +133,8 @@ interface SessionLocation {
 interface SessionHandle {
   location: SessionLocation;
   directory: string;
+  /** Temporary live-run content cache, resolved inside this profile's staging path. */
+  runCacheDirectory: string;
   session: AgentSession;
   loader: SessionConfigLoader;
   /**
@@ -616,6 +620,7 @@ class AgentHttpApplication {
   };
   private readonly maxBodyBytes: number;
   private readonly toolStreamIntervalMs: number;
+  private readonly runContentMemoryBytes: number;
   private readonly sseMaxBufferedBytes: number;
   private readonly conditionalRequests: boolean;
   private readonly snapshotTurns: number;
@@ -646,6 +651,8 @@ class AgentHttpApplication {
     this.maxBodyBytes = options.maxBodyBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.max_body_bytes;
     this.toolStreamIntervalMs =
       options.toolStreamIntervalMs ?? DEFAULT_ROOT_SERVER_SETTINGS.tool_stream_interval_ms;
+    this.runContentMemoryBytes =
+      options.runContentMemoryBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_memory_bytes;
     this.sseMaxBufferedBytes =
       options.sseMaxBufferedBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.sse_max_buffered_bytes;
     this.conditionalRequests =
@@ -656,6 +663,7 @@ class AgentHttpApplication {
       options.maxInlinePartBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.max_inline_part_bytes;
     this.runs = new SessionRunRegistry(
       options.runStateRetentionMs ?? DEFAULT_ROOT_SERVER_SETTINGS.run_state_retention_ms,
+      this.runContentMemoryBytes,
     );
   }
 
@@ -1064,6 +1072,7 @@ class AgentHttpApplication {
     return {
       location,
       directory,
+      runCacheDirectory: join(settings.paths.staging, "web-ui-runs"),
       session,
       loader,
       ...(profile === undefined ? {} : {profile}),
@@ -1349,17 +1358,15 @@ class AgentHttpApplication {
     }
 
     writeSse(response, "run", run.summary(), this.sseMaxBufferedBytes);
-    let detach = (): void => {};
-    response.once("close", () => detach());
-    detach = run.subscribe((event) => {
+    const detach = run.subscribe((event) => {
       writeSse(response, event.event, event.data, this.sseMaxBufferedBytes);
       if (event.event === "done" && !response.writableEnded && !response.destroyed) {
         response.end();
       }
     });
+    response.once("close", detach);
+    await detach.ready;
     if (run.status !== "running" && !response.writableEnded && !response.destroyed) {
-      // The retained terminal events were replayed synchronously; the stream is
-      // complete.
       response.end();
     }
   }
@@ -1866,6 +1873,7 @@ class AgentHttpApplication {
     });
     response.once("close", detach);
     await started.completion;
+    await detach.ready;
     if (!response.writableEnded && !response.destroyed) {
       response.end();
     }
@@ -1915,7 +1923,13 @@ class AgentHttpApplication {
       },
       {once: true},
     );
-    const run = this.runs.begin(handle.location.ref, handle.profile, turnId, controller);
+    const run = this.runs.begin(
+      handle.location.ref,
+      handle.profile,
+      turnId,
+      controller,
+      handle.runCacheDirectory,
+    );
     const emitter = new MessageStreamEmitter(
       this.toolStreamIntervalMs,
       (message, append) => run.publishMessage(message, append),
@@ -2051,6 +2065,8 @@ export async function startAgentServer(
       options.runStateRetentionMs ?? serverSettings.run_state_retention_ms,
     toolStreamIntervalMs:
       options.toolStreamIntervalMs ?? serverSettings.tool_stream_interval_ms,
+    runContentMemoryBytes:
+      options.runContentMemoryBytes ?? serverSettings.run_content_memory_bytes,
     sseMaxBufferedBytes:
       options.sseMaxBufferedBytes ?? serverSettings.sse_max_buffered_bytes,
     conditionalRequests:
