@@ -50,7 +50,7 @@
           "minimum": 0,
           "maximum": 16777216,
           "default": 102400,
-          "description": "Maximum in-memory UTF-8 content bytes held by each active Web UI run before partial content spills to a temporary profile-scoped file. 0 spills any non-empty content immediately."
+          "description": "Maximum in-memory UTF-8 bytes retained for the active output item's content before concatenated content spills to one responses.partial file in the response-turn staging directory. 0 spills any non-empty content immediately."
         },
         "sse_max_buffered_bytes": {
           "type": "integer",

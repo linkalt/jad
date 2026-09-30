@@ -307,7 +307,8 @@ The plugin:
 - it converts provider stream events into ordered `ui.message` SSE updates;
 - it keeps adjacent reasoning/text chunks merged in the backend and emits tool call/result blocks as structured parts;
 - it sends live updates directly to connected subscribers and keeps a latest-message cache for reload/reconnect snapshots;
-- `server.run_content_memory_bytes` (default `102400`) limits content retained by each run snapshot cache; larger snapshots keep metadata in memory and spill content into temporary files under that profile's `staging/web-ui-runs` directory, removed when the run leaves retention;
+- `server.run_content_memory_bytes` (default `102400`) limits active output-item content retained in memory; after the limit, content deltas append as unframed UTF-16LE text to one `responses.partial` file in that profile's active `staging/web-*` response-turn directory. Normalized message metadata stays in memory; the file has no JSONL records, per-delta offsets, or provider-event envelopes;
+- after a `response.output_item.done` is durably staged, reconnect snapshots read that item from turn staging and the partial file is deleted before the next item streams; `response.completed` still commits the staged output to `messages.jsonl` unchanged;
 - the cache is ephemeral transport state: it is not recovered after process restart and never changes or writes a UI projection into the raw `messages.jsonl` format;
 - the frontend receives ready-to-render messages and does not normalize provider events.
 

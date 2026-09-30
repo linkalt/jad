@@ -1,13 +1,11 @@
-import {createHash, type Hash} from "node:crypto";
 import {
   closeSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
+  readFileSync,
   rmSync,
   writeSync,
 } from "node:fs";
-import {readFile} from "node:fs/promises";
 import {join} from "node:path";
 
 import type {WebUiMessage, WebUiPart} from "./plugins/web-ui/types.js";
@@ -19,46 +17,59 @@ export interface RunContentCacheUpdate {
   changedContent: ReadonlySet<number>;
 }
 
+export interface RunContentCacheStagedReader {
+  read: () => Promise<string>;
+  codeUnits: number;
+}
+
 interface RunContentCacheOptions {
-  /** Profile-scoped staging directory; omitted in unit callers that do not spill. */
+  /** Profile-scoped fallback staging root when no response-turn path is supplied. */
   directory?: string;
-  /** UTF-8 content-byte budget kept in the run snapshot's memory cache. */
+  /** UTF-8 bytes of the active output item kept in memory before spilling. */
   memoryBytes: number;
 }
 
 type ContentField = "text" | "arguments" | "output";
 
-interface DiskPart {
+interface StagedContentSource {
+  responseKey: string;
+  outputIndex: number;
+  codeUnits: number;
+  read: () => Promise<string>;
+}
+
+interface PartContentState {
   field: ContentField;
   type: WebUiPart["type"];
-  path?: string;
-  fd?: number;
-  utf8Bytes: number;
-  storageBytes: number;
-  codeUnits: number;
-  lastCodeUnit: number;
-  digest: string;
-  hash: Hash;
-  generation: number;
+  baseValue: string;
+  includeBase: boolean;
+  stagedSources: StagedContentSource[];
+  stagedCodeUnits: number;
 }
 
 /**
- * Keeps the latest Web-UI run message in memory up to a UTF-8 byte budget, then
- * stores only part content in a temporary profile-scoped cache. Message shape
- * and part metadata remain in memory; the cache is never transcript state.
+ * Keeps a normalized message scheme in memory and one active output item's
+ * content delta. When the delta exceeds its budget, only UTF-16LE content is
+ * appended to `responses.partial`; there are no event envelopes or per-chunk
+ * records. A durably staged item becomes the replay source and retires the file.
  */
 export class RunContentCache {
   private memoryMessage: WebUiMessage | undefined;
   private diskMessage: WebUiMessage | undefined;
-  private readonly diskParts = new Map<number, DiskPart>();
-  private readonly openFileDescriptors = new Set<number>();
-  private fileSequence = 0;
-  private cacheDirectory: string | undefined;
+  private baselineMessage: WebUiMessage | undefined;
+  private latestShape: WebUiMessage | undefined;
+  private readonly partContents = new Map<number, PartContentState>();
+  private currentResponseKey: string | undefined;
+  private partialDirectory: string | undefined;
+  private partialFilePath: string | undefined;
+  private partialFileDescriptor: number | undefined;
+  private activePartIndex: number | undefined;
+  private activeOutputIndex: number | undefined;
+  private activeResponseKey: string | undefined;
+  private activeContent = "";
+  private activeMemoryBytes = 0;
   private spilled = false;
   private disabled = false;
-  private activeReads = 0;
-  private deleteAfterReads = false;
-  private readonly digestCache = new WeakMap<WebUiPart, string>();
 
   public constructor(private readonly options: RunContentCacheOptions) {}
 
@@ -66,321 +77,403 @@ export class RunContentCache {
     return this.spilled;
   }
 
-  /** Latest state metadata, with content blanked after spill. */
+  /** Latest message or its content-free normalized scheme. */
   public metadata(): WebUiMessage | undefined {
-    return this.spilled ? this.diskMessage : this.memoryMessage;
+    return this.memoryMessage ?? this.diskMessage ?? this.baselineMessage;
   }
 
-  /** Update the message snapshot and persist only the changed content when spilled. */
-  public update(message: WebUiMessage, append?: WebUiMessageAppend): RunContentCacheUpdate {
-    if (this.disabled || this.options.directory === undefined) {
+  /** Starts the partial-content lifetime for one Responses turn. */
+  public beginResponse(
+    directory: string,
+    responseKey: string,
+    baselineMessage?: WebUiMessage,
+  ): void {
+    const candidate = baselineMessage ?? this.memoryMessage ?? this.baselineMessage;
+    const baseline = candidate !== undefined && candidate.parts.length === 0 && candidate.text === ""
+      ? undefined
+      : candidate;
+    this.cleanupPartialFile();
+    this.currentResponseKey = responseKey;
+    this.partialDirectory = directory;
+    this.baselineMessage = baseline;
+    this.memoryMessage = baseline;
+    this.latestShape = baseline;
+    this.diskMessage = undefined;
+    this.partContents.clear();
+    this.clearActiveItem();
+    this.spilled = false;
+  }
+
+  /**
+   * Replaces the active item's streamed delta with the authoritative staged
+   * output reader, then deletes its partial content file.
+   */
+  public handoffOutputItem(
+    responseKey: string,
+    outputIndex: number,
+    readers: ReadonlyMap<number, RunContentCacheStagedReader>,
+  ): void {
+    if (responseKey !== this.currentResponseKey) return;
+
+    const visibleMessage = this.memoryMessage ?? this.latestShape ?? this.baselineMessage;
+    for (const [partIndex, reader] of readers) {
+      const part = visibleMessage?.parts[partIndex] ?? this.baselineMessage?.parts[partIndex];
+      if (part === undefined) continue;
+      const state = this.partContents.get(partIndex) ?? this.createPartState(partIndex, part);
+      const duplicate = state.stagedSources.some(
+        (source) => source.responseKey === responseKey && source.outputIndex === outputIndex,
+      );
+      if (!duplicate) {
+        state.stagedSources.push({
+          responseKey,
+          outputIndex,
+          codeUnits: reader.codeUnits,
+          read: reader.read,
+        });
+        state.stagedCodeUnits += reader.codeUnits;
+      }
+      this.partContents.set(partIndex, state);
+    }
+
+    const itemMatches = this.activeResponseKey === responseKey &&
+      (this.activeOutputIndex === undefined || this.activeOutputIndex === outputIndex);
+    if (itemMatches) {
+      this.clearPartialFile();
+      this.clearActiveItem();
+    }
+
+    if (this.memoryMessage !== undefined && readers.size > 0) {
+      this.latestShape = stripContent(this.memoryMessage);
+      this.diskMessage = this.latestShape;
+      this.memoryMessage = undefined;
+    }
+    this.spilled = this.spilled || readers.size > 0;
+  }
+
+  /** The staged output has been committed to messages.jsonl. */
+  public commitResponse(responseKey: string, message: WebUiMessage): void {
+    if (responseKey !== this.currentResponseKey) return;
+    this.cleanupPartialFile();
+    this.currentResponseKey = undefined;
+    this.partialDirectory = undefined;
+    this.partContents.clear();
+    this.clearActiveItem();
+    this.baselineMessage = message;
+    this.memoryMessage = message;
+    this.diskMessage = undefined;
+    this.latestShape = message;
+    this.spilled = false;
+  }
+
+  /** Update the normalized scheme and append only a supplied content delta. */
+  public update(
+    message: WebUiMessage,
+    append?: WebUiMessageAppend,
+    outputIndex?: number,
+    partIndex?: number,
+  ): RunContentCacheUpdate {
+    if (this.disabled || this.currentResponseKey === undefined) {
       this.memoryMessage = message;
+      this.baselineMessage = message;
       this.diskMessage = undefined;
+      this.latestShape = message;
       this.spilled = false;
       return {metadata: message, changedContent: new Set()};
     }
 
-    try {
-      if (!this.spilled) {
-        if (messageContentBytes(message) <= this.options.memoryBytes) {
-          this.memoryMessage = message;
-          return {metadata: message, changedContent: new Set()};
+    const responseKey = this.currentResponseKey;
+    const sourceIndex = append?.outputIndex ?? outputIndex;
+    const activePartIndex = sourceIndex !== undefined &&
+      this.activeResponseKey === responseKey &&
+      (this.activeOutputIndex === undefined || this.activeOutputIndex === sourceIndex)
+      ? this.activePartIndex
+      : undefined;
+    const index = append?.index ?? partIndex ?? activePartIndex;
+    const changedContent = new Set<number>();
+    const part = index === undefined ? undefined : message.parts[index];
+    const content = partContent(part);
+    if (index !== undefined && part !== undefined && content !== undefined) {
+      const state = this.partContents.get(index) ?? this.createPartState(index, part);
+      this.partContents.set(index, state);
+      const sameActiveItem = this.activePartIndex === index &&
+        this.activeResponseKey === responseKey &&
+        (this.activeOutputIndex === undefined || sourceIndex === undefined || this.activeOutputIndex === sourceIndex);
+
+      if (!sameActiveItem) {
+        // Responses streams stage one output item before starting the next. If a
+        // provider violates that sequence, retain the newest complete snapshot
+        // in memory rather than mixing two items in the single partial file.
+        if (this.activePartIndex !== undefined &&
+          (this.activeContent.length > 0 || this.partialFilePath !== undefined)) {
+          this.disableAfterError(new Error("a new output item started before the previous item was staged"), message);
+          return {
+            metadata: message,
+            changedContent: new Set(message.parts.map((_part, partIndex) => partIndex)),
+          };
         }
-        this.startSpill(message, append?.index);
-        return {
-          metadata: this.diskMessage!,
-          changedContent: new Set(message.parts.map((_part, index) => index)),
-        };
+        this.activePartIndex = index;
+        this.activeResponseKey = responseKey;
+        this.activeOutputIndex = sourceIndex;
+        const prefixLength = (state.includeBase ? state.baseValue.length : 0) + state.stagedCodeUnits;
+        const initial = append?.index === index
+          ? append.append
+          : content.value.slice(Math.min(prefixLength, content.value.length));
+        this.replaceActiveContent(initial);
+        if (initial.length > 0) changedContent.add(index);
+      } else if (append?.index === index) {
+        if (sourceIndex !== undefined) this.activeOutputIndex = sourceIndex;
+        this.appendActiveContent(append.append);
+        if (append.append.length > 0) changedContent.add(index);
+      } else {
+        const prefixLength = (state.includeBase ? state.baseValue.length : 0) + state.stagedCodeUnits;
+        const replacement = content.value.slice(Math.min(prefixLength, content.value.length));
+        this.replaceActiveContent(replacement);
+        if (replacement.length > 0) changedContent.add(index);
       }
-      const changedContent = this.updateSpilled(message, append);
-      return {metadata: this.diskMessage!, changedContent};
-    } catch (error) {
-      // A cache failure must not turn a provider stream into a failed turn. Keep
-      // the newest complete snapshot in memory as the availability fallback.
-      this.disableAfterError(error, message);
-      return {
-        metadata: message,
-        changedContent: new Set(message.parts.map((_part, index) => index)),
-      };
     }
+
+    this.latestShape = stripContent(message);
+    if (!this.spilled) {
+      this.memoryMessage = message;
+    } else {
+      this.diskMessage = this.latestShape;
+      this.memoryMessage = undefined;
+    }
+    if (this.activeMemoryBytes > this.options.memoryBytes) {
+      this.spillActiveContent();
+    }
+    return {
+      metadata: this.memoryMessage ?? this.diskMessage ?? this.latestShape,
+      changedContent,
+    };
   }
 
   /** Replace only top-level metadata such as the pending interaction. */
   public setMetadata(message: WebUiMessage): void {
+    this.latestShape = stripContent(message);
     if (this.spilled) {
-      this.diskMessage = message;
+      this.diskMessage = this.latestShape;
     } else {
       this.memoryMessage = message;
+      this.baselineMessage = message;
     }
   }
 
-  /** Materialize a stable snapshot for a subscriber that attaches mid-run. */
+  /** Materialize the latest snapshot from its baseline, staged items and active delta. */
   public async read(): Promise<WebUiMessage | undefined> {
-    if (!this.spilled || this.diskMessage === undefined) {
-      return this.memoryMessage;
-    }
+    if (this.memoryMessage !== undefined) return this.memoryMessage;
+    const shape = this.diskMessage ?? this.latestShape;
+    if (shape === undefined) return this.baselineMessage;
 
-    // Capture the small manifest before the first await. Part files are append
-    // only, so later chunks cannot change the bytes referenced by this snapshot.
-    const manifest = cloneMessage(this.diskMessage);
-    const parts = new Map<number, {field: ContentField; path?: string; storageBytes: number}>();
-    for (const [index, value] of this.diskParts) {
-      parts.set(index, {
-        field: value.field,
-        ...(value.path === undefined ? {} : {path: value.path}),
-        storageBytes: value.storageBytes,
+    const manifest = cloneMessage(shape);
+    const baseline = this.baselineMessage;
+    const contexts = new Map<number, PartContentState>();
+    for (const [index, state] of this.partContents) {
+      contexts.set(index, {
+        ...state,
+        stagedSources: state.stagedSources.slice(),
       });
     }
+    const activePartIndex = this.activePartIndex;
+    const activeMemoryContent = this.activeContent;
+    const partialContent = this.partialFilePath === undefined
+      ? ""
+      : readFileSync(this.partialFilePath).toString("utf16le");
 
-    this.activeReads += 1;
-    try {
-      const loaded = await Promise.all([...parts].map(async ([index, reference]) => {
-        if (reference.path === undefined || reference.storageBytes === 0) {
-          return [index, ""] as const;
-        }
-        const data = await readFile(reference.path);
-        if (data.byteLength < reference.storageBytes) {
-          throw new Error("incomplete live-run cache content");
-        }
-        return [
-          index,
-          data.subarray(0, reference.storageBytes).toString("utf16le"),
-        ] as const;
-      }));
-      const contentByPart = new Map(loaded);
-      const restoredParts = manifest.parts.map((part, index): WebUiPart => {
-        const reference = parts.get(index);
-        const value = contentByPart.get(index) ?? "";
-        if (reference === undefined || reference.field === "text") {
-          return part.type === "text" || part.type === "reasoning"
-            ? {...part, text: value}
-            : part;
-        }
-        if (reference.field === "arguments" && part.type === "tool_call") {
-          return {...part, arguments: value};
-        }
-        if (reference.field === "output" && part.type === "tool_result") {
-          return {...part, output: value};
-        }
-        return part;
-      });
-      return {
-        ...manifest,
-        parts: restoredParts,
-        ...fieldsFromParts(restoredParts),
-      };
-    } finally {
-      this.activeReads -= 1;
-      if (this.activeReads === 0 && this.deleteAfterReads) {
-        this.removeCacheDirectory();
+    const loaded = await Promise.all(manifest.parts.map(async (part, index) => {
+      const state = contexts.get(index);
+      const basePart = baseline?.parts[index];
+      const baseValue = state === undefined
+        ? partContent(basePart)?.value ?? ""
+        : state.includeBase ? state.baseValue : "";
+      const staged = state === undefined
+        ? []
+        : await Promise.all(state.stagedSources.map((source) => source.read()));
+      const active = activePartIndex === index ? partialContent + activeMemoryContent : "";
+      return [index, baseValue + staged.join("") + active] as const;
+    }));
+    const contentByPart = new Map(loaded);
+    const restoredParts = manifest.parts.map((part, index): WebUiPart => {
+      const value = contentByPart.get(index) ?? "";
+      const state = contexts.get(index);
+      const field = state?.field ?? partContent(part)?.field;
+      if (field === "text" && (part.type === "text" || part.type === "reasoning")) {
+        return {...part, text: value};
       }
-    }
+      if (field === "arguments" && part.type === "tool_call") {
+        return {...part, arguments: value};
+      }
+      if (field === "output" && part.type === "tool_result") {
+        return {...part, output: value};
+      }
+      return part;
+    });
+    return {...manifest, parts: restoredParts, ...fieldsFromParts(restoredParts)};
   }
 
-  /** Remove the ephemeral file cache when the run is no longer attachable. */
-  public dispose(): void {
-    this.removeCacheDirectory();
-    this.diskParts.clear();
-    this.diskMessage = undefined;
-    this.memoryMessage = undefined;
+  /** Keep a final terminal message in memory and retire temporary partial data. */
+  public finish(message?: WebUiMessage): void {
+    this.cleanupPartialFile();
+    this.currentResponseKey = undefined;
+    this.partialDirectory = undefined;
+    this.partContents.clear();
+    this.clearActiveItem();
     this.spilled = false;
+    this.diskMessage = undefined;
+    if (message !== undefined) {
+      this.baselineMessage = message;
+      this.memoryMessage = message;
+      this.latestShape = message;
+    } else if (this.memoryMessage === undefined) {
+      this.baselineMessage = undefined;
+      this.latestShape = undefined;
+    }
+  }
+
+  /** Remove temporary cache data when a run is no longer attachable. */
+  public dispose(): void {
     this.disabled = true;
-  }
-
-  private startSpill(message: WebUiMessage, activePartIndex?: number): void {
-    mkdirSync(this.options.directory!, {recursive: true});
-    this.cacheDirectory = mkdtempSync(join(this.options.directory!, "run-"));
-    this.spilled = true;
-    this.diskParts.clear();
-    message.parts.forEach((part, index) => {
-      const content = partContent(part);
-      if (content !== undefined) {
-        this.diskParts.set(index, this.writeReplacement(index, part, content.value));
-      }
-    });
-    this.diskMessage = stripContent(message);
+    this.cleanupPartialFile();
+    this.partContents.clear();
+    this.clearActiveItem();
     this.memoryMessage = undefined;
-    this.closeInactiveFileDescriptors(activePartIndex);
+    this.diskMessage = undefined;
+    this.baselineMessage = undefined;
+    this.latestShape = undefined;
+    this.currentResponseKey = undefined;
+    this.partialDirectory = undefined;
+    this.spilled = false;
   }
 
-  private updateSpilled(message: WebUiMessage, append?: WebUiMessageAppend): Set<number> {
-    const nextParts = new Map<number, DiskPart>();
-    const changedContent = new Set<number>();
-    message.parts.forEach((part, index) => {
-      const content = partContent(part);
-      if (content === undefined) {
-        return;
-      }
-      const prior = this.diskParts.get(index);
-      if (prior === undefined || prior.field !== content.field || prior.type !== part.type) {
-        nextParts.set(index, this.writeReplacement(index, part, content.value));
-        if (content.value.length > 0) {
-          changedContent.add(index);
-        }
-        return;
-      }
-
-      const suppliedAppend = append?.index === index ? append : undefined;
-      if (
-        suppliedAppend !== undefined &&
-        suppliedAppend.append.length > 0 &&
-        prior.codeUnits + suppliedAppend.append.length === content.value.length
-      ) {
-        const bytes = Buffer.byteLength(suppliedAppend.append, "utf8");
-        const joinsSurrogatePair = prior.lastCodeUnit >= 0xd800 &&
-          prior.lastCodeUnit <= 0xdbff &&
-          suppliedAppend.append.charCodeAt(0) >= 0xdc00 &&
-          suppliedAppend.append.charCodeAt(0) <= 0xdfff;
-        const hash = prior.hash.copy().update(suppliedAppend.append, "utf16le");
-        const digest = hash.copy().digest("hex");
-        let path = prior.path;
-        let fd = prior.fd;
-        if (path === undefined) {
-          path = this.newPartPath(index, prior.generation);
-          fd = openSync(path, "wx");
-          this.openFileDescriptors.add(fd);
-        } else if (fd === undefined) {
-          fd = openSync(path, "a");
-          this.openFileDescriptors.add(fd);
-        }
-        writeSync(fd, suppliedAppend.append, null, "utf16le");
-        nextParts.set(index, {
-          ...prior,
-          path,
-          fd,
-          utf8Bytes: prior.utf8Bytes + bytes - (joinsSurrogatePair ? 2 : 0),
-          storageBytes: prior.storageBytes + suppliedAppend.append.length * 2,
-          codeUnits: content.value.length,
-          lastCodeUnit: suppliedAppend.append.charCodeAt(suppliedAppend.append.length - 1),
-          digest,
-          hash,
-        });
-        changedContent.add(index);
-        return;
-      }
-
-      const digest = this.digest(part, content.value);
-      if (prior.codeUnits === content.value.length && prior.digest === digest) {
-        nextParts.set(index, prior);
-      } else {
-        nextParts.set(index, this.writeReplacement(index, part, content.value, digest));
-        changedContent.add(index);
-      }
-    });
-
-    for (const [index, previous] of this.diskParts) {
-      const next = nextParts.get(index);
-      if (previous.fd !== undefined && next?.fd !== previous.fd) {
-        this.closeFileDescriptor(previous.fd);
-      }
-    }
-    this.diskParts.clear();
-    for (const [index, part] of nextParts) {
-      this.diskParts.set(index, part);
-    }
-    this.diskMessage = stripContent(message);
-    this.closeInactiveFileDescriptors(append?.index);
-    return changedContent;
-  }
-
-  private writeReplacement(
-    index: number,
-    part: WebUiPart,
-    value: string,
-    knownDigest?: string,
-  ): DiskPart {
-    const field = partContent(part)!.field;
-    const generation = (this.diskParts.get(index)?.generation ?? -1) + 1;
-    const path = value.length === 0 ? undefined : this.newPartPath(index, generation);
-    let fd: number | undefined;
-    if (path !== undefined) {
-      fd = openSync(path, "wx");
-      this.openFileDescriptors.add(fd);
-      writeSync(fd, value, null, "utf16le");
-    }
-    const hash = createHash("sha256").update(value, "utf16le");
+  private createPartState(index: number, part: WebUiPart): PartContentState {
+    const baselineValue = this.baselinePartContent(index, part);
     return {
-      field,
+      field: partContent(part)!.field,
       type: part.type,
-      ...(path === undefined ? {} : {path, fd}),
-      utf8Bytes: Buffer.byteLength(value, "utf8"),
-      storageBytes: value.length * 2,
-      codeUnits: value.length,
-      lastCodeUnit: value.length === 0 ? -1 : value.charCodeAt(value.length - 1),
-      digest: knownDigest ?? hash.copy().digest("hex"),
-      hash,
-      generation,
+      baseValue: baselineValue ?? "",
+      includeBase: baselineValue !== undefined,
+      stagedSources: [],
+      stagedCodeUnits: 0,
     };
   }
 
-  private newPartPath(index: number, generation: number): string {
-    const sequence = this.fileSequence++;
-    return join(this.cacheDirectory!, `part-${index}-${generation}-${sequence}.bin`);
+  private baselinePartContent(index: number, part: WebUiPart): string | undefined {
+    const baselinePart = this.baselineMessage?.parts[index];
+    if (baselinePart === undefined || baselinePart.type !== part.type) return undefined;
+    if (
+      (part.type === "tool_call" && baselinePart.type === "tool_call" && part.callId !== baselinePart.callId) ||
+      (part.type === "tool_result" && baselinePart.type === "tool_result" && part.callId !== baselinePart.callId)
+    ) {
+      return undefined;
+    }
+    const value = partContent(baselinePart);
+    const current = partContent(part);
+    return value !== undefined && current !== undefined && value.field === current.field
+      ? value.value
+      : undefined;
   }
 
-  private closeFileDescriptor(fd: number): void {
-    if (!this.openFileDescriptors.delete(fd)) {
+  private appendActiveContent(delta: string): void {
+    if (delta.length === 0) return;
+    if (this.partialFileDescriptor !== undefined) {
+      this.writePartial(delta);
       return;
     }
-    try {
-      closeSync(fd);
-    } catch (error) {
-      console.warn(`[web-ui-run-cache] failed to close cache file: ${error instanceof Error ? error.message : String(error)}`);
+    this.activeContent += delta;
+    this.activeMemoryBytes = Buffer.byteLength(this.activeContent, "utf8");
+    if (this.activeMemoryBytes > this.options.memoryBytes) this.spillActiveContent();
+  }
+
+  private replaceActiveContent(value: string): void {
+    this.clearPartialFile();
+    this.activeContent = value;
+    this.activeMemoryBytes = Buffer.byteLength(value, "utf8");
+    if (this.activeMemoryBytes > this.options.memoryBytes) this.spillActiveContent();
+  }
+
+  private spillActiveContent(): void {
+    if (this.activeContent.length === 0 || this.disabled) return;
+    const directory = this.partialDirectory ?? this.options.directory;
+    if (directory === undefined) return;
+    mkdirSync(directory, {recursive: true});
+    this.partialFilePath ??= join(directory, "responses.partial");
+    if (this.partialFileDescriptor === undefined) {
+      this.partialFileDescriptor = openSync(this.partialFilePath, "a");
+    }
+    this.writePartial(this.activeContent);
+    this.activeContent = "";
+    this.activeMemoryBytes = 0;
+    this.spilled = true;
+    this.memoryMessage = undefined;
+    this.diskMessage = this.latestShape;
+  }
+
+  private writePartial(value: string): void {
+    if (this.partialFileDescriptor === undefined) {
+      const directory = this.partialDirectory ?? this.options.directory;
+      if (directory === undefined) throw new Error("response partial directory is unavailable");
+      mkdirSync(directory, {recursive: true});
+      this.partialFilePath ??= join(directory, "responses.partial");
+      this.partialFileDescriptor = openSync(this.partialFilePath, "a");
+    }
+    const bytes = Buffer.from(value, "utf16le");
+    let written = 0;
+    while (written < bytes.byteLength) {
+      const count = writeSync(
+        this.partialFileDescriptor,
+        bytes,
+        written,
+        bytes.byteLength - written,
+        null,
+      );
+      if (count === 0) throw new Error("incomplete response partial append");
+      written += count;
     }
   }
 
-  private closeInactiveFileDescriptors(activePartIndex?: number): void {
-    for (const [index, part] of this.diskParts) {
-      if (index !== activePartIndex && part.fd !== undefined) {
-        this.closeFileDescriptor(part.fd);
-        const {fd: _fd, ...withoutDescriptor} = part;
-        this.diskParts.set(index, withoutDescriptor);
+  private cleanupPartialFile(): void {
+    this.clearPartialFile();
+  }
+
+  private clearPartialFile(): void {
+    const descriptor = this.partialFileDescriptor;
+    this.partialFileDescriptor = undefined;
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch (error) {
+        console.warn(`[web-ui-run-cache] failed to close partial cache: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    const filePath = this.partialFilePath;
+    this.partialFilePath = undefined;
+    if (filePath !== undefined) rmSync(filePath, {force: true});
   }
 
-  private closeOpenFileDescriptors(): void {
-    for (const fd of [...this.openFileDescriptors]) {
-      this.closeFileDescriptor(fd);
-    }
-  }
-
-  private digest(part: WebUiPart, value: string): string {
-    const cached = this.digestCache.get(part);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const digest = createHash("sha256").update(value, "utf16le").digest("hex");
-    this.digestCache.set(part, digest);
-    return digest;
+  private clearActiveItem(): void {
+    this.activePartIndex = undefined;
+    this.activeOutputIndex = undefined;
+    this.activeResponseKey = undefined;
+    this.activeContent = "";
+    this.activeMemoryBytes = 0;
   }
 
   private disableAfterError(error: unknown, newest: WebUiMessage): void {
     console.warn(`[web-ui-run-cache] spill disabled: ${error instanceof Error ? error.message : String(error)}`);
-    this.removeCacheDirectory();
-    this.diskParts.clear();
+    this.cleanupPartialFile();
+    this.partContents.clear();
+    this.clearActiveItem();
     this.diskMessage = undefined;
     this.memoryMessage = newest;
+    this.baselineMessage = newest;
+    this.latestShape = newest;
     this.spilled = false;
     this.disabled = true;
   }
-
-  private removeCacheDirectory(): void {
-    if (this.cacheDirectory === undefined) {
-      return;
-    }
-    this.closeOpenFileDescriptors();
-    if (this.activeReads > 0) {
-      this.deleteAfterReads = true;
-      return;
-    }
-    rmSync(this.cacheDirectory, {recursive: true, force: true});
-    this.cacheDirectory = undefined;
-    this.deleteAfterReads = false;
-  }
 }
 
-function partContent(part: WebUiPart): {field: ContentField; value: string} | undefined {
+function partContent(part: WebUiPart | undefined): {field: ContentField; value: string} | undefined {
+  if (part === undefined) return undefined;
   switch (part.type) {
     case "text":
     case "reasoning":
@@ -390,17 +483,6 @@ function partContent(part: WebUiPart): {field: ContentField; value: string} | un
     case "tool_result":
       return {field: "output", value: part.output};
   }
-}
-
-function messageContentBytes(message: WebUiMessage): number {
-  let bytes = 0;
-  for (const part of message.parts) {
-    const content = partContent(part);
-    if (content !== undefined) {
-      bytes += Buffer.byteLength(content.value, "utf8");
-    }
-  }
-  return bytes;
 }
 
 function stripContent(message: WebUiMessage): WebUiMessage {

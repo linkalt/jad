@@ -10,6 +10,7 @@ import {
   type JsonRecord,
   type ResponseCompletedEvent,
   type ResponseOutputItemDoneEvent,
+  type ResponseTurn,
   type SessionResponseStore,
 } from "./persistence.js";
 
@@ -20,6 +21,14 @@ export interface PersistResponseStreamOptions {
   /** Model response round within the current session turn. */
   sessionStep?: number;
   onEvent?: (event: JsonRecord) => void | Promise<void>;
+  /** Called when the response-turn staging directory is ready. */
+  onTurnStarted?: (turn: ResponseTurn) => void | Promise<void>;
+  /** Called only after the output item is durably staged. */
+  onOutputItemStaged?: (
+    turn: ResponseTurn,
+    outputIndex: number,
+    item: JsonRecord,
+  ) => void | Promise<void>;
   /** Cancels the provider request and streaming response. */
   signal?: AbortSignal;
 }
@@ -73,6 +82,7 @@ export async function persistResponseStream(
   let nextOutputIndex = 0;
 
   try {
+    await options.onTurnStarted?.(turn);
     for await (const rawEvent of stream) {
       const event = asRecord(rawEvent, "Responses stream event");
       if (options.onEvent) {
@@ -92,6 +102,7 @@ export async function persistResponseStream(
         await turn.stageOutputItem(normalizedEvent);
         stagedOutputItems.set(stagedIndex, item);
         nextOutputIndex = Math.max(nextOutputIndex, stagedIndex + 1);
+        await options.onOutputItemStaged?.(turn, stagedIndex, item);
         continue;
       }
 

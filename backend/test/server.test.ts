@@ -600,7 +600,41 @@ test("marks only append-only normalizer updates for the streaming fast path", ()
     output_index: 0,
     delta: "{}",
   });
-  assert.deepEqual(argumentGrowth?.append, {index: 2, append: "{}"});
+  assert.deepEqual(argumentGrowth?.append, {index: 2, append: "{}", outputIndex: 0});
+});
+
+test("correlates streamed deltas and staged output items with normalized parts", () => {
+  const normalizedRun = new WebUiNormalizedRun("staged-output-index");
+  const first = normalizedRun.updateForStream({
+    type: "response.output_text.delta",
+    output_index: 0,
+    delta: "first ",
+  });
+  const second = normalizedRun.updateForStream({
+    type: "response.output_text.delta",
+    output_index: 1,
+    delta: "second",
+  });
+  assert.equal(first?.outputIndex, 0);
+  assert.equal(second?.outputIndex, 1);
+  assert.deepEqual(second?.append, {index: 0, append: "second", outputIndex: 1});
+
+  const firstItem = {
+    id: "message-0",
+    type: "message",
+    role: "assistant",
+    content: [{type: "output_text", text: "first "}],
+  };
+  const secondItem = {
+    id: "message-1",
+    type: "message",
+    role: "assistant",
+    content: [{type: "output_text", text: "second"}],
+  };
+  assert.equal(normalizedRun.partIndexForOutputItem(0, firstItem), 0);
+  assert.equal(normalizedRun.partIndexForOutputItem(1, secondItem), 0);
+  assert.equal(normalizedRun.stagedOutputContent(firstItem, 0), "first ");
+  assert.equal(normalizedRun.stagedOutputContent(secondItem, 0), "second");
 });
 
 test("ignores encrypted or empty reasoning summaries in the UI stream", () => {

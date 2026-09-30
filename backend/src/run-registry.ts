@@ -9,7 +9,7 @@ import { messageAppendIncrement, messageIncrements } from "./plugins/web-ui/incr
 import type {WebUiMessageAppend} from "./plugins/web-ui/incremental-web-ui.js";
 
 import {InteractionBroker} from "./interactions.js";
-import {RunContentCache} from "./run-content-cache.js";
+import {RunContentCache, type RunContentCacheStagedReader} from "./run-content-cache.js";
 import {DEFAULT_ROOT_SERVER_SETTINGS} from "./session-roots.js";
 
 export interface RunStreamEvent {
@@ -84,6 +84,26 @@ export class SessionRun {
     return this.contentCache.read();
   }
 
+  public beginResponseContentCache(
+    directory: string,
+    responseKey: string,
+    baselineMessage?: WebUiMessage,
+  ): void {
+    this.contentCache.beginResponse(directory, responseKey, baselineMessage);
+  }
+
+  public handoffStagedOutputItem(
+    responseKey: string,
+    outputIndex: number,
+    readers: ReadonlyMap<number, RunContentCacheStagedReader>,
+  ): void {
+    this.contentCache.handoffOutputItem(responseKey, outputIndex, readers);
+  }
+
+  public commitResponseContentCache(responseKey: string, message: WebUiMessage): void {
+    this.contentCache.commitResponse(responseKey, message);
+  }
+
   public summary(): WebUiSessionRun {
     return {
       turn_id: this.turnId,
@@ -93,13 +113,17 @@ export class SessionRun {
   }
 
   /** Records the newest state and forwards what changed to every subscriber. */
-  public publishMessage(message: WebUiMessage, append?: WebUiMessageAppend): void {
+  public publishMessage(
+    message: WebUiMessage,
+    append?: WebUiMessageAppend,
+    outputIndex?: number,
+  ): void {
     const nextMessage = this.pendingInteraction === undefined
       ? message
       : {...message, pending: this.pendingInteraction};
     const previous = this.contentCache.metadata();
     const wasSpilled = this.contentCache.isSpilled;
-    const update = this.contentCache.update(nextMessage, append);
+    const update = this.contentCache.update(nextMessage, append, outputIndex);
     const stored = update.metadata;
     if (previous === undefined) {
       this.publish("ui.message", {message: nextMessage});
@@ -233,12 +257,8 @@ export class SessionRun {
   ): void {
     this.interactions.cancel("The run ended before the draft was answered.");
     this.status = status;
-    if (finalMessage !== undefined) {
-      this.contentCache.update(withoutPending(finalMessage));
-    } else if (this.latest !== undefined) {
-      this.contentCache.setMetadata(withoutPending(this.latest));
-    }
     this.terminal = events.map(retainTerminalEvent);
+    this.contentCache.finish(finalMessage === undefined ? undefined : withoutPending(finalMessage));
     for (const event of events) {
       this.emit(event);
     }

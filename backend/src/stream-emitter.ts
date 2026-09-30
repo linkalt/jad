@@ -18,39 +18,54 @@ import {
  */
 export class MessageStreamEmitter {
   private pending: WebUiMessage | undefined;
-  private pendingAppend: {index: number; startLength: number} | undefined;
+  private pendingAppend: {index: number; startLength: number; outputIndex?: number} | undefined;
   private timer: NodeJS.Timeout | undefined;
   private lastEmitAt = Number.NEGATIVE_INFINITY;
   private lastEmitted: WebUiMessage | undefined;
 
   public constructor(
     private readonly intervalMs: number,
-    private readonly emit: (message: WebUiMessage, append?: WebUiMessageAppend) => void,
+    private readonly emit: (
+      message: WebUiMessage,
+      append?: WebUiMessageAppend,
+      outputIndex?: number,
+    ) => void,
   ) {}
 
-  public push(message: WebUiMessage, append?: WebUiMessageAppend): void {
+  public push(
+    message: WebUiMessage,
+    append?: WebUiMessageAppend,
+    outputIndex?: number,
+  ): void {
+    const itemIndex = append?.outputIndex ?? outputIndex;
+    const taggedAppend = append === undefined || itemIndex === undefined
+      ? append
+      : {...append, outputIndex: itemIndex};
     if (this.intervalMs <= 0) {
       this.flush();
-      this.emitNow(message, append);
+      this.emitNow(message, taggedAppend, itemIndex);
       return;
     }
-    if (append === undefined || append.append.length === 0) {
+    if (taggedAppend === undefined || taggedAppend.append.length === 0) {
       this.flush();
-      this.emitNow(message);
+      this.emitNow(message, undefined, itemIndex);
       return;
     }
 
     const previous = this.pending ?? this.lastEmitted;
-    if (previous === undefined || messageAppendIncrement(previous, message, append) === undefined) {
+    if (previous === undefined || messageAppendIncrement(previous, message, taggedAppend) === undefined) {
       this.flush();
-      this.emitNow(message);
+      this.emitNow(message, taggedAppend, itemIndex);
       return;
     }
 
     if (this.pending !== undefined) {
-      if (this.pendingAppend?.index !== append.index) {
+      if (
+        this.pendingAppend?.index !== taggedAppend.index ||
+        this.pendingAppend?.outputIndex !== itemIndex
+      ) {
         this.flush();
-        this.emitNow(message, append);
+        this.emitNow(message, taggedAppend, itemIndex);
         return;
       }
       // Keep only the newest snapshot and the starting offset. The appended
@@ -64,17 +79,21 @@ export class MessageStreamEmitter {
     // Nothing is waiting and the window is open: the caller sees this state at
     // once instead of one tick later, so a part appears the moment it starts.
     if (this.timer === undefined && Date.now() - this.lastEmitAt >= this.intervalMs) {
-      this.emitNow(message, append);
+      this.emitNow(message, taggedAppend, itemIndex);
       return;
     }
 
-    const startLength = appendableLength(previous.parts[append.index]);
+    const startLength = appendableLength(previous.parts[taggedAppend.index]);
     if (startLength === undefined) {
-      this.emitNow(message);
+      this.emitNow(message, undefined, itemIndex);
       return;
     }
     this.pending = message;
-    this.pendingAppend = {index: append.index, startLength};
+    this.pendingAppend = {
+      index: taggedAppend.index,
+      startLength,
+      ...(itemIndex === undefined ? {} : {outputIndex: itemIndex}),
+    };
     this.schedule();
   }
 
@@ -93,10 +112,11 @@ export class MessageStreamEmitter {
           append = {
             index: pendingAppend.index,
             append: text.slice(pendingAppend.startLength),
+            ...(pendingAppend.outputIndex === undefined ? {} : {outputIndex: pendingAppend.outputIndex}),
           };
         }
       }
-      this.emitNow(pending, append);
+      this.emitNow(pending, append, pendingAppend?.outputIndex);
     }
   }
 
@@ -119,10 +139,17 @@ export class MessageStreamEmitter {
     this.timer.unref?.();
   }
 
-  private emitNow(message: WebUiMessage, append?: WebUiMessageAppend): void {
+  private emitNow(
+    message: WebUiMessage,
+    append?: WebUiMessageAppend,
+    outputIndex?: number,
+  ): void {
     this.lastEmitAt = Date.now();
     this.lastEmitted = message;
-    this.emit(message, append);
+    const taggedAppend = append === undefined || (append.outputIndex !== undefined || outputIndex === undefined)
+      ? append
+      : {...append, outputIndex};
+    this.emit(message, taggedAppend, outputIndex);
   }
 
   private clearTimer(): void {

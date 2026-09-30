@@ -22,6 +22,7 @@ import {
   type AcceptedRequestSnapshot,
   type JsonRecord,
   type ResponseInputItem,
+  type ResponseTurn,
   type SessionResponseStoreOptions,
 } from "./persistence.js";
 import {
@@ -87,6 +88,14 @@ export interface AgentRunOptions {
   /** Select a model config path allowed by the active path profile. */
   modelConfigPath?: string;
   onEvent?: (event: JsonRecord) => void | Promise<void>;
+  /** Called when a response turn's staging directory is ready for partial content. */
+  onResponseTurnStarted?: (turn: ResponseTurn) => void | Promise<void>;
+  /** Called after a response output item has been durably staged. */
+  onOutputItemStaged?: (
+    turn: ResponseTurn,
+    outputIndex: number,
+    item: JsonRecord,
+  ) => void | Promise<void>;
   /** Called after each completed or incomplete provider response is committed. */
   onResponseCommitted?: (response: PersistedResponse) => void | Promise<void>;
   /** Called after successful automatic compaction changes usage state. */
@@ -478,6 +487,8 @@ export class AgentSession {
         sessionTurn,
         sessionStep: round + 1,
         onEvent: options.onEvent,
+        onTurnStarted: options.onResponseTurnStarted,
+        onOutputItemStaged: options.onOutputItemStaged,
         signal: options.signal,
       });
       await options.onResponseCommitted?.(response);

@@ -3214,6 +3214,15 @@ export class ResponseTurn {
     return this.manifest.response_id;
   }
 
+  public async readOutputItem(outputIndex: number): Promise<JsonRecord> {
+    if (this.closed) throw new PersistenceError("turn is closed");
+    const indexEntry = this.itemIndex.get(outputIndex);
+    if (indexEntry === undefined) {
+      throw new PersistenceError(`output_index ${outputIndex} has not been staged`);
+    }
+    return await readStagedItem(this.itemsPath, indexEntry, outputIndex);
+  }
+
   public async stageOutputItem(event: ResponseOutputItemDoneEvent): Promise<void> {
     await this.operationMutex.runExclusive(async () => {
       this.assertWritable();

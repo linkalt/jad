@@ -54,7 +54,7 @@ export interface RootServerSettings {
   run_state_retention_ms: number;
   /** Coalescing window for in-progress tool-call snapshots; 0 streams every delta. */
   tool_stream_interval_ms: number;
-  /** UTF-8 content bytes retained per live-run cache before content spills to a temporary file. */
+  /** UTF-8 bytes of active-response deltas retained before spilling to responses.partial. */
   run_content_memory_bytes: number;
   /** Maximum response-buffered SSE bytes per subscriber, before reconnecting to a snapshot. */
   sse_max_buffered_bytes: number;

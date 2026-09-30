@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import {mkdtemp, readdir, rm} from "node:fs/promises";
+import {mkdtemp, readFile, readdir, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
 
 import {RunContentCache} from "../src/run-content-cache.js";
+import {SessionResponseStore} from "../src/persistence.js";
+import {persistResponseStream} from "../src/responses.js";
+import {responseParts} from "../src/plugins/web-ui/normalize-web-ui.js";
 import { SessionRunRegistry } from "../src/run-registry.js";
 import { assistantMessage, fieldsFromParts } from "../src/plugins/web-ui/shared-web-ui.js";
 import type { WebUiInteraction, WebUiMessage, WebUiPart } from "../src/plugins/web-ui/types.js";
@@ -23,6 +26,10 @@ function message(id: string, text: string, status: "streaming" | "complete"): We
 function summaryRefs(registry: SessionRunRegistry, sessionRef: string): string[] {
   const run = registry.current(sessionRef, undefined);
   return run === undefined ? [] : [run.summary().turn_id];
+}
+
+async function readPartialContent(path: string): Promise<string> {
+  return (await readFile(path)).toString("utf16le");
 }
 
 /** The message-level fields the server derives from the parts. */
@@ -445,27 +452,240 @@ test("a long stream costs the appended text, not the whole message", () => {
   registry.clear();
 });
 
-test("spills content after its UTF-8 budget and restores split surrogate appends", async () => {
+test("appends one output item's content to a single partial file until staging", async () => {
   const root = await mkdtemp(join(tmpdir(), "web-ui-run-content-cache-"));
-  const cacheDirectory = join(root, "profile-a", "staging", "web-ui-runs");
-  const cache = new RunContentCache({directory: cacheDirectory, memoryBytes: 4});
+  const responseDirectory = join(root, "profile-a", "staging", "web-turn-cache");
+  const cache = new RunContentCache({directory: join(root, "web-ui-runs"), memoryBytes: 4});
   try {
-    const partial = message("turn-cache", "prefix \\ud83d", "streaming");
-    cache.update(partial);
+    cache.beginResponse(
+      responseDirectory,
+      "web-turn-cache",
+      withParts("turn-cache", [{type: "reasoning", text: ""}]),
+    );
+    const firstDelta = 'prefix "quoted" \\ slash\n \ud83d';
+    let currentText = firstDelta;
+    cache.update(
+      withParts("turn-cache", [{type: "reasoning", text: currentText}]),
+      {index: 0, append: firstDelta, outputIndex: 0},
+    );
     assert.equal(cache.isSpilled, true);
     assert.equal(cache.metadata()?.text, "");
     const cachedPart = cache.metadata()?.parts[0];
-    assert.equal(cachedPart?.type === "text" ? cachedPart.text : undefined, "");
+    assert.equal(cachedPart?.type === "reasoning" ? cachedPart.text : undefined, "");
 
-    const complete = message("turn-cache", "prefix 😀", "streaming");
-    cache.update(complete, {index: 0, append: "\\ude00"});
-    assert.deepEqual(await cache.read(), complete);
-    assert.equal((await readdir(cacheDirectory)).length, 1);
+    const partialPath = join(responseDirectory, "responses.partial");
+    assert.equal(await readPartialContent(partialPath), currentText);
+    const lowSurrogate = "\ude00";
+    currentText += lowSurrogate;
+    cache.update(
+      withParts("turn-cache", [{type: "reasoning", text: currentText}]),
+      {index: 0, append: lowSurrogate, outputIndex: 0},
+    );
+    for (let index = 0; index < 1_000; index += 1) {
+      const append = index === 17 ? ' quote " backslash \\ newline\n' : ` chunk-${index}`;
+      currentText += append;
+      cache.update(
+        withParts("turn-cache", [{type: "reasoning", text: currentText}]),
+        {index: 0, append, outputIndex: 0},
+      );
+    }
+    assert.equal(await readPartialContent(partialPath), currentText);
+    assert.deepEqual(await cache.read(), withParts("turn-cache", [{type: "reasoning", text: currentText}]));
+
+    cache.handoffOutputItem(
+      "web-turn-cache",
+      0,
+      new Map([[0, {read: async () => currentText, codeUnits: currentText.length}]]),
+    );
+    await assert.rejects(readFile(partialPath), {code: "ENOENT"});
+    assert.deepEqual(await cache.read(), withParts("turn-cache", [{type: "reasoning", text: currentText}]));
+    assert.deepEqual(await readdir(responseDirectory), []);
+
+    const toolArguments = '{"path":"sample.txt"}';
+    const toolCall: WebUiPart = {
+      type: "tool_call",
+      callId: "call-1",
+      name: "read",
+      arguments: toolArguments,
+    };
+    const withToolCall = withParts("turn-cache", [
+      {type: "reasoning", text: currentText},
+      toolCall,
+    ]);
+    cache.update(withToolCall, {index: 1, append: toolArguments, outputIndex: 1});
+    assert.equal(await readPartialContent(partialPath), toolArguments);
+    cache.handoffOutputItem(
+      "web-turn-cache",
+      1,
+      new Map([[1, {read: async () => toolArguments, codeUnits: toolArguments.length}]]),
+    );
+    await assert.rejects(readFile(partialPath), {code: "ENOENT"});
+    assert.deepEqual(await cache.read(), withToolCall);
+
+    const assistantText = "The requested result is ready.";
+    const assistant = withParts("turn-cache", [
+      {type: "reasoning", text: currentText},
+      toolCall,
+      {type: "text", text: assistantText},
+    ]);
+    cache.update(assistant, {index: 2, append: assistantText, outputIndex: 2});
+    assert.equal(await readPartialContent(partialPath), assistantText);
+    cache.handoffOutputItem(
+      "web-turn-cache",
+      2,
+      new Map([[2, {read: async () => assistantText, codeUnits: assistantText.length}]]),
+    );
+    await assert.rejects(readFile(partialPath), {code: "ENOENT"});
+    assert.deepEqual(await cache.read(), assistant);
+
+    const finalMessage = withParts(
+      "turn-cache",
+      [
+        {type: "reasoning", text: currentText},
+        toolCall,
+        {type: "text", text: assistantText},
+      ],
+      "complete",
+    );
+    cache.commitResponse("web-turn-cache", finalMessage);
+    assert.deepEqual(await cache.read(), finalMessage);
+    assert.deepEqual(await readdir(responseDirectory), []);
 
     cache.dispose();
-    assert.deepEqual(await readdir(cacheDirectory), []);
+    assert.deepEqual(await readdir(responseDirectory), []);
   } finally {
     cache.dispose();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("replaces an active item's cached content with its authoritative final snapshot", async () => {
+  const root = await mkdtemp(join(tmpdir(), "web-ui-run-final-item-"));
+  const cacheDirectory = join(root, "profile", "staging", "web-ui-runs");
+  const registry = new SessionRunRegistry(60_000, 4);
+  try {
+    const run = registry.begin(
+      "session1", "profile", "turn-final-item", new AbortController(), cacheDirectory,
+    );
+    run.beginResponseContentCache(
+      cacheDirectory,
+      "response-final-item",
+      message("turn-final-item", "", "streaming"),
+    );
+    const streamed = "partial provider text";
+    run.publishMessage(
+      message("turn-final-item", streamed, "streaming"),
+      {index: 0, append: streamed, outputIndex: 0},
+    );
+
+    const authoritative = "authoritative staged output";
+    run.publishMessage(message("turn-final-item", authoritative, "streaming"), undefined, 0);
+    assert.deepEqual(
+      await run.readLatestMessage(),
+      message("turn-final-item", authoritative, "streaming"),
+    );
+    assert.equal(
+      await readPartialContent(join(cacheDirectory, "responses.partial")),
+      authoritative,
+    );
+  } finally {
+    registry.clear();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("hands off partial deltas to staged output and replays them until commit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "web-ui-run-stage-handoff-"));
+  const cache = new RunContentCache({
+    directory: join(root, "profile", "staging", "web-ui-runs"),
+    memoryBytes: 4,
+  });
+  let store: SessionResponseStore | undefined;
+  let responseKey = "";
+  let streamedText = "";
+  let stagedSnapshot: WebUiMessage | undefined;
+  const deltas = ['hello "quoted" ', `path ${String.fromCharCode(0x5c)}`, "\n 😀"];
+  const text = deltas.join("");
+  const outputItem = {
+    id: "msg-handoff",
+    type: "message",
+    role: "assistant",
+    content: [{type: "output_text", text}],
+  };
+  const completed = {
+    type: "response.completed",
+    response: {
+      id: "resp-handoff",
+      object: "response",
+      status: "completed",
+      model: "gpt-test",
+      usage: {input_tokens: 12, output_tokens: 4},
+      output: [outputItem],
+    },
+  };
+  try {
+    store = await SessionResponseStore.open(root, {
+      messagesPath: "profile/messages.jsonl",
+      stagingDir: "profile/staging",
+    });
+    const stream = async function* (): AsyncGenerator<unknown> {
+      yield {type: "response.created", response: {id: "resp-handoff"}};
+      for (const delta of deltas) {
+        yield {type: "response.output_text.delta", output_index: 0, delta};
+      }
+      yield {type: "response.output_item.done", output_index: 0, item: outputItem};
+      yield completed;
+    };
+    await persistResponseStream(store, stream(), {
+      turnId: "web-handoff",
+      onTurnStarted: (turn) => {
+        responseKey = turn.turnDir;
+        cache.beginResponse(
+          turn.turnDir,
+          responseKey,
+          message("turn-handoff", "", "streaming"),
+        );
+      },
+      onEvent: (event) => {
+        if (event.type !== "response.output_text.delta" || typeof event.delta !== "string") return;
+        streamedText += event.delta;
+        cache.update(
+          message("turn-handoff", streamedText, "streaming"),
+          {index: 0, append: event.delta, outputIndex: 0},
+        );
+      },
+      onOutputItemStaged: async (turn, outputIndex) => {
+        const readStagedContent = async () => {
+          const stagedItem = await turn.readOutputItem(outputIndex);
+          const part = responseParts({
+            type: "response.completed",
+            response: {output: [stagedItem]},
+          })[0];
+          return part?.type === "text" ? part.text : "";
+        };
+        cache.handoffOutputItem(
+          responseKey,
+          outputIndex,
+          new Map([[0, {read: readStagedContent, codeUnits: text.length}]]),
+        );
+        stagedSnapshot = await cache.read();
+        await assert.rejects(
+          readFile(join(turn.turnDir, "responses.partial")),
+          {code: "ENOENT"},
+        );
+      },
+    });
+
+    assert.deepEqual(stagedSnapshot, message("turn-handoff", text, "streaming"));
+    assert.notEqual(responseKey, "");
+    cache.commitResponse(responseKey, message("turn-handoff", text, "complete"));
+    assert.deepEqual(await cache.read(), message("turn-handoff", text, "complete"));
+    const transcript = await readFile(join(root, "profile", "messages.jsonl"), "utf8");
+    assert.ok(transcript.includes("response.completed"));
+    assert.ok(transcript.includes("output_text"));
+  } finally {
+    cache.dispose();
+    await store?.close();
     await rm(root, {recursive: true, force: true});
   }
 });
@@ -484,8 +704,24 @@ test("spilled profile run snapshots replay independently and survive terminal re
     );
     const masterText = "master stream with enough content to spill";
     const alternateText = "alternate stream remains private";
-    master.publishMessage(message("turn-master", masterText, "streaming"));
-    alternate.publishMessage(message("turn-alternate", alternateText, "streaming"));
+    master.beginResponseContentCache(
+      masterDirectory,
+      "master-response",
+      message("turn-master", "", "streaming"),
+    );
+    alternate.beginResponseContentCache(
+      alternateDirectory,
+      "alternate-response",
+      message("turn-alternate", "", "streaming"),
+    );
+    master.publishMessage(
+      message("turn-master", masterText, "streaming"),
+      {index: 0, append: masterText, outputIndex: 0},
+    );
+    alternate.publishMessage(
+      message("turn-alternate", alternateText, "streaming"),
+      {index: 0, append: alternateText, outputIndex: 0},
+    );
     assert.equal(master.latest?.text, "");
     assert.equal(alternate.latest?.text, "");
 
@@ -543,7 +779,15 @@ test("spilled non-append updates publish only the changed full part", async () =
       "session1", "profile", "turn-parts", new AbortController(), cacheDirectory,
     );
     const existing: WebUiPart = {type: "text", text: "a long enough streamed answer"};
-    run.publishMessage(withParts("turn-parts", [existing]));
+    run.beginResponseContentCache(
+      cacheDirectory,
+      "parts-response",
+      withParts("turn-parts", [{type: "text", text: ""}]),
+    );
+    run.publishMessage(
+      withParts("turn-parts", [existing]),
+      {index: 0, append: existing.text, outputIndex: 0},
+    );
 
     const events: Array<{event: string; data: unknown}> = [];
     const subscription = run.subscribe((event) => events.push(event));

@@ -363,6 +363,7 @@ export function normalizeWebUiSession(
 export interface WebUiNormalizedStreamUpdate {
   message: WebUiMessage;
   append?: WebUiMessageAppend;
+  outputIndex?: number;
 }
 
 export class WebUiNormalizedRun {
@@ -374,6 +375,8 @@ export class WebUiNormalizedRun {
   // tool part is keyed by its call id, so the two have to be correlated.
   private readonly callIdsByItemId = new Map<string, string>();
   private readonly callIdsByOutputIndex = new Map<number, string>();
+  private readonly partIndexesByItemId = new Map<string, number>();
+  private readonly partIndexesByOutputIndex = new Map<number, number>();
 
   public constructor(private readonly messageId: string) {
     this.timestamp = new Date().toLocaleTimeString([], {
@@ -389,6 +392,10 @@ export class WebUiNormalizedRun {
   public updateForStream(event: JsonRecord): WebUiNormalizedStreamUpdate | undefined {
     if (event.type === "response.created") {
       const response = isRecord(event.response) ? event.response : undefined;
+      this.callIdsByItemId.clear();
+      this.callIdsByOutputIndex.clear();
+      this.partIndexesByItemId.clear();
+      this.partIndexesByOutputIndex.clear();
       this.ensureCurrentStep(typeof response?.id === "string" ? response.id : undefined);
       return undefined;
     }
@@ -399,10 +406,13 @@ export class WebUiNormalizedRun {
       this.ensureCurrentStep();
       this.parts = appendTextPart(this.parts, "text", textDelta);
       this.updateCurrentStep();
+      const index = this.parts.length - 1;
+      const outputIndex = this.outputIndexForEvent(event);
+      this.rememberPartIndex(event, index);
       const append = previousPart?.type === "text" && textDelta.trim().length > 0
-        ? {index: this.parts.length - 1, append: textDelta}
+        ? {index, append: textDelta, ...(outputIndex === undefined ? {} : {outputIndex})}
         : undefined;
-      return this.streamingUpdate(append);
+      return this.streamingUpdate(append, outputIndex);
     }
 
     const reasoningDelta = reasoningDeltaFromEvent(event);
@@ -411,10 +421,13 @@ export class WebUiNormalizedRun {
       this.ensureCurrentStep();
       this.parts = appendTextPart(this.parts, "reasoning", reasoningDelta);
       this.updateCurrentStep();
+      const index = this.parts.length - 1;
+      const outputIndex = this.outputIndexForEvent(event);
+      this.rememberPartIndex(event, index);
       const append = previousPart?.type === "reasoning" && reasoningDelta.trim().length > 0
-        ? {index: this.parts.length - 1, append: reasoningDelta}
+        ? {index, append: reasoningDelta, ...(outputIndex === undefined ? {} : {outputIndex})}
         : undefined;
-      return this.streamingUpdate(append);
+      return this.streamingUpdate(append, outputIndex);
     }
 
     if (event.type === "response.output_item.added" && isRecord(event.item)) {
@@ -422,11 +435,18 @@ export class WebUiNormalizedRun {
       const call = toolCallPartFromAddedItem(event.item, this.parts.length);
       if (call !== undefined) {
         this.rememberToolCall(call.callId, event, event.item);
+        const outputIndex = this.outputIndexForEvent(event);
         if (!this.hasToolCall(call.callId)) {
           this.parts = appendToolPart(this.parts, call);
           this.updateCurrentStep(true);
-          return this.streamingUpdate();
+          const index = this.parts.length - 1;
+          this.rememberPartIndex(event, index, event.item);
+          return this.streamingUpdate(undefined, outputIndex);
         }
+        const index = this.parts.findIndex(
+          (part) => part.type === "tool_call" && part.callId === call.callId,
+        );
+        if (index >= 0) this.rememberPartIndex(event, index, event.item);
       }
       return undefined;
     }
@@ -440,11 +460,13 @@ export class WebUiNormalizedRun {
         );
         const previousPart = this.parts[index];
         if (previousPart?.type === "tool_call") {
+          const outputIndex = this.outputIndexForEvent(event);
+          this.rememberPartIndex(event, index);
           const append = previousPart.partial === true && argumentsDelta.length > 0
-            ? {index, append: argumentsDelta}
+            ? {index, append: argumentsDelta, ...(outputIndex === undefined ? {} : {outputIndex})}
             : undefined;
           this.updateToolArguments(callId, (current) => `${current}${argumentsDelta}`, true);
-          return this.streamingUpdate(append);
+          return this.streamingUpdate(append, outputIndex);
         }
       }
       return undefined;
@@ -454,26 +476,37 @@ export class WebUiNormalizedRun {
     if (argumentsDone !== undefined) {
       const callId = this.toolCallIdForEvent(event);
       if (callId !== undefined && this.hasToolCall(callId)) {
+        const index = this.parts.findIndex(
+          (part) => part.type === "tool_call" && part.callId === callId,
+        );
+        const outputIndex = this.outputIndexForEvent(event);
+        if (index >= 0) this.rememberPartIndex(event, index);
         this.updateToolArguments(callId, () => argumentsDone, false);
-        return this.streamingUpdate();
+        return this.streamingUpdate(undefined, outputIndex);
       }
       return undefined;
     }
 
     if (event.type === "response.output_item.done" && isRecord(event.item)) {
       this.ensureCurrentStep();
+      const outputIndex = this.outputIndexForEvent(event);
       const call = toolCallPartFromAnyOutput(event.item, this.parts.length);
       if (call !== undefined) {
         this.rememberToolCall(call.callId, event, event.item);
         if (this.hasToolCall(call.callId)) {
           // The finished item is authoritative: it replaces whatever arrived as
           // deltas and clears the partial marker.
+          const index = this.parts.findIndex(
+            (part) => part.type === "tool_call" && part.callId === call.callId,
+          );
+          if (index >= 0) this.rememberPartIndex(event, index, event.item);
           this.updateToolArguments(call.callId, () => call.arguments, false, call.name);
         } else {
           this.parts = appendToolPart(this.parts, call);
+          this.rememberPartIndex(event, this.parts.length - 1, event.item);
         }
         this.updateCurrentStep(true);
-        return this.streamingUpdate();
+        return this.streamingUpdate(undefined, outputIndex);
       }
     }
 
@@ -522,6 +555,50 @@ export class WebUiNormalizedRun {
     );
     this.updateCurrentStep(completedParts.some((part) => part.type === "tool_call"));
     return this.message("complete");
+  }
+
+  public partIndexForOutputItem(outputIndex: number, item: JsonRecord): number | undefined {
+    const mapped = this.partIndexesByOutputIndex.get(outputIndex);
+    if (mapped !== undefined) return mapped;
+    const itemId = typeof item.id === "string" && item.id.length > 0 ? item.id : undefined;
+    if (itemId !== undefined) {
+      const byId = this.partIndexesByItemId.get(itemId);
+      if (byId !== undefined) return byId;
+    }
+
+    const normalized = this.outputPartsForItem(item);
+    const outputPart = normalized[0];
+    if (outputPart === undefined) return undefined;
+    if (outputPart.type === "tool_call") {
+      const callIndex = this.parts.findIndex(
+        (part) => part.type === "tool_call" && part.callId === outputPart.callId,
+      );
+      return callIndex >= 0 ? callIndex : undefined;
+    }
+    for (let index = this.parts.length - 1; index >= 0; index -= 1) {
+      if (samePartIdentity(this.parts[index]!, outputPart)) return index;
+    }
+    return undefined;
+  }
+
+  public stagedOutputContent(item: JsonRecord, partIndex: number): string | undefined {
+    const target = this.parts[partIndex];
+    if (target === undefined) return undefined;
+    const source = this.outputPartsForItem(item).find((part) => samePartIdentity(part, target));
+    if (source === undefined) return undefined;
+    switch (source.type) {
+      case "text":
+      case "reasoning":
+        return source.text;
+      case "tool_call":
+        return source.arguments;
+      case "tool_result":
+        return source.output;
+    }
+  }
+
+  private outputPartsForItem(item: JsonRecord): WebUiPart[] {
+    return responseParts({type: "response.completed", response: {output: [item]}});
   }
 
   private ensureCurrentStep(id?: string): WebUiMessageStep {
@@ -582,6 +659,24 @@ export class WebUiNormalizedRun {
     }
   }
 
+  private outputIndexForEvent(event: JsonRecord): number | undefined {
+    return typeof event.output_index === "number" && Number.isSafeInteger(event.output_index)
+      ? event.output_index
+      : undefined;
+  }
+
+  private rememberPartIndex(event: JsonRecord, partIndex: number, item?: JsonRecord): void {
+    const outputIndex = this.outputIndexForEvent(event);
+    if (outputIndex !== undefined) this.partIndexesByOutputIndex.set(outputIndex, partIndex);
+    const eventItemId = typeof event.item_id === "string" && event.item_id.length > 0
+      ? event.item_id
+      : undefined;
+    const itemId = eventItemId ?? (
+      typeof item?.id === "string" && item.id.length > 0 ? item.id : undefined
+    );
+    if (itemId !== undefined) this.partIndexesByItemId.set(itemId, partIndex);
+  }
+
   private toolCallIdForEvent(event: JsonRecord): string | undefined {
     const {itemId, outputIndex} = toolCallStreamTarget(event);
     if (itemId !== undefined) {
@@ -616,14 +711,32 @@ export class WebUiNormalizedRun {
     });
   }
 
-  private streamingUpdate(append?: WebUiMessageAppend): WebUiNormalizedStreamUpdate {
+  private streamingUpdate(
+    append?: WebUiMessageAppend,
+    outputIndex?: number,
+  ): WebUiNormalizedStreamUpdate {
     const message = this.streamingMessage();
-    return append === undefined ? {message} : {message, append};
+    return {
+      message,
+      ...(append === undefined ? {} : {append}),
+      ...(outputIndex === undefined ? {} : {outputIndex}),
+    };
   }
 
-  private streamingMessage(): WebUiMessage {
+  public streamingMessage(): WebUiMessage {
     return this.message("streaming");
   }
+}
+
+function samePartIdentity(left: WebUiPart, right: WebUiPart): boolean {
+  if (left.type !== right.type) return false;
+  if (left.type === "tool_call" && right.type === "tool_call") {
+    return left.callId === right.callId;
+  }
+  if (left.type === "tool_result" && right.type === "tool_result") {
+    return left.callId === right.callId;
+  }
+  return true;
 }
 
 /** A finished message never carries the in-progress marker. */

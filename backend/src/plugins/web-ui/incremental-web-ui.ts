@@ -38,6 +38,8 @@ function sameSteps(
 export interface WebUiMessageAppend {
   index: number;
   append: string;
+  /** Provider Responses output item index; internal cache metadata, not sent over SSE. */
+  outputIndex?: number;
 }
 
 export function messageAppendIncrement(

@@ -60,6 +60,31 @@ test("coalesces a burst of growing tool arguments into one emit", () => {
   emitter.discard();
 });
 
+test("keeps response output-item deltas separate across the coalescing window", () => {
+  const sent: Array<{outputIndex?: number; append?: {index: number; append: string}}> = [];
+  const emitter = new MessageStreamEmitter(60_000, (_message, append, outputIndex) => {
+    sent.push({
+      ...(outputIndex === undefined ? {} : {outputIndex}),
+      ...(append === undefined ? {} : {append}),
+    });
+  });
+
+  emitter.push(message([{type: "text", text: ""}]));
+  emitter.push(
+    message([{type: "text", text: "first"}]),
+    {index: 0, append: "first", outputIndex: 0},
+  );
+  emitter.push(
+    message([{type: "text", text: "first second"}]),
+    {index: 0, append: " second", outputIndex: 1},
+  );
+
+  assert.deepEqual(sent.map((event) => event.outputIndex), [undefined, 0, 1]);
+  assert.deepEqual(sent[1]?.append, {index: 0, append: "first", outputIndex: 0});
+  assert.deepEqual(sent[2]?.append, {index: 0, append: " second", outputIndex: 1});
+  emitter.discard();
+});
+
 test("coalesces streamed text and publishes a new part at once", () => {
   const sent: WebUiMessage[] = [];
   const emitter = new MessageStreamEmitter(60_000, (value) => sent.push(value));

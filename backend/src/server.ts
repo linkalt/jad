@@ -67,6 +67,7 @@ import type {
 import {WebUiSessionViewCache} from "./plugins/web-ui/view-cache.js";
 import {parseInteractionExtendRequest, parseInteractionReplyRequest} from "./interactions.js";
 import { SessionRunRegistry, type SessionRun } from "./run-registry.js";
+import type {RunContentCacheStagedReader} from "./run-content-cache.js";
 import { collectSessionFiles } from "./session-files.js";
 import { MessageStreamEmitter } from "./stream-emitter.js";
 import {writeSse} from "./sse-writer.js";
@@ -1932,7 +1933,7 @@ class AgentHttpApplication {
     );
     const emitter = new MessageStreamEmitter(
       this.toolStreamIntervalMs,
-      (message, append) => run.publishMessage(message, append),
+      (message, append, outputIndex) => run.publishMessage(message, append, outputIndex),
     );
     const completion = this.executeSessionRun({
       handle,
@@ -1964,6 +1965,7 @@ class AgentHttpApplication {
     const reference = handle.location.ref;
     try {
       const normalizedRun = new WebUiNormalizedRun(turnId);
+      let activeResponseKey: string | undefined;
       const publishUsage = async () => {
         try {
           const usage = await handle.session.readUsageSummary();
@@ -1986,13 +1988,50 @@ class AgentHttpApplication {
             }
           : {}),
         ...(options.modelConfigPath === undefined ? {} : {modelConfigPath: options.modelConfigPath}),
+        onResponseTurnStarted: (turn) => {
+          activeResponseKey = turn.turnDir;
+          run.beginResponseContentCache(
+            turn.turnDir,
+            activeResponseKey,
+            normalizedRun.streamingMessage(),
+          );
+        },
         onEvent: (event) => {
           const update = normalizedRun.updateForStream(event);
           if (update) {
-            emitter.push(update.message, update.append);
+            emitter.push(update.message, update.append, update.outputIndex);
           }
         },
-        onResponseCommitted: publishUsage,
+        onOutputItemStaged: async (turn, outputIndex, item) => {
+          emitter.flush();
+          const readers = new Map<number, RunContentCacheStagedReader>();
+          const partIndex = normalizedRun.partIndexForOutputItem(outputIndex, item);
+          if (partIndex !== undefined) {
+            const stagedContent = normalizedRun.stagedOutputContent(item, partIndex) ?? "";
+            const readStagedContent = async () => {
+              const stagedItem = await turn.readOutputItem(outputIndex);
+              return normalizedRun.stagedOutputContent(stagedItem, partIndex) ?? "";
+            };
+            readers.set(partIndex, {read: readStagedContent, codeUnits: stagedContent.length});
+          }
+          try {
+            // The item is durable now. Retire its partial file even when it has
+            // no Web UI content part, before the next output item can stream.
+            run.handoffStagedOutputItem(turn.turnDir, outputIndex, readers);
+          } catch (error) {
+            console.warn(
+              `[web-ui-run-cache] staged handoff failed session=${reference} turn=${turnId} output_index=${outputIndex}: ${errorMessage(error)}`,
+            );
+          }
+        },
+        onResponseCommitted: async () => {
+          emitter.flush();
+          if (activeResponseKey !== undefined) {
+            run.commitResponseContentCache(activeResponseKey, normalizedRun.streamingMessage());
+            activeResponseKey = undefined;
+          }
+          await publishUsage();
+        },
         onUsageChanged: publishUsage,
         onToolResult: (item) => {
           const message = normalizedRun.toolResult(item);
