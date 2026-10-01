@@ -1,8 +1,16 @@
-# Streaming content cache: correctness fixes and optimized implementation plan
+# Streaming content cache: audit, fixes, and implementation record
 
-Status: **implemented in the working tree; backend suite 452/452 passed; uncommitted**.
+Status: **follow-up fixes implemented in the working tree; backend suite 455/455 and focused suite 125/125 passed; generated `messages.jsonl` corpus is byte-identical to `ea77880`; uncommitted**. A three-run local interleaving benchmark (1.024 MB, two items) measured median append/compaction 28.65 ms, replay 3.52 ms, and staged-range retirement 3.54 ms. `git diff --check` and schema JSON validation pass; backend was not restarted.
 
-Audit baseline: commit `70c5de7` (`Store streamed output in one partial content file`). The audited streaming source files also matched the working tree at `d07d9a9`; that later commit concerns request-draft decline descriptions. This document does not claim that the proposed implementation exists.
+Audit baseline: commit `70c5de7` (`Store streamed output in one partial content file`). The earlier first-delta, cache-I/O, and commit-handoff fixes are in `ea77880` (`Fix streaming content cache correctness and buffering`). This document records those audit findings plus the follow-up interleaving and crash-orphan fixes currently in progress.
+
+## Current implementation status
+
+- One content-only UTF-16LE `responses.partial` file can hold multiple active output-item ranges. In-memory ranges and ordered per-part contributions reconstruct interleaved updates; staged item ranges are removed and remaining data compacted.
+- The writer maintains a PID/hostname owner sidecar. Opening a response store removes partial/compaction files only when a same-host owner process is confirmed exited; provider staging and live/unknown-owner caches are preserved.
+- `server.run_content_max_index_segments` defaults to `1024` and bounds range metadata. At the cache contribution-index cap, the run uses a correctness-first normalized-message fallback.
+- The configured content budget is not a total-process-RAM cap; the provider/normalizer and snapshot materialization still retain content. Legacy or unknown-owner files cannot be safely scavenged automatically.
+- No canonical `messages.jsonl` serialization change is intended. Full backend tests and final compatibility checks are pending.
 
 ## 1. Goal and scope
 
@@ -11,15 +19,15 @@ Implement a correct, efficient live Web UI cache without creating a second trans
 Required lifecycle:
 
 ```text
-reasoning deltas -> bounded memory -> responses.partial -> durable staged item -> delete partial
-function arguments -> bounded memory -> responses.partial -> durable staged item -> delete partial
-assistant deltas -> bounded memory -> responses.partial -> durable staged item -> delete partial
+reasoning/text/tool deltas -> bounded memory -> shared responses.partial content ranges
+output_item.done -> durable staging -> switch that item to its staged reader
+                  -> remove that item's ranges and compact remaining ranges
 response.completed -> canonical messages.jsonl commit -> safe staging cleanup
 ```
 
-Small output items may never need a partial file. There is at most one active `responses.partial` file in a response-turn staging directory. Reuse that filename only after the previous item's readers and writer have finished.
+Small output items may never need a partial file. There is at most one long-lived `responses.partial` per response-turn staging directory, and it may contain ranges for multiple interleaved output items. A staged item's ranges are retired only after in-flight snapshots finish; the shared file is deleted when no active partial-backed ranges remain. Compaction may briefly create one `responses.partial.compact` temporary file.
 
-The partial file contains **only concatenated content**, in UTF-16LE, preserving the encoding used by the audited implementation. It has no JSON object, JSONL record, separator, event header, chunk index, or per-chunk offset map. The in-memory normalized scheme identifies what that content belongs to.
+The `responses.partial` file contains **only raw UTF-16LE content**. It has no JSON object, JSONL record, delimiter, event header, or on-disk index. Small in-memory item ranges and ordered per-part contribution segments identify which content belongs to each item and preserve stream order; there is no per-provider-delta record log. A separate tiny owner sidecar protects live files during startup cleanup; it contains no content.
 
 ### Non-goals
 
@@ -65,18 +73,16 @@ output_item.done
   -> cache hands off to staged readers and removes partial
 
 response.completed
-  -> ResponseTurn.commit
-  -> canonical append, turn closed, staging removed
-  -> persistOpenAIResponse returns
-  -> AgentSession.onResponseCommitted
-  -> cache switches to committed snapshot
+  -> ResponseTurn.commit appends the canonical response
+  -> pre-cleanup observer installs the committed Web UI baseline
+  -> staged readers drain and staging is removed
 ```
 
-Two architectural problems follow: cache ingestion currently depends on the SSE coalescer, and the committed replay handoff occurs after its old staging source has already been closed/deleted.
+The original audit found cache-ingestion and commit-cleanup ordering defects; those are fixed in `ea77880`. This follow-up addresses the two remaining gaps from that implementation: interleaved-item fallback and crash-orphaned partial files.
 
-## 3. Confirmed audit bugs
+## 3. Confirmed audit bugs at `70c5de7`
 
-All three findings are confirmed by isolated reproductions. They are stored separately as `bug_report` memory records. The reproduction files below are temporary audit artifacts, not committed tests; implementation must convert them into repository regression tests.
+All three findings were confirmed by isolated reproductions and recorded separately as `bug_report` memory records. They are historical failures of the audit baseline; `ea77880` fixes them and adds repository regressions. The reproduction files mentioned below were temporary audit artifacts, not committed tests.
 
 ### B1. High: first chunk omitted; initial oversized snapshot bypasses spilling
 
@@ -149,6 +155,20 @@ Fix requirements:
 4. If a snapshot's source becomes unavailable, retry a consistent source; never substitute blank content as a successful snapshot.
 5. Test both a reconnect at the cleanup boundary and a staged read already in flight.
 
+### B4. Interleaved items disabled spilling in the correctness fallback
+
+At `ea77880`, starting another unstaged output item while a partial item existed disabled the cache and retained the complete normalized message in memory. That preserved the UI snapshot but bypassed the configured cache-content threshold for interleaved streams.
+
+The current working-tree fix keeps one raw content file and maps active item/part identities to in-memory file ranges. Each normalized part also retains an ordered list of coalesced item-contribution segments, so reconnect replay preserves `A1, B1, A2` order when item A and item B interleave in one merged UI part. Once an item is durably staged, its contributions switch to the staged reader and its ranges are removed/compacted. No provider-event envelope or JSONL record is written.
+
+`server.run_content_max_index_segments` bounds range metadata. If the per-part contribution index reaches that limit, the cache deliberately falls back to the complete normalized snapshot rather than corrupting the response or failing the provider run. This rare fallback is a documented exception to the cache content budget, not a total-process-memory guarantee.
+
+### B5. Crash-leftover partial files had no startup scavenger
+
+At `ea77880`, ordinary staging/handoff/retention cleanup removed `responses.partial`, but an abrupt process exit could leave the file in an incomplete turn directory. Persistence recovery retains incomplete staged turns to preserve provider output, so it could not safely delete the whole directory or infer cache ownership.
+
+The current working-tree fix creates a small `responses.partial.owner` sidecar with the local hostname and PID before opening the content file. `SessionResponseStore.open()` scans immediate response-turn directories and, under a per-turn cleanup lock, removes only `responses.partial`, its temporary compaction file, and owner sidecar when the recorded same-host process is confirmed exited. It leaves manifests, staged items, and other response-recovery data untouched. Live, remote, malformed, and unowned caches are preserved; a PID reused by another process may therefore delay cleanup rather than risk deleting live data.
+
 ## 4. Recommended design and invariants
 
 ### 4.1 Share normalized coalescing and cache admission
@@ -195,36 +215,41 @@ An append hint used to avoid SSE diffing is not the cache's source of truth. An 
 
 ### 4.3 State machine
 
-One cache coordinator per `(session, profile, run)`, with one active partial-file owner per response turn:
+One cache coordinator per `(session, profile, run)` and one shared partial-file generation per Responses turn. The file can index multiple active item/part identities:
 
 ```text
-IDLE
-  -> BUFFERED                   first content mutation
-  -> SPILLED                    threshold crossed or immediate-spill policy
-  -> STAGING                    output_item.done received
-  -> STAGED                     authoritative output durable and source switched
-  -> IDLE                       previous partial writer/readers retired
+per output item:
+  IDLE -> BUFFERED                 first content mutation
+        -> SPILLED                 combined cache threshold crossed
+        -> STAGING                 output_item.done received
+        -> STAGED                  durable reader installed; its file ranges retired
+
+shared response file:
+  ABSENT -> responses.partial      first active item spills
+          -> compacted partial     staged ranges removed; other active ranges remain
+          -> ABSENT                last partial-backed item is staged or run is disposed
 
 STAGED sources for a response
-  -> COMMITTED_BASELINE         canonical transcript committed, before cleanup
-  -> staging cleanup            no reader can still depend on that staging
+  -> COMMITTED_BASELINE            canonical append succeeded, before staging cleanup
+  -> staging cleanup              no reader can still depend on that staging
 
 any active state
-  -> FALLBACK_MEMORY            optional cache I/O failure / unsupported interleaving
-  -> DISPOSED                   run retired; asynchronous cleanup drained
+  -> FALLBACK_MEMORY               cache I/O failure or contribution-index cap
+  -> DISPOSED                      run retired; asynchronous cleanup drained
 ```
 
-An item that stays below the threshold goes directly from `BUFFERED` to `STAGING`; it never creates a partial file.
+When the combined active content stays below threshold and no other item has spilled, staging can complete without creating a partial file. Once spilled, new item deltas share the writer and its bounded admission queue.
 
 Invariants:
 
-1. At most one partial filename/file handle belongs to the active response coordinator.
-2. A file contains content for one supported output-content projection only.
-3. Every accepted delta is represented exactly once in the current replay source.
+1. At most one long-lived `responses.partial` filename/file handle belongs to a response coordinator; compaction may use one transient `.compact` file.
+2. The content file is raw UTF-16LE. Item ranges and normalized-part contribution ordering exist only in memory.
+3. Every accepted content delta is represented exactly once in the active range or staged source used by replay.
 4. Every read uses metadata and content from the same logical snapshot boundary.
-5. No old file operation can write into a reused filename or delete a newer generation.
-6. Staging and canonical transcript durability remain owned by `ResponseTurn`.
-7. Snapshot retries and cache failures never trigger a duplicate provider request, tool execution, or canonical append.
+5. A staged item switches to its authoritative reader before its ranges are removed; existing snapshot readers drain before compaction.
+6. No old file operation can write into a reused filename or delete a newer generation.
+7. Staging and canonical transcript durability remain owned by `ResponseTurn`.
+8. Snapshot retries and cache failures never trigger a duplicate provider request, tool execution, or canonical append.
 
 ### 4.4 Small metadata, not growing duplicate snapshots
 
@@ -238,7 +263,9 @@ Keep these in memory:
 - Buffer accounting, current writer state, and reader lease counts.
 - Pending interaction, run status, and usage metadata.
 
-Do not keep a second cumulative copy of active text just to drive appends. Do not retain a per-delta manifest. If adjacent normalized text parts merge across output items, compose a part from its baseline, ordered staged-item contributions, and current active content. That is an **item-level source list**, not a chunk-offset index.
+Do not keep a second cumulative copy of active text just to drive appends. Do not retain a provider-event or per-delta manifest. Each normalized part has an ordered sequence of coalesced contribution spans; a span identifies an output item's content offset and length, and adjacent appends from the same item extend the current span. The writer keeps in-memory byte ranges per item for the raw shared file. These are bounded replay indexes, not a disk index or per-chunk record format.
+
+`server.run_content_max_index_segments` bounds the contribution/range metadata. The writer compacts redundant file ranges at the configured threshold; if the ordered part index itself reaches the limit, the cache switches to the correctness-first normalized-message fallback.
 
 Staged descriptors must capture stable identity/field information. Avoid readers whose behavior depends on subsequently mutated normalizer maps or an unrelated current part.
 
@@ -255,16 +282,18 @@ Use a small internal module such as `backend/src/response-partial-writer.ts` for
 - Do not perform a flush, open, or `fsync` for every provider delta.
 - Do not `fsync` the partial cache: it is ephemeral. Durable staged output retains the existing persistence policy.
 - Start an actual disk write as soon as spilling is required, even if the batch timer has not fired.
-- Once spilling, append subsequent batches; do not rewrite the existing file on ordinary growth.
+- Once spilling, append subsequent content bytes; do not rewrite the file on ordinary growth. Item identity is associated with ranges in memory, never with bytes written to disk.
+- A batch may contain interleaved item deltas. Keep an in-memory range list per item and compact redundant ranges into the same raw file when `run_content_max_index_segments` is reached; use one transient `.compact` file and atomically replace the partial.
+- After an output item is durably staged, switch its contributions to the staged reader, drain snapshot readers, then remove that item's ranges and compact remaining items. Delete the partial when no active ranges remain.
 - On an unchanged final arguments snapshot, avoid redundant replacement work. When `output_item.done` is immediately followed by durable staging, switch to that authoritative source instead of rewriting the entire partial just to delete it.
 
 A queue of promises can also be unbounded: serialize file operations, but retain content only inside a budgeted buffer manager. Never enqueue one closure containing a delta for every raw provider chunk.
 
 ### 5.2 Memory accounting and configuration compatibility
 
-The existing `run_content_memory_bytes` is documented in **UTF-8 content bytes**, not actual JavaScript heap bytes. Preserve that meaning in the initial implementation. A claim that it is an exact RAM cap would be false.
+The existing `run_content_memory_bytes` is documented in **UTF-8 content bytes**, not actual JavaScript heap bytes. The implementation uses it as the active-source spill threshold and as the writer's bounded UTF-8 queue capacity (with the configured batch size as the zero-threshold transport capacity). These are separate stages, not a strict combined physical-memory ledger. Initial provider/normalizer strings, one in-flight input item, UTF-16LE encoding buffers, range metadata, and full reconnect snapshots can temporarily add memory beyond the configured content charge. Do not describe it as an exact process-RAM cap.
 
-Use one combined content-budget ledger for retained, queued, and in-flight cache content. Moving a buffer to the writer does not free its charge until the write completes and its backing storage is released. Do not give the write queue an additional unlimited budget.
+The writer queue is bounded; it must never become an unlimited promise closure queue. Initial active item strings are admitted sequentially and released from their active-source slots as the writer accepts them. A future exact physical-buffer cap would need a separately specified encoded-buffer budget and a ledger that includes transient slice/encoding allocations; do not silently redefine the existing UTF-8 setting.
 
 If admission cannot reserve capacity, start spilling/draining immediately, even when retained content is exactly equal to the threshold. Never wait for capacity while the only operation that could release it is an unscheduled spill. Test this exact-threshold case to prevent a budget deadlock.
 
@@ -401,46 +430,43 @@ A no-Web-UI/headless commit must retain the current default behavior. The observ
 
 ## 9. Concurrent items and multiple content fields
 
-A single unframed content file cannot reconstruct two independent interleaved fields without extra framing or indexing. Provider streams may legally interleave tool items; one output item can also contain multiple projected content fields. Do not assume all Responses-compatible streams obey the simple sequential example.
+A single unframed file does need in-memory identity/range metadata to reconstruct interleaved items. The implemented design keeps **all disk bytes raw content** and puts the smallest practical replay index in memory:
 
-Initial policy:
+- Key each active source by response, output index, and normalized part index. Use the normalizer's stable identity; do not infer item identity from content text.
+- Record byte ranges for contiguous item runs as batches append. Ranges for one item are read/concatenated in order; adjacent writes extend a range when their on-disk byte positions are contiguous.
+- For a normalized part, record ordered contribution spans `(item key, offset within that item's content, UTF-16 code units)`. Consecutive deltas from one item extend the same span; interleaved items create another span. This reconstructs a merged part such as `A1, B1, A2` without storing a JSONL event log.
+- On snapshot, read active item content from the partial file and staged item content from its authoritative reader, then compose the part in contribution order.
+- After `output_item.done` is durably staged, switch snapshots to the staged reader, drain existing reads, remove that item's ranges, and compact remaining content. Delete the shared file if no partial-backed items remain.
+- Compact writer ranges when redundant segments reach `server.run_content_max_index_segments`. The per-part contribution index uses the same setting as a hard metadata bound.
 
-- Spill only while a single active content projection can own the file unambiguously.
-- Multiple content blocks that normalize to one ordered field may share that projection if their order is proven by the normalizer.
-- If a second unstaged item or independent field starts concurrently, enter correctness-first in-memory fallback for that response.
-- Switch snapshot sources to the complete normalized fallback before retiring any partial file.
-- Emit a diagnostic explaining why the memory budget is no longer enforced for that response.
-- Continue live SSE and durable canonical staging normally; do not reject the provider response.
-
-This preserves one file and no offset index. It intentionally does not promise bounded cache content for arbitrary interleaving. Fully bounded interleaved support is a separate design requiring a different storage contract, explicit provider restrictions, or additional spill files; none is silently included here.
+If the per-part contribution index reaches that bound, enter the correctness-first normalized-message fallback for the rest of that response rather than corrupting output or failing the provider run. This rare fallback may exceed the cache content threshold; `run_content_memory_bytes` is not a total-process-memory cap. Normal interleaving below the configured metadata bound remains spill-backed and does not trigger the old immediate fallback.
 
 ## 10. Configuration proposal
 
 All operational limits and timing choices belong in root server configuration and normalization. Do not embed configurable defaults in writer implementations or timers.
 
-| Setting | Proposed default | Meaning |
+| Setting | Default | Meaning |
 | --- | ---: | --- |
-| `server.run_content_memory_bytes` | `102400` (existing) | Combined UTF-8 content charge for active cached buffers; zero requests immediate spill. Preserve the existing maximum of 16 MiB unless deliberately revised. |
-| `server.run_content_write_batch_bytes` | `32768` (new) | Target encoded UTF-16LE batch size; also supplies bounded transport capacity for zero-threshold mode. |
-| `server.run_content_flush_interval_ms` | `25` (new) | Maximum intentional post-spill batching delay; zero schedules immediate asynchronous flushing. |
-| `server.run_content_max_snapshot_jobs` | `4` (new) | Maximum distinct pending/in-flight snapshot jobs per run; identical revision requests may share a job. |
+| `server.run_content_memory_bytes` | `102400` (existing) | UTF-8 active-source spill threshold; zero requests immediate spill. The writer queue is separately bounded with the same setting. This is not a total RAM cap. |
+| `server.run_content_write_batch_bytes` | `32768` (implemented) | Target UTF-8 content bytes per asynchronous append batch; also supplies bounded transport capacity for zero-threshold mode. |
+| `server.run_content_flush_interval_ms` | `25` (implemented) | Maximum intentional post-spill batching delay; zero schedules immediate asynchronous flushing. |
+| `server.run_content_max_index_segments` | `1024` (implemented) | Maximum in-memory range/contribution segments per response, maximum `65536`; writer compacts redundant ranges, and the cache uses correctness-first fallback if ordered contribution metadata reaches the cap. |
+| `server.run_content_max_snapshot_jobs` | `4` (proposal only) | Suggested future ceiling on distinct pending/in-flight snapshot jobs per run; not currently in the root schema or implementation. |
 | `server.tool_stream_interval_ms` | `120` (existing) | SSE coalescing; independent of cache flush scheduling. |
-| `server.sse_max_buffered_bytes` | `1048576` (existing) | Client buffering bound; apply compatible protection while snapshots initialize. |
+| `server.sse_max_buffered_bytes` | `1048576` (existing) | Client buffering bound; snapshots continue to use the existing subscriber buffering policy. |
 | `server.run_state_retention_ms` | `30000` (existing) | Finished run retention, not partial-item file retention. |
 
-New values are initial recommendations, not measured optimal values. Benchmark before adopting them.
+The implemented writer/index defaults are configurable and should be benchmark-tuned for deployment storage. The snapshot-job ceiling remains an unimplemented proposal.
 
-Validation rules to implement in the schema and normalizer:
+Implemented schema/normalizer bounds:
 
-- All byte/count fields are safe integers with documented positive bounds, except the existing zero-capable threshold.
-- Write-batch size is even and at least two bytes so encoded batch boundaries align with UTF-16LE code units. Short filesystem writes can still split a code unit at a byte boundary; finish the entire batch before exposing it to readers. Proposed maximum: existing 16 MiB cache-setting maximum.
-- Positive memory budgets smaller than the batch target cause smaller actual batches, not invalid configurations. A single code unit may need a documented constant-size encoding allowance.
-- Flush interval is a safe integer from zero through a documented upper bound; use the existing 60,000 ms coalescing ceiling as the proposed ceiling, not as the recommended operating value.
-- Snapshot-job count is a safe integer from one through a proposed ceiling of 64.
-- Resolve effective capacities once at configuration normalization/construction, and expose them in diagnostics.
-- A zero flush interval must not create a recurring zero-delay timer when there is no content to write.
+- `run_content_memory_bytes`: safe integer from 0 through 16 MiB.
+- `run_content_write_batch_bytes`: even safe integer from 2 bytes through 16 MiB; short writes are completed before readers observe the batch.
+- `run_content_flush_interval_ms`: safe integer from 0 through 60,000 ms; zero uses asynchronous microtask flushing without a recurring timer.
+- `run_content_max_index_segments`: safe integer from 1 through 65,536; default 1,024.
+- Older root settings that omit the new writer/index fields continue to receive defaults. `AgentServerOptions`, `RootServerSettings`, defaults, normalization, and the root schema are wired together.
 
-Update `AgentServerOptions`, `RootServerSettings`, `DEFAULT_ROOT_SERVER_SETTINGS`, `normalizeRootServerSettings`, and `root-setting.schema.json` together. Keep old root settings working without new fields.
+The proposed `run_content_max_snapshot_jobs` ceiling and diagnostic exposure of effective capacities are not implemented in this follow-up.
 
 ## 11. Error handling, cancellation, and cleanup
 
@@ -466,7 +492,9 @@ Stop accepting provider deltas after abort. Do not force pointless partial flush
 
 ### Startup/recovery
 
-The cache is not resumable after process restart. Use the existing staging ownership/recovery mechanisms, not a global recursive deletion of `responses.partial` files. If a scavenger is added, it must operate only on proven orphan response directories, respect active sessions/profiles, and leave canonical staged items/manifests alone. Confirm current recovery behavior before adding it; the audited cache did not add a startup scavenger.
+The cache is ephemeral and is not resumed after process restart. Each writer creates `responses.partial.owner` before opening the content file; it records only hostname/PID, not content. `SessionResponseStore.open()` scans immediate response-turn subdirectories under the active profile's staging directory. For each candidate it takes `responses.partial.cleanup-lock`, confirms the recorded same-host PID is gone, and removes only `responses.partial`, `responses.partial.compact`, and the owner sidecar. Stale cleanup-lock files are reclaimed by PID and atomic rename; a writer checks the lock before and after lease acquisition.
+
+The scavenger leaves `manifest.json`, staged output items, final records, usage/history caches, and all other provider-recovery data untouched. It preserves live, remote, malformed, and unowned cache files because their inactivity cannot be proven safely; old partial files created before owner sidecars may require manual cleanup. Cleanup errors log a warning and do not prevent the response store from opening. Never recursively delete partial names across the whole profile or staging root.
 
 ### Privacy
 
@@ -518,7 +546,9 @@ onOutputItemStaged = async (turn, outputIndex, readers) => {
 
 `persistResponseStream` awaits each `onEvent` callback before staging/committing the corresponding event. Thus the first delta is admitted with its explicit normalized part index, provider admission waits when cache capacity is exhausted, and `response.completed` switches reconnect snapshots to a complete in-memory baseline before `ResponseTurn.commit` removes staging. This pre-cleanup source handoff is Web-UI transport state; it does not change the canonical transcript event or its serialized `messages.jsonl` line.
 
-## 13. Step-by-step implementation order
+## 13. Step-by-step implementation and status
+
+Steps 1–6 and the commit/staging handoff are implemented in `ea77880`; the current working tree adds spill-backed interleaved item ranges and owner-checked startup cleanup. The explicit `run_content_max_snapshot_jobs` ceiling remains a future proposal. Focused run-registry, persistence, and server tests pass 125/125; the full backend suite and final performance measurements are pending.
 
 ### Step 1: write failing regression tests before refactoring
 
@@ -586,16 +616,15 @@ Files: `server.ts`, `run-registry.ts`, `stream-emitter.ts`, normalizer integrati
 
 Exit criterion: every dispatched SSE revision has the same cache revision, no coalesced delta is appended twice, the first part chunk is retained, and writer pressure stops further provider-event admission without delaying normal live delivery.
 
-### Step 7: implement snapshot barriers and queue protection
+### Step 7: snapshot barriers and queue protection
 
 Files: `run-content-cache.ts`, partial writer, `run-registry.ts`, server SSE integration.
 
-- Capture consistent metadata/content/event boundaries.
-- Prevent duplicate application of already-covered coalesced deltas.
-- Coalesce equivalent snapshot jobs and bound distinct jobs/subscriber queues.
+- Capture consistent metadata/content/event boundaries and prevent duplicate application of already-covered coalesced deltas.
 - Retry retired sources; never emit blank metadata as a full snapshot.
+- Existing SSE subscriber buffering remains the client-queue bound. A separate maximum number of concurrent snapshot jobs is a future proposal, not implemented here.
 
-Exit criterion: attach at every mutation/staging/commit gate and obtain the exact correct state after queued events drain.
+Status: the cache read barrier and staged-reader lifetime protections are implemented. Consider a distinct snapshot-job ceiling only if reconnect fan-out measurements show it is required.
 
 ### Step 8: finish staging retirement and asynchronous cleanup
 
@@ -604,7 +633,7 @@ Files: `run-registry.ts`, `server.ts`, partial writer/cache, staging recovery on
 - Cancel superseded pending partial writes after durable handoff.
 - Drain active writes/readers before close/delete/reuse.
 - Observe async disposal at retention, clear, abort, and shutdown boundaries.
-- Exercise the documented interleaving fallback.
+- Exercise spill-backed interleaving, staged-range compaction, index-cap fallback, and crash/reopen scavenging with live-owner preservation.
 
 Exit criterion: one partial file at most, no open handles/timers after disposal, no generation contamination.
 
@@ -633,16 +662,18 @@ Exit criterion: one partial file at most, no open handles/timers after disposal,
 
 ### Ordering and lifecycle
 
-- One thousand or more deltas still create one partial file, then delete it on handoff.
+- One thousand or more deltas still use one content-only partial file; there are no per-delta files/records. Staged item ranges are removed/compacted, and the file is deleted when the last partial-backed item is staged.
 - Under-threshold items never create a partial.
 - Snapshot before/after batch flush, while a write is running, during staging, and during commit cleanup.
 - A snapshot covering content still waiting in the SSE coalescer; no duplicate delta afterward.
 - A staged read held open while commit attempts cleanup.
 - Repeated reasoning -> tool -> assistant reuse with different content lengths.
+- Multiple output items interleaved into one merged text part replay in exact emitted order; staging one item retires only its own ranges.
+- Range-index compaction at its configured threshold and correctness fallback at the contribution-index cap.
+- Store reopen removes a dead-owner partial/compaction file, preserves a live-owner cache, and leaves durable staged items untouched; stale cleanup-lock recovery is also covered.
 - Rapid attach/detach, many simultaneous reconnects, and a slow subscriber.
 - Separate master/named profiles and multiple sessions running concurrently.
 - Request-draft interaction before any message, while spilled, and during reconnect.
-- Concurrent output items/multiple fields use fallback without merging unrelated bytes.
 - Abort, retention expiry, registry clear, and server close with pending operations.
 
 ### Fault injection
@@ -657,9 +688,9 @@ Use a narrow injectable filesystem/writer adapter for deterministic tests. Test 
 
 ### Golden transcript compatibility
 
-`messages.jsonl` is the compatibility contract. No tracked `messages.jsonl` fixture existed during the audit, so generate a deterministic temporary golden corpus before changing persistence.
+`messages.jsonl` is the compatibility contract, and no tracked `messages.jsonl` fixture exists. For this follow-up, generated a temporary deterministic corpus with staged tool-call and assistant-message responses from baseline `ea77880` and the working tree. The two `messages.jsonl` outputs were byte-identical at 614 bytes. No transcript paths are modified in the worktree.
 
-Run identical synthetic event streams against the audited baseline and implementation, regenerate the files, and compare them byte-for-byte. Include timestamps/IDs supplied by deterministic fixtures, staged outputs, tool calls/results, reasoning, multiple rounds, incomplete responses, and already-present commits. Diff any new tracked fixtures after regeneration as well. Every unrelated byte-level difference is a regression.
+This is a focused compatibility spot check, not a substitute for a broader checked-in golden corpus. Future persistence changes should compare identical synthetic streams containing deterministic timestamps/IDs, staged outputs, tool calls/results, reasoning, multiple rounds, incomplete responses, and already-present commits. Every unrelated byte-level difference is a regression.
 
 A passing UI replay test does not prove transcript compatibility. Verify hashes, append count, ordering, recovery, and compaction/history tests independently.
 
@@ -681,6 +712,8 @@ The audited baseline backend build and 448 tests passed; 73 focused run/server/e
 
 ### Working-tree spot checks (observed, not acceptance targets)
 
+The measurements below predate the current interleaved range/compaction and startup-scavenger changes; rerun these workloads before making performance claims for the current implementation.
+
 Ran the normalized content path on Node `v26.10.0`, Linux `x64`, using a local temporary filesystem. These are single-run synthetic measurements, not concurrent or slow-disk tests:
 
 | Path | Chunks | UTF-8 content | Cache admission/write | Replay | SSE events / approximate JSON bytes | Partial file |
@@ -690,6 +723,10 @@ Ran the normalized content path on Node `v26.10.0`, Linux `x64`, using a local t
 | Normalizer + cache admission per delta (no emitter) | 500 × 2,048 | 1,024,000 bytes | 14.14 ms | 2.16 ms | n/a | 2,048,000 bytes |
 
 The emitter cases intentionally coalesced each synchronous burst into two UI events (initial message and one appended suffix). The numbers include normalizer and admission overhead but exclude HTTP/SSE transport and real provider latency. `responses.partial` is UTF-16LE, hence twice the ASCII UTF-8 content size. Each run verified replay length and that disposal removed the partial file. Do not use these spot checks as universal performance targets.
+
+### Follow-up interleaved writer measurement (observed, not a target)
+
+On Node `v26.10.0`, Linux `x64`, ran three local repetitions with two alternating output items, 500 × 1,024-byte chunks per item (1,024,000 UTF-8 bytes total), 100 KiB writer capacity, 32 KiB batches, 25 ms flush delay, and `run_content_max_index_segments=256` to exercise compaction. Median append/admission plus range-compaction time was **28.65 ms**, replay **3.52 ms**, and staged-range retirement/compaction **3.54 ms**. The raw file was 2,048,000 bytes before retirement and removed after the last item was staged. This measures the writer only on local temporary storage; it is not a full HTTP/provider benchmark, a concurrent-load result, or evidence of slow-disk behavior.
 
 ### Benchmark workloads
 
@@ -702,7 +739,7 @@ Use a repository benchmark harness with CLI/configured workload values, not hard
 5. Reconnect during growth and handoff, with one and many subscribers.
 6. Artificial write latency, short writes, and throttled storage through the test adapter.
 7. Large authoritative done items to detect unnecessary full-file rewrites.
-8. Interleaving fallback measured separately; do not combine it with bounded-mode results.
+8. Measure spill-backed interleaving, range compaction, and the contribution-index-cap fallback separately; report each mode distinctly.
 
 Record Node/platform/filesystem, warmup, workload seed, repetitions, configuration, and median/p95/p99 rather than one timing. Measure:
 
@@ -719,10 +756,10 @@ Correctness and boundedness are hard gates:
 
 - All three bug reproductions pass through production integration paths.
 - No content loss, duplication, cross-profile leakage, or stale/blank successful snapshot.
-- No per-delta file or record parsing; one content-only partial filename at most.
+- No per-delta file or record parsing; one long-lived content-only partial and at most one transient `.compact` file.
 - No synchronous filesystem calls on live cache/replay paths.
-- No unbounded delta closure queue, subscriber initialization queue, or snapshot-job queue.
-- Cache budget/backpressure invariants hold under injected slow storage, subject to documented representation overhead and fallback exceptions.
+- No unbounded delta-write closure queue; per-client SSE buffering uses the existing `sse_max_buffered_bytes` policy. A distinct cap on concurrent cache snapshot jobs remains a future measured improvement, not a completion claim.
+- The active-source spill threshold and writer queue stay bounded under slow storage, subject to documented representation overhead and the explicit index-cap fallback.
 - Canonical `messages.jsonl` remains byte-identical for the golden corpus.
 
 Performance gates must be set from a repeatable baseline on the deployment environment. Do not assert a universal millisecond target from the local audit numbers. Require normal live SSE not to wait for cache flushes, demonstrate reduced write calls for small deltas after spilling, and show bounded event-loop impact under concurrency. Treat any throughput/latency regression outside run-to-run noise as a reason to investigate and repeat.
@@ -739,21 +776,22 @@ Prefer separately reviewable commits:
 
 Each commit should build and pass its relevant tests. Avoid leaving the branch with a writer API change but old synchronous callers. Keep full backend tests, relevant frontend stream/profile tests, and golden transcript comparison as final gates.
 
-Before deployment, review zero-threshold behavior, interleaving fallback, subscriber queue policy, and the proposed new defaults. Monitor cache fallback counts, write/backpressure latency, snapshot failures, retained committed staging, and orphan cleanup. Never restart the backend currently serving the conversation merely to validate this plan.
+Before deployment, review zero-threshold behavior, the contribution-index-cap fallback, remote/unknown-owner preservation, subscriber queue policy, and the configured range threshold. Monitor cache fallback counts, write/backpressure latency, snapshot failures, retained committed staging, and orphan cleanup. Never restart the backend currently serving the conversation merely to validate this plan.
 
 ## 17. Implementation completion checklist
 
-- [ ] B1: first chunk and first oversized item correctly admitted and replayed.
-- [ ] B2: all optional-cache errors contained, including timed flushes.
-- [ ] B3: committed baseline installed before staged sources are invalidated.
-- [ ] Identity/content operations independent of SSE append hints/coalescing.
-- [ ] One unframed UTF-16LE partial file; no per-chunk metadata/file map.
-- [ ] Batched asynchronous writes with observed promises and short-write handling.
-- [ ] Shared content budget and explicit encoded-memory/materialization limitations.
-- [ ] Correct snapshot barriers and subscriber ordering without duplicate deltas.
-- [ ] Reader leases, generation-safe handoff, filename reuse, and async disposal.
-- [ ] Unsupported interleaving preserves correctness through explicit fallback.
-- [ ] Root settings, schema, server option wiring, and docs agree.
-- [ ] Golden transcript regeneration/diff passes with no unrelated changes.
-- [ ] Full relevant tests and reproducible performance measurements pass.
-- [ ] No live-backend restart or unrelated worktree modification during development.
+- [x] B1: first chunk and oversized initial content are admitted and replayed.
+- [x] B2: optional cache I/O failures are contained, including timer-origin failures.
+- [x] B3: committed baseline is installed before staged sources are invalidated.
+- [x] Identity/content mutations carry the normalized part index independently of SSE append hints.
+- [x] Disk data remains raw UTF-16LE; interleaved items use in-memory item ranges and ordered part contributions, not per-delta disk records.
+- [x] Batched asynchronous writes, short-write handling, cleanup ownership, and staged-range compaction are implemented.
+- [x] The UTF-8 active-source spill threshold, writer queue bound, and their non-total-RAM limitations are documented.
+- [x] Snapshot barriers, staged-reader handoff, and commit cleanup ordering are covered by focused tests.
+- [x] Startup scavenging removes only partial/compaction files with confirmed dead local owners and preserves provider staging/live owners.
+- [x] `run_content_max_index_segments` is wired through root settings, schema, server options, and documentation.
+- [x] Re-ran typecheck and focused/full backend tests after cleanup-lock changes; the full backend suite passed 455/455.
+- [x] Compared a temporary deterministic corpus from `ea77880` and the working tree; `messages.jsonl` was byte-identical at 614 bytes, with no tracked or changed transcript paths.
+- [x] Recorded a three-run local interleaved writer/compaction microbenchmark (median append/compaction 28.65 ms, replay 3.52 ms, staged-range retirement 3.54 ms); concurrent/slow-storage measurements remain future work.
+- [ ] Consider a separate configurable maximum snapshot-job count if reconnect fan-out measurements justify it.
+- [x] No backend restart or unrelated worktree modification during this work.

@@ -67,6 +67,13 @@
           "default": 25,
           "description": "Maximum delay before flushing a partial content append batch. 0 schedules immediate asynchronous flushing."
         },
+        "run_content_max_index_segments": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536,
+          "default": 1024,
+          "description": "Maximum item-range/contribution segments per active response before the writer compacts redundant ranges or the cache uses a correctness-first fallback."
+        },
         "sse_max_buffered_bytes": {
           "type": "integer",
           "minimum": 1024,

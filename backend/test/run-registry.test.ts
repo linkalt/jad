@@ -463,18 +463,53 @@ test("partial writer snapshots are linearized between append batches", async () 
     batchBytes: 8,
     maxBufferedBytes: 16,
     flushIntervalMs: 1_000,
+    maxIndexSegments: 16,
   });
   try {
-    const first = writer.append("first");
-    const snapshot = writer.read();
-    const later = writer.append("later");
+    const first = writer.append("item", "first");
+    const snapshot = writer.readItems();
+    const later = writer.append("item", "later");
 
     await first;
-    assert.equal(await snapshot, "first");
+    assert.equal((await snapshot).get("item"), "first");
     await later;
     await writer.flush();
-    assert.equal(await writer.read(), "firstlater");
-    assert.deepEqual(await readdir(root), ["responses.partial"]);
+    assert.equal((await writer.readItems()).get("item"), "firstlater");
+    assert.deepEqual(await readdir(root), ["responses.partial", "responses.partial.owner"]);
+  } finally {
+    await writer.dispose();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("keeps interleaved item deltas in one content-only file and retires staged ranges", async () => {
+  const root = await mkdtemp(join(tmpdir(), "response-partial-interleaved-"));
+  const path = join(root, "responses.partial");
+  const writer = new ResponsePartialWriter({
+    path,
+    batchBytes: 64,
+    maxBufferedBytes: 64,
+    flushIntervalMs: 1_000,
+    maxIndexSegments: 1,
+  });
+  try {
+    await writer.append("output-0-part-0", "A1");
+    await writer.append("output-1-part-0", "B1");
+    await writer.append("output-0-part-0", "A2");
+    await writer.flush();
+
+    const snapshot = await writer.readItems();
+    assert.equal(snapshot.get("output-0-part-0"), "A1A2");
+    assert.equal(snapshot.get("output-1-part-0"), "B1");
+    assert.equal((await readFile(path)).toString("utf16le"), "A1A2B1");
+
+    await writer.removeItems(new Set(["output-0-part-0"]));
+    assert.deepEqual(await writer.readItems(), new Map([["output-1-part-0", "B1"]]));
+    assert.equal((await readFile(path)).toString("utf16le"), "B1");
+
+    await writer.removeItems(new Set(["output-1-part-0"]));
+    await assert.rejects(readFile(path), {code: "ENOENT"});
+    assert.deepEqual(await readdir(root), []);
   } finally {
     await writer.dispose();
     await rm(root, {recursive: true, force: true});
@@ -694,6 +729,45 @@ test("appends one output item's content to a single partial file until staging",
 
     await cache.dispose();
     assert.deepEqual(await readdir(responseDirectory), []);
+  } finally {
+    await cache.dispose();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("replays interleaved output-item deltas from one bounded partial cache", async () => {
+  const root = await mkdtemp(join(tmpdir(), "web-ui-run-interleaved-cache-"));
+  const directory = join(root, "profile", "staging", "turn-interleaved");
+  const cache = new RunContentCache({directory, memoryBytes: 4, maxIndexSegments: 16});
+  const responseKey = "response-interleaved-cache";
+  try {
+    await cache.beginResponse(directory, responseKey, withParts("turn-interleaved", []));
+    const first = withParts("turn-interleaved", [{type: "text", text: "A1"}]);
+    await cache.update(first, {index: 0, append: "A1", outputIndex: 0}).capacity;
+    const second = withParts("turn-interleaved", [{type: "text", text: "A1B1"}]);
+    await cache.update(second, {index: 0, append: "B1", outputIndex: 1}).capacity;
+    const third = withParts("turn-interleaved", [{type: "text", text: "A1B1A2"}]);
+    await cache.update(third, {index: 0, append: "A2", outputIndex: 0}).capacity;
+
+    assert.equal(cache.isSpilled, true);
+    assert.deepEqual(await cache.read(), third);
+    const partialPath = join(directory, "responses.partial");
+    assert.equal((await readFile(partialPath)).toString("utf16le"), "A1A2B1");
+
+    await cache.handoffOutputItem(responseKey, 0, new Map([[0, {
+      codeUnits: 4,
+      read: async () => "A1A2",
+    }]]));
+    assert.deepEqual(await cache.read(), third);
+    assert.equal((await readFile(partialPath)).toString("utf16le"), "B1");
+
+    await cache.handoffOutputItem(responseKey, 1, new Map([[0, {
+      codeUnits: 2,
+      read: async () => "B1",
+    }]]));
+    assert.deepEqual(await cache.read(), third);
+    await assert.rejects(readFile(partialPath), {code: "ENOENT"});
+    assert.deepEqual(await readdir(directory), []);
   } finally {
     await cache.dispose();
     await rm(root, {recursive: true, force: true});

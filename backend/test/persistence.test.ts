@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
+import {spawn} from "node:child_process";
 import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import {hostname, tmpdir} from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -15,7 +16,13 @@ import {
   readTranscriptRecords,
   type ResponseCompletedEvent,
 } from "../src/persistence.js";
-import { persistResponseStream } from "../src/responses.js";
+import {persistResponseStream} from "../src/responses.js";
+import {
+  RESPONSE_PARTIAL_CLEANUP_LOCK_FILE,
+  RESPONSE_PARTIAL_COMPACT_FILE,
+  RESPONSE_PARTIAL_FILE,
+  RESPONSE_PARTIAL_OWNER_FILE,
+} from "../src/response-partial-files.js";
 import { ConfigError, SessionConfigLoader, resolveApiKey, sha256Json } from "../src/config.js";
 import { AgentSession } from "../src/session.js";
 import {TaskStore} from "../src/tools/native/task-store.js";
@@ -865,6 +872,50 @@ test("retains a streaming turn but removes a partial staging line during recover
     assert.equal(repaired.includes('"output_index":1'), false);
     await reopened.close();
   } finally {
+    await removeSession(sessionDir);
+  }
+});
+
+test("cleans only dead-owner partial caches when opening a response store", async () => {
+  const sessionDir = await makeSession();
+  let store: SessionResponseStore | undefined;
+  try {
+    const child = spawn(process.execPath, ["-e", "process.exit(0)"], {stdio: "ignore"});
+    const deadPid = child.pid;
+    assert.ok(deadPid);
+    await new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", () => resolve());
+    });
+    assert.throws(() => process.kill(deadPid, 0), (error: NodeJS.ErrnoException) => error.code === "ESRCH");
+
+    const staging = join(sessionDir, "staging");
+    const orphan = join(staging, "turn-cache-orphan");
+    const live = join(staging, "turn-cache-live");
+    await mkdir(orphan, {recursive: true});
+    await mkdir(live, {recursive: true});
+    await writeFile(join(orphan, "manifest.json"), JSON.stringify({status: "streaming"}));
+    await writeFile(join(orphan, "items.jsonl"), "staged provider item remains\n");
+    await writeFile(join(orphan, RESPONSE_PARTIAL_FILE), Buffer.from("orphan", "utf16le"));
+    await writeFile(join(orphan, RESPONSE_PARTIAL_COMPACT_FILE), Buffer.from("temporary", "utf16le"));
+    await writeFile(join(orphan, RESPONSE_PARTIAL_OWNER_FILE), JSON.stringify({hostname: hostname(), pid: deadPid}));
+    await writeFile(join(orphan, RESPONSE_PARTIAL_CLEANUP_LOCK_FILE),
+      JSON.stringify({hostname: hostname(), pid: deadPid, token: "stale-cleanup"}));
+    await writeFile(join(live, "manifest.json"), JSON.stringify({status: "streaming"}));
+    await writeFile(join(live, RESPONSE_PARTIAL_FILE), Buffer.from("live", "utf16le"));
+    await writeFile(join(live, RESPONSE_PARTIAL_OWNER_FILE), JSON.stringify({hostname: hostname(), pid: process.pid}));
+
+    store = await SessionResponseStore.open(sessionDir);
+    await assert.rejects(readFile(join(orphan, RESPONSE_PARTIAL_FILE)), {code: "ENOENT"});
+    await assert.rejects(readFile(join(orphan, RESPONSE_PARTIAL_COMPACT_FILE)), {code: "ENOENT"});
+    await assert.rejects(readFile(join(orphan, RESPONSE_PARTIAL_OWNER_FILE)), {code: "ENOENT"});
+    await assert.rejects(readFile(join(orphan, RESPONSE_PARTIAL_CLEANUP_LOCK_FILE)), {code: "ENOENT"});
+    assert.equal(await readFile(join(orphan, "items.jsonl"), "utf8"), "staged provider item remains\n");
+    assert.equal((await readFile(join(live, RESPONSE_PARTIAL_FILE))).toString("utf16le"), "live");
+    assert.equal(await readFile(join(live, RESPONSE_PARTIAL_OWNER_FILE), "utf8"),
+      JSON.stringify({hostname: hostname(), pid: process.pid}));
+  } finally {
+    await store?.close();
     await removeSession(sessionDir);
   }
 });

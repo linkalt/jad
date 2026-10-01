@@ -70,10 +70,12 @@ export class SessionRun {
       memoryBytes: number;
       writeBatchBytes?: number;
       flushIntervalMs?: number;
+      maxIndexSegments?: number;
     } = {
       memoryBytes: DEFAULT_ROOT_SERVER_SETTINGS.run_content_memory_bytes,
       writeBatchBytes: DEFAULT_ROOT_SERVER_SETTINGS.run_content_write_batch_bytes,
       flushIntervalMs: DEFAULT_ROOT_SERVER_SETTINGS.run_content_flush_interval_ms,
+      maxIndexSegments: DEFAULT_ROOT_SERVER_SETTINGS.run_content_max_index_segments,
     },
   ) {
     this.contentCache = new RunContentCache(cache);
@@ -442,6 +444,7 @@ export class SessionRunRegistry {
     private readonly runContentMemoryBytes = DEFAULT_ROOT_SERVER_SETTINGS.run_content_memory_bytes,
     private readonly runContentWriteBatchBytes = DEFAULT_ROOT_SERVER_SETTINGS.run_content_write_batch_bytes,
     private readonly runContentFlushIntervalMs: number = DEFAULT_ROOT_SERVER_SETTINGS.run_content_flush_interval_ms,
+    private readonly runContentMaxIndexSegments: number = DEFAULT_ROOT_SERVER_SETTINGS.run_content_max_index_segments,
   ) {}
 
   private static key(sessionRef: string, profile: string | undefined): string {
@@ -465,6 +468,7 @@ export class SessionRunRegistry {
         memoryBytes: this.runContentMemoryBytes,
         writeBatchBytes: this.runContentWriteBatchBytes,
         flushIntervalMs: this.runContentFlushIntervalMs,
+        maxIndexSegments: this.runContentMaxIndexSegments,
       },
     );
     const key = SessionRunRegistry.key(sessionRef, profile);

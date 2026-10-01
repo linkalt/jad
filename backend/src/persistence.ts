@@ -15,6 +15,7 @@ import { createInterface } from "node:readline";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { AsyncMutex } from "./concurrency.js";
+import {cleanupOrphanedResponsePartialFiles} from "./response-partial-files.js";
 
 export type JsonRecord = Record<string, unknown>;
 export type ResponseInputItem = JsonRecord;
@@ -1573,6 +1574,11 @@ export class SessionResponseStore {
     await mkdir(store.sessionDir, { recursive: true });
     await mkdir(dirname(store.messagesPath), { recursive: true });
     await mkdir(store.stagingDir, { recursive: true });
+    try {
+      await cleanupOrphanedResponsePartialFiles(store.stagingDir);
+    } catch (error) {
+      console.warn(`[web-ui-run-cache] startup orphan cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     await mkdir(dirname(store.historyCachePath), { recursive: true });
     await mkdir(dirname(store.usageCachePath), { recursive: true });
     await repairJsonlTail(store.messagesPath);

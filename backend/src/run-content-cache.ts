@@ -1,6 +1,7 @@
 import {join} from "node:path";
 
 import {ResponsePartialWriter} from "./response-partial-writer.js";
+import {RESPONSE_PARTIAL_FILE} from "./response-partial-files.js";
 import {DEFAULT_ROOT_SERVER_SETTINGS} from "./session-roots.js";
 
 import type {WebUiMessage, WebUiPart} from "./plugins/web-ui/types.js";
@@ -22,12 +23,14 @@ export interface RunContentCacheStagedReader {
 interface RunContentCacheOptions {
   /** Profile-scoped fallback staging root when no response-turn path is supplied. */
   directory?: string;
-  /** UTF-8 bytes of the active output item kept in memory before spilling. */
+  /** UTF-8 bytes of active-response content retained before spilling. */
   memoryBytes: number;
   /** Target UTF-8 bytes per asynchronous append batch. */
   writeBatchBytes?: number;
-  /** Maximum delay before a buffered batch is flushed asynchronously. */
+  /** Maximum delay before a buffered batch is flushed. */
   flushIntervalMs?: number;
+  /** Maximum redundant item ranges retained before compacting the shared file. */
+  maxIndexSegments?: number;
 }
 
 type ContentField = "text" | "arguments" | "output";
@@ -39,20 +42,37 @@ interface StagedContentSource {
   read: () => Promise<string>;
 }
 
+interface ContentContribution {
+  itemKey: string;
+  /** UTF-16 code-unit offset within the output item's content. */
+  offset: number;
+  codeUnits: number;
+}
+
 interface PartContentState {
   field: ContentField;
   type: WebUiPart["type"];
   baseValue: string;
   includeBase: boolean;
-  stagedSources: StagedContentSource[];
-  stagedCodeUnits: number;
+  /** Ordered coalesced runs of output-item content in the normalized part. */
+  contributions: ContentContribution[];
+  stagedSources: Map<string, StagedContentSource>;
+}
+
+interface ActiveContentSource {
+  key: string;
+  responseKey: string;
+  outputIndex: number | undefined;
+  partIndex: number;
+  content: string;
+  codeUnits: number;
+  memoryBytes: number;
 }
 
 /**
- * Keeps a normalized message scheme in memory and one active output item's
- * content delta. When the delta exceeds its budget, only UTF-16LE content is
- * appended to `responses.partial`; there are no event envelopes or per-chunk
- * records. A durably staged item becomes the replay source and retires the file.
+ * Keeps a normalized message scheme in memory and content deltas for any
+ * concurrently active output items. Spilled bytes are raw UTF-16LE content in
+ * one responses.partial file; item ranges and per-part ordering stay in memory.
  */
 export class RunContentCache {
   private memoryMessage: WebUiMessage | undefined;
@@ -60,6 +80,7 @@ export class RunContentCache {
   private baselineMessage: WebUiMessage | undefined;
   private latestShape: WebUiMessage | undefined;
   private readonly partContents = new Map<number, PartContentState>();
+  private readonly activeItems = new Map<string, ActiveContentSource>();
   private readonly activeReads = new Set<Promise<WebUiMessage | undefined>>();
   private currentResponseKey: string | undefined;
   private partialDirectory: string | undefined;
@@ -67,19 +88,18 @@ export class RunContentCache {
   private partialWriter: ResponsePartialWriter | undefined;
   private partialCleanupPromise: Promise<void> | undefined;
   private fallbackMessageProvider: (() => WebUiMessage | undefined) | undefined;
-  private activePartIndex: number | undefined;
-  private activeOutputIndex: number | undefined;
-  private activeResponseKey: string | undefined;
-  private activeContent = "";
   private activeMemoryBytes = 0;
+  private nextLegacySourceId = 0;
   private spilled = false;
   private disabled = false;
   private readonly writeBatchBytes: number;
   private readonly flushIntervalMs: number;
+  private readonly maxIndexSegments: number;
 
   public constructor(private readonly options: RunContentCacheOptions) {
     this.writeBatchBytes = options.writeBatchBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_write_batch_bytes;
     this.flushIntervalMs = options.flushIntervalMs ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_flush_interval_ms;
+    this.maxIndexSegments = options.maxIndexSegments ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_max_index_segments;
   }
 
   public get isSpilled(): boolean {
@@ -109,13 +129,14 @@ export class RunContentCache {
     this.latestShape = baseline;
     this.diskMessage = undefined;
     this.partContents.clear();
-    this.clearActiveItem();
+    this.clearActiveItems();
+    this.nextLegacySourceId = 0;
     this.spilled = false;
   }
 
   /**
-   * Replaces the active item's streamed delta with the authoritative staged
-   * output reader, then deletes its partial content file.
+   * Replaces staged output-item deltas with the authoritative persistence
+   * reader, then removes those item's bytes from the shared partial file.
    */
   public async handoffOutputItem(
     responseKey: string,
@@ -125,34 +146,43 @@ export class RunContentCache {
     if (responseKey !== this.currentResponseKey) return;
 
     const visibleMessage = this.memoryMessage ?? this.latestShape ?? this.baselineMessage;
+    const retiringKeys = new Set<string>();
     for (const [partIndex, reader] of readers) {
       const part = visibleMessage?.parts[partIndex] ?? this.baselineMessage?.parts[partIndex];
       if (part === undefined) continue;
       const state = this.partContents.get(partIndex) ?? this.createPartState(partIndex, part);
-      const duplicate = state.stagedSources.some(
-        (source) => source.responseKey === responseKey && source.outputIndex === outputIndex,
-      );
-      if (!duplicate) {
-        state.stagedSources.push({
+      this.partContents.set(partIndex, state);
+      const key = this.sourceKey(responseKey, outputIndex, partIndex);
+      if (!state.stagedSources.has(key)) {
+        state.stagedSources.set(key, {
           responseKey,
           outputIndex,
           codeUnits: reader.codeUnits,
           read: reader.read,
         });
-        state.stagedCodeUnits += reader.codeUnits;
       }
-      this.partContents.set(partIndex, state);
+      this.reconcileContributionLength(state, key, reader.codeUnits);
+      const active = this.activeItems.get(key);
+      if (active !== undefined) {
+        this.activeMemoryBytes = Math.max(0, this.activeMemoryBytes - active.memoryBytes);
+        this.activeItems.delete(key);
+      }
+      retiringKeys.add(key);
     }
 
-    const itemMatches = this.activeResponseKey === responseKey &&
-      (this.activeOutputIndex === undefined || this.activeOutputIndex === outputIndex);
-    if (itemMatches) {
+    // Empty output items have no staged content reader, but their pending empty
+    // cache entries can still be retired safely.
+    for (const [key, active] of this.activeItems) {
+      if (active.responseKey === responseKey && active.outputIndex === outputIndex && active.codeUnits === 0) {
+        this.activeItems.delete(key);
+        retiringKeys.add(key);
+      }
+    }
+
+    if (retiringKeys.size > 0 && this.partialWriter !== undefined) {
       const reads = [...this.activeReads];
-      // New snapshots immediately use the staged reader; previously captured
-      // snapshots retain the partial file until their reads finish.
-      this.clearActiveItem();
       await Promise.allSettled(reads);
-      await this.clearPartialFile();
+      await this.partialWriter.removeItems(retiringKeys);
     }
 
     if (this.memoryMessage !== undefined && readers.size > 0) {
@@ -180,7 +210,7 @@ export class RunContentCache {
     await Promise.allSettled([...this.activeReads]);
     await this.cleanupPartialFile();
     this.partContents.clear();
-    this.clearActiveItem();
+    this.clearActiveItems();
   }
 
   /** Update the normalized scheme and append only a supplied content delta. */
@@ -203,66 +233,78 @@ export class RunContentCache {
     try {
       const responseKey = this.currentResponseKey;
       const sourceIndex = append?.outputIndex ?? outputIndex;
-    const activePartIndex = sourceIndex !== undefined &&
-      this.activeResponseKey === responseKey &&
-      (this.activeOutputIndex === undefined || this.activeOutputIndex === sourceIndex)
-      ? this.activePartIndex
-      : undefined;
-    const index = append?.index ?? partIndex ?? activePartIndex;
-    const changedContent = new Set<number>();
-    const part = index === undefined ? undefined : message.parts[index];
-    const content = partContent(part);
-    if (index !== undefined && part !== undefined && content !== undefined) {
-      const state = this.partContents.get(index) ?? this.createPartState(index, part);
-      this.partContents.set(index, state);
-      const sameActiveItem = this.activePartIndex === index &&
-        this.activeResponseKey === responseKey &&
-        (this.activeOutputIndex === undefined || sourceIndex === undefined || this.activeOutputIndex === sourceIndex);
-
-      if (!sameActiveItem) {
-        // Responses streams stage one output item before starting the next. If a
-        // provider violates that sequence, retain the newest complete snapshot
-        // in memory rather than mixing two items in the single partial file.
-        if (this.activePartIndex !== undefined &&
-          (this.activeContent.length > 0 || this.partialFilePath !== undefined)) {
-          this.disableAfterError(new Error("a new output item started before the previous item was staged"), message);
-          return {
-            metadata: message,
-            changedContent: new Set(message.parts.map((_part, partIndex) => partIndex)),
-            capacity: Promise.resolve(),
-          };
-        }
-        this.activePartIndex = index;
-        this.activeResponseKey = responseKey;
-        this.activeOutputIndex = sourceIndex;
-        const prefixLength = (state.includeBase ? state.baseValue.length : 0) + state.stagedCodeUnits;
-        const initial = append?.index === index
-          ? append.append
-          : content.value.slice(Math.min(prefixLength, content.value.length));
-        capacity = this.replaceActiveContent(initial);
-        if (initial.length > 0) changedContent.add(index);
-      } else if (append?.index === index) {
-        if (sourceIndex !== undefined) this.activeOutputIndex = sourceIndex;
-        capacity = this.appendActiveContent(append.append);
-        if (append.append.length > 0) changedContent.add(index);
-      } else {
-        const prefixLength = (state.includeBase ? state.baseValue.length : 0) + state.stagedCodeUnits;
-        const replacement = content.value.slice(Math.min(prefixLength, content.value.length));
-        capacity = this.replaceActiveContent(replacement);
-        if (replacement.length > 0) changedContent.add(index);
+      let index = append?.index ?? partIndex;
+      if (index === undefined && sourceIndex !== undefined) {
+        index = [...this.activeItems.values()].find(
+          (item) => item.responseKey === responseKey && item.outputIndex === sourceIndex,
+        )?.partIndex;
       }
-    }
+      const changedContent = new Set<number>();
+      const part = index === undefined ? undefined : message.parts[index];
+      const content = partContent(part);
+      if (index !== undefined && part !== undefined && content !== undefined) {
+        const state = this.partContents.get(index) ?? this.createPartState(index, part);
+        this.partContents.set(index, state);
+        let active = this.findActiveSource(responseKey, sourceIndex, index);
+        const isNew = active === undefined;
+        if (active === undefined) {
+          const key = sourceIndex === undefined
+            ? `${this.sourceKey(responseKey, undefined, index)}\u0000${this.nextLegacySourceId++}`
+            : this.sourceKey(responseKey, sourceIndex, index);
+          active = {
+            key,
+            responseKey,
+            outputIndex: sourceIndex,
+            partIndex: index,
+            content: "",
+            codeUnits: 0,
+            memoryBytes: 0,
+          };
+          this.activeItems.set(key, active);
+        }
 
-    this.latestShape = stripContent(message);
-    if (!this.spilled) {
-      this.memoryMessage = message;
-    } else {
-      this.diskMessage = this.latestShape;
-      this.memoryMessage = undefined;
-    }
-    if (this.activeMemoryBytes > this.options.memoryBytes) {
-      capacity = Promise.all([capacity, this.spillActiveContent()]).then(() => undefined);
-    }
+        const appendMatchesItem = append?.index === index &&
+          (append.outputIndex === undefined || sourceIndex === undefined || append.outputIndex === sourceIndex);
+        if (appendMatchesItem) {
+          capacity = this.appendContribution(state, active, append.append);
+          if (append.append.length > 0) changedContent.add(index);
+        } else if (isNew) {
+          const prefixLength = this.baseLength(state) + this.contributionLength(state);
+          const initial = content.value.slice(Math.min(prefixLength, content.value.length));
+          capacity = this.appendContribution(state, active, initial);
+          if (initial.length > 0) changedContent.add(index);
+        } else {
+          const otherContentLength = this.baseLength(state) + state.contributions
+            .filter((contribution) => contribution.itemKey !== active!.key)
+            .reduce((total, contribution) => total + contribution.codeUnits, 0);
+          const currentItemLength = state.contributions
+            .filter((contribution) => contribution.itemKey === active!.key)
+            .reduce((total, contribution) => total + contribution.codeUnits, 0);
+          const nextItemLength = content.value.length - otherContentLength;
+          const partIsOnlyThisItem = state.contributions.every(
+            (contribution) => contribution.itemKey === active!.key,
+          );
+          if (partIsOnlyThisItem && nextItemLength >= 0 && nextItemLength !== currentItemLength) {
+            const replacement = content.value.slice(this.baseLength(state));
+            capacity = this.replaceContribution(state, active, replacement);
+            if (replacement.length > 0) changedContent.add(index);
+          }
+          // A non-appending full snapshot for one item in a merged/interleaved
+          // part is ambiguous. Keep the last streamed value until its staged
+          // reader becomes authoritative instead of mixing item contents.
+        }
+      }
+
+      this.latestShape = stripContent(message);
+      if (!this.spilled) {
+        this.memoryMessage = message;
+      } else {
+        this.diskMessage = this.latestShape;
+        this.memoryMessage = undefined;
+      }
+      if (this.activeMemoryBytes > this.options.memoryBytes) {
+        capacity = Promise.all([capacity, this.spillActiveContent()]).then(() => undefined);
+      }
       return {
         metadata: this.memoryMessage ?? this.diskMessage ?? this.latestShape,
         changedContent,
@@ -278,7 +320,6 @@ export class RunContentCache {
     }
   }
 
-  /** Supplies a lazy complete snapshot for asynchronous cache failure fallback. */
   public setFallbackMessageProvider(provider: () => WebUiMessage | undefined): void {
     this.fallbackMessageProvider = provider;
   }
@@ -294,24 +335,20 @@ export class RunContentCache {
     }
   }
 
-  /** Materialize the latest snapshot from its baseline, staged items and active delta. */
-  public async read(): Promise<WebUiMessage | undefined> {
-    if (this.memoryMessage !== undefined) return this.memoryMessage;
-    const snapshot = this.readSnapshot();
-    this.activeReads.add(snapshot);
-    try {
-      return await snapshot;
-    } catch (error) {
-      const fallback = this.fallbackMessageProvider?.() ?? this.memoryMessage;
+  public read(): Promise<WebUiMessage | undefined> {
+    const read = this.readSnapshot().catch((error: unknown) => {
+      const fallback = this.fallbackMessageProvider?.() ?? this.memoryMessage ?? this.baselineMessage;
       if (fallback === undefined) throw error;
       this.disableAfterError(error, fallback);
       return fallback;
-    } finally {
-      this.activeReads.delete(snapshot);
-    }
+    });
+    this.activeReads.add(read);
+    return read.finally(() => this.activeReads.delete(read));
   }
 
+  /** Rebuilds content from stable staged/partial sources, never from blank metadata. */
   private async readSnapshot(): Promise<WebUiMessage | undefined> {
+    if (this.disabled) return this.fallbackMessageProvider?.() ?? this.memoryMessage;
     if (this.memoryMessage !== undefined) return this.memoryMessage;
     const shape = this.diskMessage ?? this.latestShape;
     if (shape === undefined) return this.baselineMessage;
@@ -319,17 +356,35 @@ export class RunContentCache {
     const manifest = cloneMessage(shape);
     const baseline = this.baselineMessage;
     const contexts = new Map<number, PartContentState>();
+    const stagedByKey = new Map<string, StagedContentSource>();
     for (const [index, state] of this.partContents) {
-      contexts.set(index, {
+      const copied: PartContentState = {
         ...state,
-        stagedSources: state.stagedSources.slice(),
-      });
+        contributions: state.contributions.map((contribution) => ({...contribution})),
+        stagedSources: new Map(state.stagedSources),
+      };
+      contexts.set(index, copied);
+      for (const [key, source] of copied.stagedSources) stagedByKey.set(key, source);
     }
-    const activePartIndex = this.activePartIndex;
-    const activeMemoryContent = this.activeContent;
-    const partialContent = this.partialWriter === undefined || activePartIndex === undefined
-      ? ""
-      : await this.partialWriter.read();
+    const activeByKey = new Map(
+      [...this.activeItems].map(([key, source]) => [key, {...source}] as const),
+    );
+    const partialContent = this.partialWriter === undefined
+      ? new Map<string, string>()
+      : await this.partialWriter.readItems();
+    const stagedReads = new Map<string, Promise<string>>();
+    const readContent = (key: string): Promise<string> => {
+      const staged = stagedByKey.get(key);
+      if (staged !== undefined) {
+        let existing = stagedReads.get(key);
+        if (existing === undefined) {
+          existing = staged.read();
+          stagedReads.set(key, existing);
+        }
+        return existing;
+      }
+      return Promise.resolve(partialContent.get(key) ?? activeByKey.get(key)?.content ?? "");
+    };
 
     const loaded = await Promise.all(manifest.parts.map(async (part, index) => {
       const state = contexts.get(index);
@@ -337,11 +392,12 @@ export class RunContentCache {
       const baseValue = state === undefined
         ? partContent(basePart)?.value ?? ""
         : state.includeBase ? state.baseValue : "";
-      const staged = state === undefined
-        ? []
-        : await Promise.all(state.stagedSources.map((source) => source.read()));
-      const active = activePartIndex === index ? partialContent + activeMemoryContent : "";
-      return [index, baseValue + staged.join("") + active] as const;
+      if (state === undefined) return [index, baseValue] as const;
+      const pieces = await Promise.all(state.contributions.map(async (contribution) => {
+        const content = await readContent(contribution.itemKey);
+        return content.slice(contribution.offset, contribution.offset + contribution.codeUnits);
+      }));
+      return [index, baseValue + pieces.join("")] as const;
     }));
     const contentByPart = new Map(loaded);
     const restoredParts = manifest.parts.map((part, index): WebUiPart => {
@@ -368,7 +424,7 @@ export class RunContentCache {
     this.currentResponseKey = undefined;
     this.partialDirectory = undefined;
     this.partContents.clear();
-    this.clearActiveItem();
+    this.clearActiveItems();
     this.spilled = false;
     this.diskMessage = undefined;
     if (message !== undefined) {
@@ -388,7 +444,7 @@ export class RunContentCache {
     this.disabled = true;
     const reads = [...this.activeReads];
     this.partContents.clear();
-    this.clearActiveItem();
+    this.clearActiveItems();
     this.memoryMessage = undefined;
     this.diskMessage = undefined;
     this.baselineMessage = undefined;
@@ -407,8 +463,8 @@ export class RunContentCache {
       type: part.type,
       baseValue: baselineValue ?? "",
       includeBase: baselineValue !== undefined,
-      stagedSources: [],
-      stagedCodeUnits: 0,
+      contributions: [],
+      stagedSources: new Map(),
     };
   }
 
@@ -428,50 +484,162 @@ export class RunContentCache {
       : undefined;
   }
 
-  private appendActiveContent(delta: string): Promise<void> {
-    if (delta.length === 0) return Promise.resolve();
-    if (this.partialWriter !== undefined) return this.partialWriter.append(delta);
-    this.activeContent += delta;
-    // Incremental UTF-8 charging avoids re-encoding the whole growing string.
+  private findActiveSource(
+    responseKey: string,
+    outputIndex: number | undefined,
+    partIndex: number,
+  ): ActiveContentSource | undefined {
+    if (outputIndex !== undefined) {
+      return this.activeItems.get(this.sourceKey(responseKey, outputIndex, partIndex));
+    }
+    const matches = [...this.activeItems.values()].filter(
+      (item) => item.responseKey === responseKey && item.outputIndex === undefined && item.partIndex === partIndex,
+    );
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
+  private sourceKey(responseKey: string, outputIndex: number | undefined, partIndex: number): string {
+    return `${responseKey}\u0000${outputIndex === undefined ? "legacy" : outputIndex}\u0000${partIndex}`;
+  }
+
+  private appendContribution(
+    state: PartContentState,
+    source: ActiveContentSource,
+    value: string,
+  ): Promise<void> {
+    if (value.length === 0) return Promise.resolve();
+    const offset = source.codeUnits;
+    const last = state.contributions.at(-1);
+    if (last?.itemKey === source.key && last.offset + last.codeUnits === offset) {
+      last.codeUnits += value.length;
+    } else {
+      if (this.contributionCount() >= this.maxIndexSegments) {
+        throw new Error("response partial item-range index limit exceeded");
+      }
+      state.contributions.push({itemKey: source.key, offset, codeUnits: value.length});
+    }
+    source.codeUnits += value.length;
+    return this.appendActiveContent(source, value);
+  }
+
+  private replaceContribution(
+    state: PartContentState,
+    source: ActiveContentSource,
+    value: string,
+  ): Promise<void> {
+    const positions = state.contributions
+      .map((contribution, index) => contribution.itemKey === source.key ? index : -1)
+      .filter((index) => index >= 0);
+    const insertion = positions[0] ?? state.contributions.length;
+    state.contributions = state.contributions.filter((contribution) => contribution.itemKey !== source.key);
+    if (value.length > 0) {
+      if (positions.length === 0 && this.contributionCount() >= this.maxIndexSegments) {
+        throw new Error("response partial item-range index limit exceeded");
+      }
+      state.contributions.splice(insertion, 0, {itemKey: source.key, offset: 0, codeUnits: value.length});
+    }
+    return this.replaceActiveContent(source, value);
+  }
+
+  private reconcileContributionLength(state: PartContentState, key: string, codeUnits: number): void {
+    let total = state.contributions
+      .filter((contribution) => contribution.itemKey === key)
+      .reduce((sum, contribution) => sum + contribution.codeUnits, 0);
+    if (total < codeUnits) {
+      const last = [...state.contributions].reverse().find((contribution) => contribution.itemKey === key);
+      if (last === undefined) {
+        if (this.contributionCount() >= this.maxIndexSegments) {
+          throw new Error("response partial item-range index limit exceeded");
+        }
+        state.contributions.push({itemKey: key, offset: 0, codeUnits});
+      } else {
+        last.codeUnits += codeUnits - total;
+      }
+      return;
+    }
+    let remove = total - codeUnits;
+    for (let index = state.contributions.length - 1; index >= 0 && remove > 0; index -= 1) {
+      const contribution = state.contributions[index]!;
+      if (contribution.itemKey !== key) continue;
+      const amount = Math.min(contribution.codeUnits, remove);
+      contribution.codeUnits -= amount;
+      remove -= amount;
+      if (contribution.codeUnits === 0) state.contributions.splice(index, 1);
+    }
+  }
+
+  private contributionCount(): number {
+    let count = 0;
+    for (const state of this.partContents.values()) count += state.contributions.length;
+    return count;
+  }
+
+  private baseLength(state: PartContentState): number {
+    return state.includeBase ? state.baseValue.length : 0;
+  }
+
+  private contributionLength(state: PartContentState): number {
+    return state.contributions.reduce((total, contribution) => total + contribution.codeUnits, 0);
+  }
+
+  private appendActiveContent(source: ActiveContentSource, delta: string): Promise<void> {
+    if (this.partialWriter !== undefined) return this.partialWriter.append(source.key, delta);
+    source.content += delta;
+    source.memoryBytes += Buffer.byteLength(delta, "utf8");
     this.activeMemoryBytes += Buffer.byteLength(delta, "utf8");
     return Promise.resolve();
   }
 
-  private replaceActiveContent(value: string): Promise<void> {
-    if (this.partialWriter !== undefined) {
-      this.activeContent = "";
-      this.activeMemoryBytes = 0;
-      return this.partialWriter.replace(value);
-    }
-    this.activeContent = value;
-    this.activeMemoryBytes = Buffer.byteLength(value, "utf8");
+  private replaceActiveContent(source: ActiveContentSource, value: string): Promise<void> {
+    this.activeMemoryBytes = Math.max(0, this.activeMemoryBytes - source.memoryBytes);
+    source.content = "";
+    source.memoryBytes = 0;
+    source.codeUnits = value.length;
+    if (this.partialWriter !== undefined) return this.partialWriter.replace(source.key, value);
+    source.content = value;
+    source.memoryBytes = Buffer.byteLength(value, "utf8");
+    this.activeMemoryBytes += source.memoryBytes;
     return Promise.resolve();
   }
 
   private spillActiveContent(): Promise<void> {
-    if (this.activeContent.length === 0 || this.disabled || this.partialWriter !== undefined) {
+    if (this.disabled || this.partialWriter !== undefined || this.activeMemoryBytes <= this.options.memoryBytes) {
       return Promise.resolve();
     }
     const directory = this.partialDirectory ?? this.options.directory;
     if (directory === undefined) return Promise.resolve();
 
-    this.partialFilePath = join(directory, "responses.partial");
-    this.partialWriter = new ResponsePartialWriter({
+    this.partialFilePath = join(directory, RESPONSE_PARTIAL_FILE);
+    const writer = new ResponsePartialWriter({
       path: this.partialFilePath,
       batchBytes: this.writeBatchBytes,
       maxBufferedBytes: this.options.memoryBytes === 0
         ? this.writeBatchBytes
         : this.options.memoryBytes,
       flushIntervalMs: this.flushIntervalMs,
+      maxIndexSegments: this.maxIndexSegments,
       onError: (error) => this.handleWriterError(error),
     });
-    const initial = this.activeContent;
-    this.activeContent = "";
-    this.activeMemoryBytes = 0;
+    this.partialWriter = writer;
     this.spilled = true;
     this.memoryMessage = undefined;
     this.diskMessage = this.latestShape;
-    return this.partialWriter.append(initial);
+
+    const initial: Array<{itemKey: string; takeContent: () => string}> = [];
+    for (const source of this.activeItems.values()) {
+      if (source.content.length === 0) continue;
+      initial.push({
+        itemKey: source.key,
+        takeContent: () => {
+          const content = source.content;
+          source.content = "";
+          this.activeMemoryBytes = Math.max(0, this.activeMemoryBytes - source.memoryBytes);
+          source.memoryBytes = 0;
+          return content;
+        },
+      });
+    }
+    return writer.appendItems(initial);
   }
 
   private async cleanupPartialFile(): Promise<void> {
@@ -501,11 +669,8 @@ export class RunContentCache {
     else console.warn(`[web-ui-run-cache] spill disabled: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  private clearActiveItem(): void {
-    this.activePartIndex = undefined;
-    this.activeOutputIndex = undefined;
-    this.activeResponseKey = undefined;
-    this.activeContent = "";
+  private clearActiveItems(): void {
+    this.activeItems.clear();
     this.activeMemoryBytes = 0;
   }
 
@@ -521,7 +686,7 @@ export class RunContentCache {
       });
     }
     this.partContents.clear();
-    this.clearActiveItem();
+    this.clearActiveItems();
     this.diskMessage = undefined;
     this.memoryMessage = newest;
     this.baselineMessage = newest;
@@ -565,5 +730,6 @@ function cloneMessage(message: WebUiMessage): WebUiMessage {
     ...message,
     parts: message.parts.map((part) => ({...part})),
     ...(message.steps === undefined ? {} : {steps: message.steps.map((step) => ({...step}))}),
+    ...(message.pending === undefined ? {} : {pending: {...message.pending}}),
   };
 }

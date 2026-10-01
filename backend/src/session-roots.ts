@@ -13,9 +13,11 @@ const MAX_TOOL_STREAM_INTERVAL_MS = 60 * 1000;
 const MAX_RUN_CONTENT_MEMORY_BYTES = 16 * 1024 * 1024;
 const MAX_RUN_CONTENT_WRITE_BATCH_BYTES = 16 * 1024 * 1024;
 const MAX_RUN_CONTENT_FLUSH_INTERVAL_MS = 60 * 1000;
+const MAX_RUN_CONTENT_INDEX_SEGMENTS = 65_536;
 export const DEFAULT_RUN_CONTENT_MEMORY_BYTES = 100 * 1024;
 export const DEFAULT_RUN_CONTENT_WRITE_BATCH_BYTES = 32 * 1024;
 export const DEFAULT_RUN_CONTENT_FLUSH_INTERVAL_MS = 25;
+export const DEFAULT_RUN_CONTENT_MAX_INDEX_SEGMENTS = 1_024;
 const MAX_SNAPSHOT_TURNS = 100_000;
 const MAX_PAGE_TURNS = 1_000;
 const MAX_INLINE_PART_BYTES = 16 * 1024 * 1024;
@@ -33,6 +35,7 @@ export const DEFAULT_ROOT_SERVER_SETTINGS = {
   run_content_memory_bytes: DEFAULT_RUN_CONTENT_MEMORY_BYTES,
   run_content_write_batch_bytes: DEFAULT_RUN_CONTENT_WRITE_BATCH_BYTES,
   run_content_flush_interval_ms: DEFAULT_RUN_CONTENT_FLUSH_INTERVAL_MS,
+  run_content_max_index_segments: DEFAULT_RUN_CONTENT_MAX_INDEX_SEGMENTS,
   sse_max_buffered_bytes: 1024 * 1024,
   conditional_requests: true,
   snapshot_turns: 24,
@@ -66,6 +69,8 @@ export interface RootServerSettings {
   run_content_write_batch_bytes: number;
   /** Maximum delay before flushing a partial content append batch. */
   run_content_flush_interval_ms: number;
+  /** Maximum redundant content ranges retained before the shared partial file is compacted. */
+  run_content_max_index_segments: number;
   /** Maximum response-buffered SSE bytes per subscriber, before reconnecting to a snapshot. */
   sse_max_buffered_bytes: number;
   /** Answer with `304` when a session snapshot is unchanged. */
@@ -251,6 +256,18 @@ function normalizeRootServerSettings(
       `${path}: server.run_content_flush_interval_ms must be a safe integer between 0 and ${MAX_RUN_CONTENT_FLUSH_INTERVAL_MS}`,
     );
   }
+  const runContentMaxIndexSegments =
+    value.run_content_max_index_segments ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_max_index_segments;
+  if (
+    typeof runContentMaxIndexSegments !== "number" ||
+    !Number.isSafeInteger(runContentMaxIndexSegments) ||
+    runContentMaxIndexSegments < 1 ||
+    runContentMaxIndexSegments > MAX_RUN_CONTENT_INDEX_SEGMENTS
+  ) {
+    throw new ConfigError(
+      `${path}: server.run_content_max_index_segments must be a safe integer between 1 and ${MAX_RUN_CONTENT_INDEX_SEGMENTS}`,
+    );
+  }
   const sseMaxBufferedBytes =
     value.sse_max_buffered_bytes ?? DEFAULT_ROOT_SERVER_SETTINGS.sse_max_buffered_bytes;
   if (
@@ -325,6 +342,7 @@ function normalizeRootServerSettings(
     run_content_memory_bytes: runContentMemoryBytes,
     run_content_write_batch_bytes: runContentWriteBatchBytes,
     run_content_flush_interval_ms: runContentFlushIntervalMs,
+    run_content_max_index_segments: runContentMaxIndexSegments,
     sse_max_buffered_bytes: sseMaxBufferedBytes,
     conditional_requests: conditionalRequests,
     snapshot_turns: snapshotTurns,

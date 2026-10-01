@@ -151,6 +151,7 @@ test("loads configurable root server settings", async () => {
       run_content_memory_bytes: 4096,
       run_content_write_batch_bytes: 32 * 1024,
       run_content_flush_interval_ms: 25,
+      run_content_max_index_segments: 1_024,
       sse_max_buffered_bytes: 4096,
       conditional_requests: true,
       snapshot_turns: 24,
@@ -202,6 +203,15 @@ test("loads configurable root server settings", async () => {
     await assert.rejects(
       () => loadRootServerSettings({rootSettingPath: settingPath}),
       /server\.run_content_flush_interval_ms/,
+    );
+
+    await writeFile(
+      settingPath,
+      JSON.stringify({server: {run_content_max_index_segments: 0}, session_roots: [{path: ".jad/sessions"}]}),
+    );
+    await assert.rejects(
+      () => loadRootServerSettings({rootSettingPath: settingPath}),
+      /server\.run_content_max_index_segments/,
     );
 
     await writeFile(

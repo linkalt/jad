@@ -95,6 +95,8 @@ export interface AgentServerOptions {
   runContentWriteBatchBytes?: number;
   /** Maximum delay before an asynchronous partial-file batch is flushed. */
   runContentFlushIntervalMs?: number;
+  /** Maximum redundant range index entries before responses.partial is compacted. */
+  runContentMaxIndexSegments?: number;
   /** Maximum queued SSE response bytes per subscriber before it must resynchronize. */
   sseMaxBufferedBytes?: number;
   /** Answer with `304` when a session snapshot is unchanged. */
@@ -628,6 +630,7 @@ class AgentHttpApplication {
   private readonly runContentMemoryBytes: number;
   private readonly runContentWriteBatchBytes: number;
   private readonly runContentFlushIntervalMs: number;
+  private readonly runContentMaxIndexSegments: number;
   private readonly sseMaxBufferedBytes: number;
   private readonly conditionalRequests: boolean;
   private readonly snapshotTurns: number;
@@ -664,6 +667,8 @@ class AgentHttpApplication {
       options.runContentWriteBatchBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_write_batch_bytes;
     this.runContentFlushIntervalMs =
       options.runContentFlushIntervalMs ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_flush_interval_ms;
+    this.runContentMaxIndexSegments =
+      options.runContentMaxIndexSegments ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_max_index_segments;
     this.sseMaxBufferedBytes =
       options.sseMaxBufferedBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.sse_max_buffered_bytes;
     this.conditionalRequests =
@@ -677,6 +682,7 @@ class AgentHttpApplication {
       this.runContentMemoryBytes,
       this.runContentWriteBatchBytes,
       this.runContentFlushIntervalMs,
+      this.runContentMaxIndexSegments,
     );
   }
 
@@ -2140,6 +2146,8 @@ export async function startAgentServer(
       options.runContentWriteBatchBytes ?? serverSettings.run_content_write_batch_bytes,
     runContentFlushIntervalMs:
       options.runContentFlushIntervalMs ?? serverSettings.run_content_flush_interval_ms,
+    runContentMaxIndexSegments:
+      options.runContentMaxIndexSegments ?? serverSettings.run_content_max_index_segments,
     sseMaxBufferedBytes:
       options.sseMaxBufferedBytes ?? serverSettings.sse_max_buffered_bytes,
     conditionalRequests:
