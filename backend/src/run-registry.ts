@@ -57,14 +57,23 @@ export class SessionRun {
   private readonly listeners = new Set<RunSubscriber>();
   private terminal: RetainedTerminalEvent[] = [];
   private readonly contentCache: RunContentCache;
+  private lastContentCacheCapacity: Promise<void> = Promise.resolve();
+  private disposalPromise: Promise<void> | undefined;
 
   public constructor(
     public readonly turnId: string,
     public readonly controller: AbortController,
     private readonly startedAt: string,
     private readonly onRetire: (run: SessionRun) => void,
-    cache: {directory?: string; memoryBytes: number} = {
+    cache: {
+      directory?: string;
+      memoryBytes: number;
+      writeBatchBytes?: number;
+      flushIntervalMs?: number;
+    } = {
       memoryBytes: DEFAULT_ROOT_SERVER_SETTINGS.run_content_memory_bytes,
+      writeBatchBytes: DEFAULT_ROOT_SERVER_SETTINGS.run_content_write_batch_bytes,
+      flushIntervalMs: DEFAULT_ROOT_SERVER_SETTINGS.run_content_flush_interval_ms,
     },
   ) {
     this.contentCache = new RunContentCache(cache);
@@ -84,24 +93,32 @@ export class SessionRun {
     return this.contentCache.read();
   }
 
-  public beginResponseContentCache(
+  public async beginResponseContentCache(
     directory: string,
     responseKey: string,
     baselineMessage?: WebUiMessage,
-  ): void {
-    this.contentCache.beginResponse(directory, responseKey, baselineMessage);
+  ): Promise<void> {
+    await this.contentCache.beginResponse(directory, responseKey, baselineMessage);
   }
 
-  public handoffStagedOutputItem(
+  public async handoffStagedOutputItem(
     responseKey: string,
     outputIndex: number,
     readers: ReadonlyMap<number, RunContentCacheStagedReader>,
-  ): void {
-    this.contentCache.handoffOutputItem(responseKey, outputIndex, readers);
+  ): Promise<void> {
+    await this.contentCache.handoffOutputItem(responseKey, outputIndex, readers);
   }
 
-  public commitResponseContentCache(responseKey: string, message: WebUiMessage): void {
-    this.contentCache.commitResponse(responseKey, message);
+  public setContentFallbackMessageProvider(provider: () => WebUiMessage | undefined): void {
+    this.contentCache.setFallbackMessageProvider(provider);
+  }
+
+  public async waitForContentCacheCapacity(): Promise<void> {
+    await this.lastContentCacheCapacity;
+  }
+
+  public async commitResponseContentCache(responseKey: string, message: WebUiMessage): Promise<void> {
+    await this.contentCache.commitResponse(responseKey, message);
   }
 
   public summary(): WebUiSessionRun {
@@ -113,21 +130,23 @@ export class SessionRun {
   }
 
   /** Records the newest state and forwards what changed to every subscriber. */
-  public publishMessage(
+  public async publishMessage(
     message: WebUiMessage,
     append?: WebUiMessageAppend,
     outputIndex?: number,
-  ): void {
+    partIndex?: number,
+  ): Promise<void> {
     const nextMessage = this.pendingInteraction === undefined
       ? message
       : {...message, pending: this.pendingInteraction};
     const previous = this.contentCache.metadata();
     const wasSpilled = this.contentCache.isSpilled;
-    const update = this.contentCache.update(nextMessage, append, outputIndex);
+    const update = this.contentCache.update(nextMessage, append, outputIndex, partIndex);
+    this.lastContentCacheCapacity = update.capacity;
     const stored = update.metadata;
     if (previous === undefined) {
       this.publish("ui.message", {message: nextMessage});
-      return;
+      return update.capacity;
     }
 
     if (wasSpilled) {
@@ -138,7 +157,7 @@ export class SessionRun {
       } else {
         this.publishSpilledUpdates(previous, stored, nextMessage, append, update.changedContent);
       }
-      return;
+      return update.capacity;
     }
 
     const appended = append === undefined
@@ -146,16 +165,17 @@ export class SessionRun {
       : messageAppendIncrement(previous, nextMessage, append);
     if (appended !== undefined) {
       this.publish(appended.event, appended.data);
-      return;
+      return update.capacity;
     }
     const increments = messageIncrements(previous, nextMessage);
     if (increments === undefined) {
       this.publish("ui.message", {message: nextMessage});
-      return;
+      return update.capacity;
     }
     for (const increment of increments) {
       this.publish(increment.event, increment.data);
     }
+    return update.capacity;
   }
 
   private publishSpilledUpdates(
@@ -258,7 +278,9 @@ export class SessionRun {
     this.interactions.cancel("The run ended before the draft was answered.");
     this.status = status;
     this.terminal = events.map(retainTerminalEvent);
-    this.contentCache.finish(finalMessage === undefined ? undefined : withoutPending(finalMessage));
+    void this.contentCache.finish(finalMessage === undefined ? undefined : withoutPending(finalMessage)).catch((error: unknown) => {
+      console.warn(`[web-ui-run-cache] terminal cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
     for (const event of events) {
       this.emit(event);
     }
@@ -325,8 +347,9 @@ export class SessionRun {
   }
 
   /** Release the temporary run cache when retention ends or the registry closes. */
-  public dispose(): void {
-    this.contentCache.dispose();
+  public dispose(): Promise<void> {
+    this.disposalPromise ??= this.contentCache.dispose();
+    return this.disposalPromise;
   }
 
   private async replayRunning(
@@ -417,6 +440,8 @@ export class SessionRunRegistry {
   public constructor(
     private readonly retentionMs: number,
     private readonly runContentMemoryBytes = DEFAULT_ROOT_SERVER_SETTINGS.run_content_memory_bytes,
+    private readonly runContentWriteBatchBytes = DEFAULT_ROOT_SERVER_SETTINGS.run_content_write_batch_bytes,
+    private readonly runContentFlushIntervalMs: number = DEFAULT_ROOT_SERVER_SETTINGS.run_content_flush_interval_ms,
   ) {}
 
   private static key(sessionRef: string, profile: string | undefined): string {
@@ -438,6 +463,8 @@ export class SessionRunRegistry {
       {
         ...(cacheDirectory === undefined ? {} : {directory: cacheDirectory}),
         memoryBytes: this.runContentMemoryBytes,
+        writeBatchBytes: this.runContentWriteBatchBytes,
+        flushIntervalMs: this.runContentFlushIntervalMs,
       },
     );
     const key = SessionRunRegistry.key(sessionRef, profile);
@@ -537,7 +564,9 @@ export class SessionRunRegistry {
     this.timers.clear();
     for (const slot of this.runs.values()) {
       for (const run of slot.list) {
-        run.dispose();
+        void run.dispose().catch((error: unknown) => {
+          console.warn(`[web-ui-run-cache] disposal failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
       }
     }
     this.runs.clear();
@@ -555,7 +584,9 @@ export class SessionRunRegistry {
           slot.list = remaining;
         }
       }
-      run.dispose();
+      void run.dispose().catch((error: unknown) => {
+        console.warn(`[web-ui-run-cache] disposal failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
     };
 
     if (this.retentionMs <= 0) {

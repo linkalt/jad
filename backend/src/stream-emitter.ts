@@ -19,9 +19,11 @@ import {
 export class MessageStreamEmitter {
   private pending: WebUiMessage | undefined;
   private pendingAppend: {index: number; startLength: number; outputIndex?: number} | undefined;
+  private pendingPartIndex: number | undefined;
   private timer: NodeJS.Timeout | undefined;
   private lastEmitAt = Number.NEGATIVE_INFINITY;
   private lastEmitted: WebUiMessage | undefined;
+  private dispatchPromise: Promise<void> = Promise.resolve();
 
   public constructor(
     private readonly intervalMs: number,
@@ -29,13 +31,15 @@ export class MessageStreamEmitter {
       message: WebUiMessage,
       append?: WebUiMessageAppend,
       outputIndex?: number,
-    ) => void,
+      partIndex?: number,
+    ) => void | Promise<void>,
   ) {}
 
   public push(
     message: WebUiMessage,
     append?: WebUiMessageAppend,
     outputIndex?: number,
+    partIndex?: number,
   ): void {
     const itemIndex = append?.outputIndex ?? outputIndex;
     const taggedAppend = append === undefined || itemIndex === undefined
@@ -43,19 +47,19 @@ export class MessageStreamEmitter {
       : {...append, outputIndex: itemIndex};
     if (this.intervalMs <= 0) {
       this.flush();
-      this.emitNow(message, taggedAppend, itemIndex);
+      this.emitNow(message, taggedAppend, itemIndex, partIndex);
       return;
     }
     if (taggedAppend === undefined || taggedAppend.append.length === 0) {
       this.flush();
-      this.emitNow(message, undefined, itemIndex);
+      this.emitNow(message, undefined, itemIndex, partIndex);
       return;
     }
 
     const previous = this.pending ?? this.lastEmitted;
     if (previous === undefined || messageAppendIncrement(previous, message, taggedAppend) === undefined) {
       this.flush();
-      this.emitNow(message, taggedAppend, itemIndex);
+      this.emitNow(message, taggedAppend, itemIndex, partIndex);
       return;
     }
 
@@ -65,7 +69,7 @@ export class MessageStreamEmitter {
         this.pendingAppend?.outputIndex !== itemIndex
       ) {
         this.flush();
-        this.emitNow(message, taggedAppend, itemIndex);
+        this.emitNow(message, taggedAppend, itemIndex, partIndex);
         return;
       }
       // Keep only the newest snapshot and the starting offset. The appended
@@ -79,16 +83,17 @@ export class MessageStreamEmitter {
     // Nothing is waiting and the window is open: the caller sees this state at
     // once instead of one tick later, so a part appears the moment it starts.
     if (this.timer === undefined && Date.now() - this.lastEmitAt >= this.intervalMs) {
-      this.emitNow(message, taggedAppend, itemIndex);
+      this.emitNow(message, taggedAppend, itemIndex, partIndex);
       return;
     }
 
     const startLength = appendableLength(previous.parts[taggedAppend.index]);
     if (startLength === undefined) {
-      this.emitNow(message, undefined, itemIndex);
+      this.emitNow(message, undefined, itemIndex, partIndex);
       return;
     }
     this.pending = message;
+    this.pendingPartIndex = partIndex ?? taggedAppend.index;
     this.pendingAppend = {
       index: taggedAppend.index,
       startLength,
@@ -102,8 +107,10 @@ export class MessageStreamEmitter {
     this.clearTimer();
     const pending = this.pending;
     const pendingAppend = this.pendingAppend;
+    const pendingPartIndex = this.pendingPartIndex;
     this.pending = undefined;
     this.pendingAppend = undefined;
+    this.pendingPartIndex = undefined;
     if (pending !== undefined) {
       let append: WebUiMessageAppend | undefined;
       if (pendingAppend !== undefined) {
@@ -116,7 +123,21 @@ export class MessageStreamEmitter {
           };
         }
       }
-      this.emitNow(pending, append, pendingAppend?.outputIndex);
+      this.emitNow(
+        pending,
+        append,
+        pendingAppend?.outputIndex,
+        pendingAppend?.index ?? pendingPartIndex,
+      );
+    }
+  }
+
+  /** Waits for the last emitted cache/SSE update so pressure is back-pressured upstream. */
+  public async waitForEmission(): Promise<void> {
+    while (true) {
+      const current = this.dispatchPromise;
+      await current;
+      if (current === this.dispatchPromise) return;
     }
   }
 
@@ -125,6 +146,7 @@ export class MessageStreamEmitter {
     this.clearTimer();
     this.pending = undefined;
     this.pendingAppend = undefined;
+    this.pendingPartIndex = undefined;
   }
 
   private schedule(): void {
@@ -143,13 +165,23 @@ export class MessageStreamEmitter {
     message: WebUiMessage,
     append?: WebUiMessageAppend,
     outputIndex?: number,
+    partIndex?: number,
   ): void {
     this.lastEmitAt = Date.now();
     this.lastEmitted = message;
     const taggedAppend = append === undefined || (append.outputIndex !== undefined || outputIndex === undefined)
       ? append
       : {...append, outputIndex};
-    this.emit(message, taggedAppend, outputIndex);
+    try {
+      this.dispatchPromise = Promise.resolve(
+        this.emit(message, taggedAppend, outputIndex, partIndex),
+      ).catch((error: unknown) => {
+        console.warn(`[web-ui-run-cache] stream dispatch failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    } catch (error) {
+      this.dispatchPromise = Promise.resolve();
+      console.warn(`[web-ui-run-cache] stream dispatch failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private clearTimer(): void {

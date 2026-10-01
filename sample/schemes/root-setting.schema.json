@@ -52,6 +52,21 @@
           "default": 102400,
           "description": "Maximum in-memory UTF-8 bytes retained for the active output item's content before concatenated content spills to one responses.partial file in the response-turn staging directory. 0 spills any non-empty content immediately."
         },
+        "run_content_write_batch_bytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 16777216,
+          "multipleOf": 2,
+          "default": 32768,
+          "description": "Target UTF-8 content bytes per asynchronous append to responses.partial. Buffered content remains bounded by run_content_memory_bytes (with encoded-buffer overhead)."
+        },
+        "run_content_flush_interval_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60000,
+          "default": 25,
+          "description": "Maximum delay before flushing a partial content append batch. 0 schedules immediate asynchronous flushing."
+        },
         "sse_max_buffered_bytes": {
           "type": "integer",
           "minimum": 1024,

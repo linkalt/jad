@@ -38,7 +38,7 @@ test("recognizes an in-progress tool call", () => {
 
 test("coalesces a burst of growing tool arguments into one emit", () => {
   const sent: WebUiMessage[] = [];
-  const emitter = new MessageStreamEmitter(60_000, (value) => sent.push(value));
+  const emitter = new MessageStreamEmitter(60_000, (value) => { sent.push(value); });
 
   let argumentsText = "{";
   emitter.push(toolCall(argumentsText, true));
@@ -87,7 +87,7 @@ test("keeps response output-item deltas separate across the coalescing window", 
 
 test("coalesces streamed text and publishes a new part at once", () => {
   const sent: WebUiMessage[] = [];
-  const emitter = new MessageStreamEmitter(60_000, (value) => sent.push(value));
+  const emitter = new MessageStreamEmitter(60_000, (value) => { sent.push(value); });
 
   emitter.push(message([{type: "text", text: "hello"}]));
   emitter.push(message([{type: "text", text: "hello world"}]), {index: 0, append: " world"});
@@ -109,7 +109,7 @@ test("coalesces streamed text and publishes a new part at once", () => {
 
 test("flushes a pending append before another part grows", () => {
   const sent: WebUiMessage[] = [];
-  const emitter = new MessageStreamEmitter(60_000, (value) => sent.push(value));
+  const emitter = new MessageStreamEmitter(60_000, (value) => { sent.push(value); });
 
   emitter.push(message([
     {type: "text", text: "first"},
@@ -132,7 +132,7 @@ test("flushes a pending append before another part grows", () => {
 
 test("a completed snapshot is not delayed by a pending one, and supersedes it", () => {
   const sent: WebUiMessage[] = [];
-  const emitter = new MessageStreamEmitter(60_000, (value) => sent.push(value));
+  const emitter = new MessageStreamEmitter(60_000, (value) => { sent.push(value); });
 
   emitter.push(toolCall('{"path":', true));
   emitter.push(toolCall('{"path":"notes.md"}', false));
@@ -147,7 +147,7 @@ test("a completed snapshot is not delayed by a pending one, and supersedes it", 
 
 test("discard drops a coalesced snapshot that a newer state replaced", () => {
   const sent: WebUiMessage[] = [];
-  const emitter = new MessageStreamEmitter(60_000, (value) => sent.push(value));
+  const emitter = new MessageStreamEmitter(60_000, (value) => { sent.push(value); });
 
   emitter.push(toolCall("{", true));
   emitter.push(toolCall('{"path":', true), {index: 0, append: '"path":'});
@@ -160,7 +160,7 @@ test("discard drops a coalesced snapshot that a newer state replaced", () => {
 
 test("an interval of zero streams every snapshot", () => {
   const sent: WebUiMessage[] = [];
-  const emitter = new MessageStreamEmitter(0, (value) => sent.push(value));
+  const emitter = new MessageStreamEmitter(0, (value) => { sent.push(value); });
 
   emitter.push(toolCall("{", true));
   emitter.push(toolCall('{"path"', true), {index: 0, append: '"path"'});
@@ -171,7 +171,7 @@ test("an interval of zero streams every snapshot", () => {
 
 test("a scheduled flush delivers the newest snapshot without an explicit flush", async () => {
   const sent: WebUiMessage[] = [];
-  const emitter = new MessageStreamEmitter(20, (value) => sent.push(value));
+  const emitter = new MessageStreamEmitter(20, (value) => { sent.push(value); });
 
   emitter.push(toolCall("{", true));
   emitter.push(toolCall('{"path":"notes.md"', true), {index: 0, append: '"path":"notes.md"'});

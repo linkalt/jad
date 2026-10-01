@@ -1,12 +1,7 @@
-import {
-  closeSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  rmSync,
-  writeSync,
-} from "node:fs";
 import {join} from "node:path";
+
+import {ResponsePartialWriter} from "./response-partial-writer.js";
+import {DEFAULT_ROOT_SERVER_SETTINGS} from "./session-roots.js";
 
 import type {WebUiMessage, WebUiPart} from "./plugins/web-ui/types.js";
 import {fieldsFromParts} from "./plugins/web-ui/shared-web-ui.js";
@@ -15,6 +10,8 @@ import type {WebUiMessageAppend} from "./plugins/web-ui/incremental-web-ui.js";
 export interface RunContentCacheUpdate {
   metadata: WebUiMessage;
   changedContent: ReadonlySet<number>;
+  /** Resolves when the cache has admitted this update within its write budget. */
+  capacity: Promise<void>;
 }
 
 export interface RunContentCacheStagedReader {
@@ -27,6 +24,10 @@ interface RunContentCacheOptions {
   directory?: string;
   /** UTF-8 bytes of the active output item kept in memory before spilling. */
   memoryBytes: number;
+  /** Target UTF-8 bytes per asynchronous append batch. */
+  writeBatchBytes?: number;
+  /** Maximum delay before a buffered batch is flushed asynchronously. */
+  flushIntervalMs?: number;
 }
 
 type ContentField = "text" | "arguments" | "output";
@@ -59,10 +60,13 @@ export class RunContentCache {
   private baselineMessage: WebUiMessage | undefined;
   private latestShape: WebUiMessage | undefined;
   private readonly partContents = new Map<number, PartContentState>();
+  private readonly activeReads = new Set<Promise<WebUiMessage | undefined>>();
   private currentResponseKey: string | undefined;
   private partialDirectory: string | undefined;
   private partialFilePath: string | undefined;
-  private partialFileDescriptor: number | undefined;
+  private partialWriter: ResponsePartialWriter | undefined;
+  private partialCleanupPromise: Promise<void> | undefined;
+  private fallbackMessageProvider: (() => WebUiMessage | undefined) | undefined;
   private activePartIndex: number | undefined;
   private activeOutputIndex: number | undefined;
   private activeResponseKey: string | undefined;
@@ -70,8 +74,13 @@ export class RunContentCache {
   private activeMemoryBytes = 0;
   private spilled = false;
   private disabled = false;
+  private readonly writeBatchBytes: number;
+  private readonly flushIntervalMs: number;
 
-  public constructor(private readonly options: RunContentCacheOptions) {}
+  public constructor(private readonly options: RunContentCacheOptions) {
+    this.writeBatchBytes = options.writeBatchBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_write_batch_bytes;
+    this.flushIntervalMs = options.flushIntervalMs ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_flush_interval_ms;
+  }
 
   public get isSpilled(): boolean {
     return this.spilled;
@@ -83,16 +92,16 @@ export class RunContentCache {
   }
 
   /** Starts the partial-content lifetime for one Responses turn. */
-  public beginResponse(
+  public async beginResponse(
     directory: string,
     responseKey: string,
     baselineMessage?: WebUiMessage,
-  ): void {
+  ): Promise<void> {
     const candidate = baselineMessage ?? this.memoryMessage ?? this.baselineMessage;
     const baseline = candidate !== undefined && candidate.parts.length === 0 && candidate.text === ""
       ? undefined
       : candidate;
-    this.cleanupPartialFile();
+    await this.cleanupPartialFile();
     this.currentResponseKey = responseKey;
     this.partialDirectory = directory;
     this.baselineMessage = baseline;
@@ -108,11 +117,11 @@ export class RunContentCache {
    * Replaces the active item's streamed delta with the authoritative staged
    * output reader, then deletes its partial content file.
    */
-  public handoffOutputItem(
+  public async handoffOutputItem(
     responseKey: string,
     outputIndex: number,
     readers: ReadonlyMap<number, RunContentCacheStagedReader>,
-  ): void {
+  ): Promise<void> {
     if (responseKey !== this.currentResponseKey) return;
 
     const visibleMessage = this.memoryMessage ?? this.latestShape ?? this.baselineMessage;
@@ -138,8 +147,12 @@ export class RunContentCache {
     const itemMatches = this.activeResponseKey === responseKey &&
       (this.activeOutputIndex === undefined || this.activeOutputIndex === outputIndex);
     if (itemMatches) {
-      this.clearPartialFile();
+      const reads = [...this.activeReads];
+      // New snapshots immediately use the staged reader; previously captured
+      // snapshots retain the partial file until their reads finish.
       this.clearActiveItem();
+      await Promise.allSettled(reads);
+      await this.clearPartialFile();
     }
 
     if (this.memoryMessage !== undefined && readers.size > 0) {
@@ -150,19 +163,24 @@ export class RunContentCache {
     this.spilled = this.spilled || readers.size > 0;
   }
 
-  /** The staged output has been committed to messages.jsonl. */
-  public commitResponse(responseKey: string, message: WebUiMessage): void {
+  /** Installs a complete source before retiring staged readers for this response. */
+  public async commitResponse(responseKey: string, message: WebUiMessage): Promise<void> {
     if (responseKey !== this.currentResponseKey) return;
-    this.cleanupPartialFile();
+
+    // Publish the new complete source first so later subscribers cannot acquire
+    // readers that depend on staging while existing snapshot reads are drained.
     this.currentResponseKey = undefined;
     this.partialDirectory = undefined;
-    this.partContents.clear();
-    this.clearActiveItem();
     this.baselineMessage = message;
     this.memoryMessage = message;
     this.diskMessage = undefined;
     this.latestShape = message;
     this.spilled = false;
+
+    await Promise.allSettled([...this.activeReads]);
+    await this.cleanupPartialFile();
+    this.partContents.clear();
+    this.clearActiveItem();
   }
 
   /** Update the normalized scheme and append only a supplied content delta. */
@@ -178,11 +196,13 @@ export class RunContentCache {
       this.diskMessage = undefined;
       this.latestShape = message;
       this.spilled = false;
-      return {metadata: message, changedContent: new Set()};
+      return {metadata: message, changedContent: new Set(), capacity: Promise.resolve()};
     }
 
-    const responseKey = this.currentResponseKey;
-    const sourceIndex = append?.outputIndex ?? outputIndex;
+    let capacity = Promise.resolve();
+    try {
+      const responseKey = this.currentResponseKey;
+      const sourceIndex = append?.outputIndex ?? outputIndex;
     const activePartIndex = sourceIndex !== undefined &&
       this.activeResponseKey === responseKey &&
       (this.activeOutputIndex === undefined || this.activeOutputIndex === sourceIndex)
@@ -209,6 +229,7 @@ export class RunContentCache {
           return {
             metadata: message,
             changedContent: new Set(message.parts.map((_part, partIndex) => partIndex)),
+            capacity: Promise.resolve(),
           };
         }
         this.activePartIndex = index;
@@ -218,16 +239,16 @@ export class RunContentCache {
         const initial = append?.index === index
           ? append.append
           : content.value.slice(Math.min(prefixLength, content.value.length));
-        this.replaceActiveContent(initial);
+        capacity = this.replaceActiveContent(initial);
         if (initial.length > 0) changedContent.add(index);
       } else if (append?.index === index) {
         if (sourceIndex !== undefined) this.activeOutputIndex = sourceIndex;
-        this.appendActiveContent(append.append);
+        capacity = this.appendActiveContent(append.append);
         if (append.append.length > 0) changedContent.add(index);
       } else {
         const prefixLength = (state.includeBase ? state.baseValue.length : 0) + state.stagedCodeUnits;
         const replacement = content.value.slice(Math.min(prefixLength, content.value.length));
-        this.replaceActiveContent(replacement);
+        capacity = this.replaceActiveContent(replacement);
         if (replacement.length > 0) changedContent.add(index);
       }
     }
@@ -240,12 +261,26 @@ export class RunContentCache {
       this.memoryMessage = undefined;
     }
     if (this.activeMemoryBytes > this.options.memoryBytes) {
-      this.spillActiveContent();
+      capacity = Promise.all([capacity, this.spillActiveContent()]).then(() => undefined);
     }
-    return {
-      metadata: this.memoryMessage ?? this.diskMessage ?? this.latestShape,
-      changedContent,
-    };
+      return {
+        metadata: this.memoryMessage ?? this.diskMessage ?? this.latestShape,
+        changedContent,
+        capacity: this.observeCapacity(capacity, message),
+      };
+    } catch (error) {
+      this.disableAfterError(error, message);
+      return {
+        metadata: message,
+        changedContent: new Set(message.parts.map((_part, partIndex) => partIndex)),
+        capacity: Promise.resolve(),
+      };
+    }
+  }
+
+  /** Supplies a lazy complete snapshot for asynchronous cache failure fallback. */
+  public setFallbackMessageProvider(provider: () => WebUiMessage | undefined): void {
+    this.fallbackMessageProvider = provider;
   }
 
   /** Replace only top-level metadata such as the pending interaction. */
@@ -262,6 +297,22 @@ export class RunContentCache {
   /** Materialize the latest snapshot from its baseline, staged items and active delta. */
   public async read(): Promise<WebUiMessage | undefined> {
     if (this.memoryMessage !== undefined) return this.memoryMessage;
+    const snapshot = this.readSnapshot();
+    this.activeReads.add(snapshot);
+    try {
+      return await snapshot;
+    } catch (error) {
+      const fallback = this.fallbackMessageProvider?.() ?? this.memoryMessage;
+      if (fallback === undefined) throw error;
+      this.disableAfterError(error, fallback);
+      return fallback;
+    } finally {
+      this.activeReads.delete(snapshot);
+    }
+  }
+
+  private async readSnapshot(): Promise<WebUiMessage | undefined> {
+    if (this.memoryMessage !== undefined) return this.memoryMessage;
     const shape = this.diskMessage ?? this.latestShape;
     if (shape === undefined) return this.baselineMessage;
 
@@ -276,9 +327,9 @@ export class RunContentCache {
     }
     const activePartIndex = this.activePartIndex;
     const activeMemoryContent = this.activeContent;
-    const partialContent = this.partialFilePath === undefined
+    const partialContent = this.partialWriter === undefined || activePartIndex === undefined
       ? ""
-      : readFileSync(this.partialFilePath).toString("utf16le");
+      : await this.partialWriter.read();
 
     const loaded = await Promise.all(manifest.parts.map(async (part, index) => {
       const state = contexts.get(index);
@@ -311,9 +362,9 @@ export class RunContentCache {
     return {...manifest, parts: restoredParts, ...fieldsFromParts(restoredParts)};
   }
 
-  /** Keep a final terminal message in memory and retire temporary partial data. */
-  public finish(message?: WebUiMessage): void {
-    this.cleanupPartialFile();
+  /** Publish the terminal source before asynchronously retiring partial data. */
+  public async finish(message?: WebUiMessage): Promise<void> {
+    const reads = [...this.activeReads];
     this.currentResponseKey = undefined;
     this.partialDirectory = undefined;
     this.partContents.clear();
@@ -328,12 +379,14 @@ export class RunContentCache {
       this.baselineMessage = undefined;
       this.latestShape = undefined;
     }
+    await Promise.allSettled(reads);
+    await this.cleanupPartialFile();
   }
 
   /** Remove temporary cache data when a run is no longer attachable. */
-  public dispose(): void {
+  public async dispose(): Promise<void> {
     this.disabled = true;
-    this.cleanupPartialFile();
+    const reads = [...this.activeReads];
     this.partContents.clear();
     this.clearActiveItem();
     this.memoryMessage = undefined;
@@ -343,6 +396,8 @@ export class RunContentCache {
     this.currentResponseKey = undefined;
     this.partialDirectory = undefined;
     this.spilled = false;
+    await Promise.allSettled(reads);
+    await this.cleanupPartialFile();
   }
 
   private createPartState(index: number, part: WebUiPart): PartContentState {
@@ -373,81 +428,77 @@ export class RunContentCache {
       : undefined;
   }
 
-  private appendActiveContent(delta: string): void {
-    if (delta.length === 0) return;
-    if (this.partialFileDescriptor !== undefined) {
-      this.writePartial(delta);
-      return;
-    }
+  private appendActiveContent(delta: string): Promise<void> {
+    if (delta.length === 0) return Promise.resolve();
+    if (this.partialWriter !== undefined) return this.partialWriter.append(delta);
     this.activeContent += delta;
-    this.activeMemoryBytes = Buffer.byteLength(this.activeContent, "utf8");
-    if (this.activeMemoryBytes > this.options.memoryBytes) this.spillActiveContent();
+    // Incremental UTF-8 charging avoids re-encoding the whole growing string.
+    this.activeMemoryBytes += Buffer.byteLength(delta, "utf8");
+    return Promise.resolve();
   }
 
-  private replaceActiveContent(value: string): void {
-    this.clearPartialFile();
+  private replaceActiveContent(value: string): Promise<void> {
+    if (this.partialWriter !== undefined) {
+      this.activeContent = "";
+      this.activeMemoryBytes = 0;
+      return this.partialWriter.replace(value);
+    }
     this.activeContent = value;
     this.activeMemoryBytes = Buffer.byteLength(value, "utf8");
-    if (this.activeMemoryBytes > this.options.memoryBytes) this.spillActiveContent();
+    return Promise.resolve();
   }
 
-  private spillActiveContent(): void {
-    if (this.activeContent.length === 0 || this.disabled) return;
-    const directory = this.partialDirectory ?? this.options.directory;
-    if (directory === undefined) return;
-    mkdirSync(directory, {recursive: true});
-    this.partialFilePath ??= join(directory, "responses.partial");
-    if (this.partialFileDescriptor === undefined) {
-      this.partialFileDescriptor = openSync(this.partialFilePath, "a");
+  private spillActiveContent(): Promise<void> {
+    if (this.activeContent.length === 0 || this.disabled || this.partialWriter !== undefined) {
+      return Promise.resolve();
     }
-    this.writePartial(this.activeContent);
+    const directory = this.partialDirectory ?? this.options.directory;
+    if (directory === undefined) return Promise.resolve();
+
+    this.partialFilePath = join(directory, "responses.partial");
+    this.partialWriter = new ResponsePartialWriter({
+      path: this.partialFilePath,
+      batchBytes: this.writeBatchBytes,
+      maxBufferedBytes: this.options.memoryBytes === 0
+        ? this.writeBatchBytes
+        : this.options.memoryBytes,
+      flushIntervalMs: this.flushIntervalMs,
+      onError: (error) => this.handleWriterError(error),
+    });
+    const initial = this.activeContent;
     this.activeContent = "";
     this.activeMemoryBytes = 0;
     this.spilled = true;
     this.memoryMessage = undefined;
     this.diskMessage = this.latestShape;
+    return this.partialWriter.append(initial);
   }
 
-  private writePartial(value: string): void {
-    if (this.partialFileDescriptor === undefined) {
-      const directory = this.partialDirectory ?? this.options.directory;
-      if (directory === undefined) throw new Error("response partial directory is unavailable");
-      mkdirSync(directory, {recursive: true});
-      this.partialFilePath ??= join(directory, "responses.partial");
-      this.partialFileDescriptor = openSync(this.partialFilePath, "a");
-    }
-    const bytes = Buffer.from(value, "utf16le");
-    let written = 0;
-    while (written < bytes.byteLength) {
-      const count = writeSync(
-        this.partialFileDescriptor,
-        bytes,
-        written,
-        bytes.byteLength - written,
-        null,
-      );
-      if (count === 0) throw new Error("incomplete response partial append");
-      written += count;
-    }
+  private async cleanupPartialFile(): Promise<void> {
+    await this.clearPartialFile();
   }
 
-  private cleanupPartialFile(): void {
-    this.clearPartialFile();
-  }
-
-  private clearPartialFile(): void {
-    const descriptor = this.partialFileDescriptor;
-    this.partialFileDescriptor = undefined;
-    if (descriptor !== undefined) {
-      try {
-        closeSync(descriptor);
-      } catch (error) {
-        console.warn(`[web-ui-run-cache] failed to close partial cache: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    const filePath = this.partialFilePath;
+  private clearPartialFile(): Promise<void> {
+    const writer = this.partialWriter;
+    if (writer === undefined) return this.partialCleanupPromise ?? Promise.resolve();
+    this.partialWriter = undefined;
     this.partialFilePath = undefined;
-    if (filePath !== undefined) rmSync(filePath, {force: true});
+    this.partialCleanupPromise = writer.dispose().catch((error: unknown) => {
+      console.warn(`[web-ui-run-cache] failed to dispose partial cache: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    return this.partialCleanupPromise;
+  }
+
+  private observeCapacity(capacity: Promise<void>, message: WebUiMessage): Promise<void> {
+    return capacity.catch((error: unknown) => {
+      this.disableAfterError(error, this.fallbackMessageProvider?.() ?? message);
+    });
+  }
+
+  private handleWriterError(error: unknown): void {
+    const fallback = this.fallbackMessageProvider?.() ?? this.memoryMessage ?? this.baselineMessage ?? this.latestShape;
+    if (fallback !== undefined) this.disableAfterError(error, fallback);
+    else console.warn(`[web-ui-run-cache] spill disabled: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   private clearActiveItem(): void {
@@ -459,8 +510,16 @@ export class RunContentCache {
   }
 
   private disableAfterError(error: unknown, newest: WebUiMessage): void {
+    if (this.disabled) return;
     console.warn(`[web-ui-run-cache] spill disabled: ${error instanceof Error ? error.message : String(error)}`);
-    this.cleanupPartialFile();
+    const writer = this.partialWriter;
+    this.partialWriter = undefined;
+    this.partialFilePath = undefined;
+    if (writer !== undefined) {
+      this.partialCleanupPromise = writer.dispose().catch((cleanupError: unknown) => {
+        console.warn(`[web-ui-run-cache] partial cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+      });
+    }
     this.partContents.clear();
     this.clearActiveItem();
     this.diskMessage = undefined;

@@ -91,6 +91,10 @@ export interface AgentServerOptions {
   toolStreamIntervalMs?: number;
   /** UTF-8 bytes retained in memory per live-run content cache before spilling to disk. */
   runContentMemoryBytes?: number;
+  /** Target UTF-8 content bytes per asynchronous partial-file append. */
+  runContentWriteBatchBytes?: number;
+  /** Maximum delay before an asynchronous partial-file batch is flushed. */
+  runContentFlushIntervalMs?: number;
   /** Maximum queued SSE response bytes per subscriber before it must resynchronize. */
   sseMaxBufferedBytes?: number;
   /** Answer with `304` when a session snapshot is unchanged. */
@@ -622,6 +626,8 @@ class AgentHttpApplication {
   private readonly maxBodyBytes: number;
   private readonly toolStreamIntervalMs: number;
   private readonly runContentMemoryBytes: number;
+  private readonly runContentWriteBatchBytes: number;
+  private readonly runContentFlushIntervalMs: number;
   private readonly sseMaxBufferedBytes: number;
   private readonly conditionalRequests: boolean;
   private readonly snapshotTurns: number;
@@ -654,6 +660,10 @@ class AgentHttpApplication {
       options.toolStreamIntervalMs ?? DEFAULT_ROOT_SERVER_SETTINGS.tool_stream_interval_ms;
     this.runContentMemoryBytes =
       options.runContentMemoryBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_memory_bytes;
+    this.runContentWriteBatchBytes =
+      options.runContentWriteBatchBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_write_batch_bytes;
+    this.runContentFlushIntervalMs =
+      options.runContentFlushIntervalMs ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_flush_interval_ms;
     this.sseMaxBufferedBytes =
       options.sseMaxBufferedBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.sse_max_buffered_bytes;
     this.conditionalRequests =
@@ -665,6 +675,8 @@ class AgentHttpApplication {
     this.runs = new SessionRunRegistry(
       options.runStateRetentionMs ?? DEFAULT_ROOT_SERVER_SETTINGS.run_state_retention_ms,
       this.runContentMemoryBytes,
+      this.runContentWriteBatchBytes,
+      this.runContentFlushIntervalMs,
     );
   }
 
@@ -1933,7 +1945,7 @@ class AgentHttpApplication {
     );
     const emitter = new MessageStreamEmitter(
       this.toolStreamIntervalMs,
-      (message, append, outputIndex) => run.publishMessage(message, append, outputIndex),
+      (message, append, outputIndex, partIndex) => run.publishMessage(message, append, outputIndex, partIndex),
     );
     const completion = this.executeSessionRun({
       handle,
@@ -1965,6 +1977,7 @@ class AgentHttpApplication {
     const reference = handle.location.ref;
     try {
       const normalizedRun = new WebUiNormalizedRun(turnId);
+      run.setContentFallbackMessageProvider(() => normalizedRun.streamingMessage());
       let activeResponseKey: string | undefined;
       const publishUsage = async () => {
         try {
@@ -1988,22 +2001,37 @@ class AgentHttpApplication {
             }
           : {}),
         ...(options.modelConfigPath === undefined ? {} : {modelConfigPath: options.modelConfigPath}),
-        onResponseTurnStarted: (turn) => {
+        onResponseTurnStarted: async (turn) => {
           activeResponseKey = turn.turnDir;
-          run.beginResponseContentCache(
+          await run.beginResponseContentCache(
             turn.turnDir,
             activeResponseKey,
             normalizedRun.streamingMessage(),
           );
         },
-        onEvent: (event) => {
+        onEvent: async (event) => {
           const update = normalizedRun.updateForStream(event);
           if (update) {
-            emitter.push(update.message, update.append, update.outputIndex);
+            emitter.push(update.message, update.append, update.outputIndex, update.partIndex);
+          }
+          await emitter.waitForEmission();
+
+          // Switch reconnects to the complete provider response before
+          // ResponseTurn.commit closes and removes its staged item files.
+          if (
+            (event.type === "response.completed" || event.type === "response.incomplete") &&
+            activeResponseKey !== undefined && isRecord(event.response)
+          ) {
+            emitter.flush();
+            await emitter.waitForEmission();
+            const complete = normalizedRun.complete(event.response);
+            await run.commitResponseContentCache(activeResponseKey, {...complete, status: "streaming"});
+            activeResponseKey = undefined;
           }
         },
         onOutputItemStaged: async (turn, outputIndex, item) => {
           emitter.flush();
+          await emitter.waitForEmission();
           const readers = new Map<number, RunContentCacheStagedReader>();
           const partIndex = normalizedRun.partIndexForOutputItem(outputIndex, item);
           if (partIndex !== undefined) {
@@ -2017,7 +2045,7 @@ class AgentHttpApplication {
           try {
             // The item is durable now. Retire its partial file even when it has
             // no Web UI content part, before the next output item can stream.
-            run.handoffStagedOutputItem(turn.turnDir, outputIndex, readers);
+            await run.handoffStagedOutputItem(turn.turnDir, outputIndex, readers);
           } catch (error) {
             console.warn(
               `[web-ui-run-cache] staged handoff failed session=${reference} turn=${turnId} output_index=${outputIndex}: ${errorMessage(error)}`,
@@ -2026,17 +2054,19 @@ class AgentHttpApplication {
         },
         onResponseCommitted: async () => {
           emitter.flush();
+          await emitter.waitForEmission();
           if (activeResponseKey !== undefined) {
-            run.commitResponseContentCache(activeResponseKey, normalizedRun.streamingMessage());
+            await run.commitResponseContentCache(activeResponseKey, normalizedRun.streamingMessage());
             activeResponseKey = undefined;
           }
           await publishUsage();
         },
         onUsageChanged: publishUsage,
-        onToolResult: (item) => {
+        onToolResult: async (item) => {
           const message = normalizedRun.toolResult(item);
           if (message) {
             emitter.push(message);
+            await emitter.waitForEmission();
           }
         },
       });
@@ -2106,6 +2136,10 @@ export async function startAgentServer(
       options.toolStreamIntervalMs ?? serverSettings.tool_stream_interval_ms,
     runContentMemoryBytes:
       options.runContentMemoryBytes ?? serverSettings.run_content_memory_bytes,
+    runContentWriteBatchBytes:
+      options.runContentWriteBatchBytes ?? serverSettings.run_content_write_batch_bytes,
+    runContentFlushIntervalMs:
+      options.runContentFlushIntervalMs ?? serverSettings.run_content_flush_interval_ms,
     sseMaxBufferedBytes:
       options.sseMaxBufferedBytes ?? serverSettings.sse_max_buffered_bytes,
     conditionalRequests:

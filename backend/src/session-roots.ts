@@ -11,7 +11,11 @@ const MAX_SERVER_BODY_BYTES = 64 * 1024 * 1024;
 const MAX_RUN_STATE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_TOOL_STREAM_INTERVAL_MS = 60 * 1000;
 const MAX_RUN_CONTENT_MEMORY_BYTES = 16 * 1024 * 1024;
+const MAX_RUN_CONTENT_WRITE_BATCH_BYTES = 16 * 1024 * 1024;
+const MAX_RUN_CONTENT_FLUSH_INTERVAL_MS = 60 * 1000;
 export const DEFAULT_RUN_CONTENT_MEMORY_BYTES = 100 * 1024;
+export const DEFAULT_RUN_CONTENT_WRITE_BATCH_BYTES = 32 * 1024;
+export const DEFAULT_RUN_CONTENT_FLUSH_INTERVAL_MS = 25;
 const MAX_SNAPSHOT_TURNS = 100_000;
 const MAX_PAGE_TURNS = 1_000;
 const MAX_INLINE_PART_BYTES = 16 * 1024 * 1024;
@@ -27,6 +31,8 @@ export const DEFAULT_ROOT_SERVER_SETTINGS = {
   run_state_retention_ms: 30_000,
   tool_stream_interval_ms: 120,
   run_content_memory_bytes: DEFAULT_RUN_CONTENT_MEMORY_BYTES,
+  run_content_write_batch_bytes: DEFAULT_RUN_CONTENT_WRITE_BATCH_BYTES,
+  run_content_flush_interval_ms: DEFAULT_RUN_CONTENT_FLUSH_INTERVAL_MS,
   sse_max_buffered_bytes: 1024 * 1024,
   conditional_requests: true,
   snapshot_turns: 24,
@@ -56,6 +62,10 @@ export interface RootServerSettings {
   tool_stream_interval_ms: number;
   /** UTF-8 bytes of active-response deltas retained before spilling to responses.partial. */
   run_content_memory_bytes: number;
+  /** UTF-8 target size for each asynchronous responses.partial append batch. */
+  run_content_write_batch_bytes: number;
+  /** Maximum delay before flushing a partial content append batch. */
+  run_content_flush_interval_ms: number;
   /** Maximum response-buffered SSE bytes per subscriber, before reconnecting to a snapshot. */
   sse_max_buffered_bytes: number;
   /** Answer with `304` when a session snapshot is unchanged. */
@@ -216,6 +226,31 @@ function normalizeRootServerSettings(
       `${path}: server.run_content_memory_bytes must be a safe integer between 0 and ${MAX_RUN_CONTENT_MEMORY_BYTES}`,
     );
   }
+  const runContentWriteBatchBytes =
+    value.run_content_write_batch_bytes ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_write_batch_bytes;
+  if (
+    typeof runContentWriteBatchBytes !== "number" ||
+    !Number.isSafeInteger(runContentWriteBatchBytes) ||
+    runContentWriteBatchBytes < 2 ||
+    runContentWriteBatchBytes % 2 !== 0 ||
+    runContentWriteBatchBytes > MAX_RUN_CONTENT_WRITE_BATCH_BYTES
+  ) {
+    throw new ConfigError(
+      `${path}: server.run_content_write_batch_bytes must be an even safe integer between 2 and ${MAX_RUN_CONTENT_WRITE_BATCH_BYTES}`,
+    );
+  }
+  const runContentFlushIntervalMs =
+    value.run_content_flush_interval_ms ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_flush_interval_ms;
+  if (
+    typeof runContentFlushIntervalMs !== "number" ||
+    !Number.isSafeInteger(runContentFlushIntervalMs) ||
+    runContentFlushIntervalMs < 0 ||
+    runContentFlushIntervalMs > MAX_RUN_CONTENT_FLUSH_INTERVAL_MS
+  ) {
+    throw new ConfigError(
+      `${path}: server.run_content_flush_interval_ms must be a safe integer between 0 and ${MAX_RUN_CONTENT_FLUSH_INTERVAL_MS}`,
+    );
+  }
   const sseMaxBufferedBytes =
     value.sse_max_buffered_bytes ?? DEFAULT_ROOT_SERVER_SETTINGS.sse_max_buffered_bytes;
   if (
@@ -288,6 +323,8 @@ function normalizeRootServerSettings(
     run_state_retention_ms: runStateRetentionMs,
     tool_stream_interval_ms: toolStreamIntervalMs,
     run_content_memory_bytes: runContentMemoryBytes,
+    run_content_write_batch_bytes: runContentWriteBatchBytes,
+    run_content_flush_interval_ms: runContentFlushIntervalMs,
     sse_max_buffered_bytes: sseMaxBufferedBytes,
     conditional_requests: conditionalRequests,
     snapshot_turns: snapshotTurns,
