@@ -121,6 +121,49 @@ test("connects to stdio MCP, denies selected tools, namespaces calls, and adapts
   }
 }));
 
+test("validates MCP schemas using declared JSON Schema Draft 2020-12", async () => withTempDir(async (cwd) => {
+  const inputSchema = {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    type: "object",
+    properties: {
+      pair: {
+        type: "array",
+        prefixItems: [{type: "string"}, {type: "integer"}],
+        items: false,
+      },
+    },
+    required: ["pair"],
+    additionalProperties: false,
+  };
+  const source = `
+import {Server} from "@modelcontextprotocol/sdk/server/index.js";
+import {StdioServerTransport} from "@modelcontextprotocol/sdk/server/stdio.js";
+import {ListToolsRequestSchema} from "@modelcontextprotocol/sdk/types.js";
+const inputSchema = ${JSON.stringify(inputSchema)};
+const server = new Server({name:"draft-2020-fixture", version:"1.0.0"}, {capabilities:{tools:{}}});
+server.setRequestHandler(ListToolsRequestSchema, async () => ({tools:[{name:"tuple", inputSchema}]}));
+await server.connect(new StdioServerTransport());
+`;
+  const configPath = join(cwd, "server.json");
+  await writeFile(configPath, JSON.stringify({
+    transport: {type: "stdio", command: process.execPath, args: ["-e", source], cwd: process.cwd()},
+  }));
+  const manager = new McpServerManager(process.env);
+  try {
+    const loaded = await manager.loadTools([
+      {id: "draft2020", config_path: configPath, enabled: true, deny_tools: []},
+    ], cwd);
+    assert.equal(loaded.length, 1);
+    const tool = loaded[0]!;
+    assert.deepEqual(tool.definition.inputSchema, inputSchema);
+    assert.equal(tool.validate({pair: ["text", 42]}), true);
+    assert.equal(tool.validate({pair: ["text", "42"]}), false);
+    assert.equal(tool.validate({pair: ["text", 42, true]}), false);
+  } finally {
+    await manager.close();
+  }
+}));
+
 test("passes MCP multimodal function output into the next Responses request", async () => withTempDir(async (cwd) => {
   const serverConfigPath = join(cwd, "server.json");
   await writeFile(serverConfigPath, JSON.stringify({

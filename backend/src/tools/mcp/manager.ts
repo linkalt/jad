@@ -3,6 +3,7 @@ import {readFile, stat} from "node:fs/promises";
 import {basename, resolve} from "node:path";
 
 import {Ajv} from "ajv";
+import {Ajv2020} from "ajv/dist/2020.js";
 import {Client} from "@modelcontextprotocol/sdk/client/index.js";
 import {StdioClientTransport, getDefaultEnvironment} from "@modelcontextprotocol/sdk/client/stdio.js";
 import {StreamableHTTPClientTransport} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -18,7 +19,18 @@ const MAX_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_MAX_RESULT_BYTES = 1_048_576;
 const MIN_MAX_RESULT_BYTES = 512;
 const MAX_MAX_RESULT_BYTES = 16 * 1024 * 1024;
+const DRAFT_2020_12_SCHEMA_URI = "https://json-schema.org/draft/2020-12/schema";
 const ajv = new Ajv({allErrors: true, strict: false, coerceTypes: false, removeAdditional: false});
+const ajv2020 = new Ajv2020({allErrors: true, strict: false, coerceTypes: false, removeAdditional: false});
+
+// Ajv defaults to Draft 7; select the declared dialect rather than dropping $schema and risking ignored keywords.
+function validatorForInputSchema(schema: Record<string, unknown>): Ajv | Ajv2020 {
+  const dialect = schema.$schema;
+  if (dialect === DRAFT_2020_12_SCHEMA_URI || dialect === `${DRAFT_2020_12_SCHEMA_URI}#`) {
+    return ajv2020;
+  }
+  return ajv;
+}
 
 interface StdioConfig {
   type: "stdio";
@@ -336,7 +348,7 @@ export class McpServerManager {
             throw configError(server.config_path, `MCP tool ${server.id}/${remoteTool.name} must provide an object inputSchema`);
           }
           let validate;
-          try { validate = ajv.compile(remoteTool.inputSchema); } catch (error) {
+          try { validate = validatorForInputSchema(remoteTool.inputSchema).compile(remoteTool.inputSchema); } catch (error) {
             throw configError(server.config_path, `invalid inputSchema for ${server.id}/${remoteTool.name}: ${error instanceof Error ? error.message : String(error)}`);
           }
           const name = exposedToolName(server.id, remoteTool.name);
