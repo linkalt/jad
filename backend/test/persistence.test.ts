@@ -647,6 +647,45 @@ test("stores raw input items and reconstructs request history", async () => {
   }
 });
 
+test("reads JSONL records containing literal U+2028 and U+2029 characters", async () => {
+  const sessionDir = await makeSession();
+  try {
+    const store = await SessionResponseStore.open(sessionDir);
+    const text = "before\u2028middle\u2029after";
+    const toolOutput = {
+      type: "function_call_output",
+      call_id: "call_unicode_separators",
+      output: text,
+    };
+    await store.appendInputItem(toolOutput);
+
+    const history: unknown[] = [];
+    for await (const item of store.readInputItems()) history.push(item);
+    assert.deepEqual(history, [toolOutput]);
+
+    const assistantMessage = {
+      type: "message",
+      role: "assistant",
+      content: [{type: "output_text", text}],
+    };
+    const turn = await store.beginTurn("unicode-separators");
+    await turn.stageOutputItem({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: assistantMessage,
+    });
+    await turn.commit(completedEvent([assistantMessage], "resp_unicode_separators"));
+
+    const completions: ResponseCompletedEvent[] = [];
+    for await (const event of store.readCompletedResponses()) completions.push(event);
+    assert.equal(completions.length, 1);
+    assert.deepEqual(completions[0]?.response.output, [assistantMessage]);
+    await store.close();
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("writes normalized history to its configured cache path", async () => {
   const sessionDir = await makeSession();
   const cachePath = join(sessionDir, "separate-cache", "history.json");

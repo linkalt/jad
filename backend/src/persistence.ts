@@ -11,7 +11,6 @@ import {
 } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
-import { createInterface } from "node:readline";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { AsyncMutex } from "./concurrency.js";
@@ -748,22 +747,58 @@ async function appendFileIncrementally(
   }
 }
 
+/** JSON Lines are LF-delimited; U+2028/U+2029 are valid JSON string data, not record separators. */
+async function* iterateJsonLines(path: string, start = 0): AsyncGenerator<string> {
+  const input = createReadStream(path, {start});
+  let pending: Buffer[] = [];
+  let pendingBytes = 0;
+
+  const decodeLine = (line: Buffer): string => {
+    const content = line.at(-1) === 0x0d ? line.subarray(0, -1) : line;
+    return content.toString("utf8");
+  };
+
+  try {
+    for await (const chunk of input) {
+      let offset = 0;
+      let newline = chunk.indexOf(0x0a, offset);
+      while (newline >= 0) {
+        const segment = chunk.subarray(offset, newline);
+        const bytes = pendingBytes === 0
+          ? segment
+          : Buffer.concat([...pending, segment], pendingBytes + segment.length);
+        const line = decodeLine(bytes);
+        if (line.length > 0) yield line;
+        pending = [];
+        pendingBytes = 0;
+        offset = newline + 1;
+        newline = chunk.indexOf(0x0a, offset);
+      }
+
+      const remainder = chunk.subarray(offset);
+      if (remainder.length > 0) {
+        pending.push(remainder);
+        pendingBytes += remainder.length;
+      }
+    }
+
+    if (pendingBytes > 0) {
+      const bytes = pending.length === 1 ? pending[0]! : Buffer.concat(pending, pendingBytes);
+      const line = decodeLine(bytes);
+      if (line.length > 0) yield line;
+    }
+  } finally {
+    input.destroy();
+  }
+}
+
 async function readJsonLines(
   path: string,
   onLine: (line: string) => void | Promise<void>,
   start = 0,
 ): Promise<void> {
-  const input = createReadStream(path, { encoding: "utf8", start });
-  const lines = createInterface({ input, crlfDelay: Infinity });
-  try {
-    for await (const line of lines) {
-      if (line.length > 0) {
-        await onLine(line);
-      }
-    }
-  } finally {
-    lines.close();
-    input.destroy();
+  for await (const line of iterateJsonLines(path, start)) {
+    await onLine(line);
   }
 }
 
@@ -3070,28 +3105,18 @@ export class SessionResponseStore {
   public async *readCompletedResponses(): AsyncGenerator<ResponseCompletedEvent> {
     this.assertOpen();
     await repairJsonlTail(this.messagesPath);
-    const input = createReadStream(this.messagesPath, { encoding: "utf8" });
-    const lines = createInterface({ input, crlfDelay: Infinity });
-    try {
-      for await (const line of lines) {
-        if (line.length === 0) {
-          continue;
-        }
-        let value: unknown;
-        try {
-          value = JSON.parse(line);
-        } catch (error) {
-          throw new PersistenceError(
-            `invalid messages.jsonl record: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        if (isRecord(value) && value.type === "response.completed") {
-          yield value as unknown as ResponseCompletedEvent;
-        }
+    for await (const line of iterateJsonLines(this.messagesPath)) {
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch (error) {
+        throw new PersistenceError(
+          `invalid messages.jsonl record: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
-    } finally {
-      lines.close();
-      input.destroy();
+      if (isRecord(value) && value.type === "response.completed") {
+        yield value as unknown as ResponseCompletedEvent;
+      }
     }
   }
 
