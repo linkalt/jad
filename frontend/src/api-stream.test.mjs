@@ -275,6 +275,64 @@ test('a reconnect that finds no run reports an unknown outcome instead of failin
   }
 });
 
+test('parses CRLF frames wherever the network splits the stream', async () => {
+  const finalMessage = message('complete', 'the complete response');
+  const events = [
+    {event: 'run', data: {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'}},
+    {event: 'completed', data: {message: finalMessage, committed: true}},
+    {event: 'done', data: {}},
+  ];
+  const wire = new TextEncoder().encode(
+    events.map(({event, data}) => sse(event, data)).join('').replace(/\n/g, '\r\n'),
+  );
+  const failures = [];
+  const originalConfig = {
+    attempts: appConfig.run_stream_reconnect_max_attempts,
+    baseDelay: appConfig.run_stream_reconnect_base_delay_ms,
+    maxDelay: appConfig.run_stream_reconnect_max_delay_ms,
+  };
+  appConfig.run_stream_reconnect_max_attempts = 1;
+  appConfig.run_stream_reconnect_base_delay_ms = 0;
+  appConfig.run_stream_reconnect_max_delay_ms = 0;
+
+  try {
+    for (let offset = 1; offset < wire.length; offset += 1) {
+      requests.length = 0;
+      responses.length = 0;
+      responses.push(new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(wire.slice(0, offset));
+          controller.enqueue(wire.slice(offset));
+          controller.close();
+        },
+      }), {headers: {'Content-Type': 'text/event-stream'}}));
+
+      // A lost frame leaves a known-active run, which the client retries without
+      // limit. Aborting on the first retry turns that into a recorded failure.
+      const controller = new AbortController();
+      responses.push(() => {
+        controller.abort();
+        throw new Error('the first connection did not deliver every frame');
+      });
+
+      try {
+        const result = await attachSessionRun('session-1', {signal: controller.signal});
+        if (requests.length !== 1 || result.message?.text !== 'the complete response') {
+          failures.push(offset);
+        }
+      } catch {
+        failures.push(offset);
+      }
+    }
+  } finally {
+    appConfig.run_stream_reconnect_max_attempts = originalConfig.attempts;
+    appConfig.run_stream_reconnect_base_delay_ms = originalConfig.baseDelay;
+    appConfig.run_stream_reconnect_max_delay_ms = originalConfig.maxDelay;
+  }
+
+  assert.deepEqual(failures, []);
+});
+
 test('retries a temporary server error when attaching to a run', async () => {
   requests.length = 0;
   responses.length = 0;

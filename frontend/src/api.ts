@@ -751,7 +751,10 @@ async function* readSse(
         }
         throw new RunStreamConnectionError('the run stream connection was interrupted');
       }
-      buffer += decoder.decode(chunk.value, {stream: !chunk.done}).replace(/\r\n/g, '\n');
+      // Normalize the whole buffer, not just this chunk: a CRLF pair can be split
+      // across two chunks, and the lone `\r` left from the previous chunk only
+      // pairs with its `\n` once they are in the same string.
+      buffer = (buffer + decoder.decode(chunk.value, {stream: !chunk.done})).replace(/\r\n/g, '\n');
       let separator = buffer.indexOf('\n\n');
       while (separator >= 0) {
         const block = buffer.slice(0, separator);
