@@ -3879,6 +3879,12 @@ function App() {
             if (controller.signal.aborted || runAbortRefs.current.get(sessionId) !== controller) {
               return;
             }
+            if (result.idle === true && result.message === undefined) {
+              // The run's retained state expired during a reconnect, so its
+              // outcome is unknown here. The refresh in `finally` loads the
+              // committed transcript, which is authoritative.
+              return;
+            }
             const assistantMessage: MessageRecord = result.message ?? {
               id: `${sessionId}-assistant-${Date.now()}`,
               sender: 'assistant',

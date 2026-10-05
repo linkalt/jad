@@ -932,6 +932,12 @@ export interface StreamSessionRunResult {
   usage?: SessionUsageSummary;
   /** Whether the server reported a run for this session (attach path only). */
   attached?: boolean;
+  /**
+   * The run was known active but the server no longer holds it, so its outcome
+   * is unknown to this stream. It is not a failure: the committed transcript
+   * holds the result, and the caller should reload that.
+   */
+  idle?: boolean;
 }
 
 function isSessionRunState(value: unknown): value is SessionRunState {
@@ -1267,7 +1273,10 @@ async function reconnectRunStream(
       return result;
     }
     if (consumed.idle) {
-      throw new Error('the run is no longer available to reconnect to');
+      // The run ended while the connection was down and the server has already
+      // dropped its retained state. Reporting a failure here would be wrong: the
+      // run may have succeeded, and the transcript holds the answer.
+      return {...result, idle: true};
     }
     lastConnectionError = undefined;
   }

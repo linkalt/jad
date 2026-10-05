@@ -240,6 +240,41 @@ test('keeps reconnecting after the configured batch when the run is known active
   }
 });
 
+test('a reconnect that finds no run reports an unknown outcome instead of failing', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const originalConfig = {
+    baseDelay: appConfig.run_stream_reconnect_base_delay_ms,
+    maxDelay: appConfig.run_stream_reconnect_max_delay_ms,
+  };
+  appConfig.run_stream_reconnect_base_delay_ms = 0;
+  appConfig.run_stream_reconnect_max_delay_ms = 0;
+  const runningRun = {
+    turn_id: 'turn-1',
+    started_at: '2026-01-01T00:00:00.000Z',
+    status: 'running',
+  };
+  // The run finished while the connection was down and its retained state has
+  // expired, so the server answers `idle`. The run did not fail: the committed
+  // transcript holds the outcome.
+  responses.push(
+    stalledStream([{event: 'run', data: runningRun}]),
+    streamResponse([{event: 'idle', data: {}}]),
+  );
+
+  try {
+    const result = await streamSessionRun('session-1', 'hello', {stallTimeoutMs: 5});
+
+    assert.deepEqual(requests.map(request => request.method), ['POST', 'GET']);
+    assert.equal(result.idle, true);
+    assert.equal(result.message, undefined);
+    assert.equal(result.attached, true);
+  } finally {
+    appConfig.run_stream_reconnect_base_delay_ms = originalConfig.baseDelay;
+    appConfig.run_stream_reconnect_max_delay_ms = originalConfig.maxDelay;
+  }
+});
+
 test('retries a temporary server error when attaching to a run', async () => {
   requests.length = 0;
   responses.length = 0;
