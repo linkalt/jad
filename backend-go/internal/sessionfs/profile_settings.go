@@ -263,6 +263,7 @@ func (p SessionStoragePaths) pathFields() map[string]string {
 		"history_cache":    p.HistoryCache,
 		"usage_cache":      p.UsageCache,
 		"cursor_cache":     p.CursorCache,
+		"run_error_cache":  p.RunErrorCache,
 		"statecontext":     p.StateContext,
 		"staging":          p.Staging,
 		"http_debug":       p.HTTPDebug,

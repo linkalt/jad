@@ -23,6 +23,8 @@ const (
 	maxConfiguredItemBytes                  int64 = 64 * 1024 * 1024
 	defaultCursorCacheCheckpointBytes       int64 = 1 * 1024 * 1024
 	maxConfiguredCursorCacheCheckpointBytes int64 = 64 * 1024 * 1024
+	defaultRunErrorCacheMaxEntries                = 50
+	maxConfiguredRunErrorCacheMaxEntries          = 10_000
 	defaultAutoCompactionEnabled                  = true
 	defaultCompactionTriggerTokens          int64 = 200_000
 	maxCompactionTriggerTokens              int64 = 10_000_000
@@ -52,6 +54,8 @@ type Persistence struct {
 	MaxItemBytes               int64
 	ResponseMetadata           string
 	CursorCacheCheckpointBytes int64
+	// RunErrorCacheMaxEntries caps the failed-run records kept outside the transcript.
+	RunErrorCacheMaxEntries int
 }
 
 // Compaction contains the normalized settings used by the session compact action.
@@ -92,6 +96,7 @@ type SessionStoragePaths struct {
 	HistoryCache    string
 	UsageCache      string
 	CursorCache     string
+	RunErrorCache   string
 	StateContext    string
 	Staging         string
 	HTTPDebug       string
@@ -535,6 +540,7 @@ func normalizePersistence(raw json.RawMessage, path string) (Persistence, error)
 		MaxItemBytes:               defaultMaxItemBytes,
 		ResponseMetadata:           "minimal",
 		CursorCacheCheckpointBytes: defaultCursorCacheCheckpointBytes,
+		RunErrorCacheMaxEntries:    defaultRunErrorCacheMaxEntries,
 	}
 	if len(raw) == 0 {
 		return settings, nil
@@ -572,6 +578,13 @@ func normalizePersistence(raw json.RawMessage, path string) (Persistence, error)
 			return Persistence{}, configError("%s: persistence.cursor_cache_checkpoint_bytes must be an integer between 1 and %d", path, maxConfiguredCursorCacheCheckpointBytes)
 		}
 		settings.CursorCacheCheckpointBytes = int64(checkpointBytes)
+	}
+	if value, ok := fields["run_error_cache_max_entries"]; ok && string(value) != "null" {
+		configured, valid := configSafeInteger(value)
+		if !valid || configured < 1 || configured > maxConfiguredRunErrorCacheMaxEntries {
+			return Persistence{}, configError("%s: persistence.run_error_cache_max_entries must be an integer between 1 and %d", path, maxConfiguredRunErrorCacheMaxEntries)
+		}
+		settings.RunErrorCacheMaxEntries = int(configured)
 	}
 	return settings, nil
 }

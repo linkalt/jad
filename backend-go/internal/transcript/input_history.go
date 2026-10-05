@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -19,59 +20,105 @@ const (
 // items. Batch metadata is stored in messages.jsonl for turn-boundary behavior
 // and removed again by ReadInputItems.
 func (s *TurnStore) AppendInputItems(items ...[]byte) error {
+	_, err := s.AppendInputItemsAt(items...)
+	return err
+}
+
+// InputAppendResult says where an appended input batch landed in the transcript.
+type InputAppendResult struct {
+	// MessageOffset is the byte offset of the last record of the batch that the
+	// web-ui projection shows as a user message, which is what its message id
+	// (session-user-o<offset>) is built from. HasMessage is false when none of
+	// the records has visible text.
+	MessageOffset int64
+	HasMessage    bool
+}
+
+// AppendInputItemsAt is AppendInputItems that also reports the offset of the
+// batch's visible user message.
+func (s *TurnStore) AppendInputItemsAt(items ...[]byte) (InputAppendResult, error) {
 	if s == nil || s.journal == nil {
-		return errors.New("turn store is not initialized")
+		return InputAppendResult{}, errors.New("turn store is not initialized")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.recovering {
-		return errors.New("turn store recovery is in progress")
+		return InputAppendResult{}, errors.New("turn store recovery is in progress")
 	}
 	if len(s.activeTurns) > 0 {
-		return errors.New("cannot append input while a response turn is active")
+		return InputAppendResult{}, errors.New("cannot append input while a response turn is active")
 	}
 	if len(items) == 0 {
-		return nil
+		return InputAppendResult{}, nil
 	}
 
 	canonicalItems := make([][]byte, len(items))
 	for index, item := range items {
 		fields, err := objectFields(item)
 		if err != nil {
-			return fmt.Errorf("input item %d must be an object", index)
+			return InputAppendResult{}, fmt.Errorf("input item %d must be an object", index)
 		}
 		if err := validateInputFields(fields); err != nil {
-			return fmt.Errorf("input item %d: %w", index, err)
+			return InputAppendResult{}, fmt.Errorf("input item %d: %w", index, err)
 		}
 		if _, reserved := fieldValue(fields, SessionInputBatchIDField); reserved {
-			return errors.New("input items may not use reserved session batch metadata fields")
+			return InputAppendResult{}, errors.New("input items may not use reserved session batch metadata fields")
 		}
 		if _, reserved := fieldValue(fields, SessionInputBatchIndexField); reserved {
-			return errors.New("input items may not use reserved session batch metadata fields")
+			return InputAppendResult{}, errors.New("input items may not use reserved session batch metadata fields")
 		}
 		canonicalItems[index], err = canonicalJSON(item)
 		if err != nil {
-			return fmt.Errorf("serialize input item %d: %w", index, err)
+			return InputAppendResult{}, fmt.Errorf("serialize input item %d: %w", index, err)
 		}
 	}
 
 	var batchBytes [16]byte
 	if _, err := rand.Read(batchBytes[:]); err != nil {
-		return fmt.Errorf("create input batch ID: %w", err)
+		return InputAppendResult{}, fmt.Errorf("create input batch ID: %w", err)
 	}
 	batchID := hex.EncodeToString(batchBytes[:])
 	persisted := make([][]byte, len(canonicalItems))
 	for index, item := range canonicalItems {
 		persistedItem, err := persistInputItem(item, batchID, index)
 		if err != nil {
-			return fmt.Errorf("persist input item %d: %w", index, err)
+			return InputAppendResult{}, fmt.Errorf("persist input item %d: %w", index, err)
 		}
 		persisted[index] = persistedItem
 	}
-	if err := s.journal.Append(persisted...); err != nil {
-		return fmt.Errorf("append input batch: %w", err)
+	offsets, err := s.journal.AppendAt(persisted...)
+	if err != nil {
+		return InputAppendResult{}, fmt.Errorf("append input batch: %w", err)
 	}
-	return nil
+	var result InputAppendResult
+	for index, item := range canonicalItems {
+		if isVisibleUserInput(item) {
+			result.MessageOffset, result.HasMessage = offsets[index], true
+		}
+	}
+	return result, nil
+}
+
+// isVisibleUserInput reports whether the web-ui projection turns this input
+// record into a user message: a user message with some non-empty input_text.
+func isVisibleUserInput(item []byte) bool {
+	var input struct {
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(item, &input) != nil || input.Type != "message" || input.Role != "user" {
+		return false
+	}
+	for _, part := range input.Content {
+		if part.Type == "input_text" && part.Text != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func persistInputItem(canonicalItem []byte, batchID string, index int) ([]byte, error) {

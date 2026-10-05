@@ -105,19 +105,27 @@ func (j *Journal) ReplaceRecords(records ...[]byte) error {
 	return nil
 }
 
-func (j *Journal) Append(records ...[]byte) (result error) {
+func (j *Journal) Append(records ...[]byte) error {
+	_, err := j.AppendAt(records...)
+	return err
+}
+
+// AppendAt appends like Append and returns the byte offset each record starts
+// at in the transcript, in order. The offsets are what the web-ui projection
+// uses in its message ids.
+func (j *Journal) AppendAt(records ...[]byte) (offsets []int64, result error) {
 	if j == nil {
-		return errors.New("transcript journal is not initialized")
+		return nil, errors.New("transcript journal is not initialized")
 	}
 	if len(records) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	lines := make([][]byte, len(records))
 	for index, record := range records {
 		line, err := compactObject(record)
 		if err != nil {
-			return fmt.Errorf("transcript record %d: %w", index, err)
+			return nil, fmt.Errorf("transcript record %d: %w", index, err)
 		}
 		lines[index] = line
 	}
@@ -127,7 +135,7 @@ func (j *Journal) Append(records ...[]byte) (result error) {
 
 	file, err := os.OpenFile(j.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o666)
 	if err != nil {
-		return fmt.Errorf("open transcript: %w", err)
+		return nil, fmt.Errorf("open transcript: %w", err)
 	}
 	defer func() {
 		if closeErr := file.Close(); result == nil && closeErr != nil {
@@ -136,22 +144,30 @@ func (j *Journal) Append(records ...[]byte) (result error) {
 	}()
 
 	if _, err := repairTrailingPartialLine(file); err != nil {
-		return fmt.Errorf("repair transcript tail: %w", err)
+		return nil, fmt.Errorf("repair transcript tail: %w", err)
 	}
-	for _, line := range lines {
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat transcript: %w", err)
+	}
+	offset := info.Size()
+	offsets = make([]int64, len(lines))
+	for index, line := range lines {
+		offsets[index] = offset
 		if err := writeAll(file, line); err != nil {
-			return fmt.Errorf("append transcript record: %w", err)
+			return nil, fmt.Errorf("append transcript record: %w", err)
 		}
 		if err := writeAll(file, []byte{'\n'}); err != nil {
-			return fmt.Errorf("terminate transcript record: %w", err)
+			return nil, fmt.Errorf("terminate transcript record: %w", err)
 		}
+		offset += int64(len(line)) + 1
 	}
 	if j.durability != DurabilityProcess {
 		if err := file.Sync(); err != nil {
-			return fmt.Errorf("sync transcript: %w", err)
+			return nil, fmt.Errorf("sync transcript: %w", err)
 		}
 	}
-	return nil
+	return offsets, nil
 }
 
 // RepairTail removes any bytes after the last complete newline-terminated

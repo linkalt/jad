@@ -18,6 +18,7 @@ func (p SessionStoragePaths) pathEntries() []storagePathEntry {
 		{Field: "history_cache", Path: p.HistoryCache},
 		{Field: "usage_cache", Path: p.UsageCache},
 		{Field: "cursor_cache", Path: p.CursorCache},
+		{Field: "run_error_cache", Path: p.RunErrorCache},
 		{Field: "statecontext", Path: p.StateContext},
 		{Field: "staging", Path: p.Staging},
 		{Field: "http_debug", Path: p.HTTPDebug},
@@ -87,6 +88,10 @@ func resolveStoragePaths(fields map[string]json.RawMessage, profileStorageDir, s
 	if err != nil {
 		return SessionStoragePaths{}, err
 	}
+	runErrorCache, err := resolveConfiguredPath(fields, "run_error_cache", filepath.Join(staging, "run-error-cache.json"), settingDir)
+	if err != nil {
+		return SessionStoragePaths{}, err
+	}
 	stateContext, err := resolveConfiguredPath(fields, "statecontext", filepath.Join(staging, "statecontext.json"), settingDir)
 	if err != nil {
 		return SessionStoragePaths{}, err
@@ -106,6 +111,7 @@ func resolveStoragePaths(fields map[string]json.RawMessage, profileStorageDir, s
 		HistoryCache:    historyCache,
 		UsageCache:      usageCache,
 		CursorCache:     cursorCache,
+		RunErrorCache:   runErrorCache,
 		StateContext:    stateContext,
 		Staging:         staging,
 		HTTPDebug:       httpDebug,
@@ -113,10 +119,10 @@ func resolveStoragePaths(fields map[string]json.RawMessage, profileStorageDir, s
 }
 
 func validateProfileStoragePaths(settingPath string, storage SessionStoragePaths) error {
-	const duplicateFilesMessage = "paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.statecontext, and the compaction-cache backup must be different files"
+	const duplicateFilesMessage = "paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.run_error_cache, paths.statecontext, and the compaction-cache backup must be different files"
 	fileFields := map[string]struct{}{
 		"messages": {}, "messages_backup": {}, "compaction_cache": {},
-		"history_cache": {}, "usage_cache": {}, "cursor_cache": {}, "statecontext": {},
+		"history_cache": {}, "usage_cache": {}, "cursor_cache": {}, "run_error_cache": {}, "statecontext": {},
 	}
 	seen := make(map[string]struct{}, len(fileFields)+1)
 	for _, entry := range storage.pathEntries() {

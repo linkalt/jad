@@ -70,9 +70,13 @@ type AutomaticCompactionSettings struct {
 }
 
 type RunOptions struct {
-	TurnID              string
-	OnEvent             responses.EventHandler
-	OnTurnStarted       func(partialContentPath string)
+	TurnID        string
+	OnEvent       responses.EventHandler
+	OnTurnStarted func(partialContentPath string)
+	// OnInputAccepted runs once the user input is stored, before anything that
+	// can still fail, so a caller knows which turn and message a later failure
+	// belongs to. A caller that calls PersistInput itself fires it too.
+	OnInputAccepted     func(PersistedInput)
 	OnResponseCommitted func(event json.RawMessage, commit transcript.CommitResult)
 	OnToolResult        func(item json.RawMessage)
 	MemoryTrace         *memorytrace.Trace
@@ -109,6 +113,11 @@ type PersistedInput struct {
 	SessionTurn int64
 	// Items is the number of input items that were stored.
 	Items int
+	// MessageOffset is the transcript byte offset of the stored user message,
+	// the part of its web-ui message id after "session-user-o". HasMessage is
+	// false when the input had no visible text.
+	MessageOffset int64
+	HasMessage    bool
 	// history is the handle PersistInput read the history with. Run keeps using
 	// it, so the first round expands only the records appended since.
 	history *transcript.InputHistory
@@ -140,10 +149,17 @@ func PersistInput(store *transcript.TurnStore, input json.RawMessage, nextSessio
 	if err != nil {
 		return nil, fmt.Errorf("read next session turn: %w", err)
 	}
-	if err := store.AppendInputItems(inputItems...); err != nil {
+	appended, err := store.AppendInputItemsAt(inputItems...)
+	if err != nil {
 		return nil, fmt.Errorf("persist session input: %w", err)
 	}
-	return &PersistedInput{SessionTurn: sessionTurn, Items: len(inputItems), history: history}, nil
+	return &PersistedInput{
+		SessionTurn:   sessionTurn,
+		Items:         len(inputItems),
+		MessageOffset: appended.MessageOffset,
+		HasMessage:    appended.HasMessage,
+		history:       history,
+	}, nil
 }
 
 // RunResult contains the committed response envelope and transcript commit
@@ -347,6 +363,9 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		persisted, err = PersistInput(r.store, input, options.NextSessionTurn)
 		if err != nil {
 			return RunResult{}, err
+		}
+		if options.OnInputAccepted != nil {
+			options.OnInputAccepted(*persisted)
 		}
 	}
 	sessionTurn := persisted.SessionTurn

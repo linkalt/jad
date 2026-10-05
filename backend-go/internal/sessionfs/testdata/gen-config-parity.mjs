@@ -9,7 +9,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const {SessionConfigLoader} = await import(pathToFileURL(join(here, "../../../../backend/dist/src/config.js")).href);
 const cases = JSON.parse(await (await import("node:fs/promises")).readFile(join(here, "config-parity.cases.json"), "utf8"));
 const model = {schema_version: 1, provider: "openai", model: "gpt-test", api_key_env: "TEST_OPENAI_KEY", base_url: "https://api.example.test/v1/", request: {temperature: 0.2}};
-const keys = ["messages", "messages_backup", "compaction_cache", "history_cache", "usage_cache", "cursor_cache", "statecontext", "staging", "http_debug", "tool_storage", "active_profile", "default_profile", "model_default", "models"];
+const keys = ["messages", "messages_backup", "compaction_cache", "history_cache", "usage_cache", "cursor_cache", "run_error_cache", "statecontext", "staging", "http_debug", "tool_storage", "active_profile", "default_profile", "model_default", "models"];
 
 const out = [];
 for (const c of cases) {

@@ -195,6 +195,55 @@ func TestLoadSessionConfigDefaultsWithoutProviderCredentials(t *testing.T) {
 	}
 }
 
+func TestLoadSessionConfigRunErrorCacheMaxEntriesBounds(t *testing.T) {
+	rootDir := t.TempDir()
+	sessionDir := filepath.Join(rootDir, "session-1")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	location := Location{Directory: sessionDir, Root: Root{GlobalJadRoot: rootDir}}
+	cases := []struct {
+		setting string
+		want    int
+		wantErr bool
+	}{
+		{setting: `{}`, want: defaultRunErrorCacheMaxEntries},
+		{setting: `{"persistence":{"run_error_cache_max_entries":null}}`, want: defaultRunErrorCacheMaxEntries},
+		{setting: `{"persistence":{"run_error_cache_max_entries":1}}`, want: 1},
+		{setting: `{"persistence":{"run_error_cache_max_entries":10000}}`, want: 10000},
+		{setting: `{"persistence":{"run_error_cache_max_entries":0}}`, wantErr: true},
+		{setting: `{"persistence":{"run_error_cache_max_entries":10001}}`, wantErr: true},
+		{setting: `{"persistence":{"run_error_cache_max_entries":1.5}}`, wantErr: true},
+		{setting: `{"persistence":{"run_error_cache_max_entries":"50"}}`, wantErr: true},
+	}
+	for _, test := range cases {
+		t.Run(test.setting, func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(test.setting), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			config, err := LoadSessionConfig(location, "", "")
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("LoadSessionConfig unexpectedly accepted run_error_cache_max_entries")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadSessionConfig: %v", err)
+			}
+			if config.Persistence.RunErrorCacheMaxEntries != test.want {
+				t.Fatalf("run error cache max entries = %d, want %d", config.Persistence.RunErrorCacheMaxEntries, test.want)
+			}
+			if want := filepath.Join(sessionDir, "staging", "run-error-cache.json"); config.StoragePaths.RunErrorCache != want {
+				t.Fatalf("run error cache path = %q, want %q", config.StoragePaths.RunErrorCache, want)
+			}
+		})
+	}
+}
+
 func TestLoadSessionConfigCursorCacheCheckpointBounds(t *testing.T) {
 	rootDir := t.TempDir()
 	sessionDir := filepath.Join(rootDir, "session-1")

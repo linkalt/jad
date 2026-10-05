@@ -33,12 +33,21 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	logger := logging.Or(h.logger).With(runLogAttrs(run)...)
 	started := time.Now()
 	logger.Info("run started")
+	// The turn and message the run's user input was saved as, once it is saved.
+	// A failure is kept beside the transcript under them, so it outlives the
+	// run-state window. Run calls OnInputAccepted on this goroutine.
+	var accepted *session.PersistedInput
+	recordFailure := func(message string) {
+		recordRunFailure(runner, accepted, run.turnID, message, logger)
+	}
 	// A panic in the provider, a tool or an observer must fail this run, not the
 	// process. finish is idempotent, so a run that already ended keeps its status.
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			logger.Error("run panicked", slog.Any("panic", recovered), slog.String("stack", string(debug.Stack())))
-			run.finish("failed", failureEvents(clientRunErrorMessage(fmt.Errorf("internal error"))))
+			message := clientRunErrorMessage(fmt.Errorf("internal error"))
+			recordFailure(message)
+			run.finish("failed", failureEvents(message))
 		}
 		logger.Info("run finished", slog.String("status", run.state()), slog.Float64("duration_ms", durationMS(time.Since(started))))
 	}()
@@ -55,9 +64,10 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	emitter.logger = logger
 	defer emitter.discard()
 	result, err := runner.Run(ctx, input, session.RunOptions{
-		TurnID:        run.turnID,
-		MemoryTrace:   h.memoryTrace,
-		ToolExecution: toolExecution,
+		TurnID:          run.turnID,
+		MemoryTrace:     h.memoryTrace,
+		ToolExecution:   toolExecution,
+		OnInputAccepted: func(input session.PersistedInput) { accepted = &input },
 		OnTurnStarted: func(partialContentPath string) {
 			run.setPartialContentPath(partialContentPath)
 		},
@@ -104,7 +114,9 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 			return
 		}
 		logger.Error("run failed", slog.Any("error", err))
-		run.finish("failed", failureEvents(clientRunErrorMessage(err)))
+		failure := clientRunErrorMessage(err)
+		recordFailure(failure)
+		run.finish("failed", failureEvents(failure))
 		return
 	}
 	message := normalizedRun.Complete(result.Event)
@@ -112,7 +124,9 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	if err != nil {
 		emitter.discard()
 		logger.Error("run failed", slog.Any("error", err))
-		run.finish("failed", failureEvents(clientRunErrorMessage(err)))
+		failure := clientRunErrorMessage(err)
+		recordFailure(failure)
+		run.finish("failed", failureEvents(failure))
 		return
 	}
 	// The terminal full message supersedes any append-only snapshot still waiting.
@@ -132,6 +146,34 @@ func publishRunUsage(run *activeRun, runner RunSession, ctx context.Context, log
 	}
 	if err := run.publish("usage", map[string]any{"usage": usage}); err != nil {
 		logger.Warn("failed to publish usage summary", slog.Any("error", err))
+	}
+}
+
+// runErrorRecorder is implemented by a run session that keeps failed runs in a
+// cache beside the transcript. A session without one simply records nothing.
+type runErrorRecorder interface {
+	RecordRunError(transcript.RunErrorEntry) error
+}
+
+// recordRunFailure keeps one failed run, never changing the run's outcome: a
+// write problem is only logged. Nothing is recorded when the user input was not
+// saved, since there is no turn for the failure to belong to.
+func recordRunFailure(runner RunSession, accepted *session.PersistedInput, turnID, message string, logger *slog.Logger) {
+	recorder, ok := runner.(runErrorRecorder)
+	if !ok || accepted == nil {
+		return
+	}
+	entry := transcript.RunErrorEntry{
+		Turn:    accepted.SessionTurn,
+		TurnID:  turnID,
+		At:      time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		Message: message,
+	}
+	if accepted.HasMessage {
+		entry.MessageID = fmt.Sprintf("session-user-o%d", accepted.MessageOffset)
+	}
+	if err := recorder.RecordRunError(entry); err != nil {
+		logger.Warn("failed to record run error", slog.Any("error", err))
 	}
 }
 

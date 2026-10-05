@@ -256,7 +256,7 @@ func (r *Resolver) ReadSessionSnapshot(ctx context.Context, reference, profile s
 	}
 	etag = sessionVersionForCatalog(location, config, r.catalog.MaxInlinePartBytes, runs)
 	item := makeSessionListRecord(location, config, index.turns, index.usage, runs)
-	body, err := makeSnapshotBody(item, messages, page, historyRef)
+	body, err := makeSnapshotBody(item, messages, page, historyRef, shared.store.ReadRunErrors())
 	if err != nil {
 		return httpapi.CatalogResponse{}, fmt.Errorf("encode session snapshot: %w", err)
 	}
@@ -510,7 +510,7 @@ func makeSessionListRecord(location sessionfs.Location, config sessionfs.Session
 	return item
 }
 
-func makeSnapshotBody(item sessionListRecord, messages []json.RawMessage, page sessionPage, history *historyReference) (json.RawMessage, error) {
+func makeSnapshotBody(item sessionListRecord, messages []json.RawMessage, page sessionPage, history *historyReference, failures []transcript.RunErrorEntry) (json.RawMessage, error) {
 	base, err := json.Marshal(item)
 	if err != nil {
 		return nil, err
@@ -529,6 +529,13 @@ func makeSnapshotBody(item sessionListRecord, messages []json.RawMessage, page s
 	}
 	if history != nil {
 		fields["history"], err = json.Marshal(history)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Omitted when there is none, so a session that never failed keeps its payload.
+	if len(failures) > 0 {
+		fields["failures"], err = json.Marshal(failures)
 		if err != nil {
 			return nil, err
 		}
@@ -575,6 +582,8 @@ func sessionVersion(config sessionfs.SessionConfig) string {
 		fileStamp(config.MessagesPath),
 		fileStamp(config.MessagesBackupPath),
 		fileStamp(config.UsageCachePath),
+		// A failed run changes the payload without touching the transcript.
+		fileStamp(config.StoragePaths.RunErrorCache),
 		fmt.Sprint(config.BackupTurns),
 		fileStamp(config.SettingPath),
 		fileStamp(config.ModelPath),

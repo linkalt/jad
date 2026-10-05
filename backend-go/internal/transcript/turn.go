@@ -59,6 +59,7 @@ type TurnStoreOptions struct {
 	HistoryCachePath           string
 	UsageCachePath             string
 	CursorCachePath            string
+	RunErrorCachePath          string
 	StateContextPath           string
 	AcceptedRequestPath        string
 }

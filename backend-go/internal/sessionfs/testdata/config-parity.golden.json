@@ -11,6 +11,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http"
@@ -30,6 +31,7 @@
         "history_cache": "$ROOT/session-1/st/history-cache.json",
         "usage_cache": "$ROOT/session-1/st/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/st/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/st/run-error-cache.json",
         "statecontext": "$ROOT/session-1/st/statecontext.json",
         "staging": "$ROOT/session-1/st",
         "http_debug": "$ROOT/session-1/dbg"
@@ -49,6 +51,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http"
@@ -140,6 +143,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http",
@@ -162,6 +166,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http",
@@ -184,6 +189,7 @@
         "history_cache": "$ROOT/session-1/profiles/b/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/profiles/b/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/profiles/b/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/profiles/b/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/profiles/b/staging/statecontext.json",
         "staging": "$ROOT/session-1/profiles/b/staging",
         "http_debug": "$ROOT/session-1/profiles/b/debug/http",
@@ -206,6 +212,7 @@
         "history_cache": "$ROOT/session-1/profiles/b/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/profiles/b/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/profiles/b/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/profiles/b/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/profiles/b/staging/statecontext.json",
         "staging": "$ROOT/session-1/profiles/b/staging",
         "http_debug": "$ROOT/session-1/profiles/b/debug/http",
@@ -233,6 +240,7 @@
         "history_cache": "$ROOT/session-1/profiles/b/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/profiles/b/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/profiles/b/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/profiles/b/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/profiles/b/staging/statecontext.json",
         "staging": "$ROOT/session-1/profiles/b/staging",
         "http_debug": "$ROOT/session-1/profiles/b/debug/http",
@@ -265,6 +273,7 @@
         "history_cache": "$ROOT/session-1/profiles/b/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/profiles/b/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/profiles/b/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/profiles/b/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/profiles/b/staging/statecontext.json",
         "staging": "$ROOT/session-1/profiles/b/staging",
         "http_debug": "$ROOT/session-1/profiles/b/debug/http",
@@ -287,6 +296,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http",
@@ -309,6 +319,7 @@
         "history_cache": "$ROOT/session-1/profiles/a/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/profiles/a/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/profiles/a/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/profiles/a/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/profiles/a/staging/statecontext.json",
         "staging": "$ROOT/session-1/profiles/a/staging",
         "http_debug": "$ROOT/session-1/profiles/a/debug/http",
@@ -331,6 +342,7 @@
         "history_cache": "$ROOT/session-1/sb/history-cache.json",
         "usage_cache": "$ROOT/session-1/sb/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/sb/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/sb/run-error-cache.json",
         "statecontext": "$ROOT/session-1/sb/statecontext.json",
         "staging": "$ROOT/session-1/sb",
         "http_debug": "$ROOT/session-1/profiles/b/debug/http",
@@ -353,6 +365,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http",
@@ -375,6 +388,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http",
@@ -463,6 +477,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http",
@@ -520,13 +535,13 @@
     "name": "duplicate files in profile",
     "profile": "",
     "model": "",
-    "error": "paths.profiles.a: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.statecontext, and the compaction-cache backup must be different files"
+    "error": "paths.profiles.a: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.run_error_cache, paths.statecontext, and the compaction-cache backup must be different files"
   },
   {
     "name": "compaction cache backup collision",
     "profile": "",
     "model": "",
-    "error": "paths: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.statecontext, and the compaction-cache backup must be different files"
+    "error": "paths: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.run_error_cache, paths.statecontext, and the compaction-cache backup must be different files"
   },
   {
     "name": "profiles share storage",
@@ -558,6 +573,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http"
@@ -577,6 +593,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http"
@@ -596,6 +613,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http"
@@ -615,6 +633,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http"
@@ -658,6 +677,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http"
@@ -677,6 +697,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http"
@@ -696,6 +717,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http"
@@ -715,6 +737,7 @@
         "history_cache": "$ROOT/session-1/staging/history-cache.json",
         "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
         "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
         "statecontext": "$ROOT/session-1/staging/statecontext.json",
         "staging": "$ROOT/session-1/staging",
         "http_debug": "$ROOT/session-1/debug/http"

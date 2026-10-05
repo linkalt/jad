@@ -440,6 +440,7 @@ func (r *Resolver) sharedStore(config sessionfs.SessionConfig) (*sharedSession, 
 		HistoryCachePath:           config.StoragePaths.HistoryCache,
 		UsageCachePath:             config.StoragePaths.UsageCache,
 		CursorCachePath:            config.StoragePaths.CursorCache,
+		RunErrorCachePath:          config.StoragePaths.RunErrorCache,
 		CursorCacheCheckpointBytes: config.Persistence.CursorCacheCheckpointBytes,
 		StateContextPath:           config.StoragePaths.StateContext,
 		AcceptedRequestPath:        acceptedRequestPath,
@@ -533,6 +534,9 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	if err != nil {
 		return session.RunResult{}, err
 	}
+	if options.OnInputAccepted != nil {
+		options.OnInputAccepted(*persisted)
+	}
 	prepared, err := r.resolver.prepareRun(ctx, r.shared, r.config)
 	if err != nil {
 		return session.RunResult{}, err
@@ -621,6 +625,15 @@ func (r boundRunner) ReadRunUsageSummary(ctx context.Context) (webui.UsageSummar
 		return empty, err
 	}
 	return index.usage, nil
+}
+
+// RecordRunError keeps a failed run in the session's run-error cache, outside
+// messages.jsonl. The cap is the session's persistence.run_error_cache_max_entries.
+func (r boundRunner) RecordRunError(entry transcript.RunErrorEntry) error {
+	if r.shared == nil || r.shared.store == nil {
+		return errors.New("bound session runner is not initialized")
+	}
+	return r.shared.store.RecordRunError(entry, r.config.Persistence.RunErrorCacheMaxEntries)
 }
 
 func mapSessionError(err error) error {
