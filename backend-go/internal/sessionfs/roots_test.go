@@ -288,3 +288,44 @@ func TestRootSettingRunRetentionDefaultsAndNull(t *testing.T) {
 func asResolveError(err error, target **ResolveError) bool {
 	return errors.As(err, target)
 }
+
+func TestSSEHeartbeatIntervalSettingDefaultsAndValidation(t *testing.T) {
+	if got := Defaults().SSEHeartbeatInterval; got != 5*time.Second {
+		t.Fatalf("default SSE heartbeat interval = %v, want 5s", got)
+	}
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	load := func(server string) (Config, error) {
+		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+	}
+	for _, accepted := range []struct {
+		server string
+		want   time.Duration
+	}{
+		{`{}`, 5 * time.Second},
+		{`{"sse_heartbeat_interval_ms":null}`, 5 * time.Second},
+		{`{"sse_heartbeat_interval_ms":0}`, 0},
+		{`{"sse_heartbeat_interval_ms":100}`, 100 * time.Millisecond},
+		{`{"sse_heartbeat_interval_ms":300000}`, 5 * time.Minute},
+	} {
+		config, err := load(accepted.server)
+		if err != nil {
+			t.Fatalf("Load(%s) error = %v", accepted.server, err)
+		}
+		if config.Server.SSEHeartbeatInterval != accepted.want {
+			t.Errorf("Load(%s) heartbeat = %v, want %v", accepted.server, config.Server.SSEHeartbeatInterval, accepted.want)
+		}
+	}
+	for _, rejected := range []string{`-1`, `300001`, `1.5`, `"5000"`} {
+		_, err := load(`{"sse_heartbeat_interval_ms":` + rejected + `}`)
+		if err == nil || !strings.Contains(err.Error(), "sse_heartbeat_interval_ms") {
+			t.Errorf("Load(sse_heartbeat_interval_ms=%s) error = %v, want a message naming the field", rejected, err)
+		}
+	}
+}

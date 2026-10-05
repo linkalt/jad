@@ -9,14 +9,19 @@ import (
 )
 
 const (
-	defaultMaxToolRounds      int64 = 8
-	maxConfiguredToolRounds   int64 = 50_000
-	defaultNativeReadMaxBytes int64 = 64 * 1024
-	maxNativeToolBytes        int64 = 10 * 1024 * 1024
-	defaultNativeReadMaxFile  int64 = 64 * 1024 * 1024
-	maxNativeReadMaxFile      int64 = 1024 * 1024 * 1024
-	defaultNativeReadLimit    int64 = 250
-	maxSafeInteger            int64 = 9_007_199_254_740_991
+	defaultMaxToolRounds    int64 = 8
+	maxConfiguredToolRounds int64 = 50_000
+	// defaultMaxParallelToolCalls and maxConfiguredParallelToolCalls mirror the
+	// TypeScript DEFAULT_MAX_PARALLEL_TOOL_CALLS and
+	// MAX_CONFIGURED_PARALLEL_TOOL_CALLS.
+	defaultMaxParallelToolCalls    int64 = 8
+	maxConfiguredParallelToolCalls int64 = 64
+	defaultNativeReadMaxBytes      int64 = 64 * 1024
+	maxNativeToolBytes             int64 = 10 * 1024 * 1024
+	defaultNativeReadMaxFile       int64 = 64 * 1024 * 1024
+	maxNativeReadMaxFile           int64 = 1024 * 1024 * 1024
+	defaultNativeReadLimit         int64 = 250
+	maxSafeInteger                 int64 = 9_007_199_254_740_991
 )
 
 // NativeReadSettings are the normalized safety limits for the initial native
@@ -35,6 +40,19 @@ func normalizeMaxToolRounds(raw json.RawMessage, path string) (int64, error) {
 	value, ok := configSafeInteger(raw)
 	if !ok || value < 0 || value > maxConfiguredToolRounds {
 		return 0, configError("%s: max_tool_rounds must be a safe integer between 0 and %d", path, maxConfiguredToolRounds)
+	}
+	return value, nil
+}
+
+// normalizeMaxParallelToolCalls validates the most tool calls of one provider
+// response that may run at the same time.
+func normalizeMaxParallelToolCalls(raw json.RawMessage, path string) (int64, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return defaultMaxParallelToolCalls, nil
+	}
+	value, ok := configSafeInteger(raw)
+	if !ok || value < 1 || value > maxConfiguredParallelToolCalls {
+		return 0, configError("%s: max_parallel_tool_calls must be a safe integer between 1 and %d", path, maxConfiguredParallelToolCalls)
 	}
 	return value, nil
 }

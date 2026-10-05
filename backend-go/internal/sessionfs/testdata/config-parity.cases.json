@@ -49,5 +49,13 @@
  {"name":"compaction cache backup collision","setting":{"cwd":"$ROOT","paths":{"messages":"c.json.backup","compaction_cache":"c.json"}}},
  {"name":"profiles share storage","setting":{"cwd":"$ROOT","paths":{"active_profile":"a","profiles":{"a":{},"b":{"messages":"messages.jsonl"}}}}},
  {"name":"profiles share staging","setting":{"cwd":"$ROOT","paths":{"active_profile":"a","profiles":{"a":{"staging":"s"},"b":{"staging":"s"}}}}},
- {"name":"profiles share http debug","setting":{"cwd":"$ROOT","paths":{"active_profile":"a","profiles":{"a":{"http_debug":"d"},"b":{"http_debug":"d"}}}}}
+ {"name":"profiles share http debug","setting":{"cwd":"$ROOT","paths":{"active_profile":"a","profiles":{"a":{"http_debug":"d"},"b":{"http_debug":"d"}}}}},
+ {"name":"parallel calls minimum","setting":{"cwd":"$ROOT","max_parallel_tool_calls":1}},
+ {"name":"parallel calls maximum","setting":{"cwd":"$ROOT","max_parallel_tool_calls":64}},
+ {"name":"parallel calls null","setting":{"cwd":"$ROOT","max_parallel_tool_calls":null}},
+ {"name":"parallel calls integral decimal","setting":{"cwd":"$ROOT","max_parallel_tool_calls":4.0}},
+ {"name":"parallel calls zero","setting":{"cwd":"$ROOT","max_parallel_tool_calls":0}},
+ {"name":"parallel calls too many","setting":{"cwd":"$ROOT","max_parallel_tool_calls":65}},
+ {"name":"parallel calls fractional","setting":{"cwd":"$ROOT","max_parallel_tool_calls":1.5}},
+ {"name":"parallel calls string","setting":{"cwd":"$ROOT","max_parallel_tool_calls":"4"}}
 ]

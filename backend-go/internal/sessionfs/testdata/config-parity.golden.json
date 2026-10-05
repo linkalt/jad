@@ -545,5 +545,105 @@
     "profile": "",
     "model": "",
     "error": "path profiles 'a' and 'b' resolve to the same storage path (http_debug and http_debug); each profile must use distinct transcript and cache paths"
+  },
+  {
+    "name": "parallel calls minimum",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "parallel calls maximum",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "parallel calls null",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "parallel calls integral decimal",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "parallel calls zero",
+    "profile": "",
+    "model": "",
+    "error": "max_parallel_tool_calls must be a safe integer between 1 and 64"
+  },
+  {
+    "name": "parallel calls too many",
+    "profile": "",
+    "model": "",
+    "error": "max_parallel_tool_calls must be a safe integer between 1 and 64"
+  },
+  {
+    "name": "parallel calls fractional",
+    "profile": "",
+    "model": "",
+    "error": "max_parallel_tool_calls must be a safe integer between 1 and 64"
+  },
+  {
+    "name": "parallel calls string",
+    "profile": "",
+    "model": "",
+    "error": "max_parallel_tool_calls must be a safe integer between 1 and 64"
   }
 ]

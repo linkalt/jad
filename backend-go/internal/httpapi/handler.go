@@ -40,10 +40,13 @@ var (
 // Config contains the externally loaded HTTP/SSE settings. Limits and origins
 // are required here rather than silently receiving server-local defaults.
 type Config struct {
-	APIToken                   string
-	AllowedOrigins             []string
-	MaxBodyBytes               int64
-	SSEMaxBufferedBytes        int
+	APIToken            string
+	AllowedOrigins      []string
+	MaxBodyBytes        int64
+	SSEMaxBufferedBytes int
+	// SSEHeartbeatInterval is the gap between keep-alive comment frames on a
+	// run stream with nothing else to send. Zero disables them.
+	SSEHeartbeatInterval       time.Duration
 	RunStateRetention          time.Duration
 	AllowZeroRunStateRetention bool
 	ToolStreamInterval         time.Duration
@@ -231,6 +234,7 @@ type Handler struct {
 	allowedOrigin             map[string]struct{}
 	maxBodyBytes              int64
 	toolStreamInterval        time.Duration
+	sseHeartbeatInterval      time.Duration
 	conditionalRequests       bool
 	snapshotTurns             int
 	maxPageTurns              int
@@ -271,6 +275,9 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	}
 	if config.SSEMaxBufferedBytes < 1024 {
 		return nil, errors.New("maximum SSE buffered bytes must be at least 1024")
+	}
+	if config.SSEHeartbeatInterval < 0 || config.SSEHeartbeatInterval > time.Duration(serverconfig.MaxSSEHeartbeatIntervalMS)*time.Millisecond {
+		return nil, fmt.Errorf("SSE heartbeat interval must be between 0 and %d milliseconds", serverconfig.MaxSSEHeartbeatIntervalMS)
 	}
 	if config.RunStateRetention < 0 || (config.RunStateRetention == 0 && !config.AllowZeroRunStateRetention) {
 		return nil, errors.New("run state retention must be positive unless zero retention is explicitly configured")
@@ -332,6 +339,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		allowedOrigin:             origins,
 		maxBodyBytes:              config.MaxBodyBytes,
 		toolStreamInterval:        config.ToolStreamInterval,
+		sseHeartbeatInterval:      config.SSEHeartbeatInterval,
 		conditionalRequests:       config.ConditionalRequests,
 		snapshotTurns:             config.SnapshotTurns,
 		maxPageTurns:              config.MaxPageTurns,
@@ -762,7 +770,16 @@ func (h *Handler) serveSSE(w http.ResponseWriter, r *http.Request, run *activeRu
 	h.writeSSEHeaders(w)
 	flusher.Flush()
 	for {
-		event, ok := queue.next(r.Context())
+		event, ok, quiet := queue.nextOrIdle(r.Context(), h.sseHeartbeatInterval)
+		if quiet {
+			// A comment frame carries no event, so a client parser ignores it; it
+			// only proves the connection is alive during a long silent tool call.
+			if _, err := w.Write(sseKeepAliveFrame); err != nil {
+				return
+			}
+			flusher.Flush()
+			continue
+		}
 		if !ok {
 			return
 		}
@@ -775,6 +792,9 @@ func (h *Handler) serveSSE(w http.ResponseWriter, r *http.Request, run *activeRu
 		}
 	}
 }
+
+// sseKeepAliveFrame is the SSE comment sent on a quiet run stream.
+var sseKeepAliveFrame = []byte(": keep-alive\n\n")
 
 func (h *Handler) writeSSEHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")

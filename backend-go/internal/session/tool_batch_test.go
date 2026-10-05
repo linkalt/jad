@@ -1,0 +1,170 @@
+package session
+
+import (
+	"errors"
+	"reflect"
+	"slices"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestRunToolBatchRunsConcurrentlyUpToLimitAndReportsEachAsItFinishes(t *testing.T) {
+	var active, peak atomic.Int64
+	var mu sync.Mutex
+	var finished []int
+	err := runToolBatch([]int{0, 1, 2, 3, 4, 5}, 3,
+		func(call int) (int, error) {
+			now := active.Add(1)
+			for {
+				seen := peak.Load()
+				if now <= seen || peak.CompareAndSwap(seen, now) {
+					break
+				}
+			}
+			// Later calls finish first, so completion order differs from call order.
+			time.Sleep(time.Duration(6-call) * 10 * time.Millisecond)
+			active.Add(-1)
+			return call * 10, nil
+		},
+		func(call, output int) error {
+			if output != call*10 {
+				t.Errorf("output for call %d = %d", call, output)
+			}
+			mu.Lock()
+			finished = append(finished, call)
+			mu.Unlock()
+			return nil
+		}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peak.Load() != 3 {
+		t.Fatalf("peak concurrency = %d, want 3", peak.Load())
+	}
+	sorted := slices.Clone(finished)
+	slices.Sort(sorted)
+	if !reflect.DeepEqual(sorted, []int{0, 1, 2, 3, 4, 5}) {
+		t.Fatalf("finished = %v, want every call once", finished)
+	}
+	if slices.IsSorted(finished) {
+		t.Fatalf("finished = %v, want completion order to differ from call order", finished)
+	}
+}
+
+func TestRunToolBatchLimitOnePreservesSequentialOrder(t *testing.T) {
+	var order []string
+	err := runToolBatch([]string{"a", "b", "c"}, 1,
+		func(call string) (string, error) {
+			order = append(order, "start "+call)
+			time.Sleep(5 * time.Millisecond)
+			order = append(order, "end "+call)
+			return call, nil
+		},
+		func(string, string) error { return nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"start a", "end a", "start b", "end b", "start c", "end c"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+}
+
+func TestRunToolBatchTreatsALimitBelowOneAsSequential(t *testing.T) {
+	var active, peak atomic.Int64
+	err := runToolBatch([]int{0, 1, 2}, 0,
+		func(int) (int, error) {
+			if now := active.Add(1); now > peak.Load() {
+				peak.Store(now)
+			}
+			time.Sleep(5 * time.Millisecond)
+			active.Add(-1)
+			return 0, nil
+		},
+		func(int, int) error { return nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peak.Load() != 1 {
+		t.Fatalf("peak concurrency = %d, want 1", peak.Load())
+	}
+}
+
+func TestRunToolBatchFailureStartsNoFurtherCallsAndLetsInFlightCallsSettle(t *testing.T) {
+	var mu sync.Mutex
+	var started, finished []int
+	boom := errors.New("boom")
+	// Call 0 fails only once call 1 is in flight, so both workers have claimed a
+	// call before the failure and the outcome does not depend on scheduling.
+	secondStarted := make(chan struct{})
+	err := runToolBatch([]int{0, 1, 2, 3}, 2,
+		func(call int) (int, error) {
+			mu.Lock()
+			started = append(started, call)
+			mu.Unlock()
+			if call == 0 {
+				<-secondStarted
+				return 0, boom
+			}
+			if call == 1 {
+				close(secondStarted)
+			}
+			time.Sleep(40 * time.Millisecond)
+			return call, nil
+		},
+		func(call, _ int) error {
+			mu.Lock()
+			finished = append(finished, call)
+			mu.Unlock()
+			return nil
+		}, nil)
+	if !errors.Is(err, boom) {
+		t.Fatalf("error = %v, want boom", err)
+	}
+	slices.Sort(started)
+	if !reflect.DeepEqual(started, []int{0, 1}) {
+		t.Fatalf("started = %v, want [0 1]", started)
+	}
+	if !reflect.DeepEqual(finished, []int{1}) {
+		t.Fatalf("finished = %v, want [1]: the in-flight call must still settle", finished)
+	}
+}
+
+func TestRunToolBatchShouldStopPreventsLaterCallsFromStarting(t *testing.T) {
+	var stop atomic.Bool
+	var started []int
+	err := runToolBatch([]int{0, 1, 2}, 1,
+		func(call int) (int, error) {
+			started = append(started, call)
+			stop.Store(true)
+			return call, nil
+		},
+		func(int, int) error { return nil },
+		stop.Load)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(started, []int{0}) {
+		t.Fatalf("started = %v, want [0]", started)
+	}
+}
+
+func TestRunToolBatchReportsAFinishedHookErrorLikeAnExecutionError(t *testing.T) {
+	publishFailed := errors.New("publish failed")
+	err := runToolBatch([]int{0, 1}, 1,
+		func(call int) (int, error) { return call, nil },
+		func(int, int) error { return publishFailed }, nil)
+	if !errors.Is(err, publishFailed) {
+		t.Fatalf("error = %v, want publish failed", err)
+	}
+}
+
+func TestRunToolBatchWithNoCallsReturnsImmediately(t *testing.T) {
+	if err := runToolBatch([]int(nil), 4,
+		func(int) (int, error) { t.Fatal("executed"); return 0, nil },
+		func(int, int) error { t.Fatal("finished"); return nil }, nil); err != nil {
+		t.Fatal(err)
+	}
+}

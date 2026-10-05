@@ -137,7 +137,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -148,11 +148,14 @@ async function writeFixtures(sessions, providerUrl) {
       setting.tool_definition_paths = [manifest];
       setting.tools = {native: {read: {}, request_draft: {timeout_ms: 20000, max_timeout_ms: 40000, headless_auto_accept_timeout_ms: 300}}};
     }
-    if (id === "natived") {
+    if (id === "natived" || id === "parallelone" || id === "paralleltwo") {
       setting.cwd = scratch;
       setting.max_tool_rounds = 6;
       setting.tool_definition_paths = [mutatingManifest];
       setting.tools = {native: {read: {}, bash: {}, write: {}, edit: {}}};
+      // Bound how many calls of one response run at once; natived keeps the default.
+      if (id === "parallelone") setting.max_parallel_tool_calls = 1;
+      if (id === "paralleltwo") setting.max_parallel_tool_calls = 2;
     }
     // Bash output that exceeds the stream budget is spilled to files under the
     // session workspace; each session gets its own so the files can be listed.
@@ -278,6 +281,24 @@ async function startFakeProvider() {
     const response = {id, object: "response", status: "in_progress", model: body.model ?? "gpt-test", output: []};
     send({type: "response.created", sequence_number: 0, response});
     let seq = 1;
+    // A step with `calls` answers with several function calls in one response,
+    // like a model asking for parallel tool calls. Each entry is {name, arguments}.
+    if (step.calls) {
+      const items = step.calls.map((entry, index) => ({id: `fc_${counter}_${index}`, type: "function_call", status: "in_progress", call_id: entry.callId ?? `call_${counter}_${index}`, name: entry.name, arguments: ""}));
+      const finished = [];
+      for (const [index, item] of items.entries()) {
+        const args = JSON.stringify(step.calls[index].arguments ?? {});
+        send({type: "response.output_item.added", sequence_number: seq++, output_index: index, item});
+        send({type: "response.function_call_arguments.delta", sequence_number: seq++, output_index: index, item_id: item.id, delta: args});
+        send({type: "response.function_call_arguments.done", sequence_number: seq++, output_index: index, item_id: item.id, arguments: args});
+        const done = {...item, status: "completed", arguments: args};
+        finished.push(done);
+        send({type: "response.output_item.done", sequence_number: seq++, output_index: index, item: done});
+      }
+      send({type: "response.completed", sequence_number: seq++, response: {...response, status: "completed", output: finished, usage: {input_tokens: step.inputTokens ?? 12, output_tokens: 7, total_tokens: 19, input_tokens_details: {cached_tokens: 0}, output_tokens_details: {reasoning_tokens: 0}}}});
+      res.end();
+      return;
+    }
     if (step.call) {
       const call = {id: `fc_${counter}`, type: "function_call", status: "in_progress", call_id: step.call.callId ?? `call_${counter}`, name: step.call.name, arguments: ""};
       // Arguments may be a function of the requests so far, so a scenario can

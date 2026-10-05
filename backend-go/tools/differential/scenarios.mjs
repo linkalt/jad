@@ -20,7 +20,7 @@ async function call(ctx, method, path, {body, headers = {}} = {}) {
 }
 
 function parseEvents(raw) {
-  return raw.split("\n\n").filter(Boolean).map((block) => {
+  return raw.split("\n\n").filter((block) => block && !block.startsWith(":")).map((block) => {
     const event = /^event: (.*)$/m.exec(block)?.[1] ?? "message";
     const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
     let parsed = data;
@@ -40,7 +40,7 @@ async function sse(ctx, path, {method = "GET", body} = {}) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const raw = await response.text();
-  const events = raw.split("\n\n").filter(Boolean).map((block) => {
+  const events = raw.split("\n\n").filter((block) => block && !block.startsWith(":")).map((block) => {
     const event = /^event: (.*)$/m.exec(block)?.[1] ?? "message";
     const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
     let parsed = data;
@@ -78,7 +78,8 @@ async function sseLive(ctx, path, {body, onEvent}) {
     while ((index = buffer.indexOf("\n\n")) >= 0) {
       const block = buffer.slice(0, index);
       buffer = buffer.slice(index + 2);
-      if (!block.trim()) continue;
+      // A comment frame (": keep-alive") carries no event.
+      if (!block.trim() || block.startsWith(":")) continue;
       const event = /^event: (.*)$/m.exec(block)?.[1] ?? "message";
       const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
       let parsed = data;
@@ -689,6 +690,7 @@ export const scenarios = [
       return {names: eventNames(result), written, binary, records: await messagesJsonl(c, "natived"), snapshot: await call(c, "GET", "/api/sessions/natived")};
     },
   },
+  ...parallelScenarios(),
   {
     name: "native tool argument errors",
     provider: {steps: [
@@ -1011,3 +1013,59 @@ export const scenarios = [
   {name: "library root", run: (c) => call(c, "GET", "/api/library")},
   {name: "options preflight", run: async (c) => { const r = await fetch(`${c.base}/api/sessions`, {method: "OPTIONS", headers: {origin: "http://localhost:5173", "access-control-request-method": "POST"}}); return {status: r.status}; }},
 ];
+
+// Results of one response's tool calls: the call ids of the tool_result parts in
+// the order the stream published them, which is completion order when calls run
+// in parallel.
+const streamedResultOrder = (result) =>
+  result.events.filter((e) => e.event === "ui.part" && e.data?.part?.type === "tool_result").map((e) => e.data.part.callId);
+
+// Several calls in one provider response. The commands sleep for different
+// times, so completion order differs from call order, and the transcript must
+// still hold the results once each in call order.
+function parallelScenarios() {
+  const sleepCall = (callId, seconds) => ({name: "bash", callId, arguments: {command: `sleep ${seconds}; echo finished-${callId}`}});
+  // `settle` names the calls that finish within microseconds of each other: their
+  // relative order is scheduling noise (a JavaScript microtask queue and Go
+  // goroutines legitimately differ), so only the set is compared for them.
+  const run = (session, input, settle = []) => async (c) => {
+    await call(c, "POST", `/api/sessions/${session}/reset`, {body: {}});
+    const result = await sse(c, `/api/sessions/${session}/run`, {method: "POST", body: {input}});
+    const records = await messagesJsonl(c, session);
+    return {
+      names: eventNames(result),
+      streamedOrder: settle.length === 0 ? streamedResultOrder(result) : {settled: streamedResultOrder(result).filter((id) => settle.includes(id)).sort(), rest: streamedResultOrder(result).filter((id) => !settle.includes(id))},
+      persistedOrder: records.flatMap((r) => (r.item?.type === "function_call_output" || r.type === "function_call_output" ? [r.item?.call_id ?? r.call_id] : [])),
+      outputs: toolOutputs(c.provider.requests.at(-1)),
+      records,
+      snapshot: await call(c, "GET", `/api/sessions/${session}`),
+    };
+  };
+  const calls = [sleepCall("c0", 1), sleepCall("c1", 0.2), sleepCall("c2", 0.5), sleepCall("c3", 0.1)];
+  return [
+    {name: "parallel tool calls stream in completion order", provider: {steps: [{calls}, {text: "all finished"}]}, run: run("natived", "run four commands")},
+    {name: "max_parallel_tool_calls 1 runs calls in order", provider: {steps: [{calls: calls.slice(0, 3).map((entry, i) => sleepCall(`s${i}`, 0.1))}, {text: "all finished"}]}, run: run("parallelone", "run three commands")},
+    {name: "max_parallel_tool_calls 2 bounds concurrency", provider: {steps: [{calls: [sleepCall("b0", 1), sleepCall("b1", 0.2), sleepCall("b2", 0.3), sleepCall("b3", 0.1)]}, {text: "all finished"}]}, run: run("paralleltwo", "run four commands")},
+    {
+      // A silent tool call keeps the run stream alive with comment frames. The
+      // harness drops them elsewhere, so this scenario reads the raw text. The
+      // exact count depends on timing, so only "several, and none of them events"
+      // is compared.
+      name: "quiet run stream gets keep-alive comment frames",
+      provider: {steps: [{calls: [sleepCall("k0", 11.5)]}, {text: "slow done"}]},
+      run: async (c) => {
+        await call(c, "POST", "/api/sessions/natived/reset", {body: {}});
+        const response = await fetch(`${c.base}/api/sessions/natived/run`, {method: "POST", headers: {authorization: `Bearer ${c.token}`, "content-type": "application/json"}, body: JSON.stringify({input: "one slow command"})});
+        const raw = await response.text();
+        const blocks = raw.split("\n\n").filter(Boolean);
+        const keepAlives = blocks.filter((block) => block === ": keep-alive").length;
+        return {status: response.status, severalKeepAlives: keepAlives >= 2, otherComments: blocks.filter((block) => block.startsWith(":") && block !== ": keep-alive"), completed: blocks.filter((block) => block.startsWith("event: completed")).length, done: blocks.filter((block) => block.startsWith("event: done")).length};
+      },
+    },
+    {
+      name: "parallel calls mix valid, invalid and unknown tools",
+      provider: {steps: [{calls: [sleepCall("m0", 0.4), {name: "bash", callId: "m1", arguments: {command: ""}}, {name: "no_such_tool", callId: "m2", arguments: {}}, {name: "read", callId: "m3", arguments: {path: "notes.txt"}}]}, {text: "mixed"}]},
+      run: run("natived", "run a mix", ["m1", "m2", "m3"]),
+    },
+  ];
+}

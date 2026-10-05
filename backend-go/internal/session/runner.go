@@ -92,6 +92,9 @@ type RunOptions struct {
 	OnUsageChanged      func()
 	AcceptedRequestRole string
 	MaxToolRounds       int
+	// MaxParallelToolCalls is the most calls of one provider response that run
+	// at the same time; a value below one runs them one after another.
+	MaxParallelToolCalls int
 	// PersistedInput is set when PersistInput already stored the user input, so
 	// Run must not normalize, repair or append it again. A caller does this when
 	// work that can fail (reading the model file, connecting tool servers,
@@ -481,7 +484,14 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 			}
 			return resolved(identity, answer, proposed)
 		}
-		completed, executionErr := executeToolRound(ctx, options.ToolCatalog, calls, toolExecution)
+		// A result is published the moment its call settles; the ids published
+		// here are skipped by the pass after persistence below.
+		toolRun, executionErr := executeToolRound(ctx, options.ToolCatalog, calls, toolExecution, options.MaxParallelToolCalls, func(output json.RawMessage) {
+			if options.OnToolResult != nil {
+				options.OnToolResult(output)
+			}
+		})
+		completed := toolRun.Completed
 		errorCode := "tool_execution_failed"
 		errorSummary := "Tool execution failed before every call produced a persisted result."
 		if errors.Is(executionErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
@@ -495,6 +505,9 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		trace.Mark("tool-results-persisted", map[string]any{"round": round, "tool_calls": len(calls), "tool_results": len(outputs)})
 		if options.OnToolResult != nil {
 			for _, output := range outputs {
+				if _, published := toolRun.Published[functionCallID(output)]; published {
+					continue
+				}
 				options.OnToolResult(cloneRaw(output))
 			}
 		}

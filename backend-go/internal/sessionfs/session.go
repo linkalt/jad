@@ -99,38 +99,41 @@ type SessionStoragePaths struct {
 }
 
 type SessionConfig struct {
-	SessionName           string
-	Profile               string
-	DefaultProfile        string
-	PathProfiles          []string
-	ModelPath             string
-	ModelDefault          string
-	Models                []string
-	SettingPath           string
-	MessagesPath          string
-	MessagesBackupPath    string
-	UsageCachePath        string
-	StagingDir            string
-	StoragePaths          SessionStoragePaths
-	WorkingDir            string
-	SessionFiles          SessionFileListingSettings
-	NativeReadPolicy      NativePathPolicy
-	NativeRead            *NativeReadSettings
-	NativeGrep            *NativeGrepSettings
-	NativeWrite           *NativeWriteSettings
-	NativeEdit            *NativeEditSettings
-	NativeBash            *NativeBashSettings
-	NativeGlob            *NativeGlobSettings
-	NativeProcess         *NativeProcessSettings
-	NativeTask            *NativeTaskSettings
-	NativeMemory          *NativeMemorySettings
-	NativeFetch           *NativeFetchSettings
-	NativeRequestDraft    *NativeRequestDraftSettings
-	MCPServers            []MCPServerReference
-	StateContext          StateContextSettings
-	HTTPDebug             HTTPDebugSettings
-	ToolDefinitionPaths   []string
-	MaxToolRounds         int64
+	SessionName         string
+	Profile             string
+	DefaultProfile      string
+	PathProfiles        []string
+	ModelPath           string
+	ModelDefault        string
+	Models              []string
+	SettingPath         string
+	MessagesPath        string
+	MessagesBackupPath  string
+	UsageCachePath      string
+	StagingDir          string
+	StoragePaths        SessionStoragePaths
+	WorkingDir          string
+	SessionFiles        SessionFileListingSettings
+	NativeReadPolicy    NativePathPolicy
+	NativeRead          *NativeReadSettings
+	NativeGrep          *NativeGrepSettings
+	NativeWrite         *NativeWriteSettings
+	NativeEdit          *NativeEditSettings
+	NativeBash          *NativeBashSettings
+	NativeGlob          *NativeGlobSettings
+	NativeProcess       *NativeProcessSettings
+	NativeTask          *NativeTaskSettings
+	NativeMemory        *NativeMemorySettings
+	NativeFetch         *NativeFetchSettings
+	NativeRequestDraft  *NativeRequestDraftSettings
+	MCPServers          []MCPServerReference
+	StateContext        StateContextSettings
+	HTTPDebug           HTTPDebugSettings
+	ToolDefinitionPaths []string
+	MaxToolRounds       int64
+	// MaxParallelToolCalls is the most tool calls of one provider response that
+	// run at the same time.
+	MaxParallelToolCalls  int64
 	BackupTurns           int
 	Compaction            Compaction
 	Persistence           Persistence
@@ -227,6 +230,10 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		return SessionConfig{}, err
 	}
 	maxToolRounds, err := normalizeMaxToolRounds(setting["max_tool_rounds"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	maxParallelToolCalls, err := normalizeMaxParallelToolCalls(setting["max_parallel_tool_calls"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -422,6 +429,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		HTTPDebug:             httpDebug,
 		ToolDefinitionPaths:   toolDefinitionPaths,
 		MaxToolRounds:         maxToolRounds,
+		MaxParallelToolCalls:  maxParallelToolCalls,
 		BackupTurns:           backupTurns,
 		Compaction:            compactionSettings,
 		Persistence:           persistence,

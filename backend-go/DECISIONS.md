@@ -78,3 +78,18 @@ Keep these rules when porting:
 - Terminal events are replayed to a subscriber that arrives after the run finished (`ui.message`, then `completed`, then `done`), and the response **ends** after `done` — on both routes. A finished run is retained for `run_state_retention_ms` and then retired; attaching after that answers a single `idle` frame and ends.
 - A client may **replace a stream that goes quiet** (the TypeScript client's `run_stream_stall_timeout_ms`): silence is not the same as slowness, because a connection that stops delivering frames neither errors nor ends. Reconnecting is safe at any point in a run — the attach route replays the newest `ui.message` snapshot, so a client that missed every delta is correct from that frame on, and a client that already saw the terminal events finishes immediately.
 - A tool that asks for an interaction (`WebUiMessage.pending`) survives all of this: the question is message state, so a reconnecting or attaching client sees it in the snapshot it replays.
+
+## Parallel tool calls and the SSE keep-alive (TypeScript 479509f)
+
+Tool calls of one provider response run with bounded concurrency (`max_parallel_tool_calls`, default 8, range 1–64; `1` restores strict order). The Go port keeps the TypeScript contract:
+
+- Each result is published to the client the moment its call settles, so the stream follows completion order. `messages.jsonl` is unchanged: every result is persisted once, after the batch, in call order.
+- After the first error no further call starts; calls already running settle and every result that completed is persisted. A cancelled run cancels all in-flight calls through the shared context.
+- A user-decision tool (`request_draft`) in the response still runs alone; the other calls get the `user_decision_required` placeholder.
+- A quiet run stream gets a `: keep-alive` SSE comment every `server.sse_heartbeat_interval_ms` (default 5000, `0` disables, max 300000). It carries no event, so a client parser ignores it and only the stall watchdog is reset.
+- Go's process manager and fetch store were already serialized behind a mutex that spans the capacity check and the write, so the two races TypeScript closed (`max_running`, fetch storage capacity) did not exist here; regression tests lock that in.
+
+Go-specific, accepted differences:
+
+- **Order of near-simultaneous results.** Two calls that finish within microseconds publish in an order that depends on the scheduler (a JavaScript microtask queue and Go goroutines differ). Calls whose duration differs by more than scheduling noise publish in the same order on both backends; the differential harness compares only the set for calls that settle together.
+- **Heartbeat skipping.** TypeScript skips a frame while earlier output is still queued in the socket. Go writes each frame from one goroutine that blocks on the write, so there is never queued output for the heartbeat to skip behind; a stalled client back-pressures the loop instead.

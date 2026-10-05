@@ -47,6 +47,9 @@ type ServerSettings struct {
 	AllowZeroRunStateRetention bool
 	ToolStreamInterval         time.Duration
 	SSEMaxBufferedBytes        int
+	// SSEHeartbeatInterval is the gap between keep-alive frames on a quiet run
+	// stream; zero disables them.
+	SSEHeartbeatInterval       time.Duration
 	ConditionalRequests        bool
 	SnapshotTurns              int
 	MaxPageTurns               int
@@ -120,6 +123,7 @@ func Defaults() ServerSettings {
 		RunStateRetention:          30 * time.Second,
 		ToolStreamInterval:         time.Duration(serverconfig.DefaultToolStreamIntervalMS) * time.Millisecond,
 		SSEMaxBufferedBytes:        1 << 20,
+		SSEHeartbeatInterval:       time.Duration(serverconfig.DefaultSSEHeartbeatIntervalMS) * time.Millisecond,
 		ConditionalRequests:        true,
 		SnapshotTurns:              24,
 		MaxPageTurns:               50,
@@ -505,6 +509,11 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		return ServerSettings{}, err
 	}
 	settings.SSEMaxBufferedBytes = int(sseBytes)
+	heartbeat := int64(settings.SSEHeartbeatInterval / time.Millisecond)
+	if err := readInt("sse_heartbeat_interval_ms", &heartbeat, 0, serverconfig.MaxSSEHeartbeatIntervalMS); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.SSEHeartbeatInterval = time.Duration(heartbeat) * time.Millisecond
 	if err := readBool(fields, "conditional_requests", &settings.ConditionalRequests, path); err != nil {
 		return ServerSettings{}, err
 	}

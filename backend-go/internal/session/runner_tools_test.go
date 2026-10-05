@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"example.com/agent-harness/backend-go/internal/responses"
 	"example.com/agent-harness/backend-go/internal/tools"
@@ -167,10 +171,11 @@ func TestRunnerDefersEveryCoBatchedCallUntilUserDecisionIsResolved(t *testing.T)
 		json.RawMessage(`{"type":"function_call","call_id":"call-decision","name":"request_draft","arguments":"{}"}`),
 		json.RawMessage(`{"type":"function_call","call_id":"call-after","name":"lookup","arguments":"{}"}`),
 	}
-	completed, err := executeToolRound(context.Background(), catalog, calls, tools.ExecutionContext{})
+	round, err := executeToolRound(context.Background(), catalog, calls, tools.ExecutionContext{}, 8, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	completed := round.Completed
 	if otherExecutions != 0 || decisionExecutions != 1 || len(completed) != 3 {
 		t.Fatalf("other executions=%d decision executions=%d outputs=%d", otherExecutions, decisionExecutions, len(completed))
 	}
@@ -306,5 +311,170 @@ func TestRunnerPersistsToolRoundLimitOutputBeforeFailing(t *testing.T) {
 	}
 	if len(records) != 3 || !strings.Contains(string(records[2]), "tool_round_limit") {
 		t.Fatalf("transcript records = %q, want persisted tool-round-limit output", records)
+	}
+}
+
+// newSleepCatalog returns a tool whose call sleeps for the number of
+// milliseconds in its "ms" argument, so a test controls completion order.
+func newSleepCatalog(t *testing.T) (*tools.Catalog, *atomic.Int64) {
+	t.Helper()
+	schema := json.RawMessage(`{"type":"object","properties":{"ms":{"type":"integer"}},"required":["ms"],"additionalProperties":false}`)
+	validator, err := tools.CompileSchema(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var active, peak atomic.Int64
+	catalog, err := tools.NewCatalog([]tools.Tool{{
+		Definition: tools.Definition{ID: "native.sleep", Source: "native", Name: "sleep", Description: "Sleep.", InputSchema: schema},
+		Validator:  validator,
+		Execute: func(ctx context.Context, args map[string]any, execution tools.ExecutionContext) (string, error) {
+			now := active.Add(1)
+			for {
+				seen := peak.Load()
+				if now <= seen || peak.CompareAndSwap(seen, now) {
+					break
+				}
+			}
+			milliseconds, _ := args["ms"].(json.Number).Int64()
+			defer active.Add(-1)
+			select {
+			case <-time.After(time.Duration(milliseconds) * time.Millisecond):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			return "done " + execution.CallID, nil
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog, &peak
+}
+
+func parallelCallsStreamer(t *testing.T, sleeps []int) *multiRoundStreamer {
+	t.Helper()
+	first := make([]responses.Event, 0, len(sleeps)+1)
+	for index, ms := range sleeps {
+		item := fmt.Sprintf(`{"type":"function_call","call_id":"call-%d","name":"sleep","arguments":"{\"ms\":%d}"}`, index, ms)
+		first = append(first, responses.Event{Type: "response.output_item.done", Raw: json.RawMessage(fmt.Sprintf(`{"type":"response.output_item.done","output_index":%d,"item":%s}`, index, item))})
+	}
+	first = append(first, responses.Event{Type: "response.completed", Raw: json.RawMessage(`{"type":"response.completed","response":{"id":"resp-calls","status":"completed","output":[]}}`)})
+	return &multiRoundStreamer{rounds: [][]responses.Event{
+		first,
+		{
+			{Type: "response.output_item.done", Raw: json.RawMessage(`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"all finished"}]}}`)},
+			{Type: "response.completed", Raw: json.RawMessage(`{"type":"response.completed","response":{"id":"resp-final","status":"completed","output":[]}}`)},
+		},
+	}}
+}
+
+func TestRunnerPublishesParallelToolResultsInCompletionOrderAndPersistsInCallOrder(t *testing.T) {
+	catalog, peak := newSleepCatalog(t)
+	// Call 0 is the slowest: published results follow completion order.
+	streamer := parallelCallsStreamer(t, []int{300, 20, 150, 80})
+	store, journal, _ := newTestStore(t, transcript.ResponseMetadataMinimal)
+	runner, err := NewRunner(store, streamer, ModelSettings{Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var published []string
+	_, err = runner.Run(context.Background(), json.RawMessage(`"run four"`), RunOptions{
+		ToolCatalog:          catalog,
+		MaxToolRounds:        2,
+		MaxParallelToolCalls: 8,
+		OnToolResult: func(item json.RawMessage) {
+			mu.Lock()
+			published = append(published, functionCallID(item))
+			mu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if peak.Load() != 4 {
+		t.Fatalf("peak concurrency = %d, want all 4 calls in flight together", peak.Load())
+	}
+	if want := []string{"call-1", "call-3", "call-2", "call-0"}; !reflect.DeepEqual(published, want) {
+		t.Fatalf("published results = %v, want completion order %v", published, want)
+	}
+	// The transcript keeps call order and holds each result exactly once.
+	var persisted []string
+	if err := journal.ReadLines(func(line []byte) error {
+		if strings.Contains(string(line), `"type":"function_call_output"`) {
+			persisted = append(persisted, functionCallID(line))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"call-0", "call-1", "call-2", "call-3"}; !reflect.DeepEqual(persisted, want) {
+		t.Fatalf("persisted results = %v, want call order %v", persisted, want)
+	}
+}
+
+func TestRunnerLimitOneRunsParallelToolCallsOneAfterAnother(t *testing.T) {
+	catalog, peak := newSleepCatalog(t)
+	streamer := parallelCallsStreamer(t, []int{20, 20, 20})
+	store, _, _ := newTestStore(t, transcript.ResponseMetadataMinimal)
+	runner, err := NewRunner(store, streamer, ModelSettings{Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published []string
+	if _, err := runner.Run(context.Background(), json.RawMessage(`"run three"`), RunOptions{
+		ToolCatalog:          catalog,
+		MaxToolRounds:        2,
+		MaxParallelToolCalls: 1,
+		OnToolResult:         func(item json.RawMessage) { published = append(published, functionCallID(item)) },
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if peak.Load() != 1 {
+		t.Fatalf("peak concurrency = %d, want 1", peak.Load())
+	}
+	if want := []string{"call-0", "call-1", "call-2"}; !reflect.DeepEqual(published, want) {
+		t.Fatalf("published = %v, want %v", published, want)
+	}
+}
+
+func TestRunnerCancellationPersistsEveryParallelCallAndStopsPromptly(t *testing.T) {
+	catalog, _ := newSleepCatalog(t)
+	// Sleeps far longer than the test; the cancelled context must not wait for them.
+	streamer := parallelCallsStreamer(t, []int{20, 5_000, 5_000})
+	store, journal, _ := newTestStore(t, transcript.ResponseMetadataMinimal)
+	runner, err := NewRunner(store, streamer, ModelSettings{Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var once sync.Once
+	began := time.Now()
+	_, err = runner.Run(ctx, json.RawMessage(`"run slow"`), RunOptions{
+		ToolCatalog:          catalog,
+		MaxToolRounds:        2,
+		MaxParallelToolCalls: 8,
+		// Cancel as soon as the fast call has published its result.
+		OnToolResult: func(json.RawMessage) { once.Do(cancel) },
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(began); elapsed > 2*time.Second {
+		t.Fatalf("Run() took %v after cancellation, want it to stop without waiting for the 5s calls", elapsed)
+	}
+	// Every call of the round has a persisted result: the fast one real, the others
+	// recorded as cancelled, so the next run does not see a dangling call.
+	var persisted []string
+	if err := journal.ReadLines(func(line []byte) error {
+		if strings.Contains(string(line), `"type":"function_call_output"`) {
+			persisted = append(persisted, functionCallID(line))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 3 {
+		t.Fatalf("persisted tool results = %v, want one per call", persisted)
 	}
 }

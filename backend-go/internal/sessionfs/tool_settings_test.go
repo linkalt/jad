@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -77,5 +78,24 @@ func TestNormalizeNativeReadSettingsRejectsUnknownKeys(t *testing.T) {
 	}, t.TempDir(), "/session/setting.json")
 	if err == nil {
 		t.Fatal("normalizeNativeReadSettings() accepted an unknown setting")
+	}
+}
+
+func TestNormalizeMaxParallelToolCalls(t *testing.T) {
+	const path = "/session/setting.json"
+	for _, accepted := range []struct {
+		raw  string
+		want int64
+	}{{``, 8}, {`null`, 8}, {`1`, 1}, {`64`, 64}, {`4.0`, 4}} {
+		got, err := normalizeMaxParallelToolCalls(json.RawMessage(accepted.raw), path)
+		if err != nil || got != accepted.want {
+			t.Errorf("normalizeMaxParallelToolCalls(%q) = %d, %v; want %d", accepted.raw, got, err, accepted.want)
+		}
+	}
+	for _, rejected := range []string{`0`, `65`, `-1`, `1.5`, `"4"`, `true`} {
+		_, err := normalizeMaxParallelToolCalls(json.RawMessage(rejected), path)
+		if err == nil || !strings.Contains(err.Error(), "max_parallel_tool_calls must be a safe integer between 1 and 64") {
+			t.Errorf("normalizeMaxParallelToolCalls(%s) error = %v", rejected, err)
+		}
 	}
 }

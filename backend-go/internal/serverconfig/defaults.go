@@ -5,6 +5,8 @@ package serverconfig
 const (
 	DefaultToolStreamIntervalMS          = 120
 	MaxToolStreamIntervalMS              = 60 * 1000
+	DefaultSSEHeartbeatIntervalMS        = 5_000
+	MaxSSEHeartbeatIntervalMS            = 5 * 60 * 1000
 	DefaultRunContentMemoryBytes         = 100 * 1024
 	DefaultRunContentWriteBatchBytes     = 32 * 1024
 	DefaultRunContentFlushIntervalMS     = 25

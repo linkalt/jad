@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"example.com/agent-harness/backend-go/internal/tools"
 	"example.com/agent-harness/backend-go/internal/transcript"
@@ -141,8 +142,28 @@ func missingToolOutput(callID, errorCode, summary string) (json.RawMessage, erro
 	return encoded, nil
 }
 
-func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.RawMessage, execution tools.ExecutionContext) ([]json.RawMessage, error) {
-	completed := make([]json.RawMessage, 0, len(calls))
+// toolRound is what one batch of tool calls produced.
+type toolRound struct {
+	// Completed holds the output of every call that settled, in call order. Calls
+	// deferred behind a user-decision tool appear here with their placeholder
+	// output; calls that never ran or failed are absent.
+	Completed []json.RawMessage
+	// Published is the set of call ids whose output was already handed to the
+	// publish callback while the batch was running.
+	Published map[string]struct{}
+}
+
+// executeToolRound runs the calls of one provider response with at most limit
+// of them in flight at once. When the response contains a user-decision tool
+// only that call runs and every other call gets a placeholder output.
+//
+// publish, when set, receives each executed call's output the moment the call
+// settles, so completion order (not call order) is what a client sees. Calls
+// to publish are serialized. Placeholder outputs are not published here: the
+// caller publishes them after the round is persisted, together with anything
+// else that is still unpublished.
+func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.RawMessage, execution tools.ExecutionContext, limit int, publish func(json.RawMessage)) (toolRound, error) {
+	round := toolRound{Published: make(map[string]struct{}, len(calls))}
 	decisionIndex := -1
 	for index, call := range calls {
 		if catalog.IsUserDecisionCall(call) {
@@ -150,27 +171,55 @@ func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.
 			break
 		}
 	}
+
+	byCallID := make(map[string]json.RawMessage, len(calls))
+	toExecute := make([]json.RawMessage, 0, len(calls))
 	for index, call := range calls {
 		callID := functionCallID(call)
 		if callID == "" {
-			return completed, errors.New("function call is missing call_id")
+			return round, errors.New("function call is missing call_id")
 		}
 		if decisionIndex >= 0 && index != decisionIndex {
 			output, err := missingToolOutput(callID, "user_decision_required", "This call was not executed because a user-decision tool in the same response must be resolved first; re-plan after its result.")
 			if err != nil {
-				return completed, err
+				return round, err
 			}
-			completed = append(completed, output)
+			byCallID[callID] = output
 			continue
 		}
-		if err := ctx.Err(); err != nil {
-			return completed, err
-		}
-		output, err := catalog.ExecuteFunctionCall(ctx, call, execution)
-		if err != nil {
-			return completed, err
-		}
-		completed = append(completed, output)
+		toExecute = append(toExecute, call)
 	}
-	return completed, nil
+
+	var mu sync.Mutex
+	batchErr := runToolBatch(toExecute, limit,
+		func(call json.RawMessage) (json.RawMessage, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return catalog.ExecuteFunctionCall(ctx, call, execution)
+		},
+		func(_ json.RawMessage, output json.RawMessage) error {
+			outputID := functionCallID(output)
+			if outputID == "" {
+				return nil
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			byCallID[outputID] = output
+			round.Published[outputID] = struct{}{}
+			if publish != nil {
+				publish(cloneRaw(output))
+			}
+			return nil
+		},
+		nil,
+	)
+
+	round.Completed = make([]json.RawMessage, 0, len(byCallID))
+	for _, call := range calls {
+		if output, ok := byCallID[functionCallID(call)]; ok {
+			round.Completed = append(round.Completed, output)
+		}
+	}
+	return round, batchErr
 }

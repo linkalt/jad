@@ -82,6 +82,21 @@ func (q *eventQueue) push(event streamEvent, snapshot bool) bool {
 }
 
 func (q *eventQueue) next(ctx context.Context) (streamEvent, bool) {
+	event, ok, _ := q.nextOrIdle(ctx, 0)
+	return event, ok
+}
+
+// nextOrIdle is next with a quiet-stream signal: when idle is greater than zero
+// and nothing arrives within it, it returns idle=true so the caller can write a
+// keep-alive frame and wait again. The wait restarts after every event.
+func (q *eventQueue) nextOrIdle(ctx context.Context, idle time.Duration) (event streamEvent, ok, timedOut bool) {
+	var timer *time.Timer
+	var idleC <-chan time.Time
+	if idle > 0 {
+		timer = time.NewTimer(idle)
+		defer timer.Stop()
+		idleC = timer.C
+	}
 	for {
 		q.mu.Lock()
 		if len(q.queue) > 0 {
@@ -90,18 +105,20 @@ func (q *eventQueue) next(ctx context.Context) (streamEvent, bool) {
 			q.queue = q.queue[1:]
 			q.bytes -= len(event.frame)
 			q.mu.Unlock()
-			return event, true
+			return event, true, false
 		}
 		if q.closed {
 			q.mu.Unlock()
-			return streamEvent{}, false
+			return streamEvent{}, false, false
 		}
 		q.mu.Unlock()
 
 		select {
 		case <-q.wake:
+		case <-idleC:
+			return streamEvent{}, true, true
 		case <-ctx.Done():
-			return streamEvent{}, false
+			return streamEvent{}, false, false
 		}
 	}
 }
