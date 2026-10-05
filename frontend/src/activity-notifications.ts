@@ -13,6 +13,32 @@ export interface ActivityNotification {
 
 export type NewActivityNotification = Omit<ActivityNotification, 'id' | 'createdAt' | 'isRead'>;
 
+/**
+ * The notice for a run whose live connection dropped and whose retained server
+ * state expired before the client reconnected. Nothing persists a failed run in
+ * the transcript, so the client cannot tell success from failure here and must
+ * say so rather than report either.
+ */
+export function runOutcomeUnknownNotification(
+  sessionId: string,
+  sessionTitle: string,
+): NewActivityNotification {
+  return {
+    sessionId,
+    sessionTitle,
+    kind: 'info',
+    title: 'Run outcome unknown',
+    message:
+      'The live connection to this run was lost and the server no longer holds it. ' +
+      'Check the transcript for the result; a failed run leaves no record there.',
+  };
+}
+
+/** Whether a finished stream ended without the server holding the run. */
+export function isRunOutcomeUnknown(result: {idle?: boolean; message?: unknown}): boolean {
+  return result.idle === true && result.message === undefined;
+}
+
 export function prependActivityNotification(
   notifications: ActivityNotification[],
   notification: ActivityNotification,

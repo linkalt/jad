@@ -38,8 +38,10 @@ import {ChatComposerDrawer} from '@astryxdesign/core/Chat';
 import {useToast} from '@astryxdesign/core/Toast';
 import {
   hasUnreadActivityError,
+  isRunOutcomeUnknown,
   markActivityNotificationsRead,
   prependActivityNotification,
+  runOutcomeUnknownNotification,
   unreadActivityNotificationCount,
   type ActivityNotification,
   type NewActivityNotification,
@@ -3879,10 +3881,18 @@ function App() {
             if (controller.signal.aborted || runAbortRefs.current.get(sessionId) !== controller) {
               return;
             }
-            if (result.idle === true && result.message === undefined) {
-              // The run's retained state expired during a reconnect, so its
-              // outcome is unknown here. The refresh in `finally` loads the
-              // committed transcript, which is authoritative.
+            if (isRunOutcomeUnknown(result)) {
+              // The run's retained state expired during a reconnect. A failed run
+              // leaves no transcript record, so say the outcome is unknown instead
+              // of staying silent. The refresh in `finally` loads the transcript.
+              recordNotification(
+                runOutcomeUnknownNotification(sessionId, activeRowSession.title),
+              );
+              updateViewSessionRecord(
+                sessionId,
+                session => ({...session, state: 'warning'}),
+                activeRowSession,
+              );
               return;
             }
             const assistantMessage: MessageRecord = result.message ?? {
@@ -4053,6 +4063,18 @@ function App() {
       })
         .then(result => {
           if (controller.signal.aborted || runAbortRefs.current.get(sessionId) !== controller) {
+            return;
+          }
+          if (isRunOutcomeUnknown(result)) {
+            // Attached, then the connection dropped and the server released the
+            // run before the reconnect. Only that case sets `idle`; an attach that
+            // finds nothing running stays silent.
+            recordNotification(runOutcomeUnknownNotification(sessionId, sessionTitle));
+            updateViewSessionRecord(
+              sessionId,
+              session => ({...session, state: 'warning'}),
+              fallbackSession,
+            );
             return;
           }
           if (result.message === undefined) {
