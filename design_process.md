@@ -11,7 +11,7 @@
 - `bash` is foreground, has one bounded call, and cleans up its process group when done.
 - `process` is background, has an opaque process id, and retains its process group until it exits or is explicitly stopped.
 
-The tool follows `tools-guidelines.md`: common calls express only intent, backend policy supplies limits and retention, validation normalizes harmless variants, and results stay bounded.
+The tool follows the `agent-tool-design-guidelines` skill: common calls express only intent, backend policy supplies limits and retention, validation normalizes harmless variants, and results stay bounded.
 
 ## 2. Scope and safety boundary
 

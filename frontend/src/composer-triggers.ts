@@ -53,7 +53,6 @@ export type ComposerCommand = {
 export const BUILTIN_MENTION_FILES: readonly string[] = [
   'AGENTS_jad.md',
   'setting.json',
-  'tools-guidelines.md',
   'MEMORY_DESIGN.md',
   'design_cursor.md',
   'design_bash.md',

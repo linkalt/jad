@@ -214,7 +214,7 @@ MORE CLI:
 
 - Prefer modular code design, avoid monolitic.
 - **DO NOT hardcode configurable values** such as limits, timeouts, feature flags, or enable/disable options. Put them in the configuration file with sensible defaults.
-- Tool implementation guidelines document @tools-guidelines.md.
+- Tool implementation guidelines: load the `agent-tool-design-guidelines` skill.
 - Analyze code before propose/suggest an implementation idea.
 - Before reading multiple files to understand code, query Codebase Memory first. Use code snippets for local implementation details and trace path for callers, callees, dependencies, and cross-file execution flow. Read source files only when the result is insufficient or exact verification is needed.
 - If you discover a separate bug or issue while working on the requested task, do not silently fix or ignore it. Tell me what you found, where it is, and whether it affects the current task. Stored it in `memory`.
