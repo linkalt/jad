@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.skill",
+      "source": "native",
+      "name": "skill",
+      "description": "Load a skill's instructions by name. Call without a name to list available skills.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Skill name from the list."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}

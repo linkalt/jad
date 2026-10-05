@@ -284,6 +284,45 @@ export async function listRootLibrary(
   return {prompts, templates, skills};
 }
 
+/**
+ * Skills visible to the model, in configured directory order. When two
+ * directories define the same skill name the earlier directory wins, so a
+ * project can override a shared skill.
+ */
+export async function listSkills(skillDirs: readonly string[]): Promise<RootLibraryAsset[]> {
+  const byName = new Map<string, RootLibraryAsset>();
+  for (const root of skillDirs) {
+    const files = await filesForKind("skill", {
+      prompt_dirs: [],
+      template_dirs: [],
+      skill_dirs: [root],
+    });
+    for (const file of files) {
+      const asset = await readAssetFile("skill", file.root, file.path);
+      if (asset !== undefined && !byName.has(asset.name)) byName.set(asset.name, asset);
+    }
+  }
+  return [...byName.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+/**
+ * One skill by name. A valid skill's folder name equals its name, so the file
+ * is addressed directly instead of scanning every skill; the name pattern
+ * rules out path separators and `..`.
+ */
+export async function readSkill(
+  skillDirs: readonly string[],
+  name: string,
+): Promise<{asset: RootLibraryAsset; directory: string} | undefined> {
+  if (!SKILL_NAME_PATTERN.test(name) || name.length > 64) return undefined;
+  for (const root of skillDirs) {
+    const directory = resolve(root, name);
+    const asset = await readAssetFile("skill", root, resolve(directory, "SKILL.md"));
+    if (asset !== undefined) return {asset, directory};
+  }
+  return undefined;
+}
+
 export async function readRootLibraryAsset(
   kind: RootLibraryKind,
   id: string,

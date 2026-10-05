@@ -556,6 +556,21 @@ export async function loadRootLibraryDirectories(
   return normalizeRootLibraryDirectories(setting.libraries, settingPath ?? globalRoot, globalRoot);
 }
 
+/**
+ * Library directories of the global root a session belongs to. Unlike
+ * `loadRootLibraryDirectories` it is addressed by that root, not discovered
+ * from the working directory, and a root without a `setting.json` uses the
+ * defaults. Re-read on every call, so edits apply without a restart.
+ */
+export async function loadLibraryDirectoriesForRoot(
+  globalJadRoot: string,
+): Promise<RootLibraryDirectories> {
+  const root = resolve(globalJadRoot);
+  const settingPath = await firstExistingPath([resolve(root, "setting.json")]);
+  const setting = settingPath === undefined ? {} : await readRootSetting(settingPath);
+  return normalizeRootLibraryDirectories(setting.libraries, settingPath ?? root, root);
+}
+
 export async function loadRootServerSettings(
   options: SessionRootOptions = {},
 ): Promise<RootServerSettings> {

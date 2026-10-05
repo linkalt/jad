@@ -276,6 +276,11 @@ export interface NativeRequestDraftToolSettings extends JsonRecord {
   max_title_chars: number;
 }
 
+export interface NativeSkillToolSettings extends JsonRecord {
+  /** Skill instruction bytes returned per call; a longer skill is cut and says so. */
+  max_bytes: number;
+}
+
 export interface NativeMemoryToolSettings extends JsonRecord {
   /** Resolved memory-root directory, relative to cwd when configured relatively. */
   storage_dir: string;
@@ -336,6 +341,7 @@ export interface NativeToolSettings extends JsonRecord {
   memory?: NativeMemoryToolSettings;
   fetch?: NativeFetchToolSettings;
   request_draft?: NativeRequestDraftToolSettings;
+  skill?: NativeSkillToolSettings;
 }
 
 export interface ToolSettings extends JsonRecord {
@@ -740,6 +746,8 @@ export const DEFAULT_NATIVE_FETCH_MAX_RESPONSE_BYTES = 2_000_000;
 export const DEFAULT_NATIVE_FETCH_MAX_DOCUMENT_CHARS = 1_000_000;
 export const DEFAULT_NATIVE_FETCH_MAX_STORAGE_BYTES = 64 * 1024 * 1024;
 export const DEFAULT_NATIVE_FETCH_TIMEOUT_MS = 15_000;
+/** Large enough for the biggest skills in use (about 21 KiB) with room to grow. */
+export const DEFAULT_NATIVE_SKILL_MAX_BYTES = 128 * 1024;
 /**
  * How long a `request_draft` question waits for the user. Five minutes is the
  * product default: long enough to read a draft and correct it, short enough that
@@ -1820,7 +1828,8 @@ type NativeToolName =
   | "task"
   | "memory"
   | "fetch"
-  | "request_draft";
+  | "request_draft"
+  | "skill";
 
 /**
  * Every key each native tool reads. A key outside this list is refused at load
@@ -1867,6 +1876,7 @@ const NATIVE_TOOL_KEYS: Record<NativeToolName, readonly string[]> = {
   request_draft: [
     "extend_ms", "headless_auto_accept_timeout_ms", "max_draft_bytes", "max_draft_depth", "max_timeout_ms", "max_title_chars", "timeout_ms",
   ],
+  skill: ["max_bytes"],
 };
 
 const NATIVE_TOOL_NAMES = Object.keys(NATIVE_TOOL_KEYS) as NativeToolName[];
@@ -2588,6 +2598,27 @@ async function normalizeTools(
     };
   }
 
+  const skillValue = nativeValue.skill;
+  let skill: NativeSkillToolSettings | undefined;
+  if (skillValue !== undefined) {
+    if (!isRecord(skillValue)) {
+      throw new ConfigError(`${path}: tools.native.skill must be an object`);
+    }
+    assertSupportedKeys(skillValue, NATIVE_TOOL_KEYS.skill, `${path}: tools.native.skill`);
+    const skillMaxBytes = skillValue.max_bytes ?? DEFAULT_NATIVE_SKILL_MAX_BYTES;
+    if (
+      typeof skillMaxBytes !== "number" ||
+      !Number.isSafeInteger(skillMaxBytes) ||
+      skillMaxBytes < 1 ||
+      skillMaxBytes > MAX_NATIVE_TOOL_BYTES
+    ) {
+      throw new ConfigError(
+        `${path}: tools.native.skill.max_bytes must be a safe integer between 1 and ${MAX_NATIVE_TOOL_BYTES}`,
+      );
+    }
+    skill = {...skillValue, max_bytes: skillMaxBytes};
+  }
+
   const processValue = nativeValue.process;
   let processTool: NativeProcessToolSettings | undefined;
   if (processValue !== undefined) {
@@ -2793,6 +2824,7 @@ async function normalizeTools(
       ...(memory ? {memory} : {}),
       ...(fetchTool ? {fetch: fetchTool} : {}),
       ...(requestDraft ? {request_draft: requestDraft} : {}),
+      ...(skill ? {skill} : {}),
     },
     mcp: mcpValue,
   } as ToolSettings;

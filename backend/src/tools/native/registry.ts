@@ -27,6 +27,7 @@ import {ProcessManager} from "./process-manager.js";
 import {executeNativeTask, NATIVE_TASK_ID, nativeTaskDefinition, normalizeTaskArguments} from "./task.js";
 import {TaskStore} from "./task-store.js";
 import {executeNativeRequestDraft, NATIVE_REQUEST_DRAFT_ID, nativeRequestDraftDefinition} from "./request-draft.js";
+import {executeNativeSkill, NATIVE_SKILL_ID, nativeSkillDefinition, normalizeSkillArguments} from "./skill.js";
 import {normalizeEncoding, normalizeRangeType} from "./text.js";
 import {executeNativeWrite, NATIVE_WRITE_ID, nativeWriteDefinition} from "./write.js";
 
@@ -180,7 +181,33 @@ function grepSpec(): NativeToolSpec {
 }
 
 export function nativeToolSpecs(): NativeToolSpec[] {
-  return [readSpec(), writeSpec(), editSpec(), grepSpec(), bashSpec(), globSpec(), processSpec(), taskSpec(), memorySpec(), fetchSpec(), requestDraftSpec()];
+  return [readSpec(), writeSpec(), editSpec(), grepSpec(), bashSpec(), globSpec(), processSpec(), taskSpec(), memorySpec(), fetchSpec(), requestDraftSpec(), skillSpec()];
+}
+
+function skillSpec(): NativeToolSpec {
+  return {
+    id: NATIVE_SKILL_ID,
+    settingName: "skill",
+    definition: nativeSkillDefinition,
+    required: [],
+    exampleOperation: {name: "agent-tool-design-guidelines"},
+    normalizeArguments: normalizeSkillArguments,
+    configured: (config) => config.settings.tools.native.skill !== undefined,
+    build: (definition, config, validate) => {
+      const policy = config.settings.tools.native.skill;
+      if (!policy) {
+        return {error: `tool ${definition.id} is not exposed in tools.native`};
+      }
+      const globalJadRoot = config.paths.global_jad_root;
+      return {
+        tool: {
+          definition,
+          validate,
+          execute: (args, context) => executeNativeSkill(args, {...context, policy, globalJadRoot}),
+        },
+      };
+    },
+  };
 }
 
 /**
