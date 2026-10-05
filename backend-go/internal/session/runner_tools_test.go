@@ -478,3 +478,87 @@ func TestRunnerCancellationPersistsEveryParallelCallAndStopsPromptly(t *testing.
 		t.Fatalf("persisted tool results = %v, want one per call", persisted)
 	}
 }
+
+// TestRunWithPersistedInputSendsTheSameRequestsAsRunPersistingItsInput checks
+// that Run reusing the history handle PersistInput read with changes no
+// provider request: the session holds a finished turn and a tool call that
+// never got a result, and the run repairs it, appends the new input and
+// continues through a tool round.
+func TestRunWithPersistedInputSendsTheSameRequestsAsRunPersistingItsInput(t *testing.T) {
+	toolCall := json.RawMessage(`{"type":"function_call","call_id":"call-search","name":"lookup","arguments":"{\"query\":\"hello\"}"}`)
+	newStreamer := func() *multiRoundStreamer {
+		return &multiRoundStreamer{rounds: [][]responses.Event{
+			{
+				{Type: "response.output_item.done", Raw: json.RawMessage(`{"type":"response.output_item.done","output_index":0,"item":` + string(toolCall) + `}`)},
+				{Type: "response.completed", Raw: json.RawMessage(`{"type":"response.completed","response":{"id":"resp-1","status":"completed","output":[]}}`)},
+			},
+			{
+				{Type: "response.output_item.done", Raw: json.RawMessage(`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`)},
+				{Type: "response.completed", Raw: json.RawMessage(`{"type":"response.completed","response":{"id":"resp-2","status":"completed","output":[]}}`)},
+			},
+		}}
+	}
+	seed := func(store *transcript.TurnStore, journal *transcript.Journal) {
+		t.Helper()
+		if err := store.AppendInputItems([]byte(`{"type":"message","role":"user","content":[{"type":"input_text","text":"earlier"}]}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := journal.Append([]byte(`{"type":"response.completed","response":{"id":"resp-0","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"earlier answer"}]}]}}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.AppendInputItems([]byte(`{"type":"function_call","call_id":"call-interrupted","name":"lookup","arguments":"{}"}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := json.RawMessage(`"find hello"`)
+
+	directStore, directJournal, _ := newTestStore(t, transcript.ResponseMetadataMinimal)
+	seed(directStore, directJournal)
+	directStreamer := newStreamerRunner(t, directStore, newStreamer())
+	if _, err := directStreamer.runner.Run(context.Background(), input, RunOptions{ToolCatalog: newLookupCatalog(t), MaxToolRounds: 4}); err != nil {
+		t.Fatalf("direct Run() error = %v", err)
+	}
+
+	splitStore, splitJournal, _ := newTestStore(t, transcript.ResponseMetadataMinimal)
+	seed(splitStore, splitJournal)
+	persisted, err := PersistInput(splitStore, input, nil)
+	if err != nil {
+		t.Fatalf("PersistInput() error = %v", err)
+	}
+	splitStreamer := newStreamerRunner(t, splitStore, newStreamer())
+	if _, err := splitStreamer.runner.Run(context.Background(), nil, RunOptions{ToolCatalog: newLookupCatalog(t), MaxToolRounds: 4, PersistedInput: persisted}); err != nil {
+		t.Fatalf("split Run() error = %v", err)
+	}
+
+	if len(directStreamer.streamer.requests) != 2 || len(splitStreamer.streamer.requests) != 2 {
+		t.Fatalf("provider requests = %d direct, %d split, want 2 each", len(directStreamer.streamer.requests), len(splitStreamer.streamer.requests))
+	}
+	for round := range directStreamer.streamer.requests {
+		if string(directStreamer.streamer.requests[round]) != string(splitStreamer.streamer.requests[round]) {
+			t.Fatalf("round %d request differs:\ndirect: %s\nsplit:  %s", round, directStreamer.streamer.requests[round], splitStreamer.streamer.requests[round])
+		}
+	}
+	var firstRequest struct {
+		Input []json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(splitStreamer.streamer.requests[0], &firstRequest); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstRequest.Input) != 5 {
+		t.Fatalf("first request input items = %d, want earlier turn (2), interrupted call, repaired output and new input", len(firstRequest.Input))
+	}
+}
+
+type streamerRunner struct {
+	streamer *multiRoundStreamer
+	runner   *Runner
+}
+
+func newStreamerRunner(t *testing.T, store *transcript.TurnStore, streamer *multiRoundStreamer) streamerRunner {
+	t.Helper()
+	runner, err := NewRunner(store, streamer, ModelSettings{Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return streamerRunner{streamer: streamer, runner: runner}
+}

@@ -109,6 +109,9 @@ type PersistedInput struct {
 	SessionTurn int64
 	// Items is the number of input items that were stored.
 	Items int
+	// history is the handle PersistInput read the history with. Run keeps using
+	// it, so the first round expands only the records appended since.
+	history *transcript.InputHistory
 }
 
 // PersistInput stores the user input of a run and repairs tool calls that a
@@ -126,7 +129,8 @@ func PersistInput(store *transcript.TurnStore, input json.RawMessage, nextSessio
 	if err != nil {
 		return nil, err
 	}
-	if err := repairPendingToolCalls(store); err != nil {
+	history := store.NewInputHistory()
+	if err := repairPendingToolCalls(store, history); err != nil {
 		return nil, err
 	}
 	if nextSessionTurn == nil {
@@ -139,7 +143,7 @@ func PersistInput(store *transcript.TurnStore, input json.RawMessage, nextSessio
 	if err := store.AppendInputItems(inputItems...); err != nil {
 		return nil, fmt.Errorf("persist session input: %w", err)
 	}
-	return &PersistedInput{SessionTurn: sessionTurn, Items: len(inputItems)}, nil
+	return &PersistedInput{SessionTurn: sessionTurn, Items: len(inputItems), history: history}, nil
 }
 
 // RunResult contains the committed response envelope and transcript commit
@@ -372,8 +376,13 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	}
 
 	// One handle per run: later rounds expand only the records appended since
-	// the previous round instead of re-parsing the whole transcript.
-	inputHistory := r.store.NewInputHistory()
+	// the previous round instead of re-parsing the whole transcript. The handle
+	// that PersistInput read the history with is reused, so the run start does
+	// not parse the transcript twice.
+	inputHistory := persisted.history
+	if inputHistory == nil {
+		inputHistory = r.store.NewInputHistory()
+	}
 	defer inputHistory.Release()
 	for round := 0; ; round++ {
 		if err := ctx.Err(); err != nil {

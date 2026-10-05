@@ -11,8 +11,11 @@ import (
 	"example.com/agent-harness/backend-go/internal/transcript"
 )
 
-func repairPendingToolCalls(store *transcript.TurnStore) error {
-	history, err := store.ReadInputItems()
+// repairPendingToolCalls gives every tool call without a result a failure
+// result. It reads the history through the caller's handle, so the run that
+// follows expands only what the repair and the new input append.
+func repairPendingToolCalls(store *transcript.TurnStore, reader *transcript.InputHistory) error {
+	history, err := reader.Read()
 	if err != nil {
 		return fmt.Errorf("read session history before repairing pending tool calls: %w", err)
 	}
