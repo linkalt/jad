@@ -99,33 +99,37 @@ type SessionStoragePaths struct {
 }
 
 type SessionConfig struct {
-	SessionName         string
-	Profile             string
-	DefaultProfile      string
-	PathProfiles        []string
-	ModelPath           string
-	ModelDefault        string
-	Models              []string
-	SettingPath         string
-	MessagesPath        string
-	MessagesBackupPath  string
-	UsageCachePath      string
-	StagingDir          string
-	StoragePaths        SessionStoragePaths
-	WorkingDir          string
-	SessionFiles        SessionFileListingSettings
-	NativeReadPolicy    NativePathPolicy
-	NativeRead          *NativeReadSettings
-	NativeGrep          *NativeGrepSettings
-	NativeWrite         *NativeWriteSettings
-	NativeEdit          *NativeEditSettings
-	NativeBash          *NativeBashSettings
-	NativeGlob          *NativeGlobSettings
-	NativeProcess       *NativeProcessSettings
-	NativeTask          *NativeTaskSettings
-	NativeMemory        *NativeMemorySettings
-	NativeFetch         *NativeFetchSettings
-	NativeRequestDraft  *NativeRequestDraftSettings
+	SessionName        string
+	Profile            string
+	DefaultProfile     string
+	PathProfiles       []string
+	ModelPath          string
+	ModelDefault       string
+	Models             []string
+	SettingPath        string
+	MessagesPath       string
+	MessagesBackupPath string
+	UsageCachePath     string
+	StagingDir         string
+	StoragePaths       SessionStoragePaths
+	WorkingDir         string
+	SessionFiles       SessionFileListingSettings
+	NativeReadPolicy   NativePathPolicy
+	NativeRead         *NativeReadSettings
+	NativeGrep         *NativeGrepSettings
+	NativeWrite        *NativeWriteSettings
+	NativeEdit         *NativeEditSettings
+	NativeBash         *NativeBashSettings
+	NativeGlob         *NativeGlobSettings
+	NativeProcess      *NativeProcessSettings
+	NativeTask         *NativeTaskSettings
+	NativeMemory       *NativeMemorySettings
+	NativeFetch        *NativeFetchSettings
+	NativeRequestDraft *NativeRequestDraftSettings
+	NativeSkill        *NativeSkillSettings
+	// GlobalJadRoot is the global root whose setting.json names the skill
+	// directories the skill tool reads.
+	GlobalJadRoot       string
 	MCPServers          []MCPServerReference
 	StateContext        StateContextSettings
 	HTTPDebug           HTTPDebugSettings
@@ -316,6 +320,10 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	nativeSkill, err := normalizeNativeSkillSettings(setting, settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	nativeProcess, err := normalizeNativeProcessSettings(
 		setting,
 		location.Root.GlobalJadRoot,
@@ -424,6 +432,8 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		NativeMemory:          nativeMemory,
 		NativeFetch:           nativeFetch,
 		NativeRequestDraft:    nativeRequestDraft,
+		NativeSkill:           nativeSkill,
+		GlobalJadRoot:         location.Root.GlobalJadRoot,
 		MCPServers:            mcpServers,
 		StateContext:          stateContext,
 		HTTPDebug:             httpDebug,

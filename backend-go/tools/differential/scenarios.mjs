@@ -391,6 +391,72 @@ function spillScenarios() {
   ];
 }
 
+// Runs a scripted sequence of tool calls in the named session and returns what
+// the model saw, like toolboxRun but for any session.
+function sessionToolRun(name, session, steps) {
+  return {
+    name,
+    provider: {steps: [...steps, {text: "finished"}]},
+    run: async (c) => {
+      await call(c, "POST", `/api/sessions/${session}/reset`, {body: {}});
+      const result = await sse(c, `/api/sessions/${session}/run`, {method: "POST", body: {input: name}});
+      return {names: eventNames(result), outputs: toolOutputs(c.provider.requests.at(-1))};
+    },
+  };
+}
+
+function skillScenarios() {
+  const long = "x".repeat(65);
+  return [
+    sessionToolRun("skill: list and load", "skilled", [
+      toolRound("skill", {}),
+      toolRound("skill", {name: "summarize"}),
+      toolRound("skill", {name: "only-shared"}),
+      toolRound("skill", {name: "accents"}),
+    ]),
+    sessionToolRun("skill: name variants", "skilled", [
+      toolRound("skill", {name: "Agent_Tool_Design"}),
+      toolRound("skill", {name: "  agent tool design  "}),
+      toolRound("skill", {name: "AGENT-TOOL-DESIGN"}),
+      toolRound("skill", {name: "   "}),
+    ]),
+    sessionToolRun("skill: not found", "skilled", [
+      toolRound("skill", {name: "summarise"}),
+      toolRound("skill", {name: "mismatched"}),
+      toolRound("skill", {name: "other-folder"}),
+      toolRound("skill", {name: long}),
+    ]),
+    sessionToolRun("skill: names cannot escape the directories", "skilled", [
+      toolRound("skill", {name: "../outside-skill"}),
+      toolRound("skill", {name: ".."}),
+      toolRound("skill", {name: "summarize/../../outside-skill"}),
+      toolRound("skill", {name: "/etc/passwd"}),
+    ]),
+    sessionToolRun("skill: invalid arguments", "skilled", [
+      toolRound("skill", {name: "summarize", extra: true}),
+      toolRound("skill", {name: 7}),
+      toolRound("skill", {name: null}),
+    ]),
+    sessionToolRun("skill: max_bytes cuts a skill and the list", "skilledtiny", [
+      toolRound("skill", {name: "accents"}),
+      toolRound("skill", {name: "summarize"}),
+      toolRound("skill", {}),
+    ]),
+    {
+      name: "skill: an unsupported setting is a configuration error",
+      provider: {text: "unused"},
+      run: async (c) => {
+        await call(c, "POST", "/api/sessions/skillbad/reset", {body: {}});
+        return {
+          run: await sse(c, "/api/sessions/skillbad/run", {method: "POST", body: {input: "skill"}}),
+          snapshot: await call(c, "GET", "/api/sessions/skillbad"),
+          providerRequests: c.provider.requests.length,
+        };
+      },
+    },
+  ];
+}
+
 export const scenarios = [
   {name: "health", run: (c) => call(c, "GET", "/api/health")},
   {name: "unauthorized", run: async (c) => ({status: (await fetch(`${c.base}/api/sessions`)).status})},
@@ -1009,6 +1075,7 @@ export const scenarios = [
   },
   ...providerFailureScenarios(),
   ...toolboxScenarios(),
+  ...skillScenarios(),
   ...spillScenarios(),
   {name: "library root", run: (c) => call(c, "GET", "/api/library")},
   {name: "options preflight", run: async (c) => { const r = await fetch(`${c.base}/api/sessions`, {method: "OPTIONS", headers: {origin: "http://localhost:5173", "access-control-request-method": "POST"}}); return {status: r.status}; }},

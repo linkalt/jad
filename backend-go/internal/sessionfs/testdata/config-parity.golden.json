@@ -645,5 +645,141 @@
     "profile": "",
     "model": "",
     "error": "max_parallel_tool_calls must be a safe integer between 1 and 64"
+  },
+  {
+    "name": "skill tool defaults",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "skill tool max bytes",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "skill tool max bytes upper bound",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "skill tool max bytes null",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "skill tool typo",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.skill.max_byte is not supported; did you mean max_bytes?"
+  },
+  {
+    "name": "skill tool unrelated key",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.skill.timeout_ms is not supported; supported keys are max_bytes"
+  },
+  {
+    "name": "skill tool not an object",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.skill must be an object"
+  },
+  {
+    "name": "skill tool null",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.skill must be an object"
+  },
+  {
+    "name": "skill tool zero",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.skill.max_bytes must be a safe integer between 1 and 10485760"
+  },
+  {
+    "name": "skill tool fractional",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.skill.max_bytes must be a safe integer between 1 and 10485760"
+  },
+  {
+    "name": "skill tool string",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.skill.max_bytes must be a safe integer between 1 and 10485760"
+  },
+  {
+    "name": "skill tool over limit",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.skill.max_bytes must be a safe integer between 1 and 10485760"
+  },
+  {
+    "name": "native tool typo suggests skill",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.skil is not supported; did you mean skill?"
+  },
+  {
+    "name": "native tool unknown lists skill",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.unrelated is not supported; supported keys are bash, edit, fetch, glob, grep, memory, process, read, request_draft, skill, task, write; MCP servers are configured under tools.mcp"
   }
 ]

@@ -10,7 +10,7 @@ import (
 var (
 	toolNodeNames   = []string{"native", "mcp"}
 	nativeToolNames = []string{
-		"read", "write", "edit", "grep", "glob", "bash", "process", "task", "memory", "fetch", "request_draft",
+		"read", "write", "edit", "grep", "glob", "bash", "process", "task", "memory", "fetch", "request_draft", "skill",
 	}
 )
 
@@ -81,7 +81,11 @@ func unsupportedToolKey(fieldPath, key string, candidates []string, hint string)
 	}
 	sorted := append([]string(nil), candidates...)
 	sort.Strings(sorted)
-	return configError("%s.%s is not supported; supported keys are %s; %s", fieldPath, key, strings.Join(sorted, ", "), hint)
+	detail := "supported keys are " + strings.Join(sorted, ", ")
+	if hint != "" {
+		detail += "; " + hint
+	}
+	return configError("%s.%s is not supported; %s", fieldPath, key, detail)
 }
 
 func closestToolKey(key string, candidates []string) (string, int) {

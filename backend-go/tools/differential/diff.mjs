@@ -120,6 +120,25 @@ async function writeFixtures(sessions, providerUrl) {
     toolboxTools.push(await definition(file, name));
   }
   await writeFile(toolboxManifest, JSON.stringify({schema_version: 1, tools: toolboxTools}));
+  // Skills come from the global root's setting.json. With JAD_SESSIONS_DIR set,
+  // that root is the sessions directory itself. Two directories let a scenario
+  // check that the earlier one wins a name clash.
+  const skillManifest = join(dirname(sessions), "tools-skill.json");
+  await writeFile(skillManifest, JSON.stringify({schema_version: 1, tools: [await definition("skill.js", "nativeSkillDefinition")]}));
+  const skillsA = join(dirname(sessions), "skills-a");
+  const skillsB = join(dirname(sessions), "skills-b");
+  const addSkill = async (dir, name, description, body, folder = name) => {
+    await mkdir(join(dir, folder), {recursive: true});
+    await writeFile(join(dir, folder, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n${body}\n`);
+  };
+  await addSkill(skillsA, "summarize", "Summarize a document.", "# Summarize\n\nKeep it short.");
+  await addSkill(skillsA, "agent-tool-design", "Design tools for agents.", "Body of the design skill.");
+  await addSkill(skillsA, "mismatched", "Folder differs from its name.", "Hidden body.", "other-folder");
+  await addSkill(skillsA, "accents", "Multi-byte body.", "é".repeat(200));
+  await addSkill(skillsB, "summarize", "From the shared directory.", "Shared body.");
+  await addSkill(skillsB, "only-shared", "Only in the later directory.", "Later body.");
+  await writeFile(join(dirname(sessions), "outside-skill.md"), "secret\n");
+  await writeFile(join(sessions, "setting.json"), JSON.stringify({libraries: {skill_dirs: [skillsA, skillsB]}}));
   // MCP servers: one stdio fixture process per server id, spawned by whichever
   // backend is under test. `tiny` caps results at the minimum to force truncation.
   const mcpDir = join(dirname(sessions), "mcp");
@@ -137,7 +156,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -173,6 +192,20 @@ async function writeFixtures(sessions, providerUrl) {
       setting.max_tool_rounds = 30;
       setting.tool_definition_paths = [toolboxManifest];
       setting.tools = {native: {read: {}, grep: {}, glob: {}, memory: {}, task: {}, process: {}, fetch: {}}};
+    }
+    if (id === "skilled" || id === "skilledtiny") {
+      setting.cwd = toolbox;
+      setting.max_tool_rounds = 20;
+      setting.tool_definition_paths = [skillManifest];
+      // skilledtiny cuts a skill, and the skill list, at 101 bytes: the list of
+      // four skills is about 145 bytes, and the multi-byte skill is 400 bytes of
+      // two-byte characters, so the cut falls inside a character and steps back.
+      setting.tools = {native: {skill: id === "skilledtiny" ? {max_bytes: 101} : {}}};
+    }
+    if (id === "skillbad") {
+      setting.cwd = toolbox;
+      setting.tool_definition_paths = [skillManifest];
+      setting.tools = {native: {skill: {max_byte: 10}}};
     }
     if (id === "procenv") {
       // process.env_file is loaded below the inline env, and env_deny removes last.

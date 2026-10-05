@@ -61,7 +61,7 @@ func BuildCatalogWithProcessManager(config sessionfs.SessionConfig, locks *PathL
 // BuildCatalogWithResources shares resolver-owned stateful stores across tool
 // catalogs created for the same configured storage directory.
 func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeGlob == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeGlob == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -78,7 +78,7 @@ func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks,
 	}
 	if len(config.ToolDefinitionPaths) == 0 {
 		for _, enabled := range []struct{ name, id string }{
-			{"read", readToolID}, {"write", writeToolID}, {"edit", editToolID}, {"grep", grepToolID}, {"bash", bashToolID}, {"glob", globToolID}, {"process", processToolID}, {"task", taskToolID}, {"memory", memoryToolID}, {"fetch", fetchToolID}, {"request_draft", requestDraftToolID},
+			{"read", readToolID}, {"write", writeToolID}, {"edit", editToolID}, {"grep", grepToolID}, {"bash", bashToolID}, {"glob", globToolID}, {"process", processToolID}, {"task", taskToolID}, {"memory", memoryToolID}, {"fetch", fetchToolID}, {"request_draft", requestDraftToolID}, {"skill", skillToolID},
 		} {
 			if nativeToolConfigured(config, enabled.name) {
 				return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s is configured but %s is missing from tool_definition_paths", config.SettingPath, enabled.name, enabled.id)}
@@ -222,6 +222,18 @@ func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks,
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
+	if config.NativeSkill != nil {
+		definition, err := requireNativeDefinition(config, definitions, "skill", skillToolID, skillInputSchema)
+		if err != nil {
+			return nil, err
+		}
+		tool, err := NewSkillTool(*config.NativeSkill, config.GlobalJadRoot)
+		if err != nil {
+			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		tool.Definition = definition
+		loaded = append(loaded, tool)
+	}
 	return tools.NewCatalog(loaded)
 }
 
@@ -249,6 +261,8 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeFetch != nil
 	case "request_draft":
 		return config.NativeRequestDraft != nil
+	case "skill":
+		return config.NativeSkill != nil
 	default:
 		return false
 	}

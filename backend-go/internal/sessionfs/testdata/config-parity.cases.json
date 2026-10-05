@@ -57,5 +57,19 @@
  {"name":"parallel calls zero","setting":{"cwd":"$ROOT","max_parallel_tool_calls":0}},
  {"name":"parallel calls too many","setting":{"cwd":"$ROOT","max_parallel_tool_calls":65}},
  {"name":"parallel calls fractional","setting":{"cwd":"$ROOT","max_parallel_tool_calls":1.5}},
- {"name":"parallel calls string","setting":{"cwd":"$ROOT","max_parallel_tool_calls":"4"}}
+ {"name":"parallel calls string","setting":{"cwd":"$ROOT","max_parallel_tool_calls":"4"}},
+ {"name":"skill tool defaults","setting":{"cwd":"$ROOT","tools":{"native":{"skill":{}}}}},
+ {"name":"skill tool max bytes","setting":{"cwd":"$ROOT","tools":{"native":{"skill":{"max_bytes":2048}}}}},
+ {"name":"skill tool max bytes upper bound","setting":{"cwd":"$ROOT","tools":{"native":{"skill":{"max_bytes":10485760}}}}},
+ {"name":"skill tool max bytes null","setting":{"cwd":"$ROOT","tools":{"native":{"skill":{"max_bytes":null}}}}},
+ {"name":"skill tool typo","setting":{"cwd":"$ROOT","tools":{"native":{"skill":{"max_byte":10}}}}},
+ {"name":"skill tool unrelated key","setting":{"cwd":"$ROOT","tools":{"native":{"skill":{"timeout_ms":10}}}}},
+ {"name":"skill tool not an object","setting":{"cwd":"$ROOT","tools":{"native":{"skill":[]}}}},
+ {"name":"skill tool null","setting":{"cwd":"$ROOT","tools":{"native":{"skill":null}}}},
+ {"name":"skill tool zero","setting":{"cwd":"$ROOT","tools":{"native":{"skill":{"max_bytes":0}}}}},
+ {"name":"skill tool fractional","setting":{"cwd":"$ROOT","tools":{"native":{"skill":{"max_bytes":1.5}}}}},
+ {"name":"skill tool string","setting":{"cwd":"$ROOT","tools":{"native":{"skill":{"max_bytes":"10"}}}}},
+ {"name":"skill tool over limit","setting":{"cwd":"$ROOT","tools":{"native":{"skill":{"max_bytes":10485761}}}}},
+ {"name":"native tool typo suggests skill","setting":{"cwd":"$ROOT","tools":{"native":{"skil":{}}}}},
+ {"name":"native tool unknown lists skill","setting":{"cwd":"$ROOT","tools":{"native":{"unrelated":{}}}}}
 ]
