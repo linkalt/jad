@@ -110,6 +110,16 @@ func (s *TurnStore) readInputItems(handle *InputHistory) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.readInputItemsWithCache(handle, cache, prefix)
+}
+
+// readInputItemsWithCache is readInputItems after the compaction cache was
+// read. A caller that already holds the cache (a compaction, which also needs
+// it for the assistant-final items) passes it in so the cache file is parsed
+// and validated once. prefix is the cache's items as a handle shares them and
+// is used only with a handle.
+func (s *TurnStore) readInputItemsWithCache(handle *InputHistory, cache *compactionCache, prefix [][]byte) ([][]byte, error) {
+	var err error
 	items := make([][]byte, 0)
 	if cache != nil {
 		if handle != nil {

@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -61,7 +62,14 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 		return result, errors.New("cannot compact while a response turn is active")
 	}
 
-	history, err := s.ReadInputItems()
+	// The compaction cache is read once for the history and for the
+	// assistant-final items. The store lock is held and no turn is active, so
+	// nothing rewrites the cache between the two uses.
+	previousCache, err := s.readCompactionCache()
+	if err != nil {
+		return result, fmt.Errorf("read request history for compaction: %w", err)
+	}
+	history, err := s.readInputItemsWithCache(nil, previousCache, nil)
 	if err != nil {
 		return result, fmt.Errorf("read request history for compaction: %w", err)
 	}
@@ -70,7 +78,7 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 		return result, err
 	}
 	compactableHistory := excludePreservedItems(history, excluded)
-	finalAssistant, err := s.assistantFinalItems()
+	finalAssistant, err := s.assistantFinalItems(previousCache)
 	if err != nil {
 		return result, fmt.Errorf("read assistant final items for compaction: %w", err)
 	}
@@ -318,13 +326,11 @@ func assistantFinalActiveTailRecord(record []byte) (json.RawMessage, error) {
 	return json.RawMessage(canonical), err
 }
 
-func (s *TurnStore) assistantFinalItems() (map[string]struct{}, error) {
+// assistantFinalItems returns the assistant messages that end a turn, from the
+// previous compaction cache (nil when there is none) and the journal.
+func (s *TurnStore) assistantFinalItems(previous *compactionCache) (map[string]struct{}, error) {
 	finalByTurn := make(map[int]string)
 	turnIndex := -1
-	previous, err := s.readCompactionCache()
-	if err != nil {
-		return nil, err
-	}
 	if previous != nil {
 		previousFinal := make(map[string]struct{}, len(previous.AssistantFinalItems))
 		for _, item := range previous.AssistantFinalItems {
@@ -352,7 +358,7 @@ func (s *TurnStore) assistantFinalItems() (map[string]struct{}, error) {
 			}
 		}
 	}
-	err = s.journal.ReadLines(func(line []byte) error {
+	err := s.journal.ReadLines(func(line []byte) error {
 		fields, err := objectFields(line)
 		if err != nil {
 			return err
@@ -372,7 +378,9 @@ func (s *TurnStore) assistantFinalItems() (map[string]struct{}, error) {
 		if !ok {
 			return nil
 		}
-		responseFields, err := objectFields(responseRaw)
+		// objectFields validated the whole record, so every value inside it is
+		// valid JSON and the *Valid variants skip validating the same bytes again.
+		responseFields, err := objectFieldsValid(bytes.TrimSpace(responseRaw))
 		if err != nil {
 			return err
 		}
@@ -380,10 +388,14 @@ func (s *TurnStore) assistantFinalItems() (map[string]struct{}, error) {
 		if !ok {
 			return nil
 		}
+		outputRaw = bytes.TrimSpace(outputRaw)
+		if len(outputRaw) == 0 || outputRaw[0] != '[' {
+			return errors.New("expected a JSON array")
+		}
 		hasFunctionCall := false
 		var assistantFinal []byte
-		if err := arrayValues(outputRaw, func(item []byte) error {
-			itemFields, err := objectFields(item)
+		if err := arrayValuesValid(outputRaw, func(item []byte) error {
+			itemFields, err := objectFieldsValid(item)
 			if err != nil {
 				return err
 			}
@@ -395,7 +407,7 @@ func (s *TurnStore) assistantFinalItems() (map[string]struct{}, error) {
 				hasFunctionCall = true
 			}
 			if itemType == "message" && itemRole == "assistant" {
-				assistantFinal, err = canonicalJSON(item)
+				assistantFinal, err = canonicalJSONValid(item)
 				return err
 			}
 			return nil
@@ -637,7 +649,8 @@ func (s *TurnStore) readCompactionCache() (*compactionCache, error) {
 		}
 		valid := true
 		for _, item := range cache.Items {
-			fields, err := objectFields(item)
+			// json.Unmarshal validated the whole file, so each item is valid JSON.
+			fields, err := objectFieldsValid(bytes.TrimSpace(item))
 			if err != nil || validateInputFields(fields) != nil {
 				valid = false
 				break

@@ -138,3 +138,52 @@ func BenchmarkCompactHistory(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkCompactHistoryWithCache times a later compaction of a session that
+// was compacted before: cachedTurns turns sit in the compaction cache and 50
+// turns were added since, so the journal is small and the cache is large.
+func BenchmarkCompactHistoryWithCache(b *testing.B) {
+	for _, cachedTurns := range []int{1000, 5000} {
+		b.Run(fmt.Sprintf("%d-cached-turns", cachedTurns), func(b *testing.B) {
+			journal, store := newBenchmarkHistoryStore(b, cachedTurns)
+			if result, err := store.CompactHistory(CompactionOptions{TurnType: "assistant_final", KeepTurns: cachedTurns * 8 / 10, BackupMode: "replace"}); err != nil || !result.Compacted {
+				b.Skipf("first compaction did not shrink the history: %+v %v", result, err)
+			}
+			text := strings.Repeat("y", 1500)
+			for turn := 0; turn < 50; turn++ {
+				if err := store.AppendInputItems([]byte(fmt.Sprintf(`{"type":"message","role":"user","content":[{"type":"input_text","text":"later %d %s"}]}`, turn, text[:300]))); err != nil {
+					b.Fatal(err)
+				}
+				if err := journal.Append([]byte(fmt.Sprintf(`{"type":"response.completed","response":{"id":"late_%d","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"%s"}]}]}}`, turn, text))); err != nil {
+					b.Fatal(err)
+				}
+			}
+			journalBytes, err := os.ReadFile(journal.path)
+			if err != nil {
+				b.Fatal(err)
+			}
+			cacheBytes, err := os.ReadFile(store.options.CompactionCachePath)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for iteration := 0; iteration < b.N; iteration++ {
+				b.StopTimer()
+				if err := os.WriteFile(journal.path, journalBytes, 0o644); err != nil {
+					b.Fatal(err)
+				}
+				if err := os.WriteFile(store.options.CompactionCachePath, cacheBytes, 0o644); err != nil {
+					b.Fatal(err)
+				}
+				_ = os.Remove(store.options.CompactionCachePath + ".backup")
+				store.compactionGeneration.Add(1)
+				store.journal.generation++
+				b.StartTimer()
+				if _, err := store.CompactHistory(CompactionOptions{TurnType: "assistant_final", KeepTurns: cachedTurns * 6 / 10, BackupMode: "replace"}); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
