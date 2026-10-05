@@ -160,6 +160,12 @@ function toolboxScenarios() {
       toolRound("grep", {pattern: "x", path: "../outside"}),
       toolRound("grep", {pattern: ""}),
       toolRound("grep", {pattern: "TODO", context: 99}),
+      toolRound("grep", {pattern: "TODO", exclude: "*.md"}),
+      toolRound("grep", {pattern: "TODO", exclude: "!!  lib/**  "}),
+      toolRound("grep", {pattern: "TODO", include: "*.ts", exclude: "*.ts"}),
+      toolRound("grep", {pattern: "TODO", exclude: "   "}),
+      toolRound("grep", {pattern: "TODO", exclude: "!"}),
+      toolRound("grep", {pattern: "TODO", exclude: "{docs,src/lib}/**", literal: true}),
     ]),
     toolboxRun("toolbox: glob", [
       toolRound("glob", {}),
