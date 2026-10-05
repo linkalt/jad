@@ -2692,6 +2692,13 @@ function App() {
   }, []);
   const recordRunStarted = useCallback((viewKey: string, turnId: string) => {
     activeRunTurnRefs.current.set(viewKey, turnId);
+    // This client owns the turn, so the attach effect must not stream it again.
+    // A poll taken in the run's first milliseconds can still say `running` after
+    // the started-run stream has finished and released its controller; without
+    // this, that stale row re-attached and replayed the run's own error as a
+    // "Live run connection failed" notification. The next poll that reports a
+    // non-running state clears the entry (see the attach effect).
+    attachedTurnRefs.current.set(viewKey, turnId);
     setRunInteractionStatesByView(current => updateViewState(current, viewKey, existing =>
       existing?.turnId === turnId
         ? existing
