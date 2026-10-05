@@ -1,6 +1,7 @@
 {
   "api_base_path": "/api",
   "api_token_storage_key": "agent-harness.api-token",
+  "api_token_fragment_param": "api-token",
   "stop_request_timeout_ms": 15000,
   "interaction_answer_timeout_ms": 15000,
   "interaction_reason_max_length": 2000,

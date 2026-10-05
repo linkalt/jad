@@ -6,6 +6,8 @@ Set a private, randomly generated `AGENT_API_TOKEN` (at least 32 characters) in 
 
 Every `/api/sessions` route requires `Authorization: Bearer <token>`; `/api/health` remains public. Browser clients additionally require their exact origin in root `setting.json` under `server.allowed_origins` (for example `http://localhost:5173` for the Vite dev proxy). The default is `[]`, which denies cross-origin browser calls. Configure the actual frontend origin if its host or port differs; no wildcards are supported. The frontend prompts for the token on the first 401 and keeps it only in that tab's session storage. Direct API clients must add the header themselves. Keep the API on loopback or behind TLS and a trusted reverse proxy; bearer tokens are not safe over unencrypted remote HTTP. Do not grant untrusted users access to the frontend origin, since code running on that origin can access its tab's token.
 
+The web UI asks for the token with a browser prompt after its first 401 and keeps it in `sessionStorage` for that tab only. Where prompts are blocked (embedded frames, some headless browsers), open the UI once with the token in the URL fragment, for example `http://localhost:5173/#api-token=<token>`. The fragment is never sent to the server, and the UI removes it from the address bar after reading it. The parameter name is `api_token_fragment_param` in `frontend/src/config.json`. A token in a URL can end up in shell history or screen shares, so use it only for a private tab.
+
 Legacy model configurations default to API-key authentication. To use the optional local Codex OAuth adapter, sign in with the backend CLI and select `auth_mode: "openai_oauth"` in that session's `model.json`:
 
 ```json

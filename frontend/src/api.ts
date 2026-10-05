@@ -1,7 +1,11 @@
 import appConfig from './config.json' with {type: 'json'};
 import {createAuthenticatedFetch} from './api-auth.ts';
 
-const authenticatedFetch = createAuthenticatedFetch(appConfig.api_token_storage_key);
+const authenticatedFetch = createAuthenticatedFetch(
+  appConfig.api_token_storage_key,
+  globalThis.fetch,
+  appConfig.api_token_fragment_param,
+);
 
 function apiUrl(path: string): string {
   return `${appConfig.api_base_path.replace(/\/$/, '')}${path}`;
