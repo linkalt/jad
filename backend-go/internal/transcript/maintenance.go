@@ -598,6 +598,9 @@ func (s *TurnStore) Reset() error {
 
 func (s *TurnStore) removeDerivedFiles(reset bool) error {
 	s.invalidateCursorCache()
+	if reset {
+		defer s.compactionGeneration.Add(1)
+	}
 	paths := []string{s.options.HistoryCachePath, s.options.UsageCachePath, s.options.CursorCachePath, s.options.StateContextPath}
 	if reset {
 		paths = append(paths, s.options.MessagesBackupPath, s.options.CompactionCachePath, s.options.CompactionCachePath+".backup", s.options.AcceptedRequestPath)
@@ -660,6 +663,8 @@ func (s *TurnStore) writeCompactionCache(cache compactionCache) error {
 	if s.options.CompactionCachePath == "" {
 		return errors.New("compaction cache path is required")
 	}
+	// Bumped even when a write fails half way, so no memo outlives a changed file.
+	defer s.compactionGeneration.Add(1)
 	encoded, err := json.Marshal(cache)
 	if err != nil {
 		return err

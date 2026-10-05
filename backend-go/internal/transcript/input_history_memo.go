@@ -24,8 +24,9 @@ const historyCheckpointBytes int64 = 64 * 1024
 // item bytes with the handle across reads, so callers must treat them as
 // read-only.
 type InputHistory struct {
-	store *TurnStore
-	memo  transcriptMemo
+	store      *TurnStore
+	memo       transcriptMemo
+	compaction compactionMemo
 }
 
 // NewInputHistory returns a history reader that reuses work across reads.
@@ -38,13 +39,14 @@ func (h *InputHistory) Read() ([][]byte, error) {
 	if h == nil || h.store == nil || h.store.journal == nil {
 		return nil, errors.New("turn store is not initialized")
 	}
-	return h.store.readInputItems(&h.memo)
+	return h.store.readInputItems(h)
 }
 
 // Release drops the retained items.
 func (h *InputHistory) Release() {
 	if h != nil {
 		h.memo = transcriptMemo{}
+		h.compaction = compactionMemo{}
 	}
 }
 

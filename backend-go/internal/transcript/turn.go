@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -35,8 +36,12 @@ type TurnStore struct {
 	mu          sync.Mutex
 	cursorMu    sync.Mutex
 	cursorIndex *cursorCacheState
-	activeTurns map[*ResponseTurn]struct{}
-	recovering  bool
+	// compactionGeneration counts in-process writes and removals of the
+	// compaction cache files, so history handles can drop a parsed copy even
+	// when a rewritten file happens to keep its size, mtime and inode.
+	compactionGeneration atomic.Uint64
+	activeTurns          map[*ResponseTurn]struct{}
+	recovering           bool
 }
 
 // TurnStoreOptions contains session persistence settings that affect staged

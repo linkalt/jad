@@ -371,3 +371,184 @@ func joinItems(items [][]byte) string {
 	}
 	return strings.Join(parts, "\n")
 }
+
+func (f memoFixture) compact(t *testing.T, keep int) {
+	t.Helper()
+	result, err := f.store.CompactHistory(CompactionOptions{TurnType: "assistant_final", KeepTurns: keep, BackupMode: "append"})
+	if err != nil || !result.Compacted {
+		t.Fatalf("CompactHistory() = %+v, %v", result, err)
+	}
+}
+
+func (f memoFixture) compactionCachePath() string {
+	return filepath.Join(f.dir, "staging", "compaction-cache.json")
+}
+
+func TestInputHistoryReusesTheParsedCompactionCache(t *testing.T) {
+	f := newMemoFixture(t)
+	for index := 0; index < 5; index++ {
+		f.addTurn(t, index)
+	}
+	f.compact(t, 3)
+	history := f.store.NewInputHistory()
+	first := assertSameAsUncached(t, f.store, history)
+	f.addTurn(t, 5)
+	second := assertSameAsUncached(t, f.store, history)
+	if len(second) <= len(first) {
+		t.Fatalf("second read has %d items, want more than %d", len(second), len(first))
+	}
+	for index := range first {
+		if &first[index][0] != &second[index][0] {
+			t.Fatalf("compacted item %d was re-parsed instead of reused", index)
+		}
+	}
+	// A plain uncached read still returns private copies.
+	one, _ := f.store.ReadInputItems()
+	two, _ := f.store.ReadInputItems()
+	if &one[0][0] == &two[0][0] {
+		t.Fatal("ReadInputItems() shares item bytes between calls")
+	}
+}
+
+func TestInputHistoryReloadsTheCompactionCacheAfterASecondCompaction(t *testing.T) {
+	f := newMemoFixture(t)
+	for index := 0; index < 6; index++ {
+		f.addTurn(t, index)
+	}
+	f.compact(t, 4)
+	history := f.store.NewInputHistory()
+	before := assertSameAsUncached(t, f.store, history)
+	f.addTurn(t, 6)
+	f.compact(t, 2)
+	after := assertSameAsUncached(t, f.store, history)
+	if len(after) >= len(before)+2 {
+		t.Fatalf("history did not shrink after the second compaction: %d -> %d", len(before), len(after))
+	}
+	f.addTurn(t, 7)
+	assertSameAsUncached(t, f.store, history)
+}
+
+func TestInputHistoryDropsTheCompactionCacheAfterReset(t *testing.T) {
+	f := newMemoFixture(t)
+	for index := 0; index < 4; index++ {
+		f.addTurn(t, index)
+	}
+	f.compact(t, 2)
+	history := f.store.NewInputHistory()
+	assertSameAsUncached(t, f.store, history)
+	if err := f.store.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	if items := assertSameAsUncached(t, f.store, history); len(items) != 0 {
+		t.Fatalf("history after reset has %d items", len(items))
+	}
+}
+
+func TestInputHistoryNoticesACompactionCacheReplacedOutsideTheStore(t *testing.T) {
+	f := newMemoFixture(t)
+	for index := 0; index < 4; index++ {
+		f.addTurn(t, index)
+	}
+	f.compact(t, 2)
+	history := f.store.NewInputHistory()
+	before := assertSameAsUncached(t, f.store, history)
+
+	// Same-size rewrite with the old mtime: only the file identity can notice it,
+	// so write a new file and rename it over the cache.
+	path := f.compactionCachePath()
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := ""
+	for _, item := range before {
+		if strings.Contains(string(item), "question") {
+			target = string(item)
+			break
+		}
+	}
+	if target == "" {
+		t.Fatal("setup: no compacted item holds a question")
+	}
+	marker := strings.Index(string(original), "question")
+	if marker < 0 {
+		t.Fatalf("setup: compaction cache has no question text: %s", original)
+	}
+	rewritten := []byte(string(original[:marker]) + "QUESTION" + string(original[marker+len("question"):]))
+	replacement := path + ".new"
+	if err := os.WriteFile(replacement, rewritten, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(replacement, time.Now(), stat.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	items := assertSameAsUncached(t, f.store, history)
+	if !strings.Contains(joinItems(items), "QUESTION") {
+		t.Fatalf("history did not notice the replaced compaction cache: %q", items)
+	}
+}
+
+func TestInputHistoryFollowsTheCompactionCacheBackupWhenThePrimaryIsRemoved(t *testing.T) {
+	f := newMemoFixture(t)
+	for index := 0; index < 4; index++ {
+		f.addTurn(t, index)
+	}
+	f.compact(t, 2)
+	history := f.store.NewInputHistory()
+	want := assertSameAsUncached(t, f.store, history)
+	if err := os.Remove(f.compactionCachePath()); err != nil {
+		t.Fatal(err)
+	}
+	got := assertSameAsUncached(t, f.store, history)
+	if !equalJSONLines(got, want) {
+		t.Fatalf("history changed when only the backup remained:\n got  %q\n want %q", got, want)
+	}
+	// With both files gone, the compacted prefix is gone too.
+	if err := os.Remove(f.compactionCachePath() + ".backup"); err != nil {
+		t.Fatal(err)
+	}
+	assertSameAsUncached(t, f.store, history)
+}
+
+func TestInputHistoryRejectsACorruptCompactionCacheLikeAFullRead(t *testing.T) {
+	f := newMemoFixture(t)
+	for index := 0; index < 4; index++ {
+		f.addTurn(t, index)
+	}
+	f.compact(t, 2)
+	history := f.store.NewInputHistory()
+	assertSameAsUncached(t, f.store, history)
+	if err := os.WriteFile(f.compactionCachePath(), []byte("{not json"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	assertSameAsUncached(t, f.store, history)
+	if err := os.WriteFile(f.compactionCachePath()+".backup", []byte("{not json"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	assertSameAsUncached(t, f.store, history)
+}
+
+func TestInputHistoryWithoutACompactionCachePathMatchesAFullRead(t *testing.T) {
+	dir := t.TempDir()
+	journal, err := NewJournal(filepath.Join(dir, "messages.jsonl"), DurabilityProcess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewTurnStore(journal, filepath.Join(dir, "staging"), TurnStoreOptions{MaxItemBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := memoFixture{dir: dir, journal: journal, store: store}
+	history := store.NewInputHistory()
+	for index := 0; index < 3; index++ {
+		f.addTurn(t, index)
+		assertSameAsUncached(t, store, history)
+	}
+}

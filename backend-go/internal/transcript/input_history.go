@@ -94,23 +94,42 @@ func (s *TurnStore) ReadInputItems() ([][]byte, error) {
 	return s.readInputItems(nil)
 }
 
-// readInputItems implements ReadInputItems. A non-nil memo lets the transcript
-// expansion reuse what an earlier read of the same handle produced.
-func (s *TurnStore) readInputItems(memo *transcriptMemo) ([][]byte, error) {
-	cache, err := s.readCompactionCache()
+// readInputItems implements ReadInputItems. A non-nil handle lets the reads
+// reuse the compaction cache and transcript expansion an earlier read of the
+// same handle produced; its items are then shared instead of copied.
+func (s *TurnStore) readInputItems(handle *InputHistory) ([][]byte, error) {
+	var cache *compactionCache
+	var prefix [][]byte
+	var err error
+	if handle != nil {
+		cache, prefix, err = s.readCompactionCacheMemo(&handle.compaction)
+	} else {
+		cache, err = s.readCompactionCache()
+	}
 	if err != nil {
 		return nil, err
 	}
 	items := make([][]byte, 0)
 	if cache != nil {
-		for _, item := range cache.Items {
-			items = append(items, append([]byte(nil), item...))
+		if handle != nil {
+			items = append(items, prefix...)
+		} else {
+			for _, item := range cache.Items {
+				items = append(items, append([]byte(nil), item...))
+			}
 		}
 		currentHash, err := hashTranscriptFile(s.journal.path)
 		if err != nil {
 			return nil, err
 		}
 		if currentHash == cache.SourceSHA256 {
+			if handle != nil {
+				tail, err := handle.compaction.activeTailItems(cache)
+				if err != nil {
+					return nil, err
+				}
+				return append(items, tail...), nil
+			}
 			for _, record := range cache.ActiveTail {
 				expanded, err := expandTranscriptRecord(record)
 				if err != nil {
@@ -121,8 +140,8 @@ func (s *TurnStore) readInputItems(memo *transcriptMemo) ([][]byte, error) {
 			return items, nil
 		}
 	}
-	if memo != nil {
-		tail, err := s.readTranscriptItemsMemo(memo)
+	if handle != nil {
+		tail, err := s.readTranscriptItemsMemo(&handle.memo)
 		if err != nil {
 			return nil, err
 		}
