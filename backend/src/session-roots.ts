@@ -10,6 +10,7 @@ const MAX_SERVER_PORT = 65_535;
 const MAX_SERVER_BODY_BYTES = 64 * 1024 * 1024;
 const MAX_RUN_STATE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_TOOL_STREAM_INTERVAL_MS = 60 * 1000;
+const MAX_SSE_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_RUN_CONTENT_MEMORY_BYTES = 16 * 1024 * 1024;
 const MAX_RUN_CONTENT_WRITE_BATCH_BYTES = 16 * 1024 * 1024;
 const MAX_RUN_CONTENT_FLUSH_INTERVAL_MS = 60 * 1000;
@@ -37,6 +38,7 @@ export const DEFAULT_ROOT_SERVER_SETTINGS = {
   run_content_flush_interval_ms: DEFAULT_RUN_CONTENT_FLUSH_INTERVAL_MS,
   run_content_max_index_segments: DEFAULT_RUN_CONTENT_MAX_INDEX_SEGMENTS,
   sse_max_buffered_bytes: 1024 * 1024,
+  sse_heartbeat_interval_ms: 5_000,
   conditional_requests: true,
   snapshot_turns: 24,
   max_page_turns: 50,
@@ -73,6 +75,8 @@ export interface RootServerSettings {
   run_content_max_index_segments: number;
   /** Maximum response-buffered SSE bytes per subscriber, before reconnecting to a snapshot. */
   sse_max_buffered_bytes: number;
+  /** Gap between keep-alive frames on a quiet run stream; 0 disables them. */
+  sse_heartbeat_interval_ms: number;
   /** Answer with `304` when a session snapshot is unchanged. */
   conditional_requests: boolean;
   /** Turns in a session snapshot; 0 returns the whole transcript. */
@@ -280,6 +284,18 @@ function normalizeRootServerSettings(
       `${path}: server.sse_max_buffered_bytes must be a safe integer between ${MIN_SSE_BUFFERED_BYTES} and ${MAX_SSE_BUFFERED_BYTES}`,
     );
   }
+  const sseHeartbeatIntervalMs =
+    value.sse_heartbeat_interval_ms ?? DEFAULT_ROOT_SERVER_SETTINGS.sse_heartbeat_interval_ms;
+  if (
+    typeof sseHeartbeatIntervalMs !== "number" ||
+    !Number.isSafeInteger(sseHeartbeatIntervalMs) ||
+    sseHeartbeatIntervalMs < 0 ||
+    sseHeartbeatIntervalMs > MAX_SSE_HEARTBEAT_INTERVAL_MS
+  ) {
+    throw new ConfigError(
+      `${path}: server.sse_heartbeat_interval_ms must be a safe integer between 0 and ${MAX_SSE_HEARTBEAT_INTERVAL_MS}`,
+    );
+  }
   const conditionalRequests =
     value.conditional_requests ?? DEFAULT_ROOT_SERVER_SETTINGS.conditional_requests;
   if (typeof conditionalRequests !== "boolean") {
@@ -344,6 +360,7 @@ function normalizeRootServerSettings(
     run_content_flush_interval_ms: runContentFlushIntervalMs,
     run_content_max_index_segments: runContentMaxIndexSegments,
     sse_max_buffered_bytes: sseMaxBufferedBytes,
+    sse_heartbeat_interval_ms: sseHeartbeatIntervalMs,
     conditional_requests: conditionalRequests,
     snapshot_turns: snapshotTurns,
     max_page_turns: maxPageTurns,

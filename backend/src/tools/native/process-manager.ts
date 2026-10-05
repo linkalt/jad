@@ -82,6 +82,8 @@ export class ProcessManager {
   private readonly manifests = new Map<string, ProcessManifest>();
   private persistQueue: Promise<void> = Promise.resolve();
   private closed = false;
+  /** Starts that passed the capacity check but have not registered an entry yet. */
+  private starting = 0;
 
   public constructor(private readonly directory: string) {}
 
@@ -117,8 +119,32 @@ export class ProcessManager {
     if (this.closed) throw new Error("process manager is closed");
     if (process.platform === "win32") throw new Error("managed process groups require a POSIX platform");
     const running = [...this.entries.values()].filter((entry) => entry.manifest.state === "running").length;
-    if (running >= input.policy.max_running) throw new Error("process capacity reached");
+    if (running + this.starting >= input.policy.max_running) throw new Error("process capacity reached");
+    // Concurrent tool calls start here; hold the slot until the entry is
+    // registered, otherwise every caller passes the check above together.
+    this.starting += 1;
+    let reserved = true;
+    const releaseSlot = (): void => {
+      if (reserved) {
+        reserved = false;
+        this.starting -= 1;
+      }
+    };
+    try {
+      return await this.startReserved(input, releaseSlot);
+    } finally {
+      releaseSlot();
+    }
+  }
 
+  private async startReserved(input: {
+    cwd: string;
+    displayCwd: string;
+    command: string;
+    policy: NativeProcessToolSettings;
+    environment: NodeJS.ProcessEnv;
+    apiKeyEnv: string;
+  }, releaseSlot: () => void): Promise<ProcessSnapshot> {
     const id = `proc_${randomUUID()}`;
     const manifest: ProcessManifest = {
       schema_version: 1,
@@ -154,6 +180,8 @@ export class ProcessManager {
     }; 
     this.entries.set(id, entry);
     this.manifests.set(id, manifest);
+    // The entry is now counted as running, so the reservation is redundant.
+    releaseSlot();
 
     const environment = environmentWithoutApiToken({...input.environment, ...input.policy.env});
     delete environment[input.apiKeyEnv];

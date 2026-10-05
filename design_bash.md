@@ -85,10 +85,13 @@ resolve cwd (path policy, must be an existing directory)
   from waiting for credentials. A command that genuinely needs input fails fast instead of hanging.
 * **Environment** = a small allowlist from the backend environment, plus `env_file` and inline `env`
   additions (§8). `env_deny` and the harness API-key variable are applied last.
-* **One `bash` at a time per session.** `AgentSession.run` already executes tool calls of a round
-  sequentially under a mutex, so a long command delays the other calls of the same round. That is
-  acceptable and needs no extra locking, but the timeout is the only bound — there is no cancellation
-  path from the session layer yet (§8, §12).
+* **Parallel calls.** Several `bash` calls in one provider response run concurrently, up to
+  `max_parallel_tool_calls` (default 8; `1` restores strict one-at-a-time order). Each result is streamed
+  to the UI as soon as its call finishes, while the transcript still records every result in call order
+  after the batch. Calls that touch the same files are serialized by the shared path locks of `write` and
+  `edit`, but two commands that write the same file are the model's responsibility; set
+  `max_parallel_tool_calls` to `1` for sessions that depend on strict ordering. The timeout is the only
+  bound on a running command, and the run's abort signal cancels all of them.
 
 ## 5. Result
 

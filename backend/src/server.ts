@@ -70,7 +70,7 @@ import { SessionRunRegistry, type SessionRun } from "./run-registry.js";
 import type {RunContentCacheStagedReader} from "./run-content-cache.js";
 import { collectSessionFiles } from "./session-files.js";
 import { MessageStreamEmitter } from "./stream-emitter.js";
-import {writeSse} from "./sse-writer.js";
+import {startSseHeartbeat, writeSse} from "./sse-writer.js";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SESSION_ROOT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -99,6 +99,7 @@ export interface AgentServerOptions {
   runContentMaxIndexSegments?: number;
   /** Maximum queued SSE response bytes per subscriber before it must resynchronize. */
   sseMaxBufferedBytes?: number;
+  sseHeartbeatIntervalMs?: number;
   /** Answer with `304` when a session snapshot is unchanged. */
   conditionalRequests?: boolean;
   /** Turns in a session snapshot; 0 returns the whole transcript. */
@@ -632,6 +633,7 @@ class AgentHttpApplication {
   private readonly runContentFlushIntervalMs: number;
   private readonly runContentMaxIndexSegments: number;
   private readonly sseMaxBufferedBytes: number;
+  private readonly sseHeartbeatIntervalMs: number;
   private readonly conditionalRequests: boolean;
   private readonly snapshotTurns: number;
   private readonly maxPageTurns: number;
@@ -671,6 +673,8 @@ class AgentHttpApplication {
       options.runContentMaxIndexSegments ?? DEFAULT_ROOT_SERVER_SETTINGS.run_content_max_index_segments;
     this.sseMaxBufferedBytes =
       options.sseMaxBufferedBytes ?? DEFAULT_ROOT_SERVER_SETTINGS.sse_max_buffered_bytes;
+    this.sseHeartbeatIntervalMs =
+      options.sseHeartbeatIntervalMs ?? DEFAULT_ROOT_SERVER_SETTINGS.sse_heartbeat_interval_ms;
     this.conditionalRequests =
       options.conditionalRequests ?? DEFAULT_ROOT_SERVER_SETTINGS.conditional_requests;
     this.snapshotTurns = options.snapshotTurns ?? DEFAULT_ROOT_SERVER_SETTINGS.snapshot_turns;
@@ -1377,6 +1381,8 @@ class AgentHttpApplication {
     }
 
     writeSse(response, "run", run.summary(), this.sseMaxBufferedBytes);
+    const stopHeartbeat = startSseHeartbeat(response, this.sseHeartbeatIntervalMs);
+    response.once("close", stopHeartbeat);
     const detach = run.subscribe((event) => {
       writeSse(response, event.event, event.data, this.sseMaxBufferedBytes);
       if (event.event === "done" && !response.writableEnded && !response.destroyed) {
@@ -1386,6 +1392,7 @@ class AgentHttpApplication {
     response.once("close", detach);
     await detach.ready;
     if (run.status !== "running" && !response.writableEnded && !response.destroyed) {
+      stopHeartbeat();
       response.end();
     }
   }
@@ -1881,6 +1888,8 @@ class AgentHttpApplication {
     // client that later reads a session snapshot has to recognize which run the
     // status it sees belongs to.
     writeSse(response, "run", started.run.summary(), this.sseMaxBufferedBytes);
+    const stopHeartbeat = startSseHeartbeat(response, this.sseHeartbeatIntervalMs);
+    response.once("close", stopHeartbeat);
 
     // The response that started the run is one subscriber among others, so a
     // second tab (or the same tab after a reload) can attach to the same run.
@@ -1893,6 +1902,7 @@ class AgentHttpApplication {
     response.once("close", detach);
     await started.completion;
     await detach.ready;
+    stopHeartbeat();
     if (!response.writableEnded && !response.destroyed) {
       response.end();
     }
@@ -2150,6 +2160,8 @@ export async function startAgentServer(
       options.runContentMaxIndexSegments ?? serverSettings.run_content_max_index_segments,
     sseMaxBufferedBytes:
       options.sseMaxBufferedBytes ?? serverSettings.sse_max_buffered_bytes,
+    sseHeartbeatIntervalMs:
+      options.sseHeartbeatIntervalMs ?? serverSettings.sse_heartbeat_interval_ms,
     conditionalRequests:
       options.conditionalRequests ?? serverSettings.conditional_requests,
     snapshotTurns: options.snapshotTurns ?? serverSettings.snapshot_turns,

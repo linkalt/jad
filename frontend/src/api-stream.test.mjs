@@ -364,3 +364,43 @@ test('does not reconnect after a provider error event', async () => {
   await assert.rejects(streamSessionRun('session-1', 'hello'), /provider failed/);
   assert.deepEqual(requests.map(request => request.method), ['POST']);
 });
+
+test('a keep-alive comment frame resets the stall watchdog and is otherwise ignored', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const encoder = new TextEncoder();
+  const runningRun = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  const finalMessage = message('complete', 'finished after a long tool call');
+  // The run is silent for three times the stall window, but the server sends
+  // comment frames inside every window, so the watchdog must not reconnect.
+  responses.push(new Response(new ReadableStream({
+    start(controller) {
+      const stallMs = 60;
+      controller.enqueue(encoder.encode(sse('run', runningRun)));
+      let beats = 0;
+      const timer = setInterval(() => {
+        controller.enqueue(encoder.encode(': keep-alive\n\n'));
+        beats += 1;
+        if (beats === 8) {
+          clearInterval(timer);
+          controller.enqueue(encoder.encode(sse('completed', {message: finalMessage, committed: true})));
+          controller.enqueue(encoder.encode(sse('done', {})));
+          controller.close();
+        }
+      }, stallMs / 2);
+    },
+  }), {headers: {'Content-Type': 'text/event-stream'}}));
+
+  const events = [];
+  const result = await streamSessionRun('session-1', 'run a slow tool', {
+    stallTimeoutMs: 60,
+    onRun: () => events.push('run'),
+    onMessage: () => events.push('message'),
+    onCompleted: value => events.push(`completed:${value.text}`),
+  });
+
+  // One POST, no reconnect GET, and no event was invented for the comments.
+  assert.deepEqual(requests.map(request => request.method), ['POST']);
+  assert.deepEqual(events, ['run', 'completed:finished after a long tool call']);
+  assert.equal(result.message?.text, 'finished after a long tool call');
+});

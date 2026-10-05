@@ -214,3 +214,19 @@ test("follows public redirects and rejects unsafe URLs without requesting them",
     assert.match(await run({cursor: "bad"}), /fetch_storage_error/);
   } finally { await rm(directory, {recursive: true, force: true}); }
 });
+
+test("concurrent stores cannot overshoot the configured storage capacity", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-fetch-capacity-"));
+  try {
+    const store = new FetchStore(join(directory, "fetch"));
+    const document = {url: "https://example.test/", finalUrl: "https://example.test/", contentType: "text/html", status: 200, markdown: "x".repeat(400)};
+    // Room for one stored document (content plus metadata) but not two.
+    const results = await Promise.allSettled(
+      Array.from({length: 5}, () => store.create(document, {...policy, max_storage_bytes: 800})),
+    );
+    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(results.filter((result) => result.status === "rejected").length, 4);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});

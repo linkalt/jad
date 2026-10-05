@@ -52,6 +52,13 @@
       "description": "Maximum number of tool-execution continuations for a run. The initial provider request is not counted. Defaults to 8; the configured ceiling is 50000.",
       "default": 8
     },
+    "max_parallel_tool_calls": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "description": "Most tool calls from one provider response that run at the same time. Each result is streamed as soon as its call finishes. Use 1 to run them strictly one after another. Defaults to 8.",
+      "default": 8
+    },
     "persistence": {
       "type": "object",
       "description": "Transcript persistence behavior.",

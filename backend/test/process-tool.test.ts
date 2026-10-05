@@ -170,6 +170,30 @@ test("starts, waits for, lists, and reports bounded process logs", async () => {
   }
 });
 
+test("concurrent starts cannot exceed max_running and refused starts free their slot", async () => {
+  const {directory, manager, run} = await makeRunner({max_running: 2});
+  try {
+    // Parallel tool calls reach start() together; every one of them used to pass
+    // the capacity check before any of them had registered a process.
+    const results = await Promise.all(
+      Array.from({length: 6}, () => run({command: "sleep 30"}).catch((error: unknown) => String(error))),
+    );
+    const started = results.filter((text) => /^process_id: proc_/m.test(text));
+    assert.equal(started.length, 2, `exactly max_running processes start: ${JSON.stringify(results.map((text) => text.slice(0, 60)))}`);
+    const listed = await run({action: "list", filter: "running"});
+    assert.equal((listed.match(/proc_/g) ?? []).length, 2);
+
+    // The four refused starts must not have leaked a reserved slot: once a
+    // process ends, a new one is accepted again.
+    await run({action: "stop", id: resultId(started[0]!)});
+    const again = await run({command: "sleep 30"});
+    assert.match(again, /^process_id: proc_/m);
+  } finally {
+    await manager.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test("does not expose the HTTP API token to managed child processes", async () => {
   const {directory, manager, run} = await makeRunner({}, {...process.env, AGENT_API_TOKEN: "never-inherit-this-secret"});
   try {

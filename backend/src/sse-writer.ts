@@ -43,3 +43,36 @@ export function writeSse(
     return false;
   }
 }
+
+/**
+ * Keeps an SSE connection from looking dead while a run is silent, for example
+ * during a long tool call. A client that treats a quiet socket as broken
+ * reconnects and drops what it was showing; a comment frame carries no event, so
+ * it only proves the connection is alive. A frame is skipped while earlier
+ * output is still queued: a backed-up client needs no extra bytes, and the
+ * queue limit is enforced by `writeSse`. Returns a function that stops it.
+ */
+export function startSseHeartbeat(
+  response: SseWritableResponse,
+  intervalMs: number,
+): () => void {
+  if (intervalMs <= 0) {
+    return () => undefined;
+  }
+  const timer = setInterval(() => {
+    if (response.writableEnded || response.destroyed) {
+      clearInterval(timer);
+      return;
+    }
+    if (response.writableLength > 0) {
+      return;
+    }
+    try {
+      response.write(": keep-alive\n\n");
+    } catch {
+      // A disconnected browser must not affect the run.
+    }
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}

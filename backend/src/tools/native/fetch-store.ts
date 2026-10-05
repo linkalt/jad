@@ -3,6 +3,7 @@ import {mkdir, readdir, readFile, rename, stat, unlink, writeFile} from "node:fs
 import {join} from "node:path";
 
 import type {NativeFetchToolSettings} from "../../config.js";
+import {AsyncMutex} from "../../concurrency.js";
 
 export interface FetchDocument {
   id: string;
@@ -56,9 +57,16 @@ async function atomicWrite(path: string, contents: string): Promise<void> {
 }
 
 export class FetchStore {
+  /** Serializes the capacity check with the write, so concurrent fetches cannot overshoot it. */
+  private readonly writeMutex = new AsyncMutex();
+
   public constructor(private readonly directory: string) {}
 
   public async create(document: Omit<FetchDocument, "id" | "fetchedAt">, policy: NativeFetchToolSettings): Promise<FetchDocument> {
+    return this.writeMutex.runExclusive(() => this.createUnlocked(document, policy));
+  }
+
+  private async createUnlocked(document: Omit<FetchDocument, "id" | "fetchedAt">, policy: NativeFetchToolSettings): Promise<FetchDocument> {
     const id = randomUUID();
     const fetchedAt = new Date().toISOString();
     const stored: FetchDocument = {...document, id, fetchedAt};

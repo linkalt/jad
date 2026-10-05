@@ -1372,6 +1372,29 @@ test("validates configurable tool-round limits", async () => {
   }
 });
 
+test("normalizes and validates max_parallel_tool_calls", async () => {
+  const sessionDir = await makeSession();
+  try {
+    await writeFile(join(sessionDir, "model.json"), JSON.stringify({model: "gpt-test"}));
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({cwd: sessionDir}));
+    assert.equal((await new SessionConfigLoader(sessionDir).loadSettings()).max_parallel_tool_calls, 8);
+
+    for (const accepted of [1, 64]) {
+      await writeFile(join(sessionDir, "setting.json"), JSON.stringify({cwd: sessionDir, max_parallel_tool_calls: accepted}));
+      assert.equal((await new SessionConfigLoader(sessionDir).loadSettings()).max_parallel_tool_calls, accepted);
+    }
+    for (const value of [0, 65, 1.5, "4"]) {
+      await writeFile(join(sessionDir, "setting.json"), JSON.stringify({cwd: sessionDir, max_parallel_tool_calls: value}));
+      await assert.rejects(
+        () => new SessionConfigLoader(sessionDir).loadSettings(),
+        (error: unknown) => error instanceof ConfigError && /max_parallel_tool_calls/.test(error.message),
+      );
+    }
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("validates MCP server references and exact deny lists", async () => {
   const sessionDir = await makeSession();
   try {

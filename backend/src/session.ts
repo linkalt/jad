@@ -17,6 +17,7 @@ import {
   type PromptRole,
 } from "./config.js";
 import { AsyncMutex } from "./concurrency.js";
+import { runToolBatch } from "./tool-batch.js";
 import {
   SessionResponseStore,
   type AcceptedRequestSnapshot,
@@ -558,11 +559,17 @@ export class AgentSession {
       let decisionPersistenceError: unknown;
       let executionError: unknown;
       const requestInteraction = options.requestInteraction;
-      try {
-        for (const call of callsToExecute) {
+      // A result is published the moment its call settles, not after the whole
+      // batch; the ids published here are skipped by the final pass below.
+      const publishedCallIds = new Set<string>();
+      const publishMutex = new AsyncMutex();
+      const batch = await runToolBatch(
+        callsToExecute,
+        config.settings.max_parallel_tool_calls,
+        async (call) => {
           throwIfAborted(options.signal);
           const callId = functionCallId(call);
-          const toolOutput = await catalog.executeFunctionCall(call, {
+          return catalog.executeFunctionCall(call, {
             workspaceRoot: config.settings.cwd,
             sessionDir: config.paths.session_dir,
             signal: options.signal,
@@ -599,13 +606,19 @@ export class AgentSession {
                 }
               : {}),
           });
+        },
+        async (_call, toolOutput) => {
           const outputCallId = functionCallId(toolOutput);
-          if (outputCallId !== undefined) {
-            toolOutputsByCallId.set(outputCallId, toolOutput);
-          }
-        }
-      } catch (error) {
-        executionError = error;
+          if (outputCallId === undefined) return;
+          toolOutputsByCallId.set(outputCallId, toolOutput);
+          await publishMutex.runExclusive(async () => {
+            publishedCallIds.add(outputCallId);
+            await options.onToolResult?.(toolOutput);
+          });
+        },
+      );
+      if (batch.failed) {
+        executionError = batch.error;
       }
 
       const toolOutputs = await this.appendToolOutputs(
@@ -625,6 +638,8 @@ export class AgentSession {
       });
       if (refreshStateContext) await this.refreshStateContext(config, "compaction");
       for (const toolOutput of toolOutputs) {
+        const outputCallId = functionCallId(toolOutput);
+        if (outputCallId !== undefined && publishedCallIds.has(outputCallId)) continue;
         await options.onToolResult?.(toolOutput);
       }
       if (executionError !== undefined) {

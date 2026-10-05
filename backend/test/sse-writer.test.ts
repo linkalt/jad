@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {writeSse, type SseWritableResponse} from "../src/sse-writer.js";
+import {startSseHeartbeat, writeSse, type SseWritableResponse} from "../src/sse-writer.js";
 
 class FakeSseResponse implements SseWritableResponse {
   public writableEnded = false;
@@ -46,4 +46,35 @@ test("does not write to an ended or destroyed response", () => {
 
   assert.equal(writeSse(response, "done", {}, 1024), false);
   assert.equal(response.writes.length, 0);
+});
+
+test("a heartbeat writes comment frames while the stream is quiet and stops on request", async () => {
+  const response = new FakeSseResponse();
+  const stop = startSseHeartbeat(response, 5);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  stop();
+  const count = response.writes.length;
+  assert.ok(count >= 1, "a quiet stream receives keep-alive frames");
+  assert.ok(response.writes.every((frame) => frame === ": keep-alive\n\n"));
+  // A comment frame has no `event:` line, so a client parser ignores it.
+  assert.ok(response.writes.every((frame) => !frame.includes("event:")));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(response.writes.length, count, "no frames after stop");
+});
+
+test("a heartbeat adds nothing while earlier output is still queued", async () => {
+  const response = new FakeSseResponse();
+  response.writableLength = 10;
+  const stop = startSseHeartbeat(response, 5);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  stop();
+  assert.deepEqual(response.writes, []);
+});
+
+test("a zero interval disables the heartbeat", async () => {
+  const response = new FakeSseResponse();
+  const stop = startSseHeartbeat(response, 0);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  stop();
+  assert.deepEqual(response.writes, []);
 });

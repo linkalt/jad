@@ -81,6 +81,13 @@
           "default": 1048576,
           "description": "Maximum queued SSE response bytes per subscriber before the connection closes and can be reattached to a current snapshot."
         },
+        "sse_heartbeat_interval_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300000,
+          "default": 5000,
+          "description": "Gap between keep-alive frames on a run stream that has nothing else to send, such as during a long tool call. Keeps the browser from treating a quiet connection as dead. Keep it well below the browser's stall timeout. 0 disables the frames."
+        },
         "conditional_requests": {
           "type": "boolean",
           "default": true,

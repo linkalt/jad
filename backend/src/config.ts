@@ -419,6 +419,8 @@ export interface SessionSettings extends JsonRecord {
   /** Loaded prompt-document content in configured order. */
   prompt_text: string;
   max_tool_rounds: number;
+  /** Most tool calls of one provider response that run at the same time. */
+  max_parallel_tool_calls: number;
   persistence: PersistenceSettings;
   compaction: CompactionSettings;
   front_compaction: FrontCompactionSettings;
@@ -472,6 +474,8 @@ export interface LoadedSessionConfig {
 
 export const DEFAULT_MAX_TOOL_ROUNDS = 8;
 export const MAX_CONFIGURED_TOOL_ROUNDS = 50_000;
+export const DEFAULT_MAX_PARALLEL_TOOL_CALLS = 8;
+export const MAX_CONFIGURED_PARALLEL_TOOL_CALLS = 64;
 export const DEFAULT_PERSISTENCE_MAX_ITEM_BYTES = 10 * 1024 * 1024;
 export const MAX_CONFIGURED_PERSISTENCE_ITEM_BYTES = 64 * 1024 * 1024;
 /**
@@ -952,6 +956,21 @@ function normalizeFrontCompaction(value: unknown, path: string): FrontCompaction
     throw new ConfigError(`${path}: front_compaction.delete_mode must be permanent or recoverable`);
   }
   return {...raw, enabled, delete_mode: deleteMode} as FrontCompactionSettings;
+}
+
+function normalizeMaxParallelToolCalls(value: unknown, path: string): number {
+  const limit = value ?? DEFAULT_MAX_PARALLEL_TOOL_CALLS;
+  if (
+    typeof limit !== "number" ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > MAX_CONFIGURED_PARALLEL_TOOL_CALLS
+  ) {
+    throw new ConfigError(
+      `${path}: max_parallel_tool_calls must be a safe integer between 1 and ${MAX_CONFIGURED_PARALLEL_TOOL_CALLS}`,
+    );
+  }
+  return limit;
 }
 
 function normalizeMaxToolRounds(value: unknown, path: string): number {
@@ -3097,6 +3116,7 @@ async function normalizeSettings(
     throw new ConfigError(`${path}: prompt_role must be system or developer`);
   }
   const maxToolRounds = normalizeMaxToolRounds(raw.max_tool_rounds, path);
+  const maxParallelToolCalls = normalizeMaxParallelToolCalls(raw.max_parallel_tool_calls, path);
   const persistence = normalizePersistence(raw.persistence, path);
   const compaction = normalizeCompaction(raw.compaction, path);
   const frontCompaction = normalizeFrontCompaction(raw.front_compaction, path);
@@ -3127,6 +3147,7 @@ async function normalizeSettings(
     prompt_role: promptRole,
     prompt_text: promptDocuments.text,
     max_tool_rounds: maxToolRounds,
+    max_parallel_tool_calls: maxParallelToolCalls,
     persistence,
     compaction,
     front_compaction: frontCompaction,

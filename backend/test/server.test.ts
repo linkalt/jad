@@ -27,6 +27,7 @@ import {
 import type {WebUiMessage, WebUiPart} from "../src/plugins/web-ui/types.js";
 import type { LoadedSessionConfig } from "../src/config.js";
 import {nativeReadDefinition} from "../src/tools/native/read.js";
+import {nativeBashDefinition} from "../src/tools/native/bash.js";
 import {loadRootServerSettings} from "../src/session-roots.js";
 
 function completedEvent(
@@ -153,6 +154,7 @@ test("loads configurable root server settings", async () => {
       run_content_flush_interval_ms: 25,
       run_content_max_index_segments: 1_024,
       sse_max_buffered_bytes: 4096,
+      sse_heartbeat_interval_ms: 5_000,
       conditional_requests: true,
       snapshot_turns: 24,
       max_page_turns: 50,
@@ -3460,6 +3462,246 @@ test("stop aborts the run in flight and commits no response for it", async () =>
         .length,
       0,
     );
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+/** A session whose first provider response requests one slow bash call per entry. */
+async function writeParallelBashSession(
+  root: string,
+  sleeps: readonly number[],
+  settings: Record<string, unknown> = {},
+): Promise<{sessionDir: string; client: OpenAI}> {
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, {recursive: true});
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({schema_version: 1, provider: "fake", api_key_env: "FAKE_API_KEY", model: "fake-model"}),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({
+      schema_version: 1,
+      session_name: "parallel-tools",
+      cwd: sessionDir,
+      tool_definition_paths: ["bash.json"],
+      tools: {native: {bash: {}}},
+      ...settings,
+    }),
+  );
+  await writeFile(join(root, "bash.json"), JSON.stringify({schema_version: 1, tools: [nativeBashDefinition]}));
+  const calls = sleeps.map((seconds, index) => ({
+    id: `fc_${index}`,
+    type: "function_call",
+    call_id: `call_${index}`,
+    name: "bash",
+    arguments: JSON.stringify({command: `sleep ${seconds}; echo finished-${index}`}),
+  }));
+  let responseNumber = 0;
+  const client = {
+    responses: {
+      create: async () => {
+        responseNumber += 1;
+        if (responseNumber === 1) {
+          return (async function* () {
+            for (const [index, call] of calls.entries()) {
+              yield {type: "response.output_item.added", output_index: index, item: {...call, arguments: ""}};
+              yield {type: "response.output_item.done", output_index: index, item: call};
+            }
+            yield completedEvent(calls, "response-parallel-calls");
+          })();
+        }
+        const finalMessage = {type: "message", role: "assistant", content: [{type: "output_text", text: "all finished"}]};
+        return (async function* () {
+          yield {type: "response.output_item.done", output_index: 0, item: finalMessage};
+          yield completedEvent([finalMessage], "response-parallel-final");
+        })();
+      },
+    },
+  } as unknown as OpenAI;
+  return {sessionDir, client};
+}
+
+/** Frames of a run stream with the time each one arrived, relative to the first. */
+async function timedRunFrames(response: Response): Promise<{event: string; data: Record<string, unknown>; at: number}[]> {
+  const frames: {event: string; data: Record<string, unknown>; at: number}[] = [];
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  const started = Date.now();
+  let buffer = "";
+  while (true) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+    let separator = buffer.indexOf("\n\n");
+    while (separator >= 0) {
+      const block = buffer.slice(0, separator);
+      buffer = buffer.slice(separator + 2);
+      const event = /^event: (.*)$/m.exec(block)?.[1];
+      const data = /^data: (.*)$/m.exec(block)?.[1];
+      if (event !== undefined && data !== undefined) {
+        frames.push({event, data: JSON.parse(data) as Record<string, unknown>, at: Date.now() - started});
+      }
+      separator = buffer.indexOf("\n\n");
+    }
+  }
+  return frames;
+}
+
+test("streams each parallel tool result as its call finishes, without duplicates", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-parallel-tools-"));
+  // Call 0 is the slowest: results must follow completion order, not call order.
+  const {client} = await writeParallelBashSession(root, [1.2, 0.2, 0.6, 0.4]);
+  const running = createAgentServer({sessionsDir: root, client, toolStreamIntervalMs: 0});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "run four commands"}),
+    });
+    assert.equal(response.status, 200);
+    const frames = await timedRunFrames(response);
+
+    const results = frames
+      .filter((frame) => frame.event === "ui.part" && (frame.data.part as {type?: string}).type === "tool_result")
+      .map((frame) => ({callId: (frame.data.part as {callId: string}).callId, at: frame.at}));
+    assert.equal(results.length, 4, `one result event per call, saw ${JSON.stringify(results)}`);
+    assert.deepEqual(
+      results.map((result) => result.callId),
+      ["call_1", "call_3", "call_2", "call_0"],
+      "results arrive in completion order",
+    );
+    // They are spread over the run instead of arriving as one burst at the end.
+    assert.ok(
+      results[3]!.at - results[0]!.at >= 600,
+      `results should be spread out, saw ${JSON.stringify(results)}`,
+    );
+
+    // Replaying the stream yields one result per call in the final message, and
+    // the completed message is the persisted, call-ordered one.
+    const final = runStreamStates(
+      frames.map((frame) => `event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`).join(""),
+    ).at(-1)!;
+    const resultParts = final.parts.filter((part) => part.type === "tool_result");
+    assert.deepEqual(
+      resultParts.map((part) => (part as {callId: string}).callId).sort(),
+      ["call_0", "call_1", "call_2", "call_3"],
+    );
+    // The completed message holds each result exactly once. The UI pairs a
+    // result with its call by call id, so the order of the result parts is
+    // not significant (the persisted transcript keeps call order).
+    const completed = frames.find((frame) => frame.event === "completed")!.data.message as WebUiMessage;
+    assert.deepEqual(
+      completed.parts
+        .filter((part) => part.type === "tool_result")
+        .map((part) => (part as {callId: string}).callId)
+        .sort(),
+      ["call_0", "call_1", "call_2", "call_3"],
+    );
+    assert.equal(frames.at(-1)!.event, "done");
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("max_parallel_tool_calls 1 runs the calls strictly one after another", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-sequential-tools-"));
+  const {client} = await writeParallelBashSession(root, [0.4, 0.4, 0.4], {max_parallel_tool_calls: 1});
+  const running = createAgentServer({sessionsDir: root, client, toolStreamIntervalMs: 0});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const started = Date.now();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "run three commands"}),
+    });
+    const frames = await timedRunFrames(response);
+    assert.ok(Date.now() - started >= 1_100, "three 0.4s calls take at least 1.2s when serialized");
+    const order = frames
+      .filter((frame) => frame.event === "ui.part" && (frame.data.part as {type?: string}).type === "tool_result")
+      .map((frame) => (frame.data.part as {callId: string}).callId);
+    assert.deepEqual(order, ["call_0", "call_1", "call_2"]);
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("stopping a run cancels every in-flight parallel tool call", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-stop-parallel-"));
+  const {client} = await writeParallelBashSession(root, [30, 30, 30]);
+  const running = createAgentServer({sessionsDir: root, client, toolStreamIntervalMs: 0});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const response = await fetch(`${baseUrl}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "three slow commands"}),
+    });
+    const reading = timedRunFrames(response);
+    // Let all three calls start, then stop the run.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const stopped = Date.now();
+    const stopResponse = await fetch(`${baseUrl}/api/sessions/session1/run/stop`, {method: "POST"});
+    assert.equal(stopResponse.status, 200);
+    const frames = await reading;
+    assert.ok(Date.now() - stopped < 5_000, "the run ends promptly instead of waiting for the 30s commands");
+    assert.equal(frames.some((frame) => frame.event === "error"), true);
+    assert.equal(frames.at(-1)!.event, "done");
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("keeps a quiet run stream alive with comment frames that clients ignore", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-heartbeat-"));
+  const {client} = await writeParallelBashSession(root, [0.6]);
+  const running = createAgentServer({
+    sessionsDir: root,
+    client,
+    toolStreamIntervalMs: 0,
+    sseHeartbeatIntervalMs: 100,
+  });
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "one slow command"}),
+    });
+    const body = await response.text();
+    const keepAlives = body.split("\n\n").filter((block) => block === ": keep-alive");
+    assert.ok(keepAlives.length >= 2, `expected keep-alive frames during the 0.6s tool call, saw ${keepAlives.length}`);
+    // Real events still parse, and the run still completes normally.
+    assert.equal(ssePayloads(body, "completed").length, 1);
+    assert.equal(ssePayloads(body, "done").length, 1);
   } finally {
     await running.close();
     await rm(root, {recursive: true, force: true});
