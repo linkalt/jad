@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {viewKey} from './session-views.ts';
-import {canAttachRunToView, updateViewState} from './view-state.ts';
+import {canAttachRunToView, recordOwnedRunTurn, updateViewState} from './view-state.ts';
 
 const session = 'root:session1';
 const masterView = viewKey(session);
@@ -69,4 +69,32 @@ test('an active run attachment for one view does not block the other profile', (
     canAttachRunToView(profileAttachments, profileControllers, profileView, profileTurn),
     false,
   );
+});
+
+test('a run this client started is not attached again while a stale poll still says running', () => {
+  const masterTurn = 'master-turn';
+  const activeTurns = new Map();
+  const attachedTurns = new Map();
+  // The started-run stream has finished and released its controller.
+  const controllers = new Map();
+
+  recordOwnedRunTurn(activeTurns, attachedTurns, masterView, masterTurn);
+
+  assert.equal(activeTurns.get(masterView), masterTurn);
+  assert.equal(attachedTurns.get(masterView), masterTurn);
+  assert.equal(canAttachRunToView(attachedTurns, controllers, masterView, masterTurn), false);
+});
+
+test('recording an owned run turn leaves another view and another turn attachable', () => {
+  const masterTurn = 'master-turn';
+  const activeTurns = new Map();
+  const attachedTurns = new Map();
+  const controllers = new Map();
+
+  recordOwnedRunTurn(activeTurns, attachedTurns, masterView, masterTurn);
+
+  assert.equal(canAttachRunToView(attachedTurns, controllers, profileView, masterTurn), true);
+  assert.equal(canAttachRunToView(attachedTurns, controllers, masterView, 'a-later-turn'), true);
+  assert.equal(activeTurns.has(profileView), false);
+  assert.equal(attachedTurns.has(profileView), false);
 });
