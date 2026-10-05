@@ -8,7 +8,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  DEFAULT_RUN_ERROR_CACHE_MAX_ENTRIES,
   MAX_CURSOR_CACHE_CHECKPOINT_BYTES,
+  MAX_RUN_ERROR_CACHE_MAX_ENTRIES,
   PersistenceError,
   SESSION_INPUT_BATCH_ID_FIELD,
   SESSION_INPUT_BATCH_INDEX_FIELD,
@@ -1111,6 +1113,38 @@ test("rejects an unsupported persistence.response_metadata and threads a configu
   }
 });
 
+test("validates the run-error cache entry cap and defaults it", async () => {
+  const sessionDir = await makeSession();
+  try {
+    await writeFile(join(sessionDir, "model.json"), JSON.stringify({model: "gpt-test"}));
+    for (const value of [0, MAX_RUN_ERROR_CACHE_MAX_ENTRIES + 1, 1.5, "50"]) {
+      await writeFile(
+        join(sessionDir, "setting.json"),
+        JSON.stringify({cwd: sessionDir, persistence: {run_error_cache_max_entries: value}}),
+      );
+      await assert.rejects(
+        () => new SessionConfigLoader(sessionDir).loadSettings(),
+        /persistence\.run_error_cache_max_entries must be a safe integer/,
+        `value ${JSON.stringify(value)} must be rejected`,
+      );
+    }
+
+    await writeFile(
+      join(sessionDir, "setting.json"),
+      JSON.stringify({cwd: sessionDir, persistence: {run_error_cache_max_entries: 3}}),
+    );
+    assert.equal((await new SessionConfigLoader(sessionDir).load()).settings.persistence.run_error_cache_max_entries, 3);
+
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({cwd: sessionDir}));
+    assert.equal(
+      (await new SessionConfigLoader(sessionDir).load()).settings.persistence.run_error_cache_max_entries,
+      DEFAULT_RUN_ERROR_CACHE_MAX_ENTRIES,
+    );
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("validates and threads the cursor-cache checkpoint byte threshold", async () => {
   const sessionDir = await makeSession();
   try {
@@ -1329,6 +1363,7 @@ test("loads model and session settings with normalized paths and hashes", async 
       max_item_bytes: 10 * 1024 * 1024,
       response_metadata: "minimal",
       cursor_cache_checkpoint_bytes: 1024 * 1024,
+      run_error_cache_max_entries: DEFAULT_RUN_ERROR_CACHE_MAX_ENTRIES,
     });
     assert.deepEqual(config.settings.http_debug, {
       enabled: false,
@@ -1735,6 +1770,9 @@ test("profile storage defaults are isolated while the stored default keeps legac
     assert.notEqual(primaryPaths.history_cache, alternatePaths.history_cache);
     assert.notEqual(primaryPaths.usage_cache, alternatePaths.usage_cache);
     assert.notEqual(primaryPaths.cursor_cache, alternatePaths.cursor_cache);
+    assert.notEqual(primaryPaths.run_error_cache, alternatePaths.run_error_cache);
+    assert.equal(primaryPaths.run_error_cache, join(sessionDir, "staging", "run-error-cache.json"));
+    assert.equal(alternatePaths.run_error_cache, join(sessionDir, "profiles/alternate/staging", "run-error-cache.json"));
   } finally {
     await removeSession(sessionDir);
   }
@@ -2047,6 +2085,15 @@ test("rejects malformed and conflicting path profiles", async () => {
       },
     }));
     await assert.rejects(() => loader.loadSettings(), /must be different files/);
+
+    // The failed-run cache is a session file too: it may not alias the cursor index.
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({
+      paths: {
+        active_profile: "profile1",
+        profiles: {profile1: {cursor_cache: "staging/shared.json", run_error_cache: "staging/shared.json"}},
+      },
+    }));
+    await assert.rejects(() => loader.loadSettings(), /paths\.run_error_cache.*must be different files/);
 
     // An unknown profile field is still rejected, so a typo cannot silently
     // fall back to the flat path.
@@ -2435,6 +2482,7 @@ test("defaults empty settings and rejects missing or unsafe model configuration"
       max_item_bytes: 10 * 1024 * 1024,
       response_metadata: "minimal",
       cursor_cache_checkpoint_bytes: 1024 * 1024,
+      run_error_cache_max_entries: DEFAULT_RUN_ERROR_CACHE_MAX_ENTRIES,
     });
     assert.equal(settings.http_debug.enabled, false);
     assert.equal(settings.paths.history_cache, join(sessionDir, "staging/history-cache.json"));

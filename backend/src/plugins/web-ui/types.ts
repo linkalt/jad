@@ -185,4 +185,17 @@ export interface WebUiSessionSnapshot {
   runs_by_profile?: Record<string, WebUiSessionRun>;
   page?: WebUiSessionPage;
   history?: WebUiSessionHistory;
+  /**
+   * Runs that failed after their user message was saved, oldest first. They are
+   * kept beside the transcript, never in it, and omitted when there are none.
+   * `turn` is the session turn whose user message has no answer.
+   */
+  failures?: WebUiRunFailure[];
+}
+
+export interface WebUiRunFailure {
+  turn: number;
+  turn_id: string;
+  at: string;
+  message: string;
 }

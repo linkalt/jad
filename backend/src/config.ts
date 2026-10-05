@@ -6,8 +6,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import {
   CURSOR_CACHE_FILE,
   DEFAULT_CURSOR_CACHE_CHECKPOINT_BYTES,
+  DEFAULT_RUN_ERROR_CACHE_MAX_ENTRIES,
   HISTORY_CACHE_FILE,
   MAX_CURSOR_CACHE_CHECKPOINT_BYTES,
+  MAX_RUN_ERROR_CACHE_MAX_ENTRIES,
+  RUN_ERROR_CACHE_FILE,
   USAGE_CACHE_FILE,
 } from "./persistence.js";
 import type {DurabilityMode, JsonRecord, ResponseMetadataMode} from "./persistence.js";
@@ -362,6 +365,7 @@ export interface SessionStoragePaths extends JsonRecord {
   history_cache: string;
   usage_cache: string;
   cursor_cache: string;
+  run_error_cache: string;
   staging: string;
   http_debug: string;
   statecontext: string;
@@ -404,6 +408,8 @@ export interface PersistenceSettings extends JsonRecord {
   max_item_bytes: number;
   response_metadata: ResponseMetadataMode;
   cursor_cache_checkpoint_bytes: number;
+  /** Failed-run records kept in the run-error cache; the oldest are dropped first. */
+  run_error_cache_max_entries: number;
 }
 
 export type PromptRole = "system" | "developer";
@@ -450,6 +456,7 @@ export interface SessionConfigPaths {
   history_cache_path: string;
   usage_cache_path: string;
   cursor_cache_path: string;
+  run_error_cache_path: string;
   statecontext_path: string;
   staging_dir: string;
   http_debug_dir: string;
@@ -883,12 +890,25 @@ function normalizePersistence(
       `${path}: persistence.cursor_cache_checkpoint_bytes must be a safe integer between 1 and ${MAX_CURSOR_CACHE_CHECKPOINT_BYTES}`,
     );
   }
+  const runErrorCacheMaxEntries =
+    persistence.run_error_cache_max_entries ?? DEFAULT_RUN_ERROR_CACHE_MAX_ENTRIES;
+  if (
+    typeof runErrorCacheMaxEntries !== "number" ||
+    !Number.isSafeInteger(runErrorCacheMaxEntries) ||
+    runErrorCacheMaxEntries < 1 ||
+    runErrorCacheMaxEntries > MAX_RUN_ERROR_CACHE_MAX_ENTRIES
+  ) {
+    throw new ConfigError(
+      `${path}: persistence.run_error_cache_max_entries must be a safe integer between 1 and ${MAX_RUN_ERROR_CACHE_MAX_ENTRIES}`,
+    );
+  }
   return {
     ...persistence,
     durability,
     max_item_bytes: maxItemBytes,
     response_metadata: responseMetadata,
     cursor_cache_checkpoint_bytes: cursorCacheCheckpointBytes,
+    run_error_cache_max_entries: runErrorCacheMaxEntries,
   } as PersistenceSettings;
 }
 
@@ -2837,6 +2857,7 @@ const SESSION_PATH_FIELDS = [
   "history_cache",
   "usage_cache",
   "cursor_cache",
+  "run_error_cache",
   "statecontext",
   "staging",
   "http_debug",
@@ -2921,11 +2942,12 @@ function normalizeStoragePaths(
     const historyCache = pathValue("history_cache", join(staging, HISTORY_CACHE_FILE));
     const usageCache = pathValue("usage_cache", join(staging, USAGE_CACHE_FILE));
     const cursorCache = pathValue("cursor_cache", join(staging, CURSOR_CACHE_FILE));
+    const runErrorCache = pathValue("run_error_cache", join(staging, RUN_ERROR_CACHE_FILE));
     const statecontext = pathValue("statecontext", join(staging, "statecontext.json"));
-    const distinctFilePaths = new Set([messages, messagesBackup, compactionCache, historyCache, usageCache, cursorCache, statecontext]);
+    const distinctFilePaths = new Set([messages, messagesBackup, compactionCache, historyCache, usageCache, cursorCache, runErrorCache, statecontext]);
     const compactionCacheBackup = `${compactionCache}.backup`;
-    if (distinctFilePaths.size !== 7 || distinctFilePaths.has(compactionCacheBackup)) {
-      throw new ConfigError(`${profilePath}: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.statecontext, and the compaction-cache backup must be different files`);
+    if (distinctFilePaths.size !== 8 || distinctFilePaths.has(compactionCacheBackup)) {
+      throw new ConfigError(`${profilePath}: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.run_error_cache, paths.statecontext, and the compaction-cache backup must be different files`);
     }
     const extras = Object.fromEntries(Object.entries(configuredPaths).filter(([field]) => !SESSION_PATH_FIELD_SET.has(field)));
     return {
@@ -2937,6 +2959,7 @@ function normalizeStoragePaths(
       history_cache: historyCache,
       usage_cache: usageCache,
       cursor_cache: cursorCache,
+      run_error_cache: runErrorCache,
       statecontext,
       staging,
       http_debug: pathValue(
@@ -3262,6 +3285,7 @@ export class SessionConfigLoader {
       history_cache_path: join(absoluteSessionDir, "staging", HISTORY_CACHE_FILE),
       usage_cache_path: join(absoluteSessionDir, "staging", USAGE_CACHE_FILE),
       cursor_cache_path: join(absoluteSessionDir, "staging", CURSOR_CACHE_FILE),
+      run_error_cache_path: join(absoluteSessionDir, "staging", RUN_ERROR_CACHE_FILE),
       statecontext_path: join(absoluteSessionDir, "staging", "statecontext.json"),
       staging_dir: join(absoluteSessionDir, "staging"),
       http_debug_dir: join(absoluteSessionDir, "debug", "http"),
@@ -3315,6 +3339,7 @@ export class SessionConfigLoader {
     this.paths.history_cache_path = storagePaths.history_cache;
     this.paths.usage_cache_path = storagePaths.usage_cache;
     this.paths.cursor_cache_path = storagePaths.cursor_cache;
+    this.paths.run_error_cache_path = storagePaths.run_error_cache;
     this.paths.statecontext_path = storagePaths.statecontext;
     this.paths.staging_dir = storagePaths.staging;
     this.paths.http_debug_dir = storagePaths.http_debug;

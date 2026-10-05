@@ -26,6 +26,7 @@ export interface SessionProfileStoragePaths {
   history_cache: string;
   usage_cache: string;
   cursor_cache: string;
+  run_error_cache: string;
   statecontext: string;
   staging: string;
   http_debug: string;

@@ -15,6 +15,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { AsyncMutex } from "./concurrency.js";
 import {cleanupOrphanedResponsePartialFiles} from "./response-partial-files.js";
+import {appendRunError, readRunErrors, type RunErrorEntry} from "./run-error-cache.js";
 
 export type JsonRecord = Record<string, unknown>;
 export type ResponseInputItem = JsonRecord;
@@ -67,6 +68,10 @@ export interface SessionResponseStoreOptions {
   usageCachePath?: string;
   /** Replaceable provider-run offset index; relative paths resolve from the session directory. */
   cursorCachePath?: string;
+  /** Replaceable failed-run record, kept outside the transcript; relative paths resolve from the session directory. */
+  runErrorCachePath?: string;
+  /** Failed-run records kept; the oldest are dropped first. Defaults to 50. */
+  runErrorCacheMaxEntries?: number;
   /** Latest pre-compaction transcript backup. */
   messagesBackupPath?: string;
   /** Replaceable state-context snapshot file. */
@@ -273,6 +278,10 @@ export const USAGE_CACHE_FILE = "usage-cache.json";
 export const CURSOR_CACHE_FILE = "cursor-cache.json";
 export const DEFAULT_CURSOR_CACHE_CHECKPOINT_BYTES = 1024 * 1024;
 export const MAX_CURSOR_CACHE_CHECKPOINT_BYTES = 64 * 1024 * 1024;
+/** Failed-run records live beside the other caches, never in messages.jsonl. */
+export const RUN_ERROR_CACHE_FILE = "run-error-cache.json";
+export const DEFAULT_RUN_ERROR_CACHE_MAX_ENTRIES = 50;
+export const MAX_RUN_ERROR_CACHE_MAX_ENTRIES = 10_000;
 const COMPACTION_CACHE_FILE = "compaction-cache.json";
 const HISTORY_CACHE_SCHEMA_VERSION = 1;
 const USAGE_CACHE_SCHEMA_VERSION = 1;
@@ -1504,6 +1513,7 @@ export class SessionResponseStore {
   public readonly historyCachePath: string;
   public readonly usageCachePath: string;
   public readonly cursorCachePath: string;
+  public readonly runErrorCachePath: string;
   public readonly compactionCachePath: string;
   public readonly compactionCacheBackupPath: string;
   public readonly messagesBackupPath: string;
@@ -1512,7 +1522,7 @@ export class SessionResponseStore {
 
   private readonly options: Required<Pick<
     SessionResponseStoreOptions,
-    "durability" | "maxItemBytes" | "responseMetadata" | "cursorCacheCheckpointBytes"
+    "durability" | "maxItemBytes" | "responseMetadata" | "cursorCacheCheckpointBytes" | "runErrorCacheMaxEntries"
   >>;
   private historyCache: InputHistoryCache | undefined;
   private historyCacheNeedsPersistence = false;
@@ -1552,6 +1562,11 @@ export class SessionResponseStore {
         ? resolve(options.cursorCachePath)
         : resolve(absoluteSessionDir, options.cursorCachePath)
       : join(this.stagingDir, CURSOR_CACHE_FILE);
+    this.runErrorCachePath = options.runErrorCachePath
+      ? isAbsolute(options.runErrorCachePath)
+        ? resolve(options.runErrorCachePath)
+        : resolve(absoluteSessionDir, options.runErrorCachePath)
+      : join(this.stagingDir, RUN_ERROR_CACHE_FILE);
     this.compactionCachePath = options.compactionCachePath
       ? isAbsolute(options.compactionCachePath)
         ? resolve(options.compactionCachePath)
@@ -1579,8 +1594,19 @@ export class SessionResponseStore {
       responseMetadata: options.responseMetadata ?? "minimal",
       cursorCacheCheckpointBytes:
         options.cursorCacheCheckpointBytes ?? DEFAULT_CURSOR_CACHE_CHECKPOINT_BYTES,
+      runErrorCacheMaxEntries:
+        options.runErrorCacheMaxEntries ?? DEFAULT_RUN_ERROR_CACHE_MAX_ENTRIES,
     };
 
+    if (
+      !Number.isSafeInteger(this.options.runErrorCacheMaxEntries) ||
+      this.options.runErrorCacheMaxEntries < 1 ||
+      this.options.runErrorCacheMaxEntries > MAX_RUN_ERROR_CACHE_MAX_ENTRIES
+    ) {
+      throw new PersistenceError(
+        `runErrorCacheMaxEntries must be a safe integer between 1 and ${MAX_RUN_ERROR_CACHE_MAX_ENTRIES}`,
+      );
+    }
     if (!Number.isSafeInteger(this.options.maxItemBytes) || this.options.maxItemBytes <= 0) {
       throw new PersistenceError("maxItemBytes must be a positive safe integer");
     }
@@ -1757,6 +1783,28 @@ export class SessionResponseStore {
       await mkdir(dirname(this.stateContextPath), {recursive: true});
       await writeJsonAtomic(this.stateContextPath, snapshot, this.options.durability);
     });
+  }
+
+  /**
+   * Records a failed run outside the transcript. Serialized with reset and
+   * compaction, which delete the file, so a stale entry cannot reappear.
+   */
+  public async recordRunError(entry: RunErrorEntry): Promise<void> {
+    this.assertOpen();
+    await this.messageMutex.runExclusive(async () => {
+      await appendRunError(
+        this.runErrorCachePath,
+        entry,
+        this.options.runErrorCacheMaxEntries,
+        (path, value) => writeJsonAtomic(path, value, this.options.durability),
+      );
+    });
+  }
+
+  /** Failed runs still on record; an unreadable cache reads as none. */
+  public async readRunErrors(): Promise<RunErrorEntry[]> {
+    this.assertOpen();
+    return readRunErrors(this.runErrorCachePath);
   }
 
   public async readAcceptedRequest(): Promise<AcceptedRequestSnapshot | undefined> {
@@ -2305,6 +2353,7 @@ export class SessionResponseStore {
         this.historyCachePath,
         this.usageCachePath,
         this.cursorCachePath,
+        this.runErrorCachePath,
         this.stateContextPath,
       ]) {
         await rm(path, {force: true});
@@ -2349,6 +2398,7 @@ export class SessionResponseStore {
         this.historyCachePath,
         this.usageCachePath,
         this.cursorCachePath,
+        this.runErrorCachePath,
         this.stateContextPath,
         this.acceptedRequestPath,
       ]);
@@ -3052,6 +3102,8 @@ export class SessionResponseStore {
       this.cursorCachePersistedOffset = undefined;
       await rm(this.historyCachePath, {force: true});
       await rm(this.cursorCachePath, {force: true});
+      // Entries are anchored to session turn numbers that compaction re-bases.
+      await rm(this.runErrorCachePath, {force: true});
       await this.resetUsageCheckpointAfterCompactionUnlocked();
       return {compacted: true, compacted_items: history.length, retained_items: nextHistory.length, backup_path: this.messagesBackupPath};
     });

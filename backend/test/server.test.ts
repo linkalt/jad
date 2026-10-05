@@ -1442,6 +1442,150 @@ test("persists user input before a tool configuration failure", async () => {
   }
 });
 
+test("a change to the run-error cache alone busts the snapshot etag", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-run-error-etag-"));
+  const sessionDir = join(root, "session1");
+  await mkdir(join(sessionDir, "staging"), {recursive: true});
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({schema_version: 1, provider: "fake", api_key_env: "FAKE_API_KEY", model: "fake-model"}),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({schema_version: 1, session_name: "etag", cwd: sessionDir}),
+  );
+  await writeFile(join(sessionDir, "messages.jsonl"), `${JSON.stringify({
+    type: "message",
+    role: "user",
+    content: [{type: "input_text", text: "unanswered"}],
+  })}\n`);
+
+  const running = createAgentServer({sessionsDir: root});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const url = `http://127.0.0.1:${address.port}/api/sessions/session1`;
+    const first = await fetch(url);
+    const etag = first.headers.get("etag");
+    assert.ok(etag);
+    assert.equal(Object.hasOwn((await first.json()) as object, "failures"), false);
+    assert.equal((await fetch(url, {headers: {"if-none-match": etag}})).status, 304);
+
+    // Only the cache file changes; messages.jsonl and the run state do not.
+    await writeFile(
+      join(sessionDir, "staging", "run-error-cache.json"),
+      JSON.stringify({
+        schema_version: 1,
+        errors: [{turn: 1, turn_id: "t", at: "2026-01-01T00:00:00.000Z", message: "boom"}],
+      }),
+    );
+    const changed = await fetch(url, {headers: {"if-none-match": etag}});
+    assert.equal(changed.status, 200);
+    assert.notEqual(changed.headers.get("etag"), etag);
+    const body = (await changed.json()) as {failures?: Array<{message: string}>};
+    assert.equal(body.failures?.[0]?.message, "boom");
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("records a failed run outside messages.jsonl and leaves the transcript untouched", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-run-error-"));
+  const sessionDir = join(root, "session1");
+  await mkdir(sessionDir, {recursive: true});
+  await writeFile(
+    join(sessionDir, "model.json"),
+    JSON.stringify({schema_version: 1, provider: "fake", api_key_env: "FAKE_API_KEY", model: "fake-model"}),
+  );
+  await writeFile(
+    join(sessionDir, "setting.json"),
+    JSON.stringify({
+      schema_version: 1,
+      session_name: "run-error",
+      cwd: sessionDir,
+      tool_definition_paths: ["missing-tools.json"],
+      tools: {native: {read: {max_bytes: 65536, default_limit: 250}}},
+    }),
+  );
+
+  const running = createAgentServer({sessionsDir: root});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "this run will fail"}),
+    });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /The run failed\. Response details were withheld/);
+
+    // The transcript is exactly what it was before this change: the user record only.
+    const transcript = await readFile(join(sessionDir, "messages.jsonl"), "utf8");
+    assert.equal(transcript.trim().split("\n").length, 1);
+    assert.doesNotMatch(transcript, /run failed|Response details were withheld|missing-tools/i);
+
+    const cache = JSON.parse(await readFile(join(sessionDir, "staging", "run-error-cache.json"), "utf8")) as {
+      schema_version: number;
+      errors: Array<{turn: number; turn_id: string; at: string; message: string}>;
+    };
+    assert.equal(cache.schema_version, 1);
+    assert.equal(cache.errors.length, 1);
+    assert.equal(cache.errors[0]?.turn, 1);
+    assert.match(cache.errors[0]?.message ?? "", /The run failed\. Response details were withheld/);
+    // The cache carries the client-safe message, never the underlying cause.
+    assert.doesNotMatch(JSON.stringify(cache), /missing-tools/);
+    assert.ok(!Number.isNaN(Date.parse(cache.errors[0]?.at ?? "")));
+
+    // A reload sees the failure even after the in-memory run state is gone.
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const snapshotResponse = await fetch(`${baseUrl}/api/sessions/session1`);
+    assert.equal(snapshotResponse.status, 200);
+    const snapshotEtag = snapshotResponse.headers.get("etag");
+    assert.ok(snapshotEtag);
+    const snapshot = (await snapshotResponse.json()) as {
+      failures?: Array<{turn: number; message: string}>;
+      messages: Array<{sender: string}>;
+    };
+    assert.equal(snapshot.failures?.length, 1);
+    assert.equal(snapshot.failures?.[0]?.turn, 1);
+    assert.match(snapshot.failures?.[0]?.message ?? "", /The run failed/);
+    // The failure is not a message: the transcript still shows only the user turn.
+    assert.deepEqual(snapshot.messages.map((message) => message.sender), ["user"]);
+
+    // Revalidation holds while nothing changes...
+    const unchanged = await fetch(`${baseUrl}/api/sessions/session1`, {headers: {"if-none-match": snapshotEtag}});
+    assert.equal(unchanged.status, 304);
+
+    // ...and a second failure changes only the cache file, which must still bust the etag.
+    const second = await fetch(`${baseUrl}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "this one fails too"}),
+    });
+    await second.text();
+    const afterSecond = await fetch(`${baseUrl}/api/sessions/session1`, {headers: {"if-none-match": snapshotEtag}});
+    assert.equal(afterSecond.status, 200);
+    assert.notEqual(afterSecond.headers.get("etag"), snapshotEtag);
+    const secondBody = (await afterSecond.json()) as {failures?: Array<{turn: number}>};
+    assert.deepEqual(secondBody.failures?.map((failure) => failure.turn), [1, 2]);
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test("loads active path-profile model configs for defaults and selections", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-model-profile-"));
   const sessionDir = join(root, "session1");
@@ -2163,6 +2307,15 @@ test("sanitizes provider error details before sending a run failure over SSE", a
     assert.match(stream, /event: done/);
     assert.doesNotMatch(stream, /private-provider-body-and-header-marker|x-codex-plan-type|Headers/);
     assert.doesNotMatch(stream, /event: ui\.message|event: completed/);
+
+    // The durable record carries the same client-safe text and never the private body.
+    const cacheText = await readFile(join(sessionDir, "staging", "run-error-cache.json"), "utf8");
+    assert.doesNotMatch(cacheText, /private-provider-body-and-header-marker|x-codex-plan-type|Headers/);
+    const recorded = (JSON.parse(cacheText) as {errors: Array<{turn: number; message: string}>}).errors;
+    assert.deepEqual(recorded.map((item) => item.message), [
+      "The provider request failed (HTTP 401). Response details were withheld.",
+    ]);
+    assert.equal(recorded[0]?.turn, 1);
   } finally {
     await running.close();
     await rm(root, {recursive: true, force: true});
@@ -3501,6 +3654,12 @@ test("stop aborts the run in flight and commits no response for it", async () =>
         .length,
       0,
     );
+    // A stop is the user's own action, not a failure, so it leaves no failure record.
+    await assert.rejects(
+      () => readFile(join(sessionDir, "staging", "run-error-cache.json"), "utf8"),
+      {code: "ENOENT"},
+    );
+    assert.equal(Object.hasOwn(after, "failures"), false);
   } finally {
     await running.close();
     await rm(root, {recursive: true, force: true});

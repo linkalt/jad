@@ -67,6 +67,7 @@ import type {
 import {WebUiSessionViewCache} from "./plugins/web-ui/view-cache.js";
 import {parseInteractionExtendRequest, parseInteractionReplyRequest} from "./interactions.js";
 import { SessionRunRegistry, type SessionRun } from "./run-registry.js";
+import type { RunErrorEntry } from "./run-error-cache.js";
 import type {RunContentCacheStagedReader} from "./run-content-cache.js";
 import { collectSessionFiles } from "./session-files.js";
 import { MessageStreamEmitter } from "./stream-emitter.js";
@@ -187,6 +188,7 @@ interface SessionStatePaths {
   messagesBackup: string;
   compactionCache: string;
   usageCache: string;
+  runErrorCache: string;
   setting: string;
   model: string;
 }
@@ -204,6 +206,7 @@ function sessionStatePaths(paths: SessionConfigPaths): SessionStatePaths {
     messagesBackup: paths.messages_backup_path,
     compactionCache: paths.compaction_cache_path,
     usageCache: paths.usage_cache_path,
+    runErrorCache: paths.run_error_cache_path,
     setting: paths.setting_path,
     model: paths.model_path,
   };
@@ -219,6 +222,7 @@ function sessionProfileStoragePaths(
     history_cache: paths.history_cache,
     usage_cache: paths.usage_cache,
     cursor_cache: paths.cursor_cache,
+    run_error_cache: paths.run_error_cache,
     statecontext: paths.statecontext,
     staging: paths.staging,
     http_debug: paths.http_debug,
@@ -238,13 +242,16 @@ async function sessionStateVersion(
   paths: SessionStatePaths,
   runs: readonly WebUiSessionRun[],
 ): Promise<string> {
-  // These six metadata reads are independent. Keep the fan-out bounded to this
-  // fixed per-session set while avoiding six serial filesystem round-trips.
+  // These seven metadata reads are independent. Keep the fan-out bounded to this
+  // fixed per-session set while avoiding seven serial filesystem round-trips.
+  // The run-error cache is part of the fingerprint because a failed run changes
+  // the payload without touching the transcript.
   const parts = await Promise.all([
     paths.messages,
     paths.messagesBackup,
     paths.compactionCache,
     paths.usageCache,
+    paths.runErrorCache,
     paths.setting,
     paths.model,
   ].map(async (path) => {
@@ -560,6 +567,7 @@ function sessionSummary(
   run?: WebUiSessionRun,
   page?: SessionPageInfo,
   runsByProfile?: Record<string, WebUiSessionRun>,
+  failures?: readonly RunErrorEntry[],
 ): WebUiSessionSnapshot {
   const usageValue = sessionUsageFromSummary(usage);
   return {
@@ -572,6 +580,8 @@ function sessionSummary(
     ...(runsByProfile === undefined ? {} : {runs_by_profile: runsByProfile}),
     ...(page === undefined ? {} : {page}),
     ...(view.history === undefined ? {} : {history: view.history}),
+    // Omitted when there is none, so a session that never failed is unchanged.
+    ...(failures === undefined || failures.length === 0 ? {} : {failures: [...failures]}),
     session_id: location.sessionId,
     root_id: location.root.id,
     root_label: location.root.label,
@@ -1268,7 +1278,7 @@ class AgentHttpApplication {
     const config = await handle.loader.load();
     const pathProfileInfo = await readSessionPathProfiles(handle.loader.paths.setting_path);
     const sessionConfig = {...config, pathProfiles: pathProfileInfo.path_profiles};
-    const [view, usage] = await Promise.all([
+    const [view, usage, failures] = await Promise.all([
       handle.view.read({
         ...(before === undefined ? {} : {before}),
         ...(cursorGeneration === undefined ? {} : {generation: cursorGeneration}),
@@ -1276,6 +1286,7 @@ class AgentHttpApplication {
         backupTurns: config.settings.compaction.keepbackup.turns,
       }),
       handle.session.readUsageSummary(),
+      handle.session.readRunErrors(),
     ]);
     const messages = capWebUiMessages(view.messages, {
       maxInlineBytes: this.maxInlinePartBytes,
@@ -1299,6 +1310,7 @@ class AgentHttpApplication {
       run,
       page,
       this.runs.describeAll(handle.location.ref),
+      failures,
     );
     sendVersionedJson(response, summary, etag, this.conditionalRequests);
   }
@@ -1995,6 +2007,9 @@ class AgentHttpApplication {
   }): Promise<void> {
     const {handle, run, emitter, controller, turnId, supportsInteraction} = options;
     const reference = handle.location.ref;
+    // Set once the user input is in the transcript: a failure before that point
+    // leaves no unanswered turn, so there is nothing to record.
+    let acceptedSessionTurn: number | undefined;
     try {
       const normalizedRun = new WebUiNormalizedRun(turnId);
       run.setContentFallbackMessageProvider(() => normalizedRun.streamingMessage());
@@ -2012,6 +2027,9 @@ class AgentHttpApplication {
       const result = await handle.session.run(options.input, {
         turnId,
         signal: controller.signal,
+        onInputAccepted: (sessionTurn) => {
+          acceptedSessionTurn = sessionTurn;
+        },
         // Only a frontend-capable run publishes a pending question. Headless runs
         // use the tool's configured auto-accept fallback instead.
         ...(supportsInteraction
@@ -2106,14 +2124,30 @@ class AgentHttpApplication {
         `[agent-run] failed session=${reference} profile=${handle.profile ?? "-"} turn=${turnId} connected=${options.isConnected()} aborted=${aborted}: ${errorMessage(error)}`,
         error,
       );
+      const failureMessage = aborted
+        ? "The run was stopped before it completed."
+        : clientRunErrorMessage(error);
+      // A stop is a user action, not a failure. A real failure is kept beside the
+      // transcript so it outlives the run-state window; it never changes the run's
+      // outcome, so a write problem is only logged.
+      if (!aborted && acceptedSessionTurn !== undefined) {
+        try {
+          await handle.session.recordRunError({
+            turn: acceptedSessionTurn,
+            turn_id: turnId,
+            at: new Date().toISOString(),
+            message: failureMessage,
+          });
+        } catch (recordError) {
+          console.warn(
+            `[agent-run] failed to record run error session=${reference} turn=${turnId}: ${errorMessage(recordError)}`,
+          );
+        }
+      }
       run.finish(aborted ? "aborted" : "failed", [
         {
           event: "error",
-          data: {
-            message: aborted
-              ? "The run was stopped before it completed."
-              : clientRunErrorMessage(error),
-          },
+          data: {message: failureMessage},
         },
         {event: "done", data: {}},
       ]);

@@ -30,6 +30,7 @@ import {
   persistOpenAIResponse,
   type PersistedResponse,
 } from "./responses.js";
+import type { RunErrorEntry } from "./run-error-cache.js";
 import { createHttpDebugFetch } from "./http-debug.js";
 import {
   loadToolCatalog,
@@ -89,6 +90,12 @@ export interface AgentRunOptions {
   /** Select a model config path allowed by the active path profile. */
   modelConfigPath?: string;
   onEvent?: (event: JsonRecord) => void | Promise<void>;
+  /**
+   * Called once the user input is in the transcript, with the session turn it
+   * opened. A run that fails after this point leaves an unanswered user turn;
+   * a run that fails before it leaves nothing behind.
+   */
+  onInputAccepted?: (sessionTurn: number) => void | Promise<void>;
   /** Called when a response turn's staging directory is ready for partial content. */
   onResponseTurnStarted?: (turn: ResponseTurn) => void | Promise<void>;
   /** Called after a response output item has been durably staged. */
@@ -369,6 +376,10 @@ export class AgentSession {
       historyCachePath: options.store?.historyCachePath ?? settings.paths.history_cache,
       usageCachePath: options.store?.usageCachePath ?? settings.paths.usage_cache,
       cursorCachePath: options.store?.cursorCachePath ?? settings.paths.cursor_cache,
+      runErrorCachePath: options.store?.runErrorCachePath ?? settings.paths.run_error_cache,
+      runErrorCacheMaxEntries:
+        options.store?.runErrorCacheMaxEntries ??
+        settings.persistence.run_error_cache_max_entries,
       messagesBackupPath: settings.paths.messages_backup,
       stateContextPath: options.store?.stateContextPath ?? settings.paths.statecontext,
       acceptedRequestPath: options.store?.acceptedRequestPath
@@ -417,6 +428,16 @@ export class AgentSession {
     return this.store.readUsageSummary();
   }
 
+  /** Records a failed run outside messages.jsonl. */
+  public async recordRunError(entry: RunErrorEntry): Promise<void> {
+    return this.store.recordRunError(entry);
+  }
+
+  /** Failed runs still on record; none when the cache is missing or unreadable. */
+  public async readRunErrors(): Promise<RunErrorEntry[]> {
+    return this.store.readRunErrors();
+  }
+
   public async run(
     input: SessionUserInput,
     options: AgentRunOptions = {},
@@ -447,6 +468,7 @@ export class AgentSession {
     }
     const sessionTurn = priorUsage.turn_count + 1;
     await this.store.appendInputItems(inputItems);
+    await options.onInputAccepted?.(sessionTurn);
     throwIfAborted(options.signal);
     const config = await this.loader.load(options.modelConfigPath);
     const catalog = await loadToolCatalog(config, {processManager: this.processManager, taskStore: this.taskStore, memoryStore: this.memoryStore, mcpManager: this.mcpManager});
