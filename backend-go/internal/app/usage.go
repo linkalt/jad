@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,13 +18,13 @@ import (
 const maxSafeUsageInteger int64 = 9007199254740991
 
 type usageCheckpoint struct {
-	Device          uint64  `json:"device"`
-	Inode           uint64  `json:"inode"`
-	Offset          int64   `json:"offset"`
-	ModifiedAtMS    float64 `json:"modified_at_ms"`
-	ChangedAtMS     float64 `json:"changed_at_ms"`
-	CheckpointStart int64   `json:"checkpoint_start"`
-	CheckpointSHA   string  `json:"checkpoint_sha256"`
+	Device          uint64 `json:"device"`
+	Inode           uint64 `json:"inode"`
+	Offset          int64  `json:"offset"`
+	ModifiedAtMS    int64  `json:"modified_at_ms"`
+	ChangedAtMS     int64  `json:"changed_at_ms"`
+	CheckpointStart int64  `json:"checkpoint_start"`
+	CheckpointSHA   string `json:"checkpoint_sha256"`
 }
 
 type usageCacheFile struct {
@@ -72,8 +71,7 @@ func readUsageCacheState(config sessionfs.SessionConfig) (usageCacheFile, bool) 
 	}
 	if info.Size() == checkpoint.Offset {
 		changedAtMS, hasChangedAt := statChangeTimeMS(info)
-		modifiedAtMS := float64(info.ModTime().UnixNano()) / float64(time.Millisecond)
-		if !hasChangedAt || math.Abs(modifiedAtMS-checkpoint.ModifiedAtMS) > 0.001 || math.Abs(changedAtMS-checkpoint.ChangedAtMS) > 0.001 {
+		if !hasChangedAt || modTimeMS(info) != checkpoint.ModifiedAtMS || changedAtMS != checkpoint.ChangedAtMS {
 			return usageCacheFile{}, false
 		}
 		return cache, true
@@ -125,7 +123,17 @@ func statIdentity(info os.FileInfo) (uint64, uint64, bool) {
 	return device, inode, deviceOK && inodeOK
 }
 
-func statChangeTimeMS(info os.FileInfo) (float64, bool) {
+// modTimeMS returns the modification time as whole milliseconds, truncated
+// toward zero. The TypeScript backend stores Math.trunc(mtimeMs) and rejects a
+// usage cache whose timestamps are not safe integers, so both backends must
+// write and compare whole milliseconds.
+func modTimeMS(info os.FileInfo) int64 {
+	return info.ModTime().UnixNano() / int64(time.Millisecond)
+}
+
+// statChangeTimeMS returns the inode change time as whole milliseconds,
+// truncated toward zero like Math.trunc(ctimeMs) in the TypeScript backend.
+func statChangeTimeMS(info os.FileInfo) (int64, bool) {
 	stat := reflect.ValueOf(info.Sys())
 	if stat.Kind() == reflect.Pointer {
 		if stat.IsNil() {
@@ -144,7 +152,7 @@ func statChangeTimeMS(info os.FileInfo) (float64, bool) {
 		seconds, secondsOK := signedOrUnsignedInt(field.FieldByName("Sec"))
 		nanoseconds, nanosOK := signedOrUnsignedInt(field.FieldByName("Nsec"))
 		if secondsOK && nanosOK {
-			return float64(seconds)*1000 + float64(nanoseconds)/float64(time.Millisecond), true
+			return seconds*1000 + nanoseconds/int64(time.Millisecond), true
 		}
 	}
 	return 0, false
@@ -238,7 +246,7 @@ func writeUsageCacheCheckpoint(config sessionfs.SessionConfig, summary webui.Usa
 			Device:          device,
 			Inode:           inode,
 			Offset:          offset,
-			ModifiedAtMS:    float64(info.ModTime().UnixNano()) / float64(time.Millisecond),
+			ModifiedAtMS:    modTimeMS(info),
 			ChangedAtMS:     changedAtMS,
 			CheckpointStart: checkpointStart,
 			CheckpointSHA:   checkpointHash,
