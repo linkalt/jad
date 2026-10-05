@@ -231,6 +231,14 @@ function toolboxScenarios() {
       toolRound("fetch", {url: "http://localhost/x", limit: 0}),
       toolRound("fetch", {url: "http://user:pw@example.com/"}),
     ]),
+    // A successful fetch needs a host that resolves publicly (the tool refuses
+    // loopback and private addresses), so it only runs with DIFF_NETWORK=1.
+    ...(process.env.DIFF_NETWORK === "1" ? [toolboxRun("toolbox: fetch success (network)", [
+      toolRound("fetch", {url: "https://example.com/"}),
+      toolRound("fetch", {url: "https://example.com/", limit: 50}),
+      toolRound("fetch", {cursor: (r) => generated(r, 1, /next_cursor: (\S+)/), limit: 50}),
+      toolRound("fetch", {url: "https://example.com/does-not-exist-404"}),
+    ])] : []),
     toolboxRun("toolbox: read via toolbox session", [
       toolRound("read", {path: "src/main.ts"}),
       toolRound("read", {path: "src/main.ts", offset: 2, limit: 1}),
