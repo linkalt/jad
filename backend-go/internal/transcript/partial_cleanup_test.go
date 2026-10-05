@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"example.com/agent-harness/backend-go/internal/logging"
 )
 
 func TestCleanupOrphanedPartialFilesRemovesOnlyConfirmedDeadLocalCache(t *testing.T) {
@@ -51,7 +53,7 @@ func TestCleanupOrphanedPartialFilesRemovesOnlyConfirmedDeadLocalCache(t *testin
 	remoteTurn := makeTurn("remote-turn", &partialOwnerRecord{Hostname: "another-host", PID: deadPID})
 	unknownTurn := makeTurn("unknown-turn", nil)
 
-	cleanupOrphanedPartialFiles(staging)
+	cleanupOrphanedPartialFiles(staging, logging.Discard())
 
 	for _, filename := range []string{partialContentFilename, partialCompactFilename, partialOwnerFilename} {
 		if _, err := os.Stat(filepath.Join(deadTurn, filename)); !os.IsNotExist(err) {

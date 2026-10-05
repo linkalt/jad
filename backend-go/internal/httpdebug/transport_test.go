@@ -1,13 +1,16 @@
 package httpdebug
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -146,4 +149,53 @@ func readRecord(t *testing.T, directory, name string) map[string]any {
 		t.Fatalf("decode %s: %v", name, err)
 	}
 	return record
+}
+
+func TestTransportReportsDebugDirectoryFailureOnTheInjectedLogger(t *testing.T) {
+	root := t.TempDir()
+	blocked := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output lockedBuffer
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+	base := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("ok")), Request: request}, nil
+	})
+	transport := NewTransport(filepath.Join(blocked, "debug"), Settings{Logger: logger, Enabled: true, MaxBodyBytes: 64}, base).(*Transport)
+	request, err := http.NewRequest(http.MethodGet, "https://provider.example.test/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	// Debug files are written on a background goroutine; wait for it before
+	// reading the log.
+	transport.logger.pending.Wait()
+	logged := output.String()
+	if !strings.Contains(logged, "unable to initialize HTTP debug directory") || !strings.Contains(logged, "level=WARN") {
+		t.Errorf("directory failure not logged on the injected logger:\n%s", logged)
+	}
+}
+
+// lockedBuffer is a bytes.Buffer that the writer goroutine and the test can
+// share.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

@@ -9,13 +9,15 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"example.com/agent-harness/backend-go/internal/logging"
 )
 
 const (
@@ -47,6 +49,8 @@ type TurnStore struct {
 // TurnStoreOptions contains session persistence settings that affect staged
 // response records. MaxItemBytes is required and must come from configuration.
 type TurnStoreOptions struct {
+	// Logger receives persistence diagnostics. Nil discards them.
+	Logger                     *slog.Logger
 	MaxItemBytes               int64
 	ResponseMetadata           ResponseMetadataMode
 	CursorCacheCheckpointBytes int64
@@ -132,7 +136,7 @@ func NewTurnStore(journal *Journal, stagingDir string, options TurnStoreOptions)
 		options:     options,
 		activeTurns: make(map[*ResponseTurn]struct{}),
 	}
-	cleanupOrphanedPartialFiles(store.stagingDir)
+	cleanupOrphanedPartialFiles(store.stagingDir, logging.Or(options.Logger))
 	return store, nil
 }
 
@@ -364,14 +368,14 @@ func (t *ResponseTurn) CommitWithObserver(event []byte, observer func(CommitResu
 		return CommitResult{}, fmt.Errorf("persist committed turn manifest: %w", err)
 	}
 	commitResult := CommitResult{LineHash: hash, Bytes: byteCount, AlreadyPresent: !inserted}
-	if observer != nil && !callCommitObserver(observer, commitResult) {
+	if observer != nil && !callCommitObserver(observer, commitResult, logging.Or(t.store.options.Logger)) {
 		t.closed = true
 		t.store.unregister(t)
 		return commitResult, nil
 	}
 	if err := os.RemoveAll(t.turnDir); err != nil {
 		if observer != nil {
-			log.Printf("committed response staging cleanup deferred for %s: %v", t.manifest.TurnID, err)
+			logging.Or(t.store.options.Logger).Warn("committed response staging cleanup deferred", slog.String("turn", t.manifest.TurnID), slog.Any("error", err))
 			t.closed = true
 			t.store.unregister(t)
 			return commitResult, nil
@@ -383,11 +387,11 @@ func (t *ResponseTurn) CommitWithObserver(event []byte, observer func(CommitResu
 	return commitResult, nil
 }
 
-func callCommitObserver(observer func(CommitResult), result CommitResult) (succeeded bool) {
+func callCommitObserver(observer func(CommitResult), result CommitResult, logger *slog.Logger) (succeeded bool) {
 	succeeded = true
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			log.Printf("response commit observer failed; staging cleanup deferred: %v", recovered)
+			logger.Error("response commit observer panicked; staging cleanup deferred", slog.Any("panic", recovered))
 			succeeded = false
 		}
 	}()

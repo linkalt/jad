@@ -21,3 +21,24 @@ const (
 	MaxRunContentFlushIntervalMS = 60 * 1000
 	MaxRunContentIndexSegments   = 65_536
 )
+
+// Logging defaults and the accepted values of the server.log_level and
+// server.log_format settings.
+const (
+	DefaultLogLevel  = "info"
+	DefaultLogFormat = "text"
+)
+
+// IsLogLevel reports whether value is an accepted server.log_level.
+func IsLogLevel(value string) bool {
+	switch value {
+	case "debug", "info", "warn", "error", "off":
+		return true
+	}
+	return false
+}
+
+// IsLogFormat reports whether value is an accepted server.log_format.
+func IsLogFormat(value string) bool {
+	return value == "text" || value == "json"
+}

@@ -55,7 +55,12 @@ type ServerSettings struct {
 	ReadHeaderTimeout time.Duration
 	// IdleTimeout is how long an idle keep-alive connection stays open between
 	// requests; zero disables the limit.
-	IdleTimeout                time.Duration
+	IdleTimeout time.Duration
+	// LogLevel, LogFormat and LogFile configure the Go backend's structured log.
+	// LogFile is absolute (resolved against the setting file) or empty for stderr.
+	LogLevel                   string
+	LogFormat                  string
+	LogFile                    string
 	ConditionalRequests        bool
 	SnapshotTurns              int
 	MaxPageTurns               int
@@ -132,6 +137,8 @@ func Defaults() ServerSettings {
 		SSEHeartbeatInterval:       time.Duration(serverconfig.DefaultSSEHeartbeatIntervalMS) * time.Millisecond,
 		ReadHeaderTimeout:          time.Duration(serverconfig.DefaultReadHeaderTimeoutMS) * time.Millisecond,
 		IdleTimeout:                time.Duration(serverconfig.DefaultIdleTimeoutMS) * time.Millisecond,
+		LogLevel:                   serverconfig.DefaultLogLevel,
+		LogFormat:                  serverconfig.DefaultLogFormat,
 		ConditionalRequests:        true,
 		SnapshotTurns:              24,
 		MaxPageTurns:               50,
@@ -204,6 +211,9 @@ func Load(options LoadOptions) (Config, error) {
 	serverSettings, err := normalizeServerSettings(setting["server"], settingPath+": server")
 	if err != nil {
 		return Config{}, err
+	}
+	if serverSettings.LogFile != "" {
+		serverSettings.LogFile = resolveFrom(filepath.Dir(settingPath), serverSettings.LogFile)
 	}
 	return Config{Roots: roots, Server: serverSettings, SettingPath: settingPath}, nil
 }
@@ -532,6 +542,19 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		return ServerSettings{}, err
 	}
 	settings.IdleTimeout = time.Duration(idleTimeout) * time.Millisecond
+	if err := readChoice(fields, "log_level", &settings.LogLevel, serverconfig.IsLogLevel, "debug, info, warn, error or off", path); err != nil {
+		return ServerSettings{}, err
+	}
+	if err := readChoice(fields, "log_format", &settings.LogFormat, serverconfig.IsLogFormat, "text or json", path); err != nil {
+		return ServerSettings{}, err
+	}
+	if value, ok := fields["log_file"]; ok && string(value) != "null" {
+		var parsed string
+		if err := json.Unmarshal(value, &parsed); err != nil {
+			return ServerSettings{}, fmt.Errorf("%s: server.log_file must be a string", path)
+		}
+		settings.LogFile = strings.TrimSpace(parsed)
+	}
 	if err := readBool(fields, "conditional_requests", &settings.ConditionalRequests, path); err != nil {
 		return ServerSettings{}, err
 	}
@@ -586,6 +609,21 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		settings.AllowedOrigins = append([]string(nil), origins...)
 	}
 	return settings, nil
+}
+
+// readChoice reads a string setting that must satisfy valid. Absent and null
+// keep the default already in target.
+func readChoice(fields map[string]json.RawMessage, name string, target *string, valid func(string) bool, allowed, path string) error {
+	value, ok := fields[name]
+	if !ok || string(value) == "null" {
+		return nil
+	}
+	var parsed string
+	if err := json.Unmarshal(value, &parsed); err != nil || !valid(parsed) {
+		return fmt.Errorf("%s: server.%s must be %s", path, name, allowed)
+	}
+	*target = parsed
+	return nil
 }
 
 func readBool(fields map[string]json.RawMessage, name string, target *bool, path string) error {

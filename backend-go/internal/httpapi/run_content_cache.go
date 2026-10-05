@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"example.com/agent-harness/backend-go/internal/logging"
 )
 
 const runPartialOwnerSuffix = ".owner"
@@ -42,6 +44,8 @@ type runContentCache struct {
 	fallback        bool
 	closed          bool
 	warned          bool
+	// logger receives the one-time degradation warning; nil discards it.
+	logger *slog.Logger
 }
 
 func newRunContentCache(memoryLimit, writeBatchBytes int, flushInterval time.Duration) *runContentCache {
@@ -364,5 +368,5 @@ func (c *runContentCache) warnLocked(format string, args ...any) {
 		return
 	}
 	c.warned = true
-	log.Printf(format, args...)
+	logging.Or(c.logger).Warn("run content cache degraded", slog.String("detail", fmt.Sprintf(format, args...)))
 }

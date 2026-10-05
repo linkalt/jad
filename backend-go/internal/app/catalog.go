@@ -143,10 +143,12 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			if err != nil {
 				var configErr *sessionfs.ConfigError
 				if errors.As(err, &configErr) {
+					r.skipped.report(r.logger, location.Reference, configErr.Error())
 					continue
 				}
 				return httpapi.CatalogResponse{}, mapSessionError(err)
 			}
+			r.skipped.resolved(location.Reference)
 			sessionRuns := httpapi.SessionRunSummaries{}
 			if runStates != nil {
 				sessionRuns = runStates.SessionRuns(location.Reference, config.Profile)

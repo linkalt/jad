@@ -298,6 +298,18 @@ test("loads configurable root server settings", async () => {
     const timeouts = await loadRootServerSettings({rootSettingPath: settingPath});
     assert.equal(timeouts.read_header_timeout_ms, 0);
     assert.equal(timeouts.idle_timeout_ms, 3_600_000);
+    // The Go backend's log_level, log_format and log_file share this section. The
+    // TypeScript backend must keep loading a setting.json that carries them, even
+    // with values it would never validate.
+    for (const server of [
+      {log_level: "debug", log_format: "json", log_file: "logs/agent.log"},
+      {log_level: "verbose", log_format: 42, log_file: 7},
+    ]) {
+      await writeFile(settingPath, JSON.stringify({server, session_roots: [{path: ".jad/sessions"}]}));
+      const ignored = await loadRootServerSettings({rootSettingPath: settingPath});
+      assert.equal(ignored.idle_timeout_ms, 5_000);
+      assert.equal("log_level" in ignored, false);
+    }
     await writeFile(settingPath, JSON.stringify({server: {allowed_origins: ["*", "http://localhost:5173"]}}));
     await assert.rejects(
       () => loadRootServerSettings({rootSettingPath: settingPath}),

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"example.com/agent-harness/backend-go/internal/logging"
 )
 
 const redactedValue = "[REDACTED]"
@@ -25,6 +27,9 @@ var (
 // Settings controls opt-in HTTP diagnostics. Body capture is bounded before
 // text is written, and request credentials are redacted from captured headers.
 type Settings struct {
+	// Logger receives the adapter's own failures (it writes debug files, not
+	// log records). Nil discards them.
+	Logger                 *slog.Logger
 	Enabled                bool
 	IncludeRequestHeaders  bool
 	IncludeRequestBody     bool
@@ -45,7 +50,7 @@ func NewTransport(directory string, settings Settings, next http.RoundTripper) h
 	return &Transport{
 		next:     next,
 		settings: settings,
-		logger:   newFileLogger(directory),
+		logger:   newFileLogger(directory, logging.Or(settings.Logger)),
 	}
 }
 
@@ -257,10 +262,11 @@ type fileLogger struct {
 	queue          []fileWrite
 	writing        bool
 	pending        sync.WaitGroup
+	log            *slog.Logger
 }
 
-func newFileLogger(directory string) *fileLogger {
-	return &fileLogger{directory: directory, nextID: 1}
+func newFileLogger(directory string, logger *slog.Logger) *fileLogger {
+	return &fileLogger{directory: directory, nextID: 1, log: logger}
 }
 
 func (l *fileLogger) reserve() int64 {
@@ -274,12 +280,12 @@ func (l *fileLogger) reserve() int64 {
 
 func (l *fileLogger) initialize() {
 	if err := os.MkdirAll(l.directory, 0o755); err != nil {
-		log.Printf("unable to initialize HTTP debug directory %s: %v", l.directory, err)
+		l.log.Warn("unable to initialize HTTP debug directory", slog.String("directory", l.directory), slog.Any("error", err))
 		return
 	}
 	entries, err := os.ReadDir(l.directory)
 	if err != nil {
-		log.Printf("unable to read HTTP debug directory %s: %v", l.directory, err)
+		l.log.Warn("unable to read HTTP debug directory", slog.String("directory", l.directory), slog.Any("error", err))
 		return
 	}
 	var next int64 = 1
@@ -304,7 +310,7 @@ func (l *fileLogger) initialize() {
 func (l *fileLogger) enqueue(name string, record map[string]any) {
 	data, err := json.Marshal(record)
 	if err != nil {
-		log.Printf("unable to encode HTTP debug record %s: %v", name, err)
+		l.log.Warn("unable to encode HTTP debug record", slog.String("record", name), slog.Any("error", err))
 		return
 	}
 	data = append(data, '\n')
@@ -333,7 +339,7 @@ func (l *fileLogger) writeQueue() {
 
 		err := os.WriteFile(filepath.Join(l.directory, entry.name), entry.data, 0o600)
 		if err != nil {
-			log.Printf("unable to write HTTP debug file %s: %v", filepath.Join(l.directory, entry.name), err)
+			l.log.Warn("unable to write HTTP debug file", slog.String("path", filepath.Join(l.directory, entry.name)), slog.Any("error", err))
 		}
 		l.pending.Done()
 	}

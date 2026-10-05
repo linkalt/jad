@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"example.com/agent-harness/backend-go/internal/httpapi"
 	"example.com/agent-harness/backend-go/internal/httpdebug"
+	"example.com/agent-harness/backend-go/internal/logging"
 	"example.com/agent-harness/backend-go/internal/openaiapi"
 	"example.com/agent-harness/backend-go/internal/session"
 	"example.com/agent-harness/backend-go/internal/sessionfs"
@@ -35,6 +37,8 @@ type CatalogConfig struct {
 }
 
 type Resolver struct {
+	logger      *slog.Logger
+	skipped     skippedSessions
 	roots       []sessionfs.Root
 	environment map[string]string
 	catalog     CatalogConfig
@@ -76,7 +80,7 @@ type boundRunner struct {
 // NewResolver returns a filesystem-backed resolver. Store and runner instances
 // are shared by canonical transcript/staging paths to preserve in-process
 // serialization across roots, profiles, and model selections.
-func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog CatalogConfig) (*Resolver, error) {
+func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog CatalogConfig, options ...ResolverOption) (*Resolver, error) {
 	if len(roots) == 0 {
 		return nil, errors.New("at least one session root is required")
 	}
@@ -91,7 +95,12 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 	for name, value := range environment {
 		copyEnvironment[name] = value
 	}
+	resolverOptions := resolverOptions{logger: logging.Discard()}
+	for _, option := range options {
+		option(&resolverOptions)
+	}
 	return &Resolver{
+		logger:          resolverOptions.logger,
 		roots:           copyRoots,
 		environment:     copyEnvironment,
 		catalog:         catalog,
@@ -253,6 +262,7 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 		var httpClient *http.Client
 		if config.HTTPDebug.Enabled {
 			transport := httpdebug.NewTransport(config.StoragePaths.HTTPDebug, httpdebug.Settings{
+				Logger:                 r.logger,
 				Enabled:                true,
 				IncludeRequestHeaders:  config.HTTPDebug.IncludeRequestHeaders,
 				IncludeRequestBody:     config.HTTPDebug.IncludeRequestBody,
@@ -422,6 +432,7 @@ func (r *Resolver) sharedStore(config sessionfs.SessionConfig) (*sharedSession, 
 		acceptedRequestPath = filepath.Join(filepath.Dir(config.SettingPath), "accepted-request.json")
 	}
 	storeOptions := transcript.TurnStoreOptions{
+		Logger:                     r.logger,
 		MaxItemBytes:               config.Persistence.MaxItemBytes,
 		ResponseMetadata:           transcript.ResponseMetadataMode(config.Persistence.ResponseMetadata),
 		MessagesBackupPath:         config.StoragePaths.MessagesBackup,

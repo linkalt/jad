@@ -376,3 +376,61 @@ func TestLoadServerReadHeaderAndIdleTimeouts(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadServerLoggingSettings(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	load := func(server string) (Config, error) {
+		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+	}
+	for _, accepted := range []struct {
+		server, level, format, file string
+	}{
+		{`{}`, "info", "text", ""},
+		{`{"log_level":null,"log_format":null,"log_file":null}`, "info", "text", ""},
+		{`{"log_level":"debug","log_format":"json"}`, "debug", "json", ""},
+		{`{"log_level":"off"}`, "off", "text", ""},
+		{`{"log_file":""}`, "info", "text", ""},
+		{`{"log_file":"  "}`, "info", "text", ""},
+		{`{"log_file":"logs/agent.log"}`, "info", "text", filepath.Join(cwd, "logs", "agent.log")},
+		{`{"log_file":"/var/log/agent.log"}`, "info", "text", "/var/log/agent.log"},
+	} {
+		config, err := load(accepted.server)
+		if err != nil {
+			t.Errorf("Load(%s) error = %v", accepted.server, err)
+			continue
+		}
+		got := config.Server
+		if got.LogLevel != accepted.level || got.LogFormat != accepted.format || got.LogFile != accepted.file {
+			t.Errorf("Load(%s) = %q/%q/%q, want %q/%q/%q", accepted.server, got.LogLevel, got.LogFormat, got.LogFile, accepted.level, accepted.format, accepted.file)
+		}
+	}
+	for _, rejected := range []struct{ field, value string }{
+		{"log_level", `"verbose"`},
+		{"log_level", `"INFO"`},
+		{"log_level", `""`},
+		{"log_level", `1`},
+		{"log_format", `"xml"`},
+		{"log_format", `true`},
+		{"log_file", `1`},
+		{"log_file", `["a"]`},
+	} {
+		_, err := load(`{"` + rejected.field + `":` + rejected.value + `}`)
+		if err == nil || !strings.Contains(err.Error(), "server."+rejected.field) {
+			t.Errorf("Load(%s=%s) error = %v, want a message naming the field", rejected.field, rejected.value, err)
+		}
+	}
+}
+
+func TestDefaultsKeepLoggingAtInfoText(t *testing.T) {
+	defaults := Defaults()
+	if defaults.LogLevel != "info" || defaults.LogFormat != "text" || defaults.LogFile != "" {
+		t.Errorf("Defaults() logging = %q/%q/%q", defaults.LogLevel, defaults.LogFormat, defaults.LogFile)
+	}
+}

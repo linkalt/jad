@@ -12,6 +12,7 @@ import (
 
 	"example.com/agent-harness/backend-go/internal/contentlibrary"
 	"example.com/agent-harness/backend-go/internal/httpapi"
+	"example.com/agent-harness/backend-go/internal/logging"
 	"example.com/agent-harness/backend-go/internal/sessionfs"
 )
 
@@ -24,8 +25,10 @@ type Config struct {
 	// ReadHeaderTimeout and IdleTimeout bound slow or idle clients; zero
 	// disables a limit. There is deliberately no read or write timeout, which
 	// would cut long-lived SSE run streams.
-	ReadHeaderTimeout  time.Duration
-	IdleTimeout        time.Duration
+	ReadHeaderTimeout time.Duration
+	IdleTimeout       time.Duration
+	// Log configures the structured logger built by main; see internal/logging.
+	Log                logging.Settings
 	Roots              []sessionfs.Root
 	HTTP               httpapi.Config
 	Environment        map[string]string
@@ -64,7 +67,12 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 		Port:              port,
 		ReadHeaderTimeout: loaded.Server.ReadHeaderTimeout,
 		IdleTimeout:       loaded.Server.IdleTimeout,
-		Roots:             append([]sessionfs.Root(nil), loaded.Roots...),
+		Log: logging.Settings{
+			Level:  loaded.Server.LogLevel,
+			Format: loaded.Server.LogFormat,
+			File:   loaded.Server.LogFile,
+		},
+		Roots: append([]sessionfs.Root(nil), loaded.Roots...),
 		HTTP: httpapi.Config{
 			APIToken:                   environment[apiTokenEnvironmentName],
 			AllowedOrigins:             append([]string(nil), loaded.Server.AllowedOrigins...),

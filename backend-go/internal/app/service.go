@@ -22,7 +22,7 @@ func NewService(config Config) (*Service, error) {
 		SnapshotTurns:      config.HTTP.SnapshotTurns,
 		MaxPageTurns:       config.HTTP.MaxPageTurns,
 		MaxInlinePartBytes: config.HTTP.MaxInlinePartBytes,
-	})
+	}, WithLogger(config.HTTP.Logger))
 	if err != nil {
 		return nil, err
 	}

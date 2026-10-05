@@ -2,10 +2,11 @@ package httpapi
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
+	"example.com/agent-harness/backend-go/internal/logging"
 	"example.com/agent-harness/backend-go/internal/webui"
 )
 
@@ -21,6 +22,8 @@ type messageStreamEmitter struct {
 	lastEmitted  *webui.Message
 	lastEmitAt   time.Time
 	timer        *time.Timer
+	// logger receives the timer-flush failure; nil discards it.
+	logger *slog.Logger
 }
 
 func newMessageStreamEmitter(interval time.Duration, publish func(webui.Message) error) *messageStreamEmitter {
@@ -102,7 +105,7 @@ func (e *messageStreamEmitter) scheduleLocked() {
 		err := e.flushPendingLocked()
 		e.mu.Unlock()
 		if err != nil {
-			log.Printf("[web-ui-run-cache] coalesced stream dispatch failed: %v", err)
+			logging.Or(e.logger).Warn("coalesced stream dispatch failed", slog.Any("error", err))
 		}
 	})
 }

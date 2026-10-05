@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
+	"runtime/debug"
 	"strings"
 	"time"
 
+	"example.com/agent-harness/backend-go/internal/logging"
 	"example.com/agent-harness/backend-go/internal/responses"
 	"example.com/agent-harness/backend-go/internal/session"
 	"example.com/agent-harness/backend-go/internal/tools"
@@ -28,6 +30,18 @@ type runUsageSummaryReader interface {
 
 func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMessage) {
 	ctx := run.context()
+	logger := logging.Or(h.logger).With(runLogAttrs(run)...)
+	started := time.Now()
+	logger.Info("run started")
+	// A panic in the provider, a tool or an observer must fail this run, not the
+	// process. finish is idempotent, so a run that already ended keeps its status.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Error("run panicked", slog.Any("panic", recovered), slog.String("stack", string(debug.Stack())))
+			run.finish("failed", failureEvents(clientRunErrorMessage(fmt.Errorf("internal error"))))
+		}
+		logger.Info("run finished", slog.String("status", run.state()), slog.Float64("duration_ms", durationMS(time.Since(started))))
+	}()
 	timestamp := time.Now().Local().Format("3:04 PM")
 	// No empty placeholder message is published: like the TypeScript run, the first
 	// ui.message is the first visible change, so a client that attaches before any
@@ -38,6 +52,7 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	}
 	normalizedRun := webui.NewStreamingRun(run.turnID, timestamp)
 	emitter := newMessageStreamEmitter(h.toolStreamInterval, run.publishMessage)
+	emitter.logger = logger
 	defer emitter.discard()
 	result, err := runner.Run(ctx, input, session.RunOptions{
 		TurnID:        run.turnID,
@@ -48,12 +63,12 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 		},
 		OnResponseCommitted: func(json.RawMessage, transcript.CommitResult) {
 			if err := emitter.flush(); err != nil {
-				log.Printf("failed to flush committed message for turn %s: %v", run.turnID, err)
+				logger.Warn("failed to flush committed message", slog.Any("error", err))
 			}
 			run.setCommittedMessage(normalizedRun.Message("streaming"))
-			publishRunUsage(run, runner, ctx)
+			publishRunUsage(run, runner, ctx, logger)
 		},
-		OnUsageChanged: func() { publishRunUsage(run, runner, ctx) },
+		OnUsageChanged: func() { publishRunUsage(run, runner, ctx, logger) },
 		OnEvent: func(event responses.Event) error {
 			if event.Type == "response.output_text.delta" {
 				var payload struct {
@@ -73,7 +88,7 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 			message, changed := normalizedRun.AddToolResult(item)
 			if changed {
 				if err := emitter.push(message); err != nil {
-					log.Printf("failed to publish tool result for turn %s: %v", run.turnID, err)
+					logger.Warn("failed to publish tool result", slog.Any("error", err))
 				}
 			}
 		},
@@ -84,10 +99,11 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 		// text the run never committed, and the terminal error follows.
 		emitter.discard()
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			logger.Info("run aborted", slog.String("reason", abortReason(ctx)))
 			run.finish("aborted", failureEvents("The run was stopped before it completed."))
 			return
 		}
-		log.Printf("[agent-run] failed turn=%s: %v", run.turnID, err)
+		logger.Error("run failed", slog.Any("error", err))
 		run.finish("failed", failureEvents(clientRunErrorMessage(err)))
 		return
 	}
@@ -95,7 +111,7 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	terminal, err := encodeTerminalEvents(message)
 	if err != nil {
 		emitter.discard()
-		log.Printf("[agent-run] failed turn=%s: %v", run.turnID, err)
+		logger.Error("run failed", slog.Any("error", err))
 		run.finish("failed", failureEvents(clientRunErrorMessage(err)))
 		return
 	}
@@ -104,18 +120,18 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	run.finish("completed", terminal)
 }
 
-func publishRunUsage(run *activeRun, runner RunSession, ctx context.Context) {
+func publishRunUsage(run *activeRun, runner RunSession, ctx context.Context, logger *slog.Logger) {
 	reader, ok := runner.(runUsageSummaryReader)
 	if !ok {
 		return
 	}
 	usage, err := reader.ReadRunUsageSummary(ctx)
 	if err != nil {
-		log.Printf("failed to read usage summary for turn %s: %v", run.turnID, err)
+		logger.Warn("failed to read usage summary", slog.Any("error", err))
 		return
 	}
 	if err := run.publish("usage", map[string]any{"usage": usage}); err != nil {
-		log.Printf("failed to publish usage summary for turn %s: %v", run.turnID, err)
+		logger.Warn("failed to publish usage summary", slog.Any("error", err))
 	}
 }
 
@@ -326,4 +342,23 @@ func textParts(text string) []webUIPart {
 		parts = append(parts, webUIPart{Type: "text", Text: text})
 	}
 	return parts
+}
+
+// runLogAttrs identifies a run in the log by its session reference, profile and
+// turn. The run key is "reference\x00profile"; an empty profile logs as "-".
+func runLogAttrs(run *activeRun) []any {
+	reference, profile, _ := strings.Cut(run.key, "\x00")
+	if profile == "" {
+		profile = "-"
+	}
+	return []any{slog.String("session", reference), slog.String("profile", profile), slog.String("turn", run.turnID)}
+}
+
+// abortReason names why a run's context ended, like the TypeScript
+// "[agent-run] aborted ... reason=" line.
+func abortReason(ctx context.Context) string {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause.Error()
+	}
+	return "unspecified"
 }

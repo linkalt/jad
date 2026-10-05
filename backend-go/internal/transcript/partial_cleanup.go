@@ -3,7 +3,7 @@ package transcript
 import (
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,17 +25,17 @@ type partialOwnerRecord struct {
 // cleanupOrphanedPartialFiles removes only cache files whose same-host owner
 // process is confirmed gone. It deliberately leaves staged output, manifests,
 // malformed owners, remote owners, and unknown process states untouched.
-func cleanupOrphanedPartialFiles(stagingDir string) {
+func cleanupOrphanedPartialFiles(stagingDir string, logger *slog.Logger) {
 	entries, err := os.ReadDir(stagingDir)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			log.Printf("scan response staging for partial caches: %v", err)
+			logger.Warn("scan response staging for partial caches", slog.Any("error", err))
 		}
 		return
 	}
 	hostname, err := os.Hostname()
 	if err != nil {
-		log.Printf("read hostname while cleaning partial caches: %v", err)
+		logger.Warn("read hostname while cleaning partial caches", slog.Any("error", err))
 		return
 	}
 	for _, entry := range entries {
@@ -45,16 +45,16 @@ func cleanupOrphanedPartialFiles(stagingDir string) {
 		turnDir := filepath.Join(stagingDir, entry.Name())
 		ownerPath := filepath.Join(turnDir, partialOwnerFilename)
 		lockPath := filepath.Join(turnDir, partialCleanupLockName)
-		release, ok := acquirePartialCleanupLock(lockPath, hostname)
+		release, ok := acquirePartialCleanupLock(lockPath, hostname, logger)
 		if !ok {
 			continue
 		}
-		cleanupPartialCache(turnDir, ownerPath, hostname)
+		cleanupPartialCache(turnDir, ownerPath, hostname, logger)
 		release()
 	}
 }
 
-func cleanupPartialCache(turnDir, ownerPath, hostname string) {
+func cleanupPartialCache(turnDir, ownerPath, hostname string, logger *slog.Logger) {
 	ownerBytes, err := os.ReadFile(ownerPath)
 	if err != nil {
 		return
@@ -70,12 +70,12 @@ func cleanupPartialCache(turnDir, ownerPath, hostname string) {
 	for _, filename := range []string{partialContentFilename, partialCompactFilename, partialOwnerFilename} {
 		path := filepath.Join(turnDir, filename)
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			log.Printf("remove orphaned response partial cache %s: %v", path, err)
+			logger.Warn("remove orphaned response partial cache", slog.String("path", path), slog.Any("error", err))
 		}
 	}
 }
 
-func acquirePartialCleanupLock(lockPath, hostname string) (func(), bool) {
+func acquirePartialCleanupLock(lockPath, hostname string, logger *slog.Logger) (func(), bool) {
 	for attempt := 0; attempt < 2; attempt++ {
 		lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
@@ -96,7 +96,7 @@ func acquirePartialCleanupLock(lockPath, hostname string) (func(), bool) {
 			}
 			return func() {
 				if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-					log.Printf("remove response partial cleanup lock %s: %v", lockPath, err)
+					logger.Warn("remove response partial cleanup lock", slog.String("path", lockPath), slog.Any("error", err))
 				}
 			}, true
 		}

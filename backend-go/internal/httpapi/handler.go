@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"example.com/agent-harness/backend-go/internal/contentlibrary"
+	"example.com/agent-harness/backend-go/internal/logging"
 	"example.com/agent-harness/backend-go/internal/memorytrace"
 	"example.com/agent-harness/backend-go/internal/serverconfig"
 	"example.com/agent-harness/backend-go/internal/session"
@@ -40,6 +42,8 @@ var (
 // Config contains the externally loaded HTTP/SSE settings. Limits and origins
 // are required here rather than silently receiving server-local defaults.
 type Config struct {
+	// Logger receives the handler's diagnostics. Nil discards them.
+	Logger              *slog.Logger
 	APIToken            string
 	AllowedOrigins      []string
 	MaxBodyBytes        int64
@@ -224,6 +228,7 @@ func (e *StatusError) Error() string { return e.Message }
 
 // Handler implements the health and session-run HTTP/SSE routes.
 type Handler struct {
+	logger                    *slog.Logger
 	resolver                  SessionResolver
 	catalog                   SessionCatalog
 	toolLister                SessionToolLister
@@ -329,6 +334,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		trace = memorytrace.FromEnvironment()
 	}
 	return &Handler{
+		logger:                    logging.Or(config.Logger),
 		resolver:                  resolver,
 		catalog:                   catalog,
 		toolLister:                toolLister,
@@ -365,6 +371,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
+	h.observeRequest(w, r, func(w http.ResponseWriter) { h.route(w, r) })
+}
+
+// route dispatches one request to its handler.
+func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 	if !h.applyCORS(w, r) {
 		return
 	}
@@ -541,7 +552,9 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	run.mu.Lock()
 	run.supportsInteraction = body.SupportsInteraction
 	run.mu.Unlock()
-	run.setContentCache(newRunContentCache(h.runContentMemoryBytes, h.runContentWriteBatchBytes, h.runContentFlushInterval))
+	contentCache := newRunContentCache(h.runContentMemoryBytes, h.runContentWriteBatchBytes, h.runContentFlushInterval)
+	contentCache.logger = h.logger.With(runLogAttrs(run)...)
+	run.setContentCache(contentCache)
 	queue := run.subscribe()
 	go func() {
 		defer processUnlock()
@@ -895,6 +908,9 @@ func normalizeResolverError(err error) error {
 }
 
 func writeJSONError(w http.ResponseWriter, err error) {
+	if recorder, ok := w.(causeRecorder); ok {
+		recorder.recordCause(err)
+	}
 	var statusErr *StatusError
 	if errors.As(err, &statusErr) {
 		writeJSON(w, statusErr.Code, map[string]string{"error": statusErr.Message})

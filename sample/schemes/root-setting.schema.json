@@ -102,6 +102,22 @@
           "default": 5000,
           "description": "Time an idle keep-alive connection stays open between requests before it is closed. 0 disables the limit."
         },
+        "log_level": {
+          "type": "string",
+          "enum": ["debug", "info", "warn", "error", "off"],
+          "default": "info",
+          "description": "Go backend only. Minimum level of the structured server log. debug adds one access-log line per request (method, route template, status, duration, bytes); off disables logging. The TypeScript backend ignores this key."
+        },
+        "log_format": {
+          "type": "string",
+          "enum": ["text", "json"],
+          "default": "text",
+          "description": "Go backend only. Log line encoding: key=value text or one JSON object per line. The TypeScript backend ignores this key."
+        },
+        "log_file": {
+          "type": "string",
+          "description": "Go backend only. Append the server log to this file instead of standard error; a relative path is resolved against the directory of this setting file, the file is created with mode 0600, and the Go backend refuses to start when it cannot be opened. There is no rotation. Empty or absent logs to standard error. The TypeScript backend ignores this key."
+        },
         "conditional_requests": {
           "type": "boolean",
           "default": true,
