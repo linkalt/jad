@@ -100,6 +100,10 @@ export interface AgentServerOptions {
   /** Maximum queued SSE response bytes per subscriber before it must resynchronize. */
   sseMaxBufferedBytes?: number;
   sseHeartbeatIntervalMs?: number;
+  /** Time a client has to send complete request headers; 0 disables the limit. */
+  readHeaderTimeoutMs?: number;
+  /** Time an idle keep-alive connection stays open between requests; 0 disables the limit. */
+  idleTimeoutMs?: number;
   /** Answer with `304` when a session snapshot is unchanged. */
   conditionalRequests?: boolean;
   /** Turns in a session snapshot; 0 returns the whole transcript. */
@@ -2122,6 +2126,9 @@ export function createAgentServer(options: AgentServerOptions = {}): RunningAgen
   const server = createServer((request, response) => {
     void application.handle(request, response);
   });
+  server.headersTimeout =
+    options.readHeaderTimeoutMs ?? DEFAULT_ROOT_SERVER_SETTINGS.read_header_timeout_ms;
+  server.keepAliveTimeout = options.idleTimeoutMs ?? DEFAULT_ROOT_SERVER_SETTINGS.idle_timeout_ms;
 
   return {
     server,
@@ -2162,6 +2169,9 @@ export async function startAgentServer(
       options.sseMaxBufferedBytes ?? serverSettings.sse_max_buffered_bytes,
     sseHeartbeatIntervalMs:
       options.sseHeartbeatIntervalMs ?? serverSettings.sse_heartbeat_interval_ms,
+    readHeaderTimeoutMs:
+      options.readHeaderTimeoutMs ?? serverSettings.read_header_timeout_ms,
+    idleTimeoutMs: options.idleTimeoutMs ?? serverSettings.idle_timeout_ms,
     conditionalRequests:
       options.conditionalRequests ?? serverSettings.conditional_requests,
     snapshotTurns: options.snapshotTurns ?? serverSettings.snapshot_turns,

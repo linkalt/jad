@@ -49,7 +49,13 @@ type ServerSettings struct {
 	SSEMaxBufferedBytes        int
 	// SSEHeartbeatInterval is the gap between keep-alive frames on a quiet run
 	// stream; zero disables them.
-	SSEHeartbeatInterval       time.Duration
+	SSEHeartbeatInterval time.Duration
+	// ReadHeaderTimeout is how long a client has to send complete request
+	// headers; zero disables the limit.
+	ReadHeaderTimeout time.Duration
+	// IdleTimeout is how long an idle keep-alive connection stays open between
+	// requests; zero disables the limit.
+	IdleTimeout                time.Duration
 	ConditionalRequests        bool
 	SnapshotTurns              int
 	MaxPageTurns               int
@@ -124,6 +130,8 @@ func Defaults() ServerSettings {
 		ToolStreamInterval:         time.Duration(serverconfig.DefaultToolStreamIntervalMS) * time.Millisecond,
 		SSEMaxBufferedBytes:        1 << 20,
 		SSEHeartbeatInterval:       time.Duration(serverconfig.DefaultSSEHeartbeatIntervalMS) * time.Millisecond,
+		ReadHeaderTimeout:          time.Duration(serverconfig.DefaultReadHeaderTimeoutMS) * time.Millisecond,
+		IdleTimeout:                time.Duration(serverconfig.DefaultIdleTimeoutMS) * time.Millisecond,
 		ConditionalRequests:        true,
 		SnapshotTurns:              24,
 		MaxPageTurns:               50,
@@ -514,6 +522,16 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		return ServerSettings{}, err
 	}
 	settings.SSEHeartbeatInterval = time.Duration(heartbeat) * time.Millisecond
+	readHeaderTimeout := int64(settings.ReadHeaderTimeout / time.Millisecond)
+	if err := readInt("read_header_timeout_ms", &readHeaderTimeout, 0, serverconfig.MaxReadHeaderTimeoutMS); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.ReadHeaderTimeout = time.Duration(readHeaderTimeout) * time.Millisecond
+	idleTimeout := int64(settings.IdleTimeout / time.Millisecond)
+	if err := readInt("idle_timeout_ms", &idleTimeout, 0, serverconfig.MaxIdleTimeoutMS); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.IdleTimeout = time.Duration(idleTimeout) * time.Millisecond
 	if err := readBool(fields, "conditional_requests", &settings.ConditionalRequests, path); err != nil {
 		return ServerSettings{}, err
 	}

@@ -11,6 +11,8 @@ const MAX_SERVER_BODY_BYTES = 64 * 1024 * 1024;
 const MAX_RUN_STATE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_TOOL_STREAM_INTERVAL_MS = 60 * 1000;
 const MAX_SSE_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_READ_HEADER_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
 const MAX_RUN_CONTENT_MEMORY_BYTES = 16 * 1024 * 1024;
 const MAX_RUN_CONTENT_WRITE_BATCH_BYTES = 16 * 1024 * 1024;
 const MAX_RUN_CONTENT_FLUSH_INTERVAL_MS = 60 * 1000;
@@ -39,6 +41,8 @@ export const DEFAULT_ROOT_SERVER_SETTINGS = {
   run_content_max_index_segments: DEFAULT_RUN_CONTENT_MAX_INDEX_SEGMENTS,
   sse_max_buffered_bytes: 1024 * 1024,
   sse_heartbeat_interval_ms: 5_000,
+  read_header_timeout_ms: 60_000,
+  idle_timeout_ms: 5_000,
   conditional_requests: true,
   snapshot_turns: 24,
   max_page_turns: 50,
@@ -77,6 +81,10 @@ export interface RootServerSettings {
   sse_max_buffered_bytes: number;
   /** Gap between keep-alive frames on a quiet run stream; 0 disables them. */
   sse_heartbeat_interval_ms: number;
+  /** Time a client has to send complete request headers; 0 disables the limit. */
+  read_header_timeout_ms: number;
+  /** Time an idle keep-alive connection stays open between requests; 0 disables the limit. */
+  idle_timeout_ms: number;
   /** Answer with `304` when a session snapshot is unchanged. */
   conditional_requests: boolean;
   /** Turns in a session snapshot; 0 returns the whole transcript. */
@@ -296,6 +304,29 @@ function normalizeRootServerSettings(
       `${path}: server.sse_heartbeat_interval_ms must be a safe integer between 0 and ${MAX_SSE_HEARTBEAT_INTERVAL_MS}`,
     );
   }
+  const readHeaderTimeoutMs =
+    value.read_header_timeout_ms ?? DEFAULT_ROOT_SERVER_SETTINGS.read_header_timeout_ms;
+  if (
+    typeof readHeaderTimeoutMs !== "number" ||
+    !Number.isSafeInteger(readHeaderTimeoutMs) ||
+    readHeaderTimeoutMs < 0 ||
+    readHeaderTimeoutMs > MAX_READ_HEADER_TIMEOUT_MS
+  ) {
+    throw new ConfigError(
+      `${path}: server.read_header_timeout_ms must be a safe integer between 0 and ${MAX_READ_HEADER_TIMEOUT_MS}`,
+    );
+  }
+  const idleTimeoutMs = value.idle_timeout_ms ?? DEFAULT_ROOT_SERVER_SETTINGS.idle_timeout_ms;
+  if (
+    typeof idleTimeoutMs !== "number" ||
+    !Number.isSafeInteger(idleTimeoutMs) ||
+    idleTimeoutMs < 0 ||
+    idleTimeoutMs > MAX_IDLE_TIMEOUT_MS
+  ) {
+    throw new ConfigError(
+      `${path}: server.idle_timeout_ms must be a safe integer between 0 and ${MAX_IDLE_TIMEOUT_MS}`,
+    );
+  }
   const conditionalRequests =
     value.conditional_requests ?? DEFAULT_ROOT_SERVER_SETTINGS.conditional_requests;
   if (typeof conditionalRequests !== "boolean") {
@@ -361,6 +392,8 @@ function normalizeRootServerSettings(
     run_content_max_index_segments: runContentMaxIndexSegments,
     sse_max_buffered_bytes: sseMaxBufferedBytes,
     sse_heartbeat_interval_ms: sseHeartbeatIntervalMs,
+    read_header_timeout_ms: readHeaderTimeoutMs,
+    idle_timeout_ms: idleTimeoutMs,
     conditional_requests: conditionalRequests,
     snapshot_turns: snapshotTurns,
     max_page_turns: maxPageTurns,

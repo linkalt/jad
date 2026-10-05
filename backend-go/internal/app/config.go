@@ -4,9 +4,11 @@ package app
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"example.com/agent-harness/backend-go/internal/contentlibrary"
 	"example.com/agent-harness/backend-go/internal/httpapi"
@@ -17,8 +19,13 @@ const apiTokenEnvironmentName = "AGENT_API_TOKEN"
 
 // Config contains all runtime dependencies and settings loaded before serving.
 type Config struct {
-	Host               string
-	Port               int
+	Host string
+	Port int
+	// ReadHeaderTimeout and IdleTimeout bound slow or idle clients; zero
+	// disables a limit. There is deliberately no read or write timeout, which
+	// would cut long-lived SSE run streams.
+	ReadHeaderTimeout  time.Duration
+	IdleTimeout        time.Duration
 	Roots              []sessionfs.Root
 	HTTP               httpapi.Config
 	Environment        map[string]string
@@ -53,9 +60,11 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 	resolverEnvironment := cloneEnvironment(environment)
 	delete(resolverEnvironment, apiTokenEnvironmentName)
 	return Config{
-		Host:  host,
-		Port:  port,
-		Roots: append([]sessionfs.Root(nil), loaded.Roots...),
+		Host:              host,
+		Port:              port,
+		ReadHeaderTimeout: loaded.Server.ReadHeaderTimeout,
+		IdleTimeout:       loaded.Server.IdleTimeout,
+		Roots:             append([]sessionfs.Root(nil), loaded.Roots...),
 		HTTP: httpapi.Config{
 			APIToken:                   environment[apiTokenEnvironmentName],
 			AllowedOrigins:             append([]string(nil), loaded.Server.AllowedOrigins...),
@@ -101,4 +110,15 @@ func cloneEnvironment(source map[string]string) map[string]string {
 		copy[key] = value
 	}
 	return copy
+}
+
+// NewHTTPServer returns an http.Server for handler with the configured header
+// and idle timeouts. It sets no ReadTimeout or WriteTimeout because those would
+// end long-lived SSE run streams.
+func (c Config) NewHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: c.ReadHeaderTimeout,
+		IdleTimeout:       c.IdleTimeout,
+	}
 }

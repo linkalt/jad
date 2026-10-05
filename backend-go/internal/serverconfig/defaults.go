@@ -7,6 +7,10 @@ const (
 	MaxToolStreamIntervalMS              = 60 * 1000
 	DefaultSSEHeartbeatIntervalMS        = 5_000
 	MaxSSEHeartbeatIntervalMS            = 5 * 60 * 1000
+	DefaultReadHeaderTimeoutMS           = 60_000
+	MaxReadHeaderTimeoutMS               = 5 * 60 * 1000
+	DefaultIdleTimeoutMS                 = 5_000
+	MaxIdleTimeoutMS                     = 60 * 60 * 1000
 	DefaultRunContentMemoryBytes         = 100 * 1024
 	DefaultRunContentWriteBatchBytes     = 32 * 1024
 	DefaultRunContentFlushIntervalMS     = 25

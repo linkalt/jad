@@ -88,6 +88,20 @@
           "default": 5000,
           "description": "Gap between keep-alive frames on a run stream that has nothing else to send, such as during a long tool call. Keeps the browser from treating a quiet connection as dead. Keep it well below the browser's stall timeout. 0 disables the frames."
         },
+        "read_header_timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300000,
+          "default": 60000,
+          "description": "Time a client has to send complete request headers before the connection is closed. Bounds slow-header clients. 0 disables the limit. There is deliberately no whole-request or response timeout, which would cut long-lived SSE run streams."
+        },
+        "idle_timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000,
+          "default": 5000,
+          "description": "Time an idle keep-alive connection stays open between requests before it is closed. 0 disables the limit."
+        },
         "conditional_requests": {
           "type": "boolean",
           "default": true,

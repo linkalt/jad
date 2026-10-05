@@ -87,6 +87,7 @@ Tool calls of one provider response run with bounded concurrency (`max_parallel_
 - After the first error no further call starts; calls already running settle and every result that completed is persisted. A cancelled run cancels all in-flight calls through the shared context.
 - A user-decision tool (`request_draft`) in the response still runs alone; the other calls get the `user_decision_required` placeholder.
 - A quiet run stream gets a `: keep-alive` SSE comment every `server.sse_heartbeat_interval_ms` (default 5000, `0` disables, max 300000). It carries no event, so a client parser ignores it and only the stall watchdog is reset.
+- Slow clients are bounded by `server.read_header_timeout_ms` (default 60000, max 300000) and `server.idle_timeout_ms` (default 5000, max 3600000); `0` disables either. Both backends read the same keys, and the defaults equal Node's `headersTimeout` and `keepAliveTimeout`. Neither backend sets a whole-request or write timeout, because that would cut long-lived SSE run streams.
 - Go's process manager and fetch store were already serialized behind a mutex that spans the capacity check and the write, so the two races TypeScript closed (`max_running`, fetch storage capacity) did not exist here; regression tests lock that in.
 
 Go-specific, accepted differences:

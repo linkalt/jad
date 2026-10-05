@@ -41,7 +41,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", address, err)
 	}
-	server := &http.Server{Handler: service.Handler}
+	server := config.NewHTTPServer(service.Handler)
 	serveErrors := make(chan error, 1)
 	go func() { serveErrors <- server.Serve(listener) }()
 	log.Printf("Go agent API listening at http://%s", listener.Addr())

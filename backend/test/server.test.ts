@@ -155,6 +155,8 @@ test("loads configurable root server settings", async () => {
       run_content_max_index_segments: 1_024,
       sse_max_buffered_bytes: 4096,
       sse_heartbeat_interval_ms: 5_000,
+      read_header_timeout_ms: 60_000,
+      idle_timeout_ms: 5_000,
       conditional_requests: true,
       snapshot_turns: 24,
       max_page_turns: 50,
@@ -271,6 +273,31 @@ test("loads configurable root server settings", async () => {
       () => loadRootServerSettings({rootSettingPath: settingPath}),
       /server\.sse_max_buffered_bytes/,
     );
+    for (const [key, bad, limit] of [
+      ["read_header_timeout_ms", -1, 300_000],
+      ["read_header_timeout_ms", 300_001, 300_000],
+      ["idle_timeout_ms", 1.5, 3_600_000],
+      ["idle_timeout_ms", 3_600_001, 3_600_000],
+    ] as const) {
+      await writeFile(
+        settingPath,
+        JSON.stringify({server: {[key]: bad}, session_roots: [{path: ".jad/sessions"}]}),
+      );
+      await assert.rejects(
+        () => loadRootServerSettings({rootSettingPath: settingPath}),
+        new RegExp(`server\\.${key} must be a safe integer between 0 and ${limit}`),
+      );
+    }
+    await writeFile(
+      settingPath,
+      JSON.stringify({
+        server: {read_header_timeout_ms: 0, idle_timeout_ms: 3_600_000},
+        session_roots: [{path: ".jad/sessions"}],
+      }),
+    );
+    const timeouts = await loadRootServerSettings({rootSettingPath: settingPath});
+    assert.equal(timeouts.read_header_timeout_ms, 0);
+    assert.equal(timeouts.idle_timeout_ms, 3_600_000);
     await writeFile(settingPath, JSON.stringify({server: {allowed_origins: ["*", "http://localhost:5173"]}}));
     await assert.rejects(
       () => loadRootServerSettings({rootSettingPath: settingPath}),
@@ -4330,4 +4357,13 @@ test("a capped message from the compacted prefix is returned whole", async () =>
     await running.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("applies the configured header and idle timeouts to the HTTP server", () => {
+  const defaults = createAgentServer({});
+  assert.equal(defaults.server.headersTimeout, 60_000);
+  assert.equal(defaults.server.keepAliveTimeout, 5_000);
+  const configured = createAgentServer({readHeaderTimeoutMs: 1_500, idleTimeoutMs: 0});
+  assert.equal(configured.server.headersTimeout, 1_500);
+  assert.equal(configured.server.keepAliveTimeout, 0);
 });

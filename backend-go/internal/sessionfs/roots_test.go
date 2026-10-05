@@ -329,3 +329,50 @@ func TestSSEHeartbeatIntervalSettingDefaultsAndValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadServerReadHeaderAndIdleTimeouts(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	load := func(server string) (Config, error) {
+		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+	}
+	for _, accepted := range []struct {
+		server           string
+		wantHeader, idle time.Duration
+	}{
+		{`{}`, 60 * time.Second, 5 * time.Second},
+		{`{"read_header_timeout_ms":null,"idle_timeout_ms":null}`, 60 * time.Second, 5 * time.Second},
+		{`{"read_header_timeout_ms":0,"idle_timeout_ms":0}`, 0, 0},
+		{`{"read_header_timeout_ms":1500,"idle_timeout_ms":250}`, 1500 * time.Millisecond, 250 * time.Millisecond},
+		{`{"read_header_timeout_ms":300000,"idle_timeout_ms":3600000}`, 5 * time.Minute, time.Hour},
+	} {
+		config, err := load(accepted.server)
+		if err != nil {
+			t.Fatalf("Load(%s) error = %v", accepted.server, err)
+		}
+		if config.Server.ReadHeaderTimeout != accepted.wantHeader || config.Server.IdleTimeout != accepted.idle {
+			t.Errorf("Load(%s) = header %v idle %v, want %v and %v", accepted.server, config.Server.ReadHeaderTimeout, config.Server.IdleTimeout, accepted.wantHeader, accepted.idle)
+		}
+	}
+	for _, rejected := range []struct{ field, value string }{
+		{"read_header_timeout_ms", `-1`},
+		{"read_header_timeout_ms", `300001`},
+		{"read_header_timeout_ms", `1.5`},
+		{"read_header_timeout_ms", `"60000"`},
+		{"idle_timeout_ms", `-1`},
+		{"idle_timeout_ms", `3600001`},
+		{"idle_timeout_ms", `1.5`},
+		{"idle_timeout_ms", `"5000"`},
+	} {
+		_, err := load(`{"` + rejected.field + `":` + rejected.value + `}`)
+		if err == nil || !strings.Contains(err.Error(), "server."+rejected.field) {
+			t.Errorf("Load(%s=%s) error = %v, want a message naming the field", rejected.field, rejected.value, err)
+		}
+	}
+}
