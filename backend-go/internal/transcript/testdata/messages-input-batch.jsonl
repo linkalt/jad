@@ -1,0 +1,1 @@
+{"type":"message","role":"user","content":[{"type":"input_text","text":"<hello & café>"}],"future":{"2":"two","10":"ten","value":9007199254740992},"__agent_session_input_batch_id":"0123456789abcdef0123456789abcdef","__agent_session_input_batch_index":0}

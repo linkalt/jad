@@ -1,0 +1,192 @@
+package app
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/tools/native"
+)
+
+type processStateSourceStub struct {
+	snapshots []native.ProcessSnapshot
+	recovered bool
+	err       error
+}
+
+func (source *processStateSourceStub) Recover() error {
+	source.recovered = true
+	return source.err
+}
+
+func (source *processStateSourceStub) List(filter string) []native.ProcessSnapshot {
+	if filter == "" {
+		return append([]native.ProcessSnapshot(nil), source.snapshots...)
+	}
+	var matching []native.ProcessSnapshot
+	for _, snapshot := range source.snapshots {
+		if string(snapshot.State) == filter {
+			matching = append(matching, snapshot)
+		}
+	}
+	return matching
+}
+
+func TestCollectStateContextSnapshotFiltersSortsAndLimitsProcessItems(t *testing.T) {
+	source := &processStateSourceStub{snapshots: []native.ProcessSnapshot{
+		processStateSnapshot("proc_b", native.ProcessRunning, "2026-10-01T00:00:00.000Z", "/workspace/b"),
+		processStateSnapshot("proc_lost", native.ProcessLost, "2026-10-03T00:00:00.000Z", "/workspace/lost"),
+		processStateSnapshot("proc_recent", native.ProcessRunning, "2026-10-02T00:00:00.000Z", "/workspace/recent"),
+		processStateSnapshot("proc_a", native.ProcessRunning, "2026-10-01T00:00:00.000Z", "/workspace/a"),
+	}}
+	config := processStateContextConfig(4096, 2)
+	snapshot, include, err := collectStateContextSnapshot(config, source, nil, "compaction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !include || !source.recovered {
+		t.Fatalf("include = %v, recovered = %v; want true, true", include, source.recovered)
+	}
+	if snapshot.SchemaVersion != 1 || snapshot.Trigger != "compaction" {
+		t.Fatalf("snapshot metadata = %#v", snapshot)
+	}
+	if !strings.HasPrefix(snapshot.Text, stateContextPreamble) {
+		t.Fatalf("snapshot text missing safety preamble: %q", snapshot.Text)
+	}
+	var document struct {
+		Trigger   string `json:"trigger"`
+		Providers struct {
+			Process struct {
+				Items   []native.ProcessStateContextItem `json:"items"`
+				HasMore bool                             `json:"has_more"`
+			} `json:"process"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(snapshot.Text, stateContextPreamble)), &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.Trigger != "compaction" || !document.Providers.Process.HasMore {
+		t.Fatalf("document = %#v", document)
+	}
+	items := document.Providers.Process.Items
+	if len(items) != 2 || items[0].ID != "proc_recent" || items[1].ID != "proc_a" {
+		t.Fatalf("process items = %#v; want recent then id-sorted tie", items)
+	}
+}
+
+func TestCollectStateContextSnapshotTrimsItemsToConfiguredByteBudget(t *testing.T) {
+	longPath := "/workspace/" + strings.Repeat("x", 700)
+	source := &processStateSourceStub{snapshots: []native.ProcessSnapshot{
+		processStateSnapshot("proc_1", native.ProcessRunning, "2026-10-03T00:00:00.000Z", longPath),
+		processStateSnapshot("proc_2", native.ProcessRunning, "2026-10-02T00:00:00.000Z", longPath),
+	}}
+	config := processStateContextConfig(1024, 10)
+	snapshot, include, err := collectStateContextSnapshot(config, source, nil, "compaction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !include || int64(len(snapshot.Text)) > config.StateContext.MaxBytes {
+		t.Fatalf("included = %v, text bytes = %d; want within %d", include, len(snapshot.Text), config.StateContext.MaxBytes)
+	}
+	if !strings.Contains(snapshot.Text, `"omitted_by_snapshot":`) {
+		t.Fatalf("trimmed snapshot lacks omitted_by_snapshot: %s", snapshot.Text)
+	}
+}
+
+func TestCollectStateContextSnapshotSkipsDisabledOrUnmatchedTrigger(t *testing.T) {
+	source := &processStateSourceStub{}
+	config := processStateContextConfig(4096, 2)
+	config.StateContext.Enabled = false
+	if _, include, err := collectStateContextSnapshot(config, source, nil, "compaction"); err != nil || include || source.recovered {
+		t.Fatalf("disabled collection = include %v, err %v, recovered %v", include, err, source.recovered)
+	}
+	config.StateContext.Enabled = true
+	if _, include, err := collectStateContextSnapshot(config, source, nil, "request"); err != nil || include || source.recovered {
+		t.Fatalf("unmatched trigger collection = include %v, err %v, recovered %v", include, err, source.recovered)
+	}
+}
+
+func TestCollectStateContextSnapshotIncludesAndTrimsTaskItems(t *testing.T) {
+	directory := t.TempDir()
+	taskSettings := sessionfs.NativeTaskSettings{
+		MaxTasks: 10, MaxStorageBytes: 64 * 1024,
+		StateContext: sessionfs.NativeTaskStateContextSettings{Statuses: []string{"in-progress", "done"}, Limit: 10},
+	}
+	store := native.NewTaskStore(directory)
+	for index := 0; index < 4; index++ {
+		status := native.TaskInProgress
+		if index%2 == 1 {
+			status = native.TaskDone
+		}
+		_, err := store.Create(native.TaskInput{
+			Title: strings.Repeat("task-", 100), Status: status, Priority: native.TaskPriorityNormal,
+			Tags: []string{}, Documents: []string{},
+		}, taskSettings)
+		if err != nil {
+			t.Fatalf("create task %d: %v", index, err)
+		}
+	}
+	config := sessionfs.SessionConfig{
+		NativeTask: &taskSettings,
+		StateContext: sessionfs.StateContextSettings{
+			Enabled: true, Trigger: []string{"compaction"}, Tools: []string{"task"},
+			Role: "developer", MaxBytes: 1024,
+		},
+	}
+	snapshot, include, err := collectStateContextSnapshot(config, nil, store, "compaction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !include || int64(len(snapshot.Text)) > config.StateContext.MaxBytes {
+		t.Fatalf("included = %v, snapshot bytes = %d", include, len(snapshot.Text))
+	}
+	var document struct {
+		Providers struct {
+			Task struct {
+				Items   []native.TaskStateContextItem `json:"items"`
+				HasMore bool                          `json:"has_more"`
+			} `json:"task"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(snapshot.Text, stateContextPreamble)), &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Providers.Task.Items) == 0 || len(document.Providers.Task.Items) >= 4 || !document.Providers.Task.HasMore {
+		t.Fatalf("trimmed task provider = %+v", document.Providers.Task)
+	}
+	item := document.Providers.Task.Items[0]
+	if item.ID == "" || item.Title == "" || item.UpdatedAt == "" || len(item.Tags) != 0 {
+		t.Fatalf("task statecontext item = %+v", item)
+	}
+}
+
+func processStateContextConfig(maxBytes, limit int64) sessionfs.SessionConfig {
+	return sessionfs.SessionConfig{
+		StateContext: sessionfs.StateContextSettings{
+			Enabled:  true,
+			Trigger:  []string{"compaction"},
+			Tools:    []string{"process"},
+			Role:     "developer",
+			MaxBytes: maxBytes,
+		},
+		NativeProcess: &sessionfs.NativeProcessSettings{
+			StateContext: sessionfs.NativeProcessStateContextSettings{
+				States: []string{"running"},
+				Limit:  limit,
+			},
+		},
+	}
+}
+
+func processStateSnapshot(id string, state native.ProcessState, startedAt, cwd string) native.ProcessSnapshot {
+	return native.ProcessSnapshot{ProcessManifest: native.ProcessManifest{
+		SchemaVersion: 1,
+		ID:            id,
+		State:         state,
+		CWD:           cwd,
+		StartedAt:     startedAt,
+		ExitCode:      json.RawMessage("null"),
+		Signal:        json.RawMessage("null"),
+	}}
+}

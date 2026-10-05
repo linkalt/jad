@@ -1,0 +1,329 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"example.com/agent-harness/backend-go/internal/responses"
+	"example.com/agent-harness/backend-go/internal/session"
+	"example.com/agent-harness/backend-go/internal/tools"
+	"example.com/agent-harness/backend-go/internal/transcript"
+	"example.com/agent-harness/backend-go/internal/webui"
+)
+
+type webUIPart = webui.Part
+type webUIMessage = webui.Message
+
+// runUsageSummaryReader reads usage from inside a run. Like the TypeScript run,
+// the usage is republished after every committed response and after an
+// automatic compaction, so a client sees the totals grow across tool rounds.
+type runUsageSummaryReader interface {
+	ReadRunUsageSummary(context.Context) (webui.UsageSummary, error)
+}
+
+func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMessage) {
+	ctx := run.context()
+	timestamp := time.Now().Local().Format("3:04 PM")
+	// No empty placeholder message is published: like the TypeScript run, the first
+	// ui.message is the first visible change, so a client that attaches before any
+	// output receives only the run summary.
+	toolExecution := tools.ExecutionContext{}
+	if run.canRequestInteraction() && run.interactions != nil {
+		toolExecution.RequestInteraction = run.interactions.Request
+	}
+	normalizedRun := webui.NewStreamingRun(run.turnID, timestamp)
+	emitter := newMessageStreamEmitter(h.toolStreamInterval, run.publishMessage)
+	defer emitter.discard()
+	result, err := runner.Run(ctx, input, session.RunOptions{
+		TurnID:        run.turnID,
+		MemoryTrace:   h.memoryTrace,
+		ToolExecution: toolExecution,
+		OnTurnStarted: func(partialContentPath string) {
+			run.setPartialContentPath(partialContentPath)
+		},
+		OnResponseCommitted: func(json.RawMessage, transcript.CommitResult) {
+			if err := emitter.flush(); err != nil {
+				log.Printf("failed to flush committed message for turn %s: %v", run.turnID, err)
+			}
+			run.setCommittedMessage(normalizedRun.Message("streaming"))
+			publishRunUsage(run, runner, ctx)
+		},
+		OnUsageChanged: func() { publishRunUsage(run, runner, ctx) },
+		OnEvent: func(event responses.Event) error {
+			if event.Type == "response.output_text.delta" {
+				var payload struct {
+					Delta string `json:"delta"`
+				}
+				if json.Unmarshal(event.Raw, &payload) == nil {
+					run.cacheContent(payload.Delta)
+				}
+			}
+			message, changed := normalizedRun.Update(event.Raw)
+			if !changed {
+				return nil
+			}
+			return emitter.push(message)
+		},
+		OnToolResult: func(item json.RawMessage) {
+			message, changed := normalizedRun.AddToolResult(item)
+			if changed {
+				if err := emitter.push(message); err != nil {
+					log.Printf("failed to publish tool result for turn %s: %v", run.turnID, err)
+				}
+			}
+		},
+	})
+	if err != nil {
+		// Like the TypeScript run, a failed or stopped run drops the snapshot still
+		// waiting in the coalescing window instead of publishing it: it describes
+		// text the run never committed, and the terminal error follows.
+		emitter.discard()
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			run.finish("aborted", failureEvents("The run was stopped before it completed."))
+			return
+		}
+		log.Printf("[agent-run] failed turn=%s: %v", run.turnID, err)
+		run.finish("failed", failureEvents(clientRunErrorMessage(err)))
+		return
+	}
+	message := normalizedRun.Complete(result.Event)
+	terminal, err := encodeTerminalEvents(message)
+	if err != nil {
+		emitter.discard()
+		log.Printf("[agent-run] failed turn=%s: %v", run.turnID, err)
+		run.finish("failed", failureEvents(clientRunErrorMessage(err)))
+		return
+	}
+	// The terminal full message supersedes any append-only snapshot still waiting.
+	emitter.discard()
+	run.finish("completed", terminal)
+}
+
+func publishRunUsage(run *activeRun, runner RunSession, ctx context.Context) {
+	reader, ok := runner.(runUsageSummaryReader)
+	if !ok {
+		return
+	}
+	usage, err := reader.ReadRunUsageSummary(ctx)
+	if err != nil {
+		log.Printf("failed to read usage summary for turn %s: %v", run.turnID, err)
+		return
+	}
+	if err := run.publish("usage", map[string]any{"usage": usage}); err != nil {
+		log.Printf("failed to publish usage summary for turn %s: %v", run.turnID, err)
+	}
+}
+
+// providerStatusError is implemented by an error that carries the HTTP status a
+// provider answered with.
+type providerStatusError interface{ ProviderStatus() int }
+
+// clientRunErrorMessage is the only description of a failed run a client gets:
+// the provider's HTTP status when there was one, otherwise a generic line. The
+// detail (a response body, a path, a tool server's message) stays in the server
+// log. The wording matches the TypeScript backend.
+func clientRunErrorMessage(err error) string {
+	var provider providerStatusError
+	if errors.As(err, &provider) {
+		if status := provider.ProviderStatus(); status >= 100 && status <= 599 {
+			return fmt.Sprintf("The provider request failed (HTTP %d). Response details were withheld.", status)
+		}
+	}
+	return "The run failed. Response details were withheld; check server logs for diagnostics."
+}
+
+func failureEvents(message string) []streamEvent {
+	errorEvent, _ := makeSSEEvent("error", map[string]string{"message": message})
+	doneEvent, _ := makeSSEEvent("done", struct{}{})
+	return []streamEvent{errorEvent, doneEvent}
+}
+
+func encodeTerminalEvents(message webUIMessage) ([]streamEvent, error) {
+	uiEvent, err := makeSSEEvent("ui.message", map[string]any{"message": message})
+	if err != nil {
+		return nil, err
+	}
+	completedEvent, err := makeSSEEvent("completed", map[string]any{"message": message, "committed": true})
+	if err != nil {
+		return nil, err
+	}
+	doneEvent, err := makeSSEEvent("done", struct{}{})
+	if err != nil {
+		return nil, err
+	}
+	return []streamEvent{uiEvent, completedEvent, doneEvent}, nil
+}
+
+func messageFromResponse(event json.RawMessage, id, timestamp string) webUIMessage {
+	var envelope struct {
+		Response json.RawMessage `json:"response"`
+	}
+	_ = json.Unmarshal(event, &envelope)
+	var response struct {
+		Output []json.RawMessage `json:"output"`
+	}
+	_ = json.Unmarshal(envelope.Response, &response)
+
+	parts := make([]webUIPart, 0)
+	var text strings.Builder
+	for _, rawOutput := range response.Output {
+		var output struct {
+			Type      string `json:"type"`
+			CallID    string `json:"call_id"`
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+			Content   []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if json.Unmarshal(rawOutput, &output) != nil {
+			continue
+		}
+		switch output.Type {
+		case "message":
+			for _, content := range output.Content {
+				switch content.Type {
+				case "output_text", "refusal":
+					if content.Text != "" {
+						text.WriteString(content.Text)
+						parts = appendTextPart(parts, "text", content.Text)
+					}
+				case "reasoning":
+					if content.Text != "" {
+						parts = appendTextPart(parts, "reasoning", content.Text)
+					}
+				}
+			}
+		case "function_call":
+			if output.CallID != "" && output.Name != "" {
+				arguments := output.Arguments
+				parts = append(parts, webUIPart{
+					Type:      "tool_call",
+					CallID:    output.CallID,
+					Name:      output.Name,
+					Arguments: &arguments,
+				})
+			}
+		}
+	}
+	return webUIMessage{
+		ID:        id,
+		Sender:    "assistant",
+		Timestamp: timestamp,
+		Parts:     parts,
+		Status:    "complete",
+		Text:      text.String(),
+	}
+}
+
+// UserMessageFromTranscriptRecord converts one persisted user item to the
+// frontend Web UI message shape. The offset makes the ID stable across paging.
+func UserMessageFromTranscriptRecord(record json.RawMessage, offset int64) (json.RawMessage, bool, error) {
+	var input struct {
+		Type      string          `json:"type"`
+		Role      string          `json:"role"`
+		CreatedAt json.RawMessage `json:"created_at"`
+		Content   []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(record, &input); err != nil {
+		return nil, false, fmt.Errorf("decode transcript input message: %w", err)
+	}
+	if input.Type != "message" || input.Role != "user" {
+		return nil, false, nil
+	}
+	var text strings.Builder
+	for _, content := range input.Content {
+		if content.Type == "input_text" {
+			text.WriteString(content.Text)
+		}
+	}
+	if text.Len() == 0 {
+		return nil, false, nil
+	}
+	message := webUIMessage{
+		ID:        fmt.Sprintf("session-user-o%d", offset),
+		Sender:    "user",
+		Timestamp: timestampFromRaw(input.CreatedAt),
+		Parts:     []webUIPart{{Type: "text", Text: text.String()}},
+		Text:      text.String(),
+	}
+	encoded, err := json.Marshal(message)
+	return encoded, true, err
+}
+
+// AssistantMessageFromTranscriptRecord converts a committed response record to
+// the same message representation used by the live run stream.
+func AssistantMessageFromTranscriptRecord(record json.RawMessage, offset int64) (json.RawMessage, bool, error) {
+	var transcriptRecord struct {
+		Type     string          `json:"type"`
+		Response json.RawMessage `json:"response"`
+	}
+	if err := json.Unmarshal(record, &transcriptRecord); err != nil {
+		return nil, false, fmt.Errorf("decode transcript response: %w", err)
+	}
+	if transcriptRecord.Type != "response.completed" {
+		return nil, false, nil
+	}
+	var response struct {
+		ID        string          `json:"id"`
+		CreatedAt json.RawMessage `json:"created_at"`
+	}
+	if err := json.Unmarshal(transcriptRecord.Response, &response); err != nil {
+		return nil, false, fmt.Errorf("decode transcript response envelope: %w", err)
+	}
+	id := response.ID
+	if id == "" {
+		id = fmt.Sprintf("session-assistant-o%d", offset)
+	}
+	message := messageFromResponse(record, id, timestampFromRaw(response.CreatedAt))
+	if len(message.Parts) == 0 {
+		return nil, false, nil
+	}
+	encoded, err := json.Marshal(message)
+	return encoded, true, err
+}
+
+func timestampFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var seconds float64
+	if err := json.Unmarshal(raw, &seconds); err == nil {
+		return time.Unix(0, int64(seconds*float64(time.Second))).Local().Format("3:04 PM")
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || value == "" {
+		return ""
+	}
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.000Z07:00", "2006-01-02"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.Local().Format("3:04 PM")
+		}
+	}
+	return ""
+}
+
+func appendTextPart(parts []webUIPart, kind, text string) []webUIPart {
+	if len(parts) > 0 && parts[len(parts)-1].Type == kind {
+		parts[len(parts)-1].Text += text
+		return parts
+	}
+	return append(parts, webUIPart{Type: kind, Text: text})
+}
+
+func textParts(text string) []webUIPart {
+	parts := make([]webUIPart, 0, 1)
+	if text != "" {
+		parts = append(parts, webUIPart{Type: "text", Text: text})
+	}
+	return parts
+}

@@ -1,0 +1,1 @@
+{"type":"function_call_output","call_id":"call-task-add","output":"{\"id\":\"call-task-add\",\"status\":\"ok\",\"summary\":\"Task added\"}\n\n--- INFORMATION ---\naction: add\ntask_id: T-001\ntitle: Plan the next change\nstatus: todo\npriority: normal\n"}

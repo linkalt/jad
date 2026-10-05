@@ -1,0 +1,1 @@
+{"type":"response.completed","session_turn":1,"session_step":1,"response":{"id":"resp_1","object":"response","status":"completed","model":"gpt-test","usage":{"input_tokens":7,"output_tokens":2,"total_tokens":9},"future_response_field":"retained","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}}

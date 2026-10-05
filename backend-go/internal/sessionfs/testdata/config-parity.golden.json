@@ -1,0 +1,549 @@
+[
+  {
+    "name": "no paths",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "custom base paths",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/m/a.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/st/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/st/history-cache.json",
+        "usage_cache": "$ROOT/session-1/st/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/st/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/st/statecontext.json",
+        "staging": "$ROOT/session-1/st",
+        "http_debug": "$ROOT/session-1/dbg"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "home and nested",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "/home/www/x/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "paths not object",
+    "profile": "",
+    "model": "",
+    "error": "paths must be a JSON object"
+  },
+  {
+    "name": "paths null",
+    "profile": "",
+    "model": "",
+    "error": "paths must be a JSON object"
+  },
+  {
+    "name": "profile requested without profiles",
+    "profile": "green",
+    "model": "",
+    "error": "profile 'green' was requested but the session configures no paths.profiles"
+  },
+  {
+    "name": "active without profiles",
+    "profile": "",
+    "model": "",
+    "error": "paths.active_profile requires paths.profiles"
+  },
+  {
+    "name": "profiles empty",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles must be a non-empty object"
+  },
+  {
+    "name": "profiles array",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles must be a non-empty object"
+  },
+  {
+    "name": "active missing",
+    "profile": "",
+    "model": "",
+    "error": "paths: active_profile must be a non-empty string"
+  },
+  {
+    "name": "active bad chars",
+    "profile": "",
+    "model": "",
+    "error": "paths.active_profile must contain only letters, numbers, underscores, or hyphens"
+  },
+  {
+    "name": "requested undefined",
+    "profile": "zzz",
+    "model": "",
+    "error": "path profile 'zzz' is not defined in paths.profiles"
+  },
+  {
+    "name": "requested bad chars",
+    "profile": "a/b",
+    "model": "",
+    "error": "path profile 'a/b' must contain only letters, numbers, underscores, or hyphens"
+  },
+  {
+    "name": "profile not object",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a must be an object"
+  },
+  {
+    "name": "profile key invalid",
+    "profile": "",
+    "model": "",
+    "error": "invalid paths.profiles key 'b c'"
+  },
+  {
+    "name": "single default profile",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http",
+        "tool_storage": "$ROOT/.jad/profiles/a/tools",
+        "active_profile": "a",
+        "default_profile": "a"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "two profiles default",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http",
+        "tool_storage": "$ROOT/.jad/profiles/a/tools",
+        "active_profile": "a",
+        "default_profile": "a"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "two profiles request other",
+    "profile": "b",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/profiles/b/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/profiles/b/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/profiles/b/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/profiles/b/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/profiles/b/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/profiles/b/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/profiles/b/staging/statecontext.json",
+        "staging": "$ROOT/session-1/profiles/b/staging",
+        "http_debug": "$ROOT/session-1/profiles/b/debug/http",
+        "tool_storage": "$ROOT/.jad/profiles/b/tools",
+        "active_profile": "b",
+        "default_profile": "a"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "profile models",
+    "profile": "b",
+    "model": "alternate.json",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/profiles/b/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/profiles/b/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/profiles/b/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/profiles/b/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/profiles/b/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/profiles/b/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/profiles/b/staging/statecontext.json",
+        "staging": "$ROOT/session-1/profiles/b/staging",
+        "http_debug": "$ROOT/session-1/profiles/b/debug/http",
+        "tool_storage": "$ROOT/.jad/profiles/b/tools",
+        "active_profile": "b",
+        "default_profile": "a",
+        "model_default": "alternate.json",
+        "models": [
+          "model.json",
+          "alternate.json"
+        ]
+      },
+      "model_path": "$ROOT/session-1/alternate.json"
+    }
+  },
+  {
+    "name": "profile model default only",
+    "profile": "b",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/profiles/b/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/profiles/b/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/profiles/b/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/profiles/b/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/profiles/b/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/profiles/b/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/profiles/b/staging/statecontext.json",
+        "staging": "$ROOT/session-1/profiles/b/staging",
+        "http_debug": "$ROOT/session-1/profiles/b/debug/http",
+        "tool_storage": "$ROOT/.jad/profiles/b/tools",
+        "active_profile": "b",
+        "default_profile": "a",
+        "model_default": "alternate.json",
+        "models": [
+          "alternate.json"
+        ]
+      },
+      "model_path": "$ROOT/session-1/alternate.json"
+    }
+  },
+  {
+    "name": "requested model not available",
+    "profile": "",
+    "model": "other.json",
+    "error": "model config path is not available in the active session path profile"
+  },
+  {
+    "name": "base paths inherited by default only",
+    "profile": "b",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/profiles/b/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/profiles/b/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/profiles/b/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/profiles/b/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/profiles/b/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/profiles/b/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/profiles/b/staging/statecontext.json",
+        "staging": "$ROOT/session-1/profiles/b/staging",
+        "http_debug": "$ROOT/session-1/profiles/b/debug/http",
+        "tool_storage": "$ROOT/.jad/profiles/b/tools",
+        "active_profile": "b",
+        "default_profile": "a"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "base paths default profile",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/base.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http",
+        "tool_storage": "$ROOT/.jad/profiles/a/tools",
+        "active_profile": "a",
+        "default_profile": "a"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "profile scoped messages",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/pa/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/pa/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/profiles/a/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/profiles/a/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/profiles/a/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/profiles/a/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/profiles/a/staging/statecontext.json",
+        "staging": "$ROOT/session-1/profiles/a/staging",
+        "http_debug": "$ROOT/session-1/profiles/a/debug/http",
+        "tool_storage": "$ROOT/.jad/profiles/a/tools",
+        "active_profile": "a",
+        "default_profile": "a"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "profile scoped staging",
+    "profile": "b",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/profiles/b/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/profiles/b/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/sb/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/sb/history-cache.json",
+        "usage_cache": "$ROOT/session-1/sb/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/sb/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/sb/statecontext.json",
+        "staging": "$ROOT/session-1/sb",
+        "http_debug": "$ROOT/session-1/profiles/b/debug/http",
+        "tool_storage": "$ROOT/.jad/profiles/b/tools",
+        "active_profile": "b",
+        "default_profile": "a"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "tool storage relative",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http",
+        "tool_storage": "$ROOT/ts",
+        "active_profile": "a",
+        "default_profile": "a"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "tool storage absolute",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http",
+        "tool_storage": "$ROOT/abs-tools",
+        "active_profile": "a",
+        "default_profile": "a"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "base tool storage",
+    "profile": "",
+    "model": "",
+    "error": "paths.tool_storage must be configured within paths.profiles.<name>"
+  },
+  {
+    "name": "base model removed",
+    "profile": "",
+    "model": "",
+    "error": "paths.model was removed; configure model config paths with paths.profiles.<name>.model_default/models, or use the session model.json default"
+  },
+  {
+    "name": "base models",
+    "profile": "",
+    "model": "",
+    "error": "model_default and models must be configured within paths.profiles"
+  },
+  {
+    "name": "base model_default",
+    "profile": "",
+    "model": "",
+    "error": "model_default and models must be configured within paths.profiles"
+  },
+  {
+    "name": "base processes",
+    "profile": "",
+    "model": "",
+    "error": "paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir"
+  },
+  {
+    "name": "base tasks",
+    "profile": "",
+    "model": "",
+    "error": "paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir"
+  },
+  {
+    "name": "profile model removed",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a.model was removed; use model_default and models for model config paths"
+  },
+  {
+    "name": "profile unknown field",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a.bogus is not a supported session path or profile model setting"
+  },
+  {
+    "name": "profile duplicate models",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a: models must not contain duplicate paths"
+  },
+  {
+    "name": "profile models not array",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a: models must be an array of model configuration paths"
+  },
+  {
+    "name": "profile models empty entry",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a: models[1] must be a non-empty string"
+  },
+  {
+    "name": "profile models empty list",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http",
+        "tool_storage": "$ROOT/.jad/profiles/a/tools",
+        "active_profile": "a",
+        "default_profile": "a",
+        "models": []
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "profile default not in models",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a.model_default must be included in models"
+  },
+  {
+    "name": "profile default blank",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a: model_default must be a non-empty string"
+  },
+  {
+    "name": "profile path wrong type",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a: messages must be a non-empty string"
+  },
+  {
+    "name": "profile path null",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a: messages must be a non-empty string"
+  },
+  {
+    "name": "profile prompt docs not array",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a: prompt_documents must be an array"
+  },
+  {
+    "name": "profile prompt docs blank",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a: prompt_documents[0] must be a non-empty string"
+  },
+  {
+    "name": "profile processes",
+    "profile": "",
+    "model": "",
+    "error": "paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir"
+  },
+  {
+    "name": "duplicate files in profile",
+    "profile": "",
+    "model": "",
+    "error": "paths.profiles.a: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.statecontext, and the compaction-cache backup must be different files"
+  },
+  {
+    "name": "compaction cache backup collision",
+    "profile": "",
+    "model": "",
+    "error": "paths: paths.messages, paths.messages_backup, paths.compaction_cache, paths.history_cache, paths.usage_cache, paths.cursor_cache, paths.statecontext, and the compaction-cache backup must be different files"
+  },
+  {
+    "name": "profiles share storage",
+    "profile": "",
+    "model": "",
+    "error": "path profiles 'a' and 'b' resolve to the same storage path (messages and messages); each profile must use distinct transcript and cache paths"
+  },
+  {
+    "name": "profiles share staging",
+    "profile": "",
+    "model": "",
+    "error": "path profiles 'a' and 'b' resolve to the same storage path (compaction_cache and compaction_cache); each profile must use distinct transcript and cache paths"
+  },
+  {
+    "name": "profiles share http debug",
+    "profile": "",
+    "model": "",
+    "error": "path profiles 'a' and 'b' resolve to the same storage path (http_debug and http_debug); each profile must use distinct transcript and cache paths"
+  }
+]

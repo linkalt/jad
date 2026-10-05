@@ -1,0 +1,127 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"example.com/agent-harness/backend-go/internal/httpapi"
+	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/tools/native"
+	"example.com/agent-harness/backend-go/internal/transcript"
+)
+
+func (r *Resolver) ResolveMaintenance(ctx context.Context, reference, profile string) (httpapi.ResolvedMutation, error) {
+	if ctx == nil {
+		return httpapi.ResolvedMutation{}, errors.New("session maintenance context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return httpapi.ResolvedMutation{}, err
+	}
+	location, err := sessionfs.Resolve(r.roots, reference)
+	if err != nil {
+		return httpapi.ResolvedMutation{}, mapSessionError(err)
+	}
+	// Settings only: the TypeScript reset and front-compact handlers open the
+	// session without reading model.json, so a broken model file must not block
+	// them. Compact validates the model itself, as TypeScript's compact() does.
+	config, err := sessionfs.LoadSessionSettings(location, profile, "")
+	if err != nil {
+		return httpapi.ResolvedMutation{}, mapSessionError(err)
+	}
+	shared, err := r.sharedStore(config)
+	if err != nil {
+		return httpapi.ResolvedMutation{}, err
+	}
+	processManager := r.sharedProcessManager(config)
+	taskStore := r.sharedTaskStore(config)
+	memoryStore := r.sharedMemoryStore(config)
+	return httpapi.ResolvedMutation{
+		Reference: location.Reference,
+		Profile:   config.Profile,
+		Session:   boundMutation{shared: shared, config: config, processManager: processManager, taskStore: taskStore, memoryStore: memoryStore},
+	}, nil
+}
+
+type boundMutation struct {
+	shared         *sharedSession
+	config         sessionfs.SessionConfig
+	processManager native.ProcessManager
+	taskStore      *native.TaskStore
+	memoryStore    *native.MemoryStore
+}
+
+func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse, error) {
+	var result httpapi.CompactionResponse
+	if ctx == nil {
+		return result, errors.New("session compaction context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if m.shared == nil || m.shared.store == nil {
+		return result, errors.New("session transcript store is not initialized")
+	}
+	m.shared.runMu.Lock()
+	defer m.shared.runMu.Unlock()
+	// TypeScript compact() loads the full configuration, so an unusable
+	// model.json fails the request with a 422 before the transcript is touched.
+	if _, err := m.config.WithModel(); err != nil {
+		return result, mapSessionError(err)
+	}
+	m.shared.invalidateTurnStarts()
+	compacted, err := m.shared.compactPreservingUsage(m.config, transcript.CompactionOptions{
+		TurnType:      m.config.Compaction.TurnType,
+		KeepTurns:     m.config.Compaction.KeepTurns,
+		KeepToolPairs: m.config.Compaction.KeepToolPairs,
+		BackupMode:    m.config.Compaction.BackupMode,
+	})
+	if err != nil {
+		return result, fmt.Errorf("compact session transcript: %w", err)
+	}
+	if compacted.Compacted {
+		snapshot, include, err := collectStateContextSnapshot(m.config, m.processManager, m.taskStore, "compaction", m.memoryStore)
+		if err != nil {
+			return result, fmt.Errorf("collect state context after compaction: %w", err)
+		}
+		if include {
+			if err := m.shared.store.WriteStateContextSnapshot(snapshot); err != nil {
+				return result, fmt.Errorf("persist state context after compaction: %w", err)
+			}
+		}
+	}
+	index, err := scanTranscriptIndex(m.shared, m.config)
+	if err != nil {
+		return result, fmt.Errorf("read usage after compaction: %w", err)
+	}
+	usage, err := json.Marshal(index.usage)
+	if err != nil {
+		return result, fmt.Errorf("encode usage after compaction: %w", err)
+	}
+	return httpapi.CompactionResponse{
+		Compacted:      compacted.Compacted,
+		CompactedItems: compacted.CompactedItems,
+		RetainedItems:  compacted.RetainedItems,
+		Usage:          usage,
+	}, nil
+}
+
+func (m boundMutation) Reset(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("session reset context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m.shared == nil || m.shared.store == nil {
+		return errors.New("session transcript store is not initialized")
+	}
+	m.shared.runMu.Lock()
+	defer m.shared.runMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.shared.invalidateTurnStarts()
+	return m.shared.store.Reset()
+}

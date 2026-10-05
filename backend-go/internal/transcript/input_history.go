@@ -1,0 +1,232 @@
+package transcript
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+const (
+	SessionInputBatchIDField    = "__agent_session_input_batch_id"
+	SessionInputBatchIndexField = "__agent_session_input_batch_index"
+)
+
+// AppendInputItems persists one atomic-in-process batch of Responses API input
+// items. Batch metadata is stored in messages.jsonl for turn-boundary behavior
+// and removed again by ReadInputItems.
+func (s *TurnStore) AppendInputItems(items ...[]byte) error {
+	if s == nil || s.journal == nil {
+		return errors.New("turn store is not initialized")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recovering {
+		return errors.New("turn store recovery is in progress")
+	}
+	if len(s.activeTurns) > 0 {
+		return errors.New("cannot append input while a response turn is active")
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	canonicalItems := make([][]byte, len(items))
+	for index, item := range items {
+		fields, err := objectFields(item)
+		if err != nil {
+			return fmt.Errorf("input item %d must be an object", index)
+		}
+		if err := validateInputFields(fields); err != nil {
+			return fmt.Errorf("input item %d: %w", index, err)
+		}
+		if _, reserved := fieldValue(fields, SessionInputBatchIDField); reserved {
+			return errors.New("input items may not use reserved session batch metadata fields")
+		}
+		if _, reserved := fieldValue(fields, SessionInputBatchIndexField); reserved {
+			return errors.New("input items may not use reserved session batch metadata fields")
+		}
+		canonicalItems[index], err = canonicalJSON(item)
+		if err != nil {
+			return fmt.Errorf("serialize input item %d: %w", index, err)
+		}
+	}
+
+	var batchBytes [16]byte
+	if _, err := rand.Read(batchBytes[:]); err != nil {
+		return fmt.Errorf("create input batch ID: %w", err)
+	}
+	batchID := hex.EncodeToString(batchBytes[:])
+	persisted := make([][]byte, len(canonicalItems))
+	for index, item := range canonicalItems {
+		persistedItem, err := persistInputItem(item, batchID, index)
+		if err != nil {
+			return fmt.Errorf("persist input item %d: %w", index, err)
+		}
+		persisted[index] = persistedItem
+	}
+	if err := s.journal.Append(persisted...); err != nil {
+		return fmt.Errorf("append input batch: %w", err)
+	}
+	return nil
+}
+
+func persistInputItem(canonicalItem []byte, batchID string, index int) ([]byte, error) {
+	fields, err := objectFields(canonicalItem)
+	if err != nil {
+		return nil, fmt.Errorf("read canonical input item: %w", err)
+	}
+	fields = append(fields,
+		jsonField{key: SessionInputBatchIDField, value: appendJSONString(nil, batchID)},
+		jsonField{key: SessionInputBatchIndexField, value: []byte(strconv.Itoa(index))},
+	)
+	return encodeJSONObject(fields), nil
+}
+
+// ReadInputItems reconstructs Responses API request history from messages.jsonl
+// without reading or applying compaction/history caches.
+func (s *TurnStore) ReadInputItems() ([][]byte, error) {
+	if s == nil || s.journal == nil {
+		return nil, errors.New("turn store is not initialized")
+	}
+	cache, err := s.readCompactionCache()
+	if err != nil {
+		return nil, err
+	}
+	items := make([][]byte, 0)
+	if cache != nil {
+		for _, item := range cache.Items {
+			items = append(items, append([]byte(nil), item...))
+		}
+		currentHash, err := hashTranscriptFile(s.journal.path)
+		if err != nil {
+			return nil, err
+		}
+		if currentHash == cache.SourceSHA256 {
+			for _, record := range cache.ActiveTail {
+				expanded, err := expandTranscriptRecord(record)
+				if err != nil {
+					return nil, err
+				}
+				items = append(items, expanded...)
+			}
+			return items, nil
+		}
+	}
+	err = s.journal.ReadLines(func(line []byte) error {
+		expanded, err := expandTranscriptRecord(line)
+		if err != nil {
+			return fmt.Errorf("expand transcript record: %w", err)
+		}
+		items = append(items, expanded...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func validateInputFields(fields []jsonField) error {
+	typeRaw, exists := fieldValue(fields, "type")
+	itemType, isString := stringValue(typeRaw)
+	if !exists || !isString || itemType == "" {
+		return errors.New("input item must contain a non-empty string type")
+	}
+	if itemType == "response.completed" || strings.HasPrefix(itemType, "response.") {
+		return errors.New("response events cannot be appended as input items")
+	}
+	return nil
+}
+
+func expandTranscriptRecord(raw []byte) ([][]byte, error) {
+	fields, err := objectFields(raw)
+	if err != nil {
+		return nil, fmt.Errorf("messages.jsonl record must be an object: %w", err)
+	}
+	if rawType, exists := fieldValue(fields, "type"); exists {
+		if recordType, isString := stringValue(rawType); isString && recordType == "response.completed" {
+			return expandCompletedRecord(fields)
+		}
+		if recordType, isString := stringValue(rawType); isString && strings.HasPrefix(recordType, "response.") {
+			return nil, fmt.Errorf("unsupported response event in messages.jsonl: %s", recordType)
+		}
+	}
+
+	if _, hasBatchID := fieldValue(fields, SessionInputBatchIDField); hasBatchID {
+		fields = removeInputBatchFields(fields)
+	} else if _, hasBatchIndex := fieldValue(fields, SessionInputBatchIndexField); hasBatchIndex {
+		fields = removeInputBatchFields(fields)
+	}
+	if err := validateInputFields(fields); err != nil {
+		return nil, err
+	}
+	canonical, err := canonicalJSONFields(fields)
+	if err != nil {
+		return nil, err
+	}
+	return [][]byte{canonical}, nil
+}
+
+func expandCompletedRecord(eventFields []jsonField) ([][]byte, error) {
+	for _, metadataField := range []string{"session_turn", "session_step"} {
+		if raw, exists := fieldValue(eventFields, metadataField); exists {
+			if _, valid := safeInteger(raw, true); !valid {
+				return nil, fmt.Errorf("%s must be a positive safe integer", metadataField)
+			}
+		}
+	}
+	responseRaw, exists := fieldValue(eventFields, "response")
+	if !exists {
+		return nil, errors.New("completed response must be an object")
+	}
+	responseFields, err := objectFields(responseRaw)
+	if err != nil {
+		return nil, errors.New("completed response must be an object")
+	}
+	outputRaw, exists := fieldValue(responseFields, "output")
+	if !exists {
+		return nil, errors.New("committed response has no output array")
+	}
+	items := make([][]byte, 0)
+	err = arrayValues(outputRaw, func(item []byte) error {
+		if err := validateOutputItemJSON(item); err != nil {
+			return err
+		}
+		canonical, err := canonicalJSON(item)
+		if err != nil {
+			return err
+		}
+		items = append(items, canonical)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("committed response output must be an array: %w", err)
+	}
+	return items, nil
+}
+
+func canonicalJSONFields(fields []jsonField) ([]byte, error) {
+	canonicalFields := make([]jsonField, len(fields))
+	for index, field := range fields {
+		value, err := canonicalJSON(field.value)
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize input field %q: %w", field.key, err)
+		}
+		canonicalFields[index] = jsonField{key: field.key, value: value}
+	}
+	return encodeJSONObject(canonicalFields), nil
+}
+
+func removeInputBatchFields(fields []jsonField) []jsonField {
+	filtered := make([]jsonField, 0, len(fields))
+	for _, field := range fields {
+		if field.key == SessionInputBatchIDField || field.key == SessionInputBatchIndexField {
+			continue
+		}
+		filtered = append(filtered, field)
+	}
+	return filtered
+}

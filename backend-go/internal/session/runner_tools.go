@@ -1,0 +1,176 @@
+package session
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"example.com/agent-harness/backend-go/internal/tools"
+	"example.com/agent-harness/backend-go/internal/transcript"
+)
+
+func repairPendingToolCalls(store *transcript.TurnStore) error {
+	history, err := store.ReadInputItems()
+	if err != nil {
+		return fmt.Errorf("read session history before repairing pending tool calls: %w", err)
+	}
+	pending := make(map[string]json.RawMessage)
+	order := make([]string, 0)
+	for _, item := range history {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(item, &fields) != nil {
+			continue
+		}
+		var itemType string
+		if json.Unmarshal(fields["type"], &itemType) != nil {
+			continue
+		}
+		switch itemType {
+		case "function_call":
+			callID := functionCallID(item)
+			if callID == "" {
+				continue
+			}
+			if _, exists := pending[callID]; !exists {
+				order = append(order, callID)
+			}
+			pending[callID] = cloneRaw(item)
+		case "function_call_output":
+			callID := functionCallID(item)
+			if callID != "" {
+				delete(pending, callID)
+			}
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	calls := make([]json.RawMessage, 0, len(pending))
+	for _, callID := range order {
+		if call, exists := pending[callID]; exists {
+			calls = append(calls, call)
+		}
+	}
+	_, err = appendToolOutputs(store, calls, nil, "tool_result_missing", "A previous tool call has no persisted result and was not rerun automatically.")
+	return err
+}
+
+func responseFunctionCalls(event json.RawMessage) ([]json.RawMessage, error) {
+	var envelope struct {
+		Response struct {
+			Output []json.RawMessage `json:"output"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(event, &envelope); err != nil {
+		return nil, fmt.Errorf("decode committed response for tool calls: %w", err)
+	}
+	calls := make([]json.RawMessage, 0)
+	for _, item := range envelope.Response.Output {
+		var header struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(item, &header); err != nil {
+			continue
+		}
+		if header.Type == "function_call" {
+			calls = append(calls, cloneRaw(item))
+		}
+	}
+	return calls, nil
+}
+
+func functionCallID(item json.RawMessage) string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(item, &fields) != nil {
+		return ""
+	}
+	var callID string
+	if json.Unmarshal(fields["call_id"], &callID) != nil {
+		return ""
+	}
+	return callID
+}
+
+func appendToolOutputs(store *transcript.TurnStore, calls, completed []json.RawMessage, errorCode, summary string) ([]json.RawMessage, error) {
+	completedByCallID := make(map[string]json.RawMessage, len(completed))
+	for _, output := range completed {
+		if callID := functionCallID(output); callID != "" {
+			completedByCallID[callID] = cloneRaw(output)
+		}
+	}
+	ordered := make([]json.RawMessage, 0, len(calls))
+	for _, call := range calls {
+		callID := functionCallID(call)
+		if callID == "" {
+			continue
+		}
+		if output, ok := completedByCallID[callID]; ok {
+			ordered = append(ordered, output)
+			continue
+		}
+		output, err := missingToolOutput(callID, errorCode, summary)
+		if err != nil {
+			return nil, err
+		}
+		ordered = append(ordered, output)
+	}
+	if len(ordered) == 0 {
+		return ordered, nil
+	}
+	items := make([][]byte, len(ordered))
+	for index, output := range ordered {
+		items[index] = output
+	}
+	if err := store.AppendInputItems(items...); err != nil {
+		return nil, fmt.Errorf("persist native tool outputs: %w", err)
+	}
+	return ordered, nil
+}
+
+func missingToolOutput(callID, errorCode, summary string) (json.RawMessage, error) {
+	result := tools.ExecutionError(callID, tools.StatusError, errorCode, summary)
+	encoded, err := json.Marshal(struct {
+		Type   string `json:"type"`
+		CallID string `json:"call_id"`
+		Output string `json:"output"`
+	}{Type: "function_call_output", CallID: callID, Output: result})
+	if err != nil {
+		return nil, fmt.Errorf("encode missing native tool output: %w", err)
+	}
+	return encoded, nil
+}
+
+func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.RawMessage, execution tools.ExecutionContext) ([]json.RawMessage, error) {
+	completed := make([]json.RawMessage, 0, len(calls))
+	decisionIndex := -1
+	for index, call := range calls {
+		if catalog.IsUserDecisionCall(call) {
+			decisionIndex = index
+			break
+		}
+	}
+	for index, call := range calls {
+		callID := functionCallID(call)
+		if callID == "" {
+			return completed, errors.New("function call is missing call_id")
+		}
+		if decisionIndex >= 0 && index != decisionIndex {
+			output, err := missingToolOutput(callID, "user_decision_required", "This call was not executed because a user-decision tool in the same response must be resolved first; re-plan after its result.")
+			if err != nil {
+				return completed, err
+			}
+			completed = append(completed, output)
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return completed, err
+		}
+		output, err := catalog.ExecuteFunctionCall(ctx, call, execution)
+		if err != nil {
+			return completed, err
+		}
+		completed = append(completed, output)
+	}
+	return completed, nil
+}

@@ -1,0 +1,1 @@
+{"type":"function_call_output","call_id":"call-process-status","output":"{\"id\":\"call-process-status\",\"status\":\"ok\",\"summary\":\"Process proc_fixed is exited\"}\n\n--- INFORMATION ---\naction: status\nprocess_id: proc_fixed\nstate: exited\ncwd: workspace\npid: 123\nexit_code: 0\nsignal: null\nstdout_produced_bytes: 3\nstderr_produced_bytes: 0\n"}
