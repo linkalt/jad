@@ -5,6 +5,7 @@ import {join} from "node:path";
 import test from "node:test";
 
 import {SessionResponseStore} from "../src/persistence.js";
+import {AgentSession} from "../src/session.js";
 import {
   appendRunError,
   readRunErrors,
@@ -165,6 +166,90 @@ test("front compaction removes failure entries whose turn numbers it re-bases", 
       assert.deepEqual(await store.readRunErrors(), []);
     } finally {
       await store.close();
+    }
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test("history compaction removes failure entries only when it rewrites the transcript", async () => {
+  const dir = await tempDir();
+  try {
+    const store = await openStore(dir);
+    try {
+      const user = {type: "message", role: "user", content: [{type: "input_text", text: "question"}]} as const;
+      const reasoning = {type: "reasoning", summary: [{type: "summary_text", text: "long reasoning ".repeat(100)}]};
+      const answer = {type: "message", role: "assistant", content: [{type: "output_text", text: "answer"}]};
+      await store.appendInputItem(user);
+      await store.recordRunError(entry(1));
+
+      // Nothing is compactable yet, so the transcript and the failure record stay as they are.
+      const untouched = await store.compactHistory({turnType: "assistant_final", keepTurns: 1, keepToolPairs: 0, backupMode: "replace"});
+      assert.equal(untouched.compacted, false);
+      assert.deepEqual(await store.readRunErrors(), [entry(1)]);
+
+      const turn = await store.beginTurn("compact-with-failure");
+      await turn.stageOutputItem({type: "response.output_item.done", output_index: 0, item: reasoning});
+      await turn.stageOutputItem({type: "response.output_item.done", output_index: 1, item: answer});
+      await turn.commit({
+        type: "response.completed",
+        response: {
+          id: "resp-compact-with-failure",
+          object: "response",
+          status: "completed",
+          model: "gpt-test",
+          usage: {input_tokens: 10, output_tokens: 4},
+          output: [reasoning, answer],
+        },
+      });
+      assert.deepEqual(await store.readRunErrors(), [entry(1)]);
+
+      // A compaction that rewrites the transcript re-bases turn numbers, so the record goes.
+      const compacted = await store.compactHistory({turnType: "assistant_final", keepTurns: 1, keepToolPairs: 0, backupMode: "replace"});
+      assert.equal(compacted.compacted, true);
+      assert.deepEqual(await store.readRunErrors(), []);
+      await assert.rejects(() => stat(store.runErrorCachePath), {code: "ENOENT"});
+    } finally {
+      await store.close();
+    }
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test("a run with image-only input reports its turn without a message offset", async () => {
+  const dir = await tempDir();
+  try {
+    await writeFile(
+      join(dir, "model.json"),
+      JSON.stringify({schema_version: 1, provider: "fake", api_key_env: "FAKE_API_KEY", model: "fake-model"}),
+    );
+    await writeFile(
+      join(dir, "setting.json"),
+      JSON.stringify({schema_version: 1, session_name: "image-only", cwd: dir, tool_definition_paths: ["missing-tools.json"]}),
+    );
+    const session = await AgentSession.open(dir);
+    try {
+      const accepted: Array<{turn: number; offset: number | undefined}> = [];
+      const options = {onInputAccepted: (turn: number, offset: number | undefined) => { accepted.push({turn, offset}); }};
+
+      // Both runs fail on the missing tool file, after their input has been saved.
+      const imageOnly = {type: "message", role: "user", content: [{type: "input_image", image_url: "data:image/png;base64,AA=="}]};
+      await assert.rejects(() => session.run(imageOnly, options));
+      await assert.rejects(() => session.run("with text", options));
+
+      assert.equal(accepted.length, 2);
+      assert.deepEqual(accepted[0], {turn: 1, offset: undefined});
+      assert.equal(accepted[1]?.turn, 2);
+      assert.equal(typeof accepted[1]?.offset, "number");
+
+      // The record can be written without a message id, and the cache keeps it as is.
+      await session.recordRunError({turn: 1, turn_id: "image-turn", at: "2026-01-01T00:00:00.000Z", message: "failed"});
+      const [only] = await session.readRunErrors();
+      assert.equal(only?.turn, 1);
+      assert.equal(Object.hasOwn(only ?? {}, "message_id"), false);
+    } finally {
+      await session.close();
     }
   } finally {
     await rm(dir, {recursive: true, force: true});
