@@ -136,6 +136,19 @@ function withProfile(query: URLSearchParams, profile: string | undefined): strin
   return query.size === 0 ? '' : `?${query.toString()}`;
 }
 
+/**
+ * A run that failed after its user message was saved. The server keeps these
+ * beside the transcript, never in it; `message_id` names the user message the
+ * failure belongs to and is absent when the server could not name one.
+ */
+export interface SessionRunFailure {
+  turn: number;
+  message_id?: string;
+  turn_id: string;
+  at: string;
+  message: string;
+}
+
 export interface SessionSnapshot {
   id: string;
   session_id?: string;
@@ -170,6 +183,8 @@ export interface SessionSnapshot {
    * removed, served from the backup by `fetchSessionHistory`.
    */
   history?: SessionHistory;
+  /** Failed runs, oldest first. Absent when the session has none. */
+  failures?: SessionRunFailure[];
 }
 
 export interface SessionPathProfileUpdate {

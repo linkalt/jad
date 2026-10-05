@@ -1,4 +1,4 @@
-import {memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import type {ChangeEvent, CSSProperties, SVGProps} from 'react';
 import * as stylex from '@stylexjs/stylex';
 import {
@@ -62,6 +62,7 @@ import {
   stopSessionRun,
   streamSessionRun,
   type SessionPage,
+  type SessionRunFailure,
   type SessionSnapshot,
   type RootLibraryAsset,
   type WebUiInteraction,
@@ -172,6 +173,7 @@ import {
   type PinnedView,
   type SessionListRow,
 } from './session-views';
+import {placeRunFailures, runFailureText} from './run-failures';
 import {removeViewKeys, removedViewKeys} from './view-cache';
 import {canAttachRunToView, updateViewState} from './view-state';
 
@@ -208,6 +210,18 @@ function FrontCompactionIcon(props: SVGProps<SVGSVGElement>) {
       <circle cx="12" cy="12" r="1" />
       <circle cx="19" cy="12" r="1" />
     </svg>
+  );
+}
+
+/** A failed run, drawn where the user message it belongs to ends. */
+function RunFailureRow({failure}: {failure: SessionRunFailure}) {
+  return (
+    <ChatSystemMessage
+      variant="default"
+      icon={<Icon icon="close" color="error" size="sm" />}
+    >
+      {runFailureText(failure)}
+    </ChatSystemMessage>
   );
 }
 
@@ -2814,6 +2828,10 @@ function App() {
   );
   // How much of the transcript is still on the server, per session.
   const [sessionPages, setSessionPages] = useState<Record<string, SessionPage>>({});
+  // Runs that failed, per view. The server keeps them beside the transcript.
+  const [sessionFailures, setSessionFailures] = useState<
+    Record<string, readonly SessionRunFailure[]>
+  >({});
 
   // Live sessions come from the backend, so the active id can outlive its row —
   // on the first paint (before the first poll answers) and after a session is
@@ -2886,6 +2904,7 @@ function App() {
     updateHistoryBlocks(blocks => forgetHistoryBlocks(blocks, viewKeys));
     setThreads(current => removeViewKeys(current, viewKeys));
     setSessionPages(current => removeViewKeys(current, viewKeys));
+    setSessionFailures(current => removeViewKeys(current, viewKeys));
     setRowSessions(current => removeViewKeys(current, viewKeys));
     // Keep loadingOlderRef entries until their requests settle; their captured
     // reset epoch now prevents an evicted result from repopulating the cache.
@@ -3075,6 +3094,10 @@ function App() {
     initialCount: appConfig.transcript_window_messages,
     pageSize: appConfig.transcript_window_page_messages,
   });
+  const placedFailures = useMemo(
+    () => placeRunFailures(sessionFailures[activeViewKey], visibleMessages.map(message => message.id)),
+    [sessionFailures, activeViewKey, visibleMessages],
+  );
   const activeSessionRef = activeSession?.sessionRef;
   const activeSessionPage = sessionPages[activeViewKey];
   // Older turns exist on the server but are not part of this client's copy yet.
@@ -3634,6 +3657,7 @@ function App() {
       hydratedTranscriptSessionIdsRef.current.delete(targetViewKey);
       loadingOlderRef.current.delete(targetViewKey);
       setThreads(current => ({...current, [targetViewKey]: []}));
+      setSessionFailures(current => removeViewKeys(current, new Set([targetViewKey])));
       setSessionPages(current => {
         if (!(targetViewKey in current)) {
           return current;
@@ -3748,6 +3772,7 @@ function App() {
       hydratedTranscriptSessionIdsRef.current.delete(targetViewKey);
       loadingOlderRef.current.delete(targetViewKey);
       setThreads(current => ({...current, [targetViewKey]: []}));
+      setSessionFailures(current => removeViewKeys(current, new Set([targetViewKey])));
       setSessionPages(current => {
         if (!(targetViewKey in current)) {
           return current;
@@ -4467,6 +4492,17 @@ function App() {
       if (snapshot.page !== undefined) {
         setSessionPages(current => ({...current, [uiId]: snapshot.page!}));
       }
+      setSessionFailures(current => {
+        const failures = snapshot.failures ?? [];
+        const previous = current[uiId] ?? [];
+        if (deepEqual(previous, failures)) {
+          return current;
+        }
+        if (failures.length === 0) {
+          return removeViewKeys(current, new Set([uiId]));
+        }
+        return {...current, [uiId]: failures};
+      });
       hydratedTranscriptSessionIdsRef.current.add(uiId);
       applyRowSnapshot(uiId, sessionRef, profile, snapshot);
     }, error => {
@@ -5193,20 +5229,27 @@ function App() {
                         />
                       )}
                       {visibleMessages.map(message => (
-                        <TranscriptRow
-                          key={message.id}
-                          message={message}
-                          model={activeRowSession.model}
-                          onLoadFull={loadFullMessage}
-                          isFrontCompactionSelectable={isFrontCompactionSelectionMode}
-                          isFrontCompactionSelected={
-                            isFrontCompactionConfirmationOpen &&
-                            frontCompactionTarget?.message.id === message.id
-                          }
-                          onSelectFrontCompaction={isFrontCompactionSelectionMode
-                            ? openFrontCompactionConfirmation
-                            : undefined}
-                        />
+                        <Fragment key={message.id}>
+                          <TranscriptRow
+                            message={message}
+                            model={activeRowSession.model}
+                            onLoadFull={loadFullMessage}
+                            isFrontCompactionSelectable={isFrontCompactionSelectionMode}
+                            isFrontCompactionSelected={
+                              isFrontCompactionConfirmationOpen &&
+                              frontCompactionTarget?.message.id === message.id
+                            }
+                            onSelectFrontCompaction={isFrontCompactionSelectionMode
+                              ? openFrontCompactionConfirmation
+                              : undefined}
+                          />
+                          {placedFailures.byMessageId.get(message.id)?.map(failure => (
+                            <RunFailureRow key={failure.turn_id} failure={failure} />
+                          ))}
+                        </Fragment>
+                      ))}
+                      {placedFailures.trailing.map(failure => (
+                        <RunFailureRow key={failure.turn_id} failure={failure} />
                       ))}
                       {isRunning &&
                         (!isLiveSession || streamingMessage !== null || hasLiveAttachedRun) &&
