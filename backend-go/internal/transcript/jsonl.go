@@ -33,6 +33,10 @@ type Journal struct {
 	path       string
 	durability DurabilityMode
 	mu         sync.Mutex
+	// generation counts in-process rewrites of the whole file (compaction,
+	// reset, front compaction). Readers that cache parsed content use it to
+	// drop that cache; it is only read and written while mu is held.
+	generation uint64
 }
 
 // NewJournal constructs a JSONL writer for path using the requested durability.
@@ -97,6 +101,7 @@ func (j *Journal) ReplaceRecords(records ...[]byte) error {
 	if err := os.Rename(tempPath, j.path); err != nil {
 		return err
 	}
+	j.generation++
 	return nil
 }
 
@@ -201,6 +206,28 @@ func (j *Journal) ReadRecordsRange(start, end int64, visit func(offset int64, li
 	if start < 0 || end < start {
 		return errors.New("transcript record range is invalid")
 	}
+	return j.withRepairedFile(func(file *os.File, info os.FileInfo) error {
+		limit := end
+		if limit > info.Size() {
+			limit = info.Size()
+		}
+		if start > limit {
+			return nil
+		}
+		if start > 0 {
+			var previous [1]byte
+			if n, readErr := file.ReadAt(previous[:], start-1); readErr != nil || n != 1 || previous[0] != '\n' {
+				return errors.New("transcript range start is not a record boundary")
+			}
+		}
+		return visitRecords(file, start, limit, visit)
+	})
+}
+
+// withRepairedFile runs fn while holding the journal lock, on the transcript
+// opened for reading after any incomplete final record was removed. info
+// describes the repaired file. fn must not call other Journal methods.
+func (j *Journal) withRepairedFile(fn func(file *os.File, info os.FileInfo) error) (result error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	file, err := os.OpenFile(j.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o666)
@@ -219,19 +246,12 @@ func (j *Journal) ReadRecordsRange(start, end int64, visit func(offset int64, li
 	if err != nil {
 		return fmt.Errorf("stat transcript before reading: %w", err)
 	}
-	limit := end
-	if limit > info.Size() {
-		limit = info.Size()
-	}
-	if start > limit {
-		return nil
-	}
-	if start > 0 {
-		var previous [1]byte
-		if n, readErr := file.ReadAt(previous[:], start-1); readErr != nil || n != 1 || previous[0] != '\n' {
-			return errors.New("transcript range start is not a record boundary")
-		}
-	}
+	return fn(file, info)
+}
+
+// visitRecords visits the LF-terminated records in [start, limit) of an open
+// transcript whose tail is already repaired. start must be a record boundary.
+func visitRecords(file *os.File, start, limit int64, visit func(offset int64, line []byte) error) error {
 	if _, err := file.Seek(start, io.SeekStart); err != nil {
 		return fmt.Errorf("seek transcript: %w", err)
 	}

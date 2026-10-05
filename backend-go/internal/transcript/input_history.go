@@ -91,6 +91,12 @@ func (s *TurnStore) ReadInputItems() ([][]byte, error) {
 	if s == nil || s.journal == nil {
 		return nil, errors.New("turn store is not initialized")
 	}
+	return s.readInputItems(nil)
+}
+
+// readInputItems implements ReadInputItems. A non-nil memo lets the transcript
+// expansion reuse what an earlier read of the same handle produced.
+func (s *TurnStore) readInputItems(memo *transcriptMemo) ([][]byte, error) {
 	cache, err := s.readCompactionCache()
 	if err != nil {
 		return nil, err
@@ -114,6 +120,13 @@ func (s *TurnStore) ReadInputItems() ([][]byte, error) {
 			}
 			return items, nil
 		}
+	}
+	if memo != nil {
+		tail, err := s.readTranscriptItemsMemo(memo)
+		if err != nil {
+			return nil, err
+		}
+		return append(items, tail...), nil
 	}
 	err = s.journal.ReadLines(func(line []byte) error {
 		expanded, err := expandTranscriptRecord(line)

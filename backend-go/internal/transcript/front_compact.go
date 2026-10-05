@@ -276,5 +276,6 @@ func (j *Journal) ReplaceWithPrefix(boundary, expectedSize int64, archivePath st
 	if err := os.Rename(prefixTempPath, j.path); err != nil {
 		return fmt.Errorf("publish front-compaction transcript: %w", err)
 	}
+	j.generation++
 	return nil
 }

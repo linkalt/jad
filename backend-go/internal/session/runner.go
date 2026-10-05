@@ -371,11 +371,15 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		}
 	}
 
+	// One handle per run: later rounds expand only the records appended since
+	// the previous round instead of re-parsing the whole transcript.
+	inputHistory := r.store.NewInputHistory()
+	defer inputHistory.Release()
 	for round := 0; ; round++ {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		history, err := r.store.ReadInputItems()
+		history, err := inputHistory.Read()
 		if err != nil {
 			return result, fmt.Errorf("read session history: %w", err)
 		}
