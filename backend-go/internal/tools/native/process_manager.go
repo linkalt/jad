@@ -39,7 +39,8 @@ type ProcessManifest struct {
 	// assigns them (the model sees this JSON in process results): a stop reason
 	// and left_running are set while the process is stopping, the exit status and
 	// ended_at when it finishes. A process recovered as "lost" after a restart is
-	// the one case TypeScript orders differently (ended_at, then stop_reason).
+	// the one case TypeScript orders differently (ended_at, then stop_reason);
+	// endedBeforeStop records that and process_manifest_order.go honours it.
 	StopReason          string          `json:"stop_reason,omitempty"`
 	LeftRunning         bool            `json:"left_running,omitempty"`
 	ExitCode            json.RawMessage `json:"exit_code,omitempty"`
@@ -51,6 +52,10 @@ type ProcessManifest struct {
 	StderrStoredBytes   json.RawMessage `json:"stderr_stored_bytes,omitempty"`
 	StdoutCapped        json.RawMessage `json:"stdout_capped,omitempty"`
 	StderrCapped        json.RawMessage `json:"stderr_capped,omitempty"`
+
+	// endedBeforeStop is set for a manifest whose ended_at precedes stop_reason:
+	// a running process recovered as lost without a prior stop reason.
+	endedBeforeStop bool
 }
 
 type ProcessSnapshot struct {
@@ -719,6 +724,7 @@ func (manager *ManagedProcessManager) Recover() error {
 		if manifest.State == ProcessRunning {
 			manifest.State = ProcessLost
 			manifest.EndedAt = processNow()
+			manifest.endedBeforeStop = manifest.StopReason == ""
 			manifest.StopReason = "backend_restarted"
 			if err := manager.persistManifest(manifest); err != nil {
 				return fmt.Errorf("persist recovered process manifest %s: %w", manifest.ID, err)
@@ -742,7 +748,7 @@ func (manager *ManagedProcessManager) persistManifest(manifest ProcessManifest) 
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return err
 	}
-	encoded, err := json.Marshal(manifest)
+	encoded, err := marshalProcessManifest(manifest)
 	if err != nil {
 		return err
 	}
@@ -779,6 +785,7 @@ func (manager *ManagedProcessManager) readManifest(id string) (ProcessManifest, 
 	if manifest.SchemaVersion != 1 || manifest.ID == "" || manifest.State == "" || manifest.StartedAt == "" {
 		return ProcessManifest{}, false
 	}
+	manifest.endedBeforeStop = endedAtPrecedesStopReason(data)
 	return manifest, true
 }
 
