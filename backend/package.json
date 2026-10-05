@@ -8,7 +8,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "server": "npm run build && node dist/src/server.js",
     "auth": "npm run build --silent && node dist/src/auth-cli.js",
-    "test": "npm run build && node --test dist/test/content-library.test.js dist/test/openai-oauth.test.js dist/test/persistence.test.js dist/test/cursor-cache.test.js dist/test/part-cap.test.js dist/test/run-registry.test.js dist/test/run-memory-trace.test.js dist/test/json-bounds.test.js dist/test/request-draft-scheduling.test.js dist/test/statecontext.test.js dist/test/server.test.js dist/test/sse-writer.test.js dist/test/tool-batch.test.js dist/test/session-profiles.test.js dist/test/stream-emitter.test.js dist/test/tool-result-status.test.js dist/test/http-debug.test.js dist/test/path-policy.test.js dist/test/session-files.test.js dist/test/tools.test.js dist/test/write-tool.test.js dist/test/edit-tool.test.js dist/test/grep-tool.test.js dist/test/bash-tool.test.js dist/test/glob-tool.test.js dist/test/process-tool.test.js dist/test/task-tool.test.js dist/test/memory-tool.test.js dist/test/fetch-tool.test.js dist/test/definitions.test.js dist/test/mcp.test.js dist/test/interactions.test.js dist/test/request-draft-tool.test.js dist/test/skill-tool.test.js dist/test/interaction-endpoint.test.js"
+    "test": "node -e \"require(\\\"fs\\\").rmSync(\\\"dist/test\\\",{recursive:true,force:true})\" && npm run build && node --test \"dist/test/*.test.js\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
