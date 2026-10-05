@@ -33,8 +33,10 @@ func objectFieldsValid(raw []byte) ([]jsonField, error) {
 		return nil, errors.New("expected a JSON object")
 	}
 	position++
-	fields := make([]jsonField, 0)
-	indices := make(map[string]int)
+	fields := make([]jsonField, 0, 8)
+	// Small objects look keys up linearly; the map is built only once an object
+	// grows past objectFieldIndexThreshold fields.
+	var indices map[string]int
 	for {
 		position = skipJSONSpace(raw, position)
 		if position >= len(raw) {
@@ -47,8 +49,8 @@ func objectFieldsValid(raw []byte) ([]jsonField, error) {
 		if err != nil {
 			return nil, err
 		}
-		var key string
-		if err := json.Unmarshal(raw[position:keyEnd], &key); err != nil {
+		key, err := jsonStringValue(raw[position:keyEnd])
+		if err != nil {
 			return nil, err
 		}
 		position = skipJSONSpace(raw, keyEnd)
@@ -61,12 +63,19 @@ func objectFieldsValid(raw []byte) ([]jsonField, error) {
 			return nil, err
 		}
 		field := jsonField{key: key, value: raw[valueStart:valueEnd]}
-		if index, found := indices[key]; found {
+		if index := indexOfField(fields, indices, key); index >= 0 {
 			// JSON.parse keeps the original property position but the final value.
 			fields[index].value = field.value
 		} else {
-			indices[key] = len(fields)
 			fields = append(fields, field)
+			if indices != nil {
+				indices[key] = len(fields) - 1
+			} else if len(fields) >= objectFieldIndexThreshold {
+				indices = make(map[string]int, 2*len(fields))
+				for fieldIndex, existing := range fields {
+					indices[existing.key] = fieldIndex
+				}
+			}
 		}
 		position = skipJSONSpace(raw, valueEnd)
 		if position >= len(raw) {
@@ -80,6 +89,60 @@ func objectFieldsValid(raw []byte) ([]jsonField, error) {
 		}
 		position++
 	}
+}
+
+// objectFieldIndexThreshold is the object size at which duplicate-key lookup
+// switches from a linear scan to a map. It is an algorithmic cutover, not a limit.
+const objectFieldIndexThreshold = 16
+
+func indexOfField(fields []jsonField, indices map[string]int, key string) int {
+	if indices != nil {
+		if index, found := indices[key]; found {
+			return index
+		}
+		return -1
+	}
+	for index := range fields {
+		if fields[index].key == key {
+			return index
+		}
+	}
+	return -1
+}
+
+// plainJSONString returns the contents of a JSON string literal whose decoded
+// value is byte-for-byte its contents: no escapes and valid UTF-8. Such a string
+// is already in canonical form. Anything else reports false so callers decode it.
+func plainJSONString(raw []byte) ([]byte, bool) {
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return nil, false
+	}
+	inner := raw[1 : len(raw)-1]
+	ascii := true
+	for _, current := range inner {
+		if current == '\\' || current == '"' || current < 0x20 {
+			return nil, false
+		}
+		if current >= 0x80 {
+			ascii = false
+		}
+	}
+	if !ascii && !utf8.Valid(inner) {
+		return nil, false
+	}
+	return inner, true
+}
+
+// jsonStringValue decodes a JSON string literal like json.Unmarshal into a string.
+func jsonStringValue(raw []byte) (string, error) {
+	if inner, plain := plainJSONString(raw); plain {
+		return string(inner), nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", err
+	}
+	return value, nil
 }
 
 func arrayValues(raw []byte, visit func([]byte) error) error {
@@ -257,11 +320,15 @@ func canonicalJSONValid(raw []byte) ([]byte, error) {
 		result.WriteByte(']')
 		return result.Bytes(), nil
 	case '"':
+		if _, plain := plainJSONString(raw); plain {
+			// No escapes and valid UTF-8: canonical form equals the source bytes.
+			return append(make([]byte, 0, len(raw)), raw...), nil
+		}
 		var value string
 		if err := json.Unmarshal(raw, &value); err != nil {
 			return nil, err
 		}
-		return appendJSONString(nil, value), nil
+		return appendJSONString(make([]byte, 0, len(raw)+2), value), nil
 	case 't', 'f', 'n':
 		return append([]byte(nil), raw...), nil
 	default:
@@ -433,6 +500,9 @@ func safeInteger(raw []byte, positive bool) (int64, bool) {
 }
 
 func stringValue(raw []byte) (string, bool) {
+	if inner, plain := plainJSONString(raw); plain {
+		return string(inner), true
+	}
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return "", false

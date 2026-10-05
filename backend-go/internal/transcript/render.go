@@ -160,6 +160,12 @@ func validateOutputItemJSON(raw []byte) error {
 	if err != nil {
 		return errors.New("output item must be an object")
 	}
+	return validateOutputItemType(fields)
+}
+
+// validateOutputItemType checks the parsed fields of an output item for a
+// non-empty string type.
+func validateOutputItemType(fields []jsonField) error {
 	typeRaw, ok := fieldValue(fields, "type")
 	if !ok {
 		return errors.New("output item must contain a non-empty string type")

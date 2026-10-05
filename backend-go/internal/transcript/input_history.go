@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -214,7 +215,9 @@ func expandCompletedRecord(eventFields []jsonField) ([][]byte, error) {
 	if !exists {
 		return nil, errors.New("completed response must be an object")
 	}
-	responseFields, err := objectFields(responseRaw)
+	// responseRaw is a sub-value of a record objectFields already validated, so
+	// the *Valid variants skip re-validating the same bytes at every level.
+	responseFields, err := objectFieldsValid(bytes.TrimSpace(responseRaw))
 	if err != nil {
 		return nil, errors.New("completed response must be an object")
 	}
@@ -222,12 +225,20 @@ func expandCompletedRecord(eventFields []jsonField) ([][]byte, error) {
 	if !exists {
 		return nil, errors.New("committed response has no output array")
 	}
-	items := make([][]byte, 0)
-	err = arrayValues(outputRaw, func(item []byte) error {
-		if err := validateOutputItemJSON(item); err != nil {
+	outputRaw = bytes.TrimSpace(outputRaw)
+	if len(outputRaw) == 0 || outputRaw[0] != '[' {
+		return nil, fmt.Errorf("committed response output must be an array: %w", errors.New("expected a JSON array"))
+	}
+	items := make([][]byte, 0, 4)
+	err = arrayValuesValid(outputRaw, func(item []byte) error {
+		itemFields, err := objectFieldsValid(item)
+		if err != nil {
+			return errors.New("output item must be an object")
+		}
+		if err := validateOutputItemType(itemFields); err != nil {
 			return err
 		}
-		canonical, err := canonicalJSON(item)
+		canonical, err := canonicalJSONValid(item)
 		if err != nil {
 			return err
 		}
@@ -243,7 +254,8 @@ func expandCompletedRecord(eventFields []jsonField) ([][]byte, error) {
 func canonicalJSONFields(fields []jsonField) ([]byte, error) {
 	canonicalFields := make([]jsonField, len(fields))
 	for index, field := range fields {
-		value, err := canonicalJSON(field.value)
+		// fields come from objectFields, so each value is already valid JSON.
+		value, err := canonicalJSONValid(field.value)
 		if err != nil {
 			return nil, fmt.Errorf("canonicalize input field %q: %w", field.key, err)
 		}
