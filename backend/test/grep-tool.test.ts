@@ -155,6 +155,62 @@ test("scopes a search with a path and an include glob", {skip: ripgrepSkip}, asy
   }
 });
 
+test("skips files matching an exclude glob, alone or after include", {skip: ripgrepSkip}, async () => {
+  const {sessionDir, run} = await openGrepSession();
+  try {
+    await writeTree(sessionDir);
+    await writeFile(join(sessionDir, "src/a.test.ts"), "TODO in test\n", "utf8");
+
+    const excluded = await run("grep-exclude", {pattern: "TODO", exclude: "*.md"});
+    assert.equal(firstLine(excluded).status, "ok");
+    assert.equal(informationFields(excluded).exclude, "*.md");
+    assert.doesNotMatch(excluded, /notes\.md/);
+    assert.match(excluded, /src\/a\.ts\n2:beta TODO/);
+
+    // Excluding must win over an include that also matches the file.
+    const both = await run("grep-include-exclude", {
+      pattern: "TODO",
+      include: "*.ts",
+      exclude: "*.test.ts",
+    });
+    assert.equal(firstLine(both).status, "ok");
+    assert.equal(informationFields(both).files, "2");
+    assert.doesNotMatch(both, /a\.test\.ts/);
+    assert.doesNotMatch(both, /notes\.md/);
+    assert.match(both, /src\/sub\/c\.ts/);
+
+    const directory = await run("grep-exclude-dir", {pattern: "TODO", exclude: "src/sub/**"});
+    assert.equal(informationFields(directory).files, "3");
+    assert.doesNotMatch(directory, /c\.ts|TODO again/);
+
+    const braces = await run("grep-exclude-braces", {pattern: "TODO", exclude: "*.{md,test.ts}"});
+    assert.equal(informationFields(braces).files, "2");
+    assert.doesNotMatch(braces, /notes\.md|a\.test\.ts/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("normalizes a gitignore-style or blank exclude instead of failing", {skip: ripgrepSkip}, async () => {
+  const {sessionDir, run} = await openGrepSession();
+  try {
+    await writeTree(sessionDir);
+    const negated = await run("grep-exclude-bang", {pattern: "TODO", exclude: " !*.md "});
+    assert.equal(firstLine(negated).status, "ok");
+    assert.equal(informationFields(negated).exclude, "*.md");
+    assert.doesNotMatch(negated, /notes\.md/);
+
+    for (const [id, exclude] of [["grep-exclude-blank", "  "], ["grep-exclude-bangs", "!"]] as const) {
+      const blank = await run(id, {pattern: "TODO", exclude});
+      assert.equal(firstLine(blank).status, "ok");
+      assert.equal(informationFields(blank).exclude, undefined);
+      assert.equal(informationFields(blank).files, "3");
+    }
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
 test("treats the pattern as literal text when asked", {skip: ripgrepSkip}, async () => {
   const {sessionDir, run} = await openGrepSession();
   try {

@@ -19,6 +19,7 @@ var grepInputSchema = json.RawMessage(`{
     "pattern":{"type":"string","minLength":1,"description":"ripgrep regular expression (Rust syntax: no lookaround or backreferences). Use literal when the text contains regex characters."},
     "path":{"type":"string","minLength":1,"description":"File or directory to search, relative to cwd or absolute. Defaults to the workspace root. Explicit paths are searched even when ignored or hidden."},
     "include":{"type":"string","minLength":1,"description":"Only search files matching this glob, for example \"*.ts\" or \"src/**/*.{ts,tsx}\"."},
+    "exclude":{"type":"string","minLength":1,"description":"Skip files matching this glob, for example \"*.test.ts\" or \"{dist,vendor}/**\". Applied after include."},
     "literal":{"type":"boolean","description":"Treat the pattern as exact text instead of a regular expression."},
     "context":{"type":"integer","minimum":0,"maximum":20,"description":"Lines of context to show before and after each match."}
   },
@@ -30,6 +31,7 @@ type grepArgs struct {
 	pattern string
 	path    string
 	include string
+	exclude string
 	literal bool
 	context int64
 }
@@ -71,6 +73,15 @@ func normalizeGrepArguments(arguments map[string]any) map[string]any {
 		}
 		normalized["context"] = json.Number(strconv.FormatInt(contextLines, 10))
 	}
+	if exclude, ok := arguments["exclude"].(string); ok {
+		// The backend adds the negation; models often write gitignore-style "!glob".
+		exclude = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(exclude), "!"))
+		if exclude == "" {
+			delete(normalized, "exclude")
+		} else {
+			normalized["exclude"] = exclude
+		}
+	}
 	return normalized
 }
 
@@ -81,6 +92,7 @@ func parseGrepArguments(arguments map[string]any) grepArgs {
 		parsed.path = path
 	}
 	parsed.include, _ = arguments["include"].(string)
+	parsed.exclude, _ = arguments["exclude"].(string)
 	parsed.literal, _ = arguments["literal"].(bool)
 	parsed.context, _ = safeInteger(arguments["context"])
 	return parsed
@@ -125,6 +137,9 @@ func executeNativeGrep(
 	}
 	if args.include != "" {
 		information = append(information, tools.Information{Key: "include", Value: args.include})
+	}
+	if args.exclude != "" {
+		information = append(information, tools.Information{Key: "exclude", Value: args.exclude})
 	}
 	if args.literal {
 		information = append(information, tools.Information{Key: "literal", Value: true})
@@ -174,6 +189,10 @@ func grepSearchFlags(args grepArgs) []string {
 	}
 	if args.include != "" {
 		flags = append(flags, "--glob", args.include)
+	}
+	if args.exclude != "" {
+		// ripgrep lets the last matching glob win, so this must follow include.
+		flags = append(flags, "--glob", "!"+args.exclude)
 	}
 	if args.context > 0 {
 		contextLines := args.context

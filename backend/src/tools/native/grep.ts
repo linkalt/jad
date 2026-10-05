@@ -41,6 +41,12 @@ export const nativeGrepDefinition: ToolDefinition = {
         description:
           "Only search files matching this glob, for example \"*.ts\" or \"src/**/*.{ts,tsx}\".",
       },
+      exclude: {
+        type: "string",
+        minLength: 1,
+        description:
+          "Skip files matching this glob, for example \"*.test.ts\" or \"{dist,vendor}/**\". Applied after include.",
+      },
       literal: {
         type: "boolean",
         description: "Treat the pattern as exact text instead of a regular expression.",
@@ -61,6 +67,7 @@ interface GrepArgs {
   pattern: string;
   path?: string;
   include?: string;
+  exclude?: string;
   literal?: boolean;
   context?: number;
 }
@@ -74,6 +81,15 @@ export function normalizeGrepArguments(args: JsonRecord): JsonRecord {
   if (typeof args.context === "number" && Number.isSafeInteger(args.context)) {
     normalized.context = Math.min(Math.max(args.context, 0), 20);
   }
+  if (typeof args.exclude === "string") {
+    // The backend adds the negation; models often write gitignore-style "!glob".
+    const exclude = args.exclude.trim().replace(/^!+/, "").trim();
+    if (exclude.length > 0) {
+      normalized.exclude = exclude;
+    } else {
+      delete normalized.exclude;
+    }
+  }
   return normalized;
 }
 
@@ -84,6 +100,10 @@ function searchFlags(args: GrepArgs): string[] {
   }
   if (args.include !== undefined) {
     flags.push("--glob", args.include);
+  }
+  if (args.exclude !== undefined) {
+    // ripgrep lets the last matching glob win, so this must follow include.
+    flags.push("--glob", `!${args.exclude}`);
   }
   const context = args.context ?? 0;
   if (context > 0) {
@@ -267,6 +287,7 @@ export async function executeNativeGrep(
     ["path", root.displayPath],
     ["pattern", grepArgs.pattern],
     ...(grepArgs.include !== undefined ? [["include", grepArgs.include] as [string, unknown]] : []),
+    ...(grepArgs.exclude !== undefined ? [["exclude", grepArgs.exclude] as [string, unknown]] : []),
     ...(grepArgs.literal === true ? [["literal", true] as [string, unknown]] : []),
     ...((grepArgs.context ?? 0) > 0
       ? [["context", Math.min(grepArgs.context ?? 0, 20)] as [string, unknown]]

@@ -128,6 +128,55 @@ func TestNativeGrepFindsAndGroupsMatches(t *testing.T) {
 	}
 }
 
+func TestNativeGrepExcludeGlob(t *testing.T) {
+	root := t.TempDir()
+	for path, content := range map[string]string{
+		"src/a.ts":      "beta TODO\n",
+		"src/a.test.ts": "TODO in test\n",
+		"src/sub/c.ts":  "TODO again\n",
+		"src/notes.md":  "TODO in markdown\n",
+	} {
+		absolute := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(absolute), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(absolute, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog := newGrepTestCatalog(t, nativeGrepSettings(installedRipgrep(t)))
+	run := func(id string, arguments map[string]any) string {
+		return executeGrepTestCall(t, catalog, root, id, arguments)
+	}
+
+	excluded := run("grep-exclude", map[string]any{"pattern": "TODO", "exclude": "*.md"})
+	if !strings.Contains(excluded, "exclude: *.md") || strings.Contains(excluded, "notes.md") || !strings.Contains(excluded, "src/a.ts\n1:beta TODO") {
+		t.Fatalf("exclude result = %s", excluded)
+	}
+	both := run("grep-include-exclude", map[string]any{"pattern": "TODO", "include": "*.ts", "exclude": "*.test.ts"})
+	if !strings.Contains(both, "files: 2\n") || strings.Contains(both, "a.test.ts") || strings.Contains(both, "notes.md") || !strings.Contains(both, "src/sub/c.ts") {
+		t.Fatalf("include+exclude result = %s", both)
+	}
+	directory := run("grep-exclude-dir", map[string]any{"pattern": "TODO", "exclude": "src/sub/**"})
+	if !strings.Contains(directory, "files: 3\n") || strings.Contains(directory, "TODO again") {
+		t.Fatalf("directory exclude result = %s", directory)
+	}
+	braces := run("grep-exclude-braces", map[string]any{"pattern": "TODO", "exclude": "*.{md,test.ts}"})
+	if !strings.Contains(braces, "files: 2\n") || strings.Contains(braces, "notes.md") || strings.Contains(braces, "a.test.ts") {
+		t.Fatalf("brace exclude result = %s", braces)
+	}
+	negated := run("grep-exclude-bang", map[string]any{"pattern": "TODO", "exclude": " !*.md "})
+	if !strings.Contains(negated, "exclude: *.md\n") || strings.Contains(negated, "notes.md") {
+		t.Fatalf("negated exclude result = %s", negated)
+	}
+	for id, exclude := range map[string]string{"grep-exclude-blank": "  ", "grep-exclude-bangs": "!"} {
+		blank := run(id, map[string]any{"pattern": "TODO", "exclude": exclude})
+		if strings.Contains(blank, "exclude:") || !strings.Contains(blank, "files: 4\n") {
+			t.Fatalf("blank exclude %q result = %s", exclude, blank)
+		}
+	}
+}
+
 func TestNativeGrepContextLimitsAndPathPolicy(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "secret"), 0o755); err != nil {

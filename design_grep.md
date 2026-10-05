@@ -29,6 +29,7 @@ It is a read-only tool: it never writes, and its result is bounded by policy so 
 | `pattern` | string, required, minLength 1 | ripgrep regular expression (Rust syntax: no lookaround or backreferences). |
 | `path` | string, default `.` | File or directory to search, workspace-relative or authorized absolute. Same resolution, symlink, and policy rules as `read`. |
 | `include` | string | Only search files matching one glob (`*.ts`, `src/**/*.{ts,tsx}`). |
+| `exclude` | string | Skip files matching one glob (`*.test.ts`, `{dist,vendor}/**`). Passed to ripgrep as `--glob '!<exclude>'` after `include`, so it wins when both match. A leading `!` and surrounding whitespace are stripped; a blank value is treated as absent. |
 | `literal` | boolean, default `false` | Treat `pattern` as exact text instead of a regular expression. |
 | `context` | integer 0-20, default 0 | Lines shown before and after each match. |
 
@@ -75,7 +76,7 @@ src/b.ts
 
 * The payload is verbatim ripgrep-style output: a path heading followed by `line:text` matches and `line-text` context lines, blank line between files. Line numbers are 1-based and match `read`'s, and the text after `:` is the exact file content, so it can be pasted into `edit`'s `oldText`.
 * The payload uses the shared CONTENT frame (randomized boundary token), so file content cannot forge the tool's metadata.
-* `pattern` is echoed because it is small and identifies the call. `include`, `literal`, and `context` are echoed only when they were provided, because they change how the payload must be read (context lines use `-`).
+* `pattern` is echoed because it is small and identifies the call. `include`, `exclude`, `literal`, and `context` are echoed only when they were provided, because they change how the payload must be read (context lines use `-`).
 * `files`/`matches` count what was returned. Zero matches is a success: `status: ok`, `matches: 0`, summary `No matches for <pattern>`, plus a `hint` that hidden files and files ignored by git are not searched.
 * `per_file_limit_reached: true` appears when a file returned as many matches as `max_matches_per_file` allows, so a capped file is never mistaken for a complete one.
 

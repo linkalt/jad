@@ -24,6 +24,11 @@
             "minLength": 1,
             "description": "Only search files matching this glob, for example \"*.ts\" or \"src/**/*.{ts,tsx}\"."
           },
+          "exclude": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Skip files matching this glob, for example \"*.test.ts\" or \"{dist,vendor}/**\". Applied after include."
+          },
           "literal": {
             "type": "boolean",
             "description": "Treat the pattern as exact text instead of a regular expression."
