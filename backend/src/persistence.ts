@@ -591,6 +591,22 @@ async function statOrCreate(path: string): Promise<Stats> {
   }
 }
 
+/** Where an appended input batch landed in the transcript. */
+export interface InputAppendResult {
+  /** Byte offset of the last record shown as a user message; absent when none is. */
+  messageOffset?: number;
+}
+
+/** True when the web-ui projection turns this input record into a user message. */
+function isVisibleUserInput(item: JsonRecord): boolean {
+  if (item.type !== "message" || item.role !== "user" || !Array.isArray(item.content)) {
+    return false;
+  }
+  return item.content.some((part) =>
+    isRecord(part) && part.type === "input_text" && typeof part.text === "string" && part.text.length > 0
+  );
+}
+
 /**
  * Truncates a JSONL file to its last newline. This is intentionally byte-based:
  * a partial UTF-8 code point can only occur in the incomplete trailing record,
@@ -1716,17 +1732,22 @@ export class SessionResponseStore {
    * usage reconstruction and pagination. The id is stripped when history is
    * reconstructed for the provider.
    */
-  public async appendInputItem(item: ResponseInputItem): Promise<void> {
-    await this.appendInputItems([item]);
+  public async appendInputItem(item: ResponseInputItem): Promise<InputAppendResult> {
+    return this.appendInputItems([item]);
   }
 
-  public async appendInputItems(items: readonly ResponseInputItem[]): Promise<void> {
+  /**
+   * The result names the byte offset of the last appended record that the UI
+   * shows as a user message. That offset is what the projection puts in the
+   * message id, so other caches can point at the message without a transcript scan.
+   */
+  public async appendInputItems(items: readonly ResponseInputItem[]): Promise<InputAppendResult> {
     this.assertOpen();
     if (this.activeTurns.size > 0) {
       throw new PersistenceError("cannot append input while a response turn is active");
     }
     if (items.length === 0) {
-      return;
+      return {};
     }
 
     const validatedItems = items.map((item) => validateInputItem(item));
@@ -1742,19 +1763,26 @@ export class SessionResponseStore {
       [SESSION_INPUT_BATCH_ID_FIELD]: batchId,
       [SESSION_INPUT_BATCH_INDEX_FIELD]: index,
     }));
-    await this.messageMutex.runExclusive(async () => {
+    return this.messageMutex.runExclusive(async () => {
       await repairJsonlTail(this.messagesPath);
       const handle = await open(this.messagesPath, "a");
+      let messageOffset: number | undefined;
       try {
+        let offset = Number((await handle.stat()).size);
         for (const item of persistedItems) {
-          const line = `${stringifyJson(item, "input item")}\n`;
-          await writeAll(handle, Buffer.from(line, "utf8"));
+          const bytes = Buffer.from(`${stringifyJson(item, "input item")}\n`, "utf8");
+          await writeAll(handle, bytes);
+          if (isVisibleUserInput(item)) {
+            messageOffset = offset;
+          }
+          offset += bytes.length;
         }
         await syncIfRequired(handle, this.options.durability);
       } finally {
         await handle.close();
       }
       await this.refreshUsageCacheUnlocked();
+      return messageOffset === undefined ? {} : {messageOffset};
     });
   }
 

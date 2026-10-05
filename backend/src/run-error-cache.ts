@@ -20,6 +20,12 @@ export const RUN_ERROR_CACHE_SCHEMA_VERSION = 1;
 /** One failed run. `turn` is the session turn whose user message has no answer. */
 export interface RunErrorEntry {
   turn: number;
+  /**
+   * Id of the user message in the web-ui projection (`session-user-o<offset>`).
+   * Absent when the input had no visible text, and in entries written before
+   * this field existed; readers then show the failure after the last message.
+   */
+  message_id?: string;
   turn_id: string;
   /** ISO timestamp of the failure. */
   at: string;
@@ -39,6 +45,7 @@ function isEntry(value: unknown): value is RunErrorEntry {
     typeof entry.turn === "number" &&
     Number.isSafeInteger(entry.turn) &&
     entry.turn >= 1 &&
+    (entry.message_id === undefined || typeof entry.message_id === "string") &&
     typeof entry.turn_id === "string" &&
     typeof entry.at === "string" &&
     typeof entry.message === "string"

@@ -195,6 +195,8 @@ export interface WebUiSessionSnapshot {
 
 export interface WebUiRunFailure {
   turn: number;
+  /** Id of the user message the failure belongs to; absent when it cannot be named. */
+  message_id?: string;
   turn_id: string;
   at: string;
   message: string;

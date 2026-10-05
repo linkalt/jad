@@ -95,7 +95,11 @@ export interface AgentRunOptions {
    * opened. A run that fails after this point leaves an unanswered user turn;
    * a run that fails before it leaves nothing behind.
    */
-  onInputAccepted?: (sessionTurn: number) => void | Promise<void>;
+  /**
+   * Called once the user input is saved. `messageOffset` is the transcript byte
+   * offset of the user message, absent when the input has no visible text.
+   */
+  onInputAccepted?: (sessionTurn: number, messageOffset: number | undefined) => void | Promise<void>;
   /** Called when a response turn's staging directory is ready for partial content. */
   onResponseTurnStarted?: (turn: ResponseTurn) => void | Promise<void>;
   /** Called after a response output item has been durably staged. */
@@ -467,8 +471,8 @@ export class AgentSession {
       throw new Error("session turn counter is exhausted");
     }
     const sessionTurn = priorUsage.turn_count + 1;
-    await this.store.appendInputItems(inputItems);
-    await options.onInputAccepted?.(sessionTurn);
+    const appended = await this.store.appendInputItems(inputItems);
+    await options.onInputAccepted?.(sessionTurn, appended.messageOffset);
     throwIfAborted(options.signal);
     const config = await this.loader.load(options.modelConfigPath);
     const catalog = await loadToolCatalog(config, {processManager: this.processManager, taskStore: this.taskStore, memoryStore: this.memoryStore, mcpManager: this.mcpManager});

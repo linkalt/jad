@@ -1555,11 +1555,14 @@ test("records a failed run outside messages.jsonl and leaves the transcript unto
     const snapshotEtag = snapshotResponse.headers.get("etag");
     assert.ok(snapshotEtag);
     const snapshot = (await snapshotResponse.json()) as {
-      failures?: Array<{turn: number; message: string}>;
-      messages: Array<{sender: string}>;
+      failures?: Array<{turn: number; message_id?: string; message: string}>;
+      messages: Array<{id: string; sender: string}>;
     };
     assert.equal(snapshot.failures?.length, 1);
     assert.equal(snapshot.failures?.[0]?.turn, 1);
+    // The failure names the user message it belongs to, by the id the projection gave it.
+    assert.equal(snapshot.failures?.[0]?.message_id, snapshot.messages[0]?.id);
+    assert.match(snapshot.failures?.[0]?.message_id ?? "", /^session-user-o(0|[1-9][0-9]*)$/);
     assert.match(snapshot.failures?.[0]?.message ?? "", /The run failed/);
     // The failure is not a message: the transcript still shows only the user turn.
     assert.deepEqual(snapshot.messages.map((message) => message.sender), ["user"]);
@@ -1578,8 +1581,15 @@ test("records a failed run outside messages.jsonl and leaves the transcript unto
     const afterSecond = await fetch(`${baseUrl}/api/sessions/session1`, {headers: {"if-none-match": snapshotEtag}});
     assert.equal(afterSecond.status, 200);
     assert.notEqual(afterSecond.headers.get("etag"), snapshotEtag);
-    const secondBody = (await afterSecond.json()) as {failures?: Array<{turn: number}>};
+    const secondBody = (await afterSecond.json()) as {
+      failures?: Array<{turn: number; message_id?: string}>;
+      messages: Array<{id: string; sender: string}>;
+    };
     assert.deepEqual(secondBody.failures?.map((failure) => failure.turn), [1, 2]);
+    // The second failure points at the second user message, not the first.
+    const userIds = secondBody.messages.filter((message) => message.sender === "user").map((message) => message.id);
+    assert.equal(userIds.length, 2);
+    assert.deepEqual(secondBody.failures?.map((failure) => failure.message_id), userIds);
   } finally {
     await running.close();
     await rm(root, {recursive: true, force: true});

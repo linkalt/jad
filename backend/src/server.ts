@@ -2010,6 +2010,8 @@ class AgentHttpApplication {
     // Set once the user input is in the transcript: a failure before that point
     // leaves no unanswered turn, so there is nothing to record.
     let acceptedSessionTurn: number | undefined;
+    // Id the web-ui projection gives the saved user message; absent for input with no text.
+    let acceptedMessageId: string | undefined;
     try {
       const normalizedRun = new WebUiNormalizedRun(turnId);
       run.setContentFallbackMessageProvider(() => normalizedRun.streamingMessage());
@@ -2027,8 +2029,9 @@ class AgentHttpApplication {
       const result = await handle.session.run(options.input, {
         turnId,
         signal: controller.signal,
-        onInputAccepted: (sessionTurn) => {
+        onInputAccepted: (sessionTurn, messageOffset) => {
           acceptedSessionTurn = sessionTurn;
+          acceptedMessageId = messageOffset === undefined ? undefined : `session-user-o${messageOffset}`;
         },
         // Only a frontend-capable run publishes a pending question. Headless runs
         // use the tool's configured auto-accept fallback instead.
@@ -2134,6 +2137,7 @@ class AgentHttpApplication {
         try {
           await handle.session.recordRunError({
             turn: acceptedSessionTurn,
+            ...(acceptedMessageId === undefined ? {} : {message_id: acceptedMessageId}),
             turn_id: turnId,
             at: new Date().toISOString(),
             message: failureMessage,

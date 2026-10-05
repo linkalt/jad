@@ -100,6 +100,41 @@ test("the store keeps failures beside the transcript and reset removes them", as
   }
 });
 
+test("appending input reports the byte offset of the last visible user message", async () => {
+  const dir = await tempDir();
+  try {
+    const store = await openStore(dir);
+    try {
+      const user = (text: string) => ({type: "message", role: "user", content: [{type: "input_text", text}]}) as const;
+      const first = await store.appendInputItems([user("first")]);
+      assert.equal(first.messageOffset, 0);
+
+      // The offset is where the record starts, so it equals the transcript size before the append.
+      const sizeBefore = (await stat(store.messagesPath)).size;
+      const second = await store.appendInputItems([user("second")]);
+      assert.equal(second.messageOffset, sizeBefore);
+
+      // A batch of several visible items points at the last one.
+      const sizeMid = (await stat(store.messagesPath)).size;
+      const batch = await store.appendInputItems([user("a"), user("b")]);
+      const lines = (await readFile(store.messagesPath, "utf8")).split("\n").filter((line) => line.length > 0);
+      const lastLine = lines[lines.length - 1] ?? "";
+      assert.ok(batch.messageOffset !== undefined && batch.messageOffset > sizeMid);
+      assert.equal((await stat(store.messagesPath)).size, batch.messageOffset + Buffer.byteLength(lastLine) + 1);
+
+      // Input the projection would not show as a message has no offset to point at.
+      const imageOnly = await store.appendInputItems([
+        {type: "message", role: "user", content: [{type: "input_image", image_url: "data:image/png;base64,AA=="}]},
+      ]);
+      assert.equal(imageOnly.messageOffset, undefined);
+    } finally {
+      await store.close();
+    }
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
 test("the store enforces the configured entry cap", async () => {
   const dir = await tempDir();
   try {
