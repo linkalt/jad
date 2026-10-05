@@ -25,13 +25,14 @@ type modelSummary struct {
 }
 
 // listingModelSummary names the model of a session for the session list. It reads
-// the session's own model.json without validating it, as the TypeScript list
-// does: a missing or malformed file, or a field that is not a non-empty string,
-// falls back to provider "unknown" and the session id as the model name, so one
-// broken model file never hides a session.
-func listingModelSummary(location sessionfs.Location) modelSummary {
+// the model file the session's settings select (config.ModelPath: the active
+// profile's model_default, or model.json beside setting.json) without validating
+// it, as the TypeScript list does: a missing or malformed file, or a field that
+// is not a non-empty string, falls back to provider "unknown" and the session id
+// as the model name, so one broken model file never hides a session.
+func listingModelSummary(location sessionfs.Location, config sessionfs.SessionConfig) modelSummary {
 	summary := modelSummary{Provider: "unknown", Model: location.SessionID}
-	contents, err := os.ReadFile(filepath.Join(location.Directory, "model.json"))
+	contents, err := os.ReadFile(config.ModelPath)
 	if err != nil {
 		return summary
 	}
@@ -174,7 +175,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			return httpapi.CatalogResponse{}, fmt.Errorf("read session transcript %q: %w", candidate.location.Reference, err)
 		}
 		record := makeSessionListRecord(candidate.location, candidate.config, index.turns, index.usage, candidate.runs)
-		record.Model = listingModelSummary(candidate.location)
+		record.Model = listingModelSummary(candidate.location, candidate.config)
 		// The TypeScript list reports usage only from an existing usage cache, so
 		// a session that has never completed a response carries no usage block.
 		if usageIsEmpty(index.usage) {

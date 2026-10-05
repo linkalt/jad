@@ -269,3 +269,81 @@ func TestSnapshotCursorsUseTurnByteOffsetsAndFetchWholeMessage(t *testing.T) {
 		t.Fatal("message fetch accepted a cursor from a different turn")
 	}
 }
+
+// TestSessionListNamesTheModelFileTheSettingsSelect checks that the session
+// list reports the provider and model of the file the active path profile
+// selects (paths.profiles.<name>.model_default), not of model.json beside
+// setting.json. The TypeScript list reads the selected file; reading model.json
+// showed another session's label whenever the two files differ.
+func TestSessionListNamesTheModelFileTheSettingsSelect(t *testing.T) {
+	workspace := t.TempDir()
+	rootDir := filepath.Join(workspace, "sessions")
+	write := func(session, name, contents string) {
+		t.Helper()
+		dir := filepath.Join(rootDir, session)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setting := func(paths string) string {
+		return fmt.Sprintf(`{"cwd":%q,"persistence":{"durability":"process","max_item_bytes":1048576,"response_metadata":"full"}%s}`, workspace, paths)
+	}
+	// profiled: the profile's default model is other.json, model.json differs.
+	write("profiled", "setting.json", setting(`,"paths":{"active_profile":"work","profiles":{"work":{"model_default":"other.json","models":["other.json","model.json"]}}}`))
+	write("profiled", "model.json", `{"provider":"plain","model":"plain-model"}`)
+	write("profiled", "other.json", `{"provider":"  selected  ","model":" selected-model "}`)
+	// first: no model_default, so the first listed model is the default.
+	write("first", "setting.json", setting(`,"paths":{"active_profile":"work","profiles":{"work":{"models":["second.json","model.json"]}}}`))
+	write("first", "model.json", `{"provider":"plain","model":"plain-model"}`)
+	write("first", "second.json", `{"provider":"listed","model":"listed-model"}`)
+	// plain: no profiles, model.json beside setting.json.
+	write("plain", "setting.json", setting(``))
+	write("plain", "model.json", `{"provider":"plain","model":"plain-model"}`)
+	// missing: the selected file does not exist.
+	write("missing", "setting.json", setting(`,"paths":{"active_profile":"work","profiles":{"work":{"model_default":"gone.json","models":["gone.json"]}}}`))
+	write("missing", "model.json", `{"provider":"plain","model":"plain-model"}`)
+	// partial: provider is not a string, model is blank.
+	write("partial", "setting.json", setting(`,"paths":{"active_profile":"work","profiles":{"work":{"model_default":"odd.json","models":["odd.json"]}}}`))
+	write("partial", "odd.json", `{"provider":7,"model":"   "}`)
+
+	roots := []sessionfs.Root{{ID: "primary", Label: "Primary", Directory: rootDir}}
+	resolver, err := NewResolver(roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50, MaxInlinePartBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := resolver.ListSessions(context.Background(), "", nil)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	var listed struct {
+		Sessions []struct {
+			SessionID string       `json:"session_id"`
+			Model     modelSummary `json:"model"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(list.Body, &listed); err != nil {
+		t.Fatalf("decode session list: %v", err)
+	}
+	got := map[string]modelSummary{}
+	for _, session := range listed.Sessions {
+		got[session.SessionID] = session.Model
+	}
+	want := map[string]modelSummary{
+		"profiled": {Provider: "selected", Model: "selected-model"},
+		"first":    {Provider: "listed", Model: "listed-model"},
+		"plain":    {Provider: "plain", Model: "plain-model"},
+		"missing":  {Provider: "unknown", Model: "missing"},
+		"partial":  {Provider: "unknown", Model: "partial"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("listed %d sessions, want %d: %+v", len(got), len(want), got)
+	}
+	for session, expected := range want {
+		if got[session] != expected {
+			t.Errorf("session %q model = %+v, want %+v", session, got[session], expected)
+		}
+	}
+}

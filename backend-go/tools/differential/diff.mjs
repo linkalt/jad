@@ -156,7 +156,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -233,6 +233,12 @@ async function writeFixtures(sessions, providerUrl) {
     if (id === "frontrec") setting.front_compaction = {delete_mode: "recoverable"};
     if (id === "compactme") {
       setting.compaction = {keepbatch: {turn: {type: "assistant_final", keep: 1}}};
+    }
+    if (id === "labelled") {
+      // The active profile selects selected.json, whose provider and model differ
+      // from model.json: the session list must name the selected file.
+      await writeFile(join(dir, "selected.json"), JSON.stringify({...model, provider: "acme", model: "label-model"}));
+      setting.paths = {active_profile: "one", profiles: {one: {model_default: "selected.json", models: ["selected.json", "model.json"]}}};
     }
     if (id === "profiled") {
       setting.paths = {active_profile: "one", profiles: {one: {models: ["model.json", "alternate.json"]}, two: {models: ["alternate.json"]}}};
