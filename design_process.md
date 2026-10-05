@@ -161,9 +161,9 @@ interface NativeProcessToolSettings extends NativePathPolicy {
   log_cap_bytes: number;            // default: 64 MiB per stream
   max_line_chars: number;           // default: bash setting
   strip_ansi: boolean;              // default: bash setting
-  env_file?: string;                // default: bash setting
-  env: Record<string, string>;      // default: bash setting plus safe defaults
-  env_deny: string[];               // default: bash setting; API key always denied
+  env_file?: string;                // optional strict dotenv; session-relative or absolute; own setting, not inherited from bash
+  env: Record<string, string>;      // safe defaults, then env_file, then inline env (inline wins)
+  env_deny: string[];               // removed last; API key always denied
   retention_days: number;           // default: 14; 0 disables pruning
   max_completed: number;            // default: 100 retained terminal records
   storage_dir: string;              // default: .processes under profile tool_storage (or setting.cwd without a profile)

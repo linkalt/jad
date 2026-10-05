@@ -315,6 +315,8 @@ export interface NativeProcessToolSettings extends NativePathPolicy {
   log_cap_bytes: number;
   max_line_chars: number;
   strip_ansi: boolean;
+  /** Resolved dotenv file loaded before inline environment overrides. */
+  env_file?: string;
   env: Record<string, string>;
   env_deny: string[];
   /** Resolved managed-process directory, relative to cwd when configured relatively. */
@@ -1658,6 +1660,20 @@ function parseBashEnvFile(contents: string, path: string): Record<string, string
   return env;
 }
 
+/** Resolves an optional `env_file` setting against the session directory and loads it. */
+async function loadConfiguredEnvFile(
+  value: unknown,
+  sessionDir: string,
+  settingPath: string,
+  tool: "bash" | "process",
+): Promise<{envFile?: string; fileEnv: Record<string, string>}> {
+  if (value === undefined) return {fileEnv: {}};
+  const configured = requiredString(value, "env_file", `${settingPath}: tools.native.${tool}`);
+  const envFile = resolve(sessionDir, configured);
+  const fileEnv = await loadBashEnvFile(envFile, `${settingPath}: tools.native.${tool}.env_file`);
+  return {envFile, fileEnv};
+}
+
 async function loadBashEnvFile(envFile: string, settingPath: string): Promise<Record<string, string>> {
   let contents: string;
   try {
@@ -1807,7 +1823,7 @@ const NATIVE_TOOL_KEYS: Record<NativeToolName, readonly string[]> = {
     "capture_bytes", "head_ratio",
   ],
   process: [
-    "env", "env_deny", "kill_grace_ms", "log_cap_bytes", "login_shell", "max_completed",
+    "env", "env_deny", "env_file", "kill_grace_ms", "log_cap_bytes", "login_shell", "max_completed",
     "max_line_chars", "max_running", "max_wait_timeout_ms", "paths", "retention_days",
     "shell", "statecontext", "status_log_bytes", "stderr", "stdout", "storage_dir",
     "strip_ansi", "wait_timeout_ms",
@@ -2287,18 +2303,7 @@ async function normalizeTools(
     if (typeof stripAnsi !== "boolean") {
       throw new ConfigError(`${path}: tools.native.bash.strip_ansi must be a boolean`);
     }
-    const envFileValue = bashValue.env_file;
-    let envFile: string | undefined;
-    let fileEnv: Record<string, string> = {};
-    if (envFileValue !== undefined) {
-      const configuredEnvFile = requiredString(
-        envFileValue,
-        "env_file",
-        `${path}: tools.native.bash`,
-      );
-      envFile = resolve(sessionDir, configuredEnvFile);
-      fileEnv = await loadBashEnvFile(envFile, `${path}: tools.native.bash.env_file`);
-    }
+    const {envFile, fileEnv} = await loadConfiguredEnvFile(bashValue.env_file, sessionDir, path, "bash");
     const envValue = bashValue.env ?? {};
     if (!isRecord(envValue)) {
       throw new ConfigError(`${path}: tools.native.bash.env must be an object`);
@@ -2618,11 +2623,12 @@ async function normalizeTools(
     if (typeof stripAnsi !== "boolean") {
       throw new ConfigError(`${path}: tools.native.process.strip_ansi must be a boolean`);
     }
+    const {envFile, fileEnv} = await loadConfiguredEnvFile(processValue.env_file, sessionDir, path, "process");
     const envValue = processValue.env ?? {};
     if (!isRecord(envValue)) {
       throw new ConfigError(`${path}: tools.native.process.env must be an object`);
     }
-    const env: Record<string, string> = {...DEFAULT_NATIVE_BASH_ENV};
+    const env: Record<string, string> = {...DEFAULT_NATIVE_BASH_ENV, ...fileEnv};
     for (const [name, value] of Object.entries(envValue)) {
       if (!ENVIRONMENT_NAME_PATTERN.test(name) || typeof value !== "string") {
         throw new ConfigError(`${path}: tools.native.process.env entries must be valid string environment variables`);
@@ -2661,6 +2667,7 @@ async function normalizeTools(
       log_cap_bytes: logCapBytes,
       max_line_chars: maxLineChars,
       strip_ansi: stripAnsi,
+      ...(envFile ? {env_file: envFile} : {}),
       env,
       env_deny: [...envDenyValue] as string[],
       storage_dir: storageDir,

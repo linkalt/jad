@@ -85,6 +85,69 @@ test("normalizes process settings and process storage paths", async () => {
   }
 });
 
+test("loads process env_file relative to the session with inline overrides and denials", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-process-env-file-"));
+  try {
+    await writeFile(join(directory, "process.env"), [
+      "# process-specific configuration",
+      "FILE_VALUE=from-file",
+      "OVERRIDDEN=from-file",
+      "QUOTED=\"line one\\nline two # literal\"",
+      "export DENIED=from-file",
+      "",
+    ].join("\n"));
+    await writeFile(join(directory, "setting.json"), JSON.stringify({
+      cwd: directory,
+      tools: {native: {process: {
+        env_file: "process.env",
+        env: {OVERRIDDEN: "inline"},
+        env_deny: ["DENIED"],
+      }}},
+    }));
+    const settings = await new SessionConfigLoader(directory).loadSettings();
+    const loaded = settings.tools.native.process!;
+    assert.equal(loaded.env_file, join(directory, "process.env"));
+    assert.equal(loaded.env.NO_COLOR, "1");
+    const {manager, run} = await makeRunner({env: loaded.env, env_deny: loaded.env_deny});
+    try {
+      const started = await run({
+        command: "printf '%s|%s|%s|%s' \"$FILE_VALUE\" \"$OVERRIDDEN\" \"$QUOTED\" \"${DENIED-unset}\"",
+      });
+      const completed = await run({action: "wait", id: resultId(started), timeout_ms: 1_000});
+      assert.match(completed, /from-file\|inline\|line one\nline two # literal\|unset/);
+    } finally {
+      await manager.close();
+    }
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("loads an absolute process env_file and rejects missing or malformed files", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-process-env-file-"));
+  try {
+    const envFile = join(directory, "absolute.env");
+    await writeFile(envFile, "ABSOLUTE_VALUE=available\n");
+    const configure = async (value: unknown) => {
+      await writeFile(join(directory, "setting.json"), JSON.stringify({
+        cwd: directory,
+        tools: {native: {process: {env_file: value}}},
+      }));
+      return new SessionConfigLoader(directory).loadSettings();
+    };
+    const settings = await configure(envFile);
+    assert.equal(settings.tools.native.process?.env_file, envFile);
+    assert.equal(settings.tools.native.process?.env.ABSOLUTE_VALUE, "available");
+
+    await assert.rejects(configure("missing.env"), /tools\.native\.process\.env_file: could not read/);
+    await assert.rejects(configure("   "), /env_file/);
+    await writeFile(join(directory, "bad.env"), "not an assignment\n");
+    await assert.rejects(configure("bad.env"), /bad\.env:1: expected NAME=value/);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test("starts, waits for, lists, and reports bounded process logs", async () => {
   const {directory, manager, run} = await makeRunner();
   try {
