@@ -196,6 +196,15 @@ export function parseListedFiles(text: string, truncated: boolean): string[] {
   return entries;
 }
 
+/** Truncates a rendered path by Unicode code point, after the NUL stream is parsed. */
+function truncateRenderedPath(path: string, maxLineChars: number): string {
+  const characters = Array.from(path);
+  if (maxLineChars <= 0 || characters.length <= maxLineChars) {
+    return path;
+  }
+  return `${characters.slice(0, maxLineChars).join("")} [... truncated line]`;
+}
+
 /** First non-empty line of a diagnostic, bounded for the result. */
 function firstDiagnosticLine(text: string): string {
   const line = text
@@ -269,7 +278,8 @@ export async function executeNativeGlob(
       // Diagnostics from the binary are only read for their first line.
       stderr: {headBytes: policy.max_bytes, tailBytes: 0},
       // The NUL list is a protocol, not model-visible text. Keep it intact
-      // until parseListedFiles() has reconstructed the exact paths.
+      // until parseListedFiles() has reconstructed the exact paths; the display
+      // line limit is applied only after each path has been decoded.
       maxLineChars: policy.max_bytes,
       stripAnsi: false,
       preserveNul: true,
@@ -350,7 +360,10 @@ export async function executeNativeGlob(
         ? "max_bytes"
         : undefined;
   const content = listed
-    .map((file) => /[\n\r]/.test(file.path) ? JSON.stringify(file.path) : file.path)
+    .map((file) => {
+      const renderedPath = /[\n\r]/.test(file.path) ? JSON.stringify(file.path) : file.path;
+      return truncateRenderedPath(renderedPath, policy.max_line_chars);
+    })
     .join("\n");
   const hints: string[] = [];
   if (truncated) {

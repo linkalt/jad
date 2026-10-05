@@ -187,6 +187,21 @@ test("lists files matching a pattern at any depth", {skip: ripgrepSkip}, async (
   }
 });
 
+test("truncates rendered paths with max_line_chars without corrupting the NUL list", {skip: ripgrepSkip}, async () => {
+  const {sessionDir, run} = await openGlobSession({max_line_chars: 24, max_bytes: 4096});
+  const filename = `${"a".repeat(23)}😀${"tail".repeat(8)}.txt`;
+  try {
+    await writeFile(join(sessionDir, filename), "x\n", "utf8");
+    const output = await run("glob-line-cap", {pattern: "*.txt"});
+    assert.equal(firstLine(output).status, "ok");
+    assert.equal(informationFields(output).files, "1");
+    assert.ok(output.includes(`${"a".repeat(23)}😀 [... truncated line]`));
+    assert.ok(!output.includes(filename), "the full long path should not be rendered");
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
 test("lists every visible file without a pattern", {skip: ripgrepSkip}, async () => {
   const {sessionDir, run} = await openGlobSession();
   try {
