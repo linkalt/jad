@@ -53,6 +53,14 @@ export function createAuthenticatedFetch(
   };
   const fragmentToken = fragmentParam ? takeTokenFromFragment(fragmentParam) : null;
   if (fragmentToken) saveToken(fragmentToken);
+  if (fragmentParam) {
+    // Adding a fragment to a page that is already open is a same-document
+    // navigation: nothing reloads, so the token has to be taken on the event.
+    globalThis.addEventListener?.('hashchange', () => {
+      const added = takeTokenFromFragment(fragmentParam);
+      if (added) saveToken(added);
+    });
+  }
   const askForToken = async (): Promise<string | null> => {
     if (typeof window === 'undefined' || typeof window.prompt !== 'function') return null;
     tokenPrompt ??= Promise.resolve().then(() => window.prompt('Enter the backend API token (AGENT_API_TOKEN):'))
@@ -75,7 +83,12 @@ export function createAuthenticatedFetch(
     const token = newerToken && newerToken !== attemptedToken
       ? newerToken
       : (await askForToken())?.trim() || null;
-    if (!token) return response;
+    if (!token) {
+      // The server rejected the stored token and no replacement was given:
+      // drop it, unless a concurrent request already replaced it.
+      if (attemptedToken && storedToken() === attemptedToken) saveToken(null);
+      return response;
+    }
     saveToken(token);
     response = await send(token);
     if (response.status === 401) saveToken(null);

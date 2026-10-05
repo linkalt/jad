@@ -129,3 +129,101 @@ test('a rejected replacement token is removed instead of retried indefinitely', 
     else globalThis.sessionStorage = previousStorage;
   }
 });
+
+function memoryStorage(entries) {
+  return {
+    getItem: key => entries.get(key) ?? null,
+    setItem: (key, value) => entries.set(key, value),
+    removeItem: key => entries.delete(key),
+  };
+}
+
+test('a stored token the server rejects is removed even when no replacement is given', async () => {
+  const previousWindow = globalThis.window;
+  const previousStorage = globalThis.sessionStorage;
+  const entries = new Map([['api-secret', 'stale']]);
+  globalThis.sessionStorage = memoryStorage(entries);
+  globalThis.window = {prompt: () => null};
+  try {
+    const sent = [];
+    const request = createAuthenticatedFetch('api-secret', async (_url, init) => {
+      sent.push(new Headers(init.headers).get('Authorization'));
+      return new Response(null, {status: 401});
+    });
+    assert.equal((await request('/api/sessions')).status, 401);
+    assert.equal(entries.has('api-secret'), false);
+    await request('/api/sessions');
+    assert.deepEqual(sent, ['Bearer stale', null]);
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = previousStorage;
+  }
+});
+
+test('a request without any token and no prompt answer leaves storage alone', async () => {
+  const previousWindow = globalThis.window;
+  const previousStorage = globalThis.sessionStorage;
+  const entries = new Map();
+  globalThis.sessionStorage = memoryStorage(entries);
+  globalThis.window = {prompt: () => null};
+  try {
+    const request = createAuthenticatedFetch('api-secret', async () => new Response(null, {status: 401}));
+    assert.equal((await request('/api/sessions')).status, 401);
+    assert.equal(entries.size, 0);
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = previousStorage;
+  }
+});
+
+test('a fragment added to an already loaded page is taken on hashchange', async () => {
+  const previous = {
+    window: globalThis.window,
+    storage: globalThis.sessionStorage,
+    location: globalThis.location,
+    history: globalThis.history,
+    add: Object.getOwnPropertyDescriptor(globalThis, 'addEventListener'),
+  };
+  const entries = new Map([['api-secret', 'old']]);
+  const listeners = [];
+  const history = fakeHistory();
+  globalThis.sessionStorage = memoryStorage(entries);
+  globalThis.window = {prompt: () => null};
+  globalThis.location = {hash: '', pathname: '/', search: ''};
+  globalThis.history = history;
+  Object.defineProperty(globalThis, 'addEventListener', {
+    configurable: true,
+    value: (type, listener) => listeners.push({type, listener}),
+  });
+  try {
+    const sent = [];
+    const request = createAuthenticatedFetch('api-secret', async (_url, init) => {
+      const header = new Headers(init.headers).get('Authorization');
+      sent.push(header);
+      return new Response(null, {status: header === 'Bearer fresh' ? 200 : 401});
+    }, 'api-token');
+    assert.deepEqual(listeners.map(item => item.type), ['hashchange']);
+    globalThis.location = {hash: '#api-token=fresh', pathname: '/', search: ''};
+    listeners[0].listener();
+    assert.equal(history.calls.length, 1);
+    assert.equal(history.calls[0].url, '/');
+    assert.equal((await request('/api/sessions')).status, 200);
+    assert.deepEqual(sent, ['Bearer fresh']);
+    assert.equal(entries.get('api-secret'), 'fresh');
+    // A real replaceState has already removed the fragment from the location.
+    globalThis.location = {hash: '', pathname: '/', search: ''};
+    listeners[0].listener();
+    assert.equal(history.calls.length, 1);
+  } finally {
+    if (previous.add) Object.defineProperty(globalThis, 'addEventListener', previous.add);
+    else delete globalThis.addEventListener;
+    for (const [key, value] of [['window', previous.window], ['sessionStorage', previous.storage], ['location', previous.location], ['history', previous.history]]) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  }
+});
