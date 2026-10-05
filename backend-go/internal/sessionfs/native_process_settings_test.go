@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -25,6 +26,7 @@ func TestNormalizeNativeProcessSettingsDefaultsAndInheritsBashPolicy(t *testing.
 		globalRoot,
 		settingPath,
 		cwd,
+		"",
 		"",
 		bash,
 		nil,
@@ -72,6 +74,7 @@ func TestNormalizeNativeProcessSettingsOverridesAndStorage(t *testing.T) {
 		globalRoot,
 		settingPath,
 		cwd,
+		"",
 		toolStorage,
 		nil,
 		&NativeWriteSettings{Policy: writePolicy},
@@ -139,7 +142,7 @@ func TestNormalizeNativeProcessSettingsValidatesUnsupportedValues(t *testing.T) 
 		`{"statecontext":{"states":["unknown"]}}`,
 		`{"statecontext":{"limit":0}}`,
 	} {
-		_, err := normalizeNativeProcessSettings(base(raw), globalRoot, settingPath, globalRoot, "", nil, nil)
+		_, err := normalizeNativeProcessSettings(base(raw), globalRoot, settingPath, globalRoot, "", "", nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "tools.native.process") {
 			t.Errorf("normalizeNativeProcessSettings(%s) error = %v, want process config error", raw, err)
 		}
@@ -151,12 +154,83 @@ func TestNormalizeNativeProcessLegacyStatusLogBytesDefaultsNull(t *testing.T) {
 	settingPath := filepath.Join(globalRoot, "setting.json")
 	legacy, err := normalizeNativeProcessSettings(
 		map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":{"status_log_bytes":null}}}`)},
-		globalRoot, settingPath, globalRoot, "", nil, nil,
+		globalRoot, settingPath, globalRoot, "", "", nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("normalizeNativeProcessSettings(legacy null) error = %v", err)
 	}
 	if legacy.Stdout != (NativeBashStreamBudget{TailBytes: 1}) || legacy.Stderr != (NativeBashStreamBudget{TailBytes: 1}) {
 		t.Fatalf("legacy null budgets = %+v/%+v", legacy.Stdout, legacy.Stderr)
+	}
+}
+
+func TestNormalizeNativeProcessSettingsLoadsEnvFileBelowInlineEnv(t *testing.T) {
+	sessionDir := t.TempDir()
+	settingPath := filepath.Join(sessionDir, "setting.json")
+	contents := strings.Join([]string{
+		"# process-specific configuration",
+		"FILE_VALUE=from-file",
+		"OVERRIDDEN=from-file",
+		`QUOTED="line one\nline two # literal"`,
+		"export DENIED=from-file",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(sessionDir, "process.env"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setting := map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":{"env_file":"process.env","env":{"OVERRIDDEN":"inline"},"env_deny":["DENIED"]}}}`)}
+	// The bash env_file must not leak into process.
+	bash := &NativeBashSettings{Env: map[string]string{"BASH_ONLY": "x"}, EnvFile: filepath.Join(sessionDir, "bash.env")}
+	settings, err := normalizeNativeProcessSettings(setting, sessionDir, settingPath, sessionDir, sessionDir, "", bash, nil)
+	if err != nil {
+		t.Fatalf("normalizeNativeProcessSettings() error = %v", err)
+	}
+	if settings.EnvFile != filepath.Join(sessionDir, "process.env") {
+		t.Fatalf("EnvFile = %q", settings.EnvFile)
+	}
+	want := map[string]string{
+		"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0",
+		"FILE_VALUE": "from-file", "OVERRIDDEN": "inline", "QUOTED": "line one\nline two # literal", "DENIED": "from-file",
+	}
+	if !reflect.DeepEqual(settings.Env, want) {
+		t.Fatalf("Env = %v, want %v", settings.Env, want)
+	}
+	if !reflect.DeepEqual(settings.EnvDeny, []string{"DENIED"}) {
+		t.Fatalf("EnvDeny = %v", settings.EnvDeny)
+	}
+}
+
+func TestNormalizeNativeProcessSettingsEnvFileAbsoluteAndErrors(t *testing.T) {
+	sessionDir := t.TempDir()
+	settingPath := filepath.Join(sessionDir, "setting.json")
+	absolute := filepath.Join(sessionDir, "absolute.env")
+	if err := os.WriteFile(absolute, []byte("ABSOLUTE_VALUE=available\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "bad.env"), []byte("not an assignment\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	load := func(value string) (*NativeProcessSettings, error) {
+		setting := map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":{"env_file":` + value + `}}}`)}
+		return normalizeNativeProcessSettings(setting, sessionDir, settingPath, sessionDir, sessionDir, "", nil, nil)
+	}
+	quoted, _ := json.Marshal(absolute)
+	settings, err := load(string(quoted))
+	if err != nil {
+		t.Fatalf("absolute env_file error = %v", err)
+	}
+	if settings.EnvFile != absolute || settings.Env["ABSOLUTE_VALUE"] != "available" {
+		t.Fatalf("absolute env_file settings = %q %v", settings.EnvFile, settings.Env)
+	}
+	for value, want := range map[string]string{
+		`"missing.env"`: "tools.native.process.env_file: could not read",
+		`"   "`:         "tools.native.process: env_file must be a non-empty string",
+		`null`:          "tools.native.process: env_file must be a non-empty string",
+		`7`:             "tools.native.process: env_file must be a non-empty string",
+		`"bad.env"`:     "bad.env:1: expected NAME=value",
+	} {
+		if _, err := load(value); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("env_file %s error = %v, want %q", value, err, want)
+		}
 	}
 }

@@ -231,6 +231,31 @@ function toolboxScenarios() {
       toolRound("fetch", {url: "http://localhost/x", limit: 0}),
       toolRound("fetch", {url: "http://user:pw@example.com/"}),
     ]),
+    {
+      name: "process env_file: file below inline env, denial last",
+      provider: {steps: [
+        toolRound("process", {command: "printf '%s|%s|%s|%s|%s' \"$FILE_VALUE\" \"$OVERRIDDEN\" \"$QUOTED\" \"${DENIED-unset}\" \"$NO_COLOR\""}),
+        toolRound("process", {action: "wait", id: (r) => generated(r, 0, /process_id: (\S+)/), timeout_ms: 5000}),
+        {text: "finished"},
+      ]},
+      run: async (c) => {
+        await call(c, "POST", "/api/sessions/procenv/reset", {body: {}});
+        const result = await sse(c, "/api/sessions/procenv/run", {method: "POST", body: {input: "env file"}});
+        return {names: eventNames(result), outputs: toolOutputs(c.provider.requests.at(-1))};
+      },
+    },
+    {
+      name: "process env_file: missing file is a configuration error",
+      provider: {text: "unused"},
+      run: async (c) => {
+        await call(c, "POST", "/api/sessions/procenvbad/reset", {body: {}});
+        return {
+          run: await sse(c, "/api/sessions/procenvbad/run", {method: "POST", body: {input: "env file"}}),
+          snapshot: await call(c, "GET", "/api/sessions/procenvbad"),
+          providerRequests: c.provider.requests.length,
+        };
+      },
+    },
     // A successful fetch needs a host that resolves publicly (the tool refuses
     // loopback and private addresses), so it only runs with DIFF_NETWORK=1.
     ...(process.env.DIFF_NETWORK === "1" ? [toolboxRun("toolbox: fetch success (network)", [

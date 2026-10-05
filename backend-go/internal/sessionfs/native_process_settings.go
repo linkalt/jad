@@ -51,6 +51,7 @@ type NativeProcessSettings struct {
 	LogCapBytes      int64
 	MaxLineChars     int64
 	StripANSI        bool
+	EnvFile          string
 	Env              map[string]string
 	EnvDeny          []string
 	StorageDir       string
@@ -59,7 +60,7 @@ type NativeProcessSettings struct {
 
 func normalizeNativeProcessSettings(
 	setting map[string]json.RawMessage,
-	globalJadRoot, settingPath, cwd, toolStorageDir string,
+	globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir string,
 	bash *NativeBashSettings,
 	write *NativeWriteSettings,
 ) (*NativeProcessSettings, error) {
@@ -89,7 +90,7 @@ func normalizeNativeProcessSettings(
 	}
 	for key := range fields {
 		switch key {
-		case "shell", "login_shell", "kill_grace_ms", "max_running", "max_completed", "retention_days", "wait_timeout_ms", "max_wait_timeout_ms", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "strip_ansi", "env", "env_deny", "storage_dir", "paths", "statecontext":
+		case "shell", "login_shell", "kill_grace_ms", "max_running", "max_completed", "retention_days", "wait_timeout_ms", "max_wait_timeout_ms", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "strip_ansi", "env_file", "env", "env_deny", "storage_dir", "paths", "statecontext":
 		default:
 			return nil, configError("%s: tools.native.process.%s is not supported", settingPath, key)
 		}
@@ -185,6 +186,16 @@ func normalizeNativeProcessSettings(
 		if err := json.Unmarshal(raw, &settings.StripANSI); err != nil {
 			return nil, configError("%s: tools.native.process.strip_ansi must be a boolean", settingPath)
 		}
+	}
+	// Safe defaults, then env_file, then inline env (inline wins). env_file is
+	// the process tool's own setting and is not inherited from bash.
+	envFile, fileEnv, err := loadConfiguredEnvFile(fields, sessionDir, settingPath, "process")
+	if err != nil {
+		return nil, err
+	}
+	settings.EnvFile = envFile
+	for name, value := range fileEnv {
+		settings.Env[name] = value
 	}
 	if raw, ok := fields["env"]; ok && strings.TrimSpace(string(raw)) != "null" {
 		var values map[string]json.RawMessage

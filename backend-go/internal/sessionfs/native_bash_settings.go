@@ -172,26 +172,13 @@ func normalizeNativeBashSettings(
 
 	settings.Env = map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}
 	settings.EnvDeny = []string{}
-	if rawEnvFile, ok := fields["env_file"]; ok {
-		if strings.TrimSpace(string(rawEnvFile)) == "null" {
-			return nil, configError("%s: tools.native.bash.env_file must be a non-empty string", settingPath)
-		}
-		configured, err := bashString(fields, "env_file", "", settingPath+": tools.native.bash", false)
-		if err != nil {
-			return nil, err
-		}
-		envFile := expandHome(configured)
-		if !filepath.IsAbs(envFile) {
-			envFile = resolveFrom(sessionDir, envFile)
-		}
-		fileEnv, err := loadNativeBashEnvFile(envFile, settingPath+": tools.native.bash.env_file")
-		if err != nil {
-			return nil, err
-		}
-		settings.EnvFile = envFile
-		for name, value := range fileEnv {
-			settings.Env[name] = value
-		}
+	envFile, fileEnv, err := loadConfiguredEnvFile(fields, sessionDir, settingPath, "bash")
+	if err != nil {
+		return nil, err
+	}
+	settings.EnvFile = envFile
+	for name, value := range fileEnv {
+		settings.Env[name] = value
 	}
 	if rawEnv, ok := fields["env"]; ok && strings.TrimSpace(string(rawEnv)) != "null" {
 		var values map[string]json.RawMessage

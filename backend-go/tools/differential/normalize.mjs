@@ -13,6 +13,7 @@ export function normalize(value, {root, sessions, port, providerUrl}) {
       // "ENOENT: no such file or directory, open '…'", Go "open …: no such file
       // or directory") and cannot be matched, so only the prefix is compared.
       .replace(/(could not read MCP server config): .*/, "$1: $OSERROR")
+      .replace(/(env_file: could not read \S+): .*/, "$1: $OSERROR")
       // Recoverable front-compaction archives: timestamp plus random suffix.
       .replace(/messages-\d{8}T\d{9}Z-[0-9a-f]{8}\.jsonl/g, "messages-$STAMP.jsonl")
       // Edit backups are named by wall-clock milliseconds plus a random suffix.

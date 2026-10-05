@@ -137,7 +137,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "spilldefault", "spillalways", "spilloff", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -170,6 +170,19 @@ async function writeFixtures(sessions, providerUrl) {
       setting.max_tool_rounds = 30;
       setting.tool_definition_paths = [toolboxManifest];
       setting.tools = {native: {read: {}, grep: {}, glob: {}, memory: {}, task: {}, process: {}, fetch: {}}};
+    }
+    if (id === "procenv") {
+      // process.env_file is loaded below the inline env, and env_deny removes last.
+      setting.cwd = toolbox;
+      setting.max_tool_rounds = 8;
+      setting.tool_definition_paths = [toolboxManifest];
+      setting.tools = {native: {process: {env_file: "process.env", env: {OVERRIDDEN: "inline"}, env_deny: ["DENIED"]}}};
+      await writeFile(join(dir, "process.env"), ["# process-specific configuration", "FILE_VALUE=from-file", "OVERRIDDEN=from-file", 'QUOTED="line one\\nline two # literal"', "export DENIED=from-file", ""].join("\n"));
+    }
+    if (id === "procenvbad") {
+      setting.cwd = toolbox;
+      setting.tool_definition_paths = [toolboxManifest];
+      setting.tools = {native: {process: {env_file: "missing.env"}}};
     }
     if (id === "nokey") await writeFile(join(dir, "model.json"), JSON.stringify({...model, api_key_env: "DIFF_UNSET_KEY"}));
     // Valid JSON that fails validation. A syntax error would only compare V8's

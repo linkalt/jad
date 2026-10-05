@@ -314,6 +314,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		location.Root.GlobalJadRoot,
 		settingPath,
 		cwd,
+		location.Directory,
 		storagePaths.ToolStorage,
 		nativeBash,
 		nativeWrite,
