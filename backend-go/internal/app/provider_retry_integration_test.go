@@ -182,3 +182,49 @@ func TestProviderRetryNullRefusesTheRunAndNamesTheKey(t *testing.T) {
 		t.Fatalf("status = %d, body = %s; want 422 naming provider_retry.max_retries", status, body)
 	}
 }
+
+func TestProviderRetryWaitsAreAnnouncedOnTheRunStreamAndClearedBeforeTheResponse(t *testing.T) {
+	f := newRetryFixture(t, `{"max_retries":3,"initial_delay_ms":1,"max_delay_ms":20}`, http.StatusTooManyRequests)
+	stream, requests := f.run(2)
+	if requests != 3 {
+		t.Fatalf("provider requests = %d, want 3", requests)
+	}
+	waits := strings.Count(stream, "event: provider_retry")
+	if waits != 3 {
+		t.Fatalf("provider_retry events = %d, want two waits and one clear:\n%s", waits, stream)
+	}
+	for _, want := range []string{`"attempt":1`, `"attempt":2`, `"max_retries":3`, `"status":429`, `"waiting":null`, `"resume_at":"`} {
+		if !strings.Contains(stream, want) {
+			t.Errorf("stream lacks %s:\n%s", want, stream)
+		}
+	}
+	if last, completed := strings.LastIndex(stream, "event: provider_retry"), strings.Index(stream, "event: completed"); last > completed {
+		t.Fatalf("the notice was cleared after the run completed:\n%s", stream)
+	}
+	transcript, err := os.ReadFile(filepath.Join(f.sessionDir, "messages.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(transcript), "provider_retry") || strings.Contains(string(transcript), "resume_at") {
+		t.Fatalf("the retry notice reached the transcript:\n%s", transcript)
+	}
+}
+
+func TestProviderRetryUsedUpClearsTheNoticeBeforeTheError(t *testing.T) {
+	f := newRetryFixture(t, `{"max_retries":2,"initial_delay_ms":1,"max_delay_ms":20}`, http.StatusServiceUnavailable)
+	stream, _ := f.run(100)
+	if got := strings.Count(stream, "event: provider_retry"); got != 3 {
+		t.Fatalf("provider_retry events = %d, want two waits and one clear:\n%s", got, stream)
+	}
+	if last, failed := strings.LastIndex(stream, "event: provider_retry"), strings.Index(stream, "event: error"); failed < 0 || last > failed {
+		t.Fatalf("the notice must be cleared before the error:\n%s", stream)
+	}
+}
+
+func TestARequestThatWorksFirstTimeSendsNoProviderRetryEvent(t *testing.T) {
+	f := newRetryFixture(t, `{"max_retries":3,"initial_delay_ms":1,"max_delay_ms":20}`, http.StatusTooManyRequests)
+	stream, _ := f.run(0)
+	if strings.Contains(stream, "provider_retry") {
+		t.Fatalf("unexpected provider_retry event:\n%s", stream)
+	}
+}

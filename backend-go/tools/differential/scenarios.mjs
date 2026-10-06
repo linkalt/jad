@@ -360,6 +360,40 @@ function providerRetryScenarios() {
     attempt("a 429 whose x-ratelimit-reset is in epoch seconds is capped too", "retryslow", {status: 429, headers: {"x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 3600)}}),
     attempt("a 429 with an unreadable or past x-ratelimit-reset keeps the backoff", "retryslow", {steps: [{status: 429, headers: {"x-ratelimit-reset": "6m0s"}}, {status: 429, headers: {"x-ratelimit-reset": String(Date.now() - 60000)}}, {text: "recovered"}]}),
     {
+      // The provider_retry event: one per wait, then one that clears it. Retry-After-Ms
+      // fixes wait_ms, so the whole payload is compared except resume_at, which is a
+      // clock reading the normalizer masks.
+      name: "provider retry: each wait is announced and the notice is cleared",
+      provider: {steps: [{status: 429, headers: quick}, {status: 503, headers: quick}, {text: "recovered"}]},
+      run: async (c) => {
+        await call(c, "POST", "/api/sessions/retrymany/reset", {body: {}});
+        const run = await sse(c, "/api/sessions/retrymany/run", {method: "POST", body: {input: "hello announce"}});
+        const notices = run.events.filter((e) => e.event === "provider_retry").map((e) => e.data);
+        return {
+          names: eventNames(run),
+          notices,
+          turnMatches: notices.every((n) => n.turn_id === run.events.find((e) => e.event === "run")?.data?.turn_id),
+          clearedBeforeCompleted: eventNames(run).lastIndexOf("provider_retry") < eventNames(run).indexOf("completed"),
+          records: await messagesJsonl(c, "retrymany").catch(() => null),
+        };
+      },
+    },
+    {
+      name: "provider retry: used-up retries clear the notice before the error",
+      provider: {status: 503, headers: quick},
+      run: async (c) => {
+        await call(c, "POST", "/api/sessions/retrymany/reset", {body: {}});
+        const run = await sse(c, "/api/sessions/retrymany/run", {method: "POST", body: {input: "hello exhausted"}});
+        const names = eventNames(run);
+        return {
+          names,
+          notices: run.events.filter((e) => e.event === "provider_retry").map((e) => e.data),
+          clearedBeforeError: names.lastIndexOf("provider_retry") < names.indexOf("error"),
+          error: run.events.find((e) => e.event === "error")?.data?.message ?? null,
+        };
+      },
+    },
+    {
       name: "provider retry: null max_retries refuses the run",
       run: async (c) => ({run: await call(c, "POST", "/api/sessions/retrybad/run", {body: {input: "go"}}), snapshot: await call(c, "GET", "/api/sessions/retrybad")}),
     },

@@ -497,3 +497,47 @@ test('a keep-alive comment frame resets the stall watchdog and is otherwise igno
   assert.deepEqual(events, ['run', 'completed:finished after a long tool call']);
   assert.equal(result.message?.text, 'finished after a long tool call');
 });
+
+test('a provider_retry event reaches the caller as a wait, and null or a malformed one clears it', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const runningRun = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  const finalMessage = message('complete', 'recovered');
+  const wait = {attempt: 1, max_retries: 3, status: 429, wait_ms: 2000, resume_at: '2026-01-01T00:00:02.000Z'};
+  responses.push(streamResponse([
+    {event: 'run', data: runningRun},
+    {event: 'provider_retry', data: {turn_id: 'turn-1', waiting: wait}},
+    {event: 'provider_retry', data: {turn_id: 'turn-1', waiting: {...wait, attempt: 2, status: null}}},
+    {event: 'provider_retry', data: {turn_id: 'turn-1', waiting: {attempt: 'two'}}},
+    {event: 'provider_retry', data: {turn_id: 'turn-1', waiting: wait}},
+    {event: 'provider_retry', data: {turn_id: 'turn-1', waiting: null}},
+    {event: 'provider_retry', data: {waiting: wait}},
+    {event: 'completed', data: {message: finalMessage, committed: true}},
+    {event: 'done', data: {}},
+  ]));
+  const seen = [];
+  const result = await streamSessionRun('session-1', 'hello', {
+    onProviderRetry: (turnId, value) => seen.push({turnId, attempt: value?.attempt, status: value?.status, resumeAtMs: value?.resumeAtMs}),
+  });
+  assert.deepEqual(seen, [
+    {turnId: 'turn-1', attempt: 1, status: 429, resumeAtMs: Date.parse('2026-01-01T00:00:02.000Z')},
+    {turnId: 'turn-1', attempt: 2, status: null, resumeAtMs: Date.parse('2026-01-01T00:00:02.000Z')},
+    {turnId: 'turn-1', attempt: undefined, status: undefined, resumeAtMs: undefined},
+    {turnId: 'turn-1', attempt: 1, status: 429, resumeAtMs: Date.parse('2026-01-01T00:00:02.000Z')},
+    {turnId: 'turn-1', attempt: undefined, status: undefined, resumeAtMs: undefined},
+  ], 'the event without a turn_id is ignored');
+  assert.equal(result.message?.text, 'recovered');
+});
+
+test('a run that never retries, and a caller that does not listen, are unaffected by provider_retry', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  responses.push(streamResponse([
+    {event: 'run', data: {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'}},
+    {event: 'provider_retry', data: {turn_id: 'turn-1', waiting: {attempt: 1, max_retries: 2, status: 503, wait_ms: 1, resume_at: '2026-01-01T00:00:00.001Z'}}},
+    {event: 'completed', data: {message: message('complete', 'fine'), committed: true}},
+    {event: 'done', data: {}},
+  ]));
+  const result = await streamSessionRun('session-1', 'hello', {});
+  assert.equal(result.message?.text, 'fine');
+});

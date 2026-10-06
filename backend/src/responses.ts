@@ -5,7 +5,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 
 import type {ProviderRetrySettings} from "./config.js";
-import {withProviderRetry} from "./provider-retry.js";
+import {withProviderRetry, type ProviderRetryWait} from "./provider-retry.js";
 import {
   PersistenceError,
   type CommitResult,
@@ -39,6 +39,12 @@ export interface PersistResponseStreamOptions {
    * defaults apply, as before the setting existed.
    */
   retry?: ProviderRetrySettings;
+  /**
+   * Reports a retry wait before it starts, and `null` once the wait is over (the stream
+   * opened, the request failed for good, or the run was stopped). Only called when a
+   * retry happened, so a request that succeeds first time reports nothing.
+   */
+  onProviderRetry?: (waiting: ProviderRetryWait | null) => void;
 }
 
 export interface PersistedResponse extends CommitResult {
@@ -182,14 +188,29 @@ export async function persistOpenAIResponse(
       ...(options.retry ? {maxRetries: 0} : {}),
     });
   // Only opening the stream is retried; a failure after events arrived is not.
-  const stream = options.retry
-    ? await withProviderRetry(options.retry, open, options.signal, {
-        onRetry: ({attempt, delayMs, status}) => {
-          console.warn(
-            `[provider-retry] attempt=${attempt}/${options.retry?.max_retries} status=${status ?? "connection"} wait_ms=${delayMs}`,
-          );
-        },
-      })
-    : await open();
+  let reported = false;
+  let stream: Awaited<ReturnType<typeof open>>;
+  try {
+    stream = options.retry
+      ? await withProviderRetry(options.retry, open, options.signal, {
+          onRetry: ({attempt, delayMs, status}) => {
+            console.warn(
+              `[provider-retry] attempt=${attempt}/${options.retry?.max_retries} status=${status ?? "connection"} wait_ms=${delayMs}`,
+            );
+            reported = true;
+            options.onProviderRetry?.({
+              attempt,
+              max_retries: options.retry?.max_retries ?? attempt,
+              status: status ?? null,
+              wait_ms: delayMs,
+              resume_at: new Date(Date.now() + delayMs).toISOString(),
+            });
+          },
+        })
+      : await open();
+  } finally {
+    // The opening request is over, whether it worked, failed for good or was stopped.
+    if (reported) options.onProviderRetry?.(null);
+  }
   return persistResponseStream(store, stream as AsyncIterable<ResponseStreamEvent>, options);
 }

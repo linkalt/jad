@@ -119,6 +119,39 @@ test("publishes and replays a pending interaction without requiring a UI message
   registry.clear();
 });
 
+test("publishes a provider retry wait, replays it to a late subscriber, and drops it when cleared or finished", () => {
+  const registry = new SessionRunRegistry(60_000);
+  const run = registry.begin("session1", undefined, "web-turn-1", new AbortController());
+  const waiting = {attempt: 2, max_retries: 5, status: 429, wait_ms: 4000, resume_at: "2026-01-01T00:00:04.000Z"};
+  const live: Array<{event: string; data: unknown}> = [];
+  run.subscribe(event => live.push(event));
+
+  run.setProviderRetry(null);
+  assert.deepEqual(live, [], "clearing a wait that was never set sends nothing");
+
+  run.setProviderRetry(waiting);
+  assert.deepEqual(live, [{event: "provider_retry", data: {turn_id: "web-turn-1", waiting}}]);
+
+  const late: Array<{event: string; data: unknown}> = [];
+  run.subscribe(event => late.push(event));
+  assert.deepEqual(late, [{event: "provider_retry", data: {turn_id: "web-turn-1", waiting}}]);
+
+  run.setProviderRetry(null);
+  assert.deepEqual(live.at(-1), {event: "provider_retry", data: {turn_id: "web-turn-1", waiting: null}});
+  const afterClear: Array<{event: string; data: unknown}> = [];
+  run.subscribe(event => afterClear.push(event));
+  assert.deepEqual(afterClear, [], "a cleared wait is not replayed");
+
+  run.setProviderRetry(waiting);
+  run.finish("failed", [{event: "done", data: {}}]);
+  const afterFinish: Array<{event: string; data: unknown}> = [];
+  run.subscribe(event => afterFinish.push(event));
+  assert.deepEqual(afterFinish.map(event => event.event), ["done"], "a finished run keeps no wait");
+  run.setProviderRetry(waiting);
+  assert.equal(afterFinish.length, 1, "a finished run publishes nothing more");
+  registry.clear();
+});
+
 test("describes a run while it is in flight and after it finishes", () => {
   const registry = new SessionRunRegistry(60_000);
   const controller = new AbortController();

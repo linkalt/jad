@@ -7,6 +7,7 @@ import {
   type RestoreMode,
   type RestorePlan,
 } from './checkpoint-view.ts';
+import {parseProviderRetryWait, type ProviderRetryWait} from './provider-retry-view.ts';
 
 const authenticatedFetch = createAuthenticatedFetch(
   appConfig.api_token_storage_key,
@@ -998,6 +999,11 @@ export interface StreamSessionRunOptions {
   onRun?: (run: SessionRunState) => void;
   /** A pending user decision for this run; `undefined` clears the interaction. */
   onInteraction?: (turnId: string, interaction: WebUiInteraction | undefined) => void;
+  /**
+   * The run is waiting to retry a failed provider request; `undefined` clears the
+   * notice (the wait ended, or the event was malformed, so a bad one never sticks).
+   */
+  onProviderRetry?: (turnId: string, wait: ProviderRetryWait | undefined) => void;
   onIdle?: () => void;
   /**
    * How long the run response or event stream may stay silent before it counts
@@ -1083,6 +1089,12 @@ async function consumeRunStream(
             message.data.turn_id,
             message.data.pending === null ? undefined : message.data.pending,
           );
+        }
+        continue;
+      }
+      if (message.event === 'provider_retry') {
+        if (isRecord(message.data) && typeof message.data.turn_id === 'string') {
+          options.onProviderRetry?.(message.data.turn_id, parseProviderRetryWait(message.data.waiting));
         }
         continue;
       }

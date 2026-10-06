@@ -173,6 +173,10 @@ type activeRun struct {
 	terminal           []streamEvent
 	subscribers        map[*eventQueue]struct{}
 	done               chan struct{}
+
+	// providerRetry is the provider retry the run is waiting on, replayed to a client
+	// that attaches mid-wait. nil when the run is not waiting. Guarded by mu.
+	providerRetry *providerRetryWait
 }
 
 type runRegistry struct {
@@ -349,6 +353,11 @@ func (r *activeRun) subscribe() *eventQueue {
 				pending = &copy
 			}
 			if event, err := makeSSEEvent("interaction", map[string]any{"turn_id": r.turnID, "pending": pending}); err == nil {
+				queue.push(event, false)
+			}
+		}
+		if r.providerRetry != nil {
+			if event, err := makeSSEEvent("provider_retry", map[string]any{"turn_id": r.turnID, "waiting": r.providerRetry}); err == nil {
 				queue.push(event, false)
 			}
 		}
@@ -589,6 +598,7 @@ func (r *activeRun) finish(status string, terminal []streamEvent) {
 		return
 	}
 	r.status = status
+	r.providerRetry = nil
 	r.finishedAt = time.Now()
 	r.terminal = append([]streamEvent(nil), terminal...)
 	for _, event := range terminal {

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	streamresponses "example.com/agent-harness/backend-go/internal/responses"
 	openai "github.com/openai/openai-go/v3"
 )
 
@@ -431,5 +432,95 @@ func TestStreamReportsEachRetryToTheCallback(t *testing.T) {
 	}
 	if len(seen) != 2 || seen[0].Status != 429 || seen[0].Attempt != 1 || seen[1].Status != 503 || seen[1].Attempt != 2 || seen[1].MaxRetries != 3 {
 		t.Fatalf("callback events = %+v", seen)
+	}
+}
+
+// notices records what a stream reports to the context's retry notifier: a wait as
+// "w<attempt>:<status>:<delay>" and the end of the wait as "clear".
+func notices(log *[]string) streamresponses.RetryNotifier {
+	return func(wait *streamresponses.RetryWait) {
+		if wait == nil {
+			*log = append(*log, "clear")
+			return
+		}
+		*log = append(*log, fmt.Sprintf("w%d/%d:%d:%v", wait.Attempt, wait.MaxRetries, wait.Status, wait.Delay))
+	}
+}
+
+func TestStreamAnnouncesEachWaitAndClearsItOnceTheStreamOpens(t *testing.T) {
+	server, _ := providerServer(t, providerReply{status: 429}, providerReply{status: 503}, providerReply{})
+	client, _ := retryClient(server, &RetryConfig{MaxRetries: 3, InitialDelay: 500 * time.Millisecond, MaxDelay: 8 * time.Second})
+	var log []string
+	ctx := streamresponses.WithRetryNotifier(context.Background(), notices(&log))
+	if _, err := stream(client, ctx); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	want := []string{"w1/3:429:500ms", "w2/3:503:1s", "clear"}
+	if strings.Join(log, " ") != strings.Join(want, " ") {
+		t.Fatalf("notices = %v, want %v", log, want)
+	}
+}
+
+func TestStreamClearsTheWaitWhenTheRetriesAreUsedUp(t *testing.T) {
+	server, _ := providerServer(t, providerReply{status: 503})
+	client, _ := retryClient(server, &RetryConfig{MaxRetries: 2, InitialDelay: time.Millisecond, MaxDelay: time.Second})
+	var log []string
+	ctx := streamresponses.WithRetryNotifier(context.Background(), notices(&log))
+	if _, err := stream(client, ctx); err == nil {
+		t.Fatal("want an error")
+	}
+	if len(log) != 3 || log[2] != "clear" {
+		t.Fatalf("notices = %v, want two waits then clear", log)
+	}
+}
+
+func TestStreamClearsTheWaitWhenTheRunIsStoppedDuringIt(t *testing.T) {
+	server, _ := providerServer(t, providerReply{status: 429})
+	client, _ := retryClient(server, &RetryConfig{MaxRetries: 5, InitialDelay: time.Millisecond, MaxDelay: time.Second})
+	ctx, cancel := context.WithCancel(context.Background())
+	client.sleep = func(ctx context.Context, _ time.Duration) error {
+		cancel()
+		return ctx.Err()
+	}
+	var log []string
+	ctx = streamresponses.WithRetryNotifier(ctx, notices(&log))
+	if _, err := stream(client, ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if len(log) != 2 || log[1] != "clear" {
+		t.Fatalf("notices = %v, want one wait then clear", log)
+	}
+}
+
+func TestStreamReportsAConnectionFailureWithStatusZero(t *testing.T) {
+	server, _ := providerServer(t, providerReply{})
+	url := server.URL
+	server.Close()
+	client := NewClient(Config{APIKey: "k", BaseURL: url + "/v1/", Retry: &RetryConfig{MaxRetries: 1, InitialDelay: time.Millisecond, MaxDelay: time.Second}})
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+	client.random = func() float64 { return 0 }
+	var log []string
+	ctx := streamresponses.WithRetryNotifier(context.Background(), notices(&log))
+	_, _ = stream(client, ctx)
+	if len(log) != 2 || !strings.HasPrefix(log[0], "w1/1:0:") {
+		t.Fatalf("notices = %v, want a wait with status 0 then clear", log)
+	}
+}
+
+func TestStreamAnnouncesNothingWhenTheFirstRequestWorksOrThereIsNoNotifier(t *testing.T) {
+	server, _ := providerServer(t, providerReply{})
+	client, _ := retryClient(server, &RetryConfig{MaxRetries: 3, InitialDelay: time.Millisecond, MaxDelay: time.Second})
+	var log []string
+	ctx := streamresponses.WithRetryNotifier(context.Background(), notices(&log))
+	if _, err := stream(client, ctx); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(log) != 0 {
+		t.Fatalf("notices = %v, want none", log)
+	}
+	failing, _ := providerServer(t, providerReply{status: 429}, providerReply{})
+	other, _ := retryClient(failing, &RetryConfig{MaxRetries: 3, InitialDelay: time.Millisecond, MaxDelay: time.Second})
+	if _, err := stream(other, context.Background()); err != nil {
+		t.Fatalf("a retry without a notifier must still work: %v", err)
 	}
 }

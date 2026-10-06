@@ -236,3 +236,124 @@ test("a stop during a retry wait ends the run at once and makes no further attem
     await f.close();
   }
 });
+
+type RetryNotice = {turn_id: string; waiting: null | {attempt: number; max_retries: number; status: number | null; wait_ms: number; resume_at: string}};
+const notices = (events: Array<{event: string; data: Record<string, unknown>}>) =>
+  events.filter((e) => e.event === "provider_retry").map((e) => e.data as unknown as RetryNotice);
+
+test("each retry wait is announced on the run stream and cleared before the response streams", async () => {
+  const f = await fixture({
+    steps: [{error: rateLimit({"retry-after-ms": "40"})}, {error: rateLimit({"retry-after-ms": "40"})}, {text: "recovered"}],
+    providerRetry: {max_retries: 4, initial_delay_ms: 1, max_delay_ms: 50},
+  });
+  try {
+    const before = Date.now();
+    const events = await run(f.baseUrl);
+    const runEvent = events.find((e) => e.event === "run");
+    const sent = notices(events);
+    assert.equal(sent.length, 3, "two waits and one clear");
+    assert.deepEqual(sent.map((n) => n.waiting?.attempt ?? null), [1, 2, null]);
+    for (const n of sent) assert.equal(n.turn_id, runEvent?.data.turn_id);
+    const first = sent[0]!.waiting!;
+    assert.equal(first.status, 429);
+    assert.equal(first.max_retries, 4);
+    assert.equal(first.wait_ms, 40, "the wait the loop sleeps, here the provider's Retry-After-Ms");
+    const resumeAt = Date.parse(first.resume_at);
+    assert.ok(Number.isFinite(resumeAt) && resumeAt >= before + 30 && resumeAt <= Date.now() + 40, first.resume_at);
+    const order = names(events);
+    const cleared = order.lastIndexOf("provider_retry");
+    assert.ok(cleared < order.indexOf("completed"), order.join(","));
+    assert.equal(errorMessage(events), undefined);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a request that works first time sends no provider_retry event", async () => {
+  const f = await fixture({steps: [{text: "fine"}], providerRetry: {max_retries: 3, initial_delay_ms: 1}});
+  try {
+    const events = await run(f.baseUrl);
+    assert.deepEqual(notices(events), []);
+    assert.ok(names(events).includes("completed"));
+  } finally {
+    await f.close();
+  }
+});
+
+test("a connection failure is announced with status null", async () => {
+  const f = await fixture({
+    steps: [{error: new OpenAI.APIConnectionError({message: "ECONNRESET"})}, {text: "back"}],
+    providerRetry: {initial_delay_ms: 1, max_delay_ms: 5},
+  });
+  try {
+    const sent = notices(await run(f.baseUrl));
+    assert.equal(sent[0]?.waiting?.status, null);
+    assert.equal(sent.at(-1)?.waiting, null);
+  } finally {
+    await f.close();
+  }
+});
+
+test("when the retries are used up the notice is cleared before the error", async () => {
+  const f = await fixture({
+    steps: [{error: rateLimit()}],
+    providerRetry: {max_retries: 2, initial_delay_ms: 1, max_delay_ms: 5},
+  });
+  try {
+    const events = await run(f.baseUrl);
+    const sent = notices(events);
+    assert.deepEqual(sent.map((n) => n.waiting?.attempt ?? null), [1, 2, null]);
+    const order = names(events);
+    assert.ok(order.lastIndexOf("provider_retry") < order.indexOf("error"), order.join(","));
+  } finally {
+    await f.close();
+  }
+});
+
+test("a client that attaches during a wait is told about it, and a stop clears it", async () => {
+  const f = await fixture({
+    steps: [{error: rateLimit({"retry-after-ms": "30000"})}],
+    providerRetry: {max_retries: 5, initial_delay_ms: 1, max_delay_ms: 60_000},
+  });
+  try {
+    const pending = run(f.baseUrl);
+    for (let i = 0; i < 200 && f.calls.length === 0; i += 1) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(f.calls.length, 1);
+    // The notice is published right after the first failure, so wait until it is held.
+    let attached = "";
+    for (let i = 0; i < 100 && !attached.includes("event: provider_retry"); i += 1) {
+      const stream = await fetch(`${f.baseUrl}/api/sessions/session1/run/stream`, {headers: AUTH});
+      const reader = stream.body!.getReader();
+      const decoder = new TextDecoder();
+      attached = "";
+      const deadline = Date.now() + 300;
+      while (Date.now() < deadline && !attached.includes("event: provider_retry")) {
+        const chunk = await Promise.race([reader.read(), new Promise<{done: true; value?: undefined}>((r) => setTimeout(() => r({done: true}), 100))]);
+        if (chunk.done) break;
+        attached += decoder.decode(chunk.value);
+      }
+      await reader.cancel();
+    }
+    assert.match(attached, /event: provider_retry\ndata: .*"attempt":1.*"status":429/s, attached);
+    const stop = await fetch(`${f.baseUrl}/api/sessions/session1/run/stop`, {method: "POST", headers: AUTH, body: "{}"});
+    assert.equal(stop.status, 200);
+    const events = await pending;
+    const sent = notices(events);
+    assert.equal(sent.at(-1)?.waiting, null, "the stop ends the wait and clears the notice");
+  } finally {
+    await f.close();
+  }
+});
+
+test("the retry notice never reaches the transcript", async () => {
+  const f = await fixture({
+    steps: [{error: rateLimit({"retry-after-ms": "5"})}, {text: "recovered"}],
+    providerRetry: {max_retries: 2, initial_delay_ms: 1, max_delay_ms: 20},
+  });
+  try {
+    await run(f.baseUrl);
+    assert.doesNotMatch(await transcript(f.sessionDir), /provider_retry|resume_at|wait_ms/);
+  } finally {
+    await f.close();
+  }
+});

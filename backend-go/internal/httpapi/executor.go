@@ -29,7 +29,9 @@ type runUsageSummaryReader interface {
 }
 
 func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMessage) {
-	ctx := run.context()
+	// The retry notifier rides in the context: the client that retries is shared by every
+	// run, and only this run should show the wait.
+	ctx := responses.WithRetryNotifier(run.context(), run.setProviderRetry)
 	logger := logging.Or(h.logger).With(runLogAttrs(run)...)
 	started := time.Now()
 	logger.Info("run started")

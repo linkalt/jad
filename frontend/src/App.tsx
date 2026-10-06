@@ -176,6 +176,8 @@ import {
   type SessionListRow,
 } from './session-views';
 import {placeRunFailures, runFailureText} from './run-failures';
+import {ProviderRetryNotice} from './components/ProviderRetryNotice';
+import type {ProviderRetryWait} from './provider-retry-view';
 import {removeViewKeys, removedViewKeys} from './view-cache';
 import {canAttachRunToView, recordOwnedRunTurn, updateViewState} from './view-state';
 
@@ -364,6 +366,10 @@ interface RunInteractionState {
   turnId: string;
   pending: WebUiInteraction | undefined;
   received: boolean;
+}
+interface RunRetryState {
+  turnId: string;
+  wait: ProviderRetryWait;
 }
 interface InteractionUiState {
   answeringInteractionId?: string;
@@ -2521,6 +2527,9 @@ function App() {
   }, []);
   const [runInteractionStatesByView, setRunInteractionStatesByView] =
     useState<Record<string, RunInteractionState>>({});
+  // The provider retry each view's run is waiting on; absent when it is not waiting.
+  const [runRetriesByView, setRunRetriesByView] =
+    useState<Record<string, RunRetryState>>({});
   const [interactionUiByView, setInteractionUiByView] =
     useState<Record<string, InteractionUiState>>({});
   const activeInteractionUi = interactionUiByView[activeViewKey];
@@ -2727,10 +2736,22 @@ function App() {
       received: true,
     })));
   }, []);
+  const recordRunRetry = useCallback((
+    viewKey: string,
+    turnId: string,
+    wait: ProviderRetryWait | undefined,
+  ) => {
+    if (activeRunTurnRefs.current.get(viewKey) !== turnId) return;
+    setRunRetriesByView(current => updateViewState(current, viewKey, () =>
+      wait === undefined ? undefined : {turnId, wait},
+    ));
+  }, []);
   const clearRunInteraction = useCallback((viewKey: string, turnId?: string) => {
     const activeTurnId = activeRunTurnRefs.current.get(viewKey);
     if (turnId !== undefined && activeTurnId !== undefined && activeTurnId !== turnId) return;
     activeRunTurnRefs.current.delete(viewKey);
+    // A run that is no longer ours cannot still be waiting on the provider.
+    setRunRetriesByView(current => updateViewState(current, viewKey, () => undefined));
     setRunInteractionStatesByView(current => updateViewState(current, viewKey, state =>
       state !== undefined && turnId !== undefined && state.turnId !== turnId
         ? state
@@ -3337,6 +3358,7 @@ function App() {
    * prompt is not gated on a message completing; message.pending remains a
    * compatibility fallback. The question stays on the view where its run waits.
    */
+  const activeRunRetry = runRetriesByView[activeViewKey];
   const activeRunInteractionState = runInteractionStatesByView[activeViewKey];
   const pendingInteraction = activeRunInteractionState?.received
     ? activeRunInteractionState.pending
@@ -3898,6 +3920,7 @@ function App() {
           onRun: run => recordRunStarted(sessionId, run.turn_id),
           onInteraction: (turnId, interaction) =>
             recordRunInteraction(sessionId, turnId, interaction),
+          onProviderRetry: (turnId, wait) => recordRunRetry(sessionId, turnId, wait),
           onMessage: message => {
             setStreamingMessageForView(sessionId, message);
             setRunProgressForView(sessionId, 1);
@@ -4045,6 +4068,7 @@ function App() {
       applyRunPart,
       recordRunStarted,
       recordRunInteraction,
+      recordRunRetry,
       clearRunInteraction,
       clearInteractionUiForView,
       setRunProgressForView,
@@ -4088,6 +4112,8 @@ function App() {
         onRun: run => recordRunStarted(sessionId, run.turn_id),
         onInteraction: (pendingTurnId, interaction) =>
           recordRunInteraction(sessionId, pendingTurnId, interaction),
+        onProviderRetry: (pendingTurnId, wait) =>
+          recordRunRetry(sessionId, pendingTurnId, wait),
         onMessage: message => setStreamingMessageForView(sessionId, message),
         onDelta: (messageId, index, append) =>
           applyRunDelta(sessionId, messageId, index, append),
@@ -4178,6 +4204,7 @@ function App() {
       clearRunInteraction,
       recordNotification,
       recordRunInteraction,
+      recordRunRetry,
       recordRunStarted,
       setRunProgressForView,
       setRunRunningForView,
@@ -5325,6 +5352,12 @@ function App() {
                             )}
                           </ChatMessageBubble>
                         </ChatMessage>
+                      )}
+                      {isRunning && activeRunRetry !== undefined && (
+                        <ProviderRetryNotice
+                          wait={activeRunRetry.wait}
+                          tickMs={appConfig.provider_retry_tick_ms}
+                        />
                       )}
                     </ChatMessageList>
                   </VStack>

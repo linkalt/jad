@@ -5,6 +5,7 @@ import {randomUUID} from "node:crypto";
 import {stat} from "node:fs/promises";
 import {join} from "node:path";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+import type { ProviderRetryWait } from "./provider-retry.js";
 
 import {
   DEFAULT_NATIVE_MEMORY_STORAGE_DIR,
@@ -117,6 +118,8 @@ export interface AgentRunOptions {
   onResponseCommitted?: (response: PersistedResponse) => void | Promise<void>;
   /** Called after successful automatic compaction changes usage state. */
   onUsageChanged?: () => void | Promise<void>;
+  /** A provider retry wait, or `null` when the wait is over; see `persistOpenAIResponse`. */
+  onProviderRetry?: (waiting: ProviderRetryWait | null) => void;
   onToolResult?: (item: ResponseInputItem) => void | Promise<void>;
   /**
    * Interactive answer channel for tools that ask the user. If omitted,
@@ -550,6 +553,7 @@ export class AgentSession {
         onOutputItemStaged: options.onOutputItemStaged,
         signal: options.signal,
         retry: config.settings.provider_retry,
+        ...(options.onProviderRetry === undefined ? {} : {onProviderRetry: options.onProviderRetry}),
       });
       await options.onResponseCommitted?.(response);
       usedTokens += responseTokens(response.event.response);

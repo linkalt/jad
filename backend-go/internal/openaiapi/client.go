@@ -109,6 +109,15 @@ func (c *Client) openStream(ctx context.Context, requestOptions []option.Request
 		return c.sdk.Responses.NewStreaming(ctx, sdkresponses.ResponseNewParams{}, requestOptions...)
 	}
 	options := append(append([]option.RequestOption{}, requestOptions...), option.WithMaxRetries(0))
+	notify := streamresponses.RetryNotifierFrom(ctx)
+	reported := false
+	// The opening request is over on every return below, whether it worked, failed for
+	// good or was stopped, so a wait that was announced is always cleared.
+	defer func() {
+		if reported {
+			notify(nil)
+		}
+	}()
 	for attempt := 0; ; attempt++ {
 		stream := c.sdk.Responses.NewStreaming(ctx, sdkresponses.ResponseNewParams{}, options...)
 		err := stream.Err()
@@ -119,6 +128,10 @@ func (c *Client) openStream(ctx context.Context, requestOptions []option.Request
 		delay := retryDelay(*c.retry, attempt, statusOf(err), responseHeader(err), time.Now(), c.random)
 		if c.retry.OnRetry != nil {
 			c.retry.OnRetry(RetryEvent{Attempt: attempt + 1, MaxRetries: c.retry.MaxRetries, Delay: delay, Status: statusOf(err)})
+		}
+		if notify != nil {
+			reported = true
+			notify(&streamresponses.RetryWait{Attempt: attempt + 1, MaxRetries: c.retry.MaxRetries, Status: statusOf(err), Delay: delay})
 		}
 		if sleepErr := c.sleep(ctx, delay); sleepErr != nil {
 			// The run was stopped during the wait: report the stop, not the earlier failure.

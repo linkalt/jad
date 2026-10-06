@@ -2196,6 +2196,7 @@ class AgentHttpApplication {
           await publishUsage();
         },
         onUsageChanged: publishUsage,
+        onProviderRetry: (waiting) => run.setProviderRetry(waiting),
         onToolResult: async (item) => {
           const message = normalizedRun.toolResult(item);
           if (message) {

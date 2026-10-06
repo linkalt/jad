@@ -6,6 +6,7 @@
   "interaction_answer_timeout_ms": 15000,
   "interaction_reason_max_length": 2000,
   "interaction_deadline_tick_ms": 30000,
+  "provider_retry_tick_ms": 500,
   "run_stream_reconnect_base_delay_ms": 250,
   "run_stream_reconnect_max_delay_ms": 2000,
   "run_stream_reconnect_max_attempts": 8,

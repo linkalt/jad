@@ -168,6 +168,16 @@ New session setting `provider_retry` with `max_retries` (default 2, 0 to 10), `i
 - **Go.** `internal/openaiapi/retry.go` holds the rules and `Client.openStream` the loop; `internal/app/provider_retry.go` maps the setting and logs each retry (`provider request retry`, with the attempt, status and wait). `fingerprintRunner` includes the setting, so a changed `provider_retry` reaches the next run instead of waiting for a restart.
 - **`messages.jsonl` is unchanged.** Failed attempts write nothing, and a run that recovers writes the same records as one that never failed.
 
+### The retry wait is shown to the client: the `provider_retry` run-stream event
+
+While a run waits to retry, nothing else on the stream changes, so the wait looked like a hang. Both backends now send one `provider_retry` event before each wait and one that clears it. There is no setting: the event is always sent, and a client that does not know it ignores it (the frontend's stream reader skips unknown events).
+
+- **Shape.** `{"turn_id": "...", "waiting": {"attempt": 2, "max_retries": 5, "status": 429, "wait_ms": 4000, "resume_at": "2026-01-01T00:00:04.000Z"}}`, or `"waiting": null` when the wait is over. `status` is `null` for a connection failure. `wait_ms` is the wait the loop actually sleeps (backoff, `Retry-After` or `x-ratelimit-reset`, after the cap), and `resume_at` is when it ends, so the UI counts down without trusting the two clocks to agree.
+- **When it is cleared.** When the request that opens the stream returns, however it ends: the stream opened, the retries were used up (the clear comes before the `error` event), or the run was stopped. It is sent only when a retry happened, so a request that works first time produces no event.
+- **Reattach.** It is run state like the pending question: a client that attaches mid-wait is told about it, a cleared wait is not replayed, and a finished run keeps none. It is never written to `messages.jsonl`.
+- **How Go reaches the run.** The client that retries is built once per runner and shared by every run, so it cannot hold a run. The run's notifier travels in the request context instead (`responses.WithRetryNotifier`, set in `internal/httpapi/executor.go`; `Client.openStream` reads it), which leaves the `Streamer` interface unchanged. TypeScript passes an `onProviderRetry` option down `persistOpenAIResponse`.
+- **Differential harness.** `resume_at` is a clock reading, so `normalize.mjs` masks it; `wait_ms` is fixed by the scenario's `Retry-After-Ms`, so it and the rest of the payload are compared.
+
 ## Run token cap: `max_run_tokens` stops a run between rounds (TypeScript and Go together)
 
 New session setting `max_run_tokens`, an integer from 1 to 1000000000000. **There is no default: an absent key means no cap and changes nothing.** `null`, `0`, a negative or fractional number, a string and anything else is a configuration error with the same message on both backends: `max_run_tokens must be a safe integer between 1 and 1000000000000`.

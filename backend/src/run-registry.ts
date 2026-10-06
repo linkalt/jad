@@ -9,6 +9,7 @@ import { messageAppendIncrement, messageIncrements } from "./plugins/web-ui/incr
 import type {WebUiMessageAppend} from "./plugins/web-ui/incremental-web-ui.js";
 
 import {InteractionBroker} from "./interactions.js";
+import type {ProviderRetryWait} from "./provider-retry.js";
 import {RunContentCache, type RunContentCacheStagedReader} from "./run-content-cache.js";
 import {DEFAULT_ROOT_SERVER_SETTINGS} from "./session-roots.js";
 
@@ -53,6 +54,8 @@ export class SessionRun {
   public status: WebUiRunStatus = "running";
   private pendingInteraction: WebUiInteraction | undefined;
   private interactionKnown = false;
+  /** The provider retry the run is waiting on, replayed to a client that attaches mid-wait. */
+  private providerRetryWait: ProviderRetryWait | undefined;
   private latestUsage: RunStreamEvent | undefined;
   private readonly listeners = new Set<RunSubscriber>();
   private terminal: RetainedTerminalEvent[] = [];
@@ -260,6 +263,22 @@ export class SessionRun {
     });
   }
 
+  /**
+   * Publishes that the run is waiting to retry a provider request, or `null` when the
+   * wait is over. It is run state, not transcript: nothing is written for it, and a
+   * finished run keeps no wait.
+   */
+  public setProviderRetry(waiting: ProviderRetryWait | null): void {
+    if (this.status !== "running") {
+      return;
+    }
+    if (waiting === null && this.providerRetryWait === undefined) {
+      return;
+    }
+    this.providerRetryWait = waiting ?? undefined;
+    this.publish("provider_retry", {turn_id: this.turnId, waiting});
+  }
+
   public publish(event: string, data: unknown): void {
     const published = {event, data};
     if (event === "usage") {
@@ -278,6 +297,7 @@ export class SessionRun {
     finalMessage?: WebUiMessage,
   ): void {
     this.interactions.cancel("The run ended before the draft was answered.");
+    this.providerRetryWait = undefined;
     this.status = status;
     this.terminal = events.map(retainTerminalEvent);
     void this.contentCache.finish(finalMessage === undefined ? undefined : withoutPending(finalMessage)).catch((error: unknown) => {
@@ -336,7 +356,7 @@ export class SessionRun {
     subscriptionState.subscriber = subscriber;
     this.listeners.add(subscriber);
     if (!subscriber.initializing) {
-      this.replayLiveState(listener, this.latest, this.interactionKnown, this.pendingInteraction, this.latestUsage);
+      this.replayLiveState(listener, this.latest, this.interactionKnown, this.pendingInteraction, this.latestUsage, this.providerRetryWait);
       return subscription;
     }
 
@@ -344,7 +364,8 @@ export class SessionRun {
     const interactionKnown = this.interactionKnown;
     const pendingInteraction = this.pendingInteraction;
     const latestUsage = this.latestUsage;
-    subscription.ready = this.replayRunning(subscriber, snapshot, interactionKnown, pendingInteraction, latestUsage);
+    const providerRetryWait = this.providerRetryWait;
+    subscription.ready = this.replayRunning(subscriber, snapshot, interactionKnown, pendingInteraction, latestUsage, providerRetryWait);
     return subscription;
   }
 
@@ -360,6 +381,7 @@ export class SessionRun {
     interactionKnown: boolean,
     pendingInteraction: WebUiInteraction | undefined,
     latestUsage: RunStreamEvent | undefined,
+    providerRetryWait: ProviderRetryWait | undefined,
   ): Promise<void> {
     let message: WebUiMessage | undefined;
     try {
@@ -371,7 +393,7 @@ export class SessionRun {
     if (!subscriber.active) {
       return;
     }
-    this.replayLiveState(subscriber.listener, message, interactionKnown, pendingInteraction, latestUsage);
+    this.replayLiveState(subscriber.listener, message, interactionKnown, pendingInteraction, latestUsage, providerRetryWait);
     subscriber.initializing = false;
     for (const event of subscriber.queued.splice(0)) {
       if (subscriber.active) {
@@ -386,6 +408,7 @@ export class SessionRun {
     interactionKnown: boolean,
     pendingInteraction: WebUiInteraction | undefined,
     latestUsage: RunStreamEvent | undefined,
+    providerRetryWait: ProviderRetryWait | undefined,
   ): void {
     if (message !== undefined) {
       listener({event: "ui.message", data: {message}});
@@ -395,6 +418,9 @@ export class SessionRun {
         event: "interaction",
         data: {turn_id: this.turnId, pending: pendingInteraction ?? null},
       });
+    }
+    if (providerRetryWait !== undefined) {
+      listener({event: "provider_retry", data: {turn_id: this.turnId, waiting: providerRetryWait}});
     }
     if (latestUsage !== undefined) {
       listener(latestUsage);

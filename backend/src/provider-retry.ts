@@ -18,6 +18,19 @@ interface ProviderErrorLike {
   headers?: {get(name: string): string | null | undefined} | undefined;
 }
 
+/**
+ * A retry the run is waiting on, as the run stream reports it: which attempt is next,
+ * the failure that caused it (`null` for a connection failure), how long the wait is and
+ * when it ends. The wait is the one the loop sleeps, so the UI's countdown is exact.
+ */
+export interface ProviderRetryWait {
+  attempt: number;
+  max_retries: number;
+  status: number | null;
+  wait_ms: number;
+  resume_at: string;
+}
+
 export interface ProviderRetryHooks {
   /** Called before each wait, with the failure that caused it. */
   onRetry?: (info: {attempt: number; delayMs: number; status: number | undefined}) => void;

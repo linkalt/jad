@@ -48,4 +48,4 @@ export function normalize(value, {root, sessions, port, providerUrl}) {
 }
 
 // Keys whose values are timestamps, hashes of volatile content or durations.
-const VOLATILE = new Set(["__agent_session_input_batch_id", "created_at", "updated_at", "started_at", "completed_at", "finished_at", "duration_ms", "elapsed_ms", "mtime_ms", "modified_at", "etag", "cursor"]);
+const VOLATILE = new Set(["__agent_session_input_batch_id", "created_at", "updated_at", "started_at", "completed_at", "finished_at", "duration_ms", "elapsed_ms", "mtime_ms", "modified_at", "etag", "cursor", "resume_at"]);
