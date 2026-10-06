@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {createServer} from "node:http";
 import test from "node:test";
 
 import OpenAI from "openai";
@@ -136,6 +137,41 @@ test("withProviderRetry waits until the provider's reset time before the next at
   assert.equal(waits.length, 1);
   const waited = waits[0] ?? -1;
   assert.ok(waited > 19000 && waited <= 20000, `wait ${waited}`);
+});
+
+test("a real SDK error from a real HTTP 429 carries x-ratelimit-reset into the wait", async () => {
+  const reset = String(Date.now() + 20000);
+  let requests = 0;
+  const server = createServer((req, res) => {
+    req.resume();
+    requests += 1;
+    if (requests === 1) {
+      res.writeHead(429, {"content-type": "application/json", "X-RateLimit-Reset": reset});
+      res.end(JSON.stringify({error: {message: "slow down"}}));
+      return;
+    }
+    res.writeHead(200, {"content-type": "application/json"});
+    res.end(JSON.stringify({id: "r", object: "response", status: "completed", output: []}));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  try {
+    const address = server.address();
+    assert.ok(address !== null && typeof address !== "string");
+    const client = new OpenAI({apiKey: "k", baseURL: `http://127.0.0.1:${address.port}/v1`, maxRetries: 0});
+    const waits: number[] = [];
+    await withProviderRetry(
+      {...settings, max_delay_ms: 60000},
+      () => client.responses.create({model: "m", input: "hi"}),
+      undefined,
+      {random: () => 0, sleep: async (ms) => void waits.push(ms)},
+    );
+    assert.equal(requests, 2);
+    assert.equal(waits.length, 1);
+    const waited = waits[0] ?? -1;
+    assert.ok(waited > 18000 && waited <= 20000, `wait ${waited}`);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test("withProviderRetry retries until success and reports each wait", async () => {

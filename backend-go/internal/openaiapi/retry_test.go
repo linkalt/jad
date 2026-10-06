@@ -335,6 +335,31 @@ func TestStreamHonoursRetryAfterAndTheCap(t *testing.T) {
 	}
 }
 
+func TestStreamWaitsForTheResetTimeOfARateLimitAnd503KeepsTheBackoff(t *testing.T) {
+	reset := strconv.FormatInt(time.Now().Add(20*time.Second).UnixMilli(), 10)
+	server, _ := providerServer(t,
+		providerReply{status: 429, headers: map[string]string{"X-RateLimit-Reset": reset}},
+		providerReply{status: 503, headers: map[string]string{"X-RateLimit-Reset": reset}},
+		providerReply{status: 429, headers: map[string]string{"X-RateLimit-Reset": reset}},
+		providerReply{})
+	client, waits := retryClient(server, &RetryConfig{MaxRetries: 4, InitialDelay: 500 * time.Millisecond, MaxDelay: time.Minute})
+	if _, err := stream(client, context.Background()); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(*waits) != 3 {
+		t.Fatalf("waits = %v, want 3", *waits)
+	}
+	if w := (*waits)[0]; w < 19*time.Second || w > 20*time.Second {
+		t.Errorf("a 429 waits until the reset, got %v", w)
+	}
+	if w := (*waits)[1]; w != time.Second {
+		t.Errorf("a 503 keeps the backoff (500ms doubled once), got %v", w)
+	}
+	if w := (*waits)[2]; w < 19*time.Second || w > 20*time.Second {
+		t.Errorf("the next 429 waits until the reset again, got %v", w)
+	}
+}
+
 func TestStreamDoesNotRetryAFailureAfterEventsArrived(t *testing.T) {
 	server, requests := providerServer(t, providerReply{partial: true})
 	client, waits := retryClient(server, &RetryConfig{MaxRetries: 5, InitialDelay: time.Millisecond, MaxDelay: time.Second})
