@@ -3,8 +3,15 @@ import test from 'node:test';
 
 import {
   buildEditedDraft,
+  addListItem,
   canExtendDraft,
   draftDeadlineLabel,
+  editListItem,
+  isListEdited,
+  listItemsOf,
+  moveListItem,
+  removeListItem,
+  retypeListItem,
   draftExtendLabel,
   draftFields,
   hasAddedFields,
@@ -14,6 +21,8 @@ import {
   reviewDraftAnswer,
   reviewDraftJsonAnswer,
 } from './draft-answer.ts';
+
+const field = (draft, label) => draftFields(draft).find((entry) => entry.label === label);
 
 const DRAFT = {
   goal: 'Make the page clearer',
@@ -36,11 +45,30 @@ test('every scalar becomes a row, nested objects read as paths', () => {
       ['notes', 'null', ''],
       ['scope.area', 'string', 'landing'],
       ['scope.keepUrls', 'boolean', 'true'],
-      ['steps[1]', 'string', 'audit the copy'],
-      ['steps[2]', 'string', 'rewrite the intro'],
-      ['reviewers', 'json', '[\n  {\n    "name": "sam",\n    "role": "editor"\n  }\n]'],
+      ['steps', 'list', '[\n  "audit the copy",\n  "rewrite the intro"\n]'],
+      ['reviewers', 'list', '[\n  {\n    "name": "sam",\n    "role": "editor"\n  }\n]'],
     ],
   );
+});
+
+test('an array is one field whose entries keep the type the proposal gave them', () => {
+  const fields = draftFields({mix: ['a', 2, true, null, {k: 1}, [3]], empty: []});
+  const mix = fields.find((field) => field.label === 'mix');
+  assert.ok(mix);
+  assert.deepEqual(
+    mix.items.map((item) => [item.id, item.kind, item.text]),
+    [
+      ['0', 'string', 'a'],
+      ['1', 'number', '2'],
+      ['2', 'boolean', 'true'],
+      ['3', 'null', ''],
+      ['4', 'json', '{\n  "k": 1\n}'],
+      ['5', 'json', '[\n  3\n]'],
+    ],
+  );
+  const empty = fields.find((field) => field.label === 'empty');
+  assert.deepEqual([empty.kind, empty.items], ['list', []]);
+  assert.equal(fields.filter((field) => field.label.startsWith('mix[')).length, 0, 'no row per index');
 });
 
 test('rows the form cannot express are edited as JSON, and a key cannot collide with a path', () => {
@@ -53,6 +81,7 @@ test('rows the form cannot express are edited as JSON, and a key cannot collide 
       ['list', '[\n  [\n    1,\n    2\n  ]\n]'],
     ],
   );
+  assert.equal(fields[2].items[0].kind, 'json', 'a nested array is one JSON entry');
   // Same label, different keys: the key is the path, so React and edits stay exact.
   assert.notEqual(fields[0].key, fields[1].key);
 });
@@ -69,10 +98,14 @@ test('edited rows rebuild the proposal with their own type', () => {
     [JSON.stringify(['rounds'])]: '5',
     [JSON.stringify(['aggressive'])]: 'true',
     [JSON.stringify(['scope', 'keepUrls'])]: 'false',
-    [JSON.stringify(['steps', 1])]: 'audit the tone',
-    [JSON.stringify(['reviewers'])]: '[{"name":"sam"}]',
   };
-  assert.deepEqual(buildEditedDraft(DRAFT, edits), {
+  const stepsKey = JSON.stringify(['steps']);
+  const reviewersKey = JSON.stringify(['reviewers']);
+  const lists = {
+    [stepsKey]: editListItem(field(DRAFT, 'steps').items, 1, 'audit the tone'),
+    [reviewersKey]: editListItem(field(DRAFT, 'reviewers').items, 0, '{"name":"sam"}'),
+  };
+  assert.deepEqual(buildEditedDraft(DRAFT, edits, [], lists), {
     value: {
       ...DRAFT,
       goal: 'Rewrite the intro only',
@@ -91,7 +124,6 @@ test('a row that no longer parses names itself instead of throwing', () => {
     ['rounds', 'two', 'rounds must be a number'],
     ['aggressive', 'yes', 'aggressive must be true or false'],
     ['notes', 'something', 'notes must stay empty'],
-    ['reviewers', '[{oops}', 'reviewers must be valid JSON'],
   ];
   for (const [label, text, expectation] of cases) {
     const built = buildEditedDraft(DRAFT, {[JSON.stringify([label])]: text});
@@ -287,4 +319,104 @@ test('an added field cannot collide with another added field', () => {
   ]);
   assert.ok('error' in built);
   assert.match(built.error.message, /already exists/);
+});
+
+test('an array that was not touched is not an edit and keeps its exact value', () => {
+  const draft = {steps: ['a', 'b'], empty: [], objects: [{x: 1}]};
+  const fields = draftFields(draft);
+  const steps = fields.find((entry) => entry.label === 'steps');
+  assert.equal(isListEdited(steps, steps.items), false);
+  assert.equal(hasDraftEdits(fields, {}, {[steps.key]: steps.items}), false);
+  assert.deepEqual(buildEditedDraft(draft, {}, [], {[steps.key]: steps.items}), {value: draft});
+  // Retyping the same text over an entry is not an edit either.
+  assert.equal(isListEdited(steps, editListItem(steps.items, 0, 'a')), false);
+});
+
+test('entries can be added, removed and reordered, and the draft follows', () => {
+  const draft = {steps: ['audit', 'rewrite', 'ship']};
+  const steps = field(draft, 'steps');
+  const key = steps.key;
+  const build = (items) => buildEditedDraft(draft, {}, [], {[key]: items});
+
+  assert.deepEqual(build(moveListItem(steps.items, 2, -1)), {value: {steps: ['audit', 'ship', 'rewrite']}});
+  assert.deepEqual(build(moveListItem(steps.items, 0, 1)), {value: {steps: ['rewrite', 'audit', 'ship']}});
+  assert.deepEqual(build(removeListItem(steps.items, 1)), {value: {steps: ['audit', 'ship']}});
+  const added = editListItem(addListItem(steps.items, 'item-1'), 3, 'review');
+  assert.deepEqual(build(added), {value: {steps: ['audit', 'rewrite', 'ship', 'review']}});
+  assert.equal(hasDraftEdits([steps], {}, {[key]: added}), true);
+  assert.deepEqual(build([]), {value: {steps: []}}, 'removing every entry leaves an empty array');
+  assert.deepEqual(DRAFT.steps, ['audit the copy', 'rewrite the intro'], 'the proposal is never mutated');
+});
+
+test('moving past either end changes nothing', () => {
+  const steps = field({steps: ['a', 'b']}, 'steps');
+  assert.deepEqual(moveListItem(steps.items, 0, -1), steps.items);
+  assert.deepEqual(moveListItem(steps.items, 1, 1), steps.items);
+  assert.deepEqual(moveListItem(steps.items, 5, 1), steps.items);
+  assert.equal(isListEdited(steps, moveListItem(steps.items, 0, -1)), false);
+});
+
+test('a reorder is an edit even when the text is unchanged', () => {
+  const steps = field({steps: ['same', 'same']}, 'steps');
+  assert.equal(isListEdited(steps, moveListItem(steps.items, 0, 1)), true, 'ids differ, so the order changed');
+});
+
+test('an added entry takes the type of the entry before it and can be retyped', () => {
+  const numbers = field({n: [1, 2]}, 'n');
+  const grown = addListItem(numbers.items, 'item-1');
+  assert.equal(grown[2].kind, 'number');
+  assert.equal(grown[2].added, true);
+  assert.deepEqual(buildEditedDraft({n: [1, 2]}, {}, [], {[numbers.key]: editListItem(grown, 2, '3')}), {
+    value: {n: [1, 2, 3]},
+  });
+
+  const empty = field({tags: []}, 'tags');
+  const first = addListItem(empty.items, 'item-2');
+  assert.equal(first[0].kind, 'string', 'an empty list starts with text');
+  const asBool = editListItem(retypeListItem(first, 0, 'boolean'), 0, 'true');
+  assert.deepEqual(buildEditedDraft({tags: []}, {}, [], {[empty.key]: asBool}), {value: {tags: [true]}});
+  const asJson = editListItem(retypeListItem(first, 0, 'json'), 0, '{"a":1}');
+  assert.deepEqual(buildEditedDraft({tags: []}, {}, [], {[empty.key]: asJson}), {value: {tags: [{a: 1}]}});
+
+  const original = retypeListItem(numbers.items, 0, 'string');
+  assert.equal(original[0].kind, 'number', 'an entry the proposal had keeps its type');
+});
+
+test('an entry that no longer parses names the array and its position', () => {
+  const numbers = field({n: [1, 2]}, 'n');
+  const bad = buildEditedDraft({n: [1, 2]}, {}, [], {[numbers.key]: editListItem(numbers.items, 1, 'two')});
+  assert.ok('error' in bad);
+  assert.equal(`${bad.error.label} ${bad.error.message}`, 'n item 2 must be a number');
+  const blank = buildEditedDraft({n: [1]}, {}, [], {
+    [numbers.key]: addListItem(numbers.items, 'item-1'),
+  });
+  assert.ok('error' in blank, 'a new empty number is refused, not sent as 0');
+  const json = field({o: [{a: 1}]}, 'o');
+  const broken = buildEditedDraft({o: [{a: 1}]}, {}, [], {[json.key]: editListItem(json.items, 0, '{oops')});
+  assert.equal(`${broken.error.label} ${broken.error.message}`, 'o item 1 must be valid JSON');
+});
+
+test('arrays inside nested objects are edited at their own path', () => {
+  const draft = {scope: {include: ['one'], name: 'x'}};
+  const include = field(draft, 'scope.include');
+  assert.deepEqual(include.path, ['scope', 'include']);
+  const filled = editListItem(addListItem(include.items, 'item-1'), 1, 'two');
+  assert.deepEqual(buildEditedDraft(draft, {}, [], {[include.key]: filled}), {
+    value: {scope: {include: ['one', 'two'], name: 'x'}},
+  });
+});
+
+test('an answer carries an edited array as an update and lists stay out of the way otherwise', () => {
+  const draft = {goal: 'g', steps: ['a']};
+  const fields = draftFields(draft);
+  const steps = fields.find((entry) => entry.label === 'steps');
+  const review = (lists) =>
+    reviewDraftAnswer({draft, fields, edits: {}, added: [], lists, decision: 'update', reason: '', reasonMaxLength: 100});
+  assert.deepEqual(review({[steps.key]: editListItem(addListItem(steps.items, 'item-1'), 1, 'b')}), {
+    body: {decision: 'update', draft: {goal: 'g', steps: ['a', 'b']}},
+  });
+  assert.deepEqual(review(undefined), {body: {decision: 'update', draft}});
+  assert.ok('error' in review({[steps.key]: addListItem(steps.items, 'item-1')}) === false, 'a blank text entry is a valid empty string');
+  assert.equal(hasDraftChanges(fields, {}, [], {[steps.key]: steps.items}), false);
+  assert.equal(listItemsOf(steps, {}), steps.items);
 });

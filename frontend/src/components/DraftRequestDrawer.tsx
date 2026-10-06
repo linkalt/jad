@@ -10,7 +10,8 @@
  * input until it is answered, and the run's own deadline closes it either way.
  *
  * The form is derived from the draft (see `draft-answer.ts`): one row per scalar,
- * one JSON row for a value rows cannot express, plus rows the user adds for what
+ * one list editor per array (entries added, removed and reordered, never one
+ * input per index), plus rows the user adds for what
  * the agent missed — a draft that missed the one thing the user cares about would
  * otherwise cost a decline and a whole new turn. Edits are local until they are
  * submitted, so a declined draft leaves the proposal untouched.
@@ -39,12 +40,15 @@ import {
   draftFields,
   hasDraftChanges,
   hasJsonDraftChanges,
+  listItemsOf,
   reviewDraftAnswer,
   reviewDraftJsonAnswer,
   type DraftAddedField,
   type DraftAddedFieldKind,
   type DraftDecision,
+  type DraftListItem,
 } from '../draft-answer';
+import {DraftListField} from './DraftListField';
 
 export interface DraftRequestDrawerProps {
   pending: WebUiInteraction;
@@ -76,6 +80,7 @@ export function DraftRequestDrawer({
   const fields = useMemo(() => draftFields(draftBase), [draftBase]);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [added, setAdded] = useState<DraftAddedField[]>([]);
+  const [lists, setLists] = useState<Record<string, DraftListItem[]>>({});
   const [jsonText, setJsonText] = useState(() => JSON.stringify(pending.draft, null, 2));
   const [isJsonMode, setIsJsonMode] = useState(false);
   const [reason, setReason] = useState('');
@@ -83,6 +88,7 @@ export function DraftRequestDrawer({
   const [problem, setProblem] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const nextAddedId = useRef(0);
+  const nextListItemId = useRef(0);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), deadlineTickMs);
@@ -94,6 +100,7 @@ export function DraftRequestDrawer({
     setDraftBase(pending.draft);
     setEdits({});
     setAdded([]);
+    setLists({});
     setJsonText(JSON.stringify(pending.draft, null, 2));
     setIsJsonMode(false);
     setReason('');
@@ -103,7 +110,7 @@ export function DraftRequestDrawer({
 
   const isEdited = isJsonMode
     ? hasJsonDraftChanges(jsonText, pending.draft)
-    : JSON.stringify(draftBase) !== JSON.stringify(pending.draft) || hasDraftChanges(fields, edits, added);
+    : JSON.stringify(draftBase) !== JSON.stringify(pending.draft) || hasDraftChanges(fields, edits, added, lists);
   const deadline = draftDeadlineLabel(pending.expires_at, now);
   const extendable = canExtendDraft(pending.expires_at, pending.max_expires_at, now);
 
@@ -123,6 +130,7 @@ export function DraftRequestDrawer({
       fields,
       edits,
       added,
+      lists,
       decision,
       reason,
       reasonMaxLength,
@@ -141,6 +149,7 @@ export function DraftRequestDrawer({
       fields,
       edits,
       added,
+      lists,
       decision: 'update',
       reason: '',
       reasonMaxLength,
@@ -153,6 +162,7 @@ export function DraftRequestDrawer({
     setDraftBase(nextDraft);
     setEdits({});
     setAdded([]);
+    setLists({});
     setJsonText(JSON.stringify(nextDraft, null, 2));
     setIsJsonMode(true);
     setProblem(null);
@@ -167,6 +177,7 @@ export function DraftRequestDrawer({
     setDraftBase(reviewed.body.draft);
     setEdits({});
     setAdded([]);
+    setLists({});
     setIsJsonMode(false);
     setProblem(null);
   };
@@ -242,7 +253,19 @@ export function DraftRequestDrawer({
               </Text>
             ) : (
               fields.map((field) =>
-                field.kind === 'json' || field.kind === 'string' ? (
+                field.kind === 'list' ? (
+                  <DraftListField
+                    key={field.key}
+                    label={field.label}
+                    items={listItemsOf(field, lists)}
+                    isDisabled={isSubmitting}
+                    nextItemId={() => {
+                      nextListItemId.current += 1;
+                      return `item-${nextListItemId.current}`;
+                    }}
+                    onChange={(items) => setLists((previous) => ({...previous, [field.key]: items}))}
+                  />
+                ) : field.kind === 'json' || field.kind === 'string' ? (
                   <TextArea
                     key={field.key}
                     label={field.label}

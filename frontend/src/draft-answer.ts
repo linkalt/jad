@@ -13,18 +13,35 @@
  * has to see which field to fix.
  */
 
-export type DraftFieldKind = 'string' | 'number' | 'boolean' | 'null' | 'json';
+export type DraftItemKind = 'string' | 'number' | 'boolean' | 'null' | 'json';
+export type DraftFieldKind = DraftItemKind | 'list';
+
+/**
+ * One entry of an array field. An array is one field, not one row per index, so
+ * its entries can be added, removed and reordered; each entry keeps the type the
+ * proposal gave it (an object or a nested array reads as one JSON entry).
+ */
+export interface DraftListItem {
+  /** Stable identity across reorders: the original index, or `item-N` for an added entry. */
+  id: string;
+  kind: DraftItemKind;
+  text: string;
+  /** True for an entry the user added, which may still be retyped. */
+  added?: boolean;
+}
 
 export interface DraftField {
   /** Stable row identity: the path, JSON-encoded so dots and brackets cannot collide. */
   key: string;
-  /** Path from the draft root: `['steps', 0]`, `['scope', 'name']`. */
+  /** Path from the draft root: `['scope', 'name']`, `['scope', 'steps']`. */
   path: (string | number)[];
-  /** What the row is called: the path as the user reads it, `steps[1]`. */
+  /** What the row is called: the path as the user reads it, `scope.steps`. */
   label: string;
   kind: DraftFieldKind;
   /** The proposal's own text, before any edit. */
   text: string;
+  /** The entries of an array field, as the proposal had them. */
+  items?: DraftListItem[];
 }
 
 export interface DraftFieldError {
@@ -77,17 +94,13 @@ export function draftFields(draft: unknown): DraftField[] {
       return;
     }
     if (Array.isArray(value)) {
-      if (value.length > 0 && value.every(isScalar)) {
-        value.forEach((item, index) => {
-          const childPath = [...path, index];
-          fields.push(makeField(childPath, kindOf(item), scalarText(item)));
-        });
-        return;
-      }
       if (path.length === 0) {
         return;
       }
-      fields.push(makeField(path, 'json', prettyJson(value)));
+      fields.push({
+        ...makeField(path, 'list', prettyJson(value)),
+        items: value.map((item, index) => makeItem(String(index), item)),
+      });
       return;
     }
     const entries = Object.entries(value as Record<string, unknown>);
@@ -107,9 +120,34 @@ export function buildEditedDraft(
   draft: unknown,
   edits: Readonly<Record<string, string>>,
   added: readonly DraftAddedField[] = [],
+  lists: DraftListEdits = {},
 ): {value: unknown} | {error: DraftFieldError} {
   const value = structuredClone(draft) as unknown;
   for (const field of draftFields(draft)) {
+    if (field.kind === 'list') {
+      const items = lists[field.key];
+      if (items === undefined || !isListEdited(field, items)) {
+        continue;
+      }
+      const values: unknown[] = [];
+      for (const [index, item] of items.entries()) {
+        const parsed = parseFieldText(item.kind, item.text);
+        if ('error' in parsed) {
+          return {
+            error: {
+              key: field.key,
+              label: `${field.label} item ${index + 1}`,
+              message: parsed.error,
+            },
+          };
+        }
+        values.push(parsed.value);
+      }
+      if (!setAtPath(value, field.path, values)) {
+        return {error: {key: field.key, label: field.label, message: 'could not be applied'}};
+      }
+      continue;
+    }
     const text = edits[field.key];
     if (text === undefined || text === field.text) {
       continue;
@@ -159,15 +197,101 @@ export function buildEditedDraft(
   return {value};
 }
 
-/** True while at least one row holds text the proposal did not. */
+/** The entries the user has made of each array field, by field key. */
+export type DraftListEdits = Readonly<Record<string, readonly DraftListItem[]>>;
+
+/** True while at least one row or array holds something the proposal did not. */
 export function hasDraftEdits(
   fields: readonly DraftField[],
   edits: Readonly<Record<string, string>>,
+  lists: DraftListEdits = {},
 ): boolean {
   return fields.some((field) => {
+    if (field.kind === 'list') {
+      const items = lists[field.key];
+      return items !== undefined && isListEdited(field, items);
+    }
     const text = edits[field.key];
     return text !== undefined && text !== field.text;
   });
+}
+
+/** The entries an array field shows: the user's, or the proposal's own. */
+export function listItemsOf(
+  field: DraftField,
+  lists: DraftListEdits,
+): readonly DraftListItem[] {
+  return lists[field.key] ?? field.items ?? [];
+}
+
+/** True when entries were added, removed, reordered, retyped or their text changed. */
+export function isListEdited(field: DraftField, items: readonly DraftListItem[]): boolean {
+  const original = field.items ?? [];
+  return (
+    items.length !== original.length ||
+    items.some((item, index) => {
+      const first = original[index];
+      return (
+        first === undefined ||
+        item.id !== first.id ||
+        item.kind !== first.kind ||
+        item.text !== first.text
+      );
+    })
+  );
+}
+
+/** Swaps an entry with its neighbour; out of range returns the list unchanged. */
+export function moveListItem(
+  items: readonly DraftListItem[],
+  index: number,
+  offset: -1 | 1,
+): DraftListItem[] {
+  const target = index + offset;
+  if (index < 0 || index >= items.length || target < 0 || target >= items.length) {
+    return [...items];
+  }
+  const next = [...items];
+  [next[index], next[target]] = [next[target]!, next[index]!];
+  return next;
+}
+
+export function removeListItem(items: readonly DraftListItem[], index: number): DraftListItem[] {
+  return items.filter((_, position) => position !== index);
+}
+
+/**
+ * Appends an empty entry. It takes the type of the entry before it, so a list of
+ * numbers grows numbers; an empty list or a list of nulls starts with text.
+ */
+export function addListItem(
+  items: readonly DraftListItem[],
+  id: string,
+  kind?: DraftAddedFieldKind,
+): DraftListItem[] {
+  const last = items[items.length - 1];
+  const inherited: DraftAddedFieldKind =
+    last === undefined || last.kind === 'null' ? 'string' : last.kind;
+  return [...items, {id, kind: kind ?? inherited, text: '', added: true}];
+}
+
+/** Retypes an added entry; its text is kept so a mis-click costs nothing. */
+export function retypeListItem(
+  items: readonly DraftListItem[],
+  index: number,
+  kind: DraftAddedFieldKind,
+): DraftListItem[] {
+  return items.map((item, position) =>
+    position === index && item.added === true ? {...item, kind} : item,
+  );
+}
+
+export function editListItem(
+  items: readonly DraftListItem[],
+  index: number,
+  text: string,
+): DraftListItem[] {
+  return items.map((item, position) => (position === index ? {...item, text} : item));
 }
 
 /** True while an opened "new field" row holds anything the user typed. */
@@ -185,8 +309,9 @@ export function hasDraftChanges(
   fields: readonly DraftField[],
   edits: Readonly<Record<string, string>>,
   added: readonly DraftAddedField[],
+  lists: DraftListEdits = {},
 ): boolean {
-  return hasDraftEdits(fields, edits) || hasAddedFields(added);
+  return hasDraftEdits(fields, edits, lists) || hasAddedFields(added);
 }
 
 /**
@@ -201,6 +326,7 @@ export function reviewDraftAnswer(options: {
   fields: readonly DraftField[];
   edits: Readonly<Record<string, string>>;
   added: readonly DraftAddedField[];
+  lists?: DraftListEdits;
   decision: DraftDecision;
   reason: string;
   reasonMaxLength: number;
@@ -218,7 +344,7 @@ export function reviewDraftAnswer(options: {
   if (options.decision === 'accept') {
     return {body: {decision: 'accept'}};
   }
-  const edited = buildEditedDraft(options.draft, options.edits, options.added);
+  const edited = buildEditedDraft(options.draft, options.edits, options.added, options.lists);
   if ('error' in edited) {
     return {error: `${edited.error.label} ${edited.error.message}.`};
   }
@@ -293,6 +419,12 @@ export function canExtendDraft(expiresAt: string, maxExpiresAt: string, now: num
   return now < deadline && deadline < ceiling;
 }
 
+function makeItem(id: string, value: unknown): DraftListItem {
+  return isScalar(value)
+    ? {id, kind: kindOf(value), text: scalarText(value)}
+    : {id, kind: 'json', text: prettyJson(value)};
+}
+
 function makeField(path: (string | number)[], kind: DraftFieldKind, text: string): DraftField {
   return {key: JSON.stringify(path), path, label: labelFor(path), kind, text};
 }
@@ -309,7 +441,7 @@ function labelFor(path: readonly (string | number)[]): string {
   return label;
 }
 
-function kindOf(value: unknown): DraftFieldKind {
+function kindOf(value: unknown): DraftItemKind {
   if (value === null) {
     return 'null';
   }
@@ -350,7 +482,7 @@ function isScalar(value: unknown): value is null | boolean | number | string {
   );
 }
 
-function parseFieldText(kind: DraftFieldKind, text: string): {value: unknown} | {error: string} {
+function parseFieldText(kind: DraftItemKind, text: string): {value: unknown} | {error: string} {
   switch (kind) {
     case 'string':
       return {value: text};
