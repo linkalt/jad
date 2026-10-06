@@ -164,7 +164,7 @@ New session setting `tool_call_scheduling`, `"ordered"` (default) or `"concurren
 - It is true from the moment a real restore holds the session's gate until the restore ends, and false for a dry run. A restore also holds the gate that compaction and reset share, so the list cannot read the gate itself; each backend keeps a separate set of the keys with a restore in flight (`restoringCheckpoints` in TypeScript, `Handler.restoring` under `mutationMu` in Go) that only the restore route touches.
 - The frontend reads a missing value as false, so an older server still works, and rejects a non-boolean. While it is true the panel disables every Restore control and re-reads the list every `checkpoint_restore_poll_ms` (frontend config, 2000).
 - `messages.jsonl` is unchanged; this is a list field only.
-- **Known difference, not fixed here:** TypeScript refuses a second real restore sent while one runs with 409; Go takes the per-session keyed lock first, so the second request waits and then runs. Recorded as a bug report; the Go test therefore does not send a second restore.
+- **A second restore sent while one runs is refused with 409 ("session profile is already changing") on both backends, real or dry.** Go used to take the per-session keyed lock before the mutation gate, so the second request waited for the first and then ran; the restore handler now takes the gate first and the lock second. Compaction, reset and front compaction still take the lock first and so queue behind a running restore (measured: reset answered 200 only after the restore ended, 2.1 s); TypeScript answers those with 409. That difference is open and recorded separately.
 
 ## Provider retry: the harness retries the request that opens a response
 

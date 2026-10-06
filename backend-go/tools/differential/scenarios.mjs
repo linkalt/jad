@@ -1474,6 +1474,39 @@ function checkpointScenarios() {
       },
     },
     {
+      // git is slowed so the first restore stays open; a second one sent meanwhile must be refused
+      // at once on both backends (Go used to queue it behind the first and run it afterwards).
+      name: "checkpoint: a restore sent while another restore runs is refused with 409",
+      provider: {steps: [{call: {name: "write", arguments: {path: "a.txt", content: "agent"}}}, {text: "done"}]},
+      run: async (c) => {
+        await clear(c, "ckptslow");
+        await put(c, "ckptslow", "a.txt", "original");
+        await resetAndRun(c, "ckptslow", "write it");
+        const [record] = (await list(c, "ckptslow")).checkpoints;
+        const flag = join(dirname(c.sessions), "slow-git.flag");
+        await writeFile(flag, "slow");
+        try {
+          const first = restore(c, "ckptslow", record.id, {mode: "full"});
+          let seen = false;
+          for (let i = 0; i < 200 && !seen; i += 1) {
+            seen = (await list(c, "ckptslow")).restoring === true;
+            if (!seen) await new Promise((done) => setTimeout(done, 25));
+          }
+          const started = Date.now();
+          const second = await restore(c, "ckptslow", record.id, {mode: "full"});
+          const secondDry = await restore(c, "ckptslow", record.id, {dry_run: true});
+          const refusedQuickly = Date.now() - started < 1000;
+          const firstDone = await first;
+          return {
+            seen, second, secondDry, refusedQuickly, firstStatus: firstDone.status,
+            afterRestoring: (await list(c, "ckptslow")).restoring, file: await file(c, "ckptslow", "a.txt"),
+          };
+        } finally {
+          await rm(flag, {force: true});
+        }
+      },
+    },
+    {
       name: "checkpoint: a bad checkpoint value is refused with the same message",
       provider: {steps: [{text: "x"}]},
       run: async (c) => ({run: await call(c, "POST", "/api/sessions/ckptbad/run", {body: {input: "go"}}), list: await call(c, "GET", "/api/sessions/ckptbad/checkpoints")}),

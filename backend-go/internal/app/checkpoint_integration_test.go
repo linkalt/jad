@@ -721,8 +721,20 @@ func TestTheListSaysRestoringWhileARealRestoreRunsAndNotForADryRun(t *testing.T)
 	if f.file("a.txt") != "agent" {
 		t.Fatalf("the restore had already finished: a.txt = %q", f.file("a.txt"))
 	}
-	// A second restore sent now is not asserted: TypeScript refuses it with 409 but
-	// Go queues it behind the first (a recorded, separate difference).
+	// A second restore (real or dry) sent now is refused at once with 409, as
+	// TypeScript does, instead of waiting for the first one and running after it.
+	for _, body := range []string{`{}`, `{"dry_run":true}`, `{"mode":"full"}`} {
+		started := time.Now()
+		status, text := f.request(http.MethodPost, "/checkpoints/"+id+"/restore", body, true)
+		if status != http.StatusConflict || !strings.Contains(text, "session profile is already changing") {
+			t.Fatalf("second restore %s = %d %s, want 409 session profile is already changing", body, status, text)
+		}
+		select {
+		case <-restoreDone:
+			t.Fatalf("second restore %s was answered only after the first ended (%v)", body, time.Since(started))
+		default:
+		}
+	}
 	if status := <-restoreDone; status != http.StatusOK {
 		t.Fatalf("restore status = %d", status)
 	}

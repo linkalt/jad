@@ -36,6 +36,7 @@ Why not `git stash create` or a commit in the user's repo: it needs a git repo, 
 3. **At run end** a second snapshot records the end state (see safe restore below).
 4. **Restore** (user-initiated only, never by the model):
    * refused while the session has a live run (409);
+   * refused at once (409, "session profile is already changing") while another restore, compaction or reset of the same profile is running; it is never queued behind it;
    * `dry_run` returns the path lists (restore, delete, conflicts) without changing anything;
    * takes a **pre-restore checkpoint** first, so a restore is itself undoable;
    * **safe restore (recommended default):** only paths whose current content equals the run-end snapshot are reverted. Paths the user changed after the run are reported as conflicts and left alone. This needs the run-end snapshot; it is **untested**.

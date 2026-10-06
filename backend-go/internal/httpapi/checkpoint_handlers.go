@@ -75,8 +75,6 @@ func (h *Handler) handleCheckpointRestore(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, err)
 		return
 	}
-	unlock := h.sessionLocks.lock(reference)
-	defer unlock()
 	resolved, err := h.maintenance.ResolveMaintenance(r.Context(), reference, profile)
 	if err != nil {
 		writeJSONError(w, err)
@@ -89,11 +87,15 @@ func (h *Handler) handleCheckpointRestore(w http.ResponseWriter, r *http.Request
 	}
 	key := h.runKey(ResolvedSession{Reference: resolved.Reference, Profile: resolved.Profile})
 	// Held for the whole restore: a run cannot start while files are being rewritten.
+	// The gate is taken before the per-session lock: a second restore must be
+	// refused at once, as TypeScript does, not wait for the first and then run.
 	if !h.beginMutation(key) {
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "session profile is already changing"})
 		return
 	}
 	defer h.endMutation(key)
+	unlock := h.sessionLocks.lock(reference)
+	defer unlock()
 	// A run holds the cross-process session lock until it ends, so the run is
 	// checked first: waiting on that lock would delay the refusal until the run
 	// was over, and TypeScript refuses at once.

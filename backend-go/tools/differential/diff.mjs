@@ -167,7 +167,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "askdefault", "askdefaultexplicit", "askdefaultoff", "askdefaultbad", "askdefaultmcp", "ckpt", "ckptnogit", "ckptbad", "ckptoff", "retryoff", "retrymany", "retrybad", "retryslow", "capstop", "capnone", "capbad", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "askdefault", "askdefaultexplicit", "askdefaultoff", "askdefaultbad", "askdefaultmcp", "ckpt", "ckptnogit", "ckptbad", "ckptoff", "ckptslow", "retryoff", "retrymany", "retrybad", "retryslow", "capstop", "capnone", "capbad", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -275,7 +275,7 @@ async function writeFixtures(sessions, providerUrl) {
     // Checkpoints: ckpt records runs, ckptnogit points at a git that does not exist,
     // ckptbad holds a value both backends must refuse with the same message, ckptoff
     // has the node absent. Each has its own workspace so a restore cannot touch another session.
-    if (id === "ckpt" || id === "ckptnogit" || id === "ckptbad" || id === "ckptoff") {
+    if (id === "ckpt" || id === "ckptnogit" || id === "ckptbad" || id === "ckptoff" || id === "ckptslow") {
       const ckptSpace = join(dirname(sessions), `ckpt-${id}`);
       await mkdir(ckptSpace, {recursive: true});
       setting.cwd = ckptSpace;
@@ -285,6 +285,13 @@ async function writeFixtures(sessions, providerUrl) {
       if (id === "ckpt") setting.checkpoint = {enabled: true, max_checkpoints: 5};
       if (id === "ckptnogit") setting.checkpoint = {enabled: true, git_binary: "/nonexistent/git"};
       if (id === "ckptbad") setting.checkpoint = {enabled: true, snapshot_on: "always"};
+      if (id === "ckptslow") {
+        // git waits 0.15 s per call while the flag file exists, so a restore can be held open.
+        const wrapper = join(dirname(sessions), "slow-git.sh");
+        const realGit = await new Promise((done) => spawn("sh", ["-c", "command -v git"]).stdout.on("data", (chunk) => done(String(chunk).trim())));
+        await writeFile(wrapper, `#!/bin/sh\nif [ -e "${join(dirname(sessions), "slow-git.flag")}" ]; then sleep 0.15; fi\nexec "${realGit}" "$@"\n`, {mode: 0o755});
+        setting.checkpoint = {enabled: true, git_binary: wrapper};
+      }
     }
     // provider_retry: a failed opening request is retried by the harness, not the SDK.
     if (id === "retryoff") setting.provider_retry = {max_retries: 0};
