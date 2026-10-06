@@ -364,6 +364,7 @@ export class McpServerManager {
           tools.push({
             definition,
             validate,
+            ...(server.approval === "ask" ? {approval: "ask" as const} : {}),
             execute: async (args: JsonRecord, context: ToolExecutionContext) => {
               let result: unknown;
               try {

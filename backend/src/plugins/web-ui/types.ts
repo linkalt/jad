@@ -57,6 +57,8 @@ export interface WebUiMessageStep {
  */
 export interface WebUiInteraction {
   id: string;
+  /** `approval` asks for a yes or no on one call; absent means an editable `draft`. */
+  kind?: "draft" | "approval";
   /** Name of the native tool that asked, e.g. `request_draft`. */
   tool: string;
   tool_call_id: string;

@@ -1440,6 +1440,7 @@ class AgentHttpApplication {
     const parsed = parseInteractionReplyRequest(
       await readJsonBody(request, this.maxBodyBytes),
       run.interactions.limits,
+      run.interactions.kind,
     );
     if ("error" in parsed) {
       throw new HttpError(400, parsed.error);

@@ -19,7 +19,7 @@ import type {ProcessManager} from "./native/process-manager.js";
 import type {TaskStore} from "./native/task-store.js";
 import type {MemoryStore} from "./native/memory-store.js";
 import type {McpServerManager} from "./mcp/manager.js";
-import type {LoadedTool, ToolDefinition, ToolExecutionContext, ToolOutput} from "./types.js";
+import type {ApprovalVerdict, LoadedTool, ToolDefinition, ToolExecutionContext, ToolOutput} from "./types.js";
 
 const definitionDocumentSchema: JsonRecord = {
   type: "object",
@@ -106,6 +106,12 @@ function validationExample(definition: ToolDefinition): JsonRecord | undefined {
   return nativeSpecsById.get(definition.id)?.exampleOperation;
 }
 
+/** The `approval` of a native tool's settings; tools without the key never ask. */
+function nativeApprovalMode(config: LoadedSessionConfig, settingName: string): "off" | "ask" {
+  const settings = (config.settings.tools.native as Record<string, unknown>)[settingName];
+  return isRecord(settings) && settings.approval === "ask" ? "ask" : "off";
+}
+
 function buildNativeTool(
   spec: NativeToolSpec,
   definition: ToolDefinition,
@@ -117,10 +123,12 @@ function buildNativeTool(
   if ("error" in built) {
     throw configError(config.paths.setting_path, built.error);
   }
+  const approval = nativeApprovalMode(config, spec.settingName);
   return {
     ...built.tool,
     normalizeArguments: spec.normalizeArguments,
     ...(spec.requiresUserDecision ? {requiresUserDecision: true} : {}),
+    ...(approval === "ask" ? {approval} : {}),
   };
 }
 
@@ -234,6 +242,35 @@ export class ToolCatalog {
           exampleOperation,
         ),
       };
+    }
+
+    if (tool.approval === "ask") {
+      const verdict: ApprovalVerdict = context.requestApproval === undefined
+        ? {
+            allowed: false,
+            code: "approval_unavailable",
+            reason: "This call needs the user's approval and the run has no way to ask.",
+          }
+        : await context.requestApproval({
+            callId,
+            modelToolName: name,
+            tool: tool.definition.source === "mcp" ? tool.definition.id.split(":").slice(2).join(":") : name,
+            ...(tool.definition.server === undefined ? {} : {server: tool.definition.server}),
+            args,
+          });
+      if (!verdict.allowed) {
+        return {
+          type: "function_call_output",
+          call_id: callId,
+          output: executionError(
+            callId,
+            "blocked",
+            verdict.code,
+            `Not run: ${verdict.reason}`,
+            [["tool", name]],
+          ),
+        };
+      }
     }
 
     let output: ToolOutput;

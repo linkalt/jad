@@ -18,6 +18,8 @@ export type ToolInteractionOutcome = "answered" | "timed_out" | "cancelled";
 
 /** What a tool asks the user; the runner adds the identity of the call. */
 export interface ToolInteractionQuestion {
+  /** Absent means `draft`. An `approval` is a yes or no and is never edited. */
+  kind?: "draft" | "approval";
   draft: JsonRecord;
   title?: string;
   /** How long the run waits for the user; the session's configured wait. */
@@ -30,7 +32,7 @@ export interface ToolInteractionQuestion {
    * Bounds the user's edited draft is re-checked against, so an edit cannot be
    * larger or deeper than a proposal could have been.
    */
-  limits: DraftBounds;
+  limits?: DraftBounds;
 }
 
 export interface ToolInteractionAnswer {
@@ -52,6 +54,30 @@ export type ToolInteractionHandler = (
   question: ToolInteractionQuestion,
 ) => Promise<ToolInteractionAnswer>;
 
+/** Why an approval did not let a call run. `approval_unavailable` means nobody could be asked. */
+export type ApprovalDenialCode =
+  | "approval_denied"
+  | "approval_timeout"
+  | "approval_cancelled"
+  | "approval_unavailable";
+
+export type ApprovalVerdict =
+  | {allowed: true}
+  | {allowed: false; code: ApprovalDenialCode; reason: string};
+
+/** A call the user is asked to approve; the run turns it into a question. */
+export interface ApprovalCall {
+  /** The call's id in the transcript; the question publishes it to the client. */
+  callId: string;
+  /** The name the model used, which is what the client shows and the transcript holds. */
+  modelToolName: string;
+  /** The tool as the user knows it: the remote name for an MCP tool. */
+  tool: string;
+  /** Set for MCP tools: the server the call goes to. */
+  server?: string;
+  args: JsonRecord;
+}
+
 export interface ToolDefinition {
   id: string;
   source: ToolSource;
@@ -69,6 +95,11 @@ export interface ToolExecutionContext {
   signal?: AbortSignal;
   /** Present when a client can answer; see `ToolInteractionHandler`. */
   requestInteraction?: ToolInteractionHandler;
+  /**
+   * Decides whether a call to a tool whose `approval` is `ask` may run. When the
+   * host supplies none the call is blocked, so a missing wire cannot run it.
+   */
+  requestApproval?: (call: ApprovalCall) => Promise<ApprovalVerdict>;
   /** Host persistence hook called after a user/headless decision is settled. */
   onInteractionResolved?: (
     answer: ToolInteractionAnswer,
@@ -81,6 +112,8 @@ export interface LoadedTool {
   validate: ValidateFunction<unknown>;
   /** Scheduler policy: resolve this call before running co-batched calls. */
   requiresUserDecision?: boolean;
+  /** `ask` holds each call until the user approves it; absent or `off` runs it. */
+  approval?: "off" | "ask";
   /** Tolerant pre-validation normalization (enum aliases, harmless variants). */
   normalizeArguments?(args: JsonRecord): JsonRecord;
   execute(

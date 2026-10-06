@@ -40,6 +40,7 @@ import {
   type ToolInteractionQuestion,
 } from "./tools/index.js";
 import {renderToolResult} from "./tools/output.js";
+import {createApprovalRequester} from "./tools/approval.js";
 import {ProcessManager} from "./tools/native/process-manager.js";
 import {TaskStore} from "./tools/native/task-store.js";
 import {MemoryStore} from "./tools/native/memory-store.js";
@@ -585,6 +586,14 @@ export class AgentSession {
       let decisionPersistenceError: unknown;
       let executionError: unknown;
       const requestInteraction = options.requestInteraction;
+      // One requester per step: its mutex keeps approvals to one question at a time.
+      const requestApproval = createApprovalRequester({
+        settings: config.settings.approval,
+        gate: new AsyncMutex(),
+        ask: requestInteraction === undefined
+          ? undefined
+          : (question, identity) => requestInteraction({...question, ...identity}),
+      });
       // A result is published the moment its call settles, not after the whole
       // batch; the ids published here are skipped by the final pass below.
       const publishedCallIds = new Set<string>();
@@ -599,6 +608,7 @@ export class AgentSession {
             workspaceRoot: config.settings.cwd,
             sessionDir: config.paths.session_dir,
             signal: options.signal,
+            requestApproval,
             ...(requestInteraction === undefined
               ? {}
               : {

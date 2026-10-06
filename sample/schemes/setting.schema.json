@@ -59,6 +59,19 @@
       "description": "Most tool calls from one provider response that run at the same time. Each result is streamed as soon as its call finishes. Use 1 to run them strictly one after another. Defaults to 8.",
       "default": 8
     },
+    "approval": {
+      "type": "object",
+      "description": "Wait and preview values for tools whose approval is ask. Nothing is asked while every tool's approval is off, which is the default.",
+      "properties": {
+        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 300000, "description": "How long a run waits for the user before the call is blocked as approval_timeout. Must not exceed max_timeout_ms."},
+        "extend_ms": {"type": "integer", "minimum": 1000, "maximum": 1800000, "default": 300000, "description": "How much one extension adds to the deadline."},
+        "max_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 1800000, "description": "Ceiling for the whole wait, extensions included."},
+        "headless": {"type": "string", "enum": ["deny", "allow"], "default": "deny", "description": "What a run does with a call that needs approval when no client can answer: deny blocks it as approval_unavailable, allow runs it. Unlike request_draft, an unanswered approval is never accepted by default."},
+        "preview_bytes": {"type": "integer", "minimum": 64, "maximum": 65536, "default": 4096, "description": "Bytes of each text field shown in the approval question; longer text is cut and its real size is reported."}
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
     "persistence": {
       "type": "object",
       "description": "Transcript persistence behavior.",
@@ -300,6 +313,12 @@
             "items": {"type": "string", "pattern": "\\S"},
             "uniqueItems": true,
             "default": []
+          },
+          "approval": {
+            "type": "string",
+            "enum": ["off", "ask"],
+            "default": "off",
+            "description": "ask pauses every call to this server's tools until the user approves it; off runs them at once."
           }
         },
         "additionalProperties": false
@@ -404,6 +423,12 @@
               "type": "object",
               "description": "Native file writes. Parent directories are created automatically; backups default to true and collect in backup_dir (the active profile's tool_storage/backups directory, or the session's backups directory without a profile); identical content is left unchanged.",
               "properties": {
+                "approval": {
+                  "type": "string",
+                  "enum": ["off", "ask"],
+                  "default": "off",
+                  "description": "ask pauses every write until the user approves it (see the top-level approval block); off runs it at once."
+                },
                 "max_bytes": {
                   "type": "integer",
                   "minimum": 1,
@@ -507,6 +532,12 @@
               "type": "object",
               "description": "Native surgical text edits. oldText must match the file exactly and occur once unless replaceAll is true; backups and durability default to the tools.native.write settings and may be overridden here, and paths fall back to the write path rules.",
               "properties": {
+                "approval": {
+                  "type": "string",
+                  "enum": ["off", "ask"],
+                  "default": "off",
+                  "description": "ask pauses every edit until the user approves it (see the top-level approval block); off runs it at once."
+                },
                 "max_bytes": {
                   "type": "integer",
                   "minimum": 1,
@@ -727,6 +758,12 @@
               "type": "object",
               "description": "Shell command execution. Each call gets a fresh shell in a resolved working directory; the path rules only decide that directory, because the command itself runs with the backend user's rights.",
               "properties": {
+                "approval": {
+                  "type": "string",
+                  "enum": ["off", "ask"],
+                  "default": "off",
+                  "description": "ask pauses every command until the user approves it (see the top-level approval block); off runs it at once. Approval is a confirmation, not a sandbox: an approved command runs with the backend user's rights."
+                },
                 "shell": {
                   "type": "string",
                   "pattern": "\\S",
@@ -1090,6 +1127,12 @@
               "type": "object",
               "description": "Long-running shell process management. Processes are session-owned and stopped on orderly backend shutdown.",
               "properties": {
+                "approval": {
+                  "type": "string",
+                  "enum": ["off", "ask"],
+                  "default": "off",
+                  "description": "ask pauses every process start until the user approves it; status, wait, list and stop never ask. See the top-level approval block."
+                },
                 "statecontext": {
                   "type": "object",
                   "description": "Process state included in statecontext snapshots.",

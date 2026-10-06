@@ -1347,8 +1347,8 @@ test("loads model and session settings with normalized paths and hashes", async 
     assert.equal(config.settings.prompt_role, "developer");
     assert.equal(config.settings.prompt_text, "Be concise.\n\nUse tools.");
     assert.deepEqual(config.settings.mcp_servers, [
-      {id: "docs", config_path: join(sessionDir, "mcp/docs.json"), enabled: true, deny_tools: ["delete"]},
-      {id: "optional", config_path: absolutePrompt, enabled: false, deny_tools: []},
+      {id: "docs", config_path: join(sessionDir, "mcp/docs.json"), enabled: true, deny_tools: ["delete"], approval: "off"},
+      {id: "optional", config_path: absolutePrompt, enabled: false, deny_tools: [], approval: "off"},
     ]);
     assert.equal(config.settings.max_tool_rounds, 8);
     assert.deepEqual(config.settings.compaction, {

@@ -66,6 +66,26 @@ export interface SessionFileListingSettings extends JsonRecord {
   ignore_directories: string[];
 }
 
+/** Whether a call to a tool waits for the user's decision before it runs. */
+export type ApprovalMode = "off" | "ask";
+
+/** What a run does with an approval when no client can answer it. */
+export type ApprovalHeadlessPolicy = "deny" | "allow";
+
+/** Session-wide wait and preview values shared by every tool whose approval is `ask`. */
+export interface ApprovalSettings extends JsonRecord {
+  /** How long an interactive run waits for the user before the call is denied. */
+  timeout_ms: number;
+  /** How much one extension adds to the deadline. */
+  extend_ms: number;
+  /** Ceiling for the whole wait, extensions included. */
+  max_timeout_ms: number;
+  /** `deny` blocks a call nobody can answer; `allow` lets unattended runs proceed. */
+  headless: ApprovalHeadlessPolicy;
+  /** Bytes of each text field shown in the preview; longer text is cut. */
+  preview_bytes: number;
+}
+
 export type NativeReadPathAction = "allow" | "deny";
 
 export interface NativePathRule extends JsonRecord {
@@ -142,10 +162,14 @@ export interface NativeMutationSettings extends JsonRecord {
 
 export interface NativeWriteToolSettings extends NativePathPolicy, NativeMutationSettings {
   max_bytes: number;
+  /** `ask` pauses each call for the user's decision; `off` (default) runs it. */
+  approval?: ApprovalMode;
 }
 
 export interface NativeEditToolSettings extends NativePathPolicy, NativeMutationSettings {
   max_bytes: number;
+  /** `ask` pauses each call for the user's decision; `off` (default) runs it. */
+  approval?: ApprovalMode;
 }
 
 /** How the bash tool signals leftover descendants when a command finishes. */
@@ -179,6 +203,8 @@ export interface NativeBashSpillSettings {
 }
 
 export interface NativeBashToolSettings extends NativePathPolicy {
+  /** `ask` pauses each command for the user's decision; `off` (default) runs it. */
+  approval?: ApprovalMode;
   /** Shell executable: a PATH name or an absolute path. */
   shell: string;
   /** Add -l so profile-provided PATH entries exist (profiles may print and cd). */
@@ -308,6 +334,8 @@ export interface NativeMemoryToolSettings extends JsonRecord {
 }
 
 export interface NativeProcessToolSettings extends NativePathPolicy {
+  /** `ask` pauses each `start` for the user's decision; other actions never ask. */
+  approval?: ApprovalMode;
   shell: string;
   login_shell: boolean;
   kill_grace_ms: number;
@@ -419,6 +447,8 @@ export interface McpServerReference extends JsonRecord {
   config_path: string;
   enabled: boolean;
   deny_tools: string[];
+  /** `ask` pauses every call to this server's tools for the user's decision. */
+  approval?: ApprovalMode;
 }
 
 export interface SessionSettings extends JsonRecord {
@@ -433,6 +463,8 @@ export interface SessionSettings extends JsonRecord {
   max_tool_rounds: number;
   /** Most tool calls of one provider response that run at the same time. */
   max_parallel_tool_calls: number;
+  /** Wait and preview values for tools whose `approval` is `ask`. */
+  approval: ApprovalSettings;
   persistence: PersistenceSettings;
   compaction: CompactionSettings;
   front_compaction: FrontCompactionSettings;
@@ -771,6 +803,19 @@ export const DEFAULT_NATIVE_REQUEST_DRAFT_MAX_TIMEOUT_MS = MAX_NATIVE_REQUEST_DR
  * far a user can push the deadline out.
  */
 export const DEFAULT_NATIVE_REQUEST_DRAFT_EXTEND_MS = 300_000;
+/**
+ * Approval waits follow the request_draft values so one session behaves the same
+ * whichever tool asks; the ceiling is shared, the defaults are separate keys.
+ */
+export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_NATIVE_REQUEST_DRAFT_TIMEOUT_MS;
+export const DEFAULT_APPROVAL_EXTEND_MS = DEFAULT_NATIVE_REQUEST_DRAFT_EXTEND_MS;
+export const MAX_APPROVAL_TIMEOUT_MS = MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS;
+export const MIN_APPROVAL_EXTEND_MS = 1_000;
+export const DEFAULT_APPROVAL_HEADLESS: ApprovalHeadlessPolicy = "deny";
+/** Bytes of each previewed text field; the question stays small enough to read. */
+export const DEFAULT_APPROVAL_PREVIEW_BYTES = 4096;
+export const MIN_APPROVAL_PREVIEW_BYTES = 64;
+export const MAX_APPROVAL_PREVIEW_BYTES = 65_536;
 export const MIN_NATIVE_REQUEST_DRAFT_EXTEND_MS = 1_000;
 /**
  * A draft is a question read at a glance and re-published in every message
@@ -984,6 +1029,60 @@ function normalizeFrontCompaction(value: unknown, path: string): FrontCompaction
     throw new ConfigError(`${path}: front_compaction.delete_mode must be permanent or recoverable`);
   }
   return {...raw, enabled, delete_mode: deleteMode} as FrontCompactionSettings;
+}
+
+/** `off` (the default) runs a call at once; `ask` waits for the user's decision first. */
+function normalizeApprovalMode(value: unknown, fieldPath: string, path: string): ApprovalMode {
+  // Only an absent key means off: a `null` or misspelt value must not quietly disable a gate.
+  const mode = value === undefined ? "off" : value;
+  if (mode !== "off" && mode !== "ask") {
+    throw new ConfigError(`${path}: ${fieldPath}.approval must be "off" or "ask"`);
+  }
+  return mode;
+}
+
+function normalizeApprovalSettings(value: unknown, path: string): ApprovalSettings {
+  if (value !== undefined && !isRecord(value)) {
+    throw new ConfigError(`${path}: approval must be an object`);
+  }
+  const raw = value ?? {};
+  assertSupportedKeys(raw, ["extend_ms", "headless", "max_timeout_ms", "preview_bytes", "timeout_ms"], `${path}: approval`);
+  const bounded = (field: string, fallback: number, minimum: number, maximum: number): number => {
+    const configured = raw[field] ?? fallback;
+    if (
+      typeof configured !== "number" ||
+      !Number.isSafeInteger(configured) ||
+      configured < minimum ||
+      configured > maximum
+    ) {
+      throw new ConfigError(
+        `${path}: approval.${field} must be a safe integer between ${minimum} and ${maximum}`,
+      );
+    }
+    return configured;
+  };
+  const timeoutMs = bounded("timeout_ms", DEFAULT_APPROVAL_TIMEOUT_MS, 1, MAX_APPROVAL_TIMEOUT_MS);
+  const maxTimeoutMs = bounded("max_timeout_ms", MAX_APPROVAL_TIMEOUT_MS, 1, MAX_APPROVAL_TIMEOUT_MS);
+  if (timeoutMs > maxTimeoutMs) {
+    throw new ConfigError(`${path}: approval.timeout_ms must not exceed max_timeout_ms`);
+  }
+  const headless = raw.headless ?? DEFAULT_APPROVAL_HEADLESS;
+  if (headless !== "deny" && headless !== "allow") {
+    throw new ConfigError(`${path}: approval.headless must be "deny" or "allow"`);
+  }
+  return {
+    ...raw,
+    timeout_ms: timeoutMs,
+    extend_ms: bounded("extend_ms", DEFAULT_APPROVAL_EXTEND_MS, MIN_APPROVAL_EXTEND_MS, MAX_APPROVAL_TIMEOUT_MS),
+    max_timeout_ms: maxTimeoutMs,
+    headless,
+    preview_bytes: bounded(
+      "preview_bytes",
+      DEFAULT_APPROVAL_PREVIEW_BYTES,
+      MIN_APPROVAL_PREVIEW_BYTES,
+      MAX_APPROVAL_PREVIEW_BYTES,
+    ),
+  };
 }
 
 function normalizeMaxParallelToolCalls(value: unknown, path: string): number {
@@ -1217,6 +1316,7 @@ function normalizeMcpServers(value: unknown, cwd: string, path: string): McpServ
       config_path: isAbsolute(configuredPath) ? resolve(configuredPath) : resolve(cwd, configuredPath),
       enabled,
       deny_tools: denyTools,
+      approval: normalizeApprovalMode(entry.approval, `mcp_servers[${index}]`, path),
     };
   });
 }
@@ -1859,19 +1959,19 @@ type NativeToolName =
  */
 const NATIVE_TOOL_KEYS: Record<NativeToolName, readonly string[]> = {
   read: ["default_limit", "max_bytes", "max_file_bytes", "paths"],
-  write: ["backup_dir", "backup_max_count", "backup_max_total_bytes", "fsync", "max_bytes", "paths"],
-  edit: ["backup_dir", "backup_max_count", "backup_max_total_bytes", "fsync", "max_bytes", "paths"],
+  write: ["approval", "backup_dir", "backup_max_count", "backup_max_total_bytes", "fsync", "max_bytes", "paths"],
+  edit: ["approval", "backup_dir", "backup_max_count", "backup_max_total_bytes", "fsync", "max_bytes", "paths"],
   grep: ["binary", "max_bytes", "max_file_bytes", "max_line_chars", "max_matches_per_file", "max_results", "paths", "timeout_ms"],
   glob: ["binary", "include_hidden", "max_bytes", "max_line_chars", "max_results", "paths", "timeout_ms"],
   bash: [
-    "env", "env_deny", "env_file", "kill_grace_ms", "kill_process_group", "login_shell",
+    "approval", "env", "env_deny", "env_file", "kill_grace_ms", "kill_process_group", "login_shell",
     "max_bytes", "max_line_chars", "max_timeout_ms", "paths", "shell", "spill", "stderr",
     "stdout", "strip_ansi", "timeout_ms",
     // Removed keys, kept so their "was removed" errors below still fire.
     "capture_bytes", "head_ratio",
   ],
   process: [
-    "env", "env_deny", "env_file", "kill_grace_ms", "log_cap_bytes", "login_shell", "max_completed",
+    "approval", "env", "env_deny", "env_file", "kill_grace_ms", "log_cap_bytes", "login_shell", "max_completed",
     "max_line_chars", "max_running", "max_wait_timeout_ms", "paths", "retention_days",
     "shell", "statecontext", "status_log_bytes", "stderr", "stdout", "storage_dir",
     "strip_ansi", "wait_timeout_ms",
@@ -2145,6 +2245,7 @@ async function normalizeTools(
     }
     write = {
       ...writeValue,
+      approval: normalizeApprovalMode(writeValue.approval, "tools.native.write", path),
       max_bytes: maxBytes,
       backup_max_count: mutationBackupMaxCount(
         writeValue.backup_max_count,
@@ -2199,6 +2300,7 @@ async function normalizeTools(
     };
     edit = {
       ...editValue,
+      approval: normalizeApprovalMode(editValue.approval, "tools.native.edit", path),
       max_bytes: maxBytes,
       backup_max_count: mutationBackupMaxCount(
         editValue.backup_max_count,
@@ -2382,6 +2484,7 @@ async function normalizeTools(
     });
     bash = {
       ...bashValue,
+      approval: normalizeApprovalMode(bashValue.approval, "tools.native.bash", path),
       shell,
       login_shell: loginShell,
       timeout_ms: timeoutMs,
@@ -2718,6 +2821,7 @@ async function normalizeTools(
     );
     processTool = {
       ...processValue,
+      approval: normalizeApprovalMode(processValue.approval, "tools.native.process", path),
       shell: shell.trim(),
       login_shell: loginShell,
       kill_grace_ms: killGraceMs,
@@ -3172,6 +3276,7 @@ async function normalizeSettings(
   }
   const maxToolRounds = normalizeMaxToolRounds(raw.max_tool_rounds, path);
   const maxParallelToolCalls = normalizeMaxParallelToolCalls(raw.max_parallel_tool_calls, path);
+  const approval = normalizeApprovalSettings(raw.approval, path);
   const persistence = normalizePersistence(raw.persistence, path);
   const compaction = normalizeCompaction(raw.compaction, path);
   const frontCompaction = normalizeFrontCompaction(raw.front_compaction, path);
@@ -3203,6 +3308,7 @@ async function normalizeSettings(
     prompt_text: promptDocuments.text,
     max_tool_rounds: maxToolRounds,
     max_parallel_tool_calls: maxParallelToolCalls,
+    approval,
     persistence,
     compaction,
     front_compaction: frontCompaction,

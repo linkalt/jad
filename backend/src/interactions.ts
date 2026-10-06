@@ -27,8 +27,16 @@ export type InteractionDecision = "accept" | "update" | "decline";
 /** Why the wait ended: the user answered, the deadline passed, or the run stopped. */
 export type InteractionOutcome = "answered" | "timed_out" | "cancelled";
 
+/**
+ * What the question is for. A `draft` is a proposal the user may edit; an
+ * `approval` is a yes or no on running one call, which cannot be edited.
+ */
+export type InteractionKind = "draft" | "approval";
+
 /** What a tool asks, before the run attaches the identity of the call. */
 export interface InteractionQuestion {
+  /** Absent means `draft`, so clients that predate approvals keep working. */
+  kind?: InteractionKind;
   /** The dynamic JSON the tool proposes and the user decides on. */
   draft: JsonRecord;
   title?: string;
@@ -57,6 +65,8 @@ export interface InteractionIdentity {
  */
 export interface PendingInteraction extends InteractionIdentity {
   id: string;
+  /** Absent means `draft`. */
+  kind?: InteractionKind;
   /** The tool's proposal, exactly as the tool sent it. */
   draft: JsonRecord;
   title?: string;
@@ -122,6 +132,11 @@ export class InteractionBroker {
    * answer endpoint reads them here rather than from config, so the check follows
    * the question that is actually waiting.
    */
+  /** What the pending question is for; a reply is checked against it. */
+  public get kind(): InteractionKind | undefined {
+    return this.entry?.pending.kind;
+  }
+
   public get limits(): DraftBounds | undefined {
     return this.entry?.limits;
   }
@@ -141,6 +156,7 @@ export class InteractionBroker {
     const createdAt = Date.now();
     const pending: PendingInteraction = {
       id: randomUUID(),
+      ...(question.kind === undefined ? {} : {kind: question.kind}),
       tool: identity.tool,
       tool_call_id: identity.tool_call_id,
       draft: question.draft,
@@ -305,6 +321,7 @@ export function parseInteractionExtendRequest(
 export function parseInteractionReplyRequest(
   value: unknown,
   limits?: DraftBounds,
+  kind: InteractionKind = "draft",
 ): InteractionReplyRequest | {error: string} {
   const record = asJsonRecord(value);
   if (record === undefined) {
@@ -317,6 +334,10 @@ export function parseInteractionReplyRequest(
   const decision = record.decision;
   if (decision !== "accept" && decision !== "update" && decision !== "decline") {
     return {error: 'decision must be "accept", "update" or "decline"'};
+  }
+  if (kind === "approval" && decision === "update") {
+    // An edited call would run something the user was not shown as the question.
+    return {error: 'decision must be "accept" or "decline" when the question asks for approval'};
   }
   const reason = record.reason;
   if (reason !== undefined && typeof reason !== "string") {
