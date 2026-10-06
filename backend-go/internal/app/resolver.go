@@ -548,6 +548,13 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	options.ToolCatalog = prepared.toolCatalog
 	options.MaxToolRounds = int(r.config.MaxToolRounds)
 	options.MaxParallelToolCalls = int(r.config.MaxParallelToolCalls)
+	options.Approval = &tools.ApprovalOptions{
+		TimeoutMS:     r.config.Approval.TimeoutMS,
+		ExtendMS:      r.config.Approval.ExtendMS,
+		MaxTimeoutMS:  r.config.Approval.MaxTimeoutMS,
+		HeadlessAllow: r.config.Approval.Headless == sessionfs.ApprovalHeadlessAllow,
+		PreviewBytes:  r.config.Approval.PreviewBytes,
+	}
 	options.ToolExecution.WorkspaceRoot = r.config.WorkingDir
 	options.ToolExecution.SessionDir = filepath.Dir(r.config.SettingPath)
 	options.ToolExecution.OnInteractionResolved = func(identity tools.InteractionIdentity, answer tools.InteractionAnswer, proposed json.RawMessage) error {

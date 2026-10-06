@@ -80,6 +80,7 @@ func clonePendingInteraction(pending tools.PendingInteraction) tools.PendingInte
 func pendingToWebUI(pending tools.PendingInteraction) *webui.Interaction {
 	return &webui.Interaction{
 		ID:           pending.ID,
+		Kind:         string(pending.Kind),
 		Tool:         pending.Tool,
 		ToolCallID:   pending.ToolCallID,
 		Draft:        append([]byte(nil), pending.Draft...),

@@ -112,6 +112,7 @@ func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks,
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
+		tool.Approval = approvalMode(config.NativeWrite.Approval)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeEdit != nil {
@@ -124,6 +125,7 @@ func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks,
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
+		tool.Approval = approvalMode(config.NativeEdit.Approval)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeGrep != nil {
@@ -148,6 +150,7 @@ func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks,
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
+		tool.Approval = approvalMode(config.NativeBash.Approval)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeGlob != nil {
@@ -172,6 +175,7 @@ func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks,
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
+		tool.Approval = approvalMode(config.NativeProcess.Approval)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeTask != nil {
@@ -235,6 +239,15 @@ func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks,
 		loaded = append(loaded, tool)
 	}
 	return tools.NewCatalog(loaded)
+}
+
+// approvalMode maps a tool's normalized approval setting to the catalog's field:
+// only "ask" holds a call, so every other value leaves the tool ungated.
+func approvalMode(configured string) string {
+	if configured == sessionfs.ApprovalAsk {
+		return tools.ApprovalAsk
+	}
+	return ""
 }
 
 func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {

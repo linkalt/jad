@@ -58,7 +58,9 @@ type NativeBashSpillSettings struct {
 // NativeBashSettings contains normalized shell, path, output, and environment
 // policy for native.bash.
 type NativeBashSettings struct {
-	Policy           NativePathPolicy
+	Policy NativePathPolicy
+	// Approval is "off" (default) or "ask".
+	Approval         string
 	Shell            string
 	LoginShell       bool
 	TimeoutMs        int64
@@ -108,7 +110,7 @@ func normalizeNativeBashSettings(
 	}
 	for key := range fields {
 		switch key {
-		case "shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_process_group", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "strip_ansi", "env_file", "env", "env_deny", "paths", "capture_bytes", "head_ratio":
+		case "shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_process_group", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "strip_ansi", "env_file", "env", "env_deny", "paths", "approval", "capture_bytes", "head_ratio":
 		default:
 			return nil, configError("%s: tools.native.bash.%s is not supported", settingPath, key)
 		}
@@ -121,6 +123,9 @@ func normalizeNativeBashSettings(
 	}
 
 	settings := &NativeBashSettings{}
+	if settings.Approval, err = normalizeApprovalMode(fields, "tools.native.bash", settingPath); err != nil {
+		return nil, err
+	}
 	if settings.Shell, err = bashString(fields, "shell", defaultNativeBashShell, settingPath+": tools.native.bash", false); err != nil {
 		return nil, err
 	}

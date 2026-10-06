@@ -30,6 +30,8 @@ type NativeMutationSettings struct {
 type NativeWriteSettings struct {
 	Policy   NativePathPolicy
 	MaxBytes int64
+	// Approval is "off" (default) or "ask"; it is never inherited from another tool.
+	Approval string
 	NativeMutationSettings
 }
 
@@ -37,6 +39,8 @@ type NativeWriteSettings struct {
 type NativeEditSettings struct {
 	Policy   NativePathPolicy
 	MaxBytes int64
+	// Approval is "off" (default) or "ask"; edit does not inherit write's.
+	Approval string
 	NativeMutationSettings
 }
 
@@ -142,7 +146,11 @@ func normalizeNativeWriteSettings(
 	if err != nil {
 		return nil, err
 	}
-	return &NativeWriteSettings{Policy: policy, MaxBytes: maxBytes, NativeMutationSettings: mutation}, nil
+	approval, err := normalizeApprovalMode(fields, "tools.native."+toolName, settingPath)
+	if err != nil {
+		return nil, err
+	}
+	return &NativeWriteSettings{Policy: policy, MaxBytes: maxBytes, Approval: approval, NativeMutationSettings: mutation}, nil
 }
 
 func normalizeNativeEditSettings(
@@ -172,13 +180,17 @@ func normalizeNativeEditSettings(
 	if err != nil {
 		return nil, err
 	}
-	return &NativeEditSettings{Policy: policy, MaxBytes: maxBytes, NativeMutationSettings: mutation}, nil
+	approval, err := normalizeApprovalMode(fields, "tools.native."+toolName, settingPath)
+	if err != nil {
+		return nil, err
+	}
+	return &NativeEditSettings{Policy: policy, MaxBytes: maxBytes, Approval: approval, NativeMutationSettings: mutation}, nil
 }
 
 func validateNativeMutationKeys(fields map[string]json.RawMessage, toolName, settingPath string) error {
 	for key := range fields {
 		switch key {
-		case "max_bytes", "paths", "backup_max_count", "backup_max_total_bytes", "backup_dir", "fsync":
+		case "max_bytes", "paths", "backup_max_count", "backup_max_total_bytes", "backup_dir", "fsync", "approval":
 		default:
 			return configError("%s: tools.native.%s.%s is not supported", settingPath, toolName, key)
 		}

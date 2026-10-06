@@ -3,6 +3,7 @@ package interactions
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,3 +137,47 @@ func awaitAnswer(t *testing.T, answers <-chan tools.InteractionAnswer) tools.Int
 }
 
 func ptr(value string) *string { return &value }
+
+func TestBrokerReportsTheKindOfTheWaitingQuestion(t *testing.T) {
+	changes := make(chan *tools.PendingInteraction, 4)
+	broker := NewBroker(func(pending *tools.PendingInteraction) { changes <- pending })
+	if broker.Kind() != tools.InteractionKindDraft {
+		t.Fatalf("kind with nothing waiting = %q, want the draft kind", broker.Kind())
+	}
+	var nilBroker *Broker
+	if nilBroker.Kind() != tools.InteractionKindDraft {
+		t.Fatal("a nil broker must report the draft kind")
+	}
+	for _, kind := range []tools.InteractionKind{tools.InteractionKindApproval, tools.InteractionKindDraft} {
+		result := make(chan tools.InteractionAnswer, 1)
+		go func() {
+			answer, _ := broker.Request(context.Background(), tools.InteractionIdentity{Tool: "bash", ToolCallID: "call-1"}, tools.InteractionQuestion{
+				Kind: kind, Draft: json.RawMessage(`{"command":"ls"}`), TimeoutMS: 60_000, ExtendMS: 1_000, MaxTimeoutMS: 61_000,
+			})
+			result <- answer
+		}()
+		pending := awaitPending(t, changes)
+		if pending.Kind != kind || broker.Kind() != kind {
+			t.Fatalf("kind %q: pending %q, broker %q", kind, pending.Kind, broker.Kind())
+		}
+		if status := broker.Reply(pending.ID, tools.InteractionReply{Decision: tools.InteractionAccept}); status != tools.InteractionStatusAnswered {
+			t.Fatalf("reply status = %q", status)
+		}
+		awaitAnswer(t, result)
+		<-changes
+		if broker.Kind() != tools.InteractionKindDraft {
+			t.Fatalf("kind after the answer = %q, want the draft kind", broker.Kind())
+		}
+	}
+}
+
+func TestPendingInteractionOmitsTheKindForADraft(t *testing.T) {
+	draft, _ := json.Marshal(tools.PendingInteraction{ID: "a"})
+	if strings.Contains(string(draft), `"kind"`) {
+		t.Fatalf("a draft question carries a kind, so older clients see a new field: %s", draft)
+	}
+	approval, _ := json.Marshal(tools.PendingInteraction{ID: "a", Kind: tools.InteractionKindApproval})
+	if !strings.Contains(string(approval), `"kind":"approval"`) {
+		t.Fatalf("an approval question does not say so: %s", approval)
+	}
+}

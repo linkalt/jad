@@ -763,6 +763,7 @@ export const scenarios = [
     },
   },
   ...parallelScenarios(),
+  ...approvalScenarios(),
   {
     name: "native tool argument errors",
     provider: {steps: [
@@ -1139,6 +1140,132 @@ function parallelScenarios() {
       name: "parallel calls mix valid, invalid and unknown tools",
       provider: {steps: [{calls: [sleepCall("m0", 0.4), {name: "bash", callId: "m1", arguments: {command: ""}}, {name: "no_such_tool", callId: "m2", arguments: {}}, {name: "read", callId: "m3", arguments: {path: "notes.txt"}}]}, {text: "mixed"}]},
       run: run("natived", "run a mix", ["m1", "m2", "m3"]),
+    },
+  ];
+}
+
+// Approval: a tool set to "ask" waits for the user before it runs. The scenarios
+// answer through the HTTP endpoint, so they compare what a client sees (the
+// published question and its kind, the refusal of an edit) and what the model
+// sees (a blocked result with a code), not how either backend gets there.
+function approvalScenarios() {
+  const reply = (c, session, body) => call(c, "POST", `/api/sessions/${session}/run/interaction`, {body});
+  // Runs one scripted response against `session`, calls `decide(c, pending, attempts)` when
+  // the first question appears, and returns everything a client or the model observed.
+  const asked = (name, session, steps, decide, {interaction = true, extra} = {}) => ({
+    name,
+    provider: {steps: [...steps, {text: "understood"}]},
+    run: async (c) => {
+      await call(c, "POST", `/api/sessions/${session}/reset`, {body: {}});
+      const attempts = [];
+      const questions = [];
+      const result = await sseLive(c, `/api/sessions/${session}/run`, {
+        body: {input: "go", supports_interaction: interaction},
+        onEvent: async (event) => {
+          if (event.event !== "interaction" || !event.data.pending) return;
+          // A republished question (an extension) keeps its id; answer each question once.
+          if (questions.some((q) => q.id === event.data.pending.id)) return;
+          questions.push(event.data.pending);
+          await decide(c, event.data.pending, attempts);
+        },
+      });
+      return {
+        names: eventNames(result),
+        questions: questions.map((q) => ({kind: q.kind ?? null, tool: q.tool, tool_call_id: q.tool_call_id, title: q.title ?? null, draft: q.draft, extend_ms: q.extend_ms})),
+        attempts,
+        outputs: toolOutputs(c.provider.requests.at(-1)),
+        records: await messagesJsonl(c, session),
+        ...(extra ? await extra(c) : {}),
+      };
+    },
+  });
+  const accept = async (c, pending, attempts, session = "askall") => {
+    attempts.push(await reply(c, session, {interaction_id: pending.id, decision: "accept"}));
+  };
+  const fileOf = (name) => async (c) => ({file: await readFile(join(c.root, "scratch", name), "utf8").catch(() => null)});
+  return [
+    asked("approval: accepted write runs and the question is published as an approval", "askall",
+      [toolRound("write", {path: "ask/a.txt", content: "hello"})], accept, {extra: fileOf("ask/a.txt")}),
+    asked("approval: declined write is blocked with the reason and writes nothing", "askall",
+      [toolRound("write", {path: "ask/b.txt", content: "no"})],
+      async (c, pending, attempts) => {
+        attempts.push(await reply(c, "askall", {interaction_id: pending.id, decision: "decline"}));
+        attempts.push(await reply(c, "askall", {interaction_id: pending.id, decision: "decline", reason: "use a copy"}));
+      }, {extra: fileOf("ask/b.txt")}),
+    asked("approval: update is refused for an approval and the question stays open", "askall",
+      [toolRound("write", {path: "ask/c.txt", content: "x"})],
+      async (c, pending, attempts) => {
+        attempts.push(await reply(c, "askall", {interaction_id: pending.id, decision: "update", draft: {path: "/etc/passwd", content: "x"}}));
+        await accept(c, pending, attempts);
+      }, {extra: fileOf("ask/c.txt")}),
+    asked("approval: bash and edit ask, read does not", "askall",
+      [{calls: [
+        {name: "read", callId: "r1", arguments: {path: "notes.txt"}},
+        {name: "bash", callId: "b1", arguments: {command: "echo ran-b1"}},
+      ]}], accept),
+    asked("approval: edit asks and shows old and new text", "askall",
+      [toolRound("edit", {path: "notes.txt", oldText: "beta", newText: "gamma"})], accept),
+    asked("approval: long text is cut and says how long it was", "askall",
+      [toolRound("bash", {command: `echo ${"y".repeat(200)}`, cwd: "."})], accept),
+    // The bash call between them gives the started process time to exit, so the
+    // list that follows sees the same state in both backends. It asks as well.
+    asked("approval: process start asks, status does not", "askall",
+      [toolRound("process", {action: "start", command: "echo started"}), toolRound("bash", {command: "sleep 0.6"}), toolRound("process", {action: "list"})], accept),
+    asked("approval: headless run with deny blocks the call", "askall",
+      [toolRound("write", {path: "ask/d.txt", content: "x"})], async () => {}, {interaction: false, extra: fileOf("ask/d.txt")}),
+    asked("approval: headless run with allow runs the call", "askallow",
+      [toolRound("write", {path: "ask/e.txt", content: "x"})], async () => {}, {interaction: false, extra: fileOf("ask/e.txt")}),
+    {
+      // Which of two simultaneous questions is asked first is scheduling (the TypeScript
+      // backend and Go may differ, and the order of one response's calls is not promised),
+      // so this compares what must hold either way: each call is asked once, never two
+      // questions are open together, both run once answered, and the transcript keeps call order.
+      name: "approval: two gated calls of one response are asked one at a time",
+      provider: {steps: [{calls: [
+        {name: "write", callId: "w1", arguments: {path: "ask/f1.txt", content: "1"}},
+        {name: "write", callId: "w2", arguments: {path: "ask/f2.txt", content: "2"}},
+      ]}, {text: "understood"}]},
+      run: async (c) => {
+        await call(c, "POST", "/api/sessions/askall/reset", {body: {}});
+        const questions = [];
+        let open = null;
+        let overlapped = false;
+        const result = await sseLive(c, "/api/sessions/askall/run", {
+          body: {input: "go", supports_interaction: true},
+          onEvent: async (event) => {
+            if (event.event !== "interaction") return;
+            const pending = event.data.pending;
+            if (!pending) { open = null; return; }
+            if (open !== null && open !== pending.id) overlapped = true;
+            if (open === pending.id) return;
+            open = pending.id;
+            questions.push(pending);
+            await reply(c, "askall", {interaction_id: pending.id, decision: "accept"});
+          },
+        });
+        return {
+          status: result.status,
+          overlapped,
+          asked: questions.map((q) => ({kind: q.kind ?? null, tool: q.tool, tool_call_id: q.tool_call_id, draft: q.draft})).sort((a, b) => (a.tool_call_id < b.tool_call_id ? -1 : 1)),
+          completed: result.events.some((e) => e.event === "completed"),
+          outputs: toolOutputs(c.provider.requests.at(-1)),
+          persistedOrder: (await messagesJsonl(c, "askall")).flatMap((r) => (r.item?.type === "function_call_output" || r.type === "function_call_output" ? [r.item?.call_id ?? r.call_id] : [])),
+          files: [await fileOf("ask/f1.txt")(c), await fileOf("ask/f2.txt")(c)],
+        };
+      },
+    },
+    asked("approval: an MCP server set to ask holds its tool calls", "askmcp",
+      [toolRound(mcpName("fx", "echo"), {text: "hi"})], async (c, pending, attempts) => accept(c, pending, attempts, "askmcp")),
+    {
+      name: "approval: a bad approval value is refused with the same message",
+      provider: {steps: [{text: "x"}]},
+      run: async (c) => {
+        const out = {};
+        for (const id of ["askbad", "askbadmcp", "askbadblock"]) {
+          out[id] = await call(c, "POST", `/api/sessions/${id}/run`, {body: {input: "go"}});
+        }
+        return out;
+      },
     },
   ];
 }

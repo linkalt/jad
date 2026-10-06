@@ -114,6 +114,17 @@ async function writeFixtures(sessions, providerUrl) {
   await writeFile(join(toolbox, "docs", "naïve café.txt"), "unicode name\n");
   await writeFile(join(toolbox, ".secret"), "hidden TODO\n");
   await writeFile(join(toolbox, "long.txt"), `${"x".repeat(5000)} needle ${"y".repeat(5000)}\n`);
+  const askManifest = join(dirname(sessions), "tools-ask.json");
+  await writeFile(askManifest, JSON.stringify({
+    schema_version: 1,
+    tools: [
+      nativeReadDefinition,
+      await definition("bash.js", "nativeBashDefinition"),
+      await definition("write.js", "nativeWriteDefinition"),
+      await definition("edit.js", "nativeEditDefinition"),
+      await definition("process.js", "nativeProcessDefinition"),
+    ],
+  }));
   const toolboxManifest = join(dirname(sessions), "tools-toolbox.json");
   const toolboxTools = [];
   for (const [file, name] of [["read.js", "nativeReadDefinition"], ["grep.js", "nativeGrepDefinition"], ["glob.js", "nativeGlobDefinition"], ["memory.js", "nativeMemoryDefinition"], ["task.js", "nativeTaskDefinition"], ["process.js", "nativeProcessDefinition"], ["fetch.js", "nativeFetchDefinition"]]) {
@@ -156,7 +167,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -225,6 +236,25 @@ async function writeFixtures(sessions, providerUrl) {
     // parser wording against Go's, which cannot match.
     if (id === "badmodel" || id === "badmodelmaint") await writeFile(join(dir, "model.json"), JSON.stringify({provider: "acme", api_key_env: "not a valid name"}));
     if (id === "toolmissing") setting.tool_definition_paths = [join(dirname(sessions), "no-such-tools.json")];
+    // Approval: write, edit, bash and process ask; read does not. askallow lets an
+    // unattended run proceed, askmcp gates a whole MCP server, and the ask*bad
+    // sessions hold settings both backends must refuse with the same message.
+    if (id === "askall" || id === "askallow" || id === "askbad" || id === "askbadblock") {
+      setting.cwd = scratch;
+      setting.max_tool_rounds = 6;
+      setting.tool_definition_paths = [askManifest];
+      setting.tools = {native: {read: {}, bash: {approval: "ask"}, write: {approval: "ask"}, edit: {approval: "ask"}, process: {approval: "ask"}}};
+      setting.approval = {timeout_ms: 20000, max_timeout_ms: 40000, headless: id === "askallow" ? "allow" : "deny", preview_bytes: 64};
+      if (id === "askbad") setting.tools.native.write.approval = "on";
+      if (id === "askbadblock") setting.approval.headless = "maybe";
+    }
+    if (id === "askmcp") {
+      setting.max_tool_rounds = 6;
+      setting.mcp_servers = [{id: "fx", config_path: join(mcpDir, "fx.json"), enabled: true, deny_tools: ["denied"], approval: "ask"}];
+    }
+    if (id === "askbadmcp") {
+      setting.mcp_servers = [{id: "fx", config_path: join(mcpDir, "fx.json"), enabled: true, approval: null}];
+    }
     if (mcpServers[id]) {
       setting.mcp_servers = mcpServers[id];
       setting.max_tool_rounds = 12;

@@ -14,6 +14,8 @@ type MCPServerReference struct {
 	ConfigPath string
 	Enabled    bool
 	DenyTools  []string
+	// Approval is "off" (default) or "ask"; ask holds every call to this server's tools.
+	Approval string
 }
 
 var mcpServerIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -83,7 +85,11 @@ func normalizeMCPServers(raw json.RawMessage, cwd, settingPath string) ([]MCPSer
 				denyTools = append(denyTools, name)
 			}
 		}
-		servers = append(servers, MCPServerReference{ID: id, ConfigPath: configPath, Enabled: enabled, DenyTools: denyTools})
+		approval, err := normalizeApprovalMode(fields, fmt.Sprintf("mcp_servers[%d]", index), settingPath)
+		if err != nil {
+			return nil, err
+		}
+		servers = append(servers, MCPServerReference{ID: id, ConfigPath: configPath, Enabled: enabled, DenyTools: denyTools, Approval: approval})
 	}
 	return servers, nil
 }

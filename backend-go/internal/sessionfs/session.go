@@ -142,7 +142,9 @@ type SessionConfig struct {
 	MaxToolRounds       int64
 	// MaxParallelToolCalls is the most tool calls of one provider response that
 	// run at the same time.
-	MaxParallelToolCalls  int64
+	MaxParallelToolCalls int64
+	// Approval holds the wait and preview values for tools whose approval is "ask".
+	Approval              ApprovalSettings
 	BackupTurns           int
 	Compaction            Compaction
 	Persistence           Persistence
@@ -243,6 +245,10 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		return SessionConfig{}, err
 	}
 	maxParallelToolCalls, err := normalizeMaxParallelToolCalls(setting["max_parallel_tool_calls"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	approval, err := normalizeApprovalSettings(setting["approval"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -445,6 +451,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		ToolDefinitionPaths:   toolDefinitionPaths,
 		MaxToolRounds:         maxToolRounds,
 		MaxParallelToolCalls:  maxParallelToolCalls,
+		Approval:              approval,
 		BackupTurns:           backupTurns,
 		Compaction:            compactionSettings,
 		Persistence:           persistence,
