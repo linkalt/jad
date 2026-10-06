@@ -73,6 +73,8 @@
   "tool_arguments_max_height_px": 200,
   "tool_result_max_height_px": 360,
   "approval_preview_max_height_px": 200,
+  "checkpoint_paths_preview_limit": 100,
+  "checkpoint_paths_max_height_px": 200,
   "copy_feedback_duration_ms": 2000,
   "mock_run_delay_ms": 1100,
   "session_refresh_interval_ms": 5000,

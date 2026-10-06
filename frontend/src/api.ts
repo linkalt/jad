@@ -1,5 +1,12 @@
 import appConfig from './config.json' with {type: 'json'};
 import {createAuthenticatedFetch} from './api-auth.ts';
+import {
+  parseCheckpointList,
+  parseRestorePlan,
+  type CheckpointList,
+  type RestoreMode,
+  type RestorePlan,
+} from './checkpoint-view.ts';
 
 const authenticatedFetch = createAuthenticatedFetch(
   appConfig.api_token_storage_key,
@@ -694,6 +701,48 @@ export async function resetSession(sessionId: string, profile?: string): Promise
   if (!isRecord(value) || value.reset !== true) {
     throw new Error('the server returned invalid reset data');
   }
+}
+
+/** The session's checkpoints, newest first, and whether the session keeps any. */
+export async function fetchSessionCheckpoints(
+  sessionId: string,
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<CheckpointList> {
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/checkpoints${profileQuery(profile)}`),
+    signal === undefined ? undefined : {signal},
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return parseCheckpointList(await response.json());
+}
+
+/**
+ * Asks what a restore would do (`dryRun`) or does it. The server refuses while a
+ * run is active (409) and answers a checkpoint with no saved state the same way.
+ */
+export async function restoreSessionCheckpoint(
+  sessionId: string,
+  checkpointId: string,
+  options: {dryRun: boolean; mode: RestoreMode},
+  profile?: string,
+): Promise<RestorePlan> {
+  const response = await authenticatedFetch(
+    apiUrl(
+      `/sessions/${encodeURIComponent(sessionId)}/checkpoints/${encodeURIComponent(checkpointId)}/restore${profileQuery(profile)}`,
+    ),
+    {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({dry_run: options.dryRun, mode: options.mode}),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return parseRestorePlan(await response.json());
 }
 
 class RunStreamConnectionError extends Error {

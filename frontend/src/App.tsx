@@ -130,6 +130,7 @@ import {ModelPicker} from './components/ModelPicker';
 import {SessionProfilePicker} from './components/SessionProfilePicker';
 import {FloatingPanel} from './components/FloatingPanel';
 import {NotificationPanel} from './components/NotificationPanel';
+import {CheckpointPanel} from './components/CheckpointPanel';
 import {MarkdownText} from './components/MarkdownText';
 import {SelectionMenu} from './components/SelectionMenu';
 import type {QuoteAnchor} from './components/SelectionMenu';
@@ -1623,6 +1624,7 @@ function SessionNavigation({
   unreadCount,
   hasUnreadError,
   onToggleNotifications,
+  onToggleCheckpoints,
 }: {
   /** Every session, each followed by the profile rows pinned to it. */
   rows: SessionListRow[];
@@ -1642,6 +1644,7 @@ function SessionNavigation({
   unreadCount: number;
   hasUnreadError: boolean;
   onToggleNotifications: () => void;
+  onToggleCheckpoints: () => void;
 }) {
   // The ✕ of a pinned row appears while the pointer is over that row, so the
   // list stays quiet; the row's context menu is the keyboard path to the same
@@ -1800,6 +1803,13 @@ function SessionNavigation({
             <Badge label={String(unreadCount)} variant={hasUnreadError ? 'error' : 'info'} />
           ) : undefined}
           onClick={onToggleNotifications}
+        />
+        <SideNavItem
+          data-panel-toggle=""
+          label="Checkpoints"
+          icon={<Icon icon="clock" size="sm" />}
+          isSelected={rightPanel === 'checkpoints'}
+          onClick={onToggleCheckpoints}
         />
       </SideNavSection>
     </SideNav>
@@ -2413,6 +2423,9 @@ function App() {
   }, []);
   const toggleInspector = useCallback(() => {
     setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'inspector'));
+  }, [setRightPanelMode]);
+  const toggleCheckpoints = useCallback(() => {
+    setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'checkpoints'));
   }, [setRightPanelMode]);
   // One left slot, several datasets: the panel shows whichever workspace view
   // was picked last, so two panels never stack on the same edge. The closed
@@ -5187,6 +5200,7 @@ function App() {
           unreadCount={unreadNotificationCount}
           hasUnreadError={hasUnreadError}
           onToggleNotifications={toggleNotifications}
+          onToggleCheckpoints={toggleCheckpoints}
         />
       }
     >
@@ -5370,6 +5384,17 @@ function App() {
               selectSession(sessionId);
               setRightPanelMode(null);
             }}
+          />
+        )}
+        {rightPanel === 'checkpoints' && (
+          <CheckpointPanel
+            sessionId={activeSessionId}
+            profile={activeProfile}
+            isRunning={isRunning}
+            region={inspector}
+            pathsPreviewLimit={appConfig.checkpoint_paths_preview_limit}
+            pathsMaxHeightPx={appConfig.checkpoint_paths_max_height_px}
+            onClose={() => setRightPanelMode(null)}
           />
         )}
       </VStack>
