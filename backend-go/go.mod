@@ -7,7 +7,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/openai/openai-go/v3 v3.66.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	github.com/xberg-io/html-to-markdown/packages/go/v3 v3.14.3
+	github.com/xberg-io/html-to-markdown/packages/go/v3 v3.17.1
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.41.0
 )
