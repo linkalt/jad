@@ -67,6 +67,7 @@ import type {
 import {WebUiSessionViewCache} from "./plugins/web-ui/view-cache.js";
 import {parseInteractionExtendRequest, parseInteractionReplyRequest} from "./interactions.js";
 import { SessionRunRegistry, type SessionRun } from "./run-registry.js";
+import {CheckpointError, checkpointServiceFor, type CheckpointService} from "./checkpoint.js";
 import type { RunErrorEntry } from "./run-error-cache.js";
 import type {RunContentCacheStagedReader} from "./run-content-cache.js";
 import { collectSessionFiles } from "./session-files.js";
@@ -872,6 +873,25 @@ class AgentHttpApplication {
 
       if (
         request.method === "GET" &&
+        segments.length === 4 &&
+        segments[3] === "checkpoints"
+      ) {
+        await this.handleCheckpointList(sessionRef, response, profile);
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        segments.length === 6 &&
+        segments[3] === "checkpoints" &&
+        segments[5] === "restore"
+      ) {
+        await this.handleCheckpointRestore(sessionRef, segments[4] ?? "", request, response, profile);
+        return;
+      }
+
+      if (
+        request.method === "GET" &&
         segments.length === 5 &&
         segments[3] === "run" &&
         segments[4] === "stream"
@@ -1631,6 +1651,72 @@ class AgentHttpApplication {
       }
       await handle.session.reset();
       sendJson(response, 200, {reset: true});
+    } finally {
+      this.changingTranscripts.delete(key);
+    }
+  }
+
+  private async checkpointServiceOf(handle: SessionHandle): Promise<{enabled: boolean; service: CheckpointService}> {
+    const settings = await handle.loader.loadSettings();
+    // loadSettings has just resolved this profile's storage paths into loader.paths.
+    const service = checkpointServiceFor({settings, paths: handle.loader.paths});
+    return {enabled: settings.checkpoint.enabled, service};
+  }
+
+  private async handleCheckpointList(id: string, response: ServerResponse, profile?: string): Promise<void> {
+    const handle = await this.getSession(id, profile);
+    const {enabled, service} = await this.checkpointServiceOf(handle);
+    sendJson(response, 200, {enabled, checkpoints: await service.list()});
+  }
+
+  private async handleCheckpointRestore(
+    id: string,
+    checkpointId: string,
+    request: IncomingMessage,
+    response: ServerResponse,
+    profile?: string,
+  ): Promise<void> {
+    if (this.changingSessionSettings.has(id)) {
+      throw new HttpError(409, "session settings are changing");
+    }
+    const body = await readJsonBody(request, this.maxBodyBytes);
+    if (!isRecord(body)) throw new HttpError(400, "body must be a JSON object");
+    const unknown = Object.keys(body).filter((key) => key !== "dry_run" && key !== "mode");
+    if (unknown.length > 0) throw new HttpError(400, `unsupported field: ${unknown[0]}`);
+    if (body.dry_run !== undefined && typeof body.dry_run !== "boolean") {
+      throw new HttpError(400, "dry_run must be a boolean");
+    }
+    if (body.mode !== undefined && body.mode !== "safe" && body.mode !== "full") {
+      throw new HttpError(400, 'mode must be "safe" or "full"');
+    }
+    const handle = await this.getSession(id, profile);
+    const key = profileKey(handle.location.ref, handle.profile);
+    const isRunning = () => this.runs.current(handle.location.ref, handle.profile)?.status === "running";
+    const isBusy = () =>
+      this.changingSessionSettings.has(id) || this.compactingSessions.has(key) || this.changingTranscripts.has(key);
+    if (isBusy()) throw new HttpError(409, "session profile is already changing");
+    if (isRunning()) throw new HttpError(409, "cannot restore a checkpoint while a run is active");
+
+    // Held for the whole restore: a run cannot start while files are being rewritten.
+    this.changingTranscripts.add(key);
+    try {
+      if (isRunning()) throw new HttpError(409, "cannot restore a checkpoint while a run is active");
+      const {service} = await this.checkpointServiceOf(handle);
+      try {
+        const result = await service.restore(checkpointId, {
+          dryRun: body.dry_run === true,
+          ...(body.mode === undefined ? {} : {mode: body.mode}),
+        });
+        sendJson(response, 200, {restore: result});
+      } catch (error) {
+        if (error instanceof CheckpointError) {
+          throw new HttpError(
+            error.code === "not_found" ? 404 : error.code === "conflict" ? 409 : 422,
+            error.message,
+          );
+        }
+        throw error;
+      }
     } finally {
       this.changingTranscripts.delete(key);
     }

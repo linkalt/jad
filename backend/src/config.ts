@@ -72,6 +72,34 @@ export type ApprovalMode = "off" | "ask";
 /** What a run does with an approval when no client can answer it. */
 export type ApprovalHeadlessPolicy = "deny" | "allow";
 
+/** When a run records the workspace state it can later be restored to. */
+export type CheckpointSnapshotOn = "first_mutation" | "run_start";
+
+/**
+ * Run checkpoints: a private git directory that snapshots the workspace before a
+ * run changes it, so the user can undo the run. Off by default; see design_checkpoint.md.
+ */
+export interface CheckpointSettings extends JsonRecord {
+  /** Master switch. When false nothing is snapshotted and behaviour is unchanged. */
+  enabled: boolean;
+  /** git executable: a PATH name or an absolute path. */
+  git_binary: string;
+  /** Checkpoints kept per session; the oldest are pruned first. */
+  max_checkpoints: number;
+  /** A snapshot of a workspace with more files than this is skipped and recorded as such. */
+  max_files: number;
+  /** A snapshot is skipped while the private git directory is larger than this. */
+  max_total_bytes: number;
+  /** Longest a single git command may run before it is killed and the snapshot fails. */
+  timeout_ms: number;
+  /** Whether a call to an MCP tool counts as a change to the workspace. */
+  include_mcp_tools: boolean;
+  /** `first_mutation` snapshots just before the first changing call; `run_start` at the start of every run. */
+  snapshot_on: CheckpointSnapshotOn;
+  /** Restore only what the run changed and leave later edits by the user alone. */
+  safe_restore: boolean;
+}
+
 /** Session-wide wait and preview values shared by every tool whose approval is `ask`. */
 export interface ApprovalSettings extends JsonRecord {
   /** How long an interactive run waits for the user before the call is denied. */
@@ -465,6 +493,8 @@ export interface SessionSettings extends JsonRecord {
   max_parallel_tool_calls: number;
   /** Wait and preview values for tools whose `approval` is `ask`. */
   approval: ApprovalSettings;
+  /** Undo points for the workspace; nothing happens while `enabled` is false. */
+  checkpoint: CheckpointSettings;
   persistence: PersistenceSettings;
   compaction: CompactionSettings;
   front_compaction: FrontCompactionSettings;
@@ -810,6 +840,18 @@ export const DEFAULT_NATIVE_REQUEST_DRAFT_EXTEND_MS = 300_000;
 export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_NATIVE_REQUEST_DRAFT_TIMEOUT_MS;
 export const DEFAULT_APPROVAL_EXTEND_MS = DEFAULT_NATIVE_REQUEST_DRAFT_EXTEND_MS;
 export const MAX_APPROVAL_TIMEOUT_MS = MAX_NATIVE_REQUEST_DRAFT_TIMEOUT_MS;
+export const DEFAULT_CHECKPOINT_GIT_BINARY = "git";
+export const DEFAULT_CHECKPOINT_MAX_CHECKPOINTS = 20;
+export const MAX_CHECKPOINT_MAX_CHECKPOINTS = 1000;
+/** Placeholder until measured on a larger workspace; see design_checkpoint.md section 6. */
+export const DEFAULT_CHECKPOINT_MAX_FILES = 20_000;
+export const MAX_CHECKPOINT_MAX_FILES = 1_000_000;
+export const DEFAULT_CHECKPOINT_MAX_TOTAL_BYTES = 512 * 1024 * 1024;
+export const MAX_CHECKPOINT_MAX_TOTAL_BYTES = 2 ** 40;
+export const DEFAULT_CHECKPOINT_TIMEOUT_MS = 120_000;
+export const MIN_CHECKPOINT_TIMEOUT_MS = 1_000;
+export const MAX_CHECKPOINT_TIMEOUT_MS = 3_600_000;
+export const DEFAULT_CHECKPOINT_SNAPSHOT_ON: CheckpointSnapshotOn = "first_mutation";
 export const MIN_APPROVAL_EXTEND_MS = 1_000;
 export const DEFAULT_APPROVAL_HEADLESS: ApprovalHeadlessPolicy = "deny";
 /** Bytes of each previewed text field; the question stays small enough to read. */
@@ -1082,6 +1124,60 @@ function normalizeApprovalSettings(value: unknown, path: string): ApprovalSettin
       MIN_APPROVAL_PREVIEW_BYTES,
       MAX_APPROVAL_PREVIEW_BYTES,
     ),
+  };
+}
+
+function normalizeCheckpointSettings(value: unknown, path: string): CheckpointSettings {
+  if (value !== undefined && !isRecord(value)) {
+    throw new ConfigError(`${path}: checkpoint must be an object`);
+  }
+  const raw = value ?? {};
+  assertSupportedKeys(
+    raw,
+    ["enabled", "git_binary", "include_mcp_tools", "max_checkpoints", "max_files", "max_total_bytes", "safe_restore", "snapshot_on", "timeout_ms"],
+    `${path}: checkpoint`,
+  );
+  // Only an absent key takes the default: a `null` must not quietly pick one.
+  const flag = (field: string, fallback: boolean): boolean => {
+    const configured = raw[field] === undefined ? fallback : raw[field];
+    if (typeof configured !== "boolean") {
+      throw new ConfigError(`${path}: checkpoint.${field} must be a boolean`);
+    }
+    return configured;
+  };
+  const bounded = (field: string, fallback: number, minimum: number, maximum: number): number => {
+    const configured = raw[field] === undefined ? fallback : raw[field];
+    if (
+      typeof configured !== "number" ||
+      !Number.isSafeInteger(configured) ||
+      configured < minimum ||
+      configured > maximum
+    ) {
+      throw new ConfigError(
+        `${path}: checkpoint.${field} must be a safe integer between ${minimum} and ${maximum}`,
+      );
+    }
+    return configured;
+  };
+  const gitBinary = raw.git_binary === undefined ? DEFAULT_CHECKPOINT_GIT_BINARY : raw.git_binary;
+  if (typeof gitBinary !== "string" || gitBinary.trim().length === 0) {
+    throw new ConfigError(`${path}: checkpoint.git_binary must be a non-empty string`);
+  }
+  const snapshotOn = raw.snapshot_on === undefined ? DEFAULT_CHECKPOINT_SNAPSHOT_ON : raw.snapshot_on;
+  if (snapshotOn !== "first_mutation" && snapshotOn !== "run_start") {
+    throw new ConfigError(`${path}: checkpoint.snapshot_on must be "first_mutation" or "run_start"`);
+  }
+  return {
+    ...raw,
+    enabled: flag("enabled", false),
+    git_binary: gitBinary.trim(),
+    max_checkpoints: bounded("max_checkpoints", DEFAULT_CHECKPOINT_MAX_CHECKPOINTS, 1, MAX_CHECKPOINT_MAX_CHECKPOINTS),
+    max_files: bounded("max_files", DEFAULT_CHECKPOINT_MAX_FILES, 1, MAX_CHECKPOINT_MAX_FILES),
+    max_total_bytes: bounded("max_total_bytes", DEFAULT_CHECKPOINT_MAX_TOTAL_BYTES, 1, MAX_CHECKPOINT_MAX_TOTAL_BYTES),
+    timeout_ms: bounded("timeout_ms", DEFAULT_CHECKPOINT_TIMEOUT_MS, MIN_CHECKPOINT_TIMEOUT_MS, MAX_CHECKPOINT_TIMEOUT_MS),
+    include_mcp_tools: flag("include_mcp_tools", true),
+    snapshot_on: snapshotOn,
+    safe_restore: flag("safe_restore", true),
   };
 }
 
@@ -3277,6 +3373,7 @@ async function normalizeSettings(
   const maxToolRounds = normalizeMaxToolRounds(raw.max_tool_rounds, path);
   const maxParallelToolCalls = normalizeMaxParallelToolCalls(raw.max_parallel_tool_calls, path);
   const approval = normalizeApprovalSettings(raw.approval, path);
+  const checkpoint = normalizeCheckpointSettings(raw.checkpoint, path);
   const persistence = normalizePersistence(raw.persistence, path);
   const compaction = normalizeCompaction(raw.compaction, path);
   const frontCompaction = normalizeFrontCompaction(raw.front_compaction, path);
@@ -3309,6 +3406,7 @@ async function normalizeSettings(
     max_tool_rounds: maxToolRounds,
     max_parallel_tool_calls: maxParallelToolCalls,
     approval,
+    checkpoint,
     persistence,
     compaction,
     front_compaction: frontCompaction,

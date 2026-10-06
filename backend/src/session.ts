@@ -1,6 +1,7 @@
 import { openaiCredentials } from "@openai-oauth/local";
 import { createOpenAIOptions } from "@openai-oauth/openai-client";
 import OpenAI from "openai";
+import {randomUUID} from "node:crypto";
 import {stat} from "node:fs/promises";
 import {join} from "node:path";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
@@ -35,12 +36,14 @@ import { createHttpDebugFetch } from "./http-debug.js";
 import {
   loadToolCatalog,
   responseFunctionCalls,
+  type ToolCatalog,
   type ToolDefinition,
   type ToolInteractionAnswer,
   type ToolInteractionQuestion,
 } from "./tools/index.js";
 import {renderToolResult} from "./tools/output.js";
 import {createApprovalRequester} from "./tools/approval.js";
+import {callChangesWorkspace, checkpointServiceFor, createRunCheckpoint, type CheckpointRunHooks} from "./checkpoint.js";
 import {ProcessManager} from "./tools/native/process-manager.js";
 import {TaskStore} from "./tools/native/task-store.js";
 import {MemoryStore} from "./tools/native/memory-store.js";
@@ -482,6 +485,30 @@ export class AgentSession {
       options.maxToolRounds ?? config.settings.max_tool_rounds,
     );
 
+    // Off by default; when on, the run records the workspace before it changes it
+    // and again when it ends, so the user can undo it. See checkpoint.ts.
+    const checkpoint = config.settings.checkpoint.enabled
+      ? createRunCheckpoint(checkpointServiceFor(config), options.turnId ?? `run-${randomUUID()}`, sessionTurn)
+      : undefined;
+    try {
+      await checkpoint?.start();
+      return await this.runRounds({config, catalog, client, maxToolRounds, options, memoryTrace, checkpoint, sessionTurn});
+    } finally {
+      await checkpoint?.finish();
+    }
+  }
+
+  private async runRounds(context: {
+    config: LoadedSessionConfig;
+    catalog: ToolCatalog;
+    client: OpenAI;
+    maxToolRounds: number;
+    options: AgentRunOptions;
+    memoryTrace: RunMemoryTraceHandle;
+    checkpoint: CheckpointRunHooks | undefined;
+    sessionTurn: number;
+  }): Promise<AgentRunResult> {
+    const {config, catalog, client, maxToolRounds, options, memoryTrace, checkpoint, sessionTurn} = context;
     for (let round = 0; ; round += 1) {
       // messages.jsonl is authoritative; avoid rewriting the full derived cache each tool round.
       const history: ResponseInputItem[] = [];
@@ -571,6 +598,10 @@ export class AgentSession {
       const decisionCall = calls.find((call) => catalog.isUserDecisionCall(call));
       const callsToExecute = decisionCall === undefined ? calls : [decisionCall];
       const skippedCalls = decisionCall === undefined ? [] : calls.filter((call) => call !== decisionCall);
+      // Takes the checkpoint once, just before the first call that can change files.
+      // A failed snapshot is a recorded warning, never an error that stops the call.
+      await checkpoint?.beforeCalls(callsToExecute.some((call) =>
+        callChangesWorkspace(call, catalog.sourceOf(call), config.settings.checkpoint.include_mcp_tools)));
       const toolOutputsByCallId = new Map<string, ResponseInputItem>();
       for (const call of skippedCalls) {
         const callId = functionCallId(call);

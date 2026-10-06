@@ -72,6 +72,23 @@
       "additionalProperties": false,
       "default": {}
     },
+    "checkpoint": {
+      "type": "object",
+      "description": "Run checkpoints: before a run changes the workspace the harness snapshots it in a private git directory under the session staging path, and again when the run ends, so a run can be undone through the checkpoints API. Off by default; while disabled nothing is snapshotted and behaviour is unchanged. Covers files in the workspace (cwd) that are not git-ignored; it does not cover files outside cwd, ignored files, git history, or anything a background process changes later. A snapshot that fails or is skipped never blocks a tool call.",
+      "properties": {
+        "enabled": {"type": "boolean", "default": false, "description": "Master switch."},
+        "git_binary": {"type": "string", "minLength": 1, "default": "git", "description": "git executable: a PATH name or an absolute path."},
+        "max_checkpoints": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 20, "description": "Checkpoints kept per session; the oldest are pruned first."},
+        "max_files": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 20000, "description": "A workspace with more files than this is not snapshotted; the checkpoint is recorded as skipped."},
+        "max_total_bytes": {"type": "integer", "minimum": 1, "maximum": 1099511627776, "default": 536870912, "description": "No snapshot is taken while the private git directory is larger than this."},
+        "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 120000, "description": "Longest a single git command may run before the snapshot is abandoned."},
+        "include_mcp_tools": {"type": "boolean", "default": true, "description": "Treat a call to any MCP tool as a change to the workspace, so it takes the checkpoint."},
+        "snapshot_on": {"type": "string", "enum": ["first_mutation", "run_start"], "default": "first_mutation", "description": "first_mutation snapshots just before the first call to write, edit, bash, a process start or an MCP tool, so a read-only run costs nothing; run_start snapshots at the start of every run."},
+        "safe_restore": {"type": "boolean", "default": true, "description": "Default restore mode. Safe restore reverts only the paths the run changed and leaves paths changed since the run ended alone, reporting them as conflicts; when false the default is a full restore. A request can still choose the mode."}
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
     "persistence": {
       "type": "object",
       "description": "Transcript persistence behavior.",

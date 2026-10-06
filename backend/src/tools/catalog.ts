@@ -19,7 +19,7 @@ import type {ProcessManager} from "./native/process-manager.js";
 import type {TaskStore} from "./native/task-store.js";
 import type {MemoryStore} from "./native/memory-store.js";
 import type {McpServerManager} from "./mcp/manager.js";
-import type {ApprovalVerdict, LoadedTool, ToolDefinition, ToolExecutionContext, ToolOutput} from "./types.js";
+import type {ApprovalVerdict, LoadedTool, ToolDefinition, ToolExecutionContext, ToolOutput, ToolSource} from "./types.js";
 
 const definitionDocumentSchema: JsonRecord = {
   type: "object",
@@ -149,6 +149,12 @@ export class ToolCatalog {
 
   public definitions(): ToolDefinition[] {
     return this.tools.map((tool) => tool.definition);
+  }
+
+  /** Where a called tool comes from; undefined for an unknown name. */
+  public sourceOf(call: JsonRecord): ToolSource | undefined {
+    const name = typeof call.name === "string" ? call.name : "";
+    return this.byName.get(name)?.definition.source;
   }
 
   /** Whether a provider call must be resolved before its co-batched calls run. */
