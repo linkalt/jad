@@ -51,7 +51,7 @@ func TestApprovalDefaultsAreOffAndTheSharedBlockHasTypeScriptDefaults(t *testing
 			t.Errorf("%s approval = %q, want %q", name, got, ApprovalOff)
 		}
 	}
-	want := ApprovalSettings{TimeoutMS: 300_000, ExtendMS: 300_000, MaxTimeoutMS: 1_800_000, Headless: "deny", PreviewBytes: 4096}
+	want := ApprovalSettings{Default: ApprovalOff, TimeoutMS: 300_000, ExtendMS: 300_000, MaxTimeoutMS: 1_800_000, Headless: "deny", PreviewBytes: 4096}
 	if config.Approval != want {
 		t.Fatalf("default approval settings = %+v, want %+v", config.Approval, want)
 	}
@@ -114,7 +114,7 @@ func TestApprovalSharedBlockValuesAndBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ApprovalSettings{TimeoutMS: 1000, ExtendMS: 2000, MaxTimeoutMS: 5000, Headless: "allow", PreviewBytes: 128}
+	want := ApprovalSettings{Default: ApprovalOff, TimeoutMS: 1000, ExtendMS: 2000, MaxTimeoutMS: 5000, Headless: "allow", PreviewBytes: 128}
 	if config.Approval != want {
 		t.Fatalf("approval = %+v, want %+v", config.Approval, want)
 	}

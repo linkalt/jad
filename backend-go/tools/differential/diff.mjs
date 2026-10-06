@@ -167,7 +167,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "ckpt", "ckptnogit", "ckptbad", "ckptoff", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "askdefault", "askdefaultexplicit", "askdefaultoff", "askdefaultbad", "askdefaultmcp", "ckpt", "ckptnogit", "ckptbad", "ckptoff", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -252,6 +252,25 @@ async function writeFixtures(sessions, providerUrl) {
       setting.approval = {timeout_ms: 20000, max_timeout_ms: 40000, headless: id === "askallow" ? "allow" : "deny", preview_bytes: 64};
       if (id === "askbad") setting.tools.native.write.approval = "on";
       if (id === "askbadblock") setting.approval.headless = "maybe";
+    }
+    // approval.default: no tool sets its own approval key, so the session default decides.
+    // askdefaultexplicit mixes an explicit off on write and ask on edit; askdefaultoff and
+    // askdefaultbad check that off asks nothing and that null is refused like the other values.
+    if (id === "askdefault" || id === "askdefaultexplicit" || id === "askdefaultoff" || id === "askdefaultbad") {
+      setting.cwd = scratch;
+      setting.max_tool_rounds = 6;
+      setting.tool_definition_paths = [askManifest];
+      setting.tools = {native: {read: {}, bash: {}, write: {}, edit: {}, process: {}}};
+      setting.approval = {timeout_ms: 20000, max_timeout_ms: 40000, preview_bytes: 64, default: id === "askdefaultoff" ? "off" : id === "askdefaultbad" ? null : "ask"};
+      if (id === "askdefaultexplicit") {
+        setting.tools.native.write.approval = "off";
+        setting.tools.native.edit.approval = "ask";
+      }
+    }
+    if (id === "askdefaultmcp") {
+      setting.max_tool_rounds = 6;
+      setting.approval = {timeout_ms: 20000, max_timeout_ms: 40000, preview_bytes: 64, default: "ask"};
+      setting.mcp_servers = [{id: "fx", config_path: join(mcpDir, "fx.json"), enabled: true, deny_tools: ["denied"]}];
     }
     // Checkpoints: ckpt records runs, ckptnogit points at a git that does not exist,
     // ckptbad holds a value both backends must refuse with the same message, ckptoff

@@ -382,3 +382,56 @@ test("a read in the same response does not wait for the write's approval", async
     await fixture.close();
   }
 });
+
+test("approval.default ask makes a write with no approval key of its own wait for the user", async () => {
+  const fixture = await createFixture({
+    nativeSettings: allowSession,
+    approval: {default: "ask"},
+    responses: [[writeCall("w1", "a.txt", "hello")], [finalMessage("done")]],
+  });
+  const target = join(fixture.sessionDir, "a.txt");
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    const run = await startRun(fixture.baseUrl, true);
+    reader = run.body!.getReader();
+    const events = sseReader(reader);
+    const pending = await readPending(events);
+    assert.equal(pending.kind, "approval");
+    assert.equal(pending.tool, "write");
+    await assert.rejects(() => access(target), {code: "ENOENT"}, "nothing is written while the question is open");
+    const answer = await reply(fixture.baseUrl, {interaction_id: pending.id, decision: "decline", reason: "no"});
+    assert.equal(answer.status, 200);
+    await untilDone(events);
+    await assert.rejects(() => access(target), {code: "ENOENT"});
+    const [output] = secondRequestToolOutputs(fixture.requests);
+    assert.match(output!, /approval_denied/);
+  } finally {
+    await reader?.cancel().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+test("an explicit approval off on the tool wins over approval.default ask", async () => {
+  const fixture = await createFixture({
+    nativeSettings: (dir) => ({...allowSession(dir), write: {paths: {allow: [dir]}, approval: "off"}}),
+    approval: {default: "ask"},
+    responses: [[writeCall("w1", "a.txt", "hello")], [finalMessage("done")]],
+  });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    const run = await startRun(fixture.baseUrl, true);
+    reader = run.body!.getReader();
+    const events = sseReader(reader);
+    let sawQuestion = false;
+    for (;;) {
+      const event = await events.next();
+      if (event.event === "interaction" && isRecord(event.data.pending)) sawQuestion = true;
+      if (event.event === "done") break;
+    }
+    assert.equal(sawQuestion, false);
+    assert.equal(await readFile(join(fixture.sessionDir, "a.txt"), "utf8"), "hello");
+  } finally {
+    await reader?.cancel().catch(() => undefined);
+    await fixture.close();
+  }
+});

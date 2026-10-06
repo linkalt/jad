@@ -1431,6 +1431,38 @@ function approvalScenarios() {
         };
       },
     },
+    // approval.default: no tool sets its own key, so the session default decides which ask.
+    asked("approval default: a write with no approval key asks when the default is ask", "askdefault",
+      [toolRound("write", {path: "ask/g.txt", content: "default"})],
+      async (c, pending, attempts) => accept(c, pending, attempts, "askdefault"), {extra: fileOf("ask/g.txt")}),
+    asked("approval default: bash asks, read does not", "askdefault",
+      [{calls: [
+        {name: "read", callId: "r1", arguments: {path: "notes.txt"}},
+        {name: "bash", callId: "b1", arguments: {command: "echo default-b1"}},
+      ]}], async (c, pending, attempts) => accept(c, pending, attempts, "askdefault")),
+    asked("approval default: a process start asks and a list does not", "askdefault",
+      [toolRound("process", {action: "start", command: "echo default-started"}), toolRound("bash", {command: "sleep 0.6"}), toolRound("process", {action: "list"})],
+      async (c, pending, attempts) => accept(c, pending, attempts, "askdefault")),
+    asked("approval default: declined write is blocked and writes nothing", "askdefault",
+      [toolRound("write", {path: "ask/h.txt", content: "no"})],
+      async (c, pending, attempts) => {
+        attempts.push(await reply(c, "askdefault", {interaction_id: pending.id, decision: "decline", reason: "not by default"}));
+      }, {extra: fileOf("ask/h.txt")}),
+    asked("approval default: an explicit off on write wins and an explicit ask on edit asks", "askdefaultexplicit",
+      [{calls: [
+        {name: "write", callId: "w1", arguments: {path: "ask/i.txt", content: "one"}},
+        {name: "edit", callId: "e1", arguments: {path: "ask/i.txt", oldText: "one", newText: "two"}},
+      ]}], async (c, pending, attempts) => accept(c, pending, attempts, "askdefaultexplicit"), {extra: fileOf("ask/i.txt")}),
+    asked("approval default: off asks nothing", "askdefaultoff",
+      [toolRound("write", {path: "ask/j.txt", content: "quiet"}), toolRound("bash", {command: "echo quiet"})],
+      async () => {}, {extra: fileOf("ask/j.txt")}),
+    asked("approval default: an MCP server with no key asks when the default is ask", "askdefaultmcp",
+      [toolRound(mcpName("fx", "echo"), {text: "hi"})], async (c, pending, attempts) => accept(c, pending, attempts, "askdefaultmcp")),
+    {
+      name: "approval default: null is refused with the same message",
+      provider: {steps: [{text: "x"}]},
+      run: async (c) => ({refused: await call(c, "POST", "/api/sessions/askdefaultbad/run", {body: {input: "go"}})}),
+    },
     asked("approval: an MCP server set to ask holds its tool calls", "askmcp",
       [toolRound(mcpName("fx", "echo"), {text: "hi"})], async (c, pending, attempts) => accept(c, pending, attempts, "askmcp")),
     {

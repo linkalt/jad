@@ -101,5 +101,16 @@
  {"name":"tool call scheduling wrong case","setting":{"cwd":"$ROOT","tool_call_scheduling":"Ordered"}},
  {"name":"tool call scheduling empty string","setting":{"cwd":"$ROOT","tool_call_scheduling":""}},
  {"name":"tool call scheduling number","setting":{"cwd":"$ROOT","tool_call_scheduling":1}},
- {"name":"tool call scheduling boolean","setting":{"cwd":"$ROOT","tool_call_scheduling":true}}
+ {"name":"tool call scheduling boolean","setting":{"cwd":"$ROOT","tool_call_scheduling":true}},
+ {"name":"approval default ask","setting":{"cwd":"$ROOT","approval":{"default":"ask"},"tools":{"native":{"write":{},"edit":{},"bash":{},"process":{}}},"mcp_servers":[{"id":"fx","config_path":"fx.json"}]}},
+ {"name":"approval default off","setting":{"cwd":"$ROOT","approval":{"default":"off"}}},
+ {"name":"approval default ask with explicit per-tool values","setting":{"cwd":"$ROOT","approval":{"default":"ask"},"tools":{"native":{"write":{"approval":"off"},"edit":{"approval":"ask"}}},"mcp_servers":[{"id":"fx","config_path":"fx.json","approval":"off"}]}},
+ {"name":"approval default null","setting":{"cwd":"$ROOT","approval":{"default":null}}},
+ {"name":"approval default on","setting":{"cwd":"$ROOT","approval":{"default":"on"}}},
+ {"name":"approval default wrong case","setting":{"cwd":"$ROOT","approval":{"default":"Ask"}}},
+ {"name":"approval default empty string","setting":{"cwd":"$ROOT","approval":{"default":""}}},
+ {"name":"approval default boolean","setting":{"cwd":"$ROOT","approval":{"default":true}}},
+ {"name":"approval default number","setting":{"cwd":"$ROOT","approval":{"default":1}}},
+ {"name":"approval default array","setting":{"cwd":"$ROOT","approval":{"default":["ask"]}}},
+ {"name":"approval default does not excuse a bad per-tool value","setting":{"cwd":"$ROOT","approval":{"default":"ask"},"tools":{"native":{"bash":{"approval":"on"}}}}}
 ]

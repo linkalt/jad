@@ -74,7 +74,8 @@ Per-tool node, consistent with the existing `tools.native.<tool>` settings, plus
 "mcp_servers": [ { "id": "x", "approval": "off", "approval_tools": [] } ]
 ```
 
-* `approval` per tool defaults to `"off"`. With every tool `off`, the gate is never entered and no run state, event or output changes.
+* `approval` per tool defaults to the session's `approval.default`, which is `"off"` unless set. With every tool `off`, the gate is never entered and no run state, event or output changes.
+* `approval.default` (`"off"` | `"ask"`) is the value for write, edit, bash, process and every MCP server whose own `approval` key is absent. An explicit per-tool value, `off` or `ask`, always wins. It adds no tool the session does not configure. A process `status`, `wait`, `list` or `stop` never asks. Only an absent key means the default; `null` is a config error, like the per-tool keys.
 * The numbers above are placeholders; real defaults come from the request_draft values already in `config.ts` so the two stay consistent. They need a schema entry in `sample/schemes/setting.schema.json` and config tests in both backends.
 * `headless: "deny"` is the safe default when a tool is set to `ask` and nobody can answer. `"allow"` is the explicit opt-out for unattended runs. (Contrast: `request_draft` auto-accepts when headless.)
 
@@ -92,7 +93,8 @@ Approved calls produce the same records as today. Denied calls add one ordinary 
 
 * It is not confinement. After approval a `bash` command still runs with the backend user's rights, and a command can fetch and run more code.
 * It cannot show what a script will do, only the command text.
-* Only listed tools are gated. Other MCP tools, and files changed by an approved process later, are not.
+* Approval is per tool. A tool whose approval is `off` is never asked about, so a model refused on one tool can reach the same effect through another that does not ask. Seen with a real model: after three timed-out `write` calls it ran `echo -n "hi" > t.txt` through an ungated `bash`. Set `approval.default` to `"ask"` to cover every tool that can ask (write, edit, bash, process, each MCP server) without listing them; a tool's own `off` still wins, so use it only where you mean it.
+* Tools that cannot ask (read, grep, glob, fetch, skill, task, memory, request_draft) are never gated, whatever `approval.default` says. Files changed by an approved process later are not covered either.
 * Real confinement needs an OS-level sandbox (bubblewrap, a container, a separate user). That is a different project.
 
 ## 8. Failure handling

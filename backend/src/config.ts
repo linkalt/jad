@@ -102,6 +102,11 @@ export interface CheckpointSettings extends JsonRecord {
 
 /** Session-wide wait and preview values shared by every tool whose approval is `ask`. */
 export interface ApprovalSettings extends JsonRecord {
+  /**
+   * The `approval` of every tool that can ask (write, edit, bash, process, each MCP server)
+   * whose own key is absent. An explicit per-tool value wins.
+   */
+  default: ApprovalMode;
   /** How long an interactive run waits for the user before the call is denied. */
   timeout_ms: number;
   /** How much one extension adds to the deadline. */
@@ -862,6 +867,7 @@ export const MAX_CHECKPOINT_TIMEOUT_MS = 3_600_000;
 export const DEFAULT_CHECKPOINT_SNAPSHOT_ON: CheckpointSnapshotOn = "first_mutation";
 export const MIN_APPROVAL_EXTEND_MS = 1_000;
 export const DEFAULT_APPROVAL_HEADLESS: ApprovalHeadlessPolicy = "deny";
+export const DEFAULT_APPROVAL_DEFAULT: ApprovalMode = "off";
 /** Bytes of each previewed text field; the question stays small enough to read. */
 export const DEFAULT_APPROVAL_PREVIEW_BYTES = 4096;
 export const MIN_APPROVAL_PREVIEW_BYTES = 64;
@@ -1081,10 +1087,18 @@ function normalizeFrontCompaction(value: unknown, path: string): FrontCompaction
   return {...raw, enabled, delete_mode: deleteMode} as FrontCompactionSettings;
 }
 
-/** `off` (the default) runs a call at once; `ask` waits for the user's decision first. */
-function normalizeApprovalMode(value: unknown, fieldPath: string, path: string): ApprovalMode {
-  // Only an absent key means off: a `null` or misspelt value must not quietly disable a gate.
-  const mode = value === undefined ? "off" : value;
+/**
+ * `off` runs a call at once; `ask` waits for the user's decision first. An absent key takes
+ * `fallback`, which is the session's `approval.default`; an explicit value always wins.
+ */
+function normalizeApprovalMode(
+  value: unknown,
+  fieldPath: string,
+  path: string,
+  fallback: ApprovalMode = "off",
+): ApprovalMode {
+  // Only an absent key takes the fallback: a `null` or misspelt value must not quietly disable a gate.
+  const mode = value === undefined ? fallback : value;
   if (mode !== "off" && mode !== "ask") {
     throw new ConfigError(`${path}: ${fieldPath}.approval must be "off" or "ask"`);
   }
@@ -1096,7 +1110,7 @@ function normalizeApprovalSettings(value: unknown, path: string): ApprovalSettin
     throw new ConfigError(`${path}: approval must be an object`);
   }
   const raw = value ?? {};
-  assertSupportedKeys(raw, ["extend_ms", "headless", "max_timeout_ms", "preview_bytes", "timeout_ms"], `${path}: approval`);
+  assertSupportedKeys(raw, ["default", "extend_ms", "headless", "max_timeout_ms", "preview_bytes", "timeout_ms"], `${path}: approval`);
   const bounded = (field: string, fallback: number, minimum: number, maximum: number): number => {
     const configured = raw[field] ?? fallback;
     if (
@@ -1120,8 +1134,14 @@ function normalizeApprovalSettings(value: unknown, path: string): ApprovalSettin
   if (headless !== "deny" && headless !== "allow") {
     throw new ConfigError(`${path}: approval.headless must be "deny" or "allow"`);
   }
+  // Only an absent key means off; `null` is an error, like the per-tool keys.
+  const defaultMode = raw.default === undefined ? DEFAULT_APPROVAL_DEFAULT : raw.default;
+  if (defaultMode !== "off" && defaultMode !== "ask") {
+    throw new ConfigError(`${path}: approval.default must be "off" or "ask"`);
+  }
   return {
     ...raw,
+    default: defaultMode,
     timeout_ms: timeoutMs,
     extend_ms: bounded("extend_ms", DEFAULT_APPROVAL_EXTEND_MS, MIN_APPROVAL_EXTEND_MS, MAX_APPROVAL_TIMEOUT_MS),
     max_timeout_ms: maxTimeoutMs,
@@ -1399,7 +1419,12 @@ function normalizeToolDefinitionPaths(
   });
 }
 
-function normalizeMcpServers(value: unknown, cwd: string, path: string): McpServerReference[] {
+function normalizeMcpServers(
+  value: unknown,
+  cwd: string,
+  path: string,
+  approvalDefault: ApprovalMode = "off",
+): McpServerReference[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new ConfigError(`${path}: mcp_servers must be an array`);
   const ids = new Set<string>();
@@ -1428,7 +1453,7 @@ function normalizeMcpServers(value: unknown, cwd: string, path: string): McpServ
       config_path: isAbsolute(configuredPath) ? resolve(configuredPath) : resolve(cwd, configuredPath),
       enabled,
       deny_tools: denyTools,
-      approval: normalizeApprovalMode(entry.approval, `mcp_servers[${index}]`, path),
+      approval: normalizeApprovalMode(entry.approval, `mcp_servers[${index}]`, path, approvalDefault),
     };
   });
 }
@@ -2169,6 +2194,7 @@ async function normalizeTools(
   sessionDir: string,
   cwd: string,
   toolStorageDir?: string,
+  approvalDefault: ApprovalMode = "off",
 ): Promise<ToolSettings> {
   const defaultBackupDir = toolStorageDir === undefined
     ? join(sessionDir, SESSION_BACKUP_DIRECTORY_NAME)
@@ -2357,7 +2383,7 @@ async function normalizeTools(
     }
     write = {
       ...writeValue,
-      approval: normalizeApprovalMode(writeValue.approval, "tools.native.write", path),
+      approval: normalizeApprovalMode(writeValue.approval, "tools.native.write", path, approvalDefault),
       max_bytes: maxBytes,
       backup_max_count: mutationBackupMaxCount(
         writeValue.backup_max_count,
@@ -2412,7 +2438,7 @@ async function normalizeTools(
     };
     edit = {
       ...editValue,
-      approval: normalizeApprovalMode(editValue.approval, "tools.native.edit", path),
+      approval: normalizeApprovalMode(editValue.approval, "tools.native.edit", path, approvalDefault),
       max_bytes: maxBytes,
       backup_max_count: mutationBackupMaxCount(
         editValue.backup_max_count,
@@ -2596,7 +2622,7 @@ async function normalizeTools(
     });
     bash = {
       ...bashValue,
-      approval: normalizeApprovalMode(bashValue.approval, "tools.native.bash", path),
+      approval: normalizeApprovalMode(bashValue.approval, "tools.native.bash", path, approvalDefault),
       shell,
       login_shell: loginShell,
       timeout_ms: timeoutMs,
@@ -2933,7 +2959,7 @@ async function normalizeTools(
     );
     processTool = {
       ...processValue,
-      approval: normalizeApprovalMode(processValue.approval, "tools.native.process", path),
+      approval: normalizeApprovalMode(processValue.approval, "tools.native.process", path, approvalDefault),
       shell: shell.trim(),
       login_shell: loginShell,
       kill_grace_ms: killGraceMs,
@@ -3408,9 +3434,10 @@ async function normalizeSettings(
     sessionDir,
     cwd,
     storagePaths.tool_storage,
+    approval.default,
   );
   const statecontext = normalizeStateContext(raw.statecontext, path, tools);
-  const mcpServers = normalizeMcpServers(raw.mcp_servers, cwd, path);
+  const mcpServers = normalizeMcpServers(raw.mcp_servers, cwd, path, approval.default);
 
   return {
     ...raw,

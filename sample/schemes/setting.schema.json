@@ -67,8 +67,9 @@
     },
     "approval": {
       "type": "object",
-      "description": "Wait and preview values for tools whose approval is ask. Nothing is asked while every tool's approval is off, which is the default.",
+      "description": "Wait and preview values for tools whose approval is ask, and the default for tools that do not set their own. Nothing is asked while every tool's approval is off, which is the default. Approval is per tool: a tool whose approval is off is never asked about, so a model refused on one tool can reach the same effect through another unless that one asks too. Set default to ask to cover every tool that can ask. Approval is a confirmation, not a sandbox.",
       "properties": {
+        "default": {"type": "string", "enum": ["off", "ask"], "default": "off", "description": "The approval of every tool that can ask (write, edit, bash, process and each MCP server) whose own approval key is absent. An explicit approval on a tool, off or ask, always wins. It does not add a tool the session does not configure, and it never applies to read, grep, glob, fetch, skill, task, memory or request_draft. A process status, wait, list or stop never asks."},
         "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 300000, "description": "How long a run waits for the user before the call is blocked as approval_timeout. Must not exceed max_timeout_ms."},
         "extend_ms": {"type": "integer", "minimum": 1000, "maximum": 1800000, "default": 300000, "description": "How much one extension adds to the deadline."},
         "max_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 1800000, "description": "Ceiling for the whole wait, extensions included."},
@@ -340,8 +341,7 @@
           "approval": {
             "type": "string",
             "enum": ["off", "ask"],
-            "default": "off",
-            "description": "ask pauses every call to this server's tools until the user approves it; off runs them at once."
+            "description": "ask pauses every call to this server's tools until the user approves it; off runs them at once. When absent, the top-level approval.default applies (off unless set)."
           }
         },
         "additionalProperties": false
@@ -449,8 +449,7 @@
                 "approval": {
                   "type": "string",
                   "enum": ["off", "ask"],
-                  "default": "off",
-                  "description": "ask pauses every write until the user approves it (see the top-level approval block); off runs it at once."
+                  "description": "ask pauses every write until the user approves it (see the top-level approval block); off runs it at once. When absent, approval.default applies (off unless set)."
                 },
                 "max_bytes": {
                   "type": "integer",
@@ -558,8 +557,7 @@
                 "approval": {
                   "type": "string",
                   "enum": ["off", "ask"],
-                  "default": "off",
-                  "description": "ask pauses every edit until the user approves it (see the top-level approval block); off runs it at once."
+                  "description": "ask pauses every edit until the user approves it (see the top-level approval block); off runs it at once. When absent, approval.default applies (off unless set). This key is separate from write's."
                 },
                 "max_bytes": {
                   "type": "integer",
@@ -784,8 +782,7 @@
                 "approval": {
                   "type": "string",
                   "enum": ["off", "ask"],
-                  "default": "off",
-                  "description": "ask pauses every command until the user approves it (see the top-level approval block); off runs it at once. Approval is a confirmation, not a sandbox: an approved command runs with the backend user's rights."
+                  "description": "ask pauses every command until the user approves it (see the top-level approval block); off runs it at once. When absent, approval.default applies (off unless set). Approval is a confirmation, not a sandbox: an approved command runs with the backend user's rights."
                 },
                 "shell": {
                   "type": "string",
@@ -1153,8 +1150,7 @@
                 "approval": {
                   "type": "string",
                   "enum": ["off", "ask"],
-                  "default": "off",
-                  "description": "ask pauses every process start until the user approves it; status, wait, list and stop never ask. See the top-level approval block."
+                  "description": "ask pauses every process start until the user approves it; status, wait, list and stop never ask. When absent, approval.default applies (off unless set). See the top-level approval block."
                 },
                 "statecontext": {
                   "type": "object",

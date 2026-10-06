@@ -35,6 +35,7 @@ test("approval defaults: every tool is off, headless denies, waits follow reques
     async (load) => {
       const settings = await load();
       assert.deepEqual(settings.approval, {
+        default: "off",
         timeout_ms: DEFAULT_APPROVAL_TIMEOUT_MS,
         extend_ms: DEFAULT_APPROVAL_EXTEND_MS,
         max_timeout_ms: MAX_APPROVAL_TIMEOUT_MS,
@@ -100,4 +101,56 @@ test("approval waits and preview bytes are bounded, and a typo is named", async 
   await withSession({approval: {headless: "maybe"}}, (load) => rejects(load, /approval\.headless must be "deny" or "allow"/));
   await withSession({approval: {timeout: 1000}}, (load) => rejects(load, /approval\.timeout is not supported/));
   await withSession({approval: "ask"}, (load) => rejects(load, /approval must be an object/));
+});
+
+test("approval.default ask fills every tool whose own key is absent, and an explicit value wins", async () => {
+  await withSession(
+    {
+      approval: {default: "ask"},
+      tools: {native: {bash: {}, write: {approval: "off"}, edit: {approval: "ask"}, process: {}}},
+      mcp_servers: [
+        {id: "plain", config_path: "a.json"},
+        {id: "quiet", config_path: "b.json", approval: "off"},
+      ],
+    },
+    async (load) => {
+      const settings = await load();
+      assert.equal(settings.approval.default, "ask");
+      assert.equal(settings.tools.native.bash?.approval, "ask");
+      assert.equal(settings.tools.native.process?.approval, "ask");
+      assert.equal(settings.tools.native.edit?.approval, "ask");
+      assert.equal(settings.tools.native.write?.approval, "off");
+      assert.equal(settings.mcp_servers.find((server) => server.id === "plain")?.approval, "ask");
+      assert.equal(settings.mcp_servers.find((server) => server.id === "quiet")?.approval, "off");
+    },
+  );
+});
+
+test("approval.default off, or absent, leaves absent keys off", async () => {
+  for (const approval of [{default: "off"}, {}, undefined]) {
+    await withSession(
+      {...(approval === undefined ? {} : {approval}), tools: {native: {bash: {}}}, mcp_servers: [{id: "srv", config_path: "s.json"}]},
+      async (load) => {
+        const settings = await load();
+        assert.equal(settings.approval.default, "off");
+        assert.equal(settings.tools.native.bash?.approval, "off");
+        assert.equal(settings.mcp_servers[0]?.approval, "off");
+      },
+    );
+  }
+});
+
+test("approval.default does not create a tool the session does not configure", async () => {
+  await withSession({approval: {default: "ask"}, tools: {native: {bash: {}}}}, async (load) => {
+    const settings = await load();
+    assert.equal(settings.tools.native.write, undefined);
+    assert.equal(settings.tools.native.edit, undefined);
+    assert.equal(settings.tools.native.process, undefined);
+  });
+});
+
+test("approval.default refuses anything but off and ask, null included", async () => {
+  for (const value of ["on", "always", true, 1, null, ""]) {
+    await withSession({approval: {default: value}}, (load) => rejects(load, /approval\.default must be "off" or "ask"/));
+  }
 });

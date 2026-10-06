@@ -27,11 +27,14 @@ const (
 	maxApprovalPreviewBytes     int64 = 65_536
 )
 
-var approvalKeys = []string{"extend_ms", "headless", "max_timeout_ms", "preview_bytes", "timeout_ms"}
+var approvalKeys = []string{"default", "extend_ms", "headless", "max_timeout_ms", "preview_bytes", "timeout_ms"}
 
 // ApprovalSettings are the session-wide wait and preview values shared by every
 // tool whose approval is "ask".
 type ApprovalSettings struct {
+	// Default is the approval of every tool that can ask whose own key is absent:
+	// "off" or "ask". An explicit per-tool value wins.
+	Default string
 	// TimeoutMS is how long an interactive run waits before the call is denied.
 	TimeoutMS int64
 	// ExtendMS is how much one extension adds to the deadline.
@@ -79,6 +82,9 @@ func normalizeApprovalSettings(raw json.RawMessage, settingPath string) (Approva
 	}
 	var settings ApprovalSettings
 	var err error
+	if settings.Default, err = normalizeApprovalDefault(fields, settingPath); err != nil {
+		return ApprovalSettings{}, err
+	}
 	if settings.TimeoutMS, err = bounded("timeout_ms", defaultApprovalTimeoutMS, 1, maxApprovalTimeoutMS); err != nil {
 		return ApprovalSettings{}, err
 	}

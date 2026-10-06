@@ -13,6 +13,7 @@ import {
 import type {ToolInteractionAnswer, ToolInteractionQuestion} from "../src/tools/types.js";
 
 const SETTINGS: ApprovalSettings = {
+  default: "off",
   timeout_ms: 60_000,
   extend_ms: 30_000,
   max_timeout_ms: 120_000,
