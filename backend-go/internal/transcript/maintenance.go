@@ -107,8 +107,9 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	}
 
 	retained := make([][]byte, 0, len(history))
+	keepPairs := keptToolPairs(selected, options)
 	for _, turn := range selected {
-		retained = append(retained, retainCompactedTurn(turn, options, finalAssistant)...)
+		retained = append(retained, retainCompactedTurn(turn, options, finalAssistant, keepPairs)...)
 	}
 	compactedActiveTail := activeTail
 	if options.TurnType == "assistant_final" {
@@ -439,41 +440,53 @@ func (s *TurnStore) assistantFinalItems(previous *compactionCache) (map[string]s
 	return finals, nil
 }
 
-func retainCompactedTurn(turn [][]byte, options CompactionOptions, assistantFinal map[string]struct{}) [][]byte {
-	if len(turn) == 0 {
-		return nil
+// keptToolPairs picks the tool call/result pairs compaction keeps. The count is
+// compaction.keepbatch.tools in total across every kept turn, newest first, as
+// the TypeScript backend does; it is not a count per turn. A pair is a call
+// whose output is also in the kept turns, and only assistant_final keeps any.
+func keptToolPairs(turns [][][]byte, options CompactionOptions) map[string]bool {
+	keepPairs := make(map[string]bool)
+	if options.TurnType != "assistant_final" || options.KeepToolPairs <= 0 {
+		return keepPairs
 	}
 	callIDs := make([]string, 0)
 	callSeen := make(map[string]bool)
 	outputIDs := make(map[string]bool)
-	for _, item := range turn {
-		fields, err := objectFields(item)
-		if err != nil {
-			continue
-		}
-		typeRaw, _ := fieldValue(fields, "type")
-		itemType, _ := stringValue(typeRaw)
-		if itemType == "function_call" || itemType == "function_call_output" {
-			idRaw, _ := fieldValue(fields, "call_id")
-			id, ok := stringValue(idRaw)
-			if ok && id != "" {
-				if itemType == "function_call" && !callSeen[id] {
-					callIDs = append(callIDs, id)
-					callSeen[id] = true
-				}
-				if itemType == "function_call_output" {
-					outputIDs[id] = true
-				}
+	for _, turn := range turns {
+		for _, item := range turn {
+			fields, err := objectFields(item)
+			if err != nil {
+				continue
+			}
+			typeRaw, _ := fieldValue(fields, "type")
+			itemType, _ := stringValue(typeRaw)
+			if itemType != "function_call" && itemType != "function_call_output" {
+				continue
+			}
+			id := rawCallID(fields)
+			if id == "" {
+				continue
+			}
+			if itemType == "function_call" && !callSeen[id] {
+				callIDs = append(callIDs, id)
+				callSeen[id] = true
+			}
+			if itemType == "function_call_output" {
+				outputIDs[id] = true
 			}
 		}
 	}
-	keepPairs := make(map[string]bool)
-	if options.TurnType == "assistant_final" && options.KeepToolPairs > 0 {
-		for i := len(callIDs) - 1; i >= 0 && len(keepPairs) < options.KeepToolPairs; i-- {
-			if outputIDs[callIDs[i]] {
-				keepPairs[callIDs[i]] = true
-			}
+	for i := len(callIDs) - 1; i >= 0 && len(keepPairs) < options.KeepToolPairs; i-- {
+		if outputIDs[callIDs[i]] {
+			keepPairs[callIDs[i]] = true
 		}
+	}
+	return keepPairs
+}
+
+func retainCompactedTurn(turn [][]byte, options CompactionOptions, assistantFinal map[string]struct{}, keepPairs map[string]bool) [][]byte {
+	if len(turn) == 0 {
+		return nil
 	}
 	retained := make([][]byte, 0, len(turn))
 	for _, item := range turn {

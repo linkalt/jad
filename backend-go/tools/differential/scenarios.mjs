@@ -810,6 +810,22 @@ export const scenarios = [
     },
   },
   {
+    // compaction.keepbatch.tools is the number of pairs kept in total across the
+    // kept turns, not per turn: three turns that each used one tool leave one pair.
+    name: "compact with keepbatch.tools 1 over several turns",
+    // One step list for all three turns: the fake provider numbers calls by its
+    // request counter, so a reset between turns would reuse one call id.
+    provider: {steps: ["a", "b", "c"].flatMap((word) => [toolRound("read", {path: "README.md"}), {text: "read " + word}])},
+    run: async (c) => {
+      for (const input of ["first topic", "second topic", "third topic"]) {
+        await sse(c, "/api/sessions/keeptools/run", {method: "POST", body: {input}});
+      }
+      const compact = await call(c, "POST", "/api/sessions/keeptools/compact", {body: {}});
+      const history = await call(c, "GET", "/api/sessions/keeptools/history");
+      return {compact, history, records: await messagesJsonl(c, "keeptools")};
+    },
+  },
+  {
     name: "compact twice",
     provider: {text: "second summary"},
     run: async (c) => ({
