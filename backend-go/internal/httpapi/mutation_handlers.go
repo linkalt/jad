@@ -10,14 +10,6 @@ func (h *Handler) handleSessionCompact(w http.ResponseWriter, r *http.Request, r
 		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "session compaction is unavailable"})
 		return
 	}
-	unlock := h.sessionLocks.lock(reference)
-	defer unlock()
-	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
-	if err != nil {
-		writeJSONError(w, err)
-		return
-	}
-	defer processUnlock()
 	resolved, err := h.maintenance.ResolveMaintenance(r.Context(), reference, profile)
 	if err != nil {
 		writeJSONError(w, err)
@@ -28,11 +20,22 @@ func (h *Handler) handleSessionCompact(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	key := h.runKey(ResolvedSession{Reference: resolved.Reference, Profile: resolved.Profile})
+	// The gate is taken before the per-session lock: a request that finds the
+	// session changing is refused at once, as TypeScript does, instead of waiting
+	// for the other change to end and then running after it.
 	if !h.beginMutation(key) {
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "session profile or compaction is already changing"})
 		return
 	}
 	defer h.endMutation(key)
+	unlock := h.sessionLocks.lock(reference)
+	defer unlock()
+	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	defer processUnlock()
 	result, err := resolved.Session.Compact(r.Context())
 	if err != nil {
 		writeJSONError(w, err)
@@ -55,14 +58,6 @@ func (h *Handler) handleSessionReset(w http.ResponseWriter, r *http.Request, ref
 		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "session reset is unavailable"})
 		return
 	}
-	unlock := h.sessionLocks.lock(reference)
-	defer unlock()
-	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
-	if err != nil {
-		writeJSONError(w, err)
-		return
-	}
-	defer processUnlock()
 	resolved, err := h.maintenance.ResolveMaintenance(r.Context(), reference, profile)
 	if err != nil {
 		writeJSONError(w, err)
@@ -73,11 +68,20 @@ func (h *Handler) handleSessionReset(w http.ResponseWriter, r *http.Request, ref
 		return
 	}
 	key := h.runKey(ResolvedSession{Reference: resolved.Reference, Profile: resolved.Profile})
+	// The gate is taken before the per-session lock (see handleSessionCompact).
 	if !h.beginMutation(key) {
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "session profile is already changing"})
 		return
 	}
 	defer h.endMutation(key)
+	unlock := h.sessionLocks.lock(reference)
+	defer unlock()
+	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	defer processUnlock()
 	if run := h.runs.current(key); run != nil && run.state() == "running" {
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot reset a profile while a run is active"})
 		return

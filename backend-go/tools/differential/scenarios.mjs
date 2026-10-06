@@ -1511,10 +1511,14 @@ function checkpointScenarios() {
           const started = Date.now();
           const second = await restore(c, "ckptslow", record.id, {mode: "full"});
           const secondDry = await restore(c, "ckptslow", record.id, {dry_run: true});
+          // Compaction, reset and front compaction share the restore's gate: refused at once too.
+          const compact = await call(c, "POST", "/api/sessions/ckptslow/compact", {body: {}});
+          const reset = await call(c, "POST", "/api/sessions/ckptslow/reset", {body: {}});
+          const frontCompact = await call(c, "POST", "/api/sessions/ckptslow/front-compact", {body: {message_id: "session-user-o0"}});
           const refusedQuickly = Date.now() - started < 1000;
           const firstDone = await first;
           return {
-            seen, second, secondDry, refusedQuickly, firstStatus: firstDone.status,
+            seen, second, secondDry, compact, reset, frontCompact, refusedQuickly, firstStatus: firstDone.status,
             afterRestoring: (await list(c, "ckptslow")).restoring, file: await file(c, "ckptslow", "a.txt"),
           };
         } finally {

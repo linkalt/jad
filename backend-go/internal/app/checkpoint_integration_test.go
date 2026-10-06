@@ -735,6 +735,25 @@ func TestTheListSaysRestoringWhileARealRestoreRunsAndNotForADryRun(t *testing.T)
 		default:
 		}
 	}
+	// Compaction, reset and front compaction share the restore's gate: sent now,
+	// each is refused at once with 409 (TypeScript does the same) instead of
+	// queueing behind the restore and running after it.
+	for _, route := range []struct{ path, body, message string }{
+		{"/compact", `{}`, "session profile or compaction is already changing"},
+		{"/reset", `{}`, "session profile is already changing"},
+		{"/front-compact", `{"message_id":"session-user-o0"}`, "session profile or transcript is already changing"},
+	} {
+		started := time.Now()
+		status, text := f.request(http.MethodPost, route.path, route.body, true)
+		if status != http.StatusConflict || !strings.Contains(text, route.message) {
+			t.Fatalf("%s during a restore = %d %s, want 409 %s", route.path, status, text, route.message)
+		}
+		select {
+		case <-restoreDone:
+			t.Fatalf("%s was answered only after the restore ended (%v)", route.path, time.Since(started))
+		default:
+		}
+	}
 	if status := <-restoreDone; status != http.StatusOK {
 		t.Fatalf("restore status = %d", status)
 	}
