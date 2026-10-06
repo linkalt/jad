@@ -57,6 +57,26 @@ func normalizeMaxParallelToolCalls(raw json.RawMessage, path string) (int64, err
 	return value, nil
 }
 
+// ToolCallScheduling values; they mirror the TypeScript backend.
+const (
+	ToolCallSchedulingOrdered    = "ordered"
+	ToolCallSchedulingConcurrent = "concurrent"
+	defaultToolCallScheduling    = ToolCallSchedulingOrdered
+)
+
+// normalizeToolCallScheduling validates how the calls of one provider response
+// are scheduled. Only an absent key means the default; null is an error.
+func normalizeToolCallScheduling(raw json.RawMessage, path string) (string, error) {
+	if len(raw) == 0 {
+		return defaultToolCallScheduling, nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || (value != ToolCallSchedulingOrdered && value != ToolCallSchedulingConcurrent) {
+		return "", configError("%s: tool_call_scheduling must be \"ordered\" or \"concurrent\"", path)
+	}
+	return value, nil
+}
+
 func normalizeToolDefinitionPaths(raw json.RawMessage, globalJadRoot, path string) ([]string, error) {
 	if len(raw) == 0 {
 		return []string{}, nil

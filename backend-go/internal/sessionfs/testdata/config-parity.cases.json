@@ -93,5 +93,13 @@
  {"name":"checkpoint mcp number","setting":{"cwd":"$ROOT","checkpoint":{"include_mcp_tools":1}}},
  {"name":"checkpoint snapshot_on word","setting":{"cwd":"$ROOT","checkpoint":{"snapshot_on":"always"}}},
  {"name":"checkpoint snapshot_on null","setting":{"cwd":"$ROOT","checkpoint":{"snapshot_on":null}}},
- {"name":"checkpoint safe_restore string","setting":{"cwd":"$ROOT","checkpoint":{"safe_restore":"true"}}}
+ {"name":"checkpoint safe_restore string","setting":{"cwd":"$ROOT","checkpoint":{"safe_restore":"true"}}},
+ {"name":"tool call scheduling ordered","setting":{"cwd":"$ROOT","tool_call_scheduling":"ordered"}},
+ {"name":"tool call scheduling concurrent","setting":{"cwd":"$ROOT","tool_call_scheduling":"concurrent"}},
+ {"name":"tool call scheduling null","setting":{"cwd":"$ROOT","tool_call_scheduling":null}},
+ {"name":"tool call scheduling unknown word","setting":{"cwd":"$ROOT","tool_call_scheduling":"parallel"}},
+ {"name":"tool call scheduling wrong case","setting":{"cwd":"$ROOT","tool_call_scheduling":"Ordered"}},
+ {"name":"tool call scheduling empty string","setting":{"cwd":"$ROOT","tool_call_scheduling":""}},
+ {"name":"tool call scheduling number","setting":{"cwd":"$ROOT","tool_call_scheduling":1}},
+ {"name":"tool call scheduling boolean","setting":{"cwd":"$ROOT","tool_call_scheduling":true}}
 ]

@@ -112,6 +112,8 @@ export interface LoadedTool {
   validate: ValidateFunction<unknown>;
   /** Scheduler policy: resolve this call before running co-batched calls. */
   requiresUserDecision?: boolean;
+  /** Never changes state and depends on none, so it may run beside other calls. */
+  readOnly?: boolean;
   /** `ask` holds each call until the user approves it; absent or `off` runs it. */
   approval?: "off" | "ask";
   /** Tolerant pre-validation normalization (enum aliases, harmless variants). */

@@ -196,3 +196,42 @@ func TestCatalogRejectsDuplicateNamesAndIdentifiesUserDecisionTools(t *testing.T
 		t.Fatal("IsUserDecisionCall() = false, want true")
 	}
 }
+
+func TestCatalogChangesStateTreatsOnlyReadOnlyToolsAsSafe(t *testing.T) {
+	build := func(name string, readOnly bool) Tool {
+		validator, err := CompileSchema([]byte(`{"type":"object"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Tool{
+			Definition: Definition{ID: "test:" + name, Source: "native", Name: name, InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Validator:  validator,
+			ReadOnly:   readOnly,
+			Execute: func(context.Context, map[string]any, ExecutionContext) (string, error) {
+				return "", nil
+			},
+		}
+	}
+	catalog, err := NewCatalog([]Tool{build("lookup", true), build("mutate", false)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		call string
+		want bool
+	}{
+		{`{"name":"lookup"}`, false},
+		{`{"name":"mutate"}`, true},
+		{`{"name":"no_such_tool"}`, false},
+		{`{}`, false},
+		{`not json`, false},
+	} {
+		if got := catalog.ChangesState(json.RawMessage(tc.call)); got != tc.want {
+			t.Errorf("ChangesState(%s) = %v, want %v", tc.call, got, tc.want)
+		}
+	}
+	var none *Catalog
+	if none.ChangesState(json.RawMessage(`{"name":"mutate"}`)) {
+		t.Error("a nil catalog reports a state change")
+	}
+}

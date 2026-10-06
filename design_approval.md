@@ -51,7 +51,7 @@ Preview size is a config value, not a constant.
 
 ### 3.2 Ordering note
 
-Approved calls start when approved, not in the model's order. This interacts with the deferred ordering bug (`bug_report` open, `max_parallel_tool_calls: 1` workaround); approvals do not fix it and can reorder calls further. Decide ordering semantics before building both.
+Approved calls start when approved, not in the model's order, when `tool_call_scheduling` is `"concurrent"`. With the default `"ordered"` a response that holds a state-changing call runs one call at a time in the model's order, so approvals are asked in that order too (`DECISIONS.md`, "Tool call scheduling").
 
 ## 4. Configuration (all defaults; nothing hardcoded)
 

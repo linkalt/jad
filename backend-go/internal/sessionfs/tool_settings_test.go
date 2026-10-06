@@ -99,3 +99,23 @@ func TestNormalizeMaxParallelToolCalls(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeToolCallScheduling(t *testing.T) {
+	const path = "/session/setting.json"
+	for _, accepted := range []struct {
+		raw  string
+		want string
+	}{{``, "ordered"}, {`"ordered"`, "ordered"}, {`"concurrent"`, "concurrent"}} {
+		got, err := normalizeToolCallScheduling(json.RawMessage(accepted.raw), path)
+		if err != nil || got != accepted.want {
+			t.Errorf("normalizeToolCallScheduling(%q) = %q, %v; want %q", accepted.raw, got, err, accepted.want)
+		}
+	}
+	// Only an absent key means the default: null, other strings and other types are errors.
+	for _, rejected := range []string{`null`, `"parallel"`, `""`, `1`, `true`, `"Ordered"`} {
+		_, err := normalizeToolCallScheduling(json.RawMessage(rejected), path)
+		if err == nil || !strings.Contains(err.Error(), `tool_call_scheduling must be "ordered" or "concurrent"`) {
+			t.Errorf("normalizeToolCallScheduling(%s) error = %v", rejected, err)
+		}
+	}
+}

@@ -23,7 +23,7 @@ type orderingOutcome struct {
 
 // runChainedResponse runs three chained edits and a read of one file through
 // executeToolRound, the way Runner.Run does, with the given concurrency.
-func runChainedResponse(t *testing.T, limit int) orderingOutcome {
+func runChainedResponse(t *testing.T, limit int, scheduling string) orderingOutcome {
 	t.Helper()
 	workspace := t.TempDir()
 	backupDir := filepath.Join(workspace, "backups")
@@ -59,7 +59,7 @@ func runChainedResponse(t *testing.T, limit int) orderingOutcome {
 	}
 	var order []string
 	round, err := executeToolRound(context.Background(), catalog, calls,
-		tools.ExecutionContext{WorkspaceRoot: workspace, SessionDir: workspace}, limit,
+		tools.ExecutionContext{WorkspaceRoot: workspace, SessionDir: workspace}, limit, scheduling,
 		func(output json.RawMessage) { order = append(order, functionCallID(output)) })
 	if err != nil {
 		t.Fatal(err)
@@ -83,19 +83,18 @@ func runChainedResponse(t *testing.T, limit int) orderingOutcome {
 	return outcome
 }
 
-// Known defect: the calls of one response start together, so the read does not
-// wait for the edits written before it and the edits reach the per-path lock in
-// no fixed order (sync.Mutex is not first-in, first-out). Skipped so it reports
-// without failing the suite; remove the Skip when the scheduler honours the
-// model's order. Measured on 2026-10-06 at limit 8 over 200 runs: the edits
-// failed or applied out of order in 73, and the read saw the final content in 2.
-// The TypeScript twin is backend/test/tool-batch-ordering.test.ts.
+// The calls of one response used to start together, so the read did not wait for
+// the edits written before it and the edits reached the per-path lock in no fixed
+// order (sync.Mutex is not first-in, first-out). Measured at limit 8 over 200 runs
+// before the fix: the edits failed or applied out of order in 73, and the read saw
+// the final content in 2. With tool_call_scheduling "ordered" (the default) a
+// response holding a call that can change state runs one call at a time in the
+// model's order. The TypeScript twin is backend/test/tool-batch-ordering.test.ts.
 func TestToolRoundRunsEditEditEditReadInTheModelsOrder(t *testing.T) {
-	t.Skip("known defect: tool calls of one response have no ordering guarantee")
 	const runs = 20
 	readSawFinal, editsInOrder := 0, 0
 	for range runs {
-		outcome := runChainedResponse(t, 8)
+		outcome := runChainedResponse(t, 8, "ordered")
 		if outcome.readSawLast {
 			readSawFinal++
 		}
@@ -108,11 +107,19 @@ func TestToolRoundRunsEditEditEditReadInTheModelsOrder(t *testing.T) {
 	}
 }
 
-func TestToolRoundLimitOneRunsEditEditEditReadInOrder(t *testing.T) {
+func TestToolRoundWithLimitOneRunsEditEditEditReadInOrderEvenWhenConcurrent(t *testing.T) {
 	for range 20 {
-		outcome := runChainedResponse(t, 1)
+		outcome := runChainedResponse(t, 1, "concurrent")
 		if !outcome.editsOK || !outcome.readSawLast || !outcome.fileIsV3 || outcome.order != "e1,e2,e3,r1" {
 			t.Fatalf("limit 1 outcome = %+v, want edits ok, read sees v3, file v3, order e1,e2,e3,r1", outcome)
 		}
+	}
+}
+
+func TestToolRoundOrderedRunsReadOnlyCallsTogether(t *testing.T) {
+	calls := []string{"read", "grep", "read"}
+	changes := func(name string) bool { return name == "edit" }
+	if got := toolBatchConcurrency(calls, 8, "ordered", changes); got != 8 {
+		t.Fatalf("read-only batch concurrency = %d, want 8", got)
 	}
 }

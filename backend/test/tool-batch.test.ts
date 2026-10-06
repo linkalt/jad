@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {runToolBatch} from "../src/tool-batch.js";
+import {runToolBatch, toolBatchConcurrency} from "../src/tool-batch.js";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -106,4 +106,14 @@ test("rejects a non-positive limit", async () => {
     () => runToolBatch([1], 0, async (call) => call, () => undefined),
     /positive safe integer/,
   );
+});
+
+test("toolBatchConcurrency runs a response with a state-changing call one at a time when ordered", () => {
+  const changes = (call: string) => call !== "read";
+  assert.equal(toolBatchConcurrency(["read", "edit"], 8, "ordered", changes), 1);
+  assert.equal(toolBatchConcurrency(["edit"], 8, "ordered", changes), 1);
+  assert.equal(toolBatchConcurrency(["read", "read", "read"], 8, "ordered", changes), 8);
+  assert.equal(toolBatchConcurrency([], 8, "ordered", changes), 8);
+  assert.equal(toolBatchConcurrency(["read", "edit"], 8, "concurrent", changes), 8);
+  assert.equal(toolBatchConcurrency(["edit", "edit"], 3, "concurrent", changes), 3);
 });

@@ -51,6 +51,7 @@ func NewGrepTool(settings sessionfs.NativeGrepSettings) (tools.Tool, error) {
 			InputSchema: append(json.RawMessage(nil), grepInputSchema...),
 		},
 		Validator:          validator,
+		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(`{"pattern":"TODO","path":"src"}`),
 		NormalizeArguments: normalizeGrepArguments,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {

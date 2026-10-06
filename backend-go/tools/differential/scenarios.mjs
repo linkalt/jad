@@ -1118,7 +1118,43 @@ function parallelScenarios() {
   };
   const calls = [sleepCall("c0", 1), sleepCall("c1", 0.2), sleepCall("c2", 0.5), sleepCall("c3", 0.1)];
   return [
-    {name: "parallel tool calls stream in completion order", provider: {steps: [{calls}, {text: "all finished"}]}, run: run("natived", "run four commands")},
+    {name: "parallel tool calls stream in completion order with tool_call_scheduling concurrent", provider: {steps: [{calls}, {text: "all finished"}]}, run: run("parallelconc", "run four commands")},
+    // The default, "ordered", runs a response that holds a call able to change state
+    // one call at a time in the model's order, whatever each call's duration.
+    {name: "default ordered scheduling runs bash calls in the model's order", provider: {steps: [{calls}, {text: "all finished"}]}, run: run("natived", "run four commands")},
+    {
+      // A response made only of read-only calls is not serialized: the slow read does
+      // not hold up the others, so results still stream in completion order.
+      name: "default ordered scheduling still runs a response of read-only calls together",
+      provider: {steps: [{calls: [
+        {name: "read", callId: "p0", arguments: {path: "notes.txt"}},
+        {name: "read", callId: "p1", arguments: {path: "notes.txt", offset: 2}},
+        {name: "read", callId: "p2", arguments: {path: "notes.txt", limit: 1}},
+      ]}, {text: "read all"}]},
+      run: run("natived", "read three things", ["p0", "p1", "p2"]),
+    },
+    {
+      // Three chained edits and a read of one file in one response: every edit sees
+      // the one before it and the read sees the last, as with a limit of one.
+      name: "default ordered scheduling applies chained edits and a read in the model's order",
+      provider: {steps: [{calls: [
+        {name: "write", callId: "w0", arguments: {path: "chain.txt", content: "v0\n"}},
+        {name: "edit", callId: "e1", arguments: {path: "chain.txt", oldText: "v0", newText: "v1"}},
+        {name: "edit", callId: "e2", arguments: {path: "chain.txt", oldText: "v1", newText: "v2"}},
+        {name: "edit", callId: "e3", arguments: {path: "chain.txt", oldText: "v2", newText: "v3"}},
+        {name: "read", callId: "r1", arguments: {path: "chain.txt"}},
+      ]}, {text: "chained"}]},
+      run: async (c) => {
+        await call(c, "POST", "/api/sessions/natived/reset", {body: {}});
+        const result = await sse(c, "/api/sessions/natived/run", {method: "POST", body: {input: "chain edits"}});
+        return {
+          names: eventNames(result),
+          streamedOrder: streamedResultOrder(result),
+          outputs: toolOutputs(c.provider.requests.at(-1)),
+          file: await readFile(join(c.root, "scratch", "chain.txt"), "utf8"),
+        };
+      },
+    },
     {name: "max_parallel_tool_calls 1 runs calls in order", provider: {steps: [{calls: calls.slice(0, 3).map((entry, i) => sleepCall(`s${i}`, 0.1))}, {text: "all finished"}]}, run: run("parallelone", "run three commands")},
     {name: "max_parallel_tool_calls 2 bounds concurrency", provider: {steps: [{calls: [sleepCall("b0", 1), sleepCall("b1", 0.2), sleepCall("b2", 0.3), sleepCall("b3", 0.1)]}, {text: "all finished"}]}, run: run("paralleltwo", "run four commands")},
     {
@@ -1140,7 +1176,7 @@ function parallelScenarios() {
     {
       name: "parallel calls mix valid, invalid and unknown tools",
       provider: {steps: [{calls: [sleepCall("m0", 0.4), {name: "bash", callId: "m1", arguments: {command: ""}}, {name: "no_such_tool", callId: "m2", arguments: {}}, {name: "read", callId: "m3", arguments: {path: "notes.txt"}}]}, {text: "mixed"}]},
-      run: run("natived", "run a mix", ["m1", "m2", "m3"]),
+      run: run("parallelconc", "run a mix", ["m1", "m2", "m3"]),
     },
   ];
 }

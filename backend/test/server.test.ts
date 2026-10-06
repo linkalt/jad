@@ -3761,7 +3761,7 @@ async function timedRunFrames(response: Response): Promise<{event: string; data:
 test("streams each parallel tool result as its call finishes, without duplicates", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-parallel-tools-"));
   // Call 0 is the slowest: results must follow completion order, not call order.
-  const {client} = await writeParallelBashSession(root, [1.2, 0.2, 0.6, 0.4]);
+  const {client} = await writeParallelBashSession(root, [1.2, 0.2, 0.6, 0.4], {tool_call_scheduling: "concurrent"});
   const running = createAgentServer({sessionsDir: root, client, toolStreamIntervalMs: 0});
   await new Promise<void>((resolve, reject) => {
     running.server.once("error", reject);
@@ -3815,6 +3815,36 @@ test("streams each parallel tool result as its call finishes, without duplicates
       ["call_0", "call_1", "call_2", "call_3"],
     );
     assert.equal(frames.at(-1)!.event, "done");
+  } finally {
+    await running.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("the default ordered scheduling runs state-changing calls one after another in the model's order", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-ordered-tools-"));
+  // Call 0 is the slowest: with concurrent scheduling it would finish last.
+  const {client} = await writeParallelBashSession(root, [0.6, 0.2, 0.2]);
+  const running = createAgentServer({sessionsDir: root, client, toolStreamIntervalMs: 0});
+  await new Promise<void>((resolve, reject) => {
+    running.server.once("error", reject);
+    running.server.listen(0, "127.0.0.1", () => resolve());
+  });
+  try {
+    const address = running.server.address();
+    assert.ok(address && typeof address !== "string");
+    const started = Date.now();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/sessions/session1/run`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({input: "run three commands"}),
+    });
+    const frames = await timedRunFrames(response);
+    assert.ok(Date.now() - started >= 950, "0.6s + 0.2s + 0.2s take at least 1s when serialized");
+    const order = frames
+      .filter((frame) => frame.event === "ui.part" && (frame.data.part as {type?: string}).type === "tool_result")
+      .map((frame) => (frame.data.part as {callId: string}).callId);
+    assert.deepEqual(order, ["call_0", "call_1", "call_2"]);
   } finally {
     await running.close();
     await rm(root, {recursive: true, force: true});

@@ -18,7 +18,7 @@ import {
   type PromptRole,
 } from "./config.js";
 import { AsyncMutex } from "./concurrency.js";
-import { runToolBatch } from "./tool-batch.js";
+import { runToolBatch, toolBatchConcurrency } from "./tool-batch.js";
 import {
   SessionResponseStore,
   type AcceptedRequestSnapshot,
@@ -631,7 +631,12 @@ export class AgentSession {
       const publishMutex = new AsyncMutex();
       const batch = await runToolBatch(
         callsToExecute,
-        config.settings.max_parallel_tool_calls,
+        toolBatchConcurrency(
+          callsToExecute,
+          config.settings.max_parallel_tool_calls,
+          config.settings.tool_call_scheduling,
+          (call) => catalog.changesState(call),
+        ),
         async (call) => {
           throwIfAborted(options.signal);
           const callId = functionCallId(call);

@@ -48,6 +48,9 @@ type Tool struct {
 	// nil omits the example.
 	ExampleOperation     json.RawMessage
 	RequiresUserDecision bool
+	// ReadOnly marks a tool that never changes state and depends on none, so its
+	// calls may run beside other calls of the same response.
+	ReadOnly bool
 	// Approval "ask" holds each call until the user approves it; empty or "off" runs it.
 	Approval           string
 	NormalizeArguments func(map[string]any) map[string]any
@@ -174,6 +177,23 @@ func (c *Catalog) IsUserDecisionCall(call json.RawMessage) bool {
 		return false
 	}
 	return c.byName[name].RequiresUserDecision
+}
+
+// ChangesState reports whether a call can change state, or depend on a change made
+// by another call of the same response. An unknown name runs nothing, so it does
+// not count; a tool that is not marked ReadOnly (every MCP tool included) does.
+func (c *Catalog) ChangesState(call json.RawMessage) bool {
+	if c == nil {
+		return false
+	}
+	var fields struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(call, &fields) != nil {
+		return false
+	}
+	tool, exists := c.byName[fields.Name]
+	return exists && !tool.ReadOnly
 }
 
 // SourceOf returns where a called tool comes from ("native" or "mcp"), or "" for

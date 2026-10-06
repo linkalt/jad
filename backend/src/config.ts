@@ -491,6 +491,11 @@ export interface SessionSettings extends JsonRecord {
   max_tool_rounds: number;
   /** Most tool calls of one provider response that run at the same time. */
   max_parallel_tool_calls: number;
+  /**
+   * `ordered` runs the calls of a response one at a time, in the model's order,
+   * whenever one of them can change state; `concurrent` always runs them together.
+   */
+  tool_call_scheduling: ToolCallScheduling;
   /** Wait and preview values for tools whose `approval` is `ask`. */
   approval: ApprovalSettings;
   /** Undo points for the workspace; nothing happens while `enabled` is false. */
@@ -550,6 +555,9 @@ export interface LoadedSessionConfig {
 export const DEFAULT_MAX_TOOL_ROUNDS = 8;
 export const MAX_CONFIGURED_TOOL_ROUNDS = 50_000;
 export const DEFAULT_MAX_PARALLEL_TOOL_CALLS = 8;
+export type ToolCallScheduling = "ordered" | "concurrent";
+export const TOOL_CALL_SCHEDULING_VALUES: readonly ToolCallScheduling[] = ["ordered", "concurrent"];
+export const DEFAULT_TOOL_CALL_SCHEDULING: ToolCallScheduling = "ordered";
 export const MAX_CONFIGURED_PARALLEL_TOOL_CALLS = 64;
 export const DEFAULT_PERSISTENCE_MAX_ITEM_BYTES = 10 * 1024 * 1024;
 export const MAX_CONFIGURED_PERSISTENCE_ITEM_BYTES = 64 * 1024 * 1024;
@@ -1179,6 +1187,14 @@ function normalizeCheckpointSettings(value: unknown, path: string): CheckpointSe
     snapshot_on: snapshotOn,
     safe_restore: flag("safe_restore", true),
   };
+}
+
+function normalizeToolCallScheduling(value: unknown, path: string): ToolCallScheduling {
+  const mode = value === undefined ? DEFAULT_TOOL_CALL_SCHEDULING : value;
+  if (typeof mode !== "string" || !(TOOL_CALL_SCHEDULING_VALUES as readonly string[]).includes(mode)) {
+    throw new ConfigError(`${path}: tool_call_scheduling must be "ordered" or "concurrent"`);
+  }
+  return mode as ToolCallScheduling;
 }
 
 function normalizeMaxParallelToolCalls(value: unknown, path: string): number {
@@ -3372,6 +3388,7 @@ async function normalizeSettings(
   }
   const maxToolRounds = normalizeMaxToolRounds(raw.max_tool_rounds, path);
   const maxParallelToolCalls = normalizeMaxParallelToolCalls(raw.max_parallel_tool_calls, path);
+  const toolCallScheduling = normalizeToolCallScheduling(raw.tool_call_scheduling, path);
   const approval = normalizeApprovalSettings(raw.approval, path);
   const checkpoint = normalizeCheckpointSettings(raw.checkpoint, path);
   const persistence = normalizePersistence(raw.persistence, path);
@@ -3405,6 +3422,7 @@ async function normalizeSettings(
     prompt_text: promptDocuments.text,
     max_tool_rounds: maxToolRounds,
     max_parallel_tool_calls: maxParallelToolCalls,
+    tool_call_scheduling: toolCallScheduling,
     approval,
     checkpoint,
     persistence,

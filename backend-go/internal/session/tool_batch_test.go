@@ -168,3 +168,25 @@ func TestRunToolBatchWithNoCallsReturnsImmediately(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestToolBatchConcurrency(t *testing.T) {
+	changes := func(name string) bool { return name != "read" }
+	cases := []struct {
+		name       string
+		calls      []string
+		scheduling string
+		want       int
+	}{
+		{"ordered with a state-changing call", []string{"read", "edit"}, "ordered", 1},
+		{"ordered with only a state-changing call", []string{"edit"}, "ordered", 1},
+		{"ordered with read-only calls", []string{"read", "read", "read"}, "ordered", 8},
+		{"ordered with no calls", nil, "ordered", 8},
+		{"concurrent with a state-changing call", []string{"read", "edit"}, "concurrent", 8},
+		{"empty scheduling keeps the old behaviour", []string{"edit", "edit"}, "", 8},
+	}
+	for _, tc := range cases {
+		if got := toolBatchConcurrency(tc.calls, 8, tc.scheduling, changes); got != tc.want {
+			t.Errorf("%s: concurrency = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}

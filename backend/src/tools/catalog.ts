@@ -128,6 +128,7 @@ function buildNativeTool(
     ...built.tool,
     normalizeArguments: spec.normalizeArguments,
     ...(spec.requiresUserDecision ? {requiresUserDecision: true} : {}),
+    ...(spec.readOnly ? {readOnly: true} : {}),
     ...(approval === "ask" ? {approval} : {}),
   };
 }
@@ -155,6 +156,17 @@ export class ToolCatalog {
   public sourceOf(call: JsonRecord): ToolSource | undefined {
     const name = typeof call.name === "string" ? call.name : "";
     return this.byName.get(name)?.definition.source;
+  }
+
+  /**
+   * Whether a call can change state, or depend on a change made by another call of
+   * the same response. Unknown tools never run anything, so they do not count; a
+   * tool that is not marked read-only (including every MCP tool) does.
+   */
+  public changesState(call: JsonRecord): boolean {
+    const name = typeof call.name === "string" ? call.name : "";
+    const tool = this.byName.get(name);
+    return tool !== undefined && tool.readOnly !== true;
   }
 
   /** Whether a provider call must be resolved before its co-batched calls run. */

@@ -1407,6 +1407,29 @@ test("validates configurable tool-round limits", async () => {
   }
 });
 
+test("normalizes and validates tool_call_scheduling", async () => {
+  const sessionDir = await makeSession();
+  try {
+    await writeFile(join(sessionDir, "model.json"), JSON.stringify({model: "gpt-test"}));
+    await writeFile(join(sessionDir, "setting.json"), JSON.stringify({cwd: sessionDir}));
+    assert.equal((await new SessionConfigLoader(sessionDir).loadSettings()).tool_call_scheduling, "ordered");
+
+    for (const accepted of ["ordered", "concurrent"]) {
+      await writeFile(join(sessionDir, "setting.json"), JSON.stringify({cwd: sessionDir, tool_call_scheduling: accepted}));
+      assert.equal((await new SessionConfigLoader(sessionDir).loadSettings()).tool_call_scheduling, accepted);
+    }
+    for (const value of [null, "parallel", "", 1, true, "Ordered"]) {
+      await writeFile(join(sessionDir, "setting.json"), JSON.stringify({cwd: sessionDir, tool_call_scheduling: value}));
+      await assert.rejects(
+        () => new SessionConfigLoader(sessionDir).loadSettings(),
+        (error: unknown) => error instanceof ConfigError && /tool_call_scheduling must be "ordered" or "concurrent"/.test(error.message),
+      );
+    }
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("normalizes and validates max_parallel_tool_calls", async () => {
   const sessionDir = await makeSession();
   try {

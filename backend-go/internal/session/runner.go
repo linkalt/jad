@@ -107,6 +107,10 @@ type RunOptions struct {
 	// MaxParallelToolCalls is the most calls of one provider response that run
 	// at the same time; a value below one runs them one after another.
 	MaxParallelToolCalls int
+	// ToolCallScheduling is "ordered" (the default of the session setting) or
+	// "concurrent"; see toolBatchConcurrency. An empty value runs concurrently, so
+	// a caller that builds RunOptions by hand keeps the old behaviour.
+	ToolCallScheduling string
 	// PersistedInput is set when PersistInput already stored the user input, so
 	// Run must not normalize, repair or append it again. A caller does this when
 	// work that can fail (reading the model file, connecting tool servers,
@@ -540,7 +544,7 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		}
 		// A result is published the moment its call settles; the ids published
 		// here are skipped by the pass after persistence below.
-		toolRun, executionErr := executeToolRound(ctx, options.ToolCatalog, calls, toolExecution, options.MaxParallelToolCalls, func(output json.RawMessage) {
+		toolRun, executionErr := executeToolRound(ctx, options.ToolCatalog, calls, toolExecution, options.MaxParallelToolCalls, options.ToolCallScheduling, func(output json.RawMessage) {
 			if options.OnToolResult != nil {
 				options.OnToolResult(output)
 			}

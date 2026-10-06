@@ -67,6 +67,7 @@ func newSkillTool(settings sessionfs.NativeSkillSettings, library skillLibrary) 
 			InputSchema: append(json.RawMessage(nil), skillInputSchema...),
 		},
 		Validator:          validator,
+		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(`{"name":"agent-tool-design-guidelines"}`),
 		NormalizeArguments: normalizeSkillArguments,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {

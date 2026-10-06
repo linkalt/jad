@@ -188,6 +188,7 @@ func NewGlobTool(settings sessionfs.NativeGlobSettings) (tools.Tool, error) {
 			InputSchema: append(json.RawMessage(nil), globInputSchema...),
 		},
 		Validator:          validator,
+		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(`{"pattern":"*.test.ts"}`),
 		NormalizeArguments: normalizeGlobArguments,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {

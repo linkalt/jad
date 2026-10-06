@@ -51,6 +51,7 @@ func NewReadTool(settings sessionfs.NativeReadSettings) (tools.Tool, error) {
 			InputSchema: append(json.RawMessage(nil), readInputSchema...),
 		},
 		Validator:          validator,
+		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(`{"path":"."}`),
 		NormalizeArguments: normalizeReadArguments,
 		Execute: func(_ context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {

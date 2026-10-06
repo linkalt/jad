@@ -5,10 +5,12 @@ import {join} from "node:path";
 import test from "node:test";
 
 import {DEFAULT_MAX_PARALLEL_TOOL_CALLS, SessionConfigLoader} from "../src/config.js";
-import {runToolBatch} from "../src/tool-batch.js";
+import {runToolBatch, toolBatchConcurrency} from "../src/tool-batch.js";
 import {nativeEditDefinition} from "../src/tools/native/edit.js";
 import {nativeReadDefinition} from "../src/tools/native/read.js";
+import {ToolCatalog} from "../src/tools/catalog.js";
 import {loadToolCatalog} from "../src/tools/index.js";
+import type {LoadedTool} from "../src/tools/types.js";
 import {firstLine, outputText} from "./tool-session.js";
 
 interface Call {
@@ -40,12 +42,17 @@ async function makeReadEditSession(): Promise<string> {
  * Runs one provider response the way AgentSession does: runToolBatch over the
  * calls, each through the catalog, with the configured concurrency.
  */
-async function runResponse(sessionDir: string, calls: readonly Call[], limit: number) {
+async function runResponse(
+  sessionDir: string,
+  calls: readonly Call[],
+  limit: number,
+  scheduling: "ordered" | "concurrent" = "ordered",
+) {
   const catalog = await loadToolCatalog(await new SessionConfigLoader(sessionDir).load());
   const outputs = new Map<string, string>();
   const outcome = await runToolBatch(
     calls,
-    limit,
+    toolBatchConcurrency(calls, limit, scheduling, (call) => catalog.changesState({name: call.name})),
     (call) =>
       catalog.executeFunctionCall(
         {type: "function_call", call_id: call.callId, name: call.name, arguments: JSON.stringify(call.args)},
@@ -69,16 +76,15 @@ function chainedCalls(path: string): Call[] {
   ];
 }
 
-// Known defect: the calls of one response start together, so the read does not
-// wait for the edits written before it, and the edits can reach the per-path
-// lock out of order. Marked todo so it reports without failing the suite; remove
-// `todo` when the scheduler honours the model's order (see the bug report
-// "Tool calls of one response run concurrently with no ordering guarantee").
-// Measured on 2026-10-05 at the default concurrency over 200 runs: the read saw
-// the final content in 1, and the edits applied out of order in 3.
+// The calls of one response used to start together, so the read did not wait for
+// the edits written before it and the edits could reach the per-path lock out of
+// order (measured at the default concurrency over 200 runs: the read saw the final
+// content in 1, the edits applied out of order in 3). With tool_call_scheduling
+// "ordered" (the default) a response holding a call that can change state runs one
+// call at a time in the model's order. The twin is
+// backend-go/internal/session/tool_batch_ordering_test.go.
 test(
   "edit+edit+edit+read of one file runs in the order the model wrote it",
-  {todo: "tool calls of one response have no ordering guarantee"},
   async () => {
     const runs = 20;
     let readSawFinal = 0;
@@ -118,4 +124,32 @@ test("a concurrency limit of one runs edit+edit+edit+read in order", async () =>
   } finally {
     await rm(sessionDir, {recursive: true, force: true});
   }
+});
+
+test("the catalog treats read-only native tools as safe to run together and everything else as state-changing", async () => {
+  const sessionDir = await makeReadEditSession();
+  try {
+    const catalog = await loadToolCatalog(await new SessionConfigLoader(sessionDir).load());
+    assert.equal(catalog.changesState({name: "read"}), false);
+    assert.equal(catalog.changesState({name: "edit"}), true);
+    // An unknown tool runs nothing, so it never forces a serial run.
+    assert.equal(catalog.changesState({name: "no_such_tool"}), false);
+    assert.equal(catalog.changesState({}), false);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("a tool that is not marked read-only counts as state-changing, as every MCP tool does", () => {
+  const definition = {
+    id: "mcp:srv:lookup", name: "lookup", description: "", inputSchema: {type: "object"}, source: "mcp",
+  } as unknown as LoadedTool["definition"];
+  const validate = (() => true) as unknown as LoadedTool["validate"];
+  const execute = async () => ({output: ""}) as unknown as Awaited<ReturnType<LoadedTool["execute"]>>;
+  const catalog = new ToolCatalog([
+    {definition, validate, execute},
+    {definition: {...definition, id: "native:probe", name: "probe", source: "native"}, validate, execute, readOnly: true},
+  ]);
+  assert.equal(catalog.changesState({name: "lookup"}), true);
+  assert.equal(catalog.changesState({name: "probe"}), false);
 });

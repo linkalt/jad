@@ -17,6 +17,21 @@ export interface ToolBatchOutcome {
   error?: unknown;
 }
 
+/**
+ * How many calls of one response may run at once. With `ordered` scheduling a
+ * response holding a call that can change state runs one call at a time in the
+ * model's order, so a later call sees what an earlier one did; a response of
+ * read-only calls still runs together, up to `limit`.
+ */
+export function toolBatchConcurrency<Call>(
+  calls: readonly Call[],
+  limit: number,
+  scheduling: "ordered" | "concurrent",
+  changesState: (call: Call) => boolean,
+): number {
+  return scheduling === "ordered" && calls.some(changesState) ? 1 : limit;
+}
+
 export async function runToolBatch<Call, Output>(
   calls: readonly Call[],
   limit: number,

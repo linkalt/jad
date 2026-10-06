@@ -85,12 +85,14 @@ resolve cwd (path policy, must be an existing directory)
   from waiting for credentials. A command that genuinely needs input fails fast instead of hanging.
 * **Environment** = a small allowlist from the backend environment, plus `env_file` and inline `env`
   additions (§8). `env_deny` and the harness API-key variable are applied last.
-* **Parallel calls.** Several `bash` calls in one provider response run concurrently, up to
+* **Parallel calls.** By default (`tool_call_scheduling: "ordered"`) a response that holds a `bash` call
+  runs its calls one at a time in the order the model wrote them. With `tool_call_scheduling: "concurrent"`
+  several `bash` calls in one provider response run concurrently, up to
   `max_parallel_tool_calls` (default 8; `1` restores strict one-at-a-time order). Each result is streamed
   to the UI as soon as its call finishes, while the transcript still records every result in call order
   after the batch. Calls that touch the same files are serialized by the shared path locks of `write` and
-  `edit`, but two commands that write the same file are the model's responsibility; set
-  `max_parallel_tool_calls` to `1` for sessions that depend on strict ordering. The timeout is the only
+  `edit`, but two commands that write the same file are the model's responsibility when scheduling is
+  `concurrent`; the default `ordered` removes that. The timeout is the only
   bound on a running command, and the run's abort signal cancels all of them.
 
 ## 5. Result

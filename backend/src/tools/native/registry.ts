@@ -38,6 +38,11 @@ export interface NativeToolSpec {
   readonly definition: ToolDefinition;
   /** If set, the session resolves this call before executing co-batched calls. */
   readonly requiresUserDecision?: boolean;
+  /**
+   * True when a call never changes workspace or harness state and does not depend
+   * on one that does, so it may run beside other calls of the same response.
+   */
+  readonly readOnly?: boolean;
   /** Required input fields, in the order the definition must declare them. */
   readonly required: readonly string[];
   readonly exampleOperation: JsonRecord;
@@ -59,6 +64,7 @@ export interface NativeToolSpec {
 function readSpec(): NativeToolSpec {
   return {
     id: NATIVE_READ_ID,
+    readOnly: true,
     settingName: "read",
     definition: nativeReadDefinition,
     required: ["path"],
@@ -158,6 +164,7 @@ function editSpec(): NativeToolSpec {
 function grepSpec(): NativeToolSpec {
   return {
     id: NATIVE_GREP_ID,
+    readOnly: true,
     settingName: "grep",
     definition: nativeGrepDefinition,
     required: ["pattern"],
@@ -187,6 +194,7 @@ export function nativeToolSpecs(): NativeToolSpec[] {
 function skillSpec(): NativeToolSpec {
   return {
     id: NATIVE_SKILL_ID,
+    readOnly: true,
     settingName: "skill",
     definition: nativeSkillDefinition,
     required: [],
@@ -244,6 +252,7 @@ function requestDraftSpec(): NativeToolSpec {
 function fetchSpec(): NativeToolSpec {
   return {
     id: NATIVE_FETCH_ID, settingName: "fetch", definition: nativeFetchDefinition,
+    readOnly: true,
     required: [], exampleOperation: {url: "https://example.com"}, normalizeArguments: normalizeFetchArguments,
     configured: (config) => config.settings.tools.native.fetch !== undefined,
     build: (definition, config, validate) => {
@@ -325,6 +334,7 @@ function processSpec(): NativeToolSpec {
 function globSpec(): NativeToolSpec {
   return {
     id: NATIVE_GLOB_ID,
+    readOnly: true,
     settingName: "glob",
     definition: nativeGlobDefinition,
     required: [],

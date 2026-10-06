@@ -180,7 +180,8 @@ type toolRound struct {
 }
 
 // executeToolRound runs the calls of one provider response with at most limit
-// of them in flight at once. When the response contains a user-decision tool
+// of them in flight at once, or one at a time in call order when scheduling is
+// "ordered" and any call that will run can change state. When the response contains a user-decision tool
 // only that call runs and every other call gets a placeholder output.
 //
 // publish, when set, receives each executed call's output the moment the call
@@ -188,7 +189,7 @@ type toolRound struct {
 // to publish are serialized. Placeholder outputs are not published here: the
 // caller publishes them after the round is persisted, together with anything
 // else that is still unpublished.
-func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.RawMessage, execution tools.ExecutionContext, limit int, publish func(json.RawMessage)) (toolRound, error) {
+func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.RawMessage, execution tools.ExecutionContext, limit int, scheduling string, publish func(json.RawMessage)) (toolRound, error) {
 	round := toolRound{Published: make(map[string]struct{}, len(calls))}
 	decisionIndex := -1
 	for index, call := range calls {
@@ -217,7 +218,8 @@ func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.
 	}
 
 	var mu sync.Mutex
-	batchErr := runToolBatch(toExecute, limit,
+	concurrency := toolBatchConcurrency(toExecute, limit, scheduling, catalog.ChangesState)
+	batchErr := runToolBatch(toExecute, concurrency,
 		func(call json.RawMessage) (json.RawMessage, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err

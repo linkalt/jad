@@ -171,7 +171,7 @@ func TestRunnerDefersEveryCoBatchedCallUntilUserDecisionIsResolved(t *testing.T)
 		json.RawMessage(`{"type":"function_call","call_id":"call-decision","name":"request_draft","arguments":"{}"}`),
 		json.RawMessage(`{"type":"function_call","call_id":"call-after","name":"lookup","arguments":"{}"}`),
 	}
-	round, err := executeToolRound(context.Background(), catalog, calls, tools.ExecutionContext{}, 8, nil)
+	round, err := executeToolRound(context.Background(), catalog, calls, tools.ExecutionContext{}, 8, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

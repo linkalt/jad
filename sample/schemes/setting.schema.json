@@ -59,6 +59,12 @@
       "description": "Most tool calls from one provider response that run at the same time. Each result is streamed as soon as its call finishes. Use 1 to run them strictly one after another. Defaults to 8.",
       "default": 8
     },
+    "tool_call_scheduling": {
+      "type": "string",
+      "enum": ["ordered", "concurrent"],
+      "description": "How the calls of one provider response are scheduled. ordered runs them one at a time in the order the model wrote them whenever one of them can change state (every tool except read, grep, glob, fetch and skill, and every MCP tool), so a later call sees what an earlier one did; a response made only of those read-only tools still runs up to max_parallel_tool_calls at once. concurrent always runs them together, with no ordering guarantee between calls. Defaults to ordered.",
+      "default": "ordered"
+    },
     "approval": {
       "type": "object",
       "description": "Wait and preview values for tools whose approval is ask. Nothing is asked while every tool's approval is off, which is the default.",

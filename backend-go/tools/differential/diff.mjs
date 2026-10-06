@@ -167,7 +167,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "ckpt", "ckptnogit", "ckptbad", "ckptoff", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "ckpt", "ckptnogit", "ckptbad", "ckptoff", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -178,14 +178,19 @@ async function writeFixtures(sessions, providerUrl) {
       setting.tool_definition_paths = [manifest];
       setting.tools = {native: {read: {}, request_draft: {timeout_ms: 20000, max_timeout_ms: 40000, headless_auto_accept_timeout_ms: 300}}};
     }
-    if (id === "natived" || id === "parallelone" || id === "paralleltwo") {
+    if (id === "natived" || id === "parallelone" || id === "paralleltwo" || id === "parallelconc") {
       setting.cwd = scratch;
       setting.max_tool_rounds = 6;
       setting.tool_definition_paths = [mutatingManifest];
       setting.tools = {native: {read: {}, bash: {}, write: {}, edit: {}}};
       // Bound how many calls of one response run at once; natived keeps the default.
       if (id === "parallelone") setting.max_parallel_tool_calls = 1;
-      if (id === "paralleltwo") setting.max_parallel_tool_calls = 2;
+      if (id === "paralleltwo") {
+        setting.max_parallel_tool_calls = 2;
+        setting.tool_call_scheduling = "concurrent";
+      }
+      // parallelconc opts out of ordering; the other sessions keep the default.
+      if (id === "parallelconc") setting.tool_call_scheduling = "concurrent";
     }
     // Bash output that exceeds the stream budget is spilled to files under the
     // session workspace; each session gets its own so the files can be listed.

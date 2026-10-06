@@ -549,6 +549,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	options.ToolCatalog = prepared.toolCatalog
 	options.MaxToolRounds = int(r.config.MaxToolRounds)
 	options.MaxParallelToolCalls = int(r.config.MaxParallelToolCalls)
+	options.ToolCallScheduling = r.config.ToolCallScheduling
 	options.Approval = &tools.ApprovalOptions{
 		TimeoutMS:     r.config.Approval.TimeoutMS,
 		ExtendMS:      r.config.Approval.ExtendMS,

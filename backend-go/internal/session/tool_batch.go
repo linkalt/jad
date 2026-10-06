@@ -2,6 +2,23 @@ package session
 
 import "sync"
 
+// toolBatchConcurrency is how many calls of one response may run at once. With
+// "ordered" scheduling a response holding a call that can change state runs one
+// call at a time in the model's order, so a later call sees what an earlier one
+// did; a response of read-only calls still runs together, up to limit. Any other
+// scheduling value runs up to limit calls together.
+func toolBatchConcurrency[Call any](calls []Call, limit int, scheduling string, changesState func(Call) bool) int {
+	if scheduling != "ordered" {
+		return limit
+	}
+	for _, call := range calls {
+		if changesState(call) {
+			return 1
+		}
+	}
+	return limit
+}
+
 // runToolBatch runs the calls of one provider response with bounded
 // concurrency. A model that returns several function calls in one response
 // expects them to run in parallel, and each finished call is reported through

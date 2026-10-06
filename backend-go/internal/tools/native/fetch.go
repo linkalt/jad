@@ -124,6 +124,7 @@ func newFetchTool(settings sessionfs.NativeFetchSettings, store *FetchStore, res
 			InputSchema: append(json.RawMessage(nil), fetchInputSchema...),
 		},
 		Validator:          validator,
+		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(`{"url":"https://example.com"}`),
 		NormalizeArguments: normalizeFetchArguments,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
