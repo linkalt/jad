@@ -453,6 +453,10 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleSessionReset(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "front-compact":
 		h.handleSessionFrontCompact(w, r, reference, profile)
+	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "checkpoints":
+		h.handleCheckpointList(w, r, reference, profile)
+	case r.Method == http.MethodPost && len(segments) == 6 && segments[3] == "checkpoints" && segments[5] == "restore":
+		h.handleCheckpointRestore(w, r, reference, profile, segments[4])
 	case r.Method == http.MethodPost && len(segments) == 6 && segments[3] == "run" && segments[4] == "interaction" && segments[5] == "extend":
 		h.handleRunInteractionExtend(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 5 && segments[3] == "run" && segments[4] == "interaction":

@@ -1,0 +1,301 @@
+// Package checkpoint records the workspace before a run changes it and when the
+// run ends, so the user can undo the run. It is the Go port of the TypeScript
+// checkpoint.ts and checkpoint-git.ts; design_checkpoint.md describes both.
+//
+// This file is the lowest layer: it knows git and nothing about sessions or runs.
+// The workspace is the work tree of a bare repository that lives elsewhere, and
+// every command names its own index file, so the user's repository (its index,
+// HEAD, refs and stash) is never read or written, and a workspace that is not a
+// git repository works the same way.
+package checkpoint
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Git failure kinds. "unavailable" means the binary cannot be run at all.
+const (
+	GitUnavailable = "unavailable"
+	GitTimeout     = "timeout"
+	GitFailed      = "failed"
+)
+
+// GitError is a failed git command.
+type GitError struct {
+	Failure string
+	Message string
+}
+
+func (e *GitError) Error() string { return e.Message }
+
+// TreeChange is one path that differs between two trees. Status A and D are
+// relative to the first tree.
+type TreeChange struct {
+	Path    string
+	Status  string
+	OldMode string
+	NewMode string
+	OldSHA  string
+	NewSHA  string
+}
+
+type shadowGit struct {
+	gitDir  string
+	workDir string
+	binary  string
+	timeout time.Duration
+	// maxOutput is the largest output one git command may return before it is a failure.
+	maxOutput int64
+}
+
+const (
+	snapshotIndex = "snapshot.index"
+	restoreIndex  = "restore.index"
+	// maxStderrBytes bounds the error text kept from a failed command.
+	maxStderrBytes = 4096
+	// killWait bounds how long Wait lingers for a killed git's children to close the pipes.
+	killWait = 5 * time.Second
+)
+
+// fixedConfig keeps a snapshot independent of the user's and the machine's git setup.
+var fixedConfig = []string{
+	"core.autocrlf=false",
+	"core.safecrlf=false",
+	"core.fileMode=true",
+	"core.symlinks=true",
+	"core.fsmonitor=false",
+	"core.hooksPath=/dev/null",
+	"gc.auto=0",
+	"maintenance.auto=false",
+}
+
+var inheritedGitVariables = map[string]bool{
+	"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_INDEX_FILE": true, "GIT_OBJECT_DIRECTORY": true,
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES": true, "GIT_NAMESPACE": true,
+}
+
+func (g *shadowGit) env(indexFile string, bound bool) []string {
+	env := make([]string, 0, len(os.Environ())+12)
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if !inheritedGitVariables[name] {
+			env = append(env, entry)
+		}
+	}
+	// `git init` refuses a work tree it was not asked for, so it runs unbound.
+	if bound {
+		env = append(env, "GIT_DIR="+g.gitDir, "GIT_WORK_TREE="+g.workDir)
+	}
+	if indexFile != "" {
+		env = append(env, "GIT_INDEX_FILE="+filepath.Join(g.gitDir, indexFile))
+	}
+	return append(env,
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_AUTHOR_NAME=agent-checkpoint",
+		"GIT_AUTHOR_EMAIL=checkpoint@localhost",
+		"GIT_COMMITTER_NAME=agent-checkpoint",
+		"GIT_COMMITTER_EMAIL=checkpoint@localhost",
+	)
+}
+
+// limitedBuffer keeps at most max bytes and cancels the command once it is exceeded.
+type limitedBuffer struct {
+	buffer   bytes.Buffer
+	max      int64
+	overflow bool
+	cancel   context.CancelFunc
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if b.overflow {
+		return len(p), nil
+	}
+	if int64(b.buffer.Len())+int64(len(p)) > b.max {
+		b.overflow = true
+		if b.cancel != nil {
+			b.cancel()
+		}
+		return len(p), nil
+	}
+	return b.buffer.Write(p)
+}
+
+type runOptions struct {
+	index   string
+	input   []byte
+	unbound bool
+}
+
+func (g *shadowGit) run(args []string, options runOptions) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	full := make([]string, 0, len(fixedConfig)*2+len(args))
+	for _, entry := range fixedConfig {
+		full = append(full, "-c", entry)
+	}
+	full = append(full, args...)
+	command := exec.CommandContext(ctx, g.binary, full...)
+	command.Dir = g.workDir
+	command.Env = g.env(options.index, !options.unbound)
+	command.WaitDelay = killWait
+	if options.input != nil {
+		command.Stdin = bytes.NewReader(options.input)
+	}
+	stdout := &limitedBuffer{max: g.maxOutput, cancel: cancel}
+	stderr := &limitedBuffer{max: maxStderrBytes}
+	command.Stdout = stdout
+	command.Stderr = stderr
+	err := command.Run()
+	if stdout.overflow {
+		return nil, &GitError{Failure: GitFailed, Message: fmt.Sprintf("git %s returned more than %d bytes", args[0], g.maxOutput)}
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return nil, &GitError{Failure: GitTimeout, Message: fmt.Sprintf("git %s did not finish within %d ms", args[0], g.timeout.Milliseconds())}
+	}
+	if err == nil {
+		return stdout.buffer.Bytes(), nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		detail := strings.TrimSpace(stderr.buffer.String())
+		if len(detail) > 500 {
+			detail = detail[:500]
+		}
+		if detail != "" {
+			detail = ": " + detail
+		}
+		return nil, &GitError{Failure: GitFailed, Message: fmt.Sprintf("git %s exited with %d%s", args[0], exit.ExitCode(), detail)}
+	}
+	failure := GitFailed
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+		failure = GitUnavailable
+	}
+	return nil, &GitError{Failure: failure, Message: fmt.Sprintf("cannot run %s: %v", g.binary, err)}
+}
+
+// prepare creates the private repository on first use and writes the exclusion list.
+func (g *shadowGit) prepare(excludePatterns []string) error {
+	if _, err := os.Stat(filepath.Join(g.gitDir, "HEAD")); err != nil {
+		if err := os.MkdirAll(g.gitDir, 0o755); err != nil {
+			return err
+		}
+		if _, err := g.run([]string{"init", "--bare", "--quiet", g.gitDir}, runOptions{unbound: true}); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(g.gitDir, "info"), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(g.gitDir, "info", "exclude"), []byte(strings.Join(excludePatterns, "\n")+"\n"), 0o644)
+}
+
+// snapshot stages the whole workspace in the private index and returns the tree
+// and its file count.
+func (g *shadowGit) snapshot() (string, int, error) {
+	if _, err := g.run([]string{"add", "--all", "--", "."}, runOptions{index: snapshotIndex}); err != nil {
+		return "", 0, err
+	}
+	tree, err := g.run([]string{"write-tree"}, runOptions{index: snapshotIndex})
+	if err != nil {
+		return "", 0, err
+	}
+	listing, err := g.run([]string{"ls-files", "-z"}, runOptions{index: snapshotIndex})
+	if err != nil {
+		return "", 0, err
+	}
+	return strings.TrimSpace(string(tree)), bytes.Count(listing, []byte{0}), nil
+}
+
+func (g *shadowGit) commit(tree, message string) (string, error) {
+	output, err := g.run([]string{"commit-tree", tree, "-m", message}, runOptions{})
+	return strings.TrimSpace(string(output)), err
+}
+
+func (g *shadowGit) setRef(ref, commit string) error {
+	_, err := g.run([]string{"update-ref", ref, commit}, runOptions{})
+	return err
+}
+
+func (g *shadowGit) deleteRef(ref string) error {
+	_, err := g.run([]string{"update-ref", "-d", ref}, runOptions{})
+	return err
+}
+
+var objectSizeLine = regexp.MustCompile(`^(size|size-pack|size-garbage):\s+(\d+)`)
+
+// repositoryBytes is what the private repository occupies: loose objects plus packs.
+func (g *shadowGit) repositoryBytes() (int64, error) {
+	output, err := g.run([]string{"count-objects", "-v"}, runOptions{})
+	if err != nil {
+		return 0, err
+	}
+	var kibibytes int64
+	for _, line := range strings.Split(string(output), "\n") {
+		if match := objectSizeLine.FindStringSubmatch(line); match != nil {
+			value, _ := strconv.ParseInt(match[2], 10, 64)
+			kibibytes += value
+		}
+	}
+	return kibibytes * 1024, nil
+}
+
+// diff lists the paths that differ between two trees, with the mode and blob of each side.
+func (g *shadowGit) diff(from, to string) ([]TreeChange, error) {
+	if from == to {
+		return nil, nil
+	}
+	raw, err := g.run([]string{"diff-tree", "-r", "-z", "--no-renames", "--raw", "--no-abbrev", from, to}, runOptions{})
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(string(raw), "\x00")
+	var changes []TreeChange
+	for index := 0; index+1 < len(parts); index += 2 {
+		meta, path := parts[index], parts[index+1]
+		if !strings.HasPrefix(meta, ":") {
+			continue
+		}
+		fields := strings.Split(meta[1:], " ")
+		for len(fields) < 5 {
+			fields = append(fields, "")
+		}
+		letter := ""
+		if fields[4] != "" {
+			letter = fields[4][:1]
+		}
+		if letter != "A" && letter != "D" && letter != "M" && letter != "T" {
+			continue
+		}
+		changes = append(changes, TreeChange{Path: path, Status: letter, OldMode: fields[0], NewMode: fields[1], OldSHA: fields[2], NewSHA: fields[3]})
+	}
+	return changes, nil
+}
+
+// checkout writes paths of tree into the workspace, replacing what is there.
+func (g *shadowGit) checkout(tree string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	if _, err := g.run([]string{"read-tree", tree}, runOptions{index: restoreIndex}); err != nil {
+		return err
+	}
+	_, err := g.run([]string{"checkout-index", "--force", "-z", "--stdin"}, runOptions{
+		index: restoreIndex,
+		input: []byte(strings.Join(paths, "\x00") + "\x00"),
+	})
+	return err
+}

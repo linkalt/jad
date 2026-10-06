@@ -16,6 +16,10 @@ export function normalize(value, {root, sessions, port, providerUrl}) {
       .replace(/(env_file: could not read \S+): .*/, "$1: $OSERROR")
       // Recoverable front-compaction archives: timestamp plus random suffix.
       .replace(/messages-\d{8}T\d{9}Z-[0-9a-f]{8}\.jsonl/g, "messages-$STAMP.jsonl")
+      // Checkpoint ids are a base-36 clock plus a random suffix; the operating-system
+      // part of "cannot run <git>: ..." is worded differently by Node and Go.
+      .replace(/ckpt-[0-9a-z]+-[0-9a-f]{8}/g, "$CKPT")
+      .replace(/(cannot run \S+): .*?(?=\)|$)/g, "$1: $OSERROR")
       // Edit backups are named by wall-clock milliseconds plus a random suffix.
       .replace(/\.bak-\d{10,}-[0-9a-f]{16}/g, ".bak-$STAMP")
       // Memory refs embed the creation time; managed processes report their OS pid.

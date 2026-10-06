@@ -1,6 +1,6 @@
 import {createHash} from "node:crypto";
-import {readFile, readdir, rm} from "node:fs/promises";
-import {join} from "node:path";
+import {mkdir, readFile, readdir, rm, writeFile} from "node:fs/promises";
+import {dirname, join} from "node:path";
 
 // Each scenario returns a JSON-serializable record of what a client observes.
 async function call(ctx, method, path, {body, headers = {}} = {}) {
@@ -764,6 +764,7 @@ export const scenarios = [
   },
   ...parallelScenarios(),
   ...approvalScenarios(),
+  ...checkpointScenarios(),
   {
     name: "native tool argument errors",
     provider: {steps: [
@@ -1140,6 +1141,146 @@ function parallelScenarios() {
       name: "parallel calls mix valid, invalid and unknown tools",
       provider: {steps: [{calls: [sleepCall("m0", 0.4), {name: "bash", callId: "m1", arguments: {command: ""}}, {name: "no_such_tool", callId: "m2", arguments: {}}, {name: "read", callId: "m3", arguments: {path: "notes.txt"}}]}, {text: "mixed"}]},
       run: run("natived", "run a mix", ["m1", "m2", "m3"]),
+    },
+  ];
+}
+
+// Checkpoints: a run that changes files records the workspace before and after, and
+// the user can list, dry-run and restore it. The scenarios compare what a client sees
+// (record fields, plans, status codes, error text) and the files on disk, not how either
+// backend takes the snapshot. Ids and times are masked by normalize.mjs.
+function checkpointScenarios() {
+  const space = (c, session) => join(c.root, `ckpt-${session}`);
+  const put = async (c, session, name, text) => {
+    const path = join(space(c, session), name);
+    await mkdir(dirname(path), {recursive: true});
+    await writeFile(path, text);
+  };
+  const file = async (c, session, name) => readFile(join(space(c, session), name), "utf8").catch(() => null);
+  const list = async (c, session) => (await call(c, "GET", `/api/sessions/${session}/checkpoints`)).body;
+  // The shape of a record without its identity: ids, trees and sizes differ per backend run.
+  const shape = (record) => ({
+    kind: record.kind, state: record.state, turn: record.turn_id?.replace(/^web-.*/, "web"), session_turn: record.session_turn,
+    has_before: Boolean(record.before_tree), has_after: Boolean(record.after_tree), file_count: record.file_count ?? null,
+    warning: record.warning ?? null, restored_from: Boolean(record.restored_from),
+  });
+  const resetAndRun = async (c, session, input) => {
+    await call(c, "POST", `/api/sessions/${session}/reset`, {body: {}});
+    return sse(c, `/api/sessions/${session}/run`, {method: "POST", body: {input}});
+  };
+  const restore = (c, session, id, body) => call(c, "POST", `/api/sessions/${session}/checkpoints/${id}/restore`, {body});
+  const clear = async (c, session) => {
+    await rm(space(c, session), {recursive: true, force: true});
+    await mkdir(space(c, session), {recursive: true});
+    await rm(join(c.sessions, session, "staging"), {recursive: true, force: true});
+  };
+  return [
+    {
+      name: "checkpoint: a run that writes records one checkpoint and a safe restore reverts it",
+      provider: {steps: [{call: {name: "write", arguments: {path: "a.txt", content: "agent"}}}, {call: {name: "write", arguments: {path: "b.txt", content: "second"}}}, {text: "done"}]},
+      run: async (c) => {
+        await clear(c, "ckpt");
+        await put(c, "ckpt", "a.txt", "original");
+        await put(c, "ckpt", "keep.txt", "keep");
+        const run = await resetAndRun(c, "ckpt", "write two files");
+        const listed = await list(c, "ckpt");
+        const [record] = listed.checkpoints;
+        const dry = await restore(c, "ckpt", record.id, {dry_run: true});
+        const filesAfterDry = [await file(c, "ckpt", "a.txt"), await file(c, "ckpt", "b.txt")];
+        const done = await restore(c, "ckpt", record.id, {});
+        const after = await list(c, "ckpt");
+        return {
+          names: eventNames(run), enabled: listed.enabled, records: listed.checkpoints.map(shape), dry, filesAfterDry,
+          done: {...done, body: {restore: {...done.body.restore, undo_checkpoint_id: Boolean(done.body.restore?.undo_checkpoint_id), checkpoint_id: "id"}}},
+          files: [await file(c, "ckpt", "a.txt"), await file(c, "ckpt", "b.txt"), await file(c, "ckpt", "keep.txt")],
+          afterRecords: after.checkpoints.map(shape),
+        };
+      },
+    },
+    {
+      name: "checkpoint: a read-only run records nothing and creates no files",
+      provider: {steps: [{call: {name: "read", arguments: {path: "r.txt"}}}, {text: "done"}]},
+      run: async (c) => {
+        await clear(c, "ckpt");
+        await put(c, "ckpt", "r.txt", "x");
+        const run = await resetAndRun(c, "ckpt", "read it");
+        return {names: eventNames(run), listed: await list(c, "ckpt"), repository: (await readdir(join(c.sessions, "ckpt", "staging")).catch(() => [])).filter((name) => name.startsWith("checkpoints"))};
+      },
+    },
+    {
+      name: "checkpoint: safe restore leaves a file changed after the run and reports it as a conflict",
+      provider: {steps: [{call: {name: "write", arguments: {path: "a.txt", content: "agent"}}}, {call: {name: "write", arguments: {path: "d/b.txt", content: "agent-b"}}}, {text: "done"}]},
+      run: async (c) => {
+        await clear(c, "ckpt");
+        await put(c, "ckpt", "a.txt", "a0");
+        await put(c, "ckpt", "d/b.txt", "b0");
+        await resetAndRun(c, "ckpt", "change both");
+        const [record] = (await list(c, "ckpt")).checkpoints;
+        await put(c, "ckpt", "a.txt", "user edit after the run");
+        const done = await restore(c, "ckpt", record.id, {});
+        return {status: done.status, plan: {...done.body.restore, undo_checkpoint_id: Boolean(done.body.restore?.undo_checkpoint_id), checkpoint_id: "id"}, files: [await file(c, "ckpt", "a.txt"), await file(c, "ckpt", "d/b.txt")]};
+      },
+    },
+    {
+      name: "checkpoint: a full restore makes the workspace equal to before the run, user edits included",
+      provider: {steps: [{call: {name: "write", arguments: {path: "a.txt", content: "agent"}}}, {text: "done"}]},
+      run: async (c) => {
+        await clear(c, "ckpt");
+        await put(c, "ckpt", "a.txt", "a0");
+        await resetAndRun(c, "ckpt", "change it");
+        const [record] = (await list(c, "ckpt")).checkpoints;
+        await put(c, "ckpt", "a.txt", "user");
+        await put(c, "ckpt", "later.txt", "later");
+        const done = await restore(c, "ckpt", record.id, {mode: "full"});
+        return {status: done.status, plan: {...done.body.restore, undo_checkpoint_id: Boolean(done.body.restore?.undo_checkpoint_id), checkpoint_id: "id"}, files: [await file(c, "ckpt", "a.txt"), await file(c, "ckpt", "later.txt")]};
+      },
+    },
+    {
+      name: "checkpoint: a restore is undone through the checkpoint it recorded",
+      provider: {steps: [{call: {name: "write", arguments: {path: "a.txt", content: "agent"}}}, {text: "done"}]},
+      run: async (c) => {
+        await clear(c, "ckpt");
+        await put(c, "ckpt", "a.txt", "a0");
+        await resetAndRun(c, "ckpt", "change it");
+        const [record] = (await list(c, "ckpt")).checkpoints;
+        const first = await restore(c, "ckpt", record.id, {});
+        const afterFirst = await file(c, "ckpt", "a.txt");
+        const undoRecord = (await list(c, "ckpt")).checkpoints[0];
+        const undone = await restore(c, "ckpt", undoRecord.id, {mode: "full"});
+        return {firstStatus: first.status, afterFirst, undoShape: shape(undoRecord), undoneStatus: undone.status, afterUndo: await file(c, "ckpt", "a.txt")};
+      },
+    },
+    {
+      name: "checkpoint: a missing git binary is a failed record, the write still runs, and restore says 409",
+      provider: {steps: [{call: {name: "write", arguments: {path: "a.txt", content: "hello"}}}, {text: "done"}]},
+      run: async (c) => {
+        await clear(c, "ckptnogit");
+        const run = await resetAndRun(c, "ckptnogit", "write it");
+        const listed = await list(c, "ckptnogit");
+        const record = listed.checkpoints[0];
+        const done = await restore(c, "ckptnogit", record.id, {});
+        // Node and Go word the operating-system error differently; the prefix is the contract.
+        return {names: eventNames(run), file: await file(c, "ckptnogit", "a.txt"), shape: {...shape(record), warning: record.warning?.split(":")[0] + ":" + record.warning?.split(":")[1]?.slice(0, 18)}, restore: done};
+      },
+    },
+    {
+      name: "checkpoint: restore routes answer 404 for an unknown id and 400 for a bad body, and list needs a token",
+      run: async (c) => {
+        const bad = [];
+        for (const body of [{mode: "everything"}, {dry_run: "yes"}, {surprise: 1}, []]) bad.push(await restore(c, "ckpt", "ckpt-nope", body));
+        return {
+          unknown: await restore(c, "ckpt", "ckpt-nope", {}), bad,
+          noToken: (await fetch(`${c.base}/api/sessions/ckpt/checkpoints`)).status,
+          wrongMethod: await call(c, "POST", "/api/sessions/ckpt/checkpoints", {body: {}}),
+          off: await list(c, "ckptoff"),
+          offRestore: await restore(c, "ckptoff", "ckpt-nope", {}),
+        };
+      },
+    },
+    {
+      name: "checkpoint: a bad checkpoint value is refused with the same message",
+      provider: {steps: [{text: "x"}]},
+      run: async (c) => ({run: await call(c, "POST", "/api/sessions/ckptbad/run", {body: {input: "go"}}), list: await call(c, "GET", "/api/sessions/ckptbad/checkpoints")}),
     },
   ];
 }

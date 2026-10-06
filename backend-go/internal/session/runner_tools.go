@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 
+	"example.com/agent-harness/backend-go/internal/checkpoint"
 	"example.com/agent-harness/backend-go/internal/tools"
 	"example.com/agent-harness/backend-go/internal/transcript"
 )
@@ -143,6 +144,28 @@ func missingToolOutput(callID, errorCode, summary string) (json.RawMessage, erro
 		return nil, fmt.Errorf("encode missing native tool output: %w", err)
 	}
 	return encoded, nil
+}
+
+// roundChangesWorkspace reports whether any call that will actually run in this
+// round can change files. When the response holds a user-decision tool only that
+// call runs, so only it counts; the rest get a placeholder output.
+func roundChangesWorkspace(catalog *tools.Catalog, calls []json.RawMessage, run *checkpoint.Run) bool {
+	if run == nil || catalog == nil {
+		return false
+	}
+	toRun := calls
+	for _, call := range calls {
+		if catalog.IsUserDecisionCall(call) {
+			toRun = []json.RawMessage{call}
+			break
+		}
+	}
+	for _, call := range toRun {
+		if checkpoint.CallChangesWorkspace(call, catalog.SourceOf(call), run.IncludeMCPTools()) {
+			return true
+		}
+	}
+	return false
 }
 
 // toolRound is what one batch of tool calls produced.

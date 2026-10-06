@@ -804,5 +804,165 @@
     "profile": "",
     "model": "",
     "error": "tools.native.unrelated is not supported; supported keys are bash, edit, fetch, glob, grep, memory, process, read, request_draft, skill, task, write; MCP servers are configured under tools.mcp"
+  },
+  {
+    "name": "checkpoint all keys",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "checkpoint empty",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "checkpoint not an object",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint must be an object"
+  },
+  {
+    "name": "checkpoint array",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint must be an object"
+  },
+  {
+    "name": "checkpoint enabled string",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.enabled must be a boolean"
+  },
+  {
+    "name": "checkpoint enabled null",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.enabled must be a boolean"
+  },
+  {
+    "name": "checkpoint typo",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.enable is not supported; did you mean enabled?"
+  },
+  {
+    "name": "checkpoint unknown key",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.surprise is not supported; supported keys are enabled, git_binary, include_mcp_tools, max_checkpoints, max_files, max_total_bytes, safe_restore, snapshot_on, timeout_ms"
+  },
+  {
+    "name": "checkpoint binary empty",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.git_binary must be a non-empty string"
+  },
+  {
+    "name": "checkpoint binary number",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.git_binary must be a non-empty string"
+  },
+  {
+    "name": "checkpoint max_checkpoints zero",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.max_checkpoints must be a safe integer between 1 and 1000"
+  },
+  {
+    "name": "checkpoint max_checkpoints over",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.max_checkpoints must be a safe integer between 1 and 1000"
+  },
+  {
+    "name": "checkpoint max_files fraction",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.max_files must be a safe integer between 1 and 1000000"
+  },
+  {
+    "name": "checkpoint max_files null",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.max_files must be a safe integer between 1 and 1000000"
+  },
+  {
+    "name": "checkpoint max_total_bytes zero",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.max_total_bytes must be a safe integer between 1 and 1099511627776"
+  },
+  {
+    "name": "checkpoint max_total_bytes over",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.max_total_bytes must be a safe integer between 1 and 1099511627776"
+  },
+  {
+    "name": "checkpoint timeout low",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.timeout_ms must be a safe integer between 1000 and 3600000"
+  },
+  {
+    "name": "checkpoint timeout high",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.timeout_ms must be a safe integer between 1000 and 3600000"
+  },
+  {
+    "name": "checkpoint mcp number",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.include_mcp_tools must be a boolean"
+  },
+  {
+    "name": "checkpoint snapshot_on word",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.snapshot_on must be \"first_mutation\" or \"run_start\""
+  },
+  {
+    "name": "checkpoint snapshot_on null",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.snapshot_on must be \"first_mutation\" or \"run_start\""
+  },
+  {
+    "name": "checkpoint safe_restore string",
+    "profile": "",
+    "model": "",
+    "error": "checkpoint.safe_restore must be a boolean"
   }
 ]

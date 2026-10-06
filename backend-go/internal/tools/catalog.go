@@ -176,6 +176,25 @@ func (c *Catalog) IsUserDecisionCall(call json.RawMessage) bool {
 	return c.byName[name].RequiresUserDecision
 }
 
+// SourceOf returns where a called tool comes from ("native" or "mcp"), or "" for
+// an unknown name.
+func (c *Catalog) SourceOf(call json.RawMessage) string {
+	if c == nil {
+		return ""
+	}
+	var fields struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(call, &fields) != nil {
+		return ""
+	}
+	tool, exists := c.byName[fields.Name]
+	if !exists {
+		return ""
+	}
+	return tool.Definition.Source
+}
+
 // ExecuteFunctionCall validates arguments and returns a Responses
 // function_call_output item. It leaves argument values unchanged unless the
 // tool explicitly supplies a normalization function.

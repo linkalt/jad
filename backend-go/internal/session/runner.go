@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	"example.com/agent-harness/backend-go/internal/checkpoint"
 	"example.com/agent-harness/backend-go/internal/memorytrace"
 	"example.com/agent-harness/backend-go/internal/responses"
 	"example.com/agent-harness/backend-go/internal/tools"
@@ -84,7 +85,11 @@ type RunOptions struct {
 	ToolExecution       tools.ExecutionContext
 	// Approval holds the wait and preview values for tools whose approval is
 	// "ask". Nil means the host supplies none, so such a call is blocked.
-	Approval            *tools.ApprovalOptions
+	Approval *tools.ApprovalOptions
+	// Checkpoint records the workspace before the run first changes it and when
+	// the run ends. Nil, or a service whose setting is off, means no checkpoint.
+	// A snapshot that fails is a recorded warning and never stops the call it precedes.
+	Checkpoint          *checkpoint.Service
 	StateContext        *StateContextPrompt
 	RefreshStateContext func(context.Context) (*StateContextPrompt, error)
 	AutomaticCompaction *AutomaticCompactionSettings
@@ -389,6 +394,12 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	if options.MaxToolRounds < 0 {
 		return result, errors.New("maximum tool rounds cannot be negative")
 	}
+	// Off by default; when on, the run records the workspace before it changes it
+	// and again when it ends, so the user can undo it. The end is recorded
+	// whatever the outcome, like the TypeScript try/finally.
+	checkpointRun := checkpoint.NewRun(options.Checkpoint, turnID, sessionTurn)
+	checkpointRun.Start()
+	defer checkpointRun.Finish()
 	var responseTools []json.RawMessage
 	if options.ToolCatalog != nil {
 		responseTools, err = options.ToolCatalog.ResponseTools()
@@ -505,6 +516,9 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 			return result, fmt.Errorf("tool execution exceeded %d tool rounds", options.MaxToolRounds)
 		}
 
+		// Takes the checkpoint once, just before the first call that can change
+		// files. A user-decision tool runs alone, so only its call counts then.
+		checkpointRun.BeforeCalls(roundChangesWorkspace(options.ToolCatalog, calls, checkpointRun))
 		// Remember how a user-decision tool was answered: a decline, a timeout or a
 		// cancellation ends the run once its result is persisted, because the model
 		// must not carry on as if the user had approved the draft.

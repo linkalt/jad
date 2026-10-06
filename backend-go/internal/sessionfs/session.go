@@ -144,7 +144,9 @@ type SessionConfig struct {
 	// run at the same time.
 	MaxParallelToolCalls int64
 	// Approval holds the wait and preview values for tools whose approval is "ask".
-	Approval              ApprovalSettings
+	Approval ApprovalSettings
+	// Checkpoint controls run checkpoints and undo; it is off by default.
+	Checkpoint            CheckpointSettings
 	BackupTurns           int
 	Compaction            Compaction
 	Persistence           Persistence
@@ -249,6 +251,10 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		return SessionConfig{}, err
 	}
 	approval, err := normalizeApprovalSettings(setting["approval"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	checkpoint, err := normalizeCheckpointSettings(setting["checkpoint"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -452,6 +458,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		MaxToolRounds:         maxToolRounds,
 		MaxParallelToolCalls:  maxParallelToolCalls,
 		Approval:              approval,
+		Checkpoint:            checkpoint,
 		BackupTurns:           backupTurns,
 		Compaction:            compactionSettings,
 		Persistence:           persistence,

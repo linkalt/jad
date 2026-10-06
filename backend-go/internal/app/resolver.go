@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"example.com/agent-harness/backend-go/internal/checkpoint"
 	"example.com/agent-harness/backend-go/internal/httpapi"
 	"example.com/agent-harness/backend-go/internal/httpdebug"
 	"example.com/agent-harness/backend-go/internal/logging"
@@ -554,6 +555,9 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		MaxTimeoutMS:  r.config.Approval.MaxTimeoutMS,
 		HeadlessAllow: r.config.Approval.Headless == sessionfs.ApprovalHeadlessAllow,
 		PreviewBytes:  r.config.Approval.PreviewBytes,
+	}
+	if r.config.Checkpoint.Enabled {
+		options.Checkpoint = checkpoint.ForSession(r.config, r.resolver.logger)
 	}
 	options.ToolExecution.WorkspaceRoot = r.config.WorkingDir
 	options.ToolExecution.SessionDir = filepath.Dir(r.config.SettingPath)

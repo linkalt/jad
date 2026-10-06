@@ -167,7 +167,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "ckpt", "ckptnogit", "ckptbad", "ckptoff", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -247,6 +247,20 @@ async function writeFixtures(sessions, providerUrl) {
       setting.approval = {timeout_ms: 20000, max_timeout_ms: 40000, headless: id === "askallow" ? "allow" : "deny", preview_bytes: 64};
       if (id === "askbad") setting.tools.native.write.approval = "on";
       if (id === "askbadblock") setting.approval.headless = "maybe";
+    }
+    // Checkpoints: ckpt records runs, ckptnogit points at a git that does not exist,
+    // ckptbad holds a value both backends must refuse with the same message, ckptoff
+    // has the node absent. Each has its own workspace so a restore cannot touch another session.
+    if (id === "ckpt" || id === "ckptnogit" || id === "ckptbad" || id === "ckptoff") {
+      const ckptSpace = join(dirname(sessions), `ckpt-${id}`);
+      await mkdir(ckptSpace, {recursive: true});
+      setting.cwd = ckptSpace;
+      setting.max_tool_rounds = 6;
+      setting.tool_definition_paths = [askManifest];
+      setting.tools = {native: {read: {paths: {allow: [ckptSpace]}}, write: {paths: {allow: [ckptSpace]}}, bash: {}, edit: {paths: {allow: [ckptSpace]}}}};
+      if (id === "ckpt") setting.checkpoint = {enabled: true, max_checkpoints: 5};
+      if (id === "ckptnogit") setting.checkpoint = {enabled: true, git_binary: "/nonexistent/git"};
+      if (id === "ckptbad") setting.checkpoint = {enabled: true, snapshot_on: "always"};
     }
     if (id === "askmcp") {
       setting.max_tool_rounds = 6;
