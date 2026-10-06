@@ -2376,6 +2376,43 @@ test("compacts at a tool-call boundary while leaving that response active for it
   }
 });
 
+test("keepToolPairs counts tool pairs in total over all kept turns, not per turn", async () => {
+  const sessionDir = await makeSession();
+  try {
+    const store = await SessionResponseStore.open(sessionDir);
+    for (let turn = 1; turn <= 4; turn += 1) {
+      const user = {type: "message", role: "user", content: [{type: "input_text", text: `turn ${turn} ${"x".repeat(200)}`}]};
+      await store.appendInputItem(user);
+      for (let pair = 1; pair <= 2; pair += 1) {
+        const call = {type: "function_call", call_id: `call-${turn}-${pair}`, name: "memory", arguments: "{}"};
+        const output = {type: "function_call_output", call_id: call.call_id, output: "data ".repeat(200)};
+        const callTurn = await store.beginTurn(`resp-call-${turn}-${pair}`);
+        await callTurn.stageOutputItem({type: "response.output_item.done", output_index: 0, item: call});
+        await callTurn.commit(completedEvent([call], `resp-call-${turn}-${pair}`));
+        await store.appendInputItem(output);
+      }
+      const final = {type: "message", role: "assistant", content: [{type: "output_text", text: `answer ${turn}`}]};
+      const finalTurn = await store.beginTurn(`resp-final-${turn}`);
+      await finalTurn.stageOutputItem({type: "response.output_item.done", output_index: 0, item: final});
+      await finalTurn.commit(completedEvent([final], `resp-final-${turn}`));
+    }
+    // 4 turns x 2 pairs = 8 pairs; keepTurns 3 leaves 6 pairs; keepToolPairs 1 keeps only the very last one.
+    const result = await store.compactHistory({turnType: "assistant_final", keepTurns: 3, keepToolPairs: 1, backupMode: "replace"});
+    assert.equal(result.compacted, true);
+    const history: Array<Record<string, unknown>> = [];
+    for await (const item of store.readInputItems()) history.push(item as Record<string, unknown>);
+    const keptCalls = history.filter((item) => item.type === "function_call").map((item) => item.call_id);
+    const keptOutputs = history.filter((item) => item.type === "function_call_output").map((item) => item.call_id);
+    assert.deepEqual(keptCalls, ["call-4-2"]);
+    assert.deepEqual(keptOutputs, ["call-4-2"]);
+    assert.equal(history.filter((item) => item.role === "user").length, 3);
+
+    await store.close();
+  } finally {
+    await removeSession(sessionDir);
+  }
+});
+
 test("recovers an interrupted compaction before new transcript records are appended", async () => {
   const sessionDir = await makeSession();
   try {
