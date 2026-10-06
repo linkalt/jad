@@ -122,6 +122,7 @@ import {
   shouldInstallDesyncWatch,
   type ComposerDesync,
 } from './desync-watch';
+import {ApprovalDrawer} from './components/ApprovalDrawer';
 import {DraftRequestDrawer} from './components/DraftRequestDrawer';
 import type {DraftDecision} from './draft-answer';
 import type {ComposerInsertActions} from './components/ComposerPane';
@@ -4774,7 +4775,19 @@ function App() {
       onToggleLeftPanel={toggleLeftPanel}
       onRegisterInsert={registerComposerInsert}
       drawer={
-        pendingInteraction !== undefined ? (
+        pendingInteraction?.kind === 'approval' ? (
+          <ApprovalDrawer
+            pending={pendingInteraction}
+            isSubmitting={answeringInteractionId === pendingInteraction.id}
+            isExtending={extendingInteractionId === pendingInteraction.id}
+            error={interactionAnswerError}
+            reasonMaxLength={appConfig.interaction_reason_max_length}
+            deadlineTickMs={appConfig.interaction_deadline_tick_ms}
+            previewMaxHeightPx={appConfig.approval_preview_max_height_px}
+            onAnswer={body => answerInteraction(pendingInteraction, body)}
+            onExtend={() => extendInteraction(pendingInteraction)}
+          />
+        ) : pendingInteraction !== undefined ? (
           <DraftRequestDrawer
             pending={pendingInteraction}
             isSubmitting={answeringInteractionId === pendingInteraction.id}
