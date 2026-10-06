@@ -75,6 +75,12 @@
         "max_delay_ms": {"type": "integer", "minimum": 1, "maximum": 600000, "default": 8000, "description": "Longest wait between attempts, also the cap for a Retry-After from the provider."}
       }
     },
+    "max_run_tokens": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000000000,
+      "description": "Most tokens one run may use before it stops. Absent means no cap, which is the default. After each provider response the harness adds the tokens the provider reported (total_tokens, or input plus output) to the run's count; when the count has reached this value and the model asked for tool calls, those calls get a run_token_limit result, no further round starts, and the run fails with a message naming the count and the limit. A response in flight is never cut, so a run can end above the cap by up to one response. A response with no usage counts as 0. A final answer with no tool calls always completes."
+    },
     "approval": {
       "type": "object",
       "description": "Wait and preview values for tools whose approval is ask, and the default for tools that do not set their own. Nothing is asked while every tool's approval is off, which is the default. Approval is per tool: a tool whose approval is off is never asked about, so a model refused on one tool can reach the same effect through another unless that one asks too. Set default to ask to cover every tool that can ask. Approval is a confirmation, not a sandbox.",

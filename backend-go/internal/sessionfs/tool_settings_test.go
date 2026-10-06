@@ -119,3 +119,27 @@ func TestNormalizeToolCallScheduling(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeMaxRunTokens(t *testing.T) {
+	const path = "/session/setting.json"
+	// An absent key means no cap, returned as 0.
+	if got, err := normalizeMaxRunTokens(json.RawMessage(``), path); err != nil || got != 0 {
+		t.Errorf("normalizeMaxRunTokens(absent) = %d, %v; want 0, nil", got, err)
+	}
+	for _, accepted := range []struct {
+		raw  string
+		want int64
+	}{{`1`, 1}, {`5000`, 5000}, {`1000000000000`, 1_000_000_000_000}} {
+		got, err := normalizeMaxRunTokens(json.RawMessage(accepted.raw), path)
+		if err != nil || got != accepted.want {
+			t.Errorf("normalizeMaxRunTokens(%s) = %d, %v; want %d", accepted.raw, got, err, accepted.want)
+		}
+	}
+	// null is an error, like every other non-integer and out-of-range value.
+	for _, rejected := range []string{`null`, `0`, `-5`, `1.5`, `"100"`, `true`, `[]`, `{}`, `1000000000001`, `9007199254740991`} {
+		_, err := normalizeMaxRunTokens(json.RawMessage(rejected), path)
+		if err == nil || !strings.Contains(err.Error(), "max_run_tokens must be a safe integer between 1 and 1000000000000") {
+			t.Errorf("normalizeMaxRunTokens(%s) error = %v", rejected, err)
+		}
+	}
+}

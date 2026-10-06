@@ -44,6 +44,22 @@ func normalizeMaxToolRounds(raw json.RawMessage, path string) (int64, error) {
 	return value, nil
 }
 
+// maxConfiguredRunTokens mirrors the TypeScript MAX_CONFIGURED_RUN_TOKENS.
+const maxConfiguredRunTokens int64 = 1_000_000_000_000
+
+// normalizeMaxRunTokens validates the most tokens one run may use. An absent key
+// means no cap and is returned as 0; null and every other non-integer is an error.
+func normalizeMaxRunTokens(raw json.RawMessage, path string) (int64, error) {
+	if len(raw) == 0 {
+		return 0, nil
+	}
+	value, ok := configSafeInteger(raw)
+	if !ok || value < 1 || value > maxConfiguredRunTokens {
+		return 0, configError("%s: max_run_tokens must be a safe integer between 1 and %d", path, maxConfiguredRunTokens)
+	}
+	return value, nil
+}
+
 // normalizeMaxParallelToolCalls validates the most tool calls of one provider
 // response that may run at the same time.
 func normalizeMaxParallelToolCalls(raw json.RawMessage, path string) (int64, error) {

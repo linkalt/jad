@@ -186,6 +186,11 @@ type providerStatusError interface{ ProviderStatus() int }
 // detail (a response body, a path, a tool server's message) stays in the server
 // log. The wording matches the TypeScript backend.
 func clientRunErrorMessage(err error) string {
+	// Its text holds only numbers the harness counted, so a client may read it.
+	var tokenLimit *session.RunTokenLimitError
+	if errors.As(err, &tokenLimit) {
+		return tokenLimit.Error()
+	}
 	var provider providerStatusError
 	if errors.As(err, &provider) {
 		if status := provider.ProviderStatus(); status >= 100 && status <= 599 {

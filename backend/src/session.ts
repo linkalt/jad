@@ -32,6 +32,7 @@ import {
   type PersistedResponse,
 } from "./responses.js";
 import type { RunErrorEntry } from "./run-error-cache.js";
+import { RunTokenLimitError, responseTokens } from "./run-token-budget.js";
 import { createHttpDebugFetch } from "./http-debug.js";
 import {
   loadToolCatalog,
@@ -509,6 +510,9 @@ export class AgentSession {
     sessionTurn: number;
   }): Promise<AgentRunResult> {
     const {config, catalog, client, maxToolRounds, options, memoryTrace, checkpoint, sessionTurn} = context;
+    // Tokens the provider reported for the rounds of this run so far. Every round
+    // re-sends the history, so this is what the run is billed, not the transcript size.
+    let usedTokens = 0;
     for (let round = 0; ; round += 1) {
       // messages.jsonl is authoritative; avoid rewriting the full derived cache each tool round.
       const history: ResponseInputItem[] = [];
@@ -548,6 +552,7 @@ export class AgentSession {
         retry: config.settings.provider_retry,
       });
       await options.onResponseCommitted?.(response);
+      usedTokens += responseTokens(response.event.response);
       const calls = responseFunctionCalls(response.event.response);
       const usage = response.event.response.usage;
       memoryTrace.mark("provider-response-complete", {
@@ -594,6 +599,16 @@ export class AgentSession {
         );
         if (refreshStateContext) await this.refreshStateContext(config, "compaction");
         throw new Error(`tool execution exceeded ${maxToolRounds} tool rounds`);
+      }
+      // The cap is checked here, between rounds, from usage already reported: a
+      // round in flight is never cut, but the next one is not started. The calls
+      // get a result so the transcript stays a valid history for a later run.
+      const maxRunTokens = config.settings.max_run_tokens;
+      if (maxRunTokens !== undefined && usedTokens >= maxRunTokens) {
+        const limit = new RunTokenLimitError(usedTokens, maxRunTokens);
+        await this.appendToolOutputs(calls, [], "run_token_limit", `Tool execution was not started. ${limit.message}`);
+        if (refreshStateContext) await this.refreshStateContext(config, "compaction");
+        throw limit;
       }
 
       const decisionCall = calls.find((call) => catalog.isUserDecisionCall(call));

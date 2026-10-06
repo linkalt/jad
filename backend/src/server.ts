@@ -21,6 +21,7 @@ import {
   type SessionSettings,
 } from "./config.js";
 import { AgentSession } from "./session.js";
+import { RunTokenLimitError } from "./run-token-budget.js";
 import type {ToolInteractionQuestion} from "./tools/types.js";
 import { ProcessManager } from "./tools/native/process-manager.js";
 import { TaskStore } from "./tools/native/task-store.js";
@@ -338,6 +339,8 @@ function isAuthorized(request: IncomingMessage, tokenHash: Buffer): boolean {
 }
 
 function clientRunErrorMessage(error: unknown): string {
+  // Its text holds only numbers the harness counted, so a client may read it.
+  if (error instanceof RunTokenLimitError) return error.message;
   const status =
     error !== null && typeof error === "object" && "status" in error
       ? (error as {status?: unknown}).status

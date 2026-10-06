@@ -1374,5 +1374,133 @@
     "profile": "",
     "model": "",
     "error": "provider_retry.initial_delay_ms must not exceed max_delay_ms"
+  },
+  {
+    "name": "max run tokens absent is no cap",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "max run tokens one",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "max run tokens typical",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "max run tokens ceiling",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "max run tokens null",
+    "profile": "",
+    "model": "",
+    "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+  },
+  {
+    "name": "max run tokens zero",
+    "profile": "",
+    "model": "",
+    "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+  },
+  {
+    "name": "max run tokens negative",
+    "profile": "",
+    "model": "",
+    "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+  },
+  {
+    "name": "max run tokens fraction",
+    "profile": "",
+    "model": "",
+    "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+  },
+  {
+    "name": "max run tokens string",
+    "profile": "",
+    "model": "",
+    "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+  },
+  {
+    "name": "max run tokens boolean",
+    "profile": "",
+    "model": "",
+    "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+  },
+  {
+    "name": "max run tokens above ceiling",
+    "profile": "",
+    "model": "",
+    "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+  },
+  {
+    "name": "max run tokens max safe integer",
+    "profile": "",
+    "model": "",
+    "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
   }
 ]

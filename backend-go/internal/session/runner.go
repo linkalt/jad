@@ -104,6 +104,9 @@ type RunOptions struct {
 	OnUsageChanged      func()
 	AcceptedRequestRole string
 	MaxToolRounds       int
+	// MaxRunTokens is the most tokens one run may use before it starts another
+	// provider round; zero means no cap. Counted from the usage the provider reported.
+	MaxRunTokens int64
 	// MaxParallelToolCalls is the most calls of one provider response that run
 	// at the same time; a value below one runs them one after another.
 	MaxParallelToolCalls int
@@ -421,6 +424,9 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		inputHistory = r.store.NewInputHistory()
 	}
 	defer inputHistory.Release()
+	// Tokens the provider reported for the rounds of this run so far. Every round
+	// re-sends the history, so this is what the run is billed, not the transcript size.
+	var usedTokens int64
 	for round := 0; ; round++ {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -463,6 +469,7 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		result.Event = responseResult.Event
 		result.Commit = responseResult.Commit
 		trace.Mark("provider-response-complete", responseTraceDetails(result.Event))
+		usedTokens += responseTokens(result.Event)
 
 		calls, err := responseFunctionCalls(result.Event)
 		if err != nil {
@@ -518,6 +525,19 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 				return result, err
 			}
 			return result, fmt.Errorf("tool execution exceeded %d tool rounds", options.MaxToolRounds)
+		}
+		// The cap is checked here, between rounds, from usage already reported: a
+		// round in flight is never cut, but the next one is not started. The calls
+		// get a result so the transcript stays a valid history for a later run.
+		if options.MaxRunTokens > 0 && usedTokens >= options.MaxRunTokens {
+			limit := &RunTokenLimitError{Used: usedTokens, Limit: options.MaxRunTokens}
+			if _, err := appendToolOutputs(r.store, calls, nil, "run_token_limit", "Tool execution was not started. "+limit.Error()); err != nil {
+				return result, err
+			}
+			if err := refreshAfterCompaction(); err != nil {
+				return result, err
+			}
+			return result, limit
 		}
 
 		// Takes the checkpoint once, just before the first call that can change

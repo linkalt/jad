@@ -167,7 +167,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "askdefault", "askdefaultexplicit", "askdefaultoff", "askdefaultbad", "askdefaultmcp", "ckpt", "ckptnogit", "ckptbad", "ckptoff", "retryoff", "retrymany", "retrybad", "retryslow", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "askdefault", "askdefaultexplicit", "askdefaultoff", "askdefaultbad", "askdefaultmcp", "ckpt", "ckptnogit", "ckptbad", "ckptoff", "retryoff", "retrymany", "retrybad", "retryslow", "capstop", "capnone", "capbad", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -291,6 +291,15 @@ async function writeFixtures(sessions, providerUrl) {
     if (id === "retrymany") setting.provider_retry = {max_retries: 4, initial_delay_ms: 1, max_delay_ms: 20};
     if (id === "retrybad") setting.provider_retry = {max_retries: null};
     if (id === "retryslow") setting.provider_retry = {max_retries: 2, initial_delay_ms: 1, max_delay_ms: 30};
+    // max_run_tokens: the fake provider reports total_tokens 19 for every round, so a cap of 30 is
+    // reached by the second round and never by the first.
+    if (id === "capstop" || id === "capnone" || id === "capbad") {
+      setting.max_tool_rounds = 6;
+      setting.tool_definition_paths = [manifest];
+      setting.tools = {native: {read: {}}};
+      if (id === "capstop") setting.max_run_tokens = 30;
+      if (id === "capbad") setting.max_run_tokens = null;
+    }
     if (id === "askmcp") {
       setting.max_tool_rounds = 6;
       setting.mcp_servers = [{id: "fx", config_path: join(mcpDir, "fx.json"), enabled: true, deny_tools: ["denied"], approval: "ask"}];

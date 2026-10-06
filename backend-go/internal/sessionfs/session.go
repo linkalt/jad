@@ -148,6 +148,9 @@ type SessionConfig struct {
 	ToolCallScheduling string
 	// ProviderRetry controls how a failed request to the model provider is retried.
 	ProviderRetry ProviderRetrySettings
+	// MaxRunTokens is the most tokens one run may use before it starts another
+	// provider round; zero means no cap (the key is absent).
+	MaxRunTokens int64
 	// Approval holds the wait and preview values for tools whose approval is "ask".
 	Approval ApprovalSettings
 	// Checkpoint controls run checkpoints and undo; it is off by default.
@@ -260,6 +263,10 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		return SessionConfig{}, err
 	}
 	providerRetry, err := normalizeProviderRetrySettings(setting["provider_retry"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	maxRunTokens, err := normalizeMaxRunTokens(setting["max_run_tokens"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -473,6 +480,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		MaxParallelToolCalls:  maxParallelToolCalls,
 		ToolCallScheduling:    toolCallScheduling,
 		ProviderRetry:         providerRetry,
+		MaxRunTokens:          maxRunTokens,
 		Approval:              approval,
 		Checkpoint:            checkpoint,
 		BackupTurns:           backupTurns,

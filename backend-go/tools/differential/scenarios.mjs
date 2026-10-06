@@ -319,6 +319,7 @@ function providerFailureScenarios() {
     failing("connection dropped mid-stream", {deltas: ["partial ", "reply"], disconnectAfter: 1}),
     failing("stream ends without response.completed", {deltas: ["partial ", "reply"], endWithoutCompleted: true}),
     ...providerRetryScenarios(),
+    ...runTokenLimitScenarios(),
   ];
 }
 
@@ -355,6 +356,41 @@ function providerRetryScenarios() {
     {
       name: "provider retry: null max_retries refuses the run",
       run: async (c) => ({run: await call(c, "POST", "/api/sessions/retrybad/run", {body: {input: "go"}}), snapshot: await call(c, "GET", "/api/sessions/retrybad")}),
+    },
+  ];
+}
+
+// max_run_tokens: the fake provider reports total_tokens 19 for every response, so the
+// capstop session (cap 30) is under its cap after one round and over it after two. What is
+// compared is how many requests the provider sees, the message the client gets, and the
+// transcript: every call of the refused round has a result.
+function runTokenLimitScenarios() {
+  const rounds = [toolRound("read", {path: "README.md"}), toolRound("read", {path: "README.md"}), toolRound("read", {path: "README.md"}), {text: "finished"}];
+  const attempt = (name, session) => ({
+    name: `max_run_tokens: ${name}`,
+    provider: {steps: rounds},
+    run: async (c) => {
+      await call(c, "POST", `/api/sessions/${session}/reset`, {body: {}});
+      const first = await sse(c, `/api/sessions/${session}/run`, {method: "POST", body: {input: `go ${name}`}});
+      const afterFirst = c.provider.requests.length;
+      const second = await sse(c, `/api/sessions/${session}/run`, {method: "POST", body: {input: "again"}});
+      return {
+        names: eventNames(first),
+        error: first.events.find((e) => e.event === "error")?.data?.message ?? null,
+        requestsAfterFirstRun: afterFirst,
+        records: await messagesJsonl(c, session),
+        secondNames: eventNames(second),
+        secondError: second.events.find((e) => e.event === "error")?.data?.message ?? null,
+        snapshot: await call(c, "GET", `/api/sessions/${session}`),
+      };
+    },
+  });
+  return [
+    attempt("a run that reaches the cap stops before the next round", "capstop"),
+    attempt("without the key the same run is not capped", "capnone"),
+    {
+      name: "max_run_tokens: null refuses the run",
+      run: async (c) => ({run: await call(c, "POST", "/api/sessions/capbad/run", {body: {input: "go"}}), snapshot: await call(c, "GET", "/api/sessions/capbad")}),
     },
   ];
 }

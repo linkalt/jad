@@ -516,6 +516,11 @@ export interface SessionSettings extends JsonRecord {
   tool_call_scheduling: ToolCallScheduling;
   /** How a failed provider request is retried before the run fails. */
   provider_retry: ProviderRetrySettings;
+  /**
+   * Most tokens one run may use before it starts another provider round; absent
+   * means no cap. Counted from the usage the provider reported.
+   */
+  max_run_tokens?: number;
   /** Wait and preview values for tools whose `approval` is `ask`. */
   approval: ApprovalSettings;
   /** Undo points for the workspace; nothing happens while `enabled` is false. */
@@ -589,6 +594,8 @@ export const DEFAULT_PROVIDER_RETRY_INITIAL_DELAY_MS = 500;
 export const MAX_PROVIDER_RETRY_INITIAL_DELAY_MS = 60_000;
 export const DEFAULT_PROVIDER_RETRY_MAX_DELAY_MS = 8_000;
 export const MAX_PROVIDER_RETRY_MAX_DELAY_MS = 600_000;
+/** Largest `max_run_tokens`; there is no default, an absent key means no cap. */
+export const MAX_CONFIGURED_RUN_TOKENS = 1_000_000_000_000;
 export const MAX_CONFIGURED_PARALLEL_TOOL_CALLS = 64;
 export const DEFAULT_PERSISTENCE_MAX_ITEM_BYTES = 10 * 1024 * 1024;
 export const MAX_CONFIGURED_PERSISTENCE_ITEM_BYTES = 64 * 1024 * 1024;
@@ -1310,6 +1317,22 @@ function normalizeMaxToolRounds(value: unknown, path: string): number {
     );
   }
   return maxToolRounds;
+}
+
+/** An absent key means no cap; `null` and every other non-integer is an error. */
+function normalizeMaxRunTokens(value: unknown, path: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > MAX_CONFIGURED_RUN_TOKENS
+  ) {
+    throw new ConfigError(
+      `${path}: max_run_tokens must be a safe integer between 1 and ${MAX_CONFIGURED_RUN_TOKENS}`,
+    );
+  }
+  return value;
 }
 
 const DEFAULT_HTTP_DEBUG: HttpDebugSettings = {
@@ -3481,6 +3504,7 @@ async function normalizeSettings(
   const maxParallelToolCalls = normalizeMaxParallelToolCalls(raw.max_parallel_tool_calls, path);
   const toolCallScheduling = normalizeToolCallScheduling(raw.tool_call_scheduling, path);
   const providerRetry = normalizeProviderRetrySettings(raw.provider_retry, path);
+  const maxRunTokens = normalizeMaxRunTokens(raw.max_run_tokens, path);
   const approval = normalizeApprovalSettings(raw.approval, path);
   const checkpoint = normalizeCheckpointSettings(raw.checkpoint, path);
   const persistence = normalizePersistence(raw.persistence, path);
@@ -3517,6 +3541,7 @@ async function normalizeSettings(
     max_parallel_tool_calls: maxParallelToolCalls,
     tool_call_scheduling: toolCallScheduling,
     provider_retry: providerRetry,
+    ...(maxRunTokens === undefined ? {} : {max_run_tokens: maxRunTokens}),
     approval,
     checkpoint,
     persistence,

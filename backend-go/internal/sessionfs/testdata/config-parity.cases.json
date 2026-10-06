@@ -138,5 +138,17 @@
  {"name":"provider retry array node","setting":{"cwd":"$ROOT","provider_retry":[]}},
  {"name":"provider retry string node","setting":{"cwd":"$ROOT","provider_retry":"on"}},
  {"name":"provider retry number node","setting":{"cwd":"$ROOT","provider_retry":3}},
- {"name":"provider retry delay order is checked before max_retries","setting":{"cwd":"$ROOT","provider_retry":{"max_retries":99,"initial_delay_ms":9000}}}
+ {"name":"provider retry delay order is checked before max_retries","setting":{"cwd":"$ROOT","provider_retry":{"max_retries":99,"initial_delay_ms":9000}}},
+ {"name":"max run tokens absent is no cap","setting":{"cwd":"$ROOT"}},
+ {"name":"max run tokens one","setting":{"cwd":"$ROOT","max_run_tokens":1}},
+ {"name":"max run tokens typical","setting":{"cwd":"$ROOT","max_run_tokens":200000}},
+ {"name":"max run tokens ceiling","setting":{"cwd":"$ROOT","max_run_tokens":1000000000000}},
+ {"name":"max run tokens null","setting":{"cwd":"$ROOT","max_run_tokens":null}},
+ {"name":"max run tokens zero","setting":{"cwd":"$ROOT","max_run_tokens":0}},
+ {"name":"max run tokens negative","setting":{"cwd":"$ROOT","max_run_tokens":-5}},
+ {"name":"max run tokens fraction","setting":{"cwd":"$ROOT","max_run_tokens":1.5}},
+ {"name":"max run tokens string","setting":{"cwd":"$ROOT","max_run_tokens":"100"}},
+ {"name":"max run tokens boolean","setting":{"cwd":"$ROOT","max_run_tokens":true}},
+ {"name":"max run tokens above ceiling","setting":{"cwd":"$ROOT","max_run_tokens":1000000000001}},
+ {"name":"max run tokens max safe integer","setting":{"cwd":"$ROOT","max_run_tokens":9007199254740991}}
 ]
