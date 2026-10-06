@@ -146,6 +146,8 @@ type SessionConfig struct {
 	// ToolCallScheduling is "ordered" or "concurrent": whether a response holding a
 	// call that can change state runs its calls one at a time in the model's order.
 	ToolCallScheduling string
+	// ProviderRetry controls how a failed request to the model provider is retried.
+	ProviderRetry ProviderRetrySettings
 	// Approval holds the wait and preview values for tools whose approval is "ask".
 	Approval ApprovalSettings
 	// Checkpoint controls run checkpoints and undo; it is off by default.
@@ -254,6 +256,10 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		return SessionConfig{}, err
 	}
 	toolCallScheduling, err := normalizeToolCallScheduling(setting["tool_call_scheduling"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	providerRetry, err := normalizeProviderRetrySettings(setting["provider_retry"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -466,6 +472,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		MaxToolRounds:         maxToolRounds,
 		MaxParallelToolCalls:  maxParallelToolCalls,
 		ToolCallScheduling:    toolCallScheduling,
+		ProviderRetry:         providerRetry,
 		Approval:              approval,
 		Checkpoint:            checkpoint,
 		BackupTurns:           backupTurns,

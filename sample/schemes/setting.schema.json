@@ -65,6 +65,16 @@
       "description": "How the calls of one provider response are scheduled. ordered runs them one at a time in the order the model wrote them whenever one of them can change state (every tool except read, grep, glob, fetch and skill, and every MCP tool), so a later call sees what an earlier one did; a response made only of those read-only tools still runs up to max_parallel_tool_calls at once. concurrent always runs them together, with no ordering guarantee between calls. Defaults to ordered.",
       "default": "ordered"
     },
+    "provider_retry": {
+      "type": "object",
+      "description": "How a failed request to the model provider is retried before the run fails. Only the request that opens a response is retried: once the provider has started streaming, a failure is never retried because partial output was already shown. A 408, 409, 429, a 5xx status and a connection failure or timeout are retried, and the provider's x-should-retry header overrides the status. The wait doubles from initial_delay_ms up to max_delay_ms, minus up to a quarter as jitter; a Retry-After the provider sends is used instead, capped to max_delay_ms. The defaults equal what both SDKs did before this setting existed.",
+      "additionalProperties": false,
+      "properties": {
+        "max_retries": {"type": "integer", "minimum": 0, "maximum": 10, "default": 2, "description": "Retries after the first attempt. 0 turns retrying off."},
+        "initial_delay_ms": {"type": "integer", "minimum": 1, "maximum": 60000, "default": 500, "description": "Wait before the first retry. Must not exceed max_delay_ms."},
+        "max_delay_ms": {"type": "integer", "minimum": 1, "maximum": 600000, "default": 8000, "description": "Longest wait between attempts, also the cap for a Retry-After from the provider."}
+      }
+    },
     "approval": {
       "type": "object",
       "description": "Wait and preview values for tools whose approval is ask, and the default for tools that do not set their own. Nothing is asked while every tool's approval is off, which is the default. Approval is per tool: a tool whose approval is off is never asked about, so a model refused on one tool can reach the same effect through another unless that one asks too. Set default to ask to cover every tool that can ask. Approval is a confirmation, not a sandbox.",

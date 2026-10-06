@@ -318,6 +318,44 @@ function providerFailureScenarios() {
     failing("non-JSON error body", {status: 502, headers: {...fast, "content-type": "text/plain"}, errorBody: "SECRET-DETAIL upstream is down"}),
     failing("connection dropped mid-stream", {deltas: ["partial ", "reply"], disconnectAfter: 1}),
     failing("stream ends without response.completed", {deltas: ["partial ", "reply"], endWithoutCompleted: true}),
+    ...providerRetryScenarios(),
+  ];
+}
+
+// provider_retry: how many requests the provider sees, and what the client and the
+// transcript show, when a request fails. The waits are short (retry-after-ms or a tiny
+// initial delay) so the scenarios stay fast; the counts are what is compared.
+function providerRetryScenarios() {
+  const quick = {"retry-after-ms": "2"};
+  const attempt = (name, session, provider, extra = {}) => ({
+    name: `provider retry: ${name}`,
+    provider,
+    run: async (c) => {
+      await call(c, "POST", `/api/sessions/${session}/reset`, {body: {}});
+      const run = await sse(c, `/api/sessions/${session}/run`, {method: "POST", body: {input: `hello ${name}`}});
+      return {
+        names: eventNames(run),
+        error: run.events.find((e) => e.event === "error")?.data?.message ?? null,
+        providerRequests: c.provider.requests.length,
+        records: await messagesJsonl(c, session).catch(() => null),
+        next: await sse(c, `/api/sessions/${session}/run`, {method: "POST", body: {input: "after"}}).then((r) => eventNames(r)),
+        ...extra,
+      };
+    },
+  });
+  return [
+    attempt("max_retries 0 makes one request", "retryoff", {status: 429, headers: quick}),
+    attempt("max_retries 4 makes five requests", "retrymany", {status: 503, headers: quick}),
+    attempt("a retry can succeed after three failures", "retrymany", {steps: [{status: 429, headers: quick}, {status: 500, headers: quick}, {status: 502, headers: quick}, {text: "recovered"}]}),
+    attempt("a status that cannot succeed is not retried", "retrymany", {status: 401}),
+    attempt("x-should-retry false stops a 500", "retrymany", {status: 500, headers: {...quick, "x-should-retry": "false"}}),
+    attempt("max_retries 2 makes three requests", "retryslow", {status: 429, headers: {"retry-after-ms": "1"}}),
+    attempt("a Retry-After above max_delay_ms is capped, not waited out", "retryslow", {status: 429, headers: {"retry-after": "3600"}}),
+    attempt("a failure after the stream started is not retried", "retrymany", {deltas: ["partial ", "reply"], disconnectAfter: 1}),
+    {
+      name: "provider retry: null max_retries refuses the run",
+      run: async (c) => ({run: await call(c, "POST", "/api/sessions/retrybad/run", {body: {input: "go"}}), snapshot: await call(c, "GET", "/api/sessions/retrybad")}),
+    },
   ];
 }
 

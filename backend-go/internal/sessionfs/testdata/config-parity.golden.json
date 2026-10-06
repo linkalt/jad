@@ -1148,5 +1148,231 @@
     "profile": "",
     "model": "",
     "error": "tools.native.bash.approval must be \"off\" or \"ask\""
+  },
+  {
+    "name": "provider retry empty object",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "provider retry every key",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "provider retry zero retries",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "provider retry maximums",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "provider retry equal initial and max",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "provider retry max_retries negative",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+  },
+  {
+    "name": "provider retry max_retries above maximum",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+  },
+  {
+    "name": "provider retry max_retries fraction",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+  },
+  {
+    "name": "provider retry max_retries string",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+  },
+  {
+    "name": "provider retry max_retries null",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+  },
+  {
+    "name": "provider retry max_retries boolean",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+  },
+  {
+    "name": "provider retry initial_delay zero",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.initial_delay_ms must be a safe integer between 1 and 60000"
+  },
+  {
+    "name": "provider retry initial_delay above maximum",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.initial_delay_ms must be a safe integer between 1 and 60000"
+  },
+  {
+    "name": "provider retry initial_delay null",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.initial_delay_ms must be a safe integer between 1 and 60000"
+  },
+  {
+    "name": "provider retry max_delay zero",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.max_delay_ms must be a safe integer between 1 and 600000"
+  },
+  {
+    "name": "provider retry max_delay above maximum",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.max_delay_ms must be a safe integer between 1 and 600000"
+  },
+  {
+    "name": "provider retry max_delay string",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.max_delay_ms must be a safe integer between 1 and 600000"
+  },
+  {
+    "name": "provider retry initial above default max",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.initial_delay_ms must not exceed max_delay_ms"
+  },
+  {
+    "name": "provider retry initial above configured max",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.initial_delay_ms must not exceed max_delay_ms"
+  },
+  {
+    "name": "provider retry unknown key",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.retries is not supported; supported keys are initial_delay_ms, max_delay_ms, max_retries"
+  },
+  {
+    "name": "provider retry misspelt key",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.max_retrie is not supported; did you mean max_retries?"
+  },
+  {
+    "name": "provider retry null node",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry must be an object"
+  },
+  {
+    "name": "provider retry array node",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry must be an object"
+  },
+  {
+    "name": "provider retry string node",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry must be an object"
+  },
+  {
+    "name": "provider retry number node",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry must be an object"
+  },
+  {
+    "name": "provider retry delay order is checked before max_retries",
+    "profile": "",
+    "model": "",
+    "error": "provider_retry.initial_delay_ms must not exceed max_delay_ms"
   }
 ]

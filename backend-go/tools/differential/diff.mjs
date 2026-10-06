@@ -167,7 +167,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "askdefault", "askdefaultexplicit", "askdefaultoff", "askdefaultbad", "askdefaultmcp", "ckpt", "ckptnogit", "ckptbad", "ckptoff", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "paged", "natived", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "askdefault", "askdefaultexplicit", "askdefaultoff", "askdefaultbad", "askdefaultmcp", "ckpt", "ckptnogit", "ckptbad", "ckptoff", "retryoff", "retrymany", "retrybad", "retryslow", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -286,6 +286,11 @@ async function writeFixtures(sessions, providerUrl) {
       if (id === "ckptnogit") setting.checkpoint = {enabled: true, git_binary: "/nonexistent/git"};
       if (id === "ckptbad") setting.checkpoint = {enabled: true, snapshot_on: "always"};
     }
+    // provider_retry: a failed opening request is retried by the harness, not the SDK.
+    if (id === "retryoff") setting.provider_retry = {max_retries: 0};
+    if (id === "retrymany") setting.provider_retry = {max_retries: 4, initial_delay_ms: 1, max_delay_ms: 20};
+    if (id === "retrybad") setting.provider_retry = {max_retries: null};
+    if (id === "retryslow") setting.provider_retry = {max_retries: 2, initial_delay_ms: 1, max_delay_ms: 30};
     if (id === "askmcp") {
       setting.max_tool_rounds = 6;
       setting.mcp_servers = [{id: "fx", config_path: join(mcpDir, "fx.json"), enabled: true, deny_tools: ["denied"], approval: "ask"}];

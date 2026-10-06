@@ -156,3 +156,14 @@ New session setting `tool_call_scheduling`, `"ordered"` (default) or `"concurren
 - A response that holds a user-decision tool still runs only that call; the rest get placeholders, as before.
 - Approval gains ordering for free: with a state-changing call in the batch the calls run one at a time, so approvals are asked in the model's order. With `concurrent` the earlier note still applies (approved calls start when approved).
 - `messages.jsonl` is unchanged: results were already persisted in call order after the batch. Only the order results are streamed in, and when each call runs, changes.
+
+## Provider retry: the harness retries the request that opens a response
+
+New session setting `provider_retry` with `max_retries` (default 2, 0 to 10), `initial_delay_ms` (default 500, 1 to 60000) and `max_delay_ms` (default 8000, 1 to 600000). The defaults equal what both SDKs did before the setting existed, so an absent key changes nothing. Only an absent key takes a default: `null`, a wrong type, an out-of-range value, an unknown key, or an `initial_delay_ms` above `max_delay_ms` is a config error with the same message in both backends (26 config-parity cases cover it).
+
+- **What is retried.** Only the request that opens the response stream. After the first event arrives, partial output was already shown and staged, so a failure after that point is never retried; the run fails as before.
+- **Which failures.** Status 408, 409, 429 and any 5xx; a connection failure or timeout; the provider's `x-should-retry` header overrides the status. A stop by the user is never retried, and a stop during a wait ends the run at once with the stop's reason.
+- **The wait.** `initial_delay_ms` doubled per retry up to `max_delay_ms`, minus up to a quarter as jitter. A `Retry-After-Ms` or `Retry-After` (seconds or an HTTP date) from the provider replaces the backoff, capped to `max_delay_ms`. The SDKs capped a server-directed wait at 8 s and did not read this from the session; the cap is now the setting.
+- **Why each backend runs its own loop.** The Go SDK exposes the retry count but not the backoff curve, so matching the TypeScript SDK's delays exactly needs one loop per backend with the SDK's own retries switched off for that request (`maxRetries: 0` in TypeScript, `option.WithMaxRetries(0)` in Go). With no `provider_retry` given to the client (a test, or another caller) the SDK's defaults apply unchanged.
+- **Go.** `internal/openaiapi/retry.go` holds the rules and `Client.openStream` the loop; `internal/app/provider_retry.go` maps the setting and logs each retry (`provider request retry`, with the attempt, status and wait). `fingerprintRunner` includes the setting, so a changed `provider_retry` reaches the next run instead of waiting for a restart.
+- **`messages.jsonl` is unchanged.** Failed attempts write nothing, and a run that recovers writes the same records as one that never failed.

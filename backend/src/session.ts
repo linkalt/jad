@@ -545,6 +545,7 @@ export class AgentSession {
         onTurnStarted: options.onResponseTurnStarted,
         onOutputItemStaged: options.onOutputItemStaged,
         signal: options.signal,
+        retry: config.settings.provider_retry,
       });
       await options.onResponseCommitted?.(response);
       const calls = responseFunctionCalls(response.event.response);

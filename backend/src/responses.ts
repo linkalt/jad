@@ -4,6 +4,8 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 
+import type {ProviderRetrySettings} from "./config.js";
+import {withProviderRetry} from "./provider-retry.js";
 import {
   PersistenceError,
   type CommitResult,
@@ -31,6 +33,12 @@ export interface PersistResponseStreamOptions {
   ) => void | Promise<void>;
   /** Cancels the provider request and streaming response. */
   signal?: AbortSignal;
+  /**
+   * Retry of the request that opens the stream. When set, the SDK's own retries are
+   * switched off for that request so this loop is the only one; when absent the SDK's
+   * defaults apply, as before the setting existed.
+   */
+  retry?: ProviderRetrySettings;
 }
 
 export interface PersistedResponse extends CommitResult {
@@ -168,8 +176,20 @@ export async function persistOpenAIResponse(
   params: ResponseCreateParamsStreaming,
   options: PersistResponseStreamOptions = {},
 ): Promise<PersistedResponse> {
-  const stream = await client.responses.create(params, {
-    ...(options.signal ? {signal: options.signal} : {}),
-  });
+  const open = () =>
+    client.responses.create(params, {
+      ...(options.signal ? {signal: options.signal} : {}),
+      ...(options.retry ? {maxRetries: 0} : {}),
+    });
+  // Only opening the stream is retried; a failure after events arrived is not.
+  const stream = options.retry
+    ? await withProviderRetry(options.retry, open, options.signal, {
+        onRetry: ({attempt, delayMs, status}) => {
+          console.warn(
+            `[provider-retry] attempt=${attempt}/${options.retry?.max_retries} status=${status ?? "connection"} wait_ms=${delayMs}`,
+          );
+        },
+      })
+    : await open();
   return persistResponseStream(store, stream as AsyncIterable<ResponseStreamEvent>, options);
 }

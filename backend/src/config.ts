@@ -72,6 +72,19 @@ export type ApprovalMode = "off" | "ask";
 /** What a run does with an approval when no client can answer it. */
 export type ApprovalHeadlessPolicy = "deny" | "allow";
 
+/**
+ * How a failed provider request is retried. Applies to the initial request only: once a
+ * response stream has started nothing is retried, because partial output was already shown.
+ */
+export interface ProviderRetrySettings extends JsonRecord {
+  /** Retries after the first attempt; 0 turns retrying off. */
+  max_retries: number;
+  /** Wait before the first retry. Each later wait doubles, up to `max_delay_ms`. */
+  initial_delay_ms: number;
+  /** Longest wait between attempts. A `Retry-After` longer than this is capped to it. */
+  max_delay_ms: number;
+}
+
 /** When a run records the workspace state it can later be restored to. */
 export type CheckpointSnapshotOn = "first_mutation" | "run_start";
 
@@ -501,6 +514,8 @@ export interface SessionSettings extends JsonRecord {
    * whenever one of them can change state; `concurrent` always runs them together.
    */
   tool_call_scheduling: ToolCallScheduling;
+  /** How a failed provider request is retried before the run fails. */
+  provider_retry: ProviderRetrySettings;
   /** Wait and preview values for tools whose `approval` is `ask`. */
   approval: ApprovalSettings;
   /** Undo points for the workspace; nothing happens while `enabled` is false. */
@@ -563,6 +578,17 @@ export const DEFAULT_MAX_PARALLEL_TOOL_CALLS = 8;
 export type ToolCallScheduling = "ordered" | "concurrent";
 export const TOOL_CALL_SCHEDULING_VALUES: readonly ToolCallScheduling[] = ["ordered", "concurrent"];
 export const DEFAULT_TOOL_CALL_SCHEDULING: ToolCallScheduling = "ordered";
+/**
+ * Retry of the provider request. The defaults equal what both SDKs did before the
+ * setting existed (two retries, 0.5 s doubling to 8 s), so an absent key keeps the
+ * old behaviour. Only the initial request is retried, never a stream that started.
+ */
+export const DEFAULT_PROVIDER_RETRY_MAX_RETRIES = 2;
+export const MAX_PROVIDER_RETRY_MAX_RETRIES = 10;
+export const DEFAULT_PROVIDER_RETRY_INITIAL_DELAY_MS = 500;
+export const MAX_PROVIDER_RETRY_INITIAL_DELAY_MS = 60_000;
+export const DEFAULT_PROVIDER_RETRY_MAX_DELAY_MS = 8_000;
+export const MAX_PROVIDER_RETRY_MAX_DELAY_MS = 600_000;
 export const MAX_CONFIGURED_PARALLEL_TOOL_CALLS = 64;
 export const DEFAULT_PERSISTENCE_MAX_ITEM_BYTES = 10 * 1024 * 1024;
 export const MAX_CONFIGURED_PERSISTENCE_ITEM_BYTES = 64 * 1024 * 1024;
@@ -1152,6 +1178,45 @@ function normalizeApprovalSettings(value: unknown, path: string): ApprovalSettin
       MIN_APPROVAL_PREVIEW_BYTES,
       MAX_APPROVAL_PREVIEW_BYTES,
     ),
+  };
+}
+
+function normalizeProviderRetrySettings(value: unknown, path: string): ProviderRetrySettings {
+  if (value !== undefined && !isRecord(value)) {
+    throw new ConfigError(`${path}: provider_retry must be an object`);
+  }
+  const raw = value ?? {};
+  assertSupportedKeys(raw, ["initial_delay_ms", "max_delay_ms", "max_retries"], `${path}: provider_retry`);
+  // Only an absent key takes the default: a `null` must not quietly pick one.
+  const bounded = (field: string, fallback: number, minimum: number, maximum: number): number => {
+    const configured = raw[field] === undefined ? fallback : raw[field];
+    if (
+      typeof configured !== "number" ||
+      !Number.isSafeInteger(configured) ||
+      configured < minimum ||
+      configured > maximum
+    ) {
+      throw new ConfigError(
+        `${path}: provider_retry.${field} must be a safe integer between ${minimum} and ${maximum}`,
+      );
+    }
+    return configured;
+  };
+  const initialDelayMs = bounded(
+    "initial_delay_ms",
+    DEFAULT_PROVIDER_RETRY_INITIAL_DELAY_MS,
+    1,
+    MAX_PROVIDER_RETRY_INITIAL_DELAY_MS,
+  );
+  const maxDelayMs = bounded("max_delay_ms", DEFAULT_PROVIDER_RETRY_MAX_DELAY_MS, 1, MAX_PROVIDER_RETRY_MAX_DELAY_MS);
+  if (initialDelayMs > maxDelayMs) {
+    throw new ConfigError(`${path}: provider_retry.initial_delay_ms must not exceed max_delay_ms`);
+  }
+  return {
+    ...raw,
+    max_retries: bounded("max_retries", DEFAULT_PROVIDER_RETRY_MAX_RETRIES, 0, MAX_PROVIDER_RETRY_MAX_RETRIES),
+    initial_delay_ms: initialDelayMs,
+    max_delay_ms: maxDelayMs,
   };
 }
 
@@ -3415,6 +3480,7 @@ async function normalizeSettings(
   const maxToolRounds = normalizeMaxToolRounds(raw.max_tool_rounds, path);
   const maxParallelToolCalls = normalizeMaxParallelToolCalls(raw.max_parallel_tool_calls, path);
   const toolCallScheduling = normalizeToolCallScheduling(raw.tool_call_scheduling, path);
+  const providerRetry = normalizeProviderRetrySettings(raw.provider_retry, path);
   const approval = normalizeApprovalSettings(raw.approval, path);
   const checkpoint = normalizeCheckpointSettings(raw.checkpoint, path);
   const persistence = normalizePersistence(raw.persistence, path);
@@ -3450,6 +3516,7 @@ async function normalizeSettings(
     max_tool_rounds: maxToolRounds,
     max_parallel_tool_calls: maxParallelToolCalls,
     tool_call_scheduling: toolCallScheduling,
+    provider_retry: providerRetry,
     approval,
     checkpoint,
     persistence,

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"time"
 
 	streamresponses "example.com/agent-harness/backend-go/internal/responses"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	sdkresponses "github.com/openai/openai-go/v3/responses"
 )
 
@@ -19,6 +21,9 @@ type Config struct {
 	APIKey     string
 	BaseURL    string
 	HTTPClient *http.Client
+	// Retry, when set, replaces the SDK's own retries for the request that opens a
+	// response stream. When nil the SDK's defaults apply, as before the setting existed.
+	Retry *RetryConfig
 }
 
 // Event and EventHandler remain aliases for the provider-neutral stream
@@ -29,7 +34,11 @@ type EventHandler = streamresponses.EventHandler
 
 // Client adapts the OpenAI Go SDK's Responses streaming API to raw JSON events.
 type Client struct {
-	sdk *openai.Client
+	sdk   *openai.Client
+	retry *RetryConfig
+	// sleep and random are replaced by tests so a retry wait costs no time.
+	sleep  func(context.Context, time.Duration) error
+	random func() float64
 }
 
 // NewClient creates a client. An empty APIKey leaves credential lookup to the
@@ -47,7 +56,7 @@ func NewClient(config Config) *Client {
 		options = append(options, option.WithHTTPClient(config.HTTPClient))
 	}
 	sdk := openai.NewClient(options...)
-	return &Client{sdk: &sdk}
+	return &Client{sdk: &sdk, retry: config.Retry, sleep: sleepContext, random: defaultRandom}
 }
 
 // Stream posts a JSON Responses request and forwards each server-sent event
@@ -66,7 +75,7 @@ func (c *Client) Stream(ctx context.Context, request json.RawMessage, handle Eve
 		return err
 	}
 
-	stream := c.sdk.Responses.NewStreaming(ctx, sdkresponses.ResponseNewParams{}, requestOptions...)
+	stream := c.openStream(ctx, requestOptions)
 	defer func() { _ = stream.Close() }()
 
 	for stream.Next() {
@@ -88,6 +97,34 @@ func (c *Client) Stream(ctx context.Context, request json.RawMessage, handle Eve
 		return err
 	}
 	return nil
+}
+
+// openStream opens the response stream. With a retry setting, a failed opening request
+// is retried here; the SDK's own retries are switched off so this loop is the only one.
+// The SDK records an opening failure in the stream before any event is read, so
+// stream.Err() right after NewStreaming separates "the request failed" from "the stream
+// broke later": only the first is retried, because after that partial output was shown.
+func (c *Client) openStream(ctx context.Context, requestOptions []option.RequestOption) *ssestream.Stream[sdkresponses.ResponseStreamEventUnion] {
+	if c.retry == nil {
+		return c.sdk.Responses.NewStreaming(ctx, sdkresponses.ResponseNewParams{}, requestOptions...)
+	}
+	options := append(append([]option.RequestOption{}, requestOptions...), option.WithMaxRetries(0))
+	for attempt := 0; ; attempt++ {
+		stream := c.sdk.Responses.NewStreaming(ctx, sdkresponses.ResponseNewParams{}, options...)
+		err := stream.Err()
+		if err == nil || attempt >= c.retry.MaxRetries || ctx.Err() != nil || !isRetryableError(err) {
+			return stream
+		}
+		_ = stream.Close()
+		delay := retryDelay(*c.retry, attempt, responseHeader(err), time.Now(), c.random)
+		if c.retry.OnRetry != nil {
+			c.retry.OnRetry(RetryEvent{Attempt: attempt + 1, MaxRetries: c.retry.MaxRetries, Delay: delay, Status: statusOf(err)})
+		}
+		if sleepErr := c.sleep(ctx, delay); sleepErr != nil {
+			// The run was stopped during the wait: report the stop, not the earlier failure.
+			return ssestream.NewStream[sdkresponses.ResponseStreamEventUnion](nil, sleepErr)
+		}
+	}
 }
 
 // StatusError is a failure the provider answered with an HTTP status. The

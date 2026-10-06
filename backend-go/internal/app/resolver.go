@@ -273,7 +273,8 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 			}, http.DefaultTransport)
 			httpClient = &http.Client{Transport: transport}
 		}
-		streamer := openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: config.Model.BaseURL, HTTPClient: httpClient})
+		retry := providerRetryConfig(config.ProviderRetry, r.logger)
+		streamer := openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: config.Model.BaseURL, HTTPClient: httpClient, Retry: &retry})
 		runner, err = session.NewRunner(shared.store, streamer, session.ModelSettings{
 			Model:      config.Model.Name,
 			Request:    config.Model.Request,
@@ -685,18 +686,21 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		PromptText   string
 		HTTPDebug    sessionfs.HTTPDebugSettings
 		HTTPDebugDir string
+		// The runner holds the retry settings, so a changed setting needs a new runner.
+		ProviderRetry sessionfs.ProviderRetrySettings
 	}{
-		ModelPath:    config.ModelPath,
-		Provider:     config.Model.Provider,
-		Model:        config.Model.Name,
-		APIKeyEnv:    config.Model.APIKeyEnv,
-		BaseURL:      config.Model.BaseURL,
-		AuthMode:     config.Model.AuthMode,
-		Request:      config.Model.Request,
-		PromptRole:   config.Model.PromptRole,
-		PromptText:   config.Model.PromptText,
-		HTTPDebug:    config.HTTPDebug,
-		HTTPDebugDir: config.StoragePaths.HTTPDebug,
+		ModelPath:     config.ModelPath,
+		Provider:      config.Model.Provider,
+		Model:         config.Model.Name,
+		APIKeyEnv:     config.Model.APIKeyEnv,
+		BaseURL:       config.Model.BaseURL,
+		AuthMode:      config.Model.AuthMode,
+		Request:       config.Model.Request,
+		PromptRole:    config.Model.PromptRole,
+		PromptText:    config.Model.PromptText,
+		HTTPDebug:     config.HTTPDebug,
+		HTTPDebugDir:  config.StoragePaths.HTTPDebug,
+		ProviderRetry: config.ProviderRetry,
 	}
 	keyHash := sha256.Sum256([]byte(apiKey))
 	identity.APIKeyHash = hex.EncodeToString(keyHash[:])
