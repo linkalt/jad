@@ -82,10 +82,38 @@ export function retryAfterMs(error: unknown, now: number = Date.now()): number |
   return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 }
 
+/** Smallest value read as an epoch in milliseconds (1e12 ms is September 2001). */
+const EPOCH_MS_FLOOR = 1e12;
+/** Smallest value read as an epoch in seconds (1e9 s is September 2001). */
+const EPOCH_SECONDS_FLOOR = 1e9;
+
+/**
+ * The wait until the time named by `x-ratelimit-reset` on a 429, in ms. OpenRouter sends
+ * the header, as an epoch in milliseconds, on a platform rate limit and no Retry-After.
+ * Providers differ in the unit, so only a value that is plainly an epoch is used: at
+ * least 1e12 is milliseconds, at least 1e9 is seconds. A small number (a delta), a
+ * duration string, an unreadable value and a time that has already passed are absent,
+ * and any other status is ignored, so a format that was not verified changes nothing.
+ */
+export function rateLimitResetMs(error: unknown, now: number = Date.now()): number | undefined {
+  if (statusOf(error) !== 429) return undefined;
+  const raw = headerOf(error, "x-ratelimit-reset");
+  if (raw === undefined || !/^\d+(\.\d+)?$/.test(raw.trim())) return undefined;
+  const value = Number.parseFloat(raw);
+  let resetAt: number;
+  if (value >= EPOCH_MS_FLOOR) resetAt = value;
+  else if (value >= EPOCH_SECONDS_FLOOR) resetAt = value * 1000;
+  else return undefined;
+  const wait = resetAt - now;
+  return Number.isFinite(wait) && wait > 0 ? wait : undefined;
+}
+
 /**
  * The wait before retry number `attempt` (0 for the first retry). A `Retry-After` the
- * provider sent wins over the backoff, but never exceeds `max_delay_ms`. The backoff
- * doubles from `initial_delay_ms` up to `max_delay_ms`, minus up to a quarter as jitter.
+ * provider sent wins over the backoff, and on a 429 without one the provider's
+ * `x-ratelimit-reset` does; either way the wait never exceeds `max_delay_ms`. The
+ * backoff doubles from `initial_delay_ms` up to `max_delay_ms`, minus up to a quarter
+ * as jitter.
  */
 export function providerRetryDelayMs(
   settings: ProviderRetrySettings,
@@ -94,7 +122,7 @@ export function providerRetryDelayMs(
   random: () => number = Math.random,
   now: number = Date.now(),
 ): number {
-  const requested = retryAfterMs(error, now);
+  const requested = retryAfterMs(error, now) ?? rateLimitResetMs(error, now);
   if (requested !== undefined) return Math.min(requested, settings.max_delay_ms);
   const backoff = Math.min(settings.initial_delay_ms * 2 ** attempt, settings.max_delay_ms);
   return Math.floor(backoff * (1 - random() * 0.25));

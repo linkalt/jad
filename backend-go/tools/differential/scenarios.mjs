@@ -353,6 +353,12 @@ function providerRetryScenarios() {
     attempt("max_retries 2 makes three requests", "retryslow", {status: 429, headers: {"retry-after-ms": "1"}}),
     attempt("a Retry-After above max_delay_ms is capped, not waited out", "retryslow", {status: 429, headers: {"retry-after": "3600"}}),
     attempt("a failure after the stream started is not retried", "retrymany", {deltas: ["partial ", "reply"], disconnectAfter: 1}),
+    // x-ratelimit-reset: the harness cannot see how long a backend waited, only how many
+    // requests it made, so these show both backends read each format without a failure
+    // and agree on the counts. The wait itself is covered by the unit tests.
+    attempt("a 429 whose x-ratelimit-reset is an hour away is capped, not waited out", "retryslow", {status: 429, headers: {"x-ratelimit-reset": String(Date.now() + 3600000)}}),
+    attempt("a 429 whose x-ratelimit-reset is in epoch seconds is capped too", "retryslow", {status: 429, headers: {"x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 3600)}}),
+    attempt("a 429 with an unreadable or past x-ratelimit-reset keeps the backoff", "retryslow", {steps: [{status: 429, headers: {"x-ratelimit-reset": "6m0s"}}, {status: 429, headers: {"x-ratelimit-reset": String(Date.now() - 60000)}}, {text: "recovered"}]}),
     {
       name: "provider retry: null max_retries refuses the run",
       run: async (c) => ({run: await call(c, "POST", "/api/sessions/retrybad/run", {body: {input: "go"}}), snapshot: await call(c, "GET", "/api/sessions/retrybad")}),

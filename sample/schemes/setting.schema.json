@@ -67,12 +67,12 @@
     },
     "provider_retry": {
       "type": "object",
-      "description": "How a failed request to the model provider is retried before the run fails. Only the request that opens a response is retried: once the provider has started streaming, a failure is never retried because partial output was already shown. A 408, 409, 429, a 5xx status and a connection failure or timeout are retried, and the provider's x-should-retry header overrides the status. The wait doubles from initial_delay_ms up to max_delay_ms, minus up to a quarter as jitter; a Retry-After the provider sends is used instead, capped to max_delay_ms. The defaults equal what both SDKs did before this setting existed.",
+      "description": "How a failed request to the model provider is retried before the run fails. Only the request that opens a response is retried: once the provider has started streaming, a failure is never retried because partial output was already shown. A 408, 409, 429, a 5xx status and a connection failure or timeout are retried, and the provider's x-should-retry header overrides the status. The wait doubles from initial_delay_ms up to max_delay_ms, minus up to a quarter as jitter; a Retry-After the provider sends is used instead, and on a 429 without one so is an x-ratelimit-reset that is an epoch time (milliseconds or seconds), either way capped to max_delay_ms. The defaults equal what both SDKs did before this setting existed.",
       "additionalProperties": false,
       "properties": {
         "max_retries": {"type": "integer", "minimum": 0, "maximum": 10, "default": 2, "description": "Retries after the first attempt. 0 turns retrying off."},
         "initial_delay_ms": {"type": "integer", "minimum": 1, "maximum": 60000, "default": 500, "description": "Wait before the first retry. Must not exceed max_delay_ms."},
-        "max_delay_ms": {"type": "integer", "minimum": 1, "maximum": 600000, "default": 8000, "description": "Longest wait between attempts, also the cap for a Retry-After from the provider."}
+        "max_delay_ms": {"type": "integer", "minimum": 1, "maximum": 600000, "default": 8000, "description": "Longest wait between attempts, also the cap for a Retry-After or an x-ratelimit-reset from the provider. Raise it (and max_retries) to outlast a rate-limit window longer than the default."}
       }
     },
     "max_run_tokens": {

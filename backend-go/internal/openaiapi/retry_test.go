@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -103,36 +104,105 @@ func TestRetryDelayBacksOffAndHonoursRetryAfterWithinTheCap(t *testing.T) {
 	now := time.Now()
 	none := func() float64 { return 0 }
 	for attempt, want := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second} {
-		if got := retryDelay(config, attempt, nil, now, none); got != want {
+		if got := retryDelay(config, attempt, 0, nil, now, none); got != want {
 			t.Errorf("attempt %d: got %v, want %v", attempt, got, want)
 		}
 	}
-	if got := retryDelay(config, 4, nil, now, none); got != 8*time.Second {
+	if got := retryDelay(config, 4, 0, nil, now, none); got != 8*time.Second {
 		t.Errorf("the backoff stops at the maximum, got %v", got)
 	}
-	if got := retryDelay(config, 9, nil, now, none); got != 8*time.Second {
+	if got := retryDelay(config, 9, 0, nil, now, none); got != 8*time.Second {
 		t.Errorf("a huge attempt number still stops at the maximum, got %v", got)
 	}
-	if got := retryDelay(config, 1, nil, now, func() float64 { return 1 }); got != 750*time.Millisecond {
+	if got := retryDelay(config, 1, 0, nil, now, func() float64 { return 1 }); got != 750*time.Millisecond {
 		t.Errorf("the longest jitter takes a quarter off, got %v", got)
 	}
 	header := http.Header{"Retry-After-Ms": {"40"}}
-	if got := retryDelay(config, 3, header, now, none); got != 40*time.Millisecond {
+	if got := retryDelay(config, 3, 0, header, now, none); got != 40*time.Millisecond {
 		t.Errorf("Retry-After replaces the backoff, got %v", got)
 	}
 	header = http.Header{"Retry-After": {"120"}}
-	if got := retryDelay(config, 0, header, now, none); got != 8*time.Second {
+	if got := retryDelay(config, 0, 0, header, now, none); got != 8*time.Second {
 		t.Errorf("Retry-After is capped to the maximum, got %v", got)
 	}
 	capped := RetryConfig{InitialDelay: time.Millisecond, MaxDelay: time.Second}
-	if got := retryDelay(capped, 0, http.Header{"Retry-After": {"5"}}, now, none); got != time.Second {
+	if got := retryDelay(capped, 0, 0, http.Header{"Retry-After": {"5"}}, now, none); got != time.Second {
 		t.Errorf("a configured cap applies to Retry-After, got %v", got)
 	}
 	for i := 0; i < 100; i++ {
-		got := retryDelay(config, 2, nil, now, defaultRandom)
+		got := retryDelay(config, 2, 0, nil, now, defaultRandom)
 		if got < 1500*time.Millisecond || got > 2*time.Second {
 			t.Fatalf("jittered delay %v is outside [1.5s, 2s]", got)
 		}
+	}
+}
+
+func TestRateLimitResetReadsAnEpochOnA429Only(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	epochMs := func(offset time.Duration) string { return strconv.FormatInt(now.Add(offset).UnixMilli(), 10) }
+	epochS := func(offset time.Duration) string { return strconv.FormatInt(now.Add(offset).Unix(), 10) }
+	cases := []struct {
+		name   string
+		status int
+		value  string
+		want   time.Duration
+		ok     bool
+	}{
+		{"epoch milliseconds", 429, epochMs(3 * time.Second), 3 * time.Second, true},
+		{"epoch seconds", 429, epochS(3 * time.Second), 3 * time.Second, true},
+		{"epoch milliseconds with a fraction", 429, epochMs(1500*time.Millisecond) + ".0", 1500 * time.Millisecond, true},
+		{"already passed", 429, epochMs(-3 * time.Second), 0, false},
+		{"now exactly", 429, epochMs(0), 0, false},
+		{"a delta in seconds", 429, "30", 0, false},
+		{"a delta in milliseconds below the floor", 429, "60000", 0, false},
+		{"a duration string", 429, "6m0s", 0, false},
+		{"text", 429, "soon", 0, false},
+		{"negative", 429, "-" + epochMs(time.Second), 0, false},
+		{"exponent", 429, "1.8e12", 0, false},
+		{"hex", 429, "0x1", 0, false},
+		{"empty", 429, "", 0, false},
+		{"a 503 is ignored", 503, epochMs(3 * time.Second), 0, false},
+		{"a transport failure is ignored", 0, epochMs(3 * time.Second), 0, false},
+	}
+	for _, tc := range cases {
+		header := http.Header{}
+		if tc.value != "" {
+			header.Set("X-RateLimit-Reset", tc.value)
+		}
+		got, ok := rateLimitReset(header, tc.status, now)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("%s: got (%v, %v), want (%v, %v)", tc.name, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestRetryDelayFollowsTheResetWithinTheCapAndYieldsToRetryAfter(t *testing.T) {
+	config := RetryConfig{MaxRetries: 2, InitialDelay: 500 * time.Millisecond, MaxDelay: 8 * time.Second}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	none := func() float64 { return 0 }
+	reset := func(offset time.Duration) http.Header {
+		return http.Header{"X-Ratelimit-Reset": {strconv.FormatInt(now.Add(offset).UnixMilli(), 10)}}
+	}
+	if got := retryDelay(config, 0, 429, reset(3*time.Second), now, none); got != 3*time.Second {
+		t.Errorf("the reset replaces the backoff on a 429, got %v", got)
+	}
+	if got := retryDelay(config, 0, 429, reset(45*time.Second), now, none); got != 8*time.Second {
+		t.Errorf("the reset is capped to the maximum, got %v", got)
+	}
+	longer := RetryConfig{InitialDelay: 500 * time.Millisecond, MaxDelay: time.Minute}
+	if got := retryDelay(longer, 0, 429, reset(45*time.Second), now, none); got != 45*time.Second {
+		t.Errorf("a higher maximum lets the wait outlast the window, got %v", got)
+	}
+	if got := retryDelay(config, 0, 503, reset(3*time.Second), now, none); got != 500*time.Millisecond {
+		t.Errorf("a 503 keeps the backoff, got %v", got)
+	}
+	both := reset(3 * time.Second)
+	both.Set("Retry-After-Ms", "40")
+	if got := retryDelay(config, 0, 429, both, now, none); got != 40*time.Millisecond {
+		t.Errorf("Retry-After wins over the reset, got %v", got)
+	}
+	if got := retryDelay(config, 1, 429, reset(-time.Second), now, none); got != time.Second {
+		t.Errorf("a reset in the past keeps the backoff, got %v", got)
 	}
 }
 

@@ -7,6 +7,7 @@ import type {ProviderRetrySettings} from "../src/config.js";
 import {
   isRetryableProviderError,
   providerRetryDelayMs,
+  rateLimitResetMs,
   retryAfterMs,
   withProviderRetry,
 } from "../src/provider-retry.js";
@@ -75,6 +76,66 @@ test("a Retry-After from the provider replaces the backoff but never exceeds max
     providerRetryDelayMs({...settings, max_delay_ms: 1000}, 0, statusError(429, {"retry-after": "5"}), () => 0),
     1000,
   );
+});
+
+test("x-ratelimit-reset is read as an epoch on a 429 only, and only when it plainly is one", () => {
+  const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+  const reset = (status: number, value: string) => rateLimitResetMs(statusError(status, {"x-ratelimit-reset": value}), now);
+  assert.equal(reset(429, String(now + 3000)), 3000, "epoch milliseconds");
+  assert.equal(reset(429, String((now + 3000) / 1000)), 3000, "epoch seconds");
+  assert.equal(reset(429, `${now + 1500}.0`), 1500, "a fraction");
+  assert.equal(reset(429, String(now - 3000)), undefined, "already passed");
+  assert.equal(reset(429, String(now)), undefined, "now exactly");
+  assert.equal(reset(429, "30"), undefined, "a delta in seconds");
+  assert.equal(reset(429, "60000"), undefined, "a delta in milliseconds below the floor");
+  assert.equal(reset(429, "6m0s"), undefined, "a duration string");
+  assert.equal(reset(429, "soon"), undefined, "text");
+  assert.equal(reset(429, `-${now + 1000}`), undefined, "negative");
+  assert.equal(reset(429, "1.8e12"), undefined, "exponent");
+  assert.equal(reset(429, "0x1"), undefined, "hex");
+  assert.equal(reset(429, ""), undefined, "empty");
+  assert.equal(reset(503, String(now + 3000)), undefined, "a 503 is ignored");
+  assert.equal(rateLimitResetMs(new OpenAI.APIConnectionError({message: "down"}), now), undefined, "a transport failure");
+  assert.equal(rateLimitResetMs(statusError(429), now), undefined, "no header");
+});
+
+test("the reset replaces the backoff on a 429, is capped by max_delay_ms, and yields to Retry-After", () => {
+  const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+  const error = (headers: Record<string, string>, status = 429) => statusError(status, headers);
+  const delay = (s: ProviderRetrySettings, attempt: number, e: Error) => providerRetryDelayMs(s, attempt, e, () => 0, now);
+  assert.equal(delay(settings, 0, error({"x-ratelimit-reset": String(now + 3000)})), 3000);
+  assert.equal(delay(settings, 0, error({"x-ratelimit-reset": String(now + 45000)})), 8000, "capped");
+  assert.equal(
+    delay({...settings, max_delay_ms: 60000}, 0, error({"x-ratelimit-reset": String(now + 45000)})),
+    45000,
+    "a higher maximum lets the wait outlast the window",
+  );
+  assert.equal(delay(settings, 0, error({"x-ratelimit-reset": String(now + 3000)}, 503)), 500, "a 503 keeps the backoff");
+  assert.equal(
+    delay(settings, 0, error({"x-ratelimit-reset": String(now + 3000), "retry-after-ms": "40"})),
+    40,
+    "Retry-After wins over the reset",
+  );
+  assert.equal(delay(settings, 1, error({"x-ratelimit-reset": String(now - 1000)})), 1000, "a reset in the past keeps the backoff");
+});
+
+test("withProviderRetry waits until the provider's reset time before the next attempt", async () => {
+  let calls = 0;
+  const waits: number[] = [];
+  await withProviderRetry(
+    {...settings, max_delay_ms: 60000},
+    async () => {
+      calls += 1;
+      if (calls === 1) throw statusError(429, {"x-ratelimit-reset": String(Date.now() + 20000)});
+      return "ok";
+    },
+    undefined,
+    {random: () => 0, sleep: async (ms) => void waits.push(ms)},
+  );
+  assert.equal(calls, 2);
+  assert.equal(waits.length, 1);
+  const waited = waits[0] ?? -1;
+  assert.ok(waited > 19000 && waited <= 20000, `wait ${waited}`);
 });
 
 test("withProviderRetry retries until success and reports each wait", async () => {

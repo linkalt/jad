@@ -109,11 +109,77 @@ func retryAfter(header http.Header, now time.Time) (time.Duration, bool) {
 	return 0, false
 }
 
+const (
+	// epochMillisFloor is the smallest value read as an epoch in milliseconds (1e12 ms is
+	// September 2001).
+	epochMillisFloor = 1e12
+	// epochSecondsFloor is the smallest value read as an epoch in seconds (1e9 s is
+	// September 2001).
+	epochSecondsFloor = 1e9
+)
+
+// rateLimitReset reads the wait until the time named by x-ratelimit-reset on a 429.
+// OpenRouter sends the header, as an epoch in milliseconds, on a platform rate limit and
+// no Retry-After. Providers differ in the unit, so only a value that is plainly an epoch
+// is used: at least 1e12 is milliseconds, at least 1e9 is seconds. A small number (a
+// delta), a duration string, an unreadable value and a time that has already passed are
+// absent, and any other status is ignored, so a format that was not verified changes
+// nothing. It mirrors rateLimitResetMs in backend/src/provider-retry.ts.
+func rateLimitReset(header http.Header, status int, now time.Time) (time.Duration, bool) {
+	if status != http.StatusTooManyRequests {
+		return 0, false
+	}
+	raw := strings.TrimSpace(header.Get("X-Ratelimit-Reset"))
+	if raw == "" || !isPlainDecimal(raw) {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, false
+	}
+	var resetAtMillis float64
+	switch {
+	case value >= epochMillisFloor:
+		resetAtMillis = value
+	case value >= epochSecondsFloor:
+		resetAtMillis = value * 1000
+	default:
+		return 0, false
+	}
+	wait := resetAtMillis - float64(now.UnixMilli())
+	if wait <= 0 || math.IsInf(wait, 0) {
+		return 0, false
+	}
+	return time.Duration(wait * float64(time.Millisecond)), true
+}
+
+// isPlainDecimal reports whether s is digits with at most one fractional part, the same
+// shape the TypeScript backend accepts (no sign, exponent, hex or text).
+func isPlainDecimal(s string) bool {
+	digits, dot := 0, false
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c >= '0' && c <= '9':
+			digits++
+		case c == '.' && !dot && digits > 0 && i < len(s)-1:
+			dot = true
+		default:
+			return false
+		}
+	}
+	return digits > 0
+}
+
 // retryDelay is the wait before retry number attempt (0 for the first retry). A Retry-After
-// the provider sent replaces the backoff but never exceeds MaxDelay. The backoff doubles
+// the provider sent replaces the backoff, and on a 429 without one the provider's
+// x-ratelimit-reset does; either way the wait never exceeds MaxDelay. The backoff doubles
 // from InitialDelay up to MaxDelay, minus up to a quarter as jitter. random returns [0, 1).
-func retryDelay(config RetryConfig, attempt int, header http.Header, now time.Time, random func() float64) time.Duration {
+// status is the provider status that caused the retry, or 0 for a transport failure.
+func retryDelay(config RetryConfig, attempt, status int, header http.Header, now time.Time, random func() float64) time.Duration {
 	if requested, ok := retryAfter(header, now); ok {
+		return min(requested, config.MaxDelay)
+	}
+	if requested, ok := rateLimitReset(header, status, now); ok {
 		return min(requested, config.MaxDelay)
 	}
 	backoff := float64(config.InitialDelay) * math.Pow(2, float64(attempt))

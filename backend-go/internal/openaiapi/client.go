@@ -116,7 +116,7 @@ func (c *Client) openStream(ctx context.Context, requestOptions []option.Request
 			return stream
 		}
 		_ = stream.Close()
-		delay := retryDelay(*c.retry, attempt, responseHeader(err), time.Now(), c.random)
+		delay := retryDelay(*c.retry, attempt, statusOf(err), responseHeader(err), time.Now(), c.random)
 		if c.retry.OnRetry != nil {
 			c.retry.OnRetry(RetryEvent{Attempt: attempt + 1, MaxRetries: c.retry.MaxRetries, Delay: delay, Status: statusOf(err)})
 		}
