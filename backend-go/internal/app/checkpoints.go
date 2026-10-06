@@ -10,13 +10,14 @@ import (
 )
 
 // ListCheckpoints lists the session's checkpoints, newest first. Reading needs no
-// git, so a missing binary does not hide the list.
-func (m boundMutation) ListCheckpoints(ctx context.Context) (httpapi.CheckpointListing, error) {
+// git, so a missing binary does not hide the list. A record left open while no run
+// is live is reported as interrupted.
+func (m boundMutation) ListCheckpoints(ctx context.Context, runIsLive bool) (httpapi.CheckpointListing, error) {
 	if err := ctx.Err(); err != nil {
 		return httpapi.CheckpointListing{}, err
 	}
 	service := checkpoint.ForSession(m.config, nil)
-	return httpapi.CheckpointListing{Enabled: service.Enabled(), Checkpoints: service.List()}, nil
+	return httpapi.CheckpointListing{Enabled: service.Enabled(), Checkpoints: service.Report(runIsLive)}, nil
 }
 
 // RestoreCheckpoint reverts what a checkpoint's run changed. It holds the same

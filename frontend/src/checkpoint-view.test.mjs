@@ -73,6 +73,25 @@ test('a checkpoint with no run-end snapshot offers only full, as the server insi
   assert.deepEqual(restoreChoice(row), {canRestore: true, modes: ['full'], defaultMode: 'full'});
 });
 
+test('an interrupted checkpoint is read, labelled and offers only full, with the warning from the server', () => {
+  const {after_tree, finished_at, ...cut} = {
+    ...complete,
+    state: 'interrupted',
+    warning: 'The run ended without recording its end (the server stopped or crashed).',
+  };
+  const [row] = parseCheckpointList({enabled: true, checkpoints: [cut]}).checkpoints;
+  assert.equal(row.state, 'interrupted');
+  assert.equal(row.warning, 'The run ended without recording its end (the server stopped or crashed).');
+  assert.deepEqual(restoreChoice(row), {canRestore: true, modes: ['full'], defaultMode: 'full'});
+  assert.equal(checkpointDescription(row), 'Interrupted · 12 files');
+});
+
+test('an open checkpoint reads as running, not as interrupted', () => {
+  const {after_tree, ...open} = {...complete, state: 'open'};
+  const [row] = parseCheckpointList({enabled: true, checkpoints: [open]}).checkpoints;
+  assert.equal(checkpointDescription(row), 'Running · 12 files');
+});
+
 test('a skipped or failed checkpoint cannot be restored and says why', () => {
   const {before_tree, after_tree, ...skipped} = {
     ...complete,

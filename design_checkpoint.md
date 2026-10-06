@@ -39,6 +39,7 @@ Why not `git stash create` or a commit in the user's repo: it needs a git repo, 
    * `dry_run` returns the path lists (restore, delete, conflicts) without changing anything;
    * takes a **pre-restore checkpoint** first, so a restore is itself undoable;
    * **safe restore (recommended default):** only paths whose current content equals the run-end snapshot are reverted. Paths the user changed after the run are reported as conflicts and left alone. This needs the run-end snapshot; it is **untested**.
+   * **A run cut short.** If the server is killed between the first snapshot and the run's end, the record stays `open` with no `after_tree`. The list reports such a record as `interrupted` (with a warning) whenever no run of the session is live; while a run is live it stays `open`. This is derived at read time from the run state and is never written: the checkpoint service is built per request and cannot know which runs are live, and a write from the list route could race with a run that has just begun. A `pre_restore` checkpoint left open (a restore killed halfway) is reported the same way. Only a full restore is offered for an interrupted record, because a safe restore needs the run-end snapshot. The stored `checkpoints.json` keeps `open`, so a script that reads the file directly still sees it.
 5. **Not covered** (state this in the UI): files outside `cwd` (`write` may allow `/tmp`, `bash` may allow `/`), ignored files, git history changes made by `bash` (commits, branch moves; `.git` is not snapshotted), network and database side effects, and anything a background `process` changes after the run ends.
 6. **Interaction with `.bak` files:** backups created in the workspace are untracked, non-ignored files. A restore would delete the ones created after the checkpoint, and the next snapshot would include older ones. Whether that is acceptable, or `backup_dir` should be required, is open. **Untested.**
 
@@ -67,7 +68,7 @@ Exact defaults need measurement on a larger workspace before they are fixed. `ma
 
 ## 7. API (new)
 
-* `GET /api/sessions/{id}/checkpoints` : list.
+* `GET /api/sessions/{id}/checkpoints` : list. A record's `state` is `open` (a run is live), `complete`, `skipped`, `failed`, or `interrupted` (it was left open and no run is live; see section 4).
 * `POST /api/sessions/{id}/checkpoints/{checkpoint_id}/restore` with `{dry_run?: boolean}` : returns `{restored[], deleted[], conflicts[]}`.
 * Both require the API token like every other `/api` route. Errors: 404 unknown id, 409 live run, 422 when the workspace has no readable git binary.
 

@@ -13,7 +13,8 @@
  */
 
 export type CheckpointKind = 'run' | 'pre_restore';
-export type CheckpointState = 'open' | 'complete' | 'skipped' | 'failed';
+/** `interrupted`: the run was cut short (the server stopped); the server decides this, it is never stored. */
+export type CheckpointState = 'open' | 'complete' | 'skipped' | 'failed' | 'interrupted';
 export type RestoreMode = 'safe' | 'full';
 
 export interface CheckpointRow {
@@ -74,7 +75,11 @@ function parseRow(value: unknown): CheckpointRow | undefined {
     typeof id !== 'string' ||
     id.length === 0 ||
     (kind !== 'run' && kind !== 'pre_restore') ||
-    (state !== 'open' && state !== 'complete' && state !== 'skipped' && state !== 'failed') ||
+    (state !== 'open' &&
+      state !== 'complete' &&
+      state !== 'skipped' &&
+      state !== 'failed' &&
+      state !== 'interrupted') ||
     typeof turn_id !== 'string' ||
     typeof session_turn !== 'number' ||
     !Number.isFinite(session_turn) ||
@@ -186,7 +191,9 @@ export function checkpointTitle(row: CheckpointRow): string {
 export function checkpointStateLabel(row: CheckpointRow): string {
   switch (row.state) {
     case 'open':
-      return 'Not closed (running or interrupted)';
+      return 'Running';
+    case 'interrupted':
+      return 'Interrupted';
     case 'complete':
       return 'Saved';
     case 'skipped':

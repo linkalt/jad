@@ -74,6 +74,7 @@ function stateVariant(row: CheckpointRow): 'success' | 'warning' | 'error' | 'ne
     case 'failed':
       return 'error';
     case 'open':
+    case 'interrupted':
       return 'warning';
     case 'skipped':
       return 'neutral';

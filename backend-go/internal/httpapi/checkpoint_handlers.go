@@ -26,7 +26,10 @@ type CheckpointRestoreRequest struct {
 // returns when run checkpoints are available. It reports a refusal as a
 // *StatusError: 404 unknown id, 409 nothing to restore, 422 git unavailable.
 type SessionCheckpoints interface {
-	ListCheckpoints(context.Context) (CheckpointListing, error)
+	// ListCheckpoints lists the checkpoints; runIsLive says whether a run of the
+	// session is running, so a record left open by a stopped server is reported
+	// as interrupted rather than open.
+	ListCheckpoints(ctx context.Context, runIsLive bool) (CheckpointListing, error)
 	RestoreCheckpoint(ctx context.Context, id string, request CheckpointRestoreRequest) (any, error)
 }
 
@@ -45,7 +48,12 @@ func (h *Handler) handleCheckpointList(w http.ResponseWriter, r *http.Request, r
 		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "checkpoints are unavailable"})
 		return
 	}
-	listing, err := checkpoints.ListCheckpoints(r.Context())
+	// A run's status turns from "running" only after its end snapshot is written
+	// (the checkpoint is finished in a defer inside the run), so an open record
+	// with no live run belongs to a run that was cut short.
+	key := h.runKey(ResolvedSession{Reference: resolved.Reference, Profile: resolved.Profile})
+	run := h.runs.current(key)
+	listing, err := checkpoints.ListCheckpoints(r.Context(), run != nil && run.state() == "running")
 	if err != nil {
 		writeJSONError(w, err)
 		return

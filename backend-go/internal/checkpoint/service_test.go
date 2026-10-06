@@ -513,3 +513,35 @@ func TestNewRunIsNilWhenCheckpointsAreOffAndItsMethodsAreSafe(t *testing.T) {
 		t.Fatalf("an off checkpoint created %d files", len(entries))
 	}
 }
+
+func TestReportShowsARecordLeftOpenAsInterruptedOnlyWhileNoRunIsLive(t *testing.T) {
+	f := newFixture(t, nil)
+	f.seed(t)
+	id := f.begin(t, "turn-1", 1)
+	f.write(t, "a.txt", "a1\n")
+	stored, err := os.ReadFile(filepath.Join(f.staging, MetadataFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	live := f.service.Report(true)
+	if len(live) != 1 || live[0].State != StateOpen || live[0].Warning != "" {
+		t.Fatalf("while a run is live = %+v, want the open record untouched", live)
+	}
+	gone := f.service.Report(false)
+	if len(gone) != 1 || gone[0].State != StateInterrupted || gone[0].Warning != InterruptedWarning || gone[0].BeforeTree == "" {
+		t.Fatalf("with no run live = %+v, want interrupted with its saved state kept", gone)
+	}
+	if f.service.List()[0].State != StateOpen {
+		t.Fatal("List must report the stored state")
+	}
+	after, err := os.ReadFile(filepath.Join(f.staging, MetadataFile))
+	if err != nil || string(after) != string(stored) {
+		t.Fatalf("reporting wrote the record back: err=%v", err)
+	}
+
+	f.service.Finish(id)
+	if finished := f.service.Report(false); finished[0].State != StateComplete || finished[0].Warning != "" {
+		t.Fatalf("a finished record = %+v, want it untouched", finished[0])
+	}
+}

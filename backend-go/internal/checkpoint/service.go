@@ -42,6 +42,13 @@ const (
 	StateComplete = "complete"
 	StateSkipped  = "skipped"
 	StateFailed   = "failed"
+	// StateInterrupted is never stored: List reports it for a record that is still
+	// open while no run of the session is live (the server stopped mid-run).
+	StateInterrupted = "interrupted"
+
+	// InterruptedWarning is shown for a record cut short; BeforeTree is kept, so a
+	// full restore still works.
+	InterruptedWarning = "The run ended without recording its end (the server stopped or crashed)."
 )
 
 // Restore modes.
@@ -329,13 +336,35 @@ func writeFileAtomic(path string, data []byte, durability string) error {
 	return nil
 }
 
-// List returns the checkpoints, newest first. Reading never needs git, so a
-// missing binary does not hide the list.
+// List returns the checkpoints as stored, newest first. Reading never needs git,
+// so a missing binary does not hide the list.
 func (s *Service) List() []Record {
 	records := s.readAll()
 	listed := make([]Record, 0, len(records))
 	for index := len(records) - 1; index >= 0; index-- {
 		listed = append(listed, records[index])
+	}
+	return listed
+}
+
+// Report is List as the API shows it. A record still open while no run is live
+// was cut short (the server stopped or crashed before Finish), so it is reported
+// as interrupted. That is decided at read time and never written: the service is
+// built per request and cannot know which runs are live, and a write here could
+// race with a run that has just begun.
+func (s *Service) Report(runIsLive bool) []Record {
+	listed := s.List()
+	if runIsLive {
+		return listed
+	}
+	for index := range listed {
+		if listed[index].State != StateOpen {
+			continue
+		}
+		listed[index].State = StateInterrupted
+		if listed[index].Warning == "" {
+			listed[index].Warning = InterruptedWarning
+		}
 	}
 	return listed
 }

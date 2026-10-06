@@ -482,3 +482,161 @@ func TestTheCheckpointRoutesAnswer404And400And401(t *testing.T) {
 		t.Fatalf("wrong method status = %d, want 404", status)
 	}
 }
+
+// leaveOpen rewrites the stored records the way a server killed mid-run leaves them.
+func (f *checkpointFixture) leaveOpen(kinds ...string) {
+	f.t.Helper()
+	path := filepath.Join(f.sessionDir, "staging", "checkpoints.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	var document struct {
+		SchemaVersion int              `json:"schema_version"`
+		Checkpoints   []map[string]any `json:"checkpoints"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		f.t.Fatal(err)
+	}
+	for _, record := range document.Checkpoints {
+		for _, kind := range kinds {
+			if record["kind"] == kind {
+				record["state"] = "open"
+				delete(record, "after_tree")
+				delete(record, "finished_at")
+				delete(record, "warning")
+			}
+		}
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func TestARunCheckpointLeftOpenByAStoppedServerIsListedAsInterruptedAndAFullRestoreStillWorks(t *testing.T) {
+	f := newCheckpointFixture(t, checkpointFixtureOptions{
+		checkpoint: `{"enabled":true}`,
+		steps:      []providerStep{writeCall("w1", "a.txt", "agent"), {message: "done"}},
+	})
+	f.put("a.txt", "original")
+	if got := f.runToEnd(); got != "completed" {
+		t.Fatalf("run = %s", got)
+	}
+	f.leaveOpen("run", "pre_restore")
+	path := filepath.Join(f.sessionDir, "staging", "checkpoints.json")
+	stored, _ := os.ReadFile(path)
+
+	_, records := f.checkpoints()
+	if len(records) != 1 || records[0]["state"] != "interrupted" {
+		t.Fatalf("records = %v, want one interrupted checkpoint", records)
+	}
+	if records[0]["warning"] != "The run ended without recording its end (the server stopped or crashed)." || records[0]["before_tree"] == nil {
+		t.Fatalf("record = %v, want the warning and the saved state kept", records[0])
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(stored) {
+		t.Fatal("listing wrote the record back")
+	}
+
+	id := records[0]["id"].(string)
+	status, body := f.request(http.MethodPost, "/checkpoints/"+id+"/restore", `{"mode":"safe"}`, true)
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &refusal); err != nil || status != http.StatusConflict || !strings.Contains(refusal.Error, `use mode "full"`) {
+		t.Fatalf("safe restore: status = %d body = %s", status, body)
+	}
+	if status, body := f.request(http.MethodPost, "/checkpoints/"+id+"/restore", `{"mode":"full"}`, true); status != http.StatusOK {
+		t.Fatalf("full restore: status = %d body = %s", status, body)
+	}
+	if f.file("a.txt") != "original" {
+		t.Fatalf("a.txt = %q, want the original", f.file("a.txt"))
+	}
+}
+
+func TestAPreRestoreCheckpointLeftOpenIsReportedTheSameWayAndFinishedRecordsAreUntouched(t *testing.T) {
+	f := newCheckpointFixture(t, checkpointFixtureOptions{
+		checkpoint: `{"enabled":true}`,
+		steps:      []providerStep{writeCall("w1", "a.txt", "agent"), {message: "done"}},
+	})
+	f.put("a.txt", "original")
+	if got := f.runToEnd(); got != "completed" {
+		t.Fatalf("run = %s", got)
+	}
+	_, records := f.checkpoints()
+	if status, body := f.request(http.MethodPost, "/checkpoints/"+records[0]["id"].(string)+"/restore", `{}`, true); status != http.StatusOK {
+		t.Fatalf("restore: status = %d body = %s", status, body)
+	}
+	pairs := func() string {
+		_, listed := f.checkpoints()
+		var out []string
+		for _, record := range listed {
+			out = append(out, fmt.Sprintf("%v/%v", record["kind"], record["state"]))
+		}
+		return strings.Join(out, " ")
+	}
+	if got := pairs(); got != "pre_restore/complete run/complete" {
+		t.Fatalf("before = %q", got)
+	}
+	f.leaveOpen("pre_restore")
+	if got := pairs(); got != "pre_restore/interrupted run/complete" {
+		t.Fatalf("after = %q", got)
+	}
+}
+
+func TestACheckpointIsOpenNotInterruptedWhileItsRunIsLive(t *testing.T) {
+	f := newCheckpointFixture(t, checkpointFixtureOptions{
+		checkpoint: `{"enabled":true}`,
+		approval:   true,
+		steps:      []providerStep{writeCall("w1", "a.txt", "agent"), {message: "done"}},
+	})
+	f.put("a.txt", "original")
+	request, _ := http.NewRequest(http.MethodPost, f.api.URL+"/api/sessions/local:demo/run", strings.NewReader(`{"input":"go","supports_interaction":true}`))
+	request.Header.Set("Authorization", "Bearer "+integrationAPIToken)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	var pendingID, event string
+	deadline := time.Now().Add(10 * time.Second)
+	for pendingID == "" && time.Now().Before(deadline) {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("stream ended before the approval question: %v", err)
+		}
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "event:") {
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		} else if strings.HasPrefix(line, "data:") && event == "interaction" {
+			var data struct {
+				Pending *struct {
+					ID string `json:"id"`
+				} `json:"pending"`
+			}
+			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &data) == nil && data.Pending != nil {
+				pendingID = data.Pending.ID
+			}
+		}
+	}
+	if pendingID == "" {
+		t.Fatal("no approval question arrived")
+	}
+	if _, records := f.checkpoints(); len(records) != 1 || records[0]["state"] != "open" {
+		t.Fatalf("records = %v, want one open checkpoint while the run is live", records)
+	}
+	if status, body := f.request(http.MethodPost, "/run/interaction", fmt.Sprintf(`{"interaction_id":%q,"decision":"accept"}`, pendingID), true); status != http.StatusOK {
+		t.Fatalf("answer status = %d body = %s", status, body)
+	}
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		t.Fatal(err)
+	}
+	if _, records := f.checkpoints(); len(records) != 1 || records[0]["state"] != "complete" {
+		t.Fatalf("records after the run = %v", records)
+	}
+}

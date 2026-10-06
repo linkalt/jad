@@ -1666,7 +1666,10 @@ class AgentHttpApplication {
   private async handleCheckpointList(id: string, response: ServerResponse, profile?: string): Promise<void> {
     const handle = await this.getSession(id, profile);
     const {enabled, service} = await this.checkpointServiceOf(handle);
-    sendJson(response, 200, {enabled, checkpoints: await service.list()});
+    // The run's status turns from "running" only after its end snapshot is written, so
+    // an `open` record with no live run belongs to a run that was cut short.
+    const runIsLive = this.runs.current(handle.location.ref, handle.profile)?.status === "running";
+    sendJson(response, 200, {enabled, checkpoints: await service.list({runIsLive})});
   }
 
   private async handleCheckpointRestore(

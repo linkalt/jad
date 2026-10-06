@@ -1287,6 +1287,33 @@ function checkpointScenarios() {
       },
     },
     {
+      name: "checkpoint: a record left open by a stopped server is listed as interrupted and only a full restore works",
+      provider: {steps: [{call: {name: "write", arguments: {path: "a.txt", content: "agent"}}}, {text: "done"}]},
+      run: async (c) => {
+        await clear(c, "ckpt");
+        await put(c, "ckpt", "a.txt", "a0");
+        await resetAndRun(c, "ckpt", "change it");
+        // Leave the record the way a killed server does: still open, no run-end snapshot.
+        const stored = join(c.sessions, "ckpt", "staging", "checkpoints.json");
+        const document = JSON.parse(await readFile(stored, "utf8"));
+        for (const record of document.checkpoints) {
+          record.state = "open";
+          delete record.after_tree;
+          delete record.finished_at;
+          delete record.warning;
+        }
+        await writeFile(stored, JSON.stringify(document));
+        const listed = await list(c, "ckpt");
+        const [record] = listed.checkpoints;
+        const safe = await restore(c, "ckpt", record.id, {mode: "safe"});
+        const full = await restore(c, "ckpt", record.id, {mode: "full"});
+        return {
+          records: listed.checkpoints.map(shape), safe: {status: safe.status, error: safe.body?.error?.replace(record.id, "id")},
+          fullStatus: full.status, file: await file(c, "ckpt", "a.txt"),
+        };
+      },
+    },
+    {
       name: "checkpoint: a missing git binary is a failed record, the write still runs, and restore says 409",
       provider: {steps: [{call: {name: "write", arguments: {path: "a.txt", content: "hello"}}}, {text: "done"}]},
       run: async (c) => {

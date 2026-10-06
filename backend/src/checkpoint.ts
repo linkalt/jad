@@ -36,7 +36,11 @@ const MAX_GIT_OUTPUT_BYTES = 256 * 1024 * 1024;
 const BACKUP_FILE_PATTERN = "*.bak-[0-9]*-*";
 
 export type CheckpointKind = "run" | "pre_restore";
-export type CheckpointState = "open" | "complete" | "skipped" | "failed";
+/**
+ * `interrupted` is never stored: the list reports it for a record that is still
+ * `open` while no run of the session is live (the server stopped mid-run).
+ */
+export type CheckpointState = "open" | "complete" | "skipped" | "failed" | "interrupted";
 export type RestoreMode = "safe" | "full";
 
 export interface CheckpointRecord {
@@ -170,6 +174,13 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The text shown for a record cut short; `before_tree` is kept, so a full restore still works. */
+export const INTERRUPTED_WARNING = "The run ended without recording its end (the server stopped or crashed).";
+
+function interrupted(record: CheckpointRecord): CheckpointRecord {
+  return {...record, state: "interrupted", warning: record.warning ?? INTERRUPTED_WARNING};
+}
+
 export class CheckpointService {
   private readonly mutex = new AsyncMutex();
   private readonly metadataPath: string;
@@ -225,9 +236,18 @@ export class CheckpointService {
     );
   }
 
-  /** Newest first. Reading never needs git, so a missing binary does not hide the list. */
-  public async list(): Promise<CheckpointRecord[]> {
-    return (await this.readAll()).slice().reverse();
+  /**
+   * Newest first. Reading never needs git, so a missing binary does not hide the list.
+   *
+   * A record still `open` while no run is live was cut short (the server stopped or
+   * crashed before `finish`), so it is reported as `interrupted`. That is decided at
+   * read time and never written: the service is built per request and cannot know
+   * which runs are live, and a write here could race with a run that has just begun.
+   */
+  public async list(options: {runIsLive?: boolean} = {}): Promise<CheckpointRecord[]> {
+    const records = (await this.readAll()).slice().reverse();
+    if (options.runIsLive !== false) return records;
+    return records.map((record) => (record.state === "open" ? interrupted(record) : record));
   }
 
   // ---- snapshots ----------------------------------------------------------

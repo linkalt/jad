@@ -349,3 +349,104 @@ test("the checkpoint routes answer 404, 400 and 401 like the other session route
     await f.close();
   }
 });
+
+/** Rewrites the stored records the way a server killed mid-run leaves them: still open, no run-end snapshot. */
+async function leaveOpen(sessionDir: string, kinds: Array<"run" | "pre_restore"> = ["run", "pre_restore"]): Promise<void> {
+  const path = join(sessionDir, "staging", "checkpoints.json");
+  const document = JSON.parse(await readFile(path, "utf8")) as {checkpoints: Array<Record<string, unknown>>};
+  for (const record of document.checkpoints) {
+    if (!kinds.includes(record.kind as "run" | "pre_restore")) continue;
+    record.state = "open";
+    delete record.after_tree;
+    delete record.finished_at;
+    delete record.warning;
+  }
+  await writeFile(path, JSON.stringify(document));
+}
+
+test("a run checkpoint left open by a stopped server is listed as interrupted and a full restore still works", async () => {
+  const f = await createFixture({
+    checkpoint: {enabled: true},
+    steps: [[writeCall("w1", "a.txt", "agent")], [finalMessage("done")]],
+  });
+  try {
+    await writeFile(join(f.workspace, "a.txt"), "original");
+    assert.equal(await f.runToEnd(), "done");
+    await leaveOpen(f.sessionDir);
+    const storedBefore = await readFile(join(f.sessionDir, "staging", "checkpoints.json"), "utf8");
+
+    const [record] = await f.checkpoints();
+    assert.equal(record?.state, "interrupted", "no run is live, so an open record was cut short");
+    assert.equal(record?.warning, "The run ended without recording its end (the server stopped or crashed).");
+    assert.ok(record?.before_tree, "the saved state is kept");
+    assert.equal(
+      await readFile(join(f.sessionDir, "staging", "checkpoints.json"), "utf8"),
+      storedBefore,
+      "listing never writes the record back",
+    );
+
+    const id = record?.id as string;
+    const safe = await f.api(`/checkpoints/${id}/restore`, {method: "POST", body: JSON.stringify({mode: "safe"})});
+    assert.equal(safe.status, 409);
+    assert.match(String((await safe.json() as {error: string}).error), /use mode "full"/);
+    const full = await f.api(`/checkpoints/${id}/restore`, {method: "POST", body: JSON.stringify({mode: "full"})});
+    assert.equal(full.status, 200);
+    assert.equal(await readFile(join(f.workspace, "a.txt"), "utf8"), "original");
+  } finally {
+    await f.close();
+  }
+});
+
+test("a pre_restore checkpoint left open is reported the same way, and finished records are untouched", async () => {
+  const f = await createFixture({
+    checkpoint: {enabled: true},
+    steps: [[writeCall("w1", "a.txt", "agent")], [finalMessage("done")]],
+  });
+  try {
+    await writeFile(join(f.workspace, "a.txt"), "original");
+    assert.equal(await f.runToEnd(), "done");
+    const [run] = await f.checkpoints();
+    const restored = await f.api(`/checkpoints/${run?.id as string}/restore`, {method: "POST", body: JSON.stringify({})});
+    assert.equal(restored.status, 200);
+    assert.deepEqual((await f.checkpoints()).map((record) => [record.kind, record.state]), [
+      ["pre_restore", "complete"],
+      ["run", "complete"],
+    ]);
+
+    await leaveOpen(f.sessionDir, ["pre_restore"]);
+    assert.deepEqual((await f.checkpoints()).map((record) => [record.kind, record.state]), [
+      ["pre_restore", "interrupted"],
+      ["run", "complete"],
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a checkpoint is open, not interrupted, while its run is live", async () => {
+  const f = await createFixture({
+    checkpoint: {enabled: true},
+    approvalOnWrite: true,
+    steps: [[writeCall("w1", "a.txt", "agent")], [finalMessage("done")]],
+  });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    await writeFile(join(f.workspace, "a.txt"), "original");
+    const run = await f.api("/run", {method: "POST", body: JSON.stringify({input: "go", supports_interaction: true})});
+    reader = run.body!.getReader();
+    const events = sseReader(reader);
+    let pending: Record<string, unknown> | undefined;
+    while (pending === undefined) {
+      const event = await events.next();
+      if (event.event === "interaction" && isRecord(event.data.pending)) pending = event.data.pending;
+    }
+    assert.equal((await f.checkpoints())[0]?.state, "open");
+    const answer = await f.api("/run/interaction", {method: "POST", body: JSON.stringify({interaction_id: pending.id, decision: "accept"})});
+    assert.equal(answer.status, 200);
+    await untilDone(events);
+    assert.equal((await f.checkpoints())[0]?.state, "complete");
+  } finally {
+    await reader?.cancel().catch(() => undefined);
+    await f.close();
+  }
+});
