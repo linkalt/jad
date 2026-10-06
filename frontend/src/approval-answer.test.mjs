@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {approvalRows, reviewApprovalAnswer, truncationNote} from './approval-answer.ts';
+import {approvalRows, interactionFailureTitle, reviewApprovalAnswer, truncationNote} from './approval-answer.ts';
 
 test('a bash preview becomes one row per field, without the tool name', () => {
   const rows = approvalRows({tool: 'bash', command: 'rm -rf build', cwd: '/work', timeout_ms: 5000});
@@ -75,4 +75,11 @@ test('deny refuses a reason longer than the endpoint accepts', () => {
   assert.deepEqual(tooLong, {error: 'Keep the reason under 10 characters.'});
   const exact = reviewApprovalAnswer({decision: 'decline', reason: 'x'.repeat(10), reasonMaxLength: 10});
   assert.equal('body' in exact, true);
+});
+
+test('a refused answer or extension names an approval as an approval and anything else as a draft', () => {
+  assert.equal(interactionFailureTitle('approval', 'answer'), 'Unable to answer the approval');
+  assert.equal(interactionFailureTitle('approval', 'extend'), 'Unable to extend the approval');
+  assert.equal(interactionFailureTitle('draft', 'answer'), 'Unable to answer the draft');
+  assert.equal(interactionFailureTitle(undefined, 'extend'), 'Unable to extend the draft');
 });

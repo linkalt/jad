@@ -68,7 +68,7 @@ Exact defaults need measurement on a larger workspace before they are fixed. `ma
 
 ## 7. API (new)
 
-* `GET /api/sessions/{id}/checkpoints` : list. A record's `state` is `open` (a run is live), `complete`, `skipped`, `failed`, or `interrupted` (it was left open and no run is live; see section 4).
+* `GET /api/sessions/{id}/checkpoints` : list, `{enabled, restoring, checkpoints[]}`. A record's `state` is `open` (a run is live), `complete`, `skipped`, `failed`, or `interrupted` (it was left open and no run is live; see section 4). `restoring` is true while a real restore is rewriting the workspace and false otherwise; a dry run never sets it. It exists because a restore runs on the server and goes on after the client disconnects, so a page that reloads mid-restore needs a way to see that; the frontend then disables every Restore control and re-reads the list until it is false.
 * `POST /api/sessions/{id}/checkpoints/{checkpoint_id}/restore` with `{dry_run?: boolean}` : returns `{restored[], deleted[], conflicts[]}`.
 * Both require the API token like every other `/api` route. Errors: 404 unknown id, 409 live run, 422 when the workspace has no readable git binary.
 

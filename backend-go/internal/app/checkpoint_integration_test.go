@@ -640,3 +640,112 @@ func TestACheckpointIsOpenNotInterruptedWhileItsRunIsLive(t *testing.T) {
 		t.Fatalf("records after the run = %v", records)
 	}
 }
+
+// slowGit writes a git wrapper that waits while flag exists, so a restore can be
+// held open long enough to look at it; without the flag it is plain git.
+func slowGit(t *testing.T, dir, flag string) string {
+	t.Helper()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed")
+	}
+	script := filepath.Join(dir, "slow-git.sh")
+	body := fmt.Sprintf("#!/bin/sh\nif [ -e %q ]; then sleep 0.12; fi\nexec %q \"$@\"\n", flag, gitPath)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+func (f *checkpointFixture) restoring() bool {
+	f.t.Helper()
+	status, body := f.request(http.MethodGet, "/checkpoints", "", true)
+	if status != http.StatusOK {
+		f.t.Fatalf("list status = %d, body = %s", status, body)
+	}
+	var listing struct {
+		Restoring *bool `json:"restoring"`
+	}
+	if err := json.Unmarshal([]byte(body), &listing); err != nil || listing.Restoring == nil {
+		f.t.Fatalf("list body has no restoring field: %q (%v)", body, err)
+	}
+	return *listing.Restoring
+}
+
+func TestTheListSaysRestoringWhileARealRestoreRunsAndNotForADryRun(t *testing.T) {
+	scratch := t.TempDir()
+	flag := filepath.Join(scratch, "slow.flag")
+	git := slowGit(t, scratch, flag)
+	f := newCheckpointFixture(t, checkpointFixtureOptions{
+		checkpoint: fmt.Sprintf(`{"enabled":true,"git_binary":%q}`, git),
+		steps:      []providerStep{writeCall("w1", "a.txt", "agent"), {message: "done"}},
+	})
+	f.put("a.txt", "original")
+	if got := f.runToEnd(); got != "completed" {
+		t.Fatalf("run = %s", got)
+	}
+	_, records := f.checkpoints()
+	id := records[0]["id"].(string)
+	if f.restoring() {
+		t.Fatal("restoring before the restore started")
+	}
+
+	if err := os.WriteFile(flag, []byte("slow"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dryDone := make(chan int, 1)
+	go func() {
+		status, _ := f.request(http.MethodPost, "/checkpoints/"+id+"/restore", `{"dry_run":true}`, true)
+		dryDone <- status
+	}()
+	time.Sleep(60 * time.Millisecond)
+	if f.restoring() {
+		t.Fatal("a dry run was reported as a restore")
+	}
+	if status := <-dryDone; status != http.StatusOK {
+		t.Fatalf("dry run status = %d", status)
+	}
+
+	restoreDone := make(chan int, 1)
+	go func() {
+		status, _ := f.request(http.MethodPost, "/checkpoints/"+id+"/restore", `{}`, true)
+		restoreDone <- status
+	}()
+	deadline := time.Now().Add(15 * time.Second)
+	for !f.restoring() {
+		if time.Now().After(deadline) {
+			t.Fatal("the list never reported the restore")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if f.file("a.txt") != "agent" {
+		t.Fatalf("the restore had already finished: a.txt = %q", f.file("a.txt"))
+	}
+	// A second restore sent now is not asserted: TypeScript refuses it with 409 but
+	// Go queues it behind the first (a recorded, separate difference).
+	if status := <-restoreDone; status != http.StatusOK {
+		t.Fatalf("restore status = %d", status)
+	}
+	if f.file("a.txt") != "original" {
+		t.Fatalf("a.txt = %q", f.file("a.txt"))
+	}
+	if f.restoring() {
+		t.Fatal("restoring stayed true after the restore ended")
+	}
+}
+
+func TestARefusedRestoreDoesNotLeaveTheListReportingRestoring(t *testing.T) {
+	f := newCheckpointFixture(t, checkpointFixtureOptions{
+		checkpoint: `{"enabled":true}`,
+		steps:      []providerStep{writeCall("w1", "a.txt", "agent"), {message: "done"}},
+	})
+	if got := f.runToEnd(); got != "completed" {
+		t.Fatalf("run = %s", got)
+	}
+	if status, _ := f.request(http.MethodPost, "/checkpoints/ckpt-nope/restore", `{}`, true); status != http.StatusNotFound {
+		t.Fatalf("status = %d", status)
+	}
+	if f.restoring() {
+		t.Fatal("a refused restore left restoring true")
+	}
+}

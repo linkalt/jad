@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {mkdir, mkdtemp, readFile, rm, stat, writeFile} from "node:fs/promises";
+import {chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
@@ -180,7 +180,7 @@ test("checkpoints are off by default: a write runs, nothing is recorded and no f
     assert.equal(await f.runToEnd(), "done");
     assert.equal(await readFile(join(f.workspace, "a.txt"), "utf8"), "hello");
     const list = await (await f.api("/checkpoints")).json() as {enabled: boolean; checkpoints: unknown[]};
-    assert.deepEqual(list, {enabled: false, checkpoints: []});
+    assert.deepEqual(list, {enabled: false, restoring: false, checkpoints: []});
     assert.equal(await exists(join(f.sessionDir, "staging", "checkpoints.json")), false);
     assert.equal(await exists(join(f.sessionDir, "staging", "checkpoints.git")), false);
   } finally {
@@ -447,6 +447,84 @@ test("a checkpoint is open, not interrupted, while its run is live", async () =>
     assert.equal((await f.checkpoints())[0]?.state, "complete");
   } finally {
     await reader?.cancel().catch(() => undefined);
+    await f.close();
+  }
+});
+
+/**
+ * A git that waits while `flag` exists, so a restore can be held open long enough
+ * to look at it; without the flag it is plain git, so a run's own snapshots are fast.
+ */
+async function slowGit(root: string, flag: string): Promise<string> {
+  const script = join(root, "slow-git.sh");
+  await writeFile(script, `#!/bin/sh\nif [ -e "${flag}" ]; then sleep 0.12; fi\nexec git "$@"\n`);
+  await chmod(script, 0o755);
+  return script;
+}
+
+async function untilTrue(check: () => Promise<boolean>, what: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`timed out waiting for ${what}`);
+}
+
+test("the list says restoring while a real restore runs, not for a dry run, and a second restore is refused", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-slow-git-"));
+  const flag = join(root, "slow.flag");
+  const git = await slowGit(root, flag);
+  const f = await createFixture({
+    checkpoint: {enabled: true, git_binary: git},
+    steps: [[writeCall("w1", "a.txt", "agent")], [finalMessage("done")]],
+  });
+  const listed = async () => (await (await f.api("/checkpoints")).json()) as {restoring: boolean};
+  try {
+    await writeFile(join(f.workspace, "a.txt"), "original");
+    assert.equal(await f.runToEnd(), "done");
+    const [record] = await f.checkpoints();
+    const id = record?.id as string;
+    assert.equal((await listed()).restoring, false, "nothing is restoring before the restore starts");
+
+    await writeFile(flag, "slow");
+    // A dry run changes nothing, so it is not reported even while it is slow.
+    const dry = f.api(`/checkpoints/${id}/restore`, {method: "POST", body: JSON.stringify({dry_run: true})});
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal((await listed()).restoring, false, "a dry run is not a restore");
+    assert.equal((await dry).status, 200);
+
+    const restore = f.api(`/checkpoints/${id}/restore`, {method: "POST", body: JSON.stringify({})});
+    await untilTrue(async () => (await listed()).restoring, "the list to report the restore");
+    assert.equal(await readFile(join(f.workspace, "a.txt"), "utf8"), "agent", "the restore has not finished yet");
+
+    const second = await f.api(`/checkpoints/${id}/restore`, {method: "POST", body: JSON.stringify({})});
+    assert.equal(second.status, 409, "a second restore is refused while the first runs");
+    assert.equal((await listed()).restoring, true, "a refused second restore does not clear the first");
+
+    const done = await restore;
+    assert.equal(done.status, 200);
+    assert.equal(await readFile(join(f.workspace, "a.txt"), "utf8"), "original");
+    assert.equal((await listed()).restoring, false, "the flag clears when the restore ends");
+  } finally {
+    await rm(flag, {force: true});
+    await f.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("a restore that is refused does not leave the list reporting restoring", async () => {
+  const f = await createFixture({
+    checkpoint: {enabled: true},
+    steps: [[writeCall("w1", "a.txt", "agent")], [finalMessage("done")]],
+  });
+  try {
+    assert.equal(await f.runToEnd(), "done");
+    const missing = await f.api("/checkpoints/ckpt-nope/restore", {method: "POST", body: JSON.stringify({})});
+    assert.equal(missing.status, 404);
+    const list = (await (await f.api("/checkpoints")).json()) as {restoring: boolean};
+    assert.equal(list.restoring, false);
+  } finally {
     await f.close();
   }
 });

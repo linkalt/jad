@@ -9,6 +9,7 @@ import {
   planChangesFiles,
   planSummary,
   previewPaths,
+  RESTORE_IN_PROGRESS,
   restoreChoice,
 } from './checkpoint-view.ts';
 
@@ -40,7 +41,11 @@ test('a list answer becomes rows without the tree ids', () => {
 });
 
 test('a disabled session answers with no checkpoints and is still valid', () => {
-  assert.deepEqual(parseCheckpointList({enabled: false, checkpoints: []}), {enabled: false, checkpoints: []});
+  assert.deepEqual(parseCheckpointList({enabled: false, checkpoints: []}), {
+    enabled: false,
+    restoring: false,
+    checkpoints: [],
+  });
 });
 
 test('a list answer that is not what the endpoint documents is refused', () => {
@@ -200,4 +205,25 @@ test('a long list of paths is cut at the configured limit and counts what it hid
   assert.deepEqual(previewPaths(paths, 0), {shown: [], hidden: 5});
   assert.deepEqual(previewPaths(paths, -4), {shown: [], hidden: 5});
   assert.deepEqual(previewPaths(paths, Number.NaN), {shown: [], hidden: 5});
+});
+
+test('the list says whether a restore is running; a server that never sends it reads as not restoring', () => {
+  assert.equal(parseCheckpointList({enabled: true, restoring: true, checkpoints: [complete]}).restoring, true);
+  assert.equal(parseCheckpointList({enabled: true, restoring: false, checkpoints: [complete]}).restoring, false);
+  assert.equal(parseCheckpointList({enabled: true, checkpoints: [complete]}).restoring, false);
+});
+
+test('a restoring value that is not a boolean is rejected, not treated as false', () => {
+  for (const restoring of ['yes', 1, null, [], {}]) {
+    assert.throws(
+      () => parseCheckpointList({enabled: true, restoring, checkpoints: []}),
+      /invalid checkpoint data/,
+      JSON.stringify(restoring),
+    );
+  }
+});
+
+test('the in-progress wording tells the user a reload does not stop the restore', () => {
+  assert.match(RESTORE_IN_PROGRESS, /keeps going if you reload/);
+  assert.match(RESTORE_IN_PROGRESS, /available when it ends/);
 });

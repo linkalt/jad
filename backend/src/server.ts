@@ -638,6 +638,12 @@ class AgentHttpApplication {
   private readonly compactingSessions = new Set<string>();
   /** Transcript rewrites are serialized with runs and compactions for one profile row. */
   private readonly changingTranscripts = new Set<string>();
+  /**
+   * Profile rows with a checkpoint restore in flight. A restore also holds
+   * `changingTranscripts`, which compaction and reset share, so the list cannot
+   * tell them apart from that set; this one is what `restoring` reports.
+   */
+  private readonly restoringCheckpoints = new Set<string>();
   private readonly sessionRoots: Promise<SessionRoot[]>;
   private readonly rootLibraryOptions: SessionRootOptions;
   private readonly sessionOptions: {
@@ -1672,7 +1678,10 @@ class AgentHttpApplication {
     // The run's status turns from "running" only after its end snapshot is written, so
     // an `open` record with no live run belongs to a run that was cut short.
     const runIsLive = this.runs.current(handle.location.ref, handle.profile)?.status === "running";
-    sendJson(response, 200, {enabled, checkpoints: await service.list({runIsLive})});
+    // `restoring` lets a client that reloaded mid-restore see that the files are
+    // being rewritten: the restore keeps going on the server without it.
+    const restoring = this.restoringCheckpoints.has(profileKey(handle.location.ref, handle.profile));
+    sendJson(response, 200, {enabled, restoring, checkpoints: await service.list({runIsLive})});
   }
 
   private async handleCheckpointRestore(
@@ -1705,6 +1714,9 @@ class AgentHttpApplication {
 
     // Held for the whole restore: a run cannot start while files are being rewritten.
     this.changingTranscripts.add(key);
+    // A dry run changes nothing, so only a real restore is reported as restoring.
+    const reportsRestoring = body.dry_run !== true;
+    if (reportsRestoring) this.restoringCheckpoints.add(key);
     try {
       if (isRunning()) throw new HttpError(409, "cannot restore a checkpoint while a run is active");
       const {service} = await this.checkpointServiceOf(handle);
@@ -1724,6 +1736,7 @@ class AgentHttpApplication {
         throw error;
       }
     } finally {
+      if (reportsRestoring) this.restoringCheckpoints.delete(key);
       this.changingTranscripts.delete(key);
     }
   }

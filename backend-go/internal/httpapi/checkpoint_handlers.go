@@ -11,7 +11,10 @@ import (
 
 // CheckpointListing is the body of GET /api/sessions/{id}/checkpoints.
 type CheckpointListing struct {
-	Enabled     bool `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Restoring is true while a real restore is rewriting the workspace; it lets a
+	// client that reloaded mid-restore see that. The handler sets it, not the session.
+	Restoring   bool `json:"restoring"`
 	Checkpoints any  `json:"checkpoints"`
 }
 
@@ -58,6 +61,7 @@ func (h *Handler) handleCheckpointList(w http.ResponseWriter, r *http.Request, r
 		writeJSONError(w, err)
 		return
 	}
+	listing.Restoring = h.isRestoring(key)
 	writeJSON(w, http.StatusOK, listing)
 }
 
@@ -103,6 +107,10 @@ func (h *Handler) handleCheckpointRestore(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer processUnlock()
+	// A dry run changes nothing, so only a real restore is reported as restoring.
+	if !request.DryRun {
+		defer h.markRestoring(key)()
+	}
 	result, err := checkpoints.RestoreCheckpoint(r.Context(), checkpointID, request)
 	if err != nil {
 		writeJSONError(w, err)

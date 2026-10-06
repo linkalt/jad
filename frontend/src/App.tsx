@@ -124,6 +124,7 @@ import {
 } from './desync-watch';
 import {ApprovalDrawer} from './components/ApprovalDrawer';
 import {DraftRequestDrawer} from './components/DraftRequestDrawer';
+import {interactionFailureTitle} from './approval-answer';
 import type {DraftDecision} from './draft-answer';
 import type {ComposerInsertActions} from './components/ComposerPane';
 import {ModelPicker} from './components/ModelPicker';
@@ -3524,10 +3525,10 @@ function App() {
         sessionId: session.id,
         sessionTitle: activeRowSession.title,
         kind: 'error',
-        title: 'Unable to answer the draft',
+        title: interactionFailureTitle(interaction.kind, 'answer'),
         message,
       });
-      console.warn('Unable to answer the draft:', error);
+      console.warn('Unable to answer the interaction:', error);
     }).finally(() => {
       if (answeringInteractionRefs.current.get(viewKey) === interaction.id) {
         answeringInteractionRefs.current.delete(viewKey);
@@ -3582,10 +3583,10 @@ function App() {
         sessionId: session.id,
         sessionTitle: activeRowSession.title,
         kind: 'error',
-        title: 'Unable to extend the draft',
+        title: interactionFailureTitle(interaction.kind, 'extend'),
         message,
       });
-      console.warn('Unable to extend the draft:', error);
+      console.warn('Unable to extend the interaction:', error);
     }).finally(() => {
       if (extendingInteractionRefs.current.get(viewKey) === interaction.id) {
         extendingInteractionRefs.current.delete(viewKey);
@@ -5425,6 +5426,7 @@ function App() {
             profile={activeProfile}
             isRunning={isRunning}
             region={inspector}
+            restorePollMs={appConfig.checkpoint_restore_poll_ms}
             pathsPreviewLimit={appConfig.checkpoint_paths_preview_limit}
             pathsMaxHeightPx={appConfig.checkpoint_paths_max_height_px}
             onClose={() => setRightPanelMode(null)}

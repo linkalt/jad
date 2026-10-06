@@ -157,6 +157,15 @@ New session setting `tool_call_scheduling`, `"ordered"` (default) or `"concurren
 - Approval gains ordering for free: with a state-changing call in the batch the calls run one at a time, so approvals are asked in the model's order. With `concurrent` the earlier note still applies (approved calls start when approved).
 - `messages.jsonl` is unchanged: results were already persisted in call order after the batch. Only the order results are streamed in, and when each call runs, changes.
 
+### The checkpoint list reports a restore in progress (TypeScript and Go together)
+
+`GET /api/sessions/{id}/checkpoints` answers `{enabled, restoring, checkpoints}`; `restoring` is always sent, as a boolean.
+
+- It is true from the moment a real restore holds the session's gate until the restore ends, and false for a dry run. A restore also holds the gate that compaction and reset share, so the list cannot read the gate itself; each backend keeps a separate set of the keys with a restore in flight (`restoringCheckpoints` in TypeScript, `Handler.restoring` under `mutationMu` in Go) that only the restore route touches.
+- The frontend reads a missing value as false, so an older server still works, and rejects a non-boolean. While it is true the panel disables every Restore control and re-reads the list every `checkpoint_restore_poll_ms` (frontend config, 2000).
+- `messages.jsonl` is unchanged; this is a list field only.
+- **Known difference, not fixed here:** TypeScript refuses a second real restore sent while one runs with 409; Go takes the per-session keyed lock first, so the second request waits and then runs. Recorded as a bug report; the Go test therefore does not send a second restore.
+
 ## Provider retry: the harness retries the request that opens a response
 
 New session setting `provider_retry` with `max_retries` (default 2, 0 to 10), `initial_delay_ms` (default 500, 1 to 60000) and `max_delay_ms` (default 8000, 1 to 600000). The defaults equal what both SDKs did before the setting existed, so an absent key changes nothing. Only an absent key takes a default: `null`, a wrong type, an out-of-range value, an unknown key, or an `initial_delay_ms` above `max_delay_ms` is a config error with the same message in both backends (26 config-parity cases cover it).

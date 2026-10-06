@@ -1455,6 +1455,25 @@ function checkpointScenarios() {
       },
     },
     {
+      // A restore is too quick to catch mid-way here, so this pins what both backends say
+      // when none is running: the field is always sent, as a boolean, before and after.
+      name: "checkpoint: the list always carries restoring, false when no restore is running",
+      provider: {steps: [{call: {name: "write", arguments: {path: "a.txt", content: "agent"}}}, {text: "done"}]},
+      run: async (c) => {
+        await clear(c, "ckpt");
+        await put(c, "ckpt", "a.txt", "original");
+        const flag = async () => (await list(c, "ckpt")).restoring;
+        const before = await flag();
+        await resetAndRun(c, "ckpt", "write it");
+        const afterRun = await flag();
+        const [record] = (await list(c, "ckpt")).checkpoints;
+        await restore(c, "ckpt", record.id, {dry_run: true});
+        const afterDry = await flag();
+        const done = await restore(c, "ckpt", record.id, {mode: "full"});
+        return {before, afterRun, afterDry, afterRestore: await flag(), restoreStatus: done.status, file: await file(c, "ckpt", "a.txt")};
+      },
+    },
+    {
       name: "checkpoint: a bad checkpoint value is refused with the same message",
       provider: {steps: [{text: "x"}]},
       run: async (c) => ({run: await call(c, "POST", "/api/sessions/ckptbad/run", {body: {input: "go"}}), list: await call(c, "GET", "/api/sessions/ckptbad/checkpoints")}),

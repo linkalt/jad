@@ -22,6 +22,7 @@ import {fetchSessionCheckpoints, restoreSessionCheckpoint} from '../api';
 import {
   CHECKPOINT_NOT_COVERED,
   FULL_RESTORE_WARNING,
+  RESTORE_IN_PROGRESS,
   checkpointDescription,
   checkpointTitle,
   planChangesFiles,
@@ -40,6 +41,8 @@ export interface CheckpointPanelProps {
   profile: string | undefined;
   /** True while a run is in flight; restoring would change files under it. */
   isRunning: boolean;
+  /** How often the list is re-read while the server reports a restore in progress. */
+  restorePollMs: number;
   region: ResizableRegion;
   /** How many paths of one group are listed before "and N more". */
   pathsPreviewLimit: number;
@@ -127,6 +130,7 @@ export function CheckpointPanel({
   sessionId,
   profile,
   isRunning,
+  restorePollMs,
   region,
   pathsPreviewLimit,
   pathsMaxHeightPx,
@@ -169,6 +173,35 @@ export function CheckpointPanel({
     previewSequence.current++;
     load();
   }, [load]);
+
+  // A restore lives on the server, so the page can open (or reload) while one runs.
+  // Until the list says it is over, keep asking; the next answer also carries the
+  // new "Before a restore" row.
+  const isRestoring = list?.restoring === true;
+  useEffect(() => {
+    if (!isRestoring) {
+      return undefined;
+    }
+    const controller = new AbortController();
+    const timer = window.setInterval(() => {
+      fetchSessionCheckpoints(sessionId, profile, controller.signal)
+        .then(result => {
+          if (!controller.signal.aborted) {
+            setList(result);
+            setLoadError(null);
+          }
+        })
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted) {
+            setLoadError(messageOf(error));
+          }
+        });
+    }, restorePollMs);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [isRestoring, sessionId, profile, restorePollMs]);
 
   const askPreview = useCallback(
     (row: CheckpointRow, mode: RestoreMode) => {
@@ -301,6 +334,11 @@ export function CheckpointPanel({
             A run is active. Restore is available when it ends.
           </Text>
         ) : null}
+        {isRestoring && !current.isApplying ? (
+          <Text type="supporting" color="secondary">
+            {RESTORE_IN_PROGRESS}
+          </Text>
+        ) : null}
         <Text type="supporting" color="secondary">
           {CHECKPOINT_NOT_COVERED}
         </Text>
@@ -312,6 +350,7 @@ export function CheckpointPanel({
             isLoading={current.isApplying}
             isDisabled={
               isRunning ||
+              isRestoring ||
               current.isApplying ||
               preview.state !== 'ready' ||
               !planChangesFiles(preview.plan)
@@ -352,6 +391,11 @@ export function CheckpointPanel({
             A run is active. Restore is available when it ends.
           </Text>
         ) : null}
+        {isRestoring ? (
+          <Text type="supporting" color="secondary">
+            {RESTORE_IN_PROGRESS}
+          </Text>
+        ) : null}
         <List header="Checkpoints" density="compact" hasDividers>
           {value.checkpoints.map(row => {
             const choice = restoreChoice(row);
@@ -378,7 +422,7 @@ export function CheckpointPanel({
                     label="Restore…"
                     variant="ghost"
                     size="sm"
-                    isDisabled={isRunning || !choice.canRestore}
+                    isDisabled={isRunning || isRestoring || !choice.canRestore}
                     onClick={() => openReview(row)}
                   />
                 }

@@ -94,3 +94,17 @@ export function reviewApprovalAnswer(options: {
   }
   return {body: {decision: 'decline', reason}};
 }
+
+/**
+ * The title of the notification for an answer or an extension the server refused.
+ *
+ * An approval is a question about running a call, not a draft the user edits, so
+ * it must not be called one. An absent kind is a draft, as everywhere else.
+ */
+export function interactionFailureTitle(
+  kind: 'draft' | 'approval' | undefined,
+  action: 'answer' | 'extend',
+): string {
+  const noun = kind === 'approval' ? 'the approval' : 'the draft';
+  return action === 'answer' ? `Unable to answer ${noun}` : `Unable to extend ${noun}`;
+}

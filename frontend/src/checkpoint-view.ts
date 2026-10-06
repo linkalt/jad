@@ -37,6 +37,12 @@ export interface CheckpointRow {
 
 export interface CheckpointList {
   enabled: boolean;
+  /**
+   * A real restore is rewriting the workspace right now. It lives on the server,
+   * so it is still true after a page reload; an older server never sends it,
+   * which reads as false.
+   */
+  restoring: boolean;
   /** Newest first, as the server sends them. */
   checkpoints: CheckpointRow[];
 }
@@ -121,7 +127,10 @@ export function parseCheckpointList(value: unknown): CheckpointList {
     }
     checkpoints.push(row);
   }
-  return {enabled: value.enabled, checkpoints};
+  if (value.restoring !== undefined && typeof value.restoring !== 'boolean') {
+    throw new Error('the server returned invalid checkpoint data');
+  }
+  return {enabled: value.enabled, restoring: value.restoring === true, checkpoints};
 }
 
 /** Reads the restore answer, a dry run or a real one. */
@@ -251,6 +260,10 @@ export function previewPaths(paths: readonly string[], limit: number): PathPrevi
   const keep = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
   return {shown: paths.slice(0, keep), hidden: Math.max(0, paths.length - keep)};
 }
+
+/** Shown while the server is rewriting files, including after the page was reloaded. */
+export const RESTORE_IN_PROGRESS =
+  'A restore is running. It keeps going if you reload this page; Restore is available when it ends.';
 
 /** What a checkpoint does not protect, shown beside the restore button. */
 export const CHECKPOINT_NOT_COVERED =

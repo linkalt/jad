@@ -252,6 +252,11 @@ type Handler struct {
 	sessionLocks              keyedLocker
 	mutationMu                sync.Mutex
 	mutations                 map[string]struct{}
+
+	// restoring holds the run keys with a real checkpoint restore in flight, under
+	// mutationMu. A restore also holds `mutations`, which compaction and reset
+	// share, so the checkpoint list cannot tell them apart from that map.
+	restoring map[string]struct{}
 }
 
 // NewHandler validates configuration and builds an HTTP handler. The resolver
