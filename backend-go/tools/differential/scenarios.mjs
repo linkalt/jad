@@ -1056,10 +1056,27 @@ export const scenarios = [
       };
       const lastMessage = (events) => events.filter((e) => e.event === "message" || e.event === "ui.message").at(-1);
       const records = await messagesJsonl(c, "stopme");
+      // The server answers the attach after the client saw the 5th delta, and
+      // how many more deltas it has taken in by then depends on scheduling. So
+      // the first message is compared by what must hold, not by its length: it
+      // is a whole number of deltas, at least 5, and an exact prefix of the reply.
+      const deltaChars = `${"0".repeat(30000)}\n`.length;
+      const fullReply = Array.from({length: 8}, (_, i) => `${String(i).repeat(30000)}\n`).join("");
+      const startTexts = [];
+      const collectStrings = (value) => {
+        if (typeof value === "string" && value.length > 1000) startTexts.push(value);
+        else if (value && typeof value === "object") for (const child of Object.values(value)) collectStrings(child);
+      };
+      collectStrings(second.events.find((e) => e.event === "ui.message" || e.event === "message"));
+      const attachedStartText = startTexts.map((text) => ({
+        wholeDeltas: text.length % deltaChars === 0,
+        atLeastFive: text.length >= 5 * deltaChars,
+        prefixOfReply: fullReply.startsWith(text),
+      }));
       return {
         first: eventNames(result),
         attachedNames: [...new Set(eventNames(second))],
-        attachedStartText: big(second.events.find((e) => e.event === "ui.message" || e.event === "message")),
+        attachedStartText,
         attachedEndText: big(lastMessage(second.events)),
         firstEndText: big(lastMessage(result.events)),
         spilledWhileRunning: partials,
