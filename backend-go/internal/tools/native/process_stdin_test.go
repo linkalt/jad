@@ -196,3 +196,24 @@ func TestNormalizeProcessArgumentsAcceptsInputAsStdin(t *testing.T) {
 		t.Fatalf("the named field did not win: %#v", both)
 	}
 }
+
+// A process started through PATH is launched from an absolute path, but a script
+// that prints $0 has to see the shell name as it was configured, as it does under
+// Node. Same rule as for bash; see TestNativeBashKeepsTheConfiguredNameAsArgvZero.
+func TestNativeProcessKeepsTheConfiguredShellNameAsArgvZero(t *testing.T) {
+	runner := newProcessStdinRunner(t, 1024)
+	binaryDir := filepath.Join(runner.workspace, "bin")
+	if err := os.Mkdir(binaryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(runner.settings.Shell, filepath.Join(binaryDir, "argv0-shell")); err != nil {
+		t.Fatal(err)
+	}
+	runner.settings.Shell = "argv0-shell"
+	runner.settings.Env = map[string]string{"PATH": binaryDir}
+	started := runner.run(map[string]any{"command": `printf 'name=%s\n' "$0"`})
+	waited := runner.run(map[string]any{"action": "wait", "id": processIDOf(t, started), "timeout_ms": json.Number("2000")})
+	if !strings.Contains(waited, "name=argv0-shell\n") || strings.Contains(waited, binaryDir) {
+		t.Fatalf("the process saw its resolved path instead of the configured name: %s", waited)
+	}
+}

@@ -9,6 +9,16 @@ import (
 	"strings"
 )
 
+// newInterpreterCommand starts the resolved interpreter but keeps argv[0] as the
+// name that was configured, like Node's spawn does. A script sees it as $0, so
+// without this a call that resolved "bash" through PATH would print /usr/bin/bash
+// on this backend and bash on the other.
+func newInterpreterCommand(configured, resolved string, args ...string) *exec.Cmd {
+	command := exec.Command(resolved, args...)
+	command.Args[0] = configured
+	return command
+}
+
 func resolveBashExecutable(file string, environment []string, cwd string) (string, error) {
 	if filepath.IsAbs(file) || strings.ContainsRune(file, os.PathSeparator) {
 		return file, nil

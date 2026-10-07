@@ -250,7 +250,7 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	if request.Policy.LoginShell {
 		arguments = []string{"-l", "-c", request.Command}
 	}
-	command := exec.Command(resolvedShell, arguments...)
+	command := newInterpreterCommand(request.Policy.Shell, resolvedShell, arguments...)
 	command.Dir = request.CWD
 	command.Env = environment
 	command.Stdout = processStreamWriter{entry: entry, stream: bashStdout}

@@ -384,3 +384,30 @@ func BenchmarkNativeBashShortCommand(b *testing.B) {
 		}
 	}
 }
+
+// A script reads its own name as $0. The interpreter is found through PATH, so it
+// is started from an absolute path, but argv[0] has to stay the name that was
+// configured, as it does when Node starts it. Otherwise the same call prints
+// /usr/bin/bash on one backend and bash on the other. The interpreter here is a
+// link to the real bash, because a #! script would report its own path whatever
+// argv[0] is.
+func TestNativeBashKeepsTheConfiguredNameAsArgvZero(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test shell script requires Unix semantics")
+	}
+	root := t.TempDir()
+	binaryDir := filepath.Join(root, "bin")
+	if err := os.Mkdir(binaryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := bashTestSettings(t, root)
+	if err := os.Symlink(settings.Shell, filepath.Join(binaryDir, "argv0-shell")); err != nil {
+		t.Fatal(err)
+	}
+	settings.Shell = "argv0-shell"
+	settings.Env = map[string]string{"PATH": binaryDir}
+	output := executeBashTest(t, root, "argv0", `printf 'name=%s\n' "$0"`, ".", settings)
+	if !strings.Contains(output, "name=argv0-shell\n") || strings.Contains(output, binaryDir) {
+		t.Fatalf("the script saw its resolved path instead of the configured name: %s", output)
+	}
+}

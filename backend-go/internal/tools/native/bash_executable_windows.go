@@ -9,6 +9,14 @@ import (
 	"strings"
 )
 
+// newInterpreterCommand starts the resolved interpreter but keeps argv[0] as the
+// name that was configured, like Node's spawn does.
+func newInterpreterCommand(configured, resolved string, args ...string) *exec.Cmd {
+	command := exec.Command(resolved, args...)
+	command.Args[0] = configured
+	return command
+}
+
 func resolveBashExecutable(file string, environment []string, cwd string) (string, error) {
 	if filepath.IsAbs(file) || strings.ContainsAny(file, `/\\`) {
 		return file, nil

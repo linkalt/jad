@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"sync"
 	"time"
 )
@@ -93,7 +92,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 		_ = stderrWriter.Close()
 		return finishBashSpawnFailure(result, request.collector, request.spill, err, started)
 	}
-	command := exec.Command(resolvedFile, request.args...)
+	command := newInterpreterCommand(request.file, resolvedFile, request.args...)
 	command.Dir = request.cwd
 	command.Env = request.environment
 	command.Stdout = stdoutWriter

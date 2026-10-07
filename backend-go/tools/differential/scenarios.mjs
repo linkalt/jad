@@ -1682,6 +1682,13 @@ function execScenarios() {
       toolRound("exec", {interpreter: "python", code: "print('alias beats the default')"}),
       toolRound("exec", {code: "echo \"$1|$2\"", args: ["a b", "$HOME"]}),
     ]),
+    // The interpreter is found through PATH, so one backend starts it from an absolute path.
+    // A script still has to see the name that was configured as $0, on both backends.
+    run("exec and bash: $0 is the configured interpreter name", "execd", [
+      toolRound("exec", {code: "echo \"zero=$0\""}),
+      toolRound("exec", {lang: "bash", code: "echo \"zero=$0\""}),
+      toolRound("bash", {command: "echo \"zero=$0\""}),
+    ]),
     run("exec: default_lang is configuration and a call without lang follows it", "execpy", [
       toolRound("exec", {code: "import sys\nprint('python', sys.version_info[0])"}),
       toolRound("exec", {lang: "bash", code: "echo explicit-bash"}),
