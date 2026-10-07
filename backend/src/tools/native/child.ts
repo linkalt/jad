@@ -42,6 +42,11 @@ export interface OutputLimits {
   stripAnsi: boolean;
   /** Preserve NUL delimiters for a consumer that parses a binary-safe protocol. */
   preserveNul?: boolean;
+  /**
+   * When a stream is cut, end the head and start the tail on line boundaries, so no
+   * line is shown half. The bytes this drops are counted in the omitted marker.
+   */
+  lineAware?: boolean;
 }
 
 /** What one stream produced and what the model gets to see of it. */
@@ -337,6 +342,7 @@ class StreamCollector {
     private readonly limits: StreamLimits,
     private readonly stripAnsi: boolean,
     private readonly preserveNul: boolean,
+    private readonly lineAware = false,
   ) {}
 
   /** Accepts raw bytes from one pipe; safe across split multibyte sequences. */
@@ -426,9 +432,22 @@ class StreamCollector {
    * bytes dropped from the windows and the bytes the windows never kept.
    */
   public render(maxLineChars: number, producedBytes = this.producedBytes): StreamOutput {
-    const headText = this.head.map((segment) => segment.text).join("");
-    const tailText = this.tail.map((segment) => segment.text).join("");
-    const shownBytes = this.headBytes + this.tailBytes;
+    let headText = this.head.map((segment) => segment.text).join("");
+    let tailText = this.tail.map((segment) => segment.text).join("");
+    let shownBytes = this.headBytes + this.tailBytes;
+    if (this.lineAware && producedBytes > shownBytes) {
+      // A window that holds no line break (one very long line) stays as it is.
+      const headEnd = headText.lastIndexOf("\n") + 1;
+      if (headEnd > 0 && headEnd < headText.length) {
+        shownBytes -= Buffer.byteLength(headText.slice(headEnd), "utf8");
+        headText = headText.slice(0, headEnd);
+      }
+      const tailStart = tailText.indexOf("\n") + 1;
+      if (tailStart > 0 && tailStart < tailText.length) {
+        shownBytes -= Buffer.byteLength(tailText.slice(0, tailStart), "utf8");
+        tailText = tailText.slice(tailStart);
+      }
+    }
     const omittedBytes = Math.max(producedBytes - shownBytes, 0);
     const body = omittedBytes === 0
       ? `${headText}${tailText}`
@@ -453,8 +472,8 @@ export class OutputCollector {
 
   public constructor(private readonly limits: OutputLimits) {
     this.streams = {
-      stdout: new StreamCollector(limits.stdout, limits.stripAnsi, limits.preserveNul ?? false),
-      stderr: new StreamCollector(limits.stderr, limits.stripAnsi, limits.preserveNul ?? false),
+      stdout: new StreamCollector(limits.stdout, limits.stripAnsi, limits.preserveNul ?? false, limits.lineAware ?? false),
+      stderr: new StreamCollector(limits.stderr, limits.stripAnsi, limits.preserveNul ?? false, limits.lineAware ?? false),
     };
   }
 

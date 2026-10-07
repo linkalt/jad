@@ -10,7 +10,7 @@ import (
 var (
 	toolNodeNames   = []string{"native", "mcp"}
 	nativeToolNames = []string{
-		"read", "write", "edit", "grep", "glob", "bash", "process", "task", "memory", "fetch", "request_draft", "skill",
+		"read", "write", "edit", "grep", "glob", "bash", "exec", "process", "task", "memory", "fetch", "request_draft", "skill",
 	}
 )
 

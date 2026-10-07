@@ -81,6 +81,14 @@ export function approvalPreview(
       optionalField(draft, "cwd", args.cwd);
       optionalField(draft, "timeout_ms", args.timeout_ms);
       return {title: "Run shell command", draft};
+    case "exec":
+      // The code is what runs; the language alone says nothing.
+      field(draft, "lang", args.lang, maxBytes);
+      field(draft, "code", args.code, maxBytes);
+      optionalField(draft, "args", args.args);
+      optionalField(draft, "cwd", args.cwd);
+      optionalField(draft, "timeout_ms", args.timeout_ms);
+      return {title: "Run code", draft};
     case "process":
       draft.action = "start";
       field(draft, "command", args.command, maxBytes);

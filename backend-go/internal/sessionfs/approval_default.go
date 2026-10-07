@@ -46,6 +46,7 @@ func applyApprovalDefault(
 	write *NativeWriteSettings,
 	edit *NativeEditSettings,
 	bash *NativeBashSettings,
+	exec *NativeExecSettings,
 	process *NativeProcessSettings,
 	servers []MCPServerReference,
 ) {
@@ -60,6 +61,9 @@ func applyApprovalDefault(
 	}
 	if bash != nil && !nativeToolHasApprovalKey(setting, "bash") {
 		bash.Approval = mode
+	}
+	if exec != nil && !nativeToolHasApprovalKey(setting, "exec") {
+		exec.Approval = mode
 	}
 	if process != nil && !nativeToolHasApprovalKey(setting, "process") {
 		process.Approval = mode

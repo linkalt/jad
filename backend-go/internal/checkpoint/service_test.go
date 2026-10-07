@@ -438,6 +438,7 @@ func TestCallChangesWorkspace(t *testing.T) {
 		{"write", call("write", map[string]any{}), "native", true, true},
 		{"edit", call("edit", map[string]any{}), "native", true, true},
 		{"bash", call("bash", map[string]any{}), "native", true, true},
+		{"exec runs a program that can change files", call("exec", map[string]any{"lang": "bash", "code": "x"}), "native", true, true},
 		{"process start", call("process", map[string]any{"action": "start", "command": "x"}), "native", true, true},
 		{"process status", call("process", map[string]any{"action": "status", "id": "p"}), "native", true, false},
 		{"read", call("read", map[string]any{}), "native", true, false},

@@ -118,15 +118,32 @@ func (collector *bashStreamCollector) end() {
 }
 
 func (collector *bashStreamCollector) render(maxLineChars int, stripANSI bool) bashStreamOutput {
-	return collector.renderWithProducedBytes(maxLineChars, stripANSI, collector.producedBytes)
+	return collector.renderWithProducedBytes(maxLineChars, stripANSI, collector.producedBytes, false)
 }
 
-func (collector *bashStreamCollector) renderWithProducedBytes(maxLineChars int, stripANSI bool, producedBytes int64) bashStreamOutput {
+// lineAwareWindows drops the partial line at the end of the head and at the start of the
+// tail, so a cut stream shows whole lines only. A window with no line break (one very
+// long line) is left as it is. The dropped bytes are counted by the caller as omitted.
+func lineAwareWindows(headText, tailText string) (string, string) {
+	if end := strings.LastIndexByte(headText, '\n') + 1; end > 0 && end < len(headText) {
+		headText = headText[:end]
+	}
+	if start := strings.IndexByte(tailText, '\n') + 1; start > 0 && start < len(tailText) {
+		tailText = tailText[start:]
+	}
+	return headText, tailText
+}
+
+func (collector *bashStreamCollector) renderWithProducedBytes(maxLineChars int, stripANSI bool, producedBytes int64, lineAware bool) bashStreamOutput {
 	headText := sanitizeBashOutput(string(collector.head), stripANSI)
 	tailText := sanitizeBashOutput(string(collector.tail), stripANSI)
 	shown := int64(len(headText) + len(tailText))
 	if producedBytes < shown {
 		producedBytes = shown
+	}
+	if lineAware && producedBytes > shown {
+		headText, tailText = lineAwareWindows(headText, tailText)
+		shown = int64(len(headText) + len(tailText))
 	}
 	omitted := producedBytes - shown
 	body := headText + tailText
@@ -156,6 +173,8 @@ type bashOutputCollector struct {
 	stderr       *bashStreamCollector
 	maxLineChars int
 	stripANSI    bool
+	// lineAware ends a cut stream's head and starts its tail on line boundaries.
+	lineAware bool
 }
 
 func newBashOutputCollector(stdout, stderr bashStreamLimits, maxLineChars int, stripANSI bool) *bashOutputCollector {
@@ -185,8 +204,8 @@ func (collector *bashOutputCollector) render() bashRenderedOutput {
 }
 
 func (collector *bashOutputCollector) renderWithProducedBytes(stdoutProducedBytes, stderrProducedBytes int64) bashRenderedOutput {
-	stdout := collector.stdout.renderWithProducedBytes(collector.maxLineChars, collector.stripANSI, stdoutProducedBytes)
-	stderr := collector.stderr.renderWithProducedBytes(collector.maxLineChars, collector.stripANSI, stderrProducedBytes)
+	stdout := collector.stdout.renderWithProducedBytes(collector.maxLineChars, collector.stripANSI, stdoutProducedBytes, collector.lineAware)
+	stderr := collector.stderr.renderWithProducedBytes(collector.maxLineChars, collector.stripANSI, stderrProducedBytes, collector.lineAware)
 	labeled := stdout.text != "" && stderr.text != ""
 	sections := make([]string, 0, 2)
 	if stdout.text != "" {

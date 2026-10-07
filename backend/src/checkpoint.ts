@@ -141,7 +141,7 @@ export function callChangesWorkspace(
 ): boolean {
   if (source === "mcp") return includeMcpTools;
   const name = typeof call.name === "string" ? call.name : "";
-  if (name === "write" || name === "edit" || name === "bash") return true;
+  if (name === "write" || name === "edit" || name === "bash" || name === "exec") return true;
   if (name !== "process") return false;
   let args: unknown;
   try {

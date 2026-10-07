@@ -152,6 +152,14 @@ func ApprovalPreview(call ApprovalCall, maxBytes int64) (Preview, error) {
 		fields = appendPresent(fields, call.Args, "cwd")
 		fields = appendPresent(fields, call.Args, "timeout_ms")
 		title = "Run shell command"
+	case call.Tool == "exec":
+		// The code is what runs; the language alone says nothing.
+		fields = appendString(fields, call.Args, "lang", maxBytes)
+		fields = appendString(fields, call.Args, "code", maxBytes)
+		fields = appendPresent(fields, call.Args, "args")
+		fields = appendPresent(fields, call.Args, "cwd")
+		fields = appendPresent(fields, call.Args, "timeout_ms")
+		title = "Run code"
 	case call.Tool == "process":
 		fields = append(fields, previewField{"action", "start"})
 		fields = appendString(fields, call.Args, "command", maxBytes)

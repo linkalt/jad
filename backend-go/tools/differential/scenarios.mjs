@@ -952,6 +952,7 @@ export const scenarios = [
     },
   },
   ...parallelScenarios(),
+  ...execScenarios(),
   ...approvalScenarios(),
   ...checkpointScenarios(),
   {
@@ -1597,6 +1598,76 @@ function checkpointScenarios() {
 // answer through the HTTP endpoint, so they compare what a client sees (the
 // published question and its kind, the refusal of an edit) and what the model
 // sees (a blocked result with a code), not how either backend gets there.
+// exec: inline code in a configured interpreter. Each scenario reads the recorded tool
+// results, so a match means both backends produced the same text, not just the same events.
+function execScenarios() {
+  const run = (name, session, steps, extra = async () => ({})) => ({
+    name,
+    provider: {steps: [...steps, {text: "exec finished"}]},
+    run: async (c) => {
+      await call(c, "POST", `/api/sessions/${session}/reset`, {body: {}});
+      const result = await sse(c, `/api/sessions/${session}/run`, {method: "POST", body: {input: name}});
+      return {names: eventNames(result), outputs: toolOutputs(c.provider.requests.at(-1)), ...(await extra(c))};
+    },
+  });
+  const rows = "for i in range(100):\n    print('row-%03d' % i)";
+  return [
+    run("exec: the smallest call, aliases, argv without quoting", "execd", [
+      toolRound("exec", {lang: "python", code: "print(1 + 2)"}),
+      toolRound("exec", {lang: "Node", code: "console.log(6 * 7)"}),
+      toolRound("exec", {lang: "bash", code: "echo $((6 * 7))"}),
+      toolRound("exec", {lang: "py", code: "import sys\nfor v in sys.argv[1:]:\n    print(repr(v))", args: ["a b", "$HOME", "it's", "x;y", ""]}),
+      toolRound("exec", {language: " python ", source: "print('near miss')", argv: [1, true]}),
+    ]),
+    run("exec: failures, unknown language, empty code, bad args", "execd", [
+      toolRound("exec", {lang: "python", code: "import sys\nprint('partial')\nsys.stderr.write('boom\\n')\nsys.exit(3)"}),
+      toolRound("exec", {lang: "cobol", code: "x"}),
+      toolRound("exec", {lang: "python", code: "   \n  "}),
+      toolRound("exec", {lang: "python", code: "print(1)", args: ["ok", 1.5, {"a": 1}]}),
+      toolRound("exec", {lang: "bash", code: "sleep 5", timeout_ms: 1000}),
+      toolRound("exec", {lang: "bash", code: "kill -9 $$"}),
+    ]),
+    run("exec: the result file is shown ahead of the raw output", "execd", [
+      toolRound("exec", {lang: "python", code: "import os\nprint('noisy line')\nopen(os.environ['EXEC_RESULT'], 'w').write('the answer is 42\\n')"}),
+      toolRound("exec", {lang: "bash", code: "echo -n 'just this' > \"$EXEC_RESULT\""}),
+      toolRound("exec", {lang: "bash", code: "echo shown; : > \"$EXEC_RESULT\""}),
+      toolRound("exec", {lang: "python", code: "import os\nopen(os.environ['EXEC_RESULT'], 'w').write('é' * 9000)"}),
+      toolRound("exec", {lang: "bash", code: "echo oops >&2; echo -n 'with an error' > \"$EXEC_RESULT\"; exit 2"}),
+    ]),
+    // The run stream echoes every tool call's arguments, and the TypeScript server closes a
+    // stream that holds more than sse_max_buffered_bytes (1 MiB). One call over the limit
+    // plus ones just under it stays inside that budget; two over-limit calls would not.
+    run("exec: the code limit counts bytes and the program does not start", "execd", [
+      // 90K characters are 276,480 bytes: over the limit by bytes, under it by characters.
+      toolRound("exec", {lang: "bash", code: "echo should-not-run # " + "✓".repeat(90 * 1024)}),
+      toolRound("exec", {lang: "bash", code: "echo " + "✓".repeat(30 * 1024) + " | wc -c"}),
+      toolRound("exec", {lang: "bash", code: "echo " + "✓".repeat(100) + " | wc -c"}),
+    ]),
+    run("exec: a cut stream shows whole lines and the marker counts every dropped byte", "execbudget", [
+      toolRound("exec", {lang: "python", code: rows}),
+      toolRound("bash", {command: "python3 -c \"for i in range(100): print('row-%03d' % i)\""}),
+    ], async (c) => ({records: await messagesJsonl(c, "execbudget")})),
+    run("exec: the environment is bash's and the harness credential never arrives", "execd", [
+      toolRound("exec", {lang: "bash", code: "echo \"token=${AGENT_API_TOKEN:-none} home_set=${HOME:+yes}\""}),
+      toolRound("exec", {lang: "bash", code: "mkdir -p sub && cd sub && pwd"}),
+      toolRound("exec", {lang: "bash", code: "pwd", cwd: "sub"}),
+      toolRound("exec", {lang: "bash", code: "pwd", cwd: "no-such-dir"}),
+    ]),
+    {
+      name: "exec: needs bash, and a clashing language alias is a configuration error",
+      provider: {steps: [{text: "unused"}]},
+      run: async (c) => {
+        const out = {};
+        for (const session of ["execnobash", "execbad"]) {
+          const result = await call(c, "POST", `/api/sessions/${session}/run`, {body: {input: "go"}});
+          out[session] = {status: result.status, body: result.body};
+        }
+        return out;
+      },
+    },
+  ];
+}
+
 function approvalScenarios() {
   const reply = (c, session, body) => call(c, "POST", `/api/sessions/${session}/run/interaction`, {body});
   // Runs one scripted response against `session`, calls `decide(c, pending, attempts)` when
@@ -1657,6 +1728,20 @@ function approvalScenarios() {
       [toolRound("edit", {path: "notes.txt", oldText: "beta", newText: "gamma"})], accept),
     asked("approval: long text is cut and says how long it was", "askall",
       [toolRound("bash", {command: `echo ${"y".repeat(200)}`, cwd: "."})], accept),
+    // exec: the question shows the language and the code, and a declined call never runs it.
+    asked("approval: an exec call shows its language and code, cut and counted when long", "execask",
+      [toolRound("exec", {lang: "python", code: `print('approved')  # ${"z".repeat(5000)}`, args: ["a"]})],
+      (c, pending, attempts) => accept(c, pending, attempts, "execask")),
+    asked("approval: a declined exec call is blocked and the program does not run", "execask",
+      [toolRound("exec", {lang: "bash", code: "echo should-not-run > declined-marker.txt"})],
+      async (c, pending, attempts) => {
+        attempts.push(await reply(c, "execask", {interaction_id: pending.id, decision: "decline", reason: "not that"}));
+      }, {extra: async (c) => ({marker: await readFile(join(c.root, "workspace-execask", "declined-marker.txt"), "utf8").catch(() => null)})}),
+    asked("approval default: an exec call with no approval key asks when the default is ask", "execdefault",
+      [toolRound("exec", {lang: "bash", code: "echo defaulted"})],
+      (c, pending, attempts) => accept(c, pending, attempts, "execdefault")),
+    asked("approval default: an explicit off on exec wins over the default", "execdefaultoff",
+      [toolRound("exec", {lang: "bash", code: "echo ran-without-asking"})], async () => {}),
     // The question must show the text piped to the command, not just `python3 -`.
     asked("approval: a bash call shows its stdin, cut and counted when long", "askall",
       [toolRound("bash", {command: "cat", stdin: `print-me ${"z".repeat(5000)}`})], accept),

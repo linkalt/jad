@@ -10,6 +10,7 @@ func TestApprovalDefaultAskFillsEveryToolWithoutItsOwnKeyAndAnExplicitValueWins(
 		"approval": map[string]any{"default": "ask"},
 		"tools": map[string]any{"native": map[string]any{
 			"bash":    map[string]any{},
+			"exec":    map[string]any{},
 			"write":   map[string]any{"approval": "off"},
 			"edit":    map[string]any{"approval": "ask"},
 			"process": map[string]any{},
@@ -27,6 +28,7 @@ func TestApprovalDefaultAskFillsEveryToolWithoutItsOwnKeyAndAnExplicitValueWins(
 	}
 	for name, want := range map[string]string{
 		"bash":    ApprovalAsk,
+		"exec":    ApprovalAsk,
 		"process": ApprovalAsk,
 		"edit":    ApprovalAsk,
 		"write":   ApprovalOff,
@@ -35,6 +37,8 @@ func TestApprovalDefaultAskFillsEveryToolWithoutItsOwnKeyAndAnExplicitValueWins(
 		switch name {
 		case "bash":
 			got = config.NativeBash.Approval
+		case "exec":
+			got = config.NativeExec.Approval
 		case "process":
 			got = config.NativeProcess.Approval
 		case "edit":

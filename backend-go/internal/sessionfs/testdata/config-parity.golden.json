@@ -803,7 +803,7 @@
     "name": "native tool unknown lists skill",
     "profile": "",
     "model": "",
-    "error": "tools.native.unrelated is not supported; supported keys are bash, edit, fetch, glob, grep, memory, process, read, request_draft, skill, task, write; MCP servers are configured under tools.mcp"
+    "error": "tools.native.unrelated is not supported; supported keys are bash, edit, exec, fetch, glob, grep, memory, process, read, request_draft, skill, task, write; MCP servers are configured under tools.mcp"
   },
   {
     "name": "checkpoint all keys",
@@ -1502,5 +1502,325 @@
     "profile": "",
     "model": "",
     "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+  },
+  {
+    "name": "exec defaults",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "exec without bash",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec needs tools.native.bash, whose child-process settings it uses"
+  },
+  {
+    "name": "exec null",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec must be an object"
+  },
+  {
+    "name": "exec not an object",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec must be an object"
+  },
+  {
+    "name": "exec unknown key",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.unknown_key is not supported; supported keys are approval, code_max_bytes, langs, line_aware, result_max_bytes"
+  },
+  {
+    "name": "exec approval invalid",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.approval must be \"off\" or \"ask\""
+  },
+  {
+    "name": "exec approval null",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.approval must be \"off\" or \"ask\""
+  },
+  {
+    "name": "exec approval ask",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "exec code_max_bytes zero",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.code_max_bytes must be a safe integer between 1 and 10485760"
+  },
+  {
+    "name": "exec code_max_bytes over limit",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.code_max_bytes must be a safe integer between 1 and 10485760"
+  },
+  {
+    "name": "exec code_max_bytes fractional",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.code_max_bytes must be a safe integer between 1 and 10485760"
+  },
+  {
+    "name": "exec code_max_bytes string",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.code_max_bytes must be a safe integer between 1 and 10485760"
+  },
+  {
+    "name": "exec code_max_bytes null",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "exec result_max_bytes string",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.result_max_bytes must be a safe integer between 1 and 10485760"
+  },
+  {
+    "name": "exec result_max_bytes zero",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.result_max_bytes must be a safe integer between 1 and 10485760"
+  },
+  {
+    "name": "exec line_aware string",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.line_aware must be a boolean"
+  },
+  {
+    "name": "exec line_aware null",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "exec langs not an object",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs must be an object"
+  },
+  {
+    "name": "exec langs bad name",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.Bad Name is not a valid language name (lowercase letters, digits, _ + . -)"
+  },
+  {
+    "name": "exec lang not an object",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x must be an object"
+  },
+  {
+    "name": "exec lang without argv",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+  },
+  {
+    "name": "exec lang empty argv",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+  },
+  {
+    "name": "exec lang empty argv item",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+  },
+  {
+    "name": "exec lang argv not strings",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+  },
+  {
+    "name": "exec lang argv too long",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+  },
+  {
+    "name": "exec lang bad code",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.code must be \"stdin\" or \"file\""
+  },
+  {
+    "name": "exec lang file without placeholder",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.argv must contain {file} when code is \"file\""
+  },
+  {
+    "name": "exec lang stdin with placeholder",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.argv must not contain {file} when code is \"stdin\""
+  },
+  {
+    "name": "exec lang bad ext",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.ext must be empty or a dot and 1 to 8 letters or digits"
+  },
+  {
+    "name": "exec lang bad alias",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.aliases must be language names"
+  },
+  {
+    "name": "exec lang aliases not a list",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.aliases must be language names"
+  },
+  {
+    "name": "exec lang unknown key",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs.x.extra is not supported; did you mean ext?"
+  },
+  {
+    "name": "exec lang alias clashes with builtin",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs: \"py\" names both python and x"
+  },
+  {
+    "name": "exec lang alias clashes with another entry",
+    "profile": "",
+    "model": "",
+    "error": "tools.native.exec.langs: \"z\" names both x and y"
+  },
+  {
+    "name": "exec lang replaces a builtin and takes its aliases",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "exec lang valid file entry",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
+  },
+  {
+    "name": "exec approval default",
+    "profile": "",
+    "model": "",
+    "ok": {
+      "paths": {
+        "messages": "$ROOT/session-1/messages.jsonl",
+        "messages_backup": "$ROOT/session-1/messages.backup.jsonl",
+        "compaction_cache": "$ROOT/session-1/staging/compaction-cache.json",
+        "history_cache": "$ROOT/session-1/staging/history-cache.json",
+        "usage_cache": "$ROOT/session-1/staging/usage-cache.json",
+        "cursor_cache": "$ROOT/session-1/staging/cursor-cache.json",
+        "run_error_cache": "$ROOT/session-1/staging/run-error-cache.json",
+        "statecontext": "$ROOT/session-1/staging/statecontext.json",
+        "staging": "$ROOT/session-1/staging",
+        "http_debug": "$ROOT/session-1/debug/http"
+      },
+      "model_path": "$ROOT/session-1/model.json"
+    }
   }
 ]

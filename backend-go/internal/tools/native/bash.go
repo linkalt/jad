@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
 	"example.com/agent-harness/backend-go/internal/tools"
@@ -129,7 +131,59 @@ func executeNativeBash(
 			fmt.Sprintf("stdin is %d bytes, over the limit of %d", stdinBytes, settings.StdinMaxBytes),
 			tools.Information{Key: "suggestion", Value: "write the text to a file and run it from there"})
 	}
-	resolved, pathError := resolveExistingTarget(args.cwd, execution.WorkspaceRoot, settings.Policy, execution.CallID)
+	commandArgs := []string{"-c", commandText}
+	if settings.LoginShell {
+		commandArgs = []string{"-l", "-c", commandText}
+	}
+	return runShellChild(ctx, shellChildRun{
+		file:  settings.Shell,
+		argv:  commandArgs,
+		stdin: args.stdin,
+		cwd:   args.cwd,
+		// timeoutMs is applied by runShellChild from the same argument.
+		timeoutMs: args.timeoutMs,
+	}, settings, apiKeyEnv, execution)
+}
+
+// shellChildRun is what differs between the tools that run a child under bash's policy.
+type shellChildRun struct {
+	file      string
+	argv      []string
+	stdin     string
+	cwd       string
+	timeoutMs *int64
+	// lineAware cuts a truncated stream at line boundaries.
+	lineAware bool
+	// extraEnv is added after the allowlist and denials were applied.
+	extraEnv map[string]string
+	// resultFile is a file the program may write its answer to; its text, cut to maxBytes,
+	// is shown ahead of the raw output, which is then labeled [output].
+	resultFile *shellResultFile
+	// program names the interpreter in the "not installed" error; nil means the shell.
+	program *shellProgram
+}
+
+type shellResultFile struct {
+	path     string
+	maxBytes int64
+}
+
+type shellProgram struct {
+	name    string
+	setting string
+}
+
+// runShellChild runs one child in a resolved working directory under bash's settings
+// (timeout, spill, stream budgets, environment) and renders the result. bash and exec
+// share it, so the two cannot drift in how output is bounded or reported.
+func runShellChild(
+	ctx context.Context,
+	run shellChildRun,
+	settings sessionfs.NativeBashSettings,
+	apiKeyEnv string,
+	execution tools.ExecutionContext,
+) string {
+	resolved, pathError := resolveExistingTarget(run.cwd, execution.WorkspaceRoot, settings.Policy, execution.CallID)
 	if pathError != "" {
 		return pathError
 	}
@@ -141,15 +195,11 @@ func executeNativeBash(
 		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "not_a_directory", "The working directory is not a directory", tools.Information{Key: "path", Value: resolved.displayPath})
 	}
 
-	timeoutMs := effectiveBashTimeoutMs(args.timeoutMs, settings)
+	timeoutMs := effectiveBashTimeoutMs(run.timeoutMs, settings)
 	spillPlan := planBashSpill(settings.Spill, execution.WorkspaceRoot, execution.SessionDir, execution.CallID)
 	var spillWriters map[bashStream]bashSpillSink
 	if spillPlan != nil {
 		spillWriters = spillPlan.writers
-	}
-	commandArgs := []string{"-c", commandText}
-	if settings.LoginShell {
-		commandArgs = []string{"-l", "-c", commandText}
 	}
 	collector := newBashOutputCollector(
 		bashStreamLimits{headBytes: int(settings.Stdout.HeadBytes), tailBytes: int(settings.Stdout.TailBytes)},
@@ -157,20 +207,65 @@ func executeNativeBash(
 		int(settings.MaxLineChars),
 		settings.StripANSI,
 	)
+	collector.lineAware = run.lineAware
+	environment := buildNativeBashEnvironment(os.Environ(), settings, apiKeyEnv)
+	for _, name := range sortedKeys(run.extraEnv) {
+		environment = append(environment, name+"="+run.extraEnv[name])
+	}
 	child := runBashCommand(ctx, bashChildRequest{
-		file:                     settings.Shell,
-		args:                     commandArgs,
+		file:                     run.file,
+		args:                     run.argv,
 		cwd:                      resolved.realPath,
-		environment:              buildNativeBashEnvironment(os.Environ(), settings, apiKeyEnv),
+		environment:              environment,
 		timeout:                  time.Duration(timeoutMs) * time.Millisecond,
 		killGrace:                time.Duration(settings.KillGraceMs) * time.Millisecond,
 		killProcessGroupWhenDone: settings.KillProcessGroup == "always",
 		collector:                collector,
 		spill:                    spillWriters,
-		stdin:                    args.stdin,
+		stdin:                    run.stdin,
 	})
 	spillDecision := applyBashSpillPolicy(settings.Spill, spillPlan, child, execution.WorkspaceRoot)
-	return renderBashExecutionResult(execution.CallID, resolved.displayPath, settings.Shell, timeoutMs, child, spillDecision)
+	var answer *shellResult
+	if run.resultFile != nil {
+		answer = readShellResultFile(run.resultFile.path, run.resultFile.maxBytes)
+	}
+	return renderBashExecutionResult(execution.CallID, resolved.displayPath, run.file, timeoutMs, child, spillDecision, answer, run.program)
+}
+
+func sortedKeys(values map[string]string) []string {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// shellResult is the answer a program wrote to its result file.
+type shellResult struct {
+	text     string
+	cutBytes int64
+}
+
+// readShellResultFile reads the answer, cut to maxBytes without splitting a character and
+// with trailing whitespace removed. A missing, empty or blank file is no answer.
+func readShellResultFile(path string, maxBytes int64) *shellResult {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	end := len(data)
+	if int64(end) > maxBytes {
+		end = int(maxBytes)
+	}
+	for end > 0 && end < len(data) && !utf8.RuneStart(data[end]) {
+		end--
+	}
+	text := strings.TrimRightFunc(string(data[:end]), unicode.IsSpace)
+	if text == "" {
+		return nil
+	}
+	return &shellResult{text: text, cutBytes: int64(len(data) - end)}
 }
 
 func effectiveBashTimeoutMs(requested *int64, settings sessionfs.NativeBashSettings) int64 {
@@ -255,14 +350,22 @@ func buildNativeBashEnvironment(base []string, settings sessionfs.NativeBashSett
 	return environment
 }
 
-func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, result bashChildResult, spill bashSpillDecision) string {
+func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, result bashChildResult, spill bashSpillDecision, answer *shellResult, program *shellProgram) string {
 	information := []tools.Information{{Key: "cwd", Value: cwd}}
 	if result.leftRunning {
 		information = append(information, tools.Information{Key: "left_running", Value: true})
 	}
+	contentText := result.output.text
+	if answer != nil {
+		if contentText != "" {
+			contentText = "[result]\n" + answer.text + "\n[output]\n" + contentText
+		} else {
+			contentText = "[result]\n" + answer.text
+		}
+	}
 	content := (*tools.Content)(nil)
-	if result.output.text != "" {
-		content = &tools.Content{Text: result.output.text, Encoding: "utf8"}
+	if contentText != "" {
+		content = &tools.Content{Text: contentText, Encoding: "utf8"}
 	}
 	contentStream := ""
 	if result.output.stdout.text != "" && result.output.stderr.text != "" {
@@ -318,6 +421,9 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 	if result.output.binary {
 		measured = append(measured, tools.Information{Key: "binary_output", Value: true})
 	}
+	if answer != nil && answer.cutBytes > 0 {
+		measured = append(measured, tools.Information{Key: "result_truncated_bytes", Value: answer.cutBytes})
+	}
 
 	render := func(status tools.Status, summary string, errorFields ...tools.Information) string {
 		items := append([]tools.Information(nil), errorFields...)
@@ -331,18 +437,30 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 	}
 	if result.spawnError != nil {
 		unavailable := errors.Is(result.spawnError, exec.ErrNotFound) || errors.Is(result.spawnError, os.ErrNotExist)
+		// An interpreter is named "interpreter" and the shell "shell", so each message
+		// points at the setting that would fix it.
+		programKey := "shell"
+		if program != nil {
+			programKey = "interpreter"
+		}
 		if unavailable {
-			return render(tools.StatusError, "The shell is not available",
+			summary, code := "The shell is not available", "shell_unavailable"
+			suggestion := "install the shell or point tools.native.bash.shell at an executable"
+			if program != nil {
+				summary, code = program.name+" is not available", "interpreter_unavailable"
+				suggestion = "install " + program.name + " or point " + program.setting + " at it"
+			}
+			return render(tools.StatusError, summary,
 				tools.Information{Key: "error_type", Value: "execution"},
-				tools.Information{Key: "error_code", Value: "shell_unavailable"},
-				tools.Information{Key: "shell", Value: shell},
-				tools.Information{Key: "suggestion", Value: "install the shell or point tools.native.bash.shell at an executable"},
+				tools.Information{Key: "error_code", Value: code},
+				tools.Information{Key: programKey, Value: shell},
+				tools.Information{Key: "suggestion", Value: suggestion},
 			)
 		}
 		return render(tools.StatusError, "The command could not be started",
 			tools.Information{Key: "error_type", Value: "execution"},
 			tools.Information{Key: "error_code", Value: "spawn_failed"},
-			tools.Information{Key: "shell", Value: shell},
+			tools.Information{Key: programKey, Value: shell},
 			tools.Information{Key: "system_error", Value: result.spawnError.Error()},
 		)
 	}

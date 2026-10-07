@@ -1056,6 +1056,76 @@
               },
               "additionalProperties": false
             },
+            "exec": {
+              "type": "object",
+              "description": "Inline code in a configured interpreter. Requires tools.native.bash: the environment, timeouts, output budgets, spill files and path rules of a run are bash's, so the two tools bound and report output alike. exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.",
+              "properties": {
+                "approval": {
+                  "type": "string",
+                  "enum": ["off", "ask"],
+                  "description": "ask pauses every call until the user approves it; the question shows the language and the code. When absent, approval.default applies (off unless set). Approval is a confirmation, not a sandbox."
+                },
+                "langs": {
+                  "type": "object",
+                  "description": "Interpreters by name, merged over the built-in python, node, bash, sh, ruby and perl. An entry with a built-in name replaces it. A name or alias claimed by two entries is refused.",
+                  "propertyNames": {
+                    "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "required": ["argv"],
+                    "properties": {
+                      "argv": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 32,
+                        "items": {"type": "string", "minLength": 1},
+                        "description": "The interpreter and its fixed flags, run without a shell. With code \"file\", one item contains {file}, replaced by the path of the code file."
+                      },
+                      "code": {
+                        "type": "string",
+                        "enum": ["stdin", "file"],
+                        "default": "stdin",
+                        "description": "How the program receives its code: on standard input, or as a temporary file that is removed after the call."
+                      },
+                      "ext": {
+                        "type": "string",
+                        "pattern": "^(\\.[A-Za-z0-9]{1,8})?$",
+                        "default": "",
+                        "description": "Extension of the temporary code file, with its dot (code \"file\" only)."
+                      },
+                      "aliases": {
+                        "type": "array",
+                        "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$"},
+                        "default": [],
+                        "description": "Other names the model may use for this language."
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "code_max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 262144,
+                  "description": "Largest code text one call may carry, in UTF-8 bytes. A larger text is refused with code_too_large, never cut."
+                },
+                "result_max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 16384,
+                  "description": "Largest answer read back from the file named by $EXEC_RESULT. A longer one is cut at a character and result_truncated_bytes says how much was dropped."
+                },
+                "line_aware": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "When a stream is cut, end the head and start the tail on line boundaries so no line is shown half. The omitted marker counts every byte dropped."
+                }
+              },
+              "additionalProperties": false
+            },
             "glob": {
               "type": "object",
               "description": "File listing by name pattern. Read-only: it reuses the read path rules for the searched directory.",

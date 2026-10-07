@@ -6,6 +6,7 @@ import test from "node:test";
 import {fileURLToPath} from "node:url";
 
 import {nativeBashDefinition} from "../src/tools/native/bash.js";
+import {nativeExecDefinition} from "../src/tools/native/exec.js";
 import {nativeEditDefinition} from "../src/tools/native/edit.js";
 import {nativeGlobDefinition} from "../src/tools/native/glob.js";
 import {nativeGrepDefinition, normalizeGrepArguments} from "../src/tools/native/grep.js";
@@ -38,6 +39,7 @@ test("shipped definition documents match the code definitions", async () => {
     ["edit.json", nativeEditDefinition],
     ["grep.json", nativeGrepDefinition],
     ["bash.json", nativeBashDefinition],
+    ["exec.json", nativeExecDefinition],
     ["glob.json", nativeGlobDefinition],
     ["process.json", nativeProcessDefinition],
     ["task.json", nativeTaskDefinition],

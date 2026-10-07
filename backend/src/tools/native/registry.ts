@@ -14,6 +14,7 @@ import type {LoadedSessionConfig} from "../../config.js";
 import type {JsonRecord} from "../../persistence.js";
 import type {LoadedTool, ToolDefinition} from "../types.js";
 import {executeNativeBash, NATIVE_BASH_ID, nativeBashDefinition} from "./bash.js";
+import {executeNativeExec, NATIVE_EXEC_ID, nativeExecDefinition, normalizeExecArguments} from "./exec.js";
 import {executeNativeEdit, NATIVE_EDIT_ID, nativeEditDefinition} from "./edit.js";
 import {executeNativeGlob, NATIVE_GLOB_ID, nativeGlobDefinition} from "./glob.js";
 import {executeNativeGrep, NATIVE_GREP_ID, nativeGrepDefinition, normalizeGrepArguments} from "./grep.js";
@@ -188,7 +189,7 @@ function grepSpec(): NativeToolSpec {
 }
 
 export function nativeToolSpecs(): NativeToolSpec[] {
-  return [readSpec(), writeSpec(), editSpec(), grepSpec(), bashSpec(), globSpec(), processSpec(), taskSpec(), memorySpec(), fetchSpec(), requestDraftSpec(), skillSpec()];
+  return [readSpec(), writeSpec(), editSpec(), grepSpec(), bashSpec(), execSpec(), globSpec(), processSpec(), taskSpec(), memorySpec(), fetchSpec(), requestDraftSpec(), skillSpec()];
 }
 
 function skillSpec(): NativeToolSpec {
@@ -369,6 +370,33 @@ function globSpec(): NativeToolSpec {
           definition,
           validate,
           execute: (args, context) => executeNativeGlob(args, {...context, policy}),
+        },
+      };
+    },
+  };
+}
+
+function execSpec(): NativeToolSpec {
+  return {
+    id: NATIVE_EXEC_ID,
+    settingName: "exec",
+    definition: nativeExecDefinition,
+    required: ["lang", "code"],
+    exampleOperation: {lang: "python", code: "print(1 + 1)"},
+    normalizeArguments: normalizeExecArguments,
+    configured: (config) => config.settings.tools.native.exec !== undefined,
+    build: (definition, config, validate) => {
+      const exec = config.settings.tools.native.exec;
+      const policy = config.settings.tools.native.bash;
+      if (!exec || !policy) {
+        return {error: `tool ${definition.id} is not exposed in tools.native`};
+      }
+      const apiKeyEnv = config.model.api_key_env;
+      return {
+        tool: {
+          definition,
+          validate,
+          execute: (args, context) => executeNativeExec(args, {...context, policy, apiKeyEnv, exec}),
         },
       };
     },

@@ -285,6 +285,37 @@ export interface NativeBashToolSettings extends NativePathPolicy {
   env_deny: string[];
 }
 
+/** How a language receives its code: on standard input, or as a temporary file. */
+export type NativeExecCodeDelivery = "stdin" | "file";
+
+/** One interpreter `exec` can run. */
+export interface NativeExecLangSettings {
+  /** Interpreter and its fixed flags; `{file}` is replaced by the code file in file mode. */
+  argv: string[];
+  code: NativeExecCodeDelivery;
+  /** Extension of the temporary code file (file mode only), with its dot. */
+  ext: string;
+  /** Other names the model may use for this language. */
+  aliases: string[];
+}
+
+/**
+ * Settings of `exec`. Everything about how a child runs (environment, spill, stream
+ * budgets, timeouts, path policy) comes from `tools.native.bash`, which `exec` requires.
+ */
+export interface NativeExecToolSettings extends JsonRecord {
+  /** `ask` pauses each call for the user's decision; `off` (default) runs it. */
+  approval?: ApprovalMode;
+  /** Interpreters by name; the configured entries are merged over the defaults. */
+  langs: Record<string, NativeExecLangSettings>;
+  /** Largest `code` text one call may carry; more is refused, never cut. */
+  code_max_bytes: number;
+  /** Largest result text read back from `$EXEC_RESULT`; more is cut and says so. */
+  result_max_bytes: number;
+  /** Cut a truncated stream at line boundaries instead of in the middle of a line. */
+  line_aware: boolean;
+}
+
 export type NativeTaskStateContextStatus = "todo" | "in-progress" | "blocked" | "done";
 export interface NativeTaskStateContextSettings extends JsonRecord {
   statuses: NativeTaskStateContextStatus[];
@@ -416,6 +447,7 @@ export interface NativeToolSettings extends JsonRecord {
   edit?: NativeEditToolSettings;
   grep?: NativeGrepToolSettings;
   bash?: NativeBashToolSettings;
+  exec?: NativeExecToolSettings;
   glob?: NativeGlobToolSettings;
   process?: NativeProcessToolSettings;
   task?: NativeTaskToolSettings;
@@ -858,6 +890,24 @@ export const DEFAULT_NATIVE_BASH_MAX_LINE_CHARS = 2000;
 /** Room for a long inline script or a JSON document piped to a command. */
 export const DEFAULT_NATIVE_BASH_STDIN_MAX_BYTES = 256 * 1024;
 export const DEFAULT_NATIVE_BASH_STRIP_ANSI = true;
+/** Room for a long inline program; the same order as a bash `stdin`. */
+export const DEFAULT_NATIVE_EXEC_CODE_MAX_BYTES = 256 * 1024;
+/** A result is meant to be short; the output budgets are for raw output. */
+export const DEFAULT_NATIVE_EXEC_RESULT_MAX_BYTES = 16 * 1024;
+export const DEFAULT_NATIVE_EXEC_LINE_AWARE = true;
+/**
+ * Interpreters available without configuration. The program reads its code from
+ * standard input, so relative imports and the working directory behave as in a
+ * shell; `exec.langs` adds or replaces entries.
+ */
+export const DEFAULT_NATIVE_EXEC_LANGS: Readonly<Record<string, NativeExecLangSettings>> = {
+  python: {argv: ["python3", "-"], code: "stdin", ext: ".py", aliases: ["python3", "py"]},
+  node: {argv: ["node", "-"], code: "stdin", ext: ".js", aliases: ["nodejs", "js", "javascript"]},
+  bash: {argv: ["bash", "-s", "--"], code: "stdin", ext: ".sh", aliases: ["shell"]},
+  sh: {argv: ["sh", "-s", "--"], code: "stdin", ext: ".sh", aliases: []},
+  ruby: {argv: ["ruby", "-"], code: "stdin", ext: ".rb", aliases: ["rb"]},
+  perl: {argv: ["perl", "-"], code: "stdin", ext: ".pl", aliases: []},
+};
 export const DEFAULT_NATIVE_FETCH_STORAGE_DIR = ".fetch";
 export const DEFAULT_NATIVE_FETCH_INCLUDE_METADATA = false;
 export const DEFAULT_NATIVE_FETCH_INCLUDE_IMAGES = false;
@@ -2169,6 +2219,71 @@ function normalizeStateContext(value: unknown, path: string, tools: ToolSettings
   return {...raw, enabled, trigger, tools: providers, role, max_bytes: maxBytes};
 }
 
+const EXEC_LANG_NAME_PATTERN = /^[a-z0-9][a-z0-9_+.-]{0,31}$/;
+const EXEC_LANG_EXTENSION_PATTERN = /^\.[A-Za-z0-9]{1,8}$/;
+const EXEC_FILE_PLACEHOLDER = "{file}";
+const EXEC_LANG_KEYS = ["aliases", "argv", "code", "ext"];
+
+/**
+ * The interpreter table: the built-in entries with the configured ones merged over
+ * them by name. A name or alias that two entries both claim is refused, because the
+ * model could not tell which program it would get.
+ */
+function normalizeExecLangs(value: unknown, path: string): Record<string, NativeExecLangSettings> {
+  if (value !== undefined && !isRecord(value)) {
+    throw new ConfigError(`${path} must be an object`);
+  }
+  const langs: Record<string, NativeExecLangSettings> = {};
+  for (const [name, entry] of Object.entries(DEFAULT_NATIVE_EXEC_LANGS)) {
+    langs[name] = {...entry, argv: [...entry.argv], aliases: [...entry.aliases]};
+  }
+  for (const [name, entry] of Object.entries(value ?? {})) {
+    const entryPath = `${path}.${name}`;
+    if (!EXEC_LANG_NAME_PATTERN.test(name)) {
+      throw new ConfigError(`${entryPath} is not a valid language name (lowercase letters, digits, _ + . -)`);
+    }
+    if (!isRecord(entry)) {
+      throw new ConfigError(`${entryPath} must be an object`);
+    }
+    assertSupportedKeys(entry, EXEC_LANG_KEYS, entryPath);
+    const argv = entry.argv;
+    if (!Array.isArray(argv) || argv.length === 0 || argv.length > 32 || argv.some((item) => typeof item !== "string" || item.length === 0)) {
+      throw new ConfigError(`${entryPath}.argv must be 1 to 32 non-empty strings: the interpreter and its flags`);
+    }
+    const code = entry.code ?? "stdin";
+    if (code !== "stdin" && code !== "file") {
+      throw new ConfigError(`${entryPath}.code must be "stdin" or "file"`);
+    }
+    const placeholders = argv.filter((item) => (item as string).includes(EXEC_FILE_PLACEHOLDER)).length;
+    if (code === "file" && placeholders === 0) {
+      throw new ConfigError(`${entryPath}.argv must contain ${EXEC_FILE_PLACEHOLDER} when code is "file"`);
+    }
+    if (code === "stdin" && placeholders > 0) {
+      throw new ConfigError(`${entryPath}.argv must not contain ${EXEC_FILE_PLACEHOLDER} when code is "stdin"`);
+    }
+    const ext = entry.ext ?? "";
+    if (typeof ext !== "string" || (ext !== "" && !EXEC_LANG_EXTENSION_PATTERN.test(ext))) {
+      throw new ConfigError(`${entryPath}.ext must be empty or a dot and 1 to 8 letters or digits`);
+    }
+    const aliases = entry.aliases ?? [];
+    if (!Array.isArray(aliases) || aliases.some((alias) => typeof alias !== "string" || !EXEC_LANG_NAME_PATTERN.test(alias))) {
+      throw new ConfigError(`${entryPath}.aliases must be language names`);
+    }
+    langs[name] = {argv: [...(argv as string[])], code, ext, aliases: [...(aliases as string[])]};
+  }
+  const claimed = new Map<string, string>();
+  for (const [name, entry] of Object.entries(langs)) {
+    for (const label of [name, ...entry.aliases]) {
+      const owner = claimed.get(label);
+      if (owner !== undefined && owner !== name) {
+        throw new ConfigError(`${path}: "${label}" names both ${owner} and ${name}`);
+      }
+      claimed.set(label, name);
+    }
+  }
+  return langs;
+}
+
 /** Native tools whose settings `normalizeTools` understands. */
 type NativeToolName =
   | "read"
@@ -2177,6 +2292,7 @@ type NativeToolName =
   | "grep"
   | "glob"
   | "bash"
+  | "exec"
   | "process"
   | "task"
   | "memory"
@@ -2203,6 +2319,7 @@ const NATIVE_TOOL_KEYS: Record<NativeToolName, readonly string[]> = {
     // Removed keys, kept so their "was removed" errors below still fire.
     "capture_bytes", "head_ratio",
   ],
+  exec: ["approval", "code_max_bytes", "langs", "line_aware", "result_max_bytes"],
   process: [
     "approval", "env", "env_deny", "env_file", "kill_grace_ms", "log_cap_bytes", "login_shell", "max_completed",
     "max_line_chars", "max_running", "max_wait_timeout_ms", "paths", "retention_days",
@@ -2754,6 +2871,39 @@ async function normalizeTools(
     };
   }
 
+  const execValue = nativeValue.exec;
+  let exec: NativeExecToolSettings | undefined;
+  if (execValue !== undefined) {
+    if (!isRecord(execValue)) {
+      throw new ConfigError(`${path}: tools.native.exec must be an object`);
+    }
+    assertSupportedKeys(execValue, NATIVE_TOOL_KEYS.exec, `${path}: tools.native.exec`);
+    if (bash === undefined) {
+      // The child's environment, spill files, stream budgets, timeouts and path policy
+      // are bash's; running without them would mean a second copy of every default.
+      throw new ConfigError(`${path}: tools.native.exec needs tools.native.bash, whose child-process settings it uses`);
+    }
+    const sizeSetting = (field: string, fallback: number): number => {
+      const value = execValue[field] ?? fallback;
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > MAX_NATIVE_TOOL_BYTES) {
+        throw new ConfigError(`${path}: tools.native.exec.${field} must be a safe integer between 1 and ${MAX_NATIVE_TOOL_BYTES}`);
+      }
+      return value;
+    };
+    const lineAware = execValue.line_aware ?? DEFAULT_NATIVE_EXEC_LINE_AWARE;
+    if (typeof lineAware !== "boolean") {
+      throw new ConfigError(`${path}: tools.native.exec.line_aware must be a boolean`);
+    }
+    exec = {
+      ...execValue,
+      approval: normalizeApprovalMode(execValue.approval, "tools.native.exec", path, approvalDefault),
+      langs: normalizeExecLangs(execValue.langs, `${path}: tools.native.exec.langs`),
+      code_max_bytes: sizeSetting("code_max_bytes", DEFAULT_NATIVE_EXEC_CODE_MAX_BYTES),
+      result_max_bytes: sizeSetting("result_max_bytes", DEFAULT_NATIVE_EXEC_RESULT_MAX_BYTES),
+      line_aware: lineAware,
+    };
+  }
+
   const taskValue = nativeValue.task;
   let task: NativeTaskToolSettings | undefined;
   if (taskValue !== undefined) {
@@ -3190,6 +3340,7 @@ async function normalizeTools(
       ...(edit ? {edit} : {}),
       ...(grep ? {grep} : {}),
       ...(bash ? {bash} : {}),
+      ...(exec ? {exec} : {}),
       ...(glob ? {glob} : {}),
       ...(processTool ? {process: processTool} : {}),
       ...(task ? {task} : {}),

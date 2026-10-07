@@ -125,6 +125,7 @@ type SessionConfig struct {
 	NativeWrite        *NativeWriteSettings
 	NativeEdit         *NativeEditSettings
 	NativeBash         *NativeBashSettings
+	NativeExec         *NativeExecSettings
 	NativeGlob         *NativeGlobSettings
 	NativeProcess      *NativeProcessSettings
 	NativeTask         *NativeTaskSettings
@@ -341,6 +342,10 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	nativeExec, err := normalizeNativeExecSettings(setting, settingPath, nativeBash)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	nativeTask, err := normalizeNativeTaskSettings(setting, settingPath, cwd, storagePaths.ToolStorage)
 	if err != nil {
 		return SessionConfig{}, err
@@ -374,7 +379,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	applyApprovalDefault(approval.Default, setting, nativeWrite, nativeEdit, nativeBash, nativeProcess, mcpServers)
+	applyApprovalDefault(approval.Default, setting, nativeWrite, nativeEdit, nativeBash, nativeExec, nativeProcess, mcpServers)
 	stateContext, err := normalizeStateContextSettings(setting, settingPath, nativeProcess, nativeTask, nativeMemory)
 	if err != nil {
 		return SessionConfig{}, err
@@ -464,6 +469,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		NativeWrite:           nativeWrite,
 		NativeEdit:            nativeEdit,
 		NativeBash:            nativeBash,
+		NativeExec:            nativeExec,
 		NativeGlob:            nativeGlob,
 		NativeProcess:         nativeProcess,
 		NativeTask:            nativeTask,

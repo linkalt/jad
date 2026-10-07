@@ -15,7 +15,7 @@
  * process tree, no hang waiting for a prompt, and output bounded in bytes.
  */
 
-import {stat, unlink} from "node:fs/promises";
+import {readFile, stat, unlink} from "node:fs/promises";
 import {basename, dirname, join} from "node:path";
 
 import {
@@ -286,11 +286,30 @@ export async function applySpillPolicy(
   return decision;
 }
 
+/** Reads the answer a program wrote to its result file, cut to `maxBytes` without splitting a character. */
+async function readResultFile(path: string, maxBytes: number): Promise<{text: string; cutBytes: number} | undefined> {
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(path);
+  } catch {
+    return undefined;
+  }
+  if (buffer.length === 0) {
+    return undefined;
+  }
+  let end = Math.min(buffer.length, maxBytes);
+  while (end > 0 && end < buffer.length && ((buffer[end] ?? 0) & 0xc0) === 0x80) {
+    end -= 1;
+  }
+  const text = buffer.subarray(0, end).toString("utf8").replace(/\s+$/u, "");
+  return text.length === 0 ? undefined : {text, cutBytes: buffer.length - end};
+}
+
 export async function executeNativeBash(
   args: JsonRecord,
   context: NativeBashExecutionContext,
 ): Promise<string> {
-  const {callId, workspaceRoot, policy, apiKeyEnv} = context;
+  const {callId, policy} = context;
   const command = typeof args.command === "string" ? args.command.trim() : "";
   if (command.length === 0) {
     return executionError(
@@ -316,6 +335,48 @@ export async function executeNativeBash(
     }
   }
 
+  return runShellChild(
+    {
+      args,
+      file: policy.shell,
+      argv: policy.login_shell ? ["-l", "-c", command] : ["-c", command],
+      ...(stdin !== undefined ? {stdin} : {}),
+    },
+    context,
+  );
+}
+
+/** What differs between the tools that run a child with bash's policy. */
+export interface ShellChildRun {
+  /** The call's own arguments: `cwd` and `timeout_ms` are read from here. */
+  args: JsonRecord;
+  file: string;
+  argv: string[];
+  stdin?: string;
+  /** Cut a truncated stream at line boundaries. */
+  lineAware?: boolean;
+  /** Variables added after the allowlist and denials were applied. */
+  extraEnv?: Record<string, string>;
+  /**
+   * A file the program may write its answer to. Its text, cut to `maxBytes`, is shown
+   * ahead of the raw output, which is labeled `[output]` when both are present.
+   */
+  resultFile?: {path: string; maxBytes: number};
+  /** Names the program in the "not installed" error; absent means the configured shell. */
+  program?: {name: string; setting: string};
+}
+
+/**
+ * Runs one child in a resolved working directory under bash's settings (timeout, spill,
+ * stream budgets, environment) and renders the result. `bash` and `exec` share it, so
+ * the two cannot drift in how output is bounded or reported.
+ */
+export async function runShellChild(
+  run: ShellChildRun,
+  context: NativeBashExecutionContext,
+): Promise<string> {
+  const {callId, workspaceRoot, policy, apiKeyEnv} = context;
+  const args = run.args;
   const requestedCwd = stringField(args.cwd) ?? ".";
   const resolved = await resolveExistingTarget(requestedCwd, workspaceRoot, policy, callId);
   if (!resolved.target) {
@@ -339,20 +400,21 @@ export async function executeNativeBash(
   const timeoutMs = effectiveTimeoutMs(integerField(args.timeout_ms), policy);
   const spillPlan = await planSpill(policy, workspaceRoot, context.sessionDir, callId);
   const result = await runChildProcess({
-    file: policy.shell,
-    args: policy.login_shell ? ["-l", "-c", command] : ["-c", command],
+    file: run.file,
+    args: run.argv,
     cwd: realPath,
-    env: buildCommandEnvironment(context.environment ?? process.env, policy, apiKeyEnv),
+    env: {...buildCommandEnvironment(context.environment ?? process.env, policy, apiKeyEnv), ...run.extraEnv},
     timeoutMs,
     killGraceMs: policy.kill_grace_ms,
     killProcessGroupWhenDone: policy.kill_process_group === "always",
     signal: context.signal,
-    ...(stdin !== undefined ? {stdin} : {}),
+    ...(run.stdin !== undefined ? {stdin: run.stdin} : {}),
     output: {
       stdout: toStreamLimits(policy.stdout),
       stderr: toStreamLimits(policy.stderr),
       maxLineChars: policy.max_line_chars,
       stripAnsi: policy.strip_ansi,
+      ...(run.lineAware ? {lineAware: true} : {}),
     },
     ...(spillPlan ? {spill: spillPlan.targets} : {}),
   });
@@ -365,8 +427,14 @@ export async function executeNativeBash(
       ? [["left_running", true] as [string, unknown]]
       : []),
   ];
-  const content = result.text.length > 0
-    ? {text: result.text, encoding: "utf8" as const}
+  const answer = run.resultFile ? await readResultFile(run.resultFile.path, run.resultFile.maxBytes) : undefined;
+  const contentText = answer === undefined
+    ? result.text
+    : result.text.length > 0
+      ? `[result]\n${answer.text}\n[output]\n${result.text}`
+      : `[result]\n${answer.text}`;
+  const content = contentText.length > 0
+    ? {text: contentText, encoding: "utf8" as const}
     : undefined;
   // A command that never finished produced incomplete output even when the
   // byte budget had room, so a timeout always counts as truncation.
@@ -399,6 +467,7 @@ export async function executeNativeBash(
     ...(kept.error ? [["spill_error", kept.error] as [string, unknown]] : []),
     ...(kept.hint ? [["hint", kept.hint] as [string, unknown]] : []),
     ...(result.binary ? [["binary_output", true] as [string, unknown]] : []),
+    ...(answer && answer.cutBytes > 0 ? [["result_truncated_bytes", answer.cutBytes] as [string, unknown]] : []),
   ];
 
   const render = (
@@ -419,12 +488,17 @@ export async function executeNativeBash(
 
   if (result.spawnError) {
     const unavailable = result.spawnError.code === "ENOENT";
-    return render("error", unavailable ? "The shell is not available" : "The command could not be started", [
+    const program = run.program;
+    return render("error", unavailable
+      ? program ? `${program.name} is not available` : "The shell is not available"
+      : "The command could not be started", [
       ["error_type", "execution"],
-      ["error_code", unavailable ? "shell_unavailable" : "spawn_failed"],
-      ["shell", policy.shell],
+      ["error_code", unavailable ? (program ? "interpreter_unavailable" : "shell_unavailable") : "spawn_failed"],
+      [program ? "interpreter" : "shell", run.file],
       ...(unavailable
-        ? [["suggestion", "install the shell or point tools.native.bash.shell at an executable"] as [string, unknown]]
+        ? [["suggestion", program
+          ? `install ${program.name} or point ${program.setting} at it`
+          : "install the shell or point tools.native.bash.shell at an executable"] as [string, unknown]]
         : [["system_error", result.spawnError.message] as [string, unknown]]),
     ]);
   }

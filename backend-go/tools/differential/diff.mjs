@@ -125,6 +125,12 @@ async function writeFixtures(sessions, providerUrl) {
       await definition("process.js", "nativeProcessDefinition"),
     ],
   }));
+  // exec reuses bash's runner, so its manifest carries both definitions.
+  const execManifest = join(dirname(sessions), "tools-exec.json");
+  await writeFile(execManifest, JSON.stringify({
+    schema_version: 1,
+    tools: [await definition("bash.js", "nativeBashDefinition"), await definition("exec.js", "nativeExecDefinition")],
+  }));
   const toolboxManifest = join(dirname(sessions), "tools-toolbox.json");
   const toolboxTools = [];
   for (const [file, name] of [["read.js", "nativeReadDefinition"], ["grep.js", "nativeGrepDefinition"], ["glob.js", "nativeGlobDefinition"], ["memory.js", "nativeMemoryDefinition"], ["task.js", "nativeTaskDefinition"], ["process.js", "nativeProcessDefinition"], ["fetch.js", "nativeFetchDefinition"]]) {
@@ -167,7 +173,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "keeptools", "paged", "natived", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "askdefault", "askdefaultexplicit", "askdefaultoff", "askdefaultbad", "askdefaultmcp", "ckpt", "ckptnogit", "ckptbad", "ckptoff", "ckptslow", "retryoff", "retrymany", "retrybad", "retryslow", "capstop", "capnone", "capbad", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "keeptools", "paged", "natived", "execd", "execbudget", "execnobash", "execbad", "execask", "execdefault", "execdefaultoff", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "askdefault", "askdefaultexplicit", "askdefaultoff", "askdefaultbad", "askdefaultmcp", "ckpt", "ckptnogit", "ckptbad", "ckptoff", "ckptslow", "retryoff", "retrymany", "retrybad", "retryslow", "capstop", "capnone", "capbad", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -202,6 +208,33 @@ async function writeFixtures(sessions, providerUrl) {
       setting.tool_definition_paths = [mutatingManifest];
       const spill = {spillalways: {keep: "always", cap_bytes: 100000}, spilloff: {enabled: false}}[id] ?? {};
       setting.tools = {native: {read: {}, bash: {spill}, write: {}, edit: {}}};
+    }
+    if (id === "execd" || id === "execbudget" || id === "execnobash" || id === "execbad" || id === "execask" || id === "execdefault" || id === "execdefaultoff") {
+      // Each exec session has its own workspace, so spill files and scratch output of one
+      // never show up in another's results.
+      const workspace = join(dirname(sessions), `workspace-${id}`);
+      await mkdir(workspace, {recursive: true});
+      setting.cwd = workspace;
+      setting.max_tool_rounds = 12;
+      setting.tool_definition_paths = [execManifest];
+      setting.tools = {native: {bash: {}, exec: {}}};
+      if (id === "execbudget") {
+        // 43 is not a multiple of the 8-byte rows the scenario prints, so a plain cut
+        // lands inside a row; only the line-aware cut avoids it.
+        setting.tools.native.bash = {stdout: {head_bytes: 43, tail_bytes: 43}, stderr: {head_bytes: 43, tail_bytes: 43}, max_bytes: 4096, spill: {keep: "always"}};
+      }
+      if (id === "execnobash") setting.tools = {native: {exec: {}}};
+      if (id === "execbad") setting.tools = {native: {bash: {}, exec: {langs: {x: {argv: ["a"], aliases: ["py"]}}}}};
+      if (id === "execask") {
+        setting.tools = {native: {bash: {}, exec: {approval: "ask"}}};
+        setting.approval = {timeout_ms: 20000, max_timeout_ms: 40000, headless: "deny", preview_bytes: 64};
+      }
+      // approval.default reaches exec when it has no key of its own; an explicit off wins.
+      if (id === "execdefault") setting.approval = {timeout_ms: 20000, max_timeout_ms: 40000, preview_bytes: 64, default: "ask"};
+      if (id === "execdefaultoff") {
+        setting.tools = {native: {bash: {}, exec: {approval: "off"}}};
+        setting.approval = {timeout_ms: 20000, max_timeout_ms: 40000, preview_bytes: 64, default: "ask"};
+      }
     }
     if (id === "toolbox") {
       setting.cwd = toolbox;
