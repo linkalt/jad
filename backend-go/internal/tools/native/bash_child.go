@@ -38,6 +38,9 @@ type bashChildRequest struct {
 	killProcessGroupWhenDone bool
 	collector                *bashOutputCollector
 	spill                    map[bashStream]bashSpillSink
+	// stdin is written to the child's standard input, which is then closed.
+	// Empty leaves the input closed from the start (/dev/null).
+	stdin string
 }
 
 type bashChildResult struct {
@@ -95,16 +98,46 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 	command.Env = request.environment
 	command.Stdout = stdoutWriter
 	command.Stderr = stderrWriter
+	// An own pipe, not exec's copier: Wait must never block on a descendant that
+	// keeps the read end open and never reads it.
+	var stdinReader, stdinWriter *os.File
+	if request.stdin != "" {
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			_ = stdoutReader.Close()
+			_ = stdoutWriter.Close()
+			_ = stderrReader.Close()
+			_ = stderrWriter.Close()
+			return finishBashSpawnFailure(result, request.collector, request.spill, err, started)
+		}
+		command.Stdin = reader
+		stdinReader, stdinWriter = reader, writer
+		// Closing the write end when the call ends frees the writer goroutine even
+		// if a descendant that holds the read end never reads it.
+		defer stdinWriter.Close()
+	}
 	configureProcessGroup(command)
 	if err := command.Start(); err != nil {
 		_ = stdoutReader.Close()
 		_ = stdoutWriter.Close()
 		_ = stderrReader.Close()
 		_ = stderrWriter.Close()
+		if stdinReader != nil {
+			_ = stdinReader.Close()
+		}
 		return finishBashSpawnFailure(result, request.collector, request.spill, err, started)
 	}
 	_ = stdoutWriter.Close()
 	_ = stderrWriter.Close()
+	if stdinReader != nil {
+		// The child owns the read end now. A program that exits or never reads its
+		// input makes the write fail (EPIPE); that is its choice, not a failed call.
+		_ = stdinReader.Close()
+		go func(writer *os.File, text string) {
+			_, _ = io.WriteString(writer, text)
+			_ = writer.Close()
+		}(stdinWriter, request.stdin)
+	}
 
 	var readers sync.WaitGroup
 	readers.Add(2)

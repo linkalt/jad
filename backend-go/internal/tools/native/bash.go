@@ -23,6 +23,7 @@ var bashInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "command":{"type":"string","minLength":1,"description":"Shell command line, executed with the configured shell."},
+    "stdin":{"type":"string","description":"Text piped to the command's standard input, e.g. a script for ` + "`python3 -` or `node -`" + `, or data for ` + "`jq`" + `."},
     "cwd":{"type":"string","minLength":1,"description":"Directory to run in, relative to the workspace root or absolute. Defaults to the workspace root."},
     "timeout_ms":{"type":"integer","description":"Wall-clock budget for this call in milliseconds; clamped to the configured range."}
   },
@@ -77,14 +78,22 @@ func normalizeBashArguments(arguments map[string]any) map[string]any {
 			normalized["cwd"] = cwd
 		}
 	}
+	// `input` is the other common name for text piped to a command.
+	if _, hasStdin := normalized["stdin"]; !hasStdin {
+		if input, ok := arguments["input"].(string); ok {
+			normalized["stdin"] = input
+		}
+	}
 	delete(normalized, "cmd")
 	delete(normalized, "workdir")
 	delete(normalized, "dir")
+	delete(normalized, "input")
 	return normalized
 }
 
 type bashArguments struct {
 	command   string
+	stdin     string
 	cwd       string
 	timeoutMs *int64
 }
@@ -92,6 +101,7 @@ type bashArguments struct {
 func parseBashArguments(arguments map[string]any) bashArguments {
 	parsed := bashArguments{cwd: "."}
 	parsed.command, _ = arguments["command"].(string)
+	parsed.stdin, _ = arguments["stdin"].(string)
 	if cwd, ok := arguments["cwd"].(string); ok {
 		parsed.cwd = cwd
 	}
@@ -112,6 +122,12 @@ func executeNativeBash(
 	commandText := strings.TrimSpace(args.command)
 	if commandText == "" {
 		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "invalid_command", "The command is empty")
+	}
+	// An empty stdin is the same as none: a closed input reads as empty anyway.
+	if stdinBytes := int64(len(args.stdin)); stdinBytes > settings.StdinMaxBytes {
+		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "stdin_too_large",
+			fmt.Sprintf("stdin is %d bytes, over the limit of %d", stdinBytes, settings.StdinMaxBytes),
+			tools.Information{Key: "suggestion", Value: "write the text to a file and run it from there"})
 	}
 	resolved, pathError := resolveExistingTarget(args.cwd, execution.WorkspaceRoot, settings.Policy, execution.CallID)
 	if pathError != "" {
@@ -151,6 +167,7 @@ func executeNativeBash(
 		killProcessGroupWhenDone: settings.KillProcessGroup == "always",
 		collector:                collector,
 		spill:                    spillWriters,
+		stdin:                    args.stdin,
 	})
 	spillDecision := applyBashSpillPolicy(settings.Spill, spillPlan, child, execution.WorkspaceRoot)
 	return renderBashExecutionResult(execution.CallID, resolved.displayPath, settings.Shell, timeoutMs, child, spillDecision)

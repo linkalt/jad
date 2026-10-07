@@ -892,6 +892,40 @@ export const scenarios = [
       return {names: eventNames(result), written, binary, records: await messagesJsonl(c, "natived"), snapshot: await call(c, "GET", "/api/sessions/natived")};
     },
   },
+  {
+    // The text piped to a command: plain, through a pipeline, under the `input`
+    // alias, as multi-byte text, and ignored by the program. The natived session
+    // allows 6 tool rounds, so each scenario stays under that.
+    name: "bash stdin: piped text, pipeline, alias, multi-byte and ignored",
+    provider: {steps: [
+      toolRound("bash", {command: "cat", stdin: "piped-line\nsecond line\n"}),
+      toolRound("bash", {command: "tr a-z A-Z | rev", stdin: "abc"}),
+      toolRound("bash", {command: "cat", input: "via-input-alias"}),
+      toolRound("bash", {command: "cat", stdin: "héllo ✓"}),
+      toolRound("bash", {command: "echo ignored-input", stdin: "x".repeat(100 * 1024)}),
+      {text: "stdin finished"},
+    ]},
+    run: async (c) => {
+      await call(c, "POST", "/api/sessions/natived/reset", {body: {}});
+      const result = await sse(c, "/api/sessions/natived/run", {method: "POST", body: {input: "pipe some text"}});
+      return {names: eventNames(result), records: await messagesJsonl(c, "natived")};
+    },
+  },
+  {
+    // No stdin leaves the input closed, and a text over the default limit
+    // (256 KiB) is refused whole: the command after the refusal must not run.
+    name: "bash stdin: absent input is closed and an oversize text is refused",
+    provider: {steps: [
+      toolRound("bash", {command: "cat; echo no-input-done"}),
+      toolRound("bash", {command: "echo should-not-run", stdin: "y".repeat(256 * 1024 + 1)}),
+      {text: "stdin limit finished"},
+    ]},
+    run: async (c) => {
+      await call(c, "POST", "/api/sessions/natived/reset", {body: {}});
+      const result = await sse(c, "/api/sessions/natived/run", {method: "POST", body: {input: "pipe too much"}});
+      return {names: eventNames(result), records: await messagesJsonl(c, "natived")};
+    },
+  },
   ...parallelScenarios(),
   ...approvalScenarios(),
   ...checkpointScenarios(),
@@ -1598,6 +1632,9 @@ function approvalScenarios() {
       [toolRound("edit", {path: "notes.txt", oldText: "beta", newText: "gamma"})], accept),
     asked("approval: long text is cut and says how long it was", "askall",
       [toolRound("bash", {command: `echo ${"y".repeat(200)}`, cwd: "."})], accept),
+    // The question must show the text piped to the command, not just `python3 -`.
+    asked("approval: a bash call shows its stdin, cut and counted when long", "askall",
+      [toolRound("bash", {command: "cat", stdin: `print-me ${"z".repeat(5000)}`})], accept),
     // The bash call between them gives the started process time to exit, so the
     // list that follows sees the same state in both backends. It asks as well.
     asked("approval: process start asks, status does not", "askall",

@@ -174,10 +174,15 @@ func TestApprovalPreviewShowsOnlyWhatWillHappen(t *testing.T) {
 		title string
 		draft string
 	}{
-		{"bash", ApprovalCall{Tool: "bash", Args: map[string]any{"command": "ls <dir> & echo", "cwd": "/w", "timeout_ms": 5000.0, "stdin": "ignored"}},
+		{"bash", ApprovalCall{Tool: "bash", Args: map[string]any{"command": "ls <dir> & echo", "cwd": "/w", "timeout_ms": 5000.0}},
 			"Run shell command", `{"tool":"bash","command":"ls <dir> & echo","cwd":"/w","timeout_ms":5000}`},
+		// The text piped to the command is part of what runs, so it is shown right after the command.
+		{"bash with stdin", ApprovalCall{Tool: "bash", Args: map[string]any{"command": "python3 -", "stdin": "print(1)\n", "cwd": "/w"}},
+			"Run shell command", `{"tool":"bash","command":"python3 -","stdin":"print(1)\n","cwd":"/w"}`},
 		{"bash cut", ApprovalCall{Tool: "bash", Args: map[string]any{"command": long}},
 			"Run shell command", `{"tool":"bash","command":"` + long[:16] + `","command_truncated_bytes":200}`},
+		{"bash stdin cut", ApprovalCall{Tool: "bash", Args: map[string]any{"command": "python3 -", "stdin": long}},
+			"Run shell command", `{"tool":"bash","command":"python3 -","stdin":"` + long[:16] + `","stdin_truncated_bytes":200}`},
 		{"process start", ApprovalCall{Tool: "process", Args: map[string]any{"command": "sleep 9", "cwd": "/w"}},
 			"Start background process", `{"tool":"process","action":"start","command":"sleep 9","cwd":"/w"}`},
 		{"write text", ApprovalCall{Tool: "write", Args: map[string]any{"path": "a.txt", "content": "hi"}},
@@ -194,7 +199,7 @@ func TestApprovalPreviewShowsOnlyWhatWillHappen(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			preview, err := ApprovalPreview(tc.call, 16)
-			if tc.name != "bash cut" {
+			if tc.name != "bash cut" && tc.name != "bash stdin cut" {
 				preview, err = ApprovalPreview(tc.call, 4096)
 			}
 			if err != nil {

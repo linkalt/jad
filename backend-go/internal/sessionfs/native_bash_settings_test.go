@@ -32,6 +32,9 @@ func TestNormalizeNativeBashSettingsDefaultsAndInheritsWritePolicy(t *testing.T)
 	if !settings.Spill.Enabled || settings.Spill.Keep != "truncated_only" || settings.Spill.CapBytes != 64*1024*1024 || settings.Spill.RetentionDays != 14 || settings.Spill.StorageDir != filepath.Join(cwd, ".bash-output") || settings.MaxLineChars != 2_000 || !settings.StripANSI {
 		t.Fatalf("default bash output settings = %+v", settings)
 	}
+	if settings.StdinMaxBytes != 256*1024 {
+		t.Fatalf("default stdin_max_bytes = %d, want %d", settings.StdinMaxBytes, 256*1024)
+	}
 	if settings.Env["NO_COLOR"] != "1" || settings.Env["GIT_TERMINAL_PROMPT"] != "0" || !reflect.DeepEqual(settings.EnvDeny, []string{}) {
 		t.Fatalf("default bash environment = %+v", settings)
 	}
@@ -50,7 +53,7 @@ func TestNormalizeNativeBashSettingsOverridesAndLoadsEnvFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	setting := map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"bash":{"shell":" /bin/sh ","login_shell":true,"timeout_ms":30000,"max_timeout_ms":45000,"kill_grace_ms":400,"kill_process_group":"timeout_only","max_bytes":1024,"stdout":{"head_bytes":100,"tail_bytes":100},"stderr":{"head_bytes":50,"tail_bytes":50},"spill":{"enabled":false,"keep":"always","storage_dir":"custom-spill"},"max_line_chars":200,"strip_ansi":false,"env_file":"command.env","env":{"OVERRIDDEN":"inline"},"env_deny":[" DENIED "],"paths":{"deny":["private"]}}}}`),
+		"tools": json.RawMessage(`{"native":{"bash":{"shell":" /bin/sh ","login_shell":true,"timeout_ms":30000,"max_timeout_ms":45000,"kill_grace_ms":400,"kill_process_group":"timeout_only","max_bytes":1024,"stdout":{"head_bytes":100,"tail_bytes":100},"stderr":{"head_bytes":50,"tail_bytes":50},"spill":{"enabled":false,"keep":"always","storage_dir":"custom-spill"},"max_line_chars":200,"stdin_max_bytes":4096,"strip_ansi":false,"env_file":"command.env","env":{"OVERRIDDEN":"inline"},"env_deny":[" DENIED "],"paths":{"deny":["private"]}}}}`),
 	}
 	settings, err := normalizeNativeBashSettings(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", nil, NativePathPolicy{}, NativePathPolicy{})
 	if err != nil {
@@ -61,6 +64,9 @@ func TestNormalizeNativeBashSettingsOverridesAndLoadsEnvFile(t *testing.T) {
 	}
 	if settings.MaxBytes != 1024 || settings.Stdout != (NativeBashStreamBudget{HeadBytes: 100, TailBytes: 100}) || settings.Stderr != (NativeBashStreamBudget{HeadBytes: 50, TailBytes: 50}) || settings.MaxLineChars != 200 || settings.StripANSI {
 		t.Fatalf("normalized output settings = %+v", settings)
+	}
+	if settings.StdinMaxBytes != 4096 {
+		t.Fatalf("normalized stdin_max_bytes = %d, want 4096", settings.StdinMaxBytes)
 	}
 	if settings.Spill.Enabled || settings.Spill.Keep != "always" || settings.Spill.StorageDir != filepath.Join(cwd, "custom-spill") {
 		t.Fatalf("normalized spill settings = %+v", settings.Spill)
@@ -99,6 +105,11 @@ func TestNormalizeNativeBashSettingsValidatesConfiguration(t *testing.T) {
 		`{"native":{"bash":{"spill":{"cap_bytes":0}}}}`,
 		`{"native":{"bash":{"spill":{"storage_dir":"` + outside + `"}}}}`,
 		`{"native":{"bash":{"max_line_chars":5}}}`,
+		`{"native":{"bash":{"stdin_max_bytes":0}}}`,
+		`{"native":{"bash":{"stdin_max_bytes":-1}}}`,
+		`{"native":{"bash":{"stdin_max_bytes":1.5}}}`,
+		`{"native":{"bash":{"stdin_max_bytes":"10"}}}`,
+		`{"native":{"bash":{"stdin_max_bytes":10485761}}}`,
 		`{"native":{"bash":{"strip_ansi":"yes"}}}`,
 		`{"native":{"bash":{"env_file":null}}}`,
 		`{"native":{"bash":{"env":{"BAD_NAME":1}}}}`,

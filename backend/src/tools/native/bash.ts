@@ -56,6 +56,11 @@ export const nativeBashDefinition: ToolDefinition = {
         minLength: 1,
         description: "Shell command line, executed with the configured shell.",
       },
+      stdin: {
+        type: "string",
+        description:
+          "Text piped to the command's standard input, e.g. a script for `python3 -` or `node -`, or data for `jq`.",
+      },
       cwd: {
         type: "string",
         minLength: 1,
@@ -296,6 +301,21 @@ export async function executeNativeBash(
     );
   }
 
+  // An empty `stdin` is the same as none: a closed input reads as empty anyway.
+  const stdin = stringField(args.stdin);
+  if (stdin !== undefined) {
+    const stdinBytes = Buffer.byteLength(stdin, "utf8");
+    if (stdinBytes > policy.stdin_max_bytes) {
+      return executionError(
+        callId,
+        "invalid_input",
+        "stdin_too_large",
+        `stdin is ${stdinBytes} bytes, over the limit of ${policy.stdin_max_bytes}`,
+        [["suggestion", "write the text to a file and run it from there"]],
+      );
+    }
+  }
+
   const requestedCwd = stringField(args.cwd) ?? ".";
   const resolved = await resolveExistingTarget(requestedCwd, workspaceRoot, policy, callId);
   if (!resolved.target) {
@@ -327,6 +347,7 @@ export async function executeNativeBash(
     killGraceMs: policy.kill_grace_ms,
     killProcessGroupWhenDone: policy.kill_process_group === "always",
     signal: context.signal,
+    ...(stdin !== undefined ? {stdin} : {}),
     output: {
       stdout: toStreamLimits(policy.stdout),
       stderr: toStreamLimits(policy.stderr),

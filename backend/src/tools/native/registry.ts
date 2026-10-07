@@ -397,9 +397,14 @@ function bashSpec(): NativeToolSpec {
           normalized.cwd = alias;
         }
       }
+      // `input` is the other common name for text piped to a command.
+      if (normalized.stdin === undefined && typeof args.input === "string") {
+        normalized.stdin = args.input;
+      }
       delete normalized.cmd;
       delete normalized.workdir;
       delete normalized.dir;
+      delete normalized.input;
       return normalized;
     },
     configured: (config) => config.settings.tools.native.bash !== undefined,

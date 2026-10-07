@@ -147,6 +147,8 @@ func ApprovalPreview(call ApprovalCall, maxBytes int64) (Preview, error) {
 		title = "Run " + call.Server + " tool " + call.Tool
 	case call.Tool == "bash":
 		fields = appendString(fields, call.Args, "command", maxBytes)
+		// The text piped to the command is part of what runs (`python3 -` alone says nothing).
+		fields = appendString(fields, call.Args, "stdin", maxBytes)
 		fields = appendPresent(fields, call.Args, "cwd")
 		fields = appendPresent(fields, call.Args, "timeout_ms")
 		title = "Run shell command"

@@ -76,6 +76,8 @@ export function approvalPreview(
   switch (toolName) {
     case "bash":
       field(draft, "command", args.command, maxBytes);
+      // The text piped to the command is part of what runs (`python3 -` alone says nothing).
+      field(draft, "stdin", args.stdin, maxBytes);
       optionalField(draft, "cwd", args.cwd);
       optionalField(draft, "timeout_ms", args.timeout_ms);
       return {title: "Run shell command", draft};

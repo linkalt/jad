@@ -20,6 +20,7 @@ const (
 	defaultNativeBashStderrTail    int64 = 12 * 1024
 	defaultNativeBashMaxLine       int64 = 2_000
 	maxNativeBashMaxLine           int64 = 8_000
+	defaultNativeBashStdinMax      int64 = 256 * 1024
 	defaultNativeBashSpillCap      int64 = 64 * 1024 * 1024
 	maxNativeBashSpillCap          int64 = 1024 * 1024 * 1024
 	defaultNativeBashRetention     int64 = 14
@@ -72,10 +73,12 @@ type NativeBashSettings struct {
 	Stderr           NativeBashStreamBudget
 	Spill            NativeBashSpillSettings
 	MaxLineChars     int64
-	StripANSI        bool
-	EnvFile          string
-	Env              map[string]string
-	EnvDeny          []string
+	// StdinMaxBytes is the largest stdin text one call may pipe to its command.
+	StdinMaxBytes int64
+	StripANSI     bool
+	EnvFile       string
+	Env           map[string]string
+	EnvDeny       []string
 }
 
 func normalizeNativeBashSettings(
@@ -110,7 +113,7 @@ func normalizeNativeBashSettings(
 	}
 	for key := range fields {
 		switch key {
-		case "shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_process_group", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "strip_ansi", "env_file", "env", "env_deny", "paths", "approval", "capture_bytes", "head_ratio":
+		case "shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_process_group", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "paths", "approval", "capture_bytes", "head_ratio":
 		default:
 			return nil, configError("%s: tools.native.bash.%s is not supported", settingPath, key)
 		}
@@ -169,6 +172,9 @@ func normalizeNativeBashSettings(
 		return nil, err
 	}
 	if settings.MaxLineChars, err = configuredInteger(fields, "max_line_chars", defaultNativeBashMaxLine, 20, maxNativeBashMaxLine, settingPath, "tools.native.bash"); err != nil {
+		return nil, err
+	}
+	if settings.StdinMaxBytes, err = configuredInteger(fields, "stdin_max_bytes", defaultNativeBashStdinMax, 1, maxNativeToolBytes, settingPath, "tools.native.bash"); err != nil {
 		return nil, err
 	}
 	if settings.StripANSI, err = bashBool(fields, "strip_ansi", true, settingPath+": tools.native.bash"); err != nil {

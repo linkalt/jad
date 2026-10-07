@@ -46,6 +46,23 @@ test("preview shows what a bash command will do and cuts long text", () => {
   assert.equal(preview.draft.timeout_ms, 5000);
 });
 
+test("preview of bash shows stdin, cut like the command, and omits it when absent", () => {
+  const script = "print('x')\n".repeat(30);
+  const preview = approvalPreview("bash", undefined, {command: "python3 -", stdin: script, cwd: "sub"}, 64);
+  assert.equal(preview.draft.stdin, script.slice(0, 64));
+  assert.equal(preview.draft.stdin_truncated_bytes, script.length);
+  // The key sits right after the command, before cwd, so the user reads what runs in order.
+  assert.deepEqual(Object.keys(preview.draft), ["tool", "command", "stdin", "stdin_truncated_bytes", "cwd"]);
+
+  const short = approvalPreview("bash", undefined, {command: "cat", stdin: "hi"}, 64);
+  assert.equal(short.draft.stdin, "hi");
+  assert.equal("stdin_truncated_bytes" in short.draft, false);
+
+  // A call without stdin previews exactly as before.
+  const without = approvalPreview("bash", undefined, {command: "ls"}, 64);
+  assert.deepEqual(Object.keys(without.draft), ["tool", "command"]);
+});
+
 test("preview of write omits base64 content but reports its size", () => {
   const preview = approvalPreview("write", undefined, {path: "a.bin", content: "AAAA", contentEncoding: "base64"}, 64);
   assert.equal(preview.draft.content, undefined);

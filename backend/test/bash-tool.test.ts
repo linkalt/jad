@@ -645,6 +645,7 @@ test("clamps the per-call timeout to the configured range", () => {
       allow_unreadable: true,
     },
     max_line_chars: 100,
+    stdin_max_bytes: 1024,
     strip_ansi: true,
     env: {},
     env_deny: [],
@@ -1106,4 +1107,143 @@ test("collects head and tail windows per stream without duplication", () => {
   // Sections are labeled because both streams wrote.
   assert.match(bounded.text, /^\[stdout\]\nabcdefghijuvwxyz/);
   assert.match(bounded.text, /\[stderr\]\nklmn\n\[\.\.\. 2 bytes omitted \.\.\.\]\nqrst$/);
+});
+
+const python = ((): string | undefined => {
+  for (const name of ["python3", "python"]) {
+    try {
+      execFileSync(name, ["--version"], {stdio: "ignore"});
+      return name;
+    } catch {
+      // try the next name
+    }
+  }
+  return undefined;
+})();
+
+test("pipes stdin to the command", {skip: bashSkip}, async () => {
+  const {sessionDir, run} = await openBashSession();
+  try {
+    const output = await run("bash-stdin", {command: "cat", stdin: "piped-text\nsecond line\n"});
+    assert.equal(firstLine(output).status, "ok");
+    assert.match(output, /piped-text\nsecond line/);
+
+    // The shell reads a here-document-free script from stdin too, and a pipeline
+    // can end in another program.
+    const piped = await run("bash-stdin-pipe", {command: "tr a-z A-Z | rev", stdin: "abc"});
+    assert.equal(firstLine(piped).status, "ok");
+    assert.match(piped, /CBA/);
+
+    // Multi-byte text arrives intact.
+    const unicode = await run("bash-stdin-utf8", {command: "cat", stdin: "héllo ✓"});
+    assert.match(unicode, /héllo ✓/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("runs an inline script fed on stdin", {skip: python === undefined ? "python is not installed" : bashSkip}, async () => {
+  const {sessionDir, run} = await openBashSession();
+  try {
+    const output = await run("bash-stdin-python", {
+      command: `${python} -`,
+      stdin: "import sys\nprint('sum', 2 + 3)\nprint('err', file=sys.stderr)\n",
+    });
+    assert.equal(firstLine(output).status, "ok");
+    assert.match(output, /sum 5/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("without stdin the command still sees a closed input", {skip: bashSkip}, async () => {
+  const {sessionDir, run} = await openBashSession();
+  try {
+    // `cat` returns at once with nothing to read instead of waiting for input.
+    const started = Date.now();
+    const output = await run("bash-no-stdin", {command: "cat; echo done"});
+    assert.equal(firstLine(output).status, "ok");
+    assert.match(output, /done/);
+    assert.ok(Date.now() - started < 5000);
+
+    // An empty text is the same as none.
+    const empty = await run("bash-empty-stdin", {command: "cat; echo done-empty", stdin: ""});
+    assert.equal(firstLine(empty).status, "ok");
+    assert.match(empty, /done-empty/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("a command that ignores its stdin is not an error", {skip: bashSkip}, async () => {
+  const {sessionDir, run} = await openBashSession();
+  try {
+    // 200 KiB into a process that never reads it: the closed pipe must not fail the call.
+    const output = await run("bash-stdin-ignored", {command: "echo ignored-input", stdin: "x".repeat(200 * 1024)});
+    assert.equal(firstLine(output).status, "ok");
+    assert.match(output, /ignored-input/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("stdin over stdin_max_bytes is refused whole, and the limit counts bytes", {skip: bashSkip}, async () => {
+  const {sessionDir, run} = await openBashSession({stdin_max_bytes: 10});
+  try {
+    const atLimit = await run("bash-stdin-limit", {command: "wc -c", stdin: "0123456789"});
+    assert.equal(firstLine(atLimit).status, "ok");
+    assert.match(atLimit, /10/);
+
+    const over = await run("bash-stdin-over", {command: "cat", stdin: "01234567890"});
+    assert.equal(firstLine(over).status, "invalid_input");
+    const fields = informationFields(over);
+    assert.equal(fields.error_code, "stdin_too_large");
+    assert.match(over, /11 bytes, over the limit of 10/);
+    assert.doesNotMatch(over, /--- CONTENT token=/);
+
+    // Three-byte characters: 4 of them are 12 bytes, not 4 characters.
+    const wide = await run("bash-stdin-wide", {command: "cat", stdin: "✓✓✓✓"});
+    assert.equal(informationFields(wide).error_code, "stdin_too_large");
+    assert.match(wide, /12 bytes, over the limit of 10/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("accepts input as another name for stdin", {skip: bashSkip}, async () => {
+  const {sessionDir, run} = await openBashSession();
+  try {
+    const output = await run("bash-input-alias", {command: "cat", input: "via-input"});
+    assert.equal(firstLine(output).status, "ok");
+    assert.match(output, /via-input/);
+    // The named field wins when both are present.
+    const both = await run("bash-input-both", {command: "cat", stdin: "named", input: "alias"});
+    assert.match(both, /named/);
+    assert.doesNotMatch(both, /alias/);
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
+});
+
+test("stdin_max_bytes defaults and is validated", async () => {
+  const sessionDir = await makeBashToolSession();
+  try {
+    const config = await new SessionConfigLoader(sessionDir).load();
+    assert.equal(config.settings.tools.native.bash?.stdin_max_bytes, 256 * 1024);
+    for (const value of [0, -1, 1.5, "10", 10 * 1024 * 1024 + 1]) {
+      await refreshBashSession(sessionDir, {stdin_max_bytes: value} as unknown as NativeBashSessionOptions);
+      await assert.rejects(
+        new SessionConfigLoader(sessionDir).load(),
+        /tools\.native\.bash\.stdin_max_bytes/,
+        `stdin_max_bytes ${JSON.stringify(value)}`,
+      );
+    }
+    await refreshBashSession(sessionDir, {stdin_max_bytes: 10 * 1024 * 1024});
+    assert.equal(
+      (await new SessionConfigLoader(sessionDir).load()).settings.tools.native.bash?.stdin_max_bytes,
+      10 * 1024 * 1024,
+    );
+  } finally {
+    await rm(sessionDir, {recursive: true, force: true});
+  }
 });

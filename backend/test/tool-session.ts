@@ -68,6 +68,7 @@ export interface NativeBashSessionOptions {
     allow_unreadable?: boolean;
   };
   max_line_chars?: number;
+  stdin_max_bytes?: number;
   strip_ansi?: boolean;
   env_file?: string;
   env?: Record<string, string>;
@@ -297,6 +298,9 @@ function bashToolSettings(options: NativeBashSessionOptions): Record<string, unk
         ...(options.spill !== undefined ? {spill: options.spill} : {}),
         ...(options.max_line_chars !== undefined
           ? {max_line_chars: options.max_line_chars}
+          : {}),
+        ...(options.stdin_max_bytes !== undefined
+          ? {stdin_max_bytes: options.stdin_max_bytes}
           : {}),
         ...(options.strip_ansi !== undefined ? {strip_ansi: options.strip_ansi} : {}),
         ...(options.env_file !== undefined ? {env_file: options.env_file} : {}),

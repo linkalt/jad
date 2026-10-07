@@ -273,6 +273,8 @@ export interface NativeBashToolSettings extends NativePathPolicy {
   spill: NativeBashSpillSettings;
   /** Longest rendered output line before it is cut. */
   max_line_chars: number;
+  /** Largest `stdin` text one call may pipe to its command; more is refused, never cut. */
+  stdin_max_bytes: number;
   /** Remove ANSI escape sequences and other control characters. */
   strip_ansi: boolean;
   /** Resolved dotenv file loaded before inline environment overrides. */
@@ -851,6 +853,8 @@ export const DEFAULT_NATIVE_BASH_SPILL_FILENAME = "bash-{call_id}.{stream}.log";
 /** Deprecated template retained for legacy settings without a storage_dir. */
 export const DEFAULT_NATIVE_BASH_SPILL_PATH = "{cwd}/.bash-output/bash-{call_id}.{stream}.log";
 export const DEFAULT_NATIVE_BASH_MAX_LINE_CHARS = 2000;
+/** Room for a long inline script or a JSON document piped to a command. */
+export const DEFAULT_NATIVE_BASH_STDIN_MAX_BYTES = 256 * 1024;
 export const DEFAULT_NATIVE_BASH_STRIP_ANSI = true;
 export const DEFAULT_NATIVE_FETCH_STORAGE_DIR = ".fetch";
 export const DEFAULT_NATIVE_FETCH_INCLUDE_METADATA = false;
@@ -2191,7 +2195,7 @@ const NATIVE_TOOL_KEYS: Record<NativeToolName, readonly string[]> = {
   bash: [
     "approval", "env", "env_deny", "env_file", "kill_grace_ms", "kill_process_group", "login_shell",
     "max_bytes", "max_line_chars", "max_timeout_ms", "paths", "shell", "spill", "stderr",
-    "stdout", "strip_ansi", "timeout_ms",
+    "stdin_max_bytes", "stdout", "strip_ansi", "timeout_ms",
     // Removed keys, kept so their "was removed" errors below still fire.
     "capture_bytes", "head_ratio",
   ],
@@ -2676,6 +2680,17 @@ async function normalizeTools(
         `${path}: tools.native.bash.max_line_chars must be a safe integer between 20 and ${MAX_NATIVE_BASH_LINE_CHARS}`,
       );
     }
+    const stdinMaxBytes = bashValue.stdin_max_bytes ?? DEFAULT_NATIVE_BASH_STDIN_MAX_BYTES;
+    if (
+      typeof stdinMaxBytes !== "number" ||
+      !Number.isSafeInteger(stdinMaxBytes) ||
+      stdinMaxBytes < 1 ||
+      stdinMaxBytes > MAX_NATIVE_TOOL_BYTES
+    ) {
+      throw new ConfigError(
+        `${path}: tools.native.bash.stdin_max_bytes must be a safe integer between 1 and ${MAX_NATIVE_TOOL_BYTES}`,
+      );
+    }
     const stripAnsi = bashValue.strip_ansi ?? DEFAULT_NATIVE_BASH_STRIP_ANSI;
     if (typeof stripAnsi !== "boolean") {
       throw new ConfigError(`${path}: tools.native.bash.strip_ansi must be a boolean`);
@@ -2722,6 +2737,7 @@ async function normalizeTools(
       stderr: stderrBudget,
       spill,
       max_line_chars: maxLineChars,
+      stdin_max_bytes: stdinMaxBytes,
       strip_ansi: stripAnsi,
       ...(envFile ? {env_file: envFile} : {}),
       env,

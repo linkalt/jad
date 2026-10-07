@@ -96,6 +96,8 @@ export interface ChildProcessRequest {
   output: OutputLimits;
   /** Cancels this foreground child process and its process group. */
   signal?: AbortSignal;
+  /** Text written to the child's standard input, which is then closed; absent leaves it closed from the start. */
+  stdin?: string;
   /** Complete streams written to disk while they are read. */
   spill?: {
     stdout?: SpillTarget;
@@ -623,10 +625,17 @@ export function runChildProcess(request: ChildProcessRequest): Promise<ChildProc
     const child = spawn(request.file, request.args, {
       cwd: request.cwd,
       env: request.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [request.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       detached: true,
       windowsHide: true,
     });
+
+    if (request.stdin !== undefined && child.stdin) {
+      // A program that exits or never reads its input closes the pipe under us
+      // (EPIPE); that is the program's choice, not a failure of the call.
+      child.stdin.on("error", () => undefined);
+      child.stdin.end(request.stdin);
+    }
 
     const signalGroup = (signal: NodeJS.Signals): void => {
       if (child.pid === undefined) {

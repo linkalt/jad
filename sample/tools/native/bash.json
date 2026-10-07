@@ -14,6 +14,10 @@
       "minLength": 1,
       "description": "Shell command line, executed with the configured shell."
      },
+     "stdin": {
+      "type": "string",
+      "description": "Text piped to the command's standard input, e.g. a script for `python3 -` or `node -`, or data for `jq`."
+     },
      "cwd": {
       "type": "string",
       "minLength": 1,

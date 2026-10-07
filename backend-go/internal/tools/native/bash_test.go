@@ -35,10 +35,11 @@ func bashTestSettings(t *testing.T, root string) sessionfs.NativeBashSettings {
 			Enabled: false, Keep: "truncated_only", CapBytes: 1024, RetentionDays: 0,
 			StorageDir: filepath.Join(root, ".bash-output"),
 		},
-		MaxLineChars: 2000,
-		StripANSI:    true,
-		Env:          map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"},
-		EnvDeny:      []string{},
+		MaxLineChars:  2000,
+		StdinMaxBytes: 64 * 1024,
+		StripANSI:     true,
+		Env:           map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"},
+		EnvDeny:       []string{},
 	}
 }
 
