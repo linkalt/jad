@@ -11,6 +11,7 @@
         "properties": {
           "action": {"type": "string", "enum": ["start", "status", "list", "wait", "stop"], "description": "Usually inferred from command or id."},
           "command": {"type": "string", "minLength": 1, "description": "Shell command to start."},
+          "stdin": {"type": "string", "description": "Text written once to the started command's standard input, e.g. a script for `python3 -` or `node -`; the input is then closed."},
           "cwd": {"type": "string", "minLength": 1, "description": "Working directory for start. Defaults to the workspace."},
           "id": {"type": "string", "minLength": 1, "description": "Id returned by a prior start."},
           "filter": {"type": "string", "enum": ["running", "exited", "stopped", "failed", "lost"], "description": "State filter for list."},
