@@ -381,9 +381,9 @@ function execSpec(): NativeToolSpec {
     id: NATIVE_EXEC_ID,
     settingName: "exec",
     definition: nativeExecDefinition,
-    required: ["lang", "code"],
-    exampleOperation: {lang: "python", code: "print(1 + 1)"},
-    normalizeArguments: normalizeExecArguments,
+    required: ["code"],
+    exampleOperation: {code: "echo hello"},
+    normalizeArguments: (args) => normalizeExecArguments(args),
     configured: (config) => config.settings.tools.native.exec !== undefined,
     build: (definition, config, validate) => {
       const exec = config.settings.tools.native.exec;
@@ -396,6 +396,8 @@ function execSpec(): NativeToolSpec {
         tool: {
           definition,
           validate,
+          // The configured default language is only known here, not to the static spec.
+          normalizeArguments: (args) => normalizeExecArguments(args, exec.default_lang),
           execute: (args, context) => executeNativeExec(args, {...context, policy, apiKeyEnv, exec}),
         },
       };

@@ -1065,6 +1065,12 @@
                   "enum": ["off", "ask"],
                   "description": "ask pauses every call until the user approves it; the question shows the language and the code. When absent, approval.default applies (off unless set). Approval is a confirmation, not a sandbox."
                 },
+                "default_lang": {
+                  "type": "string",
+                  "minLength": 1,
+                  "default": "bash",
+                  "description": "The interpreter a call without lang runs. A name or alias from langs (built-in or configured); an unknown name is a configuration error when the session loads. The language is filled in before approval, so the question shows what will run."
+                },
                 "langs": {
                   "type": "object",
                   "description": "Interpreters by name, merged over the built-in python, node, bash, sh, ruby and perl. An entry with a built-in name replaces it. A name or alias claimed by two entries is refused.",

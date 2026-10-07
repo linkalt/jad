@@ -308,6 +308,8 @@ export interface NativeExecToolSettings extends JsonRecord {
   approval?: ApprovalMode;
   /** Interpreters by name; the configured entries are merged over the defaults. */
   langs: Record<string, NativeExecLangSettings>;
+  /** Name (never an alias) of the `langs` entry a call without `lang` runs. */
+  default_lang: string;
   /** Largest `code` text one call may carry; more is refused, never cut. */
   code_max_bytes: number;
   /** Largest result text read back from `$EXEC_RESULT`; more is cut and says so. */
@@ -895,6 +897,8 @@ export const DEFAULT_NATIVE_EXEC_CODE_MAX_BYTES = 256 * 1024;
 /** A result is meant to be short; the output budgets are for raw output. */
 export const DEFAULT_NATIVE_EXEC_RESULT_MAX_BYTES = 16 * 1024;
 export const DEFAULT_NATIVE_EXEC_LINE_AWARE = true;
+/** The interpreter an `exec` call runs when it names none. */
+export const DEFAULT_NATIVE_EXEC_DEFAULT_LANG = "bash";
 /**
  * Interpreters available without configuration. The program reads its code from
  * standard input, so relative imports and the working directory behave as in a
@@ -2284,6 +2288,29 @@ function normalizeExecLangs(value: unknown, path: string): Record<string, Native
   return langs;
 }
 
+/**
+ * The language a call without `lang` runs, resolved to its table name so a later lookup
+ * cannot miss. An alias is accepted; a name the table does not know is refused at load
+ * time instead of failing every call.
+ */
+function normalizeExecDefaultLang(
+  value: unknown,
+  langs: Record<string, NativeExecLangSettings>,
+  path: string,
+): string {
+  const wanted = value ?? DEFAULT_NATIVE_EXEC_DEFAULT_LANG;
+  if (typeof wanted !== "string") {
+    throw new ConfigError(`${path} must be a language name`);
+  }
+  const lowered = wanted.trim().toLowerCase();
+  for (const [name, lang] of Object.entries(langs)) {
+    if (name === lowered || lang.aliases.includes(lowered)) {
+      return name;
+    }
+  }
+  throw new ConfigError(`${path} "${wanted}" is not in tools.native.exec.langs (available: ${Object.keys(langs).join(", ")})`);
+}
+
 /** Native tools whose settings `normalizeTools` understands. */
 type NativeToolName =
   | "read"
@@ -2319,7 +2346,7 @@ const NATIVE_TOOL_KEYS: Record<NativeToolName, readonly string[]> = {
     // Removed keys, kept so their "was removed" errors below still fire.
     "capture_bytes", "head_ratio",
   ],
-  exec: ["approval", "code_max_bytes", "langs", "line_aware", "result_max_bytes"],
+  exec: ["approval", "code_max_bytes", "default_lang", "langs", "line_aware", "result_max_bytes"],
   process: [
     "approval", "env", "env_deny", "env_file", "kill_grace_ms", "log_cap_bytes", "login_shell", "max_completed",
     "max_line_chars", "max_running", "max_wait_timeout_ms", "paths", "retention_days",
@@ -2894,10 +2921,12 @@ async function normalizeTools(
     if (typeof lineAware !== "boolean") {
       throw new ConfigError(`${path}: tools.native.exec.line_aware must be a boolean`);
     }
+    const execLangs = normalizeExecLangs(execValue.langs, `${path}: tools.native.exec.langs`);
     exec = {
       ...execValue,
       approval: normalizeApprovalMode(execValue.approval, "tools.native.exec", path, approvalDefault),
-      langs: normalizeExecLangs(execValue.langs, `${path}: tools.native.exec.langs`),
+      langs: execLangs,
+      default_lang: normalizeExecDefaultLang(execValue.default_lang, execLangs, `${path}: tools.native.exec.default_lang`),
       code_max_bytes: sizeSetting("code_max_bytes", DEFAULT_NATIVE_EXEC_CODE_MAX_BYTES),
       result_max_bytes: sizeSetting("result_max_bytes", DEFAULT_NATIVE_EXEC_RESULT_MAX_BYTES),
       line_aware: lineAware,

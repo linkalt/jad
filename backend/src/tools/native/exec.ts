@@ -43,7 +43,7 @@ export const nativeExecDefinition: ToolDefinition = {
       lang: {
         type: "string",
         minLength: 1,
-        description: "Interpreter name, e.g. python, node, bash.",
+        description: "Interpreter name, e.g. python, node, bash. Defaults to bash.",
       },
       code: {
         type: "string",
@@ -67,7 +67,7 @@ export const nativeExecDefinition: ToolDefinition = {
           "Wall-clock budget for this call in milliseconds; clamped to the configured range.",
       },
     },
-    required: ["lang", "code"],
+    required: ["code"],
     additionalProperties: false,
   },
 };
@@ -84,8 +84,12 @@ function stringField(value: unknown): string | undefined {
  * Tolerant normalization: the near-miss names a model uses for the same intent, and
  * numbers or booleans given as arguments, become what the schema asks for.
  */
-export function normalizeExecArguments(args: JsonRecord): JsonRecord {
+export function normalizeExecArguments(args: JsonRecord, defaultLang?: string): JsonRecord {
   const normalized = {...args};
+  if (normalized.lang === null) {
+    // A model that fills an optional field with null means "not given".
+    delete normalized.lang;
+  }
   if (normalized.lang === undefined) {
     const alias = args.language ?? args.interpreter;
     if (typeof alias === "string") {
@@ -94,6 +98,14 @@ export function normalizeExecArguments(args: JsonRecord): JsonRecord {
   }
   if (typeof normalized.lang === "string") {
     normalized.lang = normalized.lang.trim();
+    if (normalized.lang === "") {
+      // A blank language is "not given" too.
+      delete normalized.lang;
+    }
+  }
+  if (normalized.lang === undefined && defaultLang !== undefined) {
+    // Filled here, not at run time, so the approval question shows what will run.
+    normalized.lang = defaultLang;
   }
   if (normalized.code === undefined) {
     const alias = args.source ?? args.script ?? args.program;

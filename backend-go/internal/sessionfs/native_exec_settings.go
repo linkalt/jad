@@ -14,6 +14,8 @@ const (
 	// raw output.
 	defaultNativeExecResultMax int64 = 16 * 1024
 	defaultNativeExecLineAware       = true
+	// defaultNativeExecLang is the interpreter a call without `lang` runs.
+	defaultNativeExecLang = "bash"
 
 	// NativeExecCodeStdin and NativeExecCodeFile are the two ways a program receives its code.
 	NativeExecCodeStdin = "stdin"
@@ -24,7 +26,7 @@ const (
 )
 
 var (
-	nativeExecKeys     = []string{"approval", "code_max_bytes", "langs", "line_aware", "result_max_bytes"}
+	nativeExecKeys     = []string{"approval", "code_max_bytes", "default_lang", "langs", "line_aware", "result_max_bytes"}
 	nativeExecLangKeys = []string{"aliases", "argv", "code", "ext"}
 
 	nativeExecNamePattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
@@ -51,6 +53,8 @@ type NativeExecSettings struct {
 	// LangNames lists Langs in the order they are shown to the model.
 	LangNames []string
 	Langs     map[string]NativeExecLang
+	// DefaultLang is the name (never an alias) of the Langs entry a call without `lang` runs.
+	DefaultLang string
 	// CodeMaxBytes is the largest code text one call may carry; more is refused, never cut.
 	CodeMaxBytes int64
 	// ResultMaxBytes is the largest answer read back from $EXEC_RESULT.
@@ -124,6 +128,9 @@ func normalizeNativeExecSettings(setting map[string]json.RawMessage, settingPath
 	if settings.LangNames, settings.Langs, err = normalizeNativeExecLangs(fields["langs"], settingPath+": "+section+".langs"); err != nil {
 		return nil, err
 	}
+	if settings.DefaultLang, err = normalizeNativeExecDefaultLang(fields, settings.LangNames, settings.Langs, settingPath+": "+section+".default_lang"); err != nil {
+		return nil, err
+	}
 	if settings.CodeMaxBytes, err = configuredInteger(fields, "code_max_bytes", defaultNativeExecCodeMax, 1, maxNativeToolBytes, settingPath, section); err != nil {
 		return nil, err
 	}
@@ -172,6 +179,25 @@ func normalizeNativeExecLangs(raw json.RawMessage, path string) ([]string, map[s
 		}
 	}
 	return names, langs, nil
+}
+
+// normalizeNativeExecDefaultLang resolves the language a call without `lang` runs to its
+// table name, so a later lookup cannot miss. An alias is accepted; a name the table does
+// not know is refused at load time instead of failing every call.
+func normalizeNativeExecDefaultLang(fields map[string]json.RawMessage, names []string, langs map[string]NativeExecLang, path string) (string, error) {
+	wanted := defaultNativeExecLang
+	if raw, present := nullableField(fields, "default_lang"); present {
+		if json.Unmarshal(raw, &wanted) != nil {
+			return "", configError("%s must be a language name", path)
+		}
+	}
+	lowered := strings.ToLower(strings.TrimSpace(wanted))
+	for _, name := range names {
+		if name == lowered || containsString(langs[name].Aliases, lowered) {
+			return name, nil
+		}
+	}
+	return "", configError("%s \"%s\" is not in tools.native.exec.langs (available: %s)", path, wanted, strings.Join(names, ", "))
 }
 
 func normalizeNativeExecLang(raw json.RawMessage, path string) (NativeExecLang, error) {

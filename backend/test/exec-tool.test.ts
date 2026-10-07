@@ -83,11 +83,62 @@ async function configError(exec: Record<string, unknown> | undefined, bash: Reco
   return "";
 }
 
-test("the smallest call, lang and code, runs the program and returns its output", async () => {
+test("a call with a language runs the program and returns its output", async () => {
   const {run} = await openExec();
   const result = await run({lang: "python", code: "print(1 + 2)"});
   assert.equal(firstLine(result).status, "ok");
   assert.equal(contentOf(result), "3\n");
+});
+
+test("the smallest call is code alone, and it runs in bash", async () => {
+  const {run} = await openExec();
+  const result = await run({code: "echo $((6 * 7))"});
+  assert.equal(firstLine(result).status, "ok");
+  assert.equal(contentOf(result), "42\n");
+  // $0 is bash's, not sh's: proves the default is the bash entry, not just a shell.
+  assert.equal(contentOf(await run({code: "echo ${BASH_VERSION:+bash}"})), "bash\n");
+});
+
+test("null, an empty or a blank language means not given and falls back to the default", async () => {
+  const {run} = await openExec();
+  for (const lang of [null, "", "   "]) {
+    assert.equal(contentOf(await run({lang, code: "echo $((6 * 7))"})), "42\n", JSON.stringify(lang));
+  }
+  assert.equal(contentOf(await run({lang: "python", code: "print(6 * 7)"})), "42\n");
+});
+
+test("default_lang is configuration: python as the default runs code alone as python", async () => {
+  const python = await openExec({default_lang: "python"});
+  assert.equal(contentOf(await python.run({code: "print(6 * 7)"})), "42\n");
+  // An alias names the entry, and the entry is what is stored.
+  const viaAlias = await new SessionConfigLoader(await writeExecSession({default_lang: " PY "})).load();
+  assert.equal(viaAlias.settings.tools.native.exec?.default_lang, "python");
+  // A user-defined language can be the default.
+  const custom = await openExec({default_lang: "mybash", langs: {mybash: {argv: ["bash", "-s", "--"]}}});
+  assert.equal(contentOf(await custom.run({code: "echo custom"})), "custom\n");
+});
+
+test("default_lang defaults to bash and is validated when the session loads", async () => {
+  const defaults = (await new SessionConfigLoader(await writeExecSession({})).load()).settings.tools.native.exec!;
+  assert.equal(defaults.default_lang, "bash");
+  assert.match(await configError({default_lang: "cobol"}), /tools\.native\.exec\.default_lang "cobol" is not in tools\.native\.exec\.langs \(available: python, node, bash, sh, ruby, perl\)/);
+  assert.match(await configError({default_lang: 3}), /default_lang must be a language name/);
+  assert.match(await configError({default_lang: ""}), /default_lang "" is not in/);
+  assert.equal((await new SessionConfigLoader(await writeExecSession({default_lang: null})).load()).settings.tools.native.exec?.default_lang, "bash");
+});
+
+test("normalization fills the default language so the approval question shows what will run", () => {
+  assert.deepEqual(normalizeExecArguments({code: "ls"}, "bash"), {lang: "bash", code: "ls"});
+  assert.deepEqual(normalizeExecArguments({code: "ls", language: "node"}, "bash"), {lang: "node", code: "ls"});
+  assert.deepEqual(normalizeExecArguments({code: "ls", lang: null}, "bash"), {lang: "bash", code: "ls"});
+  assert.deepEqual(normalizeExecArguments({code: "ls", lang: "  "}, "bash"), {lang: "bash", code: "ls"});
+  // Without a default the field stays absent and the schema decides.
+  assert.deepEqual(normalizeExecArguments({code: "ls"}), {code: "ls"});
+  assert.equal(approvalPreview("exec", undefined, normalizeExecArguments({code: "ls"}, "bash"), 100).draft.lang, "bash");
+});
+
+test("the schema asks only for code", () => {
+  assert.deepEqual(nativeExecDefinition.inputSchema.required, ["code"]);
 });
 
 test("node and bash take their code from standard input too", async () => {
@@ -309,6 +360,7 @@ test("exec settings default and validate", async () => {
   assert.equal(defaults.line_aware, true);
   assert.equal(defaults.approval, "off");
   assert.deepEqual(Object.keys(defaults.langs), ["python", "node", "bash", "sh", "ruby", "perl"]);
+  assert.equal(defaults.default_lang, "bash");
   assert.match(await configError({code_max_bytes: 0}), /tools\.native\.exec\.code_max_bytes must be a safe integer between 1 and 10485760/);
   assert.match(await configError({code_max_bytes: 10485761}), /code_max_bytes/);
   assert.match(await configError({code_max_bytes: 1.5}), /code_max_bytes/);
@@ -363,8 +415,10 @@ test("the schema accepts and rejects the same exec settings as the loader", asyn
   assert.equal(accepts({}), true, JSON.stringify(validate.errors));
   assert.equal(accepts({approval: "ask", code_max_bytes: 1, result_max_bytes: 10485760, line_aware: false}), true);
   assert.equal(accepts({langs: {deno: {argv: ["deno", "run", "-"], aliases: ["ts"]}}}), true, JSON.stringify(validate.errors));
+  assert.equal(accepts({default_lang: "python"}), true, JSON.stringify(validate.errors));
   assert.equal(accepts({langs: {viafile: {argv: ["x", "{file}"], code: "file", ext: ".x"}}}), true);
   const rejected: unknown[] = [
+    {default_lang: 3}, {default_lang: ""}, {default_lang: {}},
     {code_max_bytes: 0}, {code_max_bytes: 10485761}, {code_max_bytes: 1.5}, {result_max_bytes: "10"},
     {line_aware: "yes"}, {approval: "maybe"}, {unknown_key: 1}, {langs: {x: {}}}, {langs: {x: {argv: []}}},
     {langs: {x: {argv: ["a"], code: "pipe"}}}, {langs: {x: {argv: ["a"], ext: "py"}}},

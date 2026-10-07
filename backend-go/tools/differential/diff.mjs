@@ -173,7 +173,7 @@ async function writeFixtures(sessions, providerUrl) {
     mcpbadcfg: [{id: "bad", config_path: join(mcpDir, "badtransport.json"), enabled: true}],
     mcpnofile: [{id: "ghost", config_path: join(mcpDir, "absent.json"), enabled: true}],
   };
-  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "keeptools", "paged", "natived", "execd", "execbudget", "execnobash", "execbad", "execask", "execdefault", "execdefaultoff", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "askdefault", "askdefaultexplicit", "askdefaultoff", "askdefaultbad", "askdefaultmcp", "ckpt", "ckptnogit", "ckptbad", "ckptoff", "ckptslow", "retryoff", "retrymany", "retrybad", "retryslow", "capstop", "capnone", "capbad", ...Object.keys(mcpServers)]) {
+  for (const id of ["alpha", "beta", "profiled", "tooled", "compactme", "keeptools", "paged", "natived", "execd", "execbudget", "execnobash", "execbad", "execask", "execdefault", "execdefaultoff", "execpy", "execbaddefault", "parallelone", "paralleltwo", "parallelconc", "frontc", "frontoff", "frontrec", "stopme", "nokey", "badmodel", "badmodelmaint", "toolmissing", "provfail", "toolbox", "skilled", "skilledtiny", "skillbad", "procenv", "procenvbad", "spilldefault", "spillalways", "spilloff", "labelled", "askall", "askallow", "askmcp", "askbad", "askbadmcp", "askbadblock", "askdefault", "askdefaultexplicit", "askdefaultoff", "askdefaultbad", "askdefaultmcp", "ckpt", "ckptnogit", "ckptbad", "ckptoff", "ckptslow", "retryoff", "retrymany", "retrybad", "retryslow", "capstop", "capnone", "capbad", ...Object.keys(mcpServers)]) {
     const dir = join(sessions, id);
     await mkdir(dir, {recursive: true});
     await writeFile(join(dir, "model.json"), JSON.stringify(model));
@@ -209,7 +209,7 @@ async function writeFixtures(sessions, providerUrl) {
       const spill = {spillalways: {keep: "always", cap_bytes: 100000}, spilloff: {enabled: false}}[id] ?? {};
       setting.tools = {native: {read: {}, bash: {spill}, write: {}, edit: {}}};
     }
-    if (id === "execd" || id === "execbudget" || id === "execnobash" || id === "execbad" || id === "execask" || id === "execdefault" || id === "execdefaultoff") {
+    if (id === "execd" || id === "execbudget" || id === "execnobash" || id === "execbad" || id === "execask" || id === "execdefault" || id === "execdefaultoff" || id === "execpy" || id === "execbaddefault") {
       // Each exec session has its own workspace, so spill files and scratch output of one
       // never show up in another's results.
       const workspace = join(dirname(sessions), `workspace-${id}`);
@@ -224,6 +224,9 @@ async function writeFixtures(sessions, providerUrl) {
         setting.tools.native.bash = {stdout: {head_bytes: 43, tail_bytes: 43}, stderr: {head_bytes: 43, tail_bytes: 43}, max_bytes: 4096, spill: {keep: "always"}};
       }
       if (id === "execnobash") setting.tools = {native: {exec: {}}};
+      // default_lang is configuration: python here, and a name the table lacks is refused.
+      if (id === "execpy") setting.tools = {native: {bash: {}, exec: {default_lang: "py"}}};
+      if (id === "execbaddefault") setting.tools = {native: {bash: {}, exec: {default_lang: "cobol"}}};
       if (id === "execbad") setting.tools = {native: {bash: {}, exec: {langs: {x: {argv: ["a"], aliases: ["py"]}}}}};
       if (id === "execask") {
         setting.tools = {native: {bash: {}, exec: {approval: "ask"}}};

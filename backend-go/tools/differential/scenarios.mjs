@@ -1619,6 +1619,28 @@ function execScenarios() {
       toolRound("exec", {lang: "py", code: "import sys\nfor v in sys.argv[1:]:\n    print(repr(v))", args: ["a b", "$HOME", "it's", "x;y", ""]}),
       toolRound("exec", {language: " python ", source: "print('near miss')", argv: [1, true]}),
     ]),
+    // lang is optional: code alone runs in the default (bash), and null, "" and blanks mean
+    // "not given". A near-miss name still wins over the default.
+    run("exec: code alone runs in bash; null, empty and blank lang mean not given", "execd", [
+      toolRound("exec", {code: "echo $((6 * 7)) ${BASH_VERSION:+in-bash}"}),
+      toolRound("exec", {lang: null, code: "echo null-lang"}),
+      toolRound("exec", {lang: "", code: "echo empty-lang"}),
+      toolRound("exec", {lang: "   ", code: "echo blank-lang"}),
+      toolRound("exec", {interpreter: "python", code: "print('alias beats the default')"}),
+      toolRound("exec", {code: "echo \"$1|$2\"", args: ["a b", "$HOME"]}),
+    ]),
+    run("exec: default_lang is configuration and a call without lang follows it", "execpy", [
+      toolRound("exec", {code: "import sys\nprint('python', sys.version_info[0])"}),
+      toolRound("exec", {lang: "bash", code: "echo explicit-bash"}),
+    ]),
+    {
+      name: "exec: a default_lang the table does not know is a configuration error",
+      provider: {steps: [{text: "unused"}]},
+      run: async (c) => {
+        const result = await call(c, "POST", "/api/sessions/execbaddefault/run", {body: {input: "go"}});
+        return {status: result.status, body: result.body};
+      },
+    },
     run("exec: failures, unknown language, empty code, bad args", "execd", [
       toolRound("exec", {lang: "python", code: "import sys\nprint('partial')\nsys.stderr.write('boom\\n')\nsys.exit(3)"}),
       toolRound("exec", {lang: "cobol", code: "x"}),
@@ -1737,6 +1759,10 @@ function approvalScenarios() {
       async (c, pending, attempts) => {
         attempts.push(await reply(c, "execask", {interaction_id: pending.id, decision: "decline", reason: "not that"}));
       }, {extra: async (c) => ({marker: await readFile(join(c.root, "workspace-execask", "declined-marker.txt"), "utf8").catch(() => null)})}),
+    // The default language is filled in before the question, so it shows what will run.
+    asked("approval: an exec call without lang shows the default language", "execask",
+      [toolRound("exec", {code: "echo no-lang-given"})],
+      (c, pending, attempts) => accept(c, pending, attempts, "execask")),
     asked("approval default: an exec call with no approval key asks when the default is ask", "execdefault",
       [toolRound("exec", {lang: "bash", code: "echo defaulted"})],
       (c, pending, attempts) => accept(c, pending, attempts, "execdefault")),

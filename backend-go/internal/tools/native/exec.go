@@ -22,13 +22,13 @@ const (
 var execInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "lang":{"type":"string","minLength":1,"description":"Interpreter name, e.g. python, node, bash."},
+    "lang":{"type":"string","minLength":1,"description":"Interpreter name, e.g. python, node, bash. Defaults to bash."},
     "code":{"type":"string","minLength":1,"description":"Program source."},
     "args":{"type":"array","items":{"type":"string"},"description":"Arguments passed to the program as argv, with no shell quoting."},
     "cwd":{"type":"string","minLength":1,"description":"Directory to run in, relative to the workspace root or absolute. Defaults to the workspace root."},
     "timeout_ms":{"type":"integer","description":"Wall-clock budget for this call in milliseconds; clamped to the configured range."}
   },
-  "required":["lang","code"],
+  "required":["code"],
   "additionalProperties":false
 }`)
 
@@ -49,9 +49,12 @@ func NewExecTool(settings sessionfs.NativeExecSettings, bash sessionfs.NativeBas
 			Description: execDescription,
 			InputSchema: append(json.RawMessage(nil), execInputSchema...),
 		},
-		Validator:          validator,
-		ExampleOperation:   json.RawMessage(`{"lang":"python","code":"print(1 + 1)"}`),
-		NormalizeArguments: normalizeExecArguments,
+		Validator:        validator,
+		ExampleOperation: json.RawMessage(`{"code":"echo hello"}`),
+		// The configured default language is bound here, where the settings are known.
+		NormalizeArguments: func(arguments map[string]any) map[string]any {
+			return normalizeExecArguments(arguments, settings.DefaultLang)
+		},
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return executeNativeExec(ctx, arguments, settings, bash, apiKeyEnv, execution), nil
 		},
@@ -60,10 +63,14 @@ func NewExecTool(settings sessionfs.NativeExecSettings, bash sessionfs.NativeBas
 
 // normalizeExecArguments turns the near-miss names a model uses for the same intent, and
 // numbers or booleans given as arguments, into what the schema asks for.
-func normalizeExecArguments(arguments map[string]any) map[string]any {
+func normalizeExecArguments(arguments map[string]any, defaultLang string) map[string]any {
 	normalized := make(map[string]any, len(arguments))
 	for key, value := range arguments {
 		normalized[key] = value
+	}
+	if value, has := normalized["lang"]; has && value == nil {
+		// A model that fills an optional field with null means "not given".
+		delete(normalized, "lang")
 	}
 	if _, has := normalized["lang"]; !has {
 		if alias, ok := firstString(arguments, "language", "interpreter"); ok {
@@ -71,7 +78,16 @@ func normalizeExecArguments(arguments map[string]any) map[string]any {
 		}
 	}
 	if lang, ok := normalized["lang"].(string); ok {
-		normalized["lang"] = trimJSSpace(lang)
+		// A blank language is "not given" too.
+		if lang = trimJSSpace(lang); lang == "" {
+			delete(normalized, "lang")
+		} else {
+			normalized["lang"] = lang
+		}
+	}
+	if _, has := normalized["lang"]; !has && defaultLang != "" {
+		// Filled here, not at run time, so the approval question shows what will run.
+		normalized["lang"] = defaultLang
 	}
 	if _, has := normalized["code"]; !has {
 		if alias, ok := firstString(arguments, "source", "script", "program"); ok {

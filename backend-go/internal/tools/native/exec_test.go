@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,7 @@ func execTestSettings() sessionfs.NativeExecSettings {
 			"bash":   {Argv: []string{"bash", "-s", "--"}, Code: sessionfs.NativeExecCodeStdin, Ext: ".sh", Aliases: []string{"shell"}},
 			"sh":     {Argv: []string{"sh", "-s", "--"}, Code: sessionfs.NativeExecCodeStdin, Ext: ".sh", Aliases: []string{}},
 		},
+		DefaultLang:    "bash",
 		CodeMaxBytes:   64 * 1024,
 		ResultMaxBytes: 1024,
 		LineAware:      true,
@@ -40,7 +42,7 @@ func requireInterpreters(t *testing.T, names ...string) {
 
 func runExec(t *testing.T, root string, settings sessionfs.NativeExecSettings, bash sessionfs.NativeBashSettings, arguments map[string]any) string {
 	t.Helper()
-	normalized := normalizeExecArguments(arguments)
+	normalized := normalizeExecArguments(arguments, settings.DefaultLang)
 	return executeNativeExec(context.Background(), normalized, settings, bash, "", tools.ExecutionContext{
 		CallID: "exec-call", WorkspaceRoot: root, SessionDir: root,
 	})
@@ -317,7 +319,7 @@ func itoa(value int) string {
 }
 
 func TestNormalizeExecArgumentsTurnsNearMissNamesIntoTheSchemaForm(t *testing.T) {
-	got := normalizeExecArguments(map[string]any{"language": " Python ", "source": "print(1)", "argv": []any{float64(1), true, "x"}, "workdir": "sub"})
+	got := normalizeExecArguments(map[string]any{"language": " Python ", "source": "print(1)", "argv": []any{float64(1), true, "x"}, "workdir": "sub"}, "bash")
 	if got["lang"] != "Python" || got["code"] != "print(1)" || got["cwd"] != "sub" {
 		t.Fatalf("normalized = %v", got)
 	}
@@ -330,9 +332,136 @@ func TestNormalizeExecArgumentsTurnsNearMissNamesIntoTheSchemaForm(t *testing.T)
 			t.Fatalf("%s was not removed from %v", key, got)
 		}
 	}
-	got = normalizeExecArguments(map[string]any{"lang": "node", "code": "1", "args": []any{"a"}, "script": "ignored"})
+	got = normalizeExecArguments(map[string]any{"lang": "node", "code": "1", "args": []any{"a"}, "script": "ignored"}, "bash")
 	if got["code"] != "1" {
 		t.Fatalf("an explicit code must win over an alias: %v", got)
+	}
+}
+
+func TestExecWithoutALanguageRunsTheConfiguredDefault(t *testing.T) {
+	requireInterpreters(t, "bash", "python3")
+	root := t.TempDir()
+	settings, bash := execTestSettings(), bashTestSettings(t, root)
+	// The smallest call: code alone runs in bash.
+	if got := execContent(runExec(t, root, settings, bash, map[string]any{"code": "echo from-$0-shell; echo $((6*7))"})); !strings.Contains(got, "42") {
+		t.Fatalf("code alone did not run in bash: %q", got)
+	}
+	// null, an empty string and a blank string all mean "not given".
+	for _, lang := range []any{nil, "", "   "} {
+		if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": lang, "code": "echo $((6*7))"})); !strings.Contains(got, "42") {
+			t.Fatalf("lang %#v did not fall back to bash: %q", lang, got)
+		}
+	}
+	// A named language still wins over the default.
+	if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "python", "code": "print(6 * 7)"})); !strings.Contains(got, "42") {
+		t.Fatalf("an explicit lang must still run: %q", got)
+	}
+	// The default is configuration: with python as default, code alone is python.
+	settings.DefaultLang = "python"
+	if got := execContent(runExec(t, root, settings, bash, map[string]any{"code": "print(6 * 7)"})); !strings.Contains(got, "42") {
+		t.Fatalf("a configured default_lang of python was not used: %q", got)
+	}
+}
+
+// callExecThroughTheCatalog sends one function call the way the run loop does: raw JSON
+// arguments, the tool's own validator and its own normalizer.
+func callExecThroughTheCatalog(t *testing.T, root string, settings sessionfs.NativeExecSettings, arguments string, request func(tools.ApprovalCall)) string {
+	t.Helper()
+	tool, err := NewExecTool(settings, bashTestSettings(t, root), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request != nil {
+		tool.Approval = tools.ApprovalAsk
+	}
+	catalog, err := tools.NewCatalog([]tools.Tool{tool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := json.Marshal(map[string]any{"type": "function_call", "call_id": "exec-call", "name": "exec", "arguments": arguments})
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution := tools.ExecutionContext{WorkspaceRoot: root, SessionDir: root}
+	if request != nil {
+		execution.RequestApproval = func(_ context.Context, call tools.ApprovalCall) tools.ApprovalVerdict {
+			request(call)
+			return tools.ApprovalVerdict{Allowed: true}
+		}
+	}
+	output, err := catalog.ExecuteFunctionCall(context.Background(), call, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The catalog wraps the rendered result in a function_call_output item.
+	var item struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(output, &item); err != nil {
+		t.Fatalf("function_call_output: %v: %s", err, output)
+	}
+	return item.Output
+}
+
+func TestExecThroughTheCatalogAcceptsCodeAloneAndAsksForNothingElse(t *testing.T) {
+	requireInterpreters(t, "bash", "python3")
+	root := t.TempDir()
+	settings := execTestSettings()
+	// The schema the model sees requires code only.
+	tool, err := NewExecTool(settings, bashTestSettings(t, root), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(tool.Definition.InputSchema, &schema); err != nil || len(schema.Required) != 1 || schema.Required[0] != "code" {
+		t.Fatalf("required = %v (%v), want [code]", schema.Required, err)
+	}
+	if got := execContent(callExecThroughTheCatalog(t, root, settings, `{"code":"echo $((6*7))"}`, nil)); !strings.Contains(got, "42") {
+		t.Fatalf("code alone through the catalog: %q", got)
+	}
+	// null is "not given" and is repaired before validation, so it costs no retry.
+	if got := execContent(callExecThroughTheCatalog(t, root, settings, `{"lang":null,"code":"echo $((6*7))"}`, nil)); !strings.Contains(got, "42") {
+		t.Fatalf("lang null through the catalog: %q", got)
+	}
+	// The configured default, not a hard-coded bash, is what a call without lang runs.
+	settings.DefaultLang = "python"
+	if got := execContent(callExecThroughTheCatalog(t, root, settings, `{"code":"print(6*7)"}`, nil)); !strings.Contains(got, "42") {
+		t.Fatalf("a configured default python through the catalog: %q", got)
+	}
+}
+
+func TestExecThroughTheCatalogShowsTheDefaultLanguageInTheApprovalQuestion(t *testing.T) {
+	requireInterpreters(t, "bash")
+	var asked tools.ApprovalCall
+	result := callExecThroughTheCatalog(t, t.TempDir(), execTestSettings(), `{"code":"echo ok"}`, func(call tools.ApprovalCall) { asked = call })
+	if asked.Tool != "exec" || asked.Args["lang"] != "bash" {
+		t.Fatalf("the question carries %v, want lang bash filled in", asked.Args)
+	}
+	if !strings.Contains(execContent(result), "ok") {
+		t.Fatalf("the allowed call did not run: %q", result)
+	}
+}
+
+func TestExecNormalizationFillsTheDefaultSoTheApprovalQuestionShowsIt(t *testing.T) {
+	got := normalizeExecArguments(map[string]any{"code": "ls"}, "bash")
+	if got["lang"] != "bash" {
+		t.Fatalf("lang = %v, want bash", got["lang"])
+	}
+	if got := normalizeExecArguments(map[string]any{"code": "ls", "language": "node"}, "bash"); got["lang"] != "node" {
+		t.Fatalf("an alias must win over the default: %v", got)
+	}
+	// Without a default the field stays absent and the schema decides.
+	if got := normalizeExecArguments(map[string]any{"code": "ls"}, ""); got["lang"] != nil {
+		t.Fatalf("lang = %v, want absent", got["lang"])
+	}
+	preview, err := tools.ApprovalPreview(tools.ApprovalCall{Tool: "exec", Args: normalizeExecArguments(map[string]any{"code": "ls"}, "bash")}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(preview.Draft); !strings.Contains(text, `"lang":"bash"`) {
+		t.Fatalf("the question does not show the language that will run: %s", text)
 	}
 }
 

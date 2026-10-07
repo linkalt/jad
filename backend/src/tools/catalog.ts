@@ -126,7 +126,8 @@ function buildNativeTool(
   const approval = nativeApprovalMode(config, spec.settingName);
   return {
     ...built.tool,
-    normalizeArguments: spec.normalizeArguments,
+    // A tool that needs its settings to normalize (exec's default language) brings its own.
+    normalizeArguments: built.tool.normalizeArguments ?? spec.normalizeArguments,
     ...(spec.requiresUserDecision ? {requiresUserDecision: true} : {}),
     ...(spec.readOnly ? {readOnly: true} : {}),
     ...(approval === "ask" ? {approval} : {}),
