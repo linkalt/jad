@@ -2,10 +2,23 @@
 // generated ids, timestamps) so only behavioural differences remain.
 const ISO = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g;
 
+// The result of a `process` start is a snapshot taken right after the spawn. Whether
+// the child has already printed or exited by then is scheduling, and under CPU load it
+// differs from run to run on the same backend, so the state, exit status, byte counts
+// and output of that one snapshot are not compared. A later status or wait is, and so
+// is a start that failed (its summary says "failed", not "running" or "exited").
+function maskStartSnapshot(s) {
+  if (!s.includes("\naction: start\n") || !/^\{"id":"[^"]*","status":"ok","summary":"Process \S+ is (running|exited)"\}/.test(s)) return s;
+  const cut = s.indexOf("\n--- CONTENT token=");
+  const head = cut >= 0 ? s.slice(0, cut) : s;
+  return `${head.replace(/ is (running|exited)"\}/, ' is $STARTED"}').replace(/^(state|exit_code|signal|stdout_produced_bytes|stderr_produced_bytes): .*\n/gm, "").trimEnd()}\n`;
+}
+
 export function normalize(value, {root, sessions, port, providerUrl}) {
   const providerPort = new URL(providerUrl).port;
-  const text = (s) =>
-    s.replaceAll(sessions, "$SESSIONS").replaceAll(root, "$ROOT")
+  const text = (raw) => {
+    const s = maskStartSnapshot(raw);
+    return s.replaceAll(sessions, "$SESSIONS").replaceAll(root, "$ROOT")
       .replaceAll(`127.0.0.1:${port}`, "$SERVER").replaceAll(`127.0.0.1:${providerPort}`, "$PROVIDER")
       .replace(ISO, "$TIME")
       .replace(/Command completed in \d+ ms/g, "Command completed in $N ms")
@@ -36,6 +49,7 @@ export function normalize(value, {root, sessions, port, providerUrl}) {
       // Transcript generation is "device:inode:birth-ms"; the inode and birth
       // time differ between two server runs, so only the shape is compared.
       .replace(/^\d+:\d+:\d+$/, "$GENERATION");
+  };
   const walk = (v, key) => {
     if (typeof v === "string") return text(v);
     if (Array.isArray(v)) return v.map((x) => walk(x, key));
