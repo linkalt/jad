@@ -105,7 +105,33 @@ export type InteractionStatus = "answered" | "unknown" | "expired";
 /** Why an extension was not applied: nothing is pending, the wait is over, or the ceiling is reached. */
 export type InteractionExtendStatus = "extended" | "unknown" | "expired" | "at_max";
 
-export type InteractionListener = (pending: PendingInteraction | undefined) => void;
+/**
+ * Why a question left the run, published once with the `pending: null` that
+ * clears it. The stream alone cannot say whether a question was answered here,
+ * answered in another window, timed out or cut off by the run ending, and a
+ * client that only sees the question vanish would have to guess. `decision` is
+ * present only for an answer; a timeout or a stop is not a decision anybody made.
+ */
+export interface InteractionEnd {
+  interaction_id: string;
+  /** Always explicit here, unlike on the question, where absent means `draft`. */
+  kind: InteractionKind;
+  tool: string;
+  outcome: InteractionOutcome;
+  decision?: InteractionDecision;
+}
+
+export type InteractionListener = (pending: PendingInteraction | undefined, ended?: InteractionEnd) => void;
+
+function interactionEnd(pending: PendingInteraction, answer: InteractionAnswer): InteractionEnd {
+  return {
+    interaction_id: pending.id,
+    kind: pending.kind ?? "draft",
+    tool: pending.tool,
+    outcome: answer.outcome,
+    ...(answer.outcome === "answered" ? {decision: answer.decision} : {}),
+  };
+}
 
 /** Decline reasons are prose for the model; anything longer is a paste, not a reason. */
 export const INTERACTION_REASON_MAX_CHARS = 2000;
@@ -179,7 +205,7 @@ export class InteractionBroker {
         // The question has to leave the run's state before the tool continues:
         // a client that re-attaches must not see a question it cannot answer.
         if (notify) {
-          this.onChange(undefined);
+          this.onChange(undefined, interactionEnd(active.pending, answer));
         }
         resolve(answer);
       };

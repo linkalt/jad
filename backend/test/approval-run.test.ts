@@ -435,3 +435,60 @@ test("an explicit approval off on the tool wins over approval.default ask", asyn
     await fixture.close();
   }
 });
+
+/** Reads to the end of the run and returns the `ended` of every event that cleared a question. */
+async function collectEnds(events: ReturnType<typeof sseReader>): Promise<unknown[]> {
+  const ends: unknown[] = [];
+  for (;;) {
+    const event = await events.next();
+    if (event.event === "interaction" && event.data.pending === null) ends.push(event.data.ended ?? null);
+    if (event.event === "done") return ends;
+  }
+}
+
+test("the stream says why an approval ended: allowed, denied, or the run was stopped", async () => {
+  const cases: Array<{name: string; act: (baseUrl: string, id: unknown) => Promise<void>; expected: Record<string, unknown>}> = [
+    {
+      name: "allowed",
+      act: async (baseUrl, id) => {
+        assert.equal((await reply(baseUrl, {interaction_id: id, decision: "accept"})).status, 200);
+      },
+      expected: {kind: "approval", tool: "write", outcome: "answered", decision: "accept"},
+    },
+    {
+      name: "denied",
+      act: async (baseUrl, id) => {
+        assert.equal((await reply(baseUrl, {interaction_id: id, decision: "decline", reason: "no"})).status, 200);
+      },
+      expected: {kind: "approval", tool: "write", outcome: "answered", decision: "decline"},
+    },
+    {
+      name: "stopped",
+      act: async (baseUrl) => {
+        const stop = await fetch(`${baseUrl}/api/sessions/session1/run/stop`, {method: "POST", headers: AUTH, body: "{}"});
+        assert.equal(stop.status, 200);
+      },
+      expected: {kind: "approval", tool: "write", outcome: "cancelled"},
+    },
+  ];
+  for (const scenario of cases) {
+    const fixture = await createFixture({
+      nativeSettings: (dir) => ({...allowSession(dir), write: {paths: {allow: [dir]}, approval: "ask"}}),
+      responses: [[writeCall("w1", "a.txt", "hello")], [finalMessage("done")]],
+    });
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const run = await startRun(fixture.baseUrl, true);
+      reader = run.body!.getReader();
+      const events = sseReader(reader);
+      const pending = await readPending(events);
+      await scenario.act(fixture.baseUrl, pending.id);
+      const ends = await collectEnds(events);
+      assert.deepEqual(ends[0], {interaction_id: pending.id, ...scenario.expected}, scenario.name);
+      assert.equal(ends.length, 1, `${scenario.name}: the question ends once`);
+    } finally {
+      await reader?.cancel().catch(() => undefined);
+      await fixture.close();
+    }
+  }
+});

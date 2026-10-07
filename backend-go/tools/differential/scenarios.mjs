@@ -1573,6 +1573,7 @@ function approvalScenarios() {
     attempts.push(await reply(c, session, {interaction_id: pending.id, decision: "accept"}));
   };
   const fileOf = (name) => async (c) => ({file: await readFile(join(c.root, "scratch", name), "utf8").catch(() => null)});
+  const endSteps = [toolRound("write", {path: "ask/k.txt", content: "k"}), {text: "understood"}];
   return [
     asked("approval: accepted write runs and the question is published as an approval", "askall",
       [toolRound("write", {path: "ask/a.txt", content: "hello"})], accept, {extra: fileOf("ask/a.txt")}),
@@ -1678,6 +1679,31 @@ function approvalScenarios() {
     },
     asked("approval: an MCP server set to ask holds its tool calls", "askmcp",
       [toolRound(mcpName("fx", "echo"), {text: "hi"})], async (c, pending, attempts) => accept(c, pending, attempts, "askmcp")),
+    // The clearing event says why the question ended: who decided and what, a timeout or a
+    // stop. The three runs go through the same question; only how it ends differs.
+    {
+      name: "approval: the event that clears a question says why it ended",
+      provider: {steps: endSteps},
+      run: async (c) => {
+        const out = {};
+        for (const [label, how] of [["allowed", "accept"], ["denied", "decline"], ["stopped", "stop"]]) {
+          await call(c, "POST", "/api/sessions/askall/reset", {body: {}});
+          c.provider.reset({steps: endSteps});
+          let acted = false;
+          const result = await sseLive(c, "/api/sessions/askall/run", {
+            body: {input: "go", supports_interaction: true},
+            onEvent: async (event) => {
+              if (event.event !== "interaction" || !event.data.pending || acted) return;
+              acted = true;
+              if (how === "stop") await call(c, "POST", "/api/sessions/askall/run/stop", {body: {}});
+              else await reply(c, "askall", {interaction_id: event.data.pending.id, decision: how, ...(how === "decline" ? {reason: "no"} : {})});
+            },
+          });
+          out[label] = result.events.filter((e) => e.event === "interaction").map((e) => ({pending: e.data.pending ? "question" : null, ended: e.data.ended ?? null}));
+        }
+        return out;
+      },
+    },
     {
       name: "approval: a bad approval value is refused with the same message",
       provider: {steps: [{text: "x"}]},

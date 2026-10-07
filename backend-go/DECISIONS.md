@@ -187,6 +187,21 @@ While a run waits to retry, nothing else on the stream changes, so the wait look
 - **How Go reaches the run.** The client that retries is built once per runner and shared by every run, so it cannot hold a run. The run's notifier travels in the request context instead (`responses.WithRetryNotifier`, set in `internal/httpapi/executor.go`; `Client.openStream` reads it), which leaves the `Streamer` interface unchanged. TypeScript passes an `onProviderRetry` option down `persistOpenAIResponse`.
 - **Differential harness.** `resume_at` is a clock reading, so `normalize.mjs` masks it; `wait_ms` is fixed by the scenario's `Retry-After-Ms`, so it and the rest of the payload are compared.
 
+### The event that clears a question says why it ended: `interaction.ended` (TypeScript and Go together)
+
+A question left the run stream as `pending: null`, which could not say whether it was answered in this window, answered in another, timed out or cut off by the run ending. A second tab therefore watched its approval vanish with no explanation. The event that clears a question now carries `ended` as well:
+
+```json
+{"turn_id": "…", "pending": null, "ended": {"interaction_id": "…", "kind": "approval", "tool": "bash", "outcome": "answered", "decision": "decline"}}
+```
+
+- **Fields.** `kind` is always explicit (`draft` or `approval`), unlike on the question, where absent means `draft`. `outcome` is `answered`, `timed_out` or `cancelled`. `decision` (`accept`, `update`, `decline`) is present only for `answered`: a timeout or a stop is not a decision anybody made, and a late reply that finds the deadline passed reports `timed_out`.
+- **Sent once, never replayed.** `ended` rides on the clearing event only. A client that attaches later gets `pending: null` and nothing else, so it can never be shown a stale reason. A question nobody could answer (the run was already stopped) is neither published nor ended, so it has no end to report.
+- **No setting, additive.** An older client ignores the extra member; a newer client treats a missing one as "no explanation". It is run state, not transcript: nothing is written to `messages.jsonl`.
+- **Who stays quiet is the client's call.** The tab that sent the answer, or asked for the stop, knows why the question ended and shows nothing; any other tab shows one notification. A timeout is shown to every tab, because the countdown was the only warning.
+- **Implementation.** TypeScript: `InteractionBroker` passes an `InteractionEnd` to its listener and `SessionRun.setPending` adds it to the event. Go: `Broker.onChange` takes `(*PendingInteraction, *InteractionEnd)` and `activeRun.setPendingInteraction` adds it to the payload.
+- **Tested.** Broker tests on both backends (answered, denied, stop, run end, late reply, draft), real-server tests that read the stream (allow, deny, stop), a differential scenario that compares the three runs, and frontend parser and wording tests.
+
 ## Run token cap: `max_run_tokens` stops a run between rounds (TypeScript and Go together)
 
 New session setting `max_run_tokens`, an integer from 1 to 1000000000000. **There is no default: an absent key means no cap and changes nothing.** `null`, `0`, a negative or fractional number, a string and anything else is a configuration error with the same message on both backends: `max_run_tokens must be a safe integer between 1 and 1000000000000`.

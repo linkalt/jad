@@ -119,6 +119,41 @@ test("publishes and replays a pending interaction without requiring a UI message
   registry.clear();
 });
 
+test("the event that clears a question carries why it ended, once, and a later attach sees no reason", () => {
+  const registry = new SessionRunRegistry(60_000);
+  const run = registry.begin("session1", undefined, "web-turn-1", new AbortController());
+  const pending: WebUiInteraction = {
+    id: "interaction-1",
+    kind: "approval",
+    tool: "bash",
+    tool_call_id: "call-1",
+    draft: {command: "ls"},
+    created_at: "2026-01-01T00:00:00.000Z",
+    expires_at: "2026-01-01T00:01:00.000Z",
+    max_expires_at: "2026-01-01T00:01:00.000Z",
+    extend_ms: 0,
+  };
+  const ended = {interaction_id: "interaction-1", kind: "approval" as const, tool: "bash", outcome: "answered" as const, decision: "accept" as const};
+  const live: Array<{event: string; data: unknown}> = [];
+  run.subscribe(event => live.push(event));
+
+  run.setPending(pending);
+  run.setPending(undefined, ended);
+  assert.deepEqual(live, [
+    {event: "interaction", data: {turn_id: "web-turn-1", pending}},
+    {event: "interaction", data: {turn_id: "web-turn-1", pending: null, ended}},
+  ]);
+
+  const late: Array<{event: string; data: unknown}> = [];
+  run.subscribe(event => late.push(event));
+  assert.deepEqual(late, [{event: "interaction", data: {turn_id: "web-turn-1", pending: null}}], "the reason is not replayed");
+
+  run.setPending(undefined, ended);
+  assert.equal(live.length, 2, "clearing nothing publishes nothing");
+  run.finish("aborted", [{event: "done", data: {}}]);
+  registry.clear();
+});
+
 test("publishes a provider retry wait, replays it to a late subscriber, and drops it when cleared or finished", () => {
   const registry = new SessionRunRegistry(60_000);
   const run = registry.begin("session1", undefined, "web-turn-1", new AbortController());

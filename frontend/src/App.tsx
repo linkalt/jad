@@ -178,6 +178,7 @@ import {
 } from './session-views';
 import {placeRunFailures, runFailureText} from './run-failures';
 import {ProviderRetryNotice} from './components/ProviderRetryNotice';
+import {interactionEndNotice, type InteractionEnd} from './interaction-end';
 import type {ProviderRetryWait} from './provider-retry-view';
 import {removeViewKeys, removedViewKeys} from './view-cache';
 import {canAttachRunToView, recordOwnedRunTurn, updateViewState} from './view-state';
@@ -2693,6 +2694,13 @@ function App() {
   /** Interaction work is keyed by view so another profile can answer independently. */
   const answeringInteractionRefs = useRef(new Map<string, string>());
   const extendingInteractionRefs = useRef(new Map<string, string>());
+  /**
+   * Questions this tab sent an answer for, and views where this tab asked for the stop.
+   * They outlive the request on purpose: the stream's end event can arrive after the
+   * POST resolved, and a tab must not announce its own answer as another window's.
+   */
+  const answeredHereRefs = useRef(new Set<string>());
+  const stoppedHereViewKeysRef = useRef(new Set<string>());
   const runTimeoutRefs = useRef(new Map<string, number>());
   const activeRunViewKeysRef = useRef(new Set<string>());
   const attachedRunViewKeysRef = useRef(new Set<string>());
@@ -2747,6 +2755,32 @@ function App() {
       wait === undefined ? undefined : {turnId, wait},
     ));
   }, []);
+  /**
+   * Tells this tab why a question left the run, unless this tab caused it. The server
+   * sends the reason once, on the event that clears the question, so there is nothing
+   * to look up later; a tab that attaches afterwards is told only that nothing waits.
+   */
+  const recordInteractionEnd = useCallback((
+    viewKey: string,
+    sessionTitle: string,
+    turnId: string,
+    end: InteractionEnd,
+  ) => {
+    if (activeRunTurnRefs.current.get(viewKey) !== turnId) return;
+    const answeredHere = answeredHereRefs.current.delete(end.interactionId);
+    const notice = interactionEndNotice(end, {
+      answeredHere,
+      stoppedHere: stoppedHereViewKeysRef.current.has(viewKey),
+    });
+    if (notice === undefined) return;
+    recordNotification({
+      sessionId: viewKey,
+      sessionTitle,
+      kind: 'info',
+      title: notice.title,
+      message: notice.message,
+    });
+  }, [recordNotification]);
   const clearRunInteraction = useCallback((viewKey: string, turnId?: string) => {
     const activeTurnId = activeRunTurnRefs.current.get(viewKey);
     if (turnId !== undefined && activeTurnId !== undefined && activeTurnId !== turnId) return;
@@ -2762,6 +2796,7 @@ function App() {
   const clearInteractionUiForView = useCallback((viewKey: string) => {
     answeringInteractionRefs.current.delete(viewKey);
     extendingInteractionRefs.current.delete(viewKey);
+    stoppedHereViewKeysRef.current.delete(viewKey);
     setInteractionUiByView(current => updateViewState(current, viewKey, () => undefined));
   }, []);
   const activeSessionIdRef = useRef<string>(activeSessionId);
@@ -3443,6 +3478,7 @@ function App() {
     if (stopPendingViewKeysRef.current.has(targetViewKey)) return;
 
     stopPendingViewKeysRef.current.add(targetViewKey);
+    stoppedHereViewKeysRef.current.add(targetViewKey);
     const sessionRef = session.sessionRef;
     const profile = profileOfViewKey(targetViewKey);
     const targetController = runAbortRefs.current.get(targetViewKey) ?? null;
@@ -3462,6 +3498,7 @@ function App() {
       detachStoppedView,
     ).then(stopped => {
       if (!stopped) {
+        stoppedHereViewKeysRef.current.delete(targetViewKey);
         detachStoppedView();
         recordNotification({
           sessionId: session.id,
@@ -3472,6 +3509,7 @@ function App() {
         });
       }
     }).catch(error => {
+      stoppedHereViewKeysRef.current.delete(targetViewKey);
       recordNotification({
         sessionId: session.id,
         sessionTitle: activeRowSession.title,
@@ -3507,6 +3545,7 @@ function App() {
       return;
     }
     answeringInteractionRefs.current.set(viewKey, interaction.id);
+    answeredHereRefs.current.add(interaction.id);
     updateInteractionUiForView(viewKey, current => ({
       ...current,
       answeringInteractionId: interaction.id,
@@ -3519,6 +3558,8 @@ function App() {
       profile,
       signal,
     ).catch(error => {
+      // A refused answer did not decide anything, so the end that follows is not ours.
+      answeredHereRefs.current.delete(interaction.id);
       const message = error instanceof Error ? error.message : String(error);
       updateInteractionUiForView(viewKey, current => ({...current, error: message}));
       recordNotification({
@@ -3921,6 +3962,8 @@ function App() {
           onRun: run => recordRunStarted(sessionId, run.turn_id),
           onInteraction: (turnId, interaction) =>
             recordRunInteraction(sessionId, turnId, interaction),
+          onInteractionEnd: (turnId, end) =>
+            recordInteractionEnd(sessionId, activeRowSession.title, turnId, end),
           onProviderRetry: (turnId, wait) => recordRunRetry(sessionId, turnId, wait),
           onMessage: message => {
             setStreamingMessageForView(sessionId, message);
@@ -4068,6 +4111,7 @@ function App() {
       applyRunDelta,
       applyRunPart,
       recordRunStarted,
+      recordInteractionEnd,
       recordRunInteraction,
       recordRunRetry,
       clearRunInteraction,
@@ -4113,6 +4157,8 @@ function App() {
         onRun: run => recordRunStarted(sessionId, run.turn_id),
         onInteraction: (pendingTurnId, interaction) =>
           recordRunInteraction(sessionId, pendingTurnId, interaction),
+        onInteractionEnd: (endTurnId, end) =>
+          recordInteractionEnd(sessionId, sessionTitle, endTurnId, end),
         onProviderRetry: (pendingTurnId, wait) =>
           recordRunRetry(sessionId, pendingTurnId, wait),
         onMessage: message => setStreamingMessageForView(sessionId, message),
@@ -4204,6 +4250,7 @@ function App() {
       clearInteractionUiForView,
       clearRunInteraction,
       recordNotification,
+      recordInteractionEnd,
       recordRunInteraction,
       recordRunRetry,
       recordRunStarted,

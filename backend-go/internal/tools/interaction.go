@@ -80,6 +80,19 @@ type PendingInteraction struct {
 	ExtendMS     int64           `json:"extend_ms"`
 }
 
+// InteractionEnd says why a question left the run. It is published once, with
+// the event that clears the question, so a client that only sees the question
+// vanish does not have to guess whether it was answered here, answered in
+// another window, timed out or cut off by the run ending. Decision is set only
+// for an answer: a timeout or a stop is not a decision anybody made.
+type InteractionEnd struct {
+	InteractionID string              `json:"interaction_id"`
+	Kind          string              `json:"kind"`
+	Tool          string              `json:"tool"`
+	Outcome       InteractionOutcome  `json:"outcome"`
+	Decision      InteractionDecision `json:"decision,omitempty"`
+}
+
 type InteractionReply struct {
 	Decision InteractionDecision `json:"decision"`
 	Draft    json.RawMessage     `json:"draft,omitempty"`

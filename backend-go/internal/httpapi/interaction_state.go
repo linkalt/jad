@@ -14,7 +14,9 @@ func (r *activeRun) canRequestInteraction() bool {
 	return r.supportsInteraction
 }
 
-func (r *activeRun) setPendingInteraction(pending *tools.PendingInteraction) {
+// setPendingInteraction publishes the run's question, or its end. `ended` says why
+// a question left; it rides only on the clearing event and is not replayed.
+func (r *activeRun) setPendingInteraction(pending *tools.PendingInteraction, ended *tools.InteractionEnd) {
 	if r == nil {
 		return
 	}
@@ -40,7 +42,11 @@ func (r *activeRun) setPendingInteraction(pending *tools.PendingInteraction) {
 	if next != nil {
 		pendingValue = next
 	}
-	interactionEvent, err := makeSSEEvent("interaction", map[string]any{"turn_id": r.turnID, "pending": pendingValue})
+	payload := map[string]any{"turn_id": r.turnID, "pending": pendingValue}
+	if next == nil && ended != nil {
+		payload["ended"] = ended
+	}
+	interactionEvent, err := makeSSEEvent("interaction", payload)
 	if err != nil {
 		r.mu.Unlock()
 		return

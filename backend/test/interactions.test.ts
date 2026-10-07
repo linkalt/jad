@@ -372,3 +372,55 @@ test("one question at a time, because the runner executes calls in order", async
   broker.cancel("done");
   await answer;
 });
+
+test("tells the run why a question ended: who decided, a timeout, or a stop", async () => {
+  const ends: Array<unknown> = [];
+  const broker = new InteractionBroker((pending, ended) => {
+    if (pending === undefined) ends.push(ended);
+    else ends.push("opened");
+  });
+  const approval = {...QUESTION, kind: "approval" as const};
+
+  const first = broker.begin(approval, {tool: "bash", tool_call_id: "c1"});
+  const firstId = broker.pending?.id;
+  broker.reply(firstId ?? "", {decision: "decline", reason: "no"});
+  await first;
+
+  const second = broker.begin(QUESTION, IDENTITY);
+  const secondId = broker.pending?.id;
+  broker.reply(secondId ?? "", {decision: "update", draft: {goal: "x"}});
+  await second;
+
+  const third = broker.begin(approval, {tool: "bash", tool_call_id: "c3"});
+  const thirdId = broker.pending?.id;
+  broker.cancel("run over");
+  await third;
+
+  assert.deepEqual(ends, [
+    "opened",
+    {interaction_id: firstId, kind: "approval", tool: "bash", outcome: "answered", decision: "decline"},
+    "opened",
+    {interaction_id: secondId, kind: "draft", tool: "request_draft", outcome: "answered", decision: "update"},
+    "opened",
+    {interaction_id: thirdId, kind: "approval", tool: "bash", outcome: "cancelled"},
+  ]);
+  assert.ok(!("decision" in (ends[5] as object)), "a stop is not a decision anybody made");
+});
+
+test("a late reply reports a timeout, not an answer, and a question nobody could answer reports nothing", async () => {
+  const ends: Array<unknown> = [];
+  const broker = new InteractionBroker((pending, ended) => {
+    if (pending === undefined) ends.push(ended);
+  });
+  const late = broker.begin({...QUESTION, timeout_ms: 1, max_timeout_ms: 1}, IDENTITY);
+  const id = broker.pending?.id ?? "";
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await late;
+  assert.equal(broker.reply(id, {decision: "accept"}), "unknown", "the timer already settled it");
+  assert.deepEqual(ends, [{interaction_id: id, kind: "draft", tool: "request_draft", outcome: "timed_out"}]);
+
+  const controller = new AbortController();
+  controller.abort();
+  await broker.begin(QUESTION, IDENTITY, controller.signal);
+  assert.equal(ends.length, 1, "a question that was never published has no end to publish");
+});

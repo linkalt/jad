@@ -7,6 +7,7 @@ import {
   type RestoreMode,
   type RestorePlan,
 } from './checkpoint-view.ts';
+import {parseInteractionEnd, type InteractionEnd} from './interaction-end.ts';
 import {parseProviderRetryWait, type ProviderRetryWait} from './provider-retry-view.ts';
 
 const authenticatedFetch = createAuthenticatedFetch(
@@ -1000,6 +1001,12 @@ export interface StreamSessionRunOptions {
   /** A pending user decision for this run; `undefined` clears the interaction. */
   onInteraction?: (turnId: string, interaction: WebUiInteraction | undefined) => void;
   /**
+   * Why a question left the run: sent once, with the event that clears it, and only
+   * when the server says (an older server never does). It is not replayed to a client
+   * that attaches later.
+   */
+  onInteractionEnd?: (turnId: string, end: InteractionEnd) => void;
+  /**
    * The run is waiting to retry a failed provider request; `undefined` clears the
    * notice (the wait ended, or the event was malformed, so a bad one never sticks).
    */
@@ -1089,6 +1096,12 @@ async function consumeRunStream(
             message.data.turn_id,
             message.data.pending === null ? undefined : message.data.pending,
           );
+          if (message.data.pending === null) {
+            const end = parseInteractionEnd(message.data.ended);
+            if (end !== undefined) {
+              options.onInteractionEnd?.(message.data.turn_id, end);
+            }
+          }
         }
         continue;
       }

@@ -201,6 +201,35 @@ test('delivers a pending interaction before any message snapshot', async () => {
   assert.equal(result.message?.text, 'The run continued after approval');
 });
 
+test('an interaction event that clears a question reports why it ended, and only when it says', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const finalMessage = message('complete', 'all done');
+  const ended = {interaction_id: 'i1', kind: 'approval', tool: 'bash', outcome: 'answered', decision: 'decline'};
+  responses.push(streamResponse([
+    {event: 'run', data: {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'}},
+    {event: 'interaction', data: {turn_id: 'turn-1', pending: null, ended}},
+    {event: 'interaction', data: {turn_id: 'turn-1', pending: null}},
+    {event: 'interaction', data: {turn_id: 'turn-1', pending: null, ended: {...ended, outcome: 'nonsense'}}},
+    {event: 'interaction', data: {turn_id: 'turn-1', pending: null, ended: {interaction_id: 'i2', kind: 'draft', tool: 'request_draft', outcome: 'timed_out'}}},
+    {event: 'completed', data: {message: finalMessage, committed: true}},
+    {event: 'done', data: {}},
+  ]));
+  const cleared = [];
+  const ends = [];
+
+  await streamSessionRun('session-1', 'hello', {
+    onInteraction: (turnId, value) => cleared.push({turnId, id: value?.id}),
+    onInteractionEnd: (turnId, end) => ends.push({turnId, id: end.interactionId, outcome: end.outcome, decision: end.decision}),
+  });
+
+  assert.equal(cleared.length, 4, 'every event still clears the question, with or without a reason');
+  assert.deepEqual(ends, [
+    {turnId: 'turn-1', id: 'i1', outcome: 'answered', decision: 'decline'},
+    {turnId: 'turn-1', id: 'i2', outcome: 'timed_out', decision: undefined},
+  ], 'an absent or malformed reason is not reported');
+});
+
 test('keeps reconnecting after the configured batch when the run is known active', async () => {
   requests.length = 0;
   responses.length = 0;

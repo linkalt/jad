@@ -18,7 +18,7 @@ import (
 type Broker struct {
 	mu       sync.Mutex
 	entry    *pendingEntry
-	onChange func(*tools.PendingInteraction)
+	onChange func(*tools.PendingInteraction, *tools.InteractionEnd)
 	now      func() time.Time
 }
 
@@ -31,7 +31,7 @@ type pendingEntry struct {
 	settled    chan tools.InteractionAnswer
 }
 
-func NewBroker(onChange func(*tools.PendingInteraction)) *Broker {
+func NewBroker(onChange func(*tools.PendingInteraction, *tools.InteractionEnd)) *Broker {
 	return &Broker{onChange: onChange, now: time.Now}
 }
 
@@ -131,7 +131,7 @@ func (b *Broker) Request(ctx context.Context, identity tools.InteractionIdentity
 	b.entry = entry
 	entry.timer = time.AfterFunc(maxDuration(0, expiresAt.Sub(b.now())), func() { b.timeout(entry) })
 	b.mu.Unlock()
-	b.notify(&pending)
+	b.notify(&pending, nil)
 
 	select {
 	case answer := <-entry.settled:
@@ -153,13 +153,12 @@ func (b *Broker) Reply(id string, reply tools.InteractionReply) tools.Interactio
 		return tools.InteractionStatusUnknown
 	}
 	if !b.now().Before(entry.expiresAt) {
-		answer := timedOutAnswer(entry)
-		b.settleLocked(entry, answer)
+		ended := b.settleLocked(entry, timedOutAnswer(entry))
 		b.mu.Unlock()
-		b.notify(nil)
+		b.notify(nil, ended)
 		return tools.InteractionStatusExpired
 	}
-	b.settleLocked(entry, tools.InteractionAnswer{
+	ended := b.settleLocked(entry, tools.InteractionAnswer{
 		Decision: reply.Decision,
 		Draft:    append([]byte(nil), reply.Draft...),
 		Reason:   cloneString(reply.Reason),
@@ -167,7 +166,7 @@ func (b *Broker) Reply(id string, reply tools.InteractionReply) tools.Interactio
 		Source:   tools.InteractionSourceUser,
 	})
 	b.mu.Unlock()
-	b.notify(nil)
+	b.notify(nil, ended)
 	return tools.InteractionStatusAnswered
 }
 
@@ -183,9 +182,9 @@ func (b *Broker) Extend(id string) tools.InteractionExtendStatus {
 	}
 	now := b.now()
 	if !now.Before(entry.expiresAt) {
-		b.settleLocked(entry, timedOutAnswer(entry))
+		ended := b.settleLocked(entry, timedOutAnswer(entry))
 		b.mu.Unlock()
-		b.notify(nil)
+		b.notify(nil, ended)
 		return tools.InteractionExtendExpired
 	}
 	if !entry.expiresAt.Before(entry.maxExpires) {
@@ -201,7 +200,7 @@ func (b *Broker) Extend(id string) tools.InteractionExtendStatus {
 	entry.timer.Reset(maxDuration(0, next.Sub(now)))
 	pending := clonePending(entry.pending)
 	b.mu.Unlock()
-	b.notify(&pending)
+	b.notify(&pending, nil)
 	return tools.InteractionExtendExtended
 }
 
@@ -216,9 +215,9 @@ func (b *Broker) Cancel(reason string) {
 		b.mu.Unlock()
 		return
 	}
-	b.settleLocked(entry, cancelledAnswer(reason))
+	ended := b.settleLocked(entry, cancelledAnswer(reason))
 	b.mu.Unlock()
-	b.notify(nil)
+	b.notify(nil, ended)
 }
 
 func (b *Broker) timeout(entry *pendingEntry) {
@@ -233,9 +232,9 @@ func (b *Broker) timeout(entry *pendingEntry) {
 		b.mu.Unlock()
 		return
 	}
-	b.settleLocked(entry, timedOutAnswer(entry))
+	ended := b.settleLocked(entry, timedOutAnswer(entry))
 	b.mu.Unlock()
-	b.notify(nil)
+	b.notify(nil, ended)
 }
 
 func (b *Broker) settle(entry *pendingEntry, answer tools.InteractionAnswer, notify bool) bool {
@@ -244,35 +243,55 @@ func (b *Broker) settle(entry *pendingEntry, answer tools.InteractionAnswer, not
 		b.mu.Unlock()
 		return false
 	}
-	b.settleLocked(entry, answer)
+	ended := b.settleLocked(entry, answer)
 	b.mu.Unlock()
 	if notify {
-		b.notify(nil)
+		b.notify(nil, ended)
 	}
 	return true
 }
 
-func (b *Broker) settleLocked(entry *pendingEntry, answer tools.InteractionAnswer) {
+// settleLocked ends the wait and returns why, for the event that clears the
+// question. It returns nil when the entry was already gone.
+func (b *Broker) settleLocked(entry *pendingEntry, answer tools.InteractionAnswer) *tools.InteractionEnd {
 	if b.entry != entry {
-		return
+		return nil
 	}
 	b.entry = nil
 	if entry.timer != nil {
 		entry.timer.Stop()
 	}
 	entry.settled <- answer
+	return interactionEnd(entry.pending, answer)
 }
 
-func (b *Broker) notify(pending *tools.PendingInteraction) {
+func interactionEnd(pending tools.PendingInteraction, answer tools.InteractionAnswer) *tools.InteractionEnd {
+	kind := string(pending.Kind)
+	if kind == "" {
+		kind = "draft"
+	}
+	ended := &tools.InteractionEnd{
+		InteractionID: pending.ID,
+		Kind:          kind,
+		Tool:          pending.Tool,
+		Outcome:       answer.Outcome,
+	}
+	if answer.Outcome == tools.InteractionAnswered {
+		ended.Decision = answer.Decision
+	}
+	return ended
+}
+
+func (b *Broker) notify(pending *tools.PendingInteraction, ended *tools.InteractionEnd) {
 	if b.onChange == nil {
 		return
 	}
 	if pending == nil {
-		b.onChange(nil)
+		b.onChange(nil, ended)
 		return
 	}
 	copy := clonePending(*pending)
-	b.onChange(&copy)
+	b.onChange(&copy, nil)
 }
 
 func timedOutAnswer(entry *pendingEntry) tools.InteractionAnswer {

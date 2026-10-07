@@ -8,7 +8,7 @@ import type {
 import { messageAppendIncrement, messageIncrements } from "./plugins/web-ui/incremental-web-ui.js";
 import type {WebUiMessageAppend} from "./plugins/web-ui/incremental-web-ui.js";
 
-import {InteractionBroker} from "./interactions.js";
+import {InteractionBroker, type InteractionEnd} from "./interactions.js";
 import type {ProviderRetryWait} from "./provider-retry.js";
 import {RunContentCache, type RunContentCacheStagedReader} from "./run-content-cache.js";
 import {DEFAULT_ROOT_SERVER_SETTINGS} from "./session-roots.js";
@@ -82,7 +82,7 @@ export class SessionRun {
     },
   ) {
     this.contentCache = new RunContentCache(cache);
-    this.interactions = new InteractionBroker((pending) => this.setPending(pending));
+    this.interactions = new InteractionBroker((pending, ended) => this.setPending(pending, ended));
   }
 
   /** The question a tool is waiting on; its answer arrives over HTTP. */
@@ -228,7 +228,7 @@ export class SessionRun {
    * message when available for clients that still consume message snapshots.
    * The dedicated event is retained even before the first message exists.
    */
-  public setPending(pending: WebUiInteraction | undefined): void {
+  public setPending(pending: WebUiInteraction | undefined, ended?: InteractionEnd): void {
     if (pending === this.pendingInteraction) {
       return;
     }
@@ -237,7 +237,14 @@ export class SessionRun {
     }
     this.pendingInteraction = pending;
     this.interactionKnown = true;
-    this.publish("interaction", {turn_id: this.turnId, pending: pending ?? null});
+    // `ended` says why the question left; it is sent once, with the clearing event,
+    // and is not part of the replayed state, so a client that attaches later sees no
+    // stale reason.
+    this.publish("interaction", {
+      turn_id: this.turnId,
+      pending: pending ?? null,
+      ...(pending === undefined && ended !== undefined ? {ended} : {}),
+    });
 
     const current = this.contentCache.metadata();
     if (current === undefined) {
