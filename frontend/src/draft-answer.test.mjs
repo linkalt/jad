@@ -12,6 +12,7 @@ import {
   moveListItem,
   removeListItem,
   retypeListItem,
+  updateListItemForm,
   draftExtendLabel,
   draftFields,
   hasAddedFields,
@@ -62,10 +63,13 @@ test('an array is one field whose entries keep the type the proposal gave them',
       ['1', 'number', '2'],
       ['2', 'boolean', 'true'],
       ['3', 'null', ''],
-      ['4', 'json', '{\n  "k": 1\n}'],
+      ['4', 'object', '{\n  "k": 1\n}'],
       ['5', 'json', '[\n  3\n]'],
     ],
   );
+  assert.deepEqual(mix.items[4].form.base, {k: 1}, 'an object entry carries a form, one input per key');
+  assert.equal(mix.items[5].form, undefined, 'a nested array stays one JSON entry');
+  assert.equal(draftFields({o: [{}]})[0].items[0].kind, 'json', 'an object with no keys has nothing to show as a form');
   const empty = fields.find((field) => field.label === 'empty');
   assert.deepEqual([empty.kind, empty.items], ['list', []]);
   assert.equal(fields.filter((field) => field.label.startsWith('mix[')).length, 0, 'no row per index');
@@ -103,7 +107,9 @@ test('edited rows rebuild the proposal with their own type', () => {
   const reviewersKey = JSON.stringify(['reviewers']);
   const lists = {
     [stepsKey]: editListItem(field(DRAFT, 'steps').items, 1, 'audit the tone'),
-    [reviewersKey]: editListItem(field(DRAFT, 'reviewers').items, 0, '{"name":"sam"}'),
+    [reviewersKey]: updateListItemForm(field(DRAFT, 'reviewers').items, 0, {
+      edits: {[JSON.stringify(['role'])]: 'lead'},
+    }),
   };
   assert.deepEqual(buildEditedDraft(DRAFT, edits, [], lists), {
     value: {
@@ -113,7 +119,7 @@ test('edited rows rebuild the proposal with their own type', () => {
       aggressive: true,
       scope: {area: 'landing', keepUrls: false},
       steps: ['audit the copy', 'audit the tone'],
-      reviewers: [{name: 'sam'}],
+      reviewers: [{name: 'sam', role: 'lead'}],
     },
   });
   assert.deepEqual(DRAFT.steps, ['audit the copy', 'rewrite the intro'], 'the proposal is never mutated');
@@ -391,9 +397,118 @@ test('an entry that no longer parses names the array and its position', () => {
     [numbers.key]: addListItem(numbers.items, 'item-1'),
   });
   assert.ok('error' in blank, 'a new empty number is refused, not sent as 0');
-  const json = field({o: [{a: 1}]}, 'o');
-  const broken = buildEditedDraft({o: [{a: 1}]}, {}, [], {[json.key]: editListItem(json.items, 0, '{oops')});
+  const json = field({o: [[1]]}, 'o');
+  const broken = buildEditedDraft({o: [[1]]}, {}, [], {[json.key]: editListItem(json.items, 0, '{oops')});
   assert.equal(`${broken.error.label} ${broken.error.message}`, 'o item 1 must be valid JSON');
+});
+
+const PEOPLE = {
+  people: [
+    {name: 'sam', age: 30, admin: true, tags: ['a'], address: {city: 'Oslo'}},
+    {name: 'kim', age: 41, admin: false, tags: [], address: {city: 'Rome'}},
+  ],
+};
+const peopleKey = JSON.stringify(['people']);
+const personKey = (...path) => JSON.stringify(path);
+
+test('an array of objects is edited one input per key, never as JSON text', () => {
+  const people = field(PEOPLE, 'people');
+  assert.deepEqual(people.items.map((item) => item.kind), ['object', 'object']);
+  const labels = draftFields(people.items[0].form.base).map((entry) => [entry.label, entry.kind]);
+  assert.deepEqual(labels, [
+    ['name', 'string'],
+    ['age', 'number'],
+    ['admin', 'boolean'],
+    ['tags', 'list'],
+    ['address.city', 'string'],
+  ]);
+  assert.equal(isListEdited(people, people.items), false, 'an untouched form is not an edit');
+  assert.deepEqual(buildEditedDraft(PEOPLE, {}, [], {[peopleKey]: people.items}), {value: PEOPLE});
+});
+
+test('editing a key of one entry changes that entry and no other', () => {
+  const people = field(PEOPLE, 'people');
+  const edited = updateListItemForm(people.items, 1, {
+    edits: {[personKey('age')]: '42', [personKey('address', 'city')]: 'Milan'},
+  });
+  assert.equal(isListEdited(people, edited), true);
+  assert.deepEqual(buildEditedDraft(PEOPLE, {}, [], {[peopleKey]: edited}), {
+    value: {
+      people: [
+        PEOPLE.people[0],
+        {name: 'kim', age: 42, admin: false, tags: [], address: {city: 'Milan'}},
+      ],
+    },
+  });
+  assert.equal(PEOPLE.people[1].age, 41, 'the proposal is never mutated');
+  assert.equal(hasDraftChanges(draftFields(PEOPLE), {}, [], {[peopleKey]: edited}), true);
+});
+
+test('typing the original text over a key of an object entry is not an edit', () => {
+  const people = field(PEOPLE, 'people');
+  const same = updateListItemForm(people.items, 0, {edits: {[personKey('name')]: 'sam'}});
+  assert.equal(isListEdited(people, same), false);
+});
+
+test('an array inside an object entry is edited as a list of its own', () => {
+  const people = field(PEOPLE, 'people');
+  const tagsKey = personKey('tags');
+  const tags = field(people.items[0].form.base, 'tags');
+  const grown = editListItem(addListItem(tags.items, 'item-9'), 1, 'b');
+  const edited = updateListItemForm(people.items, 0, {lists: {[tagsKey]: grown}});
+  assert.equal(isListEdited(people, edited), true);
+  assert.deepEqual(buildEditedDraft(PEOPLE, {}, [], {[peopleKey]: edited}).value.people[0].tags, ['a', 'b']);
+});
+
+test('an object entry that cannot be built names the entry and the key', () => {
+  const people = field(PEOPLE, 'people');
+  const bad = updateListItemForm(people.items, 1, {edits: {[personKey('age')]: 'old'}});
+  const built = buildEditedDraft(PEOPLE, {}, [], {[peopleKey]: bad});
+  assert.ok('error' in built);
+  assert.equal(`${built.error.label} ${built.error.message}`, 'people item 2 age must be a number');
+  const review = reviewDraftAnswer({
+    draft: PEOPLE,
+    fields: draftFields(PEOPLE),
+    edits: {},
+    added: [],
+    lists: {[peopleKey]: bad},
+    decision: 'update',
+    reason: '',
+    reasonMaxLength: 100,
+  });
+  assert.deepEqual(review, {error: 'people item 2 age must be a number.'});
+});
+
+test('a new entry after an object entry is an object with the same keys, all blank', () => {
+  const people = field(PEOPLE, 'people');
+  const grown = addListItem(people.items, 'item-1');
+  assert.equal(grown[2].kind, 'object');
+  assert.equal(grown[2].added, true);
+  assert.deepEqual(grown[2].form.base, {name: '', age: 0, admin: false, tags: [], address: {city: ''}});
+  const filled = updateListItemForm(grown, 2, {
+    edits: {[personKey('name')]: 'ola', [personKey('age')]: '25'},
+  });
+  assert.deepEqual(buildEditedDraft(PEOPLE, {}, [], {[peopleKey]: filled}).value.people[2], {
+    name: 'ola',
+    age: 25,
+    admin: false,
+    tags: [],
+    address: {city: ''},
+  });
+});
+
+test('a reorder or a removal of object entries carries each entry with its own edits', () => {
+  const people = field(PEOPLE, 'people');
+  const edited = updateListItemForm(people.items, 0, {edits: {[personKey('name')]: 'sam2'}});
+  const swapped = moveListItem(edited, 0, 1);
+  assert.deepEqual(
+    buildEditedDraft(PEOPLE, {}, [], {[peopleKey]: swapped}).value.people.map((person) => person.name),
+    ['kim', 'sam2'],
+  );
+  assert.deepEqual(
+    buildEditedDraft(PEOPLE, {}, [], {[peopleKey]: removeListItem(edited, 1)}).value.people.map((person) => person.name),
+    ['sam2'],
+  );
 });
 
 test('arrays inside nested objects are edited at their own path', () => {

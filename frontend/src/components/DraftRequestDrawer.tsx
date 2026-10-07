@@ -40,7 +40,6 @@ import {
   draftFields,
   hasDraftChanges,
   hasJsonDraftChanges,
-  listItemsOf,
   reviewDraftAnswer,
   reviewDraftJsonAnswer,
   type DraftAddedField,
@@ -48,7 +47,7 @@ import {
   type DraftDecision,
   type DraftListItem,
 } from '../draft-answer';
-import {DraftListField} from './DraftListField';
+import {DraftFieldRows} from './DraftListField';
 
 export interface DraftRequestDrawerProps {
   pending: WebUiInteraction;
@@ -182,7 +181,6 @@ export function DraftRequestDrawer({
     setProblem(null);
   };
 
-  const textFor = (key: string, fallback: string): string => edits[key] ?? fallback;
   const editTo = (key: string, value: string): void => {
     setEdits((previous) => ({...previous, [key]: value}));
   };
@@ -252,40 +250,18 @@ export function DraftRequestDrawer({
                 field the agent missed.
               </Text>
             ) : (
-              fields.map((field) =>
-                field.kind === 'list' ? (
-                  <DraftListField
-                    key={field.key}
-                    label={field.label}
-                    items={listItemsOf(field, lists)}
-                    isDisabled={isSubmitting}
-                    nextItemId={() => {
-                      nextListItemId.current += 1;
-                      return `item-${nextListItemId.current}`;
-                    }}
-                    onChange={(items) => setLists((previous) => ({...previous, [field.key]: items}))}
-                  />
-                ) : field.kind === 'json' || field.kind === 'string' ? (
-                  <TextArea
-                    key={field.key}
-                    label={field.label}
-                    value={textFor(field.key, field.text)}
-                    rows={field.kind === 'json' ? 4 : 3}
-                    size="sm"
-                    isDisabled={isSubmitting}
-                    onChange={(value: string) => editTo(field.key, value)}
-                  />
-                ) : (
-                  <TextInput
-                    key={field.key}
-                    label={field.label}
-                    value={textFor(field.key, field.text)}
-                    size="sm"
-                    isDisabled={isSubmitting}
-                    onChange={(value: string) => editTo(field.key, value)}
-                  />
-                ),
-              )
+              <DraftFieldRows
+                base={draftBase}
+                edits={edits}
+                lists={lists}
+                isDisabled={isSubmitting}
+                nextItemId={() => {
+                  nextListItemId.current += 1;
+                  return `item-${nextListItemId.current}`;
+                }}
+                onEdit={editTo}
+                onList={(key, items) => setLists((previous) => ({...previous, [key]: items}))}
+              />
             )}
             {added.map((field) => (
               <VStack key={field.id} gap={1} width="100%">

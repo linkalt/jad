@@ -13,13 +13,25 @@
  * has to see which field to fix.
  */
 
-export type DraftItemKind = 'string' | 'number' | 'boolean' | 'null' | 'json';
+export type DraftItemKind = 'string' | 'number' | 'boolean' | 'null' | 'json' | 'object';
 export type DraftFieldKind = DraftItemKind | 'list';
+
+/**
+ * The form of an array entry that is an object: its own proposal and the edits
+ * made to it, so each key is an input like a root field. It nests, because a
+ * key of that object may itself be an array of objects.
+ */
+export interface DraftItemForm {
+  base: Record<string, unknown>;
+  edits: Readonly<Record<string, string>>;
+  lists: DraftListEdits;
+}
 
 /**
  * One entry of an array field. An array is one field, not one row per index, so
  * its entries can be added, removed and reordered; each entry keeps the type the
- * proposal gave it (an object or a nested array reads as one JSON entry).
+ * proposal gave it. An object entry with keys carries a `form` (one input per
+ * key); an empty object or a nested array reads as one JSON entry.
  */
 export interface DraftListItem {
   /** Stable identity across reorders: the original index, or `item-N` for an added entry. */
@@ -28,6 +40,8 @@ export interface DraftListItem {
   text: string;
   /** True for an entry the user added, which may still be retyped. */
   added?: boolean;
+  /** Present for `object` entries only. */
+  form?: DraftItemForm;
 }
 
 export interface DraftField {
@@ -131,12 +145,12 @@ export function buildEditedDraft(
       }
       const values: unknown[] = [];
       for (const [index, item] of items.entries()) {
-        const parsed = parseFieldText(item.kind, item.text);
+        const parsed = parseListItem(item);
         if ('error' in parsed) {
           return {
             error: {
               key: field.key,
-              label: `${field.label} item ${index + 1}`,
+              label: `${field.label} item ${index + 1}${parsed.label === undefined ? '' : ` ${parsed.label}`}`,
               message: parsed.error,
             },
           };
@@ -235,9 +249,61 @@ export function isListEdited(field: DraftField, items: readonly DraftListItem[])
         first === undefined ||
         item.id !== first.id ||
         item.kind !== first.kind ||
-        item.text !== first.text
+        item.text !== first.text ||
+        (item.form !== undefined && isFormEdited(item.form))
       );
     })
+  );
+}
+
+/** True when any input inside an object entry differs from its proposal. */
+function isFormEdited(form: DraftItemForm): boolean {
+  return hasDraftEdits(draftFields(form.base), form.edits, form.lists);
+}
+
+/** One entry's value, or the rule it broke; `label` names the input inside an object entry. */
+function parseListItem(item: DraftListItem): {value: unknown} | {error: string; label?: string} {
+  if (item.kind !== 'object' || item.form === undefined) {
+    return parseFieldText(item.kind, item.text);
+  }
+  const built = buildEditedDraft(item.form.base, item.form.edits, [], item.form.lists);
+  if ('error' in built) {
+    return {error: built.error.message, label: built.error.label};
+  }
+  return {value: built.value};
+}
+
+/** The shape of a value with nothing filled in: what a new object entry starts from. */
+function blankLike(value: unknown): unknown {
+  if (value === null || typeof value === 'boolean') {
+    return value === null ? null : false;
+  }
+  if (typeof value === 'number') {
+    return 0;
+  }
+  if (typeof value === 'string') {
+    return '';
+  }
+  if (Array.isArray(value)) {
+    return [];
+  }
+  const blank: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    blank[key] = blankLike(child);
+  }
+  return blank;
+}
+
+/** Replaces part of an object entry's form; any other entry is returned as it was. */
+export function updateListItemForm(
+  items: readonly DraftListItem[],
+  index: number,
+  patch: Partial<DraftItemForm>,
+): DraftListItem[] {
+  return items.map((item, position) =>
+    position === index && item.form !== undefined
+      ? {...item, form: {...item.form, ...patch}}
+      : item,
   );
 }
 
@@ -262,7 +328,8 @@ export function removeListItem(items: readonly DraftListItem[], index: number): 
 
 /**
  * Appends an empty entry. It takes the type of the entry before it, so a list of
- * numbers grows numbers; an empty list or a list of nulls starts with text.
+ * numbers grows numbers; an empty list or a list of nulls starts with text. After
+ * an object entry it appends an object with the same keys, all blank.
  */
 export function addListItem(
   items: readonly DraftListItem[],
@@ -270,8 +337,15 @@ export function addListItem(
   kind?: DraftAddedFieldKind,
 ): DraftListItem[] {
   const last = items[items.length - 1];
+  if (kind === undefined && last?.kind === 'object' && last.form !== undefined) {
+    const base = blankLike(last.form.base) as Record<string, unknown>;
+    return [
+      ...items,
+      {id, kind: 'object', text: '', added: true, form: {base, edits: {}, lists: {}}},
+    ];
+  }
   const inherited: DraftAddedFieldKind =
-    last === undefined || last.kind === 'null' ? 'string' : last.kind;
+    last === undefined || last.kind === 'null' || last.kind === 'object' ? 'string' : last.kind;
   return [...items, {id, kind: kind ?? inherited, text: '', added: true}];
 }
 
@@ -420,9 +494,18 @@ export function canExtendDraft(expiresAt: string, maxExpiresAt: string, now: num
 }
 
 function makeItem(id: string, value: unknown): DraftListItem {
-  return isScalar(value)
-    ? {id, kind: kindOf(value), text: scalarText(value)}
-    : {id, kind: 'json', text: prettyJson(value)};
+  if (isScalar(value)) {
+    return {id, kind: kindOf(value), text: scalarText(value)};
+  }
+  if (isRecord(value) && Object.keys(value).length > 0) {
+    return {
+      id,
+      kind: 'object',
+      text: prettyJson(value),
+      form: {base: value, edits: {}, lists: {}},
+    };
+  }
+  return {id, kind: 'json', text: prettyJson(value)};
 }
 
 function makeField(path: (string | number)[], kind: DraftFieldKind, text: string): DraftField {
