@@ -409,20 +409,25 @@ class StreamCollector {
     }
     this.tail.push(segment);
     this.tailBytes += segment.bytes;
-    while (this.tailBytes > this.limits.tailBytes && this.tail.length > 1) {
-      const removed = this.tail.shift();
-      if (removed) {
-        this.tailBytes -= removed.bytes;
+    // Drop the oldest bytes until the window fits. Whole segments go first; the
+    // first segment that is only partly over is trimmed at its front instead of
+    // being dropped, so the window keeps the last tailBytes of the stream no
+    // matter how the pipe reads were split.
+    while (this.tailBytes > this.limits.tailBytes) {
+      const first = this.tail[0];
+      if (!first) {
+        break;
       }
-    }
-    if (this.tailBytes > this.limits.tailBytes) {
-      const last = this.tail[this.tail.length - 1];
-      if (last && last.bytes > this.limits.tailBytes) {
-        const kept = takeTail(last.text, this.limits.tailBytes);
-        const keptBytes = Buffer.byteLength(kept, "utf8");
-        this.tail[this.tail.length - 1] = {text: kept, bytes: keptBytes};
-        this.tailBytes = keptBytes;
+      const excess = this.tailBytes - this.limits.tailBytes;
+      if (first.bytes <= excess) {
+        this.tail.shift();
+        this.tailBytes -= first.bytes;
+        continue;
       }
+      const kept = takeTail(first.text, first.bytes - excess);
+      const keptBytes = Buffer.byteLength(kept, "utf8");
+      this.tail[0] = {text: kept, bytes: keptBytes};
+      this.tailBytes -= first.bytes - keptBytes;
     }
   }
 

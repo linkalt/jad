@@ -475,28 +475,6 @@ async function spillFiles(c, id) {
   return files;
 }
 
-// The TypeScript collector evicts its tail window one read chunk at a time, so
-// how many tail bytes survive depends on how the operating system split the
-// pipe reads (the same 108894 bytes retained 39742 to 49152 bytes depending on
-// chunking). Go keeps an exact rolling tail, so the two cannot agree on the
-// omitted count or the start of the tail. What stays deterministic, and is
-// compared, is the head, the markers, the final bytes of the stream, and that
-// the retained text stays within the window budget.
-const TAIL_BUDGET = 16 * 1024 + 32 * 1024 + 4 * 1024 + 12 * 1024 + 512;
-function squashOutput(text) {
-  if (typeof text !== "string" || !text.includes("bytes omitted")) return text;
-  const start = text.indexOf("encoding=utf8 ---\n") + "encoding=utf8 ---\n".length;
-  const end = text.lastIndexOf("\n--- END CONTENT");
-  const body = text.slice(start, end);
-  const within = Buffer.byteLength(body, "utf8") <= TAIL_BUDGET;
-  // The tail window starts after the marker; compare only where it ends.
-  const marker = body.search(/\[\.\.\. \d+ bytes omitted \.\.\.\]/);
-  const head = body.slice(0, marker);
-  const tail = body.slice(body.indexOf("]", marker) + 1);
-  const summary = `head=${JSON.stringify(head.slice(0, 120))}(${head.length}) tailEnd=${JSON.stringify(tail.slice(-120))} withinBudget=${within}`;
-  return `${text.slice(0, start).replace(/omitted_bytes: \d+/, "omitted_bytes: $N")}${summary}${text.slice(end)}`;
-}
-
 function spillScenario(name, session, commands) {
   return {
     name,
@@ -507,8 +485,8 @@ function spillScenario(name, session, commands) {
       await rm(join(c.root, `${session}-workspace`, ".bash-output"), {recursive: true, force: true});
       await call(c, "POST", `/api/sessions/${session}/reset`, {body: {}});
       const result = await sse(c, `/api/sessions/${session}/run`, {method: "POST", body: {input: name}});
-      const records = (await messagesJsonl(c, session)).map((record) => (record.type === "function_call_output" ? {...record, output: squashOutput(record.output)} : record));
-      return {names: eventNames(result), outputs: toolOutputs(c.provider.requests.at(-1)).map(squashOutput), files: await spillFiles(c, session), records};
+      const records = (await messagesJsonl(c, session));
+      return {names: eventNames(result), outputs: toolOutputs(c.provider.requests.at(-1)), files: await spillFiles(c, session), records};
     },
   };
 }

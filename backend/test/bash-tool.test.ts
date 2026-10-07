@@ -846,6 +846,65 @@ test("never expands a rendered stream beyond its byte window", () => {
   assert.ok(collector.render().returnedBytes <= 4);
 });
 
+function collectStdout(chunks: string[], headBytes: number, tailBytes: number) {
+  const collector = new OutputCollector({
+    stdout: {headBytes, tailBytes},
+    stderr: {headBytes: 0, tailBytes: 0},
+    maxLineChars: 1000,
+    stripAnsi: false,
+  });
+  for (const chunk of chunks) {
+    collector.push("stdout", Buffer.from(chunk, "utf8"));
+  }
+  collector.end();
+  return collector.render().stdout;
+}
+
+test("keeps the last tail_bytes of a stream whatever the read chunking", () => {
+  // The same 30 bytes of text, split in different ways, must render the same
+  // head, marker and tail. Evicting the tail one chunk at a time used to leave
+  // anywhere from a newline to the whole window, depending on the split.
+  const text = "0123456789abcdefghijklmnopqrst";
+  const splits = [
+    [text],
+    [text.slice(0, 4), text.slice(4, 12), text.slice(12, 29), text.slice(29)],
+    [text.slice(0, 4), text.slice(4, 20), text.slice(20, 29), "t"],
+    text.split(""),
+    [text.slice(0, 16), text.slice(16, 29), "t"],
+  ];
+  const expected = collectStdout([text], 4, 8);
+  assert.equal(expected.shownBytes, 12);
+  assert.equal(expected.omittedBytes, 18);
+  assert.ok(expected.text.startsWith("0123"));
+  assert.ok(expected.text.endsWith("mnopqrst"));
+  for (const split of splits) {
+    const rendered = collectStdout(split, 4, 8);
+    assert.deepEqual(rendered, expected, JSON.stringify(split));
+  }
+});
+
+test("a small final chunk does not evict a full tail window", () => {
+  const rendered = collectStdout(["a".repeat(100), "\n"], 4, 8);
+  assert.equal(rendered.shownBytes, 12);
+  assert.equal(rendered.omittedBytes, 101 - 12);
+  assert.ok(rendered.text.endsWith("aaaaaaa\n"));
+});
+
+test("trimming the tail front never splits a multibyte character", () => {
+  // "é" is 2 bytes and "✓" is 3. A window of 8 bytes cuts inside a character for
+  // some splits; the front is trimmed to a character boundary instead.
+  const text = "é✓é✓é✓é✓é✓";
+  const whole = collectStdout([text], 2, 8);
+  assert.ok(!whole.text.includes("\uFFFD"));
+  assert.ok(whole.shownBytes <= 2 + 8);
+  for (const split of [text.split(""), [text.slice(0, 3), text.slice(3, 7), text.slice(7)]]) {
+    const rendered = collectStdout(split, 2, 8);
+    assert.ok(!rendered.text.includes("\uFFFD"));
+    assert.equal(rendered.text, whole.text);
+    assert.equal(rendered.omittedBytes, whole.omittedBytes);
+  }
+});
+
 test("signals and drains spill backpressure", async () => {
   const directory = await mkdtemp(join(tmpdir(), "agent-harness-spill-backpressure-"));
   try {
