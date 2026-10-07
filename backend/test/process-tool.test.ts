@@ -21,6 +21,7 @@ const policy: NativeProcessToolSettings = {
   stderr: {head_bytes: 32, tail_bytes: 32},
   log_cap_bytes: 4_096,
   max_line_chars: 200,
+  stdin_max_bytes: 1_024,
   strip_ansi: true,
   env: {NO_COLOR: "1", TERM: "dumb"},
   env_deny: [],
@@ -354,6 +355,145 @@ test("normalizes process aliases and marks unclean-running records lost on recov
     assert.match(manifest, /backend_restarted/);
   } finally {
     await manager.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("start writes stdin to the process, then closes it", async () => {
+  const {directory, manager, run} = await makeRunner();
+  try {
+    const started = await run({command: "cat", stdin: "piped-text\nsecond line\n"});
+    assert.match(started, /"status":"ok"/);
+    const id = resultId(started);
+    const waiting = await run({action: "wait", id, timeout_ms: 2_000});
+    // `cat` only exits when its input is closed, so reaching `exited` proves EOF.
+    assert.match(waiting, /state: exited/);
+    assert.match(waiting, /piped-text\nsecond line/);
+
+    // Multi-byte text arrives intact and leading whitespace is kept.
+    const wide = resultId(await run({command: "cat", stdin: "  héllo ✓"}));
+    const wideDone = await run({action: "wait", id: wide, timeout_ms: 2_000});
+    assert.match(wideDone, /state: exited/);
+    assert.match(wideDone, /  héllo ✓/);
+  } finally {
+    await manager.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("a process started without stdin sees a closed input", async () => {
+  const {directory, manager, run} = await makeRunner();
+  try {
+    const id = resultId(await run({command: "cat; echo no-input-done"}));
+    const waiting = await run({action: "wait", id, timeout_ms: 2_000});
+    assert.match(waiting, /state: exited/);
+    assert.match(waiting, /no-input-done/);
+    // An empty text is the same as none.
+    const empty = resultId(await run({command: "cat; echo empty-done", stdin: ""}));
+    assert.match(await run({action: "wait", id: empty, timeout_ms: 2_000}), /empty-done/);
+  } finally {
+    await manager.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("a process that never reads its stdin is not an error", async () => {
+  const {directory, manager, run} = await makeRunner({stdin_max_bytes: 1024 * 1024});
+  try {
+    // 200 KiB into a process that exits without reading: the closed pipe must not fail the start.
+    const started = await run({command: "echo ignored-input", stdin: "x".repeat(200 * 1024)});
+    assert.match(started, /"status":"ok"/);
+    const waiting = await run({action: "wait", id: resultId(started), timeout_ms: 2_000});
+    assert.match(waiting, /state: exited/);
+    assert.match(waiting, /ignored-input/);
+  } finally {
+    await manager.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("stdin over stdin_max_bytes is refused before anything starts, and the limit counts bytes", async () => {
+  const {directory, manager, run} = await makeRunner({stdin_max_bytes: 10});
+  try {
+    const atLimit = await run({command: "wc -c", stdin: "0123456789"});
+    assert.match(atLimit, /"status":"ok"/);
+
+    const over = await run({command: "touch should-not-start", stdin: "01234567890"});
+    assert.match(over, /"status":"invalid_input"/);
+    assert.match(over, /error_code: stdin_too_large/);
+    assert.match(over, /11 bytes, over the limit of 10/);
+    assert.equal(manager.list().length, 1, "only the in-limit call started a process");
+
+    // Three-byte characters: 4 of them are 12 bytes, not 4 characters.
+    const wide = await run({command: "cat", stdin: "✓✓✓✓"});
+    assert.match(wide, /12 bytes, over the limit of 10/);
+    assert.equal(manager.list().length, 1);
+  } finally {
+    await manager.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("stdin is only accepted on a start, and is not stored in the manifest", async () => {
+  const {directory, manager, run} = await makeRunner();
+  try {
+    const secret = "SECRET-STDIN-TEXT";
+    const id = resultId(await run({command: "cat", stdin: secret}));
+    await run({action: "wait", id, timeout_ms: 2_000});
+    for (const args of [
+      {action: "status", id, stdin: "x"},
+      {action: "wait", id, stdin: "x"},
+      {action: "stop", id, stdin: "x"},
+      {action: "list", stdin: "x"},
+    ]) {
+      const refused = await run(args);
+      assert.match(refused, /error_code: invalid_stdin/, JSON.stringify(args));
+    }
+    // The text reaches the process (and so its output log) but the manifest keeps only the command's record.
+    const manifest = await readFile(join(directory, "processes", id, "manifest.json"), "utf8");
+    assert.doesNotMatch(manifest, new RegExp(secret));
+  } finally {
+    await manager.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("accepts input as another name for stdin on process", async () => {
+  assert.deepEqual(normalizeProcessArguments({command: "cat", input: "via-input"}), {command: "cat", stdin: "via-input"});
+  assert.deepEqual(
+    normalizeProcessArguments({command: "cat", stdin: "named", input: "alias"}),
+    {command: "cat", stdin: "named"},
+  );
+  const {directory, manager, run} = await makeRunner();
+  try {
+    const id = resultId(await run(normalizeProcessArguments({command: "cat", input: "alias-text"})));
+    assert.match(await run({action: "wait", id, timeout_ms: 2_000}), /alias-text/);
+  } finally {
+    await manager.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("process stdin_max_bytes defaults and is validated", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-process-stdin-config-"));
+  try {
+    const write = async (process: Record<string, unknown>) => writeFile(
+      join(directory, "setting.json"),
+      JSON.stringify({cwd: directory, tools: {native: {process}}}),
+    );
+    await write({});
+    assert.equal((await new SessionConfigLoader(directory).loadSettings()).tools.native.process?.stdin_max_bytes, 256 * 1024);
+    await write({stdin_max_bytes: 4096});
+    assert.equal((await new SessionConfigLoader(directory).loadSettings()).tools.native.process?.stdin_max_bytes, 4096);
+    for (const value of [0, -1, 1.5, "10", 10 * 1024 * 1024 + 1]) {
+      await write({stdin_max_bytes: value});
+      await assert.rejects(
+        new SessionConfigLoader(directory).loadSettings(),
+        /tools\.native\.process\.stdin_max_bytes/,
+        `stdin_max_bytes ${JSON.stringify(value)}`,
+      );
+    }
+  } finally {
     await rm(directory, {recursive: true, force: true});
   }
 });

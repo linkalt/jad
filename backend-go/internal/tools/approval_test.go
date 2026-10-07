@@ -185,6 +185,9 @@ func TestApprovalPreviewShowsOnlyWhatWillHappen(t *testing.T) {
 			"Run shell command", `{"tool":"bash","command":"python3 -","stdin":"` + long[:16] + `","stdin_truncated_bytes":200}`},
 		{"process start", ApprovalCall{Tool: "process", Args: map[string]any{"command": "sleep 9", "cwd": "/w"}},
 			"Start background process", `{"tool":"process","action":"start","command":"sleep 9","cwd":"/w"}`},
+		// The text written to the process is part of what runs, so it is shown right after the command.
+		{"process start with stdin", ApprovalCall{Tool: "process", Args: map[string]any{"command": "node -", "stdin": "serve()\n", "cwd": "/w"}},
+			"Start background process", `{"tool":"process","action":"start","command":"node -","stdin":"serve()\n","cwd":"/w"}`},
 		{"write text", ApprovalCall{Tool: "write", Args: map[string]any{"path": "a.txt", "content": "hi"}},
 			"Write file", `{"tool":"write","path":"a.txt","content_bytes":2,"content":"hi"}`},
 		{"write base64 hides the content", ApprovalCall{Tool: "write", Args: map[string]any{"path": "a.bin", "content": "aGk=", "contentEncoding": "base64"}},

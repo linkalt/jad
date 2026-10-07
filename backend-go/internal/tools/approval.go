@@ -155,6 +155,8 @@ func ApprovalPreview(call ApprovalCall, maxBytes int64) (Preview, error) {
 	case call.Tool == "process":
 		fields = append(fields, previewField{"action", "start"})
 		fields = appendString(fields, call.Args, "command", maxBytes)
+		// The text written to the process is part of what runs (`python3 -` alone says nothing).
+		fields = appendString(fields, call.Args, "stdin", maxBytes)
 		fields = appendPresent(fields, call.Args, "cwd")
 		title = "Start background process"
 	case call.Tool == "write":

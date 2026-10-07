@@ -19,6 +19,7 @@ export const nativeProcessDefinition: ToolDefinition = {
     properties: {
       action: {type: "string", enum: ["start", "status", "list", "wait", "stop"], description: "Usually inferred from command or id."},
       command: {type: "string", minLength: 1, description: "Shell command to start."},
+      stdin: {type: "string", description: "Text written once to the started command's standard input, e.g. a script for `python3 -` or `node -`; the input is then closed."},
       cwd: {type: "string", minLength: 1, description: "Working directory for start. Defaults to the workspace."},
       id: {type: "string", minLength: 1, description: "Id returned by a prior start."},
       filter: {type: "string", enum: ["running", "exited", "stopped", "failed", "lost"], description: "State filter for list."},
@@ -86,6 +87,9 @@ export function normalizeProcessArguments(args: JsonRecord): JsonRecord {
   if (typeof normalized.timeout_ms === "number" && Number.isSafeInteger(normalized.timeout_ms)) {
     normalized.timeout_ms = Math.max(1, normalized.timeout_ms);
   }
+  // `input` is the other common name for text piped to a command; the named field wins.
+  if (normalized.stdin === undefined && typeof args.input === "string") normalized.stdin = args.input;
+  delete normalized.input;
   if (normalized.action === undefined && (normalized.filter !== undefined || suppliedFilter)) normalized.action = "list";
   return Object.fromEntries(Object.entries(normalized).filter(([, value]) => value !== undefined));
 }
@@ -119,8 +123,26 @@ export async function executeNativeProcess(args: JsonRecord, context: NativeProc
   const command = text(args.command);
   const id = text(args.id);
   const filter = text(args.filter) as ProcessState | undefined;
+  // Unlike the other text fields this one is not trimmed: leading and trailing
+  // whitespace can be part of a script. An empty text is the same as none.
+  const stdin = typeof args.stdin === "string" && args.stdin.length > 0 ? args.stdin : undefined;
+  if (stdin !== undefined && action !== "start") {
+    return executionError(callId, "invalid_input", "invalid_stdin", "stdin is only accepted when starting a process");
+  }
   if (action === "start") {
     if (!command || id) return executionError(callId, "invalid_input", "invalid_start", "Start requires command and no process id");
+    if (stdin !== undefined) {
+      const stdinBytes = Buffer.byteLength(stdin, "utf8");
+      if (stdinBytes > policy.stdin_max_bytes) {
+        return executionError(
+          callId,
+          "invalid_input",
+          "stdin_too_large",
+          `stdin is ${stdinBytes} bytes, over the limit of ${policy.stdin_max_bytes}`,
+          [["suggestion", "write the text to a file and run it from there"]],
+        );
+      }
+    }
     const requestedCwd = text(args.cwd) ?? ".";
     const resolved = await resolveExistingTarget(requestedCwd, workspaceRoot, policy, callId);
     if (!resolved.target) return resolved.error!;
@@ -131,6 +153,7 @@ export async function executeNativeProcess(args: JsonRecord, context: NativeProc
         cwd: resolved.target.realPath,
         displayCwd: resolved.target.displayPath,
         command,
+        ...(stdin !== undefined ? {stdin} : {}),
         policy,
         environment: context.environment ?? process.env,
         apiKeyEnv: context.apiKeyEnv,

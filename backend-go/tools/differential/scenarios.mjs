@@ -229,6 +229,31 @@ function toolboxScenarios() {
       toolRound("process", {action: "start"}),
       toolRound("process", {command: "pwd", cwd: "no/such/dir"}),
     ], async (c) => ({processDir: (await readdir(join(c.root, "toolbox", ".jad"), {recursive: true}).catch(() => [])).length > 0})),
+    // Text written to a started process: plain, through a pipeline, under the `input`
+    // alias, multi-byte with leading whitespace, and ignored by the program. Each
+    // command sleeps first so the start result (which reports bytes produced so far)
+    // is the same in both backends.
+    toolboxRun("process stdin: piped text, pipeline, alias, multi-byte and ignored", [
+      toolRound("process", {command: "sleep 0.3; cat", stdin: "piped-line\nsecond line\n"}),
+      toolRound("process", {action: "wait", id: (r) => generated(r, 0, /process_id: (\S+)/), timeout_ms: 5000}),
+      toolRound("process", {command: "sleep 0.3; tr a-z A-Z | rev", stdin: "abc"}),
+      toolRound("process", {action: "wait", id: (r) => generated(r, 2, /process_id: (\S+)/), timeout_ms: 5000}),
+      toolRound("process", {command: "sleep 0.3; cat", input: "via-input-alias"}),
+      toolRound("process", {action: "wait", id: (r) => generated(r, 4, /process_id: (\S+)/), timeout_ms: 5000}),
+      toolRound("process", {command: "sleep 0.3; cat", stdin: "  héllo ✓"}),
+      toolRound("process", {action: "wait", id: (r) => generated(r, 6, /process_id: (\S+)/), timeout_ms: 5000}),
+      toolRound("process", {command: "sleep 0.3; echo ignored-input", stdin: "x".repeat(100 * 1024)}),
+      toolRound("process", {action: "wait", id: (r) => generated(r, 8, /process_id: (\S+)/), timeout_ms: 5000}),
+    ]),
+    // No stdin leaves the input closed; an over-limit text is refused whole (the
+    // command after the refusal must not run); stdin on any other action is refused.
+    toolboxRun("process stdin: absent input is closed, oversize and non-start refused", [
+      toolRound("process", {command: "sleep 0.3; cat; echo no-input-done"}),
+      toolRound("process", {action: "wait", id: (r) => generated(r, 0, /process_id: (\S+)/), timeout_ms: 5000}),
+      toolRound("process", {command: "echo should-not-run", stdin: "y".repeat(256 * 1024 + 1)}),
+      toolRound("process", {action: "list", stdin: "x"}),
+      toolRound("process", {action: "status", id: (r) => generated(r, 0, /process_id: (\S+)/), stdin: "x"}),
+    ]),
     toolboxRun("toolbox: fetch refusals", [
       toolRound("fetch", {url: "http://127.0.0.1:1/"}),
       toolRound("fetch", {url: "ftp://example.com/file"}),
@@ -1639,6 +1664,12 @@ function approvalScenarios() {
     // list that follows sees the same state in both backends. It asks as well.
     asked("approval: process start asks, status does not", "askall",
       [toolRound("process", {action: "start", command: "echo started"}), toolRound("bash", {command: "sleep 0.6"}), toolRound("process", {action: "list"})], accept),
+    // A process start must show the text written to the process, not just `cat`. The
+    // process prints nothing and exits at once, and the bash call lets it finish before
+    // the run ends: a process still running when a later scenario reads this shared
+    // workspace's process directory would be reported `lost` by TypeScript.
+    asked("approval: a process start shows its stdin, cut and counted when long", "askall",
+      [toolRound("process", {command: "cat > /dev/null", stdin: `print-me ${"z".repeat(5000)}`}), toolRound("bash", {command: "sleep 0.6"})], accept),
     asked("approval: headless run with deny blocks the call", "askall",
       [toolRound("write", {path: "ask/d.txt", content: "x"})], async () => {}, {interaction: false, extra: fileOf("ask/d.txt")}),
     asked("approval: headless run with allow runs the call", "askallow",

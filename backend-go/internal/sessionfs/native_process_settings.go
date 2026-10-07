@@ -13,6 +13,7 @@ const (
 	defaultNativeProcessWaitTimeout  int64 = 10_000
 	defaultNativeProcessMaxWait      int64 = 120_000
 	defaultNativeProcessLogCap       int64 = 64 * 1024 * 1024
+	defaultNativeProcessStdinMax     int64 = 256 * 1024
 	defaultNativeProcessMaxCompleted int64 = 100
 	maxNativeProcessMaxRunning       int64 = 1024
 	maxNativeProcessMaxCompleted     int64 = 100_000
@@ -52,12 +53,14 @@ type NativeProcessSettings struct {
 	Stderr           NativeBashStreamBudget
 	LogCapBytes      int64
 	MaxLineChars     int64
-	StripANSI        bool
-	EnvFile          string
-	Env              map[string]string
-	EnvDeny          []string
-	StorageDir       string
-	StateContext     NativeProcessStateContextSettings
+	// StdinMaxBytes is the largest stdin text one start may write to its process.
+	StdinMaxBytes int64
+	StripANSI     bool
+	EnvFile       string
+	Env           map[string]string
+	EnvDeny       []string
+	StorageDir    string
+	StateContext  NativeProcessStateContextSettings
 }
 
 func normalizeNativeProcessSettings(
@@ -92,7 +95,7 @@ func normalizeNativeProcessSettings(
 	}
 	for key := range fields {
 		switch key {
-		case "shell", "login_shell", "kill_grace_ms", "max_running", "max_completed", "retention_days", "wait_timeout_ms", "max_wait_timeout_ms", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "strip_ansi", "env_file", "env", "env_deny", "storage_dir", "paths", "statecontext", "approval":
+		case "shell", "login_shell", "kill_grace_ms", "max_running", "max_completed", "retention_days", "wait_timeout_ms", "max_wait_timeout_ms", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "storage_dir", "paths", "statecontext", "approval":
 		default:
 			return nil, configError("%s: tools.native.process.%s is not supported", settingPath, key)
 		}
@@ -186,6 +189,9 @@ func normalizeNativeProcessSettings(
 		return nil, configError("%s: tools.native.process stream budgets must not exceed log_cap_bytes", settingPath)
 	}
 	if settings.MaxLineChars, err = configuredInteger(fields, "max_line_chars", maxLineFallback, 20, maxNativeBashMaxLine, settingPath, "tools.native.process"); err != nil {
+		return nil, err
+	}
+	if settings.StdinMaxBytes, err = configuredInteger(fields, "stdin_max_bytes", defaultNativeProcessStdinMax, 1, maxNativeToolBytes, settingPath, "tools.native.process"); err != nil {
 		return nil, err
 	}
 	settings.StripANSI = stripANSIFallback

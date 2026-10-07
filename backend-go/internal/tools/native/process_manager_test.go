@@ -188,6 +188,7 @@ func processTestRequest(workspace, command string, logCap int64) ProcessStartReq
 			Stderr:           sessionfs.NativeBashStreamBudget{HeadBytes: 3, TailBytes: 3},
 			LogCapBytes:      logCap,
 			MaxLineChars:     100,
+			StdinMaxBytes:    1024,
 			Env:              map[string]string{"NO_COLOR": "1"},
 			EnvDeny:          []string{},
 		},

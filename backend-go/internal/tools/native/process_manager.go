@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,9 +76,12 @@ type ProcessStreamLimits struct {
 }
 
 type ProcessStartRequest struct {
-	CWD         string
-	DisplayCWD  string
-	Command     string
+	CWD        string
+	DisplayCWD string
+	Command    string
+	// Stdin is written once to the process's standard input, which is then
+	// closed. It is never stored. Empty leaves the input closed from the start.
+	Stdin       string
 	Policy      sessionfs.NativeProcessSettings
 	Environment []string
 	APIKeyEnv   string
@@ -115,9 +119,13 @@ type ManagedProcessManager struct {
 }
 
 type managedProcess struct {
-	mu            sync.Mutex
-	manifest      ProcessManifest
-	command       *exec.Cmd
+	mu       sync.Mutex
+	manifest ProcessManifest
+	command  *exec.Cmd
+	// stdinWriter is the write end of the stdin pipe when the start had stdin text.
+	// It is closed when the process ends so a writer blocked on a process that
+	// never reads cannot outlive it.
+	stdinWriter   *os.File
 	collector     *bashOutputCollector
 	stdout        *bashSpillWriter
 	stderr        *bashSpillWriter
@@ -247,8 +255,28 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	command.Env = environment
 	command.Stdout = processStreamWriter{entry: entry, stream: bashStdout}
 	command.Stderr = processStreamWriter{entry: entry, stream: bashStderr}
+	// An own pipe, not exec's copier: Wait must never block on a descendant that
+	// keeps the read end open and never reads it.
+	var stdinReader, stdinWriter *os.File
+	if request.Stdin != "" {
+		reader, writer, pipeErr := os.Pipe()
+		if pipeErr != nil {
+			_ = manager.finish(entry, ProcessFailed, ProcessManifest{
+				StopReason: pipeErr.Error(),
+				ExitCode:   json.RawMessage("null"),
+				Signal:     json.RawMessage("null"),
+			})
+			return manager.snapshotEntry(entry), nil
+		}
+		command.Stdin = reader
+		stdinReader, stdinWriter = reader, writer
+	}
 	configureProcessGroup(command)
 	if err := command.Start(); err != nil {
+		if stdinReader != nil {
+			_ = stdinReader.Close()
+			_ = stdinWriter.Close()
+		}
 		_ = manager.finish(entry, ProcessFailed, ProcessManifest{
 			StopReason: err.Error(),
 			ExitCode:   json.RawMessage("null"),
@@ -256,7 +284,17 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 		})
 		return manager.snapshotEntry(entry), nil
 	}
+	if stdinReader != nil {
+		// The child owns the read end now. A program that exits or never reads its
+		// input makes the write fail (EPIPE); that is its choice, not a failed start.
+		_ = stdinReader.Close()
+		go func(writer *os.File, text string) {
+			_, _ = io.WriteString(writer, text)
+			_ = writer.Close()
+		}(stdinWriter, request.Stdin)
+	}
 	entry.mu.Lock()
+	entry.stdinWriter = stdinWriter
 	entry.command = command
 	entry.manifest.PID = command.Process.Pid
 	manifest = cloneProcessManifest(entry.manifest)
@@ -451,6 +489,13 @@ func (manager *ManagedProcessManager) Snapshot(id string) (*ProcessSnapshot, boo
 
 func (manager *ManagedProcessManager) waitForProcess(command *exec.Cmd, entry *managedProcess) {
 	waitErr := command.Wait()
+	entry.mu.Lock()
+	stdinWriter := entry.stdinWriter
+	entry.mu.Unlock()
+	if stdinWriter != nil {
+		// Frees a writer still blocked on a process that never read its input.
+		_ = stdinWriter.Close()
+	}
 	exitCode, hasExitCode, signal := bashExitStatus(waitErr)
 	extra := ProcessManifest{Signal: json.RawMessage("null")}
 	state := ProcessExited

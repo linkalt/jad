@@ -398,6 +398,8 @@ export interface NativeProcessToolSettings extends NativePathPolicy {
   stderr: NativeBashStreamBudget;
   log_cap_bytes: number;
   max_line_chars: number;
+  /** Largest `stdin` text one start may write to its process; more is refused, never cut. */
+  stdin_max_bytes: number;
   strip_ansi: boolean;
   /** Resolved dotenv file loaded before inline environment overrides. */
   env_file?: string;
@@ -947,6 +949,8 @@ export const DEFAULT_NATIVE_PROCESS_MAX_RUNNING = 8;
 export const DEFAULT_NATIVE_PROCESS_WAIT_TIMEOUT_MS = 10_000;
 export const DEFAULT_NATIVE_PROCESS_MAX_WAIT_TIMEOUT_MS = 120_000;
 export const DEFAULT_NATIVE_PROCESS_LOG_CAP_BYTES = 64 * 1024 * 1024;
+/** Room for a long inline script handed to a background process. */
+export const DEFAULT_NATIVE_PROCESS_STDIN_MAX_BYTES = 256 * 1024;
 export const DEFAULT_NATIVE_PROCESS_MAX_COMPLETED = 100;
 export const DEFAULT_NATIVE_TASK_MAX_TASKS = 1000;
 export const DEFAULT_NATIVE_TASK_LIST_LIMIT = 100;
@@ -2202,7 +2206,7 @@ const NATIVE_TOOL_KEYS: Record<NativeToolName, readonly string[]> = {
   process: [
     "approval", "env", "env_deny", "env_file", "kill_grace_ms", "log_cap_bytes", "login_shell", "max_completed",
     "max_line_chars", "max_running", "max_wait_timeout_ms", "paths", "retention_days",
-    "shell", "statecontext", "status_log_bytes", "stderr", "stdout", "storage_dir",
+    "shell", "statecontext", "status_log_bytes", "stderr", "stdin_max_bytes", "stdout", "storage_dir",
     "strip_ansi", "wait_timeout_ms",
   ],
   task: [
@@ -3034,6 +3038,7 @@ async function normalizeTools(
     if (maxLineChars < 20) {
       throw new ConfigError(`${path}: tools.native.process.max_line_chars must be at least 20`);
     }
+    const stdinMaxBytes = positiveInteger("stdin_max_bytes", DEFAULT_NATIVE_PROCESS_STDIN_MAX_BYTES, MAX_NATIVE_TOOL_BYTES);
     const stripAnsi = processValue.strip_ansi ?? DEFAULT_NATIVE_BASH_STRIP_ANSI;
     if (typeof stripAnsi !== "boolean") {
       throw new ConfigError(`${path}: tools.native.process.strip_ansi must be a boolean`);
@@ -3082,6 +3087,7 @@ async function normalizeTools(
       stderr,
       log_cap_bytes: logCapBytes,
       max_line_chars: maxLineChars,
+      stdin_max_bytes: stdinMaxBytes,
       strip_ansi: stripAnsi,
       ...(envFile ? {env_file: envFile} : {}),
       env,

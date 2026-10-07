@@ -84,6 +84,8 @@ export function approvalPreview(
     case "process":
       draft.action = "start";
       field(draft, "command", args.command, maxBytes);
+      // The text written to the process is part of what runs (`python3 -` alone says nothing).
+      field(draft, "stdin", args.stdin, maxBytes);
       optionalField(draft, "cwd", args.cwd);
       return {title: "Start background process", draft};
     case "write":

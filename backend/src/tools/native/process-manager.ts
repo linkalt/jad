@@ -112,6 +112,8 @@ export class ProcessManager {
     cwd: string;
     displayCwd: string;
     command: string;
+    /** Written once to the process's standard input, which is then closed. Never stored. */
+    stdin?: string;
     policy: NativeProcessToolSettings;
     environment: NodeJS.ProcessEnv;
     apiKeyEnv: string;
@@ -141,6 +143,7 @@ export class ProcessManager {
     cwd: string;
     displayCwd: string;
     command: string;
+    stdin?: string;
     policy: NativeProcessToolSettings;
     environment: NodeJS.ProcessEnv;
     apiKeyEnv: string;
@@ -192,11 +195,17 @@ export class ProcessManager {
         cwd: input.cwd,
         env: environment,
         detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [input.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       });
     } catch (error) {
       await this.finish(entry, "failed", {stop_reason: error instanceof Error ? error.message : String(error)});
       return this.snapshotEntry(entry);
+    }
+    if (input.stdin !== undefined && child.stdin) {
+      // A program that exits or never reads its input closes the pipe under us
+      // (EPIPE); that is the program's choice, not a failure of the start.
+      child.stdin.on("error", () => undefined);
+      child.stdin.end(input.stdin);
     }
     entry.child = child;
     if (typeof child.pid === "number") manifest.pid = child.pid;

@@ -28,6 +28,7 @@ var processInputSchema = json.RawMessage(`{
   "properties":{
     "action":{"type":"string","enum":["start","status","list","wait","stop"],"description":"Usually inferred from command or id."},
     "command":{"type":"string","minLength":1,"description":"Shell command to start."},
+    "stdin":{"type":"string","description":"Text written once to the started command's standard input, e.g. a script for ` + "`python3 -` or `node -`" + `; the input is then closed."},
     "cwd":{"type":"string","minLength":1,"description":"Working directory for start. Defaults to the workspace."},
     "id":{"type":"string","minLength":1,"description":"Id returned by a prior start."},
     "filter":{"type":"string","enum":["running","exited","stopped","failed","lost"],"description":"State filter for list."},
@@ -102,6 +103,13 @@ func normalizeProcessArguments(arguments map[string]any) map[string]any {
 		}
 		normalized["timeout_ms"] = json.Number(fmt.Sprint(timeout))
 	}
+	// `input` is the other common name for text piped to a command; the named field wins.
+	if _, hasStdin := normalized["stdin"]; !hasStdin {
+		if input, ok := arguments["input"].(string); ok {
+			normalized["stdin"] = input
+		}
+	}
+	delete(normalized, "input")
 	if _, hasAction := normalized["action"]; !hasAction && suppliedFilter {
 		normalized["action"] = string(processActionList)
 	}
@@ -130,9 +138,20 @@ func executeNativeProcess(
 	if !validProcessAction(action) {
 		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "invalid_action", "Process action is invalid"), nil
 	}
+	// Unlike the other text fields this one is not trimmed: leading and trailing
+	// whitespace can be part of a script. An empty text is the same as none.
+	stdin, _ := arguments["stdin"].(string)
+	if stdin != "" && action != processActionStart {
+		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "invalid_stdin", "stdin is only accepted when starting a process"), nil
+	}
 	if action == processActionStart {
 		if command == "" || id != "" {
 			return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "invalid_start", "Start requires command and no process id"), nil
+		}
+		if stdinBytes := int64(len(stdin)); stdinBytes > settings.StdinMaxBytes {
+			return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "stdin_too_large",
+				fmt.Sprintf("stdin is %d bytes, over the limit of %d", stdinBytes, settings.StdinMaxBytes),
+				tools.Information{Key: "suggestion", Value: "write the text to a file and run it from there"}), nil
 		}
 		requestedCWD := processText(arguments["cwd"])
 		if requestedCWD == "" {
@@ -150,6 +169,7 @@ func executeNativeProcess(
 			CWD:         resolved.realPath,
 			DisplayCWD:  resolved.displayPath,
 			Command:     command,
+			Stdin:       stdin,
 			Policy:      settings,
 			Environment: os.Environ(),
 			APIKeyEnv:   apiKeyEnv,

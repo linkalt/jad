@@ -46,6 +46,9 @@ func TestNormalizeNativeProcessSettingsDefaultsAndInheritsBashPolicy(t *testing.
 	if settings.MaxLineChars != 2_000 || !settings.StripANSI {
 		t.Fatalf("process output defaults = max_line_chars %d, strip_ansi %v", settings.MaxLineChars, settings.StripANSI)
 	}
+	if settings.StdinMaxBytes != 256*1024 {
+		t.Fatalf("default process stdin_max_bytes = %d, want %d", settings.StdinMaxBytes, 256*1024)
+	}
 	if settings.StorageDir != filepath.Join(cwd, ".processes") {
 		t.Fatalf("default process storage dir = %q", settings.StorageDir)
 	}
@@ -66,7 +69,7 @@ func TestNormalizeNativeProcessSettingsOverridesAndStorage(t *testing.T) {
 	toolStorage := filepath.Join(cwd, "profile-tools")
 	settingPath := filepath.Join(globalRoot, "session", "setting.json")
 	setting := map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"process":{"shell":" /bin/zsh ","login_shell":true,"kill_grace_ms":0,"max_running":4,"max_completed":8,"retention_days":0,"wait_timeout_ms":1200,"max_wait_timeout_ms":3000,"stdout":{"head_bytes":11,"tail_bytes":13},"stderr":{"head_bytes":17,"tail_bytes":19},"log_cap_bytes":512,"max_line_chars":80,"strip_ansi":false,"env":{"PROCESS_TEST":"enabled"},"env_deny":["PROCESS_SECRET"],"storage_dir":"runtime","paths":{"allow":["shared"],"deny":["private"]},"statecontext":{"states":["exited","running","exited"],"limit":7}}}}`),
+		"tools": json.RawMessage(`{"native":{"process":{"shell":" /bin/zsh ","login_shell":true,"kill_grace_ms":0,"max_running":4,"max_completed":8,"retention_days":0,"wait_timeout_ms":1200,"max_wait_timeout_ms":3000,"stdout":{"head_bytes":11,"tail_bytes":13},"stderr":{"head_bytes":17,"tail_bytes":19},"log_cap_bytes":512,"max_line_chars":80,"stdin_max_bytes":4096,"strip_ansi":false,"env":{"PROCESS_TEST":"enabled"},"env_deny":["PROCESS_SECRET"],"storage_dir":"runtime","paths":{"allow":["shared"],"deny":["private"]},"statecontext":{"states":["exited","running","exited"],"limit":7}}}}`),
 	}
 	writePolicy := NativePathPolicy{Paths: []NativePathRule{{Action: "allow", Path: filepath.Join(cwd, "legacy")}}}
 	settings, err := normalizeNativeProcessSettings(
@@ -87,6 +90,9 @@ func TestNormalizeNativeProcessSettingsOverridesAndStorage(t *testing.T) {
 	}
 	if settings.Stdout != (NativeBashStreamBudget{HeadBytes: 11, TailBytes: 13}) || settings.Stderr != (NativeBashStreamBudget{HeadBytes: 17, TailBytes: 19}) {
 		t.Fatalf("normalized process budgets = %+v/%+v", settings.Stdout, settings.Stderr)
+	}
+	if settings.StdinMaxBytes != 4096 {
+		t.Fatalf("overridden process stdin_max_bytes = %d, want 4096", settings.StdinMaxBytes)
 	}
 	if settings.LogCapBytes != 512 || settings.MaxLineChars != 80 || settings.StripANSI {
 		t.Fatalf("normalized process output settings = %+v", settings)
@@ -133,6 +139,11 @@ func TestNormalizeNativeProcessSettingsValidatesUnsupportedValues(t *testing.T) 
 		`{"stdout":{"head_bytes":10485760,"tail_bytes":1}}`,
 		`{"stdout":{"head_bytes":10,"tail_bytes":10},"log_cap_bytes":19}`,
 		`{"max_line_chars":19}`,
+		`{"stdin_max_bytes":0}`,
+		`{"stdin_max_bytes":-1}`,
+		`{"stdin_max_bytes":1.5}`,
+		`{"stdin_max_bytes":"10"}`,
+		`{"stdin_max_bytes":10485761}`,
 		`{"strip_ansi":"no"}`,
 		`{"env":{"BAD-NAME":"x"}}`,
 		`{"env":{"PROCESS_TEST":1}}`,

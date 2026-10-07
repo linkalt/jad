@@ -34,7 +34,7 @@ const processPolicy: NativeProcessToolSettings = {
   shell: "/bin/bash", login_shell: false, kill_grace_ms: 100, max_running: 4,
   max_completed: 10, retention_days: 14, wait_timeout_ms: 100, max_wait_timeout_ms: 2_000,
   stdout: {head_bytes: 64, tail_bytes: 64}, stderr: {head_bytes: 64, tail_bytes: 64},
-  log_cap_bytes: 10_000, max_line_chars: 200, strip_ansi: true, env: {}, env_deny: [],
+  log_cap_bytes: 10_000, max_line_chars: 200, stdin_max_bytes: 1024, strip_ansi: true, env: {}, env_deny: [],
   storage_dir: ".processes", paths: [], unrestricted_paths: false, statecontext: {states: ["running"], limit: 10},
 };
 

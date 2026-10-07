@@ -250,3 +250,15 @@ async function waitForPending(broker: InteractionBroker, previousId?: string): P
   }
   throw new Error("no approval became pending");
 }
+
+test("preview of a process start shows stdin like bash, and a start without it is unchanged", () => {
+  const script = "print('x')\n".repeat(30);
+  const preview = approvalPreview("process", undefined, {command: "python3 -", stdin: script, cwd: "sub"}, 64);
+  assert.equal(preview.title, "Start background process");
+  assert.equal(preview.draft.stdin, script.slice(0, 64));
+  assert.equal(preview.draft.stdin_truncated_bytes, script.length);
+  assert.deepEqual(Object.keys(preview.draft), ["tool", "action", "command", "stdin", "stdin_truncated_bytes", "cwd"]);
+
+  const without = approvalPreview("process", undefined, {command: "sleep 9", cwd: "sub"}, 64);
+  assert.deepEqual(Object.keys(without.draft), ["tool", "action", "command", "cwd"]);
+});
