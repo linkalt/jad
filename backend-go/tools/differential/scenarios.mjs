@@ -953,6 +953,7 @@ export const scenarios = [
   },
   ...parallelScenarios(),
   ...execScenarios(),
+  ...largeStreamScenarios(),
   ...approvalScenarios(),
   ...checkpointScenarios(),
   {
@@ -1600,6 +1601,58 @@ function checkpointScenarios() {
 // sees (a blocked result with a code), not how either backend gets there.
 // exec: inline code in a configured interpreter. Each scenario reads the recorded tool
 // results, so a match means both backends produced the same text, not just the same events.
+// A run whose final message is larger than half the stream budget (sse_max_buffered_bytes,
+// 1 MiB by default) writes its closing ui.message and completed events in one go. The
+// stream has to survive that and still end with completed and done, on the run's own
+// connection and when a client attaches afterwards. The frames are read raw so a cut
+// connection is a difference instead of being normalized away.
+function largeStreamScenarios() {
+  const readFrames = async (response) => {
+    const names = [];
+    let error = null;
+    try {
+      let buffer = "";
+      const decoder = new TextDecoder();
+      for await (const chunk of response.body) {
+        buffer += decoder.decode(chunk, {stream: true});
+        let at;
+        while ((at = buffer.indexOf("\n\n")) >= 0) {
+          const block = buffer.slice(0, at);
+          buffer = buffer.slice(at + 2);
+          if (!block.startsWith(":")) names.push(/^event: (.*)$/m.exec(block)?.[1] ?? "message");
+        }
+      }
+    } catch (e) {
+      error = String(e?.cause?.message ?? e.message);
+    }
+    return {error, names};
+  };
+  const bigCall = (size) => ({name: "bash", arguments: {command: "wc -c", stdin: "x".repeat(size)}});
+  const scenario = (name, size, rounds) => ({
+    name,
+    // Each round asks for two calls and the final message carries all of them, so
+    // two rounds of 140 KB pass half the budget and three rounds of 250 KB pass all of it.
+    provider: {steps: [...Array.from({length: rounds}, () => ({calls: [bigCall(size), bigCall(size)]})), {text: "big finished"}]},
+    run: async (c) => {
+      await call(c, "POST", "/api/sessions/natived/reset", {body: {}});
+      const response = await fetch(`${c.base}/api/sessions/natived/run`, {method: "POST", headers: {authorization: `Bearer ${c.token}`, "content-type": "application/json"}, body: JSON.stringify({input: name})});
+      const live = await readFrames(response);
+      const attach = await readFrames(await fetch(`${c.base}/api/sessions/natived/run/stream`, {headers: {authorization: `Bearer ${c.token}`}}));
+      return {
+        status: response.status,
+        live: {error: live.error, endsWith: live.names.slice(-2)},
+        attach: {error: attach.error, endsWith: attach.names.slice(-2)},
+        providerRequests: c.provider.requests.length,
+        lastAnswer: toolOutputs(c.provider.requests.at(-1)).length,
+      };
+    },
+  });
+  return [
+    scenario("large stream: a final message over half the budget still ends with completed and done", 140000, 2),
+    scenario("large stream: a final message over the whole budget still ends with completed and done", 250000, 3),
+  ];
+}
+
 function execScenarios() {
   const run = (name, session, steps, extra = async () => ({})) => ({
     name,

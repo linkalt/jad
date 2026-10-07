@@ -20,18 +20,28 @@ type streamEvent struct {
 }
 
 type eventQueue struct {
-	mu                sync.Mutex
-	queue             []streamEvent
-	bytes             int
-	maxBytes          int
-	closed            bool
+	mu       sync.Mutex
+	queue    []streamEvent
+	bytes    int
+	maxBytes int
+	closed   bool
+	// oversizedSnapshot is true while a full snapshot larger than the budget is
+	// the frame at the front of the queue. That frame is the smallest unit the
+	// protocol can send, so it is not charged against the frames behind it; it
+	// leaves the budget when the client has read it (see next).
 	oversizedSnapshot bool
-	terminalSnapshot  bool
 	wake              chan struct{}
 }
 
 func newEventQueue(maxBytes int) *eventQueue {
 	return &eventQueue{maxBytes: maxBytes, wake: make(chan struct{}, 1)}
+}
+
+// terminalEvent reports whether name closes a run's stream: the answer, the
+// failure and the end marker. They are finite and the connection ends right after
+// them, so they are always queued, however large the message before them was.
+func terminalEvent(name string) bool {
+	return name == "completed" || name == "error" || name == "done"
 }
 
 func (q *eventQueue) push(event streamEvent, snapshot bool) bool {
@@ -40,15 +50,19 @@ func (q *eventQueue) push(event streamEvent, snapshot bool) bool {
 	if q.closed {
 		return false
 	}
-	if q.terminalSnapshot && event.name == "done" {
+	if terminalEvent(event.name) {
+		// A terminal snapshot replaces what is still queued only when it does not
+		// fit behind it, since the client then needs just the final state; a
+		// marker (done) always follows what is there.
+		if snapshot && q.bytes+len(event.frame) > q.maxBytes {
+			q.queue = nil
+			q.bytes = 0
+			q.oversizedSnapshot = false
+		}
 		q.queue = append(q.queue, event)
 		q.bytes += len(event.frame)
 		q.signalLocked()
 		return true
-	}
-	if q.oversizedSnapshot && event.name != "completed" && event.name != "done" {
-		q.closeLocked()
-		return false
 	}
 
 	if len(event.frame) > q.maxBytes {
@@ -56,10 +70,11 @@ func (q *eventQueue) push(event streamEvent, snapshot bool) bool {
 			q.closeLocked()
 			return false
 		}
+		// It replaces everything queued and is not charged to the budget, so the
+		// frames that follow it are bounded on their own.
 		q.queue = []streamEvent{event}
-		q.bytes = len(event.frame)
+		q.bytes = 0
 		q.oversizedSnapshot = true
-		q.terminalSnapshot = event.name == "completed"
 		q.signalLocked()
 		return true
 	}
@@ -74,9 +89,6 @@ func (q *eventQueue) push(event streamEvent, snapshot bool) bool {
 	}
 	q.queue = append(q.queue, event)
 	q.bytes += len(event.frame)
-	if event.name == "completed" {
-		q.terminalSnapshot = true
-	}
 	q.signalLocked()
 	return true
 }
@@ -103,7 +115,13 @@ func (q *eventQueue) nextOrIdle(ctx context.Context, idle time.Duration) (event 
 			event := q.queue[0]
 			q.queue[0] = streamEvent{}
 			q.queue = q.queue[1:]
-			q.bytes -= len(event.frame)
+			if q.oversizedSnapshot {
+				// The front frame was the uncharged oversized snapshot; the client
+				// takes it now, so nothing is left to give back.
+				q.oversizedSnapshot = false
+			} else {
+				q.bytes -= len(event.frame)
+			}
 			q.mu.Unlock()
 			return event, true, false
 		}

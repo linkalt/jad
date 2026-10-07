@@ -29,15 +29,62 @@ test("bounds queued SSE frames and closes an over-budget subscriber", () => {
   assert.equal(response.writes.length, 1);
 });
 
-test("permits one oversized frame, then requires snapshot resynchronization", () => {
+test("permits an oversized snapshot, but not a second one while the first is still queued", () => {
   const response = new FakeSseResponse();
   const message = {id: "turn-1", status: "streaming", parts: [{type: "text", text: "x".repeat(256)}]};
 
   assert.equal(writeSse(response, "ui.message", {message}, 128), true);
   assert.equal(response.writableLength > 128, true);
-  assert.equal(writeSse(response, "ui.delta", {id: message.id, index: 0, append: "more"}, 128), false);
+  // A stalled client must not pile up one big snapshot after another.
+  assert.equal(writeSse(response, "ui.message", {message}, 128), false);
   assert.equal(response.destroyed, true);
   assert.equal(response.writes.length, 1);
+});
+
+test("an oversized snapshot is not charged to the frames behind it, which stay bounded", () => {
+  const response = new FakeSseResponse();
+  const message = {id: "turn-1", status: "streaming", parts: [{type: "text", text: "x".repeat(256)}]};
+  const delta = {id: message.id, index: 0, append: "y".repeat(60)};
+
+  assert.equal(writeSse(response, "ui.message", {message}, 128), true);
+  // The snapshot is the one frame the protocol cannot make smaller, so a client
+  // that reads it keeps its stream.
+  assert.equal(writeSse(response, "ui.delta", delta, 128), true);
+  assert.equal(response.destroyed, false);
+  // What is queued behind it is still held to the budget.
+  assert.equal(writeSse(response, "ui.delta", delta, 128), false);
+  assert.equal(response.destroyed, true);
+  assert.equal(response.writes.length, 2);
+});
+
+test("the terminal events of a run are written however much is queued", () => {
+  for (const event of ["completed", "error", "done"]) {
+    const response = new FakeSseResponse();
+    response.writableLength = 10_000;
+    assert.equal(writeSse(response, event, {message: "x".repeat(512)}, 128), true, event);
+    assert.equal(response.destroyed, false, event);
+    assert.equal(response.writes.length, 1, event);
+  }
+  // Anything else still closes an over-budget subscriber.
+  const response = new FakeSseResponse();
+  response.writableLength = 10_000;
+  assert.equal(writeSse(response, "usage", {}, 128), false);
+  assert.equal(response.destroyed, true);
+});
+
+test("a run whose final message is larger than the budget still delivers completed and done", () => {
+  const response = new FakeSseResponse();
+  const message = {id: "turn-1", status: "complete", parts: [{type: "text", text: "x".repeat(256)}]};
+
+  // The closing burst is written in one tick, so nothing drains between frames.
+  assert.equal(writeSse(response, "ui.message", {message}, 128), true);
+  assert.equal(writeSse(response, "completed", {message, committed: true}, 128), true);
+  assert.equal(writeSse(response, "done", {}, 128), true);
+  assert.equal(response.destroyed, false);
+  assert.deepEqual(
+    response.writes.map((frame) => /^event: (.*)$/m.exec(frame)?.[1]),
+    ["ui.message", "completed", "done"],
+  );
 });
 
 test("does not write to an ended or destroyed response", () => {
