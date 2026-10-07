@@ -12,7 +12,7 @@
      "lang": {
       "type": "string",
       "minLength": 1,
-      "description": "Interpreter name, e.g. python, node, bash."
+      "description": "Interpreter name, e.g. python, node, bash. Defaults to bash."
      },
      "code": {
       "type": "string",
@@ -37,7 +37,6 @@
      }
     },
     "required": [
-     "lang",
      "code"
     ],
     "additionalProperties": false
