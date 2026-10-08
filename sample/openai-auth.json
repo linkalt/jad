@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "auth_file": "~/.jad/auth/openai-codex.json",
+  "issuer": "https://auth.openai.com",
+  "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+  "scope": "openid profile email offline_access",
+  "authorize_params": {
+    "id_token_add_organizations": "true",
+    "codex_cli_simplified_flow": "true"
+  },
+  "redirect_host": "localhost",
+  "login_port": 1455,
+  "login_timeout_ms": 300000,
+  "open_browser": true,
+  "http_timeout_ms": 30000,
+  "expiry_margin_ms": 300000,
+  "keep_backup": true
+}

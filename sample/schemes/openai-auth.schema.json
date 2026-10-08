@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openai-auth.schema.json",
+  "title": "openai-auth config",
+  "description": "Configuration of the openai-auth command, which signs in to a ChatGPT account, refreshes its tokens and reports the state of the credential file the Go backend reads (model.json auth_mode openai_oauth). Every key is optional; the defaults are shown. The sign-in endpoints and the client id are not documented by OpenAI: the defaults are the ones the Codex CLI uses, found in the source of the openai-oauth library, so each is a key.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1, "default": 1 },
+    "auth_file": {
+      "type": "string",
+      "pattern": "^(~/|/)\\S",
+      "default": "~/.jad/auth/openai-codex.json",
+      "description": "Credential file. Absolute or starting with ~/, the rule model.json applies to oauth_auth_file. Use the same path there."
+    },
+    "issuer": {
+      "type": "string",
+      "pattern": "^https?://[^?#\\s]+$",
+      "default": "https://auth.openai.com",
+      "description": "OAuth server. /oauth/authorize and /oauth/token are appended."
+    },
+    "client_id": {
+      "type": "string",
+      "minLength": 1,
+      "default": "app_EMoamEEZ73f0CkXaXp7hrann",
+      "description": "OAuth client id. The default is the Codex CLI's public client."
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "default": "openid profile email offline_access",
+      "description": "Space separated scopes requested at sign-in."
+    },
+    "authorize_params": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "propertyNames": {
+        "not": { "enum": ["response_type", "client_id", "redirect_uri", "scope", "state", "code_challenge", "code_challenge_method"] }
+      },
+      "default": { "id_token_add_organizations": "true", "codex_cli_simplified_flow": "true" },
+      "description": "Extra query parameters on the authorize URL. A value given here replaces the default set, it is not merged into it. The standard OAuth parameters are set by the tool and cannot be listed."
+    },
+    "redirect_host": {
+      "type": "string",
+      "minLength": 1,
+      "default": "localhost",
+      "description": "Host name in the redirect URI. The callback server listens on 127.0.0.1 and ::1."
+    },
+    "login_port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "default": 1455,
+      "description": "Port of the sign-in callback. 0 picks a free port; the issuer may only accept the registered one."
+    },
+    "login_timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600000,
+      "default": 300000,
+      "description": "How long login waits for the browser redirect."
+    },
+    "open_browser": {
+      "type": "boolean",
+      "default": true,
+      "description": "Open the authorization URL in a browser. The --no-browser flag turns it off for one run. The URL is always printed."
+    },
+    "http_timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600000,
+      "default": 30000,
+      "description": "Deadline of one token request."
+    },
+    "expiry_margin_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600000,
+      "default": 300000,
+      "description": "How long before its expiry claim the access token counts as expired in status. Keep it equal to setting.json openai_oauth.expiry_margin_ms."
+    },
+    "keep_backup": {
+      "type": "boolean",
+      "default": true,
+      "description": "Keep the previous credential file as <auth_file>.bak (mode 0600) before each rewrite. One generation."
+    }
+  }
+}
