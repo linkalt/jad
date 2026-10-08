@@ -61,7 +61,14 @@ func BuildCatalogWithProcessManager(config sessionfs.SessionConfig, locks *PathL
 // BuildCatalogWithResources shares resolver-owned stateful stores across tool
 // catalogs created for the same configured storage directory.
 func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil {
+	return BuildCatalogWithSubagents(config, locks, manager, taskStore, memoryStore, fetchStore, nil)
+}
+
+// BuildCatalogWithSubagents is BuildCatalogWithResources plus the launcher that runs
+// the children of the subagent tool. A nil launcher still lists the tool, and a call
+// to it answers that sub-agent runs are unavailable; listing tools needs no launcher.
+func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher) (*tools.Catalog, error) {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.NativeSubagent == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -78,7 +85,7 @@ func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks,
 	}
 	if len(config.ToolDefinitionPaths) == 0 {
 		for _, enabled := range []struct{ name, id string }{
-			{"read", readToolID}, {"write", writeToolID}, {"edit", editToolID}, {"grep", grepToolID}, {"bash", bashToolID}, {"exec", execToolID}, {"glob", globToolID}, {"process", processToolID}, {"task", taskToolID}, {"memory", memoryToolID}, {"fetch", fetchToolID}, {"request_draft", requestDraftToolID}, {"skill", skillToolID},
+			{"read", readToolID}, {"write", writeToolID}, {"edit", editToolID}, {"grep", grepToolID}, {"bash", bashToolID}, {"exec", execToolID}, {"glob", globToolID}, {"process", processToolID}, {"task", taskToolID}, {"memory", memoryToolID}, {"fetch", fetchToolID}, {"request_draft", requestDraftToolID}, {"skill", skillToolID}, {"subagent", subagentToolID},
 		} {
 			if nativeToolConfigured(config, enabled.name) {
 				return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s is configured but %s is missing from tool_definition_paths", config.SettingPath, enabled.name, enabled.id)}
@@ -254,6 +261,21 @@ func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks,
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
+	// Last, because a child gets the read-only tools that are already enabled here.
+	if config.NativeSubagent != nil {
+		definition, err := requireNativeDefinition(config, definitions, "subagent", subagentToolID, subagentInputSchema)
+		if err != nil {
+			return nil, err
+		}
+		tool, err := NewSubagentTool(*config.NativeSubagent, loaded, launcher)
+		if err != nil {
+			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		// The agent list is part of the description the model sees, so it is kept on top
+		// of the manifest's text and not replaced by it.
+		tool.Definition.Description = definition.Description + subagentAgentList(config.NativeSubagent.Agents)
+		loaded = append(loaded, tool)
+	}
 	return tools.NewCatalog(loaded)
 }
 
@@ -294,6 +316,8 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeRequestDraft != nil
 	case "skill":
 		return config.NativeSkill != nil
+	case "subagent":
+		return config.NativeSubagent != nil
 	default:
 		return false
 	}

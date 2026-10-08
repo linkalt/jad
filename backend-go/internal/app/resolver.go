@@ -250,46 +250,14 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 	if err != nil {
 		return preparedRun{}, err
 	}
-	oauth := config.Model.AuthMode == "openai_oauth"
-	apiKey := oauthPlaceholderKey
-	if oauth {
-		// The token itself is read from the file on every request, so it is not part of
-		// the runner's identity; the file path and the OAuth settings are.
-		if err := checkOAuthCredential(config); err != nil {
-			return preparedRun{}, err
-		}
-	} else {
-		apiKey = strings.TrimSpace(r.environment[config.Model.APIKeyEnv])
-		if apiKey == "" {
-			return preparedRun{}, &httpapi.StatusError{
-				Code:    http.StatusUnprocessableEntity,
-				Message: fmt.Sprintf("environment variable %s is not set", config.Model.APIKeyEnv),
-			}
-		}
+	apiKey, err := r.providerAPIKey(config)
+	if err != nil {
+		return preparedRun{}, err
 	}
 	runnerKey := fingerprintRunner(config, apiKey)
 	runner := shared.runners[runnerKey]
 	if runner == nil {
-		var httpClient *http.Client
-		var network http.RoundTripper = http.DefaultTransport
-		if oauth {
-			network = oauthTransport(config, network)
-			httpClient = &http.Client{Transport: network}
-		}
-		if config.HTTPDebug.Enabled {
-			transport := httpdebug.NewTransport(config.StoragePaths.HTTPDebug, httpdebug.Settings{
-				Logger:                 r.logger,
-				Enabled:                true,
-				IncludeRequestHeaders:  config.HTTPDebug.IncludeRequestHeaders,
-				IncludeRequestBody:     config.HTTPDebug.IncludeRequestBody,
-				IncludeResponseHeaders: config.HTTPDebug.IncludeResponseHeaders,
-				IncludeResponseBody:    config.HTTPDebug.IncludeResponseBody,
-				MaxBodyBytes:           config.HTTPDebug.MaxBodyBytes,
-			}, network)
-			httpClient = &http.Client{Transport: transport}
-		}
-		retry := providerRetryConfig(config.ProviderRetry, r.logger)
-		streamer := openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: config.Model.BaseURL, HTTPClient: httpClient, Retry: &retry})
+		streamer := r.newProviderStreamer(config, apiKey)
 		runner, err = session.NewRunner(shared.store, streamer, session.ModelSettings{
 			Model:      config.Model.Name,
 			Request:    config.Model.Request,
@@ -302,6 +270,52 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 		shared.runners[runnerKey] = runner
 	}
 	return preparedRun{config: config, runner: runner, toolCatalog: toolCatalog, processManager: processManager, taskStore: taskStore, memoryStore: memoryStore}, nil
+}
+
+// providerAPIKey returns the key handed to the provider client for a loaded model, and
+// fails the run before it starts when the credential cannot be used.
+func (r *Resolver) providerAPIKey(config sessionfs.SessionConfig) (string, error) {
+	if config.Model.AuthMode == "openai_oauth" {
+		// The token itself is read from the file on every request, so it is not part of
+		// the runner's identity; the file path and the OAuth settings are.
+		if err := checkOAuthCredential(config); err != nil {
+			return "", err
+		}
+		return oauthPlaceholderKey, nil
+	}
+	apiKey := strings.TrimSpace(r.environment[config.Model.APIKeyEnv])
+	if apiKey == "" {
+		return "", &httpapi.StatusError{
+			Code:    http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("environment variable %s is not set", config.Model.APIKeyEnv),
+		}
+	}
+	return apiKey, nil
+}
+
+// newProviderStreamer builds the provider client of a loaded model: the OAuth
+// transport when the model uses it, wrapped by the HTTP debug logger when that is on.
+func (r *Resolver) newProviderStreamer(config sessionfs.SessionConfig, apiKey string) *openaiapi.Client {
+	var httpClient *http.Client
+	var network http.RoundTripper = http.DefaultTransport
+	if config.Model.AuthMode == "openai_oauth" {
+		network = oauthTransport(config, network)
+		httpClient = &http.Client{Transport: network}
+	}
+	if config.HTTPDebug.Enabled {
+		transport := httpdebug.NewTransport(config.StoragePaths.HTTPDebug, httpdebug.Settings{
+			Logger:                 r.logger,
+			Enabled:                true,
+			IncludeRequestHeaders:  config.HTTPDebug.IncludeRequestHeaders,
+			IncludeRequestBody:     config.HTTPDebug.IncludeRequestBody,
+			IncludeResponseHeaders: config.HTTPDebug.IncludeResponseHeaders,
+			IncludeResponseBody:    config.HTTPDebug.IncludeResponseBody,
+			MaxBodyBytes:           config.HTTPDebug.MaxBodyBytes,
+		}, network)
+		httpClient = &http.Client{Transport: transport}
+	}
+	retry := providerRetryConfig(config.ProviderRetry, r.logger)
+	return openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: config.Model.BaseURL, HTTPClient: httpClient, Retry: &retry})
 }
 
 // ListTools implements httpapi.SessionToolLister without requiring a provider
@@ -333,7 +347,7 @@ func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.Sessio
 	taskStore := r.sharedTaskStore(config)
 	memoryStore := r.sharedMemoryStore(config)
 	fetchStore := r.sharedFetchStore(config)
-	nativeCatalog, err := native.BuildCatalogWithResources(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore)
+	nativeCatalog, err := native.BuildCatalogWithSubagents(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config))
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}

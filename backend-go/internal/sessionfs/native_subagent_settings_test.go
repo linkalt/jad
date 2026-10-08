@@ -1,0 +1,166 @@
+package sessionfs
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func subagentSettingsFor(subagent string) map[string]json.RawMessage {
+	return map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"subagent":` + subagent + `}}`)}
+}
+
+func TestNormalizeNativeSubagentSettingsAbsentMeansDisabled(t *testing.T) {
+	for name, setting := range map[string]map[string]json.RawMessage{
+		"no tools":      {},
+		"no subagent":   {"tools": json.RawMessage(`{"native":{}}`)},
+		"null native":   {"tools": json.RawMessage(`{"native":null}`)},
+		"other tool on": {"tools": json.RawMessage(`{"native":{"skill":{}}}`)},
+	} {
+		got, err := normalizeNativeSubagentSettings(setting, "/s/setting.json", "/w", "")
+		if err != nil || got != nil {
+			t.Errorf("%s: got %+v, %v; want nil, nil", name, got, err)
+		}
+	}
+}
+
+func TestNormalizeNativeSubagentSettingsDefaultsAndOverrides(t *testing.T) {
+	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"explore":{}}}`), "/s/setting.json", "/w", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ResultMaxBytes != defaultNativeSubagentResultMaxBytes || got.MaxConcurrent != defaultNativeSubagentMaxConcurrent || got.StorageDir != "/w/.subagents" {
+		t.Fatalf("defaults = %+v", got)
+	}
+	agent := got.Agents[0]
+	if agent.Name != "explore" || agent.MaxToolRounds != defaultNativeSubagentMaxToolRounds || agent.TimeoutMS != defaultNativeSubagentTimeoutMS ||
+		agent.MaxRunTokens != 0 || agent.HasTools || agent.ModelPath != "" || agent.Instructions != "" {
+		t.Fatalf("agent defaults = %+v", agent)
+	}
+
+	custom, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{
+		"result_max_bytes": 100, "max_concurrent": 2, "storage_dir": "kids",
+		"agents": {
+			"b": {"description": "second", "model": "model-b.json", "instructions": "Be brief.", "tools": ["read","grep"],
+			      "max_tool_rounds": 5, "max_run_tokens": 9000, "timeout_ms": 2000},
+			"a": {}
+		}}`), "/s/setting.json", "/w", "/w/.jad/tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if custom.ResultMaxBytes != 100 || custom.MaxConcurrent != 2 || custom.StorageDir != "/w/.jad/tools/kids" {
+		t.Fatalf("custom = %+v", custom)
+	}
+	if custom.Agents[0].Name != "b" || custom.Agents[1].Name != "a" {
+		t.Fatalf("agents are not in file order: %+v", custom.Agents)
+	}
+	b := custom.Agents[0]
+	if b.ModelPath != "/s/model-b.json" || b.Instructions != "Be brief." || !b.HasTools || strings.Join(b.Tools, ",") != "read,grep" ||
+		b.MaxToolRounds != 5 || b.MaxRunTokens != 9000 || b.TimeoutMS != 2000 || b.Description != "second" {
+		t.Fatalf("agent b = %+v", b)
+	}
+	if found, ok := custom.Agent("a"); !ok || found.Name != "a" {
+		t.Fatalf("Agent(a) = %+v, %v", found, ok)
+	}
+	if _, ok := custom.Agent("missing"); ok {
+		t.Fatal("Agent(missing) was found")
+	}
+}
+
+func TestNormalizeNativeSubagentSettingsNullKeysMeanDefault(t *testing.T) {
+	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(
+		`{"result_max_bytes":null,"max_concurrent":null,"storage_dir":null,"agents":{"a":{"model":null,"tools":null,"max_run_tokens":null,"timeout_ms":null,"max_tool_rounds":null,"description":null,"instructions":null}}}`),
+		"/s/setting.json", "/w", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ResultMaxBytes != defaultNativeSubagentResultMaxBytes || got.Agents[0].HasTools || got.Agents[0].ModelPath != "" {
+		t.Fatalf("null keys = %+v", got)
+	}
+}
+
+func TestNormalizeNativeSubagentSettingsRejectsInvalidSettings(t *testing.T) {
+	long := strings.Repeat("x", maxNativeSubagentDescriptionChars+1)
+	for name, tc := range map[string]struct{ setting, want string }{
+		"not object":         {`[]`, "tools.native.subagent must be an object"},
+		"null":               {`null`, "tools.native.subagent must be an object"},
+		"no agents":          {`{}`, "tools.native.subagent.agents must define at least one agent"},
+		"null agents":        {`{"agents":null}`, "tools.native.subagent.agents must define at least one agent"},
+		"empty agents":       {`{"agents":{}}`, "tools.native.subagent.agents must define at least one agent"},
+		"agents array":       {`{"agents":[]}`, "tools.native.subagent.agents must define at least one agent"},
+		"typo":               {`{"agent":{}}`, "tools.native.subagent.agent is not supported; did you mean agents?"},
+		"unrelated":          {`{"agents":{"a":{}},"approval":"ask"}`, "tools.native.subagent.approval is not supported"},
+		"agent not object":   {`{"agents":{"a":[]}}`, "tools.native.subagent.agents.a must be an object"},
+		"agent null":         {`{"agents":{"a":null}}`, "tools.native.subagent.agents.a must be an object"},
+		"agent typo":         {`{"agents":{"a":{"tool":[]}}}`, "tools.native.subagent.agents.a.tool is not supported; did you mean tools?"},
+		"bad name":           {`{"agents":{"has space":{}}}`, "the name must be 1 to 64 letters, digits, underscores or hyphens"},
+		"name starts dash":   {`{"agents":{"-a":{}}}`, "the name must be 1 to 64 letters, digits, underscores or hyphens"},
+		"result zero":        {`{"agents":{"a":{}},"result_max_bytes":0}`, "tools.native.subagent.result_max_bytes must be a safe integer between 1 and 10485760"},
+		"concurrent zero":    {`{"agents":{"a":{}},"max_concurrent":0}`, "tools.native.subagent.max_concurrent must be a safe integer between 1 and 32"},
+		"concurrent over":    {`{"agents":{"a":{}},"max_concurrent":33}`, "tools.native.subagent.max_concurrent must be a safe integer between 1 and 32"},
+		"storage blank":      {`{"agents":{"a":{}},"storage_dir":" "}`, "tools.native.subagent.storage_dir must be a non-empty string"},
+		"rounds zero":        {`{"agents":{"a":{"max_tool_rounds":0}}}`, "agents.a.max_tool_rounds must be a safe integer between 1 and 50000"},
+		"tokens zero":        {`{"agents":{"a":{"max_run_tokens":0}}}`, "agents.a.max_run_tokens must be a safe integer between 1 and 1000000000000"},
+		"timeout too small":  {`{"agents":{"a":{"timeout_ms":999}}}`, "agents.a.timeout_ms must be a safe integer between 1000 and 3600000"},
+		"timeout fraction":   {`{"agents":{"a":{"timeout_ms":1500.5}}}`, "agents.a.timeout_ms must be a safe integer"},
+		"timeout string":     {`{"agents":{"a":{"timeout_ms":"2000"}}}`, "agents.a.timeout_ms must be a safe integer"},
+		"model blank":        {`{"agents":{"a":{"model":" "}}}`, "agents.a.model must be a non-empty string"},
+		"instructions blank": {`{"agents":{"a":{"instructions":""}}}`, "agents.a.instructions must be a non-empty string"},
+		"description long":   {`{"agents":{"a":{"description":"` + long + `"}}}`, "agents.a.description must be at most 500 characters"},
+		"tools not array":    {`{"agents":{"a":{"tools":"read"}}}`, "agents.a.tools must be an array of tool names"},
+		"tools blank":        {`{"agents":{"a":{"tools":["read"," "]}}}`, "agents.a.tools[1] must be a non-empty string"},
+		"tools twice":        {`{"agents":{"a":{"tools":["read","read"]}}}`, "agents.a.tools lists read twice"},
+		"upper limit ok":     {`{"agents":{"a":{"timeout_ms":3600000}},"max_concurrent":32,"result_max_bytes":10485760}`, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := normalizeNativeSubagentSettings(subagentSettingsFor(tc.setting), "setting.json", "/w", "")
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadSessionConfigAcceptsTheSubagentToolAndNeverListsItForTypeScript(t *testing.T) {
+	rootDir := t.TempDir()
+	sessionDir := filepath.Join(rootDir, "session-1")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setting, err := json.Marshal(map[string]any{
+		"schema_version": 1,
+		"cwd":            rootDir,
+		"tools":          map[string]any{"native": map[string]any{"subagent": map[string]any{"agents": map[string]any{"explore": map[string]any{"model": "fast.json"}}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), setting, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test","api_key_env":"TEST_KEY"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := LoadSessionConfig(Location{SessionID: "session-1", Directory: sessionDir, Root: Root{GlobalJadRoot: rootDir}}, "", "")
+	if err != nil {
+		t.Fatalf("LoadSessionConfig: %v", err)
+	}
+	if config.NativeSubagent == nil || len(config.NativeSubagent.Agents) != 1 || config.NativeSubagent.Agents[0].ModelPath != filepath.Join(sessionDir, "fast.json") {
+		t.Fatalf("subagent = %+v", config.NativeSubagent)
+	}
+	if config.NativeSubagent.StorageDir != filepath.Join(rootDir, ".subagents") {
+		t.Fatalf("storage dir = %q, want it under the working directory", config.NativeSubagent.StorageDir)
+	}
+}
+
+func TestApprovalKeyIsRefusedOnTheSubagentTool(t *testing.T) {
+	_, err := loadApprovalSetting(t, nativeTools(map[string]any{"subagent": map[string]any{"agents": map[string]any{"a": map[string]any{}}, "approval": "ask"}}))
+	if err == nil || !strings.Contains(err.Error(), "tools.native.subagent.approval is not supported") {
+		t.Fatalf("subagent accepted an approval key: %v", err)
+	}
+}

@@ -241,6 +241,9 @@ func HarnessPaths(config sessionfs.SessionConfig) []string {
 	if config.NativeFetch != nil {
 		candidates = append(candidates, config.NativeFetch.StorageDir)
 	}
+	if config.NativeSubagent != nil {
+		candidates = append(candidates, config.NativeSubagent.StorageDir)
+	}
 	if config.NativeProcess != nil {
 		candidates = append(candidates, config.NativeProcess.StorageDir)
 	}

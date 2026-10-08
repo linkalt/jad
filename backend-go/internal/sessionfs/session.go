@@ -136,6 +136,7 @@ type SessionConfig struct {
 	NativeFetch        *NativeFetchSettings
 	NativeRequestDraft *NativeRequestDraftSettings
 	NativeSkill        *NativeSkillSettings
+	NativeSubagent     *NativeSubagentSettings
 	// GlobalJadRoot is the global root whose setting.json names the skill
 	// directories the skill tool reads.
 	GlobalJadRoot       string
@@ -375,6 +376,10 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	nativeSubagent, err := normalizeNativeSubagentSettings(setting, settingPath, cwd, storagePaths.ToolStorage)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	nativeProcess, err := normalizeNativeProcessSettings(
 		setting,
 		location.Root.GlobalJadRoot,
@@ -486,6 +491,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		NativeFetch:           nativeFetch,
 		NativeRequestDraft:    nativeRequestDraft,
 		NativeSkill:           nativeSkill,
+		NativeSubagent:        nativeSubagent,
 		GlobalJadRoot:         location.Root.GlobalJadRoot,
 		MCPServers:            mcpServers,
 		StateContext:          stateContext,

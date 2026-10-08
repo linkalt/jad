@@ -28,6 +28,10 @@ type parityExpectation struct {
 	} `json:"ok"`
 }
 
+// goOnlyNativeTools are native tools that exist only in the Go backend. TypeScript is
+// a frozen reference (backend-go/DECISIONS.md), so it will never list them.
+var goOnlyNativeTools = []string{"subagent"}
+
 // TestConfigParityWithTypeScriptGolden replays settings through LoadSessionConfig
 // and compares resolved storage paths and error messages with the output of the
 // TypeScript SessionConfigLoader (regenerate: node testdata/gen-config-parity.mjs).
@@ -78,6 +82,11 @@ func TestConfigParityWithTypeScriptGolden(t *testing.T) {
 				}
 				message = strings.ReplaceAll(message, root, "$ROOT")
 				message = strings.TrimPrefix(message, "$ROOT/session-1/setting.json: ")
+				// The golden comes from the frozen TypeScript loader, which does not have
+				// these tools, so the list of supported tools in an error differs by them.
+				for _, name := range goOnlyNativeTools {
+					message = strings.Replace(message, ", "+name, "", 1)
+				}
 				if message != want.Error {
 					t.Fatalf("error mismatch\n go: %s\n ts: %s", message, want.Error)
 				}

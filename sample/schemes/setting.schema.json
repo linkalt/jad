@@ -1697,6 +1697,35 @@
                 }
               },
               "additionalProperties": false
+            },
+            "subagent": {
+              "type": "object",
+              "description": "Go backend only. Lets the model hand a task to a separate read-only agent that runs with a fresh context and returns only its final answer. Needs at least one agent and the tool definition sample/tools/native/subagent.json. A child can use only the enabled read-only native tools (read, grep, glob, fetch, skill), never the subagent tool, so the depth is one.",
+              "required": ["agents"],
+              "properties": {
+                "agents": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "description": "Agents by name (1 to 64 letters, digits, underscores or hyphens).",
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "description": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Shown to the model in the tool description, so keep it short."},
+                      "model": {"type": "string", "minLength": 1, "description": "Model file for this agent, relative to the session directory or absolute. Absent means the calling session's model."},
+                      "instructions": {"type": "string", "minLength": 1, "description": "System prompt of the agent. The calling session's prompt is not used."},
+                      "tools": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Read-only native tools the agent may use. Absent means every enabled one."},
+                      "max_tool_rounds": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 30, "description": "Most tool rounds of one run."},
+                      "max_run_tokens": {"type": "integer", "minimum": 1, "maximum": 1000000000000, "description": "Most tokens one run may use before it starts another provider round. Absent means no cap."},
+                      "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 600000, "description": "Wall-clock limit of one run, including provider waits."}
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "result_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 32768, "description": "Bytes of the child's answer returned per call. A longer answer is cut and the result says so."},
+                "max_concurrent": {"type": "integer", "minimum": 1, "maximum": 32, "default": 3, "description": "Most children running at once within one run. The limit is per run, not per session."},
+                "storage_dir": {"type": "string", "minLength": 1, "default": ".subagents", "description": "Directory holding one transcript folder per child run. Relative paths resolve against the profile's tool storage, or the working directory without profiles."}
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false

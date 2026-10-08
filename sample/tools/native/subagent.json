@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.subagent",
+      "source": "native",
+      "name": "subagent",
+      "description": "Hand a task to a separate read-only agent with its own fresh context and get back only its final answer. Use it for searches or reading that would fill your context.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Self-contained instructions. The agent sees nothing of this conversation."
+          },
+          "agent": {
+            "type": "string",
+            "description": "Agent name. Optional when only one is configured."
+          }
+        },
+        "required": ["task"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

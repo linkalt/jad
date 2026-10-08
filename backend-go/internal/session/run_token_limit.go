@@ -18,6 +18,10 @@ func (e *RunTokenLimitError) Error() string {
 	return fmt.Sprintf("The run stopped before its next round: it used %d tokens, which reached the max_run_tokens limit of %d.", e.Used, e.Limit)
 }
 
+// ResponseTokens is responseTokens for a caller outside the package, such as a
+// sub-agent run that reports the tokens it used.
+func ResponseTokens(event json.RawMessage) int64 { return responseTokens(event) }
+
 // responseTokens is what one provider response reports: its total_tokens, or
 // input plus output when no valid total is given. A response without usable usage
 // counts as 0, because the harness only counts what the provider reported.
