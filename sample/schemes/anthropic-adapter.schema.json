@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "anthropic-adapter.schema.json",
+  "title": "Anthropic adapter config",
+  "description": "Configuration of the anthropic-adapter command, which serves the OpenAI Responses API on top of the Anthropic Messages API. Every key is optional; the defaults are shown. The API key is never stored here: the caller sends it as a Bearer token or x-api-key header.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1, "default": 1 },
+    "listen": {
+      "type": "string",
+      "minLength": 1,
+      "default": "127.0.0.1:8788",
+      "description": "host:port the adapter listens on."
+    },
+    "upstream": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "pattern": "^https?://\\S+$",
+          "default": "https://api.anthropic.com",
+          "description": "Anthropic API base URL. /v1/messages is appended."
+        },
+        "anthropic_version": {
+          "type": "string",
+          "minLength": 1,
+          "default": "2023-06-01",
+          "description": "Value of the anthropic-version header."
+        },
+        "beta": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[^,\\s]+$" },
+          "default": [],
+          "description": "Values joined into the anthropic-beta header."
+        },
+        "request_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600000,
+          "default": 600000,
+          "description": "Deadline for one upstream request, including the whole stream."
+        }
+      }
+    },
+    "default_max_tokens": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 8192,
+      "description": "max_tokens sent when the request has no max_output_tokens. Anthropic requires the field."
+    },
+    "max_request_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 67108864,
+      "description": "Largest accepted request body."
+    },
+    "unsupported_fields": {
+      "enum": ["reject", "ignore"],
+      "default": "ignore",
+      "description": "What to do with a request field that has no Anthropic equivalent and changes behavior (for example top_logprobs). ignore drops it and lists it in the X-Adapter-Ignored-Fields response header. previous_response_id, conversation, background and hosted tools are always rejected."
+    },
+    "synthesize_missing_tool_results": {
+      "type": "boolean",
+      "default": true,
+      "description": "Answer a function_call that has no function_call_output with an error tool_result. Anthropic rejects a tool_use without a result."
+    },
+    "missing_tool_result_text": {
+      "type": "string",
+      "minLength": 1,
+      "default": "No result was recorded for this tool call.",
+      "description": "Text of the synthesized tool_result."
+    },
+    "invalid_arguments_key": {
+      "type": "string",
+      "minLength": 1,
+      "default": "_invalid_arguments",
+      "description": "function_call arguments that are not a JSON object are sent as {key: original string}."
+    },
+    "default_profile": { "$ref": "#/$defs/profile" },
+    "models": {
+      "type": "array",
+      "default": [],
+      "description": "Per-model rules. The first entry whose match regex fits the request model wins; otherwise default_profile applies.",
+      "items": {
+        "allOf": [{ "$ref": "#/$defs/profile" }],
+        "required": ["match"]
+      }
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "match": { "type": "string", "minLength": 1, "description": "Regular expression tested against the model name." },
+        "thinking": {
+          "enum": ["none", "adaptive", "budget"],
+          "default": "none",
+          "description": "none sends no thinking parameter. adaptive sends thinking {type: adaptive} and output_config.effort. budget sends thinking {type: enabled, budget_tokens} for models that still need it."
+        },
+        "display": {
+          "enum": ["", "summarized", "omitted"],
+          "default": "",
+          "description": "thinking.display to send. Empty sends none, except that a request with reasoning.summary selects summarized."
+        },
+        "default_effort": {
+          "enum": ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"],
+          "default": "",
+          "description": "Effort used when the request has no reasoning.effort. none turns thinking off for this request."
+        },
+        "effort_map": {
+          "type": "object",
+          "propertyNames": { "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"] },
+          "additionalProperties": { "enum": ["low", "medium", "high", "xhigh", "max"] },
+          "description": "Responses effort to output_config.effort. Missing keys use the defaults (minimal and low to low, medium to medium, high to high, xhigh to xhigh, max to max)."
+        },
+        "effort_budget": {
+          "type": "object",
+          "propertyNames": { "enum": ["minimal", "low", "medium", "high", "xhigh", "max"] },
+          "additionalProperties": { "type": "integer", "minimum": 1024 },
+          "description": "Responses effort to budget_tokens in budget mode. Defaults: minimal 1024, low 2048, medium 8192, high 16384, xhigh 24576, max 32000."
+        },
+        "mid_conversation_system": {
+          "type": "boolean",
+          "default": false,
+          "description": "Send system and developer messages that follow the first turn as role=system. When false they become user messages."
+        }
+      }
+    }
+  }
+}
