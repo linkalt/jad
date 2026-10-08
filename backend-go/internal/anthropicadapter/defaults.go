@@ -12,6 +12,8 @@ const (
 	DefaultAuthHeader                = AuthHeaderBearer
 	AuthHeaderBearer                 = "bearer"
 	AuthHeaderXAPIKey                = "x-api-key"
+	DefaultCredentialFile            = ""
+	DefaultExpiryMarginMS            = 300_000
 	DefaultRequestTimeoutMS          = 600_000
 	DefaultMaxTokens                 = 8192
 	DefaultMaxRequestBytes           = 64 * 1024 * 1024
@@ -42,6 +44,12 @@ const (
 	defaultEffortBudgetXHighTokens   = 24576
 	defaultEffortBudgetMaxTokens     = 32000
 )
+
+// reservedUpstreamHeaders cannot be set in upstream.extra_headers: the adapter sets them from
+// other keys, and a second source would make the result depend on header order.
+var reservedUpstreamHeaders = []string{
+	"authorization", "x-api-key", "anthropic-version", "anthropic-beta", "content-type", "content-length", "host",
+}
 
 // efforts lists the Responses reasoning.effort values the adapter accepts.
 var efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}

@@ -54,12 +54,25 @@ type UpstreamConfig struct {
 	BaseURL          string `json:"base_url"`
 	AnthropicVersion string `json:"anthropic_version"`
 	// AuthHeader is bearer or x-api-key: how the caller's token goes upstream.
-	AuthHeader       string   `json:"auth_header"`
-	Beta             []string `json:"beta"`
-	RequestTimeoutMS int      `json:"request_timeout_ms"`
+	AuthHeader string   `json:"auth_header"`
+	Beta       []string `json:"beta"`
+	// CredentialFile, when set, is a file written by the claude-auth command. The adapter then
+	// sends the access token stored in it, read on every request, and ignores the credential
+	// the caller sent. Empty (the default) forwards the caller's credential.
+	CredentialFile string `json:"credential_file"`
+	// ExpiryMarginMS is how long before its stored expiry a credential-file token already
+	// counts as expired. It applies only with credential_file.
+	ExpiryMarginMS int `json:"expiry_margin_ms"`
+	// ExtraHeaders are added to every upstream request, for a gateway or an endpoint that
+	// wants more than the headers the adapter sets itself.
+	ExtraHeaders     map[string]string `json:"extra_headers"`
+	RequestTimeoutMS int               `json:"request_timeout_ms"`
 	// StreamRetry retries a streaming request whose upstream answered with an
 	// error event before any output was written.
 	StreamRetry StreamRetryConfig `json:"stream_retry"`
+
+	// credentialPath is CredentialFile with "~/" expanded.
+	credentialPath string
 }
 
 // StreamRetryConfig controls the invisible retry of a stream that fails at
@@ -103,6 +116,9 @@ func DefaultConfig() Config {
 			AnthropicVersion: DefaultAnthropicVersion,
 			AuthHeader:       DefaultAuthHeader,
 			Beta:             []string{},
+			CredentialFile:   DefaultCredentialFile,
+			ExpiryMarginMS:   DefaultExpiryMarginMS,
+			ExtraHeaders:     map[string]string{},
 			RequestTimeoutMS: DefaultRequestTimeoutMS,
 			StreamRetry: StreamRetryConfig{
 				MaxRetries: DefaultStreamRetryMax,
@@ -218,6 +234,27 @@ func (u *UpstreamConfig) validate() error {
 	for _, beta := range u.Beta {
 		if strings.TrimSpace(beta) == "" || strings.ContainsAny(beta, ", \t") {
 			return fmt.Errorf("config: upstream.beta entries must be single non-empty tokens, got %q", beta)
+		}
+	}
+	if u.CredentialFile != "" {
+		path, err := ExpandCredentialPath(u.CredentialFile)
+		if err != nil {
+			return fmt.Errorf("config: upstream.credential_file: %w", err)
+		}
+		u.credentialPath = path
+	}
+	if u.ExpiryMarginMS < 0 || u.ExpiryMarginMS > MaxRequestTimeoutMS {
+		return fmt.Errorf("config: upstream.expiry_margin_ms must be 0..%d, got %d", MaxRequestTimeoutMS, u.ExpiryMarginMS)
+	}
+	for name, value := range u.ExtraHeaders {
+		if !validHeaderName(name) {
+			return fmt.Errorf("config: upstream.extra_headers name %q is not a valid HTTP header name", name)
+		}
+		if slices.Contains(reservedUpstreamHeaders, strings.ToLower(name)) {
+			return fmt.Errorf("config: upstream.extra_headers.%s is set by the adapter and cannot be overridden (use auth_header, beta or anthropic_version)", name)
+		}
+		if strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("config: upstream.extra_headers.%s must not contain a line break", name)
 		}
 	}
 	if u.RequestTimeoutMS < 1 || u.RequestTimeoutMS > MaxRequestTimeoutMS {

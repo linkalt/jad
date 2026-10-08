@@ -115,6 +115,8 @@ func TestSchemaDefaultsMatchGo(t *testing.T) {
 	if upstream.Properties["base_url"].Default != config.Upstream.BaseURL ||
 		upstream.Properties["anthropic_version"].Default != config.Upstream.AnthropicVersion ||
 		upstream.Properties["auth_header"].Default != config.Upstream.AuthHeader ||
+		upstream.Properties["credential_file"].Default != config.Upstream.CredentialFile ||
+		upstream.Properties["expiry_margin_ms"].Default != float64(config.Upstream.ExpiryMarginMS) ||
 		upstream.Properties["request_timeout_ms"].Default != float64(config.Upstream.RequestTimeoutMS) {
 		t.Errorf("upstream schema defaults differ from Go: %+v", upstream.Properties)
 	}
@@ -176,26 +178,32 @@ func TestSchemaAcceptsAndRejects(t *testing.T) {
 
 func TestLoadConfigRejectsBadValues(t *testing.T) {
 	cases := map[string]string{
-		`{"bogus":1}`:                                        "unknown field",
-		`{"schema_version":2}`:                               "schema_version",
-		`{"listen":""}`:                                      "listen",
-		`{"upstream":{"base_url":"ftp://x"}}`:                "base_url",
-		`{"upstream":{"request_timeout_ms":0}}`:              "request_timeout_ms",
-		`{"upstream":{"beta":["a,b"]}}`:                      "beta",
-		`{"upstream":{"auth_header":"basic"}}`:               "auth_header",
-		`{"upstream":{"auth_header":""}}`:                    "auth_header",
-		`{"upstream":{"stream_retry":{"max_retries":-1}}}`:   "max_retries",
-		`{"upstream":{"stream_retry":{"max_retries":11}}}`:   "max_retries",
-		`{"upstream":{"stream_retry":{"delay_ms":-5}}}`:      "delay_ms",
-		`{"upstream":{"stream_retry":{"error_types":[""]}}}`: "error_types",
-		`{"default_max_tokens":0}`:                           "default_max_tokens",
-		`{"unsupported_fields":"maybe"}`:                     "unsupported_fields",
-		`{"models":[{"thinking":"adaptive"}]}`:               "match",
-		`{"models":[{"match":"("}]}`:                         "regular expression",
-		`{"models":[{"match":"x","thinking":"always"}]}`:     "thinking",
-		`{"default_profile":{"effort_map":{"high":"huge"}}}`: "effort_map",
-		`{"default_profile":{"effort_budget":{"low":5}}}`:    "effort_budget",
-		`{"default_profile":{"default_effort":"loud"}}`:      "default_effort",
+		`{"bogus":1}`:                                           "unknown field",
+		`{"schema_version":2}`:                                  "schema_version",
+		`{"listen":""}`:                                         "listen",
+		`{"upstream":{"base_url":"ftp://x"}}`:                   "base_url",
+		`{"upstream":{"request_timeout_ms":0}}`:                 "request_timeout_ms",
+		`{"upstream":{"beta":["a,b"]}}`:                         "beta",
+		`{"upstream":{"auth_header":"basic"}}`:                  "auth_header",
+		`{"upstream":{"credential_file":"relative.json"}}`:      "credential_file",
+		`{"upstream":{"expiry_margin_ms":-1}}`:                  "expiry_margin_ms",
+		`{"upstream":{"extra_headers":{"bad name":"x"}}}`:       "valid HTTP header name",
+		`{"upstream":{"extra_headers":{"Authorization":"x"}}}`:  "cannot be overridden",
+		`{"upstream":{"extra_headers":{"Anthropic-Beta":"x"}}}`: "cannot be overridden",
+		`{"upstream":{"extra_headers":{"X-A":"a\nb"}}}`:         "line break",
+		`{"upstream":{"auth_header":""}}`:                       "auth_header",
+		`{"upstream":{"stream_retry":{"max_retries":-1}}}`:      "max_retries",
+		`{"upstream":{"stream_retry":{"max_retries":11}}}`:      "max_retries",
+		`{"upstream":{"stream_retry":{"delay_ms":-5}}}`:         "delay_ms",
+		`{"upstream":{"stream_retry":{"error_types":[""]}}}`:    "error_types",
+		`{"default_max_tokens":0}`:                              "default_max_tokens",
+		`{"unsupported_fields":"maybe"}`:                        "unsupported_fields",
+		`{"models":[{"thinking":"adaptive"}]}`:                  "match",
+		`{"models":[{"match":"("}]}`:                            "regular expression",
+		`{"models":[{"match":"x","thinking":"always"}]}`:        "thinking",
+		`{"default_profile":{"effort_map":{"high":"huge"}}}`:    "effort_map",
+		`{"default_profile":{"effort_budget":{"low":5}}}`:       "effort_budget",
+		`{"default_profile":{"default_effort":"loud"}}`:         "default_effort",
 		`{} {}`: "trailing",
 	}
 	for text, want := range cases {

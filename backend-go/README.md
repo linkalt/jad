@@ -19,3 +19,7 @@ This downloads and verifies the host-platform native library in the user cache a
 ## Claude models: `anthropic-adapter`
 
 `cmd/anthropic-adapter` serves the Responses API on top of the Anthropic Messages API, so a session can use a Claude model by changing `base_url` in `model.json`. See `cmd/anthropic-adapter/README.md`.
+
+## Claude subscription sign-in: `claude-auth`
+
+`cmd/claude-auth` signs in to a Claude account (Pro, Max, Team or Enterprise), refreshes its tokens and reports the credential file that the adapter reads when `upstream.credential_file` is set. Unofficial and untested against Anthropic; read its README before using it. See `cmd/claude-auth/README.md`.

@@ -40,6 +40,24 @@
           "default": [],
           "description": "Values joined into the anthropic-beta header."
         },
+        "credential_file": {
+          "type": "string",
+          "default": "",
+          "description": "Path of a credential file written by the claude-auth command (a Claude Pro, Max, Team or Enterprise sign-in). Absolute, or starting with ~/. When set, the adapter sends the access token stored in it as the upstream credential, reads the file on every request (so a refresh by claude-auth needs no restart), never writes it, and ignores the credential the caller sent. Empty forwards the caller's credential. Anthropic does not document this sign-in and limits subscription credentials to its own applications; see cmd/anthropic-adapter/README.md."
+        },
+        "expiry_margin_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000,
+          "default": 300000,
+          "description": "How long before its stored expiry a credential_file token already counts as expired, so a request is not sent with a token that ends in flight. Applies only with credential_file. Keep it equal to claude-auth's expiry_margin_ms."
+        },
+        "extra_headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "default": {},
+          "description": "Headers added to every upstream request, for a gateway or endpoint that wants more than the adapter sets. authorization, x-api-key, anthropic-version, anthropic-beta, content-type, content-length and host cannot be set here: they come from auth_header, beta and anthropic_version."
+        },
         "request_timeout_ms": {
           "type": "integer",
           "minimum": 1,

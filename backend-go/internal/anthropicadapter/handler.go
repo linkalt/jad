@@ -43,9 +43,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
-	apiKey := apiKeyFrom(r)
-	if apiKey == "" {
-		writeError(w, unauthorized("send the Anthropic credential (an API key or an access token) as a Bearer token or x-api-key header"))
+	apiKey, credentialErr := h.upstreamToken(r)
+	if credentialErr != nil {
+		writeError(w, credentialErr)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, h.config.MaxRequestBytes+1))
@@ -127,6 +127,9 @@ func (h *Handler) callUpstream(ctx context.Context, apiKey string, request *anth
 	upstream.Header.Set("anthropic-version", h.config.Upstream.AnthropicVersion)
 	if len(h.config.Upstream.Beta) > 0 {
 		upstream.Header.Set("anthropic-beta", strings.Join(h.config.Upstream.Beta, ","))
+	}
+	for name, value := range h.config.Upstream.ExtraHeaders {
+		upstream.Header.Set(name, value)
 	}
 	response, err := h.client.Do(upstream)
 	if err != nil {
