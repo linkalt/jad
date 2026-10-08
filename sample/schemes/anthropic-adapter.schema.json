@@ -48,7 +48,7 @@
         "system_prefix": {
           "type": "string",
           "default": "",
-          "description": "Text sent as the first system block of every request, as a block of its own, before the caller's instructions. Empty sends nothing extra. A live probe on 2026-10-08 showed a Claude subscription token (credential_file) is answered 429 'Error' unless the request opens with \"You are Claude Code, Anthropic's official CLI for Claude.\"; the same request with that sentence returned 200. This claims an identity the program does not have, so it is off by default and the choice is the account owner's."
+          "description": "Text sent as the first system block of every request, as a block of its own, before the caller's instructions. Empty sends nothing extra. DISCOURAGED. On 2026-10-08 a Claude subscription token (credential_file) was answered 429 'Error' without a system prompt, and 200 for tiny requests whose system prompt was \"You are Claude Code, Anthropic's official CLI for Claude.\" But a real session turn was then refused with 400 'Third-party apps now draw from your extra usage, not your plan limits' (extra usage was disabled for the organization), so the key does not avoid third-party billing. It claims an identity the program does not have, so it is off by default and the choice is the account owner's. For Claude in this harness use an API key instead."
         },
         "expiry_margin_ms": {
           "type": "integer",
