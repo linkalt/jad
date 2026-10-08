@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent.schema.json",
+  "title": "subagent agent.json",
+  "description": "The settings file of one agent folder under tools.native.subagent.agents_dir (Go backend only). Every key is optional: a folder may hold only prompt.md. The agent name is the folder name. The same keys are accepted inline under tools.native.subagent.agents.<name> in setting.json. Relative paths in model and prompt_documents resolve from the folder that holds this file.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "Shown to the model in the tool description, so keep it short."
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Model file for this agent, relative to the session directory (or to the agent's folder for a folder agent) or absolute. Absent means the calling session's model."
+    },
+    "instructions": {
+      "type": "string",
+      "minLength": 1,
+      "description": "System prompt of the agent. The calling session's prompt is not used."
+    },
+    "prompt_documents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "description": "Files appended to the agent's prompt after instructions (and after prompt.md for a folder agent), each separated by a blank line. A relative path is taken from the session's cwd, or from the agent's folder for a folder agent; ~ is expanded. The files are read when the session loads, and a missing file is a configuration error. The calling session's own prompt_documents are not used."
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "description": "Read-only native tools the agent may use. Absent means every enabled one."
+    },
+    "max_tool_rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50000,
+      "default": 30,
+      "description": "Most tool rounds of one run."
+    },
+    "max_run_tokens": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000000000,
+      "description": "Most tokens one run may use before it starts another provider round. Absent means no cap."
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 3600000,
+      "default": 600000,
+      "description": "Wall-clock limit of one run, including provider waits."
+    }
+  },
+  "additionalProperties": false
+}

@@ -1701,19 +1701,24 @@
             "subagent": {
               "type": "object",
               "description": "Go backend only. Lets the model hand a task to a separate read-only agent that runs with a fresh context and returns only its final answer. Needs at least one agent and the tool definition sample/tools/native/subagent.json. A child can use only the enabled read-only native tools (read, grep, glob, fetch, skill), never the subagent tool, so the depth is one.",
-              "required": ["agents"],
+              "anyOf": [{"required": ["agents"]}, {"required": ["agents_dir"]}],
               "properties": {
+                "agents_dir": {
+                  "type": "array",
+                  "items": {"type": "string", "minLength": 1},
+                  "uniqueItems": true,
+                  "description": "Directories holding one folder per agent. A relative path resolves from the session's cwd; ~ is expanded; a directory that does not exist is a configuration error. The folder name is the agent name (1 to 64 letters, digits, underscores or hyphens; folders starting with a dot are skipped). A folder holds agent.json (same keys as an inline agent, see agent.schema.json; relative paths inside it resolve from the folder) and/or prompt.md (the prompt text, placed after instructions and before prompt_documents). A folder with neither is an error. Agents defined here and in agents are all available; the same name twice is an error. Everything is read when the session loads."
+                },
                 "agents": {
                   "type": "object",
-                  "minProperties": 1,
-                  "description": "Agents by name (1 to 64 letters, digits, underscores or hyphens).",
+                  "description": "Agents by name (1 to 64 letters, digits, underscores or hyphens), defined inline. May be empty or absent when agents_dir supplies the agents.",
                   "additionalProperties": {
                     "type": "object",
                     "properties": {
                       "description": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Shown to the model in the tool description, so keep it short."},
-                      "model": {"type": "string", "minLength": 1, "description": "Model file for this agent, relative to the session directory or absolute. Absent means the calling session's model."},
+                      "model": {"type": "string", "minLength": 1, "description": "Model file for this agent, relative to the session directory (or to the agent's folder for a folder agent) or absolute. Absent means the calling session's model."},
                       "instructions": {"type": "string", "minLength": 1, "description": "System prompt of the agent. The calling session's prompt is not used."},
-                      "prompt_documents": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Files appended to the agent's prompt after instructions, each separated by a blank line. A relative path is taken from the session's cwd; ~ is expanded. The files are read when the session loads, and a missing file is a configuration error. The calling session's own prompt_documents are not used."},
+                      "prompt_documents": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Files appended to the agent's prompt after instructions (and after prompt.md for a folder agent), each separated by a blank line. A relative path is taken from the session's cwd, or from the agent's folder for a folder agent; ~ is expanded. The files are read when the session loads, and a missing file is a configuration error. The calling session's own prompt_documents are not used."},
                       "tools": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Read-only native tools the agent may use. Absent means every enabled one."},
                       "max_tool_rounds": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 30, "description": "Most tool rounds of one run."},
                       "max_run_tokens": {"type": "integer", "minimum": 1, "maximum": 1000000000000, "description": "Most tokens one run may use before it starts another provider round. Absent means no cap."},

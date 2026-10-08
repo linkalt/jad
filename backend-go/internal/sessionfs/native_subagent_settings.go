@@ -22,7 +22,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys      = []string{"agents", "result_max_bytes", "max_concurrent", "storage_dir"}
+	nativeSubagentKeys      = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "storage_dir"}
 	nativeSubagentAgentKeys = []string{"description", "model", "tools", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
@@ -36,7 +36,10 @@ type NativeSubagentSettings struct {
 	MaxConcurrent int64
 	// StorageDir holds one transcript directory per child run.
 	StorageDir string
-	// Agents are the configured children in file order.
+	// AgentDirs are the absolute agents_dir directories in configured order.
+	AgentDirs []string
+	// Agents are the configured children: the inline ones in file order, then each
+	// directory's folders in name order.
 	Agents []NativeSubagentAgent
 }
 
@@ -49,9 +52,13 @@ type NativeSubagentAgent struct {
 	Instructions string
 	// PromptDocuments are the absolute paths of the files read into PromptText.
 	PromptDocuments []string
-	// PromptText is the child's whole system prompt: Instructions first, then each
-	// document in order, joined by a blank line. Empty means the child gets none.
+	// PromptText is the child's whole system prompt: Instructions first, then
+	// prompt.md of an agent folder, then each document in order, joined by a blank
+	// line. Empty means the child gets none.
 	PromptText string
+	// Dir is the agent's folder when it was loaded from agents_dir; empty for an
+	// agent defined inline in setting.json.
+	Dir string
 	// Tools names the read-only native tools the child may use. HasTools is false
 	// when the key is absent, which means every read-only native tool.
 	Tools         []string
@@ -117,27 +124,46 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 	if settings.StorageDir, err = normalizeNativeSubagentStorageDir(fields, cwd, toolStorageDir, settingPath); err != nil {
 		return nil, err
 	}
-	agentsRaw, exists := fields["agents"]
-	if !exists || strings.TrimSpace(string(agentsRaw)) == "null" {
-		return nil, configError("%s: %s.agents must define at least one agent", settingPath, section)
-	}
-	names, err := orderedObjectKeys(agentsRaw)
-	if err != nil || len(names) == 0 {
-		return nil, configError("%s: %s.agents must define at least one agent", settingPath, section)
-	}
-	agentFields, err := decodeConfigObject(agentsRaw, settingPath+": "+section+".agents")
-	if err != nil {
+	agentsRaw, hasAgents := fields["agents"]
+	hasAgents = hasAgents && strings.TrimSpace(string(agentsRaw)) != "null"
+	if settings.AgentDirs, err = normalizeSubagentAgentDirs(fields, cwd, settingPath); err != nil {
 		return nil, err
 	}
-	for _, name := range names {
-		if !subagentNamePattern.MatchString(name) {
-			return nil, configError("%s: %s.agents.%s: the name must be 1 to 64 letters, digits, underscores or hyphens", settingPath, section, name)
+	noAgents := configError("%s: %s.agents must define at least one agent", settingPath, section)
+	if !hasAgents && len(settings.AgentDirs) == 0 {
+		return nil, noAgents
+	}
+	taken := make(map[string]string)
+	if hasAgents {
+		names, err := orderedObjectKeys(agentsRaw)
+		if err != nil || (len(names) == 0 && len(settings.AgentDirs) == 0) {
+			return nil, noAgents
 		}
-		agent, err := normalizeNativeSubagentAgent(name, agentFields[name], settingPath, filepath.Dir(settingPath), cwd)
+		agentFields, err := decodeConfigObject(agentsRaw, settingPath+": "+section+".agents")
 		if err != nil {
 			return nil, err
 		}
-		settings.Agents = append(settings.Agents, agent)
+		for _, name := range names {
+			if !subagentNamePattern.MatchString(name) {
+				return nil, configError("%s: %s.agents.%s: the name must be 1 to 64 letters, digits, underscores or hyphens", settingPath, section, name)
+			}
+			agent, err := normalizeNativeSubagentAgent(name, agentFields[name], settingPath, filepath.Dir(settingPath), cwd)
+			if err != nil {
+				return nil, err
+			}
+			taken[name] = settingPath + " (" + section + ".agents)"
+			settings.Agents = append(settings.Agents, agent)
+		}
+	}
+	for _, dir := range settings.AgentDirs {
+		agents, err := loadSubagentDirAgents(dir, settingPath, taken)
+		if err != nil {
+			return nil, err
+		}
+		settings.Agents = append(settings.Agents, agents...)
+	}
+	if len(settings.Agents) == 0 {
+		return nil, configError("%s: %s.agents_dir holds no agent folder; add a folder with an agent.json or a prompt.md, or define agents", settingPath, section)
 	}
 	return settings, nil
 }
@@ -180,6 +206,27 @@ func normalizeNativeSubagentAgent(name string, raw json.RawMessage, settingPath,
 			return NativeSubagentAgent{}, unsupportedToolKey(settingPath+": "+section, key, nativeSubagentAgentKeys, "")
 		}
 	}
+	return buildNativeSubagentAgent(name, fields, subagentSource{path: settingPath, section: section, modelBase: settingDir, documentBase: cwd}, "", "")
+}
+
+// subagentSource says where an agent was defined, for error messages and for
+// resolving the relative paths it names.
+type subagentSource struct {
+	// path and section start every error: "<path>: <section>.<key> ...".
+	path    string
+	section string
+	// modelBase and documentBase are what a relative model and a relative
+	// prompt_documents entry resolve from.
+	modelBase    string
+	documentBase string
+}
+
+// buildNativeSubagentAgent turns already checked fields into an agent. promptFile is
+// the text of an agent folder's prompt.md (empty for an inline agent) and
+// promptFilePath its path.
+func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, source subagentSource, promptFile, promptFilePath string) (NativeSubagentAgent, error) {
+	settingPath, section, settingDir, cwd := source.path, source.section, source.modelBase, source.documentBase
+	var err error
 	agent := NativeSubagentAgent{Name: name}
 	if agent.Description, err = optionalSubagentString(fields, "description", settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
@@ -197,8 +244,11 @@ func normalizeNativeSubagentAgent(name string, raw json.RawMessage, settingPath,
 	if agent.Instructions, err = optionalSubagentString(fields, "instructions", settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
-	if agent.PromptDocuments, agent.PromptText, err = loadSubagentPrompt(fields, agent.Instructions, cwd, settingPath, section); err != nil {
+	if agent.PromptDocuments, agent.PromptText, err = loadSubagentPrompt(fields, []string{agent.Instructions, promptFile}, cwd, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
+	}
+	if strings.TrimSpace(promptFile) != "" {
+		agent.PromptDocuments = append([]string{promptFilePath}, agent.PromptDocuments...)
 	}
 	if agent.Tools, agent.HasTools, err = optionalSubagentTools(fields, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
@@ -218,18 +268,20 @@ func normalizeNativeSubagentAgent(name string, raw json.RawMessage, settingPath,
 // loadSubagentPrompt reads the agent's prompt_documents the way the session reads its
 // own: a relative path is taken from the session's cwd and ~ is expanded. The files
 // are read when the settings load, so a missing file fails the session at once and
-// not in the middle of a child run. The prompt is the instructions text first, then
-// each document, joined by a blank line.
-func loadSubagentPrompt(fields map[string]json.RawMessage, instructions, cwd, settingPath, section string) ([]string, string, error) {
+// not in the middle of a child run. The prompt is the leading texts (the instructions,
+// then an agent folder's prompt.md) and then each document, joined by a blank line.
+func loadSubagentPrompt(fields map[string]json.RawMessage, leading []string, cwd, settingPath, section string) ([]string, string, error) {
 	var paths []string
 	if raw, exists := fields["prompt_documents"]; exists && strings.TrimSpace(string(raw)) != "null" {
 		if err := json.Unmarshal(raw, &paths); err != nil || paths == nil {
 			return nil, "", configError("%s: %s.prompt_documents must be an array of file paths", settingPath, section)
 		}
 	}
-	parts := make([]string, 0, len(paths)+1)
-	if instructions != "" {
-		parts = append(parts, instructions)
+	parts := make([]string, 0, len(paths)+len(leading))
+	for _, text := range leading {
+		if strings.TrimSpace(text) != "" {
+			parts = append(parts, text)
+		}
 	}
 	resolvedPaths := make([]string, 0, len(paths))
 	seen := make(map[string]struct{}, len(paths))

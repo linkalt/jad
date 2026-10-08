@@ -41,6 +41,8 @@ type providerRequest struct {
 	Tools []string
 	Input []json.RawMessage
 	Text  string
+	// Descriptions maps a tool name to the description the model was shown.
+	Descriptions map[string]string
 	// Authorization is the header the client sent, so a test can tell which
 	// credential reached which server.
 	Authorization string
@@ -64,10 +66,15 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		record := providerRequest{Model: body.Model, Input: body.Input, Authorization: r.Header.Get("Authorization")}
 		for _, tool := range body.Tools {
 			var named struct {
-				Name string `json:"name"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
 			}
 			_ = json.Unmarshal(tool, &named)
 			record.Tools = append(record.Tools, named.Name)
+			if record.Descriptions == nil {
+				record.Descriptions = map[string]string{}
+			}
+			record.Descriptions[named.Name] = named.Description
 		}
 		for _, item := range body.Input {
 			record.Text += string(item) + "\n"
@@ -244,6 +251,10 @@ func buildSubagentFixture(t *testing.T, agentSetting map[string]any, splitChild 
 		t.Fatal(err)
 	}
 	subagent := map[string]any{"agents": map[string]any{"explore": agentSetting}}
+	if dir, ok := agentSetting["__agents_dir"].(string); ok {
+		// The test supplies the agents as folders; nothing is defined inline.
+		subagent = map[string]any{"agents_dir": []string{dir}}
+	}
 	setting, err := json.Marshal(map[string]any{
 		"cwd": workspace, "max_tool_rounds": 4,
 		"tool_definition_paths": []string{"read.json", "subagent.json"},
@@ -276,6 +287,10 @@ func buildSubagentFixture(t *testing.T, agentSetting map[string]any, splitChild 
 	for file, model := range map[string]map[string]any{"model.json": parentModel, "child.json": childModel} {
 		body, _ := json.Marshal(model)
 		writeFile(t, filepath.Join(sessionDir, file), body)
+		if dir, ok := agentSetting["__agents_dir"].(string); ok && file == "child.json" {
+			// An agent folder names its model relative to itself.
+			writeFile(t, filepath.Join(workspace, dir, "explore", file), body)
+		}
 	}
 
 	config, err := LoadConfig(sessionfs.LoadOptions{
@@ -299,6 +314,9 @@ func buildSubagentFixture(t *testing.T, agentSetting map[string]any, splitChild 
 
 func writeFile(t *testing.T, path string, data []byte) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -451,6 +469,43 @@ func TestSubagentPromptIsItsInstructionsPlusDocumentsAndNeverTheParents(t *testi
 	}
 	if !strings.Contains(child[1].Text, "CHILD RULE: report file paths only.") {
 		t.Fatalf("the child's second round lost its prompt:\n%s", child[1].Text)
+	}
+}
+
+func TestSubagentLoadedFromAFolderRunsWithTheFoldersModelAndPrompt(t *testing.T) {
+	// The folder's model file is found next to agent.json, and its prompt is
+	// prompt.md followed by the listed document; the parent's models and prompt are not used.
+	f := newSubagentFixtureWithFiles(t, map[string]any{"__agents_dir": "agent-files"}, map[string]string{
+		"agent-files/explore/agent.json": `{"description":"Finds facts.","model":"child.json","prompt_documents":["format.md"]}`,
+		"agent-files/explore/prompt.md":  "FOLDER PROMPT: you are the explorer.",
+		"agent-files/explore/format.md":  "FOLDER FORMAT: answer in one line.",
+	})
+
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	parent := f.provider.forModel("parent-model")
+	child := f.provider.forModel("child-model")
+	if len(parent) != 2 || len(child) != 2 {
+		t.Fatalf("provider requests: parent %d (want 2), child %d (want 2)", len(parent), len(child))
+	}
+	if strings.Join(child[0].Tools, ",") != "read" {
+		t.Fatalf("child tools = %v, want read only", child[0].Tools)
+	}
+	prompt := child[0].Text
+	first := strings.Index(prompt, "FOLDER PROMPT: you are the explorer.")
+	second := strings.Index(prompt, "FOLDER FORMAT: answer in one line.")
+	if first < 0 || second < first {
+		t.Fatalf("the child's request lacks prompt.md then format.md (at %d, %d):\n%s", first, second, prompt)
+	}
+	for _, request := range parent {
+		if strings.Contains(request.Text, "FOLDER PROMPT") || strings.Contains(request.Text, "FOLDER FORMAT") {
+			t.Fatalf("the folder's prompt leaked into a parent request:\n%s", request.Text)
+		}
+	}
+	// The agent list shown to the model comes from the folder's agent.json.
+	if description := parent[0].Descriptions["subagent"]; !strings.Contains(description, "\n- explore: Finds facts.") {
+		t.Fatalf("the tool description lacks the folder agent: %q", description)
 	}
 }
 
