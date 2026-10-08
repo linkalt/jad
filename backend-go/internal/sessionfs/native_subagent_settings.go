@@ -40,7 +40,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "storage_dir", "statecontext"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "storage_dir", "statecontext"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -77,6 +77,11 @@ type NativeSubagentSettings struct {
 	// survive a server restart. A run that was going at the restart is reported as
 	// lost. The zero value of this struct means "memory only"; the loader sets true.
 	PersistRuns bool
+	// DeleteTranscripts deletes a child's transcript folder from the storage directory
+	// when keep_finished drops its run, so the folders stop growing. Off by default:
+	// the transcript is the record of what a child did, and nothing deletes it unless
+	// asked. The zero value is the default.
+	DeleteTranscripts bool
 	// ListMaxBytes is the most bytes of agent list the tool description may carry:
 	// the full list when it fits, else the names, else a count. Zero never lists
 	// inline, so the model has to ask. The zero value of this struct therefore means
@@ -195,6 +200,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.PersistRuns, err = bashBool(fields, "persist_runs", true, settingPath+": "+section); err != nil {
+		return nil, err
+	}
+	if settings.DeleteTranscripts, err = bashBool(fields, "delete_transcripts", false, settingPath+": "+section); err != nil {
 		return nil, err
 	}
 	if settings.StorageDir, err = normalizeNativeSubagentStorageDir(fields, cwd, toolStorageDir, settingPath); err != nil {

@@ -441,9 +441,13 @@ func (r *Resolver) sharedSubagentManager(config sessionfs.SessionConfig) *native
 	if config.NativeSubagent.PersistRuns {
 		manager = native.NewPersistentSubagentManager(native.SubagentManagerOptions{
 			StorageDir: config.NativeSubagent.StorageDir, Keep: int(config.NativeSubagent.KeepFinished), Logger: r.logger,
+			DeleteTranscripts: config.NativeSubagent.DeleteTranscripts,
 		})
 	} else {
 		manager = native.NewSubagentManager()
+		if config.NativeSubagent.DeleteTranscripts {
+			manager.DeleteTranscriptsUnder(config.NativeSubagent.StorageDir)
+		}
 	}
 	r.subagentManagers[storageKey] = manager
 	return manager

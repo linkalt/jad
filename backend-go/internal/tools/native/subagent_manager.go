@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -55,6 +56,9 @@ type SubagentManager struct {
 	// store keeps a manifest per run so ids survive a restart; nil keeps runs in
 	// memory only.
 	store *subagentStore
+	// transcriptRoot, when set, is the storage directory whose child folders are
+	// deleted as runs are dropped; see DeleteTranscriptsUnder.
+	transcriptRoot string
 }
 
 // NewSubagentManager returns an empty manager that keeps its runs in memory only.
@@ -71,6 +75,9 @@ type SubagentManagerOptions struct {
 	// Keep is how many ended runs stay, as in tools.native.subagent.keep_finished.
 	Keep   int
 	Logger *slog.Logger
+	// DeleteTranscripts deletes a run's transcript folder when keep_finished drops the
+	// run, including at startup. Off keeps every folder.
+	DeleteTranscripts bool
 }
 
 // NewPersistentSubagentManager returns a manager that writes a manifest per run and
@@ -80,6 +87,9 @@ type SubagentManagerOptions struct {
 func NewPersistentSubagentManager(options SubagentManagerOptions) *SubagentManager {
 	manager := NewSubagentManager()
 	manager.store = newSubagentStore(options.StorageDir, options.Logger)
+	if options.DeleteTranscripts {
+		manager.transcriptRoot = filepath.Clean(options.StorageDir)
+	}
 	manager.recover(options.Keep)
 	return manager
 }
@@ -107,18 +117,65 @@ func (m *SubagentManager) recover(keep int) {
 		}
 		return a.id < b.id
 	})
+	var dropped []string
 	for len(m.finished) > keep {
-		m.dropOldestLocked()
+		if dir := m.dropOldestLocked(); dir != "" {
+			dropped = append(dropped, dir)
+		}
 	}
+	m.removeTranscripts(dropped)
 }
 
 // dropOldestLocked forgets the oldest ended run and its manifest; the caller holds mu or
-// is the only user of the manager. The child's transcript folder is left in place.
-func (m *SubagentManager) dropOldestLocked() {
+// is the only user of the manager. It returns the transcript folder to delete, or "" when
+// the folder stays; the caller deletes it after releasing mu, so a slow disk never holds
+// the lock.
+func (m *SubagentManager) dropOldestLocked() string {
 	id := m.finished[0]
 	m.finished = m.finished[1:]
+	run := m.runs[id]
 	delete(m.runs, id)
 	m.store.remove(id)
+	if run == nil {
+		return ""
+	}
+	run.mu.Lock()
+	dir := run.dir
+	run.mu.Unlock()
+	if !transcriptFolderUnder(m.transcriptRoot, dir) {
+		return ""
+	}
+	return dir
+}
+
+// DeleteTranscriptsUnder makes the manager delete a run's transcript folder when
+// keep_finished drops the run, which is tools.native.subagent.delete_transcripts. Only a
+// folder directly under root is ever deleted. Without it the folders stay and grow.
+func (m *SubagentManager) DeleteTranscriptsUnder(root string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if root == "" {
+		m.transcriptRoot = ""
+		return
+	}
+	m.transcriptRoot = filepath.Clean(root)
+}
+
+// removeTranscripts deletes transcript folders chosen by dropOldestLocked. A failure is
+// logged and does not stop the others.
+func (m *SubagentManager) removeTranscripts(dirs []string) {
+	for _, dir := range dirs {
+		if err := os.RemoveAll(dir); err != nil {
+			m.logger().Warn("delete sub-agent transcript folder", "dir", dir, "error", err)
+		}
+	}
+}
+
+func (m *SubagentManager) logger() *slog.Logger {
+	if m.store != nil && m.store.logger != nil {
+		return m.store.logger
+	}
+	return slog.New(slog.DiscardHandler)
 }
 
 // subagentRun is one child, from start to end.
@@ -394,14 +451,19 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	// The manifest is written before the waiters wake, so a read of the file after a
 	// wait returns sees the end.
 	run.store.save(run)
-	close(run.done)
 
+	var dropped []string
 	m.mu.Lock()
 	m.finished = append(m.finished, run.id)
 	for len(m.finished) > spec.keep {
-		m.dropOldestLocked()
+		if dir := m.dropOldestLocked(); dir != "" {
+			dropped = append(dropped, dir)
+		}
 	}
 	m.mu.Unlock()
+	m.removeTranscripts(dropped)
+	// Waiters wake last, so a wait that returns sees the disk already settled.
+	close(run.done)
 }
 
 // get returns the run with the given id, or nil. A run of another session is nil too,

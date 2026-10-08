@@ -366,6 +366,13 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		delete(agentSetting, "__list_max_bytes")
 		subagent["list_max_bytes"] = budget
 	}
+	if extra, ok := agentSetting["__subagent_settings"].(map[string]any); ok {
+		// The test sets tools.native.subagent keys beside the agents, such as persist_runs.
+		delete(agentSetting, "__subagent_settings")
+		for key, value := range extra {
+			subagent[key] = value
+		}
+	}
 	if dir, ok := agentSetting["__agents_dir"].(string); ok {
 		// The test supplies the agents as folders; nothing is defined inline.
 		subagent = map[string]any{"agents_dir": []string{dir}}
@@ -1233,5 +1240,45 @@ func TestSubagentRunStillGoingAtAGracefulRestartIsReportedStopped(t *testing.T) 
 	last := parent[len(parent)-1].Text
 	if !strings.Contains(last, "was stopped") || strings.Contains(last, "subagent_lost") {
 		t.Errorf("a child cancelled by a graceful shutdown must read as stopped:\n%s", last)
+	}
+}
+
+func countChildFolders(t *testing.T, f subagentFixture) int {
+	t.Helper()
+	folders, err := filepath.Glob(filepath.Join(f.workspace, ".subagents", "*", "messages.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(folders)
+}
+
+func TestSubagentDeleteTranscriptsKeepsOnlyTheFoldersOfKeptRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		extra     map[string]any
+		folder    int
+		manifests int
+	}{
+		{"off by default", map[string]any{"keep_finished": 1}, 3, 1},
+		{"on", map[string]any{"keep_finished": 1, "delete_transcripts": true}, 1, 1},
+		{"on without manifests", map[string]any{"keep_finished": 1, "delete_transcripts": true, "persist_runs": false}, 1, 0},
+		{"off without manifests", map[string]any{"keep_finished": 1, "persist_runs": false}, 3, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSubagentFixture(t, map[string]any{"model": "child.json", "__subagent_settings": tc.extra})
+			// One response with three subagent calls: the fake parent answers once it has
+			// seen a tool result, so separate runs would start only one child.
+			f.provider.parentCalls = 3
+			if body := f.run(t); !strings.Contains(body, "event: completed") {
+				t.Fatalf("run did not complete:\n%s", body)
+			}
+			if got := countChildFolders(t, f); got != tc.folder {
+				t.Errorf("child transcript folders = %d, want %d", got, tc.folder)
+			}
+			manifests, _ := filepath.Glob(filepath.Join(f.workspace, ".subagents", ".runs", "sub_*.json"))
+			if len(manifests) != tc.manifests {
+				t.Errorf("manifests = %d, want %d", len(manifests), tc.manifests)
+			}
+		})
 	}
 }

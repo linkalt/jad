@@ -165,9 +165,23 @@ func (s *subagentStore) read(path, id string) (subagentManifest, error) {
 	return manifest, nil
 }
 
-func (s *subagentStore) inside(dir string) bool {
-	relative, err := filepath.Rel(s.root, filepath.Clean(dir))
+func (s *subagentStore) inside(dir string) bool { return insideDirectory(s.root, dir) }
+
+// insideDirectory reports whether dir lies strictly below root.
+func insideDirectory(root, dir string) bool {
+	relative, err := filepath.Rel(root, filepath.Clean(dir))
 	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+// transcriptFolderUnder reports whether dir is a child's transcript folder directly
+// under the storage directory: one path element below it, and not the manifest folder.
+// Only such a folder is ever deleted, so a bad manifest cannot aim a delete elsewhere.
+func transcriptFolderUnder(root, dir string) bool {
+	if root == "" || dir == "" || !insideDirectory(root, dir) {
+		return false
+	}
+	relative, err := filepath.Rel(root, filepath.Clean(dir))
+	return err == nil && !strings.ContainsRune(relative, filepath.Separator) && relative != subagentManifestDir
 }
 
 func knownSubagentRunState(state string) bool {

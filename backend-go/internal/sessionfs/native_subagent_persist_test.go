@@ -35,3 +35,27 @@ func TestSubagentStateContextAcceptsTheLostState(t *testing.T) {
 		t.Fatalf("states = %+v, %v", got, err)
 	}
 }
+
+func TestSubagentDeleteTranscriptsDefaultsToOffAndCanBeTurnedOn(t *testing.T) {
+	off, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"a":{}}}`), "/s/setting.json", "/w", "")
+	if err != nil || off.DeleteTranscripts {
+		t.Fatalf("default delete_transcripts = %v, %v; want false", off != nil && off.DeleteTranscripts, err)
+	}
+	on, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"delete_transcripts":true,"agents":{"a":{}}}`), "/s/setting.json", "/w", "")
+	if err != nil || !on.DeleteTranscripts {
+		t.Fatalf("delete_transcripts true = %v, %v", on != nil && on.DeleteTranscripts, err)
+	}
+	null, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"delete_transcripts":null,"agents":{"a":{}}}`), "/s/setting.json", "/w", "")
+	if err != nil || null.DeleteTranscripts {
+		t.Fatalf("delete_transcripts null = %v, %v; want the default false", null != nil && null.DeleteTranscripts, err)
+	}
+}
+
+func TestSubagentDeleteTranscriptsRejectsANonBoolean(t *testing.T) {
+	for _, value := range []string{`"yes"`, `1`, `{}`} {
+		_, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"delete_transcripts":`+value+`,"agents":{"a":{}}}`), "/s/setting.json", "/w", "")
+		if err == nil || !strings.Contains(err.Error(), "tools.native.subagent.delete_transcripts must be a boolean") {
+			t.Errorf("delete_transcripts %s: err = %v", value, err)
+		}
+	}
+}
