@@ -40,16 +40,22 @@ func (r *Resolver) ResolveMaintenance(ctx context.Context, reference, profile st
 	return httpapi.ResolvedMutation{
 		Reference: location.Reference,
 		Profile:   config.Profile,
-		Session:   boundMutation{shared: shared, config: config, processManager: processManager, taskStore: taskStore, memoryStore: memoryStore},
+		Session: boundMutation{
+			shared: shared, config: config, processManager: processManager, taskStore: taskStore, memoryStore: memoryStore,
+			subagentManager: r.sharedSubagentManager(config), owner: sessionKey(location.Reference, config.Profile),
+		},
 	}, nil
 }
 
 type boundMutation struct {
-	shared         *sharedSession
-	config         sessionfs.SessionConfig
-	processManager native.ProcessManager
-	taskStore      *native.TaskStore
-	memoryStore    *native.MemoryStore
+	shared          *sharedSession
+	config          sessionfs.SessionConfig
+	processManager  native.ProcessManager
+	taskStore       *native.TaskStore
+	memoryStore     *native.MemoryStore
+	subagentManager *native.SubagentManager
+	// owner is the session key of the sub-agent runs this session started.
+	owner string
 }
 
 func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse, error) {
@@ -81,7 +87,10 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 		return result, fmt.Errorf("compact session transcript: %w", err)
 	}
 	if compacted.Compacted {
-		snapshot, include, err := collectStateContextSnapshot(m.config, m.processManager, m.taskStore, "compaction", m.memoryStore)
+		snapshot, include, err := collectStateContextSnapshot(m.config, stateContextSources{
+			process: m.processManager, task: m.taskStore, memory: m.memoryStore,
+			subagent: m.subagentManager, owner: m.owner,
+		}, "compaction")
 		if err != nil {
 			return result, fmt.Errorf("collect state context after compaction: %w", err)
 		}

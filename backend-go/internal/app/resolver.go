@@ -74,9 +74,36 @@ type boundRunner struct {
 	resolver       *Resolver
 	shared         *sharedSession
 	config         sessionfs.SessionConfig
+	reference      string
 	processManager native.ProcessManager
 	taskStore      *native.TaskStore
 	memoryStore    *native.MemoryStore
+}
+
+// sessionKey names one session and profile, like the HTTP run registry's key. It is the
+// owner of the sub-agent runs the session starts, so a stop or reset of the session
+// reaches exactly those.
+func sessionKey(reference, profile string) string {
+	return reference + "\x00" + profile
+}
+
+// CancelSessionChildren asks every sub-agent run a session started to stop, and
+// reports how many were still going. The HTTP layer calls it when the user stops or
+// resets the session: a child handed off earlier would otherwise keep spending after
+// the user asked for everything to end. It does not wait for the children.
+func (r *Resolver) CancelSessionChildren(reference, profile string) int {
+	r.mu.Lock()
+	managers := make([]*native.SubagentManager, 0, len(r.subagentManagers))
+	for _, manager := range r.subagentManagers {
+		managers = append(managers, manager)
+	}
+	r.mu.Unlock()
+	owner := sessionKey(reference, profile)
+	cancelled := 0
+	for _, manager := range managers {
+		cancelled += manager.CancelOwner(owner)
+	}
+	return cancelled
 }
 
 // NewResolver returns a filesystem-backed resolver. Store and runner instances
@@ -225,7 +252,7 @@ func (r *Resolver) Resolve(ctx context.Context, reference, profile, modelPath st
 	return httpapi.ResolvedSession{
 		Reference: location.Reference,
 		Profile:   config.Profile,
-		Runner:    boundRunner{resolver: r, shared: shared, config: config},
+		Runner:    boundRunner{resolver: r, shared: shared, config: config, reference: location.Reference},
 	}, nil
 }
 
@@ -628,6 +655,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	}
 	options.ToolExecution.WorkspaceRoot = r.config.WorkingDir
 	options.ToolExecution.SessionDir = filepath.Dir(r.config.SettingPath)
+	options.ToolExecution.SessionKey = sessionKey(r.reference, r.config.Profile)
 	options.ToolExecution.OnInteractionResolved = func(identity tools.InteractionIdentity, answer tools.InteractionAnswer, proposed json.RawMessage) error {
 		if answer.Decision != tools.InteractionAccept && answer.Decision != tools.InteractionUpdate {
 			return nil
@@ -657,7 +685,10 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		return r.shared.compactPreservingUsage(r.config, compaction)
 	}
 	options.RefreshStateContext = func(context.Context) (*session.StateContextPrompt, error) {
-		snapshot, include, err := collectStateContextSnapshot(r.config, r.processManager, r.taskStore, "compaction", r.memoryStore)
+		snapshot, include, err := collectStateContextSnapshot(r.config, stateContextSources{
+			process: r.processManager, task: r.taskStore, memory: r.memoryStore,
+			subagent: r.resolver.sharedSubagentManager(r.config), owner: sessionKey(r.reference, r.config.Profile),
+		}, "compaction")
 		if err != nil {
 			return nil, fmt.Errorf("collect state context after automatic compaction: %w", err)
 		}

@@ -20,17 +20,14 @@ func normalizeStateContextSettings(
 	settingPath string,
 	process *NativeProcessSettings,
 	task *NativeTaskSettings,
-	memorySettings ...*NativeMemorySettings,
+	memory *NativeMemorySettings,
+	subagent *NativeSubagentSettings,
 ) (StateContextSettings, error) {
 	settings := StateContextSettings{
 		Trigger:  []string{"compaction"},
 		Tools:    []string{},
 		Role:     "developer",
 		MaxBytes: defaultStateContextMaxBytes,
-	}
-	var memory *NativeMemorySettings
-	if len(memorySettings) > 0 {
-		memory = memorySettings[0]
 	}
 	raw, exists := setting["statecontext"]
 	if !exists {
@@ -69,14 +66,14 @@ func normalizeStateContextSettings(
 	if value, exists := fields["tools"]; exists && strings.TrimSpace(string(value)) != "null" {
 		var rawTools []json.RawMessage
 		if err := json.Unmarshal(value, &rawTools); err != nil || rawTools == nil {
-			return StateContextSettings{}, configError("%s: statecontext.tools must contain only task, memory, or process", settingPath)
+			return StateContextSettings{}, configError("%s: statecontext.tools must contain only task, memory, process, or subagent", settingPath)
 		}
 		settings.Tools = make([]string, 0, len(rawTools))
 		seen := make(map[string]struct{}, len(rawTools))
 		for _, rawTool := range rawTools {
 			var name string
-			if err := json.Unmarshal(rawTool, &name); err != nil || (name != "task" && name != "memory" && name != "process") {
-				return StateContextSettings{}, configError("%s: statecontext.tools must contain only task, memory, or process", settingPath)
+			if err := json.Unmarshal(rawTool, &name); err != nil || (name != "task" && name != "memory" && name != "process" && name != "subagent") {
+				return StateContextSettings{}, configError("%s: statecontext.tools must contain only task, memory, process, or subagent", settingPath)
 			}
 			if _, exists := seen[name]; !exists {
 				settings.Tools = append(settings.Tools, name)
@@ -108,6 +105,10 @@ func normalizeStateContextSettings(
 			case "task":
 				if task == nil {
 					return StateContextSettings{}, configError("%s: statecontext provider task requires tools.native.task", settingPath)
+				}
+			case "subagent":
+				if subagent == nil {
+					return StateContextSettings{}, configError("%s: statecontext provider subagent requires tools.native.subagent", settingPath)
 				}
 			case "memory":
 				if memory == nil {

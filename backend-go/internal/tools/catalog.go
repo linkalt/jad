@@ -24,10 +24,14 @@ type Definition struct {
 // ExecutionContext carries per-call filesystem roots without coupling tools to
 // the HTTP or session packages.
 type ExecutionContext struct {
-	CallID                string
-	ToolName              string
-	WorkspaceRoot         string
-	SessionDir            string
+	CallID        string
+	ToolName      string
+	WorkspaceRoot string
+	SessionDir    string
+	// SessionKey identifies the session and profile the call belongs to. A tool that
+	// keeps state beyond one call uses it to scope that state, so a user stop or a
+	// reset of this session reaches only its own state.
+	SessionKey            string
 	RequestInteraction    InteractionHandler
 	OnInteractionResolved InteractionResolvedHandler
 	// RequestApproval decides whether a call to a tool whose Approval is "ask"

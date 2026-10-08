@@ -278,11 +278,17 @@ func TestSubagentCountsRunningChildrenAcrossToolsSharingAManager(t *testing.T) {
 func TestSubagentKeepsOnlyTheNewestFinishedRuns(t *testing.T) {
 	settings := subagentSettings(agentNamed("explore"))
 	settings.KeepFinished = 2
-	catalog, _ := buildSubagentCatalog(t, settings, &fakeLauncher{}, readOnlyTool("read"))
+	// Each child waits for a token, so the call that starts it always hands off: with an
+	// instant child, a zero wait could return the answer and no id.
+	proceed := make(chan struct{})
+	catalog, _ := buildSubagentCatalog(t, settings, &fakeLauncher{run: func(context.Context, SubagentRequest) (SubagentResult, error) {
+		<-proceed
+		return SubagentResult{Text: "found it", Rounds: 2, Tokens: 1234}, nil
+	}}, readOnlyTool("read"))
 	var ids []string
 	for range 4 {
-		// A zero wait detaches, so the id exists even though the child is quick.
 		ids = append(ids, runIDOf(t, subagentCall(t, catalog, `{"task":"x","wait_ms":0}`)))
+		proceed <- struct{}{}
 		waitUntilListed(t, catalog, ids[len(ids)-1], "done")
 	}
 	for index, id := range ids {
@@ -351,11 +357,14 @@ func TestSubagentTheRunListKeepsOnlyAShortTaskPreview(t *testing.T) {
 
 func TestSubagentCutsALateAnswerToTheResultLimit(t *testing.T) {
 	long := strings.Repeat("é", 2000)
+	proceed := make(chan struct{})
 	launcher := &fakeLauncher{run: func(context.Context, SubagentRequest) (SubagentResult, error) {
+		<-proceed
 		return SubagentResult{Text: long, Rounds: 1}, nil
 	}}
 	catalog, _ := buildSubagentCatalog(t, subagentSettings(agentNamed("explore")), launcher, readOnlyTool("read"))
 	id := runIDOf(t, subagentCall(t, catalog, `{"task":"x","wait_ms":0}`))
+	close(proceed)
 	waitUntilListed(t, catalog, id, "done")
 	out := subagentCall(t, catalog, `{"id":"`+id+`"}`)
 	if !strings.Contains(out, "truncated: true") {

@@ -30,13 +30,22 @@ const (
 	maxNativeSubagentKeepDone      int64 = 1000
 	defaultNativeSubagentMaxQueued int64 = 32
 	maxNativeSubagentMaxQueued     int64 = 1024
+	// The state-context section lists the session's runs after a compaction, so the
+	// model still knows the ids it was given.
+	defaultNativeSubagentStateLimit int64 = 20
+	maxNativeSubagentStateLimit     int64 = 100_000
 	// maxNativeSubagentDescriptionChars bounds the text each agent adds to the tool
 	// description, which is sent to the model on every request.
 	maxNativeSubagentDescriptionChars = 500
 )
 
 var (
-	nativeSubagentKeys      = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "storage_dir"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "storage_dir", "statecontext"}
+	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
+	defaultNativeSubagentStateNames = []string{"queued", "running"}
+	allowedNativeSubagentStates     = map[string]struct{}{
+		"queued": {}, "running": {}, "done": {}, "failed": {}, "timed_out": {}, "stopped": {},
+	}
 	nativeSubagentAgentKeys = []string{"description", "model", "tools", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
@@ -71,11 +80,21 @@ type NativeSubagentSettings struct {
 	ListMaxBytes int64
 	// StorageDir holds one transcript directory per child run.
 	StorageDir string
+	// StateContext bounds the run records copied into a compaction state-context
+	// snapshot when statecontext.tools lists subagent.
+	StateContext NativeSubagentStateContextSettings
 	// AgentDirs are the absolute agents_dir directories in configured order.
 	AgentDirs []string
 	// Agents are the configured children: the inline ones in file order, then each
 	// directory's folders in name order.
 	Agents []NativeSubagentAgent
+}
+
+// NativeSubagentStateContextSettings selects which of the session's runs a
+// state-context snapshot lists, and how many.
+type NativeSubagentStateContextSettings struct {
+	States []string
+	Limit  int64
 }
 
 // NativeSubagentAgent is one configured child agent.
@@ -174,6 +193,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 	if settings.StorageDir, err = normalizeNativeSubagentStorageDir(fields, cwd, toolStorageDir, settingPath); err != nil {
 		return nil, err
 	}
+	if settings.StateContext, err = normalizeNativeSubagentStateContext(fields["statecontext"], settingPath); err != nil {
+		return nil, err
+	}
 	agentsRaw, hasAgents := fields["agents"]
 	hasAgents = hasAgents && strings.TrimSpace(string(agentsRaw)) != "null"
 	if settings.AgentDirs, err = normalizeSubagentAgentDirs(fields, cwd, settingPath); err != nil {
@@ -214,6 +236,45 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 	}
 	if len(settings.Agents) == 0 {
 		return nil, configError("%s: %s.agents_dir holds no agent folder; add a folder with an agent.json or a prompt.md, or define agents", settingPath, section)
+	}
+	return settings, nil
+}
+
+func normalizeNativeSubagentStateContext(raw json.RawMessage, settingPath string) (NativeSubagentStateContextSettings, error) {
+	settings := NativeSubagentStateContextSettings{States: append([]string(nil), defaultNativeSubagentStateNames...), Limit: defaultNativeSubagentStateLimit}
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return settings, nil
+	}
+	const section = "tools.native.subagent.statecontext"
+	fields, err := decodeConfigObject(raw, settingPath+": "+section)
+	if err != nil {
+		return NativeSubagentStateContextSettings{}, configError("%s: %s must be an object", settingPath, section)
+	}
+	for key := range fields {
+		if key != "states" && key != "limit" {
+			return NativeSubagentStateContextSettings{}, unsupportedToolKey(settingPath+": "+section, key, []string{"states", "limit"}, "")
+		}
+	}
+	if value, exists := fields["states"]; exists && strings.TrimSpace(string(value)) != "null" {
+		var names []string
+		if err := json.Unmarshal(value, &names); err != nil || names == nil {
+			return NativeSubagentStateContextSettings{}, configError("%s: %s.states must contain run states", settingPath, section)
+		}
+		states := make([]string, 0, len(names))
+		seen := make(map[string]struct{}, len(names))
+		for _, name := range names {
+			if _, ok := allowedNativeSubagentStates[name]; !ok {
+				return NativeSubagentStateContextSettings{}, configError("%s: %s.states must contain run states (queued, running, done, failed, timed_out, stopped)", settingPath, section)
+			}
+			if _, duplicate := seen[name]; !duplicate {
+				states = append(states, name)
+				seen[name] = struct{}{}
+			}
+		}
+		settings.States = states
+	}
+	if settings.Limit, err = configuredInteger(fields, "limit", defaultNativeSubagentStateLimit, 1, maxNativeSubagentStateLimit, settingPath, section); err != nil {
+		return NativeSubagentStateContextSettings{}, err
 	}
 	return settings, nil
 }

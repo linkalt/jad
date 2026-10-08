@@ -9,7 +9,7 @@ import (
 
 func TestNormalizeStateContextSettingsDefaultsAndProcessProvider(t *testing.T) {
 	const settingPath = "/session/setting.json"
-	defaults, err := normalizeStateContextSettings(map[string]json.RawMessage{}, settingPath, nil, nil)
+	defaults, err := normalizeStateContextSettings(map[string]json.RawMessage{}, settingPath, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("normalizeStateContextSettings(defaults) error = %v", err)
 	}
@@ -20,7 +20,7 @@ func TestNormalizeStateContextSettingsDefaultsAndProcessProvider(t *testing.T) {
 	setting := map[string]json.RawMessage{
 		"statecontext": json.RawMessage(`{"enabled":true,"trigger":["compaction","compaction"],"tools":["process","process"],"role":"system","max_bytes":2048}`),
 	}
-	configured, err := normalizeStateContextSettings(setting, settingPath, &NativeProcessSettings{}, nil)
+	configured, err := normalizeStateContextSettings(setting, settingPath, &NativeProcessSettings{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("normalizeStateContextSettings(process) error = %v", err)
 	}
@@ -41,7 +41,7 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 		`{"max_bytes":1023}`,
 		`{"max_bytes":10485761}`,
 	} {
-		_, err := normalizeStateContextSettings(map[string]json.RawMessage{"statecontext": json.RawMessage(raw)}, settingPath, nil, nil)
+		_, err := normalizeStateContextSettings(map[string]json.RawMessage{"statecontext": json.RawMessage(raw)}, settingPath, nil, nil, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "statecontext") {
 			t.Errorf("normalizeStateContextSettings(%s) error = %v, want statecontext config error", raw, err)
 		}
@@ -50,6 +50,8 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 	_, err := normalizeStateContextSettings(
 		map[string]json.RawMessage{"statecontext": json.RawMessage(`{"enabled":true,"tools":["process"]}`)},
 		settingPath,
+		nil,
+		nil,
 		nil,
 		nil,
 	)
@@ -61,6 +63,8 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 		settingPath,
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "requires tools.native.task") {
 		t.Fatalf("missing task provider error = %v", err)
@@ -70,6 +74,8 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 		settingPath,
 		nil,
 		&NativeTaskSettings{},
+		nil,
+		nil,
 	)
 	if err != nil || !configuredTask.Enabled || !reflect.DeepEqual(configuredTask.Tools, []string{"task"}) {
 		t.Fatalf("configured task provider = %+v, error = %v", configuredTask, err)
@@ -77,6 +83,8 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 	_, err = normalizeStateContextSettings(
 		map[string]json.RawMessage{"statecontext": json.RawMessage(`{"enabled":true,"tools":["memory"]}`)},
 		settingPath,
+		nil,
+		nil,
 		nil,
 		nil,
 	)
@@ -90,6 +98,7 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 		nil,
 		nil,
 		memorySettings,
+		nil,
 	)
 	if err != nil || !configuredMemory.Enabled || !reflect.DeepEqual(configuredMemory.Tools, []string{"memory"}) {
 		t.Fatalf("configured memory provider = %+v, error = %v", configuredMemory, err)
@@ -97,6 +106,8 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 	if _, err := normalizeStateContextSettings(
 		map[string]json.RawMessage{"statecontext": json.RawMessage(`{"tools":["task"]}`)},
 		settingPath,
+		nil,
+		nil,
 		nil,
 		nil,
 	); err != nil {

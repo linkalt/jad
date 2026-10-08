@@ -25,7 +25,7 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 			return tools.ExecutionError(callID, tools.StatusInvalidInput, "conflicting_arguments",
 				"Give either id (to check a run) or task (to start one), not both"), nil
 		}
-		return s.followUp(ctx, callID, id, stop, arguments)
+		return s.followUp(ctx, callID, execution.SessionKey, id, stop, arguments)
 	case stop:
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "missing_id", "stop needs the id of the run to cancel"), nil
 	case task == "":
@@ -33,7 +33,7 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 		// where children cannot run.
 		s.mu.RLock()
 		defer s.mu.RUnlock()
-		return renderSubagentList(callID, s.agents, s.manager.list(), s.settings.ResultMaxBytes)
+		return renderSubagentList(callID, s.agents, s.manager.list(execution.SessionKey), s.settings.ResultMaxBytes)
 	}
 	return s.startRun(ctx, callID, task, arguments, execution)
 }
@@ -53,6 +53,7 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 	}
 	run, err := s.manager.start(subagentStart{
 		launcher: s.launcher,
+		owner:    execution.SessionKey,
 		request: SubagentRequest{
 			Agent:  agent.config,
 			Task:   task,
@@ -79,8 +80,8 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 	return s.await(ctx, callID, run, s.waitFor(arguments), true)
 }
 
-func (s *subagentTool) followUp(ctx context.Context, callID, id string, stop bool, arguments map[string]any) (string, error) {
-	run := s.manager.get(id)
+func (s *subagentTool) followUp(ctx context.Context, callID, owner, id string, stop bool, arguments map[string]any) (string, error) {
+	run := s.manager.get(id, owner)
 	if run == nil {
 		return tools.ExecutionError(callID, tools.StatusNotFound, "unknown_run",
 			fmt.Sprintf("No run with id %s; it may have been dropped. Call with no task to list the runs", id)), nil

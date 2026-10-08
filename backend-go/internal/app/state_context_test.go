@@ -41,7 +41,7 @@ func TestCollectStateContextSnapshotFiltersSortsAndLimitsProcessItems(t *testing
 		processStateSnapshot("proc_a", native.ProcessRunning, "2026-10-01T00:00:00.000Z", "/workspace/a"),
 	}}
 	config := processStateContextConfig(4096, 2)
-	snapshot, include, err := collectStateContextSnapshot(config, source, nil, "compaction")
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestCollectStateContextSnapshotTrimsItemsToConfiguredByteBudget(t *testing.
 		processStateSnapshot("proc_2", native.ProcessRunning, "2026-10-02T00:00:00.000Z", longPath),
 	}}
 	config := processStateContextConfig(1024, 10)
-	snapshot, include, err := collectStateContextSnapshot(config, source, nil, "compaction")
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,11 +98,11 @@ func TestCollectStateContextSnapshotSkipsDisabledOrUnmatchedTrigger(t *testing.T
 	source := &processStateSourceStub{}
 	config := processStateContextConfig(4096, 2)
 	config.StateContext.Enabled = false
-	if _, include, err := collectStateContextSnapshot(config, source, nil, "compaction"); err != nil || include || source.recovered {
+	if _, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction"); err != nil || include || source.recovered {
 		t.Fatalf("disabled collection = include %v, err %v, recovered %v", include, err, source.recovered)
 	}
 	config.StateContext.Enabled = true
-	if _, include, err := collectStateContextSnapshot(config, source, nil, "request"); err != nil || include || source.recovered {
+	if _, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "request"); err != nil || include || source.recovered {
 		t.Fatalf("unmatched trigger collection = include %v, err %v, recovered %v", include, err, source.recovered)
 	}
 }
@@ -134,7 +134,7 @@ func TestCollectStateContextSnapshotIncludesAndTrimsTaskItems(t *testing.T) {
 			Role: "developer", MaxBytes: 1024,
 		},
 	}
-	snapshot, include, err := collectStateContextSnapshot(config, nil, store, "compaction")
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{task: store}, "compaction")
 	if err != nil {
 		t.Fatal(err)
 	}

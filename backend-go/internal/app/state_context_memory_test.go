@@ -19,7 +19,7 @@ func TestCollectStateContextSnapshotIncludesConfiguredMemoryItems(t *testing.T) 
 		NativeMemory: &settings,
 		StateContext: sessionfs.StateContextSettings{Enabled: true, Trigger: []string{"compaction"}, Tools: []string{"memory"}, MaxBytes: 4096},
 	}
-	snapshot, include, err := collectStateContextSnapshot(config, nil, nil, "compaction", store)
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{memory: store}, "compaction")
 	if err != nil || !include {
 		t.Fatalf("collect memory snapshot = include %v, error %v", include, err)
 	}
@@ -41,7 +41,7 @@ func TestCollectStateContextSnapshotTrimsOversizedMemoryItems(t *testing.T) {
 		NativeMemory: &settings,
 		StateContext: sessionfs.StateContextSettings{Enabled: true, Trigger: []string{"compaction"}, Tools: []string{"memory"}, MaxBytes: 1024},
 	}
-	snapshot, include, err := collectStateContextSnapshot(config, nil, nil, "compaction", store)
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{memory: store}, "compaction")
 	if err != nil || !include {
 		t.Fatalf("collect trimmed memory snapshot = include %v, error %v", include, err)
 	}

@@ -93,6 +93,13 @@ type SessionProcessLocker interface {
 	LockSessionSettings(context.Context, string) (func(), error)
 }
 
+// SessionChildren is an optional adapter for work a session started that outlives
+// the run, such as sub-agent runs handed off with a run id. CancelSessionChildren asks
+// all of it to stop and reports how many were still going; it must not block.
+type SessionChildren interface {
+	CancelSessionChildren(reference, profile string) int
+}
+
 // SnapshotOptions selects one page of transcript-backed session messages.
 type SnapshotOptions struct {
 	Before           *int64
@@ -600,6 +607,10 @@ func (h *Handler) handleRunStop(w http.ResponseWriter, r *http.Request, referenc
 		return
 	}
 	stop := h.runs.stop(h.runKey(resolved))
+	// A child handed off earlier is not part of the run, so stopping the run does not
+	// reach it. The user asked everything of this session to stop, whether or not a run
+	// was still going.
+	h.cancelSessionChildren(resolved.Reference, resolved.Profile)
 	writeJSON(w, http.StatusOK, map[string]any{"stop": stop})
 }
 

@@ -57,7 +57,10 @@ func NewSubagentManager() *SubagentManager {
 
 // subagentRun is one child, from start to end.
 type subagentRun struct {
-	id        string
+	id string
+	// owner is the session key of the call that started the run. Only calls of the
+	// same session can see it, and a stop or reset of that session cancels it.
+	owner     string
 	agent     string
 	task      string
 	timeoutMS int64
@@ -81,6 +84,7 @@ type subagentRunView struct {
 	cut                            bool
 	timeoutMS                      int64
 	elapsed                        time.Duration
+	startedAt, endedAt             time.Time
 }
 
 func (r *subagentRun) view() subagentRunView {
@@ -90,7 +94,14 @@ func (r *subagentRun) view() subagentRunView {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt)}
+	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+}
+
+// active reports whether the run is queued or running.
+func (r *subagentRun) active() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.state == subagentRunQueued || r.state == subagentRunRunning
 }
 
 func (r *subagentRun) setState(state string) {
@@ -103,6 +114,8 @@ func (r *subagentRun) setState(state string) {
 type subagentStart struct {
 	launcher SubagentLauncher
 	request  SubagentRequest
+	// owner is the session key of the starting call; see subagentRun.owner.
+	owner string
 	// limit, maxQueued, keep and resultMax are the starting session's settings.
 	limit     int
 	maxQueued int
@@ -137,6 +150,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	ctx, cancel := context.WithCancel(m.ctx)
 	run := &subagentRun{
 		id:        id,
+		owner:     spec.owner,
 		agent:     spec.request.Agent.Name,
 		task:      subagentTaskPreview(spec.request.Task),
 		timeoutMS: spec.request.Agent.TimeoutMS,
@@ -249,29 +263,66 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	m.mu.Unlock()
 }
 
-// get returns the run with the given id, or nil.
-func (m *SubagentManager) get(id string) *subagentRun {
+// get returns the run with the given id, or nil. A run of another session is nil too,
+// so one session cannot read or stop the runs of another that shares the directory.
+func (m *SubagentManager) get(id, owner string) *subagentRun {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.runs[id]
+	if run := m.runs[id]; run != nil && run.owner == owner {
+		return run
+	}
+	return nil
 }
 
 // stop asks a run to end. It does not wait; the caller waits on run.done.
 func (m *SubagentManager) stop(run *subagentRun) { run.cancel() }
 
-// list returns the retained runs, newest first.
-func (m *SubagentManager) list() []subagentRunView {
+// ownedRuns returns the retained runs of one session.
+func (m *SubagentManager) ownedRuns(owner string) []*subagentRun {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	runs := make([]*subagentRun, 0, len(m.runs))
 	for _, run := range m.runs {
-		runs = append(runs, run)
+		if run.owner == owner {
+			runs = append(runs, run)
+		}
 	}
-	m.mu.Unlock()
+	return runs
+}
+
+// CancelOwner asks every queued or running child of one session to stop and reports
+// how many it asked. It does not wait: each run ends as stopped once its child
+// returns, and a later call by id reads that. The host calls it when the user stops
+// the session or resets it, because a child handed off earlier would otherwise go on
+// spending after the user asked for everything to stop. Runs already ended and runs
+// of other sessions are left alone.
+func (m *SubagentManager) CancelOwner(owner string) int {
+	if m == nil {
+		return 0
+	}
+	cancelled := 0
+	for _, run := range m.ownedRuns(owner) {
+		if run.active() {
+			run.cancel()
+			cancelled++
+		}
+	}
+	return cancelled
+}
+
+// list returns the retained runs of one session, newest first.
+func (m *SubagentManager) list(owner string) []subagentRunView {
+	runs := m.ownedRuns(owner)
 	views := make([]subagentRunView, 0, len(runs))
 	for _, run := range runs {
 		views = append(views, run.view())
 	}
-	sort.Slice(views, func(i, j int) bool { return views[i].elapsed < views[j].elapsed })
+	sort.Slice(views, func(i, j int) bool {
+		if !views[i].startedAt.Equal(views[j].startedAt) {
+			return views[i].startedAt.After(views[j].startedAt)
+		}
+		return views[i].id < views[j].id
+	})
 	return views
 }
 

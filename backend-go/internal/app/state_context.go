@@ -71,12 +71,21 @@ type stateContextQueryTrimmer interface {
 	TrimStateContextQuery() bool
 }
 
+// stateContextSources are the live stores the providers read. A source a session does
+// not configure may be nil.
+type stateContextSources struct {
+	process native.ProcessStateSource
+	task    native.TaskStateSource
+	memory  *native.MemoryStore
+	// subagent holds the child runs; owner is the session key whose runs are listed.
+	subagent *native.SubagentManager
+	owner    string
+}
+
 func collectStateContextSnapshot(
 	config sessionfs.SessionConfig,
-	processManager native.ProcessStateSource,
-	taskStore native.TaskStateSource,
+	sources stateContextSources,
 	trigger string,
-	memoryStores ...*native.MemoryStore,
 ) (transcript.StateContextSnapshot, bool, error) {
 	settings := config.StateContext
 	if !settings.Enabled || !containsStateContextTrigger(settings.Trigger, trigger) {
@@ -85,21 +94,22 @@ func collectStateContextSnapshot(
 	collectors := map[string]stateContextCollector{}
 	if config.NativeProcess != nil {
 		collectors["process"] = func() (any, error) {
-			return native.CollectProcessStateContext(processManager, config.NativeProcess.StateContext)
+			return native.CollectProcessStateContext(sources.process, config.NativeProcess.StateContext)
 		}
 	}
 	if config.NativeTask != nil {
 		collectors["task"] = func() (any, error) {
-			return native.CollectTaskStateContext(taskStore, config.NativeTask.StateContext)
+			return native.CollectTaskStateContext(sources.task, config.NativeTask.StateContext)
 		}
 	}
 	if config.NativeMemory != nil {
-		var memoryStore *native.MemoryStore
-		if len(memoryStores) > 0 {
-			memoryStore = memoryStores[0]
-		}
 		collectors["memory"] = func() (any, error) {
-			return native.CollectMemoryStateContext(memoryStore, *config.NativeMemory, config.NativeMemory.StateContext)
+			return native.CollectMemoryStateContext(sources.memory, *config.NativeMemory, config.NativeMemory.StateContext)
+		}
+	}
+	if config.NativeSubagent != nil {
+		collectors["subagent"] = func() (any, error) {
+			return native.CollectSubagentStateContext(sources.subagent, sources.owner, config.NativeSubagent.StateContext)
 		}
 	}
 	providers := make(orderedStateContextProviders, 0, len(settings.Tools))

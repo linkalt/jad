@@ -394,7 +394,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		return SessionConfig{}, err
 	}
 	applyApprovalDefault(approval.Default, setting, nativeWrite, nativeEdit, nativeBash, nativeExec, nativeProcess, mcpServers)
-	stateContext, err := normalizeStateContextSettings(setting, settingPath, nativeProcess, nativeTask, nativeMemory)
+	stateContext, err := normalizeStateContextSettings(setting, settingPath, nativeProcess, nativeTask, nativeMemory, nativeSubagent)
 	if err != nil {
 		return SessionConfig{}, err
 	}

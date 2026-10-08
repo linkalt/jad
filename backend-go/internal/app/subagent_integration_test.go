@@ -44,7 +44,10 @@ type subagentProvider struct {
 	// detach scripts the parent to start the child with wait_ms 0, so the call returns
 	// a run id at once, and then to collect the answer with that id. childHold keeps
 	// the child's first request waiting until the parent has seen the handoff.
-	detach       bool
+	detach bool
+	// handoffOnly scripts the parent to start the child with wait_ms 0 and then end its
+	// run with a final answer, leaving the child going.
+	handoffOnly  bool
 	childHold    chan struct{}
 	holdReleased sync.Once
 	// childRelease ends a blocked child request at cleanup, so a run that was not
@@ -132,6 +135,8 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		}
 		var events []string
 		switch {
+		case body.Model == "parent-model" && p.handoffOnly && !strings.Contains(record.Text, "function_call_output"):
+			events = functionCallEvents("call-sub", "subagent", `{"task":"find the answer","wait_ms":0}`)
 		case body.Model == "parent-model" && p.detach && !strings.Contains(record.Text, "function_call_output"):
 			events = functionCallEvents("call-sub", "subagent", `{"task":"find the answer","wait_ms":0}`)
 		case body.Model == "parent-model" && p.detach && !strings.Contains(record.Text, "the answer is 42"):
@@ -910,5 +915,143 @@ func TestHTTPRunSlowSubagentHandsBackAnIdAndTheLaterCallCollectsTheAnswer(t *tes
 	folders, err := filepath.Glob(filepath.Join(f.workspace, ".subagents", "*", "messages.jsonl"))
 	if err != nil || len(folders) != 1 {
 		t.Errorf("child transcripts = %v, %v; want exactly 1", folders, err)
+	}
+}
+
+// handoffAndLeaveRunning runs a parent that starts a child, gets its run id and ends its
+// run, while the child is still blocked at the provider. It returns the run id.
+func handoffAndLeaveRunning(t *testing.T, f subagentFixture) string {
+	t.Helper()
+	f.provider.handoffOnly = true
+	f.provider.childBlocks = true
+	f.provider.childEntered = make(chan struct{}, 1)
+	f.provider.childCancelled = make(chan struct{}, 1)
+	f.provider.childRelease = make(chan struct{})
+	t.Cleanup(func() { close(f.provider.childRelease) })
+
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	select {
+	case <-f.provider.childEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the child never reached the provider")
+	}
+	parent := f.provider.forModel("parent-model")
+	if len(parent) != 2 || !strings.Contains(parent[1].Text, "still running") {
+		t.Fatalf("the parent did not get a handoff:\n%v", parent)
+	}
+	return runIDOf(t, parent[1].Text)
+}
+
+func runIDOf(t *testing.T, text string) string {
+	t.Helper()
+	id := regexp.MustCompile(`sub_[0-9a-f]{8}`).FindString(text)
+	if id == "" {
+		t.Fatalf("no run id in:\n%s", text)
+	}
+	return id
+}
+
+func (f subagentFixture) post(t *testing.T, path string) string {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, f.apiURL+"/api/sessions/local:demo"+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+integrationAPIToken)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("POST %s status = %d, body=%s", path, response.StatusCode, body)
+	}
+	return string(body)
+}
+
+func (f subagentFixture) expectChildCancelled(t *testing.T, why string) {
+	t.Helper()
+	select {
+	case <-f.provider.childCancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the handed-off child kept running after %s", why)
+	}
+}
+
+func TestStoppingTheSessionCancelsAChildHandedOffInAnEarlierRun(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	handoffAndLeaveRunning(t, f)
+
+	// The run is over, so there is nothing for the run to stop; the child still goes on.
+	if body := f.post(t, "/run/stop"); !strings.Contains(body, `"stopped":false`) {
+		t.Fatalf("stop answered %s, want stopped:false (no run is active)", body)
+	}
+	f.expectChildCancelled(t, "the user stopped the session")
+}
+
+func TestResettingTheSessionCancelsAChildHandedOffInAnEarlierRun(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	handoffAndLeaveRunning(t, f)
+
+	if body := f.post(t, "/reset"); !strings.Contains(body, `"reset":true`) {
+		t.Fatalf("reset answered %s", body)
+	}
+	f.expectChildCancelled(t, "the session was reset")
+}
+
+func TestSubagentRunsAreListedInTheStateContextAfterACompaction(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
+	settingPath := filepath.Join(f.sessionDir, "setting.json")
+	var setting map[string]any
+	data, err := os.ReadFile(settingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &setting); err != nil {
+		t.Fatal(err)
+	}
+	setting["compaction"] = map[string]any{"keepbatch": map[string]any{"turn": map[string]any{"type": "assistant_final", "keep": 1}}}
+	setting["statecontext"] = map[string]any{"enabled": true, "trigger": []string{"compaction"}, "tools": []string{"subagent"}, "role": "developer", "max_bytes": 8192}
+	rewritten, _ := json.Marshal(setting)
+	writeFile(t, settingPath, rewritten)
+	old := strings.Join([]string{
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"old context"}]}`,
+		`{"type":"response.completed","response":{"id":"resp_old","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old answer"}]}]}}`,
+	}, "\n") + "\n"
+	writeFile(t, filepath.Join(f.sessionDir, "messages.jsonl"), []byte(old))
+
+	id := handoffAndLeaveRunning(t, f)
+	if body := f.post(t, "/compact"); !strings.Contains(body, `"compacted":true`) {
+		t.Fatalf("compact answered %s", body)
+	}
+
+	location, err := sessionfs.Resolve([]sessionfs.Root{{ID: "local", Directory: filepath.Join(f.workspace, "sessions")}}, "local:demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionConfig, err := sessionfs.LoadSessionConfig(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(sessionConfig.StoragePaths.StateContext)
+	if err != nil {
+		t.Fatalf("no state context snapshot after the compaction: %v", err)
+	}
+	var snapshot struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"subagent"`, id, `"state": "running"`, `"agent": "explore"`, `"task": "find the answer"`} {
+		if !strings.Contains(snapshot.Text, want) {
+			t.Errorf("the snapshot lacks %s:\n%s", want, snapshot.Text)
+		}
+	}
+	if strings.Contains(snapshot.Text, "the answer is 42") {
+		t.Errorf("an answer was copied into the snapshot:\n%s", snapshot.Text)
 	}
 }
