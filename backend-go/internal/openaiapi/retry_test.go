@@ -409,6 +409,48 @@ func TestStreamRetriesAConnectionFailure(t *testing.T) {
 	}
 }
 
+// permanentFailure is a transport error that no retry can fix, like an unusable credential.
+type permanentFailure struct{}
+
+func (permanentFailure) Error() string   { return "credential file is unusable" }
+func (permanentFailure) Permanent() bool { return true }
+
+type failingTransport struct {
+	err   error
+	calls int
+}
+
+func (f *failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	f.calls++
+	return nil, f.err
+}
+
+func TestStreamDoesNotRetryAPermanentTransportError(t *testing.T) {
+	transport := &failingTransport{err: permanentFailure{}}
+	client := NewClient(Config{APIKey: "k", BaseURL: "http://provider.invalid/v1/", HTTPClient: &http.Client{Transport: transport}, Retry: &RetryConfig{MaxRetries: 3, InitialDelay: time.Millisecond, MaxDelay: time.Second}})
+	var waits int
+	client.sleep = func(context.Context, time.Duration) error { waits++; return nil }
+	_, err := stream(client, context.Background())
+	if err == nil || !strings.Contains(err.Error(), "credential file is unusable") {
+		t.Fatalf("error = %v, want the credential error to reach the caller", err)
+	}
+	if transport.calls != 1 || waits != 0 {
+		t.Fatalf("requests = %d, waits = %d; a permanent error must make one attempt and no wait", transport.calls, waits)
+	}
+}
+
+func TestStreamStillRetriesAnOrdinaryTransportError(t *testing.T) {
+	transport := &failingTransport{err: io.ErrUnexpectedEOF}
+	client := NewClient(Config{APIKey: "k", BaseURL: "http://provider.invalid/v1/", HTTPClient: &http.Client{Transport: transport}, Retry: &RetryConfig{MaxRetries: 2, InitialDelay: time.Millisecond, MaxDelay: time.Second}})
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+	if _, err := stream(client, context.Background()); err == nil {
+		t.Fatal("want an error")
+	}
+	if transport.calls != 3 {
+		t.Fatalf("requests = %d, want 3 (the first attempt and two retries)", transport.calls)
+	}
+}
+
 func TestStreamWithoutRetryConfigKeepsTheSDKDefaults(t *testing.T) {
 	server, requests := providerServer(t, providerReply{status: 429, headers: map[string]string{"Retry-After-Ms": "1"}})
 	client := NewClient(Config{APIKey: "test-api-key", BaseURL: server.URL + "/v1/"})

@@ -74,17 +74,20 @@ type FrontCompactionSettings struct {
 	DeleteMode string
 }
 
-// Model contains the API-key-based model settings supported by this Go slice.
-// OAuth is intentionally rejected until its credential adapter is ported.
+// Model contains the model settings of one model file.
 type Model struct {
-	Provider   string
-	Name       string
-	APIKeyEnv  string
-	BaseURL    string
-	AuthMode   string
-	Request    json.RawMessage
-	PromptRole string
-	PromptText string
+	Provider  string
+	Name      string
+	APIKeyEnv string
+	BaseURL   string
+	// AuthMode is "api_key" (the key is read from APIKeyEnv) or "openai_oauth" (the
+	// credential is read from OAuthAuthFile).
+	AuthMode string
+	// OAuthAuthFile is the absolute credential file path; set only for openai_oauth.
+	OAuthAuthFile string
+	Request       json.RawMessage
+	PromptRole    string
+	PromptText    string
 }
 
 // SessionConfig is the resolved filesystem-backed configuration for one
@@ -149,6 +152,8 @@ type SessionConfig struct {
 	ToolCallScheduling string
 	// ProviderRetry controls how a failed request to the model provider is retried.
 	ProviderRetry ProviderRetrySettings
+	// OpenAIOAuth configures requests of a model file whose auth_mode is openai_oauth.
+	OpenAIOAuth OpenAIOAuthSettings
 	// MaxRunTokens is the most tokens one run may use before it starts another
 	// provider round; zero means no cap (the key is absent).
 	MaxRunTokens int64
@@ -264,6 +269,10 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		return SessionConfig{}, err
 	}
 	providerRetry, err := normalizeProviderRetrySettings(setting["provider_retry"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	openAIOAuth, err := normalizeOpenAIOAuthSettings(setting["openai_oauth"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -486,6 +495,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		MaxParallelToolCalls:  maxParallelToolCalls,
 		ToolCallScheduling:    toolCallScheduling,
 		ProviderRetry:         providerRetry,
+		OpenAIOAuth:           openAIOAuth,
 		MaxRunTokens:          maxRunTokens,
 		Approval:              approval,
 		Checkpoint:            checkpoint,
@@ -815,8 +825,15 @@ func loadModel(path, promptRole, promptText string) (Model, error) {
 			return Model{}, configError("%s: oauth_auth_file requires auth_mode openai_oauth", path)
 		}
 	}
+	oauthAuthFile := ""
 	if authMode == "openai_oauth" {
-		return Model{}, configError("%s: OpenAI OAuth authentication is not supported by the Go backend yet", path)
+		if baseURL != "" {
+			return Model{}, configError("%s: base_url cannot be set with auth_mode openai_oauth; the endpoint is the openai_oauth.base_url setting", path)
+		}
+		oauthAuthFile, err = oauthAuthFilePath(fields, path)
+		if err != nil {
+			return Model{}, err
+		}
 	}
 	apiKeyEnvDefault := "OPENAI_API_KEY"
 	if strings.EqualFold(provider, "openrouter") || strings.Contains(baseURL, "openrouter.ai") {
@@ -843,15 +860,43 @@ func loadModel(path, promptRole, promptText string) (Model, error) {
 		request = bytes.TrimSpace(raw)
 	}
 	return Model{
-		Provider:   provider,
-		Name:       modelName,
-		APIKeyEnv:  apiKeyEnv,
-		BaseURL:    baseURL,
-		AuthMode:   authMode,
-		Request:    request,
-		PromptRole: promptRole,
-		PromptText: promptText,
+		Provider:      provider,
+		Name:          modelName,
+		APIKeyEnv:     apiKeyEnv,
+		BaseURL:       baseURL,
+		AuthMode:      authMode,
+		OAuthAuthFile: oauthAuthFile,
+		Request:       request,
+		PromptRole:    promptRole,
+		PromptText:    promptText,
 	}, nil
+}
+
+// defaultOAuthAuthFile is the credential file used when model.json names none, relative
+// to the home directory.
+const defaultOAuthAuthFile = ".jad/auth/openai-codex.json"
+
+// oauthAuthFilePath resolves oauth_auth_file: absent means the default file in the home
+// directory; a given value must be absolute or start with "~/" so the file never depends
+// on the working directory. A null value is an error, not a quiet default.
+func oauthAuthFilePath(fields map[string]json.RawMessage, path string) (string, error) {
+	raw, exists := fields["oauth_auth_file"]
+	if !exists {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", configError("%s: oauth_auth_file is not set and the home directory is unknown: %v", path, err)
+		}
+		return filepath.Join(home, filepath.FromSlash(defaultOAuthAuthFile)), nil
+	}
+	var configured string
+	if err := json.Unmarshal(raw, &configured); err != nil || strings.TrimSpace(configured) == "" {
+		return "", configError("%s: oauth_auth_file must be a non-empty string", path)
+	}
+	expanded := expandHome(strings.TrimSpace(configured))
+	if !filepath.IsAbs(expanded) {
+		return "", configError("%s: oauth_auth_file must be absolute or start with ~", path)
+	}
+	return filepath.Clean(expanded), nil
 }
 
 func loadPrompt(setting, profile map[string]json.RawMessage, profileConfigured bool, cwd, path string) (string, string, error) {

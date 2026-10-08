@@ -123,12 +123,6 @@ func TestLoadSessionConfigRejectsUnknownProfileModelAndOAuth(t *testing.T) {
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test","auth_mode":"openai_oauth"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadSessionConfig(location, "one", ""); err == nil {
-		t.Fatal("LoadSessionConfig(OAuth) succeeded")
-	}
 	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test","oauth_auth_file":null}`), 0o600); err != nil {
 		t.Fatal(err)
 	}

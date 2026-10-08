@@ -75,6 +75,16 @@
         "max_delay_ms": {"type": "integer", "minimum": 1, "maximum": 600000, "default": 8000, "description": "Longest wait between attempts, also the cap for a Retry-After or an x-ratelimit-reset from the provider. Raise it (and max_retries) to outlast a rate-limit window longer than the default."}
       }
     },
+    "openai_oauth": {
+      "type": "object",
+      "description": "Go backend only: requests of a model file with auth_mode openai_oauth. The backend reads the credential file but never writes or refreshes it. Other keys are rejected.",
+      "properties": {
+        "base_url": {"type": "string", "pattern": "^https?://\\S+$", "default": "https://chatgpt.com/backend-api/codex", "description": "Codex endpoint; the Responses path is appended to it."},
+        "expiry_margin_ms": {"type": "integer", "minimum": 0, "maximum": 86400000, "default": 300000, "description": "An access token that expires within this time counts as expired, and the request fails with an error naming the credential file instead of being sent."}
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
     "max_run_tokens": {
       "type": "integer",
       "minimum": 1,

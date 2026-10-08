@@ -73,6 +73,12 @@ func isRetryableError(err error) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
+	// An error that says it is permanent (an unusable credential file) fails the same
+	// way every time, even though the transport wraps it in a retryable *url.Error.
+	var permanent interface{ Permanent() bool }
+	if errors.As(err, &permanent) && permanent.Permanent() {
+		return false
+	}
 	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
 		return true
 	}

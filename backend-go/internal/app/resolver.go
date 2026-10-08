@@ -250,17 +250,34 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 	if err != nil {
 		return preparedRun{}, err
 	}
-	apiKey := strings.TrimSpace(r.environment[config.Model.APIKeyEnv])
-	if apiKey == "" {
-		return preparedRun{}, &httpapi.StatusError{
-			Code:    http.StatusUnprocessableEntity,
-			Message: fmt.Sprintf("environment variable %s is not set", config.Model.APIKeyEnv),
+	oauth := config.Model.AuthMode == "openai_oauth"
+	apiKey := oauthPlaceholderKey
+	if oauth {
+		// The token itself is read from the file on every request, so it is not part of
+		// the runner's identity; the file path and the OAuth settings are.
+		if err := checkOAuthCredential(config); err != nil {
+			return preparedRun{}, err
+		}
+	} else {
+		apiKey = strings.TrimSpace(r.environment[config.Model.APIKeyEnv])
+		if apiKey == "" {
+			return preparedRun{}, &httpapi.StatusError{
+				Code:    http.StatusUnprocessableEntity,
+				Message: fmt.Sprintf("environment variable %s is not set", config.Model.APIKeyEnv),
+			}
 		}
 	}
 	runnerKey := fingerprintRunner(config, apiKey)
 	runner := shared.runners[runnerKey]
 	if runner == nil {
 		var httpClient *http.Client
+		var network http.RoundTripper = http.DefaultTransport
+		baseURL := config.Model.BaseURL
+		if oauth {
+			network = oauthTransport(config, network)
+			baseURL = config.OpenAIOAuth.BaseURL
+			httpClient = &http.Client{Transport: network}
+		}
 		if config.HTTPDebug.Enabled {
 			transport := httpdebug.NewTransport(config.StoragePaths.HTTPDebug, httpdebug.Settings{
 				Logger:                 r.logger,
@@ -270,11 +287,11 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 				IncludeResponseHeaders: config.HTTPDebug.IncludeResponseHeaders,
 				IncludeResponseBody:    config.HTTPDebug.IncludeResponseBody,
 				MaxBodyBytes:           config.HTTPDebug.MaxBodyBytes,
-			}, http.DefaultTransport)
+			}, network)
 			httpClient = &http.Client{Transport: transport}
 		}
 		retry := providerRetryConfig(config.ProviderRetry, r.logger)
-		streamer := openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: config.Model.BaseURL, HTTPClient: httpClient, Retry: &retry})
+		streamer := openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: baseURL, HTTPClient: httpClient, Retry: &retry})
 		runner, err = session.NewRunner(shared.store, streamer, session.ModelSettings{
 			Model:      config.Model.Name,
 			Request:    config.Model.Request,
@@ -689,6 +706,10 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		HTTPDebugDir string
 		// The runner holds the retry settings, so a changed setting needs a new runner.
 		ProviderRetry sessionfs.ProviderRetrySettings
+		// The runner holds the OAuth transport, so the credential file and the endpoint
+		// and margin it was built with identify the runner. The token is not included.
+		OAuthAuthFile string
+		OpenAIOAuth   sessionfs.OpenAIOAuthSettings
 	}{
 		ModelPath:     config.ModelPath,
 		Provider:      config.Model.Provider,
@@ -702,6 +723,8 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		HTTPDebug:     config.HTTPDebug,
 		HTTPDebugDir:  config.StoragePaths.HTTPDebug,
 		ProviderRetry: config.ProviderRetry,
+		OAuthAuthFile: config.Model.OAuthAuthFile,
+		OpenAIOAuth:   config.OpenAIOAuth,
 	}
 	keyHash := sha256.Sum256([]byte(apiKey))
 	identity.APIKeyHash = hex.EncodeToString(keyHash[:])
