@@ -300,6 +300,11 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		mcpServers = []any{entry}
 	}
 	subagent := map[string]any{"agents": map[string]any{"explore": agentSetting}}
+	if budget, ok := agentSetting["__list_max_bytes"]; ok {
+		// The test sets the description budget; the agent itself keeps its other settings.
+		delete(agentSetting, "__list_max_bytes")
+		subagent["list_max_bytes"] = budget
+	}
 	if dir, ok := agentSetting["__agents_dir"].(string); ok {
 		// The test supplies the agents as folders; nothing is defined inline.
 		subagent = map[string]any{"agents_dir": []string{dir}}
@@ -645,6 +650,27 @@ func TestSubagentNamingAnMCPToolThatDoesNotExistFailsTheSessionWithTheLoadedList
 func mcpToolNameFor(server, tool string) string {
 	sum := sha256.Sum256([]byte(server + "\x00" + tool))
 	return "mcp_" + server + "_" + tool + "_" + hex.EncodeToString(sum[:])[:10]
+}
+
+func TestSubagentMasterRequestCarriesOnlyACountWhenTheListDoesNotFit(t *testing.T) {
+	descriptionOf := func(budget any) string {
+		f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts in the code and reports file paths.", "__list_max_bytes": budget})
+		f.run(t)
+		parent := f.provider.forModel("parent-model")
+		if len(parent) == 0 {
+			t.Fatal("the parent made no request")
+		}
+		return parent[0].Descriptions["subagent"]
+	}
+	// A budget that holds the full list: unchanged behaviour.
+	if d := descriptionOf(4096); !strings.Contains(d, "\nAgents:\n- explore: Finds facts in the code and reports file paths.") {
+		t.Fatalf("full list missing:\n%s", d)
+	}
+	// A budget of zero: only the count and how to ask, and no agent description reaches the model.
+	d := descriptionOf(0)
+	if strings.Contains(d, "Finds facts") || strings.Contains(d, "explore") || !strings.Contains(d, "1 agent configured. Call without a task to list them with descriptions.") {
+		t.Fatalf("zero budget still listed agents:\n%s", d)
+	}
 }
 
 func TestSubagentKeepsItsTranscriptApartFromTheSessionTranscript(t *testing.T) {

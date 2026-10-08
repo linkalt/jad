@@ -273,7 +273,7 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 		}
 		// The agent list is part of the description the model sees, so it is kept on top
 		// of the manifest's text and not replaced by it.
-		tool.Definition.Description = definition.Description + subagentAgentList(config.NativeSubagent.Agents)
+		tool.Definition.Description = definition.Description + subagentAgentList(config.NativeSubagent.Agents, config.NativeSubagent.ListMaxBytes)
 		loaded = append(loaded, tool)
 	}
 	return tools.NewCatalog(loaded)

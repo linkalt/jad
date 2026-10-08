@@ -11,18 +11,22 @@ import (
 const (
 	defaultNativeSubagentResultMaxBytes int64 = 32 * 1024
 	defaultNativeSubagentMaxConcurrent  int64 = 3
-	maxNativeSubagentConcurrent         int64 = 32
-	defaultNativeSubagentStorageDir           = ".subagents"
-	defaultNativeSubagentMaxToolRounds  int64 = 30
-	defaultNativeSubagentTimeoutMS      int64 = 600_000
-	maxNativeSubagentTimeoutMS          int64 = 3_600_000
+	// defaultNativeSubagentListMaxBytes keeps a handful of agents with one-line
+	// descriptions inline in the tool description and moves a large set behind a call.
+	defaultNativeSubagentListMaxBytes  int64 = 4096
+	maxNativeSubagentListMaxBytes      int64 = 1024 * 1024
+	maxNativeSubagentConcurrent        int64 = 32
+	defaultNativeSubagentStorageDir          = ".subagents"
+	defaultNativeSubagentMaxToolRounds int64 = 30
+	defaultNativeSubagentTimeoutMS     int64 = 600_000
+	maxNativeSubagentTimeoutMS         int64 = 3_600_000
 	// maxNativeSubagentDescriptionChars bounds the text each agent adds to the tool
 	// description, which is sent to the model on every request.
 	maxNativeSubagentDescriptionChars = 500
 )
 
 var (
-	nativeSubagentKeys      = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "storage_dir"}
+	nativeSubagentKeys      = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "storage_dir"}
 	nativeSubagentAgentKeys = []string{"description", "model", "tools", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
@@ -34,6 +38,11 @@ type NativeSubagentSettings struct {
 	ResultMaxBytes int64
 	// MaxConcurrent is the most children that run at once within one run.
 	MaxConcurrent int64
+	// ListMaxBytes is the most bytes of agent list the tool description may carry:
+	// the full list when it fits, else the names, else a count. Zero never lists
+	// inline, so the model has to ask. The zero value of this struct therefore means
+	// "ask", not "default"; the loader always sets it.
+	ListMaxBytes int64
 	// StorageDir holds one transcript directory per child run.
 	StorageDir string
 	// AgentDirs are the absolute agents_dir directories in configured order.
@@ -119,6 +128,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.MaxConcurrent, err = configuredInteger(fields, "max_concurrent", defaultNativeSubagentMaxConcurrent, 1, maxNativeSubagentConcurrent, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.ListMaxBytes, err = configuredInteger(fields, "list_max_bytes", defaultNativeSubagentListMaxBytes, 0, maxNativeSubagentListMaxBytes, settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.StorageDir, err = normalizeNativeSubagentStorageDir(fields, cwd, toolStorageDir, settingPath); err != nil {

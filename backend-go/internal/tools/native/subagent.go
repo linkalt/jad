@@ -19,10 +19,9 @@ const subagentToolID = "native.subagent"
 var subagentInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "task":{"type":"string","minLength":1,"description":"Self-contained instructions. The agent sees nothing of this conversation."},
+    "task":{"type":"string","minLength":1,"description":"Self-contained instructions. The agent sees nothing of this conversation. Omit to list the agents."},
     "agent":{"type":"string","description":"Agent name. Optional when only one is configured."}
   },
-  "required":["task"],
   "additionalProperties":false
 }`)
 
@@ -156,7 +155,7 @@ func NewSubagentToolWithMCP(settings sessionfs.NativeSubagentSettings, parentToo
 			ID:          subagentToolID,
 			Source:      "native",
 			Name:        "subagent",
-			Description: subagentDescription + subagentAgentList(settings.Agents),
+			Description: subagentDescription + subagentAgentList(settings.Agents, settings.ListMaxBytes),
 			InputSchema: append(json.RawMessage(nil), subagentInputSchema...),
 		},
 		Validator:        validator,
@@ -171,20 +170,64 @@ func NewSubagentToolWithMCP(settings sessionfs.NativeSubagentSettings, parentToo
 	}, nil
 }
 
-// subagentAgentList returns the agent list appended to a manifest description, so
-// the model sees which agents exist without an extra call.
-func subagentAgentList(agents []sessionfs.NativeSubagentAgent) string {
-	var builder strings.Builder
-	builder.WriteString("\nAgents:")
+// subagentAgentList returns the text appended to the manifest description. The agent
+// list is paid for on every request, so it shrinks with its size: names and
+// descriptions while they fit in maxBytes, else names alone, else a count; the last
+// two say how to get the rest. The count line is always sent, whatever the budget, so
+// the model always knows the tool lists agents when asked.
+func subagentAgentList(agents []sessionfs.NativeSubagentAgent, maxBytes int64) string {
+	var full strings.Builder
+	full.WriteString("\nAgents:")
+	names := make([]string, 0, len(agents))
 	for _, agent := range agents {
-		builder.WriteString("\n- ")
-		builder.WriteString(agent.Name)
+		full.WriteString("\n- ")
+		full.WriteString(agent.Name)
 		if agent.Description != "" {
-			builder.WriteString(": ")
-			builder.WriteString(agent.Description)
+			full.WriteString(": ")
+			full.WriteString(agent.Description)
 		}
+		names = append(names, agent.Name)
 	}
-	return builder.String()
+	if int64(full.Len()) <= maxBytes {
+		return full.String()
+	}
+	const askForList = " Call without a task to list them with descriptions."
+	if inline := "\nAgents: " + strings.Join(names, ", ") + "." + askForList; int64(len(inline)) <= maxBytes {
+		return inline
+	}
+	noun := "agents"
+	if len(agents) == 1 {
+		noun = "agent"
+	}
+	return fmt.Sprintf("\n%d %s configured.%s", len(agents), noun, askForList)
+}
+
+// renderSubagentList is the result of a call with no task: one line per agent.
+func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64) (string, error) {
+	lines := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		line := agent.config.Name
+		if agent.config.Description != "" {
+			line += ": " + oneLine(agent.config.Description)
+		}
+		lines = append(lines, line)
+	}
+	text, cut := cutUTF8(strings.Join(lines, "\n"), maxBytes)
+	information := []tools.Information{{Key: "agents", Value: len(agents)}}
+	if cut {
+		information = append(information, tools.Information{Key: "truncated", Value: true})
+	}
+	plural := "s"
+	if len(agents) == 1 {
+		plural = ""
+	}
+	return tools.RenderToolResult(tools.ResultOptions{
+		ID:          callID,
+		Status:      tools.StatusOK,
+		Summary:     fmt.Sprintf("%d agent%s available", len(agents), plural),
+		Information: information,
+		Content:     &tools.Content{Encoding: "utf8", Text: text},
+	})
 }
 
 // subagentChildTools picks the native tools one agent may use from the enabled
@@ -273,8 +316,12 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool) error {
 }
 
 // normalizeSubagentArguments treats a blank agent as absent, so a model that sends an
-// empty string for "the default" is not rejected.
+// empty string for "the default" is not rejected, and a blank task as absent too,
+// which asks for the agent list.
 func normalizeSubagentArguments(arguments map[string]any) map[string]any {
+	if task, ok := arguments["task"].(string); ok && strings.TrimSpace(task) == "" {
+		delete(arguments, "task")
+	}
 	if name, ok := arguments["agent"].(string); ok {
 		if trimmed := strings.TrimSpace(name); trimmed == "" {
 			delete(arguments, "agent")
@@ -316,7 +363,11 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 	task, _ := arguments["task"].(string)
 	task = strings.TrimSpace(task)
 	if task == "" {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "task must not be blank"), nil
+		// No task: the caller wants the agent list. It needs no launcher, so it works
+		// even where children cannot run.
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return renderSubagentList(callID, s.agents, s.settings.ResultMaxBytes)
 	}
 	agent, problem := s.selectAgent(arguments)
 	if problem != "" {

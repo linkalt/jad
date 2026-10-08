@@ -12,14 +12,13 @@
           "task": {
             "type": "string",
             "minLength": 1,
-            "description": "Self-contained instructions. The agent sees nothing of this conversation."
+            "description": "Self-contained instructions. The agent sees nothing of this conversation. Omit to list the agents."
           },
           "agent": {
             "type": "string",
             "description": "Agent name. Optional when only one is configured."
           }
         },
-        "required": ["task"],
         "additionalProperties": false
       }
     }

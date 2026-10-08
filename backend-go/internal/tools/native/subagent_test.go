@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +50,7 @@ func mcpReadOnlyTool(name string) tools.Tool {
 }
 
 func subagentSettings(agents ...sessionfs.NativeSubagentAgent) sessionfs.NativeSubagentSettings {
-	return sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, StorageDir: "/tmp/unused", Agents: agents}
+	return sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, StorageDir: "/tmp/unused", Agents: agents}
 }
 
 func agentNamed(name string) sessionfs.NativeSubagentAgent {
@@ -234,19 +235,20 @@ func TestSubagentTrimsAnAgentNameAndRejectsBadArguments(t *testing.T) {
 		t.Fatalf("a padded name was not trimmed:\n%s", output)
 	}
 	for name, arguments := range map[string]string{
-		"missing task": `{}`,
-		"empty task":   `{"task":""}`,
-		"extra key":    `{"task":"x","timeout":5}`,
-		"task number":  `{"task":7}`,
-		"not json":     `{`,
+		"extra key":   `{"task":"x","timeout":5}`,
+		"task number": `{"task":7}`,
+		"not json":    `{`,
 	} {
 		output := subagentCall(t, catalog, arguments)
 		if !strings.Contains(output, "error_type: schema") && !strings.Contains(output, "validation_failed") {
 			t.Errorf("%s was not rejected by the schema:\n%s", name, output)
 		}
 	}
-	if output := subagentCall(t, catalog, `{"task":"   "}`); !strings.Contains(output, "task must not be blank") {
-		t.Errorf("a blank task was run:\n%s", output)
+	// A missing, empty or blank task is not an error: it asks for the agent list.
+	for name, arguments := range map[string]string{"missing": `{}`, "empty": `{"task":""}`, "blank": `{"task":"   "}`} {
+		if output := subagentCall(t, catalog, arguments); !strings.Contains(output, "2 agents available") {
+			t.Errorf("%s task did not list the agents:\n%s", name, output)
+		}
 	}
 	if len(launcher.requests) != 1 {
 		t.Fatalf("rejected calls started children: %d requests", len(launcher.requests))
@@ -656,5 +658,134 @@ func TestSubagentBindIgnoresAToolThatIsNotFromMCP(t *testing.T) {
 	_, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "read", "mcp:zvec:search")), &fakeLauncher{}, []tools.Tool{impostor}, readOnlyTool("read"))
 	if err == nil || !strings.Contains(err.Error(), `"mcp:zvec:search", which is not a loaded MCP tool (loaded: none)`) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func describedAgent(name, description string) sessionfs.NativeSubagentAgent {
+	agent := agentNamed(name)
+	agent.Description = description
+	return agent
+}
+
+func TestSubagentAgentListShrinksWithItsBudgetAtTheByteBoundaries(t *testing.T) {
+	// Long descriptions, so the names text is shorter than the full text.
+	long := strings.Repeat("d", 100)
+	agents := []sessionfs.NativeSubagentAgent{describedAgent("alpha", long), describedAgent("beta", long), agentNamed("gamma")}
+	full := "\nAgents:\n- alpha: " + long + "\n- beta: " + long + "\n- gamma"
+	names := "\nAgents: alpha, beta, gamma. Call without a task to list them with descriptions."
+	count := "\n3 agents configured. Call without a task to list them with descriptions."
+	if !(len(count) < len(names) && len(names) < len(full)) {
+		t.Fatalf("test setup: count %d, names %d, full %d are not increasing", len(count), len(names), len(full))
+	}
+
+	for name, tc := range map[string]struct {
+		budget int64
+		want   string
+	}{
+		"full fits exactly":     {int64(len(full)), full},
+		"full is one byte over": {int64(len(full)) - 1, names},
+		"names fit exactly":     {int64(len(names)), names},
+		"names one byte over":   {int64(len(names)) - 1, count},
+		"count always sent":     {1, count},
+		"zero never lists":      {0, count},
+		"large budget":          {1 << 20, full},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := subagentAgentList(agents, tc.budget); got != tc.want {
+				t.Fatalf("budget %d:\n got %q\nwant %q", tc.budget, got, tc.want)
+			}
+		})
+	}
+	if got := subagentAgentList(agents[:1], 0); got != "\n1 agent configured. Call without a task to list them with descriptions." {
+		t.Fatalf("one agent, no budget = %q", got)
+	}
+	if got := subagentAgentList(agents[:1], 4096); got != "\nAgents:\n- alpha: "+long {
+		t.Fatalf("one agent = %q", got)
+	}
+	// With short descriptions the full text is shorter than the names text, so the
+	// full text is kept whenever it fits; the names tier is never larger than needed.
+	short := []sessionfs.NativeSubagentAgent{describedAgent("a", "x"), describedAgent("b", "y")}
+	if got := subagentAgentList(short, 4096); got != "\nAgents:\n- a: x\n- b: y" {
+		t.Fatalf("short list = %q", got)
+	}
+}
+
+func manyAgents(count int) []sessionfs.NativeSubagentAgent {
+	agents := make([]sessionfs.NativeSubagentAgent, 0, count)
+	for index := 0; index < count; index++ {
+		agents = append(agents, describedAgent(fmt.Sprintf("agent-%03d", index), "Searches one area of the code and reports file paths and line numbers."))
+	}
+	return agents
+}
+
+func TestSubagentDescriptionTierFollowsTheNumberOfAgentsAtTheDefaultBudget(t *testing.T) {
+	descriptionFor := func(count int) string {
+		settings := subagentSettings(manyAgents(count)...)
+		settings.ListMaxBytes = 4096
+		_, tool := buildSubagentCatalog(t, settings, &fakeLauncher{}, readOnlyTool("read"))
+		return tool.Definition.Description
+	}
+	// 40 lines of about 90 bytes fit in 4096: the full list.
+	if d := descriptionFor(40); !strings.Contains(d, "- agent-039: Searches one area") {
+		t.Fatalf("40 agents are not listed in full:\n%s", d)
+	}
+	// 100 agents do not fit in full (about 9 KB) but their names do (about 1 KB).
+	d := descriptionFor(100)
+	if strings.Contains(d, "Searches one area") || !strings.Contains(d, "\nAgents: agent-000, agent-001, ") || !strings.Contains(d, "agent-099. Call without a task") {
+		t.Fatalf("100 agents did not fall back to names:\n%s", d)
+	}
+	if len(d) > 1800 {
+		t.Fatalf("100 agents cost %d bytes of description, expected about 1 KB of names", len(d))
+	}
+	// 600 names do not fit in 4096 either: a count and the way to ask.
+	d = descriptionFor(600)
+	if strings.Contains(d, "agent-000") || !strings.Contains(d, "600 agents configured. Call without a task") {
+		t.Fatalf("600 agents did not collapse to a count:\n%s", d)
+	}
+	if len(d) > len(subagentDescription)+100 {
+		t.Fatalf("600 agents cost %d bytes, more than the base text plus a short note", len(d))
+	}
+}
+
+func TestSubagentCallWithoutATaskListsEveryAgentWithItsDescription(t *testing.T) {
+	launcher := &fakeLauncher{}
+	var many []sessionfs.NativeSubagentAgent
+	for _, name := range []string{"one", "two", "three"} {
+		many = append(many, describedAgent(name, "Does "+name+".\nSecond line."))
+	}
+	catalog, _ := buildSubagentCatalog(t, subagentSettings(many...), launcher, readOnlyTool("read"))
+	output := subagentCall(t, catalog, `{}`)
+	for _, want := range []string{`"status":"ok"`, "3 agents available", "agents: 3", "one: Does one. Second line.", "three: Does three. Second line."} {
+		if !strings.Contains(output, want) {
+			t.Errorf("list result lacks %q:\n%s", want, output)
+		}
+	}
+	if len(launcher.requests) != 0 {
+		t.Fatalf("listing started %d children", len(launcher.requests))
+	}
+	// With an agent named, the task still runs as before.
+	subagentCall(t, catalog, `{"task":"do it","agent":"two"}`)
+	if len(launcher.requests) != 1 || launcher.requests[0].Agent.Name != "two" {
+		t.Fatalf("requests = %+v", launcher.requests)
+	}
+}
+
+func TestSubagentListWorksWhereChildrenCannotRun(t *testing.T) {
+	// No launcher: a task answers "unavailable", but the list needs no launcher.
+	catalog, _ := buildSubagentCatalog(t, subagentSettings(describedAgent("a", "Does a.")), nil, readOnlyTool("read"))
+	if output := subagentCall(t, catalog, `{}`); !strings.Contains(output, "1 agent available") || !strings.Contains(output, "a: Does a.") {
+		t.Fatalf("list without a launcher:\n%s", output)
+	}
+	if output := subagentCall(t, catalog, `{"task":"x"}`); !strings.Contains(output, "subagent_unavailable") {
+		t.Fatalf("task without a launcher:\n%s", output)
+	}
+}
+
+func TestSubagentListIsCutAtTheResultLimit(t *testing.T) {
+	settings := subagentSettings(describedAgent("alpha", strings.Repeat("d", 100)), describedAgent("beta", strings.Repeat("e", 100)))
+	settings.ResultMaxBytes = 60
+	catalog, _ := buildSubagentCatalog(t, settings, &fakeLauncher{}, readOnlyTool("read"))
+	if output := subagentCall(t, catalog, `{}`); !strings.Contains(output, "truncated: true") {
+		t.Fatalf("a long list was not marked truncated:\n%s", output)
 	}
 }

@@ -31,6 +31,9 @@ func TestNormalizeNativeSubagentSettingsDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got.ListMaxBytes != defaultNativeSubagentListMaxBytes || defaultNativeSubagentListMaxBytes != 4096 {
+		t.Fatalf("list_max_bytes default = %d", got.ListMaxBytes)
+	}
 	if got.ResultMaxBytes != defaultNativeSubagentResultMaxBytes || got.MaxConcurrent != defaultNativeSubagentMaxConcurrent || got.StorageDir != "/w/.subagents" {
 		t.Fatalf("defaults = %+v", got)
 	}
@@ -41,7 +44,7 @@ func TestNormalizeNativeSubagentSettingsDefaultsAndOverrides(t *testing.T) {
 	}
 
 	custom, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{
-		"result_max_bytes": 100, "max_concurrent": 2, "storage_dir": "kids",
+		"result_max_bytes": 100, "max_concurrent": 2, "list_max_bytes": 0, "storage_dir": "kids",
 		"agents": {
 			"b": {"description": "second", "model": "model-b.json", "instructions": "Be brief.", "tools": ["read","grep"],
 			      "max_tool_rounds": 5, "max_run_tokens": 9000, "timeout_ms": 2000},
@@ -50,7 +53,7 @@ func TestNormalizeNativeSubagentSettingsDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if custom.ResultMaxBytes != 100 || custom.MaxConcurrent != 2 || custom.StorageDir != "/w/.jad/tools/kids" {
+	if custom.ResultMaxBytes != 100 || custom.MaxConcurrent != 2 || custom.ListMaxBytes != 0 || custom.StorageDir != "/w/.jad/tools/kids" {
 		t.Fatalf("custom = %+v", custom)
 	}
 	if custom.Agents[0].Name != "b" || custom.Agents[1].Name != "a" {
@@ -176,6 +179,9 @@ func TestNormalizeNativeSubagentSettingsRejectsInvalidSettings(t *testing.T) {
 		"result zero":        {`{"agents":{"a":{}},"result_max_bytes":0}`, "tools.native.subagent.result_max_bytes must be a safe integer between 1 and 10485760"},
 		"concurrent zero":    {`{"agents":{"a":{}},"max_concurrent":0}`, "tools.native.subagent.max_concurrent must be a safe integer between 1 and 32"},
 		"concurrent over":    {`{"agents":{"a":{}},"max_concurrent":33}`, "tools.native.subagent.max_concurrent must be a safe integer between 1 and 32"},
+		"list negative":      {`{"agents":{"a":{}},"list_max_bytes":-1}`, "tools.native.subagent.list_max_bytes must be a safe integer between 0 and 1048576"},
+		"list too large":     {`{"agents":{"a":{}},"list_max_bytes":1048577}`, "tools.native.subagent.list_max_bytes must be a safe integer between 0 and 1048576"},
+		"list string":        {`{"agents":{"a":{}},"list_max_bytes":"4096"}`, "tools.native.subagent.list_max_bytes must be a safe integer"},
 		"storage blank":      {`{"agents":{"a":{}},"storage_dir":" "}`, "tools.native.subagent.storage_dir must be a non-empty string"},
 		"rounds zero":        {`{"agents":{"a":{"max_tool_rounds":0}}}`, "agents.a.max_tool_rounds must be a safe integer between 1 and 50000"},
 		"tokens zero":        {`{"agents":{"a":{"max_run_tokens":0}}}`, "agents.a.max_run_tokens must be a safe integer between 1 and 1000000000000"},
@@ -188,7 +194,7 @@ func TestNormalizeNativeSubagentSettingsRejectsInvalidSettings(t *testing.T) {
 		"tools not array":    {`{"agents":{"a":{"tools":"read"}}}`, "agents.a.tools must be an array of tool names"},
 		"tools blank":        {`{"agents":{"a":{"tools":["read"," "]}}}`, "agents.a.tools[1] must be a non-empty string"},
 		"tools twice":        {`{"agents":{"a":{"tools":["read","read"]}}}`, "agents.a.tools lists read twice"},
-		"upper limit ok":     {`{"agents":{"a":{"timeout_ms":3600000}},"max_concurrent":32,"result_max_bytes":10485760}`, ""},
+		"upper limit ok":     {`{"agents":{"a":{"timeout_ms":3600000}},"max_concurrent":32,"result_max_bytes":10485760,"list_max_bytes":1048576}`, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := normalizeNativeSubagentSettings(subagentSettingsFor(tc.setting), "setting.json", "/w", "")
