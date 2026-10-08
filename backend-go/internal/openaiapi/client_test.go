@@ -3,6 +3,7 @@ package openaiapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -134,5 +135,70 @@ func TestStreamPropagatesHandlerError(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), wantErr.Error()) {
 		t.Fatalf("Stream() error = %v, want wrapped %q", err, wantErr)
+	}
+}
+
+// failingServer answers every request with the given status and body.
+func failingServer(t *testing.T, status int, contentType, body string) *Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
+		w.WriteHeader(status)
+		_, _ = fmt.Fprint(w, body)
+	}))
+	t.Cleanup(server.Close)
+	return NewClient(Config{APIKey: "test-api-key", BaseURL: server.URL + "/v1"})
+}
+
+func streamError(t *testing.T, client *Client) error {
+	t.Helper()
+	err := client.Stream(context.Background(), json.RawMessage(`{"model":"m","input":"hi"}`), func(Event) error { return nil })
+	if err == nil {
+		t.Fatal("Stream() succeeded, want an error")
+	}
+	return err
+}
+
+func TestStreamErrorCarriesABodyThatIsNotInTheOpenAIShape(t *testing.T) {
+	cases := []struct {
+		name, contentType, body, want string
+	}{
+		{"detail object", "application/json", `{"detail":"Store must be set to false"}`, `{"detail":"Store must be set to false"}`},
+		{"pretty detail object", "application/json", "{\n  \"detail\": \"Store must be set to false\"\n}\n", `{"detail":"Store must be set to false"}`},
+		{"plain text", "text/plain", "upstream gateway says no\n", "upstream gateway says no"},
+		{"html", "text/html", "<html>Forbidden</html>", "<html>Forbidden</html>"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := streamError(t, failingServer(t, http.StatusBadRequest, tc.contentType, tc.body))
+			if !strings.HasSuffix(err.Error(), "400 Bad Request "+tc.want) {
+				t.Errorf("error = %q, want it to end with %q", err.Error(), "400 Bad Request "+tc.want)
+			}
+			var status *StatusError
+			if !errors.As(err, &status) || status.ProviderStatus() != http.StatusBadRequest {
+				t.Errorf("errors.As(StatusError) = %v, status %v, want 400", status != nil, status)
+			}
+			if statusOf(err) != http.StatusBadRequest {
+				t.Errorf("statusOf = %d, want 400: the SDK error must stay reachable", statusOf(err))
+			}
+		})
+	}
+}
+
+func TestStreamErrorInTheOpenAIShapeIsNotChanged(t *testing.T) {
+	body := `{"error":{"message":"Bad model","type":"invalid_request_error","param":null,"code":"model_not_found"}}`
+	err := streamError(t, failingServer(t, http.StatusBadRequest, "application/json", body))
+	got := err.Error()
+	if !strings.HasSuffix(got, `"code":"model_not_found"}`) || strings.Count(got, "Bad model") != 1 {
+		t.Errorf("error = %q, want the SDK's text with the error object once", got)
+	}
+}
+
+func TestStreamErrorWithAnEmptyBodyStaysAsBefore(t *testing.T) {
+	err := streamError(t, failingServer(t, http.StatusBadRequest, "", ""))
+	if !strings.HasSuffix(err.Error(), "400 Bad Request ") {
+		t.Errorf("error = %q, want the unchanged SDK text", err.Error())
 	}
 }

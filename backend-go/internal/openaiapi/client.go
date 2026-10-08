@@ -1,12 +1,15 @@
 package openaiapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	streamresponses "example.com/agent-harness/backend-go/internal/responses"
@@ -92,7 +95,7 @@ func (c *Client) Stream(ctx context.Context, request json.RawMessage, handle Eve
 		err = fmt.Errorf("read OpenAI Responses stream: %w", err)
 		var apiError *openai.Error
 		if errors.As(err, &apiError) && apiError.StatusCode > 0 {
-			return &StatusError{Status: apiError.StatusCode, err: err}
+			return &StatusError{Status: apiError.StatusCode, err: withResponseBody(err, apiError)}
 		}
 		return err
 	}
@@ -138,6 +141,43 @@ func (c *Client) openStream(ctx context.Context, requestOptions []option.Request
 			return ssestream.NewStream[sdkresponses.ResponseStreamEventUnion](nil, sleepErr)
 		}
 	}
+}
+
+// bodyError is a failure whose message also carries the provider's response body.
+// Unwrap keeps the SDK's *openai.Error reachable for errors.As.
+type bodyError struct {
+	err  error
+	body string
+}
+
+func (e *bodyError) Error() string { return strings.TrimRight(e.err.Error(), " ") + " " + e.body }
+func (e *bodyError) Unwrap() error { return e.err }
+
+// withResponseBody returns err with the provider's response body added when the SDK's
+// own message left it out. The SDK reads the body of a failed response, keeps only the
+// value of a top-level "error" key and prints that; a provider that answers in another
+// shape, such as {"detail": "..."} or plain text, ends up with an empty message tail
+// ("400 Bad Request "). The SDK puts the body back on Response.Body, so it is read here
+// from that copy and put back again for any later reader. Nothing is added when the SDK
+// already printed a body, so a standard error is unchanged.
+func withResponseBody(err error, apiError *openai.Error) error {
+	if apiError.RawJSON() != "" || apiError.Response == nil || apiError.Response.Body == nil {
+		return err
+	}
+	body, readErr := io.ReadAll(apiError.Response.Body)
+	apiError.Response.Body = io.NopCloser(bytes.NewReader(body))
+	if readErr != nil {
+		return err
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return err
+	}
+	var compact bytes.Buffer
+	if json.Valid(body) && json.Compact(&compact, body) == nil {
+		text = compact.String()
+	}
+	return &bodyError{err: err, body: text}
 }
 
 // StatusError is a failure the provider answered with an HTTP status. The
