@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
 	"example.com/agent-harness/backend-go/internal/tools"
@@ -20,12 +19,15 @@ var subagentInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "task":{"type":"string","minLength":1,"description":"Self-contained instructions. The agent sees nothing of this conversation. Omit to list the agents."},
-    "agent":{"type":"string","description":"Agent name. Optional when only one is configured."}
+    "agent":{"type":"string","description":"Agent name. Optional when only one is configured."},
+    "id":{"type":"string","minLength":1,"description":"Run id from a call that returned still running. Use it instead of task."},
+    "wait_ms":{"type":"integer","minimum":0,"description":"Most time to wait for the answer; 0 checks without waiting. Clamped to session policy."},
+    "stop":{"type":"boolean","description":"With id: cancel that run."}
   },
   "additionalProperties":false
 }`)
 
-const subagentDescription = "Hand a task to a separate read-only agent with its own fresh context and get back only its final answer. Use it for searches or reading that would fill your context."
+const subagentDescription = "Hand a task to a separate read-only agent with its own fresh context and get back only its final answer. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again, call with that id."
 
 // subagentExample is shown to the model when its arguments are rejected.
 var subagentExample = json.RawMessage(`{"task":"Find where the retry delay is computed and report the file paths and line numbers."}`)
@@ -99,9 +101,8 @@ type subagentTool struct {
 	mu       sync.RWMutex
 	agents   []subagentAgent
 	launcher SubagentLauncher
-	// slots bounds the children running at once. The catalog is built per run, so
-	// the bound applies within one run.
-	slots chan struct{}
+	// manager owns the runs, so a run outlives the call that started it.
+	manager *SubagentManager
 }
 
 // NewSubagentTool builds the subagent tool over the already built tools of the same
@@ -115,6 +116,14 @@ func NewSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []to
 // the MCP tools an agent lists. A nil mcp is allowed; an agent that lists an MCP tool
 // then cannot start a child.
 func NewSubagentToolWithMCP(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher, mcp *SubagentMCP) (tools.Tool, error) {
+	return NewSubagentToolWithManager(settings, parentTools, launcher, mcp, nil)
+}
+
+// NewSubagentToolWithManager is NewSubagentToolWithMCP plus the manager that owns the
+// runs. The resolver passes one shared by every session of a storage directory and
+// closes it at shutdown. A nil manager gives the tool a private one that nothing
+// closes, which suits tests only.
+func NewSubagentToolWithManager(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(subagentInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native subagent schema: %w", err)
@@ -125,13 +134,22 @@ func NewSubagentToolWithMCP(settings sessionfs.NativeSubagentSettings, parentToo
 	if settings.MaxConcurrent < 1 {
 		return tools.Tool{}, errors.New("tools.native.subagent.max_concurrent must be at least 1")
 	}
+	if settings.MaxWaitMS < 1 {
+		return tools.Tool{}, errors.New("tools.native.subagent.max_wait_ms must be at least 1")
+	}
+	if settings.KeepFinished < 1 {
+		return tools.Tool{}, errors.New("tools.native.subagent.keep_finished must be at least 1")
+	}
+	if manager == nil {
+		manager = NewSubagentManager()
+	}
 	readOnly := make([]tools.Tool, 0, len(parentTools))
 	for _, tool := range parentTools {
 		if tool.ReadOnly && tool.Definition.Source == "native" && tool.Definition.ID != subagentToolID {
 			readOnly = append(readOnly, tool)
 		}
 	}
-	runtime := &subagentTool{settings: settings, launcher: launcher, slots: make(chan struct{}, settings.MaxConcurrent)}
+	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager}
 	for _, agent := range settings.Agents {
 		childTools, mcpIDs, err := subagentChildTools(agent, readOnly)
 		if err != nil {
@@ -202,9 +220,10 @@ func subagentAgentList(agents []sessionfs.NativeSubagentAgent, maxBytes int64) s
 	return fmt.Sprintf("\n%d %s configured.%s", len(agents), noun, askForList)
 }
 
-// renderSubagentList is the result of a call with no task: one line per agent.
-func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64) (string, error) {
-	lines := make([]string, 0, len(agents))
+// renderSubagentList is the result of a call with no task: one line per agent, then
+// one per retained run, so a model that lost a run id can find it again.
+func renderSubagentList(callID string, agents []subagentAgent, runs []subagentRunView, maxBytes int64) (string, error) {
+	lines := make([]string, 0, len(agents)+len(runs)+2)
 	for _, agent := range agents {
 		line := agent.config.Name
 		if agent.config.Description != "" {
@@ -212,8 +231,17 @@ func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64) (
 		}
 		lines = append(lines, line)
 	}
+	if len(runs) > 0 {
+		lines = append(lines, "", "Runs:")
+		for _, run := range runs {
+			lines = append(lines, fmt.Sprintf("%s %s %s %ds: %s", run.id, run.agent, run.state, int64(run.elapsed.Seconds()), run.task))
+		}
+	}
 	text, cut := cutUTF8(strings.Join(lines, "\n"), maxBytes)
 	information := []tools.Information{{Key: "agents", Value: len(agents)}}
+	if len(runs) > 0 {
+		information = append(information, tools.Information{Key: "runs", Value: len(runs)})
+	}
 	if cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
 	}
@@ -315,19 +343,23 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool) error {
 	return nil
 }
 
-// normalizeSubagentArguments treats a blank agent as absent, so a model that sends an
-// empty string for "the default" is not rejected, and a blank task as absent too,
-// which asks for the agent list.
+// normalizeSubagentArguments treats a blank agent, id or task as absent, so a model
+// that sends an empty string for "the default" is not rejected, and a blank task as a
+// request for the agent list. A negative wait is no wait.
 func normalizeSubagentArguments(arguments map[string]any) map[string]any {
-	if task, ok := arguments["task"].(string); ok && strings.TrimSpace(task) == "" {
-		delete(arguments, "task")
-	}
-	if name, ok := arguments["agent"].(string); ok {
-		if trimmed := strings.TrimSpace(name); trimmed == "" {
-			delete(arguments, "agent")
-		} else {
-			arguments["agent"] = trimmed
+	for _, key := range []string{"task", "agent", "id"} {
+		value, ok := arguments[key].(string)
+		if !ok {
+			continue
 		}
+		if trimmed := strings.TrimSpace(value); trimmed == "" {
+			delete(arguments, key)
+		} else if key != "task" {
+			arguments[key] = trimmed
+		}
+	}
+	if wait, ok := safeInteger(arguments["wait_ms"]); ok && wait < 0 {
+		arguments["wait_ms"] = json.Number("0")
 	}
 	return arguments
 }
@@ -356,88 +388,6 @@ func (s *subagentTool) agentNames() string {
 		names = append(names, agent.config.Name)
 	}
 	return strings.Join(names, ", ")
-}
-
-func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-	callID := execution.CallID
-	task, _ := arguments["task"].(string)
-	task = strings.TrimSpace(task)
-	if task == "" {
-		// No task: the caller wants the agent list. It needs no launcher, so it works
-		// even where children cannot run.
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		return renderSubagentList(callID, s.agents, s.settings.ResultMaxBytes)
-	}
-	agent, problem := s.selectAgent(arguments)
-	if problem != "" {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "unknown_agent", problem,
-			tools.Information{Key: "available", Value: s.agentNames()}), nil
-	}
-	if s.launcher == nil {
-		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable", "Sub-agent runs are not available in this session"), nil
-	}
-	if agent.catalog == nil {
-		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable",
-			fmt.Sprintf("The MCP tools of agent %s were not loaded", agent.config.Name)), nil
-	}
-
-	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
-	case <-ctx.Done():
-		return "", ctx.Err()
-	}
-	childContext, cancel := context.WithTimeout(ctx, time.Duration(agent.config.TimeoutMS)*time.Millisecond)
-	defer cancel()
-	result, err := s.launcher.Run(childContext, SubagentRequest{
-		Agent:  agent.config,
-		Task:   task,
-		CallID: callID,
-		Tools:  agent.catalog,
-		Execution: tools.ExecutionContext{
-			WorkspaceRoot: execution.WorkspaceRoot,
-			SessionDir:    execution.SessionDir,
-		},
-	})
-	if err != nil {
-		// The parent stopping is not a sub-agent failure; let the runner record the stop.
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		if childContext.Err() != nil {
-			return tools.ExecutionError(callID, tools.StatusError, "subagent_timeout",
-				fmt.Sprintf("Agent %s did not finish within %d ms", agent.config.Name, agent.config.TimeoutMS),
-				tools.Information{Key: "agent", Value: agent.config.Name}), nil
-		}
-		return tools.ExecutionError(callID, tools.StatusError, "subagent_failed",
-			fmt.Sprintf("Agent %s failed: %s", agent.config.Name, boundedReason(err.Error())),
-			tools.Information{Key: "agent", Value: agent.config.Name}), nil
-	}
-	text := strings.TrimSpace(result.Text)
-	if text == "" {
-		return tools.ExecutionError(callID, tools.StatusError, "subagent_empty_result",
-			fmt.Sprintf("Agent %s finished without an answer", agent.config.Name),
-			tools.Information{Key: "agent", Value: agent.config.Name},
-			tools.Information{Key: "rounds", Value: result.Rounds},
-			tools.Information{Key: "tokens", Value: result.Tokens}), nil
-	}
-	text, cut := cutUTF8(text, s.settings.ResultMaxBytes)
-	information := []tools.Information{
-		{Key: "agent", Value: agent.config.Name},
-		{Key: "rounds", Value: result.Rounds},
-		{Key: "tokens", Value: result.Tokens},
-	}
-	if cut {
-		information = append(information, tools.Information{Key: "truncated", Value: true})
-	}
-	return tools.RenderToolResult(tools.ResultOptions{
-		ID:          callID,
-		Status:      tools.StatusOK,
-		Summary:     fmt.Sprintf("Agent %s finished", agent.config.Name),
-		Information: information,
-		Content:     &tools.Content{Encoding: "utf8", Text: text},
-	})
 }
 
 // subagentReasonBytes bounds an error text copied into a result, so a provider error

@@ -20,13 +20,23 @@ const (
 	defaultNativeSubagentMaxToolRounds int64 = 30
 	defaultNativeSubagentTimeoutMS     int64 = 600_000
 	maxNativeSubagentTimeoutMS         int64 = 3_600_000
+	// A call waits wait_ms for the child's answer and then returns the run's id with the
+	// child still going, so a slow child is not thrown away; timeout_ms stays the hard
+	// limit on the child's whole life. max_wait_ms caps any wait the model asks for.
+	defaultNativeSubagentWaitMS    int64 = 120_000
+	defaultNativeSubagentMaxWaitMS int64 = 600_000
+	maxNativeSubagentWaitMS        int64 = 3_600_000
+	defaultNativeSubagentKeepDone  int64 = 50
+	maxNativeSubagentKeepDone      int64 = 1000
+	defaultNativeSubagentMaxQueued int64 = 32
+	maxNativeSubagentMaxQueued     int64 = 1024
 	// maxNativeSubagentDescriptionChars bounds the text each agent adds to the tool
 	// description, which is sent to the model on every request.
 	maxNativeSubagentDescriptionChars = 500
 )
 
 var (
-	nativeSubagentKeys      = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "storage_dir"}
+	nativeSubagentKeys      = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "storage_dir"}
 	nativeSubagentAgentKeys = []string{"description", "model", "tools", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
@@ -36,8 +46,24 @@ type NativeSubagentSettings struct {
 	// ResultMaxBytes is the most child text one call returns; a longer answer is cut
 	// and the result says so.
 	ResultMaxBytes int64
-	// MaxConcurrent is the most children that run at once within one run.
+	// MaxConcurrent is the most children that run at once. Children outlive a call, so
+	// the limit counts every child of the same storage directory, across runs; the
+	// session that first uses the directory sets it.
 	MaxConcurrent int64
+	// WaitMS is how long a call waits for the child's answer before it returns the
+	// run's id and leaves the child running. Zero returns at once, so every call
+	// detaches. The zero value of this struct therefore means "detach", not "default";
+	// the loader always sets it.
+	WaitMS int64
+	// MaxWaitMS caps a wait the model asks for with wait_ms. The tool refuses a value
+	// below one, because a zero cap would turn every wait into zero.
+	MaxWaitMS int64
+	// KeepFinished is how many finished runs stay readable by id; the oldest go first.
+	// Runs still going are never dropped.
+	KeepFinished int64
+	// MaxQueued is how many runs may wait for a free slot while MaxConcurrent are
+	// going. A start beyond it is refused. Zero allows no waiting at all.
+	MaxQueued int64
 	// ListMaxBytes is the most bytes of agent list the tool description may carry:
 	// the full list when it fits, else the names, else a count. Zero never lists
 	// inline, so the model has to ask. The zero value of this struct therefore means
@@ -131,6 +157,18 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.ListMaxBytes, err = configuredInteger(fields, "list_max_bytes", defaultNativeSubagentListMaxBytes, 0, maxNativeSubagentListMaxBytes, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.WaitMS, err = configuredInteger(fields, "wait_ms", defaultNativeSubagentWaitMS, 0, maxNativeSubagentWaitMS, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.MaxWaitMS, err = configuredInteger(fields, "max_wait_ms", defaultNativeSubagentMaxWaitMS, 1, maxNativeSubagentWaitMS, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.KeepFinished, err = configuredInteger(fields, "keep_finished", defaultNativeSubagentKeepDone, 1, maxNativeSubagentKeepDone, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.MaxQueued, err = configuredInteger(fields, "max_queued", defaultNativeSubagentMaxQueued, 0, maxNativeSubagentMaxQueued, settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.StorageDir, err = normalizeNativeSubagentStorageDir(fields, cwd, toolStorageDir, settingPath); err != nil {

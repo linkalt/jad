@@ -50,7 +50,7 @@ func mcpReadOnlyTool(name string) tools.Tool {
 }
 
 func subagentSettings(agents ...sessionfs.NativeSubagentAgent) sessionfs.NativeSubagentSettings {
-	return sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, StorageDir: "/tmp/unused", Agents: agents}
+	return sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, WaitMS: 5000, MaxWaitMS: 10000, KeepFinished: 10, MaxQueued: 4, StorageDir: "/tmp/unused", Agents: agents}
 }
 
 func agentNamed(name string) sessionfs.NativeSubagentAgent {

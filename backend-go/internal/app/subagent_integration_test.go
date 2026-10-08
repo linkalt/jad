@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,12 @@ type subagentProvider struct {
 	childFirstCall [2]string
 	childEntered   chan struct{}
 	childCancelled chan struct{}
+	// detach scripts the parent to start the child with wait_ms 0, so the call returns
+	// a run id at once, and then to collect the answer with that id. childHold keeps
+	// the child's first request waiting until the parent has seen the handoff.
+	detach       bool
+	childHold    chan struct{}
+	holdReleased sync.Once
 	// childRelease ends a blocked child request at cleanup, so a run that was not
 	// cancelled fails the test instead of hanging the server shutdown.
 	childRelease chan struct{}
@@ -111,12 +118,27 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 			return
 		}
 
+		if body.Model == "child-model" && p.childHold != nil {
+			select {
+			case <-p.childHold:
+			case <-r.Context().Done():
+				return
+			}
+		}
+
 		if fail {
 			http.Error(w, `{"error":{"message":"child provider down","type":"server_error"}}`, status)
 			return
 		}
 		var events []string
 		switch {
+		case body.Model == "parent-model" && p.detach && !strings.Contains(record.Text, "function_call_output"):
+			events = functionCallEvents("call-sub", "subagent", `{"task":"find the answer","wait_ms":0}`)
+		case body.Model == "parent-model" && p.detach && !strings.Contains(record.Text, "the answer is 42"):
+			// The handoff came back. Let the child go, then collect with the id from it.
+			id := regexp.MustCompile(`sub_[0-9a-f]{8}`).FindString(lastOutput(record.Text))
+			p.holdReleased.Do(func() { close(p.childHold) })
+			events = functionCallEvents("call-collect", "subagent", fmt.Sprintf(`{"id":%q,"wait_ms":10000}`, id))
 		case body.Model == "parent-model" && !strings.Contains(record.Text, "function_call_output") && p.parentCalls > 1:
 			events = manyCallEvents(p.parentCalls)
 		case body.Model == "parent-model" && !strings.Contains(record.Text, "function_call_output"):
@@ -855,5 +877,38 @@ func TestSeveralSubagentCallsInOneResponseEachGetTheirOwnContextAndTranscript(t 
 	}
 	if got := strings.Count(parent[1].Text, "the answer is 42"); got != 3 {
 		t.Errorf("the parent received %d child answers, want 3", got)
+	}
+}
+
+func TestHTTPRunSlowSubagentHandsBackAnIdAndTheLaterCallCollectsTheAnswer(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	f.provider.detach = true
+	f.provider.childHold = make(chan struct{})
+	t.Cleanup(func() { f.provider.holdReleased.Do(func() { close(f.provider.childHold) }) })
+
+	body := f.run(t)
+	if !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	parent := f.provider.forModel("parent-model")
+	if len(parent) != 3 {
+		t.Fatalf("parent requests = %d, want 3 (task, collect, final answer)", len(parent))
+	}
+	if !strings.Contains(parent[1].Text, "still running") || !strings.Contains(parent[1].Text, "Do not start the task again") {
+		t.Errorf("the parent's second request lacks the handoff text:\n%s", parent[1].Text)
+	}
+	if strings.Contains(parent[1].Text, "error_code") {
+		t.Errorf("the handoff was reported as an error:\n%s", parent[1].Text)
+	}
+	if !strings.Contains(parent[2].Text, "Agent explore finished") || !strings.Contains(parent[2].Text, "the answer is 42") {
+		t.Errorf("the collected answer did not reach the parent:\n%s", parent[2].Text)
+	}
+	// The collect call used the first child; it did not start another one.
+	if child := f.provider.forModel("child-model"); len(child) != 2 {
+		t.Errorf("child requests = %d, want 2 (one child: read, then answer)", len(child))
+	}
+	folders, err := filepath.Glob(filepath.Join(f.workspace, ".subagents", "*", "messages.jsonl"))
+	if err != nil || len(folders) != 1 {
+		t.Errorf("child transcripts = %v, %v; want exactly 1", folders, err)
 	}
 }

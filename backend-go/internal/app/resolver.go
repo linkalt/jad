@@ -44,16 +44,17 @@ type Resolver struct {
 	environment map[string]string
 	catalog     CatalogConfig
 
-	mu              sync.Mutex
-	settingsMu      sync.Mutex
-	stores          map[string]*sharedSession
-	processManagers map[string]*native.ManagedProcessManager
-	mcpManagers     map[string]*mcpclient.Manager
-	taskStores      map[string]*native.TaskStore
-	memoryStores    map[string]*native.MemoryStore
-	fetchStores     map[string]*native.FetchStore
-	mutationLock    *native.PathLocks
-	closed          bool
+	mu               sync.Mutex
+	settingsMu       sync.Mutex
+	stores           map[string]*sharedSession
+	processManagers  map[string]*native.ManagedProcessManager
+	subagentManagers map[string]*native.SubagentManager
+	mcpManagers      map[string]*mcpclient.Manager
+	taskStores       map[string]*native.TaskStore
+	memoryStores     map[string]*native.MemoryStore
+	fetchStores      map[string]*native.FetchStore
+	mutationLock     *native.PathLocks
+	closed           bool
 }
 
 type sharedSession struct {
@@ -101,17 +102,18 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		option(&resolverOptions)
 	}
 	return &Resolver{
-		logger:          resolverOptions.logger,
-		roots:           copyRoots,
-		environment:     copyEnvironment,
-		catalog:         catalog,
-		stores:          make(map[string]*sharedSession),
-		processManagers: make(map[string]*native.ManagedProcessManager),
-		mcpManagers:     make(map[string]*mcpclient.Manager),
-		taskStores:      make(map[string]*native.TaskStore),
-		memoryStores:    make(map[string]*native.MemoryStore),
-		fetchStores:     make(map[string]*native.FetchStore),
-		mutationLock:    native.NewPathLocks(),
+		logger:           resolverOptions.logger,
+		roots:            copyRoots,
+		environment:      copyEnvironment,
+		catalog:          catalog,
+		stores:           make(map[string]*sharedSession),
+		processManagers:  make(map[string]*native.ManagedProcessManager),
+		subagentManagers: make(map[string]*native.SubagentManager),
+		mcpManagers:      make(map[string]*mcpclient.Manager),
+		taskStores:       make(map[string]*native.TaskStore),
+		memoryStores:     make(map[string]*native.MemoryStore),
+		fetchStores:      make(map[string]*native.FetchStore),
+		mutationLock:     native.NewPathLocks(),
 	}, nil
 }
 
@@ -348,7 +350,7 @@ func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.Sessio
 	memoryStore := r.sharedMemoryStore(config)
 	fetchStore := r.sharedFetchStore(config)
 	subagentMCP := &native.SubagentMCP{}
-	nativeCatalog, err := native.BuildCatalogWithSubagents(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP)
+	nativeCatalog, err := native.BuildCatalogWithSubagents(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config))
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
@@ -390,6 +392,26 @@ func (r *Resolver) sharedProcessManager(config sessionfs.SessionConfig) native.P
 	}
 	manager := native.NewProcessManager(storageKey)
 	r.processManagers[storageKey] = manager
+	return manager
+}
+
+// sharedSubagentManager returns the manager that owns the child runs of one storage
+// directory, so a run started in one request can be read in a later one.
+func (r *Resolver) sharedSubagentManager(config sessionfs.SessionConfig) *native.SubagentManager {
+	if config.NativeSubagent == nil {
+		return nil
+	}
+	storageKey := filepath.Clean(config.NativeSubagent.StorageDir)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if manager := r.subagentManagers[storageKey]; manager != nil {
+		return manager
+	}
+	if r.closed {
+		return nil
+	}
+	manager := native.NewSubagentManager()
+	r.subagentManagers[storageKey] = manager
 	return manager
 }
 
@@ -540,7 +562,15 @@ func (r *Resolver) Close() {
 	for _, manager := range r.mcpManagers {
 		mcpManagers = append(mcpManagers, manager)
 	}
+	subagentManagers := make([]*native.SubagentManager, 0, len(r.subagentManagers))
+	for _, manager := range r.subagentManagers {
+		subagentManagers = append(subagentManagers, manager)
+	}
 	r.mu.Unlock()
+	// Children first: they may be using MCP tools the next loop closes.
+	for _, manager := range subagentManagers {
+		_ = manager.Close()
+	}
 	for _, manager := range managers {
 		_ = manager.Close()
 	}
