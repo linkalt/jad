@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -89,6 +90,8 @@ func (s *subagentTool) followUp(ctx context.Context, callID, owner, id string, s
 	if stop {
 		s.manager.stop(run)
 	}
+	// A run restored after a restart has its text in the transcript, not in memory.
+	run.loadText(s.settings.ResultMaxBytes)
 	// A detached run goes on when this call is cancelled: the model can still ask for it.
 	return s.await(ctx, callID, run, s.waitFor(arguments), false)
 }
@@ -122,6 +125,31 @@ func (s *subagentTool) await(ctx context.Context, callID string, run *subagentRu
 	return s.renderRun(callID, run.view())
 }
 
+// partialInformation adds what a cut-off run left behind to a result: a flag that the
+// text is incomplete, and the child's transcript, where its tool results are.
+func partialInformation(information []tools.Information, run subagentRunView) []tools.Information {
+	if strings.TrimSpace(run.result.Text) != "" {
+		information = append(information, tools.Information{Key: "partial", Value: true})
+		if run.cut {
+			information = append(information, tools.Information{Key: "truncated", Value: true})
+		}
+	}
+	if run.dir != "" {
+		information = append(information, tools.Information{Key: "transcript", Value: filepath.Join(run.dir, "messages.jsonl")})
+	}
+	return information
+}
+
+// partialContent is the last text the child wrote before it was cut off, or nil when
+// it wrote none. It is not an answer: the child did not finish.
+func partialContent(run subagentRunView) *tools.Content {
+	text := strings.TrimSpace(run.result.Text)
+	if text == "" {
+		return nil
+	}
+	return &tools.Content{Encoding: "utf8", Text: text}
+}
+
 func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, error) {
 	switch run.state {
 	case subagentRunQueued, subagentRunRunning:
@@ -138,19 +166,47 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 			},
 		})
 	case subagentRunStopped:
+		information := []tools.Information{{Key: "rounds", Value: run.result.Rounds}, {Key: "tokens", Value: run.result.Tokens}}
 		return tools.RenderToolResult(tools.ResultOptions{
 			ID:          callID,
 			Status:      tools.StatusOK,
 			Summary:     fmt.Sprintf("Agent %s was stopped (run %s)", run.agent, run.id),
-			Information: []tools.Information{{Key: "rounds", Value: run.result.Rounds}, {Key: "tokens", Value: run.result.Tokens}},
+			Information: partialInformation(information, run),
+			Content:     partialContent(run),
 		})
 	case subagentRunTimedOut:
-		return tools.ExecutionError(callID, tools.StatusError, "subagent_timeout",
-			fmt.Sprintf("Agent %s did not finish within %d ms", run.agent, run.timeoutMS),
-			tools.Information{Key: "run", Value: run.id},
-			tools.Information{Key: "agent", Value: run.agent},
-			tools.Information{Key: "rounds", Value: run.result.Rounds},
-			tools.Information{Key: "tokens", Value: run.result.Tokens}), nil
+		information := []tools.Information{
+			{Key: "error_type", Value: "execution"},
+			{Key: "error_code", Value: "subagent_timeout"},
+			{Key: "run", Value: run.id},
+			{Key: "agent", Value: run.agent},
+			{Key: "rounds", Value: run.result.Rounds},
+			{Key: "tokens", Value: run.result.Tokens},
+		}
+		return tools.RenderToolResult(tools.ResultOptions{
+			ID:          callID,
+			Status:      tools.StatusError,
+			Summary:     fmt.Sprintf("Agent %s did not finish within %d ms", run.agent, run.timeoutMS),
+			Information: partialInformation(information, run),
+			Content:     partialContent(run),
+		})
+	case subagentRunLost:
+		information := []tools.Information{
+			{Key: "error_type", Value: "execution"},
+			{Key: "error_code", Value: "subagent_lost"},
+			{Key: "run", Value: run.id},
+			{Key: "agent", Value: run.agent},
+			{Key: "rounds", Value: run.result.Rounds},
+			{Key: "tokens", Value: run.result.Tokens},
+		}
+		return tools.RenderToolResult(tools.ResultOptions{
+			ID:     callID,
+			Status: tools.StatusError,
+			Summary: fmt.Sprintf("Agent %s was lost: the server stopped while it was going (run %s). The child did not survive. Start the task again only if the partial work below is not enough",
+				run.agent, run.id),
+			Information: partialInformation(information, run),
+			Content:     partialContent(run),
+		})
 	case subagentRunFailed:
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_failed",
 			fmt.Sprintf("Agent %s failed: %s", run.agent, boundedReason(run.reason)),

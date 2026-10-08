@@ -42,6 +42,10 @@ type SubagentRequest struct {
 	Tools *tools.Catalog
 	// Execution carries the workspace roots the child's tools resolve paths against.
 	Execution tools.ExecutionContext
+	// OnTranscript, when set, is called once with the child's transcript directory as
+	// soon as the launcher has created it, so the manager knows where the child's work
+	// is even if the server dies before the child ends.
+	OnTranscript func(dir string)
 }
 
 // SubagentResult is what a finished child run reports.

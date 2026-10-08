@@ -51,9 +51,12 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	if err != nil {
 		return native.SubagentResult{}, err
 	}
-	store, err := l.openStore(config, request)
+	store, dir, err := l.openStore(config, request)
 	if err != nil {
 		return native.SubagentResult{}, err
+	}
+	if request.OnTranscript != nil {
+		request.OnTranscript(dir)
 	}
 	runner, err := session.NewRunner(store, l.resolver.newProviderStreamer(config, apiKey), session.ModelSettings{
 		Model:      config.Model.Name,
@@ -70,6 +73,9 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	}
 
 	var rounds, tokens atomic.Int64
+	// lastText is the newest assistant text of any round. A child that is cut off has
+	// no final answer, but what it wrote last is the best partial work it has.
+	var lastText atomic.Value
 	result, runErr := runner.Run(ctx, input, session.RunOptions{
 		ToolCatalog:          request.Tools,
 		ToolExecution:        request.Execution,
@@ -81,13 +87,17 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 		OnResponseCommitted: func(event json.RawMessage, _ transcript.CommitResult) {
 			rounds.Add(1)
 			tokens.Add(session.ResponseTokens(event))
+			if text := native.SubagentAnswerText(event); strings.TrimSpace(text) != "" {
+				lastText.Store(text)
+			}
 		},
 	})
 	outcome := native.SubagentResult{Rounds: int(rounds.Load()), Tokens: tokens.Load()}
 	if runErr != nil {
+		outcome.Text, _ = lastText.Load().(string)
 		return outcome, runErr
 	}
-	outcome.Text = finalAssistantText(result.Event)
+	outcome.Text = native.SubagentAnswerText(result.Event)
 	return outcome, nil
 }
 
@@ -109,13 +119,13 @@ func (l subagentLauncher) childConfig(request native.SubagentRequest) (sessionfs
 
 // openStore creates the child's transcript under the agent storage directory, in a
 // directory of its own so two children never share history.
-func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request native.SubagentRequest) (*transcript.TurnStore, error) {
+func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request native.SubagentRequest) (*transcript.TurnStore, string, error) {
 	if config.NativeSubagent == nil {
-		return nil, errors.New("tools.native.subagent is not configured")
+		return nil, "", errors.New("tools.native.subagent is not configured")
 	}
 	var random [4]byte
 	if _, err := rand.Read(random[:]); err != nil {
-		return nil, fmt.Errorf("create sub-agent directory name: %w", err)
+		return nil, "", fmt.Errorf("create sub-agent directory name: %w", err)
 	}
 	name := unsafeDirectoryCharacters.ReplaceAllString(request.CallID, "_")
 	if name == "" {
@@ -123,11 +133,11 @@ func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request nati
 	}
 	directory := filepath.Join(config.NativeSubagent.StorageDir, name+"-"+hex.EncodeToString(random[:]))
 	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return nil, fmt.Errorf("create sub-agent directory: %w", err)
+		return nil, "", fmt.Errorf("create sub-agent directory: %w", err)
 	}
 	journal, err := transcript.NewJournal(filepath.Join(directory, "messages.jsonl"), transcript.DurabilityMode(config.Persistence.Durability))
 	if err != nil {
-		return nil, fmt.Errorf("create sub-agent transcript: %w", err)
+		return nil, "", fmt.Errorf("create sub-agent transcript: %w", err)
 	}
 	store, err := transcript.NewTurnStore(journal, filepath.Join(directory, "staging"), transcript.TurnStoreOptions{
 		Logger:           l.resolver.logger,
@@ -135,39 +145,7 @@ func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request nati
 		ResponseMetadata: transcript.ResponseMetadataMode(config.Persistence.ResponseMetadata),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("create sub-agent turn store: %w", err)
+		return nil, "", fmt.Errorf("create sub-agent turn store: %w", err)
 	}
-	return store, nil
-}
-
-// finalAssistantText joins the output text of the assistant messages in a completed
-// response event. Reasoning and tool-call items carry no answer and are skipped.
-func finalAssistantText(event json.RawMessage) string {
-	var envelope struct {
-		Response struct {
-			Output []struct {
-				Type    string `json:"type"`
-				Role    string `json:"role"`
-				Content []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"content"`
-			} `json:"output"`
-		} `json:"response"`
-	}
-	if json.Unmarshal(event, &envelope) != nil {
-		return ""
-	}
-	var parts []string
-	for _, item := range envelope.Response.Output {
-		if item.Type != "message" || (item.Role != "" && item.Role != "assistant") {
-			continue
-		}
-		for _, content := range item.Content {
-			if content.Type == "output_text" && strings.TrimSpace(content.Text) != "" {
-				parts = append(parts, content.Text)
-			}
-		}
-	}
-	return strings.Join(parts, "\n\n")
+	return store, directory, nil
 }

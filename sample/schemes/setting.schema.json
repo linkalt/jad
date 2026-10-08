@@ -1733,13 +1733,14 @@
                 "wait_ms": {"type": "integer", "minimum": 0, "maximum": 3600000, "default": 120000, "description": "How long a call waits for the child's answer. After that the call returns the run id and the child keeps running (limited by the agent's timeout_ms), so a slow child is not thrown away and started again. 0 returns the id at once."},
                 "max_wait_ms": {"type": "integer", "minimum": 1, "maximum": 3600000, "default": 600000, "description": "Cap on a wait the model asks for with wait_ms."},
                 "keep_finished": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50, "description": "Finished runs kept readable by id; the oldest are dropped first. Runs still going are never dropped."},
+                "persist_runs": {"type": "boolean", "default": true, "description": "Write a small manifest per run into a .runs folder of storage_dir, so run ids and finished results survive a server restart. A run that was going at the restart is reported as lost; its child died with the server, and only the transcript it wrote remains. false keeps runs in memory only."},
                 "max_queued": {"type": "integer", "minimum": 0, "maximum": 1024, "default": 32, "description": "Runs that may wait for a free slot while max_concurrent are going. A start beyond it is refused with subagent_busy. 0 allows no waiting."},
                 "storage_dir": {"type": "string", "minLength": 1, "default": ".subagents", "description": "Directory holding one transcript folder per child run. Relative paths resolve against the profile's tool storage, or the working directory without profiles."},
                 "statecontext": {
                   "type": "object",
                   "description": "Which of the session's sub-agent runs a statecontext snapshot lists (when statecontext.tools includes subagent), so the model still has its run ids after a compaction. Each item carries the id, agent, state, a short task preview, times, rounds and tokens; never the answer.",
                   "properties": {
-                    "states": {"type": "array", "items": {"type": "string", "enum": ["queued", "running", "done", "failed", "timed_out", "stopped"]}, "uniqueItems": true, "default": ["queued", "running"], "description": "Run states to list."},
+                    "states": {"type": "array", "items": {"type": "string", "enum": ["queued", "running", "done", "failed", "timed_out", "stopped", "lost"]}, "uniqueItems": true, "default": ["queued", "running"], "description": "Run states to list."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 20, "description": "Most runs listed, newest first."}
                   },
                   "additionalProperties": false

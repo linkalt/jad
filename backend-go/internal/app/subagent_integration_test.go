@@ -50,6 +50,13 @@ type subagentProvider struct {
 	handoffOnly  bool
 	childHold    chan struct{}
 	holdReleased sync.Once
+	// childPartial scripts the child to write some text with its first tool call and
+	// then hang in its second round, so a timeout cuts it off with partial work.
+	childPartial bool
+	// collectMarker scripts a parent whose input holds this text to collect the run named
+	// in collectID with one subagent call and then report what it got.
+	collectMarker string
+	collectID     string
 	// childRelease ends a blocked child request at cleanup, so a run that was not
 	// cancelled fails the test instead of hanging the server shutdown.
 	childRelease chan struct{}
@@ -102,7 +109,7 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		p.requests = append(p.requests, record)
 		fail := body.Model == "child-model" && p.childFails != 0
 		status := p.childFails
-		block := body.Model == "child-model" && p.childBlocks
+		block := body.Model == "child-model" && (p.childBlocks || (p.childPartial && strings.Contains(record.Text, "function_call_output")))
 		p.mu.Unlock()
 
 		if block {
@@ -135,6 +142,13 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		}
 		var events []string
 		switch {
+		case body.Model == "parent-model" && p.collectMarker != "" && strings.Contains(record.Text, p.collectMarker):
+			after := record.Text[strings.LastIndex(record.Text, p.collectMarker):]
+			if strings.Contains(after, "function_call_output") {
+				events = messageEvents("parent saw: "+lastOutput(after), 31)
+			} else {
+				events = functionCallEvents("call-collect", "subagent", fmt.Sprintf(`{"id":%q,"wait_ms":100}`, p.collectID))
+			}
 		case body.Model == "parent-model" && p.handoffOnly && !strings.Contains(record.Text, "function_call_output"):
 			events = functionCallEvents("call-sub", "subagent", `{"task":"find the answer","wait_ms":0}`)
 		case body.Model == "parent-model" && p.detach && !strings.Contains(record.Text, "function_call_output"):
@@ -153,7 +167,9 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		case !strings.Contains(record.Text, "function_call_output"):
 			// A child's first round: its own history holds no tool result yet. Judging by the
 			// request's own history, not a global count, keeps several children apart.
-			if p.childFirstCall[0] != "" {
+			if p.childPartial {
+				events = textThenCallEvents("checking notes.txt first", "call-read", "read", `{"path":"notes.txt"}`)
+			} else if p.childFirstCall[0] != "" {
 				events = functionCallEvents("call-first", p.childFirstCall[0], p.childFirstCall[1])
 			} else {
 				events = functionCallEvents("call-read", "read", `{"path":"notes.txt"}`)
@@ -190,6 +206,20 @@ func functionCallEvents(callID, name, arguments string) []string {
 	return []string{
 		`{"type":"response.output_item.done","output_index":0,"item":` + item + `}`,
 		`{"type":"response.completed","response":{"id":"resp-call","status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}`,
+	}
+}
+
+// textThenCallEvents is one response that holds an assistant message and a tool call,
+// in the order a model writes them.
+func textThenCallEvents(text, callID, name, arguments string) []string {
+	encodedText, _ := json.Marshal(text)
+	message := `{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + string(encodedText) + `}]}`
+	encodedArguments, _ := json.Marshal(arguments)
+	call := fmt.Sprintf(`{"type":"function_call","call_id":%q,"name":%q,"arguments":%s}`, callID, name, encodedArguments)
+	return []string{
+		`{"type":"response.output_item.done","output_index":0,"item":` + message + `}`,
+		`{"type":"response.output_item.done","output_index":1,"item":` + call + `}`,
+		`{"type":"response.completed","response":{"id":"resp-call","status":"completed","output":[` + message + `,` + call + `],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}`,
 	}
 }
 
@@ -230,6 +260,10 @@ type subagentFixture struct {
 	// childProvider is the child's own server when the fixture was built with
 	// newSplitSubagentFixture; it is nil when both models share provider.
 	childProvider *subagentProvider
+	// restart stops the service, runs between (when not nil) while nothing is running,
+	// and starts a new service over the same directories, as a server restart does. It
+	// returns the new API address.
+	restart func(t *testing.T, between func()) string
 }
 
 const (
@@ -382,16 +416,35 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	service, err := NewService(config)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
+	var service *Service
+	var api *httptest.Server
+	start := func(t *testing.T) string {
+		t.Helper()
+		var err error
+		if service, err = NewService(config); err != nil {
+			t.Fatalf("NewService() error = %v", err)
+		}
+		api = httptest.NewServer(service.Handler)
+		return api.URL
 	}
-	api := httptest.NewServer(service.Handler)
-	t.Cleanup(func() {
-		service.Close()
-		api.Close()
-	})
-	return subagentFixture{workspace: workspace, sessionDir: sessionDir, apiURL: api.URL, provider: provider, childProvider: childProvider}
+	stop := func() {
+		if service != nil {
+			service.Close()
+			api.Close()
+			service = nil
+		}
+	}
+	apiURL := start(t)
+	t.Cleanup(stop)
+	restart := func(t *testing.T, between func()) string {
+		t.Helper()
+		stop()
+		if between != nil {
+			between()
+		}
+		return start(t)
+	}
+	return subagentFixture{workspace: workspace, sessionDir: sessionDir, apiURL: apiURL, provider: provider, childProvider: childProvider, restart: restart}
 }
 
 func writeFile(t *testing.T, path string, data []byte) {
@@ -406,7 +459,13 @@ func writeFile(t *testing.T, path string, data []byte) {
 
 func (f subagentFixture) run(t *testing.T) string {
 	t.Helper()
-	request, err := http.NewRequest(http.MethodPost, f.apiURL+"/api/sessions/local:demo/run", strings.NewReader(`{"input":"ask the explorer"}`))
+	return f.runInput(t, "ask the explorer")
+}
+
+func (f subagentFixture) runInput(t *testing.T, input string) string {
+	t.Helper()
+	payload, _ := json.Marshal(map[string]string{"input": input})
+	request, err := http.NewRequest(http.MethodPost, f.apiURL+"/api/sessions/local:demo/run", strings.NewReader(string(payload)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1053,5 +1112,126 @@ func TestSubagentRunsAreListedInTheStateContextAfterACompaction(t *testing.T) {
 	}
 	if strings.Contains(snapshot.Text, "the answer is 42") {
 		t.Errorf("an answer was copied into the snapshot:\n%s", snapshot.Text)
+	}
+}
+
+func TestSubagentTimeoutReachesTheParentWithPartialWorkAndTheTranscript(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "timeout_ms": 1500})
+	f.provider.childPartial = true
+
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	parent := f.provider.forModel("parent-model")
+	if len(parent) != 2 {
+		t.Fatalf("parent requests = %d, want 2 (task, then the result)", len(parent))
+	}
+	result := parent[1].Text
+	for _, want := range []string{"subagent_timeout", "partial: true", "checking notes.txt first", "rounds: 1"} {
+		if !strings.Contains(result, want) {
+			t.Errorf("the timeout result lacks %q:\n%s", want, result)
+		}
+	}
+	transcripts, err := filepath.Glob(filepath.Join(f.workspace, ".subagents", "*", "messages.jsonl"))
+	if err != nil || len(transcripts) != 1 {
+		t.Fatalf("child transcripts = %v, %v; want exactly 1", transcripts, err)
+	}
+	if !strings.Contains(result, transcripts[0]) {
+		t.Errorf("the result does not name the child's transcript %s:\n%s", transcripts[0], result)
+	}
+}
+
+// waitForManifestState polls the run manifests under the workspace until one holds the
+// state, and returns that run's id.
+func waitForManifestState(t *testing.T, f subagentFixture, state string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		files, _ := filepath.Glob(filepath.Join(f.workspace, ".subagents", ".runs", "sub_*.json"))
+		for _, file := range files {
+			if data, err := os.ReadFile(file); err == nil && strings.Contains(string(data), `"state":"`+state+`"`) {
+				return strings.TrimSuffix(filepath.Base(file), ".json")
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no run manifest reached the state %q", state)
+	return ""
+}
+
+func TestSubagentRunFinishedBeforeARestartCanBeCollectedAfterIt(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	f.provider.handoffOnly = true
+	f.provider.childHold = make(chan struct{})
+	t.Cleanup(func() { f.provider.holdReleased.Do(func() { close(f.provider.childHold) }) })
+
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	id := runIDOf(t, f.provider.forModel("parent-model")[1].Text)
+	f.provider.holdReleased.Do(func() { close(f.provider.childHold) })
+	if got := waitForManifestState(t, f, "done"); got != id {
+		t.Fatalf("the manifest on disk is %s, the handoff named %s", got, id)
+	}
+
+	f.apiURL = f.restart(t, nil)
+	f.provider.collectMarker, f.provider.collectID = "collect it now", id
+	if body := f.runInput(t, "collect it now"); !strings.Contains(body, "event: completed") {
+		t.Fatalf("the run after the restart did not complete:\n%s", body)
+	}
+	parent := f.provider.forModel("parent-model")
+	last := parent[len(parent)-1].Text
+	if !strings.Contains(last, "Agent explore finished") || !strings.Contains(last, "the answer is 42") {
+		t.Errorf("the answer did not survive the restart:\n%s", last)
+	}
+	if child := f.provider.forModel("child-model"); len(child) != 2 {
+		t.Errorf("child requests = %d, want 2: collecting must not start another child", len(child))
+	}
+}
+
+func TestSubagentRunStillGoingAtACrashIsReportedLostWithItsTranscript(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	f.provider.childPartial = true
+	id := handoffAndLeaveRunning(t, f)
+	manifestPath := filepath.Join(f.workspace, ".subagents", ".runs", id+".json")
+
+	// A crash leaves the manifest as the last write made it: running. A graceful close
+	// would have ended the run first, so the test puts the crash state back by hand.
+	f.apiURL = f.restart(t, func() {
+		data, err := os.ReadFile(manifestPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		crashed := strings.Replace(string(data), `"state":"stopped"`, `"state":"running"`, 1)
+		if crashed == string(data) && !strings.Contains(crashed, `"state":"running"`) {
+			t.Fatalf("manifest after the close holds neither state:\n%s", data)
+		}
+		writeFile(t, manifestPath, []byte(crashed))
+	})
+	f.provider.collectMarker, f.provider.collectID = "collect it now", id
+	f.runInput(t, "collect it now")
+	parent := f.provider.forModel("parent-model")
+	last := parent[len(parent)-1].Text
+	for _, want := range []string{"subagent_lost", "run: " + id, "transcript: "} {
+		if !strings.Contains(last, want) {
+			t.Errorf("the lost run result lacks %q:\n%s", want, last)
+		}
+	}
+	if data, _ := os.ReadFile(manifestPath); !strings.Contains(string(data), `"state":"lost"`) {
+		t.Errorf("the manifest was not rewritten as lost:\n%s", data)
+	}
+}
+
+func TestSubagentRunStillGoingAtAGracefulRestartIsReportedStopped(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	id := handoffAndLeaveRunning(t, f)
+
+	f.apiURL = f.restart(t, nil)
+	f.provider.collectMarker, f.provider.collectID = "collect it now", id
+	f.runInput(t, "collect it now")
+	parent := f.provider.forModel("parent-model")
+	last := parent[len(parent)-1].Text
+	if !strings.Contains(last, "was stopped") || strings.Contains(last, "subagent_lost") {
+		t.Errorf("a child cancelled by a graceful shutdown must read as stopped:\n%s", last)
 	}
 }

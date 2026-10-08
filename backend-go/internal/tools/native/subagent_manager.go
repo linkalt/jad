@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -23,6 +25,9 @@ const (
 	subagentRunFailed   = "failed"
 	subagentRunTimedOut = "timed_out"
 	subagentRunStopped  = "stopped"
+	// subagentRunLost is a run that was going when the server died. Its child died
+	// with it; only the transcript it had written remains.
+	subagentRunLost = "lost"
 )
 
 var (
@@ -47,12 +52,73 @@ type SubagentManager struct {
 	running  int      // slots held
 	queued   int      // runs waiting for a slot
 	freed    chan struct{}
+	// store keeps a manifest per run so ids survive a restart; nil keeps runs in
+	// memory only.
+	store *subagentStore
 }
 
-// NewSubagentManager returns an empty manager.
+// NewSubagentManager returns an empty manager that keeps its runs in memory only.
 func NewSubagentManager() *SubagentManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SubagentManager{ctx: ctx, cancel: cancel, runs: make(map[string]*subagentRun), freed: make(chan struct{})}
+}
+
+// SubagentManagerOptions configures a manager that keeps run manifests on disk.
+type SubagentManagerOptions struct {
+	// StorageDir is the directory the children's transcripts live in; the manifests
+	// go in a folder inside it.
+	StorageDir string
+	// Keep is how many ended runs stay, as in tools.native.subagent.keep_finished.
+	Keep   int
+	Logger *slog.Logger
+}
+
+// NewPersistentSubagentManager returns a manager that writes a manifest per run and
+// loads the manifests already in the storage directory. A run that was queued or
+// running when the last server stopped becomes lost: its child died with the server.
+// Ended runs stay readable by id. A manifest that cannot be read is skipped.
+func NewPersistentSubagentManager(options SubagentManagerOptions) *SubagentManager {
+	manager := NewSubagentManager()
+	manager.store = newSubagentStore(options.StorageDir, options.Logger)
+	manager.recover(options.Keep)
+	return manager
+}
+
+// recover loads the stored runs, marks the ones a restart interrupted as lost, and
+// drops the oldest ended runs beyond keep.
+func (m *SubagentManager) recover(keep int) {
+	manifests := m.store.load()
+	now := time.Now()
+	for _, manifest := range manifests {
+		run := restoredSubagentRun(manifest, m.store)
+		if manifest.State == subagentRunQueued || manifest.State == subagentRunRunning {
+			run.state = subagentRunLost
+			run.reason = "the server stopped while the run was going"
+			run.endedAt = now
+			m.store.save(run)
+		}
+		m.runs[run.id] = run
+		m.finished = append(m.finished, run.id)
+	}
+	sort.SliceStable(m.finished, func(i, j int) bool {
+		a, b := m.runs[m.finished[i]], m.runs[m.finished[j]]
+		if !a.endedAt.Equal(b.endedAt) {
+			return a.endedAt.Before(b.endedAt)
+		}
+		return a.id < b.id
+	})
+	for len(m.finished) > keep {
+		m.dropOldestLocked()
+	}
+}
+
+// dropOldestLocked forgets the oldest ended run and its manifest; the caller holds mu or
+// is the only user of the manager. The child's transcript folder is left in place.
+func (m *SubagentManager) dropOldestLocked() {
+	id := m.finished[0]
+	m.finished = m.finished[1:]
+	delete(m.runs, id)
+	m.store.remove(id)
 }
 
 // subagentRun is one child, from start to end.
@@ -74,7 +140,14 @@ type subagentRun struct {
 	result  SubagentResult
 	reason  string
 	endedAt time.Time
-	cut     bool // the answer was longer than the limit and was cut
+	cut     bool   // the answer was longer than the limit and was cut
+	dir     string // the child's transcript directory, once it exists
+
+	store *subagentStore // nil when runs are not persisted
+	// restored marks a run loaded from disk. Its text is not in memory: it is read
+	// from the transcript the first time the run is looked at.
+	restored   bool
+	textLoaded bool
 }
 
 // subagentRunView is a copy of a run's state taken under its lock.
@@ -82,6 +155,7 @@ type subagentRunView struct {
 	id, agent, task, state, reason string
 	result                         SubagentResult
 	cut                            bool
+	dir                            string
 	timeoutMS                      int64
 	elapsed                        time.Duration
 	startedAt, endedAt             time.Time
@@ -94,7 +168,7 @@ func (r *subagentRun) view() subagentRunView {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
 }
 
 // active reports whether the run is queued or running.
@@ -107,6 +181,68 @@ func (r *subagentRun) active() bool {
 func (r *subagentRun) setState(state string) {
 	r.mu.Lock()
 	r.state = state
+	r.mu.Unlock()
+}
+
+func (r *subagentRun) setDir(dir string) {
+	r.mu.Lock()
+	r.dir = dir
+	r.mu.Unlock()
+	r.store.save(r)
+}
+
+// manifest is the run's state in the form written to disk.
+func (r *subagentRun) manifest() subagentManifest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return subagentManifest{
+		Version: subagentManifestVersion, ID: r.id, Owner: r.owner, Agent: r.agent, Task: r.task,
+		TimeoutMS: r.timeoutMS, State: r.state, Reason: r.reason, StartedAt: r.startedAt, EndedAt: r.endedAt,
+		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut,
+	}
+}
+
+// restoredSubagentRun rebuilds an ended run from its manifest. Its done channel is
+// closed, so a wait on it returns at once.
+func restoredSubagentRun(manifest subagentManifest, store *subagentStore) *subagentRun {
+	done := make(chan struct{})
+	close(done)
+	return &subagentRun{
+		id: manifest.ID, owner: manifest.Owner, agent: manifest.Agent, task: manifest.Task,
+		timeoutMS: manifest.TimeoutMS, startedAt: manifest.StartedAt, endedAt: manifest.EndedAt,
+		cancel: func() {}, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut,
+		dir: manifest.Dir, result: SubagentResult{Rounds: manifest.Rounds, Tokens: manifest.Tokens},
+		store: store, restored: true,
+	}
+}
+
+// loadText reads the text of a restored run from its transcript, once. A finished run
+// gets its final answer; a run that was cut off or lost gets the newest text it wrote.
+// A missing or unreadable transcript leaves the text empty. The text is cut to limit.
+func (r *subagentRun) loadText(limit int64) {
+	r.mu.Lock()
+	if !r.restored || r.textLoaded {
+		r.mu.Unlock()
+		return
+	}
+	r.textLoaded = true
+	dir, state := r.dir, r.state
+	r.mu.Unlock()
+	if dir == "" {
+		return
+	}
+	answers, err := readTranscriptAnswers(filepath.Join(dir, "messages.jsonl"))
+	if err != nil && answers.lastNonEmpty == "" {
+		return
+	}
+	text := answers.lastNonEmpty
+	if state == subagentRunDone {
+		text = answers.last
+	}
+	text, cut := cutUTF8(text, limit)
+	r.mu.Lock()
+	r.result.Text = text
+	r.cut = r.cut || cut
 	r.mu.Unlock()
 }
 
@@ -149,6 +285,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	run := &subagentRun{
+		store:     m.store,
 		id:        id,
 		owner:     spec.owner,
 		agent:     spec.request.Agent.Name,
@@ -165,6 +302,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	m.runs[id] = run
 	m.active.Add(1)
 	m.mu.Unlock()
+	run.store.save(run)
 	go m.execute(ctx, run, spec, holdsSlot)
 	return run, nil
 }
@@ -183,6 +321,7 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 
 	childContext, cancel := context.WithTimeout(ctx, time.Duration(spec.request.Agent.TimeoutMS)*time.Millisecond)
 	defer cancel()
+	spec.request.OnTranscript = run.setDir
 	result, err := m.runLauncher(childContext, spec)
 	switch {
 	case err == nil:
@@ -252,13 +391,15 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	run.reason = reason
 	run.endedAt = time.Now()
 	run.mu.Unlock()
+	// The manifest is written before the waiters wake, so a read of the file after a
+	// wait returns sees the end.
+	run.store.save(run)
 	close(run.done)
 
 	m.mu.Lock()
 	m.finished = append(m.finished, run.id)
 	for len(m.finished) > spec.keep {
-		delete(m.runs, m.finished[0])
-		m.finished = m.finished[1:]
+		m.dropOldestLocked()
 	}
 	m.mu.Unlock()
 }

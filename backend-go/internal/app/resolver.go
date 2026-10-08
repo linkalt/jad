@@ -437,7 +437,14 @@ func (r *Resolver) sharedSubagentManager(config sessionfs.SessionConfig) *native
 	if r.closed {
 		return nil
 	}
-	manager := native.NewSubagentManager()
+	var manager *native.SubagentManager
+	if config.NativeSubagent.PersistRuns {
+		manager = native.NewPersistentSubagentManager(native.SubagentManagerOptions{
+			StorageDir: config.NativeSubagent.StorageDir, Keep: int(config.NativeSubagent.KeepFinished), Logger: r.logger,
+		})
+	} else {
+		manager = native.NewSubagentManager()
+	}
 	r.subagentManagers[storageKey] = manager
 	return manager
 }
