@@ -62,7 +62,7 @@ func translateRequest(config *Config, body []byte) (*translation, *apiError) {
 	}
 	out.System, out.Messages = system, messages
 
-	tools, apiErr := translateTools(request.Tools)
+	tools, apiErr := translateTools(config, request.Tools, &result.Ignored)
 	if apiErr != nil {
 		return nil, apiErr
 	}

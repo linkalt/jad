@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -70,6 +71,15 @@ func TestSchemaDefaultsMatchGo(t *testing.T) {
 		if got := defaultOf(key); got != want {
 			t.Errorf("schema default for %s is %v, Go default is %v", key, got, want)
 		}
+	}
+	var stripSchema struct {
+		Default []string `json:"default"`
+	}
+	if err := json.Unmarshal(schema.Properties["strip_schema_keywords"], &stripSchema); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stripSchema.Default, config.StripSchemaKeywords) {
+		t.Errorf("schema default for strip_schema_keywords is %v, Go default is %v", stripSchema.Default, config.StripSchemaKeywords)
 	}
 	var cacheSchema struct {
 		Properties map[string]struct {

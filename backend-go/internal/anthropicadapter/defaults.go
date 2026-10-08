@@ -51,6 +51,10 @@ var reservedUpstreamHeaders = []string{
 	"authorization", "x-api-key", "anthropic-version", "anthropic-beta", "content-type", "content-length", "host",
 }
 
+// defaultStripSchemaKeywords are the keywords Anthropic refuses at the top level of a tool's
+// input_schema ("input_schema does not support oneOf, allOf, or anyOf at the top level").
+func defaultStripSchemaKeywords() []string { return []string{"oneOf", "allOf", "anyOf"} }
+
 // efforts lists the Responses reasoning.effort values the adapter accepts.
 var efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 

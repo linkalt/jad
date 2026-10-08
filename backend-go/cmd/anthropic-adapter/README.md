@@ -56,6 +56,7 @@ Schema: `sample/schemes/anthropic-adapter.schema.json`. A working example: `samp
 | `upstream.stream_retry.error_types` | `overloaded_error`, `api_error` | Error types that are retried. |
 | `default_max_tokens` | `8192` | Sent when the request has no `max_output_tokens` (Anthropic requires it). |
 | `max_request_bytes` | `67108864` | Largest accepted body. |
+| `strip_schema_keywords` | `oneOf`, `allOf`, `anyOf` | Removed from the **top level** of every tool's `input_schema`, because Anthropic answers 400 `input_schema does not support oneOf, allOf, or anyOf at the top level`. The harness's `fetch`, `task`, `memory` and `process` tools use them. Nested schemas are not touched, and a schema with none of them is sent byte for byte. The caller still validates each call against its full schema; the model no longer sees the "one of these fields is required" rule. Each removal is listed in `X-Adapter-Ignored-Fields` as `tools.<name>.<keyword>`. `[]` sends schemas unchanged. |
 | `unsupported_fields` | `ignore` | `ignore` drops a field with no Anthropic equivalent and lists it in the `X-Adapter-Ignored-Fields` response header; `reject` answers 400. |
 | `synthesize_missing_tool_results` | `true` | Answers a `function_call` that has no output with an error `tool_result`. |
 | `cache.automatic` / `tools` / `system` / `history` | all `false` | Prompt-caching breakpoints, see below. |

@@ -24,9 +24,12 @@ type Config struct {
 	SynthesizeMissingToolResults bool           `json:"synthesize_missing_tool_results"`
 	MissingToolResultText        string         `json:"missing_tool_result_text"`
 	InvalidArgumentsKey          string         `json:"invalid_arguments_key"`
-	Cache                        CacheConfig    `json:"cache"`
-	DefaultProfile               ModelProfile   `json:"default_profile"`
-	Models                       []ModelProfile `json:"models"`
+	// StripSchemaKeywords are removed from the top level of every tool's input schema.
+	// Anthropic answers 400 for oneOf, allOf and anyOf there.
+	StripSchemaKeywords []string       `json:"strip_schema_keywords"`
+	Cache               CacheConfig    `json:"cache"`
+	DefaultProfile      ModelProfile   `json:"default_profile"`
+	Models              []ModelProfile `json:"models"`
 }
 
 // CacheConfig selects the prompt-caching breakpoints. Everything is off by
@@ -132,6 +135,7 @@ func DefaultConfig() Config {
 		SynthesizeMissingToolResults: DefaultSynthesizeToolResults,
 		MissingToolResultText:        DefaultMissingToolResultText,
 		InvalidArgumentsKey:          DefaultInvalidArgumentsKey,
+		StripSchemaKeywords:          defaultStripSchemaKeywords(),
 		DefaultProfile:               defaultProfile(),
 		Models:                       []ModelProfile{},
 	}
@@ -205,6 +209,11 @@ func (c *Config) finish() error {
 	}
 	if strings.TrimSpace(c.MissingToolResultText) == "" {
 		return errors.New("config: missing_tool_result_text must be a non-empty string")
+	}
+	for _, keyword := range c.StripSchemaKeywords {
+		if strings.TrimSpace(keyword) == "" {
+			return errors.New("config: strip_schema_keywords entries must be non-empty strings")
+		}
 	}
 	if c.Cache.TTL != CacheTTLDefault && c.Cache.TTL != CacheTTLOneHour {
 		return fmt.Errorf("config: cache.ttl must be empty or %q, got %q", CacheTTLOneHour, c.Cache.TTL)

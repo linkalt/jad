@@ -116,6 +116,12 @@
       "default": "_invalid_arguments",
       "description": "function_call arguments that are not a JSON object are sent as {key: original string}."
     },
+    "strip_schema_keywords": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": ["oneOf", "allOf", "anyOf"],
+      "description": "Keywords removed from the top level of every tool's input schema before it is sent. Anthropic answers 400 'input_schema does not support oneOf, allOf, or anyOf at the top level', and the harness's fetch, task, memory and process tools use them to say 'one of these fields is required'. Only the top level is changed, nested schemas are not. The caller still validates each call against its full schema, so the rule is enforced there; the model no longer sees it. Each removal is listed in the X-Adapter-Ignored-Fields response header as tools.<name>.<keyword>. An empty list sends schemas unchanged."
+    },
     "cache": {
       "type": "object",
       "additionalProperties": false,
