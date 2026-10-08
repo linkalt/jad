@@ -347,7 +347,8 @@ func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.Sessio
 	taskStore := r.sharedTaskStore(config)
 	memoryStore := r.sharedMemoryStore(config)
 	fetchStore := r.sharedFetchStore(config)
-	nativeCatalog, err := native.BuildCatalogWithSubagents(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config))
+	subagentMCP := &native.SubagentMCP{}
+	nativeCatalog, err := native.BuildCatalogWithSubagents(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP)
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
@@ -362,6 +363,10 @@ func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.Sessio
 	mcpCatalog, err := tools.NewCatalog(mcpTools)
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
+	}
+	// The subagent tool was built with the native catalog, before the MCP tools existed.
+	if err := subagentMCP.Bind(mcpTools); err != nil {
+		return nil, nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
 	}
 	toolCatalog, err := tools.MergeCatalogs(nativeCatalog, mcpCatalog)
 	if err != nil {

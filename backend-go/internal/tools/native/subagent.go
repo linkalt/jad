@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
@@ -61,12 +62,42 @@ type SubagentLauncher interface {
 }
 
 type subagentAgent struct {
-	config  sessionfs.NativeSubagentAgent
+	config sessionfs.NativeSubagentAgent
+	// catalog is what the child may call. It is nil for an agent that lists MCP tools
+	// until SubagentMCP.Bind has seen the loaded MCP tools.
 	catalog *tools.Catalog
+	// nativeTools and mcpIDs are the two halves of the agent's tools list; mcpIDs is
+	// empty for an agent that uses native tools only.
+	nativeTools []tools.Tool
+	mcpIDs      []string
+}
+
+// mcpToolIDPrefix starts the name an agent's tools list uses for an MCP tool:
+// mcp:<server>:<tool>, the tool's stable ID. The name the model sees ends in a hash
+// and is not meant to be written by hand.
+const mcpToolIDPrefix = "mcp:"
+
+// SubagentMCP hands the loaded MCP tools to the subagent tool. The native catalog is
+// built before the MCP servers are listed, and the subagent tool is part of it, so
+// the MCP tools reach it afterwards, once, through Bind.
+type SubagentMCP struct {
+	tool *subagentTool
+}
+
+// Bind gives each agent that lists MCP tools its catalog. It fails when a listed tool
+// is not among the loaded ones or belongs to a server that asks for approval, because
+// a child has no way to ask. It does nothing when the session has no subagent tool.
+func (m *SubagentMCP) Bind(mcpTools []tools.Tool) error {
+	if m == nil || m.tool == nil {
+		return nil
+	}
+	return m.tool.bindMCP(mcpTools)
 }
 
 type subagentTool struct {
 	settings sessionfs.NativeSubagentSettings
+	// mu guards the agents' catalogs, which Bind fills in after the tool is built.
+	mu       sync.RWMutex
 	agents   []subagentAgent
 	launcher SubagentLauncher
 	// slots bounds the children running at once. The catalog is built per run, so
@@ -78,6 +109,13 @@ type subagentTool struct {
 // catalog. A child may use only the read-only ones, optionally narrowed by its
 // agent's tools list, and never the subagent tool itself, so the depth is one.
 func NewSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher) (tools.Tool, error) {
+	return NewSubagentToolWithMCP(settings, parentTools, launcher, nil)
+}
+
+// NewSubagentToolWithMCP is NewSubagentTool plus the hook that later gives the tool
+// the MCP tools an agent lists. A nil mcp is allowed; an agent that lists an MCP tool
+// then cannot start a child.
+func NewSubagentToolWithMCP(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher, mcp *SubagentMCP) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(subagentInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native subagent schema: %w", err)
@@ -96,15 +134,22 @@ func NewSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []to
 	}
 	runtime := &subagentTool{settings: settings, launcher: launcher, slots: make(chan struct{}, settings.MaxConcurrent)}
 	for _, agent := range settings.Agents {
-		childTools, err := subagentChildTools(agent, readOnly)
+		childTools, mcpIDs, err := subagentChildTools(agent, readOnly)
 		if err != nil {
 			return tools.Tool{}, err
 		}
-		catalog, err := tools.NewCatalog(childTools)
-		if err != nil {
-			return tools.Tool{}, fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.Name, err)
+		entry := subagentAgent{config: agent, nativeTools: childTools, mcpIDs: mcpIDs}
+		if len(mcpIDs) == 0 {
+			catalog, err := tools.NewCatalog(childTools)
+			if err != nil {
+				return tools.Tool{}, fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.Name, err)
+			}
+			entry.catalog = catalog
 		}
-		runtime.agents = append(runtime.agents, subagentAgent{config: agent, catalog: catalog})
+		runtime.agents = append(runtime.agents, entry)
+	}
+	if mcp != nil {
+		mcp.tool = runtime
 	}
 	return tools.Tool{
 		Definition: tools.Definition{
@@ -142,8 +187,10 @@ func subagentAgentList(agents []sessionfs.NativeSubagentAgent) string {
 	return builder.String()
 }
 
-// subagentChildTools picks the tools one agent may use from the enabled read-only ones.
-func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly []tools.Tool) ([]tools.Tool, error) {
+// subagentChildTools picks the native tools one agent may use from the enabled
+// read-only ones, and returns separately the MCP tool IDs its list names. An agent
+// without a tools list gets every native read-only tool and no MCP tool.
+func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly []tools.Tool) ([]tools.Tool, []string, error) {
 	available := make([]string, 0, len(readOnly))
 	byName := make(map[string]tools.Tool, len(readOnly))
 	for _, tool := range readOnly {
@@ -152,11 +199,16 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly []tools.To
 	}
 	sort.Strings(available)
 	chosen := readOnly
+	var mcpIDs []string
 	if agent.HasTools {
 		wanted := make(map[string]struct{}, len(agent.Tools))
 		for _, name := range agent.Tools {
+			if strings.HasPrefix(name, mcpToolIDPrefix) {
+				mcpIDs = append(mcpIDs, name)
+				continue
+			}
 			if _, exists := byName[name]; !exists {
-				return nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not an enabled read-only native tool (enabled: %s)", agent.Name, name, strings.Join(available, ", "))
+				return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not an enabled read-only native tool (enabled: %s); an MCP tool is written mcp:<server>:<tool>", agent.Name, name, strings.Join(available, ", "))
 			}
 			wanted[name] = struct{}{}
 		}
@@ -167,10 +219,57 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly []tools.To
 			}
 		}
 	}
-	if len(chosen) == 0 {
-		return nil, fmt.Errorf("tools.native.subagent.agents.%s has no tool to use: enable at least one read-only native tool (read, grep, glob, fetch or skill)", agent.Name)
+	if len(chosen) == 0 && len(mcpIDs) == 0 {
+		return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s has no tool to use: enable at least one read-only native tool (read, grep, glob, fetch or skill)", agent.Name)
 	}
-	return chosen, nil
+	return chosen, mcpIDs, nil
+}
+
+// bindMCP builds the catalog of every agent that lists MCP tools. Only the tools an
+// agent names are given; a tool is never added because its server calls it read-only,
+// since that is the server's own claim.
+func (s *subagentTool) bindMCP(mcpTools []tools.Tool) error {
+	byID := make(map[string]tools.Tool, len(mcpTools))
+	for _, tool := range mcpTools {
+		if tool.Definition.Source == "mcp" {
+			byID[tool.Definition.ID] = tool
+		}
+	}
+	loaded := make([]string, 0, len(byID))
+	for id := range byID {
+		loaded = append(loaded, id)
+	}
+	sort.Strings(loaded)
+	loadedText := "none"
+	if len(loaded) > 0 {
+		loadedText = strings.Join(loaded, ", ")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.agents {
+		agent := &s.agents[index]
+		if len(agent.mcpIDs) == 0 {
+			continue
+		}
+		childTools := append([]tools.Tool(nil), agent.nativeTools...)
+		for _, id := range agent.mcpIDs {
+			tool, exists := byID[id]
+			if !exists {
+				return fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not a loaded MCP tool (loaded: %s)", agent.config.Name, id, loadedText)
+			}
+			if tool.Approval == tools.ApprovalAsk {
+				return fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, whose server asks for approval; a sub-agent has no way to ask the user, so the call would always be blocked", agent.config.Name, id)
+			}
+			childTools = append(childTools, tool)
+		}
+		catalog, err := tools.NewCatalog(childTools)
+		if err != nil {
+			return fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.config.Name, err)
+		}
+		agent.catalog = catalog
+	}
+	return nil
 }
 
 // normalizeSubagentArguments treats a blank agent as absent, so a model that sends an
@@ -187,6 +286,8 @@ func normalizeSubagentArguments(arguments map[string]any) map[string]any {
 }
 
 func (s *subagentTool) selectAgent(arguments map[string]any) (subagentAgent, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	name, named := arguments["agent"].(string)
 	if !named {
 		if len(s.agents) == 1 {
@@ -224,6 +325,10 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 	}
 	if s.launcher == nil {
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable", "Sub-agent runs are not available in this session"), nil
+	}
+	if agent.catalog == nil {
+		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable",
+			fmt.Sprintf("The MCP tools of agent %s were not loaded", agent.config.Name)), nil
 	}
 
 	select {

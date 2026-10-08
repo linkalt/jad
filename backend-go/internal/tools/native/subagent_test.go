@@ -517,3 +517,144 @@ func buildSubagentCatalogFrom(t *testing.T, settings sessionfs.NativeSubagentSet
 	}
 	return nil, tool
 }
+
+// mcpStub is a loaded MCP tool: the ID is what an agent's tools list writes.
+func mcpStub(t *testing.T, server, name, approval string) tools.Tool {
+	t.Helper()
+	tool := withExecutors(t, tools.Tool{Definition: tools.Definition{
+		ID: "mcp:" + server + ":" + name, Source: "mcp", Server: server, Name: "mcp_" + server + "_" + name + "_0123456789", Description: name,
+	}, Approval: approval})[0]
+	return tool
+}
+
+// buildWithMCP builds the subagent tool the way the resolver does: first the tool,
+// then Bind with the MCP tools that were loaded afterwards.
+func buildWithMCP(t *testing.T, settings sessionfs.NativeSubagentSettings, launcher SubagentLauncher, mcpTools []tools.Tool, parent ...tools.Tool) (*tools.Catalog, error) {
+	t.Helper()
+	hook := &SubagentMCP{}
+	parentTools := withExecutors(t, parent...)
+	tool, err := NewSubagentToolWithMCP(settings, parentTools, launcher, hook)
+	if err != nil {
+		t.Fatalf("NewSubagentToolWithMCP: %v", err)
+	}
+	if err := hook.Bind(mcpTools); err != nil {
+		return nil, err
+	}
+	catalog, err := tools.NewCatalog(append(parentTools, tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog, nil
+}
+
+func agentWithTools(name string, names ...string) sessionfs.NativeSubagentAgent {
+	agent := agentNamed(name)
+	agent.Tools, agent.HasTools = names, true
+	return agent
+}
+
+func TestSubagentChildGetsOnlyTheMCPToolsItsListNames(t *testing.T) {
+	launcher := &fakeLauncher{}
+	mcpTools := []tools.Tool{
+		mcpStub(t, "zvec", "search", ""),
+		mcpStub(t, "zvec", "reindex", ""),
+		mcpStub(t, "browser", "click", ""),
+	}
+	catalog, err := buildWithMCP(t, subagentSettings(
+		agentWithTools("finder", "read", "mcp:zvec:search"),
+		agentWithTools("mcponly", "mcp:zvec:search", "mcp:zvec:reindex"),
+		agentNamed("plain"),
+	), launcher, mcpTools, readOnlyTool("read"), readOnlyTool("grep"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for agent, want := range map[string]string{
+		"finder":  "read,mcp_zvec_search_0123456789",
+		"mcponly": "mcp_zvec_search_0123456789,mcp_zvec_reindex_0123456789",
+		// No tools list: native read-only tools only, never an MCP tool.
+		"plain": "read,grep",
+	} {
+		subagentCall(t, catalog, `{"task":"x","agent":"`+agent+`"}`)
+		var got string
+		for _, request := range launcher.requests {
+			if request.Agent.Name == agent {
+				got = strings.Join(toolNames(request.Tools), ",")
+			}
+		}
+		if got != want {
+			t.Errorf("agent %s child tools = %q, want %q", agent, got, want)
+		}
+	}
+}
+
+func TestSubagentBindRefusesAnMCPToolThatIsNotLoadedOrNeedsApproval(t *testing.T) {
+	loaded := []tools.Tool{mcpStub(t, "zvec", "search", ""), mcpStub(t, "gated", "lookup", tools.ApprovalAsk)}
+	for name, tc := range map[string]struct{ tool, want string }{
+		"unknown tool":   {"mcp:zvec:nope", `lists "mcp:zvec:nope", which is not a loaded MCP tool (loaded: mcp:gated:lookup, mcp:zvec:search)`},
+		"unknown server": {"mcp:other:search", `lists "mcp:other:search", which is not a loaded MCP tool`},
+		"needs approval": {"mcp:gated:lookup", `lists "mcp:gated:lookup", whose server asks for approval`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "read", tc.tool)), &fakeLauncher{}, loaded, readOnlyTool("read"))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	// With no MCP tool loaded at all the message says so.
+	_, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "mcp:zvec:search")), &fakeLauncher{}, nil, readOnlyTool("read"))
+	if err == nil || !strings.Contains(err.Error(), "(loaded: none)") {
+		t.Fatalf("error = %v", err)
+	}
+	// An agent that lists no MCP tool is not affected by what is loaded.
+	if _, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "read")), &fakeLauncher{}, loaded, readOnlyTool("read")); err != nil {
+		t.Fatalf("native-only agent: %v", err)
+	}
+}
+
+func TestSubagentWithMCPToolsAnswersUnavailableUntilBound(t *testing.T) {
+	launcher := &fakeLauncher{}
+	hook := &SubagentMCP{}
+	parentTools := withExecutors(t, readOnlyTool("read"))
+	tool, err := NewSubagentToolWithMCP(subagentSettings(agentWithTools("a", "mcp:zvec:search")), parentTools, launcher, hook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := tools.NewCatalog(append(parentTools, tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := subagentCall(t, catalog, `{"task":"x"}`)
+	if !strings.Contains(output, "The MCP tools of agent a were not loaded") || len(launcher.requests) != 0 {
+		t.Fatalf("output = %s, launcher calls = %d", output, len(launcher.requests))
+	}
+}
+
+func TestSubagentMCPHookIsSafeWithoutASubagentTool(t *testing.T) {
+	var nilHook *SubagentMCP
+	if err := nilHook.Bind([]tools.Tool{mcpStub(t, "zvec", "search", "")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&SubagentMCP{}).Bind(nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSubagentNativeNamesStillRejectAnMCPLookingNameThatIsNotMCP(t *testing.T) {
+	// "mcp_x" has no colon form, so it is an unknown native name and the error points
+	// at the right spelling.
+	_, err := NewSubagentTool(subagentSettings(agentWithTools("a", "mcp_x")), withExecutors(t, readOnlyTool("read")), nil)
+	if err == nil || !strings.Contains(err.Error(), "an MCP tool is written mcp:<server>:<tool>") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestSubagentBindIgnoresAToolThatIsNotFromMCP(t *testing.T) {
+	// Only tools whose source is "mcp" can be listed as mcp:<server>:<tool>. A native
+	// tool with such an ID, handed to Bind by mistake, must not become available.
+	impostor := withExecutors(t, tools.Tool{Definition: tools.Definition{ID: "mcp:zvec:search", Source: "native", Name: "impostor", Description: "x"}, ReadOnly: true})[0]
+	_, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "read", "mcp:zvec:search")), &fakeLauncher{}, []tools.Tool{impostor}, readOnlyTool("read"))
+	if err == nil || !strings.Contains(err.Error(), `"mcp:zvec:search", which is not a loaded MCP tool (loaded: none)`) {
+		t.Fatalf("error = %v", err)
+	}
+}

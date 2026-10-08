@@ -1,6 +1,9 @@
 package app
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,8 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	mcpSDK "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
 )
@@ -28,7 +34,10 @@ type subagentProvider struct {
 	childBlocks bool
 	// parentCalls is how many subagent calls the parent makes in its first response;
 	// zero means one.
-	parentCalls    int
+	parentCalls int
+	// childFirstCall, when set, is the (tool name, arguments) the child makes in its
+	// first round instead of reading notes.txt.
+	childFirstCall [2]string
 	childEntered   chan struct{}
 	childCancelled chan struct{}
 	// childRelease ends a blocked child request at cleanup, so a run that was not
@@ -117,7 +126,11 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		case !strings.Contains(record.Text, "function_call_output"):
 			// A child's first round: its own history holds no tool result yet. Judging by the
 			// request's own history, not a global count, keeps several children apart.
-			events = functionCallEvents("call-read", "read", `{"path":"notes.txt"}`)
+			if p.childFirstCall[0] != "" {
+				events = functionCallEvents("call-first", p.childFirstCall[0], p.childFirstCall[1])
+			} else {
+				events = functionCallEvents("call-read", "read", `{"path":"notes.txt"}`)
+			}
 		default:
 			events = messageEvents("the answer is 42", 17)
 		}
@@ -219,7 +232,17 @@ func newSplitSubagentFixture(t *testing.T, agentSetting map[string]any) subagent
 	return buildSubagentFixture(t, agentSetting, true, nil)
 }
 
+// mcpFixture adds one in-process MCP server with a "lookup" tool to the session.
+type mcpFixture struct {
+	approval string
+	calls    *atomic.Int32
+}
+
 func buildSubagentFixture(t *testing.T, agentSetting map[string]any, splitChild bool, files map[string]string) subagentFixture {
+	return buildSubagentFixtureWithMCP(t, agentSetting, splitChild, files, nil)
+}
+
+func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, splitChild bool, files map[string]string, mcp *mcpFixture) subagentFixture {
 	t.Helper()
 	workspace := t.TempDir()
 	sessionDir := filepath.Join(workspace, "sessions", "demo")
@@ -250,6 +273,32 @@ func buildSubagentFixture(t *testing.T, agentSetting map[string]any, splitChild 
 	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(`{"session_roots":[{"id":"local","path":"sessions"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	mcpServers := []any{}
+	if mcp != nil {
+		mcpServer := mcpSDK.NewServer(&mcpSDK.Implementation{Name: "fixture", Version: "1.0.0"}, nil)
+		mcpServer.AddTool(&mcpSDK.Tool{
+			Name:        "lookup",
+			Description: "looks a word up",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"word":{"type":"string"}},"required":["word"],"additionalProperties":false}`),
+		}, func(_ context.Context, request *mcpSDK.CallToolRequest) (*mcpSDK.CallToolResult, error) {
+			mcp.calls.Add(1)
+			var arguments map[string]string
+			_ = json.Unmarshal(request.Params.Arguments, &arguments)
+			return &mcpSDK.CallToolResult{Content: []mcpSDK.Content{&mcpSDK.TextContent{Text: "MCP says " + arguments["word"] + " is 99"}}}, nil
+		})
+		mcpHTTP := httptest.NewServer(mcpSDK.NewStreamableHTTPHandler(func(*http.Request) *mcpSDK.Server { return mcpServer }, nil))
+		t.Cleanup(mcpHTTP.Close)
+		mcpConfig, _ := json.Marshal(map[string]any{
+			"transport": map[string]any{"type": "streamable_http", "url": mcpHTTP.URL}, "timeout_ms": 10_000, "max_result_bytes": 4096,
+		})
+		mcpPath := filepath.Join(workspace, "mcp-server.json")
+		writeFile(t, mcpPath, mcpConfig)
+		entry := map[string]any{"id": "fixture", "config_path": mcpPath, "enabled": true, "deny_tools": []string{}}
+		if mcp.approval != "" {
+			entry["approval"] = mcp.approval
+		}
+		mcpServers = []any{entry}
+	}
 	subagent := map[string]any{"agents": map[string]any{"explore": agentSetting}}
 	if dir, ok := agentSetting["__agents_dir"].(string); ok {
 		// The test supplies the agents as folders; nothing is defined inline.
@@ -258,6 +307,7 @@ func buildSubagentFixture(t *testing.T, agentSetting map[string]any, splitChild 
 	setting, err := json.Marshal(map[string]any{
 		"cwd": workspace, "max_tool_rounds": 4,
 		"tool_definition_paths": []string{"read.json", "subagent.json"},
+		"mcp_servers":           mcpServers,
 		"tools": map[string]any{"native": map[string]any{
 			"read":     map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}},
 			"subagent": subagent,
@@ -507,6 +557,94 @@ func TestSubagentLoadedFromAFolderRunsWithTheFoldersModelAndPrompt(t *testing.T)
 	if description := parent[0].Descriptions["subagent"]; !strings.Contains(description, "\n- explore: Finds facts.") {
 		t.Fatalf("the tool description lacks the folder agent: %q", description)
 	}
+}
+
+func TestSubagentCallsAnMCPToolItsListNamesThroughTheSharedConnection(t *testing.T) {
+	calls := &atomic.Int32{}
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"}}, false, nil, &mcpFixture{calls: calls})
+	f.provider.childFirstCall = [2]string{mcpToolNameFor("fixture", "lookup"), `{"word":"answer"}`}
+
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	parent := f.provider.forModel("parent-model")
+	child := f.provider.forModel("child-model")
+	if len(parent) != 2 || len(child) != 2 {
+		t.Fatalf("provider requests: parent %d (want 2), child %d (want 2)", len(parent), len(child))
+	}
+	// The parent sees its own tool list; the MCP tool is not hidden from it.
+	if !strings.Contains(strings.Join(parent[0].Tools, ","), mcpToolNameFor("fixture", "lookup")) {
+		t.Fatalf("parent tools = %v", parent[0].Tools)
+	}
+	// The child sees read and the one MCP tool its list named, and no subagent tool.
+	if strings.Join(child[0].Tools, ",") != "read,"+mcpToolNameFor("fixture", "lookup") {
+		t.Fatalf("child tools = %v", child[0].Tools)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("the MCP server saw %d calls, want 1", calls.Load())
+	}
+	// The child's second round carries what the MCP server returned.
+	if !strings.Contains(child[1].Text, "MCP says answer is 99") {
+		t.Fatalf("the MCP result did not reach the child's second round:\n%s", child[1].Text)
+	}
+}
+
+func TestSubagentWithoutAnMCPListGetsNoMCPTool(t *testing.T) {
+	calls := &atomic.Int32{}
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json"}, false, nil, &mcpFixture{calls: calls})
+	f.run(t)
+	child := f.provider.forModel("child-model")
+	if len(child) == 0 || strings.Join(child[0].Tools, ",") != "read" {
+		t.Fatalf("child tools = %v, want read only", child)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("the MCP server saw %d calls", calls.Load())
+	}
+}
+
+// sessionToolsStatus asks for the session's tool list, which builds the catalog the way
+// a run does and reports a configuration error with its real text.
+func (f subagentFixture) sessionTools(t *testing.T) (int, string) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodGet, f.apiURL+"/api/sessions/local:demo/tools", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+integrationAPIToken)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	return response.StatusCode, string(body)
+}
+
+func TestSubagentMCPToolFromAServerThatAsksIsRefusedWhenTheSessionLoads(t *testing.T) {
+	calls := &atomic.Int32{}
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"mcp:fixture:lookup"}}, false, nil, &mcpFixture{approval: "ask", calls: calls})
+	status, body := f.sessionTools(t)
+	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "whose server asks for approval") {
+		t.Fatalf("status %d, body %s; want 422 naming the approval problem", status, body)
+	}
+	if calls.Load() != 0 || len(f.provider.requests) != 0 {
+		t.Fatalf("a refused session still ran: %d MCP calls, %d provider requests", calls.Load(), len(f.provider.requests))
+	}
+}
+
+func TestSubagentNamingAnMCPToolThatDoesNotExistFailsTheSessionWithTheLoadedList(t *testing.T) {
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"mcp:fixture:nope"}}, false, nil, &mcpFixture{calls: &atomic.Int32{}})
+	status, body := f.sessionTools(t)
+	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "which is not a loaded MCP tool (loaded: mcp:fixture:lookup)") {
+		t.Fatalf("status %d, body %s", status, body)
+	}
+}
+
+// mcpToolNameFor is the name the model sees for an MCP tool: the harness derives it
+// from the server and tool name and appends a short hash.
+func mcpToolNameFor(server, tool string) string {
+	sum := sha256.Sum256([]byte(server + "\x00" + tool))
+	return "mcp_" + server + "_" + tool + "_" + hex.EncodeToString(sum[:])[:10]
 }
 
 func TestSubagentKeepsItsTranscriptApartFromTheSessionTranscript(t *testing.T) {

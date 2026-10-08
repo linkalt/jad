@@ -61,13 +61,13 @@ func BuildCatalogWithProcessManager(config sessionfs.SessionConfig, locks *PathL
 // BuildCatalogWithResources shares resolver-owned stateful stores across tool
 // catalogs created for the same configured storage directory.
 func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore) (*tools.Catalog, error) {
-	return BuildCatalogWithSubagents(config, locks, manager, taskStore, memoryStore, fetchStore, nil)
+	return BuildCatalogWithSubagents(config, locks, manager, taskStore, memoryStore, fetchStore, nil, nil)
 }
 
 // BuildCatalogWithSubagents is BuildCatalogWithResources plus the launcher that runs
 // the children of the subagent tool. A nil launcher still lists the tool, and a call
 // to it answers that sub-agent runs are unavailable; listing tools needs no launcher.
-func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher) (*tools.Catalog, error) {
+func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP) (*tools.Catalog, error) {
 	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.NativeSubagent == nil {
 		return tools.NewCatalog(nil)
 	}
@@ -267,7 +267,7 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 		if err != nil {
 			return nil, err
 		}
-		tool, err := NewSubagentTool(*config.NativeSubagent, loaded, launcher)
+		tool, err := NewSubagentToolWithMCP(*config.NativeSubagent, loaded, launcher, mcp)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
