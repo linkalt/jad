@@ -97,8 +97,9 @@ func (l subagentLauncher) childConfig(request native.SubagentRequest) (sessionfs
 	if request.Agent.ModelPath != "" {
 		config.ModelPath = request.Agent.ModelPath
 	}
-	// The parent's instructions are not the child's: it gets its own text, or none.
-	config.Model.PromptText = request.Agent.Instructions
+	// The parent's prompt is not the child's: it gets its own instructions and
+	// documents, or none.
+	config.Model.PromptText = request.Agent.PromptText
 	loaded, err := config.WithModel()
 	if err != nil {
 		return sessionfs.SessionConfig{}, fmt.Errorf("load the model of agent %s: %w", request.Agent.Name, err)

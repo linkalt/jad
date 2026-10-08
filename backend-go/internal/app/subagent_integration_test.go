@@ -41,6 +41,9 @@ type providerRequest struct {
 	Tools []string
 	Input []json.RawMessage
 	Text  string
+	// Authorization is the header the client sent, so a test can tell which
+	// credential reached which server.
+	Authorization string
 }
 
 func (p *subagentProvider) handler(t *testing.T) http.Handler {
@@ -58,7 +61,7 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 			http.Error(w, "invalid Responses request", http.StatusBadRequest)
 			return
 		}
-		record := providerRequest{Model: body.Model, Input: body.Input}
+		record := providerRequest{Model: body.Model, Input: body.Input, Authorization: r.Header.Get("Authorization")}
 		for _, tool := range body.Tools {
 			var named struct {
 				Name string `json:"name"`
@@ -177,11 +180,39 @@ type subagentFixture struct {
 	sessionDir string
 	apiURL     string
 	provider   *subagentProvider
+	// childProvider is the child's own server when the fixture was built with
+	// newSplitSubagentFixture; it is nil when both models share provider.
+	childProvider *subagentProvider
 }
+
+const (
+	parentProviderKey = "parent-provider-key"
+	childProviderKey  = "child-provider-key"
+)
 
 // newSubagentFixture builds a session with the read tool and the subagent tool, and a
 // parent model and a child model that both point at the fake provider.
 func newSubagentFixture(t *testing.T, agentSetting map[string]any) subagentFixture {
+	t.Helper()
+	return buildSubagentFixture(t, agentSetting, false, nil)
+}
+
+// newSubagentFixtureWithFiles is the same session with extra files written into the
+// workspace before the configuration loads, for settings that read files.
+func newSubagentFixtureWithFiles(t *testing.T, agentSetting map[string]any, files map[string]string) subagentFixture {
+	t.Helper()
+	return buildSubagentFixture(t, agentSetting, false, files)
+}
+
+// newSplitSubagentFixture is the same session, but the child's model file names a
+// second server and a second key variable, so a test can see whether the child used
+// its own provider or inherited the parent's.
+func newSplitSubagentFixture(t *testing.T, agentSetting map[string]any) subagentFixture {
+	t.Helper()
+	return buildSubagentFixture(t, agentSetting, true, nil)
+}
+
+func buildSubagentFixture(t *testing.T, agentSetting map[string]any, splitChild bool, files map[string]string) subagentFixture {
 	t.Helper()
 	workspace := t.TempDir()
 	sessionDir := filepath.Join(workspace, "sessions", "demo")
@@ -203,6 +234,9 @@ func newSubagentFixture(t *testing.T, agentSetting map[string]any) subagentFixtu
 	}
 	manifest("read.json")
 	manifest("subagent.json")
+	for name, text := range files {
+		writeFile(t, filepath.Join(workspace, name), []byte(text))
+	}
 	if err := os.WriteFile(filepath.Join(workspace, "notes.txt"), []byte("the secret is 42\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -222,14 +256,31 @@ func newSubagentFixture(t *testing.T, agentSetting map[string]any) subagentFixtu
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(sessionDir, "setting.json"), setting)
-	for file, model := range map[string]string{"model.json": "parent-model", "child.json": "child-model"} {
-		body, _ := json.Marshal(map[string]any{"provider": "openai", "model": model, "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1"})
+	environment := map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"}
+	parentModel := map[string]any{"provider": "openai", "model": "parent-model", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1"}
+	childModel := map[string]any{"provider": "openai", "model": "child-model", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1"}
+	var childProvider *subagentProvider
+	if splitChild {
+		// A second server, a second provider name and a second key variable: nothing in
+		// the child's file matches the parent's, so any inherited value shows up.
+		childProvider = &subagentProvider{}
+		childServer := httptest.NewServer(childProvider.handler(t))
+		t.Cleanup(childServer.Close)
+		parentModel["api_key_env"] = "PARENT_PROVIDER_KEY"
+		childModel["provider"] = "other-vendor"
+		childModel["api_key_env"] = "CHILD_PROVIDER_KEY"
+		childModel["base_url"] = childServer.URL + "/v1"
+		environment["PARENT_PROVIDER_KEY"] = parentProviderKey
+		environment["CHILD_PROVIDER_KEY"] = childProviderKey
+	}
+	for file, model := range map[string]map[string]any{"model.json": parentModel, "child.json": childModel} {
+		body, _ := json.Marshal(model)
 		writeFile(t, filepath.Join(sessionDir, file), body)
 	}
 
 	config, err := LoadConfig(sessionfs.LoadOptions{
 		WorkingDir:  workspace,
-		Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"},
+		Environment: environment,
 	})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
@@ -243,7 +294,7 @@ func newSubagentFixture(t *testing.T, agentSetting map[string]any) subagentFixtu
 		service.Close()
 		api.Close()
 	})
-	return subagentFixture{workspace: workspace, sessionDir: sessionDir, apiURL: api.URL, provider: provider}
+	return subagentFixture{workspace: workspace, sessionDir: sessionDir, apiURL: api.URL, provider: provider, childProvider: childProvider}
 }
 
 func writeFile(t *testing.T, path string, data []byte) {
@@ -329,6 +380,77 @@ func TestHTTPRunHandsATaskToASubagentWithItsOwnModelAndContext(t *testing.T) {
 	}
 	if !strings.Contains(body, "parent saw:") {
 		t.Fatalf("the parent's final message is missing from the stream:\n%s", body)
+	}
+}
+
+func TestSubagentUsesItsOwnProviderServerAndKeyNotTheParents(t *testing.T) {
+	f := newSplitSubagentFixture(t, map[string]any{"model": "child.json"})
+	body := f.run(t)
+	if !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+
+	parent := f.provider.requests
+	child := f.childProvider.requests
+	// The parent's server saw the parent's two rounds and nothing else; the child's
+	// server saw the child's two rounds and nothing else.
+	if len(parent) != 2 || len(child) != 2 {
+		t.Fatalf("requests: parent server %d (want 2), child server %d (want 2)", len(parent), len(child))
+	}
+	for _, request := range parent {
+		if request.Model != "parent-model" || request.Authorization != "Bearer "+parentProviderKey {
+			t.Errorf("parent server got model %q with %q, want parent-model with the parent key", request.Model, request.Authorization)
+		}
+	}
+	for _, request := range child {
+		if request.Model != "child-model" || request.Authorization != "Bearer "+childProviderKey {
+			t.Errorf("child server got model %q with %q, want child-model with the child key", request.Model, request.Authorization)
+		}
+	}
+	// A key never crosses over: the parent's key is not on the child's server and the
+	// child's key is not on the parent's.
+	for _, request := range child {
+		if strings.Contains(request.Authorization, parentProviderKey) {
+			t.Fatalf("the parent's key reached the child's server")
+		}
+	}
+	for _, request := range parent {
+		if strings.Contains(request.Authorization, childProviderKey) {
+			t.Fatalf("the child's key reached the parent's server")
+		}
+	}
+}
+
+func TestSubagentPromptIsItsInstructionsPlusDocumentsAndNeverTheParents(t *testing.T) {
+	f := newSubagentFixtureWithFiles(t,
+		map[string]any{"model": "child.json", "instructions": "You are the explorer.", "prompt_documents": []string{"child-rules.md"}},
+		map[string]string{"child-rules.md": "CHILD RULE: report file paths only."})
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	parent := f.provider.forModel("parent-model")
+	child := f.provider.forModel("child-model")
+	if len(parent) != 2 || len(child) != 2 {
+		t.Fatalf("provider requests: parent %d (want 2), child %d (want 2)", len(parent), len(child))
+	}
+	// Both texts are in the child's request, in order, in one prompt item.
+	first := strings.Index(child[0].Text, "You are the explorer.")
+	second := strings.Index(child[0].Text, "CHILD RULE: report file paths only.")
+	if first < 0 || second < 0 || first > second {
+		t.Fatalf("the child's request lacks its instructions then its document (at %d, %d):\n%s", first, second, child[0].Text)
+	}
+	if !strings.Contains(child[0].Text, "You are the explorer.\\n\\nCHILD RULE") {
+		t.Fatalf("instructions and document are not joined by a blank line:\n%s", child[0].Text)
+	}
+	// The child's document is not in the parent's context, and the child's second
+	// round still carries it (the prompt is part of every request).
+	for _, request := range parent {
+		if strings.Contains(request.Text, "CHILD RULE") || strings.Contains(request.Text, "You are the explorer.") {
+			t.Fatalf("the child's prompt leaked into a parent request:\n%s", request.Text)
+		}
+	}
+	if !strings.Contains(child[1].Text, "CHILD RULE: report file paths only.") {
+		t.Fatalf("the child's second round lost its prompt:\n%s", child[1].Text)
 	}
 }
 

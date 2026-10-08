@@ -69,6 +69,82 @@ func TestNormalizeNativeSubagentSettingsDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestNormalizeNativeSubagentSettingsReadsPromptDocuments(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(cwd, "rules.md"), []byte("Rule one."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "format.md"), []byte("Answer in bullets."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	absolute := filepath.Join(cwd, "extra.md")
+	if err := os.WriteFile(absolute, []byte("Extra."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setting := `{"agents":{
+		"both": {"instructions":"You are a searcher.","prompt_documents":["rules.md","~/format.md",` + strconvQuote(absolute) + `]},
+		"docs": {"prompt_documents":["rules.md"]},
+		"none": {"instructions":"Only this."},
+		"bare": {},
+		"empty":{"prompt_documents":[]},
+		"null": {"prompt_documents":null}
+	}}`
+	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(setting), "/s/setting.json", cwd, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"both":  "You are a searcher.\n\nRule one.\n\nAnswer in bullets.\n\nExtra.",
+		"docs":  "Rule one.",
+		"none":  "Only this.",
+		"bare":  "",
+		"empty": "",
+		"null":  "",
+	}
+	for _, agent := range got.Agents {
+		if agent.PromptText != want[agent.Name] {
+			t.Errorf("%s: PromptText = %q, want %q", agent.Name, agent.PromptText, want[agent.Name])
+		}
+	}
+	both, _ := got.Agent("both")
+	if strings.Join(both.PromptDocuments, ",") != filepath.Join(cwd, "rules.md")+","+filepath.Join(home, "format.md")+","+absolute {
+		t.Errorf("PromptDocuments = %v", both.PromptDocuments)
+	}
+	// Instructions stays the inline text alone, so a reader can still tell them apart.
+	if both.Instructions != "You are a searcher." {
+		t.Errorf("Instructions = %q", both.Instructions)
+	}
+}
+
+func TestNormalizeNativeSubagentSettingsRejectsBadPromptDocuments(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "a.md"), []byte("A"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct{ setting, want string }{
+		"not array":       {`{"agents":{"a":{"prompt_documents":"a.md"}}}`, "agents.a.prompt_documents must be an array of file paths"},
+		"item blank":      {`{"agents":{"a":{"prompt_documents":["a.md"," "]}}}`, "agents.a.prompt_documents[1] must be a non-empty string"},
+		"item number":     {`{"agents":{"a":{"prompt_documents":[1]}}}`, "agents.a.prompt_documents must be an array of file paths"},
+		"missing file":    {`{"agents":{"a":{"prompt_documents":["a.md","nope.md"]}}}`, "agents.a.prompt_documents[1] could not be read: " + filepath.Join(cwd, "nope.md")},
+		"is directory":    {`{"agents":{"a":{"prompt_documents":["."]}}}`, "agents.a.prompt_documents[0] could not be read"},
+		"same file twice": {`{"agents":{"a":{"prompt_documents":["a.md","./a.md"]}}}`, "agents.a.prompt_documents lists " + filepath.Join(cwd, "a.md") + " twice"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := normalizeNativeSubagentSettings(subagentSettingsFor(tc.setting), "setting.json", cwd, "")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func strconvQuote(value string) string {
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
+}
+
 func TestNormalizeNativeSubagentSettingsNullKeysMeanDefault(t *testing.T) {
 	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(
 		`{"result_max_bytes":null,"max_concurrent":null,"storage_dir":null,"agents":{"a":{"model":null,"tools":null,"max_run_tokens":null,"timeout_ms":null,"max_tool_rounds":null,"description":null,"instructions":null}}}`),
