@@ -61,6 +61,10 @@ func translateRequest(config *Config, body []byte) (*translation, *apiError) {
 		return nil, apiErr
 	}
 	out.System, out.Messages = system, messages
+	if prefix := config.Upstream.SystemPrefix; prefix != "" {
+		// A block of its own, first: the caller's instructions follow unchanged.
+		out.System = append([]anthropicBlock{{Type: "text", Text: prefix}}, out.System...)
+	}
 
 	tools, apiErr := translateTools(config, request.Tools, &result.Ignored)
 	if apiErr != nil {

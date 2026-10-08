@@ -45,6 +45,11 @@
           "default": "",
           "description": "Path of a credential file written by the claude-auth command (a Claude Pro, Max, Team or Enterprise sign-in). Absolute, or starting with ~/. When set, the adapter sends the access token stored in it as the upstream credential, reads the file on every request (so a refresh by claude-auth needs no restart), never writes it, and ignores the credential the caller sent. Empty forwards the caller's credential. Anthropic does not document this sign-in and limits subscription credentials to its own applications; see cmd/anthropic-adapter/README.md."
         },
+        "system_prefix": {
+          "type": "string",
+          "default": "",
+          "description": "Text sent as the first system block of every request, as a block of its own, before the caller's instructions. Empty sends nothing extra. A live probe on 2026-10-08 showed a Claude subscription token (credential_file) is answered 429 'Error' unless the request opens with \"You are Claude Code, Anthropic's official CLI for Claude.\"; the same request with that sentence returned 200. This claims an identity the program does not have, so it is off by default and the choice is the account owner's."
+        },
         "expiry_margin_ms": {
           "type": "integer",
           "minimum": 0,

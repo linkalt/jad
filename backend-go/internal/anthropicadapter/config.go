@@ -77,6 +77,10 @@ type UpstreamConfig struct {
 	// sends the access token stored in it, read on every request, and ignores the credential
 	// the caller sent. Empty (the default) forwards the caller's credential.
 	CredentialFile string `json:"credential_file"`
+	// SystemPrefix, when not empty, is sent as the first system block of every request, before
+	// the caller's instructions, as a block of its own. A Claude subscription token is refused
+	// with 429 unless the request opens with the Claude Code sentence (found by a live probe).
+	SystemPrefix string `json:"system_prefix"`
 	// ExpiryMarginMS is how long before its stored expiry a credential-file token already
 	// counts as expired. It applies only with credential_file.
 	ExpiryMarginMS int `json:"expiry_margin_ms"`
@@ -134,6 +138,7 @@ func DefaultConfig() Config {
 			AuthHeader:       DefaultAuthHeader,
 			Beta:             []string{},
 			CredentialFile:   DefaultCredentialFile,
+			SystemPrefix:     DefaultSystemPrefix,
 			ExpiryMarginMS:   DefaultExpiryMarginMS,
 			ExtraHeaders:     map[string]string{},
 			RequestTimeoutMS: DefaultRequestTimeoutMS,

@@ -143,6 +143,7 @@ func TestSchemaDefaultsMatchGo(t *testing.T) {
 		upstream.Properties["anthropic_version"].Default != config.Upstream.AnthropicVersion ||
 		upstream.Properties["auth_header"].Default != config.Upstream.AuthHeader ||
 		upstream.Properties["credential_file"].Default != config.Upstream.CredentialFile ||
+		upstream.Properties["system_prefix"].Default != config.Upstream.SystemPrefix ||
 		upstream.Properties["expiry_margin_ms"].Default != float64(config.Upstream.ExpiryMarginMS) ||
 		upstream.Properties["request_timeout_ms"].Default != float64(config.Upstream.RequestTimeoutMS) {
 		t.Errorf("upstream schema defaults differ from Go: %+v", upstream.Properties)

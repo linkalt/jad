@@ -13,6 +13,7 @@ const (
 	AuthHeaderBearer                 = "bearer"
 	AuthHeaderXAPIKey                = "x-api-key"
 	DefaultCredentialFile            = ""
+	DefaultSystemPrefix              = ""
 	DefaultExpiryMarginMS            = 300_000
 	DefaultRequestTimeoutMS          = 600_000
 	DefaultMaxTokens                 = 8192
