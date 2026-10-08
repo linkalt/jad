@@ -68,6 +68,37 @@ const messageBody = `{"id":"msg_01abc","type":"message","role":"assistant","mode
  "stop_reason":"tool_use",
  "usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":4,"cache_creation_input_tokens":2}}`
 
+// auth_header chooses the upstream header; the caller may send either form.
+func TestAuthHeaderChoice(t *testing.T) {
+	cases := []struct {
+		name, authHeader string // authHeader "" leaves the key out: the default applies
+		caller           map[string]string
+		wantAuth         string
+		wantXAPIKey      string
+	}{
+		{"bearer in, default out", "", map[string]string{"Authorization": "Bearer tok-1"}, "Bearer tok-1", ""},
+		{"x-api-key in, default out", "", map[string]string{"x-api-key": "tok-2"}, "Bearer tok-2", ""},
+		{"bearer in, x-api-key out", "x-api-key", map[string]string{"Authorization": "Bearer tok-3"}, "", "tok-3"},
+		{"x-api-key in, x-api-key out", "x-api-key", map[string]string{"x-api-key": "tok-4"}, "", "tok-4"},
+	}
+	for _, c := range cases {
+		upstream, calls := fakeAnthropic(t, 200, messageBody, nil)
+		setting := ""
+		if c.authHeader != "" {
+			setting = `,"auth_header":"` + c.authHeader + `"`
+		}
+		server := httptest.NewServer(NewHandler(mustConfig(t, `{"upstream":{"base_url":"`+upstream.URL+`"`+setting+`}}`), nil))
+		t.Cleanup(server.Close)
+		if status, _, raw := post(t, server.URL+"/v1/responses", `{"model":"claude-x","input":"hi"}`, c.caller); status != 200 {
+			t.Fatalf("%s: status %d body %s", c.name, status, raw)
+		}
+		call := (*calls)[0]
+		if call.Header.Get("Authorization") != c.wantAuth || call.Header.Get("x-api-key") != c.wantXAPIKey {
+			t.Errorf("%s: Authorization=%q x-api-key=%q", c.name, call.Header.Get("Authorization"), call.Header.Get("x-api-key"))
+		}
+	}
+}
+
 func TestNonStreamingEndToEnd(t *testing.T) {
 	upstream, calls := fakeAnthropic(t, 200, messageBody, nil)
 	adapter := adapterFor(t, upstream.URL, "")
@@ -77,12 +108,12 @@ func TestNonStreamingEndToEnd(t *testing.T) {
 		t.Fatalf("status %d body %s", status, raw)
 	}
 	call := (*calls)[0]
-	if call.Path != "/v1/messages" || call.Header.Get("x-api-key") != "sk-ant-test" ||
+	if call.Path != "/v1/messages" || call.Header.Get("Authorization") != "Bearer sk-ant-test" ||
 		call.Header.Get("anthropic-version") != DefaultAnthropicVersion || call.Header.Get("anthropic-beta") != "b-1,b-2" {
 		t.Fatalf("upstream call wrong: %+v", call)
 	}
-	if call.Header.Get("Authorization") != "" {
-		t.Fatal("the bearer token must not be forwarded as Authorization")
+	if call.Header.Get("x-api-key") != "" {
+		t.Fatal("the default auth_header is bearer: x-api-key must not be sent")
 	}
 	var response responseObject
 	if err := json.Unmarshal([]byte(raw), &response); err != nil {

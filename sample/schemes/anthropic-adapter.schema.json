@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "anthropic-adapter.schema.json",
   "title": "Anthropic adapter config",
-  "description": "Configuration of the anthropic-adapter command, which serves the OpenAI Responses API on top of the Anthropic Messages API. Every key is optional; the defaults are shown. The API key is never stored here: the caller sends it as a Bearer token or x-api-key header.",
+  "description": "Configuration of the anthropic-adapter command, which serves the OpenAI Responses API on top of the Anthropic Messages API. Every key is optional; the defaults are shown. No credential is stored here: the caller sends it as a Bearer token or x-api-key header and the adapter forwards it.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -28,6 +28,11 @@
           "minLength": 1,
           "default": "2023-06-01",
           "description": "Value of the anthropic-version header."
+        },
+        "auth_header": {
+          "enum": ["bearer", "x-api-key"],
+          "default": "bearer",
+          "description": "How the token the caller sent is passed upstream. bearer sends Authorization: Bearer <token>, the form Anthropic documents; it carries an API key or a Workload Identity Federation access token. x-api-key sends the legacy header, for a proxy that expects it."
         },
         "beta": {
           "type": "array",

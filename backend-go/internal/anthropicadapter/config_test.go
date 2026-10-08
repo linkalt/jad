@@ -114,6 +114,7 @@ func TestSchemaDefaultsMatchGo(t *testing.T) {
 	}
 	if upstream.Properties["base_url"].Default != config.Upstream.BaseURL ||
 		upstream.Properties["anthropic_version"].Default != config.Upstream.AnthropicVersion ||
+		upstream.Properties["auth_header"].Default != config.Upstream.AuthHeader ||
 		upstream.Properties["request_timeout_ms"].Default != float64(config.Upstream.RequestTimeoutMS) {
 		t.Errorf("upstream schema defaults differ from Go: %+v", upstream.Properties)
 	}
@@ -181,6 +182,8 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 		`{"upstream":{"base_url":"ftp://x"}}`:                "base_url",
 		`{"upstream":{"request_timeout_ms":0}}`:              "request_timeout_ms",
 		`{"upstream":{"beta":["a,b"]}}`:                      "beta",
+		`{"upstream":{"auth_header":"basic"}}`:               "auth_header",
+		`{"upstream":{"auth_header":""}}`:                    "auth_header",
 		`{"upstream":{"stream_retry":{"max_retries":-1}}}`:   "max_retries",
 		`{"upstream":{"stream_retry":{"max_retries":11}}}`:   "max_retries",
 		`{"upstream":{"stream_retry":{"delay_ms":-5}}}`:      "delay_ms",

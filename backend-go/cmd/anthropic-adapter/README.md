@@ -28,7 +28,11 @@ Point a session at it, in that session's `model.json`:
 }
 ```
 
-The adapter holds no key. The backend sends the key from `api_key_env` as `Authorization: Bearer ...` and the adapter forwards it as `x-api-key`. A request with neither header gets 401 and never reaches Anthropic.
+The adapter holds no credential. The backend sends the token from `api_key_env` as `Authorization: Bearer ...` (an `x-api-key` header from the caller is accepted too) and the adapter forwards it upstream as `Authorization: Bearer ...`, the form Anthropic documents. `upstream.auth_header: "x-api-key"` sends the legacy header instead, for a proxy that expects it. A request with neither header gets 401 and never reaches Anthropic.
+
+**Credentials.** The adapter passes the token through and does not know what kind it is, so an API key (`sk-ant-api...`) and a short-lived Workload Identity Federation access token both work. Getting and refreshing a WIF token is a job for a separate tool: put the current token in the environment variable named by `api_key_env`. The adapter never reads or writes a credential file.
+
+**Claude subscription (Free, Pro, Max) OAuth tokens are not supported.** Anthropic's Claude Code legal page (code.claude.com/docs/en/legal-and-compliance, read 2026-10-08) says those tokens are for ordinary use of Claude Code and other native Anthropic applications, and that third-party developers may not route requests through subscription credentials or intermediate Claude.ai credentials. The Messages API authentication page documents API keys, Workload Identity Federation and App Attest only. Nothing here depends on or tests a subscription token.
 
 ## Configuration
 
@@ -39,6 +43,7 @@ Schema: `sample/schemes/anthropic-adapter.schema.json`. A working example: `samp
 | `listen` | `127.0.0.1:8788` | Address to listen on. |
 | `upstream.base_url` | `https://api.anthropic.com` | `/v1/messages` is appended. |
 | `upstream.anthropic_version` | `2023-06-01` | `anthropic-version` header. |
+| `upstream.auth_header` | `bearer` | `bearer` sends `Authorization: Bearer <token>`; `x-api-key` sends the legacy header. |
 | `upstream.beta` | `[]` | Joined into `anthropic-beta`. |
 | `upstream.request_timeout_ms` | `600000` | Deadline of one upstream request, the whole stream included. |
 | `upstream.stream_retry.max_retries` | `0` | Retries of a stream whose first event is an error. `0` is off. |

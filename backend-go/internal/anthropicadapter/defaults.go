@@ -9,6 +9,9 @@ const (
 	DefaultListen                    = "127.0.0.1:8788"
 	DefaultUpstreamBaseURL           = "https://api.anthropic.com"
 	DefaultAnthropicVersion          = "2023-06-01"
+	DefaultAuthHeader                = AuthHeaderBearer
+	AuthHeaderBearer                 = "bearer"
+	AuthHeaderXAPIKey                = "x-api-key"
 	DefaultRequestTimeoutMS          = 600_000
 	DefaultMaxTokens                 = 8192
 	DefaultMaxRequestBytes           = 64 * 1024 * 1024

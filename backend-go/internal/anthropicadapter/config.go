@@ -51,8 +51,10 @@ type CacheConfig struct {
 
 // UpstreamConfig describes the Anthropic endpoint.
 type UpstreamConfig struct {
-	BaseURL          string   `json:"base_url"`
-	AnthropicVersion string   `json:"anthropic_version"`
+	BaseURL          string `json:"base_url"`
+	AnthropicVersion string `json:"anthropic_version"`
+	// AuthHeader is bearer or x-api-key: how the caller's token goes upstream.
+	AuthHeader       string   `json:"auth_header"`
 	Beta             []string `json:"beta"`
 	RequestTimeoutMS int      `json:"request_timeout_ms"`
 	// StreamRetry retries a streaming request whose upstream answered with an
@@ -99,6 +101,7 @@ func DefaultConfig() Config {
 		Upstream: UpstreamConfig{
 			BaseURL:          DefaultUpstreamBaseURL,
 			AnthropicVersion: DefaultAnthropicVersion,
+			AuthHeader:       DefaultAuthHeader,
 			Beta:             []string{},
 			RequestTimeoutMS: DefaultRequestTimeoutMS,
 			StreamRetry: StreamRetryConfig{
@@ -208,6 +211,9 @@ func (u *UpstreamConfig) validate() error {
 	}
 	if strings.TrimSpace(u.AnthropicVersion) == "" {
 		return errors.New("config: upstream.anthropic_version must be a non-empty string")
+	}
+	if u.AuthHeader != AuthHeaderBearer && u.AuthHeader != AuthHeaderXAPIKey {
+		return fmt.Errorf("config: upstream.auth_header must be %q or %q, got %q", AuthHeaderBearer, AuthHeaderXAPIKey, u.AuthHeader)
 	}
 	for _, beta := range u.Beta {
 		if strings.TrimSpace(beta) == "" || strings.ContainsAny(beta, ", \t") {
