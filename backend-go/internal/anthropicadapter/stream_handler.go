@@ -28,12 +28,16 @@ func (h *Handler) respondStream(w http.ResponseWriter, r *http.Request, apiKey s
 		if upstream.StatusCode < 200 || upstream.StatusCode > 299 {
 			payload, _ := io.ReadAll(io.LimitReader(upstream.Body, errorBodyLimit))
 			upstream.Body.Close()
+			h.logUpstreamFailure(upstreamFailure{Kind: "http_status", Status: upstream.StatusCode, Model: translated.Request.Model, Stream: true,
+				Header: upstream.Header, Body: string(payload), SentHeaders: sentHeaderNames(h.upstreamHeaders(""))})
 			writeError(w, upstreamError(upstream.StatusCode, payload, upstream.Header))
 			return
 		}
 		if !strings.HasPrefix(upstream.Header.Get("Content-Type"), "text/event-stream") {
 			payload, _ := io.ReadAll(io.LimitReader(upstream.Body, errorBodyLimit))
 			upstream.Body.Close()
+			h.logUpstreamFailure(upstreamFailure{Kind: "not_event_stream", Status: upstream.StatusCode, Model: translated.Request.Model, Stream: true,
+				Header: upstream.Header, Body: string(payload), SentHeaders: sentHeaderNames(h.upstreamHeaders(""))})
 			writeError(w, upstreamError(http.StatusBadGateway, payload, upstream.Header))
 			return
 		}
@@ -41,6 +45,10 @@ func (h *Handler) respondStream(w http.ResponseWriter, r *http.Request, apiKey s
 		translator.allowRetry = attempt < retry.MaxRetries
 		outcome := translator.run(upstream.Body)
 		upstream.Body.Close()
+		if outcome.ErrorType != "" {
+			h.logUpstreamFailure(upstreamFailure{Kind: "stream_error_event", Status: upstream.StatusCode, Model: translated.Request.Model, Stream: true,
+				Header: upstream.Header, Body: outcome.ErrorMessage, ErrorType: outcome.ErrorType, Retried: outcome.Retry})
+		}
 		if !outcome.Retry {
 			return
 		}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -37,8 +38,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", config.Listen, err)
 	}
+	handler := anthropicadapter.NewHandler(config, nil)
+	handler.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	server := &http.Server{
-		Handler:           anthropicadapter.NewHandler(config, nil),
+		Handler:           handler,
 		ReadHeaderTimeout: shutdownGrace,
 	}
 	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ type Handler struct {
 	config *Config
 	client *http.Client
 	now    func() time.Time
+	logger *slog.Logger
 }
 
 // NewHandler builds the HTTP handler. A nil client uses a plain http.Client;
@@ -25,7 +27,9 @@ func NewHandler(config *Config, client *http.Client) *Handler {
 	if client == nil {
 		client = &http.Client{}
 	}
-	return &Handler{config: config, client: client, now: time.Now}
+	handler := &Handler{config: config, client: client, now: time.Now}
+	handler.SetLogger(nil)
+	return handler
 }
 
 // ServeHTTP routes /v1/responses and /responses.
@@ -89,6 +93,8 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, apiKey string,
 		return
 	}
 	if upstream.StatusCode < 200 || upstream.StatusCode > 299 {
+		h.logUpstreamFailure(upstreamFailure{Kind: "http_status", Status: upstream.StatusCode, Model: translated.Request.Model,
+			Header: upstream.Header, Body: string(payload), SentHeaders: sentHeaderNames(h.upstreamHeaders(""))})
 		writeError(w, upstreamError(upstream.StatusCode, payload, upstream.Header))
 		return
 	}
@@ -100,6 +106,8 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, apiKey string,
 	}
 	// A non-streaming error can still arrive as {"type":"error"} with status 200.
 	if message.Type == "error" {
+		h.logUpstreamFailure(upstreamFailure{Kind: "error_body_with_200", Status: upstream.StatusCode, Model: translated.Request.Model,
+			Header: upstream.Header, Body: string(payload), SentHeaders: sentHeaderNames(h.upstreamHeaders(""))})
 		writeError(w, upstreamError(http.StatusBadGateway, payload, upstream.Header))
 		return
 	}
@@ -118,19 +126,7 @@ func (h *Handler) callUpstream(ctx context.Context, apiKey string, request *anth
 	if err != nil {
 		return nil, &apiError{Status: http.StatusInternalServerError, Type: "api_error", Code: "request_failed", Message: err.Error()}
 	}
-	upstream.Header.Set("Content-Type", "application/json")
-	if h.config.Upstream.AuthHeader == AuthHeaderXAPIKey {
-		upstream.Header.Set("x-api-key", apiKey)
-	} else {
-		upstream.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	upstream.Header.Set("anthropic-version", h.config.Upstream.AnthropicVersion)
-	if len(h.config.Upstream.Beta) > 0 {
-		upstream.Header.Set("anthropic-beta", strings.Join(h.config.Upstream.Beta, ","))
-	}
-	for name, value := range h.config.Upstream.ExtraHeaders {
-		upstream.Header.Set(name, value)
-	}
+	upstream.Header = h.upstreamHeaders(apiKey)
 	response, err := h.client.Do(upstream)
 	if err != nil {
 		status := http.StatusBadGateway
@@ -141,6 +137,26 @@ func (h *Handler) callUpstream(ctx context.Context, apiKey string, request *anth
 			Message: "calling the Anthropic API failed: " + err.Error()}
 	}
 	return response, nil
+}
+
+// upstreamHeaders builds the headers the adapter sets on an upstream request. Go's transport adds
+// User-Agent and Accept-Encoding on top of these.
+func (h *Handler) upstreamHeaders(apiKey string) http.Header {
+	header := http.Header{}
+	header.Set("Content-Type", "application/json")
+	if h.config.Upstream.AuthHeader == AuthHeaderXAPIKey {
+		header.Set("x-api-key", apiKey)
+	} else {
+		header.Set("Authorization", "Bearer "+apiKey)
+	}
+	header.Set("anthropic-version", h.config.Upstream.AnthropicVersion)
+	if len(h.config.Upstream.Beta) > 0 {
+		header.Set("anthropic-beta", strings.Join(h.config.Upstream.Beta, ","))
+	}
+	for name, value := range h.config.Upstream.ExtraHeaders {
+		header.Set(name, value)
+	}
+	return header
 }
 
 // apiKeyFrom reads the key the caller sent: a Bearer token, which is what the

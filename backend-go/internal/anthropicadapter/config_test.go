@@ -81,6 +81,23 @@ func TestSchemaDefaultsMatchGo(t *testing.T) {
 	if !reflect.DeepEqual(stripSchema.Default, config.StripSchemaKeywords) {
 		t.Errorf("schema default for strip_schema_keywords is %v, Go default is %v", stripSchema.Default, config.StripSchemaKeywords)
 	}
+	var logSchema struct {
+		Properties map[string]struct {
+			Default any `json:"default"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schema.Properties["log"], &logSchema); err != nil {
+		t.Fatal(err)
+	}
+	if logSchema.Properties["upstream_errors"].Default != config.Log.UpstreamErrors ||
+		logSchema.Properties["body_bytes"].Default != float64(config.Log.BodyBytes) {
+		t.Errorf("log schema defaults differ from Go: %+v", logSchema.Properties)
+	}
+	wantHeaders, _ := json.Marshal(config.Log.Headers)
+	gotHeaders, _ := json.Marshal(logSchema.Properties["headers"].Default)
+	if string(wantHeaders) != string(gotHeaders) {
+		t.Errorf("log.headers schema default %s, Go default %s", gotHeaders, wantHeaders)
+	}
 	var cacheSchema struct {
 		Properties map[string]struct {
 			Default any `json:"default"`

@@ -122,6 +122,21 @@
       "default": ["oneOf", "allOf", "anyOf"],
       "description": "Keywords removed from the top level of every tool's input schema before it is sent. Anthropic answers 400 'input_schema does not support oneOf, allOf, or anyOf at the top level', and the harness's fetch, task, memory and process tools use them to say 'one of these fields is required'. Only the top level is changed, nested schemas are not. The caller still validates each call against its full schema, so the rule is enforced there; the model no longer sees it. Each removal is listed in the X-Adapter-Ignored-Fields response header as tools.<name>.<keyword>. An empty list sends schemas unchanged."
     },
+    "log": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the adapter writes to stderr when an upstream call fails. Without it a failure reaches the caller as one short message and the response headers that explain it (request id, Retry-After, rate-limit headers) are lost. The request's headers are never logged by value, so the credential cannot reach the log; only their names are.",
+      "properties": {
+        "upstream_errors": { "type": "boolean", "default": true, "description": "Log one line per failed upstream call: an HTTP error status, an error event in a stream, a non-stream body for a stream request, or an error body behind HTTP 200." },
+        "body_bytes": { "type": "integer", "minimum": 0, "maximum": 65536, "default": 2048, "description": "How much of the response body (or the error event's message) to log, on one line. 0 logs none." },
+        "headers": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$" },
+          "default": ["request-id", "retry-after", "x-should-retry", "anthropic-ratelimit-*", "content-type", "server", "cf-ray"],
+          "description": "Response header names to log, matched without regard to case. A trailing * matches a prefix."
+        }
+      }
+    },
     "cache": {
       "type": "object",
       "additionalProperties": false,

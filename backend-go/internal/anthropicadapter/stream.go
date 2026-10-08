@@ -15,6 +15,8 @@ type streamOutcome struct {
 	// Finished is set when a terminal event (completed, incomplete or failed)
 	// was written.
 	Finished bool
+	// ErrorType and ErrorMessage hold the error event the upstream sent, for the log.
+	ErrorType, ErrorMessage string
 }
 
 // streamBlock is one open Anthropic content block.
@@ -111,6 +113,7 @@ func (t *streamTranslator) run(body io.Reader) streamOutcome {
 		case "message_stop":
 			t.complete()
 		case "error":
+			outcome.ErrorType, outcome.ErrorMessage = event.Error.Type, event.Error.Message
 			if t.retryable(event.Error.Type) {
 				outcome.Retry = true
 				return false

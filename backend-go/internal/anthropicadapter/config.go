@@ -27,9 +27,23 @@ type Config struct {
 	// StripSchemaKeywords are removed from the top level of every tool's input schema.
 	// Anthropic answers 400 for oneOf, allOf and anyOf there.
 	StripSchemaKeywords []string       `json:"strip_schema_keywords"`
+	Log                 LogConfig      `json:"log"`
 	Cache               CacheConfig    `json:"cache"`
 	DefaultProfile      ModelProfile   `json:"default_profile"`
 	Models              []ModelProfile `json:"models"`
+}
+
+// LogConfig controls what the adapter writes to stderr when an upstream call fails. Without it a
+// failure reaches the caller as a short message and the response headers that explain it (the
+// request id, Retry-After, the rate-limit headers) are lost. No request header value is logged,
+// so the credential cannot reach the log.
+type LogConfig struct {
+	// UpstreamErrors turns the failure log on or off.
+	UpstreamErrors bool `json:"upstream_errors"`
+	// BodyBytes is how much of the response body (or error message) is logged. 0 logs none.
+	BodyBytes int `json:"body_bytes"`
+	// Headers are the response header names that are logged; an entry ending in * matches a prefix.
+	Headers []string `json:"headers"`
 }
 
 // CacheConfig selects the prompt-caching breakpoints. Everything is off by
@@ -136,8 +150,13 @@ func DefaultConfig() Config {
 		MissingToolResultText:        DefaultMissingToolResultText,
 		InvalidArgumentsKey:          DefaultInvalidArgumentsKey,
 		StripSchemaKeywords:          defaultStripSchemaKeywords(),
-		DefaultProfile:               defaultProfile(),
-		Models:                       []ModelProfile{},
+		Log: LogConfig{
+			UpstreamErrors: DefaultLogUpstreamErrors,
+			BodyBytes:      DefaultLogBodyBytes,
+			Headers:        defaultLogHeaders(),
+		},
+		DefaultProfile: defaultProfile(),
+		Models:         []ModelProfile{},
 	}
 }
 
@@ -209,6 +228,14 @@ func (c *Config) finish() error {
 	}
 	if strings.TrimSpace(c.MissingToolResultText) == "" {
 		return errors.New("config: missing_tool_result_text must be a non-empty string")
+	}
+	if c.Log.BodyBytes < 0 || c.Log.BodyBytes > MaxLogBodyBytes {
+		return fmt.Errorf("config: log.body_bytes must be 0..%d, got %d", MaxLogBodyBytes, c.Log.BodyBytes)
+	}
+	for _, name := range c.Log.Headers {
+		if !validHeaderName(strings.TrimSuffix(name, "*")) {
+			return fmt.Errorf("config: log.headers entry %q is not an HTTP header name (a trailing * makes it a prefix)", name)
+		}
 	}
 	for _, keyword := range c.StripSchemaKeywords {
 		if strings.TrimSpace(keyword) == "" {

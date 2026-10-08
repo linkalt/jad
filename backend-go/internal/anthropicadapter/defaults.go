@@ -51,6 +51,19 @@ var reservedUpstreamHeaders = []string{
 	"authorization", "x-api-key", "anthropic-version", "anthropic-beta", "content-type", "content-length", "host",
 }
 
+const (
+	DefaultLogUpstreamErrors = true
+	DefaultLogBodyBytes      = 2048
+	MaxLogBodyBytes          = 64 * 1024
+)
+
+// defaultLogHeaders are the response headers worth reading when an upstream call fails: the
+// request id Anthropic asks to be quoted, the retry and rate-limit headers, and the ones that
+// show whether a proxy or CDN answered instead of the API.
+func defaultLogHeaders() []string {
+	return []string{"request-id", "retry-after", "x-should-retry", "anthropic-ratelimit-*", "content-type", "server", "cf-ray"}
+}
+
 // defaultStripSchemaKeywords are the keywords Anthropic refuses at the top level of a tool's
 // input_schema ("input_schema does not support oneOf, allOf, or anyOf at the top level").
 func defaultStripSchemaKeywords() []string { return []string{"oneOf", "allOf", "anyOf"} }
