@@ -151,7 +151,7 @@ func TestSubagentTimeoutAfterDetachingIsReportedByTheFollowUp(t *testing.T) {
 	catalog, _ := buildSubagentCatalog(t, subagentSettings(agent), blockedLauncher(make(chan struct{}), nil), readOnlyTool("read"))
 	id := runIDOf(t, subagentCall(t, catalog, `{"task":"x","wait_ms":5}`))
 	output := subagentCall(t, catalog, `{"id":"`+id+`","wait_ms":2000}`)
-	for _, want := range []string{"error_code: subagent_timeout", "did not finish within 60 ms", "rounds: 1", "tokens: 10"} {
+	for _, want := range []string{"error_code: subagent_timeout", "did not finish within 60 ms", "run: " + id, "rounds: 1", "tokens: 10"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("follow-up lacks %q:\n%s", want, output)
 		}

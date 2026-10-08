@@ -147,6 +147,7 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 	case subagentRunTimedOut:
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_timeout",
 			fmt.Sprintf("Agent %s did not finish within %d ms", run.agent, run.timeoutMS),
+			tools.Information{Key: "run", Value: run.id},
 			tools.Information{Key: "agent", Value: run.agent},
 			tools.Information{Key: "rounds", Value: run.result.Rounds},
 			tools.Information{Key: "tokens", Value: run.result.Tokens}), nil
