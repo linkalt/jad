@@ -1,26 +1,23 @@
 package sessionfs
 
-import (
-	"encoding/json"
-	"net/url"
-	"strings"
-)
+import "encoding/json"
 
-// Defaults for the `openai_oauth` setting node. The endpoint is not a documented public
-// API and may change, which is why it is configuration and not a constant in the transport.
+// defaultOpenAIOAuthBaseURL is the endpoint of a model file in auth_mode openai_oauth that
+// sets no base_url. It is not a documented public API and may change, which is why model.json
+// can override it with base_url (for example to reach it through a proxy).
+const defaultOpenAIOAuthBaseURL = "https://chatgpt.com/backend-api/codex"
+
+// Defaults for the `openai_oauth` setting node.
 const (
-	defaultOpenAIOAuthBaseURL        = "https://chatgpt.com/backend-api/codex"
 	defaultOpenAIOAuthExpiryMarginMS = 300_000
 	maxOpenAIOAuthExpiryMarginMS     = 86_400_000
 )
 
-var openAIOAuthKeys = []string{"base_url", "expiry_margin_ms"}
+var openAIOAuthKeys = []string{"expiry_margin_ms"}
 
 // OpenAIOAuthSettings configures requests sent in auth_mode openai_oauth. The backend only
 // reads the credential file; it never refreshes or writes it (a separate CLI does that).
 type OpenAIOAuthSettings struct {
-	// BaseURL is the Codex endpoint the Responses path is appended to.
-	BaseURL string
 	// ExpiryMarginMS is how long before its expiry an access token counts as expired, so a
 	// request is not sent with a token that dies in flight.
 	ExpiryMarginMS int64
@@ -43,20 +40,7 @@ func normalizeOpenAIOAuthSettings(raw json.RawMessage, settingPath string) (Open
 		}
 	}
 	settings := OpenAIOAuthSettings{
-		BaseURL:        defaultOpenAIOAuthBaseURL,
 		ExpiryMarginMS: defaultOpenAIOAuthExpiryMarginMS,
-	}
-	if value, ok := fields["base_url"]; ok {
-		var configured string
-		if err := json.Unmarshal(value, &configured); err != nil || strings.TrimSpace(configured) == "" {
-			return OpenAIOAuthSettings{}, configError("%s: openai_oauth.base_url must be a non-empty string", settingPath)
-		}
-		configured = strings.TrimRight(strings.TrimSpace(configured), "/")
-		parsed, err := url.Parse(configured)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return OpenAIOAuthSettings{}, configError("%s: openai_oauth.base_url must use http or https", settingPath)
-		}
-		settings.BaseURL = configured
 	}
 	if value, ok := fields["expiry_margin_ms"]; ok {
 		configured, valid := configSafeInteger(value)

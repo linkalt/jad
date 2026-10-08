@@ -31,7 +31,7 @@
       "type": "string",
       "enum": ["api_key", "openai_oauth"],
       "default": "api_key",
-      "description": "api_key reads the key from api_key_env. openai_oauth sends requests to the Codex endpoint with the access token read from oauth_auth_file; base_url must not be set. The backend only reads that file: sign-in and token refresh are done by a separate tool. Go backend: the endpoint and the expiry margin are the openai_oauth node of setting.json. The request body is the same as in api_key mode."
+      "description": "api_key reads the key from api_key_env. openai_oauth sends requests to the Codex endpoint with the access token read from oauth_auth_file; base_url is the endpoint and defaults to https://chatgpt.com/backend-api/codex, so a proxy can be put in front of it. The backend only reads that file: sign-in and token refresh are done by a separate tool. Go backend: the expiry margin is the openai_oauth node of setting.json. The request body is the same as in api_key mode."
     },
     "oauth_auth_file": {
       "type": "string",

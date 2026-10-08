@@ -827,8 +827,10 @@ func loadModel(path, promptRole, promptText string) (Model, error) {
 	}
 	oauthAuthFile := ""
 	if authMode == "openai_oauth" {
-		if baseURL != "" {
-			return Model{}, configError("%s: base_url cannot be set with auth_mode openai_oauth; the endpoint is the openai_oauth.base_url setting", path)
+		// base_url means the same here as in api_key mode: the root the Responses path is
+		// appended to. It is how a proxy is put in front of the endpoint.
+		if baseURL == "" {
+			baseURL = defaultOpenAIOAuthBaseURL
 		}
 		oauthAuthFile, err = oauthAuthFilePath(fields, path)
 		if err != nil {

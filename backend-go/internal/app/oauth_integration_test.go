@@ -89,11 +89,11 @@ func newOAuthFixture(t *testing.T, modelExtra string) *oauthFixture {
 	if err := os.WriteFile(filepath.Join(root, "setting.json"), []byte(fmt.Sprintf(`{"session_roots":[{"id":"local","path":%q}]}`, sessionsDir)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	setting := fmt.Sprintf(`{"cwd":%q,"max_tool_rounds":2,"openai_oauth":{"base_url":%q},"http_debug":{"enabled":true,"include_request_headers":true,"include_request_body":true,"max_body_bytes":65536}}`, root, f.codex.URL+"/codex")
+	setting := fmt.Sprintf(`{"cwd":%q,"max_tool_rounds":2,"http_debug":{"enabled":true,"include_request_headers":true,"include_request_body":true,"max_body_bytes":65536}}`, root)
 	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	model := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","auth_mode":"openai_oauth","oauth_auth_file":%q%s}`, f.authFile, modelExtra)
+	model := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","auth_mode":"openai_oauth","base_url":%q,"oauth_auth_file":%q%s}`, f.codex.URL+"/codex", f.authFile, modelExtra)
 	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(model), 0o600); err != nil {
 		t.Fatal(err)
 	}

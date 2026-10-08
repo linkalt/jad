@@ -272,10 +272,8 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 	if runner == nil {
 		var httpClient *http.Client
 		var network http.RoundTripper = http.DefaultTransport
-		baseURL := config.Model.BaseURL
 		if oauth {
 			network = oauthTransport(config, network)
-			baseURL = config.OpenAIOAuth.BaseURL
 			httpClient = &http.Client{Transport: network}
 		}
 		if config.HTTPDebug.Enabled {
@@ -291,7 +289,7 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 			httpClient = &http.Client{Transport: transport}
 		}
 		retry := providerRetryConfig(config.ProviderRetry, r.logger)
-		streamer := openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: baseURL, HTTPClient: httpClient, Retry: &retry})
+		streamer := openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: config.Model.BaseURL, HTTPClient: httpClient, Retry: &retry})
 		runner, err = session.NewRunner(shared.store, streamer, session.ModelSettings{
 			Model:      config.Model.Name,
 			Request:    config.Model.Request,

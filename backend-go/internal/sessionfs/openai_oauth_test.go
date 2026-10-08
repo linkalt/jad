@@ -32,6 +32,22 @@ func loadOAuthSession(t *testing.T, modelJSON, settingExtra string) (SessionConf
 	return config.WithModel()
 }
 
+func TestOpenAIOAuthModelEndpointDefaultsToCodexAndTakesBaseURLFromModelJSON(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	config, err := loadOAuthSession(t, `{"model":"m","auth_mode":"openai_oauth"}`, "")
+	if err != nil || config.Model.BaseURL != "https://chatgpt.com/backend-api/codex" {
+		t.Fatalf("default endpoint = %q, error %v", config.Model.BaseURL, err)
+	}
+	config, err = loadOAuthSession(t, `{"model":"m","auth_mode":"openai_oauth","base_url":"http://127.0.0.1:9/proxy/"}`, "")
+	if err != nil || config.Model.BaseURL != "http://127.0.0.1:9/proxy" {
+		t.Fatalf("configured endpoint = %q, error %v; want the trailing slash trimmed", config.Model.BaseURL, err)
+	}
+	config, err = loadOAuthSession(t, `{"model":"m"}`, "")
+	if err != nil || config.Model.BaseURL != "" {
+		t.Fatalf("api_key mode endpoint = %q, error %v; the Codex default must not leak into it", config.Model.BaseURL, err)
+	}
+}
+
 func TestOpenAIOAuthModelUsesTheDefaultCredentialFileInTheHomeDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -70,7 +86,8 @@ func TestOpenAIOAuthModelRejectsBadCombinationsAndValues(t *testing.T) {
 		model string
 		want  string
 	}{
-		{"base_url in oauth mode", `{"model":"m","auth_mode":"openai_oauth","base_url":"https://x.example/v1"}`, "base_url cannot be set with auth_mode openai_oauth"},
+		{"base_url not http in oauth mode", `{"model":"m","auth_mode":"openai_oauth","base_url":"ftp://x"}`, "base_url must use http or https"},
+		{"empty base_url in oauth mode", `{"model":"m","auth_mode":"openai_oauth","base_url":""}`, "base_url must be a non-empty string"},
 		{"relative credential file", `{"model":"m","auth_mode":"openai_oauth","oauth_auth_file":"auth/x.json"}`, "oauth_auth_file must be absolute or start with ~"},
 		{"empty credential file", `{"model":"m","auth_mode":"openai_oauth","oauth_auth_file":"  "}`, "oauth_auth_file must be a non-empty string"},
 		{"numeric credential file", `{"model":"m","auth_mode":"openai_oauth","oauth_auth_file":3}`, "oauth_auth_file must be a non-empty string"},
@@ -104,15 +121,15 @@ func TestOpenAIOAuthSettingsDefaultsAndEveryKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := OpenAIOAuthSettings{BaseURL: "https://chatgpt.com/backend-api/codex", ExpiryMarginMS: 300000}
+	want := OpenAIOAuthSettings{ExpiryMarginMS: 300000}
 	if config.OpenAIOAuth != want {
 		t.Errorf("defaults = %+v, want %+v", config.OpenAIOAuth, want)
 	}
-	config, err = loadOAuthSession(t, `{"model":"m"}`, `,"openai_oauth":{"base_url":"http://127.0.0.1:9/codex/","expiry_margin_ms":0}`)
+	config, err = loadOAuthSession(t, `{"model":"m"}`, `,"openai_oauth":{"expiry_margin_ms":0}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = OpenAIOAuthSettings{BaseURL: "http://127.0.0.1:9/codex", ExpiryMarginMS: 0}
+	want = OpenAIOAuthSettings{ExpiryMarginMS: 0}
 	if config.OpenAIOAuth != want {
 		t.Errorf("configured = %+v, want %+v", config.OpenAIOAuth, want)
 	}
@@ -124,9 +141,7 @@ func TestOpenAIOAuthSettingsRejectBadValuesNullAndUnknownKeys(t *testing.T) {
 		{"null node", `null`, "openai_oauth must be an object"},
 		{"unknown key", `{"expiry_margin_m":1}`, "openai_oauth.expiry_margin_m is not supported; did you mean expiry_margin_ms?"},
 		{"removed key", `{"client_version":"1.0.0"}`, "openai_oauth.client_version is not supported"},
-		{"base_url not http", `{"base_url":"ftp://x"}`, "openai_oauth.base_url must use http or https"},
-		{"base_url empty", `{"base_url":""}`, "openai_oauth.base_url must be a non-empty string"},
-		{"base_url null", `{"base_url":null}`, "openai_oauth.base_url must be a non-empty string"},
+		{"endpoint moved to model.json", `{"base_url":"https://x.example"}`, "openai_oauth.base_url is not supported"},
 		{"margin negative", `{"expiry_margin_ms":-1}`, "openai_oauth.expiry_margin_ms must be a safe integer between 0 and 86400000"},
 		{"margin too large", `{"expiry_margin_ms":86400001}`, "openai_oauth.expiry_margin_ms must be a safe integer between 0 and 86400000"},
 		{"margin fraction", `{"expiry_margin_ms":1.5}`, "openai_oauth.expiry_margin_ms must be a safe integer"},
