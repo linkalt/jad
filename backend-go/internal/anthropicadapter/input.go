@@ -134,6 +134,9 @@ func (b *inputBuilder) addSystem(blocks []anthropicBlock) *apiError {
 	if apiErr := b.flushPending(); apiErr != nil {
 		return apiErr
 	}
+	for index := range blocks {
+		blocks[index].folded = true
+	}
 	if b.profile.MidConversationSystem {
 		b.messages = append(b.messages, anthropicMessage{Role: "system", Content: blocks})
 		return nil

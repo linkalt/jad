@@ -71,6 +71,21 @@ func TestSchemaDefaultsMatchGo(t *testing.T) {
 			t.Errorf("schema default for %s is %v, Go default is %v", key, got, want)
 		}
 	}
+	var cacheSchema struct {
+		Properties map[string]struct {
+			Default any `json:"default"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schema.Properties["cache"], &cacheSchema); err != nil {
+		t.Fatal(err)
+	}
+	if cacheSchema.Properties["automatic"].Default != config.Cache.Automatic ||
+		cacheSchema.Properties["tools"].Default != config.Cache.Tools ||
+		cacheSchema.Properties["system"].Default != config.Cache.System ||
+		cacheSchema.Properties["history"].Default != config.Cache.History ||
+		cacheSchema.Properties["ttl"].Default != config.Cache.TTL {
+		t.Errorf("cache schema defaults differ from Go: %+v", cacheSchema.Properties)
+	}
 	var upstream struct {
 		Properties map[string]struct {
 			Default any `json:"default"`

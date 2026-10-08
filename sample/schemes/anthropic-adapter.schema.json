@@ -93,6 +93,22 @@
       "default": "_invalid_arguments",
       "description": "function_call arguments that are not a JSON object are sent as {key: original string}."
     },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Prompt-caching breakpoints. All off by default: a cache write costs 1.25x (5 minutes) or 2x (1 hour) the input price, so caching only pays when the same prefix is reused within the TTL. Anthropic allows 4 breakpoints per request; these four switches use at most 4. Prompts below the model's minimum cacheable length are processed without caching and without an error.",
+      "properties": {
+        "automatic": { "type": "boolean", "default": false, "description": "Send the top-level cache_control, which marks the last cacheable block of the request." },
+        "tools": { "type": "boolean", "default": false, "description": "Mark the last tool definition." },
+        "system": { "type": "boolean", "default": false, "description": "Mark the last system block. The cached prefix covers the tools as well." },
+        "history": {
+          "type": "boolean",
+          "default": false,
+          "description": "Mark the last block that comes from a real conversation item, skipping system or developer text appended after it. Use it instead of automatic when the caller appends changing context (a timestamp, state) at the end of every request: the automatic breakpoint would land on that text and never hit."
+        },
+        "ttl": { "enum": ["", "1h"], "default": "", "description": "Empty for the 5-minute default, or 1h." }
+      }
+    },
     "default_profile": { "$ref": "#/$defs/profile" },
     "models": {
       "type": "array",

@@ -24,8 +24,29 @@ type Config struct {
 	SynthesizeMissingToolResults bool           `json:"synthesize_missing_tool_results"`
 	MissingToolResultText        string         `json:"missing_tool_result_text"`
 	InvalidArgumentsKey          string         `json:"invalid_arguments_key"`
+	Cache                        CacheConfig    `json:"cache"`
 	DefaultProfile               ModelProfile   `json:"default_profile"`
 	Models                       []ModelProfile `json:"models"`
+}
+
+// CacheConfig selects the prompt-caching breakpoints. Everything is off by
+// default: a cache write costs more than a plain input token, so caching only
+// pays when the same prefix is reused within the TTL.
+type CacheConfig struct {
+	// Automatic sends the top-level cache_control, which marks the last block
+	// of the request.
+	Automatic bool `json:"automatic"`
+	// Tools marks the last tool definition.
+	Tools bool `json:"tools"`
+	// System marks the last system block. The cached prefix covers tools too.
+	System bool `json:"system"`
+	// History marks the last block that comes from a real conversation item,
+	// skipping system or developer text appended after it. A caller that
+	// appends changing context at the end of every request needs this: the
+	// automatic breakpoint would land on that changing text and never hit.
+	History bool `json:"history"`
+	// TTL is "" for the 5-minute default or "1h".
+	TTL string `json:"ttl"`
 }
 
 // UpstreamConfig describes the Anthropic endpoint.
@@ -165,6 +186,9 @@ func (c *Config) finish() error {
 	}
 	if strings.TrimSpace(c.MissingToolResultText) == "" {
 		return errors.New("config: missing_tool_result_text must be a non-empty string")
+	}
+	if c.Cache.TTL != CacheTTLDefault && c.Cache.TTL != CacheTTLOneHour {
+		return fmt.Errorf("config: cache.ttl must be empty or %q, got %q", CacheTTLOneHour, c.Cache.TTL)
 	}
 	if err := c.DefaultProfile.finish("default_profile", false); err != nil {
 		return err

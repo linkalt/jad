@@ -73,6 +73,7 @@ func translateRequest(config *Config, body []byte) (*translation, *apiError) {
 	}
 	out.ToolChoice = choice
 	applyThinking(out, profile, request.Reasoning)
+	applyCache(out, &config.Cache)
 	sort.Strings(result.Ignored)
 	return result, nil
 }

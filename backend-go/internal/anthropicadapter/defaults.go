@@ -18,6 +18,8 @@ const (
 	DefaultMissingToolResultText     = "No result was recorded for this tool call."
 	MaxRequestTimeoutMS              = 60 * 60 * 1000
 	DefaultStreamRetryMax            = 0
+	CacheTTLDefault                  = ""
+	CacheTTLOneHour                  = "1h"
 	DefaultStreamRetryDelayMS        = 1000
 	MaxStreamRetryMax                = 10
 	MaxStreamRetryDelayMS            = 60_000

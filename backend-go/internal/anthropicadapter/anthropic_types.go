@@ -15,6 +15,14 @@ type anthropicRequest struct {
 	TopP         *float64               `json:"top_p,omitempty"`
 	Thinking     *anthropicThinking     `json:"thinking,omitempty"`
 	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
+	// CacheControl at the top level turns on automatic prompt caching.
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
+}
+
+// cacheControl marks a prompt-caching breakpoint.
+type cacheControl struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -39,6 +47,11 @@ type anthropicBlock struct {
 	ToolUseID string           `json:"tool_use_id,omitempty"`
 	Content   []anthropicBlock `json:"content,omitempty"`
 	IsError   bool             `json:"is_error,omitempty"`
+	// CacheControl marks this block as a prompt-caching breakpoint.
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
+	// folded is set on text that came from a system or developer message and
+	// was placed among the messages. The history breakpoint skips it.
+	folded bool
 }
 
 // anthropicSource is the source of an image or document block.
@@ -50,9 +63,10 @@ type anthropicSource struct {
 }
 
 type anthropicTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	CacheControl *cacheControl   `json:"cache_control,omitempty"`
 }
 
 type anthropicToolChoice struct {
