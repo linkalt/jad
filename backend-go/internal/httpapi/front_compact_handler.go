@@ -35,16 +35,17 @@ func (h *Handler) handleSessionFrontCompact(w http.ResponseWriter, r *http.Reque
 	defer h.endMutation(key)
 	unlock := h.sessionLocks.lock(reference)
 	defer unlock()
+	// Checked before waiting for the transcript lock a run holds (see handleSessionReset).
+	if h.runIsActive(key) {
+		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot front compact a profile while a run is active"})
+		return
+	}
 	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
 	if err != nil {
 		writeJSONError(w, err)
 		return
 	}
 	defer processUnlock()
-	if run := h.runs.current(key); run != nil && run.state() == "running" {
-		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot front compact a profile while a run is active"})
-		return
-	}
 	result, err := resolved.Session.FrontCompact(r.Context(), messageID)
 	if err != nil {
 		writeJSONError(w, err)

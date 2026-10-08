@@ -1005,6 +1005,36 @@ export const scenarios = [
     },
   },
   {
+    // Reset and front compaction are refused while the run is active. Compaction
+    // is not: it waits for the run, and while it waits a second compaction, a
+    // reset and a new run are refused at once. The compaction request is not
+    // awaited inside the event hook, because it only answers after the run ends.
+    name: "reset, front compact and compact sent during a live run",
+    provider: {deltas: ["a", "b", "c", "d", "e", "f"], delayMs: 150},
+    run: async (c) => {
+      await call(c, "POST", "/api/sessions/stopme/reset", {body: {}});
+      let during;
+      let pendingCompact;
+      const result = await sseLive(c, "/api/sessions/stopme/run", {
+        body: {input: "stream while maintaining"},
+        onEvent: async (event) => {
+          if (event.event !== "ui.delta" || during !== undefined) return;
+          during = {};
+          during.reset = await call(c, "POST", "/api/sessions/stopme/reset", {body: {}});
+          during.frontCompact = await call(c, "POST", "/api/sessions/stopme/front-compact", {body: {message_id: "session-user-o0"}});
+          pendingCompact = call(c, "POST", "/api/sessions/stopme/compact", {body: {}});
+          await new Promise((done) => setTimeout(done, 40));
+          during.secondCompact = await call(c, "POST", "/api/sessions/stopme/compact", {body: {}});
+          during.resetWhileCompactWaits = await call(c, "POST", "/api/sessions/stopme/reset", {body: {}});
+          during.runWhileCompactWaits = await call(c, "POST", "/api/sessions/stopme/run", {body: {input: "second run"}});
+        },
+      });
+      const compact = await pendingCompact;
+      const done = result.events.filter((e) => e.event === "done" || e.event === "error");
+      return {during, compact, firstNames: eventNames(result), done, records: await messagesJsonl(c, "stopme"), snapshot: await call(c, "GET", "/api/sessions/stopme")};
+    },
+  },
+  {
     // A response larger than the live-run memory budget spills to a partial
     // file. A client attaching midway must still receive every byte so far, and
     // the saved transcript must hold the whole text.

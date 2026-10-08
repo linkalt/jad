@@ -76,16 +76,20 @@ func (h *Handler) handleSessionReset(w http.ResponseWriter, r *http.Request, ref
 	defer h.endMutation(key)
 	unlock := h.sessionLocks.lock(reference)
 	defer unlock()
+	// A run holds the transcript lock until it ends, so the check has to come
+	// before waiting for that lock: after it, the run is over and the reset would
+	// wipe the answer it just wrote. The session lock above serializes this check
+	// with a run start, and the mutation gate keeps a new run from beginning.
+	if h.runIsActive(key) {
+		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot reset a profile while a run is active"})
+		return
+	}
 	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
 	if err != nil {
 		writeJSONError(w, err)
 		return
 	}
 	defer processUnlock()
-	if run := h.runs.current(key); run != nil && run.state() == "running" {
-		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot reset a profile while a run is active"})
-		return
-	}
 	if err := resolved.Session.Reset(r.Context()); err != nil {
 		writeJSONError(w, err)
 		return

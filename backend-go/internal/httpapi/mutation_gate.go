@@ -13,6 +13,12 @@ func (h *Handler) beginMutation(key string) bool {
 	return true
 }
 
+// runIsActive reports whether a run of key is still running.
+func (h *Handler) runIsActive(key string) bool {
+	run := h.runs.current(key)
+	return run != nil && run.state() == "running"
+}
+
 func (h *Handler) endMutation(key string) {
 	h.mutationMu.Lock()
 	delete(h.mutations, key)
