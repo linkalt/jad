@@ -41,6 +41,21 @@
           "maximum": 3600000,
           "default": 600000,
           "description": "Deadline for one upstream request, including the whole stream."
+        },
+        "stream_retry": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Retry of a streaming request that fails with an error event before any output reached the caller. An HTTP error status is not retried here: it goes to the caller, whose own provider_retry handles it.",
+          "properties": {
+            "max_retries": { "type": "integer", "minimum": 0, "maximum": 10, "default": 0, "description": "0 turns the retry off." },
+            "delay_ms": { "type": "integer", "minimum": 0, "maximum": 60000, "default": 1000, "description": "Wait before each retry." },
+            "error_types": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "default": ["overloaded_error", "api_error"],
+              "description": "Anthropic error types that are retried."
+            }
+          }
         }
       }
     },

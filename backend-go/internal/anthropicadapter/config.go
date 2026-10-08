@@ -34,6 +34,17 @@ type UpstreamConfig struct {
 	AnthropicVersion string   `json:"anthropic_version"`
 	Beta             []string `json:"beta"`
 	RequestTimeoutMS int      `json:"request_timeout_ms"`
+	// StreamRetry retries a streaming request whose upstream answered with an
+	// error event before any output was written.
+	StreamRetry StreamRetryConfig `json:"stream_retry"`
+}
+
+// StreamRetryConfig controls the invisible retry of a stream that fails at
+// its start. MaxRetries 0 turns it off.
+type StreamRetryConfig struct {
+	MaxRetries int      `json:"max_retries"`
+	DelayMS    int      `json:"delay_ms"`
+	ErrorTypes []string `json:"error_types"`
 }
 
 // ModelProfile holds the per-model rules. Anthropic models differ in which
@@ -69,6 +80,11 @@ func DefaultConfig() Config {
 			AnthropicVersion: DefaultAnthropicVersion,
 			Beta:             []string{},
 			RequestTimeoutMS: DefaultRequestTimeoutMS,
+			StreamRetry: StreamRetryConfig{
+				MaxRetries: DefaultStreamRetryMax,
+				DelayMS:    DefaultStreamRetryDelayMS,
+				ErrorTypes: []string{"overloaded_error", "api_error"},
+			},
 		},
 		DefaultMaxTokens:             DefaultMaxTokens,
 		MaxRequestBytes:              DefaultMaxRequestBytes,
@@ -177,6 +193,21 @@ func (u *UpstreamConfig) validate() error {
 	if u.RequestTimeoutMS < 1 || u.RequestTimeoutMS > MaxRequestTimeoutMS {
 		return fmt.Errorf("config: upstream.request_timeout_ms must be 1..%d, got %d",
 			MaxRequestTimeoutMS, u.RequestTimeoutMS)
+	}
+	return u.StreamRetry.validate()
+}
+
+func (r *StreamRetryConfig) validate() error {
+	if r.MaxRetries < 0 || r.MaxRetries > MaxStreamRetryMax {
+		return fmt.Errorf("config: upstream.stream_retry.max_retries must be 0..%d, got %d", MaxStreamRetryMax, r.MaxRetries)
+	}
+	if r.DelayMS < 0 || r.DelayMS > MaxStreamRetryDelayMS {
+		return fmt.Errorf("config: upstream.stream_retry.delay_ms must be 0..%d, got %d", MaxStreamRetryDelayMS, r.DelayMS)
+	}
+	for _, kind := range r.ErrorTypes {
+		if strings.TrimSpace(kind) == "" {
+			return errors.New("config: upstream.stream_retry.error_types entries must be non-empty strings")
+		}
 	}
 	return nil
 }

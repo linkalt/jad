@@ -67,7 +67,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Adapter-Ignored-Fields", strings.Join(translated.Ignored, ","))
 	}
 	if translated.Stream {
-		writeError(w, notImplemented("streaming is not implemented yet"))
+		h.respondStream(w, r, apiKey, translated)
 		return
 	}
 	h.respond(w, r, apiKey, translated)

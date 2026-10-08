@@ -79,6 +79,24 @@ func TestSchemaDefaultsMatchGo(t *testing.T) {
 	if err := json.Unmarshal(schema.Properties["upstream"], &upstream); err != nil {
 		t.Fatal(err)
 	}
+	var upstreamFull struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(schema.Properties["upstream"], &upstreamFull); err != nil {
+		t.Fatal(err)
+	}
+	var retry struct {
+		Properties map[string]struct {
+			Default any `json:"default"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(upstreamFull.Properties["stream_retry"], &retry); err != nil {
+		t.Fatal(err)
+	}
+	if retry.Properties["max_retries"].Default != float64(config.Upstream.StreamRetry.MaxRetries) ||
+		retry.Properties["delay_ms"].Default != float64(config.Upstream.StreamRetry.DelayMS) {
+		t.Errorf("stream_retry schema defaults differ from Go: %+v", retry.Properties)
+	}
 	if upstream.Properties["base_url"].Default != config.Upstream.BaseURL ||
 		upstream.Properties["anthropic_version"].Default != config.Upstream.AnthropicVersion ||
 		upstream.Properties["request_timeout_ms"].Default != float64(config.Upstream.RequestTimeoutMS) {
@@ -119,6 +137,9 @@ func TestSchemaAcceptsAndRejects(t *testing.T) {
 		"low budget":        `{"default_profile":{"effort_budget":{"low":10}}}`,
 		"beta with comma":   `{"upstream":{"beta":["a,b"]}}`,
 		"bad thinking mode": `{"default_profile":{"thinking":"always"}}`,
+		"retry too high":    `{"upstream":{"stream_retry":{"max_retries":11}}}`,
+		"negative delay":    `{"upstream":{"stream_retry":{"delay_ms":-1}}}`,
+		"empty error type":  `{"upstream":{"stream_retry":{"error_types":[""]}}}`,
 	}
 	check := func(text string) error {
 		instance, err := jsonschema.UnmarshalJSON(strings.NewReader(text))
@@ -145,6 +166,10 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 		`{"upstream":{"base_url":"ftp://x"}}`:                "base_url",
 		`{"upstream":{"request_timeout_ms":0}}`:              "request_timeout_ms",
 		`{"upstream":{"beta":["a,b"]}}`:                      "beta",
+		`{"upstream":{"stream_retry":{"max_retries":-1}}}`:   "max_retries",
+		`{"upstream":{"stream_retry":{"max_retries":11}}}`:   "max_retries",
+		`{"upstream":{"stream_retry":{"delay_ms":-5}}}`:      "delay_ms",
+		`{"upstream":{"stream_retry":{"error_types":[""]}}}`: "error_types",
 		`{"default_max_tokens":0}`:                           "default_max_tokens",
 		`{"unsupported_fields":"maybe"}`:                     "unsupported_fields",
 		`{"models":[{"thinking":"adaptive"}]}`:               "match",

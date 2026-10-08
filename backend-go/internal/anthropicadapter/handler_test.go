@@ -229,9 +229,6 @@ func TestMissingKeyAndUnsupportedRoutes(t *testing.T) {
 	if status != 501 || !strings.Contains(raw, "unsupported_operation") {
 		t.Fatalf("previous_response_id: %d %s", status, raw)
 	}
-	if status, _, raw := post(t, adapter.URL+"/v1/responses", `{"model":"m","input":"x","stream":true}`, map[string]string{"x-api-key": "k"}); status != 501 {
-		t.Fatalf("stream not implemented yet should be explicit: %d %s", status, raw)
-	}
 }
 
 func TestUpstreamErrorsKeepStatusAndRetryAfter(t *testing.T) {

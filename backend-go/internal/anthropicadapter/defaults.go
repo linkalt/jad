@@ -17,6 +17,10 @@ const (
 	DefaultInvalidArgumentsKey       = "_invalid_arguments"
 	DefaultMissingToolResultText     = "No result was recorded for this tool call."
 	MaxRequestTimeoutMS              = 60 * 60 * 1000
+	DefaultStreamRetryMax            = 0
+	DefaultStreamRetryDelayMS        = 1000
+	MaxStreamRetryMax                = 10
+	MaxStreamRetryDelayMS            = 60_000
 	MinThinkingBudgetTokens          = 1024
 	UnsupportedReject                = "reject"
 	UnsupportedIgnore                = "ignore"
