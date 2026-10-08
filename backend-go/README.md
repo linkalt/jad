@@ -11,3 +11,7 @@ go generate ./internal/tools/native
 ```
 
 This downloads and verifies the host-platform native library in the user cache and writes a machine-local cgo link shim. The shim (and the Windows DLL, if generated) is ignored by Git. Re-run the generator after upgrading the Xberg package. The generator detects the host platform; cross-compilation requires provisioning the matching target library and cgo link flags separately, and deployments must include the native runtime library.
+
+## Claude models: `anthropic-adapter`
+
+`cmd/anthropic-adapter` serves the Responses API on top of the Anthropic Messages API, so a session can use a Claude model by changing `base_url` in `model.json`. See `cmd/anthropic-adapter/README.md`.

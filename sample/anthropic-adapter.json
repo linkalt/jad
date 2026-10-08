@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "listen": "127.0.0.1:8788",
+  "upstream": {
+    "base_url": "https://api.anthropic.com",
+    "anthropic_version": "2023-06-01",
+    "beta": [],
+    "request_timeout_ms": 600000,
+    "stream_retry": { "max_retries": 2, "delay_ms": 1000, "error_types": ["overloaded_error", "api_error"] }
+  },
+  "default_max_tokens": 16384,
+  "cache": { "system": true, "history": true },
+  "default_profile": { "thinking": "none" },
+  "models": [
+    {
+      "match": "^claude-sonnet-5$",
+      "thinking": "adaptive",
+      "display": "summarized",
+      "mid_conversation_system": false
+    },
+    {
+      "match": "^claude-(fable|mythos|opus|sonnet|haiku)-5",
+      "thinking": "adaptive",
+      "display": "summarized",
+      "mid_conversation_system": true
+    },
+    {
+      "match": "^claude-opus-4-8",
+      "thinking": "adaptive",
+      "display": "summarized",
+      "mid_conversation_system": true
+    },
+    {
+      "match": "^claude-(opus|sonnet)-4-[67]",
+      "thinking": "adaptive",
+      "display": "summarized"
+    },
+    {
+      "match": "^claude-(opus|sonnet|haiku)-4-5",
+      "thinking": "budget",
+      "display": "summarized"
+    }
+  ]
+}
