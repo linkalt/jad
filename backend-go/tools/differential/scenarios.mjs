@@ -1714,9 +1714,17 @@ function execScenarios() {
       toolRound("exec", {lang: "bash", code: "echo \"zero=$0\""}),
       toolRound("bash", {command: "echo \"zero=$0\""}),
     ]),
+    // A failed call that ran in the default language says so and lists the others; a failed
+    // call that named another language, and a successful call, carry no such advice.
+    run("exec: a failed call in the default language suggests passing lang", "execd", [
+      toolRound("exec", {code: "import json\nprint(json.dumps({'a': 1}))"}),
+      toolRound("exec", {lang: "python", code: "import sys\nsys.exit(3)"}),
+      toolRound("exec", {code: "echo fine"}),
+    ]),
     run("exec: default_lang is configuration and a call without lang follows it", "execpy", [
       toolRound("exec", {code: "import sys\nprint('python', sys.version_info[0])"}),
       toolRound("exec", {lang: "bash", code: "echo explicit-bash"}),
+      toolRound("exec", {code: "raise SystemExit(2)"}),
     ]),
     {
       name: "exec: a default_lang the table does not know is a configuration error",

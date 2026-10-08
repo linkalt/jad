@@ -151,6 +151,13 @@ func execArgumentText(value any) any {
 	}
 }
 
+// defaultLangSuggestion is the advice on a failed call that ran in the default language.
+// It is true whether the model left `lang` out or named the default itself, because the
+// call cannot tell which.
+func defaultLangSuggestion(name string, available []string) string {
+	return "ran as lang=" + name + ", the default when lang is omitted; if the code is for another interpreter, pass lang (available: " + strings.Join(available, ", ") + ")"
+}
+
 // findExecLang returns the entry a name or alias selects, matched without regard to case.
 func findExecLang(settings sessionfs.NativeExecSettings, requested string) (string, sessionfs.NativeExecLang, bool) {
 	wanted := strings.ToLower(trimJSSpace(requested))
@@ -239,6 +246,12 @@ func executeNativeExec(
 		stdin = code
 	}
 	common := parseBashArguments(arguments)
+	// A call without `lang` was given the default, so a failure may mean the code was
+	// written for another interpreter (a model that assumes Python sends Python).
+	failureSuggestion := ""
+	if name == settings.DefaultLang {
+		failureSuggestion = defaultLangSuggestion(name, settings.LangNames)
+	}
 	return runShellChild(ctx, shellChildRun{
 		file:       lang.Argv[0],
 		argv:       append(append([]string(nil), programArgs...), extra...),
@@ -248,6 +261,6 @@ func executeNativeExec(
 		lineAware:  settings.LineAware,
 		extraEnv:   map[string]string{execResultEnv: resultPath},
 		resultFile: &shellResultFile{path: resultPath, maxBytes: settings.ResultMaxBytes},
-		program:    &shellProgram{name: name, setting: "tools.native.exec.langs." + name + ".argv"},
+		program:    &shellProgram{name: name, setting: "tools.native.exec.langs." + name + ".argv", failureSuggestion: failureSuggestion},
 	}, bash, apiKeyEnv, execution)
 }

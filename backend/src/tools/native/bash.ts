@@ -364,6 +364,8 @@ export interface ShellChildRun {
   resultFile?: {path: string; maxBytes: number};
   /** Names the program in the "not installed" error; absent means the configured shell. */
   program?: {name: string; setting: string};
+  /** Advice added to a non-zero exit, when the caller knows a likely cause. */
+  failureSuggestion?: string;
 }
 
 /**
@@ -530,6 +532,9 @@ export async function runShellChild(
       ["error_code", "nonzero_exit"],
       ...(notFound
         ? [["hint", "exit code 127 means the command was not found; 126 means it is not executable"] as [string, unknown]]
+        : []),
+      ...(run.failureSuggestion !== undefined
+        ? [["suggestion", run.failureSuggestion] as [string, unknown]]
         : []),
     ]);
   }

@@ -125,6 +125,44 @@ func TestExecReportsANonZeroExitWithItsOutput(t *testing.T) {
 	}
 }
 
+func TestExecFailureInTheDefaultLanguageSaysWhatRanAndHowToPickAnother(t *testing.T) {
+	requireInterpreters(t, "python3", "bash")
+	root := t.TempDir()
+	settings, bash := execTestSettings(), bashTestSettings(t, root)
+	// Python code that reached bash, as when a model assumes Python and leaves lang out.
+	result := runExec(t, root, settings, bash, map[string]any{"code": "import json\nprint(json.dumps({'a': 1}))"})
+	if !strings.Contains(result, `"status":"error"`) || execField(result, "error_code") != "nonzero_exit" {
+		t.Fatalf("result = %s", result)
+	}
+	want := "ran as lang=bash, the default when lang is omitted; if the code is for another interpreter, pass lang (available: python, node, bash, sh)"
+	if got := execField(result, "suggestion"); got != want {
+		t.Fatalf("suggestion = %q, want %q", got, want)
+	}
+	// The same code with its own language works, so the advice leads somewhere.
+	fixed := runExec(t, root, settings, bash, map[string]any{"lang": "python", "code": "import json\nprint(json.dumps({'a': 1}))"})
+	if !strings.Contains(fixed, `"status":"ok"`) {
+		t.Fatalf("python run = %s", fixed)
+	}
+}
+
+func TestExecDefaultLanguageAdviceFollowsTheSettingAndIsAbsentOtherwise(t *testing.T) {
+	requireInterpreters(t, "python3", "bash")
+	root := t.TempDir()
+	settings, bash := execTestSettings(), bashTestSettings(t, root)
+	settings.DefaultLang = "python"
+	failed := runExec(t, root, settings, bash, map[string]any{"code": "raise SystemExit(2)"})
+	if got := execField(failed, "suggestion"); !strings.HasPrefix(got, "ran as lang=python, the default when lang is omitted;") {
+		t.Fatalf("suggestion = %q\n%s", got, failed)
+	}
+	if ok := runExec(t, root, settings, bash, map[string]any{"code": "print(1)"}); execField(ok, "suggestion") != "" {
+		t.Fatalf("a successful call carries advice: %s", ok)
+	}
+	// A call that names another language than the default is not advised about the default.
+	if other := runExec(t, root, settings, bash, map[string]any{"lang": "bash", "code": "exit 3"}); execField(other, "suggestion") != "" {
+		t.Fatalf("a call in another language carries advice: %s", other)
+	}
+}
+
 func TestExecShowsTheResultFileAheadOfTheRawOutput(t *testing.T) {
 	requireInterpreters(t, "python3", "bash")
 	root := t.TempDir()

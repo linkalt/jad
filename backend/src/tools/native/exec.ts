@@ -147,6 +147,14 @@ export function findExecLang(
   return undefined;
 }
 
+/**
+ * The advice on a failed call that ran in the default language. It is true whether the
+ * model left `lang` out or named the default itself, because the call cannot tell which.
+ */
+export function defaultLangSuggestion(name: string, langs: Record<string, NativeExecLangSettings>): string {
+  return `ran as lang=${name}, the default when lang is omitted; if the code is for another interpreter, pass lang (available: ${Object.keys(langs).join(", ")})`;
+}
+
 function missingInput(callId: string, code: string, summary: string): string {
   return executionError(callId, "invalid_input", code, summary);
 }
@@ -212,6 +220,11 @@ export async function executeNativeExec(
         extraEnv: {[EXEC_RESULT_ENV]: resultPath},
         resultFile: {path: resultPath, maxBytes: exec.result_max_bytes},
         program: {name: found.name, setting: `tools.native.exec.langs.${found.name}.argv`},
+        // A call without `lang` was given the default, so a failure may mean the code was
+        // written for another interpreter (a model that assumes Python sends Python).
+        ...(found.name === exec.default_lang
+          ? {failureSuggestion: defaultLangSuggestion(found.name, exec.langs)}
+          : {}),
       },
       context,
     );

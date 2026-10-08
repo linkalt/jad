@@ -171,6 +171,8 @@ type shellResultFile struct {
 type shellProgram struct {
 	name    string
 	setting string
+	// failureSuggestion is advice added to a non-zero exit, when the caller knows a likely cause.
+	failureSuggestion string
 }
 
 // runShellChild runs one child in a resolved working directory under bash's settings
@@ -497,6 +499,9 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 		}
 		if result.hasExitCode && (result.exitCode == 126 || result.exitCode == 127) {
 			fields = append(fields, tools.Information{Key: "hint", Value: "exit code 127 means the command was not found; 126 means it is not executable"})
+		}
+		if program != nil && program.failureSuggestion != "" {
+			fields = append(fields, tools.Information{Key: "suggestion", Value: program.failureSuggestion})
 		}
 		return render(tools.StatusError, "Command exited with "+exitCode, fields...)
 	}

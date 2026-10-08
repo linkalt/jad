@@ -177,6 +177,35 @@ test("a non-zero exit is an error that still shows the output and the exit code"
   assert.equal(fields.error_code, "nonzero_exit");
   assert.equal(fields.exit_code, "3");
   assert.match(contentOf(result), /\[stdout\]\npartial\n\[stderr\]\nboom/);
+  // The failed call named its language, which is not the default: no advice about it.
+  assert.equal(fields.suggestion, undefined);
+});
+
+test("a failed call in the default language says what ran and how to pick another", async () => {
+  const {run} = await openExec();
+  // Python code that reached bash, as when a model assumes Python and leaves lang out.
+  const result = await run({code: "import json\nprint(json.dumps({'a': 1}))"});
+  const fields = informationFields(result);
+  assert.equal(firstLine(result).status, "error");
+  assert.equal(fields.error_code, "nonzero_exit");
+  assert.equal(
+    fields.suggestion,
+    "ran as lang=bash, the default when lang is omitted; if the code is for another interpreter, pass lang (available: python, node, bash, sh, ruby, perl)",
+  );
+  // The same code run with its own language works, so the advice leads somewhere.
+  const fixed = await run({lang: "python", code: "import json\nprint(json.dumps({'a': 1}))"});
+  assert.equal(firstLine(fixed).status, "ok");
+});
+
+test("the default-language advice follows default_lang and is absent on success", async () => {
+  const python = await openExec({default_lang: "python"});
+  const failed = informationFields(await python.run({code: "raise SystemExit(2)"}));
+  assert.match(String(failed.suggestion), /^ran as lang=python, the default when lang is omitted;/);
+  const ok = informationFields(await python.run({code: "print(1)"}));
+  assert.equal(ok.suggestion, undefined);
+  // A bash call is not advised about the default when it names another language.
+  const other = informationFields(await python.run({lang: "bash", code: "exit 3"}));
+  assert.equal(other.suggestion, undefined);
 });
 
 test("the program can write a short answer to $EXEC_RESULT, shown ahead of the raw output", async () => {
