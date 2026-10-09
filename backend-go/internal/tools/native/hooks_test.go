@@ -1,0 +1,454 @@
+package native
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/tools"
+)
+
+func hookTestSettings(hooks ...sessionfs.PostEditHook) sessionfs.HooksSettings {
+	return sessionfs.HooksSettings{Enabled: true, TimeoutMS: 5_000, MaxOutputBytes: 2048, PostEdit: hooks}
+}
+
+func shHook(name, script string, extensions ...string) sessionfs.PostEditHook {
+	return sessionfs.PostEditHook{Name: name, Ext: extensions, Argv: []string{"sh", "-c", script, "{rel}"}, Cwd: sessionfs.HookCwdFileDir}
+}
+
+// hookedTools returns write and edit wrapped with hooks, over a workspace with src/ and docs/.
+func hookedTools(t *testing.T, hooks sessionfs.HooksSettings) (write, edit tools.Tool, root string) {
+	t.Helper()
+	root = scopeWorkspace(t)
+	bash := bashTestSettings(t, root)
+	plainWrite, err := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainEdit, err := NewEditTool(testEditSettings(root, 1<<20), NewPathLocks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return WithPostEditHooks(plainWrite, hooks, bash, ""), WithPostEditHooks(plainEdit, hooks, bash, ""), root
+}
+
+func callTool(t *testing.T, tool tools.Tool, root string, arguments map[string]any, onChange func(string, string)) string {
+	t.Helper()
+	output, err := tool.Execute(context.Background(), arguments, tools.ExecutionContext{CallID: "c", WorkspaceRoot: root, SessionDir: root, OnFileChange: onChange})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return output
+}
+
+func TestHooksAppendTheFailingCheckAfterAWrite(t *testing.T) {
+	write, _, root := hookedTools(t, hookTestSettings(shHook("lint", `echo "bad: $0"; exit 3`, ".go")))
+	output := callTool(t, write, root, map[string]any{"path": "src/a.go", "content": "package a\n"}, nil)
+	assertMutationStatus(t, output, "ok")
+	for _, want := range []string{"Created src/a.go", "post-edit checks for src/a.go", "[lint] failed, exit 3", "bad: a.go", "--- CONTENT token="} {
+		if !strings.Contains(output, want) {
+			t.Errorf("result lacks %q:\n%s", want, output)
+		}
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "src", "a.go")); string(data) != "package a\n" {
+		t.Fatalf("the file was not written: %q", data)
+	}
+}
+
+func TestHooksRunAfterAnEditAndNameTheFile(t *testing.T) {
+	write, edit, root := hookedTools(t, hookTestSettings(shHook("lint", `echo "checked $0"`, ".go")))
+	callTool(t, write, root, map[string]any{"path": "src/b.go", "content": "one\n"}, nil)
+	output := callTool(t, edit, root, map[string]any{"path": "src/b.go", "oldText": "one", "newText": "two"}, nil)
+	for _, want := range []string{"Edited src/b.go", "[lint] passed", "checked b.go"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("edit result lacks %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestHooksLeaveTheResultAloneWhenNothingShouldRun(t *testing.T) {
+	hooks := hookTestSettings(shHook("lint", `echo ran > ran.txt`, ".go"))
+	write, edit, root := hookedTools(t, hooks)
+	plainWrite, _ := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
+	ran := filepath.Join(root, "src", "ran.txt")
+
+	// A file with another extension: byte-identical to the unhooked tool, no check started.
+	got := callTool(t, write, root, map[string]any{"path": "docs/readme.md", "content": "x\n"}, nil)
+	want := callTool(t, plainWrite, root, map[string]any{"path": "docs/readme2.md", "content": "x\n"}, nil)
+	if strings.ReplaceAll(got, "readme.md", "readme2.md") != want {
+		t.Errorf("a non-matching extension changed the result:\n%s\n---\n%s", got, want)
+	}
+	// An unchanged file, a no-match edit and a rejected path run nothing.
+	callTool(t, write, root, map[string]any{"path": "src/same.go", "content": "x\n"}, nil)
+	os.Remove(ran)
+	for name, output := range map[string]string{
+		"unchanged": callTool(t, write, root, map[string]any{"path": "src/same.go", "content": "x\n"}, nil),
+		"no match":  callTool(t, edit, root, map[string]any{"path": "src/same.go", "oldText": "absent", "newText": "y"}, nil),
+		"escape":    callTool(t, write, root, map[string]any{"path": "../outside.go", "content": "x\n"}, nil),
+	} {
+		if strings.Contains(output, "post-edit") {
+			t.Errorf("%s: a check ran:\n%s", name, output)
+		}
+	}
+	if pathExists(ran) {
+		t.Fatal("a check was started for a call that changed nothing")
+	}
+}
+
+func TestHooksOffMeansTheToolIsReturnedAsIs(t *testing.T) {
+	plain, _ := NewWriteTool(testWriteSettings(scopeWorkspace(t), 1<<20), NewPathLocks())
+	for name, hooks := range map[string]sessionfs.HooksSettings{
+		"disabled":   {Enabled: false, PostEdit: []sessionfs.PostEditHook{shHook("x", "true", ".go")}},
+		"no entries": {Enabled: true},
+		"zero value": {},
+	} {
+		wrapped := WithPostEditHooks(plain, hooks, sessionfs.NativeBashSettings{}, "")
+		if reflect.ValueOf(wrapped.Execute).Pointer() != reflect.ValueOf(plain.Execute).Pointer() {
+			t.Errorf("%s: the tool was wrapped although no check can run", name)
+		}
+	}
+	on := WithPostEditHooks(plain, hookTestSettings(shHook("x", "true", ".go")), sessionfs.NativeBashSettings{}, "")
+	if reflect.ValueOf(on.Execute).Pointer() == reflect.ValueOf(plain.Execute).Pointer() {
+		t.Error("an active hook set did not wrap the tool")
+	}
+}
+
+func TestHooksOnFailureOnlyHidesAPassingCheck(t *testing.T) {
+	quiet := shHook("quiet", `echo fine`, ".txt")
+	quiet.OnFailureOnly = true
+	write, _, root := hookedTools(t, hookTestSettings(quiet))
+	output := callTool(t, write, root, map[string]any{"path": "docs/n.txt", "content": "x\n"}, nil)
+	if strings.Contains(output, "post-edit") || strings.Contains(output, "fine") {
+		t.Fatalf("a passing on_failure_only check was reported:\n%s", output)
+	}
+	loud := shHook("quiet", `exit 1`, ".txt")
+	loud.OnFailureOnly = true
+	write, _, root = hookedTools(t, hookTestSettings(loud))
+	output = callTool(t, write, root, map[string]any{"path": "docs/n.txt", "content": "x\n"}, nil)
+	if !strings.Contains(output, "[quiet] failed, exit 1") {
+		t.Fatalf("a failing on_failure_only check was hidden:\n%s", output)
+	}
+}
+
+func TestHooksMatchExtensionsWithoutCaseAndRunEveryMatchInOrder(t *testing.T) {
+	write, _, root := hookedTools(t, hookTestSettings(
+		shHook("first", `echo one`, ".TXT"),
+		shHook("skipped", `echo never`, ".go"),
+		shHook("second", `echo two`, ".txt", ".md"),
+	))
+	output := callTool(t, write, root, map[string]any{"path": "docs/a.txt", "content": "x\n"}, nil)
+	first, second := strings.Index(output, "[first] passed"), strings.Index(output, "[second] passed")
+	if first < 0 || second < first || strings.Contains(output, "never") {
+		t.Fatalf("wrong checks or order:\n%s", output)
+	}
+}
+
+func TestHooksReportATimeoutAndAMissingProgramWithoutFailingTheCall(t *testing.T) {
+	hooks := hookTestSettings(
+		shHook("slow", `echo started; sleep 30`, ".txt"),
+		sessionfs.PostEditHook{Name: "gone", Ext: []string{".txt"}, Argv: []string{"no-such-checker-xyz", "{file}"}, Cwd: sessionfs.HookCwdFileDir},
+	)
+	hooks.TimeoutMS = 1_000
+	write, _, root := hookedTools(t, hooks)
+	output := callTool(t, write, root, map[string]any{"path": "docs/t.txt", "content": "x\n"}, nil)
+	assertMutationStatus(t, output, "ok")
+	for _, want := range []string{"[slow] timed out after 1000 ms (setting: hooks.timeout_ms)", "started", "[gone] could not start", "hooks.post_edit[gone].argv"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("result lacks %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestHooksCutLongOutputAndSayWhichSettingCutIt(t *testing.T) {
+	hooks := hookTestSettings(shHook("noisy", `i=0; while [ $i -lt 2000 ]; do echo "line $i of noise"; i=$((i+1)); done`, ".txt"))
+	hooks.MaxOutputBytes = 400
+	write, _, root := hookedTools(t, hooks)
+	output := callTool(t, write, root, map[string]any{"path": "docs/n.txt", "content": "x\n"}, nil)
+	if !strings.Contains(output, "line 0 of noise") || !strings.Contains(output, "line 1999 of noise") || !strings.Contains(output, "bytes omitted") {
+		t.Fatalf("head and tail were not both kept:\n%s", output)
+	}
+	if len(output) > 2500 {
+		t.Fatalf("the result is %d bytes although the check output is capped at 400", len(output))
+	}
+}
+
+func TestHooksNearestMarkerAndWorkspaceDirectories(t *testing.T) {
+	near := shHook("near", `pwd; echo "rel=$0"`, ".txt")
+	near.Cwd = "nearest:marker.json"
+	near.Argv[3] = "{rel}"
+	work := shHook("work", `pwd`, ".txt")
+	work.Cwd = sessionfs.HookCwdWorkspace
+	missing := shHook("missing", `pwd`, ".txt")
+	missing.Cwd = "nearest:absent.json"
+	write, _, root := hookedTools(t, hookTestSettings(near, work, missing))
+	if err := os.MkdirAll(filepath.Join(root, "src", "deep", "er"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "marker.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := callTool(t, write, root, map[string]any{"path": "src/deep/er/f.txt", "content": "x\n"}, nil)
+	for _, want := range []string{
+		"[near] passed", filepath.Join(root, "src"), "rel=deep/er/f.txt",
+		"[work] passed (", "in .)",
+		"[missing] skipped: no absent.json between the file and the workspace root",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("result lacks %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestHooksReportWhenACheckRewroteTheFile(t *testing.T) {
+	fixer := shHook("fmt", `printf 'fixed\n' > "$0"`, ".txt")
+	fixer.Argv[3] = "{file}"
+	fixer.OnFailureOnly = true
+	write, _, root := hookedTools(t, hookTestSettings(fixer))
+	output := callTool(t, write, root, map[string]any{"path": "docs/f.txt", "content": "x\n"}, nil)
+	if !strings.Contains(output, "the check changed the file, read it again before the next edit") {
+		t.Fatalf("a rewrite by the check was not reported (and on_failure_only must not hide it):\n%s", output)
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "docs", "f.txt")); string(data) != "fixed\n" {
+		t.Fatalf("the fixer did not run: %q", data)
+	}
+}
+
+func TestHooksStillReportTheChangeToTheCaller(t *testing.T) {
+	write, _, root := hookedTools(t, hookTestSettings(shHook("lint", `true`, ".txt")))
+	var seen []string
+	callTool(t, write, root, map[string]any{"path": "docs/r.txt", "content": "x\n"}, func(path, action string) { seen = append(seen, path+":"+action) })
+	if len(seen) != 1 || seen[0] != "docs/r.txt:created" {
+		t.Fatalf("the original OnFileChange was not called once: %v", seen)
+	}
+}
+
+func TestHooksRespectTheAgentPathScope(t *testing.T) {
+	write, _, root := hookedTools(t, hookTestSettings(shHook("lint", `echo ran > ../ran.flag`, ".txt")))
+	output, err := write.Execute(context.Background(), map[string]any{"path": "docs/denied.txt", "content": "x\n"}, tools.ExecutionContext{
+		CallID: "c", WorkspaceRoot: root, PathScope: &tools.PathScope{Allow: []string{"src"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output, "post-edit") || pathExists(filepath.Join(root, "ran.flag")) || pathExists(filepath.Join(root, "docs", "denied.txt")) {
+		t.Fatalf("a call outside the agent's paths ran a check or wrote:\n%s", output)
+	}
+}
+
+func TestHookArgumentsReplacePlaceholdersButNeverTheProgram(t *testing.T) {
+	hook := sessionfs.PostEditHook{Name: "x", Argv: []string{"prog", "{file}|{dir}|{rel}|{reldir}", "{file}"}}
+	got := hookArguments(hook, "/ws/pkg", "/ws/pkg/sub/a.go")
+	want := []string{"prog", "/ws/pkg/sub/a.go|/ws/pkg/sub|sub/a.go|sub", "/ws/pkg/sub/a.go"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestHooksGetNoShellSoAFileNameIsNeverParsed(t *testing.T) {
+	hook := sessionfs.PostEditHook{Name: "cat", Ext: []string{".txt"}, Argv: []string{"cat", "{file}"}, Cwd: sessionfs.HookCwdFileDir}
+	write, _, root := hookedTools(t, hookTestSettings(hook))
+	output := callTool(t, write, root, map[string]any{"path": "docs/$(touch pwned); x.txt", "content": "payload\n"}, nil)
+	if !strings.Contains(output, "payload") || pathExists(filepath.Join(root, "docs", "pwned")) {
+		t.Fatalf("the file name was interpreted by a shell:\n%s", output)
+	}
+}
+
+func TestHooksWithoutBashAreAConfigurationErrorOnCatalogBuild(t *testing.T) {
+	root := scopeWorkspace(t)
+	definition := func(file string) string {
+		data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(root, file)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	write := testWriteSettings(root, 1<<20)
+	config := sessionfs.SessionConfig{
+		SettingPath: "setting.json", ToolDefinitionPaths: []string{definition("write.json")},
+		NativeWrite: &write, Hooks: hookTestSettings(shHook("lint", "true", ".go")),
+	}
+	_, err := BuildCatalog(config)
+	if err == nil || !strings.Contains(err.Error(), "hooks needs tools.native.bash") {
+		t.Fatalf("error = %v, want one naming tools.native.bash", err)
+	}
+	config.Hooks.Enabled = false
+	if _, err := BuildCatalog(config); err != nil {
+		t.Fatalf("inactive hooks must not need bash: %v", err)
+	}
+	bash := bashTestSettings(t, root)
+	config.Hooks.Enabled, config.NativeBash = true, &bash
+	config.ToolDefinitionPaths = append(config.ToolDefinitionPaths, definition("bash.json"))
+	if _, err := BuildCatalog(config); err != nil {
+		t.Fatalf("hooks with bash must build: %v", err)
+	}
+}
+
+func TestHooksAreWiredIntoBothToolsOfTheCatalog(t *testing.T) {
+	root := scopeWorkspace(t)
+	definition := func(file string) string {
+		data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(root, file)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	write, edit, bash := testWriteSettings(root, 1<<20), testEditSettings(root, 1<<20), bashTestSettings(t, root)
+	config := sessionfs.SessionConfig{
+		SettingPath: "setting.json", NativeWrite: &write, NativeEdit: &edit, NativeBash: &bash,
+		ToolDefinitionPaths: []string{definition("write.json"), definition("edit.json"), definition("bash.json")},
+		Hooks:               hookTestSettings(shHook("lint", `echo "saw $0"`, ".txt")),
+	}
+	catalog, err := BuildCatalog(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(name, arguments string) string {
+		t.Helper()
+		item := `{"type":"function_call","call_id":"c","name":"` + name + `","arguments":` + jsonString(arguments) + `}`
+		output, err := catalog.ExecuteFunctionCall(context.Background(), []byte(item), tools.ExecutionContext{CallID: "c", ToolName: name, WorkspaceRoot: root, SessionDir: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(output)
+	}
+	if out := call("write", `{"path":"docs/c.txt","content":"one\n"}`); !strings.Contains(out, "[lint] passed") || !strings.Contains(out, "saw c.txt") {
+		t.Errorf("write from the catalog ran no check:\n%s", out)
+	}
+	if out := call("edit", `{"path":"docs/c.txt","oldText":"one","newText":"two"}`); !strings.Contains(out, "[lint] passed") || !strings.Contains(out, "saw c.txt") {
+		t.Errorf("edit from the catalog ran no check:\n%s", out)
+	}
+	// bash is not hooked: it changes files the tools cannot name.
+	if out := call("bash", `{"command":"echo hi"}`); strings.Contains(out, "post-edit") {
+		t.Errorf("bash ran a post-edit check:\n%s", out)
+	}
+}
+
+func jsonString(value string) string {
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
+}
+
+func TestHooksNearestMarkerStopsAtTheWorkspaceRoot(t *testing.T) {
+	near := shHook("near", `pwd`, ".txt")
+	near.Cwd = "nearest:outside.json"
+	write, _, root := hookedTools(t, hookTestSettings(near))
+	// The marker sits in the directory above the workspace, which the search must not reach.
+	if err := os.WriteFile(filepath.Join(filepath.Dir(root), "outside.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := callTool(t, write, root, map[string]any{"path": "src/x.txt", "content": "x\n"}, nil)
+	if !strings.Contains(output, "[near] skipped: no outside.json between the file and the workspace root") {
+		t.Fatalf("the search left the workspace:\n%s", output)
+	}
+}
+
+func TestHooksKeepTheCallsErrorEvenWhenTheFileChanged(t *testing.T) {
+	failing := tools.Tool{Execute: func(_ context.Context, _ map[string]any, execution tools.ExecutionContext) (string, error) {
+		execution.OnFileChange("docs/e.txt", "created")
+		return "", os.ErrInvalid
+	}}
+	bash := bashTestSettings(t, t.TempDir())
+	wrapped := WithPostEditHooks(failing, hookTestSettings(shHook("lint", `echo ran > ran.flag`, ".txt")), bash, "")
+	root := scopeWorkspace(t)
+	output, err := wrapped.Execute(context.Background(), nil, tools.ExecutionContext{CallID: "c", WorkspaceRoot: root})
+	if err != os.ErrInvalid || output != "" || pathExists(filepath.Join(root, "docs", "ran.flag")) {
+		t.Fatalf("err=%v output=%q: an error from the call must pass through untouched, with no check run", err, output)
+	}
+}
+
+func TestHooksNeverRunForAnUnchangedWrite(t *testing.T) {
+	write, _, root := hookedTools(t, hookTestSettings(shHook("lint", `echo ran >> ran.log`, ".txt")))
+	first := callTool(t, write, root, map[string]any{"path": "src/a.txt", "content": "x\n"}, nil)
+	if !strings.Contains(first, "[lint] passed") {
+		t.Fatalf("the first write must run the check:\n%s", first)
+	}
+	again := callTool(t, write, root, map[string]any{"path": "src/a.txt", "content": "x\n"}, nil)
+	if strings.Contains(again, "post-edit") || !strings.Contains(again, "Unchanged") {
+		t.Fatalf("an unchanged write ran a check:\n%s", again)
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "src", "ran.log")); string(data) != "ran\n" {
+		t.Fatalf("the check ran %d times in total, want once", strings.Count(string(data), "ran"))
+	}
+}
+
+func TestHooksStopARunningCheckWhenTheRunIsCancelled(t *testing.T) {
+	write, _, root := hookedTools(t, hookTestSettings(shHook("slow", `echo started; sleep 30`, ".txt")))
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	started := time.Now()
+	output, err := write.Execute(ctx, map[string]any{"path": "docs/c.txt", "content": "x\n"}, tools.ExecutionContext{CallID: "c", WorkspaceRoot: root, SessionDir: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(started); took > 10*time.Second {
+		t.Fatalf("the call took %v after a cancel; the check kept running", took)
+	}
+	if !strings.Contains(output, "[slow] stopped before it finished") || !strings.Contains(output, "Created docs/c.txt") {
+		t.Fatalf("a cancelled check must be reported and the write kept:\n%s", output)
+	}
+}
+
+func TestHooksNearestSaysSoForAFileOutsideTheWorkspace(t *testing.T) {
+	near := shHook("near", `pwd`, ".txt")
+	near.Cwd = "nearest:go.mod"
+	root := scopeWorkspace(t)
+	outside := t.TempDir()
+	output := runPostEditHooks(context.Background(), hookTestSettings(near), bashTestSettings(t, root), "", tools.ExecutionContext{WorkspaceRoot: root}, filepath.Join(outside, "o.txt"))
+	if !strings.Contains(output, "the file is outside the workspace") {
+		t.Fatalf("got:\n%s", output)
+	}
+}
+
+func TestHooksFollowASymlinkedFileToItsTarget(t *testing.T) {
+	check := shHook("where", `pwd`, ".txt")
+	check.Cwd = sessionfs.HookCwdFileDir
+	_, _, root := hookedTools(t, hookTestSettings(check))
+	target := filepath.Join(root, "src", "real.txt")
+	if err := os.WriteFile(target, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "docs", "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip("symlinks are not available")
+	}
+	plain, _ := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
+	hooked := WithPostEditHooks(plain, hookTestSettings(check), bashTestSettings(t, root), "")
+	output := callTool(t, hooked, root, map[string]any{"path": "docs/link.txt", "content": "y\n"}, nil)
+	if !strings.Contains(output, filepath.Join(root, "src")) {
+		t.Fatalf("the check did not run in the symlink target's directory:\n%s", output)
+	}
+}
+
+// The guard against an empty changed path only matters when the workspace root itself
+// carries a hooked extension: the path "" then resolves to the root and would match.
+func TestHooksNeverRunWithoutAChangedFileEvenWhenTheRootLooksLikeOne(t *testing.T) {
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(parent, "ws.txt")
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
+	write := WithPostEditHooks(plain, hookTestSettings(shHook("lint", `echo ran`, ".txt")), bashTestSettings(t, root), "")
+	callTool(t, write, root, map[string]any{"path": "src/a.dat", "content": "x\n"}, nil)
+	output := callTool(t, write, root, map[string]any{"path": "src/a.dat", "content": "x\n"}, nil)
+	if strings.Contains(output, "post-edit") || !strings.Contains(output, "Unchanged") {
+		t.Fatalf("an unchanged write ran a check:\n%s", output)
+	}
+}

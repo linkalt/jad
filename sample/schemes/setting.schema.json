@@ -121,6 +121,35 @@
       "additionalProperties": false,
       "default": {}
     },
+    "hooks": {
+      "type": "object",
+      "description": "Optional checks that run after the native write and edit tools change a file, for example a type check. Go backend only; the TypeScript backend does not read this key. Off by default: with enabled false (or the key absent) no command is started and no tool result changes. A check never fails the write or edit; its outcome is appended to the tool result as text. Needs tools.native.bash, whose environment, kill policy and line cut it uses. A check runs without asking for approval, because its command is part of this file; it also runs for write-capable sub-agents, on the files their paths allow.",
+      "properties": {
+        "enabled": {"type": "boolean", "default": false, "description": "Run the checks in post_edit."},
+        "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000, "default": 60000, "description": "Longest one check may run. A check that is still running is stopped and reported as timed out."},
+        "max_output_bytes": {"type": "integer", "minimum": 256, "maximum": 1048576, "default": 8192, "description": "Cut of the output one check adds to the tool result, applied to stdout and stderr each (a check that writes to both can add up to twice this). The start and the end are kept and the middle is dropped."},
+        "post_edit": {
+          "type": "array",
+          "maxItems": 32,
+          "default": [],
+          "description": "The checks, in the order they run. Every entry whose ext matches the changed file runs.",
+          "items": {
+            "type": "object",
+            "required": ["name", "ext", "argv"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$", "description": "Unique label shown in the tool result."},
+              "ext": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "pattern": "^\\.[A-Za-z0-9]{1,8}$"}, "description": "File extensions with the dot, compared without case, for example [\".ts\", \".tsx\"]."},
+              "argv": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}, "description": "The program and its arguments, run directly with no shell. In every argument after the first, {file} and {dir} are the absolute file and its directory, {rel} and {reldir} the same relative to the check's working directory."},
+              "cwd": {"type": "string", "default": "file_dir", "description": "Working directory: file_dir (the file's directory), workspace (the workspace root) or nearest:<marker file name> (the closest directory from the file up to the workspace root that holds the marker, for example nearest:package.json). When no directory holds the marker the check is skipped and the result says so."},
+              "on_failure_only": {"type": "boolean", "default": false, "description": "Leave a passing check out of the tool result. A check that rewrote the file is still reported."}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
     "persistence": {
       "type": "object",
       "description": "Transcript persistence behavior.",

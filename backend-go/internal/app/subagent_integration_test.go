@@ -344,6 +344,11 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		manifest("write.json")
 		delete(agentSetting, "__write")
 	}
+	bashSettings, withBash := agentSetting["__bash"].(map[string]any)
+	if withBash {
+		manifest("bash.json")
+		delete(agentSetting, "__bash")
+	}
 	checkpointJSON, withCheckpoint := agentSetting["__checkpoint"].(string)
 	delete(agentSetting, "__checkpoint")
 	sessionExtra, _ := agentSetting["__session"].(map[string]any)
@@ -415,6 +420,10 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 			writeTool[key] = value
 		}
 		nativeTools["write"] = writeTool
+	}
+	if withBash {
+		definitions = append(definitions, "bash.json")
+		nativeTools["bash"] = bashSettings
 	}
 	sessionSetting := map[string]any{
 		"cwd": workspace, "max_tool_rounds": 4,

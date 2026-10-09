@@ -71,6 +71,20 @@ func RenderToolResult(options ResultOptions) (string, error) {
 	return strings.Join(lines, "\n") + "\n", nil
 }
 
+// AppendContent adds a content section to a result RenderToolResult produced without
+// one, in the same layout RenderToolResult gives a result that has one.
+func AppendContent(result string, content Content) (string, error) {
+	encoding := content.Encoding
+	if encoding != "base64" {
+		encoding = "utf8"
+	}
+	token, err := contentToken(content.Text)
+	if err != nil {
+		return "", err
+	}
+	return result + fmt.Sprintf("\n--- CONTENT token=%s encoding=%s ---\n%s\n--- END CONTENT token=%s ---\n", token, encoding, content.Text, token), nil
+}
+
 func ExecutionError(id string, status Status, code, summary string, information ...Information) string {
 	entries := []Information{{Key: "error_type", Value: "execution"}, {Key: "error_code", Value: code}}
 	entries = append(entries, information...)

@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "enabled": true,
+    "timeout_ms": 60000,
+    "max_output_bytes": 8192,
+    "post_edit": [
+      {"name": "go-vet", "ext": [".go"], "argv": ["go", "vet", "./{reldir}"], "cwd": "nearest:go.mod"},
+      {"name": "tsc", "ext": [".ts", ".tsx"], "argv": ["npx", "--no-install", "tsc", "--noEmit"], "cwd": "nearest:tsconfig.json"},
+      {"name": "ruff", "ext": [".py"], "argv": ["ruff", "check", "{file}"], "cwd": "file_dir", "on_failure_only": true},
+      {"name": "json", "ext": [".json"], "argv": ["jq", "empty", "{file}"], "cwd": "file_dir", "on_failure_only": true}
+    ]
+  }
+}
