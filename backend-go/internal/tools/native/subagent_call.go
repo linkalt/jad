@@ -57,6 +57,12 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		WorkspaceRoot: execution.WorkspaceRoot,
 		SessionDir:    execution.SessionDir,
 	}
+	if agent.config.Paths.Set() {
+		childExecution.PathScope = &tools.PathScope{
+			Allow: append([]string(nil), agent.config.Paths.Allow...),
+			Deny:  append([]string(nil), agent.config.Paths.Deny...),
+		}
+	}
 	if changes {
 		// A child that can change files asks the same user through the same queue as
 		// the parent, with its own name on the question. A read-only child asks nobody.

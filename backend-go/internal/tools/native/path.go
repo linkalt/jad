@@ -80,6 +80,9 @@ func pathPolicyError(target, workspaceRoot string, policy sessionfs.NativePathPo
 			return tools.ExecutionError(callID, tools.StatusForbidden, "path_denied", "The requested path is denied by the native tool policy", tools.Information{Key: "path", Value: safeErrorPath(workspaceRoot, target)})
 		}
 	}
+	if len(policy.Within) > 0 && !withinAny(policy.Within, target) {
+		return tools.ExecutionError(callID, tools.StatusForbidden, "path_outside_agent_paths", "The requested path is outside the paths this agent may change", tools.Information{Key: "path", Value: safeErrorPath(workspaceRoot, target)})
+	}
 	if pathAllowed(target, workspaceRoot, policy) {
 		return ""
 	}

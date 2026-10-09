@@ -41,6 +41,18 @@ type ExecutionContext struct {
 	// RawArguments retains the provider's original JSON text for tools whose
 	// persisted format depends on object insertion order.
 	RawArguments json.RawMessage
+	// PathScope narrows the paths a file-changing tool may touch for this call, on top
+	// of the tool's own policy. The sub-agent tool sets it for an agent with paths; nil
+	// means no further narrowing.
+	PathScope *PathScope
+}
+
+// PathScope is a per-call narrowing of a tool's path policy. Allow, when not empty,
+// limits the call to paths inside one of its entries; Deny refuses paths inside one.
+// A relative entry is taken from the call's workspace root.
+type PathScope struct {
+	Allow []string
+	Deny  []string
 }
 
 // Tool is one compiled and executable function tool.

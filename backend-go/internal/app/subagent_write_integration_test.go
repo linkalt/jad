@@ -25,6 +25,12 @@ func writerFixture(t *testing.T, approval bool) subagentFixture {
 // session settings (for example tool_call_scheduling).
 func writerFixtureWith(t *testing.T, approval bool, files map[string]string, session map[string]any) subagentFixture {
 	t.Helper()
+	return writerFixtureWithPaths(t, approval, files, session, nil)
+}
+
+// writerFixtureWithPaths is writerFixtureWith plus the agent's paths (nil for none).
+func writerFixtureWithPaths(t *testing.T, approval bool, files map[string]string, session, paths map[string]any) subagentFixture {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
@@ -39,6 +45,9 @@ func writerFixtureWith(t *testing.T, approval bool, files map[string]string, ses
 	}
 	if session != nil {
 		setting["__session"] = session
+	}
+	if paths != nil {
+		setting["paths"] = paths
 	}
 	f := newSubagentFixtureWithFiles(t, setting, files)
 	f.provider.childFirstCall = [2]string{"write", `{"path":"made.txt","content":"by the child"}`}
@@ -437,5 +446,43 @@ func TestSubagentWriterParkedOnAQuestionEndsCleanlyWhenTheRunIsStopped(t *testin
 	}
 	if status, body := f.get(t, "/run"); status == http.StatusOK && strings.Contains(body, `"status":"running"`) {
 		t.Fatalf("the run is still going: %s", body)
+	}
+}
+
+// A writer child with paths: its write inside the allowed folder happens, and the same
+// write outside it is refused by the real write tool with a result the child sees.
+func TestSubagentWriterPathsLimitWhereTheChildMayWrite(t *testing.T) {
+	for name, tc := range map[string]struct {
+		target    string
+		wantFile  bool
+		wantError string
+	}{
+		"inside allow":  {target: "src/made.txt", wantFile: true},
+		"outside allow": {target: "docs/made.txt", wantError: "path_outside_agent_paths"},
+		"denied inside": {target: "src/secret/made.txt", wantError: "path_denied"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := writerFixtureWithPaths(t, false, map[string]string{"src/keep.txt": "k", "docs/keep.txt": "k", "src/secret/keep.txt": "k"}, nil,
+				map[string]any{"allow": []string{"src"}, "deny": []string{"src/secret"}})
+			f.provider.childFirstCall = [2]string{"write", `{"path":"` + tc.target + `","content":"by the child"}`}
+			if body := f.run(t); !strings.Contains(body, "event: completed") {
+				t.Fatalf("run did not complete:\n%s", body)
+			}
+			_, err := os.Stat(filepath.Join(f.workspace, tc.target))
+			if wrote := err == nil; wrote != tc.wantFile {
+				t.Fatalf("file %s written = %v, want %v", tc.target, wrote, tc.wantFile)
+			}
+			if tc.wantError != "" {
+				seen := false
+				for _, request := range f.provider.forModel("child-model") {
+					if strings.Contains(request.Text, tc.wantError) {
+						seen = true
+					}
+				}
+				if !seen {
+					t.Fatalf("the child never got %s in a tool result", tc.wantError)
+				}
+			}
+		})
 	}
 }

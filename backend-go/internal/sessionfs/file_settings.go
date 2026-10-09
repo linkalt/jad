@@ -33,6 +33,9 @@ type NativePathRule struct {
 type NativePathPolicy struct {
 	Paths             []NativePathRule
 	UnrestrictedPaths bool
+	// Within, when not empty, is a second condition on top of Paths: a path must also
+	// lie inside one of these absolute roots. It can only narrow what Paths allow.
+	Within []string
 }
 
 func defaultSessionFileListingSettings() SessionFileListingSettings {

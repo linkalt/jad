@@ -63,6 +63,32 @@
       "maximum": 3600000,
       "default": 600000,
       "description": "Wall-clock limit of one run, including provider waits."
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "description": "The agent's write and edit may change only paths inside one of these. A relative entry is taken from the workspace root. Narrows the session's own write and edit rules, never widens them."
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "description": "The agent's write and edit may not change a path inside any of these, even one allow permits."
+        }
+      },
+      "minProperties": 1,
+      "description": "Narrows where this agent's write and edit may change files, on top of the session's rules. Only allowed for an agent that lists write or edit and no bash or exec: a shell can change any path, so a paths list cannot confine it and the combination is refused."
     }
   },
   "additionalProperties": false

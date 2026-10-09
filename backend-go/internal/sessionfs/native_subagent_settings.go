@@ -46,7 +46,7 @@ var (
 	allowedNativeSubagentStates     = map[string]struct{}{
 		"queued": {}, "running": {}, "done": {}, "failed": {}, "timed_out": {}, "stopped": {}, "lost": {},
 	}
-	nativeSubagentAgentKeys = []string{"description", "model", "tools", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms"}
+	nativeSubagentAgentKeys = []string{"description", "model", "tools", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "paths"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
 
@@ -140,6 +140,9 @@ type NativeSubagentAgent struct {
 	// MaxRunTokens is the most tokens the child may use; zero means no cap.
 	MaxRunTokens int64
 	TimeoutMS    int64
+	// Paths narrows where the agent's write and edit may change files; it never widens
+	// the session's own rules.
+	Paths NativeSubagentPaths
 }
 
 // Agent returns the configured agent with the given name.
@@ -397,6 +400,12 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 		agent.PromptDocuments = append([]string{promptFilePath}, agent.PromptDocuments...)
 	}
 	if agent.Tools, agent.HasTools, err = optionalSubagentTools(fields, settingPath, section); err != nil {
+		return NativeSubagentAgent{}, err
+	}
+	if agent.Paths, err = optionalSubagentPaths(fields, settingPath, section); err != nil {
+		return NativeSubagentAgent{}, err
+	}
+	if err = checkSubagentPaths(agent, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
 	if agent.MaxToolRounds, err = configuredInteger(fields, "max_tool_rounds", defaultNativeSubagentMaxToolRounds, 1, maxConfiguredToolRounds, settingPath, section); err != nil {

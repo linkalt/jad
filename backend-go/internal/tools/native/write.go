@@ -91,6 +91,7 @@ func executeWrite(arguments map[string]any, settings sessionfs.NativeWriteSettin
 	if err != nil {
 		return "", err
 	}
+	settings.Policy = scopedPolicy(settings.Policy, execution)
 	path, pathFailure := resolveMutatePath(args.Path, execution.WorkspaceRoot, settings.Policy, execution.CallID)
 	if pathFailure != "" {
 		return pathFailure, nil

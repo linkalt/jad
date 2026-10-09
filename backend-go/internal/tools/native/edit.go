@@ -89,6 +89,7 @@ func executeEdit(arguments map[string]any, settings sessionfs.NativeEditSettings
 	if err != nil {
 		return "", err
 	}
+	settings.Policy = scopedPolicy(settings.Policy, execution)
 	path, pathFailure := resolveMutatePath(args.Path, execution.WorkspaceRoot, settings.Policy, execution.CallID)
 	if pathFailure != "" {
 		return pathFailure, nil

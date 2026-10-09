@@ -361,3 +361,26 @@ func TestSubagentWriterRunSurvivesManifestRoundTripWithItsChangesFlag(t *testing
 		t.Fatalf("restored views = %+v; the flag was lost with the manifest", restored)
 	}
 }
+
+func TestSubagentPassesTheAgentsPathsToTheChild(t *testing.T) {
+	scoped := writerAgent("scoped", "read", "write")
+	scoped.Paths = sessionfs.NativeSubagentPaths{Allow: []string{"src"}, Deny: []string{"src/secret"}}
+	open := writerAgent("open", "read", "write")
+	launcher := &fakeLauncher{}
+	catalog, _ := buildSubagentCatalog(t, writeSettings(scoped, open), launcher, readOnlyTool("read"), writeTool("write"))
+
+	subagentCall(t, catalog, `{"agent":"scoped","task":"x"}`)
+	subagentCall(t, catalog, `{"agent":"open","task":"x"}`)
+	got := launcher.requests[0].Execution.PathScope
+	if got == nil || strings.Join(got.Allow, ",") != "src" || strings.Join(got.Deny, ",") != "src/secret" {
+		t.Fatalf("scoped agent's child scope = %+v, want allow src and deny src/secret", got)
+	}
+	if launcher.requests[1].Execution.PathScope != nil {
+		t.Fatalf("an agent without paths got a scope: %+v", launcher.requests[1].Execution.PathScope)
+	}
+	// The child's scope is a copy, so changing it cannot change the agent's settings.
+	got.Allow[0] = "changed"
+	if scoped.Paths.Allow[0] != "src" {
+		t.Fatal("the child's scope shares memory with the agent's settings")
+	}
+}

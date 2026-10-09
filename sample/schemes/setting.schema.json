@@ -1722,7 +1722,17 @@
                       "tools": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Tools the agent may use: enabled read-only native tools by name (read, grep, glob, fetch, skill), and with allow_write also write, edit, bash and exec (listing one without allow_write is a configuration error), and MCP tools by ID, written mcp:<server>:<tool> (the server id from mcp_servers and the tool name the server reports). Absent means every enabled read-only native tool and no MCP tool. An MCP tool is never added because its server calls it read-only: you name each one, so you vouch that it cannot change anything you care about. A tool of a server whose approval is ask is refused, because a sub-agent has no way to ask the user. An agent that lists write, edit, bash or exec asks the user for those tools the same way the session does (their own approval setting applies), takes the checkpoint like a write, and runs to its end instead of being handed off. A name that is not loaded is a configuration error that lists the loaded ones; it is checked when the session loads."},
                       "max_tool_rounds": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 30, "description": "Most tool rounds of one run."},
                       "max_run_tokens": {"type": "integer", "minimum": 1, "maximum": 1000000000000, "description": "Most tokens one run may use before it starts another provider round. Absent means no cap."},
-                      "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 600000, "description": "Wall-clock limit of one run, including provider waits."}
+                      "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 600000, "description": "Wall-clock limit of one run, including provider waits."},
+                      "paths": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "minProperties": 1,
+                        "properties": {
+                          "allow": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "The agent's write and edit may change only paths inside one of these. A relative entry is taken from the workspace root. Narrows the session's own write and edit rules, never widens them."},
+                          "deny": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "The agent's write and edit may not change a path inside any of these, even one allow permits."}
+                        },
+                        "description": "Narrows where this agent's write and edit may change files, on top of the session's rules. Only allowed for an agent that lists write or edit and no bash or exec: a shell can change any path, so a paths list cannot confine it and the combination is refused."
+                      }
                     },
                     "additionalProperties": false
                   }
