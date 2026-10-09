@@ -198,7 +198,7 @@ func TestStreamErrorInTheOpenAIShapeIsNotChanged(t *testing.T) {
 
 func TestStreamErrorWithAnEmptyBodyStaysAsBefore(t *testing.T) {
 	err := streamError(t, failingServer(t, http.StatusBadRequest, "", ""))
-	if !strings.HasSuffix(err.Error(), "400 Bad Request ") {
-		t.Errorf("error = %q, want the unchanged SDK text", err.Error())
+	if got := strings.TrimRight(err.Error(), " "); !strings.HasSuffix(got, "400 Bad Request") || strings.Contains(got, "{") {
+		t.Errorf("error = %q, want the SDK text with no body added", err.Error())
 	}
 }

@@ -160,8 +160,16 @@ func (e *bodyError) Unwrap() error { return e.err }
 // ("400 Bad Request "). The SDK puts the body back on Response.Body, so it is read here
 // from that copy and put back again for any later reader. Nothing is added when the SDK
 // already printed a body, so a standard error is unchanged.
+//
+// Since openai-go v3.74 the SDK's message is only "OpenAI API error: <status>" and no
+// longer carries the body, even for the standard shape, so the error object it parsed
+// (RawJSON) is added here. The text reaches the server log only; the client gets the
+// status alone (see StatusError).
 func withResponseBody(err error, apiError *openai.Error) error {
-	if apiError.RawJSON() != "" || apiError.Response == nil || apiError.Response.Body == nil {
+	if raw := strings.TrimSpace(apiError.RawJSON()); raw != "" {
+		return &bodyError{err: err, body: raw}
+	}
+	if apiError.Response == nil || apiError.Response.Body == nil {
 		return err
 	}
 	body, readErr := io.ReadAll(apiError.Response.Body)
