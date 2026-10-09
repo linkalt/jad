@@ -144,24 +144,20 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 	}, nil
 }
 
-// LockSession implements httpapi.SessionProcessLocker. It locks the session
-// settings long enough to resolve the profile's storage paths, locks the
-// selected transcript, and then releases the settings lock again. The ordering
-// keeps a profile switch or model change from rewriting setting.json while a
-// run is deciding which transcript it owns.
+// LockSession implements httpapi.SessionProcessLocker. It resolves the
+// profile's storage paths and locks the selected transcript for the length of
+// the run.
 //
-// Only the transcript lock lives as long as the run. The settings lock is one
-// file for the whole session, so holding it for the run would keep every other
-// profile of the session from starting, although each profile has its own
-// transcript and storage. A settings write that comes after the release is
-// safe: a profile switch pins the storage paths of both profiles, so the
-// running one keeps its transcript.
+// It does not take the session settings lock. That lock is one file for the
+// whole session, so holding it, even only while the paths are read, adds
+// nothing here: setting.json is replaced atomically, so a read never sees a
+// torn file, and a profile switch writes the active profile and the pinned
+// storage paths of both profiles in one replace. A run therefore resolves the
+// same transcript before or after any settings write. A test that removed the
+// lock from run start found no scenario where it mattered (cross-process
+// tests in session_lock_processes_test.go).
 func (r *Resolver) LockSession(ctx context.Context, reference, profile, modelPath string) (func(), error) {
 	location, err := r.resolveLockLocation(ctx, reference)
-	if err != nil {
-		return nil, err
-	}
-	settingsLock, err := r.acquireSettingLock(ctx, location)
 	if err != nil {
 		return nil, err
 	}
@@ -170,20 +166,16 @@ func (r *Resolver) LockSession(ctx context.Context, reference, profile, modelPat
 	// reaching the point where its input is stored.
 	config, err := sessionfs.LoadSessionSettings(location, profile, modelPath)
 	if err != nil {
-		settingsLock()
 		return nil, mapSessionError(err)
 	}
 	transcriptLockPath, err := sessionlock.PathFor(config.MessagesPath)
 	if err != nil {
-		settingsLock()
 		return nil, err
 	}
 	transcriptLock, err := sessionlock.Acquire(ctx, transcriptLockPath)
 	if err != nil {
-		settingsLock()
 		return nil, fmt.Errorf("lock session transcript: %w", err)
 	}
-	settingsLock()
 	return func() { _ = transcriptLock.Close() }, nil
 }
 
