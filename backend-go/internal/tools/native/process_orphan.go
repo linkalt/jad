@@ -83,6 +83,10 @@ const (
 	orphanLost orphanVerdict = iota
 	// orphanStoppable: the process is proven to be the one the manifest names.
 	orphanStoppable
+	// orphanElsewhere: the server that started the process is another one that is
+	// still running on this directory. The process is its, not ours: leave the
+	// manifest untouched and do not load it.
+	orphanElsewhere
 )
 
 // classifyOrphan decides what to do with a manifest left running. The process is
@@ -94,9 +98,10 @@ func (manager *ManagedProcessManager) classifyOrphan(manifest ProcessManifest, s
 	if !ok {
 		return orphanLost
 	}
-	// Another server that is still running owns the process: never signal it.
+	// Another server that is still running owns the process: never signal it, and
+	// do not call it lost either.
 	if foreignServerAlive(currentServerIdentity(), record.Server) {
-		return orphanLost
+		return orphanElsewhere
 	}
 	if !stop || manifest.PID <= 0 || record.Start == 0 {
 		return orphanLost

@@ -254,6 +254,10 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	manager.mu.Unlock()
 	defer manager.starting.Done()
 
+	// Name this server before the manifest says running, so another server scanning
+	// the directory never sees a running process without an owner. The process's own
+	// start time is added once it exists (below); until then it is never signalled.
+	manager.writeOwnerRecord(id, 0)
 	if err := manager.persistManifest(manifest); err != nil {
 		manager.removeEntry(id)
 		_ = os.RemoveAll(processDir)
@@ -796,9 +800,16 @@ func (manager *ManagedProcessManager) Recover() error {
 		if !ok || manifest.ID != entry.Name() {
 			continue
 		}
-		if manifest.State == ProcessRunning && manager.classifyOrphan(manifest, stopOrphans) == orphanStoppable {
-			stoppable = append(stoppable, manifest.PID)
-			stoppableID[manifest.ID] = true
+		if manifest.State == ProcessRunning {
+			switch manager.classifyOrphan(manifest, stopOrphans) {
+			case orphanElsewhere:
+				// Another running server's process: not ours to mark lost, count,
+				// list, prune or stop.
+				continue
+			case orphanStoppable:
+				stoppable = append(stoppable, manifest.PID)
+				stoppableID[manifest.ID] = true
+			}
 		}
 		found = append(found, manifest)
 	}

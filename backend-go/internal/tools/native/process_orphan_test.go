@@ -43,6 +43,18 @@ func leaveCrashedProcess(t *testing.T, owner *serverIdentity, mutate func(*crash
 // process in this test's own process group, so it does not lead one.
 func leaveCrashedProcessIn(t *testing.T, owner *serverIdentity, mutate func(*crashedProcess, *processOwnerRecord), leader bool) crashedProcess {
 	t.Helper()
+	return leaveCrashedProcessFull(t, filepath.Join(t.TempDir(), "processes"), "proc_orphan", owner, mutate, leader)
+}
+
+// leaveCrashedProcessAt leaves a process of a crashed server (a pid that no process
+// holds) with the given id in an existing storage directory.
+func leaveCrashedProcessAt(t *testing.T, dir, id string, owner *serverIdentity) crashedProcess {
+	t.Helper()
+	return leaveCrashedProcessFull(t, dir, id, owner, nil, true)
+}
+
+func leaveCrashedProcessFull(t *testing.T, dir, id string, owner *serverIdentity, mutate func(*crashedProcess, *processOwnerRecord), leader bool) crashedProcess {
+	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("the start-time check this relies on is Linux only")
 	}
@@ -59,8 +71,7 @@ func leaveCrashedProcessIn(t *testing.T, owner *serverIdentity, mutate func(*cra
 		_ = cmd.Process.Kill()
 		<-reaped
 	})
-	dir := filepath.Join(t.TempDir(), "processes")
-	crashed := crashedProcess{dir: dir, id: "proc_orphan", cmd: cmd, reaped: reaped}
+	crashed := crashedProcess{dir: dir, id: id, cmd: cmd, reaped: reaped}
 	if err := os.MkdirAll(filepath.Join(dir, crashed.id), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -134,13 +145,11 @@ func TestRecoverLeavesTheOrphanWhenStoppingIsOff(t *testing.T) {
 }
 
 func TestRecoverNeverSignalsWhatItCannotProve(t *testing.T) {
-	live, _ := otherProcess(t)
 	cases := map[string]struct {
 		owner  *serverIdentity
 		mutate func(*crashedProcess, *processOwnerRecord)
 	}{
 		"no owner record":                 {mutate: func(_ *crashedProcess, r *processOwnerRecord) { r.Server.PID = 0 }},
-		"owner server still running":      {owner: &live},
 		"pid reused (start time differs)": {mutate: func(_ *crashedProcess, r *processOwnerRecord) { r.Start++ }},
 		"no start time recorded":          {mutate: func(_ *crashedProcess, r *processOwnerRecord) { r.Start = 0 }},
 		"recorded by this very process":   {owner: &serverIdentity{PID: os.Getpid(), Start: processStartTime(os.Getpid())}},
@@ -150,6 +159,101 @@ func TestRecoverNeverSignalsWhatItCannotProve(t *testing.T) {
 			crashed := leaveCrashedProcess(t, tc.owner, tc.mutate)
 			checkNotSignalled(t, crashed)
 		})
+	}
+}
+
+// A manifest whose owner is another server that is still running is that server's
+// process. Recover must leave the file as it is, not load it (so it is not listed,
+// counted against max_running or pruned), and signal nothing.
+func TestRecoverLeavesTheProcessOfAnotherRunningServerAlone(t *testing.T) {
+	live, _ := otherProcess(t)
+	for _, stop := range []bool{true, false} {
+		crashed := leaveCrashedProcess(t, &live, nil)
+		before, err := os.ReadFile(filepath.Join(crashed.dir, crashed.id, "manifest.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager := NewProcessManager(crashed.dir)
+		manager.SetOrphanPolicy(stop, 300*time.Millisecond)
+		if err := manager.Recover(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = manager.Close() })
+		after, err := os.ReadFile(filepath.Join(crashed.dir, crashed.id, "manifest.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(after) != string(before) {
+			t.Errorf("stop=%v: the other server's manifest was rewritten:\n%s", stop, after)
+		}
+		if _, found := manager.Snapshot(crashed.id); found {
+			t.Errorf("stop=%v: the other server's process is loaded into this manager", stop)
+		}
+		if listed := manager.List(""); len(listed) != 0 {
+			t.Errorf("stop=%v: listed %d processes, want 0", stop, len(listed))
+		}
+		if !crashed.alive() {
+			t.Errorf("stop=%v: the other server's process was signalled", stop)
+		}
+	}
+}
+
+// Beside the other server's process, a normal orphan in the same directory is still
+// recovered (the skip must not end the scan), and stop, wait and a new start treat the
+// other server's id as unknown or as not theirs.
+func TestRecoverSkipsOnlyTheOtherServersProcess(t *testing.T) {
+	live, _ := otherProcess(t)
+	theirs := leaveCrashedProcess(t, &live, nil)
+	// A second manifest in the same directory, left by a crashed server.
+	dir := theirs.dir
+	mine := leaveCrashedProcessAt(t, dir, "proc_mine", nil)
+	manager := NewProcessManager(dir)
+	manager.SetOrphanPolicy(true, 300*time.Millisecond)
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, found := manager.Snapshot("proc_mine"); !found || snapshot.State != ProcessLost || snapshot.StopReason != processReasonRestartedStopped {
+		t.Errorf("the crashed server's process = %v (found %v), want lost/%s", snapshot, found, processReasonRestartedStopped)
+	}
+	if mine.alive() {
+		t.Error("the crashed server's process is still running")
+	}
+	if _, found := manager.Stop(theirs.id, "stopped_by_agent"); found {
+		t.Error("stop found the other server's process")
+	}
+	if waited := manager.Wait(theirs.id, 10); waited.Found {
+		t.Error("wait found the other server's process")
+	}
+	if !theirs.alive() {
+		t.Error("the other server's process was signalled")
+	}
+	if _, err := os.Stat(filepath.Join(dir, theirs.id, "manifest.json")); err != nil {
+		t.Errorf("the other server's manifest is gone: %v", err)
+	}
+}
+
+// The owner record exists before anything that can fail after the manifest says
+// running, so another server never finds a running manifest without an owner.
+func TestStartNamesItsServerBeforeAnythingCanFail(t *testing.T) {
+	directory := t.TempDir()
+	manager := NewProcessManager(filepath.Join(directory, "processes"))
+	t.Cleanup(func() { _ = manager.Close() })
+	request := processTestRequest(directory, "true", 1024)
+	request.Policy.Shell = filepath.Join(directory, "no-such-shell")
+	snapshot, err := manager.Start(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != ProcessFailed {
+		t.Fatalf("state = %s, want failed (the shell does not exist)", snapshot.State)
+	}
+	record, ok := manager.readOwnerRecord(snapshot.ID)
+	if !ok {
+		t.Fatal("no owner record beside the manifest of a start that failed before the process existed")
+	}
+	if record.Server.PID != os.Getpid() || record.Start != 0 {
+		t.Errorf("owner record = %+v, want this server and no process start time", record)
 	}
 }
 
