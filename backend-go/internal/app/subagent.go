@@ -80,6 +80,7 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	result, runErr := runner.Run(ctx, input, session.RunOptions{
 		ToolCatalog:          request.Tools,
 		ImageResizer:         newImageResizer(config.ImageResize),
+		ImageStore:           newImageStore(config.ImageStore),
 		ToolExecution:        request.Execution,
 		MaxToolRounds:        int(request.Agent.MaxToolRounds),
 		MaxRunTokens:         request.Agent.MaxRunTokens,

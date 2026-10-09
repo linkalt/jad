@@ -2,6 +2,7 @@ package app
 
 import (
 	"example.com/agent-harness/backend-go/internal/imageresize"
+	"example.com/agent-harness/backend-go/internal/imagestore"
 	"example.com/agent-harness/backend-go/internal/sessionfs"
 )
 
@@ -18,4 +19,15 @@ func newImageResizer(settings sessionfs.ImageResizeSettings) *imageresize.Resize
 		JPEGQuality:  int(settings.JPEGQuality),
 		CacheEntries: int(settings.CacheEntries),
 	}, settings.AppliesTo)
+}
+
+// newImageStore builds the image store of one run from the session's image_store setting.
+// It returns nil when no directory is set, so every image stays inline in the transcript.
+func newImageStore(settings sessionfs.ImageStoreSettings) *imagestore.Store {
+	return imagestore.New(imagestore.Options{
+		Dir:           settings.Dir,
+		MinBytes:      settings.MinBytes,
+		MaxFileBytes:  settings.MaxFileBytes,
+		MaxTotalBytes: settings.MaxTotalBytes,
+	})
 }

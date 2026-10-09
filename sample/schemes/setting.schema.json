@@ -208,6 +208,40 @@
       "additionalProperties": false,
       "default": {}
     },
+    "image_store": {
+      "type": "object",
+      "description": "Keeps large tool-result images out of messages.jsonl. Go backend only; the TypeScript backend does not read this key. Off unless dir is set: with no dir (or the key absent) messages.jsonl is written exactly as before. An MCP or native tool result that carries a png, jpeg, webp or gif as a base64 data URL is written once to dir as <sha256>.<ext>, and the transcript keeps stored-image://<sha256>.<ext> in its place. Before every request to the provider the references are replaced by the data URL again, so the model sees the same image (image_resize, when on, then works on the real bytes). The Web UI loads a file through GET /api/sessions/{session}/images/{name}. An image below min_bytes or above max_file_bytes, of another type, or arriving when the directory already holds max_total_bytes stays inline. Files are never deleted by the server: reset and compaction leave them, because one file can be used by several messages. A missing or damaged file is sent to the model as the text [stored image unavailable].",
+      "properties": {
+        "dir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Directory of the image files; a relative path is resolved against the session directory. It is created on the first write with mode 0700, files get 0600."
+        },
+        "min_bytes": {
+          "type": "integer",
+          "description": "A decoded image smaller than this stays inline in the transcript.",
+          "minimum": 1,
+          "maximum": 67108864,
+          "default": 16384
+        },
+        "max_file_bytes": {
+          "type": "integer",
+          "description": "A decoded image larger than this stays inline. Must not be below min_bytes or above max_total_bytes.",
+          "minimum": 1024,
+          "maximum": 104857600,
+          "default": 20971520
+        },
+        "max_total_bytes": {
+          "type": "integer",
+          "description": "When the directory holds this many bytes of stored images, new images stay inline.",
+          "minimum": 1024,
+          "maximum": 1099511627776,
+          "default": 1073741824
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
     "persistence": {
       "type": "object",
       "description": "Transcript persistence behavior.",

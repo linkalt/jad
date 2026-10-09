@@ -19,6 +19,7 @@ import (
 
 	"example.com/agent-harness/backend-go/internal/checkpoint"
 	"example.com/agent-harness/backend-go/internal/imageresize"
+	"example.com/agent-harness/backend-go/internal/imagestore"
 	"example.com/agent-harness/backend-go/internal/memorytrace"
 	"example.com/agent-harness/backend-go/internal/responses"
 	"example.com/agent-harness/backend-go/internal/tools"
@@ -87,7 +88,11 @@ type RunOptions struct {
 	MemoryTrace         *memorytrace.Trace
 	// ImageResizer shrinks the images of the history copy that is sent to the provider.
 	// Nil sends the history as stored. The stored history is never changed.
-	ImageResizer  *imageresize.Resizer
+	ImageResizer *imageresize.Resizer
+	// ImageStore keeps large tool-result images in files: they are written there before the
+	// result is persisted, and read back into the request that goes to the provider. Nil
+	// keeps every image inline in the transcript.
+	ImageStore    *imagestore.Store
 	ToolCatalog   *tools.Catalog
 	ToolExecution tools.ExecutionContext
 	// Approval holds the wait and preview values for tools whose approval is
@@ -454,7 +459,9 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		if err != nil {
 			return result, fmt.Errorf("read accepted request context: %w", err)
 		}
-		sentHistory, resizeStats := options.ImageResizer.Apply(history, options.ToolCatalog.SourceOf)
+		// References come back as data URLs first, so the resize step sees real bytes.
+		sentHistory, restoreStats := options.ImageStore.Rehydrate(history)
+		sentHistory, resizeStats := options.ImageResizer.Apply(sentHistory, options.ToolCatalog.SourceOf)
 		request, err := BuildRequestWithStateContextAndAcceptedRequest(r.settings, sentHistory, responseTools, options.StateContext, acceptedRequest)
 		if err != nil {
 			return result, fmt.Errorf("build Responses request: %w", err)
@@ -465,6 +472,8 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 			"tool_count":        len(responseTools),
 			"images_resized":    resizeStats.Resized,
 			"image_bytes_saved": resizeStats.BytesBefore - resizeStats.BytesAfter,
+			"images_restored":   restoreStats.Restored,
+			"images_missing":    restoreStats.Missing,
 		})
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -587,7 +596,10 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 			errorCode = "tool_execution_cancelled"
 			errorSummary = "Tool execution was cancelled before every call produced a persisted result."
 		}
-		outputs, err := appendToolOutputs(r.store, calls, completed, errorCode, errorSummary)
+		// Large images go to the store first; the transcript keeps a reference. The live
+		// stream above already carried the original result.
+		persisted, _ := options.ImageStore.ExternalizeAll(completed)
+		outputs, err := appendToolOutputs(r.store, calls, persisted, errorCode, errorSummary)
 		if err != nil {
 			return result, err
 		}

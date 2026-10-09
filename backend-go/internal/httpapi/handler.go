@@ -190,6 +190,18 @@ type SessionSettings interface {
 	ListSessionFiles(context.Context, string, string) (SessionFileListing, error)
 }
 
+// SessionImage is one stored image file.
+type SessionImage struct {
+	ContentType string
+	Data        []byte
+}
+
+// SessionImages is an optional extension that serves the files of a session's image_store.
+// The name is the <sha256>.<ext> of a reference; it is never a path.
+type SessionImages interface {
+	ReadSessionImage(ctx context.Context, reference, profile, name string) (SessionImage, error)
+}
+
 type CompactionResponse struct {
 	Compacted      bool            `json:"compacted"`
 	CompactedItems int             `json:"compacted_items"`
@@ -240,6 +252,7 @@ type Handler struct {
 	catalog                   SessionCatalog
 	toolLister                SessionToolLister
 	settings                  SessionSettings
+	images                    SessionImages
 	maintenance               SessionMaintenance
 	library                   RootLibrary
 	tokenHash                 [sha256.Size]byte
@@ -340,6 +353,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	catalog, _ := resolver.(SessionCatalog)
 	toolLister, _ := resolver.(SessionToolLister)
 	settings, _ := resolver.(SessionSettings)
+	images, _ := resolver.(SessionImages)
 	maintenance, _ := resolver.(SessionMaintenance)
 	trace := config.MemoryTrace
 	if trace == nil {
@@ -348,6 +362,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	return &Handler{
 		logger:                    logging.Or(config.Logger),
 		resolver:                  resolver,
+		images:                    images,
 		catalog:                   catalog,
 		toolLister:                toolLister,
 		settings:                  settings,
@@ -453,6 +468,8 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleSessionHistory(w, r, reference, profile)
 	case r.Method == http.MethodGet && len(segments) == 5 && segments[3] == "messages":
 		h.handleSessionMessage(w, r, reference, segments[4], profile)
+	case r.Method == http.MethodGet && len(segments) == 5 && segments[3] == "images":
+		h.handleSessionImage(w, r, reference, profile, segments[4])
 	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "files":
 		h.handleSessionFiles(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "profile":

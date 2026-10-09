@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"example.com/agent-harness/backend-go/internal/imagestore"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -196,4 +197,32 @@ func mapProfileSettingsError(err error) error {
 		return &httpapi.StatusError{Code: http.StatusBadRequest, Message: clientErr.Message}
 	}
 	return mapSessionError(err)
+}
+
+// ReadSessionImage serves one stored image of a session. The name must be a stored file
+// name; the lookup never builds a path from anything else.
+func (r *Resolver) ReadSessionImage(ctx context.Context, reference, profile, name string) (httpapi.SessionImage, error) {
+	if err := requireSettingsContext(ctx); err != nil {
+		return httpapi.SessionImage{}, err
+	}
+	if _, valid := imagestore.ValidName(name); !valid {
+		return httpapi.SessionImage{}, &httpapi.StatusError{Code: http.StatusBadRequest, Message: "invalid image name"}
+	}
+	location, err := sessionfs.Resolve(r.roots, reference)
+	if err != nil {
+		return httpapi.SessionImage{}, mapSessionError(err)
+	}
+	settings, err := sessionfs.LoadSessionConfig(location, profile, "")
+	if err != nil {
+		return httpapi.SessionImage{}, mapSessionError(err)
+	}
+	store := newImageStore(settings.ImageStore)
+	if store == nil {
+		return httpapi.SessionImage{}, &httpapi.StatusError{Code: http.StatusNotFound, Message: "image store is off"}
+	}
+	data, contentType, err := store.Open(name)
+	if err != nil {
+		return httpapi.SessionImage{}, &httpapi.StatusError{Code: http.StatusNotFound, Message: "image not found"}
+	}
+	return httpapi.SessionImage{ContentType: contentType, Data: data}, nil
 }
