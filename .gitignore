@@ -11,3 +11,14 @@ coverage/
 .pi/
 session_history/
 AGENTS.md
+backend-go/html-to-markdown-rs_cgo_link.go
+backend-go/jad
+.codebase-memory/
+.zvec-grep/
+/RESUME_STATE.json
+/missing.md
+/sample/anthropic-adapter-oauth.json
+/backend-go/CLAUDE.md
+/frontend/CLAUDE.md
+/backend-go/jad_ant
+/backend-go/openai-auth
