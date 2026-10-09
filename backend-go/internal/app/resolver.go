@@ -145,8 +145,17 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 }
 
 // LockSession implements httpapi.SessionProcessLocker. It locks the session
-// settings before resolving storage, then locks the selected transcript. The
-// ordering coordinates profile changes and shared transcript paths.
+// settings long enough to resolve the profile's storage paths, locks the
+// selected transcript, and then releases the settings lock again. The ordering
+// keeps a profile switch or model change from rewriting setting.json while a
+// run is deciding which transcript it owns.
+//
+// Only the transcript lock lives as long as the run. The settings lock is one
+// file for the whole session, so holding it for the run would keep every other
+// profile of the session from starting, although each profile has its own
+// transcript and storage. A settings write that comes after the release is
+// safe: a profile switch pins the storage paths of both profiles, so the
+// running one keeps its transcript.
 func (r *Resolver) LockSession(ctx context.Context, reference, profile, modelPath string) (func(), error) {
 	location, err := r.resolveLockLocation(ctx, reference)
 	if err != nil {
@@ -174,10 +183,8 @@ func (r *Resolver) LockSession(ctx context.Context, reference, profile, modelPat
 		settingsLock()
 		return nil, fmt.Errorf("lock session transcript: %w", err)
 	}
-	return func() {
-		_ = transcriptLock.Close()
-		settingsLock()
-	}, nil
+	settingsLock()
+	return func() { _ = transcriptLock.Close() }, nil
 }
 
 // LockSessionSettings serializes writes to setting.json across processes.
