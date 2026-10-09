@@ -1463,6 +1463,7 @@ function WebUiActivityGroup({
           ]}
           xstyle={styles.toolCallsFlush}
         />
+        {part.images !== undefined && <StoredImages names={part.images} />}
       </VStack>
     );
   }

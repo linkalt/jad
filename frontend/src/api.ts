@@ -50,6 +50,8 @@ export interface WebUiHostedToolPart {
   target?: string;
   /** The provider's item as JSON, shortened to the inline limit when `truncated` is set. */
   raw?: string;
+  /** File names of images the provider generated and the server stored; fetch them with `fetchSessionImage`. */
+  images?: string[];
   truncated?: WebUiPartTruncation;
 }
 
@@ -943,7 +945,9 @@ function isWebUiPart(value: unknown): value is WebUiPart {
       typeof value.name === 'string' &&
       (value.status === undefined || typeof value.status === 'string') &&
       (value.target === undefined || typeof value.target === 'string') &&
-      (value.raw === undefined || typeof value.raw === 'string')
+      (value.raw === undefined || typeof value.raw === 'string') &&
+      (value.images === undefined ||
+        (Array.isArray(value.images) && value.images.every(name => typeof name === 'string')))
     );
   }
   if (value.type === 'tool_call') {

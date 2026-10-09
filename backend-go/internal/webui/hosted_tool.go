@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"example.com/agent-harness/backend-go/internal/imagestore"
 )
 
 // handledItemTypes are the response output items the reducers already turn into
@@ -57,6 +59,9 @@ func hostedToolPart(item map[string]json.RawMessage, limit int) (Part, bool) {
 		return part, true
 	}
 	part.Raw = raw
+	// Images the provider generated sit in the item as stored-image references; the
+	// names are read before the cap can cut the text.
+	part.Images = imagestore.RefNames([]byte(raw))
 	if limit > 0 {
 		capHostedRaw(&part, limit)
 	}

@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -386,5 +387,180 @@ func TestOpenRefusesALinkEvenWhenTheTargetIsAValidImage(t *testing.T) {
 	}
 	if _, _, err := store.Open(name); err == nil {
 		t.Fatal("Open served a file through a symlink")
+	}
+}
+
+func pngBase64(t *testing.T, seed int64) string {
+	t.Helper()
+	return base64.StdEncoding.EncodeToString(noisyPNG(t, 60, seed))
+}
+
+func generationItem(result, imageURL string) []byte {
+	return []byte(`{"type":"openrouter:image_generation","id":"st_1","status":"completed","result":"` + result + `","imageUrl":"` + imageURL + `","prompt":"a red circle"}`)
+}
+
+func TestExternalizeItemStoresADataURLAndABareBase64UnderAnyKey(t *testing.T) {
+	store, dir := newStore(t, nil)
+	bare := pngBase64(t, 1)
+	item := generationItem(bare, "data:image/png;base64,"+bare)
+	stored, stats := store.ExternalizeItem(item)
+	if stats.Stored != 2 {
+		t.Fatalf("Stored = %d, want 2", stats.Stored)
+	}
+	if bytes.Contains(stored, []byte(bare[:40])) || len(stored) > 400 {
+		t.Fatalf("base64 is still in the item (%d bytes): %s", len(stored), stored)
+	}
+	if !json.Valid(stored) {
+		t.Fatalf("stored item is not valid JSON: %s", stored)
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal(stored, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(decoded["result"], RawRefPrefix) || !strings.HasPrefix(decoded["imageUrl"], RefPrefix) {
+		t.Fatalf("references = %q / %q", decoded["result"], decoded["imageUrl"])
+	}
+	if decoded["prompt"] != "a red circle" || decoded["id"] != "st_1" {
+		t.Fatalf("other keys changed: %v", decoded)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("files = %d, want 1 (same bytes are stored once)", len(entries))
+	}
+}
+
+func TestRehydrateRestoresAGeneratedImageToTheSameBytes(t *testing.T) {
+	store, _ := newStore(t, nil)
+	bare := pngBase64(t, 2)
+	item := generationItem(bare, "data:image/png;base64,"+bare)
+	stored, _ := store.ExternalizeItem(item)
+	restored, stats := store.Rehydrate([][]byte{stored})
+	if stats.Restored != 2 || stats.Missing != 0 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	var want, got map[string]any
+	if err := json.Unmarshal(item, &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(restored[0], &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("restored item differs:\nwant %s\ngot  %s", item, restored[0])
+	}
+}
+
+func TestRehydrateOfAMissingGeneratedImageKeepsTheItemValid(t *testing.T) {
+	store, dir := newStore(t, nil)
+	bare := pngBase64(t, 3)
+	stored, _ := store.ExternalizeItem(generationItem(bare, "data:image/png;base64,"+bare))
+	entries, _ := os.ReadDir(dir)
+	for _, entry := range entries {
+		_ = os.Remove(filepath.Join(dir, entry.Name()))
+	}
+	restored, stats := store.Rehydrate([][]byte{stored})
+	if stats.Missing != 2 || !json.Valid(restored[0]) {
+		t.Fatalf("stats = %+v, valid = %v: %s", stats, json.Valid(restored[0]), restored[0])
+	}
+	var decoded map[string]string
+	_ = json.Unmarshal(restored[0], &decoded)
+	if !strings.HasPrefix(decoded["imageUrl"], "data:image/png;base64,") || strings.Contains(decoded["result"], "stored-image") {
+		t.Fatalf("placeholders = %q / %q", decoded["result"], decoded["imageUrl"])
+	}
+}
+
+func TestExternalizeItemLeavesTextItemsAndOtherStringsAlone(t *testing.T) {
+	store, _ := newStore(t, nil)
+	bare := pngBase64(t, 4)
+	for name, item := range map[string]string{
+		"message":   `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"` + bare + `"}]}`,
+		"reasoning": `{"type":"reasoning","id":"r","summary":[],"encrypted_content":"` + bare + `"}`,
+		"call":      `{"type":"function_call","call_id":"c","name":"n","arguments":"` + bare + `"}`,
+		"no type":   `{"id":"x","result":"` + bare + `"}`,
+	} {
+		out, stats := store.ExternalizeItem([]byte(item))
+		if stats.Stored != 0 || string(out) != item {
+			t.Errorf("%s: changed (%d stored): %.120s", name, stats.Stored, out)
+		}
+	}
+	// A hosted item with text that only looks like base64, or is not an image, stays.
+	for name, value := range map[string]string{
+		"plain text": strings.Repeat("hello world ", 20),
+		"not image":  "UEsDBBQAAAAIA" + strings.Repeat("A", 100),
+		"bad base64": "iVBORw0KGgo" + strings.Repeat("!", 100),
+		"short":      "iVBORw0KGgo",
+		"escaped":    "iVBORw0KGgo" + strings.Repeat("A", 80) + `\n`,
+	} {
+		item := `{"type":"web_search_call","id":"w","result":"` + value + `"}`
+		out, stats := store.ExternalizeItem([]byte(item))
+		if stats.Stored != 0 || string(out) != item {
+			t.Errorf("%s: changed: %.120s", name, out)
+		}
+	}
+}
+
+func TestRehydrateDoesNotTouchAMessageThatQuotesAReference(t *testing.T) {
+	store, _ := newStore(t, nil)
+	bare := pngBase64(t, 5)
+	stored, _ := store.ExternalizeItem(generationItem(bare, "data:image/png;base64,"+bare))
+	var decoded map[string]string
+	_ = json.Unmarshal(stored, &decoded)
+	message := `{"type":"message","role":"user","content":"` + decoded["imageUrl"] + `"}`
+	out, stats := store.Rehydrate([][]byte{[]byte(message)})
+	if stats.Restored != 0 || string(out[0]) != message {
+		t.Fatalf("message was rewritten: %s (%+v)", out[0], stats)
+	}
+}
+
+func TestExternalizeOutputOnlyRewritesHostedItems(t *testing.T) {
+	store, _ := newStore(t, nil)
+	bare := pngBase64(t, 6)
+	output := `[{"type":"message","role":"assistant","content":"` + bare + `"},` + string(generationItem(bare, "data:image/png;base64,"+bare)) + `]`
+	stored, stats := store.ExternalizeOutput(json.RawMessage(output))
+	if stats.Stored != 2 || !json.Valid(stored) {
+		t.Fatalf("stats = %+v, valid = %v", stats, json.Valid(stored))
+	}
+	var items []map[string]any
+	_ = json.Unmarshal(stored, &items)
+	if items[0]["content"] != bare {
+		t.Fatalf("the message was rewritten")
+	}
+	same, none := store.ExternalizeOutput(json.RawMessage(`[{"type":"message","content":"x"}]`))
+	if none.Stored != 0 || string(same) != `[{"type":"message","content":"x"}]` {
+		t.Fatalf("unchanged output was rebuilt: %s", same)
+	}
+}
+
+func TestExternalizeItemKeepsSmallAndOversizedImagesInline(t *testing.T) {
+	store, _ := newStore(t, func(o *Options) { o.MinBytes = 100000; o.MaxFileBytes = 200000 })
+	bare := pngBase64(t, 7)
+	item := generationItem(bare, bare)
+	out, stats := store.ExternalizeItem(item)
+	if stats.Stored != 0 || string(out) != string(item) {
+		t.Fatalf("a small image was stored: %d", stats.Stored)
+	}
+}
+
+func TestRefNamesListsValidNamesOnceUnderAnyKey(t *testing.T) {
+	store, _ := newStore(t, nil)
+	bare := pngBase64(t, 8)
+	stored, _ := store.ExternalizeItem(generationItem(bare, "data:image/png;base64,"+bare))
+	names := RefNames(stored)
+	if len(names) != 1 || !strings.HasSuffix(names[0], ".png") {
+		t.Fatalf("names = %v", names)
+	}
+	if got := RefNames([]byte(`{"a":"stored-image://../../etc/passwd","b":"stored-image-b64://short.png"}`)); len(got) != 0 {
+		t.Fatalf("invalid names listed: %v", got)
+	}
+}
+
+func TestExternalizeItemWithANilStoreIsANoOp(t *testing.T) {
+	var store *Store
+	item := generationItem("x", "y")
+	if out, stats := store.ExternalizeItem(item); stats.Stored != 0 || string(out) != string(item) {
+		t.Fatal("nil store changed the item")
+	}
+	if out, _ := store.ExternalizeOutput(json.RawMessage(`[]`)); string(out) != `[]` {
+		t.Fatal("nil store changed the output")
 	}
 }

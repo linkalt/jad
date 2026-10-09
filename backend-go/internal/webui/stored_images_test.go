@@ -67,3 +67,34 @@ func TestStoredImagesReachTranscriptAndJSON(t *testing.T) {
 		t.Fatalf("empty Images must be omitted: %s", plain)
 	}
 }
+
+func TestHostedToolListsGeneratedImagesBeforeTheRawIsCapped(t *testing.T) {
+	a := strings.Repeat("a", 64) + ".png"
+	b := strings.Repeat("b", 64) + ".webp"
+	item := `{"type":"openrouter:image_generation","id":"st_1","status":"completed","result":"stored-image-b64://` + a + `","imageUrl":"stored-image://` + a + `","extra":"stored-image://` + b + `","prompt":"` + strings.Repeat("x", 4000) + `"}`
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(item), &fields); err != nil {
+		t.Fatal(err)
+	}
+	part, ok := hostedToolPart(fields, 200)
+	if !ok {
+		t.Fatal("not a hosted tool")
+	}
+	// The raw is compact JSON with sorted keys, so "extra" (b) comes before "imageUrl" (a).
+	if want := []string{b, a}; !reflect.DeepEqual(part.Images, want) {
+		t.Fatalf("Images = %v, want %v", part.Images, want)
+	}
+	if part.Truncated == nil || !json.Valid([]byte(part.Raw)) {
+		t.Fatalf("raw should be capped and valid: truncated=%v", part.Truncated)
+	}
+	encoded, _ := json.Marshal(part)
+	if !strings.Contains(string(encoded), `"images":["`+b+`","`+a+`"]`) {
+		t.Fatalf("images missing in JSON: %s", encoded)
+	}
+	plain := `{"type":"web_search_call","id":"w","status":"completed","action":{"query":"x"}}`
+	var searchFields map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(plain), &searchFields)
+	if part, _ := hostedToolPart(searchFields, 0); part.Images != nil {
+		t.Fatalf("a search item got images: %v", part.Images)
+	}
+}
