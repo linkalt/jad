@@ -39,8 +39,11 @@ type subagentProvider struct {
 	// childFirstCall, when set, is the (tool name, arguments) the child makes in its
 	// first round instead of reading notes.txt.
 	childFirstCall [2]string
-	childEntered   chan struct{}
-	childCancelled chan struct{}
+	// childWritesByTask makes each child write its own file, w<N>.txt, where N is the
+	// number in its task ("task number N"), so several children never share a path.
+	childWritesByTask bool
+	childEntered      chan struct{}
+	childCancelled    chan struct{}
 	// detach scripts the parent to start the child with wait_ms 0, so the call returns
 	// a run id at once, and then to collect the answer with that id. childHold keeps
 	// the child's first request waiting until the parent has seen the handoff.
@@ -169,6 +172,13 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 			// request's own history, not a global count, keeps several children apart.
 			if p.childPartial {
 				events = textThenCallEvents("checking notes.txt first", "call-read", "read", `{"path":"notes.txt"}`)
+			} else if p.childWritesByTask {
+				number := regexp.MustCompile(`task number (\d+)`).FindStringSubmatch(record.Text)
+				index := "x"
+				if number != nil {
+					index = number[1]
+				}
+				events = functionCallEvents("call-first", "write", fmt.Sprintf(`{"path":"w%s.txt","content":"child %s"}`, index, index))
 			} else if p.childFirstCall[0] != "" {
 				events = functionCallEvents("call-first", p.childFirstCall[0], p.childFirstCall[1])
 			} else {
@@ -332,6 +342,8 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 	checkpointJSON, withCheckpoint := agentSetting["__checkpoint"].(string)
 	delete(agentSetting, "__checkpoint")
+	sessionExtra, _ := agentSetting["__session"].(map[string]any)
+	delete(agentSetting, "__session")
 	for name, text := range files {
 		writeFile(t, filepath.Join(workspace, name), []byte(text))
 	}
@@ -405,6 +417,9 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 	if withCheckpoint {
 		sessionSetting["checkpoint"] = json.RawMessage(checkpointJSON)
+	}
+	for key, value := range sessionExtra {
+		sessionSetting[key] = value
 	}
 	setting, err := json.Marshal(sessionSetting)
 	if err != nil {
