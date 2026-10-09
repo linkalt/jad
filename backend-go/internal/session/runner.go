@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"example.com/agent-harness/backend-go/internal/checkpoint"
+	"example.com/agent-harness/backend-go/internal/imageresize"
 	"example.com/agent-harness/backend-go/internal/memorytrace"
 	"example.com/agent-harness/backend-go/internal/responses"
 	"example.com/agent-harness/backend-go/internal/tools"
@@ -84,8 +85,11 @@ type RunOptions struct {
 	OnResponseCommitted func(event json.RawMessage, commit transcript.CommitResult)
 	OnToolResult        func(item json.RawMessage)
 	MemoryTrace         *memorytrace.Trace
-	ToolCatalog         *tools.Catalog
-	ToolExecution       tools.ExecutionContext
+	// ImageResizer shrinks the images of the history copy that is sent to the provider.
+	// Nil sends the history as stored. The stored history is never changed.
+	ImageResizer  *imageresize.Resizer
+	ToolCatalog   *tools.Catalog
+	ToolExecution tools.ExecutionContext
 	// Approval holds the wait and preview values for tools whose approval is
 	// "ask". Nil means the host supplies none, so such a call is blocked.
 	Approval *tools.ApprovalOptions
@@ -450,7 +454,8 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		if err != nil {
 			return result, fmt.Errorf("read accepted request context: %w", err)
 		}
-		request, err := BuildRequestWithStateContextAndAcceptedRequest(r.settings, history, responseTools, options.StateContext, acceptedRequest)
+		sentHistory, resizeStats := options.ImageResizer.Apply(history, options.ToolCatalog.SourceOf)
+		request, err := BuildRequestWithStateContextAndAcceptedRequest(r.settings, sentHistory, responseTools, options.StateContext, acceptedRequest)
 		if err != nil {
 			return result, fmt.Errorf("build Responses request: %w", err)
 		}
@@ -458,6 +463,8 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 			"history_items":     len(history),
 			"has_state_context": options.StateContext != nil,
 			"tool_count":        len(responseTools),
+			"images_resized":    resizeStats.Resized,
+			"image_bytes_saved": resizeStats.BytesBefore - resizeStats.BytesAfter,
 		})
 		if err := ctx.Err(); err != nil {
 			return result, err

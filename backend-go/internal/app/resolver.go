@@ -712,6 +712,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	r.processManager, r.taskStore, r.memoryStore = prepared.processManager, prepared.taskStore, prepared.memoryStore
 	options.PersistedInput = persisted
 	options.ToolCatalog = prepared.toolCatalog
+	options.ImageResizer = newImageResizer(r.config.ImageResize)
 	options.MaxToolRounds = int(r.config.MaxToolRounds)
 	options.MaxRunTokens = r.config.MaxRunTokens
 	options.MaxParallelToolCalls = int(r.config.MaxParallelToolCalls)

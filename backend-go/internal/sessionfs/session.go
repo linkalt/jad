@@ -140,6 +140,7 @@ type SessionConfig struct {
 	NativeFetch        *NativeFetchSettings
 	NativeRequestDraft *NativeRequestDraftSettings
 	NativeSkill        *NativeSkillSettings
+	NativeDecide       *NativeDecideSettings
 	NativeSubagent     *NativeSubagentSettings
 	// GlobalJadRoot is the global root whose setting.json names the skill
 	// directories the skill tool reads.
@@ -168,6 +169,7 @@ type SessionConfig struct {
 	Checkpoint CheckpointSettings
 	// Hooks holds the optional checks that run after write and edit; off by default (Go only).
 	Hooks                 HooksSettings
+	ImageResize           ImageResizeSettings
 	BackupTurns           int
 	Compaction            Compaction
 	Persistence           Persistence
@@ -299,6 +301,10 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	imageResize, err := normalizeImageResizeSettings(setting["image_resize"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	toolDefinitionPaths, err := normalizeToolDefinitionPaths(setting["tool_definition_paths"], location.Root.GlobalJadRoot, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
@@ -383,6 +389,10 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		return SessionConfig{}, err
 	}
 	nativeSkill, err := normalizeNativeSkillSettings(setting, settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	nativeDecide, err := normalizeNativeDecideSettings(setting, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -501,6 +511,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		NativeFetch:           nativeFetch,
 		NativeRequestDraft:    nativeRequestDraft,
 		NativeSkill:           nativeSkill,
+		NativeDecide:          nativeDecide,
 		NativeSubagent:        nativeSubagent,
 		GlobalJadRoot:         location.Root.GlobalJadRoot,
 		MCPServers:            mcpServers,
@@ -516,6 +527,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		Approval:              approval,
 		Checkpoint:            checkpoint,
 		Hooks:                 hooks,
+		ImageResize:           imageResize,
 		BackupTurns:           backupTurns,
 		Compaction:            compactionSettings,
 		Persistence:           persistence,

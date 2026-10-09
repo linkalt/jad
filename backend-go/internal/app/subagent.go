@@ -79,6 +79,7 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	var lastText atomic.Value
 	result, runErr := runner.Run(ctx, input, session.RunOptions{
 		ToolCatalog:          request.Tools,
+		ImageResizer:         newImageResizer(config.ImageResize),
 		ToolExecution:        request.Execution,
 		MaxToolRounds:        int(request.Agent.MaxToolRounds),
 		MaxRunTokens:         request.Agent.MaxRunTokens,

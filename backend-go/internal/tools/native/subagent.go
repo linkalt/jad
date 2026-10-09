@@ -354,7 +354,7 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 		}
 	}
 	if len(chosen) == 0 && len(mcpIDs) == 0 {
-		return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s has no tool to use: enable at least one read-only native tool (read, grep, glob, fetch or skill)", agent.Name)
+		return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s has no tool to use: enable at least one read-only native tool (read, grep, glob, fetch, skill or decide)", agent.Name)
 	}
 	return chosen, mcpIDs, nil
 }

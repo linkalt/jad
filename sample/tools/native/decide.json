@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.decide",
+      "source": "native",
+      "name": "decide",
+      "description": "Ask a fast classifier typed questions about some text or JSON. predicate: probability 0-1 that a condition holds. choice: the best of your choices, with confidence. score: a rating against ordered levels, lowest first. Use it for yes/no checks, routing and severity, not for open-ended answers.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "text"
+                      ]
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "json"
+                      ]
+                    },
+                    "value": {}
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "description": "What to evaluate, in order: a string or {type:text,text}, or {type:json,value} for structured data. Every question is asked about all of it. Images are not supported yet."
+          },
+          "questions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Label of the answer. Defaults to q1, q2, ..."
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "predicate",
+                    "choice",
+                    "score"
+                  ],
+                  "description": "Inferred when omitted: choices gives choice, levels gives score, otherwise predicate."
+                },
+                "instructions": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The question, with observable criteria."
+                },
+                "choices": {
+                  "type": "array",
+                  "minItems": 2,
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "description": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "value"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "description": "Options for a choice question: a value, or a value with when it applies."
+                },
+                "levels": {
+                  "type": "array",
+                  "minItems": 2,
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "description": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "label"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "description": "Ordered levels for a score question, lowest first: a label, or a label with its criteria."
+                }
+              },
+              "required": [
+                "instructions"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "input",
+          "questions"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

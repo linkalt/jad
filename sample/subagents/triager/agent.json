@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "description": "Classifies or scores a piece of text with the decide tool: yes/no checks, routing to a category, severity. Give it the text and the questions; it returns the answers.",
+  "tools": ["decide"],
+  "max_tool_rounds": 4,
+  "timeout_ms": 120000
+}

@@ -39,6 +39,9 @@ type subagentProvider struct {
 	// childFirstCall, when set, is the (tool name, arguments) the child makes in its
 	// first round instead of reading notes.txt.
 	childFirstCall [2]string
+	// parentFirstCall, when set, is the (tool name, arguments) the parent makes in its
+	// first round instead of starting a subagent.
+	parentFirstCall [2]string
 	// childWritesByTask makes each child write its own file, w<N>.txt, where N is the
 	// number in its task ("task number N"), so several children never share a path.
 	childWritesByTask bool
@@ -165,6 +168,8 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 			id := regexp.MustCompile(`sub_[0-9a-f]{8}`).FindString(lastOutput(record.Text))
 			p.holdReleased.Do(func() { close(p.childHold) })
 			events = functionCallEvents("call-collect", "subagent", fmt.Sprintf(`{"id":%q,"wait_ms":10000}`, id))
+		case body.Model == "parent-model" && p.parentFirstCall[0] != "" && !strings.Contains(record.Text, "function_call_output"):
+			events = functionCallEvents("call-parent-first", p.parentFirstCall[0], p.parentFirstCall[1])
 		case body.Model == "parent-model" && !strings.Contains(record.Text, "function_call_output") && p.parentCalls > 1:
 			events = manyCallEvents(p.parentCalls)
 		case body.Model == "parent-model" && !strings.Contains(record.Text, "function_call_output"):
@@ -311,6 +316,8 @@ func newSplitSubagentFixture(t *testing.T, agentSetting map[string]any) subagent
 type mcpFixture struct {
 	approval string
 	calls    *atomic.Int32
+	// image, when set, is returned as an image block beside the text.
+	image []byte
 }
 
 func buildSubagentFixture(t *testing.T, agentSetting map[string]any, splitChild bool, files map[string]string) subagentFixture {
@@ -376,12 +383,16 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 			mcp.calls.Add(1)
 			var arguments map[string]string
 			_ = json.Unmarshal(request.Params.Arguments, &arguments)
-			return &mcpSDK.CallToolResult{Content: []mcpSDK.Content{&mcpSDK.TextContent{Text: "MCP says " + arguments["word"] + " is 99"}}}, nil
+			content := []mcpSDK.Content{&mcpSDK.TextContent{Text: "MCP says " + arguments["word"] + " is 99"}}
+			if mcp.image != nil {
+				content = append(content, &mcpSDK.ImageContent{MIMEType: "image/png", Data: mcp.image})
+			}
+			return &mcpSDK.CallToolResult{Content: content}, nil
 		})
 		mcpHTTP := httptest.NewServer(mcpSDK.NewStreamableHTTPHandler(func(*http.Request) *mcpSDK.Server { return mcpServer }, nil))
 		t.Cleanup(mcpHTTP.Close)
 		mcpConfig, _ := json.Marshal(map[string]any{
-			"transport": map[string]any{"type": "streamable_http", "url": mcpHTTP.URL}, "timeout_ms": 10_000, "max_result_bytes": 4096,
+			"transport": map[string]any{"type": "streamable_http", "url": mcpHTTP.URL}, "timeout_ms": 10_000, "max_result_bytes": 4096 + 8*len(mcp.image),
 		})
 		mcpPath := filepath.Join(workspace, "mcp-server.json")
 		writeFile(t, mcpPath, mcpConfig)

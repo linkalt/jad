@@ -62,7 +62,7 @@
     "tool_call_scheduling": {
       "type": "string",
       "enum": ["ordered", "concurrent"],
-      "description": "How the calls of one provider response are scheduled. ordered runs them one at a time in the order the model wrote them whenever one of them can change state (every tool except read, grep, glob, fetch and skill, and every MCP tool), so a later call sees what an earlier one did; a response made only of those read-only tools still runs up to max_parallel_tool_calls at once. concurrent always runs them together, with no ordering guarantee between calls. Defaults to ordered.",
+      "description": "How the calls of one provider response are scheduled. ordered runs them one at a time in the order the model wrote them whenever one of them can change state (every tool except read, grep, glob, fetch, skill and decide, and every MCP tool), so a later call sees what an earlier one did; a response made only of those read-only tools still runs up to max_parallel_tool_calls at once. concurrent always runs them together, with no ordering guarantee between calls. Defaults to ordered.",
       "default": "ordered"
     },
     "provider_retry": {
@@ -94,7 +94,7 @@
       "type": "object",
       "description": "Wait and preview values for tools whose approval is ask, and the default for tools that do not set their own. Nothing is asked while every tool's approval is off, which is the default. Approval is per tool: a tool whose approval is off is never asked about, so a model refused on one tool can reach the same effect through another unless that one asks too. Set default to ask to cover every tool that can ask. Approval is a confirmation, not a sandbox.",
       "properties": {
-        "default": {"type": "string", "enum": ["off", "ask"], "default": "off", "description": "The approval of every tool that can ask (write, edit, bash, process and each MCP server) whose own approval key is absent. An explicit approval on a tool, off or ask, always wins. It does not add a tool the session does not configure, and it never applies to read, grep, glob, fetch, skill, task, memory or request_draft. A process status, wait, list or stop never asks."},
+        "default": {"type": "string", "enum": ["off", "ask"], "default": "off", "description": "The approval of every tool that can ask (write, edit, bash, process and each MCP server) whose own approval key is absent. An explicit approval on a tool, off or ask, always wins. It does not add a tool the session does not configure, and it never applies to read, grep, glob, fetch, skill, decide, task, memory or request_draft. A process status, wait, list or stop never asks."},
         "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 300000, "description": "How long a run waits for the user before the call is blocked as approval_timeout. Must not exceed max_timeout_ms."},
         "extend_ms": {"type": "integer", "minimum": 1000, "maximum": 1800000, "default": 300000, "description": "How much one extension adds to the deadline."},
         "max_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 1800000, "description": "Ceiling for the whole wait, extensions included."},
@@ -145,6 +145,64 @@
             },
             "additionalProperties": false
           }
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "image_resize": {
+      "type": "object",
+      "description": "Shrinks the images of the request that is about to be sent: request -> image_resize -> provider. Go backend only; the TypeScript backend does not read this key. Off by default: with enabled false (or the key absent) the request is unchanged. Only the copy sent to the provider changes; messages.jsonl keeps the original image. Only base64 data URLs are resized (an http URL or a file id has no bytes here), and only png, jpeg and webp: a gif may be animated. An image that already fits max_edge_px and max_bytes is sent as it is. The result is a png, or a jpeg for an opaque image that does not fit as a png; a turned jpeg (EXIF orientation) is rotated upright. A resize that cannot make the image smaller leaves it unchanged. Results are remembered by the hash of the image so every round sends the same bytes.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Turns the step on.",
+          "default": false
+        },
+        "applies_to": {
+          "type": "array",
+          "description": "Which images are resized: mcp (a tool result of an MCP server), native (a tool result of a native tool) or user (a user message). Each at most once. An empty list resizes nothing.",
+          "items": {
+            "type": "string",
+            "enum": ["mcp", "native", "user"]
+          },
+          "uniqueItems": true,
+          "default": ["mcp"]
+        },
+        "max_edge_px": {
+          "type": "integer",
+          "description": "The longest side an image keeps, in pixels.",
+          "minimum": 64,
+          "maximum": 8192,
+          "default": 1568
+        },
+        "max_bytes": {
+          "type": "integer",
+          "description": "The largest encoded image that is sent as it is, and the size a resized image is held under.",
+          "minimum": 4096,
+          "maximum": 20971520,
+          "default": 1048576
+        },
+        "max_pixels": {
+          "type": "integer",
+          "description": "An image with more pixels (width x height) than this is not opened and is sent as it is; it guards against decompression bombs.",
+          "minimum": 4096,
+          "maximum": 400000000,
+          "default": 64000000
+        },
+        "jpeg_quality": {
+          "type": "integer",
+          "description": "The first jpeg quality tried; lower ones follow, down to 40, until the image fits max_bytes.",
+          "minimum": 40,
+          "maximum": 100,
+          "default": 85
+        },
+        "cache_entries": {
+          "type": "integer",
+          "description": "How many finished resizes are remembered per run.",
+          "minimum": 1,
+          "maximum": 4096,
+          "default": 64
         }
       },
       "additionalProperties": false,
@@ -1732,9 +1790,24 @@
               },
               "additionalProperties": false
             },
+            "decide": {
+              "type": "object",
+              "description": "Go backend only. Asks a hosted classifier typed questions (predicate probability, choice, score) about a text and returns the answers; no tools, no free text. Text only. Read-only, so a sub-agent can list it in its tools. Off unless this key is present. Needs a key in the environment variable named by api_key_env, read on each call; the model file's key is not used. Needs decide in tool_definition_paths.",
+              "properties": {
+                "backend": {"type": "string", "enum": ["openrouter", "openai"], "default": "openrouter", "description": "openrouter uses OpenRouter's alpha Decisions endpoint; openai uses POST /v1/decisions. The two have different request shapes; the tool translates."},
+                "base_url": {"type": "string", "minLength": 1, "description": "The tool appends /decisions. Default https://openrouter.ai/api/alpha for openrouter and https://api.openai.com/v1 for openai."},
+                "api_key_env": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Environment variable holding the key. Default OPENROUTER_API_KEY or OPENAI_API_KEY by backend."},
+                "model": {"type": "string", "minLength": 1, "description": "Default openai/gpt-6-luna-decisions for openrouter and gpt-6-luna for openai."},
+                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000, "default": 30000, "description": "Whole-request time limit."},
+                "max_questions": {"type": "integer", "minimum": 1, "maximum": 128, "default": 16, "description": "Most questions one call may carry."},
+                "max_input_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 200000, "description": "Most bytes of input text one call may carry."},
+                "max_response_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Most response bytes read from the provider."}
+              },
+              "additionalProperties": false
+            },
             "subagent": {
               "type": "object",
-              "description": "Go backend only. Lets the model hand a task to a separate read-only agent that runs with a fresh context and returns only its final answer. Needs at least one agent and the tool definition sample/tools/native/subagent.json. A child can use only the enabled read-only native tools (read, grep, glob, fetch, skill) unless allow_write lets an agent list write, edit, bash, exec or process, and never the subagent tool, so the depth is one.",
+              "description": "Go backend only. Lets the model hand a task to a separate read-only agent that runs with a fresh context and returns only its final answer. Needs at least one agent and the tool definition sample/tools/native/subagent.json. A child can use only the enabled read-only native tools (read, grep, glob, fetch, skill, decide) unless allow_write lets an agent list write, edit, bash, exec or process, and never the subagent tool, so the depth is one.",
               "anyOf": [{"required": ["agents"]}, {"required": ["agents_dir"]}],
               "properties": {
                 "agents_dir": {
@@ -1753,7 +1826,7 @@
                       "model": {"type": "string", "minLength": 1, "description": "Model file for this agent, relative to the session directory (or to the agent's folder for a folder agent) or absolute. Absent means the calling session's model."},
                       "instructions": {"type": "string", "minLength": 1, "description": "System prompt of the agent. The calling session's prompt is not used."},
                       "prompt_documents": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Files appended to the agent's prompt after instructions (and after prompt.md for a folder agent), each separated by a blank line. A relative path is taken from the session's cwd, or from the agent's folder for a folder agent; ~ is expanded. The files are read when the session loads, and a missing file is a configuration error. The calling session's own prompt_documents are not used."},
-                      "tools": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Tools the agent may use: enabled read-only native tools by name (read, grep, glob, fetch, skill), and with allow_write also write, edit, bash, exec and process (listing one without allow_write is a configuration error; a child that lists process sees and stops only the processes it started, and they are stopped when its run ends), and MCP tools by ID, written mcp:<server>:<tool> (the server id from mcp_servers and the tool name the server reports). Absent means every enabled read-only native tool and no MCP tool. An MCP tool is never added because its server calls it read-only: you name each one, so you vouch that it cannot change anything you care about. A tool of a server whose approval is ask is refused, because a sub-agent has no way to ask the user. An agent that lists write, edit, bash or exec asks the user for those tools the same way the session does (their own approval setting applies), takes the checkpoint like a write, and runs to its end instead of being handed off. A name that is not loaded is a configuration error that lists the loaded ones; it is checked when the session loads."},
+                      "tools": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Tools the agent may use: enabled read-only native tools by name (read, grep, glob, fetch, skill, decide), and with allow_write also write, edit, bash, exec and process (listing one without allow_write is a configuration error; a child that lists process sees and stops only the processes it started, and they are stopped when its run ends), and MCP tools by ID, written mcp:<server>:<tool> (the server id from mcp_servers and the tool name the server reports). Absent means every enabled read-only native tool and no MCP tool. An MCP tool is never added because its server calls it read-only: you name each one, so you vouch that it cannot change anything you care about. A tool of a server whose approval is ask is refused, because a sub-agent has no way to ask the user. An agent that lists write, edit, bash or exec asks the user for those tools the same way the session does (their own approval setting applies), takes the checkpoint like a write, and runs to its end instead of being handed off. A name that is not loaded is a configuration error that lists the loaded ones; it is checked when the session loads."},
                       "max_tool_rounds": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 30, "description": "Most tool rounds of one run."},
                       "max_run_tokens": {"type": "integer", "minimum": 1, "maximum": 1000000000000, "description": "Most tokens one run may use before it starts another provider round. Absent means no cap."},
                       "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 600000, "description": "Wall-clock limit of one run, including provider waits."},

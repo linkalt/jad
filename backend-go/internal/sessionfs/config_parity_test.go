@@ -30,7 +30,7 @@ type parityExpectation struct {
 
 // goOnlyNativeTools are native tools that exist only in the Go backend. TypeScript is
 // a frozen reference (backend-go/DECISIONS.md), so it will never list them.
-var goOnlyNativeTools = []string{"subagent"}
+var goOnlyNativeTools = []string{"subagent", "decide"}
 
 // TestConfigParityWithTypeScriptGolden replays settings through LoadSessionConfig
 // and compares resolved storage paths and error messages with the output of the
