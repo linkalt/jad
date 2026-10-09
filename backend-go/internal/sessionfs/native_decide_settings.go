@@ -15,10 +15,13 @@ const (
 	maxNativeDecideMaxQuestions         int64 = 128
 	defaultNativeDecideMaxInputBytes    int64 = 200_000
 	defaultNativeDecideMaxResponseBytes int64 = 1_048_576
+	defaultNativeDecideMaxImages        int64 = 8
+	maxNativeDecideMaxImages            int64 = 64
+	defaultNativeDecideMaxImageBytes    int64 = 5 * 1024 * 1024
 )
 
 var (
-	nativeDecideKeys     = []string{"backend", "base_url", "api_key_env", "model", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes"}
+	nativeDecideKeys     = []string{"backend", "base_url", "api_key_env", "model", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes", "max_images", "max_image_bytes"}
 	nativeDecideBackends = []string{"openrouter", "openai"}
 	nativeDecideEnvName  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
@@ -47,6 +50,10 @@ type NativeDecideSettings struct {
 	MaxInputBytes int64
 	// MaxResponseBytes is the most response bytes read from the provider.
 	MaxResponseBytes int64
+	// MaxImages is the most image parts one call may carry.
+	MaxImages int64
+	// MaxImageBytes is the largest image, as a file or as decoded base64, read for a call.
+	MaxImageBytes int64
 }
 
 func normalizeNativeDecideSettings(setting map[string]json.RawMessage, settingPath string) (*NativeDecideSettings, error) {
@@ -119,6 +126,12 @@ func normalizeNativeDecideSettings(setting map[string]json.RawMessage, settingPa
 		return nil, err
 	}
 	if settings.MaxResponseBytes, err = configuredInteger(fields, "max_response_bytes", defaultNativeDecideMaxResponseBytes, 1, maxNativeToolBytes, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.MaxImages, err = configuredInteger(fields, "max_images", defaultNativeDecideMaxImages, 1, maxNativeDecideMaxImages, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.MaxImageBytes, err = configuredInteger(fields, "max_image_bytes", defaultNativeDecideMaxImageBytes, 1, maxNativeToolBytes, settingPath, section); err != nil {
 		return nil, err
 	}
 	return settings, nil

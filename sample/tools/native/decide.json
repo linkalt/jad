@@ -54,10 +54,35 @@
                     "value"
                   ],
                   "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "image"
+                      ]
+                    },
+                    "path": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "A file in the workspace, or a stored-image://<name> reference."
+                    },
+                    "data": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The image as base64 or a data URL."
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false
                 }
               ]
             },
-            "description": "What to evaluate, in order: a string or {type:text,text}, or {type:json,value} for structured data. Every question is asked about all of it. Images are not supported yet."
+            "description": "What to evaluate, in order: a string or {type:text,text}, {type:json,value} for structured data, or {type:image,path} for a png, jpeg, webp or gif (give exactly one of path and data; prefer path). Every question is asked about all of it."
           },
           "questions": {
             "type": "array",

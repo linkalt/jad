@@ -196,3 +196,14 @@ func (r *Resizer) resized(url string) (string, bool) {
 	}
 	return replacement, replacement != ""
 }
+
+// Resize returns the replacement data URL for one image that comes from source, or false
+// to keep it as it is: the source is not listed in applies_to, or the image needs no
+// change or cannot be decoded. It is the single-image form of Apply, for a tool that
+// builds its own request.
+func (r *Resizer) Resize(source, dataURL string) (string, bool) {
+	if r == nil || !r.appliesTo[source] {
+		return "", false
+	}
+	return r.resized(dataURL)
+}

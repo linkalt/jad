@@ -28,10 +28,10 @@ func TestNormalizeNativeDecideSettingsDefaultsPerBackend(t *testing.T) {
 		native string
 		want   NativeDecideSettings
 	}{
-		"empty object is openrouter": {`{"decide":{}}`, NativeDecideSettings{Backend: "openrouter", BaseURL: "https://openrouter.ai/api/alpha", APIKeyEnv: "OPENROUTER_API_KEY", Model: "openai/gpt-6-luna-decisions", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576}},
-		"openai":                     {`{"decide":{"backend":"openai"}}`, NativeDecideSettings{Backend: "openai", BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY", Model: "gpt-6-luna", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576}},
-		"nulls use the defaults":     {`{"decide":{"backend":null,"model":null,"timeout_ms":null}}`, NativeDecideSettings{Backend: "openrouter", BaseURL: "https://openrouter.ai/api/alpha", APIKeyEnv: "OPENROUTER_API_KEY", Model: "openai/gpt-6-luna-decisions", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576}},
-		"every key set":              {`{"decide":{"backend":"openai","base_url":"http://127.0.0.1:9/v1/","api_key_env":"MY_KEY","model":"m","timeout_ms":5,"max_questions":2,"max_input_bytes":7,"max_response_bytes":9}}`, NativeDecideSettings{Backend: "openai", BaseURL: "http://127.0.0.1:9/v1", APIKeyEnv: "MY_KEY", Model: "m", TimeoutMS: 5, MaxQuestions: 2, MaxInputBytes: 7, MaxResponseBytes: 9}},
+		"empty object is openrouter": {`{"decide":{}}`, NativeDecideSettings{Backend: "openrouter", BaseURL: "https://openrouter.ai/api/alpha", APIKeyEnv: "OPENROUTER_API_KEY", Model: "openai/gpt-6-luna-decisions", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576, MaxImages: 8, MaxImageBytes: 5242880}},
+		"openai":                     {`{"decide":{"backend":"openai"}}`, NativeDecideSettings{Backend: "openai", BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY", Model: "gpt-6-luna", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576, MaxImages: 8, MaxImageBytes: 5242880}},
+		"nulls use the defaults":     {`{"decide":{"backend":null,"model":null,"timeout_ms":null}}`, NativeDecideSettings{Backend: "openrouter", BaseURL: "https://openrouter.ai/api/alpha", APIKeyEnv: "OPENROUTER_API_KEY", Model: "openai/gpt-6-luna-decisions", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576, MaxImages: 8, MaxImageBytes: 5242880}},
+		"every key set":              {`{"decide":{"backend":"openai","base_url":"http://127.0.0.1:9/v1/","api_key_env":"MY_KEY","model":"m","timeout_ms":5,"max_questions":2,"max_input_bytes":7,"max_response_bytes":9,"max_images":3,"max_image_bytes":11}}`, NativeDecideSettings{Backend: "openai", BaseURL: "http://127.0.0.1:9/v1", APIKeyEnv: "MY_KEY", Model: "m", TimeoutMS: 5, MaxQuestions: 2, MaxInputBytes: 7, MaxResponseBytes: 9, MaxImages: 3, MaxImageBytes: 11}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := normalizeNativeDecideSettings(decideSettingsFor(tc.native), "setting.json")
@@ -45,7 +45,7 @@ func TestNormalizeNativeDecideSettingsDefaultsPerBackend(t *testing.T) {
 func TestNormalizeNativeDecideSettingsRejectsInvalidSettings(t *testing.T) {
 	for name, tc := range map[string]struct{ native, want string }{
 		"typo":                {`{"decide":{"max_question":10}}`, "tools.native.decide.max_question is not supported; did you mean max_questions?"},
-		"unrelated":           {`{"decide":{"approval":"ask"}}`, "tools.native.decide.approval is not supported; supported keys are api_key_env, backend, base_url, max_input_bytes, max_questions, max_response_bytes, model, timeout_ms"},
+		"unrelated":           {`{"decide":{"approval":"ask"}}`, "tools.native.decide.approval is not supported; supported keys are api_key_env, backend, base_url, max_image_bytes, max_images, max_input_bytes, max_questions, max_response_bytes, model, timeout_ms"},
 		"not object":          {`{"decide":[]}`, "tools.native.decide must be an object"},
 		"null":                {`{"decide":null}`, "tools.native.decide must be an object"},
 		"unknown backend":     {`{"decide":{"backend":"anthropic"}}`, "tools.native.decide.backend must be one of openrouter, openai"},
@@ -63,6 +63,11 @@ func TestNormalizeNativeDecideSettingsRejectsInvalidSettings(t *testing.T) {
 		"input zero":          {`{"decide":{"max_input_bytes":0}}`, "tools.native.decide.max_input_bytes must be a safe integer"},
 		"response fractional": {`{"decide":{"max_response_bytes":1.5}}`, "tools.native.decide.max_response_bytes must be a safe integer"},
 		"response string":     {`{"decide":{"max_response_bytes":"9"}}`, "tools.native.decide.max_response_bytes must be a safe integer"},
+		"images zero":         {`{"decide":{"max_images":0}}`, "tools.native.decide.max_images must be a safe integer between 1 and 64"},
+		"images high":         {`{"decide":{"max_images":65}}`, "tools.native.decide.max_images must be a safe integer between 1 and 64"},
+		"images upper":        {`{"decide":{"max_images":64}}`, ""},
+		"image bytes zero":    {`{"decide":{"max_image_bytes":0}}`, "tools.native.decide.max_image_bytes must be a safe integer"},
+		"image bytes string":  {`{"decide":{"max_image_bytes":"9"}}`, "tools.native.decide.max_image_bytes must be a safe integer"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := normalizeNativeDecideSettings(decideSettingsFor(tc.native), "setting.json")
@@ -118,7 +123,7 @@ func TestDecideSchemaListsTheKeysTheLoaderAccepts(t *testing.T) {
 	if !reflect.DeepEqual(properties["backend"].Enum, nativeDecideBackends) {
 		t.Fatalf("schema backends %v, loader accepts %v", properties["backend"].Enum, nativeDecideBackends)
 	}
-	defaults := map[string]float64{"timeout_ms": float64(defaultNativeDecideTimeoutMS), "max_questions": float64(defaultNativeDecideMaxQuestions), "max_input_bytes": float64(defaultNativeDecideMaxInputBytes), "max_response_bytes": float64(defaultNativeDecideMaxResponseBytes)}
+	defaults := map[string]float64{"timeout_ms": float64(defaultNativeDecideTimeoutMS), "max_questions": float64(defaultNativeDecideMaxQuestions), "max_input_bytes": float64(defaultNativeDecideMaxInputBytes), "max_response_bytes": float64(defaultNativeDecideMaxResponseBytes), "max_images": float64(defaultNativeDecideMaxImages), "max_image_bytes": float64(defaultNativeDecideMaxImageBytes)}
 	for key, value := range defaults {
 		if properties[key].Default != value {
 			t.Errorf("schema default of %s = %v, loader default %v", key, properties[key].Default, value)

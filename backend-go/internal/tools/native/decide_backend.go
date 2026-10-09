@@ -175,7 +175,7 @@ func decideRequestError(callID string, err error) string {
 func decideAllText(input []decideInputPart) (string, bool) {
 	texts := make([]string, 0, len(input))
 	for _, part := range input {
-		if part.JSON != nil {
+		if part.JSON != nil || part.isImage() {
 			return "", false
 		}
 		texts = append(texts, part.Text)
@@ -185,13 +185,17 @@ func decideAllText(input []decideInputPart) (string, bool) {
 
 // openAIDecisionsInput is a string when the input is all text, as in OpenAI's own
 // examples, and otherwise one user message whose parts are input_text, a JSON value
-// being its compact text. Image parts would be input_image parts here.
+// being its compact text, and input_image with the image as a data URL.
 func openAIDecisionsInput(input []decideInputPart) any {
 	if text, ok := decideAllText(input); ok {
 		return text
 	}
 	parts := make([]map[string]any, 0, len(input))
 	for _, part := range input {
+		if part.isImage() {
+			parts = append(parts, map[string]any{"type": "input_image", "image_url": part.Image})
+			continue
+		}
 		text := part.Text
 		if part.JSON != nil {
 			text = string(part.JSON)
@@ -210,7 +214,9 @@ func openRouterDecisionsState(input []decideInputPart) any {
 	}
 	state := make([]any, 0, len(input))
 	for _, part := range input {
-		if part.JSON != nil {
+		if part.isImage() {
+			state = append(state, map[string]any{"type": "image_url", "image_url": map[string]any{"url": part.Image}})
+		} else if part.JSON != nil {
 			state = append(state, part.JSON)
 		} else {
 			state = append(state, part.Text)

@@ -27,9 +27,10 @@ var decideInputSchema = json.RawMessage(`{
       "items":{"anyOf":[
         {"type":"string","minLength":1},
         {"type":"object","properties":{"type":{"type":"string","enum":["text"]},"text":{"type":"string","minLength":1}},"required":["type","text"],"additionalProperties":false},
-        {"type":"object","properties":{"type":{"type":"string","enum":["json"]},"value":{}},"required":["type","value"],"additionalProperties":false}
+        {"type":"object","properties":{"type":{"type":"string","enum":["json"]},"value":{}},"required":["type","value"],"additionalProperties":false},
+        {"type":"object","properties":{"type":{"type":"string","enum":["image"]},"path":{"type":"string","minLength":1,"description":"A file in the workspace, or a stored-image://<name> reference."},"data":{"type":"string","minLength":1,"description":"The image as base64 or a data URL."}},"required":["type"],"additionalProperties":false}
       ]},
-      "description":"What to evaluate, in order: a string or {type:text,text}, or {type:json,value} for structured data. Every question is asked about all of it. Images are not supported yet."
+      "description":"What to evaluate, in order: a string or {type:text,text}, {type:json,value} for structured data, or {type:image,path} for a png, jpeg, webp or gif (give exactly one of path and data; prefer path). Every question is asked about all of it."
     },
     "questions":{
       "type":"array",
@@ -63,15 +64,26 @@ type decideQuestion struct {
 // decideOption is a choice (Label is its value) or a score level.
 type decideOption struct{ Label, Description string }
 
-// decideInputPart is one part of the input: text, or a JSON value when JSON is set.
+// decideInputPart is one part of the input: text, a JSON value when JSON is set, or an
+// image when ImagePath or ImageData is set. Image is the data URL sent, filled in by
+// loadDecideImages.
 type decideInputPart struct {
-	Text string
-	JSON json.RawMessage
+	Text      string
+	JSON      json.RawMessage
+	ImagePath string
+	ImageData string
+	Image     string
 }
 
-// size is the part's bytes as sent: the text, or the compact JSON.
+func (p decideInputPart) isImage() bool { return p.ImagePath != "" || p.ImageData != "" }
+
+// size is the part's text bytes as sent: the text, or the compact JSON. An image is
+// limited by max_image_bytes and max_images instead.
 func (p decideInputPart) size() int {
-	if p.JSON != nil {
+	switch {
+	case p.isImage():
+		return 0
+	case p.JSON != nil:
 		return len(p.JSON)
 	}
 	return len(p.Text)
@@ -82,8 +94,8 @@ func (p decideInputPart) size() int {
 type decideEnvironment func(name string) string
 
 // NewDecideTool creates native.decide from its normalized settings.
-func NewDecideTool(settings sessionfs.NativeDecideSettings) (tools.Tool, error) {
-	return newDecideTool(settings, os.Getenv, newDecideHTTPClient())
+func NewDecideTool(settings sessionfs.NativeDecideSettings, images DecideImages) (tools.Tool, error) {
+	return newDecideTool(settings, images, os.Getenv, newDecideHTTPClient())
 }
 
 // newDecideHTTPClient never follows a redirect: the request carries the API key, and
@@ -92,7 +104,7 @@ func newDecideHTTPClient() *http.Client {
 	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func newDecideTool(settings sessionfs.NativeDecideSettings, environment decideEnvironment, client *http.Client) (tools.Tool, error) {
+func newDecideTool(settings sessionfs.NativeDecideSettings, images DecideImages, environment decideEnvironment, client *http.Client) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(decideInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native decide schema: %w", err)
@@ -110,7 +122,7 @@ func newDecideTool(settings sessionfs.NativeDecideSettings, environment decideEn
 		ExampleOperation:   json.RawMessage(`{"input":["I was charged twice."],"questions":[{"name":"billing","instructions":"Is this a billing problem?"}]}`),
 		NormalizeArguments: normalizeDecideArguments,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-			return executeNativeDecide(ctx, arguments, settings, environment, client, execution.CallID), nil
+			return executeNativeDecide(ctx, arguments, settings, images, environment, client, execution), nil
 		},
 	}, nil
 }
@@ -198,7 +210,8 @@ func normalizeDecideInput(input any) any {
 	return fixed
 }
 
-func executeNativeDecide(ctx context.Context, arguments map[string]any, settings sessionfs.NativeDecideSettings, environment decideEnvironment, client *http.Client, callID string) string {
+func executeNativeDecide(ctx context.Context, arguments map[string]any, settings sessionfs.NativeDecideSettings, images DecideImages, environment decideEnvironment, client *http.Client, execution tools.ExecutionContext) string {
+	callID := execution.CallID
 	input, err := parseDecideInput(arguments["input"])
 	if err != nil {
 		return decideError(callID, tools.StatusInvalidInput, "invalid_input", err.Error())
@@ -216,6 +229,9 @@ func executeNativeDecide(ctx context.Context, arguments map[string]any, settings
 	}
 	if int64(len(questions)) > settings.MaxQuestions {
 		return decideError(callID, tools.StatusInvalidInput, "too_many_questions", fmt.Sprintf("%d questions; the limit is %d", len(questions), settings.MaxQuestions))
+	}
+	if failure := loadDecideImages(input, images, settings, execution); failure != "" {
+		return failure
 	}
 	key := strings.TrimSpace(environment(settings.APIKeyEnv))
 	if key == "" {
@@ -260,7 +276,18 @@ func parseDecideInput(raw any) ([]decideInputPart, error) {
 		case string:
 			part.Text = value
 		case map[string]any:
-			if kind, _ := value["type"].(string); kind == "json" {
+			kind, _ := value["type"].(string)
+			if kind == "image" {
+				part.ImagePath, _ = value["path"].(string)
+				part.ImageData, _ = value["data"].(string)
+				part.ImagePath, part.ImageData = strings.TrimSpace(part.ImagePath), strings.TrimSpace(part.ImageData)
+				if (part.ImagePath == "") == (part.ImageData == "") {
+					return nil, fmt.Errorf("input part %d: an image needs exactly one of path and data", index+1)
+				}
+				parts = append(parts, part)
+				continue
+			}
+			if kind == "json" {
 				encoded, err := marshalDecideJSON(value["value"])
 				if err != nil {
 					return nil, fmt.Errorf("input part %d: the JSON value cannot be encoded: %v", index+1, err)

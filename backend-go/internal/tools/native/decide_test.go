@@ -54,7 +54,7 @@ func newDecideRig(t *testing.T, backend string, status int, reply string, adjust
 		}
 		return ""
 	}
-	tool, err := newDecideTool(rig.settings, environment, rig.server.Client())
+	tool, err := newDecideTool(rig.settings, DecideImages{}, environment, rig.server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestDecideTimeoutStopsASlowProvider(t *testing.T) {
 	t.Cleanup(slow.Close)
 	t.Cleanup(func() { close(release) })
 	settings := sessionfs.NativeDecideSettings{Backend: "openai", BaseURL: slow.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 100, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
-	tool, err := newDecideTool(settings, func(string) string { return "k" }, slow.Client())
+	tool, err := newDecideTool(settings, DecideImages{}, func(string) string { return "k" }, slow.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestDecideDoesNotFollowARedirectWithTheKey(t *testing.T) {
 	t.Cleanup(redirector.Close)
 	settings := sessionfs.NativeDecideSettings{Backend: "openai", BaseURL: redirector.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
 	// The client the tool builds for itself, with only the key injected.
-	tool, err := newDecideTool(settings, func(string) string { return "k" }, newDecideHTTPClient())
+	tool, err := newDecideTool(settings, DecideImages{}, func(string) string { return "k" }, newDecideHTTPClient())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestDecideDoesNotFollowARedirectWithTheKey(t *testing.T) {
 
 func TestDecideCancelledCall(t *testing.T) {
 	rig := newDecideRig(t, "openai", 200, openAIReply, nil)
-	tool, err := newDecideTool(rig.settings, func(string) string { return "k" }, rig.server.Client())
+	tool, err := newDecideTool(rig.settings, DecideImages{}, func(string) string { return "k" }, rig.server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestDecideCancelledCall(t *testing.T) {
 }
 
 func TestDecideIsReadOnlyAndShippedDefinitionMatches(t *testing.T) {
-	tool, err := NewDecideTool(sessionfs.NativeDecideSettings{})
+	tool, err := NewDecideTool(sessionfs.NativeDecideSettings{}, DecideImages{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +479,7 @@ func TestBuildCatalogLoadsConfiguredDecideAndRequiresItsManifest(t *testing.T) {
 }
 
 func TestSubagentCanListDecideBecauseItIsReadOnly(t *testing.T) {
-	tool, err := NewDecideTool(sessionfs.NativeDecideSettings{})
+	tool, err := NewDecideTool(sessionfs.NativeDecideSettings{}, DecideImages{})
 	if err != nil {
 		t.Fatal(err)
 	}

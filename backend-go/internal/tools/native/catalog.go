@@ -9,6 +9,8 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"example.com/agent-harness/backend-go/internal/imageresize"
+	"example.com/agent-harness/backend-go/internal/imagestore"
 	"example.com/agent-harness/backend-go/internal/sessionfs"
 	"example.com/agent-harness/backend-go/internal/tools"
 )
@@ -274,7 +276,11 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 		if err != nil {
 			return nil, err
 		}
-		tool, err := NewDecideTool(*config.NativeDecide)
+		images := DecideImages{Store: imagestore.FromSettings(config.ImageStore), Resizer: imageresize.FromSettings(config.ImageResize)}
+		if config.NativeRead != nil {
+			images.ReadPolicy = config.NativeRead.Policy
+		}
+		tool, err := NewDecideTool(*config.NativeDecide, images)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
