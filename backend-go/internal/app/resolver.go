@@ -55,6 +55,15 @@ type Resolver struct {
 	fetchStores      map[string]*native.FetchStore
 	mutationLock     *native.PathLocks
 	closed           bool
+
+	// subagentBuilds holds the managers being built, by storage directory. Building
+	// one reads, rewrites and may delete a lot of files, so it runs outside mu; a
+	// second caller for the same directory waits on the entry instead of building
+	// again (the recovery of a directory must run once).
+	subagentBuilds map[string]*subagentBuild
+	// newPersistentSubagentManager builds a manager that keeps run manifests; tests
+	// replace it to hold a build open.
+	newPersistentSubagentManager func(native.SubagentManagerOptions) *native.SubagentManager
 }
 
 type sharedSession struct {
@@ -141,6 +150,9 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		memoryStores:     make(map[string]*native.MemoryStore),
 		fetchStores:      make(map[string]*native.FetchStore),
 		mutationLock:     native.NewPathLocks(),
+
+		subagentBuilds:               make(map[string]*subagentBuild),
+		newPersistentSubagentManager: native.NewPersistentSubagentManager,
 	}, nil
 }
 
@@ -428,17 +440,58 @@ func (r *Resolver) sharedSubagentManager(config sessionfs.SessionConfig) *native
 		return nil
 	}
 	storageKey := filepath.Clean(config.NativeSubagent.StorageDir)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if manager := r.subagentManagers[storageKey]; manager != nil {
-		return manager
+	for {
+		r.mu.Lock()
+		if manager := r.subagentManagers[storageKey]; manager != nil {
+			r.mu.Unlock()
+			return manager
+		}
+		if r.closed {
+			r.mu.Unlock()
+			return nil
+		}
+		if build := r.subagentBuilds[storageKey]; build != nil {
+			// Someone is building this directory's manager: wait for them, then look
+			// again (the build may have ended because the resolver closed).
+			r.mu.Unlock()
+			<-build.done
+			continue
+		}
+		build := &subagentBuild{done: make(chan struct{})}
+		r.subagentBuilds[storageKey] = build
+		r.mu.Unlock()
+		return r.finishSubagentBuild(storageKey, build, config)
 	}
-	if r.closed {
-		return nil
-	}
+}
+
+// subagentBuild is one manager being built; done closes when it is in the map or the
+// build was given up.
+type subagentBuild struct {
+	done chan struct{}
+}
+
+// finishSubagentBuild builds the manager without holding mu, then publishes it. A
+// resolver that closed meanwhile does not get it: Close never saw this manager, so it
+// is closed here.
+func (r *Resolver) finishSubagentBuild(storageKey string, build *subagentBuild, config sessionfs.SessionConfig) (published *native.SubagentManager) {
 	var manager *native.SubagentManager
+	defer func() {
+		// Runs on every exit, a panic in the builder included, so waiters are released.
+		r.mu.Lock()
+		delete(r.subagentBuilds, storageKey)
+		closed := r.closed
+		if manager != nil && !closed {
+			r.subagentManagers[storageKey] = manager
+			published = manager
+		}
+		r.mu.Unlock()
+		close(build.done)
+		if manager != nil && closed {
+			_ = manager.Close()
+		}
+	}()
 	if config.NativeSubagent.PersistRuns {
-		manager = native.NewPersistentSubagentManager(native.SubagentManagerOptions{
+		manager = r.newPersistentSubagentManager(native.SubagentManagerOptions{
 			StorageDir: config.NativeSubagent.StorageDir, Keep: int(config.NativeSubagent.KeepFinished), Logger: r.logger,
 			DeleteTranscripts: config.NativeSubagent.DeleteTranscripts,
 		})
@@ -448,8 +501,7 @@ func (r *Resolver) sharedSubagentManager(config sessionfs.SessionConfig) *native
 			manager.DeleteTranscriptsUnder(config.NativeSubagent.StorageDir)
 		}
 	}
-	r.subagentManagers[storageKey] = manager
-	return manager
+	return // published is set by the deferred function
 }
 
 func (r *Resolver) sharedTaskStore(config sessionfs.SessionConfig) *native.TaskStore {
@@ -603,7 +655,17 @@ func (r *Resolver) Close() {
 	for _, manager := range r.subagentManagers {
 		subagentManagers = append(subagentManagers, manager)
 	}
+	// A manager being built is not in the map yet. Its builder closes it (the resolver
+	// is closed), but Close still waits for the build to end, as it did when the build
+	// held mu: no file work of a build outlives Close.
+	pending := make([]chan struct{}, 0, len(r.subagentBuilds))
+	for _, build := range r.subagentBuilds {
+		pending = append(pending, build.done)
+	}
 	r.mu.Unlock()
+	for _, done := range pending {
+		<-done
+	}
 	// Children first: they may be using MCP tools the next loop closes.
 	for _, manager := range subagentManagers {
 		_ = manager.Close()
