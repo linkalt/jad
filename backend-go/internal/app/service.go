@@ -1,7 +1,10 @@
 package app
 
 import (
+	"context"
 	"net/http"
+	"sync"
+	"time"
 
 	"example.com/agent-harness/backend-go/internal/contentlibrary"
 	"example.com/agent-harness/backend-go/internal/httpapi"
@@ -13,6 +16,12 @@ type Service struct {
 	Handler  http.Handler
 	api      *httpapi.Handler
 	resolver *Resolver
+
+	// stopRecovery cancels the start-time process recovery; recovering closes when
+	// that scan has ended. Both are nil when the scan was not started.
+	stopRecovery context.CancelFunc
+	recovering   chan struct{}
+	closeOnce    sync.Once
 }
 
 // NewService wires validated runtime configuration into the injectable HTTP
@@ -31,7 +40,35 @@ func NewService(config Config) (*Service, error) {
 		resolver.Close()
 		return nil, err
 	}
-	return &Service{Handler: api, api: api, resolver: resolver}, nil
+	service := &Service{Handler: api, api: api, resolver: resolver}
+	if config.RecoverProcessesAtStart {
+		service.startProcessRecovery()
+	}
+	return service, nil
+}
+
+// startProcessRecovery recovers every session's managed processes in the background,
+// so listening is not delayed by it.
+func (s *Service) startProcessRecovery() {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.stopRecovery = cancel
+	s.recovering = make(chan struct{})
+	go func() {
+		defer close(s.recovering)
+		began := time.Now()
+		report, err := s.resolver.RecoverProcesses(ctx)
+		logger := s.resolver.logger
+		switch {
+		case err != nil && ctx.Err() != nil:
+			logger.Info("process recovery at start was cancelled")
+		case err != nil:
+			logger.Warn("process recovery at start failed", "error", err)
+		default:
+			logger.Info("process recovery at start finished",
+				"sessions", report.Sessions, "storages", report.Storages,
+				"unreadable", report.Unreadable, "failed", report.Failed, "took", time.Since(began).String())
+		}
+	}()
 }
 
 // Close cancels active runs before preventing additional filesystem resolutions.
@@ -39,6 +76,13 @@ func (s *Service) Close() {
 	if s == nil {
 		return
 	}
+	s.closeOnce.Do(func() {
+		// The scan ends first: it builds managers the resolver's Close would stop.
+		if s.stopRecovery != nil {
+			s.stopRecovery()
+			<-s.recovering
+		}
+	})
 	if s.api != nil {
 		s.api.Close()
 	}

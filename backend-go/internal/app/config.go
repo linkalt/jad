@@ -28,11 +28,14 @@ type Config struct {
 	ReadHeaderTimeout time.Duration
 	IdleTimeout       time.Duration
 	// Log configures the structured logger built by main; see internal/logging.
-	Log                logging.Settings
-	Roots              []sessionfs.Root
-	HTTP               httpapi.Config
-	Environment        map[string]string
-	RootLibraryOptions contentlibrary.Options
+	Log logging.Settings
+	// RecoverProcessesAtStart starts a background recovery of every session's managed
+	// processes when the service is created; see Resolver.RecoverProcesses.
+	RecoverProcessesAtStart bool
+	Roots                   []sessionfs.Root
+	HTTP                    httpapi.Config
+	Environment             map[string]string
+	RootLibraryOptions      contentlibrary.Options
 }
 
 // LoadConfig reads root settings and server environment overrides. A supplied
@@ -72,7 +75,8 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 			Format: loaded.Server.LogFormat,
 			File:   loaded.Server.LogFile,
 		},
-		Roots: append([]sessionfs.Root(nil), loaded.Roots...),
+		RecoverProcessesAtStart: loaded.Server.RecoverProcessesAtStart,
+		Roots:                   append([]sessionfs.Root(nil), loaded.Roots...),
 		HTTP: httpapi.Config{
 			APIToken:                   environment[apiTokenEnvironmentName],
 			AllowedOrigins:             append([]string(nil), loaded.Server.AllowedOrigins...),

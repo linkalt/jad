@@ -58,9 +58,12 @@ type ServerSettings struct {
 	IdleTimeout time.Duration
 	// LogLevel, LogFormat and LogFile configure the Go backend's structured log.
 	// LogFile is absolute (resolved against the setting file) or empty for stderr.
-	LogLevel                   string
-	LogFormat                  string
-	LogFile                    string
+	LogLevel  string
+	LogFormat string
+	LogFile   string
+	// RecoverProcessesAtStart makes the Go backend recover the managed-process storage
+	// of every session when it starts, instead of at the first use of the process tool.
+	RecoverProcessesAtStart    bool
 	ConditionalRequests        bool
 	SnapshotTurns              int
 	MaxPageTurns               int
@@ -139,6 +142,7 @@ func Defaults() ServerSettings {
 		IdleTimeout:                time.Duration(serverconfig.DefaultIdleTimeoutMS) * time.Millisecond,
 		LogLevel:                   serverconfig.DefaultLogLevel,
 		LogFormat:                  serverconfig.DefaultLogFormat,
+		RecoverProcessesAtStart:    serverconfig.DefaultRecoverProcessesAtStart,
 		ConditionalRequests:        true,
 		SnapshotTurns:              24,
 		MaxPageTurns:               50,
@@ -554,6 +558,9 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 			return ServerSettings{}, fmt.Errorf("%s: server.log_file must be a string", path)
 		}
 		settings.LogFile = strings.TrimSpace(parsed)
+	}
+	if err := readBool(fields, "recover_processes_at_start", &settings.RecoverProcessesAtStart, path); err != nil {
+		return ServerSettings{}, err
 	}
 	if err := readBool(fields, "conditional_requests", &settings.ConditionalRequests, path); err != nil {
 		return ServerSettings{}, err

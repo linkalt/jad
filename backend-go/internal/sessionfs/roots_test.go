@@ -428,6 +428,50 @@ func TestLoadServerLoggingSettings(t *testing.T) {
 	}
 }
 
+func TestLoadServerRecoverProcessesAtStart(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	load := func(server string) (Config, error) {
+		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+	}
+	for _, accepted := range []struct {
+		server string
+		want   bool
+	}{
+		{`{}`, true},
+		{`{"recover_processes_at_start":null}`, true},
+		{`{"recover_processes_at_start":true}`, true},
+		{`{"recover_processes_at_start":false}`, false},
+	} {
+		config, err := load(accepted.server)
+		if err != nil {
+			t.Errorf("Load(%s) error = %v", accepted.server, err)
+			continue
+		}
+		if config.Server.RecoverProcessesAtStart != accepted.want {
+			t.Errorf("Load(%s).RecoverProcessesAtStart = %v, want %v", accepted.server, config.Server.RecoverProcessesAtStart, accepted.want)
+		}
+	}
+	for _, rejected := range []string{`1`, `"yes"`, `[]`, `{}`} {
+		_, err := load(`{"recover_processes_at_start":` + rejected + `}`)
+		if err == nil || !strings.Contains(err.Error(), "server.recover_processes_at_start") {
+			t.Errorf("Load(recover_processes_at_start=%s) error = %v, want a message naming the field", rejected, err)
+		}
+	}
+}
+
+func TestDefaultsRecoverProcessesAtStart(t *testing.T) {
+	if !Defaults().RecoverProcessesAtStart {
+		t.Error("Defaults().RecoverProcessesAtStart = false, want true")
+	}
+}
+
 func TestDefaultsKeepLoggingAtInfoText(t *testing.T) {
 	defaults := Defaults()
 	if defaults.LogLevel != "info" || defaults.LogFormat != "text" || defaults.LogFile != "" {

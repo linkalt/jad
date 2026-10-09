@@ -22,6 +22,9 @@ const (
 	MaxRunContentIndexSegments   = 65_536
 )
 
+// DefaultRecoverProcessesAtStart is the default of server.recover_processes_at_start.
+const DefaultRecoverProcessesAtStart = true
+
 // Logging defaults and the accepted values of the server.log_level and
 // server.log_format settings.
 const (
