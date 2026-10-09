@@ -571,17 +571,19 @@ test('a run that never retries, and a caller that does not listen, are unaffecte
   assert.equal(result.message?.text, 'fine');
 });
 
-test('accepts a web_search part and cited text, and drops a message whose search or citation part is malformed', async () => {
+test('accepts a hosted_tool part and cited text, and drops a message whose hosted tool or citation part is malformed', async () => {
   requests.length = 0;
   responses.length = 0;
   const run = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
   const withParts = (id, parts) => ({id, sender: 'assistant', status: 'streaming', text: 'x', timestamp: 't', parts});
   const good = withParts('good', [
-    {type: 'web_search', callId: 'ws_1', query: 'go release', status: 'completed'},
+    {type: 'hosted_tool', callId: 'ws_1', name: 'web_search', target: 'go release', status: 'completed', raw: '{"id":"ws_1"}'},
     {type: 'text', text: 'x', citations: [{url: 'https://go.dev', title: 'Go'}, {url: 'https://pkg.go.dev'}]},
   ]);
-  const noCallId = withParts('no-call-id', [{type: 'web_search', query: 'q'}]);
-  const badQuery = withParts('bad-query', [{type: 'web_search', callId: 'a', query: 5}]);
+  const noCallId = withParts('no-call-id', [{type: 'hosted_tool', name: 'web_search', target: 'q'}]);
+  const badQuery = withParts('bad-query', [{type: 'hosted_tool', callId: 'a', name: 'web_search', target: 5}]);
+  const noName = withParts('no-name', [{type: 'hosted_tool', callId: 'a'}]);
+  const badRaw = withParts('bad-raw', [{type: 'hosted_tool', callId: 'a', name: 'x', raw: {id: 1}}]);
   const badCitationUrl = withParts('bad-url', [{type: 'text', text: 'x', citations: [{url: 1}]}]);
   const badCitationList = withParts('bad-list', [{type: 'text', text: 'x', citations: 'https://go.dev'}]);
   const badTitle = withParts('bad-title', [{type: 'text', text: 'x', citations: [{url: 'https://go.dev', title: 3}]}]);
@@ -591,11 +593,13 @@ test('accepts a web_search part and cited text, and drops a message whose search
     {event: 'ui.message', data: {message: good}},
     {event: 'ui.message', data: {message: noCallId}},
     {event: 'ui.message', data: {message: badQuery}},
+    {event: 'ui.message', data: {message: noName}},
+    {event: 'ui.message', data: {message: badRaw}},
     {event: 'ui.message', data: {message: badCitationUrl}},
     {event: 'ui.message', data: {message: badCitationList}},
     {event: 'ui.message', data: {message: badTitle}},
-    {event: 'ui.part', data: {id: 'good', index: 0, part: {type: 'web_search', callId: 'ws_2'}}},
-    {event: 'ui.part', data: {id: 'good', index: 1, part: {type: 'web_search'}}},
+    {event: 'ui.part', data: {id: 'good', index: 0, part: {type: 'hosted_tool', callId: 'ws_2', name: 'openrouter:web_fetch'}}},
+    {event: 'ui.part', data: {id: 'good', index: 1, part: {type: 'hosted_tool', name: 'x'}}},
     {event: 'completed', data: {message: finalMessage, committed: true}},
     {event: 'done', data: {}},
   ]));

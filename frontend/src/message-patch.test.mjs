@@ -147,8 +147,8 @@ test('empty deltas and missing part indexes are no-ops', () => {
   assert.equal(applyPartDelta(original, 4, 'ignored'), original);
 });
 
-test('a web_search part is never grown by a text delta and does not change the text fields', () => {
-  const search = {type: 'web_search', callId: 'ws_1', query: 'q', status: 'completed'};
+test('a hosted_tool part is never grown by a text delta and does not change the text fields', () => {
+  const search = {type: 'hosted_tool', callId: 'ws_1', name: 'web_search', target: 'q', status: 'completed', raw: '{}'};
   const original = makeMessage([{type: 'text', text: 'answer'}, search]);
   assert.equal(applyPartDelta(original, 1, ' more'), original);
   assert.deepEqual(original.parts[1], search);

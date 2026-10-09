@@ -127,15 +127,15 @@ func assertSearchAndCitations(t *testing.T, where string, parts []map[string]any
 	var search, text map[string]any
 	for _, part := range parts {
 		switch part["type"] {
-		case "web_search":
+		case "hosted_tool":
 			search = part
 		case "text":
 			text = part
 		}
 	}
 	callID, _ := search["callId"].(string)
-	if search == nil || search["query"] != "go release" || search["status"] != "completed" || callID == "" {
-		t.Fatalf("%s: web_search part = %v (parts %v)", where, search, parts)
+	if search == nil || search["target"] != "go release" || search["name"] != "web_search" || search["status"] != "completed" || callID == "" {
+		t.Fatalf("%s: hosted_tool part = %v (parts %v)", where, search, parts)
 	}
 	citations, _ := text["citations"].([]any)
 	if text == nil || len(citations) != 1 {

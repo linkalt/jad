@@ -19,6 +19,15 @@ type StreamingRun struct {
 	currentStepIsFallback bool
 	callIDsByItemID       map[string]string
 	callIDsByOutputIndex  map[int]string
+	hostedRawLimit        int
+}
+
+// SetHostedRawLimit caps the raw JSON of provider-hosted tool parts in live
+// messages, in bytes (0 keeps it whole). A hosted fetch can carry a whole page.
+func (r *StreamingRun) SetHostedRawLimit(limit int) {
+	if r != nil && limit >= 0 {
+		r.hostedRawLimit = limit
+	}
 }
 
 func NewStreamingRun(id, timestamp string) *StreamingRun {
@@ -65,8 +74,8 @@ func (r *StreamingRun) Update(raw json.RawMessage) (Message, bool) {
 	case "response.output_item.added":
 		item, _ := rawObject(fields["item"])
 		if len(item) > 0 {
-			if stringField(item["type"]) == "web_search_call" {
-				return r.upsertWebSearch(item)
+			if isHostedToolItem(item) {
+				return r.upsertHostedTool(item)
 			}
 			return r.addToolCall(fields, item, true)
 		}
@@ -85,8 +94,8 @@ func (r *StreamingRun) Update(raw json.RawMessage) (Message, bool) {
 	case "response.output_item.done":
 		item, _ := rawObject(fields["item"])
 		if len(item) > 0 {
-			if stringField(item["type"]) == "web_search_call" {
-				return r.upsertWebSearch(item)
+			if isHostedToolItem(item) {
+				return r.upsertHostedTool(item)
 			}
 			return r.addToolCall(fields, item, false)
 		}
@@ -196,39 +205,46 @@ func (r *StreamingRun) addToolCall(event, item map[string]json.RawMessage, parti
 	return r.Message("streaming"), true
 }
 
-// upsertWebSearch shows a provider-hosted search as it starts and as its state
+// upsertHostedTool shows a provider-hosted tool as it starts and as its state
 // changes. It does not mark the step as a tool step: no client reply follows.
-func (r *StreamingRun) upsertWebSearch(item map[string]json.RawMessage) (Message, bool) {
-	part, ok := webSearchPart(item)
+func (r *StreamingRun) upsertHostedTool(item map[string]json.RawMessage) (Message, bool) {
+	part, ok := hostedToolPart(item, r.hostedRawLimit)
 	if !ok {
 		return Message{}, false
 	}
 	r.ensureStep("")
-	if r.replaceWebSearch(part) {
-		r.updateCurrentStep(false)
-		return r.Message("streaming"), true
-	}
-	r.parts = append(r.parts, part)
+	r.replaceHostedTool(part)
 	r.updateCurrentStep(false)
 	return r.Message("streaming"), true
 }
 
-// replaceWebSearch updates a known search part in place. A later event may carry
-// less detail (an empty query), so only non-empty fields overwrite.
-func (r *StreamingRun) replaceWebSearch(part Part) bool {
+// replaceHostedTool updates a known hosted tool part in place, or appends it. A
+// later event may carry less detail (an announcement has no result yet), so only
+// non-empty fields overwrite. It reports whether the part already existed.
+func (r *StreamingRun) replaceHostedTool(part Part) bool {
 	for index := range r.parts {
 		current := &r.parts[index]
-		if current.Type != "web_search" || current.CallID != part.CallID {
+		if current.Type != "hosted_tool" || current.CallID != part.CallID {
 			continue
 		}
-		if part.Query != "" {
-			current.Query = part.Query
+		if part.Name != "" {
+			current.Name = part.Name
 		}
 		if part.Status != "" {
 			current.Status = part.Status
 		}
+		if part.Target != "" {
+			current.Target = part.Target
+		}
+		// An event that reports a state is a full item and replaces raw, so raw and
+		// status never disagree. A sparser event without a state keeps the fuller raw.
+		if part.Raw != "" && (part.Status != "" || hostedRawSize(part) >= hostedRawSize(*current)) {
+			current.Raw = part.Raw
+			current.Truncated = part.Truncated
+		}
 		return true
 	}
+	r.parts = append(r.parts, part)
 	return false
 }
 
@@ -305,10 +321,9 @@ func (r *StreamingRun) mergeCompletedResponse(response map[string]json.RawMessag
 			}
 			continue
 		}
-		if part.Type == "web_search" {
-			if !r.replaceWebSearch(part) {
-				r.parts = append(r.parts, part)
-			}
+		if part.Type == "hosted_tool" {
+			capHostedRaw(&part, r.hostedRawLimit)
+			r.replaceHostedTool(part)
 			continue
 		}
 		found := false

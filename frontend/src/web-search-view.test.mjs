@@ -5,24 +5,21 @@ import {
   citationHost,
   citationLabel,
   safeCitationHref,
-  searchRowStatus,
-  searchRowTarget,
+  hostedToolStatus,
 } from './web-search-view.ts';
 
-test('maps provider search states to row statuses', () => {
-  assert.equal(searchRowStatus('in_progress'), 'running');
-  assert.equal(searchRowStatus('searching'), 'running');
-  assert.equal(searchRowStatus('completed'), 'complete');
-  assert.equal(searchRowStatus('failed'), 'error');
-  assert.equal(searchRowStatus('incomplete'), 'error');
-  assert.equal(searchRowStatus(undefined), 'complete');
-  assert.equal(searchRowStatus(''), 'complete');
-  assert.equal(searchRowStatus('something_new'), 'complete');
-});
-
-test('shows the query, or nothing while it is not known yet', () => {
-  assert.equal(searchRowTarget({type: 'web_search', callId: 'a', query: 'go release'}), 'go release');
-  assert.equal(searchRowTarget({type: 'web_search', callId: 'a'}), '');
+test('maps provider states of any hosted tool to row statuses', () => {
+  for (const running of ['in_progress', 'searching', 'fetching', 'generating', 'interpreting', 'queued', 'running']) {
+    assert.equal(hostedToolStatus(running), 'running', running);
+  }
+  for (const error of ['failed', 'incomplete', 'error', 'cancelled']) {
+    assert.equal(hostedToolStatus(error), 'error', error);
+  }
+  // A state ending in "ing" is not running by that fact alone: a finished item
+  // must never spin forever.
+  for (const complete of ['completed', 'done', 'succeeded', undefined, '', 'something_new', 'pending', 'warning', 'missing', 'nothing']) {
+    assert.equal(hostedToolStatus(complete), 'complete', String(complete));
+  }
 });
 
 test('links only http and https sources', () => {

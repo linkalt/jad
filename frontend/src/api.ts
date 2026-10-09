@@ -36,16 +36,21 @@ export type WebUiTextPart =
   | {type: 'text'; text: string; citations?: WebUiCitation[]; truncated?: WebUiPartTruncation};
 
 /**
- * A search the provider ran itself (hosted web search). There is no result to
- * show: its sources arrive as `citations` on the answer text.
+ * A tool the provider ran itself (hosted web search, web fetch, or any tool a
+ * provider adds later). No tool is named in the client: `name` is whatever the
+ * server derived from the item type, and `raw` is the provider's item as JSON.
  */
-export interface WebUiSearchPart {
-  type: 'web_search';
+export interface WebUiHostedToolPart {
+  type: 'hosted_tool';
   callId: string;
-  /** What was searched or opened; absent until the provider reports it. */
-  query?: string;
+  name: string;
   /** The provider's state, e.g. `in_progress`, `searching`, `completed`, `failed`. */
   status?: string;
+  /** A short text such as the query or URL; absent until the provider reports it. */
+  target?: string;
+  /** The provider's item as JSON, shortened to the inline limit when `truncated` is set. */
+  raw?: string;
+  truncated?: WebUiPartTruncation;
 }
 
 export interface WebUiToolCallPart {
@@ -70,7 +75,7 @@ export type WebUiPart =
   | WebUiTextPart
   | WebUiToolCallPart
   | WebUiToolResultPart
-  | WebUiSearchPart;
+  | WebUiHostedToolPart;
 
 export type WebUiInteractionDecision = 'accept' | 'update' | 'decline';
 
@@ -906,11 +911,13 @@ function isWebUiPart(value: unknown): value is WebUiPart {
         (Array.isArray(value.citations) && value.citations.every(isWebUiCitation)))
     );
   }
-  if (value.type === 'web_search') {
+  if (value.type === 'hosted_tool') {
     return (
       typeof value.callId === 'string' &&
-      (value.query === undefined || typeof value.query === 'string') &&
-      (value.status === undefined || typeof value.status === 'string')
+      typeof value.name === 'string' &&
+      (value.status === undefined || typeof value.status === 'string') &&
+      (value.target === undefined || typeof value.target === 'string') &&
+      (value.raw === undefined || typeof value.raw === 'string')
     );
   }
   if (value.type === 'tool_call') {

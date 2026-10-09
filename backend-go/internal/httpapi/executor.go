@@ -62,6 +62,7 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 		toolExecution.RequestInteraction = run.interactions.Request
 	}
 	normalizedRun := webui.NewStreamingRun(run.turnID, timestamp)
+	normalizedRun.SetHostedRawLimit(h.maxInlinePartBytes)
 	emitter := newMessageStreamEmitter(h.toolStreamInterval, run.publishMessage)
 	emitter.logger = logger
 	defer emitter.discard()

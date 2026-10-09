@@ -30,10 +30,10 @@ func TestNormalizeTranscriptKeepsWebSearchAndCitations(t *testing.T) {
 		t.Fatalf("messages = %d, want 2", len(messages))
 	}
 	parts := messages[1].Parts
-	if len(parts) != 3 || parts[0].Type != "reasoning" || parts[1].Type != "web_search" || parts[2].Type != "text" {
+	if len(parts) != 3 || parts[0].Type != "reasoning" || parts[1].Type != "hosted_tool" || parts[2].Type != "text" {
 		t.Fatalf("parts = %+v", parts)
 	}
-	if parts[1].CallID != "ws_1" || parts[1].Query != "go release" || parts[1].Status != "completed" {
+	if parts[1].CallID != "ws_1" || parts[1].Target != "go release" || parts[1].Name != "web_search" || parts[1].Status != "completed" {
 		t.Fatalf("web_search part = %+v", parts[1])
 	}
 	want := []Citation{{URL: "https://go.dev/dl", Title: "Downloads"}, {URL: "https://go.dev/doc"}}
@@ -47,26 +47,26 @@ func TestNormalizeTranscriptKeepsWebSearchAndCitations(t *testing.T) {
 
 func TestWebSearchPartFallsBackFromQueryToQueriesURLAndPattern(t *testing.T) {
 	cases := map[string]string{
-		`{"id":"a","status":"completed","action":{"type":"search","query":"q1"}}`:                  "q1",
-		`{"id":"a","action":{"type":"search","queries":["q1","q2"]}}`:                              "q1; q2",
-		`{"id":"a","action":{"type":"open_page","url":"https://x.test"}}`:                          "https://x.test",
-		`{"id":"a","action":{"type":"find_in_page","url":"https://x.test","pattern":"needle"}}`:    "https://x.test",
-		`{"id":"a","action":{"type":"find_in_page","pattern":"needle"}}`:                           "needle",
-		`{"id":"a","status":"in_progress"}`:                                                        "",
-		`{"id":"a","action":"not an object"}`:                                                      "",
-		`{"id":"a","action":{"type":"search","query":"q1","queries":["ignored"],"url":"ignored"}}`: "q1",
+		`{"type":"web_search_call","id":"a","status":"completed","action":{"type":"search","query":"q1"}}`:                  "q1",
+		`{"type":"web_search_call","id":"a","action":{"type":"search","queries":["q1","q2"]}}`:                              "q1; q2",
+		`{"type":"web_search_call","id":"a","action":{"type":"open_page","url":"https://x.test"}}`:                          "https://x.test",
+		`{"type":"web_search_call","id":"a","action":{"type":"find_in_page","url":"https://x.test","pattern":"needle"}}`:    "https://x.test",
+		`{"type":"web_search_call","id":"a","action":{"type":"find_in_page","pattern":"needle"}}`:                           "needle",
+		`{"type":"web_search_call","id":"a","status":"in_progress"}`:                                                        "",
+		`{"type":"web_search_call","id":"a","action":"not an object"}`:                                                      "",
+		`{"type":"web_search_call","id":"a","action":{"type":"search","query":"q1","queries":["ignored"],"url":"ignored"}}`: "q1",
 	}
 	for input, want := range cases {
 		var item map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(input), &item); err != nil {
 			t.Fatal(err)
 		}
-		part, ok := webSearchPart(item)
-		if !ok || part.Type != "web_search" || part.Query != want {
+		part, ok := hostedToolPart(item, 0)
+		if !ok || part.Type != "hosted_tool" || part.Target != want {
 			t.Fatalf("%s -> %+v ok=%v, want query %q", input, part, ok, want)
 		}
 	}
-	if _, ok := webSearchPart(map[string]json.RawMessage{"status": json.RawMessage(`"completed"`)}); ok {
+	if _, ok := hostedToolPart(map[string]json.RawMessage{"type": json.RawMessage(`"web_search_call"`), "status": json.RawMessage(`"completed"`)}, 0); ok {
 		t.Fatal("an item without id produced a part")
 	}
 }
@@ -76,7 +76,7 @@ func TestStreamingRunShowsSearchWhileItRunsThenKeepsOnePart(t *testing.T) {
 	run.Update(json.RawMessage(`{"type":"response.created","response":{"id":"resp-1"}}`))
 
 	message := updateStreamingRun(t, run, `{"type":"response.output_item.added","output_index":0,"item":{"type":"web_search_call","id":"ws_1","status":"in_progress"}}`)
-	if len(message.Parts) != 1 || message.Parts[0].Type != "web_search" || message.Parts[0].Status != "in_progress" || message.Parts[0].Query != "" {
+	if len(message.Parts) != 1 || message.Parts[0].Type != "hosted_tool" || message.Parts[0].Status != "in_progress" || message.Parts[0].Target != "" {
 		t.Fatalf("announced search = %+v", message.Parts)
 	}
 	if len(message.Steps) != 0 {
@@ -84,13 +84,13 @@ func TestStreamingRunShowsSearchWhileItRunsThenKeepsOnePart(t *testing.T) {
 	}
 
 	message = updateStreamingRun(t, run, `{"type":"response.output_item.done","output_index":0,"item":{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"go release"}}}`)
-	if len(message.Parts) != 1 || message.Parts[0].Status != "completed" || message.Parts[0].Query != "go release" {
+	if len(message.Parts) != 1 || message.Parts[0].Status != "completed" || message.Parts[0].Target != "go release" {
 		t.Fatalf("finished search = %+v", message.Parts)
 	}
 
 	// A later event with less detail must not erase what is known.
 	message = updateStreamingRun(t, run, `{"type":"response.output_item.done","output_index":0,"item":{"type":"web_search_call","id":"ws_1"}}`)
-	if message.Parts[0].Status != "completed" || message.Parts[0].Query != "go release" {
+	if message.Parts[0].Status != "completed" || message.Parts[0].Target != "go release" {
 		t.Fatalf("sparse update erased fields: %+v", message.Parts[0])
 	}
 
@@ -106,15 +106,15 @@ func TestStreamingRunShowsSearchWhileItRunsThenKeepsOnePart(t *testing.T) {
 	for _, part := range final.Parts {
 		counts[part.Type]++
 		switch part.Type {
-		case "web_search":
-			if part.CallID != "ws_1" || part.Query != "go release" {
+		case "hosted_tool":
+			if part.CallID != "ws_1" || part.Target != "go release" {
 				t.Fatalf("final search = %+v", part)
 			}
 		case "text":
 			text = part
 		}
 	}
-	if !reflect.DeepEqual(counts, map[string]int{"web_search": 1, "reasoning": 1, "text": 1}) {
+	if !reflect.DeepEqual(counts, map[string]int{"hosted_tool": 1, "reasoning": 1, "text": 1}) {
 		t.Fatalf("part counts = %v", counts)
 	}
 	if text.Text != "Go 1.27." || len(text.Citations) != 2 {
@@ -155,8 +155,8 @@ func TestPartJSONOmitsSearchFieldsForOtherParts(t *testing.T) {
 	if string(raw) != `{"type":"text","text":"hi"}` {
 		t.Fatalf("text part JSON = %s", raw)
 	}
-	raw, _ = json.Marshal(Part{Type: "web_search", CallID: "ws_1", Query: "q", Status: "completed"})
-	if string(raw) != `{"type":"web_search","callId":"ws_1","status":"completed","query":"q"}` {
+	raw, _ = json.Marshal(Part{Type: "hosted_tool", CallID: "ws_1", Name: "web_search", Target: "q", Status: "completed"})
+	if string(raw) != `{"type":"hosted_tool","callId":"ws_1","name":"web_search","status":"completed","target":"q"}` {
 		t.Fatalf("web_search part JSON = %s", raw)
 	}
 }
@@ -192,7 +192,7 @@ func TestSearchDoesNotMarkItsStepAsAToolStep(t *testing.T) {
 			t.Fatalf("a hosted search marked step %q as a tool step: %+v", step.ID, final.Steps)
 		}
 	}
-	if final.Parts[0].Type != "web_search" || final.Parts[0].Status != "completed" || len(final.Parts) != 2 {
+	if final.Parts[0].Type != "hosted_tool" || final.Parts[0].Status != "completed" || len(final.Parts) != 2 {
 		t.Fatalf("parts = %+v", final.Parts)
 	}
 }
@@ -210,8 +210,8 @@ func partSummary(parts []Part) []string {
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		switch part.Type {
-		case "web_search":
-			out = append(out, "search:"+part.CallID+":"+part.Query)
+		case "hosted_tool":
+			out = append(out, "search:"+part.CallID+":"+part.Target)
 		case "text", "reasoning":
 			summary := part.Type + ":" + part.Text
 			for _, citation := range part.Citations {
@@ -277,7 +277,7 @@ func TestTwoSearchesKeepTheirOwnIDsAndAToolCallIDDoesNotCollide(t *testing.T) {
 	if got := partSummary(message.Parts); !reflect.DeepEqual(got, []string{"tool_call", "search:ws_1:one", "search:ws_2:two"}) {
 		t.Fatalf("parts = %v", got)
 	}
-	if message.Parts[0].Query != "" || message.Parts[0].Status != "" {
+	if message.Parts[0].Target != "" || message.Parts[0].Status != "" {
 		t.Fatalf("the tool call was overwritten by a search: %+v", message.Parts[0])
 	}
 }

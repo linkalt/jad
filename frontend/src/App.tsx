@@ -69,7 +69,7 @@ import {
   type WebUiMessage,
   type WebUiMessageStep,
   type WebUiPart,
-  type WebUiSearchPart,
+  type WebUiHostedToolPart,
 } from './api';
 import appConfig from './config.json';
 import {readAttachmentBlocks} from './attachment-reading';
@@ -130,7 +130,7 @@ import type {DraftDecision} from './draft-answer';
 import type {ComposerInsertActions} from './components/ComposerPane';
 import {ModelPicker} from './components/ModelPicker';
 import {CitationList} from './components/CitationList';
-import {searchRowStatus, searchRowTarget} from './web-search-view';
+import {hostedToolStatus} from './web-search-view';
 import {SessionProfilePicker} from './components/SessionProfilePicker';
 import {FloatingPanel} from './components/FloatingPanel';
 import {NotificationPanel} from './components/NotificationPanel';
@@ -1074,7 +1074,9 @@ interface TruncatedSource {
 function loadFullAction(
   source: TruncatedSource | undefined,
 ): (() => void | Promise<void>) | undefined {
-  if (source === undefined) {
+  // A message of a live run has no cursor yet, so the server cannot re-read it
+  // whole; the button comes back once the stored message replaces it.
+  if (source === undefined || source.message.cursor === undefined) {
     return undefined;
   }
   return () => source.onLoadFull(source.message);
@@ -1282,8 +1284,8 @@ type WebUiPartGroup =
       items: IndexedWebUiPart<WebUiToolPart>[];
     }
   | {
-      type: 'search';
-      item: IndexedWebUiPart<WebUiSearchPart>;
+      type: 'hosted';
+      item: IndexedWebUiPart<WebUiHostedToolPart>;
     }
   | {
       type: 'content';
@@ -1331,8 +1333,8 @@ function groupWebUiParts(
       groups.push({type: 'reasoning', item: {part, index}});
       return;
     }
-    if (part.type === 'web_search') {
-      groups.push({type: 'search', item: {part, index}});
+    if (part.type === 'hosted_tool') {
+      groups.push({type: 'hosted', item: {part, index}});
       return;
     }
     groups.push({type: 'content', item: {part, index}});
@@ -1344,7 +1346,7 @@ function groupWebUiParts(
 
 type WebUiActivityGroupPart = Extract<
   WebUiPartGroup,
-  {type: 'reasoning' | 'tools' | 'search'}
+  {type: 'reasoning' | 'tools' | 'hosted'}
 >;
 type WebUiContentGroupPart = Extract<WebUiPartGroup, {type: 'content'}>;
 type IndexedWebUiActivityGroup = {group: WebUiActivityGroupPart; index: number};
@@ -1421,21 +1423,39 @@ function WebUiActivityGroup({
     );
   }
 
-  if (group.type === 'search') {
+  if (group.type === 'hosted') {
     const {part} = group.item;
-    const status = searchRowStatus(part.status);
-    // The provider ran this search itself, so it has no arguments or output to
-    // inspect: it is a plain row, not an expandable tool step.
+    const status = hostedToolStatus(part.status);
+    // The provider ran this tool itself, so there is no client result to wait
+    // for. The row shows what the provider reported; expanding it shows the raw
+    // item, like any other tool.
     return (
       <VStack gap={1} width="100%" xstyle={styles.activityGroup}>
         <ChatToolCalls
           calls={[
             {
-              key: `search-${part.callId}`,
-              name: 'web_search',
+              key: `hosted-${part.callId}`,
+              name: part.name,
               status,
-              target: searchRowTarget(part),
-              errorMessage: status === 'error' ? 'The search failed.' : undefined,
+              target: part.target ?? '',
+              errorMessage: status === 'error' ? 'The provider tool failed.' : undefined,
+              resultDetail:
+                part.raw === undefined ? undefined : (
+                  <VStack gap={2} width="100%">
+                    <CodeBlock
+                      code={prettyToolArguments(part.raw)}
+                      language="json"
+                      size="sm"
+                      width="100%"
+                      container="card"
+                      maxHeight={appConfig.tool_result_max_height_px}
+                      hasCopyButton
+                    />
+                    {part.truncated !== undefined && (
+                      <TruncatedNotice bytes={part.truncated.bytes} source={source} />
+                    )}
+                  </VStack>
+                ),
             },
           ]}
           xstyle={styles.toolCallsFlush}

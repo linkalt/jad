@@ -1,25 +1,33 @@
-import type {WebUiCitation, WebUiSearchPart} from './api';
+import type {WebUiCitation} from './api';
 
-export type SearchRowStatus = 'running' | 'complete' | 'error';
+export type HostedToolStatus = 'running' | 'complete' | 'error';
+
+// The states providers report while a hosted tool is still working. Anything
+// else, including a state this client has never seen, counts as finished.
+const RUNNING_STATES: ReadonlySet<string> = new Set([
+  'in_progress',
+  'queued',
+  'searching',
+  'fetching',
+  'generating',
+  'interpreting',
+  'running',
+]);
+const ERROR_STATES: ReadonlySet<string> = new Set(['failed', 'incomplete', 'error', 'cancelled']);
 
 /**
- * Maps the provider's web_search_call state to a tool-row status. An empty or
- * unknown state counts as complete: a stored transcript only keeps finished
- * searches, and a row that spins forever is worse than one that is not exact.
+ * Maps a hosted tool's provider state to a tool-row status. An empty or unknown
+ * state counts as complete: a stored transcript only keeps finished items, and a
+ * row that spins forever is worse than one that is not exact.
  */
-export function searchRowStatus(status: string | undefined): SearchRowStatus {
-  if (status === 'in_progress' || status === 'searching') {
+export function hostedToolStatus(status: string | undefined): HostedToolStatus {
+  if (status !== undefined && RUNNING_STATES.has(status)) {
     return 'running';
   }
-  if (status === 'failed' || status === 'incomplete') {
+  if (status !== undefined && ERROR_STATES.has(status)) {
     return 'error';
   }
   return 'complete';
-}
-
-/** The text shown next to the tool name: what was searched or opened. */
-export function searchRowTarget(part: WebUiSearchPart): string {
-  return part.query ?? '';
 }
 
 /** Only http and https sources become links; anything else stays plain text. */

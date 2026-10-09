@@ -23,9 +23,12 @@ type Citation struct {
 
 // Part is one renderable segment of a Web UI message.
 //
-// A "web_search" part is a provider-hosted search (a web_search_call output
-// item): CallID is the item id, Query what was searched or opened, Status the
-// provider's state. A "text" part may carry Citations.
+// A "hosted_tool" part is any tool the provider ran itself (a response output
+// item that is not text, reasoning or a client function call, for example
+// web_search_call or openrouter:web_fetch): CallID is the item id, Name the item
+// type without a trailing "_call", Status the provider's state, Target a short
+// text such as the query or URL, and Raw the item as JSON (capped, see Truncated).
+// No tool is named in the code. A "text" part may carry Citations.
 type Part struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
@@ -34,7 +37,8 @@ type Part struct {
 	Arguments *string         `json:"arguments,omitempty"`
 	Output    string          `json:"output,omitempty"`
 	Status    string          `json:"status,omitempty"`
-	Query     string          `json:"query,omitempty"`
+	Target    string          `json:"target,omitempty"`
+	Raw       string          `json:"raw,omitempty"`
 	Citations []Citation      `json:"citations,omitempty"`
 	Partial   bool            `json:"partial,omitempty"`
 	Truncated *PartTruncation `json:"truncated,omitempty"`
@@ -135,6 +139,14 @@ func CapMessages(messages []Message, maxInlineBytes int, cursors map[string]int6
 			part := &parts[partIndex]
 			var value string
 			var set func(string)
+			if part.Type == "hosted_tool" {
+				// Raw is JSON: shorten its longest strings rather than cut the bytes.
+				if part.Truncated == nil {
+					capHostedRaw(part, maxInlineBytes)
+					capped = capped || part.Truncated != nil
+				}
+				continue
+			}
 			switch part.Type {
 			case "text", "reasoning":
 				value = part.Text

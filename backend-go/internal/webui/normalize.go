@@ -226,10 +226,8 @@ func responseParts(response map[string]json.RawMessage) []Part {
 			}
 			continue
 		}
-		if typeName == "web_search_call" {
-			if part, ok := webSearchPart(output); ok {
-				parts = append(parts, part)
-			}
+		if part, ok := hostedToolPart(output, 0); ok {
+			parts = append(parts, part)
 			continue
 		}
 		if typeName == "function_call" {
@@ -364,34 +362,6 @@ func citationsFromAnnotations(raw json.RawMessage) []Citation {
 		}
 	}
 	return citations
-}
-
-// webSearchPart projects a provider-hosted web_search_call item. It has no
-// result of its own: the sources arrive as citations on the answer text.
-func webSearchPart(item map[string]json.RawMessage) (Part, bool) {
-	id := stringField(item["id"])
-	if id == "" {
-		return Part{}, false
-	}
-	var action struct {
-		Type    string   `json:"type"`
-		Query   string   `json:"query"`
-		Queries []string `json:"queries"`
-		URL     string   `json:"url"`
-		Pattern string   `json:"pattern"`
-	}
-	_ = json.Unmarshal(item["action"], &action)
-	query := action.Query
-	if query == "" && len(action.Queries) > 0 {
-		query = strings.Join(action.Queries, "; ")
-	}
-	if query == "" {
-		query = action.URL
-	}
-	if query == "" {
-		query = action.Pattern
-	}
-	return Part{Type: "web_search", CallID: id, Query: query, Status: stringField(item["status"])}, true
 }
 
 func hasToolCall(parts []Part) bool {
