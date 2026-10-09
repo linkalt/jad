@@ -202,6 +202,13 @@ type subagentRun struct {
 	endedAt time.Time
 	cut     bool   // the answer was longer than the limit and was cut
 	dir     string // the child's transcript directory, once it exists
+	// files are the files the child's write and edit changed, filesOmitted how many
+	// more there were than the list keeps.
+	files        []subagentFileChange
+	filesOmitted int
+	// tracked is set when the run lists its changed files (changes and a non-zero
+	// changed_files_max); without it the result says nothing about files.
+	tracked bool
 
 	store *subagentStore // nil when runs are not persisted
 	// restored marks a run loaded from disk. Its text is not in memory: it is read
@@ -216,6 +223,9 @@ type subagentRunView struct {
 	result                         SubagentResult
 	cut                            bool
 	changes                        bool
+	files                          []subagentFileChange
+	filesOmitted                   int
+	tracked                        bool
 	dir                            string
 	timeoutMS                      int64
 	elapsed                        time.Duration
@@ -229,7 +239,7 @@ func (r *subagentRun) view() subagentRunView {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, changes: r.changes, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
 }
 
 // active reports whether the run is queued or running.
@@ -259,7 +269,7 @@ func (r *subagentRun) manifest() subagentManifest {
 	return subagentManifest{
 		Version: subagentManifestVersion, ID: r.id, Owner: r.owner, Agent: r.agent, Task: r.task,
 		TimeoutMS: r.timeoutMS, State: r.state, Reason: r.reason, StartedAt: r.startedAt, EndedAt: r.endedAt,
-		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes,
+		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes, Files: append([]subagentFileChange(nil), r.files...), FilesOmitted: r.filesOmitted, Tracked: r.tracked,
 	}
 }
 
@@ -271,7 +281,7 @@ func restoredSubagentRun(manifest subagentManifest, store *subagentStore) *subag
 	return &subagentRun{
 		id: manifest.ID, owner: manifest.Owner, agent: manifest.Agent, task: manifest.Task,
 		timeoutMS: manifest.TimeoutMS, startedAt: manifest.StartedAt, endedAt: manifest.EndedAt,
-		cancel: func() {}, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut, changes: manifest.Changes,
+		cancel: func() {}, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut, changes: manifest.Changes, files: manifest.Files, filesOmitted: manifest.FilesOmitted, tracked: manifest.Tracked,
 		dir: manifest.Dir, result: SubagentResult{Rounds: manifest.Rounds, Tokens: manifest.Tokens},
 		store: store, restored: true,
 	}
@@ -318,8 +328,10 @@ type subagentStart struct {
 	// limit, maxQueued, keep and resultMax are the starting session's settings.
 	limit     int
 	maxQueued int
-	keep      int
-	resultMax int64
+	// changedMax is how many changed files the run lists; see recordChange.
+	changedMax int
+	keep       int
+	resultMax  int64
 }
 
 // start registers a run and launches its goroutine. It fails when the manager is
@@ -362,6 +374,11 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	}
 	if holdsSlot {
 		run.state = subagentRunRunning
+	}
+	if spec.changes && spec.changedMax > 0 {
+		run.tracked = true
+		changedMax := spec.changedMax
+		spec.request.Execution.OnFileChange = func(path, action string) { run.recordChange(path, action, changedMax) }
 	}
 	m.runs[id] = run
 	m.active.Add(1)

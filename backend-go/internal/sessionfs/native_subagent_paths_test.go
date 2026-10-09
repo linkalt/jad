@@ -100,3 +100,32 @@ func TestClonedPathPolicyKeepsItsWithinRoots(t *testing.T) {
 		t.Fatal("clone shares Within with the original")
 	}
 }
+
+func TestSubagentChangedFilesMaxSetting(t *testing.T) {
+	read := func(setting string) (int64, error) {
+		got, err := normalizeNativeSubagentSettings(subagentSettingsFor(setting), "/s/setting.json", "/w", "")
+		if err != nil {
+			return 0, err
+		}
+		return got.ChangedFilesMax, nil
+	}
+	for name, tc := range map[string]struct {
+		setting string
+		want    int64
+	}{
+		"default":  {`{"agents":{"a":{}}}`, 100},
+		"null":     {`{"changed_files_max":null,"agents":{"a":{}}}`, 100},
+		"explicit": {`{"changed_files_max":7,"agents":{"a":{}}}`, 7},
+		"off":      {`{"changed_files_max":0,"agents":{"a":{}}}`, 0},
+		"maximum":  {`{"changed_files_max":10000,"agents":{"a":{}}}`, 10000},
+	} {
+		if got, err := read(tc.setting); err != nil || got != tc.want {
+			t.Errorf("%s: got %d, %v; want %d", name, got, err, tc.want)
+		}
+	}
+	for name, value := range map[string]string{"negative": "-1", "too big": "10001", "text": `"many"`, "float": "1.5", "bool": "true"} {
+		if _, err := read(`{"changed_files_max":` + value + `,"agents":{"a":{}}}`); err == nil || !strings.Contains(err.Error(), "changed_files_max") {
+			t.Errorf("%s: error = %v, want one naming changed_files_max", name, err)
+		}
+	}
+}

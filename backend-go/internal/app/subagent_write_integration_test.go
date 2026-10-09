@@ -486,3 +486,29 @@ func TestSubagentWriterPathsLimitWhereTheChildMayWrite(t *testing.T) {
 		})
 	}
 }
+
+// The parent sees which files a writer child changed, taken from the real write tool.
+func TestSubagentWriterResultListsTheFilesItChanged(t *testing.T) {
+	f := writerFixture(t, false)
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	parent := f.provider.forModel("parent-model")
+	last := parent[len(parent)-1].Text
+	if !strings.Contains(last, "written_files: made.txt (created)") {
+		t.Fatalf("the parent's tool result does not list the file the child wrote:\n%s", last)
+	}
+}
+
+func TestSubagentWriterThatFailedToWriteListsNone(t *testing.T) {
+	f := writerFixtureWithPaths(t, false, map[string]string{"src/keep.txt": "k"}, nil, map[string]any{"allow": []string{"src"}})
+	f.provider.childFirstCall = [2]string{"write", `{"path":"docs/made.txt","content":"x"}`}
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	parent := f.provider.forModel("parent-model")
+	last := parent[len(parent)-1].Text
+	if !strings.Contains(last, "written_files: none (changes made by bash or exec are not listed)") {
+		t.Fatalf("a refused write must not be listed as a change:\n%s", last)
+	}
+}

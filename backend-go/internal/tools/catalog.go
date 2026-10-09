@@ -45,6 +45,11 @@ type ExecutionContext struct {
 	// of the tool's own policy. The sub-agent tool sets it for an agent with paths; nil
 	// means no further narrowing.
 	PathScope *PathScope
+	// OnFileChange, when set, is told about each file a native write or edit changed
+	// (path as the tool reports it, action created, updated or edited). A call that
+	// left the file as it was, or failed, is not reported. The sub-agent tool uses it
+	// to list what a child changed.
+	OnFileChange func(path, action string)
 }
 
 // PathScope is a per-call narrowing of a tool's path policy. Allow, when not empty,

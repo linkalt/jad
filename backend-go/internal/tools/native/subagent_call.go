@@ -79,10 +79,11 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 			Tools:     agent.catalog,
 			Execution: childExecution,
 		},
-		limit:     int(s.settings.MaxConcurrent),
-		maxQueued: int(s.settings.MaxQueued),
-		keep:      int(s.settings.KeepFinished),
-		resultMax: s.settings.ResultMaxBytes,
+		limit:      int(s.settings.MaxConcurrent),
+		maxQueued:  int(s.settings.MaxQueued),
+		changedMax: int(s.settings.ChangedFilesMax),
+		keep:       int(s.settings.KeepFinished),
+		resultMax:  s.settings.ResultMaxBytes,
 	})
 	if err != nil {
 		code := "subagent_unavailable"
@@ -168,6 +169,7 @@ func (s *subagentTool) await(ctx context.Context, callID string, run *subagentRu
 // partialInformation adds what a cut-off run left behind to a result: a flag that the
 // text is incomplete, and the child's transcript, where its tool results are.
 func partialInformation(information []tools.Information, run subagentRunView) []tools.Information {
+	information = append(information, changedInformation(run)...)
 	if strings.TrimSpace(run.result.Text) != "" {
 		information = append(information, tools.Information{Key: "partial", Value: true})
 		if run.cut {
@@ -260,15 +262,17 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 	case subagentRunFailed:
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_failed",
 			fmt.Sprintf("Agent %s failed: %s%s", run.agent, boundedReason(run.reason), changesNote(run)),
-			tools.Information{Key: "agent", Value: run.agent}), nil
+			append([]tools.Information{{Key: "agent", Value: run.agent}}, changedInformation(run)...)...), nil
 	}
 	text := strings.TrimSpace(run.result.Text)
 	if text == "" {
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_empty_result",
 			fmt.Sprintf("Agent %s finished without an answer", run.agent),
-			tools.Information{Key: "agent", Value: run.agent},
-			tools.Information{Key: "rounds", Value: run.result.Rounds},
-			tools.Information{Key: "tokens", Value: run.result.Tokens}), nil
+			append([]tools.Information{
+				{Key: "agent", Value: run.agent},
+				{Key: "rounds", Value: run.result.Rounds},
+				{Key: "tokens", Value: run.result.Tokens},
+			}, changedInformation(run)...)...), nil
 	}
 	// The manager cut the answer to the limit when the run ended; this only reports it.
 	information := []tools.Information{
@@ -279,6 +283,7 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 	if run.cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
 	}
+	information = append(information, changedInformation(run)...)
 	return tools.RenderToolResult(tools.ResultOptions{
 		ID:          callID,
 		Status:      tools.StatusOK,

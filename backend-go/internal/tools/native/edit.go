@@ -226,6 +226,7 @@ func applyEdit(target mutateTarget, args editArgs, settings sessionfs.NativeEdit
 		return editFailure(execution.CallID, target.errorPath, "write_failed", "Could not write the file", extra...), nil
 	}
 
+	reportFileChange(execution, target.displayPath, "edited")
 	resultInformation := information("edited")
 	if commit.backupPath != "" {
 		resultInformation = append(resultInformation, tools.Information{Key: "backup_path", Value: displayPath(target.workspaceRoot, commit.backupPath)})

@@ -209,6 +209,7 @@ func applyWrite(path resolvedMutatePath, data []byte, settings sessionfs.NativeW
 		}
 		return writeFailure(execution.CallID, target.errorPath, "write_failed", "Could not write the file", information...), nil
 	}
+	reportFileChange(execution, target.displayPath, action)
 	return tools.RenderToolResult(tools.ResultOptions{
 		ID:          execution.CallID,
 		Status:      tools.StatusOK,

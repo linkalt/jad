@@ -40,6 +40,11 @@ type subagentManifest struct {
 	Dir       string    `json:"dir,omitempty"`
 	Cut       bool      `json:"cut,omitempty"`
 	Changes   bool      `json:"changes,omitempty"`
+	// Files are the files the child's write and edit changed, FilesOmitted how many more
+	// there were than the list keeps.
+	Files        []subagentFileChange `json:"files,omitempty"`
+	FilesOmitted int                  `json:"files_omitted,omitempty"`
+	Tracked      bool                 `json:"tracked,omitempty"`
 }
 
 // subagentStore keeps one manifest file per run. Writes are best effort: a run goes on
