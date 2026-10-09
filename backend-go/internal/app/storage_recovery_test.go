@@ -376,6 +376,26 @@ func TestLoadConfigReadsTheRecoverProcessesSwitch(t *testing.T) {
 	}
 }
 
+func TestLoadConfigReadsTheRecoverSubagentRunsSwitch(t *testing.T) {
+	f := newRecoveryFixture(t)
+	for _, c := range []struct {
+		server        string
+		wantRuns      bool
+		wantProcesses bool
+	}{
+		{`{}`, true, true},
+		{`{"recover_subagent_runs_at_start":null}`, true, true},
+		{`{"recover_subagent_runs_at_start":false}`, false, true},
+		{`{"recover_subagent_runs_at_start":false,"recover_processes_at_start":false}`, false, false},
+		{`{"recover_processes_at_start":false}`, true, false},
+	} {
+		config := serviceConfig(t, f, c.server)
+		if config.RecoverSubagentRunsAtStart != c.wantRuns || config.RecoverProcessesAtStart != c.wantProcesses {
+			t.Errorf("server %s: runs=%v processes=%v, want runs=%v processes=%v", c.server, config.RecoverSubagentRunsAtStart, config.RecoverProcessesAtStart, c.wantRuns, c.wantProcesses)
+		}
+	}
+}
+
 func TestServiceRecoversOrphansAtStartInTheBackground(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "procs")
@@ -542,5 +562,303 @@ func TestServiceCloseWaitsForTheScanToEnd(t *testing.T) {
 	case <-service.recovering:
 	default:
 		t.Fatal("Service.Close returned while the scan was still going")
+	}
+}
+
+// ---- sub-agent run manifests ----
+
+func (f recoveryFixture) subagentSetting(storage, extra string) string {
+	return fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"subagent":{"storage_dir":%q%s,"agents":{"explore":{"description":"d","model":"child.json","instructions":"p","tools":["read"]}}}}}}`, f.workspace, storage, extra)
+}
+
+// leaveRun writes the manifest of a run a crashed server left in state, written by a
+// server that no longer exists.
+func leaveRun(t *testing.T, storage, id, state string, ended time.Time) string {
+	t.Helper()
+	dir := filepath.Join(storage, ".runs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := map[string]any{
+		"version": 1, "id": id, "owner": "local:demo\x00", "agent": "explore", "task": "t", "timeout_ms": 1000,
+		"state": state, "started_at": time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+		"server": map[string]any{"pid": 2000000000},
+	}
+	if !ended.IsZero() {
+		manifest["ended_at"] = ended.UTC().Format(time.RFC3339Nano)
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, id+".json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func runState(t *testing.T, path string) (state, reason string, exists bool) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", "", false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct{ State, Reason string }
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	return manifest.State, manifest.Reason, true
+}
+
+// waitForState polls the manifest until it reads want or the limit passes.
+func waitForState(t *testing.T, path, want string, limit time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(limit)
+	for {
+		state, _, _ := runState(t, path)
+		if state == want || time.Now().After(deadline) {
+			return state
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRecoverStoragesMarksAnInterruptedRunLostWithoutAnyRequest(t *testing.T) {
+	f := newRecoveryFixture(t)
+	storage := filepath.Join(f.workspace, "runs")
+	f.session(t, "demo", f.subagentSetting(storage, ""))
+	running := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
+	queued := leaveRun(t, storage, "sub_0000bbbb", "queued", time.Time{})
+	done := leaveRun(t, storage, "sub_0000cccc", "done", time.Now().Add(-time.Minute))
+
+	report, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{SubagentRuns: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{running, queued} {
+		state, reason, _ := runState(t, path)
+		if state != "lost" || !strings.Contains(reason, "server stopped") {
+			t.Errorf("%s: state %q reason %q, want lost / the server stopped", filepath.Base(path), state, reason)
+		}
+	}
+	if state, _, _ := runState(t, done); state != "done" {
+		t.Errorf("an ended run changed to %q", state)
+	}
+	if report.RunStorages != 1 || report.Storages != 0 {
+		t.Fatalf("report = %+v, want 1 run storage and 0 process storages", report)
+	}
+}
+
+func TestRecoverStoragesPrunesRunsBeyondKeepFinished(t *testing.T) {
+	f := newRecoveryFixture(t)
+	storage := filepath.Join(f.workspace, "runs")
+	f.session(t, "demo", f.subagentSetting(storage, `,"keep_finished":1`))
+	oldest := leaveRun(t, storage, "sub_0000aaaa", "done", time.Now().Add(-3*time.Hour))
+	middle := leaveRun(t, storage, "sub_0000bbbb", "done", time.Now().Add(-2*time.Hour))
+	newest := leaveRun(t, storage, "sub_0000cccc", "done", time.Now().Add(-time.Hour))
+
+	if _, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{SubagentRuns: true}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, oldestLeft := runState(t, oldest)
+	_, _, middleLeft := runState(t, middle)
+	_, _, newestLeft := runState(t, newest)
+	if oldestLeft || middleLeft || !newestLeft {
+		t.Fatalf("manifests left: oldest=%v middle=%v newest=%v; want only the newest", oldestLeft, middleLeft, newestLeft)
+	}
+}
+
+func TestRecoverStoragesLeavesTheRunsOfAnotherLiveServerAlone(t *testing.T) {
+	f := newRecoveryFixture(t)
+	storage := filepath.Join(f.workspace, "runs")
+	f.session(t, "demo", f.subagentSetting(storage, ""))
+	path := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
+	// Name this very test process's parent as the owner: another live server.
+	data, _ := os.ReadFile(path)
+	var manifest map[string]any
+	_ = json.Unmarshal(data, &manifest)
+	manifest["server"] = map[string]any{"pid": os.Getppid(), "start": linuxStartTime(t, os.Getppid())}
+	data, _ = json.Marshal(manifest)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{SubagentRuns: true}); err != nil {
+		t.Fatal(err)
+	}
+	if state, _, _ := runState(t, path); state != "running" {
+		t.Fatalf("a run of another live server was changed to %q", state)
+	}
+}
+
+func TestRecoverStoragesCreatesNoRunStorageForASessionThatNeverStartedAChild(t *testing.T) {
+	f := newRecoveryFixture(t)
+	storage := filepath.Join(f.workspace, "never-created")
+	f.session(t, "demo", f.subagentSetting(storage, ""))
+
+	report, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{SubagentRuns: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(storage); !os.IsNotExist(err) {
+		t.Fatalf("stat(%s) error = %v; the scan must not create a storage directory", storage, err)
+	}
+	if report.RunStorages != 0 {
+		t.Fatalf("report = %+v, want 0 run storages", report)
+	}
+}
+
+func TestRecoverStoragesSkipsASessionThatDoesNotPersistRuns(t *testing.T) {
+	f := newRecoveryFixture(t)
+	storage := filepath.Join(f.workspace, "runs")
+	f.session(t, "demo", f.subagentSetting(storage, `,"persist_runs":false`))
+	path := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
+
+	report, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{SubagentRuns: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state, _, _ := runState(t, path); state != "running" || report.RunStorages != 0 {
+		t.Fatalf("state %q, report %+v; a session with persist_runs off has nothing to recover", state, report)
+	}
+}
+
+func TestRecoverStoragesVisitsEveryProfilesRunStorage(t *testing.T) {
+	f := newRecoveryFixture(t)
+	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"subagent":{"agents":{"explore":{"description":"d","model":"child.json","instructions":"p","tools":["read"]}}}}},"paths":{"active_profile":"green","profiles":{"green":{"models":["model.json"]},"blue":{"models":["model.json"]}}}}`, f.workspace))
+	blue := leaveRun(t, filepath.Join(f.workspace, ".jad", "profiles", "blue", "tools", ".subagents"), "sub_0000aaaa", "running", time.Time{})
+	green := leaveRun(t, filepath.Join(f.workspace, ".jad", "profiles", "green", "tools", ".subagents"), "sub_0000bbbb", "running", time.Time{})
+
+	report, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{SubagentRuns: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{"blue": blue, "green": green} {
+		if state, _, _ := runState(t, path); state != "lost" {
+			t.Errorf("%s profile run is %q, want lost", name, state)
+		}
+	}
+	if report.RunStorages != 2 {
+		t.Fatalf("report = %+v, want 2 run storages", report)
+	}
+}
+
+// One scan with both options recovers a session's processes and its runs, and neither
+// option touches the other's storage.
+func TestRecoverStoragesOptionsAreIndependent(t *testing.T) {
+	f := newRecoveryFixture(t)
+	procs := filepath.Join(f.workspace, "procs")
+	runs := filepath.Join(f.workspace, "runs")
+	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"kill_grace_ms":200},"subagent":{"storage_dir":%q,"agents":{"explore":{"description":"d","model":"child.json","instructions":"p","tools":["read"]}}}}}}`, f.workspace, procs, runs))
+	crashed := leaveOrphan(t, procs, "proc_a")
+	run := leaveRun(t, runs, "sub_0000aaaa", "running", time.Time{})
+
+	// Processes only: the orphan goes, the run stays as the crashed server left it.
+	if _, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{Processes: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !crashed.waitGone(t, 3*time.Second) {
+		t.Fatal("a processes scan did not stop the orphan")
+	}
+	if state, _, _ := runState(t, run); state != "running" {
+		t.Fatalf("run is %q after a processes-only scan, want running (untouched)", state)
+	}
+
+	// Runs only: the run is marked lost; a second orphan is not signalled.
+	second := leaveOrphan(t, procs, "proc_b")
+	if _, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{SubagentRuns: true}); err != nil {
+		t.Fatal(err)
+	}
+	if state, _, _ := runState(t, run); state != "lost" {
+		t.Fatalf("run is %q after a runs-only scan, want lost", state)
+	}
+	if second.waitGone(t, 300*time.Millisecond) {
+		t.Fatal("a runs-only scan stopped a process")
+	}
+}
+
+func TestServiceRecoversInterruptedRunsAtStartInTheBackground(t *testing.T) {
+	f := newRecoveryFixture(t)
+	storage := filepath.Join(f.workspace, "runs")
+	f.session(t, "demo", f.subagentSetting(storage, ""))
+	path := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
+
+	service, err := NewService(serviceConfig(t, f, `{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	// No request was sent: only the start-time scan can change the file.
+	if got := waitForState(t, path, "lost", 5*time.Second); got != "lost" {
+		t.Fatalf("run is %q after the service started, want lost", got)
+	}
+}
+
+func TestServiceLeavesRunsAloneWhenOnlyTheRunSwitchIsOff(t *testing.T) {
+	f := newRecoveryFixture(t)
+	storage := filepath.Join(f.workspace, "runs")
+	procs := filepath.Join(f.workspace, "procs")
+	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"kill_grace_ms":200},"subagent":{"storage_dir":%q,"agents":{"explore":{"description":"d","model":"child.json","instructions":"p","tools":["read"]}}}}}}`, f.workspace, procs, storage))
+	run := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
+	crashed := leaveOrphan(t, procs, "proc_a")
+
+	service, err := NewService(serviceConfig(t, f, `{"recover_subagent_runs_at_start":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	if !crashed.waitGone(t, 5*time.Second) {
+		t.Fatal("the process scan did not run although only the run switch is off")
+	}
+	// The scan stops a process before it reaches the run branch, so look only once it ended.
+	select {
+	case <-service.recovering:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the start scan did not end")
+	}
+	if state, _, _ := runState(t, run); state != "running" {
+		t.Fatalf("run is %q although recover_subagent_runs_at_start is off", state)
+	}
+}
+
+func TestServiceStartsNoScanWhenBothSwitchesAreOff(t *testing.T) {
+	f := newRecoveryFixture(t)
+	service, err := NewService(serviceConfig(t, f, `{"recover_subagent_runs_at_start":false,"recover_processes_at_start":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	if service.recovering != nil {
+		t.Fatal("a scan was started with both switches off")
+	}
+}
+
+func TestServiceRecoversRunsAtStartWhenOnlyTheProcessSwitchIsOff(t *testing.T) {
+	f := newRecoveryFixture(t)
+	storage := filepath.Join(f.workspace, "runs")
+	procs := filepath.Join(f.workspace, "procs")
+	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"kill_grace_ms":200},"subagent":{"storage_dir":%q,"agents":{"explore":{"description":"d","model":"child.json","instructions":"p","tools":["read"]}}}}}}`, f.workspace, procs, storage))
+	run := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
+	crashed := leaveOrphan(t, procs, "proc_a")
+
+	service, err := NewService(serviceConfig(t, f, `{"recover_processes_at_start":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	if got := waitForState(t, run, "lost", 5*time.Second); got != "lost" {
+		t.Fatalf("run is %q, want lost: the run scan must start although the process switch is off", got)
+	}
+	select {
+	case <-service.recovering:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the start scan did not end")
+	}
+	if crashed.waitGone(t, 300*time.Millisecond) {
+		t.Fatal("the orphan was stopped although recover_processes_at_start is off")
 	}
 }

@@ -63,7 +63,10 @@ type ServerSettings struct {
 	LogFile   string
 	// RecoverProcessesAtStart makes the Go backend recover the managed-process storage
 	// of every session when it starts, instead of at the first use of the process tool.
-	RecoverProcessesAtStart    bool
+	RecoverProcessesAtStart bool
+	// RecoverSubagentRunsAtStart does the same for the sub-agent run manifests: a run the
+	// last server left running is marked lost at start, not at the first use of the tool.
+	RecoverSubagentRunsAtStart bool
 	ConditionalRequests        bool
 	SnapshotTurns              int
 	MaxPageTurns               int
@@ -143,6 +146,7 @@ func Defaults() ServerSettings {
 		LogLevel:                   serverconfig.DefaultLogLevel,
 		LogFormat:                  serverconfig.DefaultLogFormat,
 		RecoverProcessesAtStart:    serverconfig.DefaultRecoverProcessesAtStart,
+		RecoverSubagentRunsAtStart: serverconfig.DefaultRecoverSubagentRunsAtStart,
 		ConditionalRequests:        true,
 		SnapshotTurns:              24,
 		MaxPageTurns:               50,
@@ -560,6 +564,9 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		settings.LogFile = strings.TrimSpace(parsed)
 	}
 	if err := readBool(fields, "recover_processes_at_start", &settings.RecoverProcessesAtStart, path); err != nil {
+		return ServerSettings{}, err
+	}
+	if err := readBool(fields, "recover_subagent_runs_at_start", &settings.RecoverSubagentRunsAtStart, path); err != nil {
 		return ServerSettings{}, err
 	}
 	if err := readBool(fields, "conditional_requests", &settings.ConditionalRequests, path); err != nil {

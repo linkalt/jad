@@ -30,12 +30,14 @@ type Config struct {
 	// Log configures the structured logger built by main; see internal/logging.
 	Log logging.Settings
 	// RecoverProcessesAtStart starts a background recovery of every session's managed
-	// processes when the service is created; see Resolver.RecoverProcesses.
+	// processes when the service is created; see Resolver.RecoverStorages.
 	RecoverProcessesAtStart bool
-	Roots                   []sessionfs.Root
-	HTTP                    httpapi.Config
-	Environment             map[string]string
-	RootLibraryOptions      contentlibrary.Options
+	// RecoverSubagentRunsAtStart does the same for the sub-agent run manifests.
+	RecoverSubagentRunsAtStart bool
+	Roots                      []sessionfs.Root
+	HTTP                       httpapi.Config
+	Environment                map[string]string
+	RootLibraryOptions         contentlibrary.Options
 }
 
 // LoadConfig reads root settings and server environment overrides. A supplied
@@ -75,8 +77,9 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 			Format: loaded.Server.LogFormat,
 			File:   loaded.Server.LogFile,
 		},
-		RecoverProcessesAtStart: loaded.Server.RecoverProcessesAtStart,
-		Roots:                   append([]sessionfs.Root(nil), loaded.Roots...),
+		RecoverProcessesAtStart:    loaded.Server.RecoverProcessesAtStart,
+		RecoverSubagentRunsAtStart: loaded.Server.RecoverSubagentRunsAtStart,
+		Roots:                      append([]sessionfs.Root(nil), loaded.Roots...),
 		HTTP: httpapi.Config{
 			APIToken:                   environment[apiTokenEnvironmentName],
 			AllowedOrigins:             append([]string(nil), loaded.Server.AllowedOrigins...),

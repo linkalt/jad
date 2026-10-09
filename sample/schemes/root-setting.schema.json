@@ -123,6 +123,11 @@
           "default": true,
           "description": "Go backend only. At start, in the background, recover the managed-process storage of every session and path profile that configures the process tool: a process a crashed server left running is stopped (see tools.native.process.stop_orphans) and its manifest marked lost, instead of waiting for the first use of the process tool in that session. Only storage directories that already exist are visited. false keeps the recovery lazy. The TypeScript backend ignores this key."
         },
+        "recover_subagent_runs_at_start": {
+          "type": "boolean",
+          "default": true,
+          "description": "Go backend only. At start, in the background, load the sub-agent run manifests of every session and path profile whose tools.native.subagent.persist_runs is on and whose storage directory exists: a run the last server left queued or running is marked lost, and the oldest ended runs beyond keep_finished are dropped (with delete_transcripts, their transcript folders are deleted), instead of waiting for the first use of the subagent tool in that session. A run of another server that is still running on the same directory is left alone. false keeps the recovery lazy. The TypeScript backend ignores this key."
+        },
         "conditional_requests": {
           "type": "boolean",
           "default": true,
