@@ -22,6 +22,14 @@ const (
 	MaxRunContentIndexSegments   = 65_536
 )
 
+// Images in a run request (server.max_request_images, server.max_request_image_bytes).
+const (
+	DefaultMaxRequestImages     = 8
+	MaxMaxRequestImages         = 64
+	DefaultMaxRequestImageBytes = 5 * 1024 * 1024
+	MaxMaxRequestImageBytes     = 64 * 1024 * 1024
+)
+
 // DefaultRecoverProcessesAtStart is the default of server.recover_processes_at_start.
 const DefaultRecoverProcessesAtStart = true
 

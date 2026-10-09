@@ -292,13 +292,10 @@ func messageFromResponse(event json.RawMessage, id, timestamp string) webUIMessa
 // frontend Web UI message shape. The offset makes the ID stable across paging.
 func UserMessageFromTranscriptRecord(record json.RawMessage, offset int64) (json.RawMessage, bool, error) {
 	var input struct {
-		Type      string          `json:"type"`
-		Role      string          `json:"role"`
-		CreatedAt json.RawMessage `json:"created_at"`
-		Content   []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
+		Type      string                  `json:"type"`
+		Role      string                  `json:"role"`
+		CreatedAt json.RawMessage         `json:"created_at"`
+		Content   []webui.UserContentPart `json:"content"`
 	}
 	if err := json.Unmarshal(record, &input); err != nil {
 		return nil, false, fmt.Errorf("decode transcript input message: %w", err)
@@ -306,21 +303,16 @@ func UserMessageFromTranscriptRecord(record json.RawMessage, offset int64) (json
 	if input.Type != "message" || input.Role != "user" {
 		return nil, false, nil
 	}
-	var text strings.Builder
-	for _, content := range input.Content {
-		if content.Type == "input_text" {
-			text.WriteString(content.Text)
-		}
-	}
-	if text.Len() == 0 {
+	text, images, visible := webui.UserContent(input.Content)
+	if !visible {
 		return nil, false, nil
 	}
 	message := webUIMessage{
 		ID:        fmt.Sprintf("session-user-o%d", offset),
 		Sender:    "user",
 		Timestamp: timestampFromRaw(input.CreatedAt),
-		Parts:     []webUIPart{{Type: "text", Text: text.String()}},
-		Text:      text.String(),
+		Parts:     []webUIPart{{Type: "text", Text: text, Images: images}},
+		Text:      text,
 	}
 	encoded, err := json.Marshal(message)
 	return encoded, true, err

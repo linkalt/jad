@@ -176,10 +176,22 @@ func TestAppendInputItemsAtReportsTheVisibleUserMessageOffset(t *testing.T) {
 	_ = journal
 }
 
+// The Go web-ui projection shows a user message that has an image and no text (the
+// TypeScript one hides it), so the accepted-input event must point at it.
+func TestAppendInputItemsAtReportsAnImageOnlyUserMessage(t *testing.T) {
+	store, _, _, _ := newRunErrorTestStore(t)
+	result, err := store.AppendInputItemsAt([]byte(imageOnlyItem))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.HasMessage {
+		t.Fatalf("an image-only user message must be reported as visible, got %+v", result)
+	}
+}
+
 func TestAppendInputItemsAtHasNoMessageForInputWithoutVisibleText(t *testing.T) {
 	store, _, _, _ := newRunErrorTestStore(t)
 	for name, item := range map[string]string{
-		"image only":    imageOnlyItem,
 		"empty text":    `{"type":"message","role":"user","content":[{"type":"input_text","text":""}]}`,
 		"tool output":   `{"type":"function_call_output","call_id":"c","output":"o"}`,
 		"system prompt": `{"type":"message","role":"system","content":[{"type":"input_text","text":"hi"}]}`,

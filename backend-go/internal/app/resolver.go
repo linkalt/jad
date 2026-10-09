@@ -696,7 +696,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	// model file, an unreachable tool server, a missing credential), exactly as
 	// the TypeScript run does: the message is not lost, and the next run repairs
 	// and continues from it.
-	persisted, err := session.PersistInput(r.shared.store, input, nextSessionTurn)
+	persisted, err := session.PersistInputWithImages(r.shared.store, input, nextSessionTurn, newImageStore(r.config.ImageStore))
 	if err != nil {
 		return session.RunResult{}, err
 	}

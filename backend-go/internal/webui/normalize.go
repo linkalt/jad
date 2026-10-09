@@ -164,28 +164,20 @@ func (s *reducerState) appendResponseStep(stepID string, parts []Part, hasTools 
 }
 
 func userMessage(fields map[string]json.RawMessage, key string, entry TranscriptRecord) *Message {
-	var content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
+	var content []UserContentPart
 	if err := json.Unmarshal(fields["content"], &content); err != nil {
 		return nil
 	}
-	var text strings.Builder
-	for _, part := range content {
-		if part.Type == "input_text" {
-			text.WriteString(part.Text)
-		}
-	}
-	if text.Len() == 0 {
+	text, images, visible := UserContent(content)
+	if !visible {
 		return nil
 	}
 	message := Message{
 		ID:        "session-user-" + key,
 		Sender:    "user",
-		Text:      text.String(),
+		Text:      text,
 		Timestamp: timestampFromRaw(fields["created_at"]),
-		Parts:     []Part{{Type: "text", Text: text.String()}},
+		Parts:     []Part{{Type: "text", Text: text, Images: images}},
 	}
 	setCursor(&message, entry)
 	return &message

@@ -62,15 +62,17 @@ func TestRunReportsTheAcceptedInputBeforeAFailureAndTheOffsetStartsItsRecord(t *
 	}
 }
 
-func TestPersistInputReportsNoMessageForAnImageOnlyInput(t *testing.T) {
+// An image-only user input is a visible message in the Go web-ui projection (the
+// TypeScript one hides it), so a screenshot sent without text is not lost from the screen.
+func TestPersistInputReportsAMessageForAnImageOnlyInput(t *testing.T) {
 	store, _, _ := newTestStore(t, transcript.ResponseMetadataMinimal)
 	input := json.RawMessage(`[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]`)
 	persisted, err := PersistInput(store, input, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.HasMessage {
-		t.Fatalf("an image-only input has no web-ui message, got offset %d", persisted.MessageOffset)
+	if !persisted.HasMessage {
+		t.Fatal("an image-only input must report a web-ui message")
 	}
 	if persisted.SessionTurn != 1 {
 		t.Fatalf("session turn = %d, want 1", persisted.SessionTurn)

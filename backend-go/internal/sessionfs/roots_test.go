@@ -130,6 +130,10 @@ func TestServerNumberRangeErrorsUseTheTypeScriptWording(t *testing.T) {
 		{"snapshot_turns", "-1", "server.snapshot_turns must be a safe integer between 0 and 100000"},
 		{"max_page_turns", "0", "server.max_page_turns must be a safe integer between 1 and 1000"},
 		{"max_inline_part_bytes", "-1", "server.max_inline_part_bytes must be a safe integer between 0 and 16777216"},
+		{"max_request_images", "-1", "server.max_request_images must be a safe integer between 0 and 64"},
+		{"max_request_images", "65", "server.max_request_images must be a safe integer between 0 and 64"},
+		{"max_request_image_bytes", "0", "server.max_request_image_bytes must be a safe integer between 1 and 67108864"},
+		{"max_request_image_bytes", "67108865", "server.max_request_image_bytes must be a safe integer between 1 and 67108864"},
 		{"idle_timeout_ms", "1.5", "server.idle_timeout_ms must be a safe integer between 0 and 3600000"},
 		{"idle_timeout_ms", `"5"`, "server.idle_timeout_ms must be a safe integer between 0 and 3600000"},
 	} {

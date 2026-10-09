@@ -158,12 +158,23 @@ type PersistedInput struct {
 // the transcript. nextSessionTurn has the meaning of RunOptions.NextSessionTurn;
 // nil reads the turn from the transcript.
 func PersistInput(store *transcript.TurnStore, input json.RawMessage, nextSessionTurn func() (int64, error)) (*PersistedInput, error) {
+	return PersistInputWithImages(store, input, nextSessionTurn, nil)
+}
+
+// PersistInputWithImages is PersistInput with an image store: an image of the user
+// message that is a data URL is written to the store and the transcript keeps the
+// stored-image reference, as for a tool-result image. A nil store keeps the data URL
+// in the transcript, which is what PersistInput does.
+func PersistInputWithImages(store *transcript.TurnStore, input json.RawMessage, nextSessionTurn func() (int64, error), images *imagestore.Store) (*PersistedInput, error) {
 	if store == nil {
 		return nil, errors.New("transcript turn store is required")
 	}
 	inputItems, err := NormalizeInput(input)
 	if err != nil {
 		return nil, err
+	}
+	for index, item := range inputItems {
+		inputItems[index], _ = images.Externalize(item)
 	}
 	history := store.NewInputHistory()
 	if err := repairPendingToolCalls(store, history); err != nil {
@@ -388,7 +399,7 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	var err error
 	persisted := options.PersistedInput
 	if persisted == nil {
-		persisted, err = PersistInput(r.store, input, options.NextSessionTurn)
+		persisted, err = PersistInputWithImages(r.store, input, options.NextSessionTurn, options.ImageStore)
 		if err != nil {
 			return RunResult{}, err
 		}

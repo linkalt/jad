@@ -154,6 +154,20 @@
           "default": 16384,
           "description": "Inline text kept per transcript part, in bytes. A larger part is cut for transport, reports its full size, and is re-fetched whole through the message endpoint; 0 sends parts uncut."
         },
+        "max_request_images": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64,
+          "default": 8,
+          "description": "Go backend only. The most images one run request may carry in an array input ({\"type\":\"image\",\"data\":<base64 or data URL>}). 0 refuses image input. The TypeScript backend ignores this key."
+        },
+        "max_request_image_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864,
+          "default": 5242880,
+          "description": "Go backend only. The largest decoded image of a run request, in bytes. The run request may carry the base64 text of up to max_request_images images on top of max_body_bytes (the rest of the body must still fit in max_body_bytes). The TypeScript backend ignores this key."
+        },
         "allowed_origins": {
           "type": "array",
           "items": {"type": "string", "format": "uri", "pattern": "^https?://[^/]+$"},

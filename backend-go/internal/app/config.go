@@ -93,6 +93,8 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 			SnapshotTurns:              loaded.Server.SnapshotTurns,
 			MaxPageTurns:               loaded.Server.MaxPageTurns,
 			MaxInlinePartBytes:         loaded.Server.MaxInlinePartBytes,
+			MaxRequestImages:           loaded.Server.MaxRequestImages,
+			MaxRequestImageBytes:       loaded.Server.MaxRequestImageBytes,
 			RunContentMemoryBytes:      loaded.Server.RunContentMemoryBytes,
 			RunContentWriteBatchBytes:  loaded.Server.RunContentWriteBatchBytes,
 			RunContentFlushInterval:    loaded.Server.RunContentFlushInterval,

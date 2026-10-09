@@ -71,6 +71,10 @@ type ServerSettings struct {
 	SnapshotTurns              int
 	MaxPageTurns               int
 	MaxInlinePartBytes         int
+	// MaxRequestImages is the most images one run request may carry; 0 refuses image
+	// input. MaxRequestImageBytes is the largest decoded image of such a request.
+	MaxRequestImages           int
+	MaxRequestImageBytes       int64
 	RunContentMemoryBytes      int
 	RunContentWriteBatchBytes  int
 	RunContentFlushInterval    time.Duration
@@ -151,6 +155,8 @@ func Defaults() ServerSettings {
 		SnapshotTurns:              24,
 		MaxPageTurns:               50,
 		MaxInlinePartBytes:         16 * 1024,
+		MaxRequestImages:           serverconfig.DefaultMaxRequestImages,
+		MaxRequestImageBytes:       serverconfig.DefaultMaxRequestImageBytes,
 		RunContentMemoryBytes:      serverconfig.DefaultRunContentMemoryBytes,
 		RunContentWriteBatchBytes:  serverconfig.DefaultRunContentWriteBatchBytes,
 		RunContentFlushInterval:    time.Duration(serverconfig.DefaultRunContentFlushIntervalMS) * time.Millisecond,
@@ -594,6 +600,14 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		return ServerSettings{}, err
 	}
 	settings.MaxInlinePartBytes = int(inlineBytes)
+	requestImages := int64(settings.MaxRequestImages)
+	if err := readInt("max_request_images", &requestImages, 0, serverconfig.MaxMaxRequestImages); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.MaxRequestImages = int(requestImages)
+	if err := readInt("max_request_image_bytes", &settings.MaxRequestImageBytes, 1, serverconfig.MaxMaxRequestImageBytes); err != nil {
+		return ServerSettings{}, err
+	}
 	runContentMemoryBytes := int64(settings.RunContentMemoryBytes)
 	if err := readInt("run_content_memory_bytes", &runContentMemoryBytes, 0, serverconfig.MaxRunContentMemoryBytes); err != nil {
 		return ServerSettings{}, err

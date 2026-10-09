@@ -58,9 +58,14 @@ type Config struct {
 	SnapshotTurns              int
 	MaxPageTurns               int
 	MaxInlinePartBytes         int
-	RunContentMemoryBytes      int
-	RunContentWriteBatchBytes  int
-	RunContentFlushInterval    time.Duration
+	// MaxRequestImages and MaxRequestImageBytes bound the images a run request may
+	// carry (server.max_request_images, server.max_request_image_bytes). Zero images
+	// turns image input off.
+	MaxRequestImages          int
+	MaxRequestImageBytes      int64
+	RunContentMemoryBytes     int
+	RunContentWriteBatchBytes int
+	RunContentFlushInterval   time.Duration
 	// MaxIndexSegments is accepted for root-config parity; the current Go
 	// output_text cache merges into one part and does not need a range index.
 	RunContentMaxIndexSegments int
@@ -258,6 +263,7 @@ type Handler struct {
 	tokenHash                 [sha256.Size]byte
 	allowedOrigin             map[string]struct{}
 	maxBodyBytes              int64
+	runInputLimits            RunInputLimits
 	toolStreamInterval        time.Duration
 	sseHeartbeatInterval      time.Duration
 	conditionalRequests       bool
@@ -324,6 +330,9 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	if config.MaxInlinePartBytes < 0 {
 		return nil, errors.New("maximum inline part bytes must not be negative")
 	}
+	if config.MaxRequestImages < 0 || config.MaxRequestImageBytes < 0 || (config.MaxRequestImages > 0 && config.MaxRequestImageBytes < 1) {
+		return nil, errors.New("request image limits must not be negative, and an image limit needs a byte limit")
+	}
 	if config.RunContentMemoryBytes < 0 || config.RunContentMemoryBytes > serverconfig.MaxRunContentMemoryBytes {
 		return nil, errors.New("run content memory bytes must be between 0 and 16777216")
 	}
@@ -371,6 +380,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		tokenHash:                 sha256.Sum256([]byte(config.APIToken)),
 		allowedOrigin:             origins,
 		maxBodyBytes:              config.MaxBodyBytes,
+		runInputLimits:            RunInputLimits{MaxImages: config.MaxRequestImages, MaxImageBytes: config.MaxRequestImageBytes},
 		toolStreamInterval:        config.ToolStreamInterval,
 		sseHeartbeatInterval:      config.SSEHeartbeatInterval,
 		conditionalRequests:       config.ConditionalRequests,
@@ -533,7 +543,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming responses are unavailable"})
 		return
 	}
-	body, err := readRunBody(w, r, h.maxBodyBytes)
+	body, err := readRunBody(w, r, h.runBodyLimit(), h.maxBodyBytes, h.runInputLimits)
 	if err != nil {
 		writeJSONError(w, err)
 		return
@@ -555,11 +565,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 		if startErr != nil {
 			return
 		}
-		input, startErr = json.Marshal(body.Input)
-		if startErr != nil {
-			startErr = &StatusError{Code: http.StatusBadRequest, Message: "input could not be encoded"}
-			return
-		}
+		input = body.Input
 		turnID, err := newWebTurnID()
 		if err != nil {
 			startErr = &StatusError{Code: http.StatusInternalServerError, Message: "could not create run ID"}
@@ -854,17 +860,28 @@ func (h *Handler) writeSSEHeaders(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// runBodyLimit is the body limit of a run request: server.max_body_bytes plus room for
+// the images it may carry, as base64 (4 bytes for every 3). Every other route keeps
+// max_body_bytes.
+func (h *Handler) runBodyLimit() int64 {
+	limits := h.runInputLimits
+	perImage := limits.MaxImageBytes/3*4 + 8
+	return h.maxBodyBytes + int64(limits.MaxImages)*perImage
+}
+
 func (h *Handler) runKey(resolved ResolvedSession) string {
 	return resolved.Reference + "\x00" + resolved.Profile
 }
 
 type runRequest struct {
-	Input               string `json:"input"`
-	Model               string `json:"model,omitempty"`
-	SupportsInteraction bool   `json:"supports_interaction,omitempty"`
+	// Input is what the runner takes: a JSON string, or a user message item when the
+	// request sent an array of parts (see parseRunInput).
+	Input               json.RawMessage `json:"input"`
+	Model               string          `json:"model,omitempty"`
+	SupportsInteraction bool            `json:"supports_interaction,omitempty"`
 }
 
-func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes int64) (runRequest, error) {
+func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes, baseBytes int64, limits RunInputLimits) (runRequest, error) {
 	reader := http.MaxBytesReader(w, r.Body, maxBytes)
 	decoder := json.NewDecoder(reader)
 	var raw json.RawMessage
@@ -890,9 +907,19 @@ func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes int64) (runReq
 
 	inputRaw, exists := fields["input"]
 	var body runRequest
-	if !exists || json.Unmarshal(inputRaw, &body.Input) != nil || strings.TrimSpace(body.Input) == "" {
+	if !exists {
 		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "input must be a non-empty string"}
 	}
+	input, imageChars, err := parseRunInputSized(inputRaw, limits)
+	if err != nil {
+		return runRequest{}, err
+	}
+	// The reader allowed the image data on top of max_body_bytes; everything else in the
+	// body still has to fit in max_body_bytes itself.
+	if int64(len(raw))-imageChars > baseBytes {
+		return runRequest{}, &StatusError{Code: http.StatusRequestEntityTooLarge, Message: "request body is too large"}
+	}
+	body.Input = input
 	if modelRaw, exists := fields["model"]; exists {
 		if json.Unmarshal(modelRaw, &body.Model) != nil || strings.TrimSpace(body.Model) == "" {
 			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "model must be a non-empty string"}

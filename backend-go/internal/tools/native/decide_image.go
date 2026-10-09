@@ -1,15 +1,14 @@
 package native
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"net/http"
 	"os"
 	"strings"
 
+	"example.com/agent-harness/backend-go/internal/imagedata"
 	"example.com/agent-harness/backend-go/internal/imageresize"
 	"example.com/agent-harness/backend-go/internal/imagestore"
 	"example.com/agent-harness/backend-go/internal/sessionfs"
@@ -26,9 +25,6 @@ type DecideImages struct {
 	Store      *imagestore.Store
 	Resizer    *imageresize.Resizer
 }
-
-// decideImageMIME maps what http.DetectContentType finds to the types the providers take.
-var decideImageMIME = map[string]bool{"image/png": true, "image/jpeg": true, "image/webp": true, "image/gif": true}
 
 // loadDecideImages replaces the path or data of every image part by a data URL. It
 // returns a ready tool result when one image cannot be used, and nothing otherwise.
@@ -62,11 +58,11 @@ func loadDecideImages(parts []decideInputPart, images DecideImages, settings ses
 			}
 			data = decoded
 		}
-		mime := http.DetectContentType(data)
-		if !decideImageMIME[mime] {
+		mime, err := imagedata.Sniff(data)
+		if err != nil {
 			return decideError(execution.CallID, tools.StatusInvalidInput, "unsupported_image", label+": the image is "+mime+"; png, jpeg, webp and gif are supported")
 		}
-		url := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
+		url := imagedata.DataURL(mime, data)
 		if replaced, ok := images.Resizer.Resize(imageresize.SourceNative, url); ok {
 			url = replaced
 		}
@@ -78,32 +74,12 @@ func loadDecideImages(parts []decideInputPart, images DecideImages, settings ses
 // decodeDecideImageData decodes a base64 string, or a data URL, after checking that its
 // decoded size is within the limit, so a huge string is never decoded.
 func decodeDecideImageData(raw string, settings sessionfs.NativeDecideSettings, callID, label string) ([]byte, string) {
-	encoded := strings.TrimSpace(raw)
-	if strings.HasPrefix(encoded, "data:") {
-		header, body, found := strings.Cut(encoded, ",")
-		if !found || !strings.HasSuffix(header, ";base64") {
-			return nil, decideError(callID, tools.StatusInvalidInput, "invalid_image", label+": the data URL is not base64")
-		}
-		encoded = body
-	}
-	encoded = strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r == ' ' || r == '\t' {
-			return -1
-		}
-		return r
-	}, encoded)
-	if int64(len(encoded))/4*3 > settings.MaxImageBytes+3 {
+	data, err := imagedata.Decode(raw, settings.MaxImageBytes)
+	switch {
+	case errors.Is(err, imagedata.ErrTooLarge):
 		return nil, decideError(callID, tools.StatusInvalidInput, "image_too_large", fmt.Sprintf("%s: the image is larger than %d bytes", label, settings.MaxImageBytes))
-	}
-	data, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		data, err = base64.RawStdEncoding.DecodeString(encoded)
-	}
-	if err != nil || len(data) == 0 {
-		return nil, decideError(callID, tools.StatusInvalidInput, "invalid_image", label+": the data is not valid base64")
-	}
-	if int64(len(data)) > settings.MaxImageBytes {
-		return nil, decideError(callID, tools.StatusInvalidInput, "image_too_large", fmt.Sprintf("%s: the image is %d bytes; the limit is %d", label, len(data), settings.MaxImageBytes))
+	case err != nil:
+		return nil, decideError(callID, tools.StatusInvalidInput, "invalid_image", label+": "+err.Error())
 	}
 	return data, ""
 }
