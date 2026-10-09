@@ -13,14 +13,14 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@astryxdesign/core": "0.6.5",
-    "@astryxdesign/theme-neutral": "0.6.5",
+    "@astryxdesign/core": "0.6.6",
+    "@astryxdesign/theme-neutral": "0.6.6",
     "@stylexjs/stylex": "0.19.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "@astryxdesign/cli": "^0.6.5",
+    "@astryxdesign/cli": "^0.6.6",
     "@stylexjs/unplugin": "0.19.1",
     "@types/node": "^26.6.4",
     "@types/react": "^19.1.0",
