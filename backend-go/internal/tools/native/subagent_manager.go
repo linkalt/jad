@@ -350,6 +350,9 @@ type subagentStart struct {
 	processes ProcessManager
 	// changedMax is how many changed files the run lists; see recordChange.
 	changedMax int
+	// processMax is how many processes one child may have running; see
+	// ExecutionContext.ProcessOwnerLimit.
+	processMax int
 	keep       int
 	resultMax  int64
 }
@@ -398,6 +401,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	// The run id is the owner of every process the child starts, so the child sees only
 	// its own and the run's end can stop them.
 	spec.request.Execution.ProcessOwner = id
+	spec.request.Execution.ProcessOwnerLimit = int64(spec.processMax)
 	if spec.changes && spec.changedMax > 0 {
 		run.tracked = true
 		changedMax := spec.changedMax

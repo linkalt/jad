@@ -21,6 +21,18 @@ func (manager *ManagedProcessManager) ownerOf(id string) (string, bool) {
 	return entry.owner, true
 }
 
+// runningOwnedLocked counts the running processes the owner started; the caller holds
+// manager.mu. A start in progress counts, because its entry is added under that lock.
+func (manager *ManagedProcessManager) runningOwnedLocked(owner string) int {
+	count := 0
+	for id, entry := range manager.entries {
+		if entry.owner == owner && manager.manifests[id].State == ProcessRunning {
+			count++
+		}
+	}
+	return count
+}
+
 // stopOwned stops every running process the owner started and returns how many it
 // stopped. An empty owner stops nothing: the session's own processes are not a
 // sub-agent's to clean up.

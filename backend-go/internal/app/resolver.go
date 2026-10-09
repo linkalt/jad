@@ -416,7 +416,7 @@ func (r *Resolver) sharedProcessManager(config sessionfs.SessionConfig) native.P
 	if r.closed {
 		return nil
 	}
-	manager := native.NewProcessManager(storageKey)
+	manager := native.NewConfiguredProcessManager(*config.NativeProcess)
 	r.processManagers[storageKey] = manager
 	return manager
 }

@@ -56,11 +56,15 @@ type NativeProcessSettings struct {
 	// StdinMaxBytes is the largest stdin text one start may write to its process.
 	StdinMaxBytes int64
 	StripANSI     bool
-	EnvFile       string
-	Env           map[string]string
-	EnvDeny       []string
-	StorageDir    string
-	StateContext  NativeProcessStateContextSettings
+	// StopOrphans makes the manager, when it finds a process a crashed server left
+	// running, stop its process group once it has checked the process is the one the
+	// manifest names. Off only marks it lost.
+	StopOrphans  bool
+	EnvFile      string
+	Env          map[string]string
+	EnvDeny      []string
+	StorageDir   string
+	StateContext NativeProcessStateContextSettings
 }
 
 func normalizeNativeProcessSettings(
@@ -95,7 +99,7 @@ func normalizeNativeProcessSettings(
 	}
 	for key := range fields {
 		switch key {
-		case "shell", "login_shell", "kill_grace_ms", "max_running", "max_completed", "retention_days", "wait_timeout_ms", "max_wait_timeout_ms", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "storage_dir", "paths", "statecontext", "approval":
+		case "shell", "login_shell", "kill_grace_ms", "max_running", "max_completed", "retention_days", "wait_timeout_ms", "max_wait_timeout_ms", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "stdin_max_bytes", "strip_ansi", "stop_orphans", "env_file", "env", "env_deny", "storage_dir", "paths", "statecontext", "approval":
 		default:
 			return nil, configError("%s: tools.native.process.%s is not supported", settingPath, key)
 		}
@@ -192,6 +196,9 @@ func normalizeNativeProcessSettings(
 		return nil, err
 	}
 	if settings.StdinMaxBytes, err = configuredInteger(fields, "stdin_max_bytes", defaultNativeProcessStdinMax, 1, maxNativeToolBytes, settingPath, "tools.native.process"); err != nil {
+		return nil, err
+	}
+	if settings.StopOrphans, err = bashBool(fields, "stop_orphans", true, settingPath+": tools.native.process"); err != nil {
 		return nil, err
 	}
 	settings.StripANSI = stripANSIFallback

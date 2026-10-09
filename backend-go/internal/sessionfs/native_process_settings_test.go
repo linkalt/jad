@@ -145,6 +145,8 @@ func TestNormalizeNativeProcessSettingsValidatesUnsupportedValues(t *testing.T) 
 		`{"stdin_max_bytes":"10"}`,
 		`{"stdin_max_bytes":10485761}`,
 		`{"strip_ansi":"no"}`,
+		`{"stop_orphans":"yes"}`,
+		`{"stop_orphans":1}`,
 		`{"env":{"BAD-NAME":"x"}}`,
 		`{"env":{"PROCESS_TEST":1}}`,
 		`{"env_deny":["BAD-NAME"]}`,
@@ -242,6 +244,32 @@ func TestNormalizeNativeProcessSettingsEnvFileAbsoluteAndErrors(t *testing.T) {
 	} {
 		if _, err := load(value); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("env_file %s error = %v, want %q", value, err, want)
+		}
+	}
+}
+
+func TestProcessStopOrphansSetting(t *testing.T) {
+	globalRoot := t.TempDir()
+	settingPath := filepath.Join(globalRoot, "session", "setting.json")
+	read := func(process string) (bool, error) {
+		setting := map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":` + process + `}}`)}
+		got, err := normalizeNativeProcessSettings(setting, globalRoot, settingPath, globalRoot, "", "", nil, nil)
+		if err != nil {
+			return false, err
+		}
+		return got.StopOrphans, nil
+	}
+	for name, tc := range map[string]struct {
+		setting string
+		want    bool
+	}{
+		"default":  {`{}`, true},
+		"null":     {`{"stop_orphans":null}`, true},
+		"explicit": {`{"stop_orphans":true}`, true},
+		"off":      {`{"stop_orphans":false}`, false},
+	} {
+		if got, err := read(tc.setting); err != nil || got != tc.want {
+			t.Errorf("%s: got %v, %v; want %v", name, got, err, tc.want)
 		}
 	}
 }

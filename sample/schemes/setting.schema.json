@@ -1327,6 +1327,11 @@
                   "default": 262144,
                   "description": "Largest stdin text one start may write to its process, in UTF-8 bytes. A larger text is refused with stdin_too_large, never cut."
                 },
+                "stop_orphans": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "When the server starts and finds a process a crashed server left running, stop its process group (after kill_grace_ms, then by force) instead of only marking it lost. The process is signalled only when its owner record names a server that is gone, its pid still has the start time recorded, and it still leads its own process group; otherwise it is only marked lost. A stopped orphan has stop_reason backend_restarted_stopped. Linux only for the start-time check; elsewhere nothing is signalled."
+                },
                 "strip_ansi": {
                   "type": "boolean",
                   "default": true
@@ -1746,6 +1751,7 @@
                 "persist_runs": {"type": "boolean", "default": true, "description": "Write a small manifest per run into a .runs folder of storage_dir, so run ids and finished results survive a server restart. A run that was going at the restart is reported as lost; its child died with the server, and only the transcript it wrote remains. false keeps runs in memory only."},
                 "allow_write": {"type": "boolean", "default": false, "description": "Let an agent list write, edit, bash, exec or process in its tools, so a child can change files and run code. Those tools must be enabled in the session, and their own paths and approval settings apply to the child, narrowed to nothing it could not do itself. A call to such an agent is a change: it takes the checkpoint, runs in order with the other calls, asks the user for approval with the agent named in the question, and is never handed off (wait_ms is ignored; timeout_ms still bounds it). false keeps every child read-only and rejects an agent that lists one of these tools."},
                 "delete_transcripts": {"type": "boolean", "default": false, "description": "Delete a child's transcript folder from storage_dir when keep_finished drops its run (also at startup), so the folders stop growing. Only a folder directly under storage_dir is deleted. false keeps every transcript. A deleted transcript can no longer give the answer or partial work of its run, but the run was already dropped by then."},
+                "process_max_running": {"type": "integer", "minimum": 1, "maximum": 1024, "default": 4, "description": "Most background processes one child run may have running at once (an agent that lists process in its tools). A start beyond it is refused with a message naming the limit. The session's tools.native.process.max_running still caps all processes together, so a child can never take the whole capacity unless this is raised."},
                 "changed_files_max": {"type": "integer", "minimum": 0, "maximum": 10000, "default": 100, "description": "Most files a sub-agent run lists as changed by its write and edit in the result (written_files); more are only counted (written_files_omitted). 0 turns the list off. Changes made by bash or exec are not listed."},
                 "max_queued": {"type": "integer", "minimum": 0, "maximum": 1024, "default": 32, "description": "Runs that may wait for a free slot while max_concurrent are going. A start beyond it is refused with subagent_busy. 0 allows no waiting."},
                 "storage_dir": {"type": "string", "minLength": 1, "default": ".subagents", "description": "Directory holding one transcript folder per child run. Relative paths resolve against the profile's tool storage, or the working directory without profiles."},

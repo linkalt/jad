@@ -88,6 +88,9 @@ type ProcessStartRequest struct {
 	// Owner names who started the process (a sub-agent run id); empty for the session
 	// itself. It is kept in memory only, never in the manifest the model sees.
 	Owner string
+	// OwnerLimit, with Owner, refuses a start while Owner already has that many
+	// processes running; zero is no limit. The count and the start happen under one lock.
+	OwnerLimit int
 }
 
 type ProcessWaitResult struct {
@@ -119,6 +122,10 @@ type ManagedProcessManager struct {
 	persistMu sync.Mutex
 	recoverMu sync.Mutex
 	recovered bool
+	// stopOrphans and orphanGrace are the policy Recover applies to a process a crashed
+	// server left running; see SetOrphanPolicy. Guarded by mu.
+	stopOrphans bool
+	orphanGrace time.Duration
 }
 
 type managedProcess struct {
@@ -144,6 +151,13 @@ type managedProcess struct {
 type processStreamWriter struct {
 	entry  *managedProcess
 	stream bashStream
+}
+
+// NewConfiguredProcessManager is NewProcessManager with the orphan policy of settings.
+func NewConfiguredProcessManager(settings sessionfs.NativeProcessSettings) *ManagedProcessManager {
+	manager := NewProcessManager(settings.StorageDir)
+	manager.SetOrphanPolicy(settings.StopOrphans, time.Duration(settings.KillGraceMs)*time.Millisecond)
+	return manager
 }
 
 func NewProcessManager(directory string) *ManagedProcessManager {
@@ -195,6 +209,10 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	if int64(running) >= request.Policy.MaxRunning {
 		manager.mu.Unlock()
 		return ProcessSnapshot{}, errors.New("process capacity reached")
+	}
+	if request.Owner != "" && request.OwnerLimit > 0 && manager.runningOwnedLocked(request.Owner) >= request.OwnerLimit {
+		manager.mu.Unlock()
+		return ProcessSnapshot{}, fmt.Errorf("this sub-agent already has %d processes running, its limit; stop one first", request.OwnerLimit)
 	}
 	id, err := newManagedProcessID()
 	if err != nil {
@@ -308,6 +326,7 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	manager.manifests[id] = manifest
 	manager.mu.Unlock()
 	go manager.waitForProcess(command, entry)
+	manager.writeOwnerRecord(id, manifest.PID)
 	if err := manager.persistManifest(manifest); err != nil {
 		manager.signalProcess(entry, true)
 		_ = waitForManagedProcess(entry, 2*time.Second)
@@ -763,6 +782,12 @@ func (manager *ManagedProcessManager) Recover() error {
 	if err != nil {
 		return fmt.Errorf("read process storage: %w", err)
 	}
+	manager.mu.Lock()
+	stopOrphans, orphanGrace := manager.stopOrphans, manager.orphanGrace
+	manager.mu.Unlock()
+	var found []ProcessManifest
+	var stoppable []int
+	stoppableID := make(map[string]bool)
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -771,11 +796,22 @@ func (manager *ManagedProcessManager) Recover() error {
 		if !ok || manifest.ID != entry.Name() {
 			continue
 		}
+		if manifest.State == ProcessRunning && manager.classifyOrphan(manifest, stopOrphans) == orphanStoppable {
+			stoppable = append(stoppable, manifest.PID)
+			stoppableID[manifest.ID] = true
+		}
+		found = append(found, manifest)
+	}
+	gone := stopOrphanGroups(stoppable, orphanGrace)
+	for _, manifest := range found {
 		if manifest.State == ProcessRunning {
 			manifest.State = ProcessLost
 			manifest.EndedAt = processNow()
 			manifest.endedBeforeStop = manifest.StopReason == ""
-			manifest.StopReason = "backend_restarted"
+			manifest.StopReason = processReasonRestarted
+			if stoppableID[manifest.ID] && gone[manifest.PID] {
+				manifest.StopReason = processReasonRestartedStopped
+			}
 			if err := manager.persistManifest(manifest); err != nil {
 				return fmt.Errorf("persist recovered process manifest %s: %w", manifest.ID, err)
 			}

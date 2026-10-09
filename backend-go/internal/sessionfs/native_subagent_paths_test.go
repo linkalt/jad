@@ -130,3 +130,32 @@ func TestSubagentChangedFilesMaxSetting(t *testing.T) {
 		}
 	}
 }
+
+func TestSubagentProcessMaxRunningSetting(t *testing.T) {
+	read := func(setting string) (int64, error) {
+		got, err := normalizeNativeSubagentSettings(subagentSettingsFor(setting), "/s/setting.json", "/w", "")
+		if err != nil {
+			return 0, err
+		}
+		return got.ProcessMaxRunning, nil
+	}
+	for name, tc := range map[string]struct {
+		setting string
+		want    int64
+	}{
+		"default":  {`{"agents":{"a":{}}}`, 4},
+		"null":     {`{"process_max_running":null,"agents":{"a":{}}}`, 4},
+		"explicit": {`{"process_max_running":2,"agents":{"a":{}}}`, 2},
+		"one":      {`{"process_max_running":1,"agents":{"a":{}}}`, 1},
+		"maximum":  {`{"process_max_running":1024,"agents":{"a":{}}}`, 1024},
+	} {
+		if got, err := read(tc.setting); err != nil || got != tc.want {
+			t.Errorf("%s: got %d, %v; want %d", name, got, err, tc.want)
+		}
+	}
+	for name, value := range map[string]string{"zero": "0", "negative": "-1", "too big": "1025", "text": `"many"`, "float": "1.5", "bool": "true"} {
+		if _, err := read(`{"process_max_running":` + value + `,"agents":{"a":{}}}`); err == nil || !strings.Contains(err.Error(), "process_max_running") {
+			t.Errorf("%s: error = %v, want one naming process_max_running", name, err)
+		}
+	}
+}

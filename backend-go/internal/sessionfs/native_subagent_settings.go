@@ -33,7 +33,11 @@ const (
 	// result; a child that changes more says how many it left out.
 	defaultNativeSubagentChangedFilesMax int64 = 100
 	maxNativeSubagentChangedFilesMax     int64 = 10_000
-	maxNativeSubagentMaxQueued           int64 = 1024
+	// defaultNativeSubagentProcessMaxRunning is how many background processes one child
+	// may have running at once, so a child cannot fill the session's process capacity.
+	defaultNativeSubagentProcessMaxRunning int64 = 4
+	maxNativeSubagentProcessMaxRunning     int64 = 1024
+	maxNativeSubagentMaxQueued             int64 = 1024
 	// The state-context section lists the session's runs after a compaction, so the
 	// model still knows the ids it was given.
 	defaultNativeSubagentStateLimit int64 = 20
@@ -44,7 +48,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "changed_files_max", "storage_dir", "statecontext"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "changed_files_max", "process_max_running", "storage_dir", "statecontext"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -80,6 +84,11 @@ type NativeSubagentSettings struct {
 	// ChangedFilesMax is the most files a run lists as changed by its write and edit;
 	// zero turns the list off.
 	ChangedFilesMax int64
+	// ProcessMaxRunning is the most background processes one child run may have running
+	// at once (when its tools include process). The session's own max_running still
+	// applies to all processes together. Zero, only possible in a hand-built struct,
+	// means no per-child limit.
+	ProcessMaxRunning int64
 	// PersistRuns writes a small manifest per run, so run ids and finished results
 	// survive a server restart. A run that was going at the restart is reported as
 	// lost. The zero value of this struct means "memory only"; the loader sets true.
@@ -220,6 +229,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.ChangedFilesMax, err = configuredInteger(fields, "changed_files_max", defaultNativeSubagentChangedFilesMax, 0, maxNativeSubagentChangedFilesMax, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.ProcessMaxRunning, err = configuredInteger(fields, "process_max_running", defaultNativeSubagentProcessMaxRunning, 1, maxNativeSubagentProcessMaxRunning, settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.PersistRuns, err = bashBool(fields, "persist_runs", true, settingPath+": "+section); err != nil {

@@ -49,7 +49,7 @@ func NewProcessTool(settings sessionfs.NativeProcessSettings, manager ProcessMan
 		return tools.Tool{}, fmt.Errorf("compile native process schema: %w", err)
 	}
 	if manager == nil {
-		manager = NewProcessManager(settings.StorageDir)
+		manager = NewConfiguredProcessManager(settings)
 	}
 	return tools.Tool{
 		Definition: tools.Definition{
@@ -180,6 +180,7 @@ func executeNativeProcess(
 			Policy:      settings,
 			Environment: os.Environ(),
 			APIKeyEnv:   apiKeyEnv,
+			OwnerLimit:  int(execution.ProcessOwnerLimit),
 		})
 		if err != nil {
 			return tools.ExecutionError(execution.CallID, tools.StatusError, "process_start_failed", err.Error()), nil

@@ -55,6 +55,9 @@ type ExecutionContext struct {
 	// owner. The sub-agent tool sets it to the run's id for a child that lists process,
 	// so a child cannot see or stop the parent's processes. Empty means no limit.
 	ProcessOwner string
+	// ProcessOwnerLimit is the most processes ProcessOwner may have running at once;
+	// zero means no limit beyond the session's own. It only counts with ProcessOwner.
+	ProcessOwnerLimit int64
 }
 
 // PathScope is a per-call narrowing of a tool's path policy. Allow, when not empty,

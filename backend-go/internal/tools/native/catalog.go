@@ -75,7 +75,7 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 		locks = NewPathLocks()
 	}
 	if config.NativeProcess != nil && manager == nil {
-		manager = NewProcessManager(config.NativeProcess.StorageDir)
+		manager = NewConfiguredProcessManager(*config.NativeProcess)
 	}
 	if config.NativeMemory != nil && memoryStore == nil {
 		memoryStore = NewMemoryStore(config.NativeMemory.StorageDir, locks)
