@@ -45,6 +45,9 @@ type subagentManifest struct {
 	Files        []subagentFileChange `json:"files,omitempty"`
 	FilesOmitted int                  `json:"files_omitted,omitempty"`
 	Tracked      bool                 `json:"tracked,omitempty"`
+	// Server is the process that last wrote the manifest. A manifest without it comes
+	// from a version that did not record one and is treated as owned by no live server.
+	Server *serverIdentity `json:"server,omitempty"`
 }
 
 // subagentStore keeps one manifest file per run. Writes are best effort: a run goes on
@@ -53,7 +56,10 @@ type subagentStore struct {
 	dir    string // the manifest folder
 	root   string // the storage directory; a run's transcript must lie inside it
 	logger *slog.Logger
-	mu     sync.Mutex
+	// identity is written into every manifest, so another server that starts on the same
+	// directory can tell that these runs are still going.
+	identity serverIdentity
+	mu       sync.Mutex
 }
 
 func newSubagentStore(storageDir string, logger *slog.Logger) *subagentStore {
@@ -61,7 +67,7 @@ func newSubagentStore(storageDir string, logger *slog.Logger) *subagentStore {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	root := filepath.Clean(storageDir)
-	return &subagentStore{dir: filepath.Join(root, subagentManifestDir), root: root, logger: logger}
+	return &subagentStore{dir: filepath.Join(root, subagentManifestDir), root: root, logger: logger, identity: currentServerIdentity()}
 }
 
 // save writes the run's current state. The snapshot is taken while holding the store
@@ -72,7 +78,9 @@ func (s *subagentStore) save(run *subagentRun) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.write(run.manifest()); err != nil {
+	manifest := run.manifest()
+	manifest.Server = &s.identity
+	if err := s.write(manifest); err != nil {
 		s.logger.Warn("save sub-agent run manifest", "run", run.id, "error", err)
 	}
 }

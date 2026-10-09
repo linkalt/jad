@@ -100,6 +100,12 @@ func (m *SubagentManager) recover(keep int) {
 	manifests := m.store.load()
 	now := time.Now()
 	for _, manifest := range manifests {
+		// A run of another server that is still going on this directory is not ours:
+		// marking it lost or pruning it would corrupt that server's runs.
+		if manifest.Server != nil && foreignServerAlive(m.store.identity, *manifest.Server) {
+			m.logger().Info("leave the sub-agent runs of another running server alone", "run", manifest.ID, "pid", manifest.Server.PID)
+			continue
+		}
 		run := restoredSubagentRun(manifest, m.store)
 		if manifest.State == subagentRunQueued || manifest.State == subagentRunRunning {
 			run.state = subagentRunLost
