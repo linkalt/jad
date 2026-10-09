@@ -3,8 +3,11 @@ package webui
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+
+	"example.com/agent-harness/backend-go/internal/imagestore"
 )
 
 // NormalizeTranscript converts JSONL transcript entries into frontend messages.
@@ -262,8 +265,32 @@ func toolResult(fields map[string]json.RawMessage, key string) (*Part, string) {
 			}
 		}
 	}
-	part := &Part{Type: "tool_result", CallID: callID, Output: output, Status: status}
+	part := &Part{Type: "tool_result", CallID: callID, Output: output, Status: status, Images: storedImageNames(outputRaw)}
 	return part, callID
+}
+
+// storedImageNames returns the stored-image file names a tool output refers to, in
+// order and without repeats. An image still inline as a data URL is not listed.
+func storedImageNames(raw json.RawMessage) []string {
+	var parts []struct {
+		Type     string `json:"type"`
+		ImageURL string `json:"image_url"`
+	}
+	if json.Unmarshal(raw, &parts) != nil {
+		return nil
+	}
+	var names []string
+	for _, part := range parts {
+		name, ok := strings.CutPrefix(part.ImageURL, imagestore.RefPrefix)
+		if part.Type != "input_image" || !ok {
+			continue
+		}
+		if _, valid := imagestore.ValidName(name); !valid || slices.Contains(names, name) {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 func toolOutputForUI(raw json.RawMessage) string {

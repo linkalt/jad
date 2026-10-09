@@ -30,16 +30,19 @@ type Citation struct {
 // text such as the query or URL, and Raw the item as JSON (capped, see Truncated).
 // No tool is named in the code. A "text" part may carry Citations.
 type Part struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	CallID    string          `json:"callId,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Arguments *string         `json:"arguments,omitempty"`
-	Output    string          `json:"output,omitempty"`
-	Status    string          `json:"status,omitempty"`
-	Target    string          `json:"target,omitempty"`
-	Raw       string          `json:"raw,omitempty"`
-	Citations []Citation      `json:"citations,omitempty"`
+	Type      string     `json:"type"`
+	Text      string     `json:"text,omitempty"`
+	CallID    string     `json:"callId,omitempty"`
+	Name      string     `json:"name,omitempty"`
+	Arguments *string    `json:"arguments,omitempty"`
+	Output    string     `json:"output,omitempty"`
+	Status    string     `json:"status,omitempty"`
+	Target    string     `json:"target,omitempty"`
+	Raw       string     `json:"raw,omitempty"`
+	Citations []Citation `json:"citations,omitempty"`
+	// Images lists the stored image files (see internal/imagestore) a tool_result
+	// refers to, as file names the image route serves. Inline images are not listed.
+	Images    []string        `json:"images,omitempty"`
 	Partial   bool            `json:"partial,omitempty"`
 	Truncated *PartTruncation `json:"truncated,omitempty"`
 }

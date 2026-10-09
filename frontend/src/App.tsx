@@ -130,6 +130,7 @@ import type {DraftDecision} from './draft-answer';
 import type {ComposerInsertActions} from './components/ComposerPane';
 import {ModelPicker} from './components/ModelPicker';
 import {CitationList} from './components/CitationList';
+import {StoredImages, StoredImageScopeProvider} from './components/StoredImages';
 import {hostedToolStatus} from './web-search-view';
 import {SessionProfilePicker} from './components/SessionProfilePicker';
 import {FloatingPanel} from './components/FloatingPanel';
@@ -1197,6 +1198,7 @@ function toolCallItem(
             hasCopyButton
           />
         )}
+        {result?.images !== undefined && <StoredImages names={result.images} />}
         {result?.truncated !== undefined && (
           <TruncatedNotice bytes={result.truncated.bytes} source={source} />
         )}
@@ -1231,6 +1233,7 @@ function OrphanToolResultBlock({
           maxHeight={appConfig.tool_result_max_height_px}
           hasCopyButton
         />
+        {result.images !== undefined && <StoredImages names={result.images} />}
         {result.truncated !== undefined && (
           <TruncatedNotice bytes={result.truncated.bytes} source={source} />
         )}
@@ -3232,6 +3235,11 @@ function App() {
     [sessionFailures, activeViewKey, visibleMessages],
   );
   const activeSessionRef = activeSession?.sessionRef;
+  // Where a tool result's stored images are read from; memoised so the rows do not refetch.
+  const storedImageScope = useMemo(
+    () => (activeSessionRef === undefined ? undefined : {sessionRef: activeSessionRef, profile: activeProfile}),
+    [activeSessionRef, activeProfile],
+  );
   const activeSessionPage = sessionPages[activeViewKey];
   // Older turns exist on the server but are not part of this client's copy yet.
   const hasOlderTurns =
@@ -5361,6 +5369,7 @@ function App() {
               <VisuallyHidden as="div">
                 <Heading level={1}>{activeRowSession.title}</Heading>
               </VisuallyHidden>
+              <StoredImageScopeProvider value={storedImageScope}>
               <ChatLayout
                 density="balanced"
                 xstyle={styles.chat}
@@ -5471,6 +5480,7 @@ function App() {
                   </VStack>
                 </HStack>
               </ChatLayout>
+              </StoredImageScopeProvider>
             </LayoutContent>
           }
         />

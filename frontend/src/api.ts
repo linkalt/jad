@@ -68,6 +68,8 @@ export interface WebUiToolResultPart {
   callId: string;
   output: string;
   status: 'success' | 'error' | 'unknown';
+  /** File names of images the server stored for this result; fetch them with `fetchSessionImage`. */
+  images?: string[];
   truncated?: WebUiPartTruncation;
 }
 
@@ -625,6 +627,30 @@ export async function fetchSessionFiles(
   };
 }
 
+/** The shape of a stored image file name: 64 lowercase hex digits and a known extension. */
+export const STORED_IMAGE_NAME = /^[0-9a-f]{64}\.(png|jpg|webp|gif)$/;
+
+/**
+ * One image the server stored for a tool result. The route needs the API token,
+ * so the bytes are fetched here and the caller shows them from an object URL.
+ */
+export async function fetchSessionImage(
+  sessionId: string,
+  name: string,
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  if (!STORED_IMAGE_NAME.test(name)) {
+    throw new Error('invalid stored image name');
+  }
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/images/${name}${profileQuery(profile)}`),
+    signal === undefined ? {} : {signal},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  return response.blob();
+}
+
 export async function fetchSessionTools(sessionId: string, profile?: string): Promise<ToolDefinition[]> {  const response = await authenticatedFetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/tools${profileQuery(profile)}`));
   if (!response.ok) {
     throw new Error(await readError(response));
@@ -931,7 +957,9 @@ function isWebUiPart(value: unknown): value is WebUiPart {
     return (
       typeof value.callId === 'string' &&
       typeof value.output === 'string' &&
-      (value.status === 'success' || value.status === 'error' || value.status === 'unknown')
+      (value.status === 'success' || value.status === 'error' || value.status === 'unknown') &&
+      (value.images === undefined ||
+        (Array.isArray(value.images) && value.images.every(name => typeof name === 'string')))
     );
   }
   return false;
