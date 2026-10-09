@@ -14,7 +14,18 @@ type PartTruncation struct {
 	Bytes int `json:"bytes"`
 }
 
+// Citation is one web source a provider attached to answer text (a url_citation
+// annotation), reduced to what the UI shows.
+type Citation struct {
+	URL   string `json:"url"`
+	Title string `json:"title,omitempty"`
+}
+
 // Part is one renderable segment of a Web UI message.
+//
+// A "web_search" part is a provider-hosted search (a web_search_call output
+// item): CallID is the item id, Query what was searched or opened, Status the
+// provider's state. A "text" part may carry Citations.
 type Part struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
@@ -23,6 +34,8 @@ type Part struct {
 	Arguments *string         `json:"arguments,omitempty"`
 	Output    string          `json:"output,omitempty"`
 	Status    string          `json:"status,omitempty"`
+	Query     string          `json:"query,omitempty"`
+	Citations []Citation      `json:"citations,omitempty"`
 	Partial   bool            `json:"partial,omitempty"`
 	Truncated *PartTruncation `json:"truncated,omitempty"`
 }
@@ -211,7 +224,7 @@ func Increments(previous, next Message) []StreamEvent {
 }
 
 func appendedText(previous, next Part) (string, bool) {
-	if previous.Type != next.Type || previous.Truncated != nil || next.Truncated != nil {
+	if previous.Type != next.Type || previous.Truncated != nil || next.Truncated != nil || !reflect.DeepEqual(previous.Citations, next.Citations) {
 		return "", false
 	}
 	var before, after string

@@ -25,9 +25,28 @@ export interface WebUiPartTruncation {
   bytes: number;
 }
 
+/** A web source the provider cited in answer text. */
+export interface WebUiCitation {
+  url: string;
+  title?: string;
+}
+
 export type WebUiTextPart =
   | {type: 'reasoning'; text: string; truncated?: WebUiPartTruncation}
-  | {type: 'text'; text: string; truncated?: WebUiPartTruncation};
+  | {type: 'text'; text: string; citations?: WebUiCitation[]; truncated?: WebUiPartTruncation};
+
+/**
+ * A search the provider ran itself (hosted web search). There is no result to
+ * show: its sources arrive as `citations` on the answer text.
+ */
+export interface WebUiSearchPart {
+  type: 'web_search';
+  callId: string;
+  /** What was searched or opened; absent until the provider reports it. */
+  query?: string;
+  /** The provider's state, e.g. `in_progress`, `searching`, `completed`, `failed`. */
+  status?: string;
+}
 
 export interface WebUiToolCallPart {
   type: 'tool_call';
@@ -47,7 +66,11 @@ export interface WebUiToolResultPart {
   truncated?: WebUiPartTruncation;
 }
 
-export type WebUiPart = WebUiTextPart | WebUiToolCallPart | WebUiToolResultPart;
+export type WebUiPart =
+  | WebUiTextPart
+  | WebUiToolCallPart
+  | WebUiToolResultPart
+  | WebUiSearchPart;
 
 export type WebUiInteractionDecision = 'accept' | 'update' | 'decline';
 
@@ -861,12 +884,34 @@ async function* readSse(
   }
 }
 
+function isWebUiCitation(value: unknown): value is WebUiCitation {
+  return (
+    isRecord(value) &&
+    typeof value.url === 'string' &&
+    (value.title === undefined || typeof value.title === 'string')
+  );
+}
+
 function isWebUiPart(value: unknown): value is WebUiPart {
   if (!isRecord(value) || typeof value.type !== 'string') {
     return false;
   }
-  if (value.type === 'reasoning' || value.type === 'text') {
+  if (value.type === 'reasoning') {
     return typeof value.text === 'string';
+  }
+  if (value.type === 'text') {
+    return (
+      typeof value.text === 'string' &&
+      (value.citations === undefined ||
+        (Array.isArray(value.citations) && value.citations.every(isWebUiCitation)))
+    );
+  }
+  if (value.type === 'web_search') {
+    return (
+      typeof value.callId === 'string' &&
+      (value.query === undefined || typeof value.query === 'string') &&
+      (value.status === undefined || typeof value.status === 'string')
+    );
   }
   if (value.type === 'tool_call') {
     return (

@@ -208,18 +208,27 @@ func responseParts(response map[string]json.RawMessage) []Part {
 		}
 		if typeName == "message" {
 			var contents []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type        string          `json:"type"`
+				Text        string          `json:"text"`
+				Annotations json.RawMessage `json:"annotations"`
 			}
 			if json.Unmarshal(output["content"], &contents) == nil {
 				for _, content := range contents {
 					switch content.Type {
-					case "output_text", "refusal":
+					case "output_text":
+						parts = appendCitedTextPart(parts, content.Text, citationsFromAnnotations(content.Annotations))
+					case "refusal":
 						parts = appendTextPart(parts, "text", content.Text)
 					case "reasoning":
 						parts = appendTextPart(parts, "reasoning", content.Text)
 					}
 				}
+			}
+			continue
+		}
+		if typeName == "web_search_call" {
+			if part, ok := webSearchPart(output); ok {
+				parts = append(parts, part)
 			}
 			continue
 		}
@@ -305,6 +314,84 @@ func appendTextPart(parts []Part, kind, text string) []Part {
 		return parts
 	}
 	return append(parts, Part{Type: kind, Text: text})
+}
+
+// appendCitedTextPart appends answer text like appendTextPart and merges the
+// url_citation sources into the text part that now holds it.
+func appendCitedTextPart(parts []Part, text string, citations []Citation) []Part {
+	if text == "" {
+		return parts
+	}
+	parts = appendTextPart(parts, "text", text)
+	last := &parts[len(parts)-1]
+	last.Citations = mergeCitations(last.Citations, citations)
+	return parts
+}
+
+// mergeCitations adds the new sources after the existing ones, skipping a URL
+// that is already listed, so the same page cited twice shows once.
+func mergeCitations(existing, added []Citation) []Citation {
+	for _, citation := range added {
+		duplicate := false
+		for _, known := range existing {
+			if known.URL == citation.URL {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			existing = append(existing, citation)
+		}
+	}
+	return existing
+}
+
+// citationsFromAnnotations reads the url_citation entries of an output_text
+// content item. Other annotation types and entries without a URL are ignored.
+func citationsFromAnnotations(raw json.RawMessage) []Citation {
+	var annotations []struct {
+		Type  string `json:"type"`
+		URL   string `json:"url"`
+		Title string `json:"title"`
+	}
+	if json.Unmarshal(raw, &annotations) != nil {
+		return nil
+	}
+	var citations []Citation
+	for _, annotation := range annotations {
+		if annotation.Type == "url_citation" && annotation.URL != "" {
+			citations = mergeCitations(citations, []Citation{{URL: annotation.URL, Title: annotation.Title}})
+		}
+	}
+	return citations
+}
+
+// webSearchPart projects a provider-hosted web_search_call item. It has no
+// result of its own: the sources arrive as citations on the answer text.
+func webSearchPart(item map[string]json.RawMessage) (Part, bool) {
+	id := stringField(item["id"])
+	if id == "" {
+		return Part{}, false
+	}
+	var action struct {
+		Type    string   `json:"type"`
+		Query   string   `json:"query"`
+		Queries []string `json:"queries"`
+		URL     string   `json:"url"`
+		Pattern string   `json:"pattern"`
+	}
+	_ = json.Unmarshal(item["action"], &action)
+	query := action.Query
+	if query == "" && len(action.Queries) > 0 {
+		query = strings.Join(action.Queries, "; ")
+	}
+	if query == "" {
+		query = action.URL
+	}
+	if query == "" {
+		query = action.Pattern
+	}
+	return Part{Type: "web_search", CallID: id, Query: query, Status: stringField(item["status"])}, true
 }
 
 func hasToolCall(parts []Part) bool {

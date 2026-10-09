@@ -65,6 +65,9 @@ func (r *StreamingRun) Update(raw json.RawMessage) (Message, bool) {
 	case "response.output_item.added":
 		item, _ := rawObject(fields["item"])
 		if len(item) > 0 {
+			if stringField(item["type"]) == "web_search_call" {
+				return r.upsertWebSearch(item)
+			}
 			return r.addToolCall(fields, item, true)
 		}
 	case "response.function_call_arguments.delta":
@@ -82,6 +85,9 @@ func (r *StreamingRun) Update(raw json.RawMessage) (Message, bool) {
 	case "response.output_item.done":
 		item, _ := rawObject(fields["item"])
 		if len(item) > 0 {
+			if stringField(item["type"]) == "web_search_call" {
+				return r.upsertWebSearch(item)
+			}
 			return r.addToolCall(fields, item, false)
 		}
 	case "response.completed", "response.incomplete":
@@ -190,6 +196,42 @@ func (r *StreamingRun) addToolCall(event, item map[string]json.RawMessage, parti
 	return r.Message("streaming"), true
 }
 
+// upsertWebSearch shows a provider-hosted search as it starts and as its state
+// changes. It does not mark the step as a tool step: no client reply follows.
+func (r *StreamingRun) upsertWebSearch(item map[string]json.RawMessage) (Message, bool) {
+	part, ok := webSearchPart(item)
+	if !ok {
+		return Message{}, false
+	}
+	r.ensureStep("")
+	if r.replaceWebSearch(part) {
+		r.updateCurrentStep(false)
+		return r.Message("streaming"), true
+	}
+	r.parts = append(r.parts, part)
+	r.updateCurrentStep(false)
+	return r.Message("streaming"), true
+}
+
+// replaceWebSearch updates a known search part in place. A later event may carry
+// less detail (an empty query), so only non-empty fields overwrite.
+func (r *StreamingRun) replaceWebSearch(part Part) bool {
+	for index := range r.parts {
+		current := &r.parts[index]
+		if current.Type != "web_search" || current.CallID != part.CallID {
+			continue
+		}
+		if part.Query != "" {
+			current.Query = part.Query
+		}
+		if part.Status != "" {
+			current.Status = part.Status
+		}
+		return true
+	}
+	return false
+}
+
 func (r *StreamingRun) rememberToolCall(callID string, event, item map[string]json.RawMessage) {
 	if itemID := stringField(item["id"]); itemID != "" {
 		r.callIDsByItemID[itemID] = callID
@@ -242,6 +284,9 @@ func (r *StreamingRun) mergeCompletedResponse(response map[string]json.RawMessag
 	if len(r.steps) > 0 {
 		currentStepStart = r.steps[len(r.steps)-1].StartPart
 	}
+	// Text and reasoning parts of one response are matched in order: a hosted
+	// search can split them, and a second text must not overwrite the first.
+	nextByType := map[string]int{}
 	for _, part := range completed {
 		if part.Type == "tool_call" || part.Type == "tool_result" {
 			found := false
@@ -260,16 +305,33 @@ func (r *StreamingRun) mergeCompletedResponse(response map[string]json.RawMessag
 			}
 			continue
 		}
+		if part.Type == "web_search" {
+			if !r.replaceWebSearch(part) {
+				r.parts = append(r.parts, part)
+			}
+			continue
+		}
 		found := false
-		for index := currentStepStart; index < len(r.parts); index++ {
+		start := currentStepStart
+		if next, ok := nextByType[part.Type]; ok {
+			start = next
+		}
+		for index := start; index < len(r.parts); index++ {
 			if r.parts[index].Type == part.Type {
 				r.parts[index].Text = part.Text
+				r.parts[index].Citations = part.Citations
+				nextByType[part.Type] = index + 1
 				found = true
 				break
 			}
 		}
 		if !found {
 			r.parts = appendTextPart(r.parts, part.Type, part.Text)
+			last := len(r.parts) - 1
+			// appendTextPart may have extended the previous part of this type:
+			// keep the sources it already has.
+			r.parts[last].Citations = mergeCitations(r.parts[last].Citations, part.Citations)
+			nextByType[part.Type] = last + 1
 		}
 	}
 	for index := range r.parts {

@@ -69,6 +69,7 @@ import {
   type WebUiMessage,
   type WebUiMessageStep,
   type WebUiPart,
+  type WebUiSearchPart,
 } from './api';
 import appConfig from './config.json';
 import {readAttachmentBlocks} from './attachment-reading';
@@ -128,6 +129,8 @@ import {interactionFailureTitle} from './approval-answer';
 import type {DraftDecision} from './draft-answer';
 import type {ComposerInsertActions} from './components/ComposerPane';
 import {ModelPicker} from './components/ModelPicker';
+import {CitationList} from './components/CitationList';
+import {searchRowStatus, searchRowTarget} from './web-search-view';
 import {SessionProfilePicker} from './components/SessionProfilePicker';
 import {FloatingPanel} from './components/FloatingPanel';
 import {NotificationPanel} from './components/NotificationPanel';
@@ -1279,6 +1282,10 @@ type WebUiPartGroup =
       items: IndexedWebUiPart<WebUiToolPart>[];
     }
   | {
+      type: 'search';
+      item: IndexedWebUiPart<WebUiSearchPart>;
+    }
+  | {
       type: 'content';
       item: IndexedWebUiPart<WebUiContentPart>;
     };
@@ -1324,6 +1331,10 @@ function groupWebUiParts(
       groups.push({type: 'reasoning', item: {part, index}});
       return;
     }
+    if (part.type === 'web_search') {
+      groups.push({type: 'search', item: {part, index}});
+      return;
+    }
     groups.push({type: 'content', item: {part, index}});
   });
   flushTools();
@@ -1331,7 +1342,10 @@ function groupWebUiParts(
   return groups;
 }
 
-type WebUiActivityGroupPart = Extract<WebUiPartGroup, {type: 'reasoning' | 'tools'}>;
+type WebUiActivityGroupPart = Extract<
+  WebUiPartGroup,
+  {type: 'reasoning' | 'tools' | 'search'}
+>;
 type WebUiContentGroupPart = Extract<WebUiPartGroup, {type: 'content'}>;
 type IndexedWebUiActivityGroup = {group: WebUiActivityGroupPart; index: number};
 type WebUiSegment =
@@ -1403,6 +1417,29 @@ function WebUiActivityGroup({
         {part.truncated !== undefined && (
           <TruncatedNotice bytes={part.truncated.bytes} source={source} />
         )}
+      </VStack>
+    );
+  }
+
+  if (group.type === 'search') {
+    const {part} = group.item;
+    const status = searchRowStatus(part.status);
+    // The provider ran this search itself, so it has no arguments or output to
+    // inspect: it is a plain row, not an expandable tool step.
+    return (
+      <VStack gap={1} width="100%" xstyle={styles.activityGroup}>
+        <ChatToolCalls
+          calls={[
+            {
+              key: `search-${part.callId}`,
+              name: 'web_search',
+              status,
+              target: searchRowTarget(part),
+              errorMessage: status === 'error' ? 'The search failed.' : undefined,
+            },
+          ]}
+          xstyle={styles.toolCallsFlush}
+        />
       </VStack>
     );
   }
@@ -1537,6 +1574,9 @@ function WebUiParts({
               >
                 {contentPart.text}
               </MarkdownText>
+              {contentPart.citations !== undefined && contentPart.citations.length > 0 && (
+                <CitationList citations={contentPart.citations} />
+              )}
               {contentPart.truncated !== undefined && (
                 <TruncatedNotice bytes={contentPart.truncated.bytes} source={source} />
               )}

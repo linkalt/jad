@@ -570,3 +570,41 @@ test('a run that never retries, and a caller that does not listen, are unaffecte
   const result = await streamSessionRun('session-1', 'hello', {});
   assert.equal(result.message?.text, 'fine');
 });
+
+test('accepts a web_search part and cited text, and drops a message whose search or citation part is malformed', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const run = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  const withParts = (id, parts) => ({id, sender: 'assistant', status: 'streaming', text: 'x', timestamp: 't', parts});
+  const good = withParts('good', [
+    {type: 'web_search', callId: 'ws_1', query: 'go release', status: 'completed'},
+    {type: 'text', text: 'x', citations: [{url: 'https://go.dev', title: 'Go'}, {url: 'https://pkg.go.dev'}]},
+  ]);
+  const noCallId = withParts('no-call-id', [{type: 'web_search', query: 'q'}]);
+  const badQuery = withParts('bad-query', [{type: 'web_search', callId: 'a', query: 5}]);
+  const badCitationUrl = withParts('bad-url', [{type: 'text', text: 'x', citations: [{url: 1}]}]);
+  const badCitationList = withParts('bad-list', [{type: 'text', text: 'x', citations: 'https://go.dev'}]);
+  const badTitle = withParts('bad-title', [{type: 'text', text: 'x', citations: [{url: 'https://go.dev', title: 3}]}]);
+  const finalMessage = message('complete', 'done');
+  responses.push(streamResponse([
+    {event: 'run', data: run},
+    {event: 'ui.message', data: {message: good}},
+    {event: 'ui.message', data: {message: noCallId}},
+    {event: 'ui.message', data: {message: badQuery}},
+    {event: 'ui.message', data: {message: badCitationUrl}},
+    {event: 'ui.message', data: {message: badCitationList}},
+    {event: 'ui.message', data: {message: badTitle}},
+    {event: 'ui.part', data: {id: 'good', index: 0, part: {type: 'web_search', callId: 'ws_2'}}},
+    {event: 'ui.part', data: {id: 'good', index: 1, part: {type: 'web_search'}}},
+    {event: 'completed', data: {message: finalMessage, committed: true}},
+    {event: 'done', data: {}},
+  ]));
+  const seen = [];
+  const parts = [];
+  await streamSessionRun('session-1', 'hello', {
+    onMessage: value => seen.push(value.id),
+    onPart: (id, index, part) => parts.push(`${id}:${index}:${part.callId}`),
+  });
+  assert.deepEqual(seen, ['good']);
+  assert.deepEqual(parts, ['good:0:ws_2']);
+});

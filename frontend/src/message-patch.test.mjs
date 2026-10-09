@@ -146,3 +146,24 @@ test('empty deltas and missing part indexes are no-ops', () => {
   assert.equal(applyPartDelta(original, 0, ''), original);
   assert.equal(applyPartDelta(original, 4, 'ignored'), original);
 });
+
+test('a web_search part is never grown by a text delta and does not change the text fields', () => {
+  const search = {type: 'web_search', callId: 'ws_1', query: 'q', status: 'completed'};
+  const original = makeMessage([{type: 'text', text: 'answer'}, search]);
+  assert.equal(applyPartDelta(original, 1, ' more'), original);
+  assert.deepEqual(original.parts[1], search);
+
+  const patched = applyPart(original, 1, {...search, status: 'failed'});
+  assert.equal(patched.text, 'answer');
+  assert.equal(patched.parts[1].status, 'failed');
+  assert.equal(patched.parts[1].text, undefined);
+  assert.equal(patched.reasoningContent, undefined);
+});
+
+test('cited text keeps its citations through a part replacement', () => {
+  const citations = [{url: 'https://go.dev', title: 'Go'}];
+  const original = makeMessage([{type: 'text', text: 'Go'}]);
+  const patched = applyPart(original, 0, {type: 'text', text: 'Go 1.27', citations});
+  assert.equal(patched.text, 'Go 1.27');
+  assert.deepEqual(patched.parts[0].citations, citations);
+});

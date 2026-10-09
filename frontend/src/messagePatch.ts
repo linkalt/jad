@@ -13,7 +13,8 @@ export function applyPartDelta(message: WebUiMessage, index: number, append: str
     return message;
   }
   const part = message.parts[index];
-  if (part === undefined) {
+  if (part === undefined || part.type === 'web_search') {
+    // A search row has no text to grow; the server resends it as a whole part.
     return message;
   }
   const grown: WebUiPart =
