@@ -86,8 +86,12 @@ type Model struct {
 	// OAuthAuthFile is the absolute credential file path; set only for openai_oauth.
 	OAuthAuthFile string
 	Request       json.RawMessage
-	PromptRole    string
-	PromptText    string
+	// HostedTools are provider-side tool definitions (for example {"type":"web_search"})
+	// the request carries after the function tools. They have no tool code here: the
+	// provider runs them. Empty means none.
+	HostedTools []json.RawMessage
+	PromptRole  string
+	PromptText  string
 }
 
 // SessionConfig is the resolved filesystem-backed configuration for one
@@ -867,6 +871,10 @@ func loadModel(path, promptRole, promptText string) (Model, error) {
 		}
 		request = bytes.TrimSpace(raw)
 	}
+	hostedTools, err := hostedToolsField(fields, path)
+	if err != nil {
+		return Model{}, err
+	}
 	return Model{
 		Provider:      provider,
 		Name:          modelName,
@@ -875,9 +883,44 @@ func loadModel(path, promptRole, promptText string) (Model, error) {
 		AuthMode:      authMode,
 		OAuthAuthFile: oauthAuthFile,
 		Request:       request,
+		HostedTools:   hostedTools,
 		PromptRole:    promptRole,
 		PromptText:    promptText,
 	}, nil
+}
+
+// hostedToolsField reads hosted_tools: an optional array of tool objects the provider
+// runs itself. Each needs a non-empty string type; "function" is refused because
+// function tools come from the tool catalog. The objects are otherwise passed on
+// unchanged, so a provider-specific option needs no code here.
+func hostedToolsField(fields map[string]json.RawMessage, path string) ([]json.RawMessage, error) {
+	raw, ok := fields["hosted_tools"]
+	if !ok || string(bytes.TrimSpace(raw)) == "null" {
+		return nil, nil
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, configError("%s: hosted_tools must be an array of tool objects", path)
+	}
+	tools := make([]json.RawMessage, 0, len(entries))
+	for index, entry := range entries {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(entry, &object); err != nil || object == nil {
+			return nil, configError("%s: hosted_tools[%d] must be an object", path, index)
+		}
+		var toolType string
+		if err := json.Unmarshal(object["type"], &toolType); err != nil || strings.TrimSpace(toolType) == "" {
+			return nil, configError("%s: hosted_tools[%d].type must be a non-empty string", path, index)
+		}
+		if strings.EqualFold(strings.TrimSpace(toolType), "function") {
+			return nil, configError("%s: hosted_tools[%d].type must not be function; function tools come from the tool catalog", path, index)
+		}
+		tools = append(tools, entry)
+	}
+	if len(tools) == 0 {
+		return nil, nil
+	}
+	return tools, nil
 }
 
 // defaultOAuthAuthFile is the credential file used when model.json names none, relative

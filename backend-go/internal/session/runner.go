@@ -31,10 +31,13 @@ var errTerminalResponseCommitted = errors.New("terminal response committed")
 // ModelSettings is the subset of loaded model configuration needed to build a
 // Responses API request. Request preserves arbitrary model.request fields.
 type ModelSettings struct {
-	Model      string
-	Request    json.RawMessage
-	PromptRole string
-	PromptText string
+	Model   string
+	Request json.RawMessage
+	// HostedTools are provider-side tool definitions sent after the function tools.
+	// They are passed on as given: the provider runs them, so there is no tool code.
+	HostedTools []json.RawMessage
+	PromptRole  string
+	PromptText  string
 }
 
 type inputTextContent struct {
@@ -207,6 +210,7 @@ func NewRunner(store *transcript.TurnStore, streamer responses.Streamer, setting
 		return nil, err
 	}
 	settings.Request = cloneRaw(settings.Request)
+	settings.HostedTools = cloneRawList(settings.HostedTools)
 	return &Runner{store: store, streamer: streamer, settings: settings}, nil
 }
 
@@ -338,8 +342,8 @@ func BuildRequestWithStateContextAndAcceptedRequest(settings ModelSettings, hist
 	requestFields["model"] = modelJSON
 	requestFields["input"] = inputJSON
 	requestFields["stream"] = json.RawMessage("true")
-	if len(responseTools) > 0 {
-		encodedTools, err := json.Marshal(responseTools)
+	if allTools := appendHostedTools(responseTools, settings.HostedTools); len(allTools) > 0 {
+		encodedTools, err := json.Marshal(allTools)
 		if err != nil {
 			return nil, fmt.Errorf("serialize Responses tools: %w", err)
 		}
@@ -703,6 +707,9 @@ func validateModelSettings(settings ModelSettings) error {
 		if _, err := decodeJSONObject(settings.Request); err != nil {
 			return fmt.Errorf("model request settings must be a JSON object: %w", err)
 		}
+	}
+	if err := validateHostedTools(settings.HostedTools); err != nil {
+		return err
 	}
 	if settings.PromptText != "" && settings.PromptRole != "system" && settings.PromptRole != "developer" {
 		return errors.New("prompt role must be system or developer when prompt text is set")

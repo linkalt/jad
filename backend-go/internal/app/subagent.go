@@ -59,10 +59,11 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 		request.OnTranscript(dir)
 	}
 	runner, err := session.NewRunner(store, l.resolver.newProviderStreamer(config, apiKey), session.ModelSettings{
-		Model:      config.Model.Name,
-		Request:    config.Model.Request,
-		PromptRole: config.Model.PromptRole,
-		PromptText: config.Model.PromptText,
+		Model:       config.Model.Name,
+		Request:     config.Model.Request,
+		HostedTools: config.Model.HostedTools,
+		PromptRole:  config.Model.PromptRole,
+		PromptText:  config.Model.PromptText,
 	})
 	if err != nil {
 		return native.SubagentResult{}, fmt.Errorf("create sub-agent runner: %w", err)

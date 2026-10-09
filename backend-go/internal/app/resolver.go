@@ -299,10 +299,11 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 	if runner == nil {
 		streamer := r.newProviderStreamer(config, apiKey)
 		runner, err = session.NewRunner(shared.store, streamer, session.ModelSettings{
-			Model:      config.Model.Name,
-			Request:    config.Model.Request,
-			PromptRole: config.Model.PromptRole,
-			PromptText: config.Model.PromptText,
+			Model:       config.Model.Name,
+			Request:     config.Model.Request,
+			HostedTools: config.Model.HostedTools,
+			PromptRole:  config.Model.PromptRole,
+			PromptText:  config.Model.PromptText,
 		})
 		if err != nil {
 			return preparedRun{}, fmt.Errorf("create session runner: %w", err)
@@ -850,6 +851,7 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		BaseURL      string
 		AuthMode     string
 		Request      json.RawMessage
+		HostedTools  []json.RawMessage
 		PromptRole   string
 		PromptText   string
 		HTTPDebug    sessionfs.HTTPDebugSettings
@@ -868,6 +870,7 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		BaseURL:       config.Model.BaseURL,
 		AuthMode:      config.Model.AuthMode,
 		Request:       config.Model.Request,
+		HostedTools:   config.Model.HostedTools,
 		PromptRole:    config.Model.PromptRole,
 		PromptText:    config.Model.PromptText,
 		HTTPDebug:     config.HTTPDebug,

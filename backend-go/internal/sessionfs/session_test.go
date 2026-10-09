@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -281,5 +282,80 @@ func TestLoadSessionConfigCursorCacheCheckpointBounds(t *testing.T) {
 				t.Fatalf("cursor cache checkpoint bytes = %d, want %d", config.Persistence.CursorCacheCheckpointBytes, test.want)
 			}
 		})
+	}
+}
+
+func hostedToolsModel(t *testing.T, extra string) (Model, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "model.json")
+	body := `{"schema_version":1,"provider":"openai","model":"gpt-test"` + extra + `}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return loadModel(path, "", "")
+}
+
+func TestLoadModelReadsHostedTools(t *testing.T) {
+	model, err := hostedToolsModel(t, `,"hosted_tools":[ {"type":"web_search","search_context_size":"low"}, {"type":"file_search"} ]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(model.HostedTools) != 2 {
+		t.Fatalf("HostedTools = %d entries, want 2", len(model.HostedTools))
+	}
+	if got := string(model.HostedTools[0]); got != `{"type":"web_search","search_context_size":"low"}` {
+		t.Errorf("first hosted tool = %s, want the object unchanged and trimmed", got)
+	}
+	if string(model.Request) != `{}` {
+		t.Errorf("hosted_tools must not leak into request: %s", model.Request)
+	}
+}
+
+func TestLoadModelHostedToolsDefaultsToNone(t *testing.T) {
+	for name, extra := range map[string]string{
+		"absent": ``,
+		"null":   `,"hosted_tools":null`,
+		"empty":  `,"hosted_tools":[]`,
+	} {
+		model, err := hostedToolsModel(t, extra)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if model.HostedTools != nil {
+			t.Errorf("%s: HostedTools = %v, want nil", name, model.HostedTools)
+		}
+	}
+}
+
+func TestLoadModelRejectsBadHostedTools(t *testing.T) {
+	cases := map[string]struct{ extra, want string }{
+		"not an array":     {`,"hosted_tools":{"type":"web_search"}`, "hosted_tools must be an array"},
+		"string entry":     {`,"hosted_tools":["web_search"]`, "hosted_tools[0] must be an object"},
+		"null entry":       {`,"hosted_tools":[{"type":"web_search"},null]`, "hosted_tools[1] must be an object"},
+		"missing type":     {`,"hosted_tools":[{"name":"x"}]`, "hosted_tools[0].type must be a non-empty string"},
+		"empty type":       {`,"hosted_tools":[{"type":""}]`, "hosted_tools[0].type must be a non-empty string"},
+		"blank type":       {`,"hosted_tools":[{"type":"   "}]`, "hosted_tools[0].type must be a non-empty string"},
+		"type not string":  {`,"hosted_tools":[{"type":7}]`, "hosted_tools[0].type must be a non-empty string"},
+		"function refused": {`,"hosted_tools":[{"type":"function","name":"x"}]`, "must not be function"},
+		"function padded":  {`,"hosted_tools":[{"type":" function "}]`, "must not be function"},
+		"function cased":   {`,"hosted_tools":[{"type":"FUNCTION"}]`, "must not be function"},
+	}
+	for name, c := range cases {
+		_, err := hostedToolsModel(t, c.extra)
+		if err == nil {
+			t.Errorf("%s: expected an error", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: error = %q, want it to contain %q", name, err, c.want)
+		}
+	}
+}
+
+func TestLoadModelStillRefusesToolsInRequest(t *testing.T) {
+	// hosted_tools is the way to add provider tools; request.tools stays managed by the runner.
+	_, err := hostedToolsModel(t, `,"request":{"tools":[{"type":"web_search"}]}`)
+	if err == nil || !strings.Contains(err.Error(), "request.tools is managed by the session runner") {
+		t.Fatalf("err = %v, want the request.tools refusal", err)
 	}
 }

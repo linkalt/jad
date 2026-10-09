@@ -75,6 +75,8 @@ type providerRequest struct {
 	// Authorization is the header the client sent, so a test can tell which
 	// credential reached which server.
 	Authorization string
+	// ToolTypes lists the type of every tool in the request, function or hosted.
+	ToolTypes []string
 }
 
 func (p *subagentProvider) handler(t *testing.T) http.Handler {
@@ -95,10 +97,12 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		record := providerRequest{Model: body.Model, Input: body.Input, Authorization: r.Header.Get("Authorization")}
 		for _, tool := range body.Tools {
 			var named struct {
+				Type        string `json:"type"`
 				Name        string `json:"name"`
 				Description string `json:"description"`
 			}
 			_ = json.Unmarshal(tool, &named)
+			record.ToolTypes = append(record.ToolTypes, named.Type)
 			record.Tools = append(record.Tools, named.Name)
 			if record.Descriptions == nil {
 				record.Descriptions = map[string]string{}
@@ -344,6 +348,9 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	delete(agentSetting, "__checkpoint")
 	sessionExtra, _ := agentSetting["__session"].(map[string]any)
 	delete(agentSetting, "__session")
+	// __child_model adds fields to the child's model.json (for example hosted_tools).
+	childModelExtra, _ := agentSetting["__child_model"].(map[string]any)
+	delete(agentSetting, "__child_model")
 	for name, text := range files {
 		writeFile(t, filepath.Join(workspace, name), []byte(text))
 	}
@@ -429,6 +436,9 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	environment := map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"}
 	parentModel := map[string]any{"provider": "openai", "model": "parent-model", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1"}
 	childModel := map[string]any{"provider": "openai", "model": "child-model", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1"}
+	for key, value := range childModelExtra {
+		childModel[key] = value
+	}
 	var childProvider *subagentProvider
 	if splitChild {
 		// A second server, a second provider name and a second key variable: nothing in
@@ -1316,5 +1326,60 @@ func TestSubagentDeleteTranscriptsKeepsOnlyTheFoldersOfKeptRuns(t *testing.T) {
 				t.Errorf("manifests = %d, want %d", len(manifests), tc.manifests)
 			}
 		})
+	}
+}
+
+func TestSubagentSendsTheHostedToolsOfItsOwnModelFileAndTheParentDoesNot(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{
+		"model":         "child.json",
+		"__child_model": map[string]any{"hosted_tools": []any{map[string]any{"type": "web_search"}}},
+	})
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	parent := f.provider.forModel("parent-model")
+	child := f.provider.forModel("child-model")
+	if len(parent) == 0 || len(child) == 0 {
+		t.Fatalf("provider requests: parent %d, child %d", len(parent), len(child))
+	}
+	if got := strings.Join(parent[0].ToolTypes, ","); got != "function,function" {
+		t.Fatalf("parent tool types = %s, want its two function tools and no hosted tool", got)
+	}
+	if got := strings.Join(child[0].ToolTypes, ","); got != "function,web_search" {
+		t.Fatalf("child tool types = %s, want read then the hosted web_search", got)
+	}
+}
+
+func TestSubagentWithoutAModelOfItsOwnSendsTheParentsModelFileHostedTools(t *testing.T) {
+	// A child that names no model loads the parent's model file, and with it the
+	// parent's request fields and hosted_tools. The documentation says so.
+	f := newSubagentFixture(t, map[string]any{})
+	setHostedTools := func() {
+		path := filepath.Join(f.sessionDir, "model.json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var model map[string]any
+		if err := json.Unmarshal(data, &model); err != nil {
+			t.Fatal(err)
+		}
+		model["hosted_tools"] = []any{map[string]any{"type": "web_search"}}
+		out, _ := json.Marshal(model)
+		writeFile(t, path, out)
+	}
+	setHostedTools()
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	seen := 0
+	for _, request := range f.provider.forModel("parent-model") {
+		if len(request.ToolTypes) == 0 || request.ToolTypes[len(request.ToolTypes)-1] != "web_search" {
+			t.Fatalf("a request of the parent's model lacks the hosted tool: %v", request.ToolTypes)
+		}
+		seen++
+	}
+	if seen < 3 {
+		t.Fatalf("expected the parent's two rounds and the child's round on the parent model, saw %d", seen)
 	}
 }

@@ -57,6 +57,24 @@
         ]
       },
       "additionalProperties": true
+    },
+    "hosted_tools": {
+      "type": "array",
+      "description": "Provider-side tool definitions sent after the function tools, for example [{\"type\": \"web_search\"}]. The provider runs them, so there is no tool code here; each object is passed on unchanged. The Go backend only; the TypeScript backend ignores it. Not supported by the Anthropic adapter, which refuses non-function tools.",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "pattern": "\\S",
+            "not": { "const": "function" },
+            "description": "Hosted tool type. function is refused; function tools come from the tool catalog."
+          }
+        },
+        "additionalProperties": true
+      }
     }
   },
   "additionalProperties": true
