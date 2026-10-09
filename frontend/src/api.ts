@@ -9,6 +9,7 @@ import {
 } from './checkpoint-view.ts';
 import {parseInteractionEnd, type InteractionEnd} from './interaction-end.ts';
 import {parseProviderRetryWait, type ProviderRetryWait} from './provider-retry-view.ts';
+import type {RunInputPart} from './image-attachments.ts';
 
 const authenticatedFetch = createAuthenticatedFetch(
   appConfig.api_token_storage_key,
@@ -33,7 +34,14 @@ export interface WebUiCitation {
 
 export type WebUiTextPart =
   | {type: 'reasoning'; text: string; truncated?: WebUiPartTruncation}
-  | {type: 'text'; text: string; citations?: WebUiCitation[]; truncated?: WebUiPartTruncation};
+  | {
+      type: 'text';
+      text: string;
+      citations?: WebUiCitation[];
+      /** On a user message: file names of the images it carries that the server stored. */
+      images?: string[];
+      truncated?: WebUiPartTruncation;
+    };
 
 /**
  * A tool the provider ran itself (hosted web search, web fetch, or any tool a
@@ -936,7 +944,9 @@ function isWebUiPart(value: unknown): value is WebUiPart {
     return (
       typeof value.text === 'string' &&
       (value.citations === undefined ||
-        (Array.isArray(value.citations) && value.citations.every(isWebUiCitation)))
+        (Array.isArray(value.citations) && value.citations.every(isWebUiCitation))) &&
+      (value.images === undefined ||
+        (Array.isArray(value.images) && value.images.every(name => typeof name === 'string')))
     );
   }
   if (value.type === 'hosted_tool') {
@@ -1478,7 +1488,7 @@ async function reconnectRunStream(
 
 export async function streamSessionRun(
   sessionId: string,
-  input: string,
+  input: string | RunInputPart[],
   options: StreamSessionRunOptions = {},
 ): Promise<StreamSessionRunResult> {
   let attached = false;

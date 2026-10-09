@@ -4,6 +4,7 @@ import {
   Badge,
   ChatComposer,
   ChatComposerInput,
+  ChatSendButton,
   HStack,
   Icon,
   IconButton,
@@ -11,6 +12,13 @@ import {
 } from '@astryxdesign/core';
 import type {ChatComposerInputHandle} from '@astryxdesign/core/Chat';
 import appConfig from '../config.json';
+import {parseAcceptList} from '../image-attachments';
+import type {AttachedImage} from '../image-attachments';
+import {
+  ImageAttachmentPicker,
+  ImageAttachmentsDrawer,
+  useImageAttachments,
+} from './ImageAttachments';
 import {fetchSessionFiles} from '../api';
 import {createComposerTriggers, resolveMentionFiles} from '../composer-triggers';
 import {loadDrafts, saveDrafts} from '../draftStore';
@@ -51,8 +59,11 @@ type ComposerPaneProps = {
   activeSessionId: string;
   /** The row identity used to keep each profile view's draft independent. */
   draftKey: string;
-  /** Returns true when the message was accepted, so the draft is only cleared on a real send. */
-  onSubmit: (value: string) => boolean;
+  /**
+   * Returns true when the message was accepted, so the draft is only cleared on a real send.
+   * `images` are the draft's attached images; the text may be empty when there are some.
+   */
+  onSubmit: (value: string, images: AttachedImage[]) => boolean;
   onStop: () => void;
   isRunning: boolean;
   placeholder: string;
@@ -427,6 +438,19 @@ export function ComposerPane({
     [activeSessionId],
   );
 
+  const imageLimits = useMemo(
+    () => ({
+      maxCount: appConfig.attach_image_max_count,
+      maxBytes: appConfig.attach_image_max_bytes,
+      accept: parseAcceptList(appConfig.attach_image_accept),
+    }),
+    [],
+  );
+  const attachments = useImageAttachments(draftKey, imageLimits);
+  const openImagePickerRef = useRef<(() => void) | null>(null);
+  const hasImages = attachments.images.length > 0;
+  const isImageAttachEnabled = appConfig.attach_image_enabled;
+
   const inputRef = useRef<ChatComposerInputHandle | null>(null);
   // The forwarded ref lands on the composer input's root; the editable is its child.
   const inputRootRef = useRef<HTMLDivElement | null>(null);
@@ -465,8 +489,34 @@ export function ComposerPane({
     [draftKey, setDraft],
   );
 
+  const handleSubmit = useCallback(
+    (text: string) => {
+      if (onSubmit(text, attachments.images)) {
+        setDraft(draftKey, '');
+        attachments.clear();
+      }
+    },
+    [attachments, draftKey, onSubmit, setDraft],
+  );
+
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     if (handleShiftEnter(event)) {
+      return;
+    }
+    // The composer ignores an empty draft, but a message of images alone is valid.
+    if (
+      event.key === 'Enter' &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.nativeEvent.isComposing &&
+      hasImages &&
+      !isRunning &&
+      (inputRef.current?.getValue() ?? '').trim() === ''
+    ) {
+      event.preventDefault();
+      handleSubmit('');
       return;
     }
     if (!appConfig.composer_markdown_shortcuts) {
@@ -490,22 +540,13 @@ export function ComposerPane({
       event.preventDefault();
       applyInlineMarker(editable, marker);
     }
-  }, [handleShiftEnter]);
+  }, [handleShiftEnter, handleSubmit, hasImages, isRunning]);
 
   const handleChange = useCallback(
     (next: string) => {
       setDraft(draftKey, next);
     },
     [draftKey, setDraft],
-  );
-
-  const handleSubmit = useCallback(
-    (text: string) => {
-      if (onSubmit(text)) {
-        setDraft(draftKey, '');
-      }
-    },
-    [draftKey, onSubmit, setDraft],
   );
 
   /**
@@ -629,6 +670,12 @@ export function ComposerPane({
       value={value}
       onChange={handleChange}
       onSubmit={handleSubmit}
+      sendButton={
+        <ChatSendButton
+          isDisabled={value.trim() === '' && !hasImages}
+          onSend={() => handleSubmit(value)}
+        />
+      }
       onStop={onStop}
       isStopShown={isRunning}
       placeholder={placeholder}
@@ -639,12 +686,20 @@ export function ComposerPane({
           placeholder={composerPlaceholderForDraft(value, placeholder)}
           triggers={composerTriggers.length > 0 ? composerTriggers : undefined}
           onKeyDown={handleKeyDown}
+          onFiles={isImageAttachEnabled ? files => void attachments.add(files) : undefined}
           pasteAsToken={appConfig.paste_as_token_enabled ? pasteAsToken : false}
         />
       }
       drawer={
         <>
           {drawer}
+          {isImageAttachEnabled ? (
+            <ImageAttachmentsDrawer
+              images={attachments.images}
+              notice={attachments.notice}
+              onRemove={attachments.remove}
+            />
+          ) : null}
           {isPreviewEnabled && isPreviewOpen ? <ComposerPreview value={value} /> : null}
         </>
       }
@@ -661,6 +716,22 @@ export function ComposerPane({
             onClick={onToggleLeftPanel}
           />
           {toolbarActions}
+          {isImageAttachEnabled ? (
+            <>
+              <IconButton
+                label="Attach image"
+                icon={<Icon icon="upload" size="sm" />}
+                variant="ghost"
+                size="sm"
+                onClick={() => openImagePickerRef.current?.()}
+              />
+              <ImageAttachmentPicker
+                accept={appConfig.attach_image_accept}
+                onFiles={files => void attachments.add(files)}
+                openRef={openImagePickerRef}
+              />
+            </>
+          ) : null}
           {isPreviewEnabled ? (
             <IconButton
               label={isPreviewOpen ? 'Hide markdown preview' : 'Preview markdown'}

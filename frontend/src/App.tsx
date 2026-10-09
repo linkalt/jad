@@ -73,6 +73,9 @@ import {
 } from './api';
 import appConfig from './config.json';
 import {readAttachmentBlocks} from './attachment-reading';
+import {buildRunInput, userMessageImages} from './image-attachments';
+import {SentImages} from './components/ImageAttachments';
+import type {AttachedImage} from './image-attachments';
 import {createCoalescedRefresh} from './coalesced-refresh';
 import {deepEqual} from './deepEqual';
 import {selectedModelForSession} from './model-selection';
@@ -421,6 +424,8 @@ interface ReasoningStep {
 }
 
 type MessageRecord = Omit<WebUiMessage, 'parts'> & {
+  /** Data URLs of the images this tab just sent; the server's copy replaces them on the next load. */
+  sentImages?: string[];
   parts?: WebUiPart[];
   reasoning?: ReasoningStep[];
   tools?: ChatToolCallItem[];
@@ -2299,6 +2304,8 @@ const TranscriptRow = memo(
         ? deferredRowStyle(message.id)
         : {...deferredRowStyle(message.id), ...selectionStyle};
 
+      const userImages = userMessageImages(message);
+
       return (
         <ChatMessage
           sender="user"
@@ -2327,9 +2334,13 @@ const TranscriptRow = memo(
         >
           <HStack align="start" gap={1} justify="end" width="100%">
             <VStack align="end" gap={0.5}>
-              <ChatMessageBubble>
-                <MarkdownText density="compact" contentWidth="100%">{message.text}</MarkdownText>
-              </ChatMessageBubble>
+              {userImages.sent.length > 0 && <SentImages sources={userImages.sent} />}
+              {userImages.stored.length > 0 && <StoredImages names={userImages.stored} />}
+              {userImages.text !== '' && (
+                <ChatMessageBubble>
+                  <MarkdownText density="compact" contentWidth="100%">{userImages.text}</MarkdownText>
+                </ChatMessageBubble>
+              )}
               <ChatMessageMetadata
                 footer={
                   <HStack align="center" gap={2}>
@@ -3983,10 +3994,10 @@ function App() {
   ]);
 
   const submitMessage = useCallback(
-    (value: string) => {
+    (value: string, images: readonly AttachedImage[]) => {
       const trimmedValue = value.trim();
       if (
-        !trimmedValue ||
+        (!trimmedValue && images.length === 0) ||
         isRunning ||
         resettingViewKey === activeViewKey ||
         frontCompactingViewKey === activeViewKey
@@ -4004,6 +4015,7 @@ function App() {
         sender: 'user',
         text: trimmedValue,
         timestamp: messageTime(),
+        ...(images.length === 0 ? {} : {sentImages: images.map(image => image.dataUrl)}),
       };
 
       setThreads(current => ({
@@ -4025,7 +4037,7 @@ function App() {
       if (isLiveRun && sessionRef) {
         const controller = new AbortController();
         runAbortRefs.current.set(sessionId, controller);
-        void streamSessionRun(sessionRef, trimmedValue, {
+        void streamSessionRun(sessionRef, buildRunInput(trimmedValue, images), {
           signal: controller.signal,
           ...(activeProfile === undefined ? {} : {profile: activeProfile}),
           onRun: run => recordRunStarted(sessionId, run.turn_id),

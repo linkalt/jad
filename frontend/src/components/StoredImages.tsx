@@ -84,7 +84,7 @@ export function StoredImages({names}: StoredImagesProps) {
               <Thumbnail
                 key={image.name}
                 src={image.url}
-                alt="Image from the tool result"
+                alt={`Stored image ${position + 1}`}
                 label="Open image"
                 onClick={() => setOpenIndex(position)}
               />
@@ -103,7 +103,7 @@ export function StoredImages({names}: StoredImagesProps) {
           onOpenChange={isOpen => {
             if (!isOpen) setOpenIndex(undefined);
           }}
-          media={ready.map((image, index) => ({src: image.url, alt: `Tool result image ${index + 1}`}))}
+          media={ready.map((image, index) => ({src: image.url, alt: `Stored image ${index + 1}`}))}
           index={openIndex ?? 0}
           onIndexChange={setOpenIndex}
           hasZoom
