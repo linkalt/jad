@@ -72,15 +72,17 @@ func (b *browser) open(raw string) error {
 	go func() {
 		defer close(b.done)
 		for _, target := range b.visit(redirect, state) {
-			response, err := http.Get(target)
-			if err != nil {
-				b.t.Errorf("callback request failed: %v", err)
-				return
+			// A request that cannot connect is recorded as status 0, not as a test failure: Login
+			// closes the callback server after the first redirect, so a later request can
+			// legitimately find the port closed. A test that needs an answer checks the status.
+			code := 0
+			if response, err := http.Get(target); err == nil {
+				_, _ = io.Copy(io.Discard, response.Body)
+				response.Body.Close()
+				code = response.StatusCode
 			}
-			_, _ = io.Copy(io.Discard, response.Body)
-			response.Body.Close()
 			b.mutex.Lock()
-			b.status = append(b.status, response.StatusCode)
+			b.status = append(b.status, code)
 			b.mutex.Unlock()
 		}
 	}()
