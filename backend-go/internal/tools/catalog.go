@@ -50,6 +50,11 @@ type ExecutionContext struct {
 	// left the file as it was, or failed, is not reported. The sub-agent tool uses it
 	// to list what a child changed.
 	OnFileChange func(path, action string)
+	// ProcessOwner, when set, limits the process tool to the processes this owner
+	// started: it lists, reads and stops only those, and what it starts belongs to the
+	// owner. The sub-agent tool sets it to the run's id for a child that lists process,
+	// so a child cannot see or stop the parent's processes. Empty means no limit.
+	ProcessOwner string
 }
 
 // PathScope is a per-call narrowing of a tool's path policy. Allow, when not empty,

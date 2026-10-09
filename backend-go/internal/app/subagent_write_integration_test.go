@@ -508,7 +508,7 @@ func TestSubagentWriterThatFailedToWriteListsNone(t *testing.T) {
 	}
 	parent := f.provider.forModel("parent-model")
 	last := parent[len(parent)-1].Text
-	if !strings.Contains(last, "written_files: none (changes made by bash or exec are not listed)") {
+	if !strings.Contains(last, "written_files: none (changes made by bash, exec or process are not listed)") {
 		t.Fatalf("a refused write must not be listed as a change:\n%s", last)
 	}
 }

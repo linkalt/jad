@@ -82,8 +82,8 @@ func TestSubagentResultSaysWhenAWriterChangedNoFile(t *testing.T) {
 	settings.ChangedFilesMax = 100
 	catalog, _ := buildSubagentCatalog(t, settings, changesLauncher(), readOnlyTool("read"), writeTool("write"))
 	out := subagentCall(t, catalog, `{"task":"fix"}`)
-	if !strings.Contains(out, "written_files: none (changes made by bash or exec are not listed)") {
-		t.Fatalf("an empty list must say so, because bash and exec are not covered:\n%s", out)
+	if !strings.Contains(out, "written_files: none (changes made by bash, exec or process are not listed)") {
+		t.Fatalf("an empty list must say so, because bash, exec and process are not covered:\n%s", out)
 	}
 }
 

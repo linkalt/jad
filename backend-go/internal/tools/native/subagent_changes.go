@@ -38,11 +38,19 @@ func (r *subagentRun) recordChange(path, action string, max int) {
 // nothing for a run that is not allowed to change files, and for one that changed
 // none it says so, because "none" is also an answer.
 func changedInformation(run subagentRunView) []tools.Information {
+	information := changedFilesInformation(run)
+	if run.processesStopped > 0 {
+		information = append(information, tools.Information{Key: "stopped_processes", Value: run.processesStopped})
+	}
+	return information
+}
+
+func changedFilesInformation(run subagentRunView) []tools.Information {
 	if !run.tracked {
 		return nil
 	}
 	if len(run.files) == 0 && run.filesOmitted == 0 {
-		return []tools.Information{{Key: "written_files", Value: "none (changes made by bash or exec are not listed)"}}
+		return []tools.Information{{Key: "written_files", Value: "none (changes made by bash, exec or process are not listed)"}}
 	}
 	parts := make([]string, 0, len(run.files))
 	for _, file := range run.files {

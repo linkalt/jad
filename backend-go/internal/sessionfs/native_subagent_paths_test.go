@@ -48,6 +48,7 @@ func TestSubagentPathsAreRefusedWhenTheyCannotHold(t *testing.T) {
 	for name, tc := range map[string]struct{ agent, want string }{
 		"bash with paths":    {`{"tools":["write","bash"],"paths":{"allow":["src"]}}`, "a shell can change any path"},
 		"exec with paths":    {`{"tools":["edit","exec"],"paths":{"allow":["src"]}}`, "a shell can change any path"},
+		"process with paths": {`{"tools":["write","process"],"paths":{"allow":["src"]}}`, "a shell can change any path"},
 		"no change tool":     {`{"tools":["read"],"paths":{"allow":["src"]}}`, "neither write nor edit"},
 		"no tools list":      {`{"paths":{"allow":["src"]}}`, "neither write nor edit"},
 		"empty object":       {`{"tools":["write"],"paths":{}}`, "at least one allow or deny"},

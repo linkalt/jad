@@ -212,6 +212,9 @@ type subagentRun struct {
 	// more there were than the list keeps.
 	files        []subagentFileChange
 	filesOmitted int
+	// processesStopped is how many background processes the child left running that
+	// the run's end stopped. Kept in memory only.
+	processesStopped int
 	// tracked is set when the run lists its changed files (changes and a non-zero
 	// changed_files_max); without it the result says nothing about files.
 	tracked bool
@@ -232,6 +235,7 @@ type subagentRunView struct {
 	files                          []subagentFileChange
 	filesOmitted                   int
 	tracked                        bool
+	processesStopped               int
 	dir                            string
 	timeoutMS                      int64
 	elapsed                        time.Duration
@@ -245,7 +249,7 @@ func (r *subagentRun) view() subagentRunView {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
 }
 
 // active reports whether the run is queued or running.
@@ -258,6 +262,13 @@ func (r *subagentRun) active() bool {
 func (r *subagentRun) setState(state string) {
 	r.mu.Lock()
 	r.state = state
+	r.mu.Unlock()
+}
+
+// setProcessesStopped records how many processes the run's end stopped.
+func (r *subagentRun) setProcessesStopped(count int) {
+	r.mu.Lock()
+	r.processesStopped = count
 	r.mu.Unlock()
 }
 
@@ -334,6 +345,9 @@ type subagentStart struct {
 	// limit, maxQueued, keep and resultMax are the starting session's settings.
 	limit     int
 	maxQueued int
+	// processes, when set, is the manager whose processes the run started; the run's end
+	// stops them. See stopRunProcesses.
+	processes ProcessManager
 	// changedMax is how many changed files the run lists; see recordChange.
 	changedMax int
 	keep       int
@@ -381,6 +395,9 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	if holdsSlot {
 		run.state = subagentRunRunning
 	}
+	// The run id is the owner of every process the child starts, so the child sees only
+	// its own and the run's end can stop them.
+	spec.request.Execution.ProcessOwner = id
 	if spec.changes && spec.changedMax > 0 {
 		run.tracked = true
 		changedMax := spec.changedMax
@@ -410,6 +427,9 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 	defer cancel()
 	spec.request.OnTranscript = run.setDir
 	result, err := m.runLauncher(childContext, spec)
+	// The child is over, so nothing it started should go on: stop its processes before
+	// the run is reported ended, and say how many there were.
+	run.setProcessesStopped(stopRunProcesses(spec.processes, run.id))
 	switch {
 	case err == nil:
 		m.finish(run, subagentRunDone, result, "", spec)
@@ -421,6 +441,17 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 	default:
 		m.finish(run, subagentRunFailed, result, err.Error(), spec)
 	}
+}
+
+// stopRunProcesses stops the processes a run's child started and returns how many it
+// stopped. It does nothing without a process manager or for a manager that cannot tell
+// owners apart.
+func stopRunProcesses(processes ProcessManager, runID string) int {
+	owners, ok := processes.(processOwnership)
+	if !ok {
+		return 0
+	}
+	return owners.stopOwned(runID, "subagent_run_ended")
 }
 
 // runLauncher turns a panic in the launcher into a failed run, because the goroutine

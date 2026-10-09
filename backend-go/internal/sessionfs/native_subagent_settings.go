@@ -89,7 +89,7 @@ type NativeSubagentSettings struct {
 	// the transcript is the record of what a child did, and nothing deletes it unless
 	// asked. The zero value is the default.
 	DeleteTranscripts bool
-	// AllowWrite lets an agent list write, edit, bash or exec in its tools, so a child
+	// AllowWrite lets an agent list write, edit, bash, exec or process in its tools, so a child
 	// can change files and run code. Off by default: without it such a name is a
 	// configuration error, and every child stays read-only. The zero value is the
 	// default.
@@ -121,7 +121,7 @@ type NativeSubagentStateContextSettings struct {
 // SubagentChangeTools are the native tools that let a child change files or run code.
 // An agent may list them only when tools.native.subagent.allow_write is on, and a call
 // to an agent that lists one is a change the checkpoint and the scheduler must know of.
-var SubagentChangeTools = []string{"write", "edit", "bash", "exec"}
+var SubagentChangeTools = []string{"write", "edit", "bash", "exec", "process"}
 
 // NativeSubagentAgent is one configured child agent.
 type NativeSubagentAgent struct {

@@ -267,7 +267,7 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 		if err != nil {
 			return nil, err
 		}
-		tool, err := NewSubagentToolWithManager(*config.NativeSubagent, loaded, launcher, mcp, subagentManager)
+		tool, err := NewSubagentToolWithProcesses(*config.NativeSubagent, loaded, launcher, mcp, subagentManager, manager)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}

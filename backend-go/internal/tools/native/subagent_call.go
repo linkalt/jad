@@ -79,6 +79,7 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 			Tools:     agent.catalog,
 			Execution: childExecution,
 		},
+		processes:  s.processes,
 		limit:      int(s.settings.MaxConcurrent),
 		maxQueued:  int(s.settings.MaxQueued),
 		changedMax: int(s.settings.ChangedFilesMax),

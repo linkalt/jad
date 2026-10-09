@@ -107,6 +107,10 @@ type subagentTool struct {
 	launcher SubagentLauncher
 	// manager owns the runs, so a run outlives the call that started it.
 	manager *SubagentManager
+	// processes is the session's process manager. A child that lists process starts its
+	// processes in it under its run id, and the run's end stops them. Nil when the
+	// session has no process tool.
+	processes ProcessManager
 }
 
 // NewSubagentTool builds the subagent tool over the already built tools of the same
@@ -128,6 +132,13 @@ func NewSubagentToolWithMCP(settings sessionfs.NativeSubagentSettings, parentToo
 // closes it at shutdown. A nil manager gives the tool a private one that nothing
 // closes, which suits tests only.
 func NewSubagentToolWithManager(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager) (tools.Tool, error) {
+	return NewSubagentToolWithProcesses(settings, parentTools, launcher, mcp, manager, nil)
+}
+
+// NewSubagentToolWithProcesses is NewSubagentToolWithManager plus the session's process
+// manager, which a child that lists the process tool needs: its processes are stopped
+// when its run ends.
+func NewSubagentToolWithProcesses(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, processes ProcessManager) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(subagentInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native subagent schema: %w", err)
@@ -160,7 +171,7 @@ func NewSubagentToolWithManager(settings sessionfs.NativeSubagentSettings, paren
 			changers = append(changers, tool)
 		}
 	}
-	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager}
+	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager, processes: processes}
 	for _, agent := range settings.Agents {
 		childTools, mcpIDs, err := subagentChildTools(agent, readOnly, changers, settings.AllowWrite)
 		if err != nil {

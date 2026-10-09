@@ -85,6 +85,9 @@ type ProcessStartRequest struct {
 	Policy      sessionfs.NativeProcessSettings
 	Environment []string
 	APIKeyEnv   string
+	// Owner names who started the process (a sub-agent run id); empty for the session
+	// itself. It is kept in memory only, never in the manifest the model sees.
+	Owner string
 }
 
 type ProcessWaitResult struct {
@@ -135,6 +138,7 @@ type managedProcess struct {
 	killGrace     time.Duration
 	maxCompleted  int64
 	retentionDays int64
+	owner         string // see ProcessStartRequest.Owner; never changes after the start
 }
 
 type processStreamWriter struct {
@@ -224,6 +228,7 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 		killGrace:     time.Duration(request.Policy.KillGraceMs) * time.Millisecond,
 		maxCompleted:  request.Policy.MaxCompleted,
 		retentionDays: request.Policy.RetentionDays,
+		owner:         request.Owner,
 	}
 	manager.entries[id] = entry
 	manager.manifests[id] = manifest

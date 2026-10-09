@@ -54,11 +54,12 @@ func TestSubagentAgentWithoutAToolsListNeverGetsChangeTools(t *testing.T) {
 }
 
 func TestSubagentAllowWriteDoesNotLetAnythingElseThrough(t *testing.T) {
-	// A mutating tool that is not one of write, edit, bash and exec is not a change tool.
-	_, err := NewSubagentTool(writeSettings(writerAgent("fixer", "read", "process")),
-		withExecutors(t, readOnlyTool("read"), writeTool("process")), nil)
-	if err == nil || !strings.Contains(err.Error(), `lists "process"`) {
-		t.Fatalf("process was accepted for a child: %v", err)
+	// A mutating tool that is not one of write, edit, bash, exec and process is not a
+	// change tool.
+	_, err := NewSubagentTool(writeSettings(writerAgent("fixer", "read", "task")),
+		withExecutors(t, readOnlyTool("read"), writeTool("task")), nil)
+	if err == nil || !strings.Contains(err.Error(), `lists "task"`) {
+		t.Fatalf("task was accepted for a child: %v", err)
 	}
 	_, err = NewSubagentTool(writeSettings(writerAgent("fixer", "subagent")),
 		withExecutors(t, readOnlyTool("read")), nil)

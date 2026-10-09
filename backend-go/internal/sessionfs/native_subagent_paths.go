@@ -85,14 +85,14 @@ func checkSubagentPaths(agent NativeSubagentAgent, settingPath, section string) 
 	editors := false
 	for _, name := range agent.Tools {
 		switch name {
-		case "bash", "exec":
+		case "bash", "exec", "process":
 			shells = append(shells, name)
 		case "write", "edit":
 			editors = true
 		}
 	}
 	if len(shells) > 0 {
-		return configError("%s: %s lists %s together with paths; a shell can change any path, so paths cannot confine it: remove paths or the shell tool", settingPath, section, strings.Join(shells, ", "))
+		return configError("%s: %s lists %s together with paths; a shell can change any path, so paths cannot confine it: remove paths or the shell tool (process starts a shell command too)", settingPath, section, strings.Join(shells, ", "))
 	}
 	if !editors {
 		return configError("%s: %s.paths has nothing to narrow: the agent lists neither write nor edit", settingPath, section)

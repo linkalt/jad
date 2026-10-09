@@ -128,6 +128,13 @@ func executeNativeProcess(
 	if manager == nil {
 		return tools.ExecutionError(execution.CallID, tools.StatusError, "process_manager_unavailable", "The process manager is not available"), nil
 	}
+	if execution.ProcessOwner != "" {
+		scoped, ok := scopeProcessManager(manager, execution.ProcessOwner)
+		if !ok {
+			return processOwnerUnavailable(execution.CallID), nil
+		}
+		manager = scoped
+	}
 	if err := manager.Recover(); err != nil {
 		return tools.ExecutionError(execution.CallID, tools.StatusError, "process_recovery_failed", "Could not recover managed processes"), nil
 	}
