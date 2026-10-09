@@ -53,8 +53,15 @@ type Tool struct {
 	ExampleOperation     json.RawMessage
 	RequiresUserDecision bool
 	// ReadOnly marks a tool that never changes state and depends on none, so its
-	// calls may run beside other calls of the same response.
+	// calls may run beside other calls of the same response. MayChangeFiles can
+	// still make one call of such a tool count as a change.
 	ReadOnly bool
+	// MayChangeFiles, when set, decides per call whether a call of this tool can
+	// change files, for a tool whose effect depends on its arguments (the subagent
+	// tool, whose agent may or may not be allowed to write). A true answer makes the
+	// call take the checkpoint and run in order, like a write. Nil means the
+	// ReadOnly flag alone decides.
+	MayChangeFiles func(arguments map[string]any) bool
 	// Approval "ask" holds each call until the user approves it; empty or "off" runs it.
 	Approval           string
 	NormalizeArguments func(map[string]any) map[string]any
@@ -197,7 +204,42 @@ func (c *Catalog) ChangesState(call json.RawMessage) bool {
 		return false
 	}
 	tool, exists := c.byName[fields.Name]
-	return exists && !tool.ReadOnly
+	if !exists {
+		return false
+	}
+	return !tool.ReadOnly || c.CallMayChangeFiles(call)
+}
+
+// CallMayChangeFiles reports whether a call to a tool that decides per call (see
+// Tool.MayChangeFiles) can change files. A tool without that hook answers false: the
+// checkpoint judges those by name.
+func (c *Catalog) CallMayChangeFiles(call json.RawMessage) bool {
+	if c == nil {
+		return false
+	}
+	var fields struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if json.Unmarshal(call, &fields) != nil {
+		return false
+	}
+	tool, exists := c.byName[fields.Name]
+	if !exists || tool.MayChangeFiles == nil {
+		return false
+	}
+	var text string
+	if json.Unmarshal(fields.Arguments, &text) != nil {
+		return false
+	}
+	var arguments map[string]any
+	if json.Unmarshal([]byte(text), &arguments) != nil || arguments == nil {
+		return false
+	}
+	if tool.NormalizeArguments != nil {
+		arguments = tool.NormalizeArguments(arguments)
+	}
+	return tool.MayChangeFiles(arguments)
 }
 
 // SourceOf returns where a called tool comes from ("native" or "mcp"), or "" for

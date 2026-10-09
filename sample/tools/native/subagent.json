@@ -5,7 +5,7 @@
       "id": "native.subagent",
       "source": "native",
       "name": "subagent",
-      "description": "Hand a task to a separate read-only agent with its own fresh context and get back only its final answer. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again, call with that id.",
+      "description": "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again, call with that id. A marked agent is never handed off: the call runs to its end.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -27,7 +27,7 @@ var subagentInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-const subagentDescription = "Hand a task to a separate read-only agent with its own fresh context and get back only its final answer. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again, call with that id."
+const subagentDescription = "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again, call with that id. A marked agent is never handed off: the call runs to its end."
 
 // subagentExample is shown to the model when its arguments are rejected.
 var subagentExample = json.RawMessage(`{"task":"Find where the retry delay is computed and report the file paths and line numbers."}`)
@@ -148,14 +148,21 @@ func NewSubagentToolWithManager(settings sessionfs.NativeSubagentSettings, paren
 		manager = NewSubagentManager()
 	}
 	readOnly := make([]tools.Tool, 0, len(parentTools))
+	var changers []tools.Tool
 	for _, tool := range parentTools {
-		if tool.ReadOnly && tool.Definition.Source == "native" && tool.Definition.ID != subagentToolID {
+		if tool.Definition.Source != "native" || tool.Definition.ID == subagentToolID {
+			continue
+		}
+		switch {
+		case tool.ReadOnly:
 			readOnly = append(readOnly, tool)
+		case settings.AllowWrite && containsName(sessionfs.SubagentChangeTools, tool.Definition.Name):
+			changers = append(changers, tool)
 		}
 	}
 	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager}
 	for _, agent := range settings.Agents {
-		childTools, mcpIDs, err := subagentChildTools(agent, readOnly)
+		childTools, mcpIDs, err := subagentChildTools(agent, readOnly, changers, settings.AllowWrite)
 		if err != nil {
 			return tools.Tool{}, err
 		}
@@ -182,14 +189,41 @@ func NewSubagentToolWithManager(settings sessionfs.NativeSubagentSettings, paren
 		},
 		Validator:        validator,
 		ExampleOperation: subagentExample,
-		// The child cannot change files and the tool keeps its own state outside the
-		// workspace, so several calls of one response may run side by side.
+		// A read-only child cannot change files and the tool keeps its own state outside
+		// the workspace, so several calls of one response may run side by side. A call
+		// to an agent that may change files says so through MayChangeFiles, and then
+		// takes the checkpoint and runs in order like a write.
 		ReadOnly:           true,
+		MayChangeFiles:     runtime.callMayChangeFiles,
 		NormalizeArguments: normalizeSubagentArguments,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return runtime.execute(ctx, arguments, execution)
 		},
 	}, nil
+}
+
+func containsName(names []string, name string) bool {
+	for _, candidate := range names {
+		if candidate == name {
+			return true
+		}
+	}
+	return false
+}
+
+// callMayChangeFiles is the tool's per-call answer to "can this call change files": it
+// can when the agent the call picks lists a tool that changes files. A call that picks
+// no agent, or only checks a run, cannot.
+func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
+	if id, _ := arguments["id"].(string); id != "" {
+		return false
+	}
+	task, _ := arguments["task"].(string)
+	if strings.TrimSpace(task) == "" {
+		return false
+	}
+	agent, problem := s.selectAgent(arguments)
+	return problem == "" && agent.config.ChangesFiles()
 }
 
 // subagentAgentList returns the text appended to the manifest description. The agent
@@ -204,6 +238,7 @@ func subagentAgentList(agents []sessionfs.NativeSubagentAgent, maxBytes int64) s
 	for _, agent := range agents {
 		full.WriteString("\n- ")
 		full.WriteString(agent.Name)
+		full.WriteString(changeMarker(agent))
 		if agent.Description != "" {
 			full.WriteString(": ")
 			full.WriteString(agent.Description)
@@ -224,12 +259,21 @@ func subagentAgentList(agents []sessionfs.NativeSubagentAgent, maxBytes int64) s
 	return fmt.Sprintf("\n%d %s configured.%s", len(agents), noun, askForList)
 }
 
+// changeMarker tells the model that a call to this agent can change files, so it runs
+// to its end instead of handing back a run id.
+func changeMarker(agent sessionfs.NativeSubagentAgent) string {
+	if agent.ChangesFiles() {
+		return " [can change files; runs to its end]"
+	}
+	return ""
+}
+
 // renderSubagentList is the result of a call with no task: one line per agent, then
 // one per retained run, so a model that lost a run id can find it again.
 func renderSubagentList(callID string, agents []subagentAgent, runs []subagentRunView, maxBytes int64) (string, error) {
 	lines := make([]string, 0, len(agents)+len(runs)+2)
 	for _, agent := range agents {
-		line := agent.config.Name
+		line := agent.config.Name + changeMarker(agent.config)
 		if agent.config.Description != "" {
 			line += ": " + oneLine(agent.config.Description)
 		}
@@ -265,14 +309,18 @@ func renderSubagentList(callID string, agents []subagentAgent, runs []subagentRu
 // subagentChildTools picks the native tools one agent may use from the enabled
 // read-only ones, and returns separately the MCP tool IDs its list names. An agent
 // without a tools list gets every native read-only tool and no MCP tool.
-func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly []tools.Tool) ([]tools.Tool, []string, error) {
-	available := make([]string, 0, len(readOnly))
-	byName := make(map[string]tools.Tool, len(readOnly))
-	for _, tool := range readOnly {
+func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers []tools.Tool, allowWrite bool) ([]tools.Tool, []string, error) {
+	available := make([]string, 0, len(readOnly)+len(changers))
+	byName := make(map[string]tools.Tool, len(readOnly)+len(changers))
+	for _, tool := range append(append([]tools.Tool(nil), readOnly...), changers...) {
 		available = append(available, tool.Definition.Name)
 		byName[tool.Definition.Name] = tool
 	}
 	sort.Strings(available)
+	kind := "read-only native tool"
+	if allowWrite {
+		kind = "native tool"
+	}
 	chosen := readOnly
 	var mcpIDs []string
 	if agent.HasTools {
@@ -283,12 +331,12 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly []tools.To
 				continue
 			}
 			if _, exists := byName[name]; !exists {
-				return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not an enabled read-only native tool (enabled: %s); an MCP tool is written mcp:<server>:<tool>", agent.Name, name, strings.Join(available, ", "))
+				return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not an enabled %s (enabled: %s); an MCP tool is written mcp:<server>:<tool>", agent.Name, name, kind, strings.Join(available, ", "))
 			}
 			wanted[name] = struct{}{}
 		}
 		chosen = make([]tools.Tool, 0, len(wanted))
-		for _, tool := range readOnly {
+		for _, tool := range append(append([]tools.Tool(nil), readOnly...), changers...) {
 			if _, ok := wanted[tool.Definition.Name]; ok {
 				chosen = append(chosen, tool)
 			}

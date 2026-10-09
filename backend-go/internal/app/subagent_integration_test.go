@@ -325,6 +325,13 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 	manifest("read.json")
 	manifest("subagent.json")
+	writeSettings, withWrite := agentSetting["__write"].(map[string]any)
+	if withWrite {
+		manifest("write.json")
+		delete(agentSetting, "__write")
+	}
+	checkpointJSON, withCheckpoint := agentSetting["__checkpoint"].(string)
+	delete(agentSetting, "__checkpoint")
 	for name, text := range files {
 		writeFile(t, filepath.Join(workspace, name), []byte(text))
 	}
@@ -377,15 +384,29 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		// The test supplies the agents as folders; nothing is defined inline.
 		subagent = map[string]any{"agents_dir": []string{dir}}
 	}
-	setting, err := json.Marshal(map[string]any{
+	definitions := []string{"read.json", "subagent.json"}
+	nativeTools := map[string]any{
+		"read":     map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}},
+		"subagent": subagent,
+	}
+	if withWrite {
+		definitions = append(definitions, "write.json")
+		writeTool := map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}}
+		for key, value := range writeSettings {
+			writeTool[key] = value
+		}
+		nativeTools["write"] = writeTool
+	}
+	sessionSetting := map[string]any{
 		"cwd": workspace, "max_tool_rounds": 4,
-		"tool_definition_paths": []string{"read.json", "subagent.json"},
+		"tool_definition_paths": definitions,
 		"mcp_servers":           mcpServers,
-		"tools": map[string]any{"native": map[string]any{
-			"read":     map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}},
-			"subagent": subagent,
-		}},
-	})
+		"tools":                 map[string]any{"native": nativeTools},
+	}
+	if withCheckpoint {
+		sessionSetting["checkpoint"] = json.RawMessage(checkpointJSON)
+	}
+	setting, err := json.Marshal(sessionSetting)
 	if err != nil {
 		t.Fatal(err)
 	}

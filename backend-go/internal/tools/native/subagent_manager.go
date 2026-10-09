@@ -187,6 +187,9 @@ type subagentRun struct {
 	agent     string
 	task      string
 	timeoutMS int64
+	// changes is set when the agent can change files: its result then warns that an
+	// unfinished run may have left changes behind.
+	changes   bool
 	startedAt time.Time
 	cancel    context.CancelFunc
 	// done closes once, after the final state is set.
@@ -212,6 +215,7 @@ type subagentRunView struct {
 	id, agent, task, state, reason string
 	result                         SubagentResult
 	cut                            bool
+	changes                        bool
 	dir                            string
 	timeoutMS                      int64
 	elapsed                        time.Duration
@@ -225,7 +229,7 @@ func (r *subagentRun) view() subagentRunView {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, changes: r.changes, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
 }
 
 // active reports whether the run is queued or running.
@@ -255,7 +259,7 @@ func (r *subagentRun) manifest() subagentManifest {
 	return subagentManifest{
 		Version: subagentManifestVersion, ID: r.id, Owner: r.owner, Agent: r.agent, Task: r.task,
 		TimeoutMS: r.timeoutMS, State: r.state, Reason: r.reason, StartedAt: r.startedAt, EndedAt: r.endedAt,
-		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut,
+		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes,
 	}
 }
 
@@ -267,7 +271,7 @@ func restoredSubagentRun(manifest subagentManifest, store *subagentStore) *subag
 	return &subagentRun{
 		id: manifest.ID, owner: manifest.Owner, agent: manifest.Agent, task: manifest.Task,
 		timeoutMS: manifest.TimeoutMS, startedAt: manifest.StartedAt, endedAt: manifest.EndedAt,
-		cancel: func() {}, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut,
+		cancel: func() {}, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut, changes: manifest.Changes,
 		dir: manifest.Dir, result: SubagentResult{Rounds: manifest.Rounds, Tokens: manifest.Tokens},
 		store: store, restored: true,
 	}
@@ -309,6 +313,8 @@ type subagentStart struct {
 	request  SubagentRequest
 	// owner is the session key of the starting call; see subagentRun.owner.
 	owner string
+	// changes is set when the agent can change files; see subagentRun.changes.
+	changes bool
 	// limit, maxQueued, keep and resultMax are the starting session's settings.
 	limit     int
 	maxQueued int
@@ -348,6 +354,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		agent:     spec.request.Agent.Name,
 		task:      subagentTaskPreview(spec.request.Task),
 		timeoutMS: spec.request.Agent.TimeoutMS,
+		changes:   spec.changes,
 		startedAt: time.Now(),
 		cancel:    cancel,
 		done:      make(chan struct{}),

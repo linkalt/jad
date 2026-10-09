@@ -235,3 +235,51 @@ func TestCatalogChangesStateTreatsOnlyReadOnlyToolsAsSafe(t *testing.T) {
 		t.Error("a nil catalog reports a state change")
 	}
 }
+
+// A ReadOnly tool can still decide per call that a call changes files: the subagent
+// tool does, for an agent that may write. That call must order like a write.
+func TestCatalogChangesStateFollowsAPerCallHookOfAReadOnlyTool(t *testing.T) {
+	validator, err := CompileSchema([]byte(`{"type":"object"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooked := Tool{
+		Definition: Definition{ID: "test:hooked", Source: "native", Name: "hooked", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Validator:  validator,
+		ReadOnly:   true,
+		MayChangeFiles: func(arguments map[string]any) bool {
+			mode, _ := arguments["mode"].(string)
+			return mode == "write"
+		},
+		Execute: func(context.Context, map[string]any, ExecutionContext) (string, error) { return "", nil },
+	}
+	plain := hooked
+	plain.Definition.ID, plain.Definition.Name, plain.MayChangeFiles = "test:plain", "plain", nil
+	catalog, err := NewCatalog([]Tool{hooked, plain})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		call            string
+		changes, hooked bool
+	}{
+		{`{"name":"hooked","arguments":"{\"mode\":\"write\"}"}`, true, true},
+		{`{"name":"hooked","arguments":"{\"mode\":\"read\"}"}`, false, false},
+		{`{"name":"hooked","arguments":"{}"}`, false, false},
+		{`{"name":"hooked","arguments":"not json"}`, false, false},
+		{`{"name":"hooked"}`, false, false},
+		{`{"name":"plain","arguments":"{\"mode\":\"write\"}"}`, false, false},
+		{`{"name":"missing","arguments":"{\"mode\":\"write\"}"}`, false, false},
+	} {
+		if got := catalog.ChangesState(json.RawMessage(tc.call)); got != tc.changes {
+			t.Errorf("ChangesState(%s) = %v, want %v", tc.call, got, tc.changes)
+		}
+		if got := catalog.CallMayChangeFiles(json.RawMessage(tc.call)); got != tc.hooked {
+			t.Errorf("CallMayChangeFiles(%s) = %v, want %v", tc.call, got, tc.hooked)
+		}
+	}
+	var none *Catalog
+	if none.CallMayChangeFiles(json.RawMessage(`{"name":"hooked"}`)) {
+		t.Error("a nil catalog reported a change")
+	}
+}

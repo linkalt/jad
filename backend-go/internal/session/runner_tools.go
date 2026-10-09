@@ -161,7 +161,7 @@ func roundChangesWorkspace(catalog *tools.Catalog, calls []json.RawMessage, run 
 		}
 	}
 	for _, call := range toRun {
-		if checkpoint.CallChangesWorkspace(call, catalog.SourceOf(call), run.IncludeMCPTools()) {
+		if checkpoint.CallChangesWorkspace(call, catalog.SourceOf(call), run.IncludeMCPTools()) || catalog.CallMayChangeFiles(call) {
 			return true
 		}
 	}

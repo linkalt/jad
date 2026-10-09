@@ -52,18 +52,26 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable",
 			fmt.Sprintf("The MCP tools of agent %s were not loaded", agent.config.Name)), nil
 	}
+	changes := agent.config.ChangesFiles()
+	childExecution := tools.ExecutionContext{
+		WorkspaceRoot: execution.WorkspaceRoot,
+		SessionDir:    execution.SessionDir,
+	}
+	if changes {
+		// A child that can change files asks the same user through the same queue as
+		// the parent, with its own name on the question. A read-only child asks nobody.
+		childExecution.RequestApproval = childApproval(execution.RequestApproval, agent.config.Name, callID)
+	}
 	run, err := s.manager.start(subagentStart{
 		launcher: s.launcher,
 		owner:    execution.SessionKey,
+		changes:  changes,
 		request: SubagentRequest{
-			Agent:  agent.config,
-			Task:   task,
-			CallID: callID,
-			Tools:  agent.catalog,
-			Execution: tools.ExecutionContext{
-				WorkspaceRoot: execution.WorkspaceRoot,
-				SessionDir:    execution.SessionDir,
-			},
+			Agent:     agent.config,
+			Task:      task,
+			CallID:    callID,
+			Tools:     agent.catalog,
+			Execution: childExecution,
 		},
 		limit:     int(s.settings.MaxConcurrent),
 		maxQueued: int(s.settings.MaxQueued),
@@ -78,7 +86,29 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		return tools.ExecutionError(callID, tools.StatusError, code, err.Error()), nil
 	}
 	// The run is not detached yet, so the parent stopping ends it, as it always did.
-	return s.await(ctx, callID, run, s.waitFor(arguments), true)
+	// A child that can change files is never handed off: its approvals and the
+	// checkpoint belong to this run, so the call waits for it to end, whatever wait_ms
+	// says. The agent's timeout_ms still bounds it.
+	wait := s.waitFor(arguments)
+	if changes {
+		wait = -1
+	}
+	return s.await(ctx, callID, run, wait, true)
+}
+
+// childApproval wraps the parent's approval requester for a child's calls: the question
+// names the agent, and the call id carries the parent's call id so it cannot be taken
+// for one of the parent's own. A nil parent stays nil, so a run nobody can ask blocks
+// the child's calls exactly as it blocks the parent's.
+func childApproval(parent tools.ApprovalRequester, agent, parentCallID string) tools.ApprovalRequester {
+	if parent == nil {
+		return nil
+	}
+	return func(ctx context.Context, call tools.ApprovalCall) tools.ApprovalVerdict {
+		call.Agent = agent
+		call.CallID = parentCallID + "/" + call.CallID
+		return parent(ctx, call)
+	}
 }
 
 func (s *subagentTool) followUp(ctx context.Context, callID, owner, id string, stop bool, arguments map[string]any) (string, error) {
@@ -106,15 +136,19 @@ func (s *subagentTool) waitFor(arguments map[string]any) time.Duration {
 	return time.Duration(wait) * time.Millisecond
 }
 
-// await waits for a run to end, for at most wait, and renders where it stands. When
-// ownsRun is set and ctx ends first, the run is cancelled and awaited, so the child
-// has stopped when the call returns.
+// await waits for a run to end, for at most wait (a negative wait has no limit), and
+// renders where it stands. When ownsRun is set and ctx ends first, the run is cancelled
+// and awaited, so the child has stopped when the call returns.
 func (s *subagentTool) await(ctx context.Context, callID string, run *subagentRun, wait time.Duration, ownsRun bool) (string, error) {
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
+	var expired <-chan time.Time
+	if wait >= 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		expired = timer.C
+	}
 	select {
 	case <-run.done:
-	case <-timer.C:
+	case <-expired:
 	case <-ctx.Done():
 		if ownsRun {
 			s.manager.stop(run)
@@ -150,6 +184,16 @@ func partialContent(run subagentRunView) *tools.Content {
 	return &tools.Content{Encoding: "utf8", Text: text}
 }
 
+// changesNote is added to the result of a child that can change files and did not
+// finish: what it did to the files is not rolled back, and its answer is not there to
+// say how far it got.
+func changesNote(run subagentRunView) string {
+	if !run.changes {
+		return ""
+	}
+	return ". It can change files, so some changes may already be made: check them before starting it again"
+}
+
 func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, error) {
 	switch run.state {
 	case subagentRunQueued, subagentRunRunning:
@@ -170,7 +214,7 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 		return tools.RenderToolResult(tools.ResultOptions{
 			ID:          callID,
 			Status:      tools.StatusOK,
-			Summary:     fmt.Sprintf("Agent %s was stopped (run %s)", run.agent, run.id),
+			Summary:     fmt.Sprintf("Agent %s was stopped (run %s)%s", run.agent, run.id, changesNote(run)),
 			Information: partialInformation(information, run),
 			Content:     partialContent(run),
 		})
@@ -186,7 +230,7 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 		return tools.RenderToolResult(tools.ResultOptions{
 			ID:          callID,
 			Status:      tools.StatusError,
-			Summary:     fmt.Sprintf("Agent %s did not finish within %d ms", run.agent, run.timeoutMS),
+			Summary:     fmt.Sprintf("Agent %s did not finish within %d ms%s", run.agent, run.timeoutMS, changesNote(run)),
 			Information: partialInformation(information, run),
 			Content:     partialContent(run),
 		})
@@ -202,14 +246,14 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 		return tools.RenderToolResult(tools.ResultOptions{
 			ID:     callID,
 			Status: tools.StatusError,
-			Summary: fmt.Sprintf("Agent %s was lost: the server stopped while it was going (run %s). The child did not survive. Start the task again only if the partial work below is not enough",
-				run.agent, run.id),
+			Summary: fmt.Sprintf("Agent %s was lost: the server stopped while it was going (run %s). The child did not survive. Start the task again only if the partial work below is not enough%s",
+				run.agent, run.id, changesNote(run)),
 			Information: partialInformation(information, run),
 			Content:     partialContent(run),
 		})
 	case subagentRunFailed:
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_failed",
-			fmt.Sprintf("Agent %s failed: %s", run.agent, boundedReason(run.reason)),
+			fmt.Sprintf("Agent %s failed: %s%s", run.agent, boundedReason(run.reason), changesNote(run)),
 			tools.Information{Key: "agent", Value: run.agent}), nil
 	}
 	text := strings.TrimSpace(run.result.Text)

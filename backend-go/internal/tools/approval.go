@@ -27,6 +27,9 @@ type ApprovalCall struct {
 	// Server is the MCP server the call goes to, empty for a native tool.
 	Server string
 	Args   map[string]any
+	// Agent names the sub-agent that made the call; empty for the session's own model.
+	// The question says so, because the user did not write that call's context.
+	Agent string
 	// RawArguments is the provider's argument text, kept for the preview of an
 	// MCP call because it preserves the model's key order.
 	RawArguments json.RawMessage
@@ -139,6 +142,9 @@ type previewField struct {
 // Keys keep the order the TypeScript backend writes them in.
 func ApprovalPreview(call ApprovalCall, maxBytes int64) (Preview, error) {
 	fields := []previewField{{"tool", call.Tool}}
+	if call.Agent != "" {
+		fields = append(fields, previewField{"agent", call.Agent})
+	}
 	title := "Run " + call.Tool
 	switch {
 	case call.Server != "":
@@ -185,6 +191,9 @@ func ApprovalPreview(call ApprovalCall, maxBytes int64) (Preview, error) {
 		title = "Edit file"
 	default:
 		fields = appendText(fields, "arguments", compactArguments(call), maxBytes)
+	}
+	if call.Agent != "" {
+		title += " (agent " + call.Agent + ")"
 	}
 	draft, err := encodeOrdered(fields)
 	if err != nil {

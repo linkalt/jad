@@ -40,7 +40,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "storage_dir", "statecontext"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "storage_dir", "statecontext"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -82,6 +82,11 @@ type NativeSubagentSettings struct {
 	// the transcript is the record of what a child did, and nothing deletes it unless
 	// asked. The zero value is the default.
 	DeleteTranscripts bool
+	// AllowWrite lets an agent list write, edit, bash or exec in its tools, so a child
+	// can change files and run code. Off by default: without it such a name is a
+	// configuration error, and every child stays read-only. The zero value is the
+	// default.
+	AllowWrite bool
 	// ListMaxBytes is the most bytes of agent list the tool description may carry:
 	// the full list when it fits, else the names, else a count. Zero never lists
 	// inline, so the model has to ask. The zero value of this struct therefore means
@@ -105,6 +110,11 @@ type NativeSubagentStateContextSettings struct {
 	States []string
 	Limit  int64
 }
+
+// SubagentChangeTools are the native tools that let a child change files or run code.
+// An agent may list them only when tools.native.subagent.allow_write is on, and a call
+// to an agent that lists one is a change the checkpoint and the scheduler must know of.
+var SubagentChangeTools = []string{"write", "edit", "bash", "exec"}
 
 // NativeSubagentAgent is one configured child agent.
 type NativeSubagentAgent struct {
@@ -205,6 +215,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 	if settings.DeleteTranscripts, err = bashBool(fields, "delete_transcripts", false, settingPath+": "+section); err != nil {
 		return nil, err
 	}
+	if settings.AllowWrite, err = bashBool(fields, "allow_write", false, settingPath+": "+section); err != nil {
+		return nil, err
+	}
 	if settings.StorageDir, err = normalizeNativeSubagentStorageDir(fields, cwd, toolStorageDir, settingPath); err != nil {
 		return nil, err
 	}
@@ -251,6 +264,13 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 	}
 	if len(settings.Agents) == 0 {
 		return nil, configError("%s: %s.agents_dir holds no agent folder; add a folder with an agent.json or a prompt.md, or define agents", settingPath, section)
+	}
+	if !settings.AllowWrite {
+		for _, agent := range settings.Agents {
+			if names := agent.ChangeTools(); len(names) > 0 {
+				return nil, configError("%s: agent %s lists %s in tools, which can change files; set %s.allow_write to true to allow it", settingPath, agent.Name, strings.Join(names, ", "), section)
+			}
+		}
 	}
 	return settings, nil
 }
@@ -471,3 +491,18 @@ func optionalSubagentTools(fields map[string]json.RawMessage, settingPath, secti
 	}
 	return names, true, nil
 }
+
+// ChangeTools returns the tools of the agent's list that can change files or run code,
+// in list order. An agent without a tools list has none: it gets read-only tools only.
+func (a NativeSubagentAgent) ChangeTools() []string {
+	var names []string
+	for _, name := range a.Tools {
+		if containsString(SubagentChangeTools, name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// ChangesFiles reports whether the agent lists a tool that can change files.
+func (a NativeSubagentAgent) ChangesFiles() bool { return len(a.ChangeTools()) > 0 }

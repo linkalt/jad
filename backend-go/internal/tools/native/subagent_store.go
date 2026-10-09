@@ -39,6 +39,7 @@ type subagentManifest struct {
 	Tokens    int64     `json:"tokens,omitempty"`
 	Dir       string    `json:"dir,omitempty"`
 	Cut       bool      `json:"cut,omitempty"`
+	Changes   bool      `json:"changes,omitempty"`
 }
 
 // subagentStore keeps one manifest file per run. Writes are best effort: a run goes on
