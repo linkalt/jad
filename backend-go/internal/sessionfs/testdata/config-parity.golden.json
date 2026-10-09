@@ -1940,5 +1940,47 @@
       },
       "model_path": "$ROOT/session-1/model.json"
     }
+  },
+  {
+    "name": "persistence max_item_bytes zero",
+    "profile": "",
+    "model": "",
+    "error": "persistence.max_item_bytes must be a safe integer between 1 and 67108864"
+  },
+  {
+    "name": "persistence max_item_bytes fraction",
+    "profile": "",
+    "model": "",
+    "error": "persistence.max_item_bytes must be a safe integer between 1 and 67108864"
+  },
+  {
+    "name": "persistence cursor_cache_checkpoint_bytes zero",
+    "profile": "",
+    "model": "",
+    "error": "persistence.cursor_cache_checkpoint_bytes must be a safe integer between 1 and 67108864"
+  },
+  {
+    "name": "persistence run_error_cache_max_entries zero",
+    "profile": "",
+    "model": "",
+    "error": "persistence.run_error_cache_max_entries must be a safe integer between 1 and 10000"
+  },
+  {
+    "name": "session_files max_depth negative",
+    "profile": "",
+    "model": "",
+    "error": "session_files.max_depth must be a safe integer between 0 and 64"
+  },
+  {
+    "name": "session_files max_entries fraction",
+    "profile": "",
+    "model": "",
+    "error": "session_files.max_entries must be a safe integer between 0 and 1000000"
+  },
+  {
+    "name": "session_files max_results string",
+    "profile": "",
+    "model": "",
+    "error": "session_files.max_results must be a safe integer between 0 and 100000"
   }
 ]

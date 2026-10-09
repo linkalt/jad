@@ -243,11 +243,11 @@ func sessionFileInteger(fields map[string]json.RawMessage, name string, fallback
 	}
 	var value any
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return 0, configError("%s: session_files.%s must be an integer between 0 and %d", path, name, maximum)
+		return 0, configError("%s: session_files.%s must be a safe integer between 0 and %d", path, name, maximum)
 	}
 	number, ok := value.(float64)
 	if !ok || math.IsNaN(number) || math.IsInf(number, 0) || math.Trunc(number) != number || number < 0 || number > float64(maximum) {
-		return 0, configError("%s: session_files.%s must be an integer between 0 and %d", path, name, maximum)
+		return 0, configError("%s: session_files.%s must be a safe integer between 0 and %d", path, name, maximum)
 	}
 	return int(number), nil
 }

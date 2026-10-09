@@ -620,7 +620,7 @@ func normalizePersistence(raw json.RawMessage, path string) (Persistence, error)
 	if value, ok := fields["max_item_bytes"]; ok && string(value) != "null" {
 		configured, valid := configSafeInteger(value)
 		if !valid || configured < 1 || configured > int64(maxConfiguredItemBytes) {
-			return Persistence{}, configError("%s: persistence.max_item_bytes must be an integer between 1 and %d", path, maxConfiguredItemBytes)
+			return Persistence{}, configError("%s: persistence.max_item_bytes must be a safe integer between 1 and %d", path, maxConfiguredItemBytes)
 		}
 		settings.MaxItemBytes = configured
 	}
@@ -635,14 +635,14 @@ func normalizePersistence(raw json.RawMessage, path string) (Persistence, error)
 	if value, ok := fields["cursor_cache_checkpoint_bytes"]; ok && string(value) != "null" {
 		var checkpointBytes float64
 		if err := json.Unmarshal(value, &checkpointBytes); err != nil || math.IsNaN(checkpointBytes) || math.IsInf(checkpointBytes, 0) || math.Trunc(checkpointBytes) != checkpointBytes || checkpointBytes < 1 || checkpointBytes > float64(maxConfiguredCursorCacheCheckpointBytes) {
-			return Persistence{}, configError("%s: persistence.cursor_cache_checkpoint_bytes must be an integer between 1 and %d", path, maxConfiguredCursorCacheCheckpointBytes)
+			return Persistence{}, configError("%s: persistence.cursor_cache_checkpoint_bytes must be a safe integer between 1 and %d", path, maxConfiguredCursorCacheCheckpointBytes)
 		}
 		settings.CursorCacheCheckpointBytes = int64(checkpointBytes)
 	}
 	if value, ok := fields["run_error_cache_max_entries"]; ok && string(value) != "null" {
 		configured, valid := configSafeInteger(value)
 		if !valid || configured < 1 || configured > maxConfiguredRunErrorCacheMaxEntries {
-			return Persistence{}, configError("%s: persistence.run_error_cache_max_entries must be an integer between 1 and %d", path, maxConfiguredRunErrorCacheMaxEntries)
+			return Persistence{}, configError("%s: persistence.run_error_cache_max_entries must be a safe integer between 1 and %d", path, maxConfiguredRunErrorCacheMaxEntries)
 		}
 		settings.RunErrorCacheMaxEntries = int(configured)
 	}

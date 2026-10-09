@@ -87,7 +87,7 @@ func TestRunContentSettingDefaultsAndValidation(t *testing.T) {
 		want string
 	}{
 		{`{"session_roots":[{"path":"sessions"}],"server":{"run_content_memory_bytes":-1}}`, "run_content_memory_bytes"},
-		{`{"session_roots":[{"path":"sessions"}],"server":{"run_content_write_batch_bytes":3}}`, "even integer"},
+		{`{"session_roots":[{"path":"sessions"}],"server":{"run_content_write_batch_bytes":3}}`, "server.run_content_write_batch_bytes must be an even safe integer between 2 and"},
 		{`{"session_roots":[{"path":"sessions"}],"server":{"run_content_flush_interval_ms":60001}}`, "run_content_flush_interval_ms"},
 		{`{"session_roots":[{"path":"sessions"}],"server":{"run_content_max_index_segments":65537}}`, "run_content_max_index_segments"},
 		{`{"session_roots":[{"path":"sessions"}],"server":{"tool_stream_interval_ms":60001}}`, "tool_stream_interval_ms"},
@@ -99,6 +99,47 @@ func TestRunContentSettingDefaultsAndValidation(t *testing.T) {
 		}
 		if _, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}}); err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("Load(%s) error = %v, want message containing %q", test.json, err, test.want)
+		}
+	}
+}
+
+// The wording of a range error for a server.* number is the TypeScript loader's, read
+// from backend/dist/src/session-roots.js for each key (port says "an integer", the batch
+// size "an even safe integer", every other key "a safe integer").
+func TestServerNumberRangeErrorsUseTheTypeScriptWording(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		key, value, want string
+	}{
+		{"port", "0", "server.port must be an integer between 1 and 65535"},
+		{"max_body_bytes", "0", "server.max_body_bytes must be a safe integer between 1 and 67108864"},
+		{"run_state_retention_ms", "-1", "server.run_state_retention_ms must be a safe integer between 0 and 86400000"},
+		{"tool_stream_interval_ms", "-1", "server.tool_stream_interval_ms must be a safe integer between 0 and 60000"},
+		{"run_content_memory_bytes", "-1", "server.run_content_memory_bytes must be a safe integer between 0 and 16777216"},
+		{"run_content_write_batch_bytes", "3", "server.run_content_write_batch_bytes must be an even safe integer between 2 and 16777216"},
+		{"run_content_write_batch_bytes", "0", "server.run_content_write_batch_bytes must be an even safe integer between 2 and 16777216"},
+		{"run_content_flush_interval_ms", "-1", "server.run_content_flush_interval_ms must be a safe integer between 0 and 60000"},
+		{"run_content_max_index_segments", "0", "server.run_content_max_index_segments must be a safe integer between 1 and 65536"},
+		{"sse_max_buffered_bytes", "1", "server.sse_max_buffered_bytes must be a safe integer between 1024 and 67108864"},
+		{"sse_heartbeat_interval_ms", "-1", "server.sse_heartbeat_interval_ms must be a safe integer between 0 and 300000"},
+		{"read_header_timeout_ms", "-1", "server.read_header_timeout_ms must be a safe integer between 0 and 300000"},
+		{"idle_timeout_ms", "-1", "server.idle_timeout_ms must be a safe integer between 0 and 3600000"},
+		{"snapshot_turns", "-1", "server.snapshot_turns must be a safe integer between 0 and 100000"},
+		{"max_page_turns", "0", "server.max_page_turns must be a safe integer between 1 and 1000"},
+		{"max_inline_part_bytes", "-1", "server.max_inline_part_bytes must be a safe integer between 0 and 16777216"},
+		{"idle_timeout_ms", "1.5", "server.idle_timeout_ms must be a safe integer between 0 and 3600000"},
+		{"idle_timeout_ms", `"5"`, "server.idle_timeout_ms must be a safe integer between 0 and 3600000"},
+	} {
+		setting := `{"session_roots":[{"path":"sessions"}],"server":{"` + tc.key + `":` + tc.value + `}}`
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("server.%s = %s: error = %v, want it to contain %q", tc.key, tc.value, err, tc.want)
 		}
 	}
 }

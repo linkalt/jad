@@ -195,5 +195,12 @@
  {"name":"exec lang alias clashes with another entry","setting":{"cwd":"$ROOT","tools":{"native":{"bash":{},"exec":{"langs":{"x":{"argv":["a"],"aliases":["z"]},"y":{"argv":["b"],"aliases":["z"]}}}}}}},
  {"name":"exec lang replaces a builtin and takes its aliases","setting":{"cwd":"$ROOT","tools":{"native":{"bash":{},"exec":{"langs":{"python":{"argv":["python3","-c","x","--"],"aliases":["pyx"]}}}}}}},
  {"name":"exec lang valid file entry","setting":{"cwd":"$ROOT","tools":{"native":{"bash":{},"exec":{"langs":{"viafile":{"argv":["bash","{file}","--"],"code":"file","ext":".sh"}}}}}}},
- {"name":"exec approval default","setting":{"cwd":"$ROOT","tools":{"native":{"bash":{},"exec":{}}},"approval":{"default":"ask"}}}
+ {"name":"exec approval default","setting":{"cwd":"$ROOT","tools":{"native":{"bash":{},"exec":{}}},"approval":{"default":"ask"}}},
+ {"name":"persistence max_item_bytes zero","setting":{"cwd":"$ROOT","persistence":{"max_item_bytes":0}}},
+ {"name":"persistence max_item_bytes fraction","setting":{"cwd":"$ROOT","persistence":{"max_item_bytes":1.5}}},
+ {"name":"persistence cursor_cache_checkpoint_bytes zero","setting":{"cwd":"$ROOT","persistence":{"cursor_cache_checkpoint_bytes":0}}},
+ {"name":"persistence run_error_cache_max_entries zero","setting":{"cwd":"$ROOT","persistence":{"run_error_cache_max_entries":0}}},
+ {"name":"session_files max_depth negative","setting":{"cwd":"$ROOT","session_files":{"max_depth":-1}}},
+ {"name":"session_files max_entries fraction","setting":{"cwd":"$ROOT","session_files":{"max_entries":1.5}}},
+ {"name":"session_files max_results string","setting":{"cwd":"$ROOT","session_files":{"max_results":"5"}}}
 ]

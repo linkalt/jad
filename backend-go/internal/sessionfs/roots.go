@@ -492,23 +492,30 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		*target = strings.TrimSpace(parsed)
 		return nil
 	}
-	readInt := func(name string, target *int64, minimum, maximum int64) error {
+	// readIntAs reads an integer setting. kind is the words the range error uses
+	// ("a safe integer", the TypeScript loader's wording for most keys); even also
+	// rejects odd values with the same message.
+	readIntAs := func(name string, target *int64, minimum, maximum int64, kind string, even bool) error {
 		value, ok := fields[name]
 		if !ok || string(value) == "null" {
 			return nil
 		}
 		parsed, valid := configSafeInteger(value)
-		if !valid || parsed < minimum || parsed > maximum {
-			return fmt.Errorf("%s: server.%s must be an integer between %d and %d", path, name, minimum, maximum)
+		if !valid || parsed < minimum || parsed > maximum || (even && parsed%2 != 0) {
+			return fmt.Errorf("%s: server.%s must be %s between %d and %d", path, name, kind, minimum, maximum)
 		}
 		*target = parsed
 		return nil
+	}
+	readInt := func(name string, target *int64, minimum, maximum int64) error {
+		return readIntAs(name, target, minimum, maximum, "a safe integer", false)
 	}
 	if err := readString("host", &settings.Host); err != nil {
 		return ServerSettings{}, err
 	}
 	port := int64(settings.Port)
-	if err := readInt("port", &port, 1, maxServerPort); err != nil {
+	// The TypeScript loader words the port error "an integer", not "a safe integer".
+	if err := readIntAs("port", &port, 1, maxServerPort, "an integer", false); err != nil {
 		return ServerSettings{}, err
 	}
 	settings.Port = int(port)
@@ -593,11 +600,8 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 	}
 	settings.RunContentMemoryBytes = int(runContentMemoryBytes)
 	runContentWriteBatchBytes := int64(settings.RunContentWriteBatchBytes)
-	if err := readInt("run_content_write_batch_bytes", &runContentWriteBatchBytes, 2, serverconfig.MaxRunContentMemoryBytes); err != nil {
+	if err := readIntAs("run_content_write_batch_bytes", &runContentWriteBatchBytes, 2, serverconfig.MaxRunContentMemoryBytes, "an even safe integer", true); err != nil {
 		return ServerSettings{}, err
-	}
-	if runContentWriteBatchBytes%2 != 0 {
-		return ServerSettings{}, fmt.Errorf("%s: server.run_content_write_batch_bytes must be an even integer", path)
 	}
 	settings.RunContentWriteBatchBytes = int(runContentWriteBatchBytes)
 	runContentFlushIntervalMS := int64(settings.RunContentFlushInterval / time.Millisecond)
