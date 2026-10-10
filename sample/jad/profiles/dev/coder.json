@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "description": "Main coding profile.",
+  "prompt_documents": [
+    "CLAUDE.md"
+  ],
+  "prompt_role": "developer",
+  "models": [
+    "category:openai"
+  ],
+  "model_default": "gpt-deep",
+  "toolset": "full",
+  "tools": {
+    "allow": [
+      "read",
+      "grep",
+      "glob",
+      "bash",
+      "edit",
+      "write",
+      "mcp:zvec-grep:*"
+    ]
+  },
+  "settings": {
+    "max_tool_rounds": 500
+  }
+}

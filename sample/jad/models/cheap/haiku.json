@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "provider": "anthropic",
+  "api_key_env": "ANTHROPIC_API_KEY",
+  "model": "claude-haiku-5",
+  "request": {
+    "max_tokens": 8192
+  }
+}

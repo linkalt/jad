@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "allowed_origins": [
+      "http://localhost:5173",
+      "http://127.0.0.1:5173"
+    ]
+  },
+  "session_roots": [
+    {
+      "id": "local",
+      "label": "Local sessions",
+      "path": "sessions"
+    }
+  ],
+  "libraries": {
+    "prompt_dirs": [
+      "prompts/prompts"
+    ],
+    "template_dirs": [
+      "prompts/templates"
+    ],
+    "skill_dirs": [
+      "prompts/skills"
+    ],
+    "tool_definition_paths": [
+      "../sample/tools/native/read.json",
+      "../sample/tools/native/bash.json"
+    ]
+  },
+  "defaults": {
+    "max_tool_rounds": 500,
+    "persistence": {
+      "durability": "turn",
+      "max_item_bytes": 10485760,
+      "response_metadata": "minimal"
+    },
+    "compaction": {
+      "auto_enabled": true,
+      "trigger_tokens": 400000,
+      "backup_mode": "replace"
+    },
+    "http_debug": {
+      "enabled": false
+    }
+  }
+}

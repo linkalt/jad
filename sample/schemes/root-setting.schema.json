@@ -215,6 +215,139 @@
         },
         "additionalProperties": true
       }
+    },
+    "libraries": {
+      "type": "object",
+      "description": "Directories read at startup, relative to the system setting.json parent.",
+      "properties": {
+        "prompt_dirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "template_dirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skill_dirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tool_definition_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Native tool definition files. Replaces the per-session tool_definition_paths."
+        }
+      },
+      "additionalProperties": true
+    },
+    "catalogs": {
+      "type": "object",
+      "description": "Folders of the catalogs, relative to the system setting.json parent. Each is read as <folder>/<category>/<name>.json (state is the exception: <folder>/<session>/<profile>/). Defaults: .jad/profiles, .jad/models, .jad/tools, .jad/mcp, .jad/state.",
+      "properties": {
+        "profiles": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "models": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "tools": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "mcp": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "state": {
+          "type": "string",
+          "pattern": "\\S"
+        }
+      },
+      "additionalProperties": false
+    },
+    "defaults": {
+      "type": "object",
+      "description": "Setting values every session starts from. Objects merge key by key with the level below it (profile, session); arrays and scalars replace. Each value follows the same key in setting.schema.json.",
+      "propertyNames": {
+        "enum": [
+          "statecontext",
+          "max_tool_rounds",
+          "max_parallel_tool_calls",
+          "tool_call_scheduling",
+          "provider_retry",
+          "openai_oauth",
+          "max_run_tokens",
+          "approval",
+          "checkpoint",
+          "hooks",
+          "image_resize",
+          "image_store",
+          "persistence",
+          "front_compaction",
+          "compaction",
+          "http_debug"
+        ]
+      },
+      "properties": {
+        "statecontext": {
+          "$ref": "setting.schema.json#/properties/statecontext"
+        },
+        "max_tool_rounds": {
+          "$ref": "setting.schema.json#/properties/max_tool_rounds"
+        },
+        "max_parallel_tool_calls": {
+          "$ref": "setting.schema.json#/properties/max_parallel_tool_calls"
+        },
+        "tool_call_scheduling": {
+          "$ref": "setting.schema.json#/properties/tool_call_scheduling"
+        },
+        "provider_retry": {
+          "$ref": "setting.schema.json#/properties/provider_retry"
+        },
+        "openai_oauth": {
+          "$ref": "setting.schema.json#/properties/openai_oauth"
+        },
+        "max_run_tokens": {
+          "$ref": "setting.schema.json#/properties/max_run_tokens"
+        },
+        "approval": {
+          "$ref": "setting.schema.json#/properties/approval"
+        },
+        "checkpoint": {
+          "$ref": "setting.schema.json#/properties/checkpoint"
+        },
+        "hooks": {
+          "$ref": "setting.schema.json#/properties/hooks"
+        },
+        "image_resize": {
+          "$ref": "setting.schema.json#/properties/image_resize"
+        },
+        "image_store": {
+          "$ref": "setting.schema.json#/properties/image_store"
+        },
+        "persistence": {
+          "$ref": "setting.schema.json#/properties/persistence"
+        },
+        "front_compaction": {
+          "$ref": "setting.schema.json#/properties/front_compaction"
+        },
+        "compaction": {
+          "$ref": "setting.schema.json#/properties/compaction"
+        },
+        "http_debug": {
+          "$ref": "setting.schema.json#/properties/http_debug"
+        }
+      }
     }
   },
   "required": ["session_roots"],

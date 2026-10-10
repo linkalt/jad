@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "session.schema.json",
+  "title": "Session",
+  "description": "<root>/<session>/session.json. A session is a working context: a cwd, the part of the catalogs it may use, and the active profile. It holds no model, tool or MCP definitions.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Working directory of every run in this session."
+    },
+    "category": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "Optional folder name used to group sessions in listings. It does not change the session id."
+    },
+    "scope": {
+      "type": "object",
+      "description": "What this session may use. Each list narrows the catalog under .jad/. A profile can only narrow it further.",
+      "properties": {
+        "profiles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)$"
+          },
+          "uniqueItems": true,
+          "description": "Narrows the profiles offered by the level above. Items: a file name, \"category:<folder>\" or \"*\". A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)$"
+          },
+          "uniqueItems": true,
+          "description": "Narrows the models offered by the level above. Items: a file name, \"category:<folder>\" or \"*\". A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
+        },
+        "mcp": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)$"
+          },
+          "uniqueItems": true,
+          "description": "Narrows the MCP servers offered by the level above. Items: a file name, \"category:<folder>\" or \"*\". A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
+        }
+      },
+      "additionalProperties": false
+    },
+    "active_profile": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "Profile used when a request names none. Must be inside scope.profiles."
+    },
+    "settings": {
+      "type": "object",
+      "description": "Overrides of the setting keys listed in propertyNames. Objects merge key by key with the level above; arrays and scalars replace it. Each value follows the same key in setting.schema.json.",
+      "propertyNames": {
+        "enum": [
+          "statecontext",
+          "max_tool_rounds",
+          "max_parallel_tool_calls",
+          "tool_call_scheduling",
+          "provider_retry",
+          "openai_oauth",
+          "max_run_tokens",
+          "approval",
+          "checkpoint",
+          "hooks",
+          "image_resize",
+          "image_store",
+          "persistence",
+          "front_compaction",
+          "compaction",
+          "http_debug"
+        ]
+      },
+      "properties": {
+        "statecontext": {
+          "$ref": "setting.schema.json#/properties/statecontext"
+        },
+        "max_tool_rounds": {
+          "$ref": "setting.schema.json#/properties/max_tool_rounds"
+        },
+        "max_parallel_tool_calls": {
+          "$ref": "setting.schema.json#/properties/max_parallel_tool_calls"
+        },
+        "tool_call_scheduling": {
+          "$ref": "setting.schema.json#/properties/tool_call_scheduling"
+        },
+        "provider_retry": {
+          "$ref": "setting.schema.json#/properties/provider_retry"
+        },
+        "openai_oauth": {
+          "$ref": "setting.schema.json#/properties/openai_oauth"
+        },
+        "max_run_tokens": {
+          "$ref": "setting.schema.json#/properties/max_run_tokens"
+        },
+        "approval": {
+          "$ref": "setting.schema.json#/properties/approval"
+        },
+        "checkpoint": {
+          "$ref": "setting.schema.json#/properties/checkpoint"
+        },
+        "hooks": {
+          "$ref": "setting.schema.json#/properties/hooks"
+        },
+        "image_resize": {
+          "$ref": "setting.schema.json#/properties/image_resize"
+        },
+        "image_store": {
+          "$ref": "setting.schema.json#/properties/image_store"
+        },
+        "persistence": {
+          "$ref": "setting.schema.json#/properties/persistence"
+        },
+        "front_compaction": {
+          "$ref": "setting.schema.json#/properties/front_compaction"
+        },
+        "compaction": {
+          "$ref": "setting.schema.json#/properties/compaction"
+        },
+        "http_debug": {
+          "$ref": "setting.schema.json#/properties/http_debug"
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "cwd",
+    "active_profile"
+  ]
+}

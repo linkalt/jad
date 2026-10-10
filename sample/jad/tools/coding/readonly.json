@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "description": "Search and read only.",
+  "native": {
+    "read": {},
+    "grep": {},
+    "glob": {}
+  },
+  "mcp": {
+    "zvec-grep": {},
+    "codebase-memory-mcp": {}
+  }
+}

@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "profile.schema.json",
+  "title": "Profile",
+  "description": "<.jad>/profiles/<category>/<name>.json. The profile name is the file name. A profile picks a prompt, the models it may use, one toolset and setting overrides.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "prompt_documents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "description": "Prompt files, as today's prompt_documents."
+    },
+    "prompt_role": {
+      "enum": [
+        "developer",
+        "system"
+      ]
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)$"
+      },
+      "uniqueItems": true,
+      "description": "Narrows the models offered by the level above. Items: a file name, \"category:<folder>\" or \"*\". A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
+    },
+    "model_default": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "Model used when a request names none. Must be one of the models this profile ends up with. Without it, the first of them (by name) is used."
+    },
+    "toolset": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "The toolset this profile uses (a file name under tools/). Any toolset in the catalog may be used; a session does not narrow toolsets. Without it the profile has no native tool and no MCP tool."
+    },
+    "tools": {
+      "type": "object",
+      "description": "The tools.allow filter of the profile, unchanged: which registered tools the model sees.",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "settings": {
+      "type": "object",
+      "description": "Overrides of the setting keys listed in propertyNames. Objects merge key by key with the level above; arrays and scalars replace it. Each value follows the same key in setting.schema.json.",
+      "propertyNames": {
+        "enum": [
+          "statecontext",
+          "max_tool_rounds",
+          "max_parallel_tool_calls",
+          "tool_call_scheduling",
+          "provider_retry",
+          "openai_oauth",
+          "max_run_tokens",
+          "approval",
+          "checkpoint",
+          "hooks",
+          "image_resize",
+          "image_store",
+          "persistence",
+          "front_compaction",
+          "compaction",
+          "http_debug"
+        ]
+      },
+      "properties": {
+        "statecontext": {
+          "$ref": "setting.schema.json#/properties/statecontext"
+        },
+        "max_tool_rounds": {
+          "$ref": "setting.schema.json#/properties/max_tool_rounds"
+        },
+        "max_parallel_tool_calls": {
+          "$ref": "setting.schema.json#/properties/max_parallel_tool_calls"
+        },
+        "tool_call_scheduling": {
+          "$ref": "setting.schema.json#/properties/tool_call_scheduling"
+        },
+        "provider_retry": {
+          "$ref": "setting.schema.json#/properties/provider_retry"
+        },
+        "openai_oauth": {
+          "$ref": "setting.schema.json#/properties/openai_oauth"
+        },
+        "max_run_tokens": {
+          "$ref": "setting.schema.json#/properties/max_run_tokens"
+        },
+        "approval": {
+          "$ref": "setting.schema.json#/properties/approval"
+        },
+        "checkpoint": {
+          "$ref": "setting.schema.json#/properties/checkpoint"
+        },
+        "hooks": {
+          "$ref": "setting.schema.json#/properties/hooks"
+        },
+        "image_resize": {
+          "$ref": "setting.schema.json#/properties/image_resize"
+        },
+        "image_store": {
+          "$ref": "setting.schema.json#/properties/image_store"
+        },
+        "persistence": {
+          "$ref": "setting.schema.json#/properties/persistence"
+        },
+        "front_compaction": {
+          "$ref": "setting.schema.json#/properties/front_compaction"
+        },
+        "compaction": {
+          "$ref": "setting.schema.json#/properties/compaction"
+        },
+        "http_debug": {
+          "$ref": "setting.schema.json#/properties/http_debug"
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version"
+  ]
+}

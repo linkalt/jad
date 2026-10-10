@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "provider": "openai-codex",
+  "auth_mode": "openai_oauth",
+  "oauth_auth_file": "~/.jad/auth/openai-codex.json",
+  "model": "gpt-6-luna",
+  "request": {
+    "reasoning": {
+      "effort": "medium",
+      "summary": "auto"
+    },
+    "store": false
+  }
+}

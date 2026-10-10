@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "description": "My main work session.",
+  "cwd": "/home/www/Downloads/tmp/myagent3",
+  "category": "work",
+  "scope": {
+    "profiles": [
+      "category:dev",
+      "category:review"
+    ],
+    "models": [
+      "category:openai",
+      "category:cheap"
+    ],
+    "mcp": [
+      "category:code",
+      "category:browser"
+    ]
+  },
+  "active_profile": "coder",
+  "settings": {
+    "hooks": {
+      "enabled": true
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "description": "Read-only review.",
+  "prompt_documents": [
+    "CLAUDE.md"
+  ],
+  "models": [
+    "gpt-fast",
+    "haiku"
+  ],
+  "model_default": "gpt-fast",
+  "toolset": "readonly"
+}

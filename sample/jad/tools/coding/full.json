@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "description": "Read, write, run and search.",
+  "native": {
+    "read": {},
+    "write": {},
+    "edit": {},
+    "grep": {},
+    "glob": {},
+    "bash": {},
+    "subagent": {
+      "agents_dir": [
+        "../../../subagents"
+      ]
+    }
+  },
+  "mcp": {
+    "codebase-memory-mcp": {
+      "deny_tools": [
+        "ingest_traces",
+        "delete_project"
+      ]
+    },
+    "zvec-grep": {},
+    "betterwright": {
+      "approval": "ask"
+    }
+  }
+}
