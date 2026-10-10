@@ -29,20 +29,20 @@
       "type": "array",
       "items": {
         "type": "string",
-        "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?)$"
+        "pattern": "^(\\*|[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?)$"
       },
       "uniqueItems": true,
-      "description": "Narrows the models offered by the level above. Items: a file name, \"<category>/<name>\" for one file, \"category:<folder>\" for a whole folder, or \"*\". The same file name may exist in several categories; the set a profile ends up with must hold each name once. A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
+      "description": "Narrows the models. Items: \"<category>\" for a whole folder, \"<category>/<name>\" for one file, or \"*\". A missing key offers every model; [] offers none. An item that matches no model is a load error."
     },
     "model_default": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-      "description": "Model used when a request names none. Must be one of the models this profile ends up with. Without it, the first of them (by name) is used."
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "Model used when a request names none, written <category>/<name>, for example \"openai/gpt-deep\". Must be one of the profile's models. Without it, the first of them (by ID) is used."
     },
     "toolset": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-      "description": "The toolset this profile uses (a file name under tools/). Any toolset in the catalog may be used; a session does not narrow toolsets. Without it the profile has no native tool and no MCP tool."
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "The toolset this profile uses, written <category>/<name> under tools/, for example \"coding/full\". Any toolset may be used. Without it the profile has no native tool and no MCP tool."
     },
     "tools": {
       "type": "object",

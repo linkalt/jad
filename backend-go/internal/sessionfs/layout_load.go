@@ -11,12 +11,12 @@ import (
 const layoutSessionFileName = "session.json"
 
 // LoadLayoutSessionSettings is LoadSessionSettings for the catalog layout. It reads
-// <session>/session.json, narrows the catalogs by the session scope, takes the profile
-// (requested, else active_profile) and composes the setting-shaped map the existing
-// normalizers read, so a normalizer or applyApprovalDefault needs no second copy.
+// <session>/session.json, narrows the profile catalog by the session scope, takes the
+// profile (requested, else active_profile) and composes the setting-shaped map the
+// existing normalizers read, so a normalizer or applyApprovalDefault needs no second copy.
 //
-// Model identity on the wire is the file name: requestedModel, SessionConfig.Models and
-// ModelDefault hold names; ModelPath is the absolute file of the selected one.
+// Every file is named "<category>/<name>", on the wire and in the files: the profile, the
+// run's model, SessionConfig.Models and ModelDefault. ModelPath is the absolute file.
 func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfile, requestedModel string) (SessionConfig, error) {
 	sessionPath := filepath.Join(location.Directory, layoutSessionFileName)
 	var session layoutSessionFile
@@ -37,17 +37,9 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if err != nil {
 		return SessionConfig{}, configError("%s: %v", sessionPath, err)
 	}
-	models, err := catalog.Scan("model", layout.Models)
-	if err != nil {
-		return SessionConfig{}, configError("%s: %v", sessionPath, err)
-	}
 	if profiles, err = profiles.Narrow(session.Scope.Profiles); err != nil {
 		return SessionConfig{}, configError("%s: scope.profiles: %v", sessionPath, err)
 	}
-	if models, err = models.Narrow(session.Scope.Models); err != nil {
-		return SessionConfig{}, configError("%s: scope.models: %v", sessionPath, err)
-	}
-
 	selected := requestedProfile
 	if selected == "" {
 		selected = session.ActiveProfile
@@ -55,30 +47,33 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if selected == "" {
 		return SessionConfig{}, configError("%s: active_profile is required", sessionPath)
 	}
-	entry, err := uniqueEntry(profiles, selected, sessionPath, "profile")
+	entry, err := profiles.Lookup(selected)
+	if err != nil {
+		return SessionConfig{}, configError("%s: %v", sessionPath, err)
+	}
+	keys, err := profileKeys(profiles, sessionPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
 
-	built := &layoutCompose{
-		layout: layout, location: location, sessionPath: sessionPath, session: session,
-		models: models, profiles: profiles,
-	}
-	setting, selectedModels, err := built.compose(entry)
+	built := &layoutCompose{layout: layout, location: location, sessionPath: sessionPath, session: session, profiles: profiles, keys: keys}
+	setting, modelPaths, err := built.compose(entry)
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	config, err := loadSessionSettingsFrom(location, setting, sessionPath, selected, requestedModel)
+	config, err := loadSessionSettingsFrom(location, setting, sessionPath, keys[entry.ID()], requestedModel)
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	// loadSessionSettingsFrom resolved the model name as if it were a path; the name is the
-	// requested model, else the profile's default, and the file is the catalog's.
+	// The normalizers know a profile only by its storage key; callers get the ID.
+	config.Profile = entry.ID()
+	config.DefaultProfile = session.ActiveProfile
+	config.PathProfiles = profiles.IDs()
 	name := requestedModel
 	if name == "" {
 		name = config.ModelDefault
 	}
-	config.ModelPath = selectedModels[name]
+	config.ModelPath = modelPaths[name]
 	return config, nil
 }
 
@@ -94,21 +89,22 @@ func LoadLayoutSessionConfig(location Location, layout Layout, requestedProfile,
 	return config.WithModel()
 }
 
-// uniqueEntry returns the one entry called name, or an error that says what is
-// available (missing) or which files clash (ambiguous).
-func uniqueEntry(from *catalog.Catalog, name, path, kind string) (catalog.Entry, error) {
-	found := from.Find(name)
-	switch len(found) {
-	case 1:
-		return found[0], nil
-	case 0:
-		return catalog.Entry{}, configError("%s: %s %q is not in the session scope; available: %s", path, kind, name, strings.Join(from.Names(), ", "))
+// profileKeys maps each profile ID to the key the normalizers use in paths.profiles,
+// which must match profileNamePattern (letters, digits, '_' and '-'). The key never
+// leaves this package's composed map; two IDs that would share one are refused.
+func profileKeys(profiles *catalog.Catalog, sessionPath string) (map[string]string, error) {
+	replacer := strings.NewReplacer("/", "__", ".", "_d_")
+	keys := make(map[string]string, profiles.Len())
+	owners := make(map[string]string, profiles.Len())
+	for _, id := range profiles.IDs() {
+		key := replacer.Replace(id)
+		if other, taken := owners[key]; taken {
+			return nil, configError("%s: profiles %q and %q cannot both be used: they map to the same internal key %q", sessionPath, other, id, key)
+		}
+		owners[key] = id
+		keys[id] = key
 	}
-	paths := make([]string, len(found))
-	for i, item := range found {
-		paths[i] = item.Path
-	}
-	return catalog.Entry{}, configError("%s: %s %q exists %d times (%s); name it as <category>/<name>", path, kind, name, len(found), strings.Join(paths, ", "))
+	return keys, nil
 }
 
 // layoutCompose holds what composing one session needs.
@@ -117,12 +113,12 @@ type layoutCompose struct {
 	location    Location
 	sessionPath string
 	session     layoutSessionFile
-	models      *catalog.Catalog
 	profiles    *catalog.Catalog
+	keys        map[string]string
 }
 
 // compose builds the legacy-shaped setting for the selected profile. The returned map
-// of model names to files covers the models of that profile.
+// holds the file of each model ID the profile may use.
 func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMessage, map[string]string, error) {
 	var profile layoutProfileFile
 	if err := readLayoutFile(selected.Path, &profile); err != nil {
@@ -135,23 +131,27 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 		return nil, nil, err
 	}
 
-	profileModels, err := c.models.Narrow(profile.Models)
+	models, err := catalog.Scan("model", c.layout.Models)
 	if err != nil {
-		return nil, nil, configError("%s: models: %v", selected.Path, err)
-	}
-	if err := profileModels.Unique(); err != nil {
 		return nil, nil, configError("%s: %v", selected.Path, err)
 	}
-	modelPaths := make(map[string]string, profileModels.Len())
-	for _, item := range profileModels.Entries() {
-		modelPaths[item.Name] = item.Path
+	if models, err = models.Narrow(profile.Models); err != nil {
+		return nil, nil, configError("%s: models: %v", selected.Path, err)
+	}
+	if profile.ModelDefault != "" {
+		if _, err := models.Lookup(profile.ModelDefault); err != nil {
+			return nil, nil, configError("%s: model_default: %v", selected.Path, err)
+		}
+	}
+	modelPaths := make(map[string]string, models.Len())
+	for _, item := range models.Entries() {
+		modelPaths[item.ID()] = item.Path
 	}
 
 	setting := mergeSettings(mergeSettings(c.layout.Defaults, c.session.Settings), profile.Settings)
 	setting["schema_version"] = json.RawMessage("1")
-	cwd := c.session.CWD
-	if cwd != "" {
-		if setting["cwd"], err = json.Marshal(cwd); err != nil {
+	if c.session.CWD != "" {
+		if setting["cwd"], err = json.Marshal(c.session.CWD); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -161,7 +161,6 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 	if len(c.layout.ToolDefinitionPaths) > 0 {
 		setting["tool_definition_paths"], _ = json.Marshal(c.layout.ToolDefinitionPaths)
 	}
-
 	if profile.Toolset != "" {
 		if err := c.addToolset(setting, profile.Toolset, selected.Path); err != nil {
 			return nil, nil, err
@@ -169,18 +168,18 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 	}
 
 	entries := make(map[string]json.RawMessage, c.profiles.Len())
-	for _, item := range c.profiles.Names() {
-		entry := c.storageEntry(item)
-		if item == selected.Name {
-			entry = c.selectedEntry(entry, profile, profileModels)
+	for _, other := range c.profiles.Entries() {
+		entry := c.storageEntry(other)
+		if other.ID() == selected.ID() {
+			c.addProfileFields(entry, profile, models)
 		}
 		raw, err := json.Marshal(entry)
 		if err != nil {
 			return nil, nil, err
 		}
-		entries[item] = raw
+		entries[c.keys[other.ID()]] = raw
 	}
-	paths := map[string]any{"profiles": entries, "active_profile": selected.Name}
+	paths := map[string]any{"profiles": entries, "active_profile": c.keys[selected.ID()]}
 	if setting["paths"], err = json.Marshal(paths); err != nil {
 		return nil, nil, err
 	}
@@ -188,9 +187,9 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 }
 
 // storageEntry is the part of a profile entry every profile gets: where its state lives,
-// <state>/<session>/<profile>/.
-func (c *layoutCompose) storageEntry(profile string) map[string]any {
-	dir := filepath.Join(c.layout.State, c.location.SessionID, profile)
+// <state>/<session>/<category>/<name>/.
+func (c *layoutCompose) storageEntry(profile catalog.Entry) map[string]any {
+	dir := filepath.Join(c.layout.State, c.location.SessionID, profile.Category, profile.Name)
 	return map[string]any{
 		"messages":     filepath.Join(dir, "messages.jsonl"),
 		"staging":      filepath.Join(dir, "staging"),
@@ -199,12 +198,11 @@ func (c *layoutCompose) storageEntry(profile string) map[string]any {
 	}
 }
 
-// selectedEntry adds the fields only the selected profile needs.
-func (c *layoutCompose) selectedEntry(entry map[string]any, profile layoutProfileFile, models *catalog.Catalog) map[string]any {
-	names := models.Names()
-	if len(names) > 0 {
-		entry["models"] = names
-		entry["model_default"] = names[0]
+// addProfileFields adds the fields only the selected profile needs.
+func (c *layoutCompose) addProfileFields(entry map[string]any, profile layoutProfileFile, models *catalog.Catalog) {
+	if ids := models.IDs(); len(ids) > 0 {
+		entry["models"] = ids
+		entry["model_default"] = ids[0]
 	}
 	if profile.ModelDefault != "" {
 		entry["model_default"] = profile.ModelDefault
@@ -215,21 +213,18 @@ func (c *layoutCompose) selectedEntry(entry map[string]any, profile layoutProfil
 	if len(profile.Tools) > 0 {
 		entry["tools"] = profile.Tools
 	}
-	return entry
 }
 
-// addToolset puts the toolset's native settings and MCP servers into the setting. A server
-// key is a file name in the session's MCP scope, or <category>/<name> when the name
-// exists in several categories; the file holds the connection, the toolset holds how
-// this profile uses it.
-func (c *layoutCompose) addToolset(setting map[string]json.RawMessage, name, profilePath string) error {
+// addToolset puts the toolset's native settings and MCP servers into the setting. The
+// toolset is "<category>/<name>" under tools/.
+func (c *layoutCompose) addToolset(setting map[string]json.RawMessage, id, profilePath string) error {
 	toolsets, err := catalog.Scan("toolset", c.layout.Tools)
 	if err != nil {
 		return configError("%s: %v", profilePath, err)
 	}
-	entry, err := uniqueEntry(toolsets, name, profilePath, "toolset")
+	entry, err := toolsets.Lookup(id)
 	if err != nil {
-		return err
+		return configError("%s: toolset: %v", profilePath, err)
 	}
 	var toolset layoutToolsetFile
 	if err := readLayoutFile(entry.Path, &toolset); err != nil {
@@ -248,6 +243,11 @@ func (c *layoutCompose) addToolset(setting map[string]json.RawMessage, name, pro
 	return nil
 }
 
+// mcpServers turns the toolset's mcp object into the server list. Each key is
+// "<category>/<name>" of a file under mcp/; the file holds the connection and its
+// environment, the toolset holds how this profile uses it. The server id (and so the
+// model-facing tool name mcp:<id>:<tool>) is the file name, so two files with the same
+// name cannot both be in one toolset.
 func (c *layoutCompose) mcpServers(toolset layoutToolsetFile, toolsetPath string) ([]map[string]any, error) {
 	if len(toolset.MCP) == 0 {
 		return nil, nil
@@ -266,27 +266,18 @@ func (c *layoutCompose) mcpServers(toolset layoutToolsetFile, toolsetPath string
 	if err != nil {
 		return nil, configError("%s: %v", toolsetPath, err)
 	}
-	if available, err = available.Narrow(c.session.Scope.MCP); err != nil {
-		return nil, configError("%s: scope.mcp: %v", c.sessionPath, err)
-	}
 	servers := make([]map[string]any, 0, len(keys))
+	ids := make(map[string]string, len(keys))
 	for _, key := range keys {
+		file, err := available.Lookup(key)
+		if err != nil {
+			return nil, configError("%s: mcp: %v", toolsetPath, err)
+		}
+		if other, taken := ids[file.Name]; taken {
+			return nil, configError("%s: mcp: %q and %q have the same file name, so the same tool names; use one of them", toolsetPath, other, key)
+		}
+		ids[file.Name] = key
 		use := uses[key]
-		selection, err := catalog.Of(key)
-		if err != nil {
-			return nil, configError("%s: mcp %v", toolsetPath, err)
-		}
-		found, err := available.Narrow(selection)
-		if err != nil {
-			return nil, configError("%s: mcp %v (the session scope.mcp decides which files are available)", toolsetPath, err)
-		}
-		if found.Len() != 1 {
-			if err := found.Unique(); err != nil {
-				return nil, configError("%s: mcp %v", toolsetPath, err)
-			}
-			return nil, configError("%s: mcp %q must name exactly one file, it matches %d", toolsetPath, key, found.Len())
-		}
-		file := found.Entries()[0]
 		item := map[string]any{"id": file.Name, "config_path": file.Path, "enabled": true}
 		if use.Enabled != nil {
 			item["enabled"] = *use.Enabled

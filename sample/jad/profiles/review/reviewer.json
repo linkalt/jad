@@ -5,9 +5,9 @@
     "CLAUDE.md"
   ],
   "models": [
-    "gpt-fast",
-    "haiku"
+    "openai/gpt-fast",
+    "cheap/haiku"
   ],
-  "model_default": "gpt-fast",
-  "toolset": "readonly"
+  "model_default": "openai/gpt-fast",
+  "toolset": "coding/readonly"
 }

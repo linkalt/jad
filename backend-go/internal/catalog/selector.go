@@ -7,38 +7,30 @@ import (
 	"strings"
 )
 
-// categoryPrefix starts a selector that matches every entry of one category.
-const categoryPrefix = "category:"
-
 type selectorKind int
 
 const (
-	selectName selectorKind = iota
-	selectCategory
+	selectCategory selectorKind = iota
 	selectAll
-	selectQualified
+	selectFile
 )
 
-// Selector is one item of a Selection: a name, "<category>/<name>",
-// "category:<c>" or "*".
+// Selector is one item of a Selection: "<category>" for a whole folder,
+// "<category>/<name>" for one file, or "*" for everything.
 type Selector struct {
 	kind     selectorKind
-	value    string
-	category string // only for selectQualified
+	category string
+	name     string // only for selectFile
 }
 
 // ParseSelector parses one selector. Whitespace is never trimmed: a padded
 // entry is an error, so a typo cannot silently select nothing.
 func ParseSelector(text string) (Selector, error) {
-	switch {
-	case text == "*":
+	if text == "*" {
 		return Selector{kind: selectAll}, nil
-	case strings.HasPrefix(text, categoryPrefix):
-		category := strings.TrimPrefix(text, categoryPrefix)
-		if err := ValidateIdentifier(category); err != nil {
-			return Selector{}, fmt.Errorf("selector %q: category %w", text, err)
-		}
-		return Selector{kind: selectCategory, value: category}, nil
+	}
+	if strings.Contains(text, ":") {
+		return Selector{}, fmt.Errorf("selector %q: write a category as its bare name and a file as <category>/<name>; no prefix is used", text)
 	}
 	if category, name, ok := strings.Cut(text, "/"); ok {
 		if err := ValidateIdentifier(category); err != nil {
@@ -47,15 +39,12 @@ func ParseSelector(text string) (Selector, error) {
 		if err := ValidateIdentifier(name); err != nil {
 			return Selector{}, fmt.Errorf("selector %q: name %w", text, err)
 		}
-		return Selector{kind: selectQualified, value: name, category: category}, nil
-	}
-	if strings.Contains(text, ":") {
-		return Selector{}, fmt.Errorf("selector %q: only %q prefixes a selector", text, categoryPrefix)
+		return Selector{kind: selectFile, category: category, name: name}, nil
 	}
 	if err := ValidateIdentifier(text); err != nil {
-		return Selector{}, fmt.Errorf("selector %q: name %w", text, err)
+		return Selector{}, fmt.Errorf("selector %q: category %w", text, err)
 	}
-	return Selector{kind: selectName, value: text}, nil
+	return Selector{kind: selectCategory, category: text}, nil
 }
 
 // String returns the selector text that ParseSelector accepts.
@@ -63,24 +52,20 @@ func (s Selector) String() string {
 	switch s.kind {
 	case selectAll:
 		return "*"
-	case selectCategory:
-		return categoryPrefix + s.value
-	case selectQualified:
-		return s.category + "/" + s.value
+	case selectFile:
+		return s.category + "/" + s.name
 	}
-	return s.value
+	return s.category
 }
 
 func (s Selector) matches(entry Entry) bool {
 	switch s.kind {
 	case selectAll:
 		return true
-	case selectCategory:
-		return entry.Category == s.value
-	case selectQualified:
-		return entry.Category == s.category && entry.Name == s.value
+	case selectFile:
+		return entry.Category == s.category && entry.Name == s.name
 	}
-	return entry.Name == s.value
+	return entry.Category == s.category
 }
 
 // Selection is the optional list a level uses to narrow the level above.

@@ -46,87 +46,54 @@ func mustOf(t *testing.T, texts ...string) Selection {
 func TestScanReadsCategoryFolders(t *testing.T) {
 	dir := layout(t, "coding/gpt-fast.json", "coding/gpt-slow.json", "cheap/mini.json")
 	c := mustScan(t, dir)
-	if got, want := c.Names(), []string{"gpt-fast", "gpt-slow", "mini"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("names = %v, want %v", got, want)
+	if got, want := c.IDs(), []string{"cheap/mini", "coding/gpt-fast", "coding/gpt-slow"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ids = %v, want %v", got, want)
 	}
 	if got, want := c.Categories(), []string{"cheap", "coding"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("categories = %v, want %v", got, want)
 	}
-	entry, ok := c.Get("mini")
-	if !ok || entry.Category != "cheap" || entry.Path != filepath.Join(dir, "cheap", "mini.json") {
+	entry, ok := c.Get("cheap/mini")
+	if !ok || entry.Category != "cheap" || entry.Name != "mini" || entry.ID() != "cheap/mini" ||
+		entry.Path != filepath.Join(dir, "cheap", "mini.json") {
 		t.Fatalf("mini = %+v ok=%v", entry, ok)
 	}
-	if _, ok := c.Get("cheap/mini"); ok {
-		t.Fatal("identity is the plain file name, never a path")
+	if _, ok := c.Get("mini"); ok {
+		t.Fatal("identity is category/name; a bare file name is not an ID")
 	}
 }
 
 func TestScanMissingDirIsEmpty(t *testing.T) {
 	c := mustScan(t, filepath.Join(t.TempDir(), "absent"))
 	if c.Len() != 0 || len(c.Categories()) != 0 {
-		t.Fatalf("want empty catalog, got %v", c.Names())
+		t.Fatalf("want empty catalog, got %v", c.IDs())
 	}
 }
 
-func TestScanAllowsTheSameNameInTwoCategories(t *testing.T) {
-	dir := layout(t, "headed/betterwright.json", "headless/betterwright.json", "code/zvec.json")
-	c := mustScan(t, dir)
-	if got, want := c.Names(), []string{"betterwright", "zvec"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("names = %v, want %v", got, want)
-	}
-	found := c.Find("betterwright")
-	if len(found) != 2 || found[0].Category != "headed" || found[1].Category != "headless" {
-		t.Fatalf("find = %+v", found)
-	}
-	if _, ok := c.Get("betterwright"); ok {
-		t.Fatal("Get must refuse an ambiguous name")
-	}
-	if _, ok := c.Get("zvec"); !ok {
-		t.Fatal("Get must return a unique name")
-	}
-	err := c.Unique()
-	if err == nil {
-		t.Fatal("want ambiguity error")
-	}
-	for _, part := range []string{`"betterwright" is in 2 categories`, filepath.Join("headed", "betterwright.json"), filepath.Join("headless", "betterwright.json"), "<category>/<name>"} {
-		if !strings.Contains(err.Error(), part) {
-			t.Fatalf("error %q lacks %q", err, part)
-		}
-	}
-	if strings.Contains(err.Error(), "zvec") {
-		t.Fatalf("a unique name must not be reported: %v", err)
-	}
-}
-
-func TestNarrowingResolvesAnAmbiguousName(t *testing.T) {
+// One program, two environments: the same file name in two categories are two entries
+// with two IDs, and nothing is ambiguous because every reference carries its category.
+func TestTheSameFileNameInTwoCategoriesAreTwoEntries(t *testing.T) {
 	c := mustScan(t, layout(t, "headed/betterwright.json", "headless/betterwright.json", "code/zvec.json"))
-	for _, tc := range []struct {
-		sel      []string
-		wantCats []string
-	}{
-		{[]string{"category:headless", "zvec"}, []string{"headless"}},
-		{[]string{"headed/betterwright"}, []string{"headed"}},
-		{[]string{"betterwright"}, []string{"headed", "headless"}},
-	} {
-		got, err := c.Narrow(mustOf(t, tc.sel...))
-		if err != nil {
-			t.Fatalf("%v: %v", tc.sel, err)
-		}
-		var cats []string
-		for _, e := range got.Find("betterwright") {
-			cats = append(cats, e.Category)
-		}
-		if !reflect.DeepEqual(cats, tc.wantCats) {
-			t.Errorf("%v: betterwright categories = %v, want %v", tc.sel, cats, tc.wantCats)
-		}
-		unique := got.Unique() == nil
-		if unique != (len(tc.wantCats) == 1) {
-			t.Errorf("%v: unique = %v", tc.sel, unique)
+	if got, want := c.IDs(), []string{"code/zvec", "headed/betterwright", "headless/betterwright"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ids = %v, want %v", got, want)
+	}
+	for id, want := range map[string]string{"headed/betterwright": "headed", "headless/betterwright": "headless"} {
+		entry, err := c.Lookup(id)
+		if err != nil || entry.Category != want || entry.Name != "betterwright" {
+			t.Fatalf("%s: %+v %v", id, entry, err)
 		}
 	}
-	// A qualified name that does not exist is an error naming it.
-	if _, err := c.Narrow(mustOf(t, "code/betterwright")); err == nil || !strings.Contains(err.Error(), `"code/betterwright" is not available here`) {
-		t.Fatalf("err = %v", err)
+}
+
+func TestLookupExplainsWhatWentWrong(t *testing.T) {
+	c := mustScan(t, layout(t, "headed/betterwright.json", "code/zvec.json"))
+	for _, tc := range []struct{ id, want string }{
+		{"betterwright", "must be written <category>/<name>"},
+		{"a/b/c", "must be written <category>/<name>"},
+		{"code/betterwright", `"code/betterwright" is not available here (available: code/zvec, headed/betterwright)`},
+	} {
+		if _, err := c.Lookup(tc.id); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.id, err, tc.want)
+		}
 	}
 }
 
@@ -152,22 +119,25 @@ func TestScanIgnoresHiddenAndNonJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := mustScan(t, dir)
-	if got := c.Names(); !reflect.DeepEqual(got, []string{"ok"}) {
-		t.Fatalf("names = %v", got)
+	if got := c.IDs(); !reflect.DeepEqual(got, []string{"a/ok"}) {
+		t.Fatalf("ids = %v", got)
 	}
 }
 
 func TestParseSelector(t *testing.T) {
-	for _, ok := range []string{"gpt-fast", "category:coding", "*", "a.b_c-1", "headless/betterwright"} {
+	for _, ok := range []string{"coding", "coding/gpt-fast", "*", "a.b_c-1", "headless/betterwright"} {
 		s, err := ParseSelector(ok)
 		if err != nil || s.String() != ok {
 			t.Errorf("%q: %v %q", ok, err, s.String())
 		}
 	}
-	for _, bad := range []string{"", " x", "x ", "category:", "category: x", "mcp:srv", "a/", "/b", "a/b/c", "a b/c", "a*", "**", "cat:coding"} {
+	for _, bad := range []string{"", " x", "x ", "category:coding", "mcp:srv", "a:b", "a/", "/b", "a/b/c", "a b/c", "a*", "**"} {
 		if _, err := ParseSelector(bad); err == nil {
 			t.Errorf("%q: want error", bad)
 		}
+	}
+	if _, err := ParseSelector("category:coding"); err == nil || !strings.Contains(err.Error(), "no prefix is used") {
+		t.Errorf("the old prefix must be refused with an explanation: %v", err)
 	}
 }
 
@@ -183,49 +153,55 @@ func TestNarrowAbsentIsEverythingAndEmptyIsNothing(t *testing.T) {
 	}
 }
 
-func TestNarrowByNameCategoryAndStar(t *testing.T) {
+func TestNarrowByCategoryFileAndStar(t *testing.T) {
 	c := mustScan(t, layout(t, "coding/a.json", "coding/b.json", "cheap/c.json", "other/d.json"))
 	cases := []struct {
 		sel  []string
 		want []string
 	}{
-		{[]string{"category:coding"}, []string{"a", "b"}},
-		{[]string{"category:coding", "category:cheap"}, []string{"a", "b", "c"}},
-		{[]string{"d", "category:cheap"}, []string{"c", "d"}},
-		{[]string{"*"}, []string{"a", "b", "c", "d"}},
-		{[]string{"category:nothing"}, nil},
-		{[]string{"a", "a", "category:coding"}, []string{"a", "b"}},
+		{[]string{"coding"}, []string{"coding/a", "coding/b"}},
+		{[]string{"coding", "cheap"}, []string{"cheap/c", "coding/a", "coding/b"}},
+		{[]string{"other/d", "cheap"}, []string{"cheap/c", "other/d"}},
+		{[]string{"*"}, []string{"cheap/c", "coding/a", "coding/b", "other/d"}},
+		{[]string{"coding/a", "coding/a", "coding"}, []string{"coding/a", "coding/b"}},
 	}
 	for _, tc := range cases {
 		got, err := c.Narrow(mustOf(t, tc.sel...))
 		if err != nil {
 			t.Fatalf("%v: %v", tc.sel, err)
 		}
-		if names := got.Names(); !reflect.DeepEqual(names, tc.want) && !(len(names) == 0 && len(tc.want) == 0) {
-			t.Errorf("%v: got %v want %v", tc.sel, names, tc.want)
+		if ids := got.IDs(); !reflect.DeepEqual(ids, tc.want) {
+			t.Errorf("%v: got %v want %v", tc.sel, ids, tc.want)
 		}
+	}
+}
+
+func TestNarrowPicksOneEnvironmentOfASharedName(t *testing.T) {
+	c := mustScan(t, layout(t, "headed/betterwright.json", "headless/betterwright.json"))
+	got, err := c.Narrow(mustOf(t, "headless/betterwright"))
+	if err != nil || !reflect.DeepEqual(got.IDs(), []string{"headless/betterwright"}) {
+		t.Fatalf("got %v %v", got.IDs(), err)
 	}
 }
 
 func TestNarrowOnlyNarrows(t *testing.T) {
 	root := mustScan(t, layout(t, "coding/a.json", "coding/b.json", "cheap/c.json"))
-	session, err := root.Narrow(mustOf(t, "category:coding"))
+	session, err := root.Narrow(mustOf(t, "coding"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile, err := session.Narrow(mustOf(t, "a"))
-	if err != nil || !reflect.DeepEqual(profile.Names(), []string{"a"}) {
-		t.Fatalf("profile = %v %v", profile.Names(), err)
+	profile, err := session.Narrow(mustOf(t, "coding/a"))
+	if err != nil || !reflect.DeepEqual(profile.IDs(), []string{"coding/a"}) {
+		t.Fatalf("profile = %v %v", profile.IDs(), err)
 	}
-	// "c" exists in the root but is outside the session scope: an explicit error.
-	_, err = session.Narrow(mustOf(t, "c"))
-	if err == nil || !strings.Contains(err.Error(), `"c" is not available here`) || !strings.Contains(err.Error(), "a, b") {
-		t.Fatalf("err = %v", err)
-	}
-	// A category outside the scope simply intersects to nothing.
-	none, err := session.Narrow(mustOf(t, "category:cheap"))
-	if err != nil || none.Len() != 0 {
-		t.Fatalf("category outside scope: %v len=%d", err, none.Len())
+	// cheap/c exists in the root but is outside the session scope: an explicit error,
+	// for a file and for the whole category alike.
+	for _, outside := range []string{"cheap/c", "cheap"} {
+		_, err = session.Narrow(mustOf(t, outside))
+		if err == nil || !strings.Contains(err.Error(), `"`+outside+`" is not available here`) ||
+			!strings.Contains(err.Error(), "coding/a, coding/b") {
+			t.Fatalf("%s: err = %v", outside, err)
+		}
 	}
 	// Narrowing never mutates the level above.
 	if root.Len() != 3 || session.Len() != 2 {
@@ -233,10 +209,10 @@ func TestNarrowOnlyNarrows(t *testing.T) {
 	}
 }
 
-func TestNarrowReportsEveryMissingName(t *testing.T) {
+func TestNarrowReportsEveryMissingItem(t *testing.T) {
 	c := mustScan(t, layout(t, "a/x.json"))
-	_, err := c.Narrow(mustOf(t, "x", "p", "q"))
-	if err == nil || !strings.Contains(err.Error(), `"p", "q" are not available here`) {
+	_, err := c.Narrow(mustOf(t, "a", "p", "a/q"))
+	if err == nil || !strings.Contains(err.Error(), `"p", "a/q" are not available here`) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -251,11 +227,11 @@ func TestSelectionJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"models":[]}`), &doc); err != nil || doc.Models.IsAll() {
 		t.Fatalf("[] must be present and empty: %v", err)
 	}
-	if err := json.Unmarshal([]byte(`{"models":["category:coding","gpt-fast","*"]}`), &doc); err != nil {
+	if err := json.Unmarshal([]byte(`{"models":["coding","coding/gpt-fast","*"]}`), &doc); err != nil {
 		t.Fatal(err)
 	}
 	out, err := json.Marshal(doc)
-	if err != nil || string(out) != `{"models":["category:coding","gpt-fast","*"]}` {
+	if err != nil || string(out) != `{"models":["coding","coding/gpt-fast","*"]}` {
 		t.Fatalf("round trip = %s %v", out, err)
 	}
 	absent, _ := json.Marshal(struct {
@@ -264,7 +240,7 @@ func TestSelectionJSON(t *testing.T) {
 	if string(absent) != `{}` {
 		t.Fatalf("absent must be omitted: %s", absent)
 	}
-	for _, bad := range []string{`{"models":null}`, `{"models":"gpt"}`, `{"models":[1]}`, `{"models":[" x"]}`, `{"models":["mcp:a"]}`} {
+	for _, bad := range []string{`{"models":null}`, `{"models":"gpt"}`, `{"models":[1]}`, `{"models":[" x"]}`, `{"models":["mcp:a"]}`, `{"models":["category:a"]}`} {
 		var d struct {
 			Models Selection `json:"models"`
 		}
@@ -275,7 +251,7 @@ func TestSelectionJSON(t *testing.T) {
 }
 
 func TestSelectorsReturnsACopy(t *testing.T) {
-	s := mustOf(t, "a", "category:b")
+	s := mustOf(t, "a", "b/c")
 	items := s.Selectors()
 	items[0] = Selector{kind: selectAll}
 	if s.Selectors()[0].String() != "a" {

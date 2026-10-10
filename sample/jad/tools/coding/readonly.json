@@ -7,8 +7,8 @@
     "glob": {}
   },
   "mcp": {
-    "zvec-grep": {},
-    "codebase-memory-mcp": {},
+    "code/zvec-grep": {},
+    "code/codebase-memory-mcp": {},
     "browser-headless/betterwright": {}
   }
 }

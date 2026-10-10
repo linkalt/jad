@@ -23,42 +23,24 @@
     },
     "scope": {
       "type": "object",
-      "description": "What this session may use. Each list narrows the catalog under .jad/. A profile can only narrow it further.",
+      "description": "What this session may use. Only profiles are scoped: models, toolsets and MCP servers are always all available, and a profile narrows models itself.",
       "properties": {
         "profiles": {
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?)$"
+            "pattern": "^(\\*|[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?)$"
           },
           "uniqueItems": true,
-          "description": "Narrows the profiles offered by the level above. Items: a file name, \"<category>/<name>\" for one file, \"category:<folder>\" for a whole folder, or \"*\". The same file name may exist in several categories; the set a profile ends up with must hold each name once. A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
-        },
-        "models": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?)$"
-          },
-          "uniqueItems": true,
-          "description": "Narrows the models offered by the level above. Items: a file name, \"<category>/<name>\" for one file, \"category:<folder>\" for a whole folder, or \"*\". The same file name may exist in several categories; the set a profile ends up with must hold each name once. A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
-        },
-        "mcp": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?)$"
-          },
-          "uniqueItems": true,
-          "description": "Narrows the MCP servers offered by the level above. Items: a file name, \"<category>/<name>\" for one file, \"category:<folder>\" for a whole folder, or \"*\". The same file name may exist in several categories; the set a profile ends up with must hold each name once. A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
+          "description": "Narrows the profiles. Items: \"<category>\" for a whole folder, \"<category>/<name>\" for one file, or \"*\". A missing key offers every profile; [] offers none. An item that matches no profile is a load error."
         }
       },
       "additionalProperties": false
     },
     "active_profile": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-      "description": "Profile used when a request names none. Must be inside scope.profiles."
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "Profile used when a request names none, written <category>/<name>, for example \"dev/coder\". Must be inside scope.profiles."
     },
     "settings": {
       "type": "object",

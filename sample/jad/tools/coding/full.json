@@ -15,13 +15,13 @@
     }
   },
   "mcp": {
-    "codebase-memory-mcp": {
+    "code/codebase-memory-mcp": {
       "deny_tools": [
         "ingest_traces",
         "delete_project"
       ]
     },
-    "zvec-grep": {},
+    "code/zvec-grep": {},
     "browser-headed/betterwright": {
       "approval": "ask"
     }

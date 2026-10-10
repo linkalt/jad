@@ -6,10 +6,10 @@
   ],
   "prompt_role": "developer",
   "models": [
-    "category:openai"
+    "openai"
   ],
-  "model_default": "gpt-deep",
-  "toolset": "full",
+  "model_default": "openai/gpt-deep",
+  "toolset": "coding/full",
   "tools": {
     "allow": [
       "read",

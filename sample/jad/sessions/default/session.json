@@ -5,20 +5,11 @@
   "category": "work",
   "scope": {
     "profiles": [
-      "category:dev",
-      "category:review"
-    ],
-    "models": [
-      "category:openai",
-      "category:cheap"
-    ],
-    "mcp": [
-      "category:code",
-      "category:browser-headed",
-      "category:browser-headless"
+      "dev",
+      "review"
     ]
   },
-  "active_profile": "coder",
+  "active_profile": "dev/coder",
   "settings": {
     "hooks": {
       "enabled": true

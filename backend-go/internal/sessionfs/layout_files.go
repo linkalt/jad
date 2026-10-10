@@ -43,12 +43,10 @@ type layoutSessionFile struct {
 	Settings      map[string]json.RawMessage `json:"settings"`
 }
 
-// layoutScope narrows the catalogs for one session. There is no toolset entry: a
-// profile may use any toolset.
+// layoutScope narrows what one session may use. Only profiles are scoped; models,
+// toolsets and MCP servers are always all available, and a profile narrows models.
 type layoutScope struct {
 	Profiles catalog.Selection `json:"profiles"`
-	Models   catalog.Selection `json:"models"`
-	MCP      catalog.Selection `json:"mcp"`
 }
 
 // layoutProfileFile is <profiles>/<category>/<name>.json.

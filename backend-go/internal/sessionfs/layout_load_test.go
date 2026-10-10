@@ -84,10 +84,10 @@ func TestLayoutLoadsTheSampleSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Profile != "coder" || config.DefaultProfile != "coder" {
+	if config.Profile != "dev/coder" || config.DefaultProfile != "dev/coder" {
 		t.Fatalf("profile = %q default = %q", config.Profile, config.DefaultProfile)
 	}
-	if config.ModelDefault != "gpt-deep" || strings.Join(config.Models, ",") != "gpt-deep,gpt-fast" {
+	if config.ModelDefault != "openai/gpt-deep" || strings.Join(config.Models, ",") != "openai/gpt-deep,openai/gpt-fast" {
 		t.Fatalf("model default %q models %v", config.ModelDefault, config.Models)
 	}
 	if config.ModelPath != filepath.Join(root, "models", "openai", "gpt-deep.json") {
@@ -99,14 +99,14 @@ func TestLayoutLoadsTheSampleSession(t *testing.T) {
 	if config.Model.PromptText != "rules" || config.Model.PromptRole != "developer" {
 		t.Fatalf("prompt = %q role %q", config.Model.PromptText, config.Model.PromptRole)
 	}
-	wantMessages := filepath.Join(layout.State, "default", "coder", "messages.jsonl")
+	wantMessages := filepath.Join(layout.State, "default", "dev", "coder", "messages.jsonl")
 	if config.MessagesPath != wantMessages {
 		t.Fatalf("messages = %s, want %s", config.MessagesPath, wantMessages)
 	}
-	if config.StoragePaths.Staging != filepath.Join(layout.State, "default", "coder", "staging") {
+	if config.StoragePaths.Staging != filepath.Join(layout.State, "default", "dev", "coder", "staging") {
 		t.Fatalf("staging = %s", config.StoragePaths.Staging)
 	}
-	if config.StoragePaths.ToolStorage != filepath.Join(layout.State, "default", "coder", "tools") {
+	if config.StoragePaths.ToolStorage != filepath.Join(layout.State, "default", "dev", "coder", "tools") {
 		t.Fatalf("tool storage = %s", config.StoragePaths.ToolStorage)
 	}
 	if config.NativeRead == nil || config.NativeBash == nil || config.NativeSubagent == nil || config.NativeGrep == nil {
@@ -122,11 +122,11 @@ func TestLayoutLoadsTheSampleSession(t *testing.T) {
 
 func TestLayoutPicksTheMCPEnvironmentByCategory(t *testing.T) {
 	layout, location, root := sampleLayout(t)
-	coder, err := LoadLayoutSessionSettings(location, layout, "coder", "")
+	coder, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	reviewer, err := LoadLayoutSessionSettings(location, layout, "reviewer", "")
+	reviewer, err := LoadLayoutSessionSettings(location, layout, "review/reviewer", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestLayoutPicksTheMCPEnvironmentByCategory(t *testing.T) {
 
 func TestLayoutMCPUseSettingsComeFromTheToolset(t *testing.T) {
 	layout, location, _ := sampleLayout(t)
-	config, err := LoadLayoutSessionSettings(location, layout, "coder", "")
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestLayoutMCPUseSettingsComeFromTheToolset(t *testing.T) {
 func TestLayoutKeepsTheApprovalDefault(t *testing.T) {
 	layout, location, _ := sampleLayout(t)
 	layout.Defaults = map[string]json.RawMessage{"approval": json.RawMessage(`{"default":"ask"}`)}
-	config, err := LoadLayoutSessionSettings(location, layout, "coder", "")
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,9 +196,9 @@ func TestLayoutExplicitApprovalOffBeatsTheDefault(t *testing.T) {
 	layout.Defaults = map[string]json.RawMessage{"approval": json.RawMessage(`{"default":"ask"}`)}
 	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
 		m["native"].(map[string]any)["bash"] = map[string]any{"approval": "off"}
-		m["mcp"].(map[string]any)["zvec-grep"] = map[string]any{"approval": "off"}
+		m["mcp"].(map[string]any)["code/zvec-grep"] = map[string]any{"approval": "off"}
 	})
-	config, err := LoadLayoutSessionSettings(location, layout, "coder", "")
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,17 +217,17 @@ func TestLayoutExplicitApprovalOffBeatsTheDefault(t *testing.T) {
 
 func TestLayoutRequestedModelIsAName(t *testing.T) {
 	layout, location, root := sampleLayout(t)
-	config, err := LoadLayoutSessionConfig(location, layout, "coder", "gpt-fast")
+	config, err := LoadLayoutSessionConfig(location, layout, "dev/coder", "openai/gpt-fast")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if config.ModelPath != filepath.Join(root, "models", "openai", "gpt-fast.json") {
 		t.Fatalf("model path = %s", config.ModelPath)
 	}
-	if config.ModelDefault != "gpt-deep" {
+	if config.ModelDefault != "openai/gpt-deep" {
 		t.Fatalf("default changed: %q", config.ModelDefault)
 	}
-	_, err = LoadLayoutSessionSettings(location, layout, "coder", "haiku")
+	_, err = LoadLayoutSessionSettings(location, layout, "dev/coder", "cheap/haiku")
 	var clientErr *ClientError
 	if err == nil || !asClientError(err, &clientErr) {
 		t.Fatalf("a model outside the profile must be a client error, got %v", err)
@@ -242,47 +242,97 @@ func asClientError(err error, target **ClientError) bool {
 	return ok
 }
 
-func TestLayoutSessionScopeNarrowsAndReportsOutsideNames(t *testing.T) {
-	layout, location, root := sampleLayout(t)
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
-		m["scope"].(map[string]any)["profiles"] = []any{"coder"}
-	})
-	if _, err := LoadLayoutSessionSettings(location, layout, "reviewer", ""); err == nil ||
-		!strings.Contains(err.Error(), `profile "reviewer" is not in the session scope`) {
-		t.Fatalf("reviewer outside scope: %v", err)
-	}
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
-		m["scope"].(map[string]any)["models"] = []any{"nope"}
-	})
-	if _, err := LoadLayoutSessionSettings(location, layout, "coder", ""); err == nil || !strings.Contains(err.Error(), "scope.models") {
-		t.Fatalf("unknown model in scope: %v", err)
-	}
-	_ = root
-}
-
-func TestLayoutProfileModelOutsideScopeIsAnError(t *testing.T) {
+func TestLayoutSessionScopesProfilesByCategoryAndFile(t *testing.T) {
 	layout, location, _ := sampleLayout(t)
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
-		m["scope"].(map[string]any)["models"] = []any{"category:openai"}
-	})
-	// reviewer lists haiku, which is in category cheap: outside the session scope
-	_, err := LoadLayoutSessionSettings(location, layout, "reviewer", "")
-	if err == nil || !strings.Contains(err.Error(), "haiku") {
-		t.Fatalf("expected an error naming haiku, got %v", err)
+	scope := func(items ...any) {
+		editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+			m["scope"].(map[string]any)["profiles"] = items
+		})
+	}
+	scope("dev")
+	if _, err := LoadLayoutSessionSettings(location, layout, "review/reviewer", ""); err == nil ||
+		!strings.Contains(err.Error(), `"review/reviewer" is not available here`) {
+		t.Fatalf("reviewer outside a category scope: %v", err)
+	}
+	scope("dev/coder")
+	if _, err := LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err != nil {
+		t.Fatalf("a file scope keeps that file: %v", err)
+	}
+	scope("nope")
+	if _, err := LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err == nil || !strings.Contains(err.Error(), "scope.profiles") {
+		t.Fatalf("a category with no profile must be an error naming scope.profiles: %v", err)
+	}
+	scope("category:dev")
+	if _, err := LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err == nil || !strings.Contains(err.Error(), "no prefix is used") {
+		t.Fatalf("the old category: prefix must be refused: %v", err)
 	}
 }
 
-func TestLayoutAmbiguousMCPNameNeedsACategory(t *testing.T) {
+// A session has no model, toolset or mcp scope: the key is not part of the file format.
+func TestLayoutSessionHasNoScopeExceptProfiles(t *testing.T) {
+	layout, location, _ := sampleLayout(t)
+	for _, key := range []string{"models", "mcp", "toolsets", "tools"} {
+		editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+			m["scope"].(map[string]any)[key] = []any{"openai"}
+		})
+		if _, err := LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("scope.%s must be refused by name: %v", key, err)
+		}
+		editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+			delete(m["scope"].(map[string]any), key)
+		})
+	}
+}
+
+// Every model of every category is available to a profile, and a profile narrows it.
+func TestLayoutProfileSeesAllModelsUnlessItNarrows(t *testing.T) {
 	layout, location, root := sampleLayout(t)
+	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) {
+		delete(m, "models")
+		delete(m, "model_default")
+	})
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(config.Models, ","); got != "cheap/haiku,openai/gpt-deep,openai/gpt-fast" {
+		t.Fatalf("models = %s", got)
+	}
+	if config.ModelDefault != "cheap/haiku" {
+		t.Fatalf("default should be the first ID: %q", config.ModelDefault)
+	}
+	editJSON(t, filepath.Join(root, "profiles", "review", "reviewer.json"), func(m map[string]any) {
+		m["models"] = []any{"openai/nope"}
+	})
+	if _, err := LoadLayoutSessionSettings(location, layout, "review/reviewer", ""); err == nil || !strings.Contains(err.Error(), `"openai/nope" is not available here`) {
+		t.Fatalf("a model that does not exist must be named: %v", err)
+	}
+}
+
+func TestLayoutAReferenceWithoutACategoryIsRefused(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	if _, err := LoadLayoutSessionSettings(location, layout, "coder", ""); err == nil || !strings.Contains(err.Error(), "must be written <category>/<name>") {
+		t.Fatalf("a bare profile name: %v", err)
+	}
 	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
 		mcp := m["mcp"].(map[string]any)
 		delete(mcp, "browser-headed/betterwright")
 		mcp["betterwright"] = map[string]any{}
 	})
-	_, err := LoadLayoutSessionSettings(location, layout, "coder", "")
-	if err == nil || !strings.Contains(err.Error(), "betterwright") || !strings.Contains(err.Error(), "browser-headed") ||
-		!strings.Contains(err.Error(), "browser-headless") {
-		t.Fatalf("ambiguous name should list both files: %v", err)
+	if _, err := LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err == nil || !strings.Contains(err.Error(), "must be written <category>/<name>") {
+		t.Fatalf("a bare mcp name: %v", err)
+	}
+}
+
+func TestLayoutRefusesTwoMCPFilesWithTheSameName(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
+		m["mcp"].(map[string]any)["browser-headless/betterwright"] = map[string]any{}
+	})
+	_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err == nil || !strings.Contains(err.Error(), "browser-headed/betterwright") || !strings.Contains(err.Error(), "browser-headless/betterwright") ||
+		!strings.Contains(err.Error(), "same tool names") {
+		t.Fatalf("both environments in one toolset: %v", err)
 	}
 }
 
@@ -291,7 +341,7 @@ func TestLayoutRefusesSettingsThatHaveTheirOwnPlace(t *testing.T) {
 	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) {
 		m["settings"].(map[string]any)["cwd"] = "/tmp"
 	})
-	if _, err := LoadLayoutSessionSettings(location, layout, "coder", ""); err == nil || !strings.Contains(err.Error(), "cwd") {
+	if _, err := LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err == nil || !strings.Contains(err.Error(), "cwd") {
 		t.Fatalf("cwd in profile settings must be refused: %v", err)
 	}
 }
@@ -299,7 +349,7 @@ func TestLayoutRefusesSettingsThatHaveTheirOwnPlace(t *testing.T) {
 func TestLayoutRefusesAnUnknownKeyInACatalogFile(t *testing.T) {
 	layout, location, root := sampleLayout(t)
 	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) { m["toolsett"] = "full" })
-	if _, err := LoadLayoutSessionSettings(location, layout, "coder", ""); err == nil || !strings.Contains(err.Error(), "toolsett") {
+	if _, err := LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err == nil || !strings.Contains(err.Error(), "toolsett") {
 		t.Fatalf("typo must be refused: %v", err)
 	}
 }
@@ -313,7 +363,7 @@ func TestLayoutSessionOverridesDefaultsAndProfileOverridesSession(t *testing.T) 
 	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
 		m["settings"] = map[string]any{"max_tool_rounds": 20}
 	})
-	config, err := LoadLayoutSessionSettings(location, layout, "reviewer", "")
+	config, err := LoadLayoutSessionSettings(location, layout, "review/reviewer", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +373,7 @@ func TestLayoutSessionOverridesDefaultsAndProfileOverridesSession(t *testing.T) 
 	editJSON(t, filepath.Join(root, "profiles", "review", "reviewer.json"), func(m map[string]any) {
 		m["settings"] = map[string]any{"max_tool_rounds": 30}
 	})
-	config, err = LoadLayoutSessionSettings(location, layout, "reviewer", "")
+	config, err = LoadLayoutSessionSettings(location, layout, "review/reviewer", "")
 	if err != nil {
 		t.Fatal(err)
 	}
