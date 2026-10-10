@@ -133,6 +133,56 @@ func TestLayoutSessionCategoryIsLoaded(t *testing.T) {
 	}
 }
 
+// A relative agents_dir entry resolves from the effective cwd, and a profile's
+// settings.cwd beats the session cwd, so the profile decides which project folder it reads.
+func TestLayoutAgentsDirFollowsTheProfileCwd(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	sessionConfig, err := LoadLayoutSessionConfig(location, layout, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionAgents := filepath.Join(sessionConfig.WorkingDir, ".jad", "subagents")
+	if got := sessionConfig.NativeSubagent.AgentDirs; len(got) != 1 || got[0] != sessionAgents {
+		t.Fatalf("session cwd: agent dirs = %v, want [%s]", got, sessionAgents)
+	}
+
+	profileCwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(profileCwd, "CLAUDE.md"), []byte("rules"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(profileCwd, ".jad", "subagents", "y"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileCwd, ".jad", "subagents", "y", "prompt.md"), []byte("p"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) {
+		m["settings"] = map[string]any{"cwd": profileCwd}
+	})
+	config, err := LoadLayoutSessionConfig(location, layout, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(profileCwd, ".jad", "subagents")
+	if config.WorkingDir != profileCwd {
+		t.Fatalf("working dir = %s, want the profile cwd %s", config.WorkingDir, profileCwd)
+	}
+	if got := config.NativeSubagent.AgentDirs; len(got) != 1 || got[0] != want {
+		t.Fatalf("profile cwd: agent dirs = %v, want [%s]", got, want)
+	}
+	if names := agentNames(config.NativeSubagent); len(names) != 1 || names[0] != "y" {
+		t.Fatalf("agents = %v, want only the profile folder's y", names)
+	}
+}
+
+func agentNames(settings *NativeSubagentSettings) []string {
+	names := make([]string, 0, len(settings.Agents))
+	for _, agent := range settings.Agents {
+		names = append(names, agent.Name)
+	}
+	return names
+}
+
 func TestLayoutPicksTheMCPEnvironmentByCategory(t *testing.T) {
 	layout, location, root := sampleLayout(t)
 	coder, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
