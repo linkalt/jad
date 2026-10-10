@@ -10,7 +10,7 @@
     "bash": {},
     "subagent": {
       "agents_dir": [
-        "../../../subagents"
+        ".jad/subagents"
       ]
     }
   },

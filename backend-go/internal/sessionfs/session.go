@@ -195,6 +195,15 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	return loadSessionSettingsFrom(location, setting, settingPath, requestedProfile, requestedModel)
+}
+
+// loadSessionSettingsFrom validates a setting-shaped map and turns it into a
+// SessionConfig. settingPath names the file the map came from in error messages and
+// is the base for relative storage paths. The layout loader (layout_load.go) feeds
+// it a map composed from the catalogs, so both layouts share every normalizer and
+// applyApprovalDefault.
+func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessage, settingPath, requestedProfile, requestedModel string) (SessionConfig, error) {
 	if err := validateSchemaVersion(setting, settingPath); err != nil {
 		return SessionConfig{}, err
 	}
