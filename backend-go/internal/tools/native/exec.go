@@ -252,6 +252,11 @@ func executeNativeExec(
 	if name == settings.DefaultLang {
 		failureSuggestion = defaultLangSuggestion(name, settings.LangNames)
 	}
+	// An exec with its own env_file runs with that environment; bash's settings otherwise.
+	if settings.Env != nil {
+		bash.Env = settings.Env
+		bash.EnvFile = settings.EnvFile
+	}
 	return runShellChild(ctx, shellChildRun{
 		file:       lang.Argv[0],
 		argv:       append(append([]string(nil), programArgs...), extra...),

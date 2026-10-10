@@ -779,3 +779,29 @@ func TestLegacySessionEnvFileIsRelativeToTheSessionFolder(t *testing.T) {
 		t.Fatalf("legacy env file = %+v, want %s", loaded.NativeBash, want)
 	}
 }
+
+// exec's own relative env_file in a toolset is relative to the root folder as well, and
+// the layout loader hands exec the environment built from it.
+func TestLayoutExecEnvFileIsRelativeToTheRootFolder(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	for name, content := range map[string]string{"bash.env": "WHO=bash\n", "exec.env": "WHO=exec\n"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
+		native := m["native"].(map[string]any)
+		native["bash"] = map[string]any{"env_file": "bash.env"}
+		native["exec"] = map[string]any{"env_file": "exec.env"}
+	})
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.NativeExec == nil || config.NativeExec.EnvFile != filepath.Join(root, "exec.env") || config.NativeExec.Env["WHO"] != "exec" {
+		t.Fatalf("exec = %+v", config.NativeExec)
+	}
+	if config.NativeBash.Env["WHO"] != "bash" {
+		t.Fatalf("bash env = %v", config.NativeBash.Env)
+	}
+}

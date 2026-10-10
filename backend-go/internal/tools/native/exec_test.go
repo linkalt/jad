@@ -526,3 +526,25 @@ func TestExecApprovalPreviewShowsTheLanguageAndTheCode(t *testing.T) {
 		t.Fatalf("preview = %s / %s", preview.Title, text)
 	}
 }
+
+// exec runs with its own environment when its settings carry one, and with bash's when not.
+func TestExecUsesItsOwnEnvironmentWhenConfigured(t *testing.T) {
+	requireInterpreters(t, "bash")
+	root := t.TempDir()
+	bash := bashTestSettings(t, root)
+	bash.Env = map[string]string{"WHO": "bash"}
+
+	settings := execTestSettings()
+	result := runExec(t, root, settings, bash, map[string]any{"lang": "bash", "code": "echo $WHO"})
+	if got := execContent(result); got != "bash\n" {
+		t.Fatalf("without its own env: %q\n%s", got, result)
+	}
+	settings.Env = map[string]string{"WHO": "exec"}
+	result = runExec(t, root, settings, bash, map[string]any{"lang": "bash", "code": "echo $WHO"})
+	if got := execContent(result); got != "exec\n" {
+		t.Fatalf("with its own env: %q\n%s", got, result)
+	}
+	if bash.Env["WHO"] != "bash" {
+		t.Fatal("exec changed bash's settings")
+	}
+}

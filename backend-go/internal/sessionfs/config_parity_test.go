@@ -32,6 +32,10 @@ type parityExpectation struct {
 // a frozen reference (backend-go/DECISIONS.md), so it will never list them.
 var goOnlyNativeTools = []string{"subagent", "decide"}
 
+// goOnlyToolKeys are keys of a native tool that exist only in Go, by the text they add to a
+// "supported keys are ..." list. TypeScript's exec has no env_file.
+var goOnlyToolKeys = []string{"env_file, "}
+
 // TestConfigParityWithTypeScriptGolden replays settings through LoadSessionConfig
 // and compares resolved storage paths and error messages with the output of the
 // TypeScript SessionConfigLoader (regenerate: node testdata/gen-config-parity.mjs).
@@ -86,6 +90,11 @@ func TestConfigParityWithTypeScriptGolden(t *testing.T) {
 				// these tools, so the list of supported tools in an error differs by them.
 				for _, name := range goOnlyNativeTools {
 					message = strings.Replace(message, ", "+name, "", 1)
+				}
+				if strings.HasPrefix(message, "tools.native.exec.") {
+					for _, key := range goOnlyToolKeys {
+						message = strings.Replace(message, key, "", 1)
+					}
 				}
 				if message != want.Error {
 					t.Fatalf("error mismatch\n go: %s\n ts: %s", message, want.Error)

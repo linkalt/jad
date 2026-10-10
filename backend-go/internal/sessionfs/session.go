@@ -398,7 +398,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeExec, err := normalizeNativeExecSettings(setting, settingPath, nativeBash)
+	nativeExec, err := normalizeNativeExecSettings(setting, settingPath, envFileBase, nativeBash)
 	if err != nil {
 		return SessionConfig{}, err
 	}

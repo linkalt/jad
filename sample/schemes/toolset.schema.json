@@ -623,7 +623,7 @@
             "env_file": {
               "type": "string",
               "pattern": "\\S",
-              "description": "Dotenv file loaded before inline env overrides. Relative paths resolve from the session directory; absolute paths are accepted."
+              "description": "Dotenv file loaded before inline env overrides. A relative path resolves from the session directory in a legacy session and from the folder of the root setting.json in a catalog-layout session (a toolset is shared by many sessions); absolute paths and ~ are accepted."
             },
             "env": {
               "type": "object",
@@ -795,6 +795,11 @@
               "type": "boolean",
               "default": true,
               "description": "When a stream is cut, end the head and start the tail on line boundaries so no line is shown half. The omitted marker counts every byte dropped."
+            },
+            "env_file": {
+              "type": "string",
+              "pattern": "\\S",
+              "description": "Dotenv file for exec alone. When set, its values replace bash's env_file values for exec runs; bash's built-in defaults and inline env still apply, and an inline env value wins over this file. When absent, exec runs with bash's environment. Relative paths resolve like bash's env_file."
             }
           },
           "additionalProperties": false
@@ -1021,7 +1026,7 @@
             "env_file": {
               "type": "string",
               "pattern": "\\S",
-              "description": "Dotenv file loaded before inline env overrides. Relative paths resolve from the session directory; absolute paths are accepted."
+              "description": "Dotenv file loaded before inline env overrides. A relative path resolves from the session directory in a legacy session and from the folder of the root setting.json in a catalog-layout session (a toolset is shared by many sessions); absolute paths and ~ are accepted."
             },
             "env": {
               "type": "object",

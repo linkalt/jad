@@ -26,7 +26,7 @@ const (
 )
 
 var (
-	nativeExecKeys     = []string{"approval", "code_max_bytes", "default_lang", "langs", "line_aware", "result_max_bytes"}
+	nativeExecKeys     = []string{"approval", "code_max_bytes", "default_lang", "env_file", "langs", "line_aware", "result_max_bytes"}
 	nativeExecLangKeys = []string{"aliases", "argv", "code", "ext"}
 
 	nativeExecNamePattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
@@ -61,6 +61,11 @@ type NativeExecSettings struct {
 	ResultMaxBytes int64
 	// LineAware cuts a truncated stream at line boundaries.
 	LineAware bool
+	// EnvFile and Env are set only when native.exec names its own env_file: Env is bash's
+	// environment with bash's file values replaced by this file's. Both are empty
+	// otherwise, and exec runs with bash's environment.
+	EnvFile string
+	Env     map[string]string
 }
 
 // defaultNativeExecLangs are the interpreters available without configuration. The program
@@ -77,7 +82,7 @@ func defaultNativeExecLangs() ([]string, map[string]NativeExecLang) {
 	}
 }
 
-func normalizeNativeExecSettings(setting map[string]json.RawMessage, settingPath string, bash *NativeBashSettings) (*NativeExecSettings, error) {
+func normalizeNativeExecSettings(setting map[string]json.RawMessage, settingPath, envFileBase string, bash *NativeBashSettings) (*NativeExecSettings, error) {
 	toolsRaw, exists := setting["tools"]
 	if !exists {
 		return nil, nil
@@ -124,6 +129,14 @@ func normalizeNativeExecSettings(setting map[string]json.RawMessage, settingPath
 	}
 	if settings.Approval, err = normalizeApprovalMode(fields, section, settingPath); err != nil {
 		return nil, err
+	}
+	if _, named := fields["env_file"]; named {
+		envFile, fileEnv, err := loadConfiguredEnvFile(fields, envFileBase, settingPath, "exec")
+		if err != nil {
+			return nil, err
+		}
+		settings.EnvFile = envFile
+		settings.Env = execEnvironment(*bash, fileEnv)
 	}
 	if settings.LangNames, settings.Langs, err = normalizeNativeExecLangs(fields["langs"], settingPath+": "+section+".langs"); err != nil {
 		return nil, err
@@ -274,4 +287,21 @@ func nullableField(fields map[string]json.RawMessage, name string) (json.RawMess
 		return nil, false
 	}
 	return raw, true
+}
+
+// execEnvironment is bash's environment with bash's env_file values replaced by fileEnv.
+// The built-in defaults come first, then the file, then bash's inline env, so an inline
+// value still wins over either file.
+func execEnvironment(bash NativeBashSettings, fileEnv map[string]string) map[string]string {
+	env := make(map[string]string, len(bash.BaseEnv)+len(fileEnv)+len(bash.InlineEnv))
+	for name, value := range bash.BaseEnv {
+		env[name] = value
+	}
+	for name, value := range fileEnv {
+		env[name] = value
+	}
+	for name, value := range bash.InlineEnv {
+		env[name] = value
+	}
+	return env
 }

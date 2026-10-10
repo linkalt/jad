@@ -79,6 +79,12 @@ type NativeBashSettings struct {
 	EnvFile       string
 	Env           map[string]string
 	EnvDeny       []string
+	// BaseEnv, FileEnv and InlineEnv are the parts Env was built from, in that order: the
+	// built-in defaults, the env_file values, the inline `env` object. native.exec with its
+	// own env_file swaps the file values and keeps the other two.
+	BaseEnv   map[string]string
+	FileEnv   map[string]string
+	InlineEnv map[string]string
 }
 
 func normalizeNativeBashSettings(
@@ -181,6 +187,8 @@ func normalizeNativeBashSettings(
 		return nil, err
 	}
 
+	settings.BaseEnv = map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}
+	settings.InlineEnv = map[string]string{}
 	settings.Env = map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}
 	settings.EnvDeny = []string{}
 	envFile, fileEnv, err := loadConfiguredEnvFile(fields, envFileBase, settingPath, "bash")
@@ -188,6 +196,7 @@ func normalizeNativeBashSettings(
 		return nil, err
 	}
 	settings.EnvFile = envFile
+	settings.FileEnv = fileEnv
 	for name, value := range fileEnv {
 		settings.Env[name] = value
 	}
@@ -205,6 +214,7 @@ func normalizeNativeBashSettings(
 				return nil, configError("%s: tools.native.bash.env.%s must be a string", settingPath, name)
 			}
 			settings.Env[name] = value
+			settings.InlineEnv[name] = value
 		}
 	}
 	if rawDeny, ok := fields["env_deny"]; ok && strings.TrimSpace(string(rawDeny)) != "null" {
