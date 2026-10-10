@@ -438,7 +438,21 @@
                 "items": {"type": "string", "pattern": "\\S"}
               },
               "staging": {"type": "string", "pattern": "\\S"},
-              "http_debug": {"type": "string", "pattern": "\\S"}
+              "http_debug": {"type": "string", "pattern": "\\S"},
+              "tools": {
+                "type": "object",
+                "description": "Go backend only (the TypeScript backend refuses this key). Which of the session's registered tools this profile's model is shown and can call. The session registers every tool (tools.native.*, mcp_servers); a profile without this block shows all of them. A tool left out is hidden from the profile's model only: a sub-agent can still use it when its agent lists it. GET /api/sessions/{ref}/tools returns the shown tools in tools and the rest in hidden.",
+                "properties": {
+                  "allow": {
+                    "type": "array",
+                    "description": "What the model is shown: a native tool name (read, write, edit, grep, glob, bash, exec, process, task, memory, fetch, request_draft, skill, subagent, decide), one MCP tool as mcp:<server>:<tool>, or every tool of one MCP server as mcp:<server>:*. An empty array hides every registered tool; hosted tools from the model file (such as web search) are not registered tools and stay. An entry that names a tool the session does not register is a configuration error.",
+                    "items": {"type": "string", "pattern": "^(read|write|edit|grep|glob|bash|exec|process|task|memory|fetch|request_draft|skill|subagent|decide|mcp:[A-Za-z0-9_-]+:\\S+)$"},
+                    "uniqueItems": true
+                  }
+                },
+                "required": ["allow"],
+                "additionalProperties": false
+              }
             },
             "additionalProperties": false
           }

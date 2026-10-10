@@ -155,6 +155,30 @@ func MergeCatalogs(catalogs ...*Catalog) (*Catalog, error) {
 	return NewCatalog(combined)
 }
 
+// Filter splits the catalog by keep. The first result holds the tools keep accepts, in
+// the original order, and is what a model may see and call; the second lists the
+// definitions of the rest. A tool that is not kept cannot be called through the first
+// catalog (it answers UnknownToolError), while the receiver is unchanged, so whoever
+// holds it can still reach every tool.
+func (c *Catalog) Filter(keep func(Definition) bool) (*Catalog, []Definition, error) {
+	if c == nil {
+		return nil, []Definition{}, nil
+	}
+	kept := make([]Tool, 0, len(c.tools))
+	dropped := []Definition{}
+	for _, tool := range c.tools {
+		if keep(tool.Definition) {
+			kept = append(kept, tool)
+			continue
+		}
+		definition := tool.Definition
+		definition.InputSchema = append(json.RawMessage(nil), definition.InputSchema...)
+		dropped = append(dropped, definition)
+	}
+	catalog, err := NewCatalog(kept)
+	return catalog, dropped, err
+}
+
 // Definitions returns provider definitions in the registry's stable order.
 func (c *Catalog) Definitions() []Definition {
 	if c == nil {

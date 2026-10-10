@@ -361,29 +361,50 @@ func (r *Resolver) newProviderStreamer(config sessionfs.SessionConfig, apiKey st
 
 // ListTools implements httpapi.SessionToolLister without requiring a provider
 // API key or creating a session runner.
-func (r *Resolver) ListTools(ctx context.Context, reference, profile string) ([]tools.Definition, error) {
+func (r *Resolver) ListTools(ctx context.Context, reference, profile string) (httpapi.SessionTools, error) {
 	if ctx == nil {
-		return nil, errors.New("session resolution context is required")
+		return httpapi.SessionTools{}, errors.New("session resolution context is required")
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return httpapi.SessionTools{}, err
 	}
 	location, err := sessionfs.Resolve(r.roots, reference)
 	if err != nil {
-		return nil, mapSessionError(err)
+		return httpapi.SessionTools{}, mapSessionError(err)
 	}
 	config, err := sessionfs.LoadSessionConfig(location, profile, "")
 	if err != nil {
-		return nil, mapSessionError(err)
+		return httpapi.SessionTools{}, mapSessionError(err)
 	}
-	catalog, _, _, _, err := r.buildToolCatalog(ctx, config)
+	registered, _, _, _, err := r.buildRegisteredCatalog(ctx, config)
 	if err != nil {
-		return nil, err
+		return httpapi.SessionTools{}, err
 	}
-	return catalog.Definitions(), nil
+	exposed, hidden, err := applyProfileTools(config, registered)
+	if err != nil {
+		return httpapi.SessionTools{}, mapSessionError(err)
+	}
+	return httpapi.SessionTools{Tools: exposed.Definitions(), Hidden: hidden}, nil
 }
 
+// buildToolCatalog is the catalog the profile's model sees: every registered tool, narrowed
+// by the profile's tools.allow when it has one.
 func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, native.ProcessManager, *native.TaskStore, *native.MemoryStore, error) {
+	registered, processManager, taskStore, memoryStore, err := r.buildRegisteredCatalog(ctx, config)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	// The profile narrows what its own model sees, not what a child may use: the
+	// sub-agent tool built its agents' catalogs from the registered tools already.
+	toolCatalog, _, err := applyProfileTools(config, registered)
+	if err != nil {
+		return nil, nil, nil, nil, mapSessionError(err)
+	}
+	return toolCatalog, processManager, taskStore, memoryStore, nil
+}
+
+// buildRegisteredCatalog builds every tool the session registers (native, then MCP).
+func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, native.ProcessManager, *native.TaskStore, *native.MemoryStore, error) {
 	processManager := r.sharedProcessManager(config)
 	taskStore := r.sharedTaskStore(config)
 	memoryStore := r.sharedMemoryStore(config)
@@ -409,11 +430,11 @@ func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.Sessio
 	if err := subagentMCP.Bind(mcpTools); err != nil {
 		return nil, nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
 	}
-	toolCatalog, err := tools.MergeCatalogs(nativeCatalog, mcpCatalog)
+	registered, err := tools.MergeCatalogs(nativeCatalog, mcpCatalog)
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
-	return toolCatalog, processManager, taskStore, memoryStore, nil
+	return registered, processManager, taskStore, memoryStore, nil
 }
 
 func (r *Resolver) sharedProcessManager(config sessionfs.SessionConfig) native.ProcessManager {

@@ -685,14 +685,15 @@ type fakeResolver struct {
 type fakeToolLister struct {
 	*fakeResolver
 	definitions []tools.Definition
+	hidden      []tools.Definition
 	calls       [][2]string
 }
 
-func (r *fakeToolLister) ListTools(_ context.Context, reference, profile string) ([]tools.Definition, error) {
+func (r *fakeToolLister) ListTools(_ context.Context, reference, profile string) (SessionTools, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, [2]string{reference, profile})
-	return append([]tools.Definition(nil), r.definitions...), r.err
+	return SessionTools{Tools: append([]tools.Definition(nil), r.definitions...), Hidden: r.hidden}, r.err
 }
 
 func (r *fakeResolver) Resolve(_ context.Context, reference, profile, model string) (ResolvedSession, error) {

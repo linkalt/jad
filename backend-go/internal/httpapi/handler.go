@@ -156,7 +156,16 @@ type SessionCatalog interface {
 // one resolved session/profile. It is separate from SessionResolver so small
 // run-only adapters can remain independently testable.
 type SessionToolLister interface {
-	ListTools(context.Context, string, string) ([]tools.Definition, error)
+	ListTools(context.Context, string, string) (SessionTools, error)
+}
+
+// SessionTools is the answer of the session tools route. Tools is what the profile's
+// model sees. Hidden lists the registered tools the profile's tools.allow keeps from its
+// model; a sub-agent can still use them. Hidden is empty, and left out of the JSON, for a
+// profile without a tools block.
+type SessionTools struct {
+	Tools  []tools.Definition `json:"tools"`
+	Hidden []tools.Definition `json:"hidden,omitempty"`
 }
 
 type SessionPathProfileInfo struct {
@@ -650,12 +659,12 @@ func (h *Handler) handleSessionTools(w http.ResponseWriter, r *http.Request, ref
 		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "session tool listing is unavailable"})
 		return
 	}
-	definitions, err := h.toolLister.ListTools(r.Context(), reference, profile)
+	listed, err := h.toolLister.ListTools(r.Context(), reference, profile)
 	if err != nil {
 		writeJSONError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tools": definitions})
+	writeJSON(w, http.StatusOK, listed)
 }
 
 func (h *Handler) handleSessionList(w http.ResponseWriter, r *http.Request) {

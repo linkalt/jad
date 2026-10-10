@@ -95,6 +95,11 @@ func validateProfileFields(name string, raw json.RawMessage, settingPath string)
 					return configError("%s: prompt_documents[%d] must be a non-empty string", profilePath, index)
 				}
 			}
+		case "tools":
+			// Go only: which registered tools the profile's model sees (profile_tools.go).
+			if _, err := normalizeProfileTools(value, profilePath); err != nil {
+				return err
+			}
 		default:
 			if _, supported := sessionPathFields[field]; !supported {
 				return configError("%s.%s is not a supported session path or profile model setting", profilePath, field)

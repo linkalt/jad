@@ -167,6 +167,9 @@ type SessionConfig struct {
 	Approval ApprovalSettings
 	// Checkpoint controls run checkpoints and undo; it is off by default.
 	Checkpoint CheckpointSettings
+	// ProfileTools is the selected profile's optional tool allow-list; without it the
+	// model sees every registered tool (Go only).
+	ProfileTools ProfileToolSettings
 	// Hooks holds the optional checks that run after write and edit; off by default (Go only).
 	Hooks       HooksSettings
 	ImageResize ImageResizeSettings
@@ -302,6 +305,12 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 	hooks, err := normalizeHooksSettings(setting["hooks"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
+	}
+	var profileTools ProfileToolSettings
+	if raw, ok := profileSettings["tools"]; ok && profileConfigured {
+		if profileTools, err = normalizeProfileTools(raw, settingPath+": paths.profiles."+profile); err != nil {
+			return SessionConfig{}, err
+		}
 	}
 	imageResize, err := normalizeImageResizeSettings(setting["image_resize"], settingPath)
 	if err != nil {
@@ -533,6 +542,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 		Approval:              approval,
 		Checkpoint:            checkpoint,
 		Hooks:                 hooks,
+		ProfileTools:          profileTools,
 		ImageResize:           imageResize,
 		ImageStore:            imageStore,
 		BackupTurns:           backupTurns,
