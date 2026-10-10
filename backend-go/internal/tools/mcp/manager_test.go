@@ -311,3 +311,80 @@ func marshalFunctionCall(t *testing.T, callID, name, arguments string) json.RawM
 	}
 	return encoded
 }
+
+// Two profiles may pick different environments of one server (same id, two files). Each
+// profile has its own Manager. A shared Manager would replace the first connection when
+// the second profile loads, and the first profile's tool would then fail while it runs.
+func TestManagersKeepTwoEnvironmentsOfOneServerApart(t *testing.T) {
+	cwd := t.TempDir()
+	headedDir, headlessDir := filepath.Join(cwd, "headed"), filepath.Join(cwd, "headless")
+	for _, directory := range []string{headedDir, headlessDir} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	headed := []sessionfs.MCPServerReference{{ID: "betterwright", ConfigPath: writeStdioConfig(t, headedDir, "headed"), Enabled: true}}
+	headless := []sessionfs.MCPServerReference{{ID: "betterwright", ConfigPath: writeStdioConfig(t, headlessDir, "headless"), Enabled: true}}
+
+	callEcho := func(loaded []tools.Tool) string {
+		t.Helper()
+		var name string
+		for _, tool := range loaded {
+			if tool.Definition.ID == "mcp:betterwright:echo" {
+				name = tool.Definition.Name
+			}
+		}
+		if name == "" {
+			t.Fatalf("no echo tool in %+v", loaded)
+		}
+		catalog, err := tools.NewCatalog(loaded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		output, err := catalog.ExecuteFunctionCall(context.Background(), marshalFunctionCall(t, "c", name, `{"text":"hi","pair":["word",42]}`), tools.ExecutionContext{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(output)
+	}
+
+	coder, reviewer := NewManager(currentEnvironment()), NewManager(currentEnvironment())
+	defer coder.Close()
+	defer reviewer.Close()
+	coderTools, err := coder.LoadTools(context.Background(), headed, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewerTools, err := reviewer.LoadTools(context.Background(), headless, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(callEcho(coderTools), "hi") || !strings.Contains(callEcho(reviewerTools), "hi") {
+		t.Fatal("both profiles must be able to call their own connection after the other loaded")
+	}
+	descriptions := func(loaded []tools.Tool) string {
+		for _, tool := range loaded {
+			if tool.Definition.ID == "mcp:betterwright:echo" {
+				return tool.Definition.Description
+			}
+		}
+		return ""
+	}
+	if !strings.Contains(descriptions(coderTools), "headed") || !strings.Contains(descriptions(reviewerTools), "headless") {
+		t.Fatalf("environments mixed: %q / %q", descriptions(coderTools), descriptions(reviewerTools))
+	}
+
+	// What a shared Manager does: the second load replaces the first connection.
+	shared := NewManager(currentEnvironment())
+	defer shared.Close()
+	first, err := shared.LoadTools(context.Background(), headed, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := shared.LoadTools(context.Background(), headless, cwd); err != nil {
+		t.Fatal(err)
+	}
+	if out := callEcho(first); !strings.Contains(out, `\"status\":\"error\"`) {
+		t.Fatalf("expected the replaced connection to fail, got %s", out)
+	}
+}

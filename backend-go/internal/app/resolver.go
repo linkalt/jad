@@ -580,8 +580,12 @@ func (r *Resolver) sharedFetchStore(config sessionfs.SessionConfig) *native.Fetc
 	return store
 }
 
+// sharedMCPManager returns the MCP manager of one session and profile. A manager closes
+// every connection a run does not list, so profiles that pick different environments
+// of one server (browser-headed/betterwright, browser-headless/betterwright) need
+// separate managers, or each run would close the other's connection.
 func (r *Resolver) sharedMCPManager(config sessionfs.SessionConfig) (*mcpclient.Manager, error) {
-	key := filepath.Clean(config.SettingPath)
+	key := filepath.Clean(config.SettingPath) + "\x00" + config.Profile
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
