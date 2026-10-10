@@ -11,6 +11,11 @@
     "description": {
       "type": "string"
     },
+    "name": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Display name of the session. Defaults to the folder name."
+    },
     "cwd": {
       "type": "string",
       "pattern": "\\S",

@@ -150,6 +150,11 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 
 	setting := mergeSettings(mergeSettings(c.layout.Defaults, c.session.Settings), profile.Settings)
 	setting["schema_version"] = json.RawMessage("1")
+	if c.session.Name != "" {
+		if setting["session_name"], err = json.Marshal(c.session.Name); err != nil {
+			return nil, nil, err
+		}
+	}
 	if c.session.CWD != "" {
 		if setting["cwd"], err = json.Marshal(c.session.CWD); err != nil {
 			return nil, nil, err
