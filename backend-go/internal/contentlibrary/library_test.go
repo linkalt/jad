@@ -204,3 +204,37 @@ func TestLibrarySkipsSymlinkEntriesAndDeduplicatesDirectories(t *testing.T) {
 		t.Fatalf("prompt catalog followed symlinks or duplicated a directory: %+v", catalog.Prompts)
 	}
 }
+
+// The library reads the same root setting the session loader finds: .jad/setting.json of
+// the working directory, then the one in $HOME/.jad.
+func TestLibraryFindsTheRootSettingInTheJadFolderThenHome(t *testing.T) {
+	cwd, home := t.TempDir(), t.TempDir()
+	writeLibraryTestFile(t, filepath.Join(cwd, "setting.json"), `{"libraries":{"prompt_dirs":["old"]}}`)
+	writeLibraryTestFile(t, filepath.Join(cwd, "old/old.md"), "Old.")
+	writeLibraryTestFile(t, filepath.Join(home, ".jad", "setting.json"), `{"libraries":{"prompt_dirs":["home"]}}`)
+	writeLibraryTestFile(t, filepath.Join(home, ".jad", "home/home.md"), "Home.")
+	writeLibraryTestFile(t, filepath.Join(cwd, ".jad", "setting.json"), `{"libraries":{"prompt_dirs":["project"]}}`)
+	writeLibraryTestFile(t, filepath.Join(cwd, ".jad", "project/project.md"), "Project.")
+
+	names := func(workingDir string) []string {
+		t.Helper()
+		catalog, err := New(Options{WorkingDir: workingDir, Environment: map[string]string{"HOME": home}}).List(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, prompt := range catalog.Prompts {
+			out = append(out, prompt.Name)
+		}
+		return out
+	}
+	if got := names(cwd); !reflect.DeepEqual(got, []string{"project"}) {
+		t.Fatalf("project file must win: %v", got)
+	}
+	if err := os.Remove(filepath.Join(cwd, ".jad", "setting.json")); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(cwd); !reflect.DeepEqual(got, []string{"home"}) {
+		t.Fatalf("home must win over the old place: %v", got)
+	}
+}

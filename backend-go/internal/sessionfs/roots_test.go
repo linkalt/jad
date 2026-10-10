@@ -568,3 +568,53 @@ func TestDefaultsKeepLoggingAtInfoText(t *testing.T) {
 		t.Errorf("Defaults() logging = %q/%q/%q", defaults.LogLevel, defaults.LogFormat, defaults.LogFile)
 	}
 }
+
+// The root setting is looked for in .jad/setting.json of the working directory first, then
+// in $HOME/.jad/setting.json, then in the older places.
+func TestLoadFindsTheRootSettingInTheJadFolderThenHome(t *testing.T) {
+	cwd, home := t.TempDir(), t.TempDir()
+	write := func(path, id string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(`{"session_roots":[{"id":"`+id+`","path":"s"}]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rootID := func() string {
+		t.Helper()
+		config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{"HOME": home}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return config.Roots[0].ID
+	}
+	write(filepath.Join(cwd, "setting.json"), "old")
+	if got := rootID(); got != "old" {
+		t.Fatalf("old place: root = %q", got)
+	}
+	write(filepath.Join(home, ".jad", "setting.json"), "home")
+	if got := rootID(); got != "home" {
+		t.Fatalf("home must win over the old place: root = %q", got)
+	}
+	write(filepath.Join(cwd, ".jad", "setting.json"), "project")
+	if got := rootID(); got != "project" {
+		t.Fatalf("the project file must win: root = %q", got)
+	}
+	// the folder of the root setting is the global root: its sessions are resolved there
+	config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{"HOME": home}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(cwd, ".jad", "s"); config.Roots[0].Directory != want {
+		t.Fatalf("directory = %q, want %q", config.Roots[0].Directory, want)
+	}
+	// an explicit path still wins
+	explicit := filepath.Join(cwd, "elsewhere.json")
+	write(explicit, "explicit")
+	config, err = Load(LoadOptions{WorkingDir: cwd, RootSettingPath: explicit, Environment: map[string]string{"HOME": home}})
+	if err != nil || config.Roots[0].ID != "explicit" {
+		t.Fatalf("explicit path: %v, %+v", err, config.Roots)
+	}
+}

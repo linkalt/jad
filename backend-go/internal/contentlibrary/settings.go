@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"example.com/agent-harness/backend-go/internal/rootsetting"
 )
 
 //go:embed library_defaults.json
@@ -127,22 +129,7 @@ func findLibrarySettingPath(workingDir string, options Options, environment map[
 	if strings.TrimSpace(options.SessionsDir) != "" || strings.TrimSpace(environment["JAD_SESSIONS_DIR"]) != "" {
 		return "", nil
 	}
-	for _, candidate := range []string{
-		filepath.Join(workingDir, "setting.json"),
-		filepath.Join(workingDir, "..", "setting.json"),
-	} {
-		info, err := os.Stat(candidate)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return "", err
-		}
-		if info.Mode().IsRegular() {
-			return filepath.Clean(candidate), nil
-		}
-	}
-	return "", nil
+	return rootsetting.Find(workingDir, environment["HOME"])
 }
 
 func readLibrarySetting(path string) (map[string]json.RawMessage, error) {

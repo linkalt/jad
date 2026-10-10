@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"example.com/agent-harness/backend-go/internal/rootsetting"
 	"example.com/agent-harness/backend-go/internal/serverconfig"
 )
 
@@ -211,7 +212,7 @@ func Load(options LoadOptions) (Config, error) {
 		}, nil
 	}
 
-	settingPath, err := findRootSettingPath(cwd, options.RootSettingPath, env["JAD_ROOT_SETTING_PATH"])
+	settingPath, err := findRootSettingPath(cwd, options.RootSettingPath, env["JAD_ROOT_SETTING_PATH"], env["HOME"])
 	if err != nil {
 		return Config{}, err
 	}
@@ -320,7 +321,7 @@ func parseReference(value string) (rootID, sessionID string, qualified bool, err
 	return rootID, sessionID, qualified, nil
 }
 
-func findRootSettingPath(cwd, explicit, fromEnvironment string) (string, error) {
+func findRootSettingPath(cwd, explicit, fromEnvironment, home string) (string, error) {
 	configured := strings.TrimSpace(explicit)
 	if configured == "" {
 		configured = strings.TrimSpace(fromEnvironment)
@@ -328,22 +329,7 @@ func findRootSettingPath(cwd, explicit, fromEnvironment string) (string, error) 
 	if configured != "" {
 		return resolveFrom(cwd, configured), nil
 	}
-	for _, candidate := range []string{
-		filepath.Join(cwd, "setting.json"),
-		filepath.Join(cwd, "..", "setting.json"),
-	} {
-		info, err := os.Stat(candidate)
-		if err == nil {
-			if info.Mode().IsRegular() {
-				return filepath.Clean(candidate), nil
-			}
-			continue
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("inspect root setting %q: %w", candidate, err)
-		}
-	}
-	return "", nil
+	return rootsetting.Find(cwd, home)
 }
 
 func defaultSessionRoots(cwd string) ([]Root, error) {
