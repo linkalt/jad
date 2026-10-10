@@ -102,7 +102,7 @@ func TestTurnStagesOutputByIndexAndCommitsCanonicalLineIdempotently(t *testing.T
 	functionItem := `{"type":"function_call","call_id":"call_123","name":"search","arguments":"{}"}`
 	completed := []byte(`{"type":"response.completed","response":{"id":"resp_test","object":"response","status":"completed","model":"gpt-test","usage":{"input_tokens":10,"output_tokens":4},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]},{"type":"function_call","call_id":"call_123","name":"search","arguments":"{}"}]}}`)
 	// This Node-generated JSON.stringify fixture uses the canonical response
-	// fixture shape from backend/test/persistence.test.ts.
+	// fixture shape from the removed TypeScript backend (tag legacy-final).
 	golden, err := os.ReadFile(filepath.Join("testdata", "messages-canonical.jsonl"))
 	if err != nil {
 		t.Fatal(err)

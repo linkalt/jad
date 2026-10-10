@@ -104,7 +104,7 @@ func TestRunContentSettingDefaultsAndValidation(t *testing.T) {
 }
 
 // The wording of a range error for a server.* number is the TypeScript loader's, read
-// from backend/dist/src/session-roots.js for each key (port says "an integer", the batch
+// from the removed TypeScript backend's session-roots (tag legacy-final) for each key (port says "an integer", the batch
 // size "an even safe integer", every other key "a safe integer").
 func TestServerNumberRangeErrorsUseTheTypeScriptWording(t *testing.T) {
 	cwd := t.TempDir()

@@ -89,7 +89,7 @@ func runChainedResponse(t *testing.T, limit int, scheduling string) orderingOutc
 // before the fix: the edits failed or applied out of order in 73, and the read saw
 // the final content in 2. With tool_call_scheduling "ordered" (the default) a
 // response holding a call that can change state runs one call at a time in the
-// model's order. The TypeScript twin is backend/test/tool-batch-ordering.test.ts.
+// model's order. The removed TypeScript backend (tag legacy-final) had the same test.
 func TestToolRoundRunsEditEditEditReadInTheModelsOrder(t *testing.T) {
 	const runs = 20
 	readSawFinal, editsInOrder := 0, 0

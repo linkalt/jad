@@ -145,7 +145,7 @@ func TestAppendPreservesCanonicalCompletedEventLine(t *testing.T) {
 	}
 
 	// This fixture follows the canonical envelope/output ordering used by
-	// backend/src/persistence.ts and its response.completed commit test.
+	// the removed TypeScript backend (tag legacy-final) and its response.completed commit test.
 	line := []byte(`{"type":"response.completed","session_turn":2,"session_step":1,"response":{"id":"resp_test","object":"response","status":"completed","model":"gpt-test","usage":{"input_tokens":10,"output_tokens":4},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]},{"type":"function_call","call_id":"call_123","name":"search","arguments":"{}"}]}}`)
 	if err := journal.Append(line); err != nil {
 		t.Fatalf("Append() error = %v", err)

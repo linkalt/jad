@@ -130,7 +130,7 @@ const (
 // is used: at least 1e12 is milliseconds, at least 1e9 is seconds. A small number (a
 // delta), a duration string, an unreadable value and a time that has already passed are
 // absent, and any other status is ignored, so a format that was not verified changes
-// nothing. It mirrors rateLimitResetMs in backend/src/provider-retry.ts.
+// nothing. It follows rateLimitResetMs of the removed TypeScript backend (tag legacy-final).
 func rateLimitReset(header http.Header, status int, now time.Time) (time.Duration, bool) {
 	if status != http.StatusTooManyRequests {
 		return 0, false

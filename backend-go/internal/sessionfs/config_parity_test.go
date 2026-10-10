@@ -38,14 +38,16 @@ var goOnlyToolKeys = []string{"env_file, "}
 
 // TestConfigParityWithTypeScriptGolden replays settings through LoadSessionConfig
 // and compares resolved storage paths and error messages with the output of the
-// TypeScript SessionConfigLoader (regenerate: node testdata/gen-config-parity.mjs).
+// TypeScript SessionConfigLoader. The golden is a frozen file: the TypeScript backend was
+// removed (tag legacy-final has it), so it is no longer regenerated. It goes with the legacy
+// loader.
 func TestConfigParityWithTypeScriptGolden(t *testing.T) {
 	var cases []parityCase
 	readJSONFile(t, "testdata/config-parity.cases.json", &cases)
 	var expected []parityExpectation
 	readJSONFile(t, "testdata/config-parity.golden.json", &expected)
 	if len(cases) != len(expected) {
-		t.Fatalf("cases=%d golden=%d; regenerate the golden", len(cases), len(expected))
+		t.Fatalf("cases=%d golden=%d; edit both files together", len(cases), len(expected))
 	}
 	home, _ := os.UserHomeDir()
 	for index, tc := range cases {
