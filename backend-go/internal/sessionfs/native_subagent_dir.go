@@ -20,8 +20,12 @@ const (
 // directories, each holding one folder per agent. A relative path resolves from the
 // session's cwd, like prompt_documents and the MCP config paths, so one project
 // directory works from every session. A directory that does not exist is an error,
-// not an empty list, so a typo cannot silently remove every agent.
-func normalizeSubagentAgentDirs(fields map[string]json.RawMessage, cwd, settingPath string) ([]string, error) {
+// not an empty list, so a typo cannot silently remove every agent. With missingOK
+// (agents_dir_missing_ok) a directory that does not exist is skipped, so one toolset can
+// list a general folder and the project's own folder, which a new project may not have;
+// the session still needs at least one agent. A path that exists but is not a directory
+// is always an error.
+func normalizeSubagentAgentDirs(fields map[string]json.RawMessage, cwd, settingPath string, missingOK bool) ([]string, error) {
 	raw, exists := fields["agents_dir"]
 	if !exists || strings.TrimSpace(string(raw)) == "null" {
 		return nil, nil
@@ -42,6 +46,9 @@ func normalizeSubagentAgentDirs(fields map[string]json.RawMessage, cwd, settingP
 		}
 		seen[directory] = struct{}{}
 		info, err := os.Stat(directory)
+		if missingOK && errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil || !info.IsDir() {
 			return nil, configError("%s: tools.native.subagent.agents_dir[%d] is not a directory: %s", settingPath, index, directory)
 		}
@@ -52,8 +59,10 @@ func normalizeSubagentAgentDirs(fields map[string]json.RawMessage, cwd, settingP
 
 // loadSubagentDirAgents loads every agent folder of one directory, in name order.
 // taken maps an agent name to where it was first defined, so the same name in two
-// places is refused instead of one silently winning.
-func loadSubagentDirAgents(directory, settingPath string, taken map[string]string) ([]NativeSubagentAgent, error) {
+// places is refused instead of one silently winning. With override
+// (agents_dir_override) a name already taken by an earlier folder is replaced by this
+// one; a name taken inline (the folder is empty in taken) is still refused.
+func loadSubagentDirAgents(directory, settingPath string, taken map[string]string, override bool) ([]NativeSubagentAgent, error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil, configError("%s: tools.native.subagent.agents_dir could not be read: %s: %v", settingPath, directory, err)
@@ -79,7 +88,7 @@ func loadSubagentDirAgents(directory, settingPath string, taken map[string]strin
 		if err != nil {
 			return nil, err
 		}
-		if previous, duplicate := taken[name]; duplicate {
+		if previous, duplicate := taken[name]; duplicate && !(override && isSubagentFolderSource(previous)) {
 			return nil, configError("%s: tools.native.subagent: agent %s is defined twice: %s and %s", settingPath, name, previous, folder)
 		}
 		taken[name] = folder
@@ -159,4 +168,31 @@ func regularFileExists(path string) (bool, error) {
 		return false, err
 	}
 	return info.Mode().IsRegular(), nil
+}
+
+// isSubagentFolderSource tells a name taken by an agents_dir folder from one taken inline.
+// loadSubagentDirAgents records a folder as its path; inline agents are recorded with a
+// "(tools.native.subagent.agents)" suffix.
+func isSubagentFolderSource(source string) bool {
+	return !strings.HasSuffix(source, ")")
+}
+
+// withSubagentOverrides appends the agents of one folder to agents. A folder agent whose
+// name an earlier folder already defined replaces that agent where it stood; the first
+// inline entries (the first inline count of agents) are never replaced.
+func withSubagentOverrides(agents, folder []NativeSubagentAgent, inline int) []NativeSubagentAgent {
+	for _, agent := range folder {
+		replaced := false
+		for index := inline; index < len(agents); index++ {
+			if agents[index].Name == agent.Name {
+				agents[index] = agent
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			agents = append(agents, agent)
+		}
+	}
+	return agents
 }

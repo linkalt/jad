@@ -48,7 +48,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "changed_files_max", "process_max_running", "storage_dir", "statecontext"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "changed_files_max", "process_max_running", "storage_dir", "statecontext"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -255,17 +255,31 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 	}
 	agentsRaw, hasAgents := fields["agents"]
 	hasAgents = hasAgents && strings.TrimSpace(string(agentsRaw)) != "null"
-	if settings.AgentDirs, err = normalizeSubagentAgentDirs(fields, cwd, settingPath); err != nil {
+	missingOK, err := bashBool(fields, "agents_dir_missing_ok", false, settingPath+": "+section)
+	if err != nil {
 		return nil, err
 	}
+	override, err := bashBool(fields, "agents_dir_override", false, settingPath+": "+section)
+	if err != nil {
+		return nil, err
+	}
+	hasDirsRaw := fields["agents_dir"]
+	if settings.AgentDirs, err = normalizeSubagentAgentDirs(fields, cwd, settingPath, missingOK); err != nil {
+		return nil, err
+	}
+	// A listed folder that does not exist (agents_dir_missing_ok) still counts as a source
+	// of agents, so the error says the folders hold no agent, not that none are defined.
+	var listed []string
+	_ = json.Unmarshal(hasDirsRaw, &listed)
+	hasDirs := len(settings.AgentDirs) > 0 || (missingOK && len(listed) > 0)
 	noAgents := configError("%s: %s.agents must define at least one agent", settingPath, section)
-	if !hasAgents && len(settings.AgentDirs) == 0 {
+	if !hasAgents && !hasDirs {
 		return nil, noAgents
 	}
 	taken := make(map[string]string)
 	if hasAgents {
 		names, err := orderedObjectKeys(agentsRaw)
-		if err != nil || (len(names) == 0 && len(settings.AgentDirs) == 0) {
+		if err != nil || (len(names) == 0 && !hasDirs) {
 			return nil, noAgents
 		}
 		agentFields, err := decodeConfigObject(agentsRaw, settingPath+": "+section+".agents")
@@ -284,12 +298,13 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 			settings.Agents = append(settings.Agents, agent)
 		}
 	}
+	inline := len(settings.Agents)
 	for _, dir := range settings.AgentDirs {
-		agents, err := loadSubagentDirAgents(dir, settingPath, taken)
+		agents, err := loadSubagentDirAgents(dir, settingPath, taken, override)
 		if err != nil {
 			return nil, err
 		}
-		settings.Agents = append(settings.Agents, agents...)
+		settings.Agents = withSubagentOverrides(settings.Agents, agents, inline)
 	}
 	if len(settings.Agents) == 0 {
 		return nil, configError("%s: %s.agents_dir holds no agent folder; add a folder with an agent.json or a prompt.md, or define agents", settingPath, section)

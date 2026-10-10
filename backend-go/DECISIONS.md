@@ -514,3 +514,10 @@ In the catalog layout, the transcript, its backup, staging and the HTTP debug fo
 - **`tool_storage_dir`** is a settings key of the root `defaults`, a session's `settings` and a profile's `settings`; the nearest wins. Default `.jad/state`. A relative path is relative to the cwd; an absolute path is used as it is, and then the toolset's `read.paths` must allow it, or the spill check refuses the load.
 - **Not moved.** Existing tool data is not copied. For a session whose cwd is the repo and whose old state folder is `.jad/state/<session>/<category>/<name>/tools`, the new path is the same. Any other session starts with empty tool state.
 - **Not changed.** `agents_dir` and `prompt_documents` were already relative to the cwd. A missing `agents_dir` folder is still a load error.
+
+## `agents_dir_missing_ok` and `agents_dir_override` (Go only)
+
+Two booleans in `tools.native.subagent`, both default false, so nothing changes unless a toolset sets them. They exist for a toolset that many projects share: it lists a general folder plus a per-project one (for example `.jad/subagents`, relative to each session's cwd).
+- **`agents_dir_missing_ok`.** An `agents_dir` entry that does not exist is skipped instead of failing the load. A path that exists but is a file is still an error, and the session still needs at least one agent: with every folder missing the error is "agents_dir holds no agent folder", so a typo cannot remove every agent unnoticed. Cost: with the flag on, a mistyped folder name is no longer reported when another folder supplies agents.
+- **`agents_dir_override`.** An agent folder in a later entry replaces an agent of the same name from an earlier entry; the replaced agent keeps its place in the order. An inline agent in `agents` is never replaced, and without the flag a name defined twice is still an error. Cost: a stale or mistyped duplicate in a project folder silently replaces the general agent, and only the replacing folder's `agent.json` and `prompt.md` count (nothing is merged).
+- **Not changed.** `agents_dir` entries are still relative to the session cwd.

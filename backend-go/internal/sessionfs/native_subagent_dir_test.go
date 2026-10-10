@@ -396,3 +396,67 @@ func TestSampleSubagentFolderLoadsAndMatchesTheSchema(t *testing.T) {
 		t.Fatalf("sample agent.json does not match agent.schema.json: %v", err)
 	}
 }
+
+// A toolset shared by many projects lists a general folder and the project's own folder.
+// A project that has no folder of its own must still load when the setting allows it.
+func TestSubagentAgentsDirMayBeMissingWhenConfigured(t *testing.T) {
+	root := subagentTree(t, map[string]string{"general/a/prompt.md": "A."})
+	_, err := loadWithDirs(t, root, `{"agents_dir":["general","project"]}`)
+	if err == nil || !strings.Contains(err.Error(), "agents_dir[1] is not a directory") {
+		t.Fatalf("default must stay strict, error = %v", err)
+	}
+	got, err := loadWithDirs(t, root, `{"agents_dir_missing_ok":true,"agents_dir":["general","project"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Agents) != 1 || got.Agents[0].Name != "a" {
+		t.Fatalf("agents = %+v", got.Agents)
+	}
+	if len(got.AgentDirs) != 1 || got.AgentDirs[0] != filepath.Join(root, "general") {
+		t.Fatalf("AgentDirs = %v, want only the folder that exists", got.AgentDirs)
+	}
+	// A path that exists but is a file is still an error.
+	root = subagentTree(t, map[string]string{"general/a/prompt.md": "A.", "file.txt": "x"})
+	if _, err := loadWithDirs(t, root, `{"agents_dir_missing_ok":true,"agents_dir":["general","file.txt"]}`); err == nil {
+		t.Fatal("a file in agents_dir was accepted")
+	}
+	// Nothing found anywhere is still an error: a typo cannot remove every agent.
+	root = subagentTree(t, map[string]string{"x/y.txt": "x"})
+	if _, err := loadWithDirs(t, root, `{"agents_dir_missing_ok":true,"agents_dir":["nowhere"]}`); err == nil {
+		t.Fatal("no agent anywhere was accepted")
+	}
+}
+
+// With agents_dir_override a later folder replaces an earlier one's agent of the same
+// name, so a project can adapt a general agent. Inline agents are never replaced.
+func TestSubagentAgentsDirLaterFolderOverridesWhenConfigured(t *testing.T) {
+	root := subagentTree(t, map[string]string{
+		"general/a/prompt.md": "general A.",
+		"general/b/prompt.md": "general B.",
+		"project/a/prompt.md": "project A.",
+		"project/c/prompt.md": "project C.",
+	})
+	if _, err := loadWithDirs(t, root, `{"agents_dir":["general","project"]}`); err == nil || !strings.Contains(err.Error(), "agent a is defined twice") {
+		t.Fatalf("default must stay strict, error = %v", err)
+	}
+	got, err := loadWithDirs(t, root, `{"agents_dir_override":true,"agents_dir":["general","project"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, agent := range got.Agents {
+		names = append(names, agent.Name)
+	}
+	if strings.Join(names, ",") != "a,b,c" {
+		t.Fatalf("agents = %v, want a,b,c", names)
+	}
+	a, _ := got.Agent("a")
+	if a.PromptText != "project A." || a.Dir != filepath.Join(root, "project", "a") {
+		t.Fatalf("agent a = prompt %q dir %q, want the project's", a.PromptText, a.Dir)
+	}
+	// An inline agent of the same name is still refused.
+	_, err = loadWithDirs(t, root, `{"agents_dir_override":true,"agents":{"a":{"description":"x"}},"agents_dir":["general"]}`)
+	if err == nil || !strings.Contains(err.Error(), "agent a is defined twice") {
+		t.Fatalf("inline duplicate, error = %v", err)
+	}
+}
