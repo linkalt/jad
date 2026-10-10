@@ -108,7 +108,7 @@ func TestLayoutLoadsTheSampleSession(t *testing.T) {
 	if config.StoragePaths.Staging != filepath.Join(layout.State, "default", "dev", "coder", "staging") {
 		t.Fatalf("staging = %s", config.StoragePaths.Staging)
 	}
-	if config.StoragePaths.ToolStorage != filepath.Join(layout.State, "default", "dev", "coder", "tools") {
+	if config.StoragePaths.ToolStorage != filepath.Join(config.WorkingDir, ".jad", "state", "default", "dev", "coder", "tools") {
 		t.Fatalf("tool storage = %s", config.StoragePaths.ToolStorage)
 	}
 	if config.NativeRead == nil || config.NativeBash == nil || config.NativeSubagent == nil || config.NativeGrep == nil {
@@ -1007,5 +1007,52 @@ func TestLayoutSubagentWithoutModelKeepsTheCallersModel(t *testing.T) {
 	}
 	if got := subagentX(t, config).ModelPath; got != "" {
 		t.Fatalf("agent model path = %q, want empty", got)
+	}
+}
+
+// Tool state (bash spill, memory, tasks, fetch, processes, sub-agent runs, write/edit
+// backups) lives under the session cwd, so the file tools reach it with no extra rule.
+// The transcript and staging stay under the root state folder.
+func TestLayoutToolStorageIsUnderTheCWD(t *testing.T) {
+	layout, location, _ := sampleLayout(t)
+	layout.State = filepath.Join(t.TempDir(), "state")
+	config, err := LoadLayoutSessionSettings(location, layout, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(config.WorkingDir, ".jad", "state", "default", "dev", "coder", "tools")
+	if config.StoragePaths.ToolStorage != want {
+		t.Fatalf("tool storage = %s, want %s", config.StoragePaths.ToolStorage, want)
+	}
+	if !strings.HasPrefix(config.NativeBash.Spill.StorageDir, want+string(filepath.Separator)) {
+		t.Fatalf("bash spill = %s, want it under %s", config.NativeBash.Spill.StorageDir, want)
+	}
+	if !strings.HasPrefix(config.MessagesPath, layout.State+string(filepath.Separator)) {
+		t.Fatalf("messages = %s, want it under the root state %s", config.MessagesPath, layout.State)
+	}
+}
+
+// tool_storage_dir sets the folder under the cwd; the nearest level wins and an absolute
+// path is used as it is.
+func TestLayoutToolStorageDirIsConfigurable(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	layout.Defaults = map[string]json.RawMessage{"tool_storage_dir": json.RawMessage(`"from-defaults"`)}
+	config, err := LoadLayoutSessionSettings(location, layout, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(config.WorkingDir, "from-defaults", "default", "dev", "coder", "tools"); config.StoragePaths.ToolStorage != want {
+		t.Fatalf("defaults: tool storage = %s, want %s", config.StoragePaths.ToolStorage, want)
+	}
+	abs := filepath.Join(config.WorkingDir, "abs-tools")
+	editJSON(t, filepath.Join(root, "sessions", "default", "session.json"), func(m map[string]any) {
+		m["settings"].(map[string]any)["tool_storage_dir"] = abs
+	})
+	config, err = LoadLayoutSessionSettings(location, layout, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(abs, "default", "dev", "coder", "tools"); config.StoragePaths.ToolStorage != want {
+		t.Fatalf("session: tool storage = %s, want %s", config.StoragePaths.ToolStorage, want)
 	}
 }

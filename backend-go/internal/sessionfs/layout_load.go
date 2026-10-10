@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -215,8 +216,12 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 	}
 
 	entries := make(map[string]json.RawMessage, c.profiles.Len())
+	toolBase, err := toolStorageBase(setting)
+	if err != nil {
+		return nil, nil, configError("%s: %v", c.sessionPath, err)
+	}
 	for _, other := range c.profiles.Entries() {
-		entry := c.storageEntry(other)
+		entry := c.storageEntry(other, toolBase)
 		if other.ID() == selected.ID() {
 			c.addProfileFields(entry, other.ID(), profile, models)
 		}
@@ -235,14 +240,39 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 
 // storageEntry is the part of a profile entry every profile gets: where its state lives,
 // <state>/<session>/<category>/<name>/.
-func (c *layoutCompose) storageEntry(profile catalog.Entry) map[string]any {
+//
+// The transcript, staging and HTTP debug stay under the root state folder. The tool
+// storage (bash spill, memory, tasks, fetch, processes, sub-agent runs, write/edit
+// backups) lives under the session cwd, in toolBase, so the file tools reach it with no
+// extra path rule and a project keeps its own tool state.
+func (c *layoutCompose) storageEntry(profile catalog.Entry, toolBase string) map[string]any {
 	dir := filepath.Join(c.layout.State, c.location.SessionID, profile.Category, profile.Name)
 	return map[string]any{
 		"messages":     filepath.Join(dir, "messages.jsonl"),
 		"staging":      filepath.Join(dir, "staging"),
 		"http_debug":   filepath.Join(dir, "debug", "http"),
-		"tool_storage": filepath.Join(dir, "tools"),
+		"tool_storage": filepath.Join(toolBase, c.location.SessionID, profile.Category, profile.Name, "tools"),
 	}
+}
+
+// defaultToolStorageDir is the folder under the cwd that holds tool storage when
+// tool_storage_dir is not set.
+const defaultToolStorageDir = ".jad/state"
+
+// toolStorageBase is the folder that holds the tool storage of every profile of the
+// session: tool_storage_dir (default defaultToolStorageDir), relative to the cwd. A profile's
+// tool storage is <base>/<session>/<category>/<name>/tools.
+func toolStorageBase(setting map[string]json.RawMessage) (string, error) {
+	cwd, dir := "", defaultToolStorageDir
+	if err := json.Unmarshal(setting["cwd"], &cwd); err != nil {
+		return "", fmt.Errorf("cwd must be a string")
+	}
+	if raw, ok := setting["tool_storage_dir"]; ok {
+		if err := json.Unmarshal(raw, &dir); err != nil || strings.TrimSpace(dir) == "" {
+			return "", fmt.Errorf("tool_storage_dir must be a non-empty string")
+		}
+	}
+	return resolveFrom(expandHome(strings.TrimSpace(cwd)), expandHome(strings.TrimSpace(dir))), nil
 }
 
 // addProfileFields adds the fields only the selected profile needs.

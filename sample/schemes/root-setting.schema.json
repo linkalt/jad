@@ -297,7 +297,8 @@
           "compaction",
           "http_debug",
           "cwd",
-          "env_file"
+          "env_file",
+          "tool_storage_dir"
         ]
       },
       "properties": {
@@ -358,6 +359,11 @@
           "type": "string",
           "pattern": "\\S",
           "description": "Dotenv file for the toolset's bash, process and exec when they name no env_file of their own. A relative path is relative to the folder of the root setting.json. Defaults, session and profile may all set it; the nearer level wins. A tool the toolset lacks is not added."
+        },
+        "tool_storage_dir": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Folder that holds the tool storage (bash spill, memory, tasks, fetch, processes, sub-agent runs, write/edit backups), as <folder>/<session>/<category>/<name>/tools. A relative path is relative to the session cwd, so the file tools reach it with no extra path rule; the default is .jad/state. An absolute path outside the cwd needs tools.native.read.paths to allow it. The transcript and staging stay in the root state folder. Defaults, session and profile may all set it; the nearer level wins."
         }
       }
     }
