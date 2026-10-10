@@ -168,23 +168,6 @@ export function sessionListRows(
 }
 
 /**
- * The profiles a session's context menu offers.
- *
- * The session's stored default is left out: its row is the session's own row, so
- * pinning it would put the same conversation in the list twice.
- */
-export function profileMenuTargets(session: {
-  id: string;
-  title: string;
-  profiles?: readonly string[];
-  activeProfile?: string;
-}): {profile: string; label: string}[] {
-  return (session.profiles ?? [])
-    .filter(profile => profile !== session.activeProfile)
-    .map(profile => ({profile, label: viewLabel(session.title, profile)}));
-}
-
-/**
  * The run a row shows.
  *
  * A pinned row looks its own profile up in the session's per-profile runs; the
@@ -295,4 +278,152 @@ export function parseStoredViews(value: unknown, limit: number): StoredViews {
     views,
     activeViewKey: typeof record.activeViewKey === 'string' ? record.activeViewKey : '',
   };
+}
+
+/** One session of the grouped list: a header, and a row for each of its profiles. */
+export type SessionListGroup = {
+  sessionRef: string;
+  title: string;
+  /** The session's category; absent when it has none. */
+  category?: string;
+  /**
+   * One row per profile. Empty when the session has no path profiles: the group
+   * is then a single selectable row, `ownRow`.
+   */
+  children: SessionListRow[];
+  /** The session's own row (its stored default profile), always present. */
+  ownRow: SessionListRow;
+};
+
+/**
+ * The grouped list: every session once, with a child row for each of its path
+ * profiles.
+ *
+ * The profile that is the session's stored default is the session's own row
+ * (`key` = the session id, no `profile`), so it keeps following the stored
+ * default exactly as before. Any other profile is the pinned view of that
+ * profile (`session\u0000profile`), whether or not this client has pinned it yet.
+ * A pinned view whose profile the session no longer lists stays visible, after
+ * the listed ones, so the row on screen always has a place in the list.
+ */
+export function sessionListGroups(
+  sessions: readonly {
+    id: string;
+    title: string;
+    category?: string;
+    profiles?: readonly string[];
+    activeProfile?: string;
+  }[],
+  views: readonly PinnedView[],
+): SessionListGroup[] {
+  return sessions.map(session => {
+    const category = session.category === undefined || session.category === '' ? {} : {category: session.category};
+    const ownRow: SessionListRow = {
+      key: session.id,
+      sessionRef: session.id,
+      label: session.title,
+      isPinned: false,
+    };
+    const profiles = session.profiles ?? [];
+    if (profiles.length === 0) {
+      return {sessionRef: session.id, title: session.title, ...category, children: [], ownRow};
+    }
+    const pinnedProfiles = new Set(
+      views.filter(view => view.sessionRef === session.id).map(view => view.profile),
+    );
+    const listed = new Set(profiles);
+    const names = [
+      ...new Set([...profiles, ...[...pinnedProfiles].filter(profile => !listed.has(profile))]),
+    ];
+    const children: SessionListRow[] = [];
+    if (session.activeProfile === undefined || !listed.has(session.activeProfile)) {
+      children.push({
+        key: session.id,
+        sessionRef: session.id,
+        label: session.activeProfile ?? session.title,
+        isPinned: false,
+      });
+    }
+    for (const name of names) {
+      if (name === session.activeProfile) {
+        // Listed: this is the own row. Unlisted: the own row was added above.
+        if (listed.has(name)) {
+          children.push({key: session.id, sessionRef: session.id, label: name, isPinned: false});
+        }
+        // A view pinned before this profile became the stored default keeps its
+        // row, so it can still be removed and still counts where the user sees it.
+        if (pinnedProfiles.has(name)) {
+          children.push({key: viewKey(session.id, name), sessionRef: session.id, profile: name, label: name, isPinned: true});
+        }
+        continue;
+      }
+      children.push({
+        key: viewKey(session.id, name),
+        sessionRef: session.id,
+        profile: name,
+        label: name,
+        isPinned: pinnedProfiles.has(name),
+      });
+    }
+    return {sessionRef: session.id, title: session.title, ...category, children, ownRow};
+  });
+}
+
+/** Whether a group is open: expanded unless the user collapsed it. */
+export function isGroupExpanded(group: SessionListGroup, collapsedRefs: readonly string[]): boolean {
+  return !collapsedRefs.includes(group.sessionRef);
+}
+
+/** The new collapsed set after the user opened or closed one group. */
+export function setGroupCollapsed(
+  collapsedRefs: readonly string[],
+  sessionRef: string,
+  isCollapsed: boolean,
+): string[] {
+  const rest = collapsedRefs.filter(ref => ref !== sessionRef);
+  return isCollapsed ? [...rest, sessionRef] : rest;
+}
+
+/** The persisted collapsed set, defended against anything a store may hold. */
+export function parseCollapsedGroups(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [...new Set(value.filter((ref): ref is string => typeof ref === 'string' && ref.length > 0))];
+}
+
+/** The sessions of one category, in list order. */
+export type CategorySection = {
+  /** The category name; absent for the sessions that have none. */
+  category?: string;
+  groups: SessionListGroup[];
+};
+
+/**
+ * Splits the grouped list by category.
+ *
+ * Categories keep the order in which the list first meets them, so the list's own
+ * order decides, and sessions inside a category keep their list order. Sessions
+ * without a category form one section, after the named ones.
+ */
+export function groupByCategory(groups: readonly SessionListGroup[]): CategorySection[] {
+  const named = new Map<string, SessionListGroup[]>();
+  const unnamed: SessionListGroup[] = [];
+  for (const group of groups) {
+    if (group.category === undefined) {
+      unnamed.push(group);
+      continue;
+    }
+    const section = named.get(group.category);
+    if (section === undefined) {
+      named.set(group.category, [group]);
+    } else {
+      section.push(group);
+    }
+  }
+  const sections: CategorySection[] = [...named].map(([category, items]) => ({category, groups: items}));
+  if (unnamed.length > 0) {
+    sections.push({groups: unnamed});
+  }
+  return sections;
 }

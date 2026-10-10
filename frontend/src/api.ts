@@ -217,6 +217,8 @@ export interface SessionSnapshot {
   session_id?: string;
   root_id?: string;
   root_label?: string;
+  /** The session's category (session.json); absent when it has none. */
+  category?: string;
   active_profile?: string;
   path_profiles?: string[];
   model_default?: string;

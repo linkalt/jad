@@ -165,27 +165,29 @@ import {
   typeScaleVars,
   typographyVars,
 } from '@astryxdesign/core/theme/tokens.stylex';
-import {ContextMenu} from '@astryxdesign/core/ContextMenu';
 import {
   addPinnedView,
   isPinnedViewKey,
-  profileMenuTargets,
   profileOfViewKey,
   profileSelection,
   prunePinnedViews,
   removePinnedView,
   restoreViews,
-  rowHasRunningRun,
   rowRunStatus,
+  parseCollapsedGroups,
+  groupByCategory,
+  sessionListGroups,
   sessionListRows,
+  setGroupCollapsed,
   sessionRefOfViewKey,
   viewKey,
   viewLabel,
   type PinnedView,
-  type SessionListRow,
+  type SessionListGroup,
 } from './session-views';
 import {placeRunFailures, runFailureText} from './run-failures';
 import {ProviderRetryNotice} from './components/ProviderRetryNotice';
+import {SessionGroupList} from './components/SessionGroupList';
 import {interactionEndNotice, type InteractionEnd} from './interaction-end';
 import type {ProviderRetryWait} from './provider-retry-view';
 import {removeViewKeys, removedViewKeys} from './view-cache';
@@ -361,13 +363,6 @@ const styles = stylex.create({
     borderBlockStart: `${borderVars['--border-width']} solid ${colorVars['--color-border']}`,
     paddingBlockStart: spacingVars['--spacing-3'],
   },
-  // The ✕ of a pinned row lives in the item's `actions` slot: a sibling of the
-  // row button, never a child of it. The slot stays mounted so the row's shape
-  // never changes under the pointer; only this control's own display toggles,
-  // which keeps the idle row at the exact geometry it has always had.
-  rowActionHidden: {
-    display: 'none',
-  },
 });
 
 type SessionState = SessionUiState;
@@ -396,6 +391,8 @@ interface Session {
   source: 'live' | 'sample';
   sessionRef?: string;
   rootLabel?: string;
+  /** Groups sessions in the list; absent when the session has none. */
+  category?: string;
   activeProfile?: string;
   pathProfiles?: string[];
   modelDefault?: string;
@@ -463,6 +460,19 @@ function writeStoredViews(key: string, value: {views: PinnedView[]; activeViewKe
     window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // Ignored: the rows live for this page even when they cannot be persisted.
+  }
+}
+
+/** The groups the user collapsed; best effort, like the pinned rows. */
+function readCollapsedGroups(key: string): string[] {
+  return parseCollapsedGroups(readStoredViews(key));
+}
+
+function writeCollapsedGroups(key: string, value: readonly string[]): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignored: the groups keep their state for this page.
   }
 }
 
@@ -746,6 +756,7 @@ function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
       ? {}
       : {runsByProfile: snapshot.runs_by_profile}),
     ...(snapshot.root_label ? {rootLabel: snapshot.root_label} : {}),
+    ...(snapshot.category ? {category: snapshot.category} : {}),
     ...(snapshot.active_profile === undefined ? {} : {activeProfile: snapshot.active_profile}),
     ...(snapshot.path_profiles === undefined ? {} : {pathProfiles: snapshot.path_profiles}),
     ...(snapshot.model_default === undefined ? {} : {modelDefault: snapshot.model_default}),
@@ -1688,7 +1699,9 @@ function NotificationBellIcon(props: SVGProps<SVGSVGElement>) {
 }
 
 function SessionNavigation({
-  rows,
+  groups,
+  collapsedRefs,
+  onCollapsedChange,
   rowTurns,
   sessions,
   runningViewKeys,
@@ -1706,8 +1719,11 @@ function SessionNavigation({
   onToggleNotifications,
   onToggleCheckpoints,
 }: {
-  /** Every session, each followed by the profile rows pinned to it. */
-  rows: SessionListRow[];
+  /** Every session as a group, with a child row for each of its profiles. */
+  groups: SessionListGroup[];
+  /** The sessions whose group the user collapsed. */
+  collapsedRefs: readonly string[];
+  onCollapsedChange: (sessionRef: string, isCollapsed: boolean) => void;
   /** What each row's own transcript holds, when its snapshot has reported it. */
   rowTurns: Readonly<Record<string, number>>;
   sessions: Session[];
@@ -1726,12 +1742,7 @@ function SessionNavigation({
   onToggleNotifications: () => void;
   onToggleCheckpoints: () => void;
 }) {
-  // The ✕ of a pinned row appears while the pointer is over that row, so the
-  // list stays quiet; the row's context menu is the keyboard path to the same
-  // removal. Hover is tracked on the row itself (the context-menu trigger), not
-  // on the row button: the ✕ sits beside that button, so a leave fired by the
-  // button would hide the control the moment the pointer reached it.
-  const [hoveredViewKey, setHoveredViewKey] = useState<string | null>(null);
+  const categorySections = useMemo(() => groupByCategory(groups), [groups]);
   return (
     <SideNav
       aria-label="Agent sessions"
@@ -1780,83 +1791,26 @@ function SessionNavigation({
       }
       collapsible
     >
-      <SideNavSection title="Recent runs">
-        {rows.map(row => {
-          const session = sessions.find(candidate => candidate.id === row.sessionRef);
-          if (session === undefined) {
-            return null;
-          }
-          const run = rowRunStatus(row, session);
-          const state = rowHasRunningRun(row, session, runningViewKeys)
-            ? 'accent'
-            : row.profile === undefined
-              ? session.state
-              : sessionUiStateForRun(run?.status);
-          // A session row offers its other profiles; the profile it already
-          // shows is left out, because its row is this one.
-          const pinnedProfiles = profileMenuTargets({
-            id: session.id,
-            title: session.title,
-            ...(session.pathProfiles === undefined ? {} : {profiles: session.pathProfiles}),
-            ...(session.activeProfile === undefined ? {} : {activeProfile: session.activeProfile}),
-          });
-          const menuItems = row.isPinned
-            ? [
-                {
-                  id: `remove-${row.key}`,
-                  label: `Remove ${row.label}`,
-                  onClick: () => onRemoveView(row.key),
-                },
-              ]
-            : pinnedProfiles.length === 0
-              ? [{id: 'no-profiles', label: 'No other profiles', isDisabled: true}]
-              : pinnedProfiles.map(target => ({
-                  id: `pin-${target.profile}`,
-                  label: target.label,
-                  isDisabled: !canPinProfile,
-                  onClick: () => onOpenProfile(row.sessionRef, target.profile),
-                }));
-          // The ✕ is a row control, so it renders in the item's `actions` slot
-          // beside the row button — never in `endContent`, which renders inside
-          // the button: invalid HTML for a button, and the ✕'s click would also
-          // bubble into the row's select. The slot is always mounted so the
-          // row's shape never changes while the pointer moves within it; only
-          // the control's own display toggles.
-          return (
-            <ContextMenu
-              key={row.key}
-              label={`${row.label} actions`}
-              items={menuItems}
-              onMouseEnter={() => setHoveredViewKey(row.key)}
-              onMouseLeave={() => setHoveredViewKey(current => (current === row.key ? null : current))}
-            >
-              <SideNavItem
-                label={row.label}
-                isSelected={row.key === activeViewKey}
-                onClick={() => onSelect(row.key)}
-                icon={<StatusDot variant={state} label={`${row.label} ${state}`} />}
-                actions={
-                  row.isPinned ? (
-                    <IconButton
-                      label={`Remove ${row.label}`}
-                      icon={<Icon icon="close" size="sm" />}
-                      variant="ghost"
-                      size="sm"
-                      xstyle={hoveredViewKey === row.key ? undefined : styles.rowActionHidden}
-                      onClick={() => onRemoveView(row.key)}
-                    />
-                  ) : undefined
-                }
-                endContent={
-                  row.isPinned ? undefined : (
-                    <Badge label={String(rowTurns[row.key] ?? session.turns)} />
-                  )
-                }
-              />
-            </ContextMenu>
-          );
-        })}
-      </SideNavSection>
+      {categorySections.map(section => (
+        <SideNavSection
+          key={section.category ?? ''}
+          title={section.category ?? appConfig.session_uncategorized_title}
+        >
+          <SessionGroupList
+            groups={section.groups}
+            sessions={sessions}
+            rowTurns={rowTurns}
+            runningViewKeys={runningViewKeys}
+            activeViewKey={activeViewKey}
+            collapsedRefs={collapsedRefs}
+            canPinProfile={canPinProfile}
+            onCollapsedChange={onCollapsedChange}
+            onSelect={onSelect}
+            onOpenProfile={onOpenProfile}
+            onRemoveView={onRemoveView}
+          />
+        </SideNavSection>
+      ))}
       <SideNavSection title="Workspace">
         <SideNavItem
           data-panel-toggle=""
@@ -3026,6 +2980,28 @@ function App() {
     [pinnedViews, sessions],
   );
   const activeRow = listRows.find(row => row.key === activeViewKey);
+  const listGroups = useMemo(
+    () => sessionListGroups(
+      sessions.map(session => ({
+        id: session.id,
+        title: session.title,
+        ...(session.category === undefined ? {} : {category: session.category}),
+        ...(session.pathProfiles === undefined ? {} : {profiles: session.pathProfiles}),
+        ...(session.activeProfile === undefined ? {} : {activeProfile: session.activeProfile}),
+      })),
+      pinnedViews,
+    ),
+    [pinnedViews, sessions],
+  );
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>(() =>
+    readCollapsedGroups(appConfig.session_groups_storage_key),
+  );
+  const changeGroupCollapsed = useCallback((sessionRef: string, isCollapsed: boolean) => {
+    setCollapsedGroups(current => setGroupCollapsed(current, sessionRef, isCollapsed));
+  }, []);
+  useEffect(() => {
+    writeCollapsedGroups(appConfig.session_groups_storage_key, collapsedGroups);
+  }, [collapsedGroups]);
   const profileRowLimitReached = pinnedViews.length >= appConfig.session_views_max;
 
   /**
@@ -5345,7 +5321,9 @@ function App() {
       contentPadding={0}
       sideNav={
         <SessionNavigation
-          rows={listRows}
+          groups={listGroups}
+          collapsedRefs={collapsedGroups}
+          onCollapsedChange={changeGroupCollapsed}
           rowTurns={rowTurns}
           sessions={sessions}
           runningViewKeys={sidebarRunningViewKeys}

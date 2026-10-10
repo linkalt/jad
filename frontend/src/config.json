@@ -93,5 +93,7 @@
   "session_refresh_interval_ms_streaming": 5000,
   "session_views": [],
   "session_views_storage_key": "agent-harness.session-views",
+  "session_groups_storage_key": "agent-harness.session-groups",
+  "session_uncategorized_title": "Recent runs",
   "session_views_max": 8
 }
