@@ -16,7 +16,7 @@ func TestNormalizeNativeBashSettingsDefaultsAndInheritsWritePolicy(t *testing.T)
 	writePolicy := NativePathPolicy{Paths: []NativePathRule{{Action: "deny", Path: filepath.Join(cwd, "private")}}}
 	settings, err := normalizeNativeBashSettings(map[string]json.RawMessage{
 		"tools": json.RawMessage(`{"native":{"bash":{}}}`),
-	}, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", &NativeWriteSettings{Policy: writePolicy}, NativePathPolicy{}, NativePathPolicy{})
+	}, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", sessionDir, &NativeWriteSettings{Policy: writePolicy}, NativePathPolicy{}, NativePathPolicy{})
 	if err != nil {
 		t.Fatalf("normalizeNativeBashSettings() error = %v", err)
 	}
@@ -55,7 +55,7 @@ func TestNormalizeNativeBashSettingsOverridesAndLoadsEnvFile(t *testing.T) {
 	setting := map[string]json.RawMessage{
 		"tools": json.RawMessage(`{"native":{"bash":{"shell":" /bin/sh ","login_shell":true,"timeout_ms":30000,"max_timeout_ms":45000,"kill_grace_ms":400,"kill_process_group":"timeout_only","max_bytes":1024,"stdout":{"head_bytes":100,"tail_bytes":100},"stderr":{"head_bytes":50,"tail_bytes":50},"spill":{"enabled":false,"keep":"always","storage_dir":"custom-spill"},"max_line_chars":200,"stdin_max_bytes":4096,"strip_ansi":false,"env_file":"command.env","env":{"OVERRIDDEN":"inline"},"env_deny":[" DENIED "],"paths":{"deny":["private"]}}}}`),
 	}
-	settings, err := normalizeNativeBashSettings(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", nil, NativePathPolicy{}, NativePathPolicy{})
+	settings, err := normalizeNativeBashSettings(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", sessionDir, nil, NativePathPolicy{}, NativePathPolicy{})
 	if err != nil {
 		t.Fatalf("normalizeNativeBashSettings() error = %v", err)
 	}
@@ -118,7 +118,7 @@ func TestNormalizeNativeBashSettingsValidatesConfiguration(t *testing.T) {
 	}
 	for _, raw := range cases {
 		setting := map[string]json.RawMessage{"tools": json.RawMessage(raw)}
-		_, err := normalizeNativeBashSettings(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", nil, NativePathPolicy{}, NativePathPolicy{})
+		_, err := normalizeNativeBashSettings(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", sessionDir, nil, NativePathPolicy{}, NativePathPolicy{})
 		if err == nil || !strings.Contains(err.Error(), "tools.native.bash") {
 			t.Errorf("normalizeNativeBashSettings(%s) error = %v; want a bash config error", raw, err)
 		}

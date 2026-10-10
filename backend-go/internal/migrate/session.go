@@ -154,6 +154,46 @@ func checkEnvFiles(p *plan) error {
 	return nil
 }
 
+// relocateEnvFiles rewrites each relative env_file of the tools. In the legacy session it
+// was relative to the session folder; in the layout it is relative to the root folder, and
+// copyEnvFiles puts the file in the session's folder of the new tree, so the path becomes
+// "<sessions folder>/<session>/<file>". It stays relative, so the tree can be moved.
+func (r *runState) relocateEnvFiles(p *plan, native map[string]json.RawMessage) map[string]json.RawMessage {
+	out := make(map[string]json.RawMessage, len(native))
+	for tool, raw := range native {
+		out[tool] = raw
+		fields, ok := objectOf(raw)
+		if !ok {
+			continue
+		}
+		var name string
+		if json.Unmarshal(fields["env_file"], &name) != nil {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		if name == "" || filepath.IsAbs(expandHome(name)) {
+			continue
+		}
+		relative, err := filepath.Rel(r.out, filepath.Join(r.sessionsDir(p.root), p.name, name))
+		if err != nil {
+			continue
+		}
+		encoded, err := json.Marshal(filepath.ToSlash(relative))
+		if err != nil {
+			continue
+		}
+		copied := make(map[string]json.RawMessage, len(fields))
+		for key, value := range fields {
+			copied[key] = value
+		}
+		copied["env_file"] = encoded
+		if rewritten, err := json.Marshal(copied); err == nil {
+			out[tool] = rewritten
+		}
+	}
+	return out
+}
+
 // absolutePathRules returns the tools.native map with every relative path rule made
 // absolute. A relative rule is relative to the root folder, which is another folder in
 // the new tree, so it would allow or deny another place.
@@ -437,7 +477,7 @@ func (r *runState) writeToolset(p *plan) (string, error) {
 		}
 	}
 	if native, ok := objectOf(tools["native"]); ok {
-		file["native"] = absolutePathRules(native, p.root.GlobalJadRoot)
+		file["native"] = r.relocateEnvFiles(p, absolutePathRules(native, p.root.GlobalJadRoot))
 	}
 	servers, err := r.mcpServers(p)
 	if err != nil {

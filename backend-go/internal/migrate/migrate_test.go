@@ -813,3 +813,47 @@ func TestRewriteSubagentRunsKeepsAFolderNamedWithTwoDots(t *testing.T) {
 		t.Fatalf("dir = %q", manifest.Dir)
 	}
 }
+
+// A relative env_file in a legacy session is relative to the session folder; in the layout
+// it is relative to the root folder. The migrated toolset must still find the file, and the
+// two sessions that name the same file name must not share one copy.
+func TestMigrateKeepsARelativeEnvFileWorking(t *testing.T) {
+	setting, cwd := legacyTree(t)
+	root := filepath.Dir(setting)
+	for _, name := range []string{"kappa", "lambda"} {
+		simpleSession(t, root, cwd, name, map[string]any{
+			"tools": map[string]any{"native": map[string]any{
+				// the output folder of this test lies outside the session cwd, so the spill
+				// folder could not be read back under the default read policy
+				"bash":    map[string]any{"env_file": "env", "spill": map[string]any{"allow_unreadable": true}},
+				"process": map[string]any{"env_file": "env"},
+			}},
+		})
+		writeFile(t, filepath.Join(root, "sessions", name, "env"), "WHO="+name+"\n")
+	}
+	out := filepath.Join(t.TempDir(), "new")
+	report, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Differences) != 0 {
+		t.Fatalf("migrated tree differs: %v", report.Differences)
+	}
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{RootSettingPath: filepath.Join(out, "setting.json"), Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"kappa", "lambda"} {
+		location, err := sessionfs.Resolve(loaded.Roots, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config, err := sessionfs.LoadSessionSettings(location, name+"/p", "")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if config.NativeBash.Env["WHO"] != name || config.NativeProcess.EnvFile == "" {
+			t.Fatalf("%s: bash env = %v, process env file = %q", name, config.NativeBash.Env, config.NativeProcess.EnvFile)
+		}
+	}
+}

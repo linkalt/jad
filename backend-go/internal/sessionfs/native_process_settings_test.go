@@ -28,6 +28,7 @@ func TestNormalizeNativeProcessSettingsDefaultsAndInheritsBashPolicy(t *testing.
 		cwd,
 		"",
 		"",
+		"",
 		bash,
 		nil,
 	)
@@ -79,6 +80,7 @@ func TestNormalizeNativeProcessSettingsOverridesAndStorage(t *testing.T) {
 		cwd,
 		"",
 		toolStorage,
+		"",
 		nil,
 		&NativeWriteSettings{Policy: writePolicy},
 	)
@@ -155,7 +157,7 @@ func TestNormalizeNativeProcessSettingsValidatesUnsupportedValues(t *testing.T) 
 		`{"statecontext":{"states":["unknown"]}}`,
 		`{"statecontext":{"limit":0}}`,
 	} {
-		_, err := normalizeNativeProcessSettings(base(raw), globalRoot, settingPath, globalRoot, "", "", nil, nil)
+		_, err := normalizeNativeProcessSettings(base(raw), globalRoot, settingPath, globalRoot, "", "", "", nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "tools.native.process") {
 			t.Errorf("normalizeNativeProcessSettings(%s) error = %v, want process config error", raw, err)
 		}
@@ -167,7 +169,7 @@ func TestNormalizeNativeProcessLegacyStatusLogBytesDefaultsNull(t *testing.T) {
 	settingPath := filepath.Join(globalRoot, "setting.json")
 	legacy, err := normalizeNativeProcessSettings(
 		map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":{"status_log_bytes":null}}}`)},
-		globalRoot, settingPath, globalRoot, "", "", nil, nil,
+		globalRoot, settingPath, globalRoot, "", "", "", nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("normalizeNativeProcessSettings(legacy null) error = %v", err)
@@ -194,7 +196,7 @@ func TestNormalizeNativeProcessSettingsLoadsEnvFileBelowInlineEnv(t *testing.T) 
 	setting := map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":{"env_file":"process.env","env":{"OVERRIDDEN":"inline"},"env_deny":["DENIED"]}}}`)}
 	// The bash env_file must not leak into process.
 	bash := &NativeBashSettings{Env: map[string]string{"BASH_ONLY": "x"}, EnvFile: filepath.Join(sessionDir, "bash.env")}
-	settings, err := normalizeNativeProcessSettings(setting, sessionDir, settingPath, sessionDir, sessionDir, "", bash, nil)
+	settings, err := normalizeNativeProcessSettings(setting, sessionDir, settingPath, sessionDir, sessionDir, "", sessionDir, bash, nil)
 	if err != nil {
 		t.Fatalf("normalizeNativeProcessSettings() error = %v", err)
 	}
@@ -225,7 +227,7 @@ func TestNormalizeNativeProcessSettingsEnvFileAbsoluteAndErrors(t *testing.T) {
 	}
 	load := func(value string) (*NativeProcessSettings, error) {
 		setting := map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":{"env_file":` + value + `}}}`)}
-		return normalizeNativeProcessSettings(setting, sessionDir, settingPath, sessionDir, sessionDir, "", nil, nil)
+		return normalizeNativeProcessSettings(setting, sessionDir, settingPath, sessionDir, sessionDir, "", sessionDir, nil, nil)
 	}
 	quoted, _ := json.Marshal(absolute)
 	settings, err := load(string(quoted))
@@ -253,7 +255,7 @@ func TestProcessStopOrphansSetting(t *testing.T) {
 	settingPath := filepath.Join(globalRoot, "session", "setting.json")
 	read := func(process string) (bool, error) {
 		setting := map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":` + process + `}}`)}
-		got, err := normalizeNativeProcessSettings(setting, globalRoot, settingPath, globalRoot, "", "", nil, nil)
+		got, err := normalizeNativeProcessSettings(setting, globalRoot, settingPath, globalRoot, "", "", "", nil, nil)
 		if err != nil {
 			return false, err
 		}

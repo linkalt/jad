@@ -83,7 +83,7 @@ type NativeBashSettings struct {
 
 func normalizeNativeBashSettings(
 	setting map[string]json.RawMessage,
-	globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir string,
+	globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase string,
 	write *NativeWriteSettings,
 	readPolicy, grepPolicy NativePathPolicy,
 ) (*NativeBashSettings, error) {
@@ -183,7 +183,7 @@ func normalizeNativeBashSettings(
 
 	settings.Env = map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}
 	settings.EnvDeny = []string{}
-	envFile, fileEnv, err := loadConfiguredEnvFile(fields, sessionDir, settingPath, "bash")
+	envFile, fileEnv, err := loadConfiguredEnvFile(fields, envFileBase, settingPath, "bash")
 	if err != nil {
 		return nil, err
 	}

@@ -69,7 +69,7 @@ type NativeProcessSettings struct {
 
 func normalizeNativeProcessSettings(
 	setting map[string]json.RawMessage,
-	globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir string,
+	globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase string,
 	bash *NativeBashSettings,
 	write *NativeWriteSettings,
 ) (*NativeProcessSettings, error) {
@@ -209,7 +209,7 @@ func normalizeNativeProcessSettings(
 	}
 	// Safe defaults, then env_file, then inline env (inline wins). env_file is
 	// the process tool's own setting and is not inherited from bash.
-	envFile, fileEnv, err := loadConfiguredEnvFile(fields, sessionDir, settingPath, "process")
+	envFile, fileEnv, err := loadConfiguredEnvFile(fields, envFileBase, settingPath, "process")
 	if err != nil {
 		return nil, err
 	}

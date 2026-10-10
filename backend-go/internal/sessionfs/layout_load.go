@@ -61,7 +61,7 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	config, err := loadSessionSettingsFrom(location, setting, sessionPath, keys[entry.ID()], requestedModel)
+	config, err := loadSessionSettingsFrom(location, setting, sessionPath, location.Root.GlobalJadRoot, keys[entry.ID()], requestedModel)
 	if err != nil {
 		return SessionConfig{}, err
 	}

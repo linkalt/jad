@@ -694,3 +694,88 @@ func TestLayoutSettingKeysMatchTheSchemas(t *testing.T) {
 		}
 	}
 }
+
+// A relative env_file in a toolset is relative to the folder of the root setting.json (the
+// global root), not to a session folder: a toolset is shared by many sessions.
+func TestLayoutEnvFileIsRelativeToTheRootFolder(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	if err := os.WriteFile(filepath.Join(root, "env"), []byte("FROM_ROOT=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
+		native := m["native"].(map[string]any)
+		native["bash"] = map[string]any{"env_file": "env"}
+		native["process"] = map[string]any{"env_file": "env"}
+	})
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "env")
+	if config.NativeBash == nil || config.NativeBash.EnvFile != want || config.NativeBash.Env["FROM_ROOT"] != "1" {
+		t.Fatalf("bash env file = %+v, want %s with FROM_ROOT", config.NativeBash, want)
+	}
+	if config.NativeProcess == nil || config.NativeProcess.EnvFile != want {
+		t.Fatalf("process env file = %+v, want %s", config.NativeProcess, want)
+	}
+	// an absolute path is left alone
+	other := filepath.Join(t.TempDir(), "other.env")
+	if err := os.WriteFile(other, []byte("OTHER=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
+		m["native"].(map[string]any)["bash"] = map[string]any{"env_file": other}
+	})
+	if config, err = LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err != nil || config.NativeBash.EnvFile != other {
+		t.Fatalf("absolute env file: %v, %+v", err, config.NativeBash)
+	}
+}
+
+// A missing relative env_file names the path it looked at, so the user sees the root folder.
+func TestLayoutEnvFileErrorNamesTheRootFolderPath(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
+		m["native"].(map[string]any)["bash"] = map[string]any{"env_file": "missing.env"}
+	})
+	_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(root, "missing.env")) {
+		t.Fatalf("error = %v, want the root folder path", err)
+	}
+}
+
+// A legacy session keeps resolving a relative env_file against its own folder, where its
+// setting.json lives, even when its root has a catalog layout.
+func TestLegacySessionEnvFileIsRelativeToTheSessionFolder(t *testing.T) {
+	config, root := rootFromSample(t)
+	dir := filepath.Join(root, "sessions", "old")
+	cwd := t.TempDir()
+	for name, content := range map[string]string{
+		"env":          "FROM_SESSION=1\n",
+		"setting.json": `{"cwd":` + strconv.Quote(cwd) + `,"tools":{"native":{"bash":{"env_file":"env"}}}}`,
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a file of the same name in the root folder must not be picked up
+	if err := os.WriteFile(filepath.Join(root, "env"), []byte("FROM_ROOT=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	location, err := Resolve(config.Roots, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if location.UsesLayout() {
+		t.Fatal("expected a legacy session")
+	}
+	loaded, err := LoadSessionSettings(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(dir, "env"); loaded.NativeBash == nil || loaded.NativeBash.EnvFile != want || loaded.NativeBash.Env["FROM_SESSION"] != "1" {
+		t.Fatalf("legacy env file = %+v, want %s", loaded.NativeBash, want)
+	}
+}
