@@ -805,3 +805,118 @@ func TestLayoutExecEnvFileIsRelativeToTheRootFolder(t *testing.T) {
 		t.Fatalf("bash env = %v", config.NativeBash.Env)
 	}
 }
+
+// defaults.env_file is the env_file of bash, process and exec when the toolset names none; a
+// tool's own env_file wins, and a tool the toolset lacks is not added.
+func TestLayoutDefaultEnvFileFeedsBashProcessAndExec(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	if err := os.WriteFile(filepath.Join(root, "env"), []byte("FROM_DEFAULT=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(t.TempDir(), "own.env")
+	if err := os.WriteFile(own, []byte("OWN=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
+		native := m["native"].(map[string]any)
+		native["bash"] = map[string]any{}
+		native["process"] = map[string]any{"env_file": own}
+		native["exec"] = map[string]any{}
+	})
+	layout.Defaults = map[string]json.RawMessage{"env_file": json.RawMessage(`"env"`)}
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "env")
+	if config.NativeBash == nil || config.NativeBash.EnvFile != want || config.NativeBash.Env["FROM_DEFAULT"] != "1" {
+		t.Fatalf("bash = %+v, want env file %s", config.NativeBash, want)
+	}
+	if config.NativeProcess == nil || config.NativeProcess.EnvFile != own {
+		t.Fatalf("process = %+v, want its own %s", config.NativeProcess, own)
+	}
+	if config.NativeExec == nil || config.NativeExec.EnvFile != want {
+		t.Fatalf("exec = %+v, want env file %s", config.NativeExec, want)
+	}
+}
+
+// A toolset without process gets no process from the default.
+func TestLayoutDefaultEnvFileAddsNoTool(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	if err := os.WriteFile(filepath.Join(root, "env"), []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	layout.Defaults = map[string]json.RawMessage{"env_file": json.RawMessage(`"env"`)}
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.NativeProcess != nil || config.NativeExec != nil {
+		t.Fatalf("process = %+v, exec = %+v, want neither", config.NativeProcess, config.NativeExec)
+	}
+}
+
+// The nearest level wins: profile settings, then session settings, then root defaults.
+func TestLayoutEnvFileNearestLevelWins(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	for _, name := range []string{"env", "session.env", "profile.env"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("A=1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	layout.Defaults = map[string]json.RawMessage{"env_file": json.RawMessage(`"env"`)}
+	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
+		m["native"].(map[string]any)["bash"] = map[string]any{}
+	})
+	check := func(label, want string) {
+		t.Helper()
+		config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if config.NativeBash == nil || config.NativeBash.EnvFile != filepath.Join(root, want) {
+			t.Fatalf("%s: bash = %+v, want %s", label, config.NativeBash, want)
+		}
+	}
+	check("defaults", "env")
+	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+		m["settings"] = map[string]any{"env_file": "session.env"}
+	})
+	check("session", "session.env")
+	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) {
+		m["settings"] = map[string]any{"env_file": "profile.env"}
+	})
+	check("profile", "profile.env")
+}
+
+// A default that names a missing file fails and names the path it looked at.
+func TestLayoutDefaultEnvFileMissingFileFails(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
+		m["native"].(map[string]any)["bash"] = map[string]any{}
+	})
+	layout.Defaults = map[string]json.RawMessage{"env_file": json.RawMessage(`"nope.env"`)}
+	_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(root, "nope.env")) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// Without a cwd anywhere, the layout fails and says where to set one; it does not fall back
+// to the root folder.
+func TestLayoutRequiresACWD(t *testing.T) {
+	layout, location, _ := sampleLayout(t)
+	var cwd string
+	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+		cwd = m["cwd"].(string)
+		delete(m, "cwd")
+	})
+	_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err == nil || !strings.Contains(err.Error(), "cwd is required") || !strings.Contains(err.Error(), "defaults.cwd") {
+		t.Fatalf("error = %v", err)
+	}
+	layout.Defaults = map[string]json.RawMessage{"cwd": json.RawMessage(strconv.Quote(cwd))}
+	if _, err := LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err != nil {
+		t.Fatalf("with defaults.cwd: %v", err)
+	}
+}

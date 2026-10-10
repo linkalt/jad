@@ -79,7 +79,8 @@
           "front_compaction",
           "compaction",
           "http_debug",
-          "cwd"
+          "cwd",
+          "env_file"
         ]
       },
       "properties": {
@@ -135,6 +136,11 @@
           "type": "string",
           "pattern": "\\S",
           "description": "Working directory of runs. Absolute path (or ~). Defaults, session and profile may all set it; the nearer level wins (profile, then session, then root defaults). The session's top-level cwd beats its settings.cwd."
+        },
+        "env_file": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Dotenv file for the toolset's bash, process and exec when they name no env_file of their own. A relative path is relative to the folder of the root setting.json. Defaults, session and profile may all set it; the nearer level wins. A tool the toolset lacks is not added."
         }
       }
     }

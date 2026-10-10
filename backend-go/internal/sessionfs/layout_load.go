@@ -157,6 +157,12 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 		}
 	}
 	setting := mergeSettings(mergeSettings(c.layout.Defaults, sessionLayer), profile.Settings)
+	if _, set := setting["cwd"]; !set {
+		// Falling back to the root folder would run tools inside .jad/.
+		return nil, nil, configError("%s: cwd is required; set defaults.cwd in the root setting, cwd or settings.cwd in the session, or settings.cwd in the profile", c.sessionPath)
+	}
+	// env_file is a default for the toolset's bash, process and exec, not a setting of its own.
+	defaultEnvFile := setting["env_file"]
 	setting["schema_version"] = json.RawMessage("1")
 	if c.session.Name != "" {
 		if setting["session_name"], err = json.Marshal(c.session.Name); err != nil {
@@ -170,7 +176,7 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 		setting["tool_definition_paths"], _ = json.Marshal(c.layout.ToolDefinitionPaths)
 	}
 	if profile.Toolset != "" {
-		if err := c.addToolset(setting, profile.Toolset, selected.Path); err != nil {
+		if err := c.addToolset(setting, profile.Toolset, selected.Path, defaultEnvFile); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -228,7 +234,7 @@ func (c *layoutCompose) addProfileFields(entry map[string]any, profileID string,
 
 // addToolset puts the toolset's native settings and MCP servers into the setting. The
 // toolset is "<category>/<name>" under tools/.
-func (c *layoutCompose) addToolset(setting map[string]json.RawMessage, id, profilePath string) error {
+func (c *layoutCompose) addToolset(setting map[string]json.RawMessage, id, profilePath string, defaultEnvFile json.RawMessage) error {
 	toolsets, err := catalog.Scan("toolset", c.layout.Tools)
 	if err != nil {
 		return configError("%s: %v", profilePath, err)
@@ -242,7 +248,11 @@ func (c *layoutCompose) addToolset(setting map[string]json.RawMessage, id, profi
 		return err
 	}
 	if len(toolset.Native) > 0 {
-		setting["tools"], _ = json.Marshal(map[string]any{"native": toolset.Native})
+		native, err := withDefaultEnvFile(toolset.Native, defaultEnvFile, entry.Path)
+		if err != nil {
+			return err
+		}
+		setting["tools"], _ = json.Marshal(map[string]any{"native": native})
 	}
 	servers, err := c.mcpServers(toolset, entry.Path)
 	if err != nil {
@@ -302,4 +312,40 @@ func (c *layoutCompose) mcpServers(toolset layoutToolsetFile, toolsetPath string
 		servers = append(servers, item)
 	}
 	return servers, nil
+}
+
+// envFileTools are the native tools that read an env_file.
+var envFileTools = []string{"bash", "process", "exec"}
+
+// withDefaultEnvFile gives each of bash, process and exec that the toolset has, and that
+// names no env_file, the default env_file. It adds no tool and does not change the toolset's
+// own map.
+func withDefaultEnvFile(native map[string]json.RawMessage, envFile json.RawMessage, toolsetPath string) (map[string]json.RawMessage, error) {
+	if len(envFile) == 0 {
+		return native, nil
+	}
+	result := make(map[string]json.RawMessage, len(native))
+	for name, value := range native {
+		result[name] = value
+	}
+	for _, name := range envFileTools {
+		raw, present := native[name]
+		if !present {
+			continue
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+			return nil, configError("%s: native.%s must be an object", toolsetPath, name)
+		}
+		if _, named := fields["env_file"]; named {
+			continue
+		}
+		fields["env_file"] = envFile
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			return nil, err
+		}
+		result[name] = encoded
+	}
+	return result, nil
 }
