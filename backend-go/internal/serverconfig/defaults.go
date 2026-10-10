@@ -25,9 +25,9 @@ const (
 // Images in a run request (server.max_request_images, server.max_request_image_bytes).
 const (
 	DefaultMaxRequestImages     = 8
-	MaxMaxRequestImages         = 64
+	MaxMaxRequestImages         = 16
 	DefaultMaxRequestImageBytes = 5 * 1024 * 1024
-	MaxMaxRequestImageBytes     = 64 * 1024 * 1024
+	MaxMaxRequestImageBytes     = 25 * 1024 * 1024
 )
 
 // Files in a run request (server.max_request_files, server.max_request_file_bytes).

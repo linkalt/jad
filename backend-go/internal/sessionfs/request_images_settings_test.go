@@ -33,7 +33,7 @@ func TestRequestImageSettingsDefaultsAndValues(t *testing.T) {
 	if got := loadServerSetting(t, `{"max_request_images":0}`); got.MaxRequestImages != 0 {
 		t.Fatalf("0 turns image input off, got %d", got.MaxRequestImages)
 	}
-	if got := loadServerSetting(t, `{"max_request_images":64,"max_request_image_bytes":67108864}`); got.MaxRequestImages != 64 || got.MaxRequestImageBytes != 67108864 {
+	if got := loadServerSetting(t, `{"max_request_images":16,"max_request_image_bytes":26214400}`); got.MaxRequestImages != 16 || got.MaxRequestImageBytes != 26214400 {
 		t.Fatalf("upper bounds = %d, %d", got.MaxRequestImages, got.MaxRequestImageBytes)
 	}
 	if got := loadServerSetting(t, `{"max_request_images":3,"max_request_image_bytes":1}`); got.MaxRequestImages != 3 || got.MaxRequestImageBytes != 1 {
