@@ -34,12 +34,16 @@ var layoutSettingKeys = map[string]struct{}{
 
 // layoutSessionFile is <session>/session.json.
 type layoutSessionFile struct {
-	SchemaVersion int                        `json:"schema_version"`
-	Description   string                     `json:"description"`
-	CWD           string                     `json:"cwd"`
-	Category      string                     `json:"category"`
-	Scope         layoutScope                `json:"scope"`
-	ActiveProfile string                     `json:"active_profile"`
+	SchemaVersion int         `json:"schema_version"`
+	Description   string      `json:"description"`
+	CWD           string      `json:"cwd"`
+	Category      string      `json:"category"`
+	Scope         layoutScope `json:"scope"`
+	ActiveProfile string      `json:"active_profile"`
+	// ModelDefaults is the model each profile uses in this session, profile ID to model
+	// ID. It is written by the model-default route; a profile's own model_default is
+	// shared by every session that uses the profile, so a session may not edit it.
+	ModelDefaults map[string]string          `json:"model_defaults"`
 	Settings      map[string]json.RawMessage `json:"settings"`
 }
 

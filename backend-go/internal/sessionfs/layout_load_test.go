@@ -404,3 +404,174 @@ func TestMergeSettingsMergesObjectsAndReplacesTheRest(t *testing.T) {
 		t.Fatalf("base modified: %s", base["a"])
 	}
 }
+
+// rootFromSample copies sample/jad, makes its session point at a temp cwd and loads the
+// root setting.json the way the server does.
+func rootFromSample(t *testing.T) (Config, string) {
+	t.Helper()
+	_, _, root := sampleLayout(t)
+	var cwd string
+	editJSON(t, filepath.Join(root, "sessions", "default", "session.json"), func(m map[string]any) { cwd = m["cwd"].(string) })
+	// State must sit under the session cwd, or the read policy refuses the bash spill folder.
+	editJSON(t, filepath.Join(root, "setting.json"), func(m map[string]any) {
+		delete(m["libraries"].(map[string]any), "tool_definition_paths")
+		m["catalogs"].(map[string]any)["state"] = filepath.Join(cwd, ".jad", "state")
+	})
+	config, err := Load(LoadOptions{WorkingDir: root, RootSettingPath: filepath.Join(root, "setting.json"), Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return config, root
+}
+
+func TestRootSettingGivesTheSessionRootALayout(t *testing.T) {
+	config, root := rootFromSample(t)
+	layout := config.Roots[0].Layout
+	if layout == nil {
+		t.Fatal("root has no layout")
+	}
+	if layout.Profiles != filepath.Join(root, "profiles") || !strings.HasSuffix(layout.State, filepath.Join(".jad", "state")) {
+		t.Fatalf("folders = %s, %s", layout.Profiles, layout.State)
+	}
+	if layout.Defaults["max_tool_rounds"] == nil {
+		t.Fatalf("defaults not read: %v", layout.Defaults)
+	}
+}
+
+func TestRootSettingCatalogsAreReadAndChecked(t *testing.T) {
+	_, _, root := sampleLayout(t)
+	settingPath := filepath.Join(root, "setting.json")
+	editJSON(t, settingPath, func(m map[string]any) {
+		m["catalogs"] = map[string]any{"profiles": "p", "models": "/abs/m"}
+	})
+	config, err := Load(LoadOptions{WorkingDir: root, RootSettingPath: settingPath, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := config.Roots[0].Layout
+	if layout.Profiles != filepath.Join(root, "p") || layout.Models != "/abs/m" {
+		t.Fatalf("catalogs = %+v", layout)
+	}
+	editJSON(t, settingPath, func(m map[string]any) {
+		delete(m, "catalogs")
+	})
+	config, err = Load(LoadOptions{WorkingDir: root, RootSettingPath: settingPath, Environment: map[string]string{}})
+	if err != nil || config.Roots[0].Layout.MCP != filepath.Join(root, ".jad", "mcp") {
+		t.Fatalf("without catalogs the folders are .jad/<catalog>: %+v, err = %v", config.Roots[0].Layout, err)
+	}
+	editJSON(t, settingPath, func(m map[string]any) { m["catalogs"] = map[string]any{"toolsets": "x"} })
+	if _, err := Load(LoadOptions{WorkingDir: root, RootSettingPath: settingPath, Environment: map[string]string{}}); err == nil || !strings.Contains(err.Error(), "catalogs.toolsets") {
+		t.Fatalf("unknown catalog error = %v", err)
+	}
+	editJSON(t, settingPath, func(m map[string]any) {
+		delete(m, "catalogs")
+		m["defaults"] = map[string]any{"cwd": "/x"}
+	})
+	if _, err := Load(LoadOptions{WorkingDir: root, RootSettingPath: settingPath, Environment: map[string]string{}}); err == nil || !strings.Contains(err.Error(), "defaults") {
+		t.Fatalf("defaults with cwd error = %v", err)
+	}
+}
+
+// The session loaders the server calls choose the catalog layout when session.json exists
+// and the legacy reader when only setting.json does.
+func TestLoadSessionConfigUsesTheLayoutWhenSessionJSONExists(t *testing.T) {
+	config, _ := rootFromSample(t)
+	location, err := Resolve(config.Roots, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !location.UsesLayout() || filepath.Base(location.SettingFile()) != "session.json" {
+		t.Fatalf("layout = %v, file = %s", location.UsesLayout(), location.SettingFile())
+	}
+	loaded, err := LoadSessionConfig(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Profile != "dev/coder" || loaded.ModelDefault != "openai/gpt-deep" {
+		t.Fatalf("profile = %q, model = %q", loaded.Profile, loaded.ModelDefault)
+	}
+	if loaded.Model.Name == "" {
+		t.Fatal("the model file was not read")
+	}
+
+	legacy := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(legacy, "old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := Location{Directory: filepath.Join(legacy, "old"), Root: config.Roots[0]}
+	if old.UsesLayout() {
+		t.Fatal("a directory without session.json must use the legacy reader")
+	}
+	if got := filepath.Base(old.SettingFile()); got != "setting.json" {
+		t.Fatalf("legacy setting file = %s", got)
+	}
+}
+
+func TestLayoutSetActiveProfileWritesSessionJSONOnly(t *testing.T) {
+	config, root := rootFromSample(t)
+	location, _ := Resolve(config.Roots, "default")
+	profileFile := filepath.Join(root, "profiles", "review", "reviewer.json")
+	before, _ := os.ReadFile(profileFile)
+
+	update, err := SetLayoutActiveProfile(location, "review/reviewer", "turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !update.Changed || update.ActiveProfile != "review/reviewer" || strings.Join(update.PathProfiles, ",") != "dev/coder,review/reviewer" {
+		t.Fatalf("update = %+v", update)
+	}
+	info, err := ReadLayoutProfileInfo(location)
+	if err != nil || info.ActiveProfile != "review/reviewer" {
+		t.Fatalf("info = %+v, err = %v", info, err)
+	}
+	if after, _ := os.ReadFile(profileFile); string(after) != string(before) {
+		t.Fatal("setting the active profile changed a profile file")
+	}
+	if again, err := SetLayoutActiveProfile(location, "review/reviewer", "turn"); err != nil || again.Changed {
+		t.Fatalf("second set = %+v, err = %v", again, err)
+	}
+	for _, bad := range []string{"coder", "dev/missing", "other/x"} {
+		var client *ClientError
+		if _, err := SetLayoutActiveProfile(location, bad, "turn"); err == nil || !asClientError(err, &client) {
+			t.Fatalf("profile %q error = %v, want a client error", bad, err)
+		}
+	}
+	// the written file is still a valid session
+	if _, err := LoadSessionConfig(location, "", ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A profile file is shared by every session, so the chosen model goes into session.json.
+func TestLayoutSetModelDefaultIsPerSession(t *testing.T) {
+	config, root := rootFromSample(t)
+	location, _ := Resolve(config.Roots, "default")
+	profileFile := filepath.Join(root, "profiles", "dev", "coder.json")
+	before, _ := os.ReadFile(profileFile)
+
+	update, err := SetLayoutModelDefault(location, "dev/coder", "openai/gpt-fast", "turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !update.Changed || update.ModelDefault != "openai/gpt-fast" {
+		t.Fatalf("update = %+v", update)
+	}
+	loaded, err := LoadSessionSettings(location, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ModelDefault != "openai/gpt-fast" {
+		t.Fatalf("model default = %q, want the session's choice", loaded.ModelDefault)
+	}
+	if after, _ := os.ReadFile(profileFile); string(after) != string(before) {
+		t.Fatal("choosing a model changed the profile file")
+	}
+	if again, _ := SetLayoutModelDefault(location, "dev/coder", "openai/gpt-fast", "turn"); again.Changed {
+		t.Fatal("setting the same model twice reported a change")
+	}
+	// the other profile keeps its own default
+	other, err := LoadSessionSettings(location, "review/reviewer", "")
+	if err != nil || other.ModelDefault != "openai/gpt-fast" {
+		t.Fatalf("reviewer model = %q, err = %v", other.ModelDefault, err)
+	}
+}

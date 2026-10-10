@@ -93,6 +93,9 @@ type Root struct {
 	Label         string
 	Directory     string
 	GlobalJadRoot string
+	// Layout is set when the root setting file is read. A session directory of this root
+	// that holds a session.json is stored in the catalog layout (see Location.UsesLayout).
+	Layout *Layout
 }
 
 // Config is the filesystem and root-server configuration loaded at startup.
@@ -408,6 +411,10 @@ func rootsFromSetting(setting map[string]json.RawMessage, settingPath string) ([
 		return nil, fmt.Errorf("%s: session_roots must be an array", settingPath)
 	}
 	settingDir := filepath.Dir(settingPath)
+	layout, err := layoutFromSetting(setting, settingPath)
+	if err != nil {
+		return nil, err
+	}
 	roots := make([]Root, 0, len(entries))
 	ids := make(map[string]struct{}, len(entries))
 	directories := make(map[string]struct{}, len(entries))
@@ -431,6 +438,7 @@ func rootsFromSetting(setting map[string]json.RawMessage, settingPath string) ([
 			Label:         entry.label,
 			Directory:     directory,
 			GlobalJadRoot: settingDir,
+			Layout:        layout,
 		})
 	}
 	return roots, nil

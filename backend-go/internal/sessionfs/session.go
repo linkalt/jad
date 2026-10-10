@@ -190,6 +190,9 @@ type SessionConfig struct {
 // defers the model file until a run needs it, which is why a session with a
 // broken model.json still lists, snapshots and accepts a user message.
 func LoadSessionSettings(location Location, requestedProfile, requestedModel string) (SessionConfig, error) {
+	if location.UsesLayout() {
+		return LoadLayoutSessionSettings(location, *location.Root.Layout, requestedProfile, requestedModel)
+	}
 	settingPath := filepath.Join(location.Directory, "setting.json")
 	setting, err := readSessionObject(settingPath, true)
 	if err != nil {

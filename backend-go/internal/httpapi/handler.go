@@ -31,9 +31,11 @@ const (
 )
 
 var (
-	sessionRootIDPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	sessionReferencePattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$|^[A-Za-z0-9][A-Za-z0-9._-]{0,63}:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-	profileNamePattern           = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	sessionRootIDPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	sessionReferencePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$|^[A-Za-z0-9][A-Za-z0-9._-]{0,63}:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	// A profile is a legacy name (letters, digits, '_' and '-') or, in the catalog layout,
+	// <category>/<name>, the same identifier the catalog package accepts.
+	profileNamePattern           = regexp.MustCompile(`^[A-Za-z0-9_-]+$|^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	decimalIntegerPattern        = regexp.MustCompile(`^\d+$`)
 	cursorGenerationPattern      = regexp.MustCompile(`^\d+:\d+:\d+$`)
 	frontCompactMessageIDPattern = regexp.MustCompile(`^session-user-o(0|[1-9][0-9]*)$`)

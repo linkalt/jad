@@ -5,7 +5,6 @@ import (
 	"errors"
 	"example.com/agent-harness/backend-go/internal/imagestore"
 	"net/http"
-	"path/filepath"
 	"strings"
 
 	"example.com/agent-harness/backend-go/internal/httpapi"
@@ -20,7 +19,7 @@ func (r *Resolver) ReadPathProfileInfo(ctx context.Context, reference string) (h
 	if err != nil {
 		return httpapi.SessionPathProfileInfo{}, mapSessionError(err)
 	}
-	info, err := sessionfs.ReadPathProfileInfo(filepathSettingPath(location))
+	info, err := readProfileInfo(location)
 	if err != nil {
 		return httpapi.SessionPathProfileInfo{}, mapProfileSettingsError(err)
 	}
@@ -38,8 +37,7 @@ func (r *Resolver) UpdatePathProfile(ctx context.Context, reference, activeProfi
 
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	settingPath := filepathSettingPath(location)
-	info, err := sessionfs.ReadPathProfileInfo(settingPath)
+	info, err := readProfileInfo(location)
 	if err != nil {
 		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
 	}
@@ -61,7 +59,7 @@ func (r *Resolver) UpdatePathProfile(ctx context.Context, reference, activeProfi
 			activeProfile:      target.StoragePaths,
 		}
 	}
-	update, err := sessionfs.SetPathProfile(settingPath, activeProfile, current.Persistence.Durability, storagePaths)
+	update, err := setActiveProfile(location, activeProfile, current.Persistence.Durability, storagePaths)
 	if err != nil {
 		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
 	}
@@ -69,7 +67,7 @@ func (r *Resolver) UpdatePathProfile(ctx context.Context, reference, activeProfi
 	if err != nil {
 		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
 	}
-	updatedInfo, err := sessionfs.ReadPathProfileInfo(settingPath)
+	updatedInfo, err := readProfileInfo(location)
 	if err != nil {
 		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
 	}
@@ -100,8 +98,7 @@ func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedP
 
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	settingPath := filepathSettingPath(location)
-	info, err := sessionfs.ReadPathProfileInfo(settingPath)
+	info, err := readProfileInfo(location)
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
@@ -123,7 +120,7 @@ func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedP
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
-	update, err := sessionfs.SetModelDefault(settingPath, profile, strings.TrimSpace(modelDefault), settings.Persistence.Durability)
+	update, err := setModelDefault(location, profile, strings.TrimSpace(modelDefault), settings.Persistence.Durability)
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
@@ -170,8 +167,27 @@ func requireSettingsContext(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func filepathSettingPath(location sessionfs.Location) string {
-	return filepath.Join(location.Directory, "setting.json")
+// readProfileInfo, setActiveProfile and setModelDefault pick the legacy setting.json
+// writer or the catalog-layout one by what the session directory holds.
+func readProfileInfo(location sessionfs.Location) (sessionfs.PathProfileInfo, error) {
+	if location.UsesLayout() {
+		return sessionfs.ReadLayoutProfileInfo(location)
+	}
+	return sessionfs.ReadPathProfileInfo(location.SettingFile())
+}
+
+func setActiveProfile(location sessionfs.Location, profile, durability string, storage map[string]sessionfs.SessionStoragePaths) (sessionfs.PathProfileUpdate, error) {
+	if location.UsesLayout() {
+		return sessionfs.SetLayoutActiveProfile(location, profile, durability)
+	}
+	return sessionfs.SetPathProfile(location.SettingFile(), profile, durability, storage)
+}
+
+func setModelDefault(location sessionfs.Location, profile, model, durability string) (sessionfs.ModelDefaultUpdate, error) {
+	if location.UsesLayout() {
+		return sessionfs.SetLayoutModelDefault(location, profile, model, durability)
+	}
+	return sessionfs.SetModelDefault(location.SettingFile(), profile, model, durability)
 }
 
 func containsSessionPath(paths []string, value string) bool {

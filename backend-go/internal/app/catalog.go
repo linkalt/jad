@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -130,7 +129,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 				}
 				return httpapi.CatalogResponse{}, err
 			}
-			hasSetting, err := hasSessionSetting(location.Directory)
+			hasSetting, err := hasSessionSetting(location)
 			if err != nil {
 				return httpapi.CatalogResponse{}, err
 			}
@@ -543,15 +542,8 @@ func makeSnapshotBody(item sessionListRecord, messages []json.RawMessage, page s
 	return json.Marshal(fields)
 }
 
-func hasSessionSetting(directory string) (bool, error) {
-	info, err := os.Stat(filepath.Join(directory, "setting.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("inspect session setting in %q: %w", directory, err)
-	}
-	return info.Mode().IsRegular(), nil
+func hasSessionSetting(location sessionfs.Location) (bool, error) {
+	return location.HasSetting()
 }
 
 func sessionVersionForCatalog(location sessionfs.Location, config sessionfs.SessionConfig, maxInlinePartBytes int, runs httpapi.SessionRunSummaries) string {

@@ -171,7 +171,7 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 	for _, other := range c.profiles.Entries() {
 		entry := c.storageEntry(other)
 		if other.ID() == selected.ID() {
-			c.addProfileFields(entry, profile, models)
+			c.addProfileFields(entry, other.ID(), profile, models)
 		}
 		raw, err := json.Marshal(entry)
 		if err != nil {
@@ -199,13 +199,16 @@ func (c *layoutCompose) storageEntry(profile catalog.Entry) map[string]any {
 }
 
 // addProfileFields adds the fields only the selected profile needs.
-func (c *layoutCompose) addProfileFields(entry map[string]any, profile layoutProfileFile, models *catalog.Catalog) {
+func (c *layoutCompose) addProfileFields(entry map[string]any, profileID string, profile layoutProfileFile, models *catalog.Catalog) {
 	if ids := models.IDs(); len(ids) > 0 {
 		entry["models"] = ids
 		entry["model_default"] = ids[0]
 	}
 	if profile.ModelDefault != "" {
 		entry["model_default"] = profile.ModelDefault
+	}
+	if chosen := c.session.ModelDefaults[profileID]; chosen != "" {
+		entry["model_default"] = chosen
 	}
 	if len(profile.PromptDocuments) > 0 {
 		entry["prompt_documents"] = profile.PromptDocuments

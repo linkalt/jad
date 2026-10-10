@@ -42,6 +42,17 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
       "description": "Profile used when a request names none, written <category>/<name>, for example \"dev/coder\". Must be inside scope.profiles."
     },
+    "model_defaults": {
+      "type": "object",
+      "description": "The model this session uses for each profile, written by the model-default route. Keys are profile IDs (<category>/<name>), values model IDs (<category>/<name>). A profile file is shared by every session, so a session never edits it; this wins over the profile's own model_default.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+      }
+    },
     "settings": {
       "type": "object",
       "description": "Overrides of the setting keys listed in propertyNames. Objects merge key by key with the level above; arrays and scalars replace it. Each value follows the same key in setting.schema.json.",

@@ -95,7 +95,7 @@ func (r *Resolver) recoverSessionStorages(
 		}
 		return err
 	}
-	hasSetting, err := hasSessionSetting(location.Directory)
+	hasSetting, err := hasSessionSetting(location)
 	if err != nil {
 		r.logger.Warn("skipping session for storage recovery", "session", location.Reference, "error", err)
 		report.Unreadable++

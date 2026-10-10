@@ -225,7 +225,7 @@ func (r *Resolver) resolveLockLocation(ctx context.Context, reference string) (s
 }
 
 func (r *Resolver) acquireSettingLock(ctx context.Context, location sessionfs.Location) (func(), error) {
-	path, err := sessionlock.PathFor(filepath.Join(location.Directory, "setting.json"))
+	path, err := sessionlock.PathFor(location.SettingFile())
 	if err != nil {
 		return nil, err
 	}
