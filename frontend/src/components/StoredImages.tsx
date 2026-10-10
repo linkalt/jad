@@ -84,8 +84,7 @@ export function StoredImages({names}: StoredImagesProps) {
               <Thumbnail
                 key={image.name}
                 src={image.url}
-                alt={`Stored image ${position + 1}`}
-                label="Open image"
+                label={`Stored image ${position + 1}`}
                 onClick={() => setOpenIndex(position)}
               />
             );

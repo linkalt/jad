@@ -140,3 +140,111 @@ export function describeRejected(rejected: readonly RejectedImage[]): string {
   if (rejected.length === 0) return '';
   return rejected.map(item => `${item.name}: ${item.reason}`).join('; ');
 }
+
+/**
+ * How many images each draft holds or is about to hold, kept outside React state so
+ * two quick adds see each other at once. A count read from rendered state is stale
+ * for a moment after every add, which let two overlapping offers pass the limit.
+ */
+export class ImageSlots {
+  private readonly counts = new Map<string, number>();
+  private readonly generations = new Map<string, number>();
+
+  count(draftKey: string): number {
+    return this.counts.get(draftKey) ?? 0;
+  }
+
+  /** Changes every time the draft is sent; an add started under an older value is stale. */
+  generation(draftKey: string): number {
+    return this.generations.get(draftKey) ?? 0;
+  }
+
+  /** Take `n` places for images that are being read. */
+  reserve(draftKey: string, n: number): void {
+    this.counts.set(draftKey, this.count(draftKey) + n);
+  }
+
+  /** Give `n` places back: an image that could not be read, or one the user removed. */
+  release(draftKey: string, n: number): void {
+    this.counts.set(draftKey, Math.max(0, this.count(draftKey) - n));
+  }
+
+  /** The draft was sent: its places are free again and adds still in flight become stale. */
+  clear(draftKey: string): void {
+    this.counts.delete(draftKey);
+    this.generations.set(draftKey, this.generation(draftKey) + 1);
+  }
+}
+
+export interface AddImagesDeps {
+  draftKey: string;
+  /** `slots.generation(draftKey)` when the user offered the files, before any waiting. */
+  generation: number;
+  limits: ImageAttachmentLimits;
+  slots: ImageSlots;
+  /** Makes the id of one new image; ids are unique per hook. */
+  makeId: () => string;
+  /** Reads one file; replaceable in tests. */
+  read?: (file: File) => Promise<string>;
+  /** Called with each image as soon as it is read, in order. */
+  commit: (image: AttachedImage) => void;
+  /** Called with the refusal text (empty when nothing was refused). */
+  notify: (notice: string) => void;
+}
+
+const SENT_FIRST = 'was still loading when the message was sent; attach it again';
+
+function fileLabel(file: File): string {
+  return file.name === '' ? 'pasted image' : file.name;
+}
+
+/**
+ * Take files for a draft: refuse what does not fit, read the rest, hand them on.
+ * Places are reserved before the first await, so a second call that starts while
+ * this one is still reading counts these images already. If the draft is sent
+ * before a file is ready, that file is dropped with a notice instead of landing in
+ * the next message.
+ */
+export async function addImageFiles(files: readonly File[], deps: AddImagesDeps): Promise<void> {
+  const {draftKey, generation, limits, slots, makeId, commit, notify} = deps;
+  const read = deps.read ?? readImageAsDataUrl;
+  const isStale = () => slots.generation(draftKey) !== generation;
+  if (isStale()) {
+    notify(describeRejected(files.map(file => ({name: fileLabel(file), reason: SENT_FIRST}))));
+    return;
+  }
+  const plan = planImageFiles(files, slots.count(draftKey), limits);
+  slots.reserve(draftKey, plan.accepted.length);
+  const refused = [...plan.rejected];
+  for (const file of plan.accepted) {
+    const name = fileLabel(file);
+    let dataUrl: string;
+    try {
+      dataUrl = await read(file);
+    } catch {
+      if (!isStale()) slots.release(draftKey, 1);
+      refused.push({name, reason: 'could not be read'});
+      continue;
+    }
+    if (isStale()) {
+      refused.push({name, reason: SENT_FIRST});
+      continue;
+    }
+    commit({id: makeId(), name, dataUrl});
+  }
+  notify(describeRejected(refused));
+}
+
+/**
+ * Run async tasks one after another, in the order they were started. Image reads
+ * take different times, so without this a small file offered later could finish
+ * and appear before a larger one offered earlier.
+ */
+export function createSerialQueue(): (task: () => Promise<void>) => Promise<void> {
+  let tail: Promise<void> = Promise.resolve();
+  return task => {
+    const run = tail.then(task);
+    tail = run.catch(() => undefined);
+    return run;
+  };
+}

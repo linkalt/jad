@@ -491,9 +491,10 @@ export function ComposerPane({
 
   const handleSubmit = useCallback(
     (text: string) => {
-      if (onSubmit(text, attachments.images)) {
+      const sent = attachments.images;
+      if (onSubmit(text, sent)) {
         setDraft(draftKey, '');
-        attachments.clear();
+        attachments.clear(sent);
       }
     },
     [attachments, draftKey, onSubmit, setDraft],
