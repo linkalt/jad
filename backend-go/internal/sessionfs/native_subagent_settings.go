@@ -137,7 +137,11 @@ type NativeSubagentAgent struct {
 	Name        string
 	Description string
 	// ModelPath is the absolute model file; empty means the calling session's model.
-	ModelPath    string
+	ModelPath string
+	// Model is the `model` value as written. A catalog-layout session reads a value that
+	// does not end in .json as a model ID and replaces ModelPath with that model's file
+	// (resolveSubagentModels); a legacy session only uses ModelPath.
+	Model        string
 	Instructions string
 	// PromptDocuments are the absolute paths of the files read into PromptText.
 	PromptDocuments []string
@@ -409,6 +413,7 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 	if err != nil {
 		return NativeSubagentAgent{}, err
 	}
+	agent.Model = model
 	if model != "" {
 		agent.ModelPath = resolveFrom(settingDir, expandHome(model))
 	}

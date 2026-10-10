@@ -74,7 +74,40 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 		name = config.ModelDefault
 	}
 	config.ModelPath = modelPaths[name]
+	if err := resolveSubagentModels(config.NativeSubagent, layout.Models, sessionPath); err != nil {
+		return SessionConfig{}, err
+	}
 	return config, nil
+}
+
+// resolveSubagentModels turns an agent's model ID ("<category>/<name>") into the model
+// file. A value ending in .json stays the file path the normalizer resolved. An agent may
+// name any model of the catalog, not only the ones its caller's profile lists: a cheap
+// reviewer model should not have to be listed in every main profile. An unknown ID is a
+// config error that lists the available ones.
+func resolveSubagentModels(settings *NativeSubagentSettings, modelsDir, sessionPath string) error {
+	if settings == nil {
+		return nil
+	}
+	var models *catalog.Catalog
+	for index := range settings.Agents {
+		agent := &settings.Agents[index]
+		if agent.Model == "" || strings.HasSuffix(agent.Model, ".json") {
+			continue
+		}
+		if models == nil {
+			var err error
+			if models, err = catalog.Scan("model", modelsDir); err != nil {
+				return configError("%s: %v", sessionPath, err)
+			}
+		}
+		entry, err := models.Lookup(agent.Model)
+		if err != nil {
+			return configError("%s: tools.native.subagent agent %s: model: %v", sessionPath, agent.Name, err)
+		}
+		agent.ModelPath = entry.Path
+	}
+	return nil
 }
 
 // LoadLayoutSessionConfig loads the settings and the selected model file.

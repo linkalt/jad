@@ -920,3 +920,92 @@ func TestLayoutRequiresACWD(t *testing.T) {
 		t.Fatalf("with defaults.cwd: %v", err)
 	}
 }
+
+// setAgentModel writes agent x's agent.json in the session cwd with the given model value
+// (none when empty) and returns the cwd.
+func setAgentModel(t *testing.T, location Location, model string) string {
+	t.Helper()
+	var cwd string
+	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) { cwd = m["cwd"].(string) })
+	agent := map[string]any{"description": "x"}
+	if model != "" {
+		agent["model"] = model
+	}
+	data, err := json.Marshal(agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, ".jad", "subagents", "x", "agent.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return cwd
+}
+
+func subagentX(t *testing.T, config SessionConfig) NativeSubagentAgent {
+	t.Helper()
+	if config.NativeSubagent == nil {
+		t.Fatal("no sub-agent settings")
+	}
+	agent, ok := config.NativeSubagent.Agent("x")
+	if !ok {
+		t.Fatal("agent x missing")
+	}
+	return agent
+}
+
+// In a layout session an agent's model is a model ID of the catalog, also one the calling
+// profile does not list.
+func TestLayoutSubagentModelIsAnID(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	setAgentModel(t, location, "cheap/haiku")
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(config.Models, ","), "cheap/haiku") {
+		t.Fatalf("the profile lists cheap/haiku, so this test proves nothing: %v", config.Models)
+	}
+	if got, want := subagentX(t, config).ModelPath, filepath.Join(root, "models", "cheap", "haiku.json"); got != want {
+		t.Fatalf("agent model path = %s, want %s", got, want)
+	}
+}
+
+// An unknown ID fails the load and lists what exists.
+func TestLayoutSubagentUnknownModelIDFails(t *testing.T) {
+	layout, location, _ := sampleLayout(t)
+	setAgentModel(t, location, "cheap/nope")
+	_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err == nil || !strings.Contains(err.Error(), "cheap/nope") || !strings.Contains(err.Error(), "cheap/haiku") || !strings.Contains(err.Error(), "agent x") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// A value ending in .json is still a file path, relative to the agent's folder.
+func TestLayoutSubagentModelFilePathStillWorks(t *testing.T) {
+	layout, location, _ := sampleLayout(t)
+	cwd := setAgentModel(t, location, "own.json")
+	own := filepath.Join(cwd, ".jad", "subagents", "x", "own.json")
+	if err := os.WriteFile(own, []byte(`{"provider":"openai","model":"m"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := subagentX(t, config).ModelPath; got != own {
+		t.Fatalf("agent model path = %s, want %s", got, own)
+	}
+}
+
+// No model means the calling session's model.
+func TestLayoutSubagentWithoutModelKeepsTheCallersModel(t *testing.T) {
+	layout, location, _ := sampleLayout(t)
+	setAgentModel(t, location, "")
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := subagentX(t, config).ModelPath; got != "" {
+		t.Fatalf("agent model path = %q, want empty", got)
+	}
+}
