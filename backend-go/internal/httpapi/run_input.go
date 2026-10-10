@@ -8,22 +8,29 @@ import (
 	"example.com/agent-harness/backend-go/internal/imagedata"
 )
 
-// RunInputLimits bounds the images of one run request. Both values come from the
-// server.max_request_images and server.max_request_image_bytes settings.
+// RunInputLimits bounds the images and files of one run request. The values come from the
+// server.max_request_images, server.max_request_image_bytes, server.max_request_files and
+// server.max_request_file_bytes settings.
 type RunInputLimits struct {
 	// MaxImages is the most images one request may carry.
 	MaxImages int
 	// MaxImageBytes is the largest decoded image, in bytes.
 	MaxImageBytes int64
+	// MaxFiles is the most files one request may carry.
+	MaxFiles int
+	// MaxFileBytes is the largest decoded file, in bytes.
+	MaxFileBytes int64
 }
 
-// runInputPart is one element of an array input: {"type":"text","text":...} or
-// {"type":"image","data":...}. Any other field is refused, so a client that sends a
-// path or a URL learns at once that the server does not read it.
+// runInputPart is one element of an array input: {"type":"text","text":...},
+// {"type":"image","data":...} or {"type":"file","name":...,"data":...}. Any other field is
+// refused, so a client that sends a path or a URL learns at once that the server does not
+// read it.
 type runInputPart struct {
 	Type string  `json:"type"`
 	Text *string `json:"text"`
 	Data *string `json:"data"`
+	Name *string `json:"name"`
 }
 
 // userMessageContent is one part of the stored user message.
@@ -32,6 +39,9 @@ type userMessageContent struct {
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
 	Detail   string `json:"detail,omitempty"`
+	// Filename and FileData are an input_file part: a PDF as a base64 data URL.
+	Filename string `json:"filename,omitempty"`
+	FileData string `json:"file_data,omitempty"`
 }
 
 // parseRunInput turns the "input" of a run request into what the runner takes: a JSON
@@ -46,9 +56,9 @@ func parseRunInput(raw json.RawMessage, limits RunInputLimits) (json.RawMessage,
 }
 
 // parseRunInputSized is parseRunInput that also reports how many bytes of the request
-// are image data (the length of every image "data" string). The run body limit counts
-// the rest of the body against server.max_body_bytes, and only the image data against the
-// image allowance.
+// are image and file data (the length of every "data" string). The run body limit counts
+// the rest of the body against server.max_body_bytes, and only that data against the
+// image and file allowance.
 func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMessage, int64, error) {
 	imageChars := int64(0)
 	trimmed := strings.TrimSpace(string(raw))
@@ -65,7 +75,7 @@ func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMes
 		return nil, 0, badInput("input must be a non-empty string or a non-empty array of parts")
 	}
 	content := make([]userMessageContent, 0, len(parts))
-	images, hasText := 0, false
+	images, files, hasText := 0, 0, false
 	for index, rawPart := range parts {
 		label := fmt.Sprintf("input part %d", index+1)
 		fields, part := map[string]json.RawMessage{}, runInputPart{}
@@ -105,12 +115,39 @@ func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMes
 				return nil, 0, err
 			}
 			content = append(content, userMessageContent{Type: "input_image", ImageURL: url, Detail: "auto"})
+		case "file":
+			if err := onlyFields(label, fields, "type", "name", "data"); err != nil {
+				return nil, 0, err
+			}
+			if part.Data == nil {
+				return nil, 0, badInput(label + " needs data (base64 or a data URL)")
+			}
+			if part.Name == nil {
+				return nil, 0, badInput(label + " needs a name")
+			}
+			files++
+			imageChars += int64(len(*part.Data))
+			if limits.MaxFiles <= 0 {
+				return nil, 0, badInput("file input is off (server.max_request_files is 0)")
+			}
+			if files > limits.MaxFiles {
+				return nil, 0, badInput(fmt.Sprintf("input has more than %d files", limits.MaxFiles))
+			}
+			name, err := cleanFilename(label, *part.Name)
+			if err != nil {
+				return nil, 0, err
+			}
+			fileData, err := checkedFileData(label, *part.Data, limits.MaxFileBytes)
+			if err != nil {
+				return nil, 0, err
+			}
+			content = append(content, userMessageContent{Type: "input_file", Filename: name, FileData: fileData})
 		default:
-			return nil, 0, badInput(label + " has an unknown type; use text or image")
+			return nil, 0, badInput(label + " has an unknown type; use text, image or file")
 		}
 	}
-	if !hasText && images == 0 {
-		return nil, 0, badInput("input must have some text or an image")
+	if !hasText && images == 0 && files == 0 {
+		return nil, 0, badInput("input must have some text, an image or a file")
 	}
 	encoded, err := json.Marshal(struct {
 		Type    string               `json:"type"`

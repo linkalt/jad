@@ -61,8 +61,13 @@ type Config struct {
 	// MaxRequestImages and MaxRequestImageBytes bound the images a run request may
 	// carry (server.max_request_images, server.max_request_image_bytes). Zero images
 	// turns image input off.
-	MaxRequestImages          int
-	MaxRequestImageBytes      int64
+	MaxRequestImages     int
+	MaxRequestImageBytes int64
+	// MaxRequestFiles and MaxRequestFileBytes bound the files (PDF) a run request may
+	// carry (server.max_request_files, server.max_request_file_bytes). Zero files turns
+	// file input off.
+	MaxRequestFiles           int
+	MaxRequestFileBytes       int64
 	RunContentMemoryBytes     int
 	RunContentWriteBatchBytes int
 	RunContentFlushInterval   time.Duration
@@ -333,6 +338,9 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	if config.MaxRequestImages < 0 || config.MaxRequestImageBytes < 0 || (config.MaxRequestImages > 0 && config.MaxRequestImageBytes < 1) {
 		return nil, errors.New("request image limits must not be negative, and an image limit needs a byte limit")
 	}
+	if config.MaxRequestFiles < 0 || config.MaxRequestFileBytes < 0 || (config.MaxRequestFiles > 0 && config.MaxRequestFileBytes < 1) {
+		return nil, errors.New("request file limits must not be negative, and a file limit needs a byte limit")
+	}
 	if config.RunContentMemoryBytes < 0 || config.RunContentMemoryBytes > serverconfig.MaxRunContentMemoryBytes {
 		return nil, errors.New("run content memory bytes must be between 0 and 16777216")
 	}
@@ -380,7 +388,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		tokenHash:                 sha256.Sum256([]byte(config.APIToken)),
 		allowedOrigin:             origins,
 		maxBodyBytes:              config.MaxBodyBytes,
-		runInputLimits:            RunInputLimits{MaxImages: config.MaxRequestImages, MaxImageBytes: config.MaxRequestImageBytes},
+		runInputLimits:            RunInputLimits{MaxImages: config.MaxRequestImages, MaxImageBytes: config.MaxRequestImageBytes, MaxFiles: config.MaxRequestFiles, MaxFileBytes: config.MaxRequestFileBytes},
 		toolStreamInterval:        config.ToolStreamInterval,
 		sseHeartbeatInterval:      config.SSEHeartbeatInterval,
 		conditionalRequests:       config.ConditionalRequests,
@@ -861,12 +869,13 @@ func (h *Handler) writeSSEHeaders(w http.ResponseWriter) {
 }
 
 // runBodyLimit is the body limit of a run request: server.max_body_bytes plus room for
-// the images it may carry, as base64 (4 bytes for every 3). Every other route keeps
-// max_body_bytes.
+// the images and files it may carry, as base64 (4 bytes for every 3). Every other route
+// keeps max_body_bytes.
 func (h *Handler) runBodyLimit() int64 {
 	limits := h.runInputLimits
 	perImage := limits.MaxImageBytes/3*4 + 8
-	return h.maxBodyBytes + int64(limits.MaxImages)*perImage
+	perFile := limits.MaxFileBytes/3*4 + 8
+	return h.maxBodyBytes + int64(limits.MaxImages)*perImage + int64(limits.MaxFiles)*perFile
 }
 
 func (h *Handler) runKey(resolved ResolvedSession) string {

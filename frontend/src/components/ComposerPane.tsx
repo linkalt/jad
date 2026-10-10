@@ -12,14 +12,18 @@ import {
 } from '@astryxdesign/core';
 import type {ChatComposerInputHandle} from '@astryxdesign/core/Chat';
 import appConfig from '../config.json';
+import {fileRule, parseExtensionList, parseMimeList} from '../file-intake';
 import {parseAcceptList} from '../image-attachments';
-import type {AttachedImage} from '../image-attachments';
+import type {AttachedFile, AttachedImage} from '../image-attachments';
 import {
   ImageAttachmentPicker,
   ImageAttachmentsDrawer,
+  useAttachments,
   useImageAttachments,
 } from './ImageAttachments';
+import {FileAttachmentPicker, FileIcon} from './FileAttachments';
 import {fetchSessionFiles} from '../api';
+import {useFileDrop} from './FileDrop';
 import {createComposerTriggers, resolveMentionFiles} from '../composer-triggers';
 import {loadDrafts, saveDrafts} from '../draftStore';
 import {carriesReactInternals, noteComposerOperation} from '../desync-watch';
@@ -63,7 +67,7 @@ type ComposerPaneProps = {
    * Returns true when the message was accepted, so the draft is only cleared on a real send.
    * `images` are the draft's attached images; the text may be empty when there are some.
    */
-  onSubmit: (value: string, images: AttachedImage[]) => boolean;
+  onSubmit: (value: string, images: AttachedImage[], files: AttachedFile[]) => boolean;
   onStop: () => void;
   isRunning: boolean;
   placeholder: string;
@@ -380,6 +384,13 @@ function readComposerTail(editable: HTMLElement | null): ComposerTail {
   return composerTail(describeTailNode(children[children.length - 1] ?? null), hasContent);
 }
 
+/** The composer while a file is dragged over it: a token-coloured border and an inset. */
+const DROP_HIGHLIGHT = {
+  outline: 'var(--border-width) dashed var(--color-border-blue)',
+  outlineOffset: 'calc(-1 * var(--spacing-1))',
+  borderRadius: 'var(--radius-container)',
+} as const;
+
 /**
  * Owns the composer's draft state.
  *
@@ -448,8 +459,22 @@ export function ComposerPane({
   );
   const attachments = useImageAttachments(draftKey, imageLimits);
   const openImagePickerRef = useRef<(() => void) | null>(null);
-  const hasImages = attachments.images.length > 0;
   const isImageAttachEnabled = appConfig.attach_image_enabled;
+  const fileLimits = useMemo(
+    () =>
+      fileRule({
+        maxCount: appConfig.attach_file_max_count,
+        maxBytes: appConfig.attach_file_max_bytes,
+        mimeTypes: parseMimeList(appConfig.attach_file_accept),
+        extensions: parseExtensionList(appConfig.attach_file_accept),
+      }),
+    [],
+  );
+  const fileAttachments = useAttachments(draftKey, fileLimits, 'file');
+  const openFilePickerRef = useRef<(() => void) | null>(null);
+  const isFileAttachEnabled = appConfig.attach_file_enabled;
+  // A message of attachments alone is valid, so the send button and Enter treat it as content.
+  const hasAttachments = attachments.images.length > 0 || fileAttachments.images.length > 0;
 
   const inputRef = useRef<ChatComposerInputHandle | null>(null);
   // The forwarded ref lands on the composer input's root; the editable is its child.
@@ -491,13 +516,15 @@ export function ComposerPane({
 
   const handleSubmit = useCallback(
     (text: string) => {
-      const sent = attachments.images;
-      if (onSubmit(text, sent)) {
+      const sentImages = attachments.images;
+      const sentFiles = fileAttachments.images;
+      if (onSubmit(text, sentImages, sentFiles)) {
         setDraft(draftKey, '');
-        attachments.clear(sent);
+        attachments.clear(sentImages);
+        fileAttachments.clear(sentFiles);
       }
     },
-    [attachments, draftKey, onSubmit, setDraft],
+    [attachments, draftKey, fileAttachments, onSubmit, setDraft],
   );
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
@@ -512,7 +539,7 @@ export function ComposerPane({
       !event.ctrlKey &&
       !event.metaKey &&
       !event.nativeEvent.isComposing &&
-      hasImages &&
+      hasAttachments &&
       !isRunning &&
       (inputRef.current?.getValue() ?? '').trim() === ''
     ) {
@@ -541,7 +568,7 @@ export function ComposerPane({
       event.preventDefault();
       applyInlineMarker(editable, marker);
     }
-  }, [handleShiftEnter, handleSubmit, hasImages, isRunning]);
+  }, [handleShiftEnter, handleSubmit, hasAttachments, isRunning]);
 
   const handleChange = useCallback(
     (next: string) => {
@@ -630,6 +657,23 @@ export function ComposerPane({
     [insertPrompt, insertSkill, insertText],
   );
 
+  const dropRules = useMemo(
+    () => ({
+      imageAccept: parseAcceptList(appConfig.attach_image_accept),
+      fileAccept: parseMimeList(appConfig.attach_file_accept),
+      fileExtensions: parseExtensionList(appConfig.attach_file_accept),
+      isImageEnabled: appConfig.attach_image_enabled,
+      isFileEnabled: appConfig.attach_file_enabled,
+    }),
+    [],
+  );
+  const fileDrop = useFileDrop({
+    rules: dropRules,
+    addImages: attachments.add,
+    addFiles: fileAttachments.add,
+  });
+  const isDropEnabled = appConfig.drop_files_enabled;
+
   useEffect(() => {
     onRegisterInsert?.(insertActions);
     return () => onRegisterInsert?.(null);
@@ -668,12 +712,14 @@ export function ComposerPane({
 
   return (
     <ChatComposer
+      {...(isDropEnabled ? fileDrop.targetProps : {})}
+      style={isDropEnabled && fileDrop.isDragging ? DROP_HIGHLIGHT : undefined}
       value={value}
       onChange={handleChange}
       onSubmit={handleSubmit}
       sendButton={
         <ChatSendButton
-          isDisabled={value.trim() === '' && !hasImages}
+          isDisabled={value.trim() === '' && !hasAttachments}
           onSend={() => handleSubmit(value)}
         />
       }
@@ -687,18 +733,23 @@ export function ComposerPane({
           placeholder={composerPlaceholderForDraft(value, placeholder)}
           triggers={composerTriggers.length > 0 ? composerTriggers : undefined}
           onKeyDown={handleKeyDown}
-          onFiles={isImageAttachEnabled ? files => void attachments.add(files) : undefined}
+          onFiles={
+            isImageAttachEnabled || isFileAttachEnabled ? fileDrop.handleFiles : undefined
+          }
           pasteAsToken={appConfig.paste_as_token_enabled ? pasteAsToken : false}
         />
       }
       drawer={
         <>
           {drawer}
-          {isImageAttachEnabled ? (
+          {isImageAttachEnabled || isFileAttachEnabled || isDropEnabled ? (
             <ImageAttachmentsDrawer
               images={attachments.images}
               notice={attachments.notice}
               onRemove={attachments.remove}
+              files={fileAttachments.images}
+              fileNotice={fileAttachments.notice}
+              onRemoveFile={fileAttachments.remove}
             />
           ) : null}
           {isPreviewEnabled && isPreviewOpen ? <ComposerPreview value={value} /> : null}
@@ -730,6 +781,22 @@ export function ComposerPane({
                 accept={appConfig.attach_image_accept}
                 onFiles={files => void attachments.add(files)}
                 openRef={openImagePickerRef}
+              />
+            </>
+          ) : null}
+          {isFileAttachEnabled ? (
+            <>
+              <IconButton
+                label="Attach file"
+                icon={<Icon icon={FileIcon} size="sm" />}
+                variant="ghost"
+                size="sm"
+                onClick={() => openFilePickerRef.current?.()}
+              />
+              <FileAttachmentPicker
+                accept={appConfig.attach_file_accept}
+                onFiles={files => void fileAttachments.add(files)}
+                openRef={openFilePickerRef}
               />
             </>
           ) : null}

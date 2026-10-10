@@ -102,7 +102,7 @@ func TestParseRunInputRefusesBadArrays(t *testing.T) {
 	}{
 		{`[]`, "non-empty array"},
 		{`["hi"]`, "input part 1 must be an object"},
-		{`[{"type":"text","text":"   "}]`, "some text or an image"},
+		{`[{"type":"text","text":"   "}]`, "some text, an image or a file"},
 		{`[{"type":"text"}]`, "input part 1 needs a text string"},
 		{`[{"type":"text","text":5}]`, "input part 1 must be an object"},
 		{`[{"type":"text","text":"a","extra":1}]`, `unknown field "extra"`},
@@ -172,8 +172,12 @@ func TestUserMessageFromTranscriptRecordCarriesImages(t *testing.T) {
 	if message.ID != "session-user-o42" || message.Text != "[image]" || len(message.Parts) != 1 || len(message.Parts[0].Images) != 1 || message.Parts[0].Images[0] != name {
 		t.Fatalf("%s", encoded)
 	}
-	// A message with no text and no image is still not a message.
-	if _, visible, _ := UserMessageFromTranscriptRecord(json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_file"}]}`), 1); visible {
-		t.Fatal("a message without text or image must stay hidden")
+	// A message with no text, image or file is still not a message.
+	if _, visible, _ := UserMessageFromTranscriptRecord(json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_audio"}]}`), 1); visible {
+		t.Fatal("a message without text, image or file must stay hidden")
+	}
+	encoded, visible, err = UserMessageFromTranscriptRecord(json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_file","filename":"a.pdf","file_data":"data:application/pdf;base64,JVBERi0="}]}`), 2)
+	if err != nil || !visible || !strings.Contains(string(encoded), `"files":["a.pdf"]`) || strings.Contains(string(encoded), "JVBERi0") {
+		t.Fatalf("a file-only message: visible=%v err=%v %s", visible, err, encoded)
 	}
 }

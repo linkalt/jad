@@ -73,8 +73,12 @@ type ServerSettings struct {
 	MaxInlinePartBytes         int
 	// MaxRequestImages is the most images one run request may carry; 0 refuses image
 	// input. MaxRequestImageBytes is the largest decoded image of such a request.
-	MaxRequestImages           int
-	MaxRequestImageBytes       int64
+	MaxRequestImages     int
+	MaxRequestImageBytes int64
+	// MaxRequestFiles is the most files (PDF) one run request may carry; 0 refuses file
+	// input. MaxRequestFileBytes is the largest decoded file of such a request.
+	MaxRequestFiles            int
+	MaxRequestFileBytes        int64
 	RunContentMemoryBytes      int
 	RunContentWriteBatchBytes  int
 	RunContentFlushInterval    time.Duration
@@ -157,6 +161,8 @@ func Defaults() ServerSettings {
 		MaxInlinePartBytes:         16 * 1024,
 		MaxRequestImages:           serverconfig.DefaultMaxRequestImages,
 		MaxRequestImageBytes:       serverconfig.DefaultMaxRequestImageBytes,
+		MaxRequestFiles:            serverconfig.DefaultMaxRequestFiles,
+		MaxRequestFileBytes:        serverconfig.DefaultMaxRequestFileBytes,
 		RunContentMemoryBytes:      serverconfig.DefaultRunContentMemoryBytes,
 		RunContentWriteBatchBytes:  serverconfig.DefaultRunContentWriteBatchBytes,
 		RunContentFlushInterval:    time.Duration(serverconfig.DefaultRunContentFlushIntervalMS) * time.Millisecond,
@@ -606,6 +612,14 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 	}
 	settings.MaxRequestImages = int(requestImages)
 	if err := readInt("max_request_image_bytes", &settings.MaxRequestImageBytes, 1, serverconfig.MaxMaxRequestImageBytes); err != nil {
+		return ServerSettings{}, err
+	}
+	requestFiles := int64(settings.MaxRequestFiles)
+	if err := readInt("max_request_files", &requestFiles, 0, serverconfig.MaxMaxRequestFiles); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.MaxRequestFiles = int(requestFiles)
+	if err := readInt("max_request_file_bytes", &settings.MaxRequestFileBytes, 1, serverconfig.MaxMaxRequestFileBytes); err != nil {
 		return ServerSettings{}, err
 	}
 	runContentMemoryBytes := int64(settings.RunContentMemoryBytes)

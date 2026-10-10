@@ -100,7 +100,7 @@ func (s *TurnStore) AppendInputItemsAt(items ...[]byte) (InputAppendResult, erro
 }
 
 // isVisibleUserInput reports whether the web-ui projection turns this input
-// record into a user message: a user message with some non-empty input_text or an image.
+// record into a user message: a user message with some non-empty input_text, an image or a file.
 func isVisibleUserInput(item []byte) bool {
 	var input struct {
 		Type    string `json:"type"`
@@ -114,8 +114,8 @@ func isVisibleUserInput(item []byte) bool {
 		return false
 	}
 	for _, part := range input.Content {
-		// An image makes the message visible too (see webui.UserContent).
-		if (part.Type == "input_text" && part.Text != "") || part.Type == "input_image" {
+		// An image or a file makes the message visible too (see webui.UserContent).
+		if (part.Type == "input_text" && part.Text != "") || part.Type == "input_image" || part.Type == "input_file" {
 			return true
 		}
 	}

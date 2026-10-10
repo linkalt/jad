@@ -11,8 +11,21 @@ import {ChatComposerDrawer} from '@astryxdesign/core/Chat';
 import {Lightbox} from '@astryxdesign/core/Lightbox';
 import {Thumbnail} from '@astryxdesign/core/Thumbnail';
 
-import {addImageFiles, createSerialQueue, ImageSlots} from '../image-attachments';
-import type {AttachedImage, ImageAttachmentLimits} from '../image-attachments';
+import {
+  addAttachmentFiles,
+  createSerialQueue,
+  dataUrlBytes,
+  formatBytes,
+  ImageSlots,
+  imageRule,
+} from '../image-attachments';
+import type {
+  AttachedImage,
+  AttachmentRule,
+  ImageAttachmentLimits,
+  RejectedImage,
+} from '../image-attachments';
+import {FileChips} from './FileAttachments';
 
 export interface ImageAttachments {
   /** Images of the draft on screen, in the order they will be sent. */
@@ -20,23 +33,33 @@ export interface ImageAttachments {
   /** Why the last offer was partly or wholly refused; empty when nothing was. */
   notice: string;
   /** Take files from a picker, a paste or a drop. */
-  add: (files: readonly File[]) => Promise<void>;
+  add: (files: readonly File[], extraRefused?: readonly RejectedImage[]) => Promise<void>;
   remove: (id: string) => void;
   /** Forget the images that were just sent. Images added after the send stay. */
   clear: (sent: readonly AttachedImage[]) => void;
 }
 
+/** The images of the composer: `useAttachments` with the image rule. */
+export function useImageAttachments(
+  draftKey: string,
+  limits: ImageAttachmentLimits,
+): ImageAttachments {
+  const rule = useMemo(() => imageRule(limits), [limits]);
+  return useAttachments(draftKey, rule, 'image');
+}
+
 /**
- * Images wait in memory only: a data URL is too large for the draft store in
- * localStorage, and a reload simply drops them. They are kept per draft key, so
- * switching rows keeps each row's attachments apart.
+ * Attachments (images or files) wait in memory only: a data URL is too large for the
+ * draft store in localStorage, and a reload simply drops them. They are kept per draft
+ * key, so switching rows keeps each row's attachments apart.
  *
  * A ref holds the truth and state only triggers the render, so a remove or a send
  * decides from what is there now and not from what the last render saw.
  */
-export function useImageAttachments(
+export function useAttachments(
   draftKey: string,
-  limits: ImageAttachmentLimits,
+  rule: AttachmentRule,
+  idPrefix: string,
 ): ImageAttachments {
   const [, setVersion] = useState(0);
   const imagesRef = useRef<Record<string, AttachedImage[]>>({});
@@ -47,17 +70,18 @@ export function useImageAttachments(
   const rerender = useCallback(() => setVersion(version => version + 1), []);
 
   const add = useCallback(
-    (files: readonly File[]) => {
+    (files: readonly File[], extraRefused: readonly RejectedImage[] = []) => {
       // The generation is read now, before the queue makes this add wait: a send that
       // happens while it waits must make it stale.
       const generation = slots.generation(draftKey);
       return serial(() =>
-        addImageFiles(files, {
+        addAttachmentFiles(files, {
           draftKey,
           generation,
-          limits,
+          rule,
           slots,
-          makeId: () => `image-${++nextId.current}`,
+          extraRefused,
+          makeId: () => `${idPrefix}-${++nextId.current}`,
           commit: image => {
             imagesRef.current[draftKey] = [...(imagesRef.current[draftKey] ?? []), image];
             rerender();
@@ -69,7 +93,7 @@ export function useImageAttachments(
         }),
       );
     },
-    [draftKey, limits, rerender, serial, slots],
+    [draftKey, idPrefix, rerender, rule, serial, slots],
   );
 
   const remove = useCallback(
@@ -137,16 +161,30 @@ export interface ImageAttachmentsDrawerProps {
   images: readonly AttachedImage[];
   notice: string;
   onRemove: (id: string) => void;
+  /** Attached files, shown as chips with their names and a remove button. */
+  files?: readonly AttachedImage[];
+  fileNotice?: string;
+  onRemoveFile?: (id: string) => void;
 }
 
-/** Thumbnails of the attached images, each with a remove button, and any refusal notice. */
-export function ImageAttachmentsDrawer({images, notice, onRemove}: ImageAttachmentsDrawerProps) {
+/**
+ * Thumbnails of the attached images and chips for the attached files, each with a
+ * remove button, and any refusal notice.
+ */
+export function ImageAttachmentsDrawer({
+  images,
+  notice,
+  onRemove,
+  files = NO_IMAGES,
+  fileNotice = '',
+  onRemoveFile,
+}: ImageAttachmentsDrawerProps) {
   const [openIndex, setOpenIndex] = useState<number | undefined>(undefined);
   // A lightbox opened on an image that is then removed must not reopen on the next one.
   useEffect(() => {
     if (images.length === 0) setOpenIndex(undefined);
   }, [images.length]);
-  if (images.length === 0 && notice === '') return null;
+  if (images.length === 0 && files.length === 0 && notice === '' && fileNotice === '') return null;
   return (
     <ChatComposerDrawer>
       <VStack gap={1} width="100%">
@@ -164,11 +202,23 @@ export function ImageAttachmentsDrawer({images, notice, onRemove}: ImageAttachme
             ))}
           </HStack>
         )}
-        {notice !== '' && (
-          <Text type="supporting" role="status">
-            {notice}
-          </Text>
+        {files.length > 0 && (
+          <FileChips
+            names={files.map(file => ({
+              id: file.id,
+              name: file.name,
+              detail: formatBytes(dataUrlBytes(file.dataUrl)),
+            }))}
+            onRemove={onRemoveFile}
+          />
         )}
+        {[notice, fileNotice]
+          .filter(text => text !== '')
+          .map((text, index) => (
+            <Text key={index} type="supporting" role="status">
+              {text}
+            </Text>
+          ))}
         {images.length > 0 && (
           <Lightbox
             isOpen={openIndex !== undefined}

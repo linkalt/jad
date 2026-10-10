@@ -106,10 +106,10 @@ test('userMessageImages hides the server placeholder only when an image is drawn
     text: '[image] [image]',
     parts: [{type: 'text', images: [name]}],
   });
-  assert.deepEqual(stored, {sent: [], stored: [name], text: ''});
+  assert.deepEqual(stored, {sent: [], stored: [name], files: [], text: ''});
   // An inline image is not listed by the server: its placeholder is all there is to show.
   const inline = userMessageImages({text: '[image]', parts: [{type: 'text'}]});
-  assert.deepEqual(inline, {sent: [], stored: [], text: '[image]'});
+  assert.deepEqual(inline, {sent: [], stored: [], files: [], text: '[image]'});
 });
 
 test('userMessageImages keeps real text, lists each stored name once, and shows sent data URLs', async () => {
@@ -123,7 +123,7 @@ test('userMessageImages keeps real text, lists each stored name once, and shows 
       {type: 'tool_result', images: ['ignored.png']},
     ],
   });
-  assert.deepEqual(view, {sent: ['data:image/png;base64,AA=='], stored: [name], text: 'what is this?'});
+  assert.deepEqual(view, {sent: ['data:image/png;base64,AA=='], stored: [name], files: [], text: 'what is this?'});
   // A user who typed "[image]" with nothing attached keeps their words.
   assert.equal(userMessageImages({text: '[image]'}).text, '[image]');
 });

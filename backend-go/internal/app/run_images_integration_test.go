@@ -268,8 +268,10 @@ func TestRunRequestBodyLimitAllowsAllowedImagesOnly(t *testing.T) {
 	if status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run", imageRunBody(data, "")); status != http.StatusOK {
 		t.Fatalf("an image within the limits: status %d: %.200s", status, body)
 	}
-	// The same body is refused when the image allowance is zero images.
-	none := newRunImagesFixture(t, map[string]any{"max_body_bytes": 512, "max_request_images": 0}, nil)
+	// The same body is refused when there is no allowance at all: no images, and no files
+	// either (a file allowance also widens the run body limit, and then the parser answers
+	// 400 "image input is off" instead of the reader's 413).
+	none := newRunImagesFixture(t, map[string]any{"max_body_bytes": 512, "max_request_images": 0, "max_request_files": 0}, nil)
 	if status, _ := none.do(t, http.MethodPost, "/api/sessions/local:demo/run", imageRunBody(data, "")); status != http.StatusRequestEntityTooLarge {
 		t.Fatalf("image input off and a body over max_body_bytes: status %d, want 413", status)
 	}

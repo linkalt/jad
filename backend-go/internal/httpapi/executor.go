@@ -303,7 +303,7 @@ func UserMessageFromTranscriptRecord(record json.RawMessage, offset int64) (json
 	if input.Type != "message" || input.Role != "user" {
 		return nil, false, nil
 	}
-	text, images, visible := webui.UserContent(input.Content)
+	text, images, files, visible := webui.UserContent(input.Content)
 	if !visible {
 		return nil, false, nil
 	}
@@ -311,7 +311,7 @@ func UserMessageFromTranscriptRecord(record json.RawMessage, offset int64) (json
 		ID:        fmt.Sprintf("session-user-o%d", offset),
 		Sender:    "user",
 		Timestamp: timestampFromRaw(input.CreatedAt),
-		Parts:     []webUIPart{{Type: "text", Text: text, Images: images}},
+		Parts:     []webUIPart{{Type: "text", Text: text, Images: images, Files: files}},
 		Text:      text,
 	}
 	encoded, err := json.Marshal(message)

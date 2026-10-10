@@ -30,6 +30,14 @@ const (
 	MaxMaxRequestImageBytes     = 64 * 1024 * 1024
 )
 
+// Files in a run request (server.max_request_files, server.max_request_file_bytes).
+const (
+	DefaultMaxRequestFiles     = 4
+	MaxMaxRequestFiles         = 32
+	DefaultMaxRequestFileBytes = 10 * 1024 * 1024
+	MaxMaxRequestFileBytes     = 64 * 1024 * 1024
+)
+
 // DefaultRecoverProcessesAtStart is the default of server.recover_processes_at_start.
 const DefaultRecoverProcessesAtStart = true
 

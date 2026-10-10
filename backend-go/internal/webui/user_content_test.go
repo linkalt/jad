@@ -29,12 +29,61 @@ func TestUserContentReadsTextAndStoredImages(t *testing.T) {
 		{"http url is not listed", []UserContentPart{{Type: "input_text", Text: "x"}, {Type: "input_image", ImageURL: "https://example.com/a.png"}}, "x", nil, true},
 		{"empty", nil, "", nil, false},
 		{"empty text, no image", []UserContentPart{{Type: "input_text", Text: ""}}, "", nil, false},
-		{"unknown part", []UserContentPart{{Type: "input_file"}}, "", nil, false},
+		{"unknown part", []UserContentPart{{Type: "input_audio"}}, "", nil, false},
 	} {
-		text, images, visible := UserContent(tc.content)
-		if text != tc.text || !reflect.DeepEqual(images, tc.images) || visible != tc.visible {
-			t.Errorf("%s: got (%q, %v, %v), want (%q, %v, %v)", tc.name, text, images, visible, tc.text, tc.images, tc.visible)
+		text, images, files, visible := UserContent(tc.content)
+		if text != tc.text || !reflect.DeepEqual(images, tc.images) || visible != tc.visible || files != nil {
+			t.Errorf("%s: got (%q, %v, %v, %v), want (%q, %v, nil, %v)", tc.name, text, images, files, visible, tc.text, tc.images, tc.visible)
 		}
+	}
+}
+
+func TestUserContentListsFileNamesAndNeverTheirBytes(t *testing.T) {
+	a := strings.Repeat("a", 64) + ".png"
+	for _, tc := range []struct {
+		name    string
+		content []UserContentPart
+		text    string
+		images  []string
+		files   []string
+		visible bool
+	}{
+		{"text and a file", []UserContentPart{{Type: "input_text", Text: "read it"}, {Type: "input_file", Filename: "report.pdf"}}, "read it", nil, []string{"report.pdf"}, true},
+		{"a file alone is visible with its name", []UserContentPart{{Type: "input_file", Filename: "report.pdf"}}, "[file: report.pdf]", nil, []string{"report.pdf"}, true},
+		{"two files keep order and repeats", []UserContentPart{{Type: "input_file", Filename: "b.pdf"}, {Type: "input_file", Filename: "a.pdf"}, {Type: "input_file", Filename: "b.pdf"}}, "[file: b.pdf] [file: a.pdf] [file: b.pdf]", nil, []string{"b.pdf", "a.pdf", "b.pdf"}, true},
+		{"no filename gets a default", []UserContentPart{{Type: "input_file"}}, "[file: file]", nil, []string{"file"}, true},
+		{"blank filename gets a default", []UserContentPart{{Type: "input_file", Filename: "  "}}, "[file: file]", nil, []string{"file"}, true},
+		{"images come before files in the placeholder", []UserContentPart{{Type: "input_file", Filename: "a.pdf"}, {Type: "input_image", ImageURL: "stored-image://" + a}}, "[image] [file: a.pdf]", []string{a}, []string{"a.pdf"}, true},
+	} {
+		text, images, files, visible := UserContent(tc.content)
+		if text != tc.text || !reflect.DeepEqual(images, tc.images) || !reflect.DeepEqual(files, tc.files) || visible != tc.visible {
+			t.Errorf("%s: got (%q, %v, %v, %v), want (%q, %v, %v, %v)", tc.name, text, images, files, visible, tc.text, tc.images, tc.files, tc.visible)
+		}
+	}
+}
+
+func TestUserMessageProjectsFilesWithoutTheirData(t *testing.T) {
+	records := []TranscriptRecord{
+		{Offset: 0, Raw: json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"plain"}]}`)},
+		{Offset: 100, Raw: json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"see"},{"type":"input_file","filename":"r.pdf","file_data":"data:application/pdf;base64,JVBERi0="}]}`)},
+	}
+	messages, err := NormalizeTranscript(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("%d messages, want 2", len(messages))
+	}
+	plain, _ := json.Marshal(messages[0])
+	if strings.Contains(string(plain), "files") {
+		t.Fatalf("a text message must not gain a files field: %s", plain)
+	}
+	if got := messages[1].Parts[0].Files; !reflect.DeepEqual(got, []string{"r.pdf"}) || messages[1].Text != "see" {
+		t.Fatalf("message 2 = %+v", messages[1])
+	}
+	encoded, _ := json.Marshal(messages[1])
+	if strings.Contains(string(encoded), "JVBERi0") || strings.Contains(string(encoded), "base64") {
+		t.Fatalf("the file bytes reached the browser: %s", encoded)
 	}
 }
 

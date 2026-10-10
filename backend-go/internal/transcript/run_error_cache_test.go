@@ -12,6 +12,7 @@ import (
 const (
 	visibleUserItem = `{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}`
 	imageOnlyItem   = `{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}`
+	fileOnlyItem    = `{"type":"message","role":"user","content":[{"type":"input_file","filename":"a.pdf","file_data":"data:application/pdf;base64,JVBERi0="}]}`
 )
 
 func newRunErrorTestStore(t *testing.T) (*TurnStore, *Journal, string, string) {
@@ -189,12 +190,25 @@ func TestAppendInputItemsAtReportsAnImageOnlyUserMessage(t *testing.T) {
 	}
 }
 
+// A file-only user message is shown too (webui.UserContent gives it a "[file: name]" text).
+func TestAppendInputItemsAtReportsAFileOnlyUserMessage(t *testing.T) {
+	store, _, _, _ := newRunErrorTestStore(t)
+	result, err := store.AppendInputItemsAt([]byte(fileOnlyItem))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.HasMessage {
+		t.Fatalf("a file-only user message must be reported as visible, got %+v", result)
+	}
+}
+
 func TestAppendInputItemsAtHasNoMessageForInputWithoutVisibleText(t *testing.T) {
 	store, _, _, _ := newRunErrorTestStore(t)
 	for name, item := range map[string]string{
 		"empty text":    `{"type":"message","role":"user","content":[{"type":"input_text","text":""}]}`,
 		"tool output":   `{"type":"function_call_output","call_id":"c","output":"o"}`,
 		"system prompt": `{"type":"message","role":"system","content":[{"type":"input_text","text":"hi"}]}`,
+		"system file":   `{"type":"message","role":"system","content":[{"type":"input_file","filename":"a.pdf","file_data":"data:application/pdf;base64,JVBERi0="}]}`,
 	} {
 		result, err := store.AppendInputItemsAt([]byte(item))
 		if err != nil {

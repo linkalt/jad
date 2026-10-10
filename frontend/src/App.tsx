@@ -74,8 +74,9 @@ import {
 import appConfig from './config.json';
 import {readAttachmentBlocks} from './attachment-reading';
 import {buildRunInput, userMessageImages} from './image-attachments';
+import {SentFiles} from './components/FileAttachments';
 import {SentImages} from './components/ImageAttachments';
-import type {AttachedImage} from './image-attachments';
+import type {AttachedFile, AttachedImage} from './image-attachments';
 import {createCoalescedRefresh} from './coalesced-refresh';
 import {deepEqual} from './deepEqual';
 import {selectedModelForSession} from './model-selection';
@@ -426,6 +427,8 @@ interface ReasoningStep {
 type MessageRecord = Omit<WebUiMessage, 'parts'> & {
   /** Data URLs of the images this tab just sent; the server's copy replaces them on the next load. */
   sentImages?: string[];
+  /** Names of the files this tab just sent; the server's list replaces them after a reload. */
+  sentFiles?: string[];
   parts?: WebUiPart[];
   reasoning?: ReasoningStep[];
   tools?: ChatToolCallItem[];
@@ -2336,6 +2339,7 @@ const TranscriptRow = memo(
             <VStack align="end" gap={0.5}>
               {userImages.sent.length > 0 && <SentImages sources={userImages.sent} />}
               {userImages.stored.length > 0 && <StoredImages names={userImages.stored} />}
+              {userImages.files.length > 0 && <SentFiles names={userImages.files} />}
               {userImages.text !== '' && (
                 <ChatMessageBubble>
                   <MarkdownText density="compact" contentWidth="100%">{userImages.text}</MarkdownText>
@@ -3994,10 +3998,10 @@ function App() {
   ]);
 
   const submitMessage = useCallback(
-    (value: string, images: readonly AttachedImage[]) => {
+    (value: string, images: readonly AttachedImage[], files: readonly AttachedFile[]) => {
       const trimmedValue = value.trim();
       if (
-        (!trimmedValue && images.length === 0) ||
+        (!trimmedValue && images.length === 0 && files.length === 0) ||
         isRunning ||
         resettingViewKey === activeViewKey ||
         frontCompactingViewKey === activeViewKey
@@ -4016,6 +4020,7 @@ function App() {
         text: trimmedValue,
         timestamp: messageTime(),
         ...(images.length === 0 ? {} : {sentImages: images.map(image => image.dataUrl)}),
+        ...(files.length === 0 ? {} : {sentFiles: files.map(file => file.name)}),
       };
 
       setThreads(current => ({
@@ -4037,7 +4042,7 @@ function App() {
       if (isLiveRun && sessionRef) {
         const controller = new AbortController();
         runAbortRefs.current.set(sessionId, controller);
-        void streamSessionRun(sessionRef, buildRunInput(trimmedValue, images), {
+        void streamSessionRun(sessionRef, buildRunInput(trimmedValue, images, files), {
           signal: controller.signal,
           ...(activeProfile === undefined ? {} : {profile: activeProfile}),
           onRun: run => recordRunStarted(sessionId, run.turn_id),

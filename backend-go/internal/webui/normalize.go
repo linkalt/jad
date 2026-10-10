@@ -168,7 +168,7 @@ func userMessage(fields map[string]json.RawMessage, key string, entry Transcript
 	if err := json.Unmarshal(fields["content"], &content); err != nil {
 		return nil
 	}
-	text, images, visible := UserContent(content)
+	text, images, files, visible := UserContent(content)
 	if !visible {
 		return nil
 	}
@@ -177,7 +177,7 @@ func userMessage(fields map[string]json.RawMessage, key string, entry Transcript
 		Sender:    "user",
 		Text:      text,
 		Timestamp: timestampFromRaw(fields["created_at"]),
-		Parts:     []Part{{Type: "text", Text: text, Images: images}},
+		Parts:     []Part{{Type: "text", Text: text, Images: images, Files: files}},
 	}
 	setCursor(&message, entry)
 	return &message

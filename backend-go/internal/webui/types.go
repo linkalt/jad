@@ -42,7 +42,10 @@ type Part struct {
 	Citations []Citation `json:"citations,omitempty"`
 	// Images lists the stored image files (see internal/imagestore) a tool_result
 	// refers to, as file names the image route serves. Inline images are not listed.
-	Images    []string        `json:"images,omitempty"`
+	Images []string `json:"images,omitempty"`
+	// Files lists the names of the files attached to a user message, in order. The file
+	// bytes stay in the transcript and are never sent to the browser.
+	Files     []string        `json:"files,omitempty"`
 	Partial   bool            `json:"partial,omitempty"`
 	Truncated *PartTruncation `json:"truncated,omitempty"`
 }

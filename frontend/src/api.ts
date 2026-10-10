@@ -40,6 +40,8 @@ export type WebUiTextPart =
       citations?: WebUiCitation[];
       /** On a user message: file names of the images it carries that the server stored. */
       images?: string[];
+      /** On a user message: names of the files (PDF) attached to it, in order. */
+      files?: string[];
       truncated?: WebUiPartTruncation;
     };
 
@@ -946,7 +948,9 @@ function isWebUiPart(value: unknown): value is WebUiPart {
       (value.citations === undefined ||
         (Array.isArray(value.citations) && value.citations.every(isWebUiCitation))) &&
       (value.images === undefined ||
-        (Array.isArray(value.images) && value.images.every(name => typeof name === 'string')))
+        (Array.isArray(value.images) && value.images.every(name => typeof name === 'string'))) &&
+      (value.files === undefined ||
+        (Array.isArray(value.files) && value.files.every(name => typeof name === 'string')))
     );
   }
   if (value.type === 'hosted_tool') {
