@@ -16,12 +16,15 @@ const (
 	selectName selectorKind = iota
 	selectCategory
 	selectAll
+	selectQualified
 )
 
-// Selector is one item of a Selection: a name, "category:<c>" or "*".
+// Selector is one item of a Selection: a name, "<category>/<name>",
+// "category:<c>" or "*".
 type Selector struct {
-	kind  selectorKind
-	value string
+	kind     selectorKind
+	value    string
+	category string // only for selectQualified
 }
 
 // ParseSelector parses one selector. Whitespace is never trimmed: a padded
@@ -36,6 +39,15 @@ func ParseSelector(text string) (Selector, error) {
 			return Selector{}, fmt.Errorf("selector %q: category %w", text, err)
 		}
 		return Selector{kind: selectCategory, value: category}, nil
+	}
+	if category, name, ok := strings.Cut(text, "/"); ok {
+		if err := ValidateIdentifier(category); err != nil {
+			return Selector{}, fmt.Errorf("selector %q: category %w", text, err)
+		}
+		if err := ValidateIdentifier(name); err != nil {
+			return Selector{}, fmt.Errorf("selector %q: name %w", text, err)
+		}
+		return Selector{kind: selectQualified, value: name, category: category}, nil
 	}
 	if strings.Contains(text, ":") {
 		return Selector{}, fmt.Errorf("selector %q: only %q prefixes a selector", text, categoryPrefix)
@@ -53,6 +65,8 @@ func (s Selector) String() string {
 		return "*"
 	case selectCategory:
 		return categoryPrefix + s.value
+	case selectQualified:
+		return s.category + "/" + s.value
 	}
 	return s.value
 }
@@ -63,6 +77,8 @@ func (s Selector) matches(entry Entry) bool {
 		return true
 	case selectCategory:
 		return entry.Category == s.value
+	case selectQualified:
+		return entry.Category == s.category && entry.Name == s.value
 	}
 	return entry.Name == s.value
 }

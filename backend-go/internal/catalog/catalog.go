@@ -1,10 +1,12 @@
 // Package catalog scans one kind of configuration files laid out as
 // <root>/<category>/<name>.json and narrows them with selections.
 //
-// Identity is the file name and is unique across the whole kind. The
-// category is the parent folder and is used only to select and group, so
-// moving a file between categories changes who can see it but breaks no
-// reference.
+// Identity is the file name. The category is the parent folder and selects
+// and groups. The same name may exist in several categories, for example one
+// MCP server with a headed and a headless environment. What a profile ends up
+// with must then hold each name once: Unique reports the clash. A reference
+// by plain name stays valid when a file moves between categories as long as
+// the name is unique in the set it is resolved in.
 package catalog
 
 import (
@@ -24,14 +26,19 @@ type Entry struct {
 type Catalog struct {
 	kind    string
 	entries []Entry
-	index   map[string]int
+	index   map[string][]int
 }
 
 func newCatalog(kind string, entries []Entry) *Catalog {
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
-	index := make(map[string]int, len(entries))
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Name != entries[j].Name {
+			return entries[i].Name < entries[j].Name
+		}
+		return entries[i].Category < entries[j].Category
+	})
+	index := make(map[string][]int, len(entries))
 	for i, entry := range entries {
-		index[entry.Name] = i
+		index[entry.Name] = append(index[entry.Name], i)
 	}
 	return &Catalog{kind: kind, entries: entries, index: index}
 }
@@ -45,11 +52,13 @@ func (c *Catalog) Len() int { return len(c.entries) }
 // Entries returns a copy of the entries ordered by name.
 func (c *Catalog) Entries() []Entry { return append([]Entry(nil), c.entries...) }
 
-// Names returns the entry names in order.
+// Names returns the distinct entry names in order.
 func (c *Catalog) Names() []string {
-	names := make([]string, len(c.entries))
+	names := make([]string, 0, len(c.index))
 	for i, entry := range c.entries {
-		names[i] = entry.Name
+		if i == 0 || entry.Name != c.entries[i-1].Name {
+			names = append(names, entry.Name)
+		}
 	}
 	return names
 }
@@ -68,13 +77,50 @@ func (c *Catalog) Categories() []string {
 	return categories
 }
 
-// Get returns the entry with this name.
+// Find returns every entry with this name, ordered by category.
+func (c *Catalog) Find(name string) []Entry {
+	positions := c.index[name]
+	found := make([]Entry, len(positions))
+	for i, position := range positions {
+		found[i] = c.entries[position]
+	}
+	return found
+}
+
+// Get returns the entry with this name. It reports false when the name is
+// missing and also when it is ambiguous; use Find or Unique to tell them apart.
 func (c *Catalog) Get(name string) (Entry, bool) {
-	i, ok := c.index[name]
-	if !ok {
+	positions := c.index[name]
+	if len(positions) != 1 {
 		return Entry{}, false
 	}
-	return c.entries[i], true
+	return c.entries[positions[0]], true
+}
+
+// Unique returns an error naming every file path of every name that exists
+// more than once. A resolved set (what a profile uses) must pass it.
+func (c *Catalog) Unique() error {
+	var clashes []string
+	for _, name := range c.Names() {
+		found := c.Find(name)
+		if len(found) < 2 {
+			continue
+		}
+		paths := make([]string, len(found))
+		for i, entry := range found {
+			paths[i] = entry.Path
+		}
+		clashes = append(clashes, fmt.Sprintf("%q is %s (%s)", name, ambiguousWord(len(found)), strings.Join(paths, ", ")))
+	}
+	if len(clashes) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s: %s; select a category or use <category>/<name> to pick one",
+		c.kind, strings.Join(clashes, "; "))
+}
+
+func ambiguousWord(count int) string {
+	return fmt.Sprintf("in %d categories", count)
 }
 
 // Narrow returns the entries a selection keeps. An absent selection keeps
@@ -87,9 +133,14 @@ func (c *Catalog) Narrow(sel Selection) (*Catalog, error) {
 	}
 	var missing []string
 	for _, item := range sel.items {
-		if item.kind == selectName {
+		switch item.kind {
+		case selectName:
 			if _, ok := c.index[item.value]; !ok {
 				missing = append(missing, item.value)
+			}
+		case selectQualified:
+			if !c.hasQualified(item) {
+				missing = append(missing, item.String())
 			}
 		}
 	}
@@ -104,6 +155,15 @@ func (c *Catalog) Narrow(sel Selection) (*Catalog, error) {
 		}
 	}
 	return newCatalog(c.kind, kept), nil
+}
+
+func (c *Catalog) hasQualified(item Selector) bool {
+	for _, entry := range c.Find(item.value) {
+		if entry.Category == item.category {
+			return true
+		}
+	}
+	return false
 }
 
 func quoteList(values []string) string {

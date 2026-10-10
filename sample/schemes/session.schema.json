@@ -29,28 +29,28 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)$"
+            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?)$"
           },
           "uniqueItems": true,
-          "description": "Narrows the profiles offered by the level above. Items: a file name, \"category:<folder>\" or \"*\". A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
+          "description": "Narrows the profiles offered by the level above. Items: a file name, \"<category>/<name>\" for one file, \"category:<folder>\" for a whole folder, or \"*\". The same file name may exist in several categories; the set a profile ends up with must hold each name once. A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
         },
         "models": {
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)$"
+            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?)$"
           },
           "uniqueItems": true,
-          "description": "Narrows the models offered by the level above. Items: a file name, \"category:<folder>\" or \"*\". A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
+          "description": "Narrows the models offered by the level above. Items: a file name, \"<category>/<name>\" for one file, \"category:<folder>\" for a whole folder, or \"*\". The same file name may exist in several categories; the set a profile ends up with must hold each name once. A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
         },
         "mcp": {
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)$"
+            "pattern": "^(\\*|category:[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?)$"
           },
           "uniqueItems": true,
-          "description": "Narrows the MCP servers offered by the level above. Items: a file name, \"category:<folder>\" or \"*\". A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
+          "description": "Narrows the MCP servers offered by the level above. Items: a file name, \"<category>/<name>\" for one file, \"category:<folder>\" for a whole folder, or \"*\". The same file name may exist in several categories; the set a profile ends up with must hold each name once. A missing key keeps everything the level above offers; [] keeps nothing. A plain name the level above does not offer is a load error; a category or * only intersects."
         }
       },
       "additionalProperties": false

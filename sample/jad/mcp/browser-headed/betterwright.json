@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "transport": {
+    "type": "stdio",
+    "command": "bunx",
+    "args": [
+      "betterwright",
+      "mcp"
+    ],
+    "env": {
+      "BETTERWRIGHT_HEADLESS": "0",
+      "WAYLAND_DISPLAY": "wayland-0",
+      "XDG_RUNTIME_DIR": "/run/user/1000"
+    }
+  }
+}

@@ -8,6 +8,7 @@
   },
   "mcp": {
     "zvec-grep": {},
-    "codebase-memory-mcp": {}
+    "codebase-memory-mcp": {},
+    "browser-headless/betterwright": {}
   }
 }

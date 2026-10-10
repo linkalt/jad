@@ -2,6 +2,9 @@
   "schema_version": 1,
   "transport": {
     "type": "stdio",
-    "command": "codebase-memory-mcp"
+    "command": "codebase-memory-mcp",
+    "env": {
+      "CBM_CACHE_DIR": "/home/www/Downloads/tmp/myagent3/.codebase-memory"
+    }
   }
 }

@@ -34,8 +34,9 @@ func ValidateIdentifier(text string) error {
 
 // Scan reads <dir>/<category>/<name>.json for one kind. A missing dir is an
 // empty catalog. Entries that start with '.' and files that are not .json
-// are ignored. A .json file directly in dir, a bad name, or the same name
-// in two categories is a load error naming the paths.
+// are ignored. A .json file directly in dir or a bad name is a load error
+// naming the path. The same name may appear in several categories; that is
+// how one program gets different settings (see Catalog.Unique).
 func Scan(kind, dir string) (*Catalog, error) {
 	categories, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -45,7 +46,6 @@ func Scan(kind, dir string) (*Catalog, error) {
 		return nil, fmt.Errorf("%s catalog %s: %w", kind, dir, err)
 	}
 	var entries []Entry
-	seen := map[string]string{}
 	for _, item := range categories {
 		if strings.HasPrefix(item.Name(), ".") {
 			continue
@@ -65,14 +65,7 @@ func Scan(kind, dir string) (*Catalog, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, entry := range found {
-			if first, ok := seen[entry.Name]; ok {
-				return nil, fmt.Errorf("%s catalog: name %q is used twice: %s and %s",
-					kind, entry.Name, first, entry.Path)
-			}
-			seen[entry.Name] = entry.Path
-			entries = append(entries, entry)
-		}
+		entries = append(entries, found...)
 	}
 	return newCatalog(kind, entries), nil
 }

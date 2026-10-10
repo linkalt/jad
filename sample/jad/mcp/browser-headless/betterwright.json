@@ -4,7 +4,11 @@
     "type": "stdio",
     "command": "bunx",
     "args": [
-      "betterwright"
-    ]
+      "betterwright",
+      "mcp"
+    ],
+    "env": {
+      "BETTERWRIGHT_HEADLESS": "1"
+    }
   }
 }

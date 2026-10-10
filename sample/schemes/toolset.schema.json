@@ -1821,9 +1821,9 @@
     },
     "mcp": {
       "type": "object",
-      "description": "MCP servers this toolset enables. Each key is a file name under mcp/. The server connection lives in that file; here only how this toolset uses it.",
+      "description": "MCP servers this toolset enables. Each key is a file name under mcp/ (or <category>/<name> when the name exists in several categories). The server connection and its environment live in that file; here only how this toolset uses it.",
       "propertyNames": {
-        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$"
       },
       "additionalProperties": {
         "type": "object",
