@@ -196,8 +196,8 @@ func responseParts(response map[string]json.RawMessage) []Part {
 		}
 		typeName := stringField(output["type"])
 		if typeName == "reasoning" {
-			for _, summary := range textArray(output["summary"]) {
-				parts = appendTextPart(parts, "reasoning", summary)
+			for _, text := range reasoningTexts(output) {
+				parts = appendTextPart(parts, "reasoning", text)
 			}
 			continue
 		}
@@ -424,6 +424,17 @@ func rawObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
 		return nil, fmt.Errorf("expected object")
 	}
 	return result, nil
+}
+
+// reasoningTexts is the text of one reasoning item. OpenAI puts it in `summary`;
+// vLLM-style providers and the Anthropic adapter put it in `content` as
+// reasoning_text and leave `summary` empty. A summary wins when both exist, so a
+// provider that sends both does not show the same thinking twice.
+func reasoningTexts(output map[string]json.RawMessage) []string {
+	if summary := textArray(output["summary"]); len(summary) > 0 {
+		return summary
+	}
+	return textArray(output["content"])
 }
 
 func textArray(raw json.RawMessage) []string {

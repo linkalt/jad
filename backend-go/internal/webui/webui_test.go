@@ -101,3 +101,41 @@ func TestIncrementsEmitsDeltaPartAndSnapshotEvents(t *testing.T) {
 }
 
 func stringPointer(value string) *string { return &value }
+
+// A reasoning item carries its text in `summary` (OpenAI) or in `content` as
+// reasoning_text (vLLM-style providers, the Anthropic adapter). Both must show.
+func TestNormalizeTranscriptKeepsReasoningFromSummaryAndContent(t *testing.T) {
+	cases := map[string]struct{ item, want string }{
+		"summary":                     {`{"type":"reasoning","id":"rs","summary":[{"type":"summary_text","text":"S"}]}`, "S"},
+		"content":                     {`{"type":"reasoning","id":"rs","summary":[],"content":[{"type":"reasoning_text","text":"C"}]}`, "C"},
+		"content without summary key": {`{"type":"reasoning","id":"rs","content":[{"type":"reasoning_text","text":"C"},{"type":"reasoning_text","text":"D"}]}`, "CD"},
+		"summary wins over content":   {`{"type":"reasoning","id":"rs","summary":[{"type":"summary_text","text":"S"}],"content":[{"type":"reasoning_text","text":"C"}]}`, "S"},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := `{"type":"response.completed","session_turn":1,"session_step":1,"response":{"id":"r1","output":[` + test.item + `,{"type":"message","content":[{"type":"output_text","text":"ans"}]}]}}`
+			messages, err := NormalizeTranscript([]TranscriptRecord{{Offset: 0, Prefix: "o", Cursor: 1, HasCursor: true, Raw: json.RawMessage(raw)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(messages) != 1 || messages[0].ReasoningContent != test.want || messages[0].Text != "ans" {
+				t.Fatalf("messages = %+v, want reasoning %q and text ans", messages, test.want)
+			}
+			if len(messages[0].Parts) != 2 || messages[0].Parts[0].Type != "reasoning" {
+				t.Fatalf("parts = %+v, want reasoning then text", messages[0].Parts)
+			}
+		})
+	}
+}
+
+// The live message must keep the thinking when the completed response arrives
+// carrying it only as content, with no streamed deltas.
+func TestStreamingRunCompleteKeepsContentReasoning(t *testing.T) {
+	run := NewStreamingRun("turn", "now")
+	item := `{"type":"reasoning","id":"rs","summary":[],"content":[{"type":"reasoning_text","text":"thinking hard"}]}`
+	done := `{"type":"response.completed","response":{"id":"r1","output":[` + item + `,{"type":"message","content":[{"type":"output_text","text":"ans"}]}]}}`
+	final := run.Complete(json.RawMessage(done))
+	if final.ReasoningContent != "thinking hard" || final.Text != "ans" {
+		t.Fatalf("final = %+v", final)
+	}
+}
