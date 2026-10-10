@@ -148,15 +148,18 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 		modelPaths[item.ID()] = item.Path
 	}
 
-	setting := mergeSettings(mergeSettings(c.layout.Defaults, c.session.Settings), profile.Settings)
-	setting["schema_version"] = json.RawMessage("1")
-	if c.session.Name != "" {
-		if setting["session_name"], err = json.Marshal(c.session.Name); err != nil {
+	// cwd: root defaults, then the session (its top-level cwd beats its settings.cwd), then
+	// the profile.
+	sessionLayer := mergeSettings(nil, c.session.Settings)
+	if c.session.CWD != "" {
+		if sessionLayer["cwd"], err = json.Marshal(c.session.CWD); err != nil {
 			return nil, nil, err
 		}
 	}
-	if c.session.CWD != "" {
-		if setting["cwd"], err = json.Marshal(c.session.CWD); err != nil {
+	setting := mergeSettings(mergeSettings(c.layout.Defaults, sessionLayer), profile.Settings)
+	setting["schema_version"] = json.RawMessage("1")
+	if c.session.Name != "" {
+		if setting["session_name"], err = json.Marshal(c.session.Name); err != nil {
 			return nil, nil, err
 		}
 	}

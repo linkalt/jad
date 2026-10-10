@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -339,10 +341,10 @@ func TestLayoutRefusesTwoMCPFilesWithTheSameName(t *testing.T) {
 func TestLayoutRefusesSettingsThatHaveTheirOwnPlace(t *testing.T) {
 	layout, location, root := sampleLayout(t)
 	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) {
-		m["settings"].(map[string]any)["cwd"] = "/tmp"
+		m["settings"].(map[string]any)["prompt_documents"] = []string{"X.md"}
 	})
-	if _, err := LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err == nil || !strings.Contains(err.Error(), "cwd") {
-		t.Fatalf("cwd in profile settings must be refused: %v", err)
+	if _, err := LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err == nil || !strings.Contains(err.Error(), "prompt_documents") {
+		t.Fatalf("prompt_documents in profile settings must be refused: %v", err)
 	}
 }
 
@@ -465,10 +467,10 @@ func TestRootSettingCatalogsAreReadAndChecked(t *testing.T) {
 	}
 	editJSON(t, settingPath, func(m map[string]any) {
 		delete(m, "catalogs")
-		m["defaults"] = map[string]any{"cwd": "/x"}
+		m["defaults"] = map[string]any{"prompt_documents": []string{"X.md"}}
 	})
 	if _, err := Load(LoadOptions{WorkingDir: root, RootSettingPath: settingPath, Environment: map[string]string{}}); err == nil || !strings.Contains(err.Error(), "defaults") {
-		t.Fatalf("defaults with cwd error = %v", err)
+		t.Fatalf("defaults with prompt_documents error = %v", err)
 	}
 }
 
@@ -573,5 +575,122 @@ func TestLayoutSetModelDefaultIsPerSession(t *testing.T) {
 	other, err := LoadSessionSettings(location, "review/reviewer", "")
 	if err != nil || other.ModelDefault != "openai/gpt-fast" {
 		t.Fatalf("reviewer model = %q, err = %v", other.ModelDefault, err)
+	}
+}
+
+// cwd may come from the root defaults, the session or the profile; the nearer level wins.
+func TestLayoutCWDComesFromDefaultsThenSessionThenProfile(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	fromDefaults, fromSettings, fromProfile := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, dir := range []string{fromDefaults, fromSettings, fromProfile} {
+		if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("rules"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(dir, ".jad", "subagents", "x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".jad", "subagents", "x", "prompt.md"), []byte("p"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sessionCWD := ""
+	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+		sessionCWD, _ = m["cwd"].(string)
+		delete(m, "cwd")
+	})
+	layout.Defaults = map[string]json.RawMessage{"cwd": json.RawMessage(strconv.Quote(fromDefaults))}
+	load := func() string {
+		t.Helper()
+		config, err := LoadLayoutSessionSettings(location, layout, "review/reviewer", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return config.WorkingDir
+	}
+	if got := load(); got != fromDefaults {
+		t.Fatalf("defaults only: cwd = %q, want %q", got, fromDefaults)
+	}
+	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) { m["cwd"] = sessionCWD })
+	if got := load(); got != sessionCWD {
+		t.Fatalf("session top-level cwd must beat defaults: cwd = %q, want %q", got, sessionCWD)
+	}
+	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+		delete(m, "cwd")
+		m["settings"] = map[string]any{"cwd": fromSettings}
+	})
+	if got := load(); got != fromSettings {
+		t.Fatalf("session settings.cwd must beat defaults: cwd = %q, want %q", got, fromSettings)
+	}
+	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) { m["cwd"] = sessionCWD })
+	editJSON(t, filepath.Join(root, "profiles", "review", "reviewer.json"), func(m map[string]any) {
+		m["settings"] = map[string]any{"cwd": fromProfile}
+	})
+	if got := load(); got != fromProfile {
+		t.Fatalf("profile cwd must beat the session: cwd = %q, want %q", got, fromProfile)
+	}
+	// another profile of the same session is not affected
+	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.WorkingDir != sessionCWD {
+		t.Fatalf("dev/coder: cwd = %q, want the session's %q", config.WorkingDir, sessionCWD)
+	}
+}
+
+// A relative cwd is refused wherever it comes from.
+func TestLayoutRefusesARelativeCWDInProfileSettings(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	editJSON(t, filepath.Join(root, "profiles", "review", "reviewer.json"), func(m map[string]any) {
+		m["settings"] = map[string]any{"cwd": "relative/dir"}
+	})
+	_, err := LoadLayoutSessionSettings(location, layout, "review/reviewer", "")
+	if err == nil || !strings.Contains(err.Error(), "cwd must be an absolute path") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// The schemas list the setting keys a settings object may carry; the loader has its own
+// list. They must be the same list, or the schema allows what the loader refuses.
+func TestLayoutSettingKeysMatchTheSchemas(t *testing.T) {
+	want := make([]string, 0, len(layoutSettingKeys))
+	for key := range layoutSettingKeys {
+		want = append(want, key)
+	}
+	sort.Strings(want)
+	for _, file := range []struct{ name, property string }{
+		{"session.schema.json", "settings"},
+		{"profile.schema.json", "settings"},
+		{"root-setting.schema.json", "defaults"},
+	} {
+		data, err := os.ReadFile(filepath.Join("..", "..", "..", "sample", "schemes", file.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema struct {
+			Properties map[string]struct {
+				PropertyNames struct {
+					Enum []string `json:"enum"`
+				} `json:"propertyNames"`
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(data, &schema); err != nil {
+			t.Fatal(err)
+		}
+		node := schema.Properties[file.property]
+		got := append([]string(nil), node.PropertyNames.Enum...)
+		sort.Strings(got)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s %s.propertyNames.enum = %v, loader keys = %v", file.name, file.property, got, want)
+		}
+		described := make([]string, 0, len(node.Properties))
+		for key := range node.Properties {
+			described = append(described, key)
+		}
+		sort.Strings(described)
+		if strings.Join(described, ",") != strings.Join(want, ",") {
+			t.Errorf("%s %s.properties = %v, loader keys = %v", file.name, file.property, described, want)
+		}
 	}
 }

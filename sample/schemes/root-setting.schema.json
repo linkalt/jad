@@ -295,7 +295,8 @@
           "persistence",
           "front_compaction",
           "compaction",
-          "http_debug"
+          "http_debug",
+          "cwd"
         ]
       },
       "properties": {
@@ -346,6 +347,11 @@
         },
         "http_debug": {
           "$ref": "setting.schema.json#/properties/http_debug"
+        },
+        "cwd": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Working directory of runs. Absolute path (or ~). Defaults, session and profile may all set it; the nearer level wins (profile, then session, then root defaults). The session's top-level cwd beats its settings.cwd."
         }
       }
     }

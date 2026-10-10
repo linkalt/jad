@@ -19,7 +19,7 @@
     "cwd": {
       "type": "string",
       "pattern": "\\S",
-      "description": "Working directory of every run in this session."
+      "description": "Working directory of every run in this session. Absolute path (or ~). Beats settings.cwd of this file and the root defaults; a profile's settings.cwd beats it."
     },
     "category": {
       "type": "string",
@@ -78,7 +78,8 @@
           "persistence",
           "front_compaction",
           "compaction",
-          "http_debug"
+          "http_debug",
+          "cwd"
         ]
       },
       "properties": {
@@ -129,6 +130,11 @@
         },
         "http_debug": {
           "$ref": "setting.schema.json#/properties/http_debug"
+        },
+        "cwd": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Working directory of runs. Absolute path (or ~). Defaults, session and profile may all set it; the nearer level wins (profile, then session, then root defaults). The session's top-level cwd beats its settings.cwd."
         }
       }
     }
