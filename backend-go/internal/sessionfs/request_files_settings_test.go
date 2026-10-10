@@ -12,7 +12,7 @@ func TestRequestFileSettingsDefaultsAndValues(t *testing.T) {
 	if got := loadServerSetting(t, `{"max_request_files":0}`); got.MaxRequestFiles != 0 {
 		t.Fatalf("0 turns file input off, got %d", got.MaxRequestFiles)
 	}
-	if got := loadServerSetting(t, `{"max_request_files":32,"max_request_file_bytes":67108864}`); got.MaxRequestFiles != 32 || got.MaxRequestFileBytes != 67108864 {
+	if got := loadServerSetting(t, `{"max_request_files":8,"max_request_file_bytes":26214400}`); got.MaxRequestFiles != 8 || got.MaxRequestFileBytes != 26214400 {
 		t.Fatalf("upper bounds = %d, %d", got.MaxRequestFiles, got.MaxRequestFileBytes)
 	}
 	if got := loadServerSetting(t, `{"max_request_files":3,"max_request_file_bytes":1}`); got.MaxRequestFiles != 3 || got.MaxRequestFileBytes != 1 {

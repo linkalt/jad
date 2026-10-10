@@ -171,14 +171,14 @@
         "max_request_files": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 32,
+          "maximum": 8,
           "default": 4,
           "description": "Go backend only. The most files one run request may carry in an array input ({\"type\":\"file\",\"name\":<file name>,\"data\":<base64 or data URL>}). Only PDF files are accepted, judged by their first bytes. 0 refuses file input. The TypeScript backend ignores this key."
         },
         "max_request_file_bytes": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 67108864,
+          "maximum": 26214400,
           "default": 10485760,
           "description": "Go backend only. The largest decoded file of a run request, in bytes. The run request may carry the base64 text of up to max_request_files files on top of max_body_bytes (the rest of the body must still fit in max_body_bytes). A file is kept whole in messages.jsonl and sent again with every later request. The TypeScript backend ignores this key."
         },
