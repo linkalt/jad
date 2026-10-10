@@ -28,20 +28,21 @@ type parityExpectation struct {
 	} `json:"ok"`
 }
 
-// goOnlyNativeTools are native tools that exist only in the Go backend. TypeScript is
-// a frozen reference (backend-go/DECISIONS.md), so it will never list them.
+// goOnlyNativeTools are native tools the golden's TypeScript loader never had. The
+// TypeScript backend is removed, so the golden will never list them.
 var goOnlyNativeTools = []string{"subagent", "decide"}
 
 // goOnlyToolKeys are keys of a native tool that exist only in Go, by the text they add to a
-// "supported keys are ..." list. TypeScript's exec has no env_file.
+// "supported keys are ..." list. The golden's exec has no env_file.
 var goOnlyToolKeys = []string{"env_file, "}
 
-// TestConfigParityWithTypeScriptGolden replays settings through LoadSessionConfig
-// and compares resolved storage paths and error messages with the output of the
-// TypeScript SessionConfigLoader. The golden is a frozen file: the TypeScript backend was
-// removed (tag legacy-final has it), so it is no longer regenerated. It goes with the legacy
-// loader.
-func TestConfigParityWithTypeScriptGolden(t *testing.T) {
+// TestConfigAgainstFixedGolden replays settings through the legacy loader (LoadSessionConfig
+// on a session folder with a setting.json) and compares resolved storage paths and error
+// messages with a fixed file. The file was written by the TypeScript SessionConfigLoader;
+// that backend is removed (tag legacy-final has it), so the file is never regenerated and
+// is test data, not a second implementation. It is replaced by layout cases when the legacy
+// loader goes (backend-go/DECISIONS.md).
+func TestConfigAgainstFixedGolden(t *testing.T) {
 	var cases []parityCase
 	readJSONFile(t, "testdata/config-parity.cases.json", &cases)
 	var expected []parityExpectation
