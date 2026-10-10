@@ -122,6 +122,17 @@ func TestLayoutLoadsTheSampleSession(t *testing.T) {
 	}
 }
 
+func TestLayoutSessionCategoryIsLoaded(t *testing.T) {
+	layout, location, _ := sampleLayout(t)
+	config, err := LoadLayoutSessionConfig(location, layout, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Category != "work" {
+		t.Fatalf("category = %q, want work (the sample session.json sets it)", config.Category)
+	}
+}
+
 func TestLayoutPicksTheMCPEnvironmentByCategory(t *testing.T) {
 	layout, location, root := sampleLayout(t)
 	coder, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")

@@ -69,6 +69,7 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	// The normalizers know a profile only by its storage key; callers get the ID.
 	config.Profile = entry.ID()
 	config.DefaultProfile = session.ActiveProfile
+	config.Category = session.Category
 	config.PathProfiles = profiles.IDs()
 	name := requestedModel
 	if name == "" {

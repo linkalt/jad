@@ -111,7 +111,10 @@ type SessionStoragePaths struct {
 }
 
 type SessionConfig struct {
-	SessionName        string
+	SessionName string
+	// Category groups sessions in a listing (session.json "category"); empty when unset.
+	// It does not change the session id or any path.
+	Category           string
 	Profile            string
 	DefaultProfile     string
 	PathProfiles       []string

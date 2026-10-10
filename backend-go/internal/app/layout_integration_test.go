@@ -76,7 +76,7 @@ func newLayoutFixture(t *testing.T) *layoutFixture {
 	write("profiles/dev/coder.json", map[string]any{"models": []string{"openai/small", "openai/large"}, "model_default": "openai/small", "toolset": "coding/none"})
 	write("profiles/review/reviewer.json", map[string]any{"models": []string{"openai/large"}, "toolset": "coding/none"})
 	write("sessions/demo/session.json", map[string]any{
-		"schema_version": 1, "cwd": f.cwd, "active_profile": "dev/coder",
+		"schema_version": 1, "cwd": f.cwd, "active_profile": "dev/coder", "category": "work",
 		"scope": map[string]any{"profiles": []string{"dev", "review"}},
 	})
 
@@ -176,5 +176,38 @@ func TestLayoutSessionRunsSwitchesProfileAndKeepsStatePerProfile(t *testing.T) {
 	}
 	if status, body := f.do(t, http.MethodGet, "/api/sessions", ""); status != 200 || !strings.Contains(body, `"demo"`) {
 		t.Fatalf("session list: %d %s", status, body)
+	}
+}
+
+// The session list carries the category of session.json, so a client can group
+// sessions without reading the folder layout.
+func TestLayoutSessionListCarriesTheSessionCategory(t *testing.T) {
+	f := newLayoutFixture(t)
+	status, body := f.do(t, http.MethodGet, "/api/sessions", "")
+	if status != 200 {
+		t.Fatalf("session list: %d %s", status, body)
+	}
+	var list struct {
+		Sessions []struct {
+			ID       string `json:"id"`
+			Category string `json:"category"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	if len(list.Sessions) != 1 || list.Sessions[0].Category != "work" {
+		t.Fatalf("sessions = %+v, want one session in category work", list.Sessions)
+	}
+}
+
+// A category edit must change the list ETag, or a client holding the old list
+// would get 304 and keep showing the session under the old group.
+func TestSessionVersionChangesWithTheCategory(t *testing.T) {
+	base := sessionfs.SessionConfig{Profile: "a/b", DefaultProfile: "a/b", Category: "work"}
+	moved := base
+	moved.Category = "test"
+	if sessionVersion(base) == sessionVersion(moved) {
+		t.Fatal("sessionVersion ignores the category")
 	}
 }
