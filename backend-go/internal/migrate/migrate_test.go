@@ -98,8 +98,7 @@ func treeHash(t *testing.T, root string) string {
 	t.Helper()
 	var names []string
 	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		// A lock file is what the transcript lock leaves behind; a server run leaves the same.
-		if err == nil && info.Mode().IsRegular() && !sessionlock.IsLockFileName(info.Name()) {
+		if err == nil && info.Mode().IsRegular() {
 			names = append(names, path)
 		}
 		return nil
@@ -330,5 +329,487 @@ func TestMigrateRewritesSubagentRunManifests(t *testing.T) {
 	orig, _ := os.ReadFile(filepath.Join(tools, ".subagents", ".runs", "sub_1.json"))
 	if !strings.Contains(string(orig), "alpha\\u0000second") {
 		t.Fatalf("the source manifest changed: %s", orig)
+	}
+}
+
+// An explicit approval "off" on a server must survive a session whose approval.default is
+// "ask": the legacy loader keeps the explicit value, so the toolset has to carry it.
+func TestMigrateKeepsAnExplicitMCPApprovalOffUnderAskDefault(t *testing.T) {
+	setting, cwd := legacyTree(t)
+	root := filepath.Dir(setting)
+	writeObject(t, filepath.Join(root, "sessions", "delta", "model.json"), map[string]any{"provider": "openai", "model": "m", "api_key_env": "K", "base_url": "http://127.0.0.1:1/v1"})
+	writeObject(t, filepath.Join(root, "sessions", "delta", "setting.json"), map[string]any{
+		"cwd":      cwd,
+		"approval": map[string]any{"default": "ask"},
+		"mcp_servers": []any{
+			map[string]any{"id": "betterwright", "enabled": true, "approval": "off", "config_path": filepath.Join(root, "mcp", "betterwright.json")},
+			map[string]any{"id": "plain", "enabled": true, "config_path": filepath.Join(root, "mcp", "betterwright.json")},
+		},
+		"paths": map[string]any{"active_profile": "p", "profiles": map[string]any{"p": map[string]any{"model_default": "model.json", "messages": "p/messages.jsonl"}}},
+	})
+	out := filepath.Join(t.TempDir(), "new")
+	report, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Differences) != 0 {
+		t.Fatalf("migrated tree differs: %v", report.Differences)
+	}
+	data, err := os.ReadFile(filepath.Join(out, "tools", "delta", "main.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"approval": "off"`) {
+		t.Fatalf("the explicit off was lost: %s", data)
+	}
+}
+
+// An env_file outside the session folder cannot be placed in the new tree; the session is
+// skipped with the reason and nothing is written outside the output.
+func TestMigrateSkipsASessionWhoseEnvFileLeavesItsFolder(t *testing.T) {
+	setting, cwd := legacyTree(t)
+	root := filepath.Dir(setting)
+	writeFile(t, filepath.Join(root, "sessions", "shared.env"), "A=1\n")
+	writeObject(t, filepath.Join(root, "sessions", "epsilon", "setting.json"), map[string]any{
+		"cwd":   cwd,
+		"tools": map[string]any{"native": map[string]any{"bash": map[string]any{"env_file": "../shared.env"}}},
+		"paths": map[string]any{"active_profile": "p", "profiles": map[string]any{"p": map[string]any{"messages": "p/messages.jsonl"}}},
+	})
+	out := filepath.Join(t.TempDir(), "new")
+	report, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Sessions) != 2 || len(report.Skipped) != 1 || !strings.Contains(report.Skipped[0], "epsilon") || !strings.Contains(report.Skipped[0], "env_file") {
+		t.Fatalf("sessions = %d, skipped = %v", len(report.Sessions), report.Skipped)
+	}
+	if _, err := os.Stat(filepath.Join(out, "sessions", "shared.env")); err == nil {
+		t.Fatal("the env file was copied out of its session folder")
+	}
+}
+
+// Two session roots that both hold a folder of one name cannot share one state folder and
+// one category; the second is skipped with the reason, the first is converted.
+func TestMigrateSkipsASessionWhoseNameAnotherRootAlreadyUses(t *testing.T) {
+	setting, cwd := legacyTree(t)
+	root := filepath.Dir(setting)
+	writeObject(t, setting, map[string]any{
+		"schema_version": 1,
+		"server":         map[string]any{"port": 9000},
+		"session_roots":  []any{map[string]any{"id": "local", "path": "sessions"}, map[string]any{"id": "other", "path": "other"}},
+	})
+	writeObject(t, filepath.Join(root, "other", "alpha", "model.json"), map[string]any{"provider": "openai", "model": "m", "api_key_env": "K", "base_url": "http://127.0.0.1:1/v1"})
+	writeObject(t, filepath.Join(root, "other", "alpha", "setting.json"), map[string]any{
+		"cwd":   cwd,
+		"paths": map[string]any{"active_profile": "p", "profiles": map[string]any{"p": map[string]any{"model_default": "model.json", "messages": "p/messages.jsonl"}}},
+	})
+	out := filepath.Join(t.TempDir(), "new")
+	report, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Sessions) != 2 || len(report.Skipped) != 1 || !strings.Contains(report.Skipped[0], "other:alpha") {
+		t.Fatalf("sessions = %d, skipped = %v", len(report.Sessions), report.Skipped)
+	}
+}
+
+// A session whose setting.json is not an object is skipped like any unreadable session.
+func TestMigrateSkipsASessionWithABrokenSettingFile(t *testing.T) {
+	setting, _ := legacyTree(t)
+	writeFile(t, filepath.Join(filepath.Dir(setting), "sessions", "broken", "setting.json"), "[1]")
+	out := filepath.Join(t.TempDir(), "new")
+	report, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Sessions) != 2 || len(report.Skipped) != 1 || !strings.Contains(report.Skipped[0], "broken") {
+		t.Fatalf("sessions = %d, skipped = %v", len(report.Sessions), report.Skipped)
+	}
+}
+
+// A failure after some sessions were written leaves an empty output, not half a tree.
+func TestMigrateLeavesNothingBehindWhenASessionFailsToCopy(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every file")
+	}
+	setting, _ := legacyTree(t)
+	messages := filepath.Join(filepath.Dir(setting), "sessions", "beta", "only", "messages.jsonl")
+	if err := os.Chmod(messages, 0); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "new")
+	if _, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}}); err == nil {
+		t.Fatal("an unreadable transcript did not fail the run")
+	}
+	entries, _ := os.ReadDir(out)
+	if len(entries) != 0 {
+		t.Fatalf("the failed run left %d entries in the output", len(entries))
+	}
+}
+
+// An MCP id the catalog cannot name is left out with a warning; the comparison then
+// reports the loss.
+func TestMigrateReportsAnMCPIdTheCatalogCannotName(t *testing.T) {
+	setting, cwd := legacyTree(t)
+	root := filepath.Dir(setting)
+	writeObject(t, filepath.Join(root, "sessions", "zeta", "model.json"), map[string]any{"provider": "openai", "model": "m", "api_key_env": "K", "base_url": "http://127.0.0.1:1/v1"})
+	writeObject(t, filepath.Join(root, "sessions", "zeta", "setting.json"), map[string]any{
+		"cwd":         cwd,
+		"mcp_servers": []any{map[string]any{"id": "_odd", "enabled": true, "config_path": filepath.Join(root, "mcp", "betterwright.json")}},
+		"paths":       map[string]any{"active_profile": "p", "profiles": map[string]any{"p": map[string]any{"model_default": "model.json", "messages": "p/messages.jsonl"}}},
+	})
+	out := filepath.Join(t.TempDir(), "new")
+	report, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Differences) == 0 {
+		t.Fatal("a dropped MCP server was not reported as a difference")
+	}
+	found := false
+	for _, warning := range report.Warnings {
+		found = found || (strings.Contains(warning, "_odd") && strings.Contains(warning, "left out"))
+	}
+	if !found {
+		t.Fatalf("no warning names _odd: %v", report.Warnings)
+	}
+}
+
+func simpleSession(t *testing.T, root, cwd, name string, extra map[string]any) {
+	t.Helper()
+	writeObject(t, filepath.Join(root, "sessions", name, "model.json"), map[string]any{"provider": "openai", "model": "m", "api_key_env": "K", "base_url": "http://127.0.0.1:1/v1"})
+	setting := map[string]any{
+		"cwd":   cwd,
+		"paths": map[string]any{"active_profile": "p", "profiles": map[string]any{"p": map[string]any{"model_default": "model.json", "messages": "p/messages.jsonl"}}},
+	}
+	for key, value := range extra {
+		setting[key] = value
+	}
+	writeObject(t, filepath.Join(root, "sessions", name, "setting.json"), setting)
+}
+
+// A relative path rule is relative to the legacy root folder. The new root is another
+// folder, so the rule is written absolute; otherwise the tool would allow another place.
+func TestMigrateWritesRelativePathRulesAbsolute(t *testing.T) {
+	setting, cwd := legacyTree(t)
+	root := filepath.Dir(setting)
+	simpleSession(t, root, cwd, "eta", map[string]any{
+		"tools": map[string]any{"native": map[string]any{
+			"read": map[string]any{"paths": map[string]any{"allow": []any{"docs", map[string]any{"path": "more"}}, "deny": "secret"}},
+			"grep": map[string]any{"paths": []any{map[string]any{"action": "allow", "path": "src"}}},
+		}},
+	})
+	out := filepath.Join(t.TempDir(), "new")
+	report, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Differences) != 0 {
+		t.Fatalf("migrated tree differs: %v", report.Differences)
+	}
+	data, _ := os.ReadFile(filepath.Join(out, "tools", "eta", "main.json"))
+	for _, want := range []string{filepath.Join(root, "docs"), filepath.Join(root, "more"), filepath.Join(root, "secret"), filepath.Join(root, "src")} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("the toolset does not hold %s: %s", want, data)
+		}
+	}
+}
+
+// A root with no libraries key uses default folders under the root; the new root is
+// another folder, so the defaults are written out, and the check sees a lost folder.
+func TestMigrateKeepsTheDefaultLibraryFolders(t *testing.T) {
+	setting, _ := legacyTree(t)
+	out := filepath.Join(t.TempDir(), "new")
+	report, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}})
+	if err != nil || len(report.Differences) != 0 {
+		t.Fatalf("err = %v, differences = %v", err, report.Differences)
+	}
+	data, _ := os.ReadFile(filepath.Join(out, "setting.json"))
+	var root struct {
+		Libraries map[string][]string `json:"libraries"`
+	}
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(filepath.Dir(setting), ".agent", "skills")
+	if len(root.Libraries["skill_dirs"]) != 1 || root.Libraries["skill_dirs"][0] != want {
+		t.Fatalf("libraries = %v, want skill_dirs [%s]", root.Libraries, want)
+	}
+	if len(root.Libraries["prompt_dirs"]) != 1 || len(root.Libraries["template_dirs"]) != 1 {
+		t.Fatalf("libraries = %v", root.Libraries)
+	}
+}
+
+// The comparison covers the models a profile may use, not only its default.
+func TestCompareModelsReportsAModelThatWasLostOrGained(t *testing.T) {
+	dir := "/legacy/alpha"
+	toID := func(path string) string {
+		return map[string]string{"/legacy/alpha/a.json": "alpha/a", "/legacy/alpha/b.json": "alpha/b"}[path]
+	}
+	legacy := sessionfs.SessionConfig{ModelPath: "/legacy/alpha/a.json", Models: []string{"a.json", "b.json"}}
+	same := sessionfs.SessionConfig{Models: []string{"alpha/b", "alpha/a"}}
+	if got := compareModels(legacy, same, dir, toID); len(got) != 0 {
+		t.Fatalf("equal sets differ: %v", got)
+	}
+	lost := sessionfs.SessionConfig{Models: []string{"alpha/a"}}
+	if got := compareModels(legacy, lost, dir, toID); len(got) != 1 || !strings.Contains(got[0], "alpha/b") {
+		t.Fatalf("lost model = %v", got)
+	}
+	gained := sessionfs.SessionConfig{Models: []string{"alpha/a", "alpha/b", "other/c"}}
+	if got := compareModels(legacy, gained, dir, toID); len(got) != 1 || !strings.Contains(got[0], "other/c") {
+		t.Fatalf("gained model = %v", got)
+	}
+	// a legacy model whose file is missing was left out with a warning; it is not a difference
+	missing := sessionfs.SessionConfig{ModelPath: "/legacy/alpha/a.json", Models: []string{"a.json", "gone.json"}}
+	if got := compareModels(missing, lost, dir, toID); len(got) != 0 {
+		t.Fatalf("a missing legacy model was reported: %v", got)
+	}
+}
+
+// The output must not be inside the tree being read.
+func TestMigrateRefusesAnOutputInsideTheSource(t *testing.T) {
+	setting, _ := legacyTree(t)
+	root := filepath.Dir(setting)
+	for _, out := range []string{filepath.Join(root, "new"), filepath.Join(root, "sessions", "new")} {
+		if _, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}}); err == nil || !strings.Contains(err.Error(), "inside the source") {
+			t.Fatalf("out %s: error = %v", out, err)
+		}
+		if _, err := os.Stat(out); err == nil {
+			t.Fatalf("%s was created", out)
+		}
+	}
+}
+
+// verify must notice a profile that lost a model, through the real Run.
+func TestRunReportsAProfileThatLostAModelInTheNewTree(t *testing.T) {
+	setting, _ := legacyTree(t)
+	out := filepath.Join(t.TempDir(), "new")
+	report, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}, beforeVerify: func(out string) {
+		path := filepath.Join(out, "profiles", "alpha", "first.json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var file map[string]any
+		if err := json.Unmarshal(data, &file); err != nil {
+			t.Fatal(err)
+		}
+		file["models"] = []string{"alpha/model-a"}
+		file["model_default"] = "alpha/model-a"
+		data, _ = json.Marshal(file)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, difference := range report.Differences {
+		found = found || (strings.Contains(difference, "alpha/first") && strings.Contains(difference, "alpha/model-b"))
+	}
+	if !found {
+		t.Fatalf("the lost model was not reported: %v", report.Differences)
+	}
+}
+
+// A path with &, < or > must still be translated; the comparison must not escape it.
+func TestCompareDoesNotEscapeAmpersandsInPaths(t *testing.T) {
+	legacy := sessionfs.SessionConfig{MessagesPath: "/old/a&b/messages.jsonl"}
+	migrated := sessionfs.SessionConfig{MessagesPath: "/new/a&b/messages.jsonl"}
+	replace := strings.NewReplacer("/old/a&b/", "/new/a&b/").Replace
+	if got := compare(legacy, migrated, replace); len(got) != 0 {
+		t.Fatalf("a path with & differs: %v", got)
+	}
+}
+
+// profileSession builds a session "name" with several profiles whose settings are given;
+// each profile gets the one model file.
+func profileSession(t *testing.T, root, cwd, name string, profiles map[string]map[string]any, extra map[string]any) {
+	t.Helper()
+	writeObject(t, filepath.Join(root, "sessions", name, "model.json"), map[string]any{"provider": "openai", "model": "m", "api_key_env": "K", "base_url": "http://127.0.0.1:1/v1"})
+	all := map[string]any{}
+	for profile, settings := range profiles {
+		settings["model_default"] = "model.json"
+		if _, set := settings["messages"]; !set {
+			settings["messages"] = profile + "/messages.jsonl"
+		}
+		all[profile] = settings
+	}
+	setting := map[string]any{"cwd": cwd, "paths": map[string]any{"active_profile": "a", "profiles": all}}
+	for key, value := range extra {
+		setting[key] = value
+	}
+	writeObject(t, filepath.Join(root, "sessions", name, "setting.json"), setting)
+}
+
+// An output reached through a symlink into the source is still inside the source.
+func TestMigrateRefusesAnOutputReachedThroughASymlink(t *testing.T) {
+	setting, _ := legacyTree(t)
+	root := filepath.Dir(setting)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(filepath.Join(root, "sessions"), link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Run(Options{SourceSetting: setting, Out: filepath.Join(link, "new"), Environment: map[string]string{}})
+	if err == nil || !strings.Contains(err.Error(), "inside the source") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "sessions", "new")); statErr == nil {
+		t.Fatal("the run wrote into the source through the link")
+	}
+}
+
+// A state folder that holds the output would be copied into itself without end.
+func TestMigrateRefusesAnOutputInsideAStateFolderItCopies(t *testing.T) {
+	setting, cwd := legacyTree(t)
+	out := filepath.Join(cwd, "second-tools", "new")
+	_, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}})
+	if err == nil || !strings.Contains(err.Error(), "inside") {
+		t.Fatalf("error = %v", err)
+	}
+	entries, _ := os.ReadDir(out)
+	if len(entries) != 0 {
+		t.Fatalf("the failed run left %d entries", len(entries))
+	}
+}
+
+// A link or a special file in a state folder is not copied; the report must say so.
+func TestMigrateWarnsAboutEntriesItDoesNotCopy(t *testing.T) {
+	setting, _ := legacyTree(t)
+	staging := filepath.Join(filepath.Dir(setting), "sessions", "alpha", "first", "staging")
+	if err := os.Symlink("usage-cache.json", filepath.Join(staging, "link.json")); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Run(Options{SourceSetting: setting, Out: filepath.Join(t.TempDir(), "new"), Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, warning := range report.Warnings {
+		found = found || (strings.Contains(warning, "link.json") && strings.Contains(warning, "not copied"))
+	}
+	if !found {
+		t.Fatalf("no warning names the link: %v", report.Warnings)
+	}
+}
+
+// Two profiles that shared one tool-storage folder each get a copy; a run is relabelled
+// only in the copy of the profile that owned it.
+func TestMigrateKeepsEachRunWithItsOwnProfileWhenTheToolFolderWasShared(t *testing.T) {
+	setting, cwd := legacyTree(t)
+	root := filepath.Dir(setting)
+	profileSession(t, root, cwd, "theta", map[string]map[string]any{
+		"a": {"tool_storage": "shared-tools"},
+		"b": {"tool_storage": "shared-tools"},
+	}, nil)
+	runs := filepath.Join(cwd, "shared-tools", ".subagents", ".runs")
+	writeObject(t, filepath.Join(runs, "sub_aaaaaaaa.json"), map[string]any{"version": 1, "id": "sub_aaaaaaaa", "owner": "local:theta\x00a", "state": "done"})
+	writeObject(t, filepath.Join(runs, "sub_bbbbbbbb.json"), map[string]any{"version": 1, "id": "sub_bbbbbbbb", "owner": "local:theta\x00b", "state": "done"})
+	out := filepath.Join(t.TempDir(), "new")
+	if _, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}}); err != nil {
+		t.Fatal(err)
+	}
+	owner := func(profile, run string) string {
+		data, err := os.ReadFile(filepath.Join(out, "state", "theta", "theta", profile, "tools", ".subagents", ".runs", run+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var manifest struct{ Owner string }
+		_ = json.Unmarshal(data, &manifest)
+		return manifest.Owner
+	}
+	if got := owner("a", "sub_aaaaaaaa"); got != "local:theta\x00theta/a" {
+		t.Fatalf("a's own run has owner %q", got)
+	}
+	if got := owner("a", "sub_bbbbbbbb"); got != "local:theta\x00b" {
+		t.Fatalf("b's run in a's copy was relabelled: %q", got)
+	}
+	if got := owner("b", "sub_bbbbbbbb"); got != "local:theta\x00theta/b" {
+		t.Fatalf("b's own run has owner %q", got)
+	}
+	if got := owner("b", "sub_aaaaaaaa"); got != "local:theta\x00a" {
+		t.Fatalf("a's run in b's copy was relabelled: %q", got)
+	}
+}
+
+// A stale default-named cache in staging and a custom cache path must not abort the run.
+func TestMigrateKeepsGoingWhenACustomCacheCollidesWithTheStagingCopy(t *testing.T) {
+	setting, cwd := legacyTree(t)
+	root := filepath.Dir(setting)
+	profileSession(t, root, cwd, "iota", map[string]map[string]any{
+		"a": {"staging": "a/staging", "usage_cache": "caches/usage.json"},
+	}, nil)
+	writeFile(t, filepath.Join(root, "sessions", "iota", "a", "staging", "usage-cache.json"), "{\"stale\":1}")
+	writeFile(t, filepath.Join(root, "sessions", "iota", "caches", "usage.json"), "{\"real\":1}")
+	report, err := Run(Options{SourceSetting: setting, Out: filepath.Join(t.TempDir(), "new"), Environment: map[string]string{}})
+	if err != nil {
+		t.Fatalf("the run aborted: %v", err)
+	}
+	found := false
+	for _, warning := range report.Warnings {
+		found = found || strings.Contains(warning, "usage-cache.json")
+	}
+	if !found {
+		t.Fatalf("the collision was not reported: %v", report.Warnings)
+	}
+}
+
+// A private state folder stays private.
+func TestMigrateKeepsFolderPermissions(t *testing.T) {
+	setting, _ := legacyTree(t)
+	private := filepath.Join(filepath.Dir(setting), "sessions", "alpha", "first", "staging", "private")
+	writeFile(t, filepath.Join(private, "x.json"), "{}")
+	if err := os.Chmod(private, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "new")
+	if _, err := Run(Options{SourceSetting: setting, Out: out, Environment: map[string]string{}}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(out, "state", "alpha", "alpha", "first", "staging", "private"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("the private folder became %v", info.Mode().Perm())
+	}
+}
+
+// A lock that cannot be opened is not "a run is active".
+func TestMigrateDoesNotCallEveryLockErrorAnActiveRun(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root opens every file")
+	}
+	setting, _ := legacyTree(t)
+	messages := filepath.Join(filepath.Dir(setting), "sessions", "alpha", "second", "messages.jsonl")
+	lockPath, _ := sessionlock.PathFor(messages)
+	writeFile(t, lockPath, "")
+	if err := os.Chmod(lockPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Run(Options{SourceSetting: setting, Out: filepath.Join(t.TempDir(), "new"), Environment: map[string]string{}})
+	if err == nil {
+		t.Fatal("an unreadable lock did not stop the run")
+	}
+	if strings.Contains(err.Error(), "run is active") {
+		t.Fatalf("a permission error was called an active run: %v", err)
+	}
+}
+
+// A run folder whose name starts with ".." is inside the tool folder, not outside it.
+func TestRewriteSubagentRunsKeepsAFolderNamedWithTwoDots(t *testing.T) {
+	old, fresh := t.TempDir(), t.TempDir()
+	dir := filepath.Join(old, "..run")
+	writeFile(t, filepath.Join(fresh, "..run", "messages.jsonl"), "{}\n")
+	writeObject(t, filepath.Join(fresh, ".subagents", ".runs", "sub_aaaaaaaa.json"), map[string]any{"version": 1, "dir": dir, "owner": "x\x00p"})
+	if _, err := rewriteSubagentRuns(fresh, old, "p", []string{"x"}, "c/p"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(fresh, ".subagents", ".runs", "sub_aaaaaaaa.json"))
+	var manifest struct{ Dir string }
+	_ = json.Unmarshal(data, &manifest)
+	if manifest.Dir != filepath.Join(fresh, "..run") {
+		t.Fatalf("dir = %q", manifest.Dir)
 	}
 }

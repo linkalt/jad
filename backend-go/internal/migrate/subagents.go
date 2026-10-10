@@ -12,7 +12,10 @@ import (
 // "<session reference>\x00<profile>"; both change when the profile moves, and a manifest
 // that still named the old place would have its transcript dropped and its run hidden from
 // the profile it belongs to.
-func rewriteSubagentRuns(newTools, oldTools, profileID string) (int, error) {
+//
+// Only the runs the legacy profile owned are relabelled: legacy names the owner by
+// reference and profile, and a tool folder two profiles shared holds the runs of both.
+func rewriteSubagentRuns(newTools, oldTools, legacyProfile string, references []string, profileID string) (int, error) {
 	runs := filepath.Join(newTools, ".subagents", ".runs")
 	entries, err := os.ReadDir(runs)
 	if os.IsNotExist(err) {
@@ -38,14 +41,15 @@ func rewriteSubagentRuns(newTools, oldTools, profileID string) (int, error) {
 		touched := false
 		var dir string
 		if json.Unmarshal(fields["dir"], &dir) == nil && dir != "" {
-			if relative, err := filepath.Rel(oldTools, dir); err == nil && !strings.HasPrefix(relative, "..") {
+			if relative, err := filepath.Rel(oldTools, dir); err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 				fields["dir"], _ = json.Marshal(filepath.Join(newTools, relative))
 				touched = true
 			}
 		}
 		var owner string
 		if json.Unmarshal(fields["owner"], &owner) == nil {
-			if reference, _, found := strings.Cut(owner, "\x00"); found {
+			// The reference is what the client sent: "root:session" or the bare session.
+			if reference, profile, found := strings.Cut(owner, "\x00"); found && profile == legacyProfile && contains(references, reference) {
 				fields["owner"], _ = json.Marshal(reference + "\x00" + profileID)
 				touched = true
 			}

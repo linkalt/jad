@@ -68,9 +68,11 @@ func writeNew(path string, data []byte) error {
 }
 
 // copyPath copies a file or a directory tree. A missing source is not an error (the
-// profile never wrote it). Lock and temporary files are skipped. The destination must
-// not exist.
-func copyPath(source, destination string) (int, error) {
+// profile never wrote it). Lock and temporary files are skipped, and so is anything that
+// is not a plain file or folder (a link inside a tree, a socket); notCopied hears of each
+// of those. A source that is itself a link is followed, as the legacy loader followed it.
+// The destination must not exist.
+func copyPath(source, destination string, notCopied func(path, why string)) (int, error) {
 	info, err := os.Lstat(source)
 	if os.IsNotExist(err) {
 		return 0, nil
@@ -78,10 +80,30 @@ func copyPath(source, destination string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		resolved, err := filepath.EvalSymlinks(source)
+		if os.IsNotExist(err) {
+			notCopied(source, "a link to a missing target")
+			return 0, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		if source, err = filepath.Abs(resolved); err != nil {
+			return 0, err
+		}
+		if info, err = os.Stat(source); err != nil {
+			return 0, err
+		}
+	}
 	if _, err := os.Lstat(destination); err == nil {
 		return 0, fmt.Errorf("%s already exists", destination)
 	}
 	if !info.IsDir() {
+		if !info.Mode().IsRegular() {
+			notCopied(source, "not a regular file")
+			return 0, nil
+		}
 		return copyFile(source, destination, info.Mode())
 	}
 	copied := 0
@@ -92,9 +114,18 @@ func copyPath(source, destination string) (int, error) {
 		relative, _ := filepath.Rel(source, path)
 		target := filepath.Join(destination, relative)
 		if entry.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			// The owner keeps full access while the tree is written; group and other bits
+			// stay as they were.
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			return os.Chmod(target, entry.Mode().Perm()|0o700)
 		}
-		if skipFile(entry.Name()) || !entry.Mode().IsRegular() {
+		if skipFile(entry.Name()) {
+			return nil
+		}
+		if !entry.Mode().IsRegular() {
+			notCopied(path, "a link or a special file")
 			return nil
 		}
 		count, err := copyFile(path, target, entry.Mode())

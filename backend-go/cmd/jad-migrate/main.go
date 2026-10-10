@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -37,6 +38,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	out := flags.String("out", "", "directory for the new tree")
 	flags.Usage = func() { fmt.Fprint(stderr, usage) }
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return exitOK
+		}
 		return exitUsage
 	}
 	if *setting == "" || *out == "" || flags.NArg() > 0 {
@@ -44,7 +48,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	report, err := migrate.Run(migrate.Options{SourceSetting: *setting, Out: *out})
-	print(stdout, report)
+	printReport(stdout, report)
 	if err != nil {
 		fmt.Fprintf(stderr, "jad-migrate: %v\n", err)
 		return exitFailed
@@ -55,7 +59,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-func print(w io.Writer, report migrate.Report) {
+func printReport(w io.Writer, report migrate.Report) {
 	for _, session := range report.Sessions {
 		fmt.Fprintf(w, "session %s:%s\n", session.Root, session.Name)
 		for _, profile := range session.Profiles {

@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +16,8 @@ import (
 // setting file is another file.
 var skippedFields = map[string]bool{
 	"SettingPath": true, "Profile": true, "DefaultProfile": true, "PathProfiles": true,
+	// Models and ModelDefault name files in the old tree and IDs in the new one; compareModels
+	// maps one to the other.
 	"ModelDefault": true, "Models": true,
 	// The root folder moves with the tree. Skill, prompt and tool-definition paths were
 	// written absolute into the new root setting, so nothing else depends on it.
@@ -49,7 +52,71 @@ func (r *runState) verify() {
 		for _, difference := range compare(item.config, migrated, replace) {
 			r.report.Differences = append(r.report.Differences, label+": "+difference)
 		}
+		for _, difference := range compareModels(item.config, migrated, item.location.Directory, r.modelIDOf) {
+			r.report.Differences = append(r.report.Differences, label+": "+difference)
+		}
 	}
+}
+
+// modelIDOf returns the catalog ID a legacy model file was given, or "" for a file that
+// was not migrated (it was missing, and the migration said so).
+func (r *runState) modelIDOf(path string) string {
+	target, ok := r.pathMap[path]
+	if !ok {
+		return ""
+	}
+	relative, err := filepath.Rel(filepath.Join(r.out, "models"), target)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(filepath.ToSlash(relative), ".json")
+}
+
+// compareModels checks that a profile may use the same models and starts on the same one.
+// The legacy side names files (relative to the session folder), the migrated side names
+// IDs; toID maps an absolute legacy file to its ID. A legacy model whose file was missing
+// has no ID: the migration warned about it, and it is not counted here.
+func compareModels(legacy, migrated sessionfs.SessionConfig, dir string, toID func(string) string) []string {
+	files := legacy.Models
+	if len(files) == 0 && legacy.ModelPath != "" {
+		files = []string{legacy.ModelPath}
+	}
+	want := map[string]bool{}
+	for _, file := range files {
+		if id := toID(resolveFrom(dir, strings.TrimSpace(file))); id != "" {
+			want[id] = true
+		}
+	}
+	have := map[string]bool{}
+	for _, id := range migrated.Models {
+		have[id] = true
+	}
+	var differences []string
+	for _, id := range sortedKeys(want) {
+		if !have[id] {
+			differences = append(differences, fmt.Sprintf("Models: %s was allowed before and is not now", id))
+		}
+	}
+	for _, id := range sortedKeys(have) {
+		if !want[id] {
+			differences = append(differences, fmt.Sprintf("Models: %s is allowed now and was not before", id))
+		}
+	}
+	if legacy.ModelDefault != "" {
+		if id := toID(resolveFrom(dir, strings.TrimSpace(legacy.ModelDefault))); id != "" && id != migrated.ModelDefault {
+			differences = append(differences, fmt.Sprintf("ModelDefault: %q became %q", id, migrated.ModelDefault))
+		}
+	}
+	return differences
+}
+
+func sortedKeys(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func nameOf(legacy string) string {
@@ -129,12 +196,16 @@ func compare(legacy, migrated sessionfs.SessionConfig, translate func(string) st
 }
 
 func fieldsOf(config sessionfs.SessionConfig) (map[string]json.RawMessage, error) {
-	data, err := json.Marshal(config)
-	if err != nil {
+	// No HTML escaping: a path with &, < or > must stay as it is, or the path translation
+	// would not find it.
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(config); err != nil {
 		return nil, err
 	}
 	var fields map[string]json.RawMessage
-	return fields, json.Unmarshal(data, &fields)
+	return fields, json.Unmarshal(buffer.Bytes(), &fields)
 }
 
 func clip(text string) string {

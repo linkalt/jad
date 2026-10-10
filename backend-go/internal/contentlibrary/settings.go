@@ -43,6 +43,16 @@ type libraryDefaults struct {
 	Skills    []string `json:"skill_dirs"`
 }
 
+// DefaultDirectories returns the folders the root setting falls back to, by libraries key
+// (prompt_dirs, template_dirs, skill_dirs). They are relative to the root folder.
+func DefaultDirectories() (map[string][]string, error) {
+	var defaults libraryDefaults
+	if err := json.Unmarshal(embeddedDefaults, &defaults); err != nil {
+		return nil, fmt.Errorf("decode embedded root-library defaults: %w", err)
+	}
+	return map[string][]string{"prompt_dirs": defaults.Prompts, "template_dirs": defaults.Templates, "skill_dirs": defaults.Skills}, nil
+}
+
 func loadDirectories(options Options) (libraryDirectories, error) {
 	workingDir := strings.TrimSpace(options.WorkingDir)
 	if workingDir == "" {

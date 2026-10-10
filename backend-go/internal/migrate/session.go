@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"example.com/agent-harness/backend-go/internal/catalog"
 	"example.com/agent-harness/backend-go/internal/sessionfs"
 )
 
@@ -45,6 +46,9 @@ type plan struct {
 	modelList []string          // model files in first-use order
 }
 
+// fatalError marks a problem that stops the whole run, not only the session it came from.
+type fatalError struct{ error }
+
 func (r *runState) convertSession(root sessionfs.Root, name string) error {
 	dir := filepath.Join(root.Directory, name)
 	data, err := os.ReadFile(filepath.Join(dir, "setting.json"))
@@ -61,13 +65,23 @@ func (r *runState) convertSession(root sessionfs.Root, name string) error {
 	}
 	setting, err := rawObject(data)
 	if err != nil {
-		return fmt.Errorf("setting.json: %w", err)
+		r.report.Skipped = append(r.report.Skipped, fmt.Sprintf("%s:%s: setting.json: %v", root.ID, name, err))
+		return nil
+	}
+	if other, clash := r.sessionNames[name]; clash {
+		r.report.Skipped = append(r.report.Skipped, fmt.Sprintf("%s:%s: the session name is also used by root %s, and the layout keeps one state folder per session name", root.ID, name, other))
+		return nil
 	}
 	p := &plan{root: root, name: name, dir: dir, category: identifier(name), location: location, setting: setting, modelIDs: map[string]string{}}
 	if err := r.read(p); err != nil {
+		var fatal *fatalError
+		if errors.As(err, &fatal) {
+			return fatal.error
+		}
 		r.report.Skipped = append(r.report.Skipped, fmt.Sprintf("%s:%s: %v", root.ID, name, err))
 		return nil
 	}
+	r.sessionNames[name] = root.ID
 	return r.write(p)
 }
 
@@ -99,7 +113,13 @@ func (r *runState) read(p *plan) error {
 		}
 		used[item.id] = shown
 		item.raw, _ = objectOf(profiles[arg])
+		if folder := r.stateFolderHoldingOutput(config.StoragePaths); folder != "" {
+			return &fatalError{fmt.Errorf("the output %s is inside %s, a folder the profile %q keeps state in; the copy would never end. Choose another --out", r.out, folder, shown)}
+		}
 		p.profiles = append(p.profiles, item)
+	}
+	if err := checkEnvFiles(p); err != nil {
+		return err
 	}
 	p.active = info.ActiveProfile
 	if p.active == "" {
@@ -108,6 +128,96 @@ func (r *runState) read(p *plan) error {
 	cwd := p.profiles[0].config.WorkingDir
 	p.cwd = cwd
 	return nil
+}
+
+// checkEnvFiles refuses a session whose env_file names a file outside the session folder:
+// the layout keeps only the folder, so the file could not be carried over (and a shared
+// file would land in another session's place).
+func checkEnvFiles(p *plan) error {
+	tools, _ := objectOf(p.setting["tools"])
+	native, _ := objectOf(tools["native"])
+	for tool, raw := range native {
+		fields, _ := objectOf(raw)
+		var name string
+		if json.Unmarshal(fields["env_file"], &name) != nil {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		if name == "" || filepath.IsAbs(expandHome(name)) {
+			continue
+		}
+		relative := filepath.Clean(name)
+		if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("tools.native.%s.env_file %q is outside the session folder; move the file into the folder and migrate again", tool, name)
+		}
+	}
+	return nil
+}
+
+// absolutePathRules returns the tools.native map with every relative path rule made
+// absolute. A relative rule is relative to the root folder, which is another folder in
+// the new tree, so it would allow or deny another place.
+func absolutePathRules(native map[string]json.RawMessage, base string) map[string]json.RawMessage {
+	out := make(map[string]json.RawMessage, len(native))
+	for tool, raw := range native {
+		out[tool] = raw
+		fields, ok := objectOf(raw)
+		paths, has := fields["paths"]
+		if !ok || !has {
+			continue
+		}
+		var value any
+		if json.Unmarshal(paths, &value) != nil {
+			continue
+		}
+		rewritten, err := json.Marshal(absoluteRules(value, base, false))
+		if err != nil {
+			continue
+		}
+		copied := make(map[string]json.RawMessage, len(fields))
+		for key, item := range fields {
+			copied[key] = item
+		}
+		copied["paths"] = rewritten
+		if encoded, err := json.Marshal(copied); err == nil {
+			out[tool] = encoded
+		}
+	}
+	return out
+}
+
+// absoluteRules walks one paths value: an array of {action, path}, or {allow, deny} whose
+// lists hold strings or {path} objects.
+func absoluteRules(value any, base string, inside bool) any {
+	switch item := value.(type) {
+	case string:
+		if !inside {
+			return item
+		}
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			return item
+		}
+		return resolveFrom(base, trimmed)
+	case []any:
+		out := make([]any, len(item))
+		for index, entry := range item {
+			out[index] = absoluteRules(entry, base, inside)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(item))
+		for key, entry := range item {
+			switch key {
+			case "allow", "deny", "path":
+				out[key] = absoluteRules(entry, base, true)
+			default:
+				out[key] = absoluteRules(entry, base, inside)
+			}
+		}
+		return out
+	}
+	return value
 }
 
 func objectOf(raw json.RawMessage) (map[string]json.RawMessage, bool) {
@@ -215,7 +325,7 @@ func (r *runState) modelPath(id string) string { return filepath.Join(r.out, "mo
 
 func (r *runState) copyModels(p *plan) error {
 	for _, path := range p.modelList {
-		if _, err := copyPath(path, r.modelPath(p.modelIDs[path])); err != nil {
+		if _, err := r.copy(path, r.modelPath(p.modelIDs[path])); err != nil {
 			return fmt.Errorf("copy model %s: %w", path, err)
 		}
 	}
@@ -262,11 +372,32 @@ func (r *runState) writeProfile(p *plan, profile *legacyProfile, toolset string)
 		}
 	}
 	if raw, ok := profile.raw["tools"]; ok {
-		file["tools"] = raw
+		file["tools"] = r.profileTools(raw, p.root.GlobalJadRoot)
 	}
 	path := filepath.Join(r.out, "profiles", profile.id+".json")
 	r.taken[path] = filepath.Join(p.dir, "setting.json")
 	return writeJSON(path, file)
+}
+
+// profileTools makes the relative path rules of a profile's own tools block absolute.
+func (r *runState) profileTools(raw json.RawMessage, base string) json.RawMessage {
+	fields, ok := objectOf(raw)
+	if !ok {
+		return raw
+	}
+	native, ok := objectOf(fields["native"])
+	if !ok {
+		return raw
+	}
+	encoded, err := json.Marshal(absolutePathRules(native, base))
+	if err != nil {
+		return raw
+	}
+	fields["native"] = encoded
+	if out, err := json.Marshal(fields); err == nil {
+		return out
+	}
+	return raw
 }
 
 // promptDocuments is the session's documents followed by the profile's, the order the
@@ -306,7 +437,7 @@ func (r *runState) writeToolset(p *plan) (string, error) {
 		}
 	}
 	if native, ok := objectOf(tools["native"]); ok {
-		file["native"] = native
+		file["native"] = absolutePathRules(native, p.root.GlobalJadRoot)
 	}
 	servers, err := r.mcpServers(p)
 	if err != nil {
@@ -330,6 +461,10 @@ func (r *runState) writeToolset(p *plan) (string, error) {
 func (r *runState) mcpServers(p *plan) ([]pair, error) {
 	var entries []pair
 	for _, server := range p.profiles[0].config.MCPServers {
+		if err := catalog.ValidateIdentifier(server.ID); err != nil {
+			r.warn("%s:%s: MCP server id %s: %v; it is left out", p.root.ID, p.name, server.ID, err)
+			continue
+		}
 		content, err := os.ReadFile(server.ConfigPath)
 		if err != nil {
 			r.warn("%s:%s: MCP server %s: %v; it is left out", p.root.ID, p.name, server.ID, err)
@@ -346,7 +481,9 @@ func (r *runState) mcpServers(p *plan) ([]pair, error) {
 		if server.DenyTools != nil {
 			use["deny_tools"] = server.DenyTools
 		}
-		if server.Approval != "" && server.Approval != sessionfs.ApprovalOff {
+		if server.Approval != "" {
+			// off is written too: under approval.default "ask" the legacy loader keeps an
+			// explicit off, and an absent key in the toolset would become ask.
 			use["approval"] = server.Approval
 		}
 		entries = append(entries, pair{Key: category + "/" + server.ID, Value: use})
@@ -427,7 +564,11 @@ func (r *runState) copyEnvFiles(p *plan) error {
 	for tool, raw := range native {
 		fields, _ := objectOf(raw)
 		var name string
-		if json.Unmarshal(fields["env_file"], &name) != nil || name == "" || filepath.IsAbs(expandHome(name)) {
+		if json.Unmarshal(fields["env_file"], &name) != nil {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		if name == "" || filepath.IsAbs(expandHome(name)) {
 			continue
 		}
 		source := filepath.Join(p.dir, name)
@@ -439,7 +580,7 @@ func (r *runState) copyEnvFiles(p *plan) error {
 		if _, err := os.Stat(destination); err == nil {
 			continue
 		}
-		if _, err := copyPath(source, destination); err != nil {
+		if _, err := r.copy(source, destination); err != nil {
 			return err
 		}
 	}

@@ -33,6 +33,9 @@ type Options struct {
 	// LockWait is how long to wait for a profile's transcript lock before refusing the
 	// session as in use. Zero means 500 ms.
 	LockWait time.Duration
+
+	// beforeVerify lets a test change the written tree before it is compared.
+	beforeVerify func(out string)
 }
 
 // Profile is one converted profile.
@@ -78,6 +81,9 @@ func Run(options Options) (Report, error) {
 	if source.SettingPath == "" {
 		return Report{}, errors.New("the source has no root setting.json; pass its path")
 	}
+	if inside := outputInsideSource(out, source); inside != "" {
+		return Report{}, fmt.Errorf("%s is inside the source (%s); migrate reads the source and must not write into it", out, inside)
+	}
 	wait := options.LockWait
 	if wait <= 0 {
 		wait = 500 * time.Millisecond
@@ -92,15 +98,83 @@ func Run(options Options) (Report, error) {
 		pathMap: map[string]string{},
 
 		stateOwner: map[string]string{},
+
+		sessionNames: map[string]string{},
 	}
 	if err := run.convertAll(); err != nil {
+		run.clean()
 		return run.report, err
 	}
 	if err := run.writeRootSetting(); err != nil {
+		run.clean()
 		return run.report, err
+	}
+	if options.beforeVerify != nil {
+		options.beforeVerify(out)
 	}
 	run.verify()
 	return run.report, nil
+}
+
+// clean removes what a failed run wrote. The output was missing or empty when the run
+// began, so everything in it is ours.
+func (r *runState) clean() {
+	entries, err := os.ReadDir(r.out)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		_ = os.RemoveAll(filepath.Join(r.out, entry.Name()))
+	}
+}
+
+// outputInsideSource returns the source folder that holds the output, or "".
+func outputInsideSource(out string, source sessionfs.Config) string {
+	folders := []string{filepath.Dir(source.SettingPath)}
+	for _, root := range source.Roots {
+		folders = append(folders, root.Directory)
+	}
+	for _, folder := range folders {
+		if containsPath(folder, out) {
+			return folder
+		}
+	}
+	return ""
+}
+
+// stateFolderHoldingOutput returns the state folder of a profile that contains the output.
+func (r *runState) stateFolderHoldingOutput(storage sessionfs.SessionStoragePaths) string {
+	for _, folder := range []string{storage.Messages, storage.MessagesBackup, storage.Staging, storage.HTTPDebug, storage.ToolStorage} {
+		if folder != "" && containsPath(folder, r.out) {
+			return folder
+		}
+	}
+	return ""
+}
+
+// containsPath reports whether path is folder itself or lies under it, after symlinks are
+// resolved on both sides: an output reached through a link into the source is inside it.
+func containsPath(folder, path string) bool {
+	folder, path = realPath(folder), realPath(path)
+	relative, err := filepath.Rel(folder, path)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+// realPath resolves symlinks in the part of path that exists; the rest is appended as is.
+func realPath(path string) string {
+	path = filepath.Clean(path)
+	rest := ""
+	for current := path; ; {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(current), rest)
+		current = parent
+	}
 }
 
 func requireEmptyDirectory(path string) error {
@@ -130,7 +204,10 @@ type runState struct {
 	// stateOwner maps a legacy state path to the profile that used it first. Two profiles
 	// may have shared one folder (tool storage under one cwd); each gets its own copy.
 	stateOwner map[string]string
-	toolDef    []string
+	// sessionNames maps a session folder name to the root it came from: the layout keeps
+	// one state folder and one category per session name.
+	sessionNames map[string]string
+	toolDef      []string
 	// pathMap maps a legacy path (state, model, MCP and env files, the session folder) to
 	// its place in the new tree, so verify can compare two loads.
 	pathMap map[string]string
@@ -188,13 +265,30 @@ func (r *runState) lockProfile(messagesPath string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+	// The source is only read. A run creates its lock file before it writes the transcript,
+	// so a transcript with no lock file beside it has never been written by a run; taking
+	// the lock would create that file in the source tree. A run that starts after this
+	// check is not seen, so the procedure is: stop the server, then migrate.
+	if _, err := os.Stat(lockPath); os.IsNotExist(err) {
+		return func() {}, nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), r.wait)
 	defer cancel()
 	lock, err := sessionlock.Acquire(ctx, lockPath)
-	if err != nil {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return nil, fmt.Errorf("the transcript %s is in use (a run is active?); stop it and run again: %w", messagesPath, err)
 	}
+	if err != nil {
+		return nil, fmt.Errorf("the lock of %s cannot be taken: %w", messagesPath, err)
+	}
 	return func() { _ = lock.Close() }, nil
+}
+
+// copy is copyPath with the report: what it leaves out becomes a warning.
+func (r *runState) copy(source, destination string) (int, error) {
+	return copyPath(source, destination, func(path, why string) {
+		r.warn("%s is %s and was not copied", path, why)
+	})
 }
 
 func (r *runState) warn(format string, args ...any) {

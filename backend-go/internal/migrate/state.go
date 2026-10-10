@@ -33,7 +33,7 @@ func (r *runState) copyState(p *plan, profile *legacyProfile) (int, map[string]s
 		} else {
 			r.stateOwner[source] = who
 		}
-		count, err := copyPath(source, destination)
+		count, err := r.copy(source, destination)
 		if err != nil {
 			return fmt.Errorf("%s: %w", source, err)
 		}
@@ -54,7 +54,7 @@ func (r *runState) copyState(p *plan, profile *legacyProfile) (int, map[string]s
 		}
 	}
 	if storage.ToolStorage != "" {
-		if _, err := rewriteSubagentRuns(filepath.Join(target, "tools"), storage.ToolStorage, profile.id); err != nil {
+		if _, err := rewriteSubagentRuns(filepath.Join(target, "tools"), storage.ToolStorage, profile.config.Profile, []string{p.location.Reference, p.name}, profile.id); err != nil {
 			return total, moved, fmt.Errorf("fix the sub-agent run manifests: %w", err)
 		}
 	}
@@ -78,7 +78,12 @@ func (r *runState) copyState(p *plan, profile *legacyProfile) (int, map[string]s
 		if _, err := os.Stat(item.source); err != nil {
 			continue
 		}
-		if err := copyOne(item.source, filepath.Join(staging, item.name)); err != nil {
+		destination := filepath.Join(staging, item.name)
+		if _, err := os.Lstat(destination); err == nil {
+			r.warn("%s: %s is not copied: the staging folder already holds %s; the file in the staging folder is kept", p.root.ID+":"+p.name+" "+profile.name, item.source, item.name)
+			continue
+		}
+		if err := copyOne(item.source, destination); err != nil {
 			return total, moved, err
 		}
 	}
