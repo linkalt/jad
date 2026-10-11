@@ -28,6 +28,7 @@ Working directory: `/home/www/Downloads/tmp/myagent3`. Priority: system > develo
 ## Tool use
 
 - `Bash` is for build, test, git and long-running work (`Process`). Do not use `sed`, `cat`, `grep` or `python` heredocs for what `Read`, `Grep` or `Edit` does. A script is allowed only to apply one change in many places, and it must assert that every replacement applied.
+- **Detailed stdout: prefer `exec` over `bash`.** In `exec`, write the part you need to `$EXEC_RESULT` and it is shown ahead of the raw output. Both tools cut the middle of long stdout (measured: 6,000 lines lost about 207 KB in each); the full text is in the log file named in the result, so `Read` or `Grep` that file and do not re-run the command.
 - **`Edit` fails (not found or not unique):** `Read` the range again and retry with more surrounding context. Do not fall back to a script.
 - **Codebase Memory looks stale or wrong:** use `Grep`. Re-index only if the user asks. For `zvec_grep_search`, check `freshness` in the result; if it is not `fresh`, confirm hits with `Grep` before relying on them.
 - **Truncated output:** the result names a full-output file; `Read` or `Grep` it and do not re-run the command. For a command you expect to be large, redirect it to a file in `/tmp` and `Grep` that.
