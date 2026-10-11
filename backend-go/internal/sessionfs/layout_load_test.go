@@ -1272,3 +1272,60 @@ func TestLayoutModelFileInstructionsAreRefused(t *testing.T) {
 		t.Fatalf("a model file the run does not load must not matter: %v", err)
 	}
 }
+
+// session_files is a settings key of the root defaults, the session and the profile; the
+// nearer level wins and objects merge key by key.
+func TestLayoutSessionFilesComeFromDefaultsSessionAndProfile(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	load := func() SessionFileListingSettings {
+		t.Helper()
+		config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return config.SessionFiles
+	}
+	if got := load(); !got.Enabled || got.MaxDepth != 12 || got.MaxResults != 2000 || got.IncludeHidden {
+		t.Fatalf("defaults = %+v", got)
+	}
+
+	layout.Defaults = map[string]json.RawMessage{"session_files": json.RawMessage(`{"max_depth":3,"include_hidden":true,"max_results":50}`)}
+	if got := load(); got.MaxDepth != 3 || !got.IncludeHidden || got.MaxResults != 50 || !got.Enabled {
+		t.Fatalf("from defaults = %+v", got)
+	}
+
+	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+		m["settings"] = map[string]any{"session_files": map[string]any{"max_depth": 5, "ignore_directories": []any{"a", "b"}}}
+	})
+	got := load()
+	if got.MaxDepth != 5 || !got.IncludeHidden || got.MaxResults != 50 || strings.Join(got.IgnoreDirectories, ",") != "a,b" {
+		t.Fatalf("session over defaults = %+v (max_depth 5, include_hidden and max_results from defaults, ignore list replaced)", got)
+	}
+
+	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) {
+		m["settings"] = map[string]any{"session_files": map[string]any{"enabled": false}}
+	})
+	got = load()
+	if got.Enabled || got.MaxDepth != 5 {
+		t.Fatalf("profile over session = %+v (enabled false, max_depth 5 kept)", got)
+	}
+}
+
+// A bad session_files value is a config error that names the key, from every level.
+func TestLayoutSessionFilesErrors(t *testing.T) {
+	for name, tc := range map[string]struct{ value, want string }{
+		"not an object":  {`3`, "session_files"},
+		"enabled string": {`{"enabled":"no"}`, "session_files.enabled must be a boolean"},
+		"depth too big":  {`{"max_depth":65}`, "session_files.max_depth must be a safe integer between 0 and 64"},
+		"ignore blank":   {`{"ignore_directories":[" "]}`, "session_files.ignore_directories[0] must be a non-empty string"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			layout, location, _ := sampleLayout(t)
+			layout.Defaults = map[string]json.RawMessage{"session_files": json.RawMessage(tc.value)}
+			_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}

@@ -587,7 +587,7 @@ Removed: the legacy arm of `LoadSessionSettings`, `ReadPathProfileInfo`, `SetPat
 
 Kept on purpose: `loadSessionSettingsFrom`, `selectProfile` and `storage_paths.go`. The layout loader composes a setting-shaped map from the catalogs and feeds it through them, so every normalizer is shared.
 
-Tests: all tests that wrote a legacy `setting.json` now build their session with `internal/sessionfs/layouttest`. Three differences from the legacy tests were found and are not hidden: the layout's session list always reports a run under its profile id (`runs_by_profile`), `session_files` cannot be set, and two roots with equal session ids share a state folder (fixed below).
+Tests: all tests that wrote a legacy `setting.json` now build their session with `internal/sessionfs/layouttest`. Three differences from the legacy tests were found and are not hidden: the layout's session list always reports a run under its profile id (`runs_by_profile`), `session_files` could not be set (fixed below), and two roots with equal session ids share a state folder (fixed below).
 
 ### Follow-ups (2026-10-11)
 
@@ -595,3 +595,4 @@ Tests: all tests that wrote a legacy `setting.json` now build their session with
 - **A root setting whose roots hold the same session id is refused.** The state folder is `<state>/<session id>/<category>/<name>` and all roots of one root setting share the state catalog, so `alpha:shared` and `beta:shared` wrote one transcript. `Load` now fails with a message naming both roots. Only folders with a `session.json` count. The state path is unchanged, so no existing state moves. The alternative, putting the root id in the path, would move existing state and was not chosen. The multi-root HTTP test now uses `alpha:shared` and `beta:second`, and asserts `beta:second` has 0 turns.
 
 Checks (2026-10-11): `go test ./internal/... ./cmd/...` 28 packages ok; `go vet`, `gofmt -l` and `git diff --check` clean. `messages.jsonl` golden diff: one layout session run through a build of HEAD and a build of the working tree against the same stub provider, 1,294 bytes in 4 records each, identical after masking only `__agent_session_input_batch_id` and the tool-output `token=` value.
+- **`session_files` is a layout settings key.** It is accepted in the root `defaults`, a session's `settings` and a profile's `settings`, merged like the other keys (objects key by key, `ignore_directories` replaced; the nearer level wins). The normalizer (`normalizeSessionFileListing`) was already there and read the composed map; only `layoutSettingKeys` and the schemas (`setting.schema.json` definition, three `$ref`s and `propertyNames` lists) changed. With `enabled: false` the files route answers 403 "file listing is disabled"; before, that path could not be reached.

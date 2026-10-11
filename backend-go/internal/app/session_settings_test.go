@@ -219,3 +219,41 @@ func TestMapProfileSettingsErrorAnswersConflictWith409(t *testing.T) {
 		}
 	}
 }
+
+// session_files.enabled false in the session settings makes the files route answer 403.
+func TestHTTPSessionFilesRouteIsForbiddenWhenDisabled(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "README.md"), []byte("readme"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		settings map[string]any
+		status   int
+	}{
+		"enabled":  {map[string]any{"session_files": map[string]any{"enabled": true}}, http.StatusOK},
+		"disabled": {map[string]any{"session_files": map[string]any{"enabled": false}}, http.StatusForbidden},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config, _ := layoutConfig(t, layouttest.Spec{SessionID: "files", CWD: projectDir, Settings: tc.settings},
+				map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+			service, err := NewService(config)
+			if err != nil {
+				t.Fatalf("NewService() error = %v", err)
+			}
+			api := httptest.NewServer(service.Handler)
+			defer func() {
+				service.Close()
+				api.Close()
+			}()
+			response := getAPI(t, api.URL, "/api/sessions/local:files/files", integrationAPIToken, "")
+			body, _ := io.ReadAll(response.Body)
+			response.Body.Close()
+			if response.StatusCode != tc.status {
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, tc.status, body)
+			}
+			if tc.status == http.StatusForbidden && !strings.Contains(string(body), "file listing is disabled") {
+				t.Fatalf("body = %s", body)
+			}
+		})
+	}
+}

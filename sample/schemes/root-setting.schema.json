@@ -298,7 +298,8 @@
           "http_debug",
           "cwd",
           "env_file",
-          "tool_storage_dir"
+          "tool_storage_dir",
+          "session_files"
         ]
       },
       "properties": {
@@ -349,6 +350,9 @@
         },
         "http_debug": {
           "$ref": "setting.schema.json#/properties/http_debug"
+        },
+        "session_files": {
+          "$ref": "setting.schema.json#/properties/session_files"
         },
         "cwd": {
           "type": "string",

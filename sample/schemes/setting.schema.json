@@ -1944,6 +1944,20 @@
       "additionalProperties": false,
       "default": {}
     },
+    "session_files": {
+      "type": "object",
+      "description": "The read-only file list the UI shows for a session's working directory (GET .../files). With enabled false the route answers 403 \"file listing is disabled\". Objects merge key by key across root defaults, session and profile; ignore_directories replaces the list of the level above.",
+      "properties": {
+        "enabled": {"type": "boolean", "default": true, "description": "Turns the listing on or off."},
+        "include_hidden": {"type": "boolean", "default": false, "description": "List files and folders whose name starts with a dot."},
+        "max_depth": {"type": "integer", "minimum": 0, "maximum": 64, "default": 12, "description": "Deepest folder level listed."},
+        "max_entries": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 5000, "description": "Directory entries examined before the listing stops and is marked truncated."},
+        "max_results": {"type": "integer", "minimum": 0, "maximum": 100000, "default": 2000, "description": "Files returned before the listing stops and is marked truncated."},
+        "ignore_directories": {"type": "array", "items": {"type": "string", "minLength": 1}, "default": ["node_modules", ".git", "dist", "build", "coverage", ".next", "__pycache__", ".venv", "venv", ".cache"], "description": "Folder names that are not entered."}
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
     "http_debug": {
       "type": "object",
       "description": "Optional native HTTP diagnostics written as numbered request/response files under paths.http_debug. Disabled by default.",
