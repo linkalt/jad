@@ -385,3 +385,199 @@ func TestSubagentPassesTheAgentsPathsToTheChild(t *testing.T) {
 		t.Fatal("the child's scope shares memory with the agent's settings")
 	}
 }
+
+func detachedWriterSettings() sessionfs.NativeSubagentSettings {
+	settings := writeSettings(writerAgent("fixer", "read", "write"))
+	settings.AllowDetachedWriters = true
+	settings.WaitMS = 0
+	return settings
+}
+
+func TestSubagentWriterDetachesOnlyWithTheSettingAndAnExplicitWaitMS(t *testing.T) {
+	release := make(chan struct{})
+	var cancelled atomic.Int64
+	catalog, _ := buildSubagentCatalog(t, detachedWriterSettings(), blockedLauncher(release, &cancelled), readOnlyTool("read"), writeTool("write"))
+	out := subagentCall(t, catalog, `{"task":"fix","wait_ms":0}`)
+	for _, want := range []string{"still running", "It can change files", "may not be undone by a restore", "needs approval"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("detached writer result lacks %q:\n%s", want, out)
+		}
+	}
+
+	done := make(chan string, 1)
+	go func() { done <- subagentCall(t, catalog, `{"task":"fix again"}`) }()
+	select {
+	case out := <-done:
+		t.Fatalf("a writer call with no wait_ms was handed off:\n%s", out)
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the call did not return after the child ended")
+	}
+}
+
+func TestSubagentDetachedWriterThatNeedsApprovalIsStoppedWithAMessage(t *testing.T) {
+	var asked atomic.Int64
+	parent := func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
+		asked.Add(1)
+		return tools.ApprovalVerdict{Allowed: true}
+	}
+	proceed := make(chan struct{})
+	verdicts := make(chan [2]tools.ApprovalVerdict, 1)
+	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
+		select {
+		case <-proceed:
+		case <-ctx.Done():
+			return SubagentResult{}, ctx.Err()
+		}
+		needs := request.Execution.RequestApproval(ctx, tools.ApprovalCall{CallID: "w1", ModelToolName: "write", Tool: "write", Args: map[string]any{"path": "a.txt"}})
+		free := request.Execution.RequestApproval(ctx, tools.ApprovalCall{CallID: "p1", ModelToolName: "process", Tool: "process", Args: map[string]any{"action": "status"}})
+		verdicts <- [2]tools.ApprovalVerdict{needs, free}
+		<-ctx.Done()
+		return SubagentResult{Text: "was cut"}, ctx.Err()
+	}}
+	catalog, _ := buildSubagentCatalog(t, detachedWriterSettings(), launcher, readOnlyTool("read"), writeTool("write"))
+	execute := func(arguments string) string {
+		call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "parent-call", "name": "subagent", "arguments": arguments})
+		raw, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess", RequestApproval: parent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	out := execute(`{"task":"fix","wait_ms":0}`)
+	id := subagentRunIDPattern.FindString(out)
+	if id == "" {
+		t.Fatalf("no run id in the detached result:\n%s", out)
+	}
+	close(proceed)
+	var got [2]tools.ApprovalVerdict
+	select {
+	case got = <-verdicts:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the child never reached its approval calls")
+	}
+	if got[0].Allowed || !strings.Contains(got[0].Reason, "detached") {
+		t.Errorf("a detached writer's call that needs approval got %+v; want a refusal that says detached", got[0])
+	}
+	if !got[1].Allowed {
+		t.Errorf("a call that needs no approval was refused: %+v", got[1])
+	}
+	if asked.Load() != 0 {
+		t.Errorf("the parent's requester was asked %d times after the call returned; want 0", asked.Load())
+	}
+	final := execute(`{"id":"` + id + `","wait_ms":3000}`)
+	if !strings.Contains(final, "was stopped") || !strings.Contains(final, "needs approval") {
+		t.Errorf("the stopped run does not say why:\n%s", final)
+	}
+}
+
+func TestSubagentWriterApprovalStillReachesTheParentBeforeItDetaches(t *testing.T) {
+	var asked atomic.Int64
+	parent := func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
+		asked.Add(1)
+		return tools.ApprovalVerdict{Allowed: true}
+	}
+	var verdict tools.ApprovalVerdict
+	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
+		verdict = request.Execution.RequestApproval(ctx, tools.ApprovalCall{CallID: "w1", ModelToolName: "write", Tool: "write", Args: map[string]any{"path": "a.txt"}})
+		return SubagentResult{Text: "done"}, nil
+	}}
+	catalog, _ := buildSubagentCatalog(t, detachedWriterSettings(), launcher, readOnlyTool("read"), writeTool("write"))
+	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "parent-call", "name": "subagent", "arguments": `{"task":"fix","wait_ms":5000}`})
+	if _, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess", RequestApproval: parent}); err != nil {
+		t.Fatal(err)
+	}
+	if !verdict.Allowed || asked.Load() != 1 {
+		t.Fatalf("verdict %+v, parent asked %d times; want allowed and 1", verdict, asked.Load())
+	}
+}
+
+func TestSubagentHandoffWaitsForAQuestionThatIsAlreadyOpen(t *testing.T) {
+	asking := make(chan struct{})
+	answer := make(chan struct{})
+	parent := func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
+		close(asking)
+		<-answer
+		return tools.ApprovalVerdict{Allowed: true}
+	}
+	verdict := make(chan tools.ApprovalVerdict, 1)
+	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
+		verdict <- request.Execution.RequestApproval(ctx, tools.ApprovalCall{CallID: "w1", ModelToolName: "write", Tool: "write", Args: map[string]any{"path": "a.txt"}})
+		<-ctx.Done()
+		return SubagentResult{}, ctx.Err()
+	}}
+	catalog, _ := buildSubagentCatalog(t, detachedWriterSettings(), launcher, readOnlyTool("read"), writeTool("write"))
+	done := make(chan string, 1)
+	go func() {
+		call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "parent-call", "name": "subagent", "arguments": `{"task":"fix","wait_ms":50}`})
+		raw, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess", RequestApproval: parent})
+		if err != nil {
+			t.Error(err)
+		}
+		done <- string(raw)
+	}()
+	<-asking
+	select {
+	case out := <-done:
+		t.Fatalf("the call returned while the parent was still answering the child's question:\n%s", out)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(answer)
+	select {
+	case out := <-done:
+		if !strings.Contains(out, "still running") {
+			t.Errorf("after the answer the call should hand the run off:\n%s", out)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the call did not return after the question was answered")
+	}
+	if v := <-verdict; !v.Allowed {
+		t.Errorf("the question open at the wait's end was not answered by the parent: %+v", v)
+	}
+}
+
+func TestSubagentModelStopIsNotReportedAsAnApprovalStop(t *testing.T) {
+	proceed := make(chan struct{})
+	asked := make(chan struct{})
+	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
+		<-ctx.Done()
+		<-proceed
+		request.Execution.RequestApproval(context.Background(), tools.ApprovalCall{CallID: "w1", ModelToolName: "write", Tool: "write", Args: map[string]any{"path": "a.txt"}})
+		close(asked)
+		return SubagentResult{Text: "cut"}, ctx.Err()
+	}}
+	parent := func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
+		return tools.ApprovalVerdict{Allowed: true}
+	}
+	catalog, _ := buildSubagentCatalog(t, detachedWriterSettings(), launcher, readOnlyTool("read"), writeTool("write"))
+	execute := func(arguments string) string {
+		call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "parent-call", "name": "subagent", "arguments": arguments})
+		raw, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess", RequestApproval: parent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	id := subagentRunIDPattern.FindString(execute(`{"task":"fix","wait_ms":0}`))
+	if id == "" {
+		t.Fatal("no run id")
+	}
+	execute(`{"id":"` + id + `","stop":true,"wait_ms":0}`)
+	close(proceed)
+	select {
+	case <-asked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the child never made its late approval call")
+	}
+	final := execute(`{"id":"` + id + `","wait_ms":3000}`)
+	if !strings.Contains(final, "was stopped") {
+		t.Fatalf("the run is not reported stopped:\n%s", final)
+	}
+	if strings.Contains(final, "needs approval") {
+		t.Errorf("a stop made by the model is reported as an approval stop:\n%s", final)
+	}
+}

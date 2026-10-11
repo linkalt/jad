@@ -26,7 +26,7 @@
           "wait_ms": {
             "type": "integer",
             "minimum": 0,
-            "description": "Most time to wait for the answer; 0 checks without waiting. Clamped to session policy."
+            "description": "Most time to wait for the answer; 0 returns at once with a run id. Clamped to session policy. An agent that can change files ignores it unless the session allows detached writers."
           },
           "stop": {
             "type": "boolean",

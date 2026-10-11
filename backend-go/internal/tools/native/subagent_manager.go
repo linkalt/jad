@@ -198,16 +198,19 @@ type subagentRun struct {
 	changes   bool
 	startedAt time.Time
 	cancel    context.CancelFunc
+	ctx       context.Context
 	// done closes once, after the final state is set.
 	done chan struct{}
 
-	mu      sync.Mutex
-	state   string
-	result  SubagentResult
-	reason  string
-	endedAt time.Time
-	cut     bool   // the answer was longer than the limit and was cut
-	dir     string // the child's transcript directory, once it exists
+	mu     sync.Mutex
+	state  string
+	result SubagentResult
+	reason string
+	// stopReason is why the host stopped the run; the final stopped state keeps it as reason.
+	stopReason string
+	endedAt    time.Time
+	cut        bool   // the answer was longer than the limit and was cut
+	dir        string // the child's transcript directory, once it exists
 	// files are the files the child's write and edit changed, filesOmitted how many
 	// more there were than the list keeps.
 	files        []subagentFileChange
@@ -250,6 +253,23 @@ func (r *subagentRun) view() subagentRunView {
 		end = time.Now()
 	}
 	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+}
+
+// stopWith cancels the run and keeps why, so the stopped result can say it. A run that
+// is already being stopped (by the model, a reset or shutdown) keeps no reason of ours.
+func (r *subagentRun) stopWith(reason string) {
+	r.mu.Lock()
+	if r.stopReason == "" && r.ctx.Err() == nil {
+		r.stopReason = reason
+	}
+	r.mu.Unlock()
+	r.cancel()
+}
+
+func (r *subagentRun) takeStopReason() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopReason
 }
 
 // active reports whether the run is queued or running.
@@ -392,6 +412,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		changes:   spec.changes,
 		startedAt: time.Now(),
 		cancel:    cancel,
+		ctx:       ctx,
 		done:      make(chan struct{}),
 		state:     subagentRunQueued,
 	}
@@ -439,7 +460,7 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 		m.finish(run, subagentRunDone, result, "", spec)
 	case ctx.Err() != nil:
 		// Stopped by the model or by shutdown, not by the child's own limit.
-		m.finish(run, subagentRunStopped, result, "", spec)
+		m.finish(run, subagentRunStopped, result, run.takeStopReason(), spec)
 	case childContext.Err() != nil:
 		m.finish(run, subagentRunTimedOut, result, "", spec)
 	default:

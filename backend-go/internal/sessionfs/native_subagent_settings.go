@@ -48,7 +48,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "changed_files_max", "process_max_running", "storage_dir", "statecontext"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "allow_detached_writers", "changed_files_max", "process_max_running", "storage_dir", "statecontext"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -103,6 +103,10 @@ type NativeSubagentSettings struct {
 	// configuration error, and every child stays read-only. The zero value is the
 	// default.
 	AllowWrite bool
+	// AllowDetachedWriters lets a call to an agent that can change files return at once
+	// with a run id when it gives wait_ms. Off by default: such an agent then waits for
+	// its end, whatever wait_ms says. The zero value is the default.
+	AllowDetachedWriters bool
 	// ListMaxBytes is the most bytes of agent list the tool description may carry:
 	// the full list when it fits, else the names, else a count. Zero never lists
 	// inline, so the model has to ask. The zero value of this struct therefore means
@@ -245,6 +249,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.AllowWrite, err = bashBool(fields, "allow_write", false, settingPath+": "+section); err != nil {
+		return nil, err
+	}
+	if settings.AllowDetachedWriters, err = bashBool(fields, "allow_detached_writers", false, settingPath+": "+section); err != nil {
 		return nil, err
 	}
 	if settings.StorageDir, err = normalizeNativeSubagentStorageDir(fields, cwd, toolStorageDir, settingPath); err != nil {

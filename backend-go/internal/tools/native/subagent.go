@@ -21,7 +21,7 @@ var subagentInputSchema = json.RawMessage(`{
     "task":{"type":"string","minLength":1,"description":"Self-contained instructions. The agent sees nothing of this conversation. Omit to list the agents."},
     "agent":{"type":"string","description":"Agent name. Optional when only one is configured."},
     "id":{"type":"string","minLength":1,"description":"Run id from a call that returned still running. Use it instead of task."},
-    "wait_ms":{"type":"integer","minimum":0,"description":"Most time to wait for the answer; 0 checks without waiting. Clamped to session policy."},
+    "wait_ms":{"type":"integer","minimum":0,"description":"Most time to wait for the answer; 0 returns at once with a run id. Clamped to session policy. An agent that can change files ignores it unless the session allows detached writers."},
     "stop":{"type":"boolean","description":"With id: cancel that run."}
   },
   "additionalProperties":false

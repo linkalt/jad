@@ -1758,6 +1758,11 @@
               "default": false,
               "description": "Let an agent list write, edit, bash, exec or process in its tools, so a child can change files and run code. Those tools must be enabled in the session, and their own paths and approval settings apply to the child, narrowed to nothing it could not do itself. A call to such an agent is a change: it takes the checkpoint, runs in order with the other calls, asks the user for approval with the agent named in the question, and is never handed off (wait_ms is ignored; timeout_ms still bounds it). false keeps every child read-only and rejects an agent that lists one of these tools."
             },
+            "allow_detached_writers": {
+              "type": "boolean",
+              "default": false,
+              "description": "A call to an agent that can change files waits for its end, whatever wait_ms says. true lets it return at once with a run id when the call gives wait_ms; the run then keeps going outside the checkpoint (a restore may not undo what it does afterwards), and a call that needs approval stops it, because nobody can be asked once the call has returned. Only matters when an agent can change files (allow_write). Default false."
+            },
             "delete_transcripts": {
               "type": "boolean",
               "default": false,
