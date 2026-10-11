@@ -143,9 +143,6 @@ func NewSubagentToolWithProcesses(settings sessionfs.NativeSubagentSettings, par
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native subagent schema: %w", err)
 	}
-	if len(settings.Agents) == 0 {
-		return tools.Tool{}, errors.New("tools.native.subagent needs at least one agent")
-	}
 	if settings.MaxConcurrent < 1 {
 		return tools.Tool{}, errors.New("tools.native.subagent.max_concurrent must be at least 1")
 	}
@@ -195,7 +192,7 @@ func NewSubagentToolWithProcesses(settings sessionfs.NativeSubagentSettings, par
 			ID:          subagentToolID,
 			Source:      "native",
 			Name:        "subagent",
-			Description: subagentDescription + subagentAgentList(settings.Agents, settings.ListMaxBytes),
+			Description: subagentDescription + subagentListText(settings),
 			InputSchema: append(json.RawMessage(nil), subagentInputSchema...),
 		},
 		Validator:        validator,
@@ -235,6 +232,25 @@ func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
 	}
 	agent, problem := s.selectAgent(arguments)
 	return problem == "" && agent.config.ChangesFiles()
+}
+
+// subagentListText is the text appended to the manifest description: the agent list, or,
+// when there is no agent yet, how to create one.
+func subagentListText(settings sessionfs.NativeSubagentSettings) string {
+	if len(settings.Agents) == 0 {
+		return "\n" + noAgentsText(settings.ConfiguredAgentDirs)
+	}
+	return subagentAgentList(settings.Agents, settings.ListMaxBytes)
+}
+
+// noAgentsText tells the model there is no agent and what to create. The folders are
+// read when a message starts a run, so a new agent is usable from the next message.
+func noAgentsText(dirs []string) string {
+	where := "define one in tools.native.subagent.agents"
+	if len(dirs) > 0 {
+		where = "create a folder named after the agent in " + strings.Join(dirs, " or ")
+	}
+	return "No agents are configured. To add one, " + where + ", holding agent.json (optional keys: description, model, tools, instructions) and/or prompt.md; the name is 1 to 64 letters, digits, underscores or hyphens. It is available from the next message."
 }
 
 // subagentAgentList returns the text appended to the manifest description. The agent
@@ -281,8 +297,11 @@ func changeMarker(agent sessionfs.NativeSubagentAgent) string {
 
 // renderSubagentList is the result of a call with no task: one line per agent, then
 // one per retained run, so a model that lost a run id can find it again.
-func renderSubagentList(callID string, agents []subagentAgent, runs []subagentRunView, maxBytes int64) (string, error) {
+func renderSubagentList(callID string, agents []subagentAgent, runs []subagentRunView, maxBytes int64, dirs []string) (string, error) {
 	lines := make([]string, 0, len(agents)+len(runs)+2)
+	if len(agents) == 0 {
+		lines = append(lines, noAgentsText(dirs))
+	}
 	for _, agent := range agents {
 		line := agent.config.Name + changeMarker(agent.config)
 		if agent.config.Description != "" {
@@ -430,6 +449,9 @@ func normalizeSubagentArguments(arguments map[string]any) map[string]any {
 func (s *subagentTool) selectAgent(arguments map[string]any) (subagentAgent, string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if len(s.agents) == 0 {
+		return subagentAgent{}, noAgentsText(s.settings.ConfiguredAgentDirs)
+	}
 	name, named := arguments["agent"].(string)
 	if !named {
 		if len(s.agents) == 1 {

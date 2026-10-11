@@ -23,38 +23,41 @@ const (
 // not an empty list, so a typo cannot silently remove every agent. With missingOK
 // (agents_dir_missing_ok) a directory that does not exist is skipped, so one toolset can
 // list a general folder and the project's own folder, which a new project may not have;
-// the session still needs at least one agent. A path that exists but is not a directory
-// is always an error.
-func normalizeSubagentAgentDirs(fields map[string]json.RawMessage, cwd, settingPath string, missingOK bool) ([]string, error) {
+// the session then simply has no agent from it. A path that exists but is not a
+// directory is always an error. It returns the directories that exist and, separately,
+// every configured one.
+func normalizeSubagentAgentDirs(fields map[string]json.RawMessage, cwd, settingPath string, missingOK bool) (existing, configured []string, err error) {
 	raw, exists := fields["agents_dir"]
 	if !exists || strings.TrimSpace(string(raw)) == "null" {
-		return nil, nil
+		return nil, nil, nil
 	}
-	var configured []string
-	if err := json.Unmarshal(raw, &configured); err != nil || configured == nil {
-		return nil, configError("%s: tools.native.subagent.agents_dir must be an array of directory paths", settingPath)
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+		return nil, nil, configError("%s: tools.native.subagent.agents_dir must be an array of directory paths", settingPath)
 	}
-	directories := make([]string, 0, len(configured))
-	seen := make(map[string]struct{}, len(configured))
-	for index, value := range configured {
+	existing = make([]string, 0, len(values))
+	configured = make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
 		if strings.TrimSpace(value) == "" {
-			return nil, configError("%s: tools.native.subagent.agents_dir[%d] must be a non-empty string", settingPath, index)
+			return nil, nil, configError("%s: tools.native.subagent.agents_dir[%d] must be a non-empty string", settingPath, index)
 		}
 		directory := resolveFrom(cwd, expandHome(strings.TrimSpace(value)))
 		if _, duplicate := seen[directory]; duplicate {
-			return nil, configError("%s: tools.native.subagent.agents_dir lists %s twice", settingPath, directory)
+			return nil, nil, configError("%s: tools.native.subagent.agents_dir lists %s twice", settingPath, directory)
 		}
 		seen[directory] = struct{}{}
-		info, err := os.Stat(directory)
-		if missingOK && errors.Is(err, os.ErrNotExist) {
+		configured = append(configured, directory)
+		info, statErr := os.Stat(directory)
+		if missingOK && errors.Is(statErr, os.ErrNotExist) {
 			continue
 		}
-		if err != nil || !info.IsDir() {
-			return nil, configError("%s: tools.native.subagent.agents_dir[%d] is not a directory: %s", settingPath, index, directory)
+		if statErr != nil || !info.IsDir() {
+			return nil, nil, configError("%s: tools.native.subagent.agents_dir[%d] is not a directory: %s", settingPath, index, directory)
 		}
-		directories = append(directories, directory)
+		existing = append(existing, directory)
 	}
-	return directories, nil
+	return existing, configured, nil
 }
 
 // loadSubagentDirAgents loads every agent folder of one directory, in name order.

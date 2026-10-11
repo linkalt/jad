@@ -1862,12 +1862,12 @@
             },
             "subagent": {
               "type": "object",
-              "description": "Go backend only. Lets the model hand a task to a separate read-only agent that runs with a fresh context and returns only its final answer. Needs at least one agent and the tool definition sample/tools/native/subagent.json. A child can use only the enabled read-only native tools (read, grep, glob, fetch, skill, decide) unless allow_write lets an agent list write, edit, bash, exec or process, and never the subagent tool, so the depth is one.",
+              "description": "Go backend only. Lets the model hand a task to a separate read-only agent that runs with a fresh context and returns only its final answer. May start with no agent, which is the case for a new project whose model creates its own; it then needs agents or agents_dir to be present, even if empty, and the tool definition sample/tools/native/subagent.json. A child can use only the enabled read-only native tools (read, grep, glob, fetch, skill, decide) unless allow_write lets an agent list write, edit, bash, exec or process, and never the subagent tool, so the depth is one.",
               "anyOf": [{"required": ["agents"]}, {"required": ["agents_dir"]}],
               "properties": {
                 "agents_dir_missing_ok": {
                   "type": "boolean",
-                  "description": "When true, an agents_dir entry that does not exist is skipped instead of being a configuration error, so one toolset can list a general folder and each project's own folder (for example .jad/subagents), which a new project may not have. A path that exists but is not a directory is still an error, and the session still needs at least one agent. Default false."
+                  "description": "When true, an agents_dir entry that does not exist is skipped instead of being a configuration error, so one toolset can list a general folder and each project's own folder (for example .jad/subagents), which a new project may not have. A path that exists but is not a directory is still an error, and the session then has no agent from it. Default false."
                 },
                 "agents_dir_override": {
                   "type": "boolean",
@@ -1877,7 +1877,7 @@
                   "type": "array",
                   "items": {"type": "string", "minLength": 1},
                   "uniqueItems": true,
-                  "description": "Directories holding one folder per agent. A relative path resolves from the session's cwd; ~ is expanded; a directory that does not exist is a configuration error. The folder name is the agent name (1 to 64 letters, digits, underscores or hyphens; folders starting with a dot are skipped). A folder holds agent.json (same keys as an inline agent, see agent.schema.json; relative paths inside it resolve from the folder) and/or prompt.md (the prompt text, placed after instructions and before prompt_documents). A folder with neither is an error. Agents defined here and in agents are all available; the same name twice is an error. Everything is read when the session loads."
+                  "description": "Directories holding one folder per agent. A relative path resolves from the session's cwd; ~ is expanded; a directory that does not exist is a configuration error. The folder name is the agent name (1 to 64 letters, digits, underscores or hyphens; folders starting with a dot are skipped). A folder holds agent.json (same keys as an inline agent, see agent.schema.json; relative paths inside it resolve from the folder) and/or prompt.md (the prompt text, placed after instructions and before prompt_documents). A folder with neither is an error. Agents defined here and in agents are all available; the same name twice is an error. Folders are read again each time a message starts a run, so an agent created during a run is usable from the next message."
                 },
                 "agents": {
                   "type": "object",

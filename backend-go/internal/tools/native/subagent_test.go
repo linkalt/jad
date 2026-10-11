@@ -192,10 +192,6 @@ func TestSubagentNeedsAtLeastOneReadOnlyToolToGiveAChild(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "agents.explore has no tool to use") {
 		t.Fatalf("error = %v", err)
 	}
-	_, err = NewSubagentTool(sessionfs.NativeSubagentSettings{MaxConcurrent: 1}, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "needs at least one agent") {
-		t.Fatalf("error = %v", err)
-	}
 	settings := subagentSettings(agentNamed("a"))
 	settings.MaxConcurrent = 0
 	_, err = NewSubagentTool(settings, withExecutors(t, readOnlyTool("read")), nil)
@@ -767,6 +763,46 @@ func TestSubagentCallWithoutATaskListsEveryAgentWithItsDescription(t *testing.T)
 	subagentCall(t, catalog, `{"task":"do it","agent":"two"}`)
 	if len(launcher.requests) != 1 || launcher.requests[0].Agent.Name != "two" {
 		t.Fatalf("requests = %+v", launcher.requests)
+	}
+}
+
+// With no agent the tool still loads. The list, the description and a task all say there
+// is none and where to create one, and nothing is started.
+func TestSubagentWithZeroAgentsExplainsHowToCreateOne(t *testing.T) {
+	launcher := &fakeLauncher{}
+	settings := subagentSettings()
+	settings.ConfiguredAgentDirs = []string{"/proj/.jad/subagents", "/shared/agents"}
+	catalog, tool := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"))
+	for _, want := range []string{"No agents are configured", "/proj/.jad/subagents or /shared/agents", "agent.json", "next message"} {
+		if !strings.Contains(tool.Definition.Description, want) {
+			t.Errorf("description lacks %q:\n%s", want, tool.Definition.Description)
+		}
+	}
+	list := subagentCall(t, catalog, `{}`)
+	for _, want := range []string{`"status":"ok"`, "0 agents available", "No agents are configured", "/proj/.jad/subagents"} {
+		if !strings.Contains(list, want) {
+			t.Errorf("list lacks %q:\n%s", want, list)
+		}
+	}
+	task := subagentCall(t, catalog, `{"task":"do it"}`)
+	for _, want := range []string{"unknown_agent", "No agents are configured", "/shared/agents"} {
+		if !strings.Contains(task, want) {
+			t.Errorf("task result lacks %q:\n%s", want, task)
+		}
+	}
+	if len(launcher.requests) != 0 {
+		t.Fatalf("a task with no agent started %d children", len(launcher.requests))
+	}
+	// A named agent gets the same answer, not "No agent named".
+	if named := subagentCall(t, catalog, `{"task":"x","agent":"ghost"}`); !strings.Contains(named, "No agents are configured") {
+		t.Fatalf("named agent with none configured:\n%s", named)
+	}
+}
+
+func TestSubagentWithZeroAgentsAndNoFolderSaysToDefineOneInline(t *testing.T) {
+	_, tool := buildSubagentCatalog(t, subagentSettings(), &fakeLauncher{}, readOnlyTool("read"))
+	if !strings.Contains(tool.Definition.Description, "define one in tools.native.subagent.agents") {
+		t.Fatalf("description = %s", tool.Definition.Description)
 	}
 }
 

@@ -36,7 +36,7 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 		// where children cannot run.
 		s.mu.RLock()
 		defer s.mu.RUnlock()
-		return renderSubagentList(callID, s.agents, s.manager.list(execution.SessionKey), s.settings.ResultMaxBytes)
+		return renderSubagentList(callID, s.agents, s.manager.list(execution.SessionKey), s.settings.ResultMaxBytes, s.settings.ConfiguredAgentDirs)
 	}
 	return s.startRun(ctx, callID, task, arguments, execution)
 }

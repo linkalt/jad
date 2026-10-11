@@ -219,8 +219,6 @@ func TestSubagentAgentsDirRejectsInvalidSettings(t *testing.T) {
 		"missing dir":      {`{"agents_dir":["nowhere"]}`, "agents_dir[0] is not a directory: " + filepath.Join(root, "nowhere")},
 		"a file":           {`{"agents_dir":["file.txt"]}`, "agents_dir[0] is not a directory"},
 		"listed twice":     {`{"agents_dir":["ok","./ok"]}`, "agents_dir lists " + filepath.Join(root, "ok") + " twice"},
-		"no agents at all": {`{"agents_dir":["empty"]}`, "agents_dir holds no agent folder"},
-		"empty list":       {`{"agents_dir":[]}`, "agents must define at least one agent"},
 		"neither file":     {`{"agents_dir":["nothing"]}`, "agent folder x has neither agent.json nor prompt.md"},
 		"bad folder name":  {`{"agents_dir":["badname"]}`, "the name must be 1 to 64 letters, digits, underscores or hyphens"},
 		"bad json":         {`{"agents_dir":["badjson"]}`, "invalid JSON"},
@@ -246,8 +244,53 @@ func TestSubagentAgentsDirRejectsInvalidSettings(t *testing.T) {
 func TestSubagentAgentsDirNullMeansAbsent(t *testing.T) {
 	root := subagentTree(t, nil)
 	_, err := loadWithDirs(t, root, `{"agents_dir":null}`)
-	if err == nil || !strings.Contains(err.Error(), "agents must define at least one agent") {
+	if err == nil || !strings.Contains(err.Error(), "needs agents or agents_dir") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// A new project starts with no agent and the model creates them, so none is a valid
+// state: an empty folder, an empty list, an empty agents object, or missing folders.
+func TestSubagentLoadsWithZeroAgents(t *testing.T) {
+	root := subagentTree(t, map[string]string{"empty/keep.txt": "x"})
+	for name, tc := range map[string]struct {
+		setting    string
+		wantDirs   int
+		wantListed int
+	}{
+		"folder without agents": {`{"agents_dir":["empty"]}`, 1, 1},
+		"empty list":            {`{"agents_dir":[]}`, 0, 0},
+		"empty inline object":   {`{"agents":{}}`, 0, 0},
+		"both empty":            {`{"agents":{},"agents_dir":["empty"]}`, 1, 1},
+		"missing folder":        {`{"agents_dir_missing_ok":true,"agents_dir":["nowhere"]}`, 0, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := loadWithDirs(t, root, tc.setting)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Agents) != 0 || len(got.AgentDirs) != tc.wantDirs || len(got.ConfiguredAgentDirs) != tc.wantListed {
+				t.Fatalf("agents = %d, dirs = %v, configured = %v", len(got.Agents), got.AgentDirs, got.ConfiguredAgentDirs)
+			}
+		})
+	}
+	// A missing folder stays an error without agents_dir_missing_ok: a typo is still caught.
+	if _, err := loadWithDirs(t, root, `{"agents_dir":["nowhere"]}`); err == nil || !strings.Contains(err.Error(), "is not a directory") {
+		t.Fatalf("missing folder without the flag: %v", err)
+	}
+}
+
+// The model-facing folders include the ones that do not exist yet, because that is
+// where the model creates its first agent.
+func TestSubagentConfiguredAgentDirsKeepMissingFolders(t *testing.T) {
+	root := subagentTree(t, map[string]string{"general/a/prompt.md": "A."})
+	got, err := loadWithDirs(t, root, `{"agents_dir_missing_ok":true,"agents_dir":["general","project"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{filepath.Join(root, "general"), filepath.Join(root, "project")}
+	if strings.Join(got.ConfiguredAgentDirs, "|") != strings.Join(want, "|") {
+		t.Fatalf("ConfiguredAgentDirs = %v, want %v", got.ConfiguredAgentDirs, want)
 	}
 }
 
@@ -420,11 +463,6 @@ func TestSubagentAgentsDirMayBeMissingWhenConfigured(t *testing.T) {
 	if _, err := loadWithDirs(t, root, `{"agents_dir_missing_ok":true,"agents_dir":["general","file.txt"]}`); err == nil {
 		t.Fatal("a file in agents_dir was accepted")
 	}
-	// Nothing found anywhere is still an error: a typo cannot remove every agent.
-	root = subagentTree(t, map[string]string{"x/y.txt": "x"})
-	if _, err := loadWithDirs(t, root, `{"agents_dir_missing_ok":true,"agents_dir":["nowhere"]}`); err == nil {
-		t.Fatal("no agent anywhere was accepted")
-	}
 }
 
 // With agents_dir_override a later folder replaces an earlier one's agent of the same
@@ -458,5 +496,26 @@ func TestSubagentAgentsDirLaterFolderOverridesWhenConfigured(t *testing.T) {
 	_, err = loadWithDirs(t, root, `{"agents_dir_override":true,"agents":{"a":{"description":"x"}},"agents_dir":["general"]}`)
 	if err == nil || !strings.Contains(err.Error(), "agent a is defined twice") {
 		t.Fatalf("inline duplicate, error = %v", err)
+	}
+}
+
+// The model creates an agent folder during a run; the next load must see it, because
+// nothing caches the folders between loads.
+func TestSubagentNewFolderAppearsOnTheNextLoad(t *testing.T) {
+	root := subagentTree(t, map[string]string{"agents/keep.txt": "x"})
+	setting := `{"agents_dir":["agents"]}`
+	first, err := loadWithDirs(t, root, setting)
+	if err != nil || len(first.Agents) != 0 {
+		t.Fatalf("first load: agents = %v, error = %v", first, err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "agents", "scout"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "agents", "scout", "prompt.md"), []byte("Scout."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := loadWithDirs(t, root, setting)
+	if err != nil || len(second.Agents) != 1 || second.Agents[0].Name != "scout" {
+		t.Fatalf("second load: agents = %+v, error = %v", second.Agents, err)
 	}
 }

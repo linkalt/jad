@@ -520,9 +520,18 @@ In the catalog layout, the transcript, its backup, staging and the HTTP debug fo
 ## `agents_dir_missing_ok` and `agents_dir_override` (Go only)
 
 Two booleans in `tools.native.subagent`, both default false, so nothing changes unless a toolset sets them. They exist for a toolset that many projects share: it lists a general folder plus a per-project one (for example `.jad/subagents`, relative to each session's cwd).
-- **`agents_dir_missing_ok`.** An `agents_dir` entry that does not exist is skipped instead of failing the load. A path that exists but is a file is still an error, and the session still needs at least one agent: with every folder missing the error is "agents_dir holds no agent folder", so a typo cannot remove every agent unnoticed. Cost: with the flag on, a mistyped folder name is no longer reported when another folder supplies agents.
+- **`agents_dir_missing_ok`.** An `agents_dir` entry that does not exist is skipped instead of failing the load. A path that exists but is a file is still an error, and the session then has no agent from it (see "The subagent tool loads with zero agents"). Cost: with the flag on, a mistyped folder name is no longer reported; the tool only says there is no agent.
 - **`agents_dir_override`.** An agent folder in a later entry replaces an agent of the same name from an earlier entry; the replaced agent keeps its place in the order. An inline agent in `agents` is never replaced, and without the flag a name defined twice is still an error. Cost: a stale or mistyped duplicate in a project folder silently replaces the general agent, and only the replacing folder's `agent.json` and `prompt.md` count (nothing is merged).
 - **Not changed.** `agents_dir` entries are still relative to the session cwd.
+
+## The subagent tool loads with zero agents (Go only)
+
+A project starts with no agent and the model creates its own, so `tools.native.subagent` no longer needs one. Removed: "agents must define at least one agent", "agents_dir holds no agent folder" and the constructor's "needs at least one agent". Kept: the section must name `agents` or `agents_dir` (an empty object or list is fine), so a section like `{}` or a mistyped key is still an error; a missing `agents_dir` folder is still an error unless `agents_dir_missing_ok`; a folder with neither `agent.json` nor `prompt.md` is still an error.
+- **No new key.** The behavior is not a switch: with at least one agent nothing changes, and with none the old result was a load failure, which nobody can rely on.
+- **What the model sees.** With no agent the tool description, the no-task list and a task call all say "No agents are configured" and name the folders to create one in (`ConfiguredAgentDirs`, which includes folders `agents_dir_missing_ok` skipped, or the inline `agents` key when there is no folder), the files an agent folder holds and the name rule. A task call returns `unknown_agent` with that text, not a crash.
+- **When a new agent shows up.** Folders are read each time a message resolves its session (`LoadSessionSettings`), and the tool catalog is built when a run starts. An agent created during a run is therefore usable from the next message, not in the same run. The text says so. Read from the code; not run through a live server.
+- **Cost.** A typo in `agents_dir` with `agents_dir_missing_ok` on now loads with no agent instead of failing.
+- **Tests.** Zero agents from an empty folder, an empty list, an empty `agents` object and a skipped missing folder; the configured folders keep a missing one; a folder created between two loads is seen; the tool text for zero agents with and without folders. Five mutations each broke a test.
 
 ## Session category in the session list (2026-10-10)
 
