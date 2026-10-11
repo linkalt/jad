@@ -278,6 +278,56 @@ func TestUpstreamErrorsKeepStatusAndRetryAfter(t *testing.T) {
 	}
 }
 
+func TestSDKDoesNotRetryNonStreamingFailures(t *testing.T) {
+	upstream, calls := fakeAnthropic(t, http.StatusInternalServerError,
+		`{"type":"error","error":{"type":"api_error","message":"temporary"}}`, nil)
+	adapter := adapterFor(t, upstream.URL, "")
+	status, _, _ := post(t, adapter.URL+"/v1/responses", `{"model":"claude-x","input":"hi"}`, map[string]string{"x-api-key": "k"})
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status %d", status)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("the SDK made %d upstream attempts; want 1", len(*calls))
+	}
+}
+
+func TestConfiguredTimeoutAllowsLargeNonStreamingRequests(t *testing.T) {
+	upstream, calls := fakeAnthropic(t, http.StatusOK, messageBody, nil)
+	adapter := adapterFor(t, upstream.URL, "")
+	status, _, raw := post(t, adapter.URL+"/v1/responses",
+		`{"model":"claude-x","input":"hi","max_output_tokens":32000}`, map[string]string{"x-api-key": "k"})
+	if status != http.StatusOK {
+		t.Fatalf("status %d body %s", status, raw)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("got %d upstream calls, want 1", len(*calls))
+	}
+	var sent anthropicRequest
+	if err := json.Unmarshal([]byte((*calls)[0].Body), &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.MaxTokens != 32000 {
+		t.Fatalf("max_tokens = %d, want 32000", sent.MaxTokens)
+	}
+}
+
+func TestUnknownResponseContentBlocksAreIgnored(t *testing.T) {
+	body := `{"id":"msg_unknown","type":"message","role":"assistant","model":"claude-x","content":[{"type":"future_block","value":"ignored"},{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
+	upstream, _ := fakeAnthropic(t, http.StatusOK, body, nil)
+	adapter := adapterFor(t, upstream.URL, "")
+	status, _, raw := post(t, adapter.URL+"/v1/responses", `{"model":"claude-x","input":"hi"}`, map[string]string{"x-api-key": "k"})
+	if status != http.StatusOK {
+		t.Fatalf("status %d body %s", status, raw)
+	}
+	var response responseObject
+	if err := json.Unmarshal([]byte(raw), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Output) != 1 || !strings.Contains(raw, `"text":"ok"`) {
+		t.Fatalf("unknown block changed the response: %s", raw)
+	}
+}
+
 func TestErrorBodyWithStatus200IsAnError(t *testing.T) {
 	upstream, _ := fakeAnthropic(t, 200, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`, nil)
 	adapter := adapterFor(t, upstream.URL, "")
