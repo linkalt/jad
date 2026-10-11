@@ -137,7 +137,7 @@ func executeNativeMemory(args map[string]any, execution tools.ExecutionContext, 
 		value := memoryArgumentData(execution.RawArguments, data)
 		item, err := store.CreateValue(recordType, value, data, settings)
 		if err != nil {
-			return memoryExecutionError(callID, memoryCreate, recordType, "", err), nil
+			return memoryExecutionError(callID, memoryCreate, recordType, "", err, store, settings), nil
 		}
 		return renderMemoryItem(callID, memoryCreate, item, "Memory record created")
 	case memoryGet:
@@ -147,7 +147,7 @@ func executeNativeMemory(args map[string]any, execution tools.ExecutionContext, 
 		}
 		item, err := store.Get(recordType, ref, settings)
 		if err != nil {
-			return memoryExecutionError(callID, memoryGet, recordType, ref, err), nil
+			return memoryExecutionError(callID, memoryGet, recordType, ref, err, store, settings), nil
 		}
 		return renderMemoryItem(callID, memoryGet, item, "Memory record retrieved")
 	case memoryUpdate:
@@ -161,7 +161,7 @@ func executeNativeMemory(args map[string]any, execution tools.ExecutionContext, 
 		value := memoryArgumentData(execution.RawArguments, data)
 		item, err := store.UpdateValue(recordType, ref, ifMatch, value, data, settings)
 		if err != nil {
-			return memoryExecutionError(callID, memoryUpdate, recordType, ref, err), nil
+			return memoryExecutionError(callID, memoryUpdate, recordType, ref, err, store, settings), nil
 		}
 		return renderMemoryItem(callID, memoryUpdate, item, "Memory record updated")
 	case memoryList:
@@ -193,7 +193,7 @@ func executeNativeMemory(args map[string]any, execution tools.ExecutionContext, 
 		}
 		result, err := store.List(recordType, requestedFilter, requestedLimit, args["order"], args["cursor"], settings)
 		if err != nil {
-			return memoryExecutionError(callID, memoryList, recordType, "", err), nil
+			return memoryExecutionError(callID, memoryList, recordType, "", err, store, settings), nil
 		}
 		text, err := memoryListContentText(result)
 		if err != nil {
@@ -246,7 +246,7 @@ func memoryOnlyKeys(args map[string]any, allowed ...string) bool {
 	return true
 }
 
-func memoryExecutionError(callID string, operation memoryOperation, recordType, ref string, err error) string {
+func memoryExecutionError(callID string, operation memoryOperation, recordType, ref string, err error, store *MemoryStore, settings sessionfs.NativeMemorySettings) string {
 	var conflict *MemoryConflictError
 	if errors.As(err, &conflict) {
 		return tools.ExecutionError(callID, tools.StatusError, "memory_conflict", err.Error(),
@@ -262,9 +262,25 @@ func memoryExecutionError(callID string, operation memoryOperation, recordType, 
 		if strings.Contains(storeError.Error(), "not found") {
 			status = tools.StatusNotFound
 		}
-		return tools.ExecutionError(callID, status, "memory_storage_error", storeError.Error())
+		return tools.ExecutionError(callID, status, "memory_storage_error", storeError.Error(), memoryValidValues(storeError, recordType, store, settings)...)
 	}
 	return tools.ExecutionError(callID, tools.StatusError, "memory_operation_failed", err.Error())
+}
+
+// memoryValidValues lists what the agent can use instead: the allowed types after a
+// type error, the newest refs of the type after a ref error.
+func memoryValidValues(storeError *MemoryStoreError, recordType string, store *MemoryStore, settings sessionfs.NativeMemorySettings) []tools.Information {
+	switch storeError.Kind {
+	case memoryErrorType:
+		if len(settings.AllowedTypes) > 0 {
+			return []tools.Information{{Key: "available_types", Value: strings.Join(settings.AllowedTypes, ", ")}}
+		}
+	case memoryErrorRef:
+		if refs := store.RecentRefs(recordType, settings.ListLimit); len(refs) > 0 {
+			return []tools.Information{{Key: "available_refs", Value: strings.Join(refs, ", ")}}
+		}
+	}
+	return nil
 }
 
 func renderMemoryItem(callID string, operation memoryOperation, item MemoryItem, summary string) (string, error) {

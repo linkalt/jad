@@ -31,7 +31,19 @@ var (
 )
 
 // MemoryStoreError describes invalid, missing, or inaccessible memory data.
-type MemoryStoreError struct{ Message string }
+type MemoryStoreError struct {
+	Message string
+	// Kind is set for the errors whose answer lists the valid values.
+	Kind memoryErrorKind
+}
+
+type memoryErrorKind int
+
+const (
+	memoryErrorOther memoryErrorKind = iota
+	memoryErrorType
+	memoryErrorRef
+)
 
 func (e *MemoryStoreError) Error() string { return e.Message }
 
@@ -455,9 +467,29 @@ func (s *MemoryStore) withLock(operation func() error) error {
 	return operation()
 }
 
+// RecentRefs returns up to limit refs of one type, newest first.
+func (s *MemoryStore) RecentRefs(recordType string, limit int64) []string {
+	var refs []string
+	_ = s.withLock(func() error {
+		names, err := s.files(recordType)
+		if err != nil {
+			return err
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(names)))
+		if int64(len(names)) > limit {
+			names = names[:limit]
+		}
+		for _, name := range names {
+			refs = append(refs, recordType+"/"+name)
+		}
+		return nil
+	})
+	return refs
+}
+
 func (s *MemoryStore) checkType(recordType string, policy sessionfs.NativeMemorySettings) error {
 	if !memoryTypePattern.MatchString(recordType) {
-		return &MemoryStoreError{Message: "memory type is invalid"}
+		return &MemoryStoreError{Message: "memory type is invalid", Kind: memoryErrorType}
 	}
 	if policy.AllowedTypes != nil {
 		for _, allowed := range policy.AllowedTypes {
@@ -465,7 +497,7 @@ func (s *MemoryStore) checkType(recordType string, policy sessionfs.NativeMemory
 				return nil
 			}
 		}
-		return &MemoryStoreError{Message: "memory type is not allowed"}
+		return &MemoryStoreError{Message: "memory type is not allowed", Kind: memoryErrorType}
 	}
 	return nil
 }
@@ -586,7 +618,7 @@ func (s *MemoryStore) totals(recordType string, policy sessionfs.NativeMemorySet
 func (s *MemoryStore) target(recordType, ref string) (string, error) {
 	parts := strings.Split(ref, "/")
 	if len(parts) != 2 || parts[0] != recordType || !memoryFilenamePattern.MatchString(parts[1]) || !strings.HasPrefix(parts[1], recordType+"-") {
-		return "", &MemoryStoreError{Message: "memory ref is invalid for the selected type"}
+		return "", &MemoryStoreError{Message: "memory ref is invalid for the selected type", Kind: memoryErrorRef}
 	}
 	return filepath.Join(s.root, recordType, parts[1]), nil
 }
@@ -598,7 +630,7 @@ func (s *MemoryStore) load(recordType, ref string) (MemoryItem, error) {
 	}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return MemoryItem{}, &MemoryStoreError{Message: "memory record was not found"}
+		return MemoryItem{}, &MemoryStoreError{Message: "memory record was not found", Kind: memoryErrorRef}
 	}
 	if err != nil {
 		return MemoryItem{}, err
@@ -608,7 +640,7 @@ func (s *MemoryStore) load(recordType, ref string) (MemoryItem, error) {
 	}
 	text, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return MemoryItem{}, &MemoryStoreError{Message: "memory record was not found"}
+		return MemoryItem{}, &MemoryStoreError{Message: "memory record was not found", Kind: memoryErrorRef}
 	}
 	if err != nil {
 		return MemoryItem{}, err

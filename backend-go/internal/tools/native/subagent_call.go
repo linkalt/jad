@@ -211,8 +211,16 @@ func childApproval(parent tools.ApprovalRequester, agent, parentCallID string, g
 func (s *subagentTool) followUp(ctx context.Context, callID, owner, id string, stop bool, arguments map[string]any) (string, error) {
 	run := s.manager.get(id, owner)
 	if run == nil {
+		information := []tools.Information{}
+		if views := s.manager.list(owner); len(views) > 0 {
+			ids := make([]string, 0, len(views))
+			for _, view := range views {
+				ids = append(ids, view.id)
+			}
+			information = append(information, tools.Information{Key: "available_ids", Value: strings.Join(ids, ", ")})
+		}
 		return tools.ExecutionError(callID, tools.StatusNotFound, "unknown_run",
-			fmt.Sprintf("No run with id %s; it may have been dropped. Call with no task to list the runs", id)), nil
+			fmt.Sprintf("No run with id %s; it may have been dropped. Call with no task to list the runs", id), information...), nil
 	}
 	if stop {
 		s.manager.stop(run)

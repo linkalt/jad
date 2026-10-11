@@ -200,7 +200,7 @@ func executeNativeProcess(
 	stderrLimits := ProcessStreamLimits{HeadBytes: int(settings.Stderr.HeadBytes), TailBytes: int(settings.Stderr.TailBytes)}
 	existing, found := manager.SnapshotWithLogs(id, stdoutLimits, stderrLimits, int(settings.MaxLineChars), settings.StripANSI)
 	if !found || existing == nil {
-		return tools.ExecutionError(execution.CallID, tools.StatusNotFound, "process_not_found", "No managed process has that id", tools.Information{Key: "process_id", Value: id}), nil
+		return processNotFound(execution.CallID, id, manager), nil
 	}
 	if action == processActionStatus {
 		return renderProcessSnapshot(execution.CallID, action, *existing, nil)
@@ -214,7 +214,7 @@ func executeNativeProcess(
 		waited := manager.Wait(id, timeoutMS)
 		snapshot, found := manager.SnapshotWithLogs(id, stdoutLimits, stderrLimits, int(settings.MaxLineChars), settings.StripANSI)
 		if !found || snapshot == nil {
-			return tools.ExecutionError(execution.CallID, tools.StatusNotFound, "process_not_found", "No managed process has that id", tools.Information{Key: "process_id", Value: id}), nil
+			return processNotFound(execution.CallID, id, manager), nil
 		}
 		return renderProcessSnapshot(execution.CallID, action, *snapshot, []tools.Information{{Key: "waited", Value: waited.Waited}})
 	}
@@ -223,11 +223,11 @@ func executeNativeProcess(
 	}
 	_, found = manager.Stop(id, "stopped_by_agent")
 	if !found {
-		return tools.ExecutionError(execution.CallID, tools.StatusNotFound, "process_not_found", "No managed process has that id", tools.Information{Key: "process_id", Value: id}), nil
+		return processNotFound(execution.CallID, id, manager), nil
 	}
 	stopped, found := manager.SnapshotWithLogs(id, stdoutLimits, stderrLimits, int(settings.MaxLineChars), settings.StripANSI)
 	if !found || stopped == nil {
-		return tools.ExecutionError(execution.CallID, tools.StatusNotFound, "process_not_found", "No managed process has that id", tools.Information{Key: "process_id", Value: id}), nil
+		return processNotFound(execution.CallID, id, manager), nil
 	}
 	return renderProcessSnapshot(execution.CallID, action, *stopped, nil)
 }
@@ -260,6 +260,19 @@ func processText(value any) string {
 		return ""
 	}
 	return strings.TrimSpace(text)
+}
+
+// processNotFound lists the ids the manager knows, so the agent can pick one.
+func processNotFound(callID, id string, manager ProcessManager) string {
+	information := []tools.Information{{Key: "process_id", Value: id}}
+	if known := manager.List(""); len(known) > 0 {
+		ids := make([]string, 0, len(known))
+		for _, process := range known {
+			ids = append(ids, process.ID)
+		}
+		information = append(information, tools.Information{Key: "available_ids", Value: strings.Join(ids, ", ")})
+	}
+	return tools.ExecutionError(callID, tools.StatusNotFound, "process_not_found", "No managed process has that id", information...)
 }
 
 func renderProcessList(callID string, processes []ProcessSnapshot) (string, error) {

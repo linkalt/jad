@@ -607,3 +607,19 @@ Checks (2026-10-11): `go test ./internal/... ./cmd/...` 28 packages ok; `go vet`
 - **No resize, no store in the tool.** The result is an ordinary `input_image` in a `function_call_output`, so `image_resize` (source `native`) and `image_store` apply to it by the existing history steps, and the UI shows it through the stored-image or inline-image route.
 - **Shared code.** The file loading of `decide` moved to `readImageFile` (`tools/native/image_file.go`); `decide` calls it with its own limit and part label. Its tests are unchanged and pass.
 - **Not changed:** the user's `.jad` files. A session sees the tool only after the manifest is listed and the toolset has the key.
+
+## Tool errors for an unknown id or value list the valid ones (Go only, 2026-10-12)
+
+- **Rule.** A not-found or invalid-value answer adds one `available_*` information line (comma-joined) so the agent can pick a
+  valid value instead of guessing. `skill_not_found` and `unknown_agent` already did this with the key `available`.
+- **Where.** `memory` (`available_types` after a type error when `allowed_types` is set; `available_refs` after an invalid or missing
+  ref, the newest `list_limit` refs of that type, none when the type is empty), `task` (`available_ids`, newest first by the list
+  order, done tasks included, at most `list_limit`), `process` (`available_ids`, from the manager the call sees, so a sub-agent gets
+  only its own), sub-agent `unknown_run` (`available_ids`, the runs of the calling session only).
+- **Bounds.** Memory and task use their `list_limit` setting; process and sub-agent runs are already bounded by their retention
+  settings (`max_completed`, `keep_finished`). No new setting.
+- **Memory errors carry a kind.** `MemoryStoreError.Kind` marks the type and ref errors; message texts are unchanged.
+- **Not done on purpose.** `unknown_tool` (the tool list is already in every request, and an MCP catalog can be large) and the path
+  errors of `read`, `edit` and `write` (a directory listing could be large).
+- **Tests.** `tools/native/valid_values_errors_test.go`: one test per tool, including the empty case and that a sub-agent or another
+  session is offered only its own ids.

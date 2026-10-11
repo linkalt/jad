@@ -373,7 +373,7 @@ func executeNativeTask(
 				return taskStorageError(execution.CallID, err), nil
 			}
 			if !found {
-				return tools.ExecutionError(execution.CallID, tools.StatusNotFound, "task_not_found", "No task has that id", tools.Information{Key: "task_id", Value: id}), nil
+				return taskNotFound(execution.CallID, id, store, settings), nil
 			}
 			return renderTask(execution.CallID, action, task, "Task retrieved")
 
@@ -386,7 +386,7 @@ func executeNativeTask(
 				return taskStorageError(execution.CallID, err), nil
 			}
 			if !deleted {
-				return tools.ExecutionError(execution.CallID, tools.StatusNotFound, "task_not_found", "No task has that id", tools.Information{Key: "task_id", Value: id}), nil
+				return taskNotFound(execution.CallID, id, store, settings), nil
 			}
 			return taskRender(tools.ResultOptions{ID: execution.CallID, Status: tools.StatusOK, Summary: "Task deleted", Information: []tools.Information{{Key: "action", Value: string(action)}, {Key: "task_id", Value: id}}})
 
@@ -400,7 +400,7 @@ func executeNativeTask(
 				return taskStorageError(execution.CallID, err), nil
 			}
 			if !found {
-				return tools.ExecutionError(execution.CallID, tools.StatusNotFound, "task_not_found", "No task has that id", tools.Information{Key: "task_id", Value: id}), nil
+				return taskNotFound(execution.CallID, id, store, settings), nil
 			}
 			return renderTask(execution.CallID, action, task, "Task completed")
 
@@ -438,7 +438,7 @@ func executeNativeTask(
 				return taskStorageError(execution.CallID, err), nil
 			}
 			if !found {
-				return tools.ExecutionError(execution.CallID, tools.StatusNotFound, "task_not_found", "No task has that id", tools.Information{Key: "task_id", Value: id}), nil
+				return taskNotFound(execution.CallID, id, store, settings), nil
 			}
 			return renderTask(execution.CallID, action, task, "Task updated")
 		}
@@ -538,6 +538,19 @@ func taskNoExtra(arguments map[string]any, allowed ...string) bool {
 
 func taskFailure(callID, code, summary string) string {
 	return tools.ExecutionError(callID, tools.StatusInvalidInput, code, summary)
+}
+
+// taskNotFound lists the ids that exist, so the agent can pick one instead of guessing.
+func taskNotFound(callID, id string, store *TaskStore, settings sessionfs.NativeTaskSettings) string {
+	information := []tools.Information{{Key: "task_id", Value: id}}
+	if listed, err := store.List(TaskListFilter{Status: "all", Limit: int(settings.ListLimit)}); err == nil && len(listed.Tasks) > 0 {
+		ids := make([]string, 0, len(listed.Tasks))
+		for _, task := range listed.Tasks {
+			ids = append(ids, task.ID)
+		}
+		information = append(information, tools.Information{Key: "available_ids", Value: strings.Join(ids, ", ")})
+	}
+	return tools.ExecutionError(callID, tools.StatusNotFound, "task_not_found", "No task has that id", information...)
 }
 
 func taskStorageError(callID string, err error) string {
