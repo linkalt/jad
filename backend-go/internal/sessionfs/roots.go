@@ -427,6 +427,9 @@ func rootsFromSetting(setting map[string]json.RawMessage, settingPath string) ([
 			Layout:        layout,
 		})
 	}
+	if err := checkUniqueSessionIDs(roots, settingPath); err != nil {
+		return nil, err
+	}
 	return roots, nil
 }
 

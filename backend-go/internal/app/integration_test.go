@@ -52,7 +52,7 @@ func TestMultiRootHTTPRunUsesQualifiedSessionAndGoldenTranscript(t *testing.T) {
 		Settings: sharedSettings,
 		Models:   map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
-	fixture.AddSessionInRoot(t, "beta", "shared", fixture.CWD, "dev/coder", sharedSettings)
+	fixture.AddSessionInRoot(t, "beta", "second", fixture.CWD, "dev/coder", sharedSettings)
 	alphaLocation, err := sessionfs.Resolve(config.Roots, "alpha:shared")
 	if err != nil {
 		t.Fatal(err)
@@ -78,21 +78,6 @@ func TestMultiRootHTTPRunUsesQualifiedSessionAndGoldenTranscript(t *testing.T) {
 		service.Close()
 		api.Close()
 	}()
-
-	ambiguous := postRun(t, api.URL+"/api/sessions/shared/run", integrationAPIToken)
-	if ambiguous.StatusCode != http.StatusBadRequest {
-		body, _ := io.ReadAll(ambiguous.Body)
-		ambiguous.Body.Close()
-		t.Fatalf("ambiguous run status = %d, body=%s; want 400", ambiguous.StatusCode, body)
-	}
-	ambiguousBody, err := io.ReadAll(ambiguous.Body)
-	ambiguous.Body.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(ambiguousBody), "include a root id") {
-		t.Fatalf("ambiguous error body = %s", ambiguousBody)
-	}
 
 	response := postRun(t, api.URL+"/api/sessions/alpha:shared/run", integrationAPIToken)
 	defer response.Body.Close()
@@ -190,8 +175,7 @@ func TestMultiRootHTTPRunUsesQualifiedSessionAndGoldenTranscript(t *testing.T) {
 	}
 	listETag := listResponse.Header.Get("ETag")
 	listResponse.Body.Close()
-	// beta:shared reports the turns of alpha:shared: both roots share one state folder (open bug_report).
-	if len(list.Sessions) != 2 || list.Sessions[0].ID != "alpha:shared" || list.Sessions[0].RootID != "alpha" || list.Sessions[0].SessionName != "shared" || list.Sessions[0].Turns != 1 || list.Sessions[1].ID != "beta:shared" || list.Sessions[1].RootID != "beta" {
+	if len(list.Sessions) != 2 || list.Sessions[0].ID != "alpha:shared" || list.Sessions[0].RootID != "alpha" || list.Sessions[0].SessionName != "shared" || list.Sessions[0].Turns != 1 || list.Sessions[1].ID != "beta:second" || list.Sessions[1].Turns != 0 || list.Sessions[1].RootID != "beta" {
 		t.Fatalf("session list = %+v", list.Sessions)
 	}
 	primaryRun := list.Sessions[0].Run

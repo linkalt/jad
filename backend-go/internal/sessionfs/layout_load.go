@@ -158,28 +158,13 @@ type layoutCompose struct {
 // compose builds the legacy-shaped setting for the selected profile. The returned map
 // holds the file of each model ID the profile may use.
 func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMessage, map[string]string, error) {
-	var profile layoutProfileFile
-	if err := readLayoutFile(selected.Path, &profile); err != nil {
-		return nil, nil, err
-	}
-	if profile.SchemaVersion != 0 && profile.SchemaVersion != 1 {
-		return nil, nil, configError("%s: unsupported schema_version %d", selected.Path, profile.SchemaVersion)
-	}
-	if err := checkLayoutSettings(profile.Settings, selected.Path+": settings"); err != nil {
-		return nil, nil, err
-	}
-
-	models, err := catalog.Scan("model", c.layout.Models)
+	allModels, err := catalog.Scan("model", c.layout.Models)
 	if err != nil {
 		return nil, nil, configError("%s: %v", selected.Path, err)
 	}
-	if models, err = models.Narrow(profile.Models); err != nil {
-		return nil, nil, configError("%s: models: %v", selected.Path, err)
-	}
-	if profile.ModelDefault != "" {
-		if _, err := models.Lookup(profile.ModelDefault); err != nil {
-			return nil, nil, configError("%s: model_default: %v", selected.Path, err)
-		}
+	profile, models, err := readProfile(selected.Path, allModels)
+	if err != nil {
+		return nil, nil, err
 	}
 	modelPaths := make(map[string]string, models.Len())
 	for _, item := range models.Entries() {
@@ -228,6 +213,14 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 		entry := c.storageEntry(other, toolBase)
 		if other.ID() == selected.ID() {
 			c.addProfileFields(entry, other.ID(), profile, models)
+		} else {
+			unselected, _, err := readProfile(other.Path, allModels)
+			if err == nil {
+				err = checkUnselectedProfile(other.Path, unselected)
+			}
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		raw, err := json.Marshal(entry)
 		if err != nil {

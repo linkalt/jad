@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestLoadRootsAndResolveAmbiguousReferences(t *testing.T) {
@@ -616,5 +618,36 @@ func TestLoadFindsTheRootSettingInTheJadFolderThenHome(t *testing.T) {
 	config, err = Load(LoadOptions{WorkingDir: cwd, RootSettingPath: explicit, Environment: map[string]string{"HOME": home}})
 	if err != nil || config.Roots[0].ID != "explicit" {
 		t.Fatalf("explicit path: %v, %+v", err, config.Roots)
+	}
+}
+
+// Roots of one root setting share the state catalog, so the same session id in two of
+// them would write one transcript; the root setting is refused.
+func TestLoadRefusesTheSameLayoutSessionInTwoRoots(t *testing.T) {
+	fixture := layouttest.Write(t, layouttest.Spec{SessionID: "shared", RootID: "alpha", ExtraRoots: []string{"beta"}})
+	if _, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}}); err != nil {
+		t.Fatalf("one session: %v", err)
+	}
+	fixture.AddSessionInRoot(t, "beta", "other", fixture.CWD, "dev/coder", nil)
+	if _, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}}); err != nil {
+		t.Fatalf("different ids in two roots: %v", err)
+	}
+	fixture.AddSessionInRoot(t, "beta", "shared", fixture.CWD, "dev/coder", nil)
+	_, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	for _, want := range []string{`session "shared"`, `"alpha"`, `"beta"`, "rename one of the sessions"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want it to contain %q", err, want)
+		}
+	}
+}
+
+// A folder without a session.json is not a session, so it does not collide.
+func TestLoadIgnoresFoldersThatAreNotLayoutSessions(t *testing.T) {
+	fixture := layouttest.Write(t, layouttest.Spec{SessionID: "shared", RootID: "alpha", ExtraRoots: []string{"beta"}})
+	if err := os.MkdirAll(filepath.Join(fixture.RootDirs["beta"], "shared"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}}); err != nil {
+		t.Fatalf("empty folder with the same name: %v", err)
 	}
 }

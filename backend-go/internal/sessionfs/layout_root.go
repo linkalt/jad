@@ -72,6 +72,36 @@ func layoutFromSetting(setting map[string]json.RawMessage, settingPath string) (
 	return layout, nil
 }
 
+// checkUniqueSessionIDs refuses roots that hold a session of the same id. The state folder
+// of a session is <state>/<session>/..., and every root of one root setting shares the
+// state catalog, so two such sessions would write the same transcript.
+func checkUniqueSessionIDs(roots []Root, settingPath string) error {
+	owners := map[string]string{}
+	for _, root := range roots {
+		entries, err := os.ReadDir(root.Directory)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("read session root %q: %w", root.ID, err)
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			info, err := os.Stat(filepath.Join(root.Directory, entry.Name(), layoutSessionFileName))
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			if other, taken := owners[entry.Name()]; taken {
+				return configError("%s: session %q is in session roots %q and %q; they share one state folder, so rename one of the sessions", settingPath, entry.Name(), other, root.ID)
+			}
+			owners[entry.Name()] = root.ID
+		}
+	}
+	return nil
+}
+
 // UsesLayout reports whether the session is stored in the catalog layout: its root has
 // a layout and its directory holds a session.json.
 func (l Location) UsesLayout() bool {

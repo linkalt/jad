@@ -132,16 +132,58 @@ func TestProfileToolsShapeErrors(t *testing.T) {
 	}
 }
 
-// The layout loader reads only the selected profile's file, so a bad tools block in
-// another profile is reported when that profile is selected, not before. The legacy
-// loader checked every profile; missing.md (Phase 1) records the gap.
-func TestProfileToolsOfAnUnselectedProfileAreReportedWhenItIsSelected(t *testing.T) {
+// A bad tools block in a profile of the session's scope is reported when the session
+// loads, whichever profile is selected.
+func TestProfileToolsOfAnUnselectedProfileAreReportedAtLoad(t *testing.T) {
 	bad := map[string]any{"tools": map[string]any{"allow": []any{"raed"}}}
-	if _, err := loadProfileTools(t, "full", bad); err != nil {
-		t.Fatalf("unselected profile with a typo: %v (the layout loader does not read it)", err)
+	for _, active := range []string{"full", "lean"} {
+		_, err := loadProfileTools(t, active, bad)
+		if err == nil || !strings.Contains(err.Error(), `"raed" is not a native tool`) {
+			t.Fatalf("active %s: error = %v, want the typo reported", active, err)
+		}
+		if active == "full" && !strings.Contains(err.Error(), "lean.json") {
+			t.Fatalf("active full: error = %v, want it to name lean.json", err)
+		}
 	}
-	if _, err := loadProfileTools(t, "lean", bad); err == nil || !strings.Contains(err.Error(), `"raed" is not a native tool`) {
-		t.Fatalf("selected profile with a typo: error = %v, want it reported", err)
+}
+
+// Every profile in scope is checked the way the selected one is; a scope that leaves a
+// broken profile out loads.
+func TestUnselectedProfilesAreCheckedAtLoad(t *testing.T) {
+	for name, tc := range map[string]struct {
+		lean map[string]any
+		want string
+	}{
+		"settings key":     {map[string]any{"settings": map[string]any{"paths": map[string]any{}}}, "settings may not carry paths"},
+		"schema version":   {map[string]any{"schema_version": 7}, "unsupported schema_version 7"},
+		"unknown field":    {map[string]any{"colour": "red"}, "colour"},
+		"unknown model":    {map[string]any{"models": []any{"nope/none"}}, "models:"},
+		"model default":    {map[string]any{"model_default": "nope/none"}, "model_default:"},
+		"blank instruct":   {map[string]any{"instructions": "  "}, "instructions must be a non-empty string"},
+		"null instruct":    {map[string]any{"instructions": nil}, "instructions must be a non-empty string"},
+		"blank prompt doc": {map[string]any{"prompt_documents": []any{" "}}, "prompt_documents[0] must be a non-empty string"},
+		"tools not object": {map[string]any{"tools": []any{"read"}}, "tools must be an object"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadProfileTools(t, "full", tc.lean)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "lean.json") {
+				t.Fatalf("error = %v, want it to name lean.json and contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A profile the session's scope leaves out is not read, so a broken file there loads.
+func TestProfileOutsideTheScopeIsNotChecked(t *testing.T) {
+	location, _ := layoutLocation(t, layouttest.Spec{
+		ActiveProfile: "dev/full",
+		Profiles:      map[string]map[string]any{"dev/lean": {"instructions": " "}, "dev/full": {}},
+	})
+	editJSON(t, location.Directory+"/session.json", func(m map[string]any) {
+		m["scope"] = map[string]any{"profiles": []any{"dev/full"}}
+	})
+	if _, err := LoadSessionSettings(location, "", ""); err != nil {
+		t.Fatalf("load with the broken profile out of scope: %v", err)
 	}
 }
 
