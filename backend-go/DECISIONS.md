@@ -533,6 +533,14 @@ A project starts with no agent and the model creates its own, so `tools.native.s
 - **Cost.** A typo in `agents_dir` with `agents_dir_missing_ok` on now loads with no agent instead of failing.
 - **Tests.** Zero agents from an empty folder, an empty list, an empty `agents` object and a skipped missing folder; the configured folders keep a missing one; a folder created between two loads is seen; the tool text for zero agents with and without folders. Five mutations each broke a test.
 
+## `mcp:<server>:*` in a sub-agent's `tools` (Go only)
+
+An agent's `tools` list accepts `mcp:<server>:*` besides `mcp:<server>:<tool>`, with the same entry syntax as a profile's `tools.allow` (`checkProfileToolEntry`, now also called by `optionalSubagentTools` for every `mcp:` entry, so a malformed entry fails at load with `tools[i]`). Native names keep their old error text.
+- **Matching.** `bindMCP` expands the wildcard to the loaded MCP tools whose ID starts with `mcp:<server>:` (the profile's rule, so server `zvec` does not match `zvecx`), sorted by ID. A tool named both exactly and by the wildcard is added once.
+- **Approval.** A tool of a server whose approval is `ask` is skipped by a wildcard, because a child cannot ask. An exact entry for such a tool is still an error. If the wildcard is left with no tool, the error says the server asks for approval; if the server has no loaded tool, it says so and hints at `mcp_servers`.
+- **When it is checked.** The wildcard is expanded in `Bind`, after the MCP servers are listed, so a server that is down at that moment fails the session load, the same as an exact entry does today. The loader cannot check it earlier.
+- **Tests.** Loader: one valid wildcard and four malformed `mcp:` entries. Tool: a wildcard gives only that server's tools, `zvecx` and another server are not matched, a repeated tool is added once, a wildcard skips an asking tool, and the three error cases.
+
 ## Session category in the session list (2026-10-10)
 
 `session.json` `category` was read by the loader and ignored. The session list (`GET /api/sessions`) now carries it as `category` (omitted when the session has none), and it is part of the list ETag, so editing it is not answered with a 304. It is a display grouping only: it does not change the session id, the state path or the tool-storage path. The frontend shows one section per category, in the order the list first meets them, with the sessions that have none in a final section titled by `session_uncategorized_title` in `frontend/src/config.json`.

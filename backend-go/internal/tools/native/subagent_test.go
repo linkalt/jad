@@ -610,6 +610,68 @@ func TestSubagentBindRefusesAnMCPToolThatIsNotLoadedOrNeedsApproval(t *testing.T
 	}
 }
 
+func TestSubagentWildcardGivesTheChildEveryToolOfThatServerOnce(t *testing.T) {
+	launcher := &fakeLauncher{}
+	mcpTools := []tools.Tool{
+		mcpStub(t, "zvec", "search", ""),
+		mcpStub(t, "zvec", "reindex", ""),
+		mcpStub(t, "zvecx", "other", ""),
+		mcpStub(t, "browser", "click", ""),
+	}
+	catalog, err := buildWithMCP(t, subagentSettings(
+		agentWithTools("wild", "read", "mcp:zvec:*"),
+		// The exact entry repeats a tool the wildcard already gave: it is added once.
+		agentWithTools("both", "mcp:zvec:search", "mcp:zvec:*"),
+	), launcher, mcpTools, readOnlyTool("read"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for agent, want := range map[string]string{
+		"wild": "read,mcp_zvec_reindex_0123456789,mcp_zvec_search_0123456789",
+		"both": "mcp_zvec_search_0123456789,mcp_zvec_reindex_0123456789",
+	} {
+		subagentCall(t, catalog, `{"task":"x","agent":"`+agent+`"}`)
+		var got string
+		for _, request := range launcher.requests {
+			if request.Agent.Name == agent {
+				got = strings.Join(toolNames(request.Tools), ",")
+			}
+		}
+		if got != want {
+			t.Errorf("agent %s child tools = %q, want %q (server zvecx and browser must not match)", agent, got, want)
+		}
+	}
+}
+
+func TestSubagentWildcardSkipsToolsOfAServerThatAsksButExactStillFails(t *testing.T) {
+	loaded := []tools.Tool{
+		mcpStub(t, "mixed", "open", ""),
+		mcpStub(t, "mixed", "gated", tools.ApprovalAsk),
+		mcpStub(t, "gated", "lookup", tools.ApprovalAsk),
+	}
+	launcher := &fakeLauncher{}
+	catalog, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "mcp:mixed:*")), launcher, loaded, readOnlyTool("read"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subagentCall(t, catalog, `{"task":"x"}`)
+	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "mcp_mixed_open_0123456789" {
+		t.Errorf("child tools = %q, want only the tool that needs no approval", got)
+	}
+	for name, tc := range map[string]struct{ entry, want string }{
+		"every tool asks": {"mcp:gated:*", `"mcp:gated:*", but server "gated" asks for approval`},
+		"no tool loaded":  {"mcp:ghost:*", `"mcp:ghost:*", but server "ghost" has no loaded tool`},
+		"exact asks":      {"mcp:mixed:gated", `lists "mcp:mixed:gated", whose server asks for approval`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := buildWithMCP(t, subagentSettings(agentWithTools("a", tc.entry)), &fakeLauncher{}, loaded, readOnlyTool("read"))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestSubagentWithMCPToolsAnswersUnavailableUntilBound(t *testing.T) {
 	launcher := &fakeLauncher{}
 	hook := &SubagentMCP{}

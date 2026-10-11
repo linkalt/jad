@@ -538,6 +538,11 @@ func optionalSubagentTools(fields map[string]json.RawMessage, settingPath, secti
 		if name == "" {
 			return nil, false, configError("%s: %s.tools[%d] must be a non-empty string", settingPath, section, index)
 		}
+		if strings.HasPrefix(name, ProfileToolMCPPrefix) {
+			if err := checkProfileToolEntry(name); err != nil {
+				return nil, false, configError("%s: %s.tools[%d] %v", settingPath, section, index, err)
+			}
+		}
 		if _, duplicate := seen[name]; duplicate {
 			return nil, false, configError("%s: %s.tools lists %s twice", settingPath, section, name)
 		}

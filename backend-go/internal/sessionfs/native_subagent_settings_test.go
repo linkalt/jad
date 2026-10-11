@@ -205,6 +205,11 @@ func TestNormalizeNativeSubagentSettingsRejectsInvalidSettings(t *testing.T) {
 		"tools not array":    {`{"agents":{"a":{"tools":"read"}}}`, "agents.a.tools must be an array of tool names"},
 		"tools blank":        {`{"agents":{"a":{"tools":["read"," "]}}}`, "agents.a.tools[1] must be a non-empty string"},
 		"tools twice":        {`{"agents":{"a":{"tools":["read","read"]}}}`, "agents.a.tools lists read twice"},
+		"mcp wildcard ok":    {`{"agents":{"a":{"tools":["read","mcp:docs:*"]}}}`, ""},
+		"mcp no tool":        {`{"agents":{"a":{"tools":["mcp:docs"]}}}`, `agents.a.tools[0] "mcp:docs" must be mcp:<server>:<tool> or mcp:<server>:*`},
+		"mcp bad server":     {`{"agents":{"a":{"tools":["mcp:do.cs:*"]}}}`, `agents.a.tools[0] "mcp:do.cs:*" must be mcp:<server>:<tool>`},
+		"mcp colon wildcard": {`{"agents":{"a":{"tools":["mcp:docs:foo:*"]}}}`, `agents.a.tools[0] "mcp:docs:foo:*" must be mcp:<server>:<tool>`},
+		"mcp whitespace":     {`{"agents":{"a":{"tools":["mcp:docs:a b"]}}}`, `must not contain whitespace`},
 		"upper limit ok":     {`{"agents":{"a":{"timeout_ms":3600000}},"max_concurrent":32,"result_max_bytes":10485760,"list_max_bytes":1048576,"wait_ms":0,"max_wait_ms":3600000,"keep_finished":1000,"max_queued":0}`, ""},
 	} {
 		t.Run(name, func(t *testing.T) {

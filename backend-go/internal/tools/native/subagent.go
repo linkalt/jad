@@ -406,7 +406,24 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool) error {
 			continue
 		}
 		childTools := append([]tools.Tool(nil), agent.nativeTools...)
+		added := make(map[string]struct{}, len(agent.mcpIDs))
+		add := func(tool tools.Tool) {
+			if _, done := added[tool.Definition.ID]; !done {
+				added[tool.Definition.ID] = struct{}{}
+				childTools = append(childTools, tool)
+			}
+		}
 		for _, id := range agent.mcpIDs {
+			if server, wildcard := strings.CutSuffix(id, ":*"); wildcard {
+				matched, err := expandMCPWildcard(agent.config.Name, id, server, byID)
+				if err != nil {
+					return err
+				}
+				for _, tool := range matched {
+					add(tool)
+				}
+				continue
+			}
 			tool, exists := byID[id]
 			if !exists {
 				return fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not a loaded MCP tool (loaded: %s)", agent.config.Name, id, loadedText)
@@ -414,7 +431,7 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool) error {
 			if tool.Approval == tools.ApprovalAsk {
 				return fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, whose server asks for approval; a sub-agent has no way to ask the user, so the call would always be blocked", agent.config.Name, id)
 			}
-			childTools = append(childTools, tool)
+			add(tool)
 		}
 		catalog, err := tools.NewCatalog(childTools)
 		if err != nil {
@@ -423,6 +440,34 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool) error {
 		agent.catalog = catalog
 	}
 	return nil
+}
+
+// expandMCPWildcard returns the loaded tools of one server, by ID order, for an entry
+// written mcp:<server>:*. The server prefix is the profile's matching rule. A tool whose
+// server asks for approval is skipped, since the child cannot ask; a wildcard that is
+// left with no tool is an error that names the server.
+func expandMCPWildcard(agent, entry, serverPrefix string, byID map[string]tools.Tool) ([]tools.Tool, error) {
+	var matched []tools.Tool
+	skipped := 0
+	for id, tool := range byID {
+		if !strings.HasPrefix(id, serverPrefix+":") {
+			continue
+		}
+		if tool.Approval == tools.ApprovalAsk {
+			skipped++
+			continue
+		}
+		matched = append(matched, tool)
+	}
+	server := strings.TrimPrefix(serverPrefix, mcpToolIDPrefix)
+	if len(matched) == 0 {
+		if skipped > 0 {
+			return nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, but server %q asks for approval; a sub-agent has no way to ask the user, so none of its tools can be used", agent, entry, server)
+		}
+		return nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, but server %q has no loaded tool (is it enabled in mcp_servers and running?)", agent, entry, server)
+	}
+	sort.Slice(matched, func(i, j int) bool { return matched[i].Definition.ID < matched[j].Definition.ID })
+	return matched, nil
 }
 
 // normalizeSubagentArguments treats a blank agent, id or task as absent, so a model
