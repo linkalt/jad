@@ -110,6 +110,39 @@ func TestSampleConfigProfiles(t *testing.T) {
 	}
 }
 
+// Names outside every family fall to the default profile, dated snapshots follow their
+// family, and the exact claude-sonnet-5 rule wins over the family rule that also matches it.
+func TestSampleConfigMatchesFamiliesOnlyAtTheNameStart(t *testing.T) {
+	config, err := LoadConfig(samplePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		model    string
+		thinking string
+		midSys   bool
+	}{
+		{"claude-opus-4-6-20260101", ThinkingAdaptive, false},
+		{"claude-haiku-4-5-20251001", ThinkingBudget, false},
+		{"claude-sonnet-5-20260101", ThinkingAdaptive, true},
+		{"claude-sonnet-5", ThinkingAdaptive, false},
+		{"claude-haiku-4-6", ThinkingNone, false},
+		{"claude-opus-4-1", ThinkingNone, false},
+		{"claude-3-5-sonnet-20241022", ThinkingNone, false},
+		{"my-claude-opus-5-5", ThinkingNone, false},
+		{"anthropic/claude-opus-4-8", ThinkingNone, false},
+		{"Claude-Opus-5-5", ThinkingNone, false},
+		{"", ThinkingNone, false},
+	}
+	for _, tc := range cases {
+		profile := config.ProfileFor(tc.model)
+		if profile.Thinking != tc.thinking || profile.MidConversationSystem != tc.midSys {
+			t.Errorf("%q: thinking=%s mid_conversation_system=%v, want %s/%v",
+				tc.model, profile.Thinking, profile.MidConversationSystem, tc.thinking, tc.midSys)
+		}
+	}
+}
+
 // A request through the sample config must produce what the docs require for a
 // current model: adaptive thinking with an effort, never budget_tokens.
 func TestSampleConfigRequests(t *testing.T) {
