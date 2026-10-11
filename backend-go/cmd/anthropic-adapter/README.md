@@ -122,6 +122,10 @@ All off by default. A cache write costs 1.25x (5 minutes) or 2x (1 hour) the inp
 
 `pause_turn` (a server-tool loop that hit its limit) maps to `incomplete` and is **not** continued. It cannot occur here today, because the adapter forwards only client `function` tools and Anthropic returns `pause_turn` only for server tools.
 
+## Upstream transport
+
+The official Anthropic Go SDK sends the request and reads the HTTP status. It does not build the request or parse the reply: the adapter writes the Messages JSON itself and parses the reply itself, including the raw stream, so ping and unknown events are kept. SDK retries are off; `upstream.stream_retry` is the only retry. Because of this, the adapter covers only what the Responses API can express. `top_k`, `stop_sequences`, server tools and reply blocks other than thinking, text and tool calls are not passed through. See `DECISIONS.md`.
+
 ## Not verified
 
 - **Nothing has run against the real Anthropic API.** The tests use a fake upstream written from the Anthropic documentation. A live key could show differences in field shapes, the model table, or error behavior.
