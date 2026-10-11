@@ -134,7 +134,7 @@ import type {DraftDecision} from './draft-answer';
 import type {ComposerInsertActions} from './components/ComposerPane';
 import {ModelPicker} from './components/ModelPicker';
 import {CitationList} from './components/CitationList';
-import {StoredImages, StoredImageScopeProvider} from './components/StoredImages';
+import {InlineImages, StoredImages, StoredImageScopeProvider} from './components/StoredImages';
 import {hostedToolStatus} from './web-search-view';
 import {SessionProfilePicker} from './components/SessionProfilePicker';
 import {FloatingPanel} from './components/FloatingPanel';
@@ -1218,6 +1218,14 @@ function toolCallItem(
           />
         )}
         {result?.images !== undefined && <StoredImages names={result.images} />}
+        {result?.inlineImages !== undefined && result.inlineImages > 0 && source !== undefined && (
+          <InlineImages
+            messageId={source.message.id}
+            callId={result.callId}
+            count={result.inlineImages}
+            cursor={source.message.cursor}
+          />
+        )}
         {result?.truncated !== undefined && (
           <TruncatedNotice bytes={result.truncated.bytes} source={source} />
         )}
@@ -1253,6 +1261,14 @@ function OrphanToolResultBlock({
           hasCopyButton
         />
         {result.images !== undefined && <StoredImages names={result.images} />}
+        {result.inlineImages !== undefined && result.inlineImages > 0 && source !== undefined && (
+          <InlineImages
+            messageId={source.message.id}
+            callId={result.callId}
+            count={result.inlineImages}
+            cursor={source.message.cursor}
+          />
+        )}
         {result.truncated !== undefined && (
           <TruncatedNotice bytes={result.truncated.bytes} source={source} />
         )}

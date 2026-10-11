@@ -223,6 +223,12 @@ type SessionImages interface {
 	ReadSessionImage(ctx context.Context, reference, profile, name string) (SessionImage, error)
 }
 
+// MessageImages is an optional extension that serves an image a tool result still holds
+// inline in the transcript. It is addressed by message, call id and position, never by a path.
+type MessageImages interface {
+	ReadMessageImage(ctx context.Context, reference, profile, messageID, callID string, index int, cursor *int64) (SessionImage, error)
+}
+
 type CompactionResponse struct {
 	Compacted      bool            `json:"compacted"`
 	CompactedItems int             `json:"compacted_items"`
@@ -274,6 +280,7 @@ type Handler struct {
 	toolLister                SessionToolLister
 	settings                  SessionSettings
 	images                    SessionImages
+	messageImages             MessageImages
 	maintenance               SessionMaintenance
 	library                   RootLibrary
 	tokenHash                 [sha256.Size]byte
@@ -382,6 +389,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	toolLister, _ := resolver.(SessionToolLister)
 	settings, _ := resolver.(SessionSettings)
 	images, _ := resolver.(SessionImages)
+	messageImages, _ := resolver.(MessageImages)
 	maintenance, _ := resolver.(SessionMaintenance)
 	trace := config.MemoryTrace
 	if trace == nil {
@@ -391,6 +399,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		logger:                    logging.Or(config.Logger),
 		resolver:                  resolver,
 		images:                    images,
+		messageImages:             messageImages,
 		catalog:                   catalog,
 		toolLister:                toolLister,
 		settings:                  settings,
@@ -497,6 +506,8 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleSessionHistory(w, r, reference, profile)
 	case r.Method == http.MethodGet && len(segments) == 5 && segments[3] == "messages":
 		h.handleSessionMessage(w, r, reference, segments[4], profile)
+	case r.Method == http.MethodGet && len(segments) == 8 && segments[3] == "messages" && segments[5] == "images":
+		h.handleMessageImage(w, r, reference, profile, segments[4], segments[6], segments[7])
 	case r.Method == http.MethodGet && len(segments) == 5 && segments[3] == "images":
 		h.handleSessionImage(w, r, reference, profile, segments[4])
 	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "files":

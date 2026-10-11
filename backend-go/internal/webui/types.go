@@ -43,6 +43,10 @@ type Part struct {
 	// Images lists the stored image files (see internal/imagestore) a tool_result
 	// refers to, as file names the image route serves. Inline images are not listed.
 	Images []string `json:"images,omitempty"`
+	// InlineImages counts the images of a tool_result that are still a base64 data URL in
+	// the transcript. The browser fetches the n-th one through the message image route; the
+	// bytes are never put in the message.
+	InlineImages int `json:"inlineImages,omitempty"`
 	// Files lists the names of the files attached to a user message, in order. The file
 	// bytes stay in the transcript and are never sent to the browser.
 	Files     []string        `json:"files,omitempty"`
@@ -136,6 +140,9 @@ func CapMessages(messages []Message, maxInlineBytes int, cursors map[string]int6
 		transcriptCursor := message.Cursor
 		message.Cursor = nil
 		if maxInlineBytes <= 0 {
+			if hasInlineImages(message.Parts) {
+				message.Cursor = transcriptCursor
+			}
 			cappedMessages[messageIndex] = message
 			continue
 		}
@@ -189,10 +196,23 @@ func CapMessages(messages []Message, maxInlineBytes int, cursors map[string]int6
 			} else if transcriptCursor != nil {
 				message.Cursor = transcriptCursor
 			}
+		} else if hasInlineImages(parts) {
+			message.Cursor = transcriptCursor
 		}
 		cappedMessages[messageIndex] = message
 	}
 	return cappedMessages
+}
+
+// hasInlineImages reports whether a part still carries an image the browser must fetch
+// from the transcript; its message keeps the turn cursor so the route can find it.
+func hasInlineImages(parts []Part) bool {
+	for _, part := range parts {
+		if part.InlineImages > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // FieldsFromParts recomputes the message-level text summaries after part edits.

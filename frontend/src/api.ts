@@ -82,6 +82,8 @@ export interface WebUiToolResultPart {
   status: 'success' | 'error' | 'unknown';
   /** File names of images the server stored for this result; fetch them with `fetchSessionImage`. */
   images?: string[];
+  /** How many images of this result are still inline in the transcript; fetch them with `fetchMessageImage`. */
+  inlineImages?: number;
   truncated?: WebUiPartTruncation;
 }
 
@@ -665,6 +667,41 @@ export async function fetchSessionImage(
   return response.blob();
 }
 
+/**
+ * One image a tool result still holds inline in the transcript. `cursor` is the turn of
+ * the message that carries the result (a message of the history block has none). The
+ * server decodes the image on demand, so it is never part of the message itself.
+ */
+export async function fetchMessageImage(
+  sessionId: string,
+  messageId: string,
+  callId: string,
+  index: number,
+  cursor?: number,
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error('invalid image position');
+  }
+  const query = new URLSearchParams();
+  if (cursor !== undefined) {
+    query.set('cursor', String(cursor));
+  }
+  if (profile !== undefined && profile.length > 0) {
+    query.set('profile', profile);
+  }
+  const suffix = query.size === 0 ? '' : `?${query.toString()}`;
+  const response = await authenticatedFetch(
+    apiUrl(
+      `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/images/${encodeURIComponent(callId)}/${index}${suffix}`,
+    ),
+    signal === undefined ? {} : {signal},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  return response.blob();
+}
+
 export async function fetchSessionTools(sessionId: string, profile?: string): Promise<ToolDefinition[]> {  const response = await authenticatedFetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/tools${profileQuery(profile)}`));
   if (!response.ok) {
     throw new Error(await readError(response));
@@ -979,7 +1016,11 @@ function isWebUiPart(value: unknown): value is WebUiPart {
       typeof value.output === 'string' &&
       (value.status === 'success' || value.status === 'error' || value.status === 'unknown') &&
       (value.images === undefined ||
-        (Array.isArray(value.images) && value.images.every(name => typeof name === 'string')))
+        (Array.isArray(value.images) && value.images.every(name => typeof name === 'string'))) &&
+      (value.inlineImages === undefined ||
+        (typeof value.inlineImages === 'number' &&
+          Number.isInteger(value.inlineImages) &&
+          value.inlineImages >= 0))
     );
   }
   return false;

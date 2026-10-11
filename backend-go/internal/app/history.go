@@ -98,17 +98,98 @@ func (r *Resolver) ReadSessionMessage(ctx context.Context, reference, profile, m
 		return nil, &httpapi.StatusError{Code: 404, Message: "message not found"}
 	}
 
+	records, err := r.readTurnRecords(ctx, config, location.Reference, *cursor)
+	if err != nil {
+		return nil, err
+	}
+	messages, err := webui.NormalizeTranscript(records)
+	if err != nil {
+		return nil, err
+	}
+	for _, message := range messages {
+		if message.ID == messageID {
+			if webui.HasInlineImages(message) {
+				// The whole message replaces the capped one in the browser, whose inline
+				// images are fetched by this cursor.
+				message.Cursor = cursor
+			}
+			return json.Marshal(message)
+		}
+	}
+	return nil, &httpapi.StatusError{Code: 404, Message: "message not found"}
+}
+
+// ReadMessageImage serves the index-th inline image of the tool result callID in the
+// message messageID. The transcript keeps the image as a data URL; it is decoded here and
+// never copied into the message. cursor is the message's turn; without it only the history
+// block is searched, as for ReadSessionMessage.
+func (r *Resolver) ReadMessageImage(ctx context.Context, reference, profile, messageID, callID string, index int, cursor *int64) (httpapi.SessionImage, error) {
+	if ctx == nil {
+		return httpapi.SessionImage{}, errors.New("session message context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return httpapi.SessionImage{}, err
+	}
+	notFound := &httpapi.StatusError{Code: 404, Message: "image not found"}
+	if callID == "" || index < 0 {
+		return httpapi.SessionImage{}, notFound
+	}
+	location, err := sessionfs.Resolve(r.roots, reference)
+	if err != nil {
+		return httpapi.SessionImage{}, mapSessionError(err)
+	}
+	config, err := sessionfs.LoadSessionConfig(location, profile, "")
+	if err != nil {
+		return httpapi.SessionImage{}, mapSessionError(err)
+	}
+	var records []webui.TranscriptRecord
+	if cursor == nil {
+		records, _, err = readHistoryRecords(ctx, config)
+	} else {
+		records, err = r.readTurnRecords(ctx, config, location.Reference, *cursor)
+	}
+	if err != nil {
+		return httpapi.SessionImage{}, err
+	}
+	if data, contentType, ok := webui.FindInlineImage(records, messageID, callID, index); ok {
+		return httpapi.SessionImage{ContentType: contentType, Data: data}, nil
+	}
+	return httpapi.SessionImage{}, notFound
+}
+
+// readHistoryRecords returns the backup tail the history block shows; hasBackup is false
+// when the session keeps no backup.
+func readHistoryRecords(ctx context.Context, config sessionfs.SessionConfig) (records []webui.TranscriptRecord, hasBackup bool, err error) {
+	if config.BackupTurns <= 0 {
+		return nil, false, nil
+	}
+	info, err := os.Stat(config.MessagesBackupPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("stat session backup %q: %w", config.MessagesBackupPath, err)
+	}
+	if info.Size() <= 0 {
+		return nil, false, nil
+	}
+	records, err = readBackupTail(ctx, config.MessagesBackupPath, config.BackupTurns)
+	return records, err == nil, err
+}
+
+// readTurnRecords returns the records of the transcript turn that starts at cursor.
+func (r *Resolver) readTurnRecords(ctx context.Context, config sessionfs.SessionConfig, reference string, cursor int64) ([]webui.TranscriptRecord, error) {
 	shared, err := r.sharedStore(config)
 	if err != nil {
 		return nil, err
 	}
 	index, err := scanTranscriptIndex(shared, config)
 	if err != nil {
-		return nil, fmt.Errorf("read session transcript %q: %w", location.Reference, err)
+		return nil, fmt.Errorf("read session transcript %q: %w", reference, err)
 	}
 	turn := -1
 	for candidate, start := range index.starts {
-		if start == *cursor {
+		if start == cursor {
 			turn = candidate
 			break
 		}
@@ -133,36 +214,14 @@ func (r *Resolver) ReadSessionMessage(ctx context.Context, reference, profile, m
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("read session transcript %q: %w", location.Reference, err)
+		return nil, fmt.Errorf("read session transcript %q: %w", reference, err)
 	}
-	messages, err := webui.NormalizeTranscript(records)
-	if err != nil {
-		return nil, err
-	}
-	for _, message := range messages {
-		if message.ID == messageID {
-			return json.Marshal(message)
-		}
-	}
-	return nil, &httpapi.StatusError{Code: 404, Message: "message not found"}
+	return records, nil
 }
 
 func (r *Resolver) readHistoryBlock(ctx context.Context, config sessionfs.SessionConfig) (historyBlock, error) {
-	if config.BackupTurns <= 0 {
-		return historyBlock{}, nil
-	}
-	info, err := os.Stat(config.MessagesBackupPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return historyBlock{}, nil
-		}
-		return historyBlock{}, fmt.Errorf("stat session backup %q: %w", config.MessagesBackupPath, err)
-	}
-	if info.Size() <= 0 {
-		return historyBlock{}, nil
-	}
-	records, err := readBackupTail(ctx, config.MessagesBackupPath, config.BackupTurns)
-	if err != nil {
+	records, hasBackup, err := readHistoryRecords(ctx, config)
+	if err != nil || !hasBackup {
 		return historyBlock{}, err
 	}
 	messages, err := webui.NormalizeTranscript(records)

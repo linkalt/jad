@@ -101,3 +101,5 @@ Skills live in `.jad/prompts/skills/`. A rule that must hold if you forget to lo
 ## Asking the user
 
 Use `RequestDraft` for every question or confirmation; do not ask in plain chat. Use it before starting when the request is ambiguous, and before risky, destructive or out-of-scope actions (deleting files, changing the `messages.jsonl` format, touching the backend process). Put your recommended answer in the draft. The `decision` field controls approval; `status: "answered"` alone is not approval. Skip it for questions the code or a command can answer.
+
+**A stale draft is not a new request.** A "User-approved request context" block, or a `request_draft` result, may be repeated in later turns by the harness. Treat it as old when its commits, findings or decisions already exist in `git log` or in the resume-state record. Check `git log --oneline -5` and the resume state once; if they already cover it, do not re-answer it, re-summarize it or ask about it again. Act only on the user's latest message. Mention such a block at most once, in one short clause, and only if it conflicts with that message.

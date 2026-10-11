@@ -13,7 +13,13 @@ import (
 // NormalizeTranscript converts JSONL transcript entries into frontend messages.
 // Prefix is "o" for current transcript offsets and "b" for backup offsets.
 func NormalizeTranscript(records []TranscriptRecord) ([]Message, error) {
-	state := reducerState{toolMessages: make(map[string]int), activeToolMessage: -1}
+	return normalizeTranscript(records, nil)
+}
+
+// normalizeTranscript is NormalizeTranscript that also reports, for every tool result, the
+// id of the message it joined and the record it came from.
+func normalizeTranscript(records []TranscriptRecord, onToolResult func(messageID string, part Part, entry TranscriptRecord)) ([]Message, error) {
+	state := reducerState{toolMessages: make(map[string]int), activeToolMessage: -1, onToolResult: onToolResult}
 	for _, entry := range records {
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(entry.Raw, &fields); err != nil || fields == nil {
@@ -90,6 +96,7 @@ type reducerState struct {
 	toolMessages      map[string]int
 	activeToolMessage int
 	activeStepID      string
+	onToolResult      func(messageID string, part Part, entry TranscriptRecord)
 }
 
 func (s *reducerState) addToolResult(callID string, part Part, entry TranscriptRecord) {
@@ -101,6 +108,9 @@ func (s *reducerState) addToolResult(callID string, part Part, entry TranscriptR
 		}
 		message.Text, message.ReasoningContent = FieldsFromParts(message.Parts)
 		s.messages[index] = message
+		if s.onToolResult != nil {
+			s.onToolResult(message.ID, part, entry)
+		}
 		return
 	}
 	message := Message{
@@ -113,6 +123,9 @@ func (s *reducerState) addToolResult(callID string, part Part, entry TranscriptR
 	setCursor(&message, entry)
 	message.Text, message.ReasoningContent = FieldsFromParts(message.Parts)
 	s.messages = append(s.messages, message)
+	if s.onToolResult != nil {
+		s.onToolResult(message.ID, part, entry)
+	}
 }
 
 func (s *reducerState) addResponseWithTools(id, stepID, timestamp string, parts []Part, entry TranscriptRecord) {
@@ -257,7 +270,7 @@ func toolResult(fields map[string]json.RawMessage, key string) (*Part, string) {
 			}
 		}
 	}
-	part := &Part{Type: "tool_result", CallID: callID, Output: output, Status: status, Images: storedImageNames(outputRaw)}
+	part := &Part{Type: "tool_result", CallID: callID, Output: output, Status: status, Images: storedImageNames(outputRaw), InlineImages: len(inlineImageURLs(outputRaw))}
 	return part, callID
 }
 
