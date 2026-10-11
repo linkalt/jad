@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -234,8 +235,8 @@ func TestProfileToolMatching(t *testing.T) {
 		{"mcp:docs:*", native, false},
 		{"mcp:docs:lookup", native, false},
 	} {
-		if got := profileToolMatches(tc.entry, tc.def); got != tc.want {
-			t.Errorf("profileToolMatches(%q, %s) = %v, want %v", tc.entry, tc.def.ID, got, tc.want)
+		if got := tools.EntryMatches(tc.entry, tc.def); got != tc.want {
+			t.Errorf("EntryMatches(%q, %s) = %v, want %v", tc.entry, tc.def.ID, got, tc.want)
 		}
 	}
 }
@@ -266,5 +267,131 @@ func TestProfileToolsHideAnMCPToolFromTheParentButNotFromAChild(t *testing.T) {
 	}
 	if calls.Load() != 1 || !strings.Contains(child[1].Text, "MCP says answer is 99") {
 		t.Errorf("the MCP server saw %d calls (want 1); the child's second round:\n%s", calls.Load(), child[1].Text)
+	}
+}
+
+// shownAndHidden reads the tools route as two sorted lists of "source:id".
+func (f subagentFixture) shownAndHidden(t *testing.T) (shown, hidden []string) {
+	t.Helper()
+	status, raw := f.sessionTools(t)
+	if status != http.StatusOK {
+		t.Fatalf("tools route status %d: %s", status, raw)
+	}
+	var body struct {
+		Tools  []struct{ ID, Source, Name string } `json:"tools"`
+		Hidden []struct{ ID, Source, Name string } `json:"hidden"`
+	}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range body.Tools {
+		shown = append(shown, definition.Source+":"+definition.ID)
+	}
+	for _, definition := range body.Hidden {
+		hidden = append(hidden, definition.Source+":"+definition.ID)
+	}
+	sort.Strings(shown)
+	sort.Strings(hidden)
+	return shown, hidden
+}
+
+// deny alone shows everything the session registers except what it names; deny wins
+// when allow lists the same tool or the whole server.
+func TestProfileToolsDenySubtractsAndWinsOverAllow(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tools        map[string]any
+		shown, hides string
+	}{
+		"deny alone":            {map[string]any{"deny": []string{"mcp:fixture:lookup"}}, "native:native.read,native:native.subagent", "mcp:mcp:fixture:lookup"},
+		"deny a native tool":    {map[string]any{"deny": []string{"subagent"}}, "mcp:mcp:fixture:lookup,native:native.read", "native:native.subagent"},
+		"deny a whole server":   {map[string]any{"deny": []string{"mcp:fixture:*"}}, "native:native.read,native:native.subagent", "mcp:mcp:fixture:lookup"},
+		"empty deny":            {map[string]any{"deny": []string{}}, "mcp:mcp:fixture:lookup,native:native.read,native:native.subagent", ""},
+		"deny beats exact":      {map[string]any{"allow": []string{"read", "mcp:fixture:lookup"}, "deny": []string{"mcp:fixture:lookup"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.subagent"},
+		"deny beats wildcard":   {map[string]any{"allow": []string{"read", "mcp:fixture:*"}, "deny": []string{"mcp:fixture:lookup"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.subagent"},
+		"deny beats own allow":  {map[string]any{"allow": []string{"read", "subagent"}, "deny": []string{"subagent"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.subagent"},
+		"allow only, no change": {map[string]any{"allow": []string{"read"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.subagent"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := buildSubagentFixtureWithMCP(t, map[string]any{
+				"model": "child.json", "description": "Reads files.",
+				"__session": profileSession(tc.tools),
+			}, false, nil, &mcpFixture{calls: &atomic.Int32{}})
+			shown, hidden := f.shownAndHidden(t)
+			if got := strings.Join(shown, ","); got != tc.shown {
+				t.Errorf("shown = %q, want %q", got, tc.shown)
+			}
+			if got := strings.Join(hidden, ","); got != tc.hides {
+				t.Errorf("hidden = %q, want %q", got, tc.hides)
+			}
+		})
+	}
+}
+
+// The parent is sent without the denied tool, and so is the child, although the agent
+// lists it: deny reaches the sub-agent, which allow alone does not.
+func TestProfileToolsDenyAlsoLimitsTheChild(t *testing.T) {
+	calls := &atomic.Int32{}
+	f := buildSubagentFixtureWithMCP(t, map[string]any{
+		"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"},
+		"__session": profileSession(map[string]any{"deny": []string{"mcp:fixture:lookup"}}),
+	}, false, nil, &mcpFixture{calls: calls})
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	parent := f.provider.forModel("parent-model")
+	child := f.provider.forModel("child-model")
+	if len(parent) == 0 || len(child) == 0 {
+		t.Fatalf("requests: parent %d, child %d", len(parent), len(child))
+	}
+	if got := strings.Join(parent[0].Tools, ","); got != "read,subagent" {
+		t.Errorf("parent tools = %q, want read,subagent", got)
+	}
+	if got := strings.Join(child[0].Tools, ","); got != "read" {
+		t.Errorf("child tools = %q, want only read: the denied MCP tool must not reach the child", got)
+	}
+	if calls.Load() != 0 {
+		t.Errorf("the MCP server saw %d calls, want none", calls.Load())
+	}
+}
+
+// A deny entry that names nothing registered is an error like an allow entry; one that
+// is no tool name at all is refused when the settings load.
+func TestProfileToolsDenyEntryThatIsNotRegisteredIsAConfigError(t *testing.T) {
+	for name, tc := range map[string]struct {
+		entry, want string
+		atLoad      bool
+	}{
+		"misspelled":     {"raed", `deny[0] "raed" is not a native tool`, true},
+		"not enabled":    {"bash", `tools.deny lists "bash", which is not a registered tool (registered: read, subagent)`, false},
+		"mcp not loaded": {"mcp:ghost:lookup", `tools.deny lists "mcp:ghost:lookup", which is not a registered tool`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSubagentFixture(t, map[string]any{
+				"model": "child.json", "description": "Reads files.",
+				"__session": profileSession(map[string]any{"deny": []string{tc.entry}}),
+			})
+			status, body := f.sessionTools(t)
+			body = errorText([]byte(body))
+			if status != http.StatusUnprocessableEntity || !strings.Contains(body, tc.want) {
+				t.Fatalf("tools route: status %d, body %s", status, body)
+			}
+			if len(f.provider.forModel("parent-model")) != 0 {
+				t.Errorf("the parent must not reach the provider with a bad deny list")
+			}
+		})
+	}
+}
+
+// Denying the only tool an agent can use fails the load of the whole session with a
+// message that names the deny list, not a silent agent that cannot do anything.
+func TestProfileToolsDenyThatEmptiesAnAgentFailsTheLoad(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{
+		"model": "child.json", "description": "Reads files.",
+		"__session": profileSession(map[string]any{"deny": []string{"read"}}),
+	})
+	status, raw := f.sessionTools(t)
+	body := errorText([]byte(raw))
+	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "agents.explore has no tool to use") || !strings.Contains(body, "the profile's tools.deny is in effect: read") {
+		t.Fatalf("tools route: status %d, body %s", status, body)
 	}
 }

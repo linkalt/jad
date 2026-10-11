@@ -46,15 +46,22 @@
     },
     "tools": {
       "type": "object",
-      "description": "The tools.allow filter of the profile, unchanged: which registered tools the model sees.",
+      "description": "Which registered tools the profile's model sees. allow lists them, deny takes some away and wins over allow; without allow every registered tool is shown except what deny names. deny also limits the profile's sub-agents. Each entry is a native tool name, mcp:<server>:<tool> or mcp:<server>:*; setting.schema.json has the full rules.",
       "properties": {
         "allow": {
           "type": "array",
           "items": {
             "type": "string"
           }
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
+      "anyOf": [{"required": ["allow"]}, {"required": ["deny"]}],
       "additionalProperties": false
     },
     "settings": {

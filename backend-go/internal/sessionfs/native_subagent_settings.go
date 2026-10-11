@@ -107,6 +107,9 @@ type NativeSubagentSettings struct {
 	// with a run id when it gives wait_ms. Off by default: such an agent then waits for
 	// its end, whatever wait_ms says. The zero value is the default.
 	AllowDetachedWriters bool
+	// DenyTools is the selected profile's tools.deny, set when the catalog is built and
+	// not read from the subagent section: a tool it covers is in no child's catalog.
+	DenyTools []string
 	// ListMaxBytes is the most bytes of agent list the tool description may carry:
 	// the full list when it fits, else the names, else a count. Zero never lists
 	// inline, so the model has to ask. The zero value of this struct therefore means

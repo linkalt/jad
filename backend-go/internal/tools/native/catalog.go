@@ -293,13 +293,15 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 		if err != nil {
 			return nil, err
 		}
-		tool, err := NewSubagentToolWithProcesses(*config.NativeSubagent, loaded, launcher, mcp, subagentManager, manager)
+		subagentSettings := *config.NativeSubagent
+		subagentSettings.DenyTools = config.ProfileTools.Deny
+		tool, err := NewSubagentToolWithProcesses(subagentSettings, loaded, launcher, mcp, subagentManager, manager)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		// The agent list is part of the description the model sees, so it is kept on top
 		// of the manifest's text and not replaced by it.
-		tool.Definition.Description = definition.Description + subagentListText(*config.NativeSubagent)
+		tool.Definition.Description = definition.Description + subagentListText(subagentSettings)
 		loaded = append(loaded, tool)
 	}
 	return tools.NewCatalog(loaded)

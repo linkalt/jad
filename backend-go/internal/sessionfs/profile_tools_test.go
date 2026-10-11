@@ -23,9 +23,37 @@ func TestProfileToolsLoadAndReachTheConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	want := ProfileToolSettings{Restricted: true, Allow: []string{"read", "mcp:docs:search", "mcp:docs:*"}}
+	want := ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read", "mcp:docs:search", "mcp:docs:*"}, Deny: nil}
 	if !reflect.DeepEqual(config.ProfileTools, want) {
 		t.Fatalf("ProfileTools = %+v, want %+v", config.ProfileTools, want)
+	}
+}
+
+// deny alone subtracts from everything the session registers: HasAllow stays false.
+func TestProfileToolsDenyAloneLoadsWithoutAnAllowList(t *testing.T) {
+	config, err := loadApprovalSetting(t, profileSetting(map[string]any{"tools": map[string]any{"deny": []any{"bash", "mcp:docs:*"}}}))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	want := ProfileToolSettings{Restricted: true, HasAllow: false, Deny: []string{"bash", "mcp:docs:*"}}
+	if !reflect.DeepEqual(config.ProfileTools, want) {
+		t.Fatalf("ProfileTools = %+v, want %+v", config.ProfileTools, want)
+	}
+}
+
+// allow and deny together are both kept; an empty deny is a restriction that hides nothing.
+func TestProfileToolsAllowAndDenyTogether(t *testing.T) {
+	config, err := loadApprovalSetting(t, profileSetting(map[string]any{"tools": map[string]any{"allow": []any{"read", "bash"}, "deny": []any{"bash"}}}))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	want := ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read", "bash"}, Deny: []string{"bash"}}
+	if !reflect.DeepEqual(config.ProfileTools, want) {
+		t.Fatalf("ProfileTools = %+v, want %+v", config.ProfileTools, want)
+	}
+	config, err = loadApprovalSetting(t, profileSetting(map[string]any{"tools": map[string]any{"deny": []any{}}}))
+	if err != nil || !config.ProfileTools.Restricted || config.ProfileTools.HasAllow || len(config.ProfileTools.Deny) != 0 {
+		t.Fatalf("empty deny: %+v, %v", config.ProfileTools, err)
 	}
 }
 
@@ -34,7 +62,7 @@ func TestProfileToolsEmptyAllowIsRestrictedAndHidesEverything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if !config.ProfileTools.Restricted || len(config.ProfileTools.Allow) != 0 {
+	if !config.ProfileTools.Restricted || !config.ProfileTools.HasAllow || len(config.ProfileTools.Allow) != 0 {
 		t.Fatalf("ProfileTools = %+v, want restricted with no entries", config.ProfileTools)
 	}
 }
@@ -80,8 +108,14 @@ func TestProfileToolsShapeErrors(t *testing.T) {
 	}{
 		"not an object":    {[]any{"read"}, "paths.profiles.lean.tools must be an object"},
 		"null":             {nil, "paths.profiles.lean.tools must be an object"},
-		"no allow":         {map[string]any{}, "tools.allow is required; use an empty array to hide every tool"},
-		"unknown key":      {map[string]any{"allow": []any{}, "deny": []any{}}, "tools.deny is not supported"},
+		"no allow or deny": {map[string]any{}, "tools needs allow or deny; use an empty allow array to hide every tool"},
+		"unknown key":      {map[string]any{"allow": []any{}, "block": []any{}}, "tools.block is not supported"},
+		"deny not array":   {map[string]any{"deny": "bash"}, "tools.deny must be an array of tool names"},
+		"deny null":        {map[string]any{"deny": nil}, "tools.deny must be an array of tool names"},
+		"deny not string":  {map[string]any{"deny": []any{3}}, "tools.deny[0] must be a non-empty string"},
+		"deny unknown":     {map[string]any{"deny": []any{"raed"}}, `tools.deny[0] "raed" is not a native tool`},
+		"deny bad mcp":     {map[string]any{"deny": []any{"mcp:docs"}}, `tools.deny[0] "mcp:docs" must be mcp:<server>:<tool> or mcp:<server>:*`},
+		"deny duplicate":   {map[string]any{"deny": []any{"bash", "bash"}}, `tools.deny[1] repeats "bash"`},
 		"typo key":         {map[string]any{"alow": []any{}}, "did you mean allow?"},
 		"allow not array":  {map[string]any{"allow": "read"}, "tools.allow must be an array of tool names"},
 		"allow null":       {map[string]any{"allow": nil}, "tools.allow must be an array of tool names"},
@@ -134,9 +168,11 @@ func TestProfileToolsSchemaMatchesTheLoader(t *testing.T) {
 						AdditionalProperties struct {
 							Properties struct {
 								Tools struct {
-									Properties           map[string]json.RawMessage `json:"properties"`
-									Required             []string                   `json:"required"`
-									AdditionalProperties bool                       `json:"additionalProperties"`
+									Properties map[string]json.RawMessage `json:"properties"`
+									AnyOf      []struct {
+										Required []string `json:"required"`
+									} `json:"anyOf"`
+									AdditionalProperties bool `json:"additionalProperties"`
 								} `json:"tools"`
 							} `json:"properties"`
 						} `json:"additionalProperties"`
@@ -156,20 +192,35 @@ func TestProfileToolsSchemaMatchesTheLoader(t *testing.T) {
 	sort.Strings(keys)
 	want := append([]string(nil), profileToolsKeys...)
 	sort.Strings(want)
-	if !reflect.DeepEqual(keys, want) || tools.AdditionalProperties || !reflect.DeepEqual(tools.Required, []string{"allow"}) {
-		t.Fatalf("schema keys %v required %v additionalProperties %v, loader accepts %v and requires allow", keys, tools.Required, tools.AdditionalProperties, want)
+	var anyOf [][]string
+	for _, alternative := range tools.AnyOf {
+		anyOf = append(anyOf, alternative.Required)
 	}
-	var allow struct {
-		Items struct {
-			Pattern string `json:"pattern"`
-		} `json:"items"`
+	if !reflect.DeepEqual(keys, want) || tools.AdditionalProperties || !reflect.DeepEqual(anyOf, [][]string{{"allow"}, {"deny"}}) {
+		t.Fatalf("schema keys %v anyOf-required %v additionalProperties %v, loader accepts %v and needs allow or deny", keys, anyOf, tools.AdditionalProperties, want)
 	}
-	if err := json.Unmarshal(tools.Properties["allow"], &allow); err != nil {
-		t.Fatal(err)
-	}
-	pattern, err := regexp.Compile(allow.Items.Pattern)
-	if err != nil {
-		t.Fatalf("schema pattern: %v", err)
+	var pattern *regexp.Regexp
+	for _, list := range []string{"allow", "deny"} {
+		var entries struct {
+			Items struct {
+				Pattern string `json:"pattern"`
+			} `json:"items"`
+			UniqueItems bool `json:"uniqueItems"`
+		}
+		if err := json.Unmarshal(tools.Properties[list], &entries); err != nil {
+			t.Fatal(err)
+		}
+		compiled, err := regexp.Compile(entries.Items.Pattern)
+		if err != nil {
+			t.Fatalf("%s schema pattern: %v", list, err)
+		}
+		if pattern != nil && pattern.String() != compiled.String() {
+			t.Errorf("allow and deny use different entry patterns: %q and %q", pattern, compiled)
+		}
+		if !entries.UniqueItems {
+			t.Errorf("schema %s must set uniqueItems, the loader refuses a repeated entry", list)
+		}
+		pattern = compiled
 	}
 	// Every native tool name the loader knows is allowed by the schema pattern, and
 	// the pattern and the loader agree on a sample of good and bad entries.

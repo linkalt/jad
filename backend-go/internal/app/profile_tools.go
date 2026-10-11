@@ -19,11 +19,14 @@ func applyProfileTools(config sessionfs.SessionConfig, registered *tools.Catalog
 		return registered, nil, nil
 	}
 	definitions := registered.Definitions()
-	if err := checkProfileToolEntries(config, settings.Allow, definitions); err != nil {
+	if err := checkProfileToolEntries(config, "allow", settings.Allow, definitions); err != nil {
+		return nil, nil, err
+	}
+	if err := checkProfileToolEntries(config, "deny", settings.Deny, definitions); err != nil {
 		return nil, nil, err
 	}
 	exposed, hidden, err := registered.Filter(func(definition tools.Definition) bool {
-		return profileToolAllowed(settings.Allow, definition)
+		return profileToolShown(settings, definition)
 	})
 	if err != nil {
 		return nil, nil, err
@@ -31,38 +34,25 @@ func applyProfileTools(config sessionfs.SessionConfig, registered *tools.Catalog
 	return exposed, hidden, nil
 }
 
-// profileToolAllowed reports whether one allow-list entry covers the definition.
-func profileToolAllowed(allow []string, definition tools.Definition) bool {
-	for _, entry := range allow {
-		if profileToolMatches(entry, definition) {
-			return true
-		}
-	}
-	return false
-}
-
-func profileToolMatches(entry string, definition tools.Definition) bool {
-	if !strings.HasPrefix(entry, sessionfs.ProfileToolMCPPrefix) {
-		return definition.Source == "native" && definition.Name == entry
-	}
-	if definition.Source != "mcp" {
+// profileToolShown reports whether the profile's model sees the tool: an allow list
+// (when the block has one) must cover it, and no deny entry may.
+func profileToolShown(settings sessionfs.ProfileToolSettings, definition tools.Definition) bool {
+	if tools.AnyEntryMatches(settings.Deny, definition) {
 		return false
 	}
-	if prefix, found := strings.CutSuffix(entry, ":*"); found {
-		return strings.HasPrefix(definition.ID, prefix+":")
-	}
-	return definition.ID == entry
+	return !settings.HasAllow || tools.AnyEntryMatches(settings.Allow, definition)
 }
 
 // checkProfileToolEntries refuses an entry that names nothing registered, so a typo
-// shows up as a configuration error and not as a tool that is quietly missing.
-func checkProfileToolEntries(config sessionfs.SessionConfig, allow []string, registered []tools.Definition) error {
-	for _, entry := range allow {
+// shows up as a configuration error and not as a tool that is quietly missing. list is
+// "allow" or "deny".
+func checkProfileToolEntries(config sessionfs.SessionConfig, list string, entries []string, registered []tools.Definition) error {
+	for _, entry := range entries {
 		if profileToolEntryRegistered(config, entry, registered) {
 			continue
 		}
-		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.allow lists %q, which is not a registered tool (registered: %s)",
-			config.SettingPath, config.Profile, entry, registeredToolList(registered))}
+		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.%s lists %q, which is not a registered tool (registered: %s)",
+			config.SettingPath, config.Profile, list, entry, registeredToolList(registered))}
 	}
 	return nil
 }
@@ -80,7 +70,7 @@ func profileToolEntryRegistered(config sessionfs.SessionConfig, entry string, re
 		return false
 	}
 	for _, definition := range registered {
-		if profileToolMatches(entry, definition) {
+		if tools.EntryMatches(entry, definition) {
 			return true
 		}
 	}

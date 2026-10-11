@@ -158,7 +158,7 @@ func NewSubagentToolWithProcesses(settings sessionfs.NativeSubagentSettings, par
 	readOnly := make([]tools.Tool, 0, len(parentTools))
 	var changers []tools.Tool
 	for _, tool := range parentTools {
-		if tool.Definition.Source != "native" || tool.Definition.ID == subagentToolID {
+		if tool.Definition.Source != "native" || tool.Definition.ID == subagentToolID || tools.AnyEntryMatches(settings.DenyTools, tool.Definition) {
 			continue
 		}
 		switch {
@@ -170,8 +170,12 @@ func NewSubagentToolWithProcesses(settings sessionfs.NativeSubagentSettings, par
 	}
 	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager, processes: processes}
 	for _, agent := range settings.Agents {
+		agent = withoutDeniedTools(agent, settings.DenyTools)
 		childTools, mcpIDs, err := subagentChildTools(agent, readOnly, changers, settings.AllowWrite)
 		if err != nil {
+			if len(settings.DenyTools) > 0 {
+				err = fmt.Errorf("%w (the profile's tools.deny is in effect: %s)", err, strings.Join(settings.DenyTools, ", "))
+			}
 			return tools.Tool{}, err
 		}
 		entry := subagentAgent{config: agent, nativeTools: childTools, mcpIDs: mcpIDs}
@@ -208,6 +212,28 @@ func NewSubagentToolWithProcesses(settings sessionfs.NativeSubagentSettings, par
 			return runtime.execute(ctx, arguments, execution)
 		},
 	}, nil
+}
+
+// withoutDeniedTools drops from an agent's tools list every entry the profile's
+// tools.deny covers, so a denied tool cannot be reached through a child. An agent
+// without a tools list is returned as it is: its default set is filtered when built.
+// A wildcard entry that covers only some tools is expanded in bindMCP.
+func withoutDeniedTools(agent sessionfs.NativeSubagentAgent, deny []string) sessionfs.NativeSubagentAgent {
+	if !agent.HasTools || len(deny) == 0 {
+		return agent
+	}
+	kept := make([]string, 0, len(agent.Tools))
+	for _, name := range agent.Tools {
+		definition := tools.Definition{ID: name, Source: "native", Name: name}
+		if strings.HasPrefix(name, mcpToolIDPrefix) {
+			definition = tools.Definition{ID: name, Source: "mcp"}
+		}
+		if !tools.AnyEntryMatches(deny, definition) {
+			kept = append(kept, name)
+		}
+	}
+	agent.Tools = kept
+	return agent
 }
 
 func containsName(names []string, name string) bool {
@@ -408,6 +434,9 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool) error {
 		childTools := append([]tools.Tool(nil), agent.nativeTools...)
 		added := make(map[string]struct{}, len(agent.mcpIDs))
 		add := func(tool tools.Tool) {
+			if tools.AnyEntryMatches(s.settings.DenyTools, tool.Definition) {
+				return
+			}
 			if _, done := added[tool.Definition.ID]; !done {
 				added[tool.Definition.ID] = struct{}{}
 				childTools = append(childTools, tool)

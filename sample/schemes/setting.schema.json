@@ -439,12 +439,18 @@
                 "properties": {
                   "allow": {
                     "type": "array",
-                    "description": "What the model is shown: a native tool name (read, write, edit, grep, glob, bash, exec, process, task, memory, fetch, request_draft, skill, subagent, decide), one MCP tool as mcp:<server>:<tool>, or every tool of one MCP server as mcp:<server>:*. An empty array hides every registered tool; hosted tools from the model file (such as web search) are not registered tools and stay. An entry that names a tool the session does not register is a configuration error.",
+                    "description": "What the model is shown: a native tool name (read, write, edit, grep, glob, bash, exec, process, task, memory, fetch, request_draft, skill, subagent, decide), one MCP tool as mcp:<server>:<tool>, or every tool of one MCP server as mcp:<server>:*. An empty array hides every registered tool; hosted tools from the model file (such as web search) are not registered tools and stay. An entry that names a tool the session does not register is a configuration error. Without allow, every registered tool is shown except what deny names.",
+                    "items": {"type": "string", "pattern": "^(read|write|edit|grep|glob|bash|exec|process|task|memory|fetch|request_draft|skill|subagent|decide|mcp:[A-Za-z0-9_-]+:\\S+)$"},
+                    "uniqueItems": true
+                  },
+                  "deny": {
+                    "type": "array",
+                    "description": "What is taken away, in the same entry form as allow. deny wins over allow. It also limits the profile's sub-agents: a tool it covers is in no agent's catalog, and an agent that lists only denied tools fails to load. An entry that names a tool the session does not register is a configuration error.",
                     "items": {"type": "string", "pattern": "^(read|write|edit|grep|glob|bash|exec|process|task|memory|fetch|request_draft|skill|subagent|decide|mcp:[A-Za-z0-9_-]+:\\S+)$"},
                     "uniqueItems": true
                   }
                 },
-                "required": ["allow"],
+                "anyOf": [{"required": ["allow"]}, {"required": ["deny"]}],
                 "additionalProperties": false
               }
             },

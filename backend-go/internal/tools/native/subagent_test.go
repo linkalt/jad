@@ -672,6 +672,126 @@ func TestSubagentWildcardSkipsToolsOfAServerThatAsksButExactStillFails(t *testin
 	}
 }
 
+func withDeny(settings sessionfs.NativeSubagentSettings, deny ...string) sessionfs.NativeSubagentSettings {
+	settings.DenyTools = deny
+	return settings
+}
+
+// The profile's tools.deny removes a tool from every child: from the default set, from
+// an explicit list, and from a wildcard's expansion. Other tools and servers stay.
+func TestSubagentProfileDenyRemovesToolsFromEveryChild(t *testing.T) {
+	launcher := &fakeLauncher{}
+	mcpTools := []tools.Tool{
+		mcpStub(t, "zvec", "search", ""),
+		mcpStub(t, "zvec", "reindex", ""),
+		mcpStub(t, "zvecx", "other", ""),
+	}
+	catalog, err := buildWithMCP(t, withDeny(subagentSettings(
+		agentNamed("plain"),
+		agentWithTools("listed", "read", "grep"),
+		agentWithTools("wild", "read", "mcp:zvec:*"),
+		agentWithTools("exact", "mcp:zvec:search", "mcp:zvec:reindex"),
+		agentWithTools("other", "mcp:zvecx:*"),
+	), "grep", "mcp:zvec:reindex"), launcher, mcpTools, readOnlyTool("read"), readOnlyTool("grep"), readOnlyTool("glob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for agent, want := range map[string]string{
+		"plain":  "read,glob",
+		"listed": "read",
+		"wild":   "read,mcp_zvec_search_0123456789",
+		"exact":  "mcp_zvec_search_0123456789",
+		"other":  "mcp_zvecx_other_0123456789",
+	} {
+		subagentCall(t, catalog, `{"task":"x","agent":"`+agent+`"}`)
+		var got string
+		for _, request := range launcher.requests {
+			if request.Agent.Name == agent {
+				got = strings.Join(toolNames(request.Tools), ",")
+			}
+		}
+		if got != want {
+			t.Errorf("agent %s child tools = %q, want %q", agent, got, want)
+		}
+	}
+}
+
+// A deny entry for a whole server removes the server from a child; a deny entry that
+// matches no loaded tool changes nothing (the profile checks that it names a tool).
+func TestSubagentProfileDenyOfAWholeServerAndOfNothing(t *testing.T) {
+	launcher := &fakeLauncher{}
+	mcpTools := []tools.Tool{mcpStub(t, "zvec", "search", ""), mcpStub(t, "browser", "click", "")}
+	catalog, err := buildWithMCP(t, withDeny(subagentSettings(
+		agentWithTools("a", "read", "mcp:zvec:search", "mcp:browser:click"),
+	), "mcp:zvec:*", "mcp:ghost:*"), launcher, mcpTools, readOnlyTool("read"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subagentCall(t, catalog, `{"task":"x"}`)
+	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "read,mcp_browser_click_0123456789" {
+		t.Errorf("child tools = %q, want the denied server gone and the other kept", got)
+	}
+}
+
+// An agent left with nothing to use fails the load, and the message says the deny list
+// is why, so the cause is not mistaken for a typo in the agent file.
+func TestSubagentProfileDenyThatEmptiesAnAgentIsAnError(t *testing.T) {
+	loaded := []tools.Tool{mcpStub(t, "zvec", "search", "")}
+	for name, tc := range map[string]struct {
+		agent sessionfs.NativeSubagentAgent
+		deny  []string
+		want  string
+	}{
+		"listed tools all denied":  {agentWithTools("a", "read"), []string{"read"}, "agents.a has no tool to use"},
+		"default set all denied":   {agentNamed("a"), []string{"read"}, "agents.a has no tool to use"},
+		"wildcard server denied":   {agentWithTools("a", "mcp:zvec:*"), []string{"mcp:zvec:*"}, "agents.a has no tool to use"},
+		"exact mcp tool denied":    {agentWithTools("a", "mcp:zvec:search"), []string{"mcp:zvec:search"}, "agents.a has no tool to use"},
+		"message names the reason": {agentWithTools("a", "read"), []string{"read"}, "the profile's tools.deny is in effect: read"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			hook := &SubagentMCP{}
+			_, err := NewSubagentToolWithMCP(withDeny(subagentSettings(tc.agent), tc.deny...), withExecutors(t, readOnlyTool("read")), &fakeLauncher{}, hook)
+			if err == nil {
+				err = hook.Bind(loaded)
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+	// Without a deny list the same agent loads, so the error comes from the deny.
+	if _, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "read")), &fakeLauncher{}, loaded, readOnlyTool("read")); err != nil {
+		t.Fatalf("no deny: %v", err)
+	}
+}
+
+// With allow_write on, a denied change tool is not available to a child either.
+func TestSubagentProfileDenyAlsoRemovesAChangeTool(t *testing.T) {
+	settings := withDeny(subagentSettings(agentWithTools("a", "read", "write")), "write")
+	settings.AllowWrite = true
+	parentTools := withExecutors(t, readOnlyTool("read"), writeTool("write"))
+	_, err := NewSubagentTool(settings, parentTools, &fakeLauncher{})
+	if err != nil {
+		t.Fatalf("a denied change tool must be dropped from the list, not fail: %v", err)
+	}
+	settings.DenyTools = nil
+	tool, err := NewSubagentTool(settings, parentTools, &fakeLauncher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tool.MayChangeFiles(map[string]any{"task": "x", "agent": "a"}) {
+		t.Fatal("control: without a deny list the agent that lists write may change files")
+	}
+	settings.DenyTools = []string{"write"}
+	tool, err = NewSubagentTool(settings, parentTools, &fakeLauncher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool.MayChangeFiles(map[string]any{"task": "x", "agent": "a"}) {
+		t.Fatal("with write denied the agent must no longer count as a file changer")
+	}
+}
+
 func TestSubagentWithMCPToolsAnswersUnavailableUntilBound(t *testing.T) {
 	launcher := &fakeLauncher{}
 	hook := &SubagentMCP{}
