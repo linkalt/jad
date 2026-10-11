@@ -22,3 +22,6 @@ backend-go/jad
 /frontend/CLAUDE.md
 /backend-go/jad_ant
 /backend-go/openai-auth
+/backend-go/claude-auth
+/backend-go/jad2
+*.kate-swp
