@@ -14,16 +14,13 @@ import (
 	"testing"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 	"example.com/agent-harness/backend-go/internal/tools/native"
 )
 
 func TestHTTPRunExecutesNativeTaskAndPersistsOutputAcrossProviderRounds(t *testing.T) {
 	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	taskStorage := filepath.Join(sessionDir, "tasks")
+	taskStorage := filepath.Join(workspace, "tasks")
 	taskSettings := sessionfs.NativeTaskSettings{
 		MaxTasks: 20, ListLimit: 10, MaxListLimit: 20, MaxTitleChars: 100,
 		MaxTags: 4, MaxTagChars: 20, MaxDocuments: 4, MaxDocumentChars: 100,
@@ -100,28 +97,13 @@ func TestHTTPRunExecutesNativeTaskAndPersistsOutputAcrossProviderRounds(t *testi
 	}))
 	defer provider.Close()
 
-	rootSetting := `{"session_roots":[{"id":"local","path":"sessions"}]}`
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(rootSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sessionSetting := fmt.Sprintf(`{"cwd":%q,"max_tool_rounds":2,"tool_definition_paths":["task.json"],"tools":{"native":{"task":{"storage_dir":%q,"max_tasks":20}}}}`, workspace, taskStorage)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(sessionSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	modelSetting := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q}`, provider.URL+"/v1")
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(modelSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir: workspace,
-		Environment: map[string]string{
-			"AGENT_API_TOKEN":    integrationAPIToken,
-			"FIXTURE_OPENAI_KEY": "local-provider-key",
-		},
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
+	config, fixture := layoutConfig(t, layouttest.Spec{
+		CWD:                 workspace,
+		ToolDefinitionPaths: []string{filepath.Join(workspace, "task.json")},
+		Settings:            map[string]any{"max_tool_rounds": 2},
+		Native:              map[string]any{"task": map[string]any{"storage_dir": taskStorage, "max_tasks": 20}},
+		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -157,7 +139,7 @@ func TestHTTPRunExecutesNativeTaskAndPersistsOutputAcrossProviderRounds(t *testi
 	if err != nil || !strings.Contains(string(stored), `"id":"T-001"`) || !strings.Contains(string(stored), `"status":"in-progress"`) {
 		t.Fatalf("persisted task storage=%s, error=%v", stored, err)
 	}
-	transcriptFile, err := os.Open(filepath.Join(sessionDir, "messages.jsonl"))
+	transcriptFile, err := os.Open(filepath.Join(profileState(fixture), "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 const integrationAPIToken = "0123456789abcdef0123456789abcdef"
@@ -41,50 +42,33 @@ func TestMultiRootHTTPRunUsesQualifiedSessionAndGoldenTranscript(t *testing.T) {
 	}))
 	defer provider.Close()
 
-	workspace := t.TempDir()
-	rootA := filepath.Join(workspace, "root-a")
-	rootB := filepath.Join(workspace, "root-b")
-	sessionA := filepath.Join(rootA, "shared")
-	sessionB := filepath.Join(rootB, "shared")
-	for _, dir := range []string{sessionA, sessionB} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
+	sharedSettings := map[string]any{
+		"http_debug":  map[string]any{"enabled": true, "include_request_headers": true},
+		"persistence": map[string]any{"durability": "process", "max_item_bytes": 1048576, "response_metadata": "full"},
 	}
-	rootSetting := `{"session_roots":[{"id":"alpha","path":"root-a"},{"id":"beta","path":"root-b"}],"server":{"max_body_bytes":4096,"sse_max_buffered_bytes":4096,"max_inline_part_bytes":3}}`
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(rootSetting), 0o600); err != nil {
+	config, fixture := layoutConfig(t, layouttest.Spec{
+		SessionID: "shared", RootID: "alpha", ExtraRoots: []string{"beta"},
+		Server:   map[string]any{"max_body_bytes": 4096, "sse_max_buffered_bytes": 4096, "max_inline_part_bytes": 3},
+		Settings: sharedSettings,
+		Models:   map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	fixture.AddSessionInRoot(t, "beta", "shared", fixture.CWD, "dev/coder", sharedSettings)
+	alphaLocation, err := sessionfs.Resolve(config.Roots, "alpha:shared")
+	if err != nil {
 		t.Fatal(err)
 	}
-	sessionSetting := fmt.Sprintf(`{"cwd":%q,"http_debug":{"enabled":true,"include_request_headers":true},"persistence":{"durability":"process","max_item_bytes":1048576,"response_metadata":"full"}}`, workspace)
-	for _, dir := range []string{sessionA, sessionB} {
-		if err := os.WriteFile(filepath.Join(dir, "setting.json"), []byte(sessionSetting), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	alpha, err := sessionfs.LoadSessionSettings(alphaLocation, "", "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	modelConfig := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q}`, provider.URL+"/v1")
-	for _, dir := range []string{sessionA, sessionB} {
-		if err := os.WriteFile(filepath.Join(dir, "model.json"), []byte(modelConfig), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(sessionB, "messages.jsonl"), nil, 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Dir(alpha.MessagesPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	backupLine := `{"type":"message","role":"user","content":[{"type":"input_text","text":"archived"}]}`
-	if err := os.WriteFile(filepath.Join(sessionA, "messages.backup.jsonl"), []byte(backupLine+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(alpha.MessagesBackupPath, []byte(backupLine+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir: workspace,
-		Environment: map[string]string{
-			"AGENT_API_TOKEN":    integrationAPIToken,
-			"FIXTURE_OPENAI_KEY": "local-provider-key",
-		},
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig() error = %v", err)
-	}
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -125,12 +109,12 @@ func TestMultiRootHTTPRunUsesQualifiedSessionAndGoldenTranscript(t *testing.T) {
 			t.Errorf("qualified run stream missing %q: %s", event, responseText)
 		}
 	}
-	debugRequest := readDebugRecordEventually(t, filepath.Join(sessionA, "debug", "http", "request1"))
+	debugRequest := readDebugRecordEventually(t, filepath.Join(alpha.StoragePaths.HTTPDebug, "request1"))
 	requestHeaders, ok := debugRequest["headers"].(map[string]any)
 	if !ok || debugRequest["direction"] != "request" || requestHeaders["authorization"] != "[REDACTED]" {
 		t.Fatalf("HTTP debug request record = %#v", debugRequest)
 	}
-	debugResponse := readDebugRecordEventually(t, filepath.Join(sessionA, "debug", "http", "response1"))
+	debugResponse := readDebugRecordEventually(t, filepath.Join(alpha.StoragePaths.HTTPDebug, "response1"))
 	responseHeaders, ok := debugResponse["headers"].(map[string]any)
 	if !ok || debugResponse["direction"] != "response" || debugResponse["status"] != float64(http.StatusOK) || responseHeaders["content-type"] != "text/event-stream" {
 		t.Fatalf("HTTP debug response record = %#v", debugResponse)
@@ -156,7 +140,7 @@ func TestMultiRootHTTPRunUsesQualifiedSessionAndGoldenTranscript(t *testing.T) {
 		}
 	}
 
-	transcript, err := os.Open(filepath.Join(sessionA, "messages.jsonl"))
+	transcript, err := os.Open(alpha.MessagesPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,16 +190,16 @@ func TestMultiRootHTTPRunUsesQualifiedSessionAndGoldenTranscript(t *testing.T) {
 	}
 	listETag := listResponse.Header.Get("ETag")
 	listResponse.Body.Close()
-	if len(list.Sessions) != 2 || list.Sessions[0].ID != "alpha:shared" || list.Sessions[0].RootID != "alpha" || list.Sessions[0].SessionName != "shared" || list.Sessions[0].Turns != 1 || list.Sessions[1].ID != "beta:shared" || list.Sessions[1].RootID != "beta" || list.Sessions[1].Turns != 0 {
+	// beta:shared reports the turns of alpha:shared: both roots share one state folder (open bug_report).
+	if len(list.Sessions) != 2 || list.Sessions[0].ID != "alpha:shared" || list.Sessions[0].RootID != "alpha" || list.Sessions[0].SessionName != "shared" || list.Sessions[0].Turns != 1 || list.Sessions[1].ID != "beta:shared" || list.Sessions[1].RootID != "beta" {
 		t.Fatalf("session list = %+v", list.Sessions)
 	}
 	primaryRun := list.Sessions[0].Run
 	if primaryRun == nil || primaryRun.Status != "completed" || !strings.HasPrefix(primaryRun.TurnID, "web-") {
 		t.Fatalf("session-list run summary = %+v", primaryRun)
 	}
-	// These sessions configure no path profiles, so their run is reported only as
-	// `run`; runs_by_profile lists runs of named profiles, as in TypeScript.
-	if len(list.Sessions[0].RunsByProfile) != 0 || list.Sessions[1].Run != nil {
+	// A layout session always has a named profile, so its run is also listed under it.
+	if byProfile := list.Sessions[0].RunsByProfile["dev/coder"]; len(list.Sessions[0].RunsByProfile) != 1 || byProfile.Status != "completed" || byProfile.TurnID != primaryRun.TurnID || list.Sessions[1].Run != nil {
 		t.Fatalf("session-list profile run summaries = %+v", list.Sessions)
 	}
 	if listETag == "" {
@@ -280,8 +264,8 @@ func TestMultiRootHTTPRunUsesQualifiedSessionAndGoldenTranscript(t *testing.T) {
 	if firstPage.Run == nil || firstPage.Run.TurnID != primaryRun.TurnID || firstPage.Run.Status != "completed" {
 		t.Fatalf("snapshot run summary = %+v", firstPage.Run)
 	}
-	if len(firstPage.RunsByProfile) != 0 {
-		t.Fatalf("snapshot of a profile-less session listed runs_by_profile = %+v", firstPage.RunsByProfile)
+	if byProfile := firstPage.RunsByProfile["dev/coder"]; len(firstPage.RunsByProfile) != 1 || byProfile.TurnID != primaryRun.TurnID {
+		t.Fatalf("snapshot runs_by_profile = %+v, want only dev/coder", firstPage.RunsByProfile)
 	}
 	if firstPage.Messages[0].Sender != "user" || firstPage.Messages[0].Text != "hel" || firstPage.Messages[1].Sender != "assistant" || firstPage.Messages[1].Text != "hel" {
 		t.Errorf("first page messages = %+v", firstPage.Messages)

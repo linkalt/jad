@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 type lockedBuffer struct {
@@ -34,27 +32,14 @@ func (b *lockedBuffer) String() string {
 // frontend does and checks the broken session is reported once, with its reason,
 // while the healthy session is still listed.
 func TestSessionListLogsAnInvalidSessionOncePerReason(t *testing.T) {
-	workspace := t.TempDir()
-	rootDir := filepath.Join(workspace, "sessions")
-	for name, setting := range map[string]string{
-		"good":   `{"cwd":"` + filepath.ToSlash(workspace) + `","persistence":{"durability":"process","max_item_bytes":1048576}}`,
-		"broken": `{"cwd":"` + filepath.ToSlash(workspace) + `","tools":{"native":{"nonexistent_tool":{}}}}`,
-	} {
-		dir := filepath.Join(rootDir, name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "setting.json"), []byte(setting), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "model.json"), []byte(`{"provider":"openai","model":"gpt-test"}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	loaded, fixture := layoutConfig(t, layouttest.Spec{
+		SessionID: "good",
+		Settings:  map[string]any{"persistence": map[string]any{"durability": "process", "max_item_bytes": 1048576}},
+	}, map[string]string{})
+	fixture.AddSession(t, "broken", fixture.CWD, map[string]any{"nonexistent_tool": map[string]any{}}, nil)
 	output := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(output, nil))
-	roots := []sessionfs.Root{{ID: "primary", Label: "Primary", Directory: rootDir}}
-	resolver, err := NewResolver(roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50}, WithLogger(logger))
+	resolver, err := NewResolver(loaded.Roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50}, WithLogger(logger))
 	if err != nil {
 		t.Fatal(err)
 	}

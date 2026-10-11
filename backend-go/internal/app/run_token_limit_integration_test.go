@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 	"example.com/agent-harness/backend-go/internal/tools/native"
 )
 
@@ -20,7 +21,7 @@ import (
 // read in every round and reports 70 tokens each time, so a run's count is 70 * rounds.
 type tokenCapFixture struct {
 	t           *testing.T
-	sessionDir  string
+	stagingDir  string
 	api         *httptest.Server
 	providerHit atomic.Int32
 }
@@ -28,11 +29,6 @@ type tokenCapFixture struct {
 func newTokenCapFixture(t *testing.T, maxRunTokens string, finalAfter int32) *tokenCapFixture {
 	t.Helper()
 	workspace := t.TempDir()
-	sessionsDir := filepath.Join(workspace, "sessions")
-	sessionDir := filepath.Join(sessionsDir, "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(workspace, "sample.txt"), []byte("sample content\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +48,7 @@ func newTokenCapFixture(t *testing.T, maxRunTokens string, finalAfter int32) *to
 	if err := os.WriteFile(filepath.Join(workspace, "read.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fixture := &tokenCapFixture{t: t, sessionDir: sessionDir}
+	fixture := &tokenCapFixture{t: t}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		call := fixture.providerHit.Add(1)
@@ -79,28 +75,25 @@ func newTokenCapFixture(t *testing.T, maxRunTokens string, finalAfter int32) *to
 	}))
 	t.Cleanup(provider.Close)
 
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(`{"session_roots":[{"id":"local","path":"sessions"}]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	setting := fmt.Sprintf(`{"cwd":%q,"max_tool_rounds":10,"tool_definition_paths":["read.json"],"tools":{"native":{"read":{"max_bytes":1024,"max_file_bytes":4096,"default_limit":250}}}`, workspace)
+	settings := map[string]any{"max_tool_rounds": 10}
 	if maxRunTokens != "" {
-		setting += `,"max_run_tokens":` + maxRunTokens
+		settings["max_run_tokens"] = json.RawMessage(maxRunTokens)
 	}
-	setting += `}`
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	model := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q}`, provider.URL+"/v1")
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(model), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir:  workspace,
-		Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"},
-	})
+	config, layout := layoutConfig(t, layouttest.Spec{
+		SessionID: "demo", CWD: workspace, ToolDefinitionPaths: []string{filepath.Join(workspace, "read.json")},
+		Native:   map[string]any{"read": map[string]any{"max_bytes": 1024, "max_file_bytes": 4096, "default_limit": 250}},
+		Settings: settings,
+		Models:   map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	location, err := sessionfs.Resolve(config.Roots, "local:demo")
 	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
+		t.Fatal(err)
 	}
+	// A setting the loader refuses (max_run_tokens null) leaves no staging dir to read.
+	if sessionSettings, err := sessionfs.LoadSessionSettings(location, "", ""); err == nil {
+		fixture.stagingDir = sessionSettings.StagingDir
+	}
+	_ = layout
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -153,7 +146,7 @@ func TestMaxRunTokensStopsARunAndTheClientSeesTheCounts(t *testing.T) {
 		t.Errorf("the stop must not be replaced by the generic failure line:\n%s", stream)
 	}
 	// The refusal is kept beside the transcript, so it survives the run-state window.
-	cache, err := os.ReadFile(filepath.Join(f.sessionDir, "staging", "run-error-cache.json"))
+	cache, err := os.ReadFile(filepath.Join(f.stagingDir, "run-error-cache.json"))
 	if err != nil || !strings.Contains(string(cache), want) {
 		t.Errorf("run-error cache missing the stop message: %v\n%s", err, cache)
 	}

@@ -21,6 +21,7 @@ import (
 	mcpSDK "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 // subagentProvider is a fake Responses endpoint. It tells the parent run and the child
@@ -274,8 +275,14 @@ func lastOutput(dump string) string {
 type subagentFixture struct {
 	workspace  string
 	sessionDir string
-	apiURL     string
-	provider   *subagentProvider
+	// stateDir holds the profile's messages.jsonl and staging; toolDir its tool storage
+	// (.subagents, ...); modelsDir the model files; config is the loaded server config.
+	stateDir  string
+	toolDir   string
+	modelsDir string
+	config    Config
+	apiURL    string
+	provider  *subagentProvider
 	// childProvider is the child's own server when the fixture was built with
 	// newSplitSubagentFixture; it is nil when both models share provider.
 	childProvider *subagentProvider
@@ -327,40 +334,33 @@ func buildSubagentFixture(t *testing.T, agentSetting map[string]any, splitChild 
 func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, splitChild bool, files map[string]string, mcp *mcpFixture) subagentFixture {
 	t.Helper()
 	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	provider := &subagentProvider{}
 	server := httptest.NewServer(provider.handler(t))
 	t.Cleanup(server.Close)
 
-	manifest := func(file string) {
-		data, err := os.ReadFile(filepath.Join("..", "..", "..", "sample", "tools", "native", file))
+	sampleTool := func(file string) string {
+		path, err := filepath.Abs(filepath.Join("..", "..", "..", "sample", "tools", "native", file))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(workspace, file), data, 0o600); err != nil {
-			t.Fatal(err)
-		}
+		return path
 	}
-	manifest("read.json")
-	manifest("subagent.json")
+	definitions := []string{sampleTool("read.json"), sampleTool("subagent.json")}
 	writeSettings, withWrite := agentSetting["__write"].(map[string]any)
 	if withWrite {
-		manifest("write.json")
+		definitions = append(definitions, sampleTool("write.json"))
 		delete(agentSetting, "__write")
 	}
 	bashSettings, withBash := agentSetting["__bash"].(map[string]any)
 	if withBash {
-		manifest("bash.json")
+		definitions = append(definitions, sampleTool("bash.json"))
 		delete(agentSetting, "__bash")
 	}
 	checkpointJSON, withCheckpoint := agentSetting["__checkpoint"].(string)
 	delete(agentSetting, "__checkpoint")
 	sessionExtra, _ := agentSetting["__session"].(map[string]any)
 	delete(agentSetting, "__session")
-	// __child_model adds fields to the child's model.json (for example hosted_tools).
+	// __child_model adds fields to the child's model file (for example hosted_tools).
 	childModelExtra, _ := agentSetting["__child_model"].(map[string]any)
 	delete(agentSetting, "__child_model")
 	for name, text := range files {
@@ -369,10 +369,11 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	if err := os.WriteFile(filepath.Join(workspace, "notes.txt"), []byte("the secret is 42\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(`{"session_roots":[{"id":"local","path":"sessions"}]}`), 0o600); err != nil {
-		t.Fatal(err)
+	if agentSetting["model"] == "child.json" {
+		agentSetting["model"] = "openai/child"
 	}
-	mcpServers := []any{}
+
+	spec := layouttest.Spec{SessionID: "demo", CWD: workspace, ToolDefinitionPaths: definitions, ProfileModels: []string{"openai/parent"}}
 	if mcp != nil {
 		mcpServer := mcpSDK.NewServer(&mcpSDK.Implementation{Name: "fixture", Version: "1.0.0"}, nil)
 		mcpServer.AddTool(&mcpSDK.Tool{
@@ -391,16 +392,14 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		})
 		mcpHTTP := httptest.NewServer(mcpSDK.NewStreamableHTTPHandler(func(*http.Request) *mcpSDK.Server { return mcpServer }, nil))
 		t.Cleanup(mcpHTTP.Close)
-		mcpConfig, _ := json.Marshal(map[string]any{
-			"transport": map[string]any{"type": "streamable_http", "url": mcpHTTP.URL}, "timeout_ms": 10_000, "max_result_bytes": 4096 + 8*len(mcp.image),
-		})
-		mcpPath := filepath.Join(workspace, "mcp-server.json")
-		writeFile(t, mcpPath, mcpConfig)
-		entry := map[string]any{"id": "fixture", "config_path": mcpPath, "enabled": true, "deny_tools": []string{}}
+		use := map[string]any{"deny_tools": []string{}}
 		if mcp.approval != "" {
-			entry["approval"] = mcp.approval
+			use["approval"] = mcp.approval
 		}
-		mcpServers = []any{entry}
+		spec.MCP = map[string]map[string]any{"m/fixture": use}
+		spec.MCPConfig = map[string]map[string]any{"m/fixture": {
+			"transport": map[string]any{"type": "streamable_http", "url": mcpHTTP.URL}, "timeout_ms": 10_000, "max_result_bytes": 4096 + 8*len(mcp.image),
+		}}
 	}
 	subagent := map[string]any{"agents": map[string]any{"explore": agentSetting}}
 	if budget, ok := agentSetting["__list_max_bytes"]; ok {
@@ -419,40 +418,32 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		// The test supplies the agents as folders; nothing is defined inline.
 		subagent = map[string]any{"agents_dir": []string{dir}}
 	}
-	definitions := []string{"read.json", "subagent.json"}
-	nativeTools := map[string]any{
+	spec.Native = map[string]any{
 		"read":     map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}},
 		"subagent": subagent,
 	}
 	if withWrite {
-		definitions = append(definitions, "write.json")
 		writeTool := map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}}
 		for key, value := range writeSettings {
 			writeTool[key] = value
 		}
-		nativeTools["write"] = writeTool
+		spec.Native["write"] = writeTool
 	}
 	if withBash {
-		definitions = append(definitions, "bash.json")
-		nativeTools["bash"] = bashSettings
+		spec.Native["bash"] = bashSettings
 	}
-	sessionSetting := map[string]any{
-		"cwd": workspace, "max_tool_rounds": 4,
-		"tool_definition_paths": definitions,
-		"mcp_servers":           mcpServers,
-		"tools":                 map[string]any{"native": nativeTools},
-	}
+	spec.Settings = map[string]any{"max_tool_rounds": 4}
 	if withCheckpoint {
-		sessionSetting["checkpoint"] = json.RawMessage(checkpointJSON)
+		spec.Settings["checkpoint"] = json.RawMessage(checkpointJSON)
 	}
 	for key, value := range sessionExtra {
-		sessionSetting[key] = value
+		if key == "__profile_extra" {
+			spec.ProfileExtra = value.(map[string]any)
+			continue
+		}
+		spec.Settings[key] = value
 	}
-	setting, err := json.Marshal(sessionSetting)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(sessionDir, "setting.json"), setting)
+
 	environment := map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"}
 	parentModel := map[string]any{"provider": "openai", "model": "parent-model", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1"}
 	childModel := map[string]any{"provider": "openai", "model": "child-model", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1"}
@@ -473,18 +464,18 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		environment["PARENT_PROVIDER_KEY"] = parentProviderKey
 		environment["CHILD_PROVIDER_KEY"] = childProviderKey
 	}
-	for file, model := range map[string]map[string]any{"model.json": parentModel, "child.json": childModel} {
-		body, _ := json.Marshal(model)
-		writeFile(t, filepath.Join(sessionDir, file), body)
-		if dir, ok := agentSetting["__agents_dir"].(string); ok && file == "child.json" {
-			// An agent folder names its model relative to itself.
-			writeFile(t, filepath.Join(workspace, dir, "explore", file), body)
-		}
+	spec.Models = map[string]map[string]any{"openai/parent": parentModel, "openai/child": childModel}
+	layout := layouttest.Write(t, spec)
+	if dir, ok := agentSetting["__agents_dir"].(string); ok {
+		// An agent folder names its model relative to itself.
+		body, _ := json.Marshal(childModel)
+		writeFile(t, filepath.Join(workspace, dir, "explore", "child.json"), body)
 	}
 
 	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir:  workspace,
-		Environment: environment,
+		WorkingDir:      layout.Root,
+		RootSettingPath: layout.RootSetting,
+		Environment:     environment,
 	})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
@@ -517,7 +508,12 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		}
 		return start(t)
 	}
-	return subagentFixture{workspace: workspace, sessionDir: sessionDir, apiURL: apiURL, provider: provider, childProvider: childProvider, restart: restart}
+	profileState := filepath.Join(layout.StateDir, "demo", "dev", "coder")
+	return subagentFixture{
+		workspace: workspace, sessionDir: layout.SessionDir, apiURL: apiURL, provider: provider, childProvider: childProvider, restart: restart,
+		stateDir: profileState, toolDir: filepath.Join(workspace, ".jad", "state", "demo", "dev", "coder", "tools"),
+		modelsDir: filepath.Join(layout.Root, "models", "openai"), config: config,
+	}
 }
 
 func writeFile(t *testing.T, path string, data []byte) {
@@ -838,7 +834,7 @@ func TestSubagentKeepsItsTranscriptApartFromTheSessionTranscript(t *testing.T) {
 
 	// The session transcript holds the parent's records only: input, tool call, tool
 	// output, final message. The child's work is not in it.
-	lines := readLines(t, filepath.Join(f.sessionDir, "messages.jsonl"))
+	lines := readLines(t, filepath.Join(f.stateDir, "messages.jsonl"))
 	if len(lines) != 4 {
 		t.Fatalf("session messages.jsonl has %d records, want 4 (input, call, output, final):\n%s", len(lines), strings.Join(lines, "\n"))
 	}
@@ -849,7 +845,7 @@ func TestSubagentKeepsItsTranscriptApartFromTheSessionTranscript(t *testing.T) {
 	}
 
 	// The child's transcript is in the configured storage directory, one folder per call.
-	folders, err := filepath.Glob(filepath.Join(f.workspace, ".subagents", "*", "messages.jsonl"))
+	folders, err := filepath.Glob(filepath.Join(f.toolDir, ".subagents", "*", "messages.jsonl"))
 	if err != nil || len(folders) != 1 {
 		t.Fatalf("child transcripts = %v, %v; want exactly one under .subagents", folders, err)
 	}
@@ -988,7 +984,7 @@ func TestSeveralSubagentCallsInOneResponseEachGetTheirOwnContextAndTranscript(t 
 	}
 
 	// One transcript folder per call, each named after its own call id.
-	folders, err := filepath.Glob(filepath.Join(f.workspace, ".subagents", "*", "messages.jsonl"))
+	folders, err := filepath.Glob(filepath.Join(f.toolDir, ".subagents", "*", "messages.jsonl"))
 	if err != nil || len(folders) != 3 {
 		t.Fatalf("child transcripts = %v, %v; want 3", folders, err)
 	}
@@ -1044,7 +1040,7 @@ func TestHTTPRunSlowSubagentHandsBackAnIdAndTheLaterCallCollectsTheAnswer(t *tes
 	if child := f.provider.forModel("child-model"); len(child) != 2 {
 		t.Errorf("child requests = %d, want 2 (one child: read, then answer)", len(child))
 	}
-	folders, err := filepath.Glob(filepath.Join(f.workspace, ".subagents", "*", "messages.jsonl"))
+	folders, err := filepath.Glob(filepath.Join(f.toolDir, ".subagents", "*", "messages.jsonl"))
 	if err != nil || len(folders) != 1 {
 		t.Errorf("child transcripts = %v, %v; want exactly 1", folders, err)
 	}
@@ -1136,31 +1132,32 @@ func TestResettingTheSessionCancelsAChildHandedOffInAnEarlierRun(t *testing.T) {
 
 func TestSubagentRunsAreListedInTheStateContextAfterACompaction(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
-	settingPath := filepath.Join(f.sessionDir, "setting.json")
-	var setting map[string]any
+	settingPath := filepath.Join(f.sessionDir, "session.json")
+	var session map[string]any
 	data, err := os.ReadFile(settingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(data, &setting); err != nil {
+	if err := json.Unmarshal(data, &session); err != nil {
 		t.Fatal(err)
 	}
+	setting := session["settings"].(map[string]any)
 	setting["compaction"] = map[string]any{"keepbatch": map[string]any{"turn": map[string]any{"type": "assistant_final", "keep": 1}}}
 	setting["statecontext"] = map[string]any{"enabled": true, "trigger": []string{"compaction"}, "tools": []string{"subagent"}, "role": "developer", "max_bytes": 8192}
-	rewritten, _ := json.Marshal(setting)
+	rewritten, _ := json.Marshal(session)
 	writeFile(t, settingPath, rewritten)
 	old := strings.Join([]string{
 		`{"type":"message","role":"user","content":[{"type":"input_text","text":"old context"}]}`,
 		`{"type":"response.completed","response":{"id":"resp_old","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old answer"}]}]}}`,
 	}, "\n") + "\n"
-	writeFile(t, filepath.Join(f.sessionDir, "messages.jsonl"), []byte(old))
+	writeFile(t, filepath.Join(f.stateDir, "messages.jsonl"), []byte(old))
 
 	id := handoffAndLeaveRunning(t, f)
 	if body := f.post(t, "/compact"); !strings.Contains(body, `"compacted":true`) {
 		t.Fatalf("compact answered %s", body)
 	}
 
-	location, err := sessionfs.Resolve([]sessionfs.Root{{ID: "local", Directory: filepath.Join(f.workspace, "sessions")}}, "local:demo")
+	location, err := sessionfs.Resolve(f.config.Roots, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1205,7 +1202,7 @@ func TestSubagentTimeoutReachesTheParentWithPartialWorkAndTheTranscript(t *testi
 			t.Errorf("the timeout result lacks %q:\n%s", want, result)
 		}
 	}
-	transcripts, err := filepath.Glob(filepath.Join(f.workspace, ".subagents", "*", "messages.jsonl"))
+	transcripts, err := filepath.Glob(filepath.Join(f.toolDir, ".subagents", "*", "messages.jsonl"))
 	if err != nil || len(transcripts) != 1 {
 		t.Fatalf("child transcripts = %v, %v; want exactly 1", transcripts, err)
 	}
@@ -1220,7 +1217,7 @@ func waitForManifestState(t *testing.T, f subagentFixture, state string) string 
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		files, _ := filepath.Glob(filepath.Join(f.workspace, ".subagents", ".runs", "sub_*.json"))
+		files, _ := filepath.Glob(filepath.Join(f.toolDir, ".subagents", ".runs", "sub_*.json"))
 		for _, file := range files {
 			if data, err := os.ReadFile(file); err == nil && strings.Contains(string(data), `"state":"`+state+`"`) {
 				return strings.TrimSuffix(filepath.Base(file), ".json")
@@ -1266,7 +1263,7 @@ func TestSubagentRunStillGoingAtACrashIsReportedLostWithItsTranscript(t *testing
 	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
 	f.provider.childPartial = true
 	id := handoffAndLeaveRunning(t, f)
-	manifestPath := filepath.Join(f.workspace, ".subagents", ".runs", id+".json")
+	manifestPath := filepath.Join(f.toolDir, ".subagents", ".runs", id+".json")
 
 	// A crash leaves the manifest as the last write made it: running. A graceful close
 	// would have ended the run first, so the test puts the crash state back by hand.
@@ -1311,7 +1308,7 @@ func TestSubagentRunStillGoingAtAGracefulRestartIsReportedStopped(t *testing.T) 
 
 func countChildFolders(t *testing.T, f subagentFixture) int {
 	t.Helper()
-	folders, err := filepath.Glob(filepath.Join(f.workspace, ".subagents", "*", "messages.jsonl"))
+	folders, err := filepath.Glob(filepath.Join(f.toolDir, ".subagents", "*", "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1341,7 +1338,7 @@ func TestSubagentDeleteTranscriptsKeepsOnlyTheFoldersOfKeptRuns(t *testing.T) {
 			if got := countChildFolders(t, f); got != tc.folder {
 				t.Errorf("child transcript folders = %d, want %d", got, tc.folder)
 			}
-			manifests, _ := filepath.Glob(filepath.Join(f.workspace, ".subagents", ".runs", "sub_*.json"))
+			manifests, _ := filepath.Glob(filepath.Join(f.toolDir, ".subagents", ".runs", "sub_*.json"))
 			if len(manifests) != tc.manifests {
 				t.Errorf("manifests = %d, want %d", len(manifests), tc.manifests)
 			}
@@ -1375,7 +1372,7 @@ func TestSubagentWithoutAModelOfItsOwnSendsTheParentsModelFileHostedTools(t *tes
 	// parent's request fields and hosted_tools. The documentation says so.
 	f := newSubagentFixture(t, map[string]any{})
 	setHostedTools := func() {
-		path := filepath.Join(f.sessionDir, "model.json")
+		path := filepath.Join(f.modelsDir, "parent.json")
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

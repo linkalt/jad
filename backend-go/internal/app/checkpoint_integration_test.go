@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 	"example.com/agent-harness/backend-go/internal/tools/native"
 )
 
@@ -50,9 +51,11 @@ type checkpointFixture struct {
 	t          *testing.T
 	workspace  string
 	sessionDir string
-	api        *httptest.Server
-	service    *Service
-	providerN  atomic.Int32
+	// stateDir holds the profile's messages.jsonl and staging.
+	stateDir  string
+	api       *httptest.Server
+	service   *Service
+	providerN atomic.Int32
 }
 
 func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *checkpointFixture {
@@ -62,15 +65,8 @@ func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *check
 	}
 	root := t.TempDir()
 	workspace := filepath.Join(root, "ws")
-	sessionsDir := filepath.Join(root, "sessions")
-	if options.nested {
-		sessionsDir = filepath.Join(workspace, ".jad", "sessions")
-	}
-	sessionDir := filepath.Join(sessionsDir, "demo")
-	for _, dir := range []string{workspace, sessionDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
 	}
 	policy := sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}}
 	writeTool, err := native.NewWriteTool(sessionfs.NativeWriteSettings{Policy: policy, MaxBytes: 4096}, native.NewPathLocks())
@@ -86,7 +82,7 @@ func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *check
 		t.Fatal(err)
 	}
 
-	fixture := &checkpointFixture{t: t, workspace: workspace, sessionDir: sessionDir}
+	fixture := &checkpointFixture{t: t, workspace: workspace}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		index := int(fixture.providerN.Add(1)) - 1
 		if index >= len(options.steps) {
@@ -119,34 +115,29 @@ func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *check
 	}))
 	t.Cleanup(provider.Close)
 
-	if err := os.WriteFile(filepath.Join(root, "setting.json"), []byte(fmt.Sprintf(`{"session_roots":[{"id":"local","path":%q}]}`, sessionsDir)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	writeSetting := `{"max_bytes":4096`
+	writeSettings := map[string]any{"max_bytes": 4096}
 	if options.approval {
-		writeSetting += `,"approval":"ask"`
+		writeSettings["approval"] = "ask"
 	}
-	writeSetting += `}`
-	setting := fmt.Sprintf(`{"cwd":%q,"max_tool_rounds":4,"tool_definition_paths":[%q],"tools":{"native":{"read":{},"write":%s}}`,
-		workspace, filepath.Join(root, "tools.json"), writeSetting)
+	settings := map[string]any{"max_tool_rounds": 4}
 	if options.checkpoint != "" {
-		setting += `,"checkpoint":` + options.checkpoint
+		settings["checkpoint"] = json.RawMessage(options.checkpoint)
 	}
-	setting += `}`
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
+	spec := layouttest.Spec{
+		CWD:                 workspace,
+		ToolDefinitionPaths: []string{filepath.Join(root, "tools.json")},
+		Settings:            settings,
+		Native:              map[string]any{"read": map[string]any{}, "write": writeSettings},
+		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}
-	model := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q}`, provider.URL+"/v1")
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(model), 0o600); err != nil {
-		t.Fatal(err)
+	if options.nested {
+		// The session and state folders sit inside the workspace, as in a project's .jad.
+		spec.SessionsDir = filepath.Join(workspace, ".jad", "sessions")
+		spec.StateDir = filepath.Join(workspace, ".jad", "state")
 	}
-	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir:  root,
-		Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"},
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
+	config, layout := layoutConfig(t, spec, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	fixture.sessionDir = layout.SessionDir
+	fixture.stateDir = profileState(layout)
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -242,7 +233,7 @@ func TestCheckpointsAreOffByDefaultAWriteRunsAndNothingIsRecorded(t *testing.T) 
 	if enabled || len(records) != 0 {
 		t.Fatalf("enabled=%v records=%v", enabled, records)
 	}
-	staging := filepath.Join(f.sessionDir, "staging")
+	staging := filepath.Join(f.stateDir, "staging")
 	if exists(filepath.Join(staging, "checkpoints.json")) || exists(filepath.Join(staging, "checkpoints.git")) {
 		t.Fatal("an off checkpoint created files")
 	}
@@ -314,7 +305,7 @@ func TestAReadOnlyRunTakesNoCheckpoint(t *testing.T) {
 	if _, records := f.checkpoints(); len(records) != 0 {
 		t.Fatalf("records = %v", records)
 	}
-	if exists(filepath.Join(f.sessionDir, "staging", "checkpoints.git")) {
+	if exists(filepath.Join(f.stateDir, "staging", "checkpoints.git")) {
 		t.Fatal("a read-only run created the private repository")
 	}
 }
@@ -368,7 +359,7 @@ func TestASessionDirectoryInsideTheWorkspaceIsNeverPartOfASnapshotOrARestore(t *
 	if got := f.runToEnd(); got != "completed" {
 		t.Fatalf("run = %s", got)
 	}
-	messagesBefore, err := os.ReadFile(filepath.Join(f.sessionDir, "messages.jsonl"))
+	messagesBefore, err := os.ReadFile(filepath.Join(f.stateDir, "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +385,7 @@ func TestASessionDirectoryInsideTheWorkspaceIsNeverPartOfASnapshotOrARestore(t *
 	if status, body := f.request(http.MethodPost, "/checkpoints/"+id+"/restore", `{}`, true); status != http.StatusOK {
 		t.Fatalf("restore status = %d body = %s", status, body)
 	}
-	messagesAfter, _ := os.ReadFile(filepath.Join(f.sessionDir, "messages.jsonl"))
+	messagesAfter, _ := os.ReadFile(filepath.Join(f.stateDir, "messages.jsonl"))
 	if string(messagesAfter) != string(messagesBefore) {
 		t.Fatal("the transcript was rolled back by the restore")
 	}
@@ -486,7 +477,7 @@ func TestTheCheckpointRoutesAnswer404And400And401(t *testing.T) {
 // leaveOpen rewrites the stored records the way a server killed mid-run leaves them.
 func (f *checkpointFixture) leaveOpen(kinds ...string) {
 	f.t.Helper()
-	path := filepath.Join(f.sessionDir, "staging", "checkpoints.json")
+	path := filepath.Join(f.stateDir, "staging", "checkpoints.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		f.t.Fatal(err)
@@ -527,7 +518,7 @@ func TestARunCheckpointLeftOpenByAStoppedServerIsListedAsInterruptedAndAFullRest
 		t.Fatalf("run = %s", got)
 	}
 	f.leaveOpen("run", "pre_restore")
-	path := filepath.Join(f.sessionDir, "staging", "checkpoints.json")
+	path := filepath.Join(f.stateDir, "staging", "checkpoints.json")
 	stored, _ := os.ReadFile(path)
 
 	_, records := f.checkpoints()

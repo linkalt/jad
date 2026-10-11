@@ -6,12 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 // A provider-hosted fetch is not special-cased anywhere: its item reaches the Web
@@ -22,10 +20,6 @@ func TestHostedFetchReachesTheWebUIAsAGenericCappedPart(t *testing.T) {
 	const inlineCap = 2048
 	const pageBytes = 60000
 	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	page := strings.Repeat("page text ", pageBytes/10)
 	fetch := fmt.Sprintf(`{"id":"st_1","type":"openrouter:web_fetch","status":"completed","url":"https://go.dev/dl/","title":"All releases","httpStatus":200,"content":%q}`, page)
 	search := `{"id":"ws_1","type":"web_search_call","status":"completed","action":{"type":"search","query":"go release"}}`
@@ -49,22 +43,11 @@ func TestHostedFetchReachesTheWebUIAsAGenericCappedPart(t *testing.T) {
 	}))
 	defer provider.Close()
 
-	files := map[string]string{
-		filepath.Join(sessionDir, "model.json"):   fmt.Sprintf(`{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q,"hosted_tools":[{"type":"web_fetch"}]}`, provider.URL+"/v1"),
-		filepath.Join(workspace, "setting.json"):  fmt.Sprintf(`{"session_roots":[{"id":"local","path":"sessions"}],"server":{"max_inline_part_bytes":%d}}`, inlineCap),
-		filepath.Join(sessionDir, "setting.json"): fmt.Sprintf(`{"cwd":%q}`, workspace),
-	}
-	for path, content := range files {
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, Environment: map[string]string{
-		"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k",
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	config, _ := layoutConfig(t, layouttest.Spec{
+		CWD:    workspace,
+		Server: map[string]any{"max_inline_part_bytes": inlineCap},
+		Models: map[string]map[string]any{"openai/default": map[string]any{"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1", "hosted_tools": []any{map[string]any{"type": "web_fetch"}}}},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatal(err)

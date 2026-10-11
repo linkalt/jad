@@ -2,10 +2,11 @@ package sessionfs
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestNormalizeNativeFetchSettingsDefaultsAndOverrides(t *testing.T) {
@@ -64,40 +65,13 @@ func TestNormalizeNativeFetchSettingsRejectsInvalidSettings(t *testing.T) {
 
 func TestLoadSessionConfigNormalizesNativeFetchSettings(t *testing.T) {
 	rootDir := t.TempDir()
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting, err := json.Marshal(map[string]any{
-		"schema_version": 1,
-		"cwd":            rootDir,
-		"paths": map[string]any{
-			"active_profile": "work",
-			"profiles": map[string]any{
-				"work": map[string]any{"tool_storage": "custom-tools"},
-			},
-		},
-		"tools": map[string]any{
-			"native": map[string]any{
-				"fetch": map[string]any{"storage_dir": "cache/fetch", "allowed_hosts": []string{"Example.COM"}},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), setting, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test","api_key_env":"TEST_KEY"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	location := Location{SessionID: "session-1", Directory: sessionDir, Root: Root{GlobalJadRoot: rootDir}}
-	config, err := LoadSessionConfig(location, "", "")
+	config, err := loadLayoutConfig(t, layouttest.Spec{CWD: rootDir, Settings: map[string]any{"tool_storage_dir": "custom-tools"}, Native: map[string]any{
+		"fetch": map[string]any{"storage_dir": "cache/fetch", "allowed_hosts": []string{"Example.COM"}},
+	}})
 	if err != nil {
 		t.Fatalf("LoadSessionConfig() error = %v", err)
 	}
-	wantStorage := filepath.Join(rootDir, "custom-tools", "cache", "fetch")
+	wantStorage := filepath.Join(rootDir, "custom-tools", "session-1", "dev", "coder", "tools", "cache", "fetch")
 	if config.NativeFetch == nil || config.NativeFetch.StorageDir != wantStorage || len(config.NativeFetch.AllowedHosts) != 1 || config.NativeFetch.AllowedHosts[0] != "example.com" {
 		t.Fatalf("normalized native.fetch settings = %+v, want storage %q", config.NativeFetch, wantStorage)
 	}

@@ -1,26 +1,19 @@
 package sessionfs
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestLoadSessionConfigNormalizesNativeGlobAndInheritsReadPolicy(t *testing.T) {
-	rootDir := t.TempDir()
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting := fmt.Sprintf(`{"schema_version":1,"cwd":%q,"tools":{"native":{"read":{"paths":{"allow":["allowed"],"deny":["private"]}},"glob":{"max_results":900}}}}`, rootDir)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test","api_key_env":"TEST_KEY"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	location := Location{SessionID: "session-1", Directory: sessionDir, Root: Root{GlobalJadRoot: rootDir}}
+	location, fixture := layoutLocation(t, layouttest.Spec{Native: map[string]any{
+		"read": map[string]any{"paths": map[string]any{"allow": []any{"allowed"}, "deny": []any{"private"}}},
+		"glob": map[string]any{"max_results": 900},
+	}})
+	// relative read.paths resolve against the global root, which is not the session cwd
+	rootDir := fixture.Root
 	config, err := LoadSessionConfig(location, "", "")
 	if err != nil {
 		t.Fatalf("LoadSessionConfig() error = %v", err)

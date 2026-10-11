@@ -8,18 +8,23 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
-func profileSetting(profile map[string]any) map[string]any {
-	return map[string]any{"paths": map[string]any{
-		"active_profile": "lean",
-		"profiles":       map[string]any{"lean": profile, "full": map[string]any{}},
-	}}
+// loadProfileTools loads a layout session with profiles dev/lean (the given file) and
+// dev/full (an empty one); active names the selected one.
+func loadProfileTools(t *testing.T, active string, lean map[string]any) (SessionConfig, error) {
+	t.Helper()
+	return loadLayoutSpec(t, layouttest.Spec{
+		ActiveProfile: "dev/" + active,
+		Profiles:      map[string]map[string]any{"dev/lean": lean, "dev/full": {}},
+	})
 }
 
 func TestProfileToolsLoadAndReachTheConfig(t *testing.T) {
 	allow := []any{"read", "mcp:docs:search", "mcp:docs:*"}
-	config, err := loadApprovalSetting(t, profileSetting(map[string]any{"tools": map[string]any{"allow": allow}}))
+	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": allow}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -31,7 +36,7 @@ func TestProfileToolsLoadAndReachTheConfig(t *testing.T) {
 
 // deny alone subtracts from everything the session registers: HasAllow stays false.
 func TestProfileToolsDenyAloneLoadsWithoutAnAllowList(t *testing.T) {
-	config, err := loadApprovalSetting(t, profileSetting(map[string]any{"tools": map[string]any{"deny": []any{"bash", "mcp:docs:*"}}}))
+	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"deny": []any{"bash", "mcp:docs:*"}}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -43,7 +48,7 @@ func TestProfileToolsDenyAloneLoadsWithoutAnAllowList(t *testing.T) {
 
 // allow and deny together are both kept; an empty deny is a restriction that hides nothing.
 func TestProfileToolsAllowAndDenyTogether(t *testing.T) {
-	config, err := loadApprovalSetting(t, profileSetting(map[string]any{"tools": map[string]any{"allow": []any{"read", "bash"}, "deny": []any{"bash"}}}))
+	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read", "bash"}, "deny": []any{"bash"}}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -51,14 +56,14 @@ func TestProfileToolsAllowAndDenyTogether(t *testing.T) {
 	if !reflect.DeepEqual(config.ProfileTools, want) {
 		t.Fatalf("ProfileTools = %+v, want %+v", config.ProfileTools, want)
 	}
-	config, err = loadApprovalSetting(t, profileSetting(map[string]any{"tools": map[string]any{"deny": []any{}}}))
+	config, err = loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"deny": []any{}}})
 	if err != nil || !config.ProfileTools.Restricted || config.ProfileTools.HasAllow || len(config.ProfileTools.Deny) != 0 {
 		t.Fatalf("empty deny: %+v, %v", config.ProfileTools, err)
 	}
 }
 
 func TestProfileToolsEmptyAllowIsRestrictedAndHidesEverything(t *testing.T) {
-	config, err := loadApprovalSetting(t, profileSetting(map[string]any{"tools": map[string]any{"allow": []any{}}}))
+	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{}}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -67,36 +72,24 @@ func TestProfileToolsEmptyAllowIsRestrictedAndHidesEverything(t *testing.T) {
 	}
 }
 
-// A profile without a tools block, and a session without profiles, are not restricted.
+// A profile without a tools block is not restricted.
 func TestProfileToolsAbsentMeansUnrestricted(t *testing.T) {
-	for name, setting := range map[string]map[string]any{
-		"profile without tools": profileSetting(map[string]any{}),
-		"no profiles":           {},
-	} {
-		config, err := loadApprovalSetting(t, setting)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if config.ProfileTools.Restricted || config.ProfileTools.Allow != nil {
-			t.Errorf("%s: ProfileTools = %+v, want the zero value", name, config.ProfileTools)
-		}
+	config, err := loadProfileTools(t, "lean", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ProfileTools.Restricted || config.ProfileTools.Allow != nil {
+		t.Errorf("ProfileTools = %+v, want the zero value", config.ProfileTools)
 	}
 }
 
 // Only the selected profile's block applies: another profile's restriction is not read.
 func TestProfileToolsApplyToTheSelectedProfileOnly(t *testing.T) {
-	setting := map[string]any{"paths": map[string]any{
-		"active_profile": "full",
-		"profiles": map[string]any{
-			"lean": map[string]any{"tools": map[string]any{"allow": []any{"read"}}},
-			"full": map[string]any{},
-		},
-	}}
-	config, err := loadApprovalSetting(t, setting)
+	config, err := loadProfileTools(t, "full", map[string]any{"tools": map[string]any{"allow": []any{"read"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Profile != "full" || config.ProfileTools.Restricted {
+	if config.Profile != "dev/full" || config.ProfileTools.Restricted {
 		t.Fatalf("profile %q restricted %v, want full and unrestricted", config.Profile, config.ProfileTools.Restricted)
 	}
 }
@@ -106,8 +99,8 @@ func TestProfileToolsShapeErrors(t *testing.T) {
 		tools any
 		want  string
 	}{
-		"not an object":    {[]any{"read"}, "paths.profiles.lean.tools must be an object"},
-		"null":             {nil, "paths.profiles.lean.tools must be an object"},
+		"not an object":    {[]any{"read"}, "tools must be an object"},
+		"null":             {nil, "tools must be an object"},
 		"no allow or deny": {map[string]any{}, "tools needs allow or deny; use an empty allow array to hide every tool"},
 		"unknown key":      {map[string]any{"allow": []any{}, "block": []any{}}, "tools.block is not supported"},
 		"deny not array":   {map[string]any{"deny": "bash"}, "tools.deny must be an array of tool names"},
@@ -131,7 +124,7 @@ func TestProfileToolsShapeErrors(t *testing.T) {
 		"duplicate":        {map[string]any{"allow": []any{"read", "read"}}, `tools.allow[1] repeats "read"`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := loadApprovalSetting(t, profileSetting(map[string]any{"tools": tc.tools}))
+			_, err := loadProfileTools(t, "lean", map[string]any{"tools": tc.tools})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want it to contain %q", err, tc.want)
 			}
@@ -139,18 +132,16 @@ func TestProfileToolsShapeErrors(t *testing.T) {
 	}
 }
 
-// The block is checked for every profile, not only the selected one, like the other
-// profile fields, so a typo cannot hide until someone switches to that profile.
-func TestProfileToolsOfAnUnselectedProfileAreValidatedToo(t *testing.T) {
-	setting := map[string]any{"paths": map[string]any{
-		"active_profile": "full",
-		"profiles": map[string]any{
-			"lean": map[string]any{"tools": map[string]any{"allow": []any{"raed"}}},
-			"full": map[string]any{},
-		},
-	}}
-	if _, err := loadApprovalSetting(t, setting); err == nil || !strings.Contains(err.Error(), `"raed" is not a native tool`) {
-		t.Fatalf("error = %v, want the unselected profile's typo reported", err)
+// The layout loader reads only the selected profile's file, so a bad tools block in
+// another profile is reported when that profile is selected, not before. The legacy
+// loader checked every profile; missing.md (Phase 1) records the gap.
+func TestProfileToolsOfAnUnselectedProfileAreReportedWhenItIsSelected(t *testing.T) {
+	bad := map[string]any{"tools": map[string]any{"allow": []any{"raed"}}}
+	if _, err := loadProfileTools(t, "full", bad); err != nil {
+		t.Fatalf("unselected profile with a typo: %v (the layout loader does not read it)", err)
+	}
+	if _, err := loadProfileTools(t, "lean", bad); err == nil || !strings.Contains(err.Error(), `"raed" is not a native tool`) {
+		t.Fatalf("selected profile with a typo: error = %v, want it reported", err)
 	}
 }
 

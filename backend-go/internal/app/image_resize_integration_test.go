@@ -92,7 +92,7 @@ func TestParentRunSendsAResizedMCPImageAndKeepsTheOriginalInTheTranscript(t *tes
 	if width != 100 {
 		t.Fatalf("the provider got an image %d pixels wide, want 100", width)
 	}
-	stored, err := os.ReadFile(filepath.Join(f.sessionDir, "messages.jsonl"))
+	stored, err := os.ReadFile(filepath.Join(f.stateDir, "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,59 +1,29 @@
 package sessionfs
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
+// The catalog layout has no "tools" node: the toolset file holds `native` and `mcp`
+// directly, and its other keys are refused when the file is read.
 func TestLoadSessionConfigMatchesToolNamespaceValidation(t *testing.T) {
-	rootDir := t.TempDir()
-	sessionDir := filepath.Join(rootDir, "session")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	modelPath := filepath.Join(sessionDir, "model.json")
-	if err := os.WriteFile(modelPath, []byte(`{"model":"test-model"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	location := Location{Directory: sessionDir, Root: Root{GlobalJadRoot: rootDir}}
-
 	for _, test := range []struct {
 		name    string
-		setting string
+		toolset string
 		wantErr string
 	}{
-		{
-			name:    "native and mcp null default to empty objects",
-			setting: `{"tools":{"native":null,"mcp":null}}`,
-		},
-		{
-			name:    "unknown tool node",
-			setting: `{"tools":{"mcp_servers":[]}}`,
-			wantErr: "tools.mcp_servers is not supported",
-		},
-		{
-			name:    "unknown native tool with suggestion",
-			setting: `{"tools":{"native":{"memry":{}}}}`,
-			wantErr: "tools.native.memry is not supported; did you mean memory?",
-		},
-		{
-			name:    "mcp node must be an object",
-			setting: `{"tools":{"mcp":[]}}`,
-			wantErr: "tools.mcp must be an object",
-		},
-		{
-			name:    "tools must be an object",
-			setting: `{"tools":null}`,
-			wantErr: "tools must be an object",
-		},
+		{name: "native null defaults to an empty object", toolset: `{"native":null}`},
+		{name: "mcp null is refused, unlike the legacy tools.mcp", toolset: `{"mcp":null}`, wantErr: "mcp must be an object"},
+		{name: "unknown toolset key", toolset: `{"mcp_servers":[]}`, wantErr: `unknown field "mcp_servers"`},
+		{name: "unknown native tool with suggestion", toolset: `{"native":{"memry":{}}}`, wantErr: "tools.native.memry is not supported; did you mean memory?"},
+		{name: "mcp node must be an object", toolset: `{"mcp":[]}`, wantErr: "mcp"},
+		{name: "native node must be an object", toolset: `{"native":[]}`, wantErr: "native"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(test.setting), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := LoadSessionConfig(location, "", "")
+			_, err := loadLayoutConfig(t, layouttest.Spec{ToolsetRaw: test.toolset})
 			if test.wantErr == "" {
 				if err != nil {
 					t.Fatalf("LoadSessionConfig() error = %v", err)

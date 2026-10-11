@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 func subagentSettingsFor(subagent string) map[string]json.RawMessage {
@@ -226,32 +228,22 @@ func TestNormalizeNativeSubagentSettingsRejectsInvalidSettings(t *testing.T) {
 
 func TestLoadSessionConfigAcceptsTheSubagentToolAndNeverListsItForTypeScript(t *testing.T) {
 	rootDir := t.TempDir()
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
+	models := map[string]map[string]any{
+		"openai/default": {"model": "gpt-test", "api_key_env": "TEST_KEY"},
+		"openai/fast":    {"model": "gpt-fast", "api_key_env": "TEST_KEY"},
 	}
-	setting, err := json.Marshal(map[string]any{
-		"schema_version": 1,
-		"cwd":            rootDir,
-		"tools":          map[string]any{"native": map[string]any{"subagent": map[string]any{"agents": map[string]any{"explore": map[string]any{"model": "fast.json"}}}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), setting, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test","api_key_env":"TEST_KEY"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadSessionConfig(Location{SessionID: "session-1", Directory: sessionDir, Root: Root{GlobalJadRoot: rootDir}}, "", "")
+	location, fixture := layoutLocation(t, layouttest.Spec{CWD: rootDir, Models: models, Native: map[string]any{
+		"subagent": map[string]any{"agents": map[string]any{"explore": map[string]any{"model": "openai/fast"}}},
+	}})
+	config, err := LoadSessionConfig(location, "", "")
 	if err != nil {
 		t.Fatalf("LoadSessionConfig: %v", err)
 	}
-	if config.NativeSubagent == nil || len(config.NativeSubagent.Agents) != 1 || config.NativeSubagent.Agents[0].ModelPath != filepath.Join(sessionDir, "fast.json") {
+	fastPath := filepath.Join(fixture.Root, "models", "openai", "fast.json")
+	if config.NativeSubagent == nil || len(config.NativeSubagent.Agents) != 1 || config.NativeSubagent.Agents[0].ModelPath != fastPath {
 		t.Fatalf("subagent = %+v", config.NativeSubagent)
 	}
-	if config.NativeSubagent.StorageDir != filepath.Join(rootDir, ".subagents") {
+	if config.NativeSubagent.StorageDir != filepath.Join(rootDir, ".jad", "state", "session-1", "dev", "coder", "tools", ".subagents") {
 		t.Fatalf("storage dir = %q, want it under the working directory", config.NativeSubagent.StorageDir)
 	}
 }

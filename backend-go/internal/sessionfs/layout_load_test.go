@@ -537,8 +537,7 @@ func TestRootSettingCatalogsAreReadAndChecked(t *testing.T) {
 	}
 }
 
-// The session loaders the server calls choose the catalog layout when session.json exists
-// and the legacy reader when only setting.json does.
+// The session loaders the server calls read the catalog layout when session.json exists.
 func TestLoadSessionConfigUsesTheLayoutWhenSessionJSONExists(t *testing.T) {
 	config, _ := rootFromSample(t)
 	location, err := Resolve(config.Roots, "default")
@@ -559,17 +558,6 @@ func TestLoadSessionConfigUsesTheLayoutWhenSessionJSONExists(t *testing.T) {
 		t.Fatal("the model file was not read")
 	}
 
-	legacy := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(legacy, "old"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	old := Location{Directory: filepath.Join(legacy, "old"), Root: config.Roots[0]}
-	if old.UsesLayout() {
-		t.Fatal("a directory without session.json must use the legacy reader")
-	}
-	if got := filepath.Base(old.SettingFile()); got != "setting.json" {
-		t.Fatalf("legacy setting file = %s", got)
-	}
 }
 
 func TestLayoutSetActiveProfileWritesSessionJSONOnly(t *testing.T) {
@@ -932,43 +920,6 @@ func TestLayoutEnvFileErrorNamesTheRootFolderPath(t *testing.T) {
 	_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
 	if err == nil || !strings.Contains(err.Error(), filepath.Join(root, "missing.env")) {
 		t.Fatalf("error = %v, want the root folder path", err)
-	}
-}
-
-// A legacy session keeps resolving a relative env_file against its own folder, where its
-// setting.json lives, even when its root has a catalog layout.
-func TestLegacySessionEnvFileIsRelativeToTheSessionFolder(t *testing.T) {
-	config, root := rootFromSample(t)
-	dir := filepath.Join(root, "sessions", "old")
-	cwd := t.TempDir()
-	for name, content := range map[string]string{
-		"env":          "FROM_SESSION=1\n",
-		"setting.json": `{"cwd":` + strconv.Quote(cwd) + `,"tools":{"native":{"bash":{"env_file":"env"}}}}`,
-	} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// a file of the same name in the root folder must not be picked up
-	if err := os.WriteFile(filepath.Join(root, "env"), []byte("FROM_ROOT=1\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	location, err := Resolve(config.Roots, "old")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if location.UsesLayout() {
-		t.Fatal("expected a legacy session")
-	}
-	loaded, err := LoadSessionSettings(location, "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := filepath.Join(dir, "env"); loaded.NativeBash == nil || loaded.NativeBash.EnvFile != want || loaded.NativeBash.Env["FROM_SESSION"] != "1" {
-		t.Fatalf("legacy env file = %+v, want %s", loaded.NativeBash, want)
 	}
 }
 

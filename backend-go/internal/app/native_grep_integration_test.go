@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 	"example.com/agent-harness/backend-go/internal/tools/native"
 )
 
@@ -24,10 +25,6 @@ func TestHTTPRunExecutesConfiguredNativeGrepAndContinuesProviderRound(t *testing
 		t.Skip("ripgrep is not installed")
 	}
 	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(workspace, "sample.txt"), []byte("needle in file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -110,28 +107,13 @@ func TestHTTPRunExecutesConfiguredNativeGrepAndContinuesProviderRound(t *testing
 	}))
 	defer provider.Close()
 
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(`{"session_roots":[{"id":"local","path":"sessions"}]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sessionSetting := fmt.Sprintf(`{"cwd":%q,"max_tool_rounds":2,"tool_definition_paths":["grep.json"],"tools":{"native":{"grep":{}}}}`, workspace)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(sessionSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	modelSetting := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q}`, provider.URL+"/v1")
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(modelSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir: workspace,
-		Environment: map[string]string{
-			"AGENT_API_TOKEN":    integrationAPIToken,
-			"FIXTURE_OPENAI_KEY": "local-provider-key",
-		},
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig() error = %v", err)
-	}
+	config, fixture := layoutConfig(t, layouttest.Spec{
+		CWD:                 workspace,
+		ToolDefinitionPaths: []string{filepath.Join(workspace, "grep.json")},
+		Settings:            map[string]any{"max_tool_rounds": 2},
+		Native:              map[string]any{"grep": map[string]any{}},
+		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -170,7 +152,7 @@ func TestHTTPRunExecutesConfiguredNativeGrepAndContinuesProviderRound(t *testing
 		t.Fatal("second provider request did not include the native grep result")
 	}
 
-	transcript, err := os.Open(filepath.Join(sessionDir, "messages.jsonl"))
+	transcript, err := os.Open(filepath.Join(profileState(fixture), "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

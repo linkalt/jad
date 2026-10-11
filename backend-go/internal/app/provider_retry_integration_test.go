@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,14 +12,16 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 // retryFixture is one session whose provider answers each request from a script: a status
 // (with a short Retry-After-Ms so the waits stay small) or a streamed final message.
 type retryFixture struct {
-	t           *testing.T
-	sessionDir  string
+	t          *testing.T
+	sessionDir string
+	// stateDir holds the profile's transcript.
+	stateDir    string
 	api         *httptest.Server
 	providerHit atomic.Int32
 	// failures is how many requests fail before the provider answers normally.
@@ -28,13 +31,7 @@ type retryFixture struct {
 
 func newRetryFixture(t *testing.T, providerRetry string, status int) *retryFixture {
 	t.Helper()
-	root := t.TempDir()
-	sessionsDir := filepath.Join(root, "sessions")
-	sessionDir := filepath.Join(sessionsDir, "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	fixture := &retryFixture{t: t, sessionDir: sessionDir, status: status}
+	fixture := &retryFixture{t: t, status: status}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		fixture.providerHit.Add(1)
@@ -56,21 +53,13 @@ func newRetryFixture(t *testing.T, providerRetry string, status int) *retryFixtu
 	}))
 	t.Cleanup(provider.Close)
 
-	if err := os.WriteFile(filepath.Join(root, "setting.json"), []byte(fmt.Sprintf(`{"session_roots":[{"id":"local","path":%q}]}`, sessionsDir)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	fixture.writeSetting(providerRetry)
-	model := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q}`, provider.URL+"/v1")
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(model), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir:  root,
-		Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"},
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
+	config, layout := layoutConfig(t, layouttest.Spec{
+		Settings:    map[string]any{"max_tool_rounds": 2},
+		RawSettings: retryRawSettings(providerRetry),
+		Models:      map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	fixture.sessionDir = layout.SessionDir
+	fixture.stateDir = profileState(layout)
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -85,12 +74,22 @@ func newRetryFixture(t *testing.T, providerRetry string, status int) *retryFixtu
 
 func (f *retryFixture) writeSetting(providerRetry string) {
 	f.t.Helper()
-	setting := fmt.Sprintf(`{"cwd":%q,"max_tool_rounds":2`, filepath.Dir(f.sessionDir))
-	if providerRetry != "" {
-		setting += `,"provider_retry":` + providerRetry
+	path := filepath.Join(f.sessionDir, "session.json")
+	var session map[string]any
+	data, err := os.ReadFile(path)
+	if err != nil {
+		f.t.Fatal(err)
 	}
-	setting += `}`
-	if err := os.WriteFile(filepath.Join(f.sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
+	if err := json.Unmarshal(data, &session); err != nil {
+		f.t.Fatal(err)
+	}
+	settings := map[string]any{"max_tool_rounds": 2}
+	if providerRetry != "" {
+		settings["provider_retry"] = json.RawMessage(providerRetry)
+	}
+	session["settings"] = settings
+	out, _ := json.Marshal(session)
+	if err := os.WriteFile(path, out, 0o600); err != nil {
 		f.t.Fatal(err)
 	}
 }
@@ -131,7 +130,7 @@ func TestProviderRetryRecoversFromRateLimitsThroughARealRun(t *testing.T) {
 	if requests != 3 {
 		t.Fatalf("provider requests = %d, want 3 (the SDK's own retries must be off)", requests)
 	}
-	transcript, err := os.ReadFile(filepath.Join(f.sessionDir, "messages.jsonl"))
+	transcript, err := os.ReadFile(filepath.Join(f.stateDir, "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +200,7 @@ func TestProviderRetryWaitsAreAnnouncedOnTheRunStreamAndClearedBeforeTheResponse
 	if last, completed := strings.LastIndex(stream, "event: provider_retry"), strings.Index(stream, "event: completed"); last > completed {
 		t.Fatalf("the notice was cleared after the run completed:\n%s", stream)
 	}
-	transcript, err := os.ReadFile(filepath.Join(f.sessionDir, "messages.jsonl"))
+	transcript, err := os.ReadFile(filepath.Join(f.stateDir, "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,4 +226,12 @@ func TestARequestThatWorksFirstTimeSendsNoProviderRetryEvent(t *testing.T) {
 	if strings.Contains(stream, "provider_retry") {
 		t.Fatalf("unexpected provider_retry event:\n%s", stream)
 	}
+}
+
+// retryRawSettings is the session setting provider_retry, given as JSON text (null included).
+func retryRawSettings(providerRetry string) map[string]json.RawMessage {
+	if providerRetry == "" {
+		return nil
+	}
+	return map[string]json.RawMessage{"provider_retry": json.RawMessage(providerRetry)}
 }

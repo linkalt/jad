@@ -50,7 +50,7 @@ func TestImageStoreKeepsTheTranscriptSmallAndTheProviderSeesTheImage(t *testing.
 		t.Fatalf("run did not complete:\n%s", body)
 	}
 	original := gradientPNG(t)
-	transcript, err := os.ReadFile(filepath.Join(f.sessionDir, "messages.jsonl"))
+	transcript, err := os.ReadFile(filepath.Join(f.stateDir, "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestImageStoreOffLeavesTheTranscriptAsBefore(t *testing.T) {
 		f := storeFixture(t, setting, nil, false)
 		f.provider.parentFirstCall = [2]string{mcpToolNameFor("fixture", "lookup"), `{"word":"x"}`}
 		f.run(t)
-		transcript, _ := os.ReadFile(filepath.Join(f.sessionDir, "messages.jsonl"))
+		transcript, _ := os.ReadFile(filepath.Join(f.stateDir, "messages.jsonl"))
 		if !strings.Contains(string(transcript), base64.StdEncoding.EncodeToString(gradientPNG(t))) || strings.Contains(string(transcript), "stored-image://") {
 			t.Errorf("%s: the image must stay inline in messages.jsonl", name)
 		}

@@ -1,30 +1,26 @@
 package sessionfs
 
 import (
-	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestLoadSessionConfigNormalizesWriteEditAndProfileToolStorage(t *testing.T) {
 	rootDir := t.TempDir()
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting := `{"schema_version":1,"cwd":"` + rootDir + `","paths":{"active_profile":"work","profiles":{"work":{"tool_storage":"custom-tools"}}},"tools":{"native":{"write":{"max_bytes":128,"backup_max_count":3,"backup_max_total_bytes":512,"backup_dir":"write-backups","fsync":false,"paths":{"allow":["allowed"]}},"edit":{"max_bytes":64}}}}`
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test","api_key_env":"TEST_KEY"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	location := Location{SessionID: "session-1", Directory: sessionDir, Root: Root{GlobalJadRoot: rootDir}}
+	location, fixture := layoutLocation(t, layouttest.Spec{CWD: rootDir, Settings: map[string]any{"tool_storage_dir": "custom-tools"}, Native: map[string]any{
+		"write": map[string]any{"max_bytes": 128, "backup_max_count": 3, "backup_max_total_bytes": 512, "backup_dir": "write-backups", "fsync": false, "paths": map[string]any{"allow": []any{"allowed"}}},
+		"edit":  map[string]any{"max_bytes": 64},
+	}})
+	// relative paths.allow resolve against the global root, not the session cwd
+	allowedRoot := fixture.Root
 	config, err := LoadSessionConfig(location, "", "")
 	if err != nil {
 		t.Fatalf("LoadSessionConfig() error = %v", err)
 	}
-	wantToolStorage := filepath.Join(rootDir, "custom-tools")
+	wantToolStorage := filepath.Join(rootDir, "custom-tools", "session-1", "dev", "coder", "tools")
 	wantBackupDir := filepath.Join(wantToolStorage, "write-backups")
 	if config.StoragePaths.ToolStorage != wantToolStorage {
 		t.Fatalf("tool storage = %q, want %q", config.StoragePaths.ToolStorage, wantToolStorage)
@@ -41,26 +37,15 @@ func TestLoadSessionConfigNormalizesWriteEditAndProfileToolStorage(t *testing.T)
 	if config.NativeWrite.Fsync || config.NativeEdit.Fsync {
 		t.Fatalf("edit did not inherit write fsync: write=%t edit=%t", config.NativeWrite.Fsync, config.NativeEdit.Fsync)
 	}
-	if len(config.NativeWrite.Policy.Paths) != 1 || len(config.NativeEdit.Policy.Paths) != 1 || config.NativeWrite.Policy.Paths[0].Path != filepath.Join(rootDir, "allowed") || config.NativeEdit.Policy.Paths[0].Path != filepath.Join(rootDir, "allowed") {
+	if len(config.NativeWrite.Policy.Paths) != 1 || len(config.NativeEdit.Policy.Paths) != 1 || config.NativeWrite.Policy.Paths[0].Path != filepath.Join(allowedRoot, "allowed") || config.NativeEdit.Policy.Paths[0].Path != filepath.Join(allowedRoot, "allowed") {
 		t.Fatalf("path policy inheritance = write:%+v edit:%+v", config.NativeWrite.Policy, config.NativeEdit.Policy)
 	}
 }
 
 func TestLoadSessionConfigRejectsTopLevelToolStorage(t *testing.T) {
-	rootDir := t.TempDir()
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting := `{"schema_version":1,"paths":{"tool_storage":"tools"}}`
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test","api_key_env":"TEST_KEY"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	location := Location{SessionID: "session-1", Directory: sessionDir, Root: Root{GlobalJadRoot: rootDir}}
-	if _, err := LoadSessionConfig(location, "", ""); err == nil {
-		t.Fatal("LoadSessionConfig() accepted top-level paths.tool_storage")
+	// "paths" is not a settings key of the layout; its tool_storage is refused with it.
+	_, err := loadLayoutConfig(t, layouttest.Spec{Settings: map[string]any{"paths": map[string]any{"tool_storage": "tools"}}})
+	if err == nil || !strings.Contains(err.Error(), "settings may not carry paths") {
+		t.Fatalf("LoadSessionConfig() error = %v, want it to refuse paths in settings", err)
 	}
 }

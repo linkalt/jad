@@ -2,10 +2,10 @@ package sessionfs
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 func skillSettingsFor(native string) map[string]json.RawMessage {
@@ -60,26 +60,9 @@ func TestNormalizeNativeSkillSettingsRejectsInvalidSettings(t *testing.T) {
 }
 
 func TestLoadSessionConfigAcceptsTheSkillToolAndKeepsTheGlobalRoot(t *testing.T) {
-	rootDir := t.TempDir()
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting, err := json.Marshal(map[string]any{
-		"schema_version": 1,
-		"cwd":            rootDir,
-		"tools":          map[string]any{"native": map[string]any{"skill": map[string]any{"max_bytes": 4096}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), setting, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test","api_key_env":"TEST_KEY"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadSessionConfig(Location{SessionID: "session-1", Directory: sessionDir, Root: Root{GlobalJadRoot: rootDir}}, "", "")
+	location, fixture := layoutLocation(t, layouttest.Spec{Native: map[string]any{"skill": map[string]any{"max_bytes": 4096}}})
+	rootDir := fixture.Root
+	config, err := LoadSessionConfig(location, "", "")
 	if err != nil {
 		t.Fatalf("LoadSessionConfig: %v", err)
 	}

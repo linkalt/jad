@@ -33,29 +33,20 @@ const (
 	runStartPause = 10 * time.Millisecond
 )
 
+// newSharedSessionRoot writes the lock tests' layout session and returns the root setting
+// file, which the helper process opens too.
 func newSharedSessionRoot(t *testing.T) string {
 	t.Helper()
-	workspace := t.TempDir()
-	rootDir := filepath.Join(workspace, "sessions")
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting := fmt.Sprintf(`{"cwd":%q,"paths":{"active_profile":"green","profiles":{"green":{"models":["model.json","model2.json"],"model_default":"model.json"},"blue":{"models":["model.json","model2.json"],"model_default":"model.json"}}}}`, workspace)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"model.json", "model2.json"} {
-		if err := os.WriteFile(filepath.Join(sessionDir, name), []byte(`{"provider":"openai","model":"gpt-test"}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return rootDir
+	_, fixture := layoutConfig(t, lockSpec(), map[string]string{})
+	return fixture.RootSetting
 }
 
-func resolverForRoot(rootDir string) (*Resolver, error) {
-	roots := []sessionfs.Root{{ID: "primary", Label: "Primary", Directory: rootDir}}
-	return NewResolver(roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50})
+func resolverForRoot(rootSetting string) (*Resolver, error) {
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: filepath.Dir(rootSetting), RootSettingPath: rootSetting, Environment: map[string]string{}})
+	if err != nil {
+		return nil, err
+	}
+	return NewResolver(config.Roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50})
 }
 
 // TestAppLockHelperProcess is the second "server". Modes:
@@ -65,11 +56,11 @@ func resolverForRoot(rootDir string) (*Resolver, error) {
 //	flip             switch the active profile profileFlips times, print "done"
 //	models           flip model_default 300 times under LockSessionSettings, print "done"
 func TestAppLockHelperProcess(t *testing.T) {
-	rootDir := os.Getenv(lockHelperRootEnv)
-	if rootDir == "" {
+	rootSetting := os.Getenv(lockHelperRootEnv)
+	if rootSetting == "" {
 		t.Skip("helper process only")
 	}
-	resolver, err := resolverForRoot(rootDir)
+	resolver, err := resolverForRoot(rootSetting)
 	if err != nil {
 		fmt.Println("error:", err)
 		os.Exit(2)
@@ -102,9 +93,9 @@ func TestAppLockHelperProcess(t *testing.T) {
 		fmt.Println("switched")
 	case "flip":
 		for i := 0; i < profileFlips; i++ {
-			target := "blue"
+			target := "dev/blue"
 			if i%2 == 1 {
-				target = "green"
+				target = "dev/green"
 			}
 			release, err := resolver.LockSessionSettings(ctx, "session-1")
 			if err != nil {
@@ -121,16 +112,16 @@ func TestAppLockHelperProcess(t *testing.T) {
 		fmt.Println("done")
 	case "models":
 		for i := 0; i < 300; i++ {
-			model := "model.json"
+			model := "openai/model"
 			if i%2 == 1 {
-				model = "model2.json"
+				model = "openai/model2"
 			}
 			release, err := resolver.LockSessionSettings(ctx, "session-1")
 			if err != nil {
 				fmt.Println("error:", err)
 				os.Exit(2)
 			}
-			_, err = resolver.UpdateModelDefault(ctx, "session-1", "green", model)
+			_, err = resolver.UpdateModelDefault(ctx, "session-1", "dev/green", model)
 			release()
 			if err != nil {
 				fmt.Println("error:", err)
@@ -150,10 +141,10 @@ type lockHelper struct {
 	lines *bufio.Scanner
 }
 
-func startLockHelper(t *testing.T, rootDir, mode string) *lockHelper {
+func startLockHelper(t *testing.T, rootSetting, mode string) *lockHelper {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestAppLockHelperProcess$")
-	cmd.Env = append(os.Environ(), lockHelperRootEnv+"="+rootDir, lockHelperModeEnv+"="+mode)
+	cmd.Env = append(os.Environ(), lockHelperRootEnv+"="+rootSetting, lockHelperModeEnv+"="+mode)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -223,25 +214,25 @@ func lockInRoot(resolver *Resolver, profile string, wait time.Duration) (func(),
 // A run in another server process holds one profile. A second run of that
 // profile here must wait; another profile must start at once.
 func TestOtherProcessRunBlocksOnlyItsOwnProfile(t *testing.T) {
-	rootDir := newSharedSessionRoot(t)
-	other := startLockHelper(t, rootDir, "hold:blue")
+	rootSetting := newSharedSessionRoot(t)
+	other := startLockHelper(t, rootSetting, "hold:dev/blue")
 	other.expect(t, "held")
-	resolver, err := resolverForRoot(rootDir)
+	resolver, err := resolverForRoot(rootSetting)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if release, err := lockInRoot(resolver, "blue", 300*time.Millisecond); err == nil {
+	if release, err := lockInRoot(resolver, "dev/blue", 300*time.Millisecond); err == nil {
 		release()
 		t.Fatal("this process started a second run of blue while another process runs it")
 	}
 	start := time.Now()
-	release, err := lockInRoot(resolver, "green", time.Second)
+	release, err := lockInRoot(resolver, "dev/green", time.Second)
 	if err != nil {
 		t.Fatalf("green could not start while another process runs blue (waited %v): %v", time.Since(start), err)
 	}
 	release()
 	other.finish(t)
-	release, err = lockInRoot(resolver, "blue", time.Second)
+	release, err = lockInRoot(resolver, "dev/blue", time.Second)
 	if err != nil {
 		t.Fatalf("blue stayed locked after the other process released it: %v", err)
 	}
@@ -253,25 +244,25 @@ func TestOtherProcessRunBlocksOnlyItsOwnProfile(t *testing.T) {
 // process switches the active profile, a new run of the running profile has to
 // resolve to the same transcript and wait for it.
 func TestOtherProcessProfileSwitchKeepsRunningProfileTranscript(t *testing.T) {
-	rootDir := newSharedSessionRoot(t)
+	rootSetting := newSharedSessionRoot(t)
 	// green is the active profile, so it uses the session's base storage.
-	running := startLockHelper(t, rootDir, "hold:green")
+	running := startLockHelper(t, rootSetting, "hold:dev/green")
 	running.expect(t, "held")
 
-	switcher := startLockHelper(t, rootDir, "switch:blue")
+	switcher := startLockHelper(t, rootSetting, "switch:dev/blue")
 	switcher.expect(t, "switched")
 	switcher.finish(t)
 
-	resolver, err := resolverForRoot(rootDir)
+	resolver, err := resolverForRoot(rootSetting)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if release, err := lockInRoot(resolver, "green", 300*time.Millisecond); err == nil {
+	if release, err := lockInRoot(resolver, "dev/green", 300*time.Millisecond); err == nil {
 		release()
 		t.Fatal("after another process switched the active profile, green resolved to a different transcript than the run in progress")
 	}
 	// The newly active profile has its own storage and must be free.
-	release, err := lockInRoot(resolver, "blue", time.Second)
+	release, err := lockInRoot(resolver, "dev/blue", time.Second)
 	if err != nil {
 		t.Fatalf("blue could not start after the switch: %v", err)
 	}
@@ -282,9 +273,9 @@ func TestOtherProcessProfileSwitchKeepsRunningProfileTranscript(t *testing.T) {
 // Run starts read setting.json while another process rewrites model_default.
 // The write is an atomic replace, so a start must never see a torn file.
 func TestRunStartsWhileOtherProcessWritesModelDefault(t *testing.T) {
-	rootDir := newSharedSessionRoot(t)
-	writer := startLockHelper(t, rootDir, "models")
-	resolver, err := resolverForRoot(rootDir)
+	rootSetting := newSharedSessionRoot(t)
+	writer := startLockHelper(t, rootSetting, "models")
+	resolver, err := resolverForRoot(rootSetting)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +296,7 @@ func TestRunStartsWhileOtherProcessWritesModelDefault(t *testing.T) {
 			return
 		default:
 		}
-		release, err := lockInRoot(resolver, "blue", 5*time.Second)
+		release, err := lockInRoot(resolver, "dev/blue", 5*time.Second)
 		if err != nil {
 			t.Fatalf("run start %d failed while another process wrote model_default: %v", starts, err)
 		}
@@ -318,11 +309,11 @@ func TestRunStartsWhileOtherProcessWritesModelDefault(t *testing.T) {
 // every start of green here must still collide with the run in progress. If a
 // start ever resolved green to a different transcript it would get the lock.
 func TestRunStartsWhileOtherProcessFlipsActiveProfile(t *testing.T) {
-	rootDir := newSharedSessionRoot(t)
-	running := startLockHelper(t, rootDir, "hold:green")
+	rootSetting := newSharedSessionRoot(t)
+	running := startLockHelper(t, rootSetting, "hold:dev/green")
 	running.expect(t, "held")
-	flipper := startLockHelper(t, rootDir, "flip")
-	resolver, err := resolverForRoot(rootDir)
+	flipper := startLockHelper(t, rootSetting, "flip")
+	resolver, err := resolverForRoot(rootSetting)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +335,7 @@ func TestRunStartsWhileOtherProcessFlipsActiveProfile(t *testing.T) {
 			return
 		default:
 		}
-		release, err := lockInRoot(resolver, "green", 20*time.Millisecond)
+		release, err := lockInRoot(resolver, "dev/green", 20*time.Millisecond)
 		if err == nil {
 			release()
 			t.Fatalf("start %d of green got a transcript lock while green runs in another process", starts)

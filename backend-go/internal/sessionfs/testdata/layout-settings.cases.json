@@ -1,0 +1,1495 @@
+[
+ {
+  "name": "no paths",
+  "ok": true
+ },
+ {
+  "name": "parallel calls minimum",
+  "settings": {
+   "max_parallel_tool_calls": 1
+  },
+  "ok": true
+ },
+ {
+  "name": "parallel calls maximum",
+  "settings": {
+   "max_parallel_tool_calls": 64
+  },
+  "ok": true
+ },
+ {
+  "name": "parallel calls null",
+  "settings": {
+   "max_parallel_tool_calls": null
+  },
+  "ok": true
+ },
+ {
+  "name": "parallel calls integral decimal",
+  "settings": {
+   "max_parallel_tool_calls": 4.0
+  },
+  "ok": true
+ },
+ {
+  "name": "parallel calls zero",
+  "settings": {
+   "max_parallel_tool_calls": 0
+  },
+  "error": "max_parallel_tool_calls must be a safe integer between 1 and 64"
+ },
+ {
+  "name": "parallel calls too many",
+  "settings": {
+   "max_parallel_tool_calls": 65
+  },
+  "error": "max_parallel_tool_calls must be a safe integer between 1 and 64"
+ },
+ {
+  "name": "parallel calls fractional",
+  "settings": {
+   "max_parallel_tool_calls": 1.5
+  },
+  "error": "max_parallel_tool_calls must be a safe integer between 1 and 64"
+ },
+ {
+  "name": "parallel calls string",
+  "settings": {
+   "max_parallel_tool_calls": "4"
+  },
+  "error": "max_parallel_tool_calls must be a safe integer between 1 and 64"
+ },
+ {
+  "name": "skill tool defaults",
+  "native": {
+   "skill": {}
+  },
+  "ok": true
+ },
+ {
+  "name": "skill tool max bytes",
+  "native": {
+   "skill": {
+    "max_bytes": 2048
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "skill tool max bytes upper bound",
+  "native": {
+   "skill": {
+    "max_bytes": 10485760
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "skill tool max bytes null",
+  "native": {
+   "skill": {
+    "max_bytes": null
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "skill tool typo",
+  "native": {
+   "skill": {
+    "max_byte": 10
+   }
+  },
+  "error": "tools.native.skill.max_byte is not supported; did you mean max_bytes?"
+ },
+ {
+  "name": "skill tool unrelated key",
+  "native": {
+   "skill": {
+    "timeout_ms": 10
+   }
+  },
+  "error": "tools.native.skill.timeout_ms is not supported; supported keys are max_bytes"
+ },
+ {
+  "name": "skill tool not an object",
+  "native": {
+   "skill": []
+  },
+  "error": "tools.native.skill must be an object"
+ },
+ {
+  "name": "skill tool null",
+  "native": {
+   "skill": null
+  },
+  "error": "tools.native.skill must be an object"
+ },
+ {
+  "name": "skill tool zero",
+  "native": {
+   "skill": {
+    "max_bytes": 0
+   }
+  },
+  "error": "tools.native.skill.max_bytes must be a safe integer between 1 and 10485760"
+ },
+ {
+  "name": "skill tool fractional",
+  "native": {
+   "skill": {
+    "max_bytes": 1.5
+   }
+  },
+  "error": "tools.native.skill.max_bytes must be a safe integer between 1 and 10485760"
+ },
+ {
+  "name": "skill tool string",
+  "native": {
+   "skill": {
+    "max_bytes": "10"
+   }
+  },
+  "error": "tools.native.skill.max_bytes must be a safe integer between 1 and 10485760"
+ },
+ {
+  "name": "skill tool over limit",
+  "native": {
+   "skill": {
+    "max_bytes": 10485761
+   }
+  },
+  "error": "tools.native.skill.max_bytes must be a safe integer between 1 and 10485760"
+ },
+ {
+  "name": "native tool typo suggests skill",
+  "native": {
+   "skil": {}
+  },
+  "error": "tools.native.skil is not supported; did you mean skill?"
+ },
+ {
+  "name": "native tool unknown lists skill",
+  "native": {
+   "unrelated": {}
+  },
+  "error": "tools.native.unrelated is not supported; supported keys are bash, edit, exec, fetch, glob, grep, memory, process, read, request_draft, skill, task, write; MCP servers are configured under tools.mcp"
+ },
+ {
+  "name": "checkpoint all keys",
+  "settings": {
+   "checkpoint": {
+    "enabled": true,
+    "git_binary": " git ",
+    "max_checkpoints": 3,
+    "max_files": 50,
+    "max_total_bytes": 1024,
+    "timeout_ms": 2000,
+    "include_mcp_tools": false,
+    "snapshot_on": "run_start",
+    "safe_restore": false
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "checkpoint empty",
+  "settings": {
+   "checkpoint": {}
+  },
+  "ok": true
+ },
+ {
+  "name": "checkpoint not an object",
+  "settings": {
+   "checkpoint": "on"
+  },
+  "error": "checkpoint must be an object"
+ },
+ {
+  "name": "checkpoint array",
+  "settings": {
+   "checkpoint": []
+  },
+  "error": "checkpoint must be an object"
+ },
+ {
+  "name": "checkpoint enabled string",
+  "settings": {
+   "checkpoint": {
+    "enabled": "yes"
+   }
+  },
+  "error": "checkpoint.enabled must be a boolean"
+ },
+ {
+  "name": "checkpoint enabled null",
+  "settings": {
+   "checkpoint": {
+    "enabled": null
+   }
+  },
+  "error": "checkpoint.enabled must be a boolean"
+ },
+ {
+  "name": "checkpoint typo",
+  "settings": {
+   "checkpoint": {
+    "enable": true
+   }
+  },
+  "error": "checkpoint.enable is not supported; did you mean enabled?"
+ },
+ {
+  "name": "checkpoint unknown key",
+  "settings": {
+   "checkpoint": {
+    "surprise": true
+   }
+  },
+  "error": "checkpoint.surprise is not supported; supported keys are enabled, git_binary, include_mcp_tools, max_checkpoints, max_files, max_total_bytes, safe_restore, snapshot_on, timeout_ms"
+ },
+ {
+  "name": "checkpoint binary empty",
+  "settings": {
+   "checkpoint": {
+    "git_binary": ""
+   }
+  },
+  "error": "checkpoint.git_binary must be a non-empty string"
+ },
+ {
+  "name": "checkpoint binary number",
+  "settings": {
+   "checkpoint": {
+    "git_binary": 7
+   }
+  },
+  "error": "checkpoint.git_binary must be a non-empty string"
+ },
+ {
+  "name": "checkpoint max_checkpoints zero",
+  "settings": {
+   "checkpoint": {
+    "max_checkpoints": 0
+   }
+  },
+  "error": "checkpoint.max_checkpoints must be a safe integer between 1 and 1000"
+ },
+ {
+  "name": "checkpoint max_checkpoints over",
+  "settings": {
+   "checkpoint": {
+    "max_checkpoints": 1001
+   }
+  },
+  "error": "checkpoint.max_checkpoints must be a safe integer between 1 and 1000"
+ },
+ {
+  "name": "checkpoint max_files fraction",
+  "settings": {
+   "checkpoint": {
+    "max_files": 1.5
+   }
+  },
+  "error": "checkpoint.max_files must be a safe integer between 1 and 1000000"
+ },
+ {
+  "name": "checkpoint max_files null",
+  "settings": {
+   "checkpoint": {
+    "max_files": null
+   }
+  },
+  "error": "checkpoint.max_files must be a safe integer between 1 and 1000000"
+ },
+ {
+  "name": "checkpoint max_total_bytes zero",
+  "settings": {
+   "checkpoint": {
+    "max_total_bytes": 0
+   }
+  },
+  "error": "checkpoint.max_total_bytes must be a safe integer between 1 and 1099511627776"
+ },
+ {
+  "name": "checkpoint max_total_bytes over",
+  "settings": {
+   "checkpoint": {
+    "max_total_bytes": 1099511627777
+   }
+  },
+  "error": "checkpoint.max_total_bytes must be a safe integer between 1 and 1099511627776"
+ },
+ {
+  "name": "checkpoint timeout low",
+  "settings": {
+   "checkpoint": {
+    "timeout_ms": 999
+   }
+  },
+  "error": "checkpoint.timeout_ms must be a safe integer between 1000 and 3600000"
+ },
+ {
+  "name": "checkpoint timeout high",
+  "settings": {
+   "checkpoint": {
+    "timeout_ms": 3600001
+   }
+  },
+  "error": "checkpoint.timeout_ms must be a safe integer between 1000 and 3600000"
+ },
+ {
+  "name": "checkpoint mcp number",
+  "settings": {
+   "checkpoint": {
+    "include_mcp_tools": 1
+   }
+  },
+  "error": "checkpoint.include_mcp_tools must be a boolean"
+ },
+ {
+  "name": "checkpoint snapshot_on word",
+  "settings": {
+   "checkpoint": {
+    "snapshot_on": "always"
+   }
+  },
+  "error": "checkpoint.snapshot_on must be \"first_mutation\" or \"run_start\""
+ },
+ {
+  "name": "checkpoint snapshot_on null",
+  "settings": {
+   "checkpoint": {
+    "snapshot_on": null
+   }
+  },
+  "error": "checkpoint.snapshot_on must be \"first_mutation\" or \"run_start\""
+ },
+ {
+  "name": "checkpoint safe_restore string",
+  "settings": {
+   "checkpoint": {
+    "safe_restore": "true"
+   }
+  },
+  "error": "checkpoint.safe_restore must be a boolean"
+ },
+ {
+  "name": "tool call scheduling ordered",
+  "settings": {
+   "tool_call_scheduling": "ordered"
+  },
+  "ok": true
+ },
+ {
+  "name": "tool call scheduling concurrent",
+  "settings": {
+   "tool_call_scheduling": "concurrent"
+  },
+  "ok": true
+ },
+ {
+  "name": "tool call scheduling null",
+  "settings": {
+   "tool_call_scheduling": null
+  },
+  "error": "tool_call_scheduling must be \"ordered\" or \"concurrent\""
+ },
+ {
+  "name": "tool call scheduling unknown word",
+  "settings": {
+   "tool_call_scheduling": "parallel"
+  },
+  "error": "tool_call_scheduling must be \"ordered\" or \"concurrent\""
+ },
+ {
+  "name": "tool call scheduling wrong case",
+  "settings": {
+   "tool_call_scheduling": "Ordered"
+  },
+  "error": "tool_call_scheduling must be \"ordered\" or \"concurrent\""
+ },
+ {
+  "name": "tool call scheduling empty string",
+  "settings": {
+   "tool_call_scheduling": ""
+  },
+  "error": "tool_call_scheduling must be \"ordered\" or \"concurrent\""
+ },
+ {
+  "name": "tool call scheduling number",
+  "settings": {
+   "tool_call_scheduling": 1
+  },
+  "error": "tool_call_scheduling must be \"ordered\" or \"concurrent\""
+ },
+ {
+  "name": "tool call scheduling boolean",
+  "settings": {
+   "tool_call_scheduling": true
+  },
+  "error": "tool_call_scheduling must be \"ordered\" or \"concurrent\""
+ },
+ {
+  "name": "approval default off",
+  "settings": {
+   "approval": {
+    "default": "off"
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "approval default null",
+  "settings": {
+   "approval": {
+    "default": null
+   }
+  },
+  "error": "approval.default must be \"off\" or \"ask\""
+ },
+ {
+  "name": "approval default on",
+  "settings": {
+   "approval": {
+    "default": "on"
+   }
+  },
+  "error": "approval.default must be \"off\" or \"ask\""
+ },
+ {
+  "name": "approval default wrong case",
+  "settings": {
+   "approval": {
+    "default": "Ask"
+   }
+  },
+  "error": "approval.default must be \"off\" or \"ask\""
+ },
+ {
+  "name": "approval default empty string",
+  "settings": {
+   "approval": {
+    "default": ""
+   }
+  },
+  "error": "approval.default must be \"off\" or \"ask\""
+ },
+ {
+  "name": "approval default boolean",
+  "settings": {
+   "approval": {
+    "default": true
+   }
+  },
+  "error": "approval.default must be \"off\" or \"ask\""
+ },
+ {
+  "name": "approval default number",
+  "settings": {
+   "approval": {
+    "default": 1
+   }
+  },
+  "error": "approval.default must be \"off\" or \"ask\""
+ },
+ {
+  "name": "approval default array",
+  "settings": {
+   "approval": {
+    "default": [
+     "ask"
+    ]
+   }
+  },
+  "error": "approval.default must be \"off\" or \"ask\""
+ },
+ {
+  "name": "approval default does not excuse a bad per-tool value",
+  "native": {
+   "bash": {
+    "approval": "on"
+   }
+  },
+  "settings": {
+   "approval": {
+    "default": "ask"
+   }
+  },
+  "error": "tools.native.bash.approval must be \"off\" or \"ask\""
+ },
+ {
+  "name": "provider retry empty object",
+  "settings": {
+   "provider_retry": {}
+  },
+  "ok": true
+ },
+ {
+  "name": "provider retry every key",
+  "settings": {
+   "provider_retry": {
+    "max_retries": 5,
+    "initial_delay_ms": 1000,
+    "max_delay_ms": 30000
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "provider retry zero retries",
+  "settings": {
+   "provider_retry": {
+    "max_retries": 0
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "provider retry maximums",
+  "settings": {
+   "provider_retry": {
+    "max_retries": 10,
+    "initial_delay_ms": 60000,
+    "max_delay_ms": 600000
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "provider retry equal initial and max",
+  "settings": {
+   "provider_retry": {
+    "initial_delay_ms": 2000,
+    "max_delay_ms": 2000
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "provider retry max_retries negative",
+  "settings": {
+   "provider_retry": {
+    "max_retries": -1
+   }
+  },
+  "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+ },
+ {
+  "name": "provider retry max_retries above maximum",
+  "settings": {
+   "provider_retry": {
+    "max_retries": 11
+   }
+  },
+  "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+ },
+ {
+  "name": "provider retry max_retries fraction",
+  "settings": {
+   "provider_retry": {
+    "max_retries": 1.5
+   }
+  },
+  "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+ },
+ {
+  "name": "provider retry max_retries string",
+  "settings": {
+   "provider_retry": {
+    "max_retries": "2"
+   }
+  },
+  "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+ },
+ {
+  "name": "provider retry max_retries null",
+  "settings": {
+   "provider_retry": {
+    "max_retries": null
+   }
+  },
+  "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+ },
+ {
+  "name": "provider retry max_retries boolean",
+  "settings": {
+   "provider_retry": {
+    "max_retries": true
+   }
+  },
+  "error": "provider_retry.max_retries must be a safe integer between 0 and 10"
+ },
+ {
+  "name": "provider retry initial_delay zero",
+  "settings": {
+   "provider_retry": {
+    "initial_delay_ms": 0
+   }
+  },
+  "error": "provider_retry.initial_delay_ms must be a safe integer between 1 and 60000"
+ },
+ {
+  "name": "provider retry initial_delay above maximum",
+  "settings": {
+   "provider_retry": {
+    "initial_delay_ms": 60001
+   }
+  },
+  "error": "provider_retry.initial_delay_ms must be a safe integer between 1 and 60000"
+ },
+ {
+  "name": "provider retry initial_delay null",
+  "settings": {
+   "provider_retry": {
+    "initial_delay_ms": null
+   }
+  },
+  "error": "provider_retry.initial_delay_ms must be a safe integer between 1 and 60000"
+ },
+ {
+  "name": "provider retry max_delay zero",
+  "settings": {
+   "provider_retry": {
+    "max_delay_ms": 0
+   }
+  },
+  "error": "provider_retry.max_delay_ms must be a safe integer between 1 and 600000"
+ },
+ {
+  "name": "provider retry max_delay above maximum",
+  "settings": {
+   "provider_retry": {
+    "max_delay_ms": 600001
+   }
+  },
+  "error": "provider_retry.max_delay_ms must be a safe integer between 1 and 600000"
+ },
+ {
+  "name": "provider retry max_delay string",
+  "settings": {
+   "provider_retry": {
+    "max_delay_ms": "8000"
+   }
+  },
+  "error": "provider_retry.max_delay_ms must be a safe integer between 1 and 600000"
+ },
+ {
+  "name": "provider retry initial above default max",
+  "settings": {
+   "provider_retry": {
+    "initial_delay_ms": 9000
+   }
+  },
+  "error": "provider_retry.initial_delay_ms must not exceed max_delay_ms"
+ },
+ {
+  "name": "provider retry initial above configured max",
+  "settings": {
+   "provider_retry": {
+    "initial_delay_ms": 5000,
+    "max_delay_ms": 4000
+   }
+  },
+  "error": "provider_retry.initial_delay_ms must not exceed max_delay_ms"
+ },
+ {
+  "name": "provider retry unknown key",
+  "settings": {
+   "provider_retry": {
+    "retries": 3
+   }
+  },
+  "error": "provider_retry.retries is not supported; supported keys are initial_delay_ms, max_delay_ms, max_retries"
+ },
+ {
+  "name": "provider retry misspelt key",
+  "settings": {
+   "provider_retry": {
+    "max_retrie": 3
+   }
+  },
+  "error": "provider_retry.max_retrie is not supported; did you mean max_retries?"
+ },
+ {
+  "name": "provider retry null node",
+  "settings": {
+   "provider_retry": null
+  },
+  "error": "provider_retry must be an object"
+ },
+ {
+  "name": "provider retry array node",
+  "settings": {
+   "provider_retry": []
+  },
+  "error": "provider_retry must be an object"
+ },
+ {
+  "name": "provider retry string node",
+  "settings": {
+   "provider_retry": "on"
+  },
+  "error": "provider_retry must be an object"
+ },
+ {
+  "name": "provider retry number node",
+  "settings": {
+   "provider_retry": 3
+  },
+  "error": "provider_retry must be an object"
+ },
+ {
+  "name": "provider retry delay order is checked before max_retries",
+  "settings": {
+   "provider_retry": {
+    "max_retries": 99,
+    "initial_delay_ms": 9000
+   }
+  },
+  "error": "provider_retry.initial_delay_ms must not exceed max_delay_ms"
+ },
+ {
+  "name": "max run tokens absent is no cap",
+  "ok": true
+ },
+ {
+  "name": "max run tokens one",
+  "settings": {
+   "max_run_tokens": 1
+  },
+  "ok": true
+ },
+ {
+  "name": "max run tokens typical",
+  "settings": {
+   "max_run_tokens": 200000
+  },
+  "ok": true
+ },
+ {
+  "name": "max run tokens ceiling",
+  "settings": {
+   "max_run_tokens": 1000000000000
+  },
+  "ok": true
+ },
+ {
+  "name": "max run tokens null",
+  "settings": {
+   "max_run_tokens": null
+  },
+  "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+ },
+ {
+  "name": "max run tokens zero",
+  "settings": {
+   "max_run_tokens": 0
+  },
+  "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+ },
+ {
+  "name": "max run tokens negative",
+  "settings": {
+   "max_run_tokens": -5
+  },
+  "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+ },
+ {
+  "name": "max run tokens fraction",
+  "settings": {
+   "max_run_tokens": 1.5
+  },
+  "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+ },
+ {
+  "name": "max run tokens string",
+  "settings": {
+   "max_run_tokens": "100"
+  },
+  "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+ },
+ {
+  "name": "max run tokens boolean",
+  "settings": {
+   "max_run_tokens": true
+  },
+  "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+ },
+ {
+  "name": "max run tokens above ceiling",
+  "settings": {
+   "max_run_tokens": 1000000000001
+  },
+  "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+ },
+ {
+  "name": "max run tokens max safe integer",
+  "settings": {
+   "max_run_tokens": 9007199254740991
+  },
+  "error": "max_run_tokens must be a safe integer between 1 and 1000000000000"
+ },
+ {
+  "name": "exec defaults",
+  "native": {
+   "bash": {},
+   "exec": {}
+  },
+  "ok": true
+ },
+ {
+  "name": "exec without bash",
+  "native": {
+   "exec": {}
+  },
+  "error": "tools.native.exec needs tools.native.bash, whose child-process settings it uses"
+ },
+ {
+  "name": "exec null",
+  "native": {
+   "bash": {},
+   "exec": null
+  },
+  "error": "tools.native.exec must be an object"
+ },
+ {
+  "name": "exec not an object",
+  "native": {
+   "bash": {},
+   "exec": "python"
+  },
+  "error": "tools.native.exec must be an object"
+ },
+ {
+  "name": "exec unknown key",
+  "native": {
+   "bash": {},
+   "exec": {
+    "unknown_key": 1
+   }
+  },
+  "error": "tools.native.exec.unknown_key is not supported; supported keys are approval, code_max_bytes, default_lang, langs, line_aware, result_max_bytes"
+ },
+ {
+  "name": "exec approval invalid",
+  "native": {
+   "bash": {},
+   "exec": {
+    "approval": "maybe"
+   }
+  },
+  "error": "tools.native.exec.approval must be \"off\" or \"ask\""
+ },
+ {
+  "name": "exec approval null",
+  "native": {
+   "bash": {},
+   "exec": {
+    "approval": null
+   }
+  },
+  "error": "tools.native.exec.approval must be \"off\" or \"ask\""
+ },
+ {
+  "name": "exec approval ask",
+  "native": {
+   "bash": {},
+   "exec": {
+    "approval": "ask"
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "exec code_max_bytes zero",
+  "native": {
+   "bash": {},
+   "exec": {
+    "code_max_bytes": 0
+   }
+  },
+  "error": "tools.native.exec.code_max_bytes must be a safe integer between 1 and 10485760"
+ },
+ {
+  "name": "exec code_max_bytes over limit",
+  "native": {
+   "bash": {},
+   "exec": {
+    "code_max_bytes": 10485761
+   }
+  },
+  "error": "tools.native.exec.code_max_bytes must be a safe integer between 1 and 10485760"
+ },
+ {
+  "name": "exec code_max_bytes fractional",
+  "native": {
+   "bash": {},
+   "exec": {
+    "code_max_bytes": 1.5
+   }
+  },
+  "error": "tools.native.exec.code_max_bytes must be a safe integer between 1 and 10485760"
+ },
+ {
+  "name": "exec code_max_bytes string",
+  "native": {
+   "bash": {},
+   "exec": {
+    "code_max_bytes": "10"
+   }
+  },
+  "error": "tools.native.exec.code_max_bytes must be a safe integer between 1 and 10485760"
+ },
+ {
+  "name": "exec code_max_bytes null",
+  "native": {
+   "bash": {},
+   "exec": {
+    "code_max_bytes": null
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "exec result_max_bytes string",
+  "native": {
+   "bash": {},
+   "exec": {
+    "result_max_bytes": "10"
+   }
+  },
+  "error": "tools.native.exec.result_max_bytes must be a safe integer between 1 and 10485760"
+ },
+ {
+  "name": "exec result_max_bytes zero",
+  "native": {
+   "bash": {},
+   "exec": {
+    "result_max_bytes": 0
+   }
+  },
+  "error": "tools.native.exec.result_max_bytes must be a safe integer between 1 and 10485760"
+ },
+ {
+  "name": "exec line_aware string",
+  "native": {
+   "bash": {},
+   "exec": {
+    "line_aware": "yes"
+   }
+  },
+  "error": "tools.native.exec.line_aware must be a boolean"
+ },
+ {
+  "name": "exec line_aware null",
+  "native": {
+   "bash": {},
+   "exec": {
+    "line_aware": null
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "exec default_lang python",
+  "native": {
+   "bash": {},
+   "exec": {
+    "default_lang": "python"
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "exec default_lang by alias and case",
+  "native": {
+   "bash": {},
+   "exec": {
+    "default_lang": " PY "
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "exec default_lang null",
+  "native": {
+   "bash": {},
+   "exec": {
+    "default_lang": null
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "exec default_lang unknown",
+  "native": {
+   "bash": {},
+   "exec": {
+    "default_lang": "cobol"
+   }
+  },
+  "error": "tools.native.exec.default_lang \"cobol\" is not in tools.native.exec.langs (available: python, node, bash, sh, ruby, perl)"
+ },
+ {
+  "name": "exec default_lang empty",
+  "native": {
+   "bash": {},
+   "exec": {
+    "default_lang": ""
+   }
+  },
+  "error": "tools.native.exec.default_lang \"\" is not in tools.native.exec.langs (available: python, node, bash, sh, ruby, perl)"
+ },
+ {
+  "name": "exec default_lang number",
+  "native": {
+   "bash": {},
+   "exec": {
+    "default_lang": 3
+   }
+  },
+  "error": "tools.native.exec.default_lang must be a language name"
+ },
+ {
+  "name": "exec default_lang a configured language",
+  "native": {
+   "bash": {},
+   "exec": {
+    "default_lang": "mine",
+    "langs": {
+     "mine": {
+      "argv": [
+       "bash",
+       "-s",
+       "--"
+      ]
+     }
+    }
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "exec default_lang replaced built-in still resolves",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "bash": {
+      "argv": [
+       "bash",
+       "-s"
+      ]
+     }
+    }
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "exec langs not an object",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": "python"
+   }
+  },
+  "error": "tools.native.exec.langs must be an object"
+ },
+ {
+  "name": "exec langs bad name",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "Bad Name": {
+      "argv": [
+       "x"
+      ]
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.Bad Name is not a valid language name (lowercase letters, digits, _ + . -)"
+ },
+ {
+  "name": "exec lang not an object",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": "python"
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x must be an object"
+ },
+ {
+  "name": "exec lang without argv",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {}
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+ },
+ {
+  "name": "exec lang empty argv",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": []
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+ },
+ {
+  "name": "exec lang empty argv item",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a",
+       ""
+      ]
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+ },
+ {
+  "name": "exec lang argv not strings",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a",
+       1
+      ]
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+ },
+ {
+  "name": "exec lang argv too long",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a",
+       "a"
+      ]
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+ },
+ {
+  "name": "exec lang bad code",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a"
+      ],
+      "code": "pipe"
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.code must be \"stdin\" or \"file\""
+ },
+ {
+  "name": "exec lang file without placeholder",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a"
+      ],
+      "code": "file"
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.argv must contain {file} when code is \"file\""
+ },
+ {
+  "name": "exec lang stdin with placeholder",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a",
+       "{file}"
+      ]
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.argv must not contain {file} when code is \"stdin\""
+ },
+ {
+  "name": "exec lang bad ext",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a"
+      ],
+      "ext": "py"
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.ext must be empty or a dot and 1 to 8 letters or digits"
+ },
+ {
+  "name": "exec lang bad alias",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a"
+      ],
+      "aliases": [
+       "Bad Alias"
+      ]
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.aliases must be language names"
+ },
+ {
+  "name": "exec lang aliases not a list",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a"
+      ],
+      "aliases": "py"
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.aliases must be language names"
+ },
+ {
+  "name": "exec lang unknown key",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a"
+      ],
+      "extra": 1
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs.x.extra is not supported; did you mean ext?"
+ },
+ {
+  "name": "exec lang alias clashes with builtin",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a"
+      ],
+      "aliases": [
+       "py"
+      ]
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs: \"py\" names both python and x"
+ },
+ {
+  "name": "exec lang alias clashes with another entry",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "x": {
+      "argv": [
+       "a"
+      ],
+      "aliases": [
+       "z"
+      ]
+     },
+     "y": {
+      "argv": [
+       "b"
+      ],
+      "aliases": [
+       "z"
+      ]
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.langs: \"z\" names both x and y"
+ },
+ {
+  "name": "exec lang replaces a builtin and takes its aliases",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "python": {
+      "argv": [
+       "python3",
+       "-c",
+       "x",
+       "--"
+      ],
+      "aliases": [
+       "pyx"
+      ]
+     }
+    }
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "exec lang valid file entry",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {
+     "viafile": {
+      "argv": [
+       "bash",
+       "{file}",
+       "--"
+      ],
+      "code": "file",
+      "ext": ".sh"
+     }
+    }
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "exec approval default",
+  "native": {
+   "bash": {},
+   "exec": {}
+  },
+  "settings": {
+   "approval": {
+    "default": "ask"
+   }
+  },
+  "ok": true
+ },
+ {
+  "name": "persistence max_item_bytes zero",
+  "settings": {
+   "persistence": {
+    "max_item_bytes": 0
+   }
+  },
+  "error": "persistence.max_item_bytes must be a safe integer between 1 and 67108864"
+ },
+ {
+  "name": "persistence max_item_bytes fraction",
+  "settings": {
+   "persistence": {
+    "max_item_bytes": 1.5
+   }
+  },
+  "error": "persistence.max_item_bytes must be a safe integer between 1 and 67108864"
+ },
+ {
+  "name": "persistence cursor_cache_checkpoint_bytes zero",
+  "settings": {
+   "persistence": {
+    "cursor_cache_checkpoint_bytes": 0
+   }
+  },
+  "error": "persistence.cursor_cache_checkpoint_bytes must be a safe integer between 1 and 67108864"
+ },
+ {
+  "name": "persistence run_error_cache_max_entries zero",
+  "settings": {
+   "persistence": {
+    "run_error_cache_max_entries": 0
+   }
+  },
+  "error": "persistence.run_error_cache_max_entries must be a safe integer between 1 and 10000"
+ }
+]

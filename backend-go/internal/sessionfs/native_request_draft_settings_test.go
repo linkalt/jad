@@ -2,10 +2,10 @@ package sessionfs
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestNormalizeNativeRequestDraftSettingsDefaultsAndOverrides(t *testing.T) {
@@ -51,30 +51,10 @@ func TestNormalizeNativeRequestDraftSettingsRejectsInvalidSettings(t *testing.T)
 }
 
 func TestLoadSessionConfigNormalizesNativeRequestDraftSettings(t *testing.T) {
-	rootDir := t.TempDir()
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting, err := json.Marshal(map[string]any{
-		"schema_version": 1,
-		"cwd":            rootDir,
-		"tools": map[string]any{"native": map[string]any{"request_draft": map[string]any{
-			"timeout_ms": 1_000, "headless_auto_accept_timeout_ms": 2_000, "max_timeout_ms": 3_000,
-			"extend_ms": 1_000, "max_draft_bytes": 2_048, "max_draft_depth": 4, "max_title_chars": 16,
-		}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), setting, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test","api_key_env":"TEST_KEY"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	location := Location{SessionID: "session-1", Directory: sessionDir, Root: Root{GlobalJadRoot: rootDir}}
-	config, err := LoadSessionConfig(location, "", "")
+	config, err := loadLayoutConfig(t, layouttest.Spec{Native: map[string]any{"request_draft": map[string]any{
+		"timeout_ms": 1_000, "headless_auto_accept_timeout_ms": 2_000, "max_timeout_ms": 3_000,
+		"extend_ms": 1_000, "max_draft_bytes": 2_048, "max_draft_depth": 4, "max_title_chars": 16,
+	}}})
 	if err != nil {
 		t.Fatalf("LoadSessionConfig() error = %v", err)
 	}

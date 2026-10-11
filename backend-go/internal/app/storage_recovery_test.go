@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 	"example.com/agent-harness/backend-go/internal/tools/native"
 )
 
@@ -136,31 +137,62 @@ func (o orphan) manifest(t *testing.T) native.ProcessManifest {
 	return manifest
 }
 
-// recoveryFixture is a workspace with one session root. Each session is given a
-// setting.json by the test.
+// recoveryFixture is a workspace with a catalog-layout root. Each session is added with
+// its own native tool settings.
 type recoveryFixture struct {
 	workspace string
-	root      string
+	layout    layouttest.Fixture
 	roots     []sessionfs.Root
 }
 
 func newRecoveryFixture(t *testing.T) recoveryFixture {
 	t.Helper()
 	workspace := t.TempDir()
-	root := filepath.Join(workspace, "sessions")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return recoveryFixture{workspace: workspace, root: root, roots: []sessionfs.Root{{ID: "local", Label: "Local", Directory: root}}}
+	layout := layouttest.Write(t, layouttest.Spec{CWD: workspace, NoSession: true})
+	return recoveryFixtureFrom(t, workspace, layout)
 }
 
-func (f recoveryFixture) session(t *testing.T, name, setting string) {
+func recoveryFixtureFrom(t *testing.T, workspace string, layout layouttest.Fixture) recoveryFixture {
 	t.Helper()
-	dir := filepath.Join(f.root, name)
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: layout.Root, RootSettingPath: layout.RootSetting, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	return recoveryFixture{workspace: workspace, layout: layout, roots: config.Roots}
+}
+
+// newTwoProfileFixture is one session, demo, whose profiles dev/green (active) and
+// dev/blue share a toolset, so each keeps its tool storage in its own folder.
+func newTwoProfileFixture(t *testing.T, native map[string]any) recoveryFixture {
+	t.Helper()
+	workspace := t.TempDir()
+	profile := map[string]any{"models": []string{"openai/default"}, "model_default": "openai/default", "toolset": "coding/default"}
+	layout := layouttest.Write(t, layouttest.Spec{
+		SessionID: "demo", CWD: workspace, Native: native, ActiveProfile: "dev/green",
+		Profiles: map[string]map[string]any{"dev/green": profile, "dev/blue": profile},
+	})
+	return recoveryFixtureFrom(t, workspace, layout)
+}
+
+// profileTools is where the named dev profile of session demo keeps its tool storage.
+func (f recoveryFixture) profileTools(name string) string {
+	return filepath.Join(f.workspace, ".jad", "state", "demo", "dev", name, "tools")
+}
+
+// session adds a session that uses the given native tool settings (none: no toolset).
+func (f recoveryFixture) session(t *testing.T, name string, native map[string]any) {
+	t.Helper()
+	f.layout.AddSession(t, name, f.workspace, native, nil)
+}
+
+// brokenSession adds a session whose session.json is not JSON.
+func (f recoveryFixture) brokenSession(t *testing.T, name string) {
+	t.Helper()
+	dir := filepath.Join(f.layout.SessionsDir, name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "setting.json"), []byte(setting), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte(`{ this is not json`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -175,8 +207,33 @@ func (f recoveryFixture) resolver(t *testing.T) *Resolver {
 	return resolver
 }
 
-func (f recoveryFixture) processSetting(storage string) string {
-	return fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"kill_grace_ms":200}}}}`, f.workspace, storage)
+// processTool is the native process settings with a storage directory (none when empty).
+func processTool(storage string, extra map[string]any) map[string]any {
+	tool := map[string]any{"shell": "/bin/sh", "kill_grace_ms": 200}
+	if storage != "" {
+		tool["storage_dir"] = storage
+	}
+	for key, value := range extra {
+		tool[key] = value
+	}
+	return tool
+}
+
+// subagentTool is the native subagent settings with one agent and a storage directory
+// (none when empty).
+func subagentTool(storage string, extra map[string]any) map[string]any {
+	tool := map[string]any{"agents": map[string]any{"explore": map[string]any{"description": "d", "model": "openai/default", "instructions": "p", "tools": []string{"read"}}}}
+	if storage != "" {
+		tool["storage_dir"] = storage
+	}
+	for key, value := range extra {
+		tool[key] = value
+	}
+	return tool
+}
+
+func (f recoveryFixture) processSetting(storage string) map[string]any {
+	return map[string]any{"process": processTool(storage, nil)}
 }
 
 func TestRecoverProcessesStopsAnOrphanWithoutAnyRequest(t *testing.T) {
@@ -220,9 +277,9 @@ func TestRecoverProcessesLeavesNoNewDirectoryForASessionThatNeverStartedAProcess
 
 func TestRecoverProcessesSkipsSessionsWithoutTheProcessTool(t *testing.T) {
 	f := newRecoveryFixture(t)
-	f.session(t, "plain", fmt.Sprintf(`{"cwd":%q}`, f.workspace))
-	// A directory with no setting.json is not a session.
-	if err := os.MkdirAll(filepath.Join(f.root, "not-a-session"), 0o755); err != nil {
+	f.session(t, "plain", nil)
+	// A directory with no session.json is not a session.
+	if err := os.MkdirAll(filepath.Join(f.layout.SessionsDir, "not-a-session"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	report, err := f.resolver(t).RecoverProcesses(context.Background())
@@ -237,7 +294,7 @@ func TestRecoverProcessesSkipsSessionsWithoutTheProcessTool(t *testing.T) {
 func TestRecoverProcessesSkipsABrokenSessionAndKeepsGoing(t *testing.T) {
 	f := newRecoveryFixture(t)
 	good := filepath.Join(f.workspace, "good-procs")
-	f.session(t, "a-broken", `{ this is not json`)
+	f.brokenSession(t, "a-broken")
 	f.session(t, "b-good", f.processSetting(good))
 	crashed := leaveOrphan(t, good, "proc_good")
 
@@ -256,10 +313,9 @@ func TestRecoverProcessesSkipsABrokenSessionAndKeepsGoing(t *testing.T) {
 // A profile that keeps its tools in its own tool_storage keeps its processes there too,
 // so a scan of the active profile alone would miss them.
 func TestRecoverProcessesVisitsEveryProfilesStorage(t *testing.T) {
-	f := newRecoveryFixture(t)
-	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","kill_grace_ms":200}}},"paths":{"active_profile":"green","profiles":{"green":{"models":["model.json"]},"blue":{"models":["model.json"]}}}}`, f.workspace))
-	blue := filepath.Join(f.workspace, ".jad", "profiles", "blue", "tools", ".processes")
-	green := filepath.Join(f.workspace, ".jad", "profiles", "green", "tools", ".processes")
+	f := newTwoProfileFixture(t, map[string]any{"process": map[string]any{"shell": "/bin/sh", "kill_grace_ms": 200}})
+	blue := filepath.Join(f.profileTools("blue"), ".processes")
+	green := filepath.Join(f.profileTools("green"), ".processes")
 	inBlue := leaveOrphan(t, blue, "proc_blue")
 	inGreen := leaveOrphan(t, green, "proc_green")
 
@@ -298,7 +354,7 @@ func TestRecoverProcessesRecoversASharedStorageOnce(t *testing.T) {
 func TestRecoverProcessesHonoursStopOrphansOff(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"stop_orphans":false}}}}`, f.workspace, storage))
+	f.session(t, "demo", map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": storage, "stop_orphans": false}})
 	crashed := leaveOrphan(t, storage, "proc_keep")
 
 	if _, err := f.resolver(t).RecoverProcesses(context.Background()); err != nil {
@@ -345,13 +401,26 @@ func TestRecoverProcessesOnAClosedResolverFailsInsteadOfPanicking(t *testing.T) 
 // the service the way it does in production. server is the JSON body of "server".
 func serviceConfig(t *testing.T, f recoveryFixture, server string) Config {
 	t.Helper()
-	root := fmt.Sprintf(`{"session_roots":[{"id":"local","path":"sessions"}],"server":%s}`, server)
-	if err := os.WriteFile(filepath.Join(f.workspace, "setting.json"), []byte(root), 0o600); err != nil {
+	var root map[string]json.RawMessage
+	data, err := os.ReadFile(f.layout.RootSetting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	root["server"] = json.RawMessage(server)
+	data, err = json.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.layout.RootSetting, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir:  f.workspace,
-		Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken},
+		WorkingDir:      f.layout.Root,
+		RootSettingPath: f.layout.RootSetting,
+		Environment:     map[string]string{"AGENT_API_TOKEN": integrationAPIToken},
 	})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
@@ -459,7 +528,7 @@ func TestServiceCloseEndsTheStartScan(t *testing.T) {
 func TestServiceStartDoesNotWaitForTheScan(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"kill_grace_ms":1500}}}}`, f.workspace, storage))
+	f.session(t, "demo", map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": storage, "kill_grace_ms": 1500}})
 	stubborn := leaveOrphanRunning(t, storage, "proc_stubborn", "sh", "-c", `trap "" TERM; sleep 120`)
 	// Let the shell install its trap before the scan signals it.
 	time.Sleep(200 * time.Millisecond)
@@ -486,7 +555,7 @@ func TestServiceStartDoesNotWaitForTheScan(t *testing.T) {
 // having the process tool, the only effect of the cancel is the error it returns.
 func TestRecoverProcessesChecksTheContextBeforeEachSession(t *testing.T) {
 	f := newRecoveryFixture(t)
-	f.session(t, "plain", fmt.Sprintf(`{"cwd":%q}`, f.workspace))
+	f.session(t, "plain", nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := f.resolver(t).RecoverProcesses(ctx); err == nil {
@@ -498,10 +567,9 @@ func TestRecoverProcessesChecksTheContextBeforeEachSession(t *testing.T) {
 // session untouched. The active profile (green) is recovered first and holds an orphan
 // that ignores the polite signal, so its recovery lasts the kill grace.
 func TestRecoverProcessesChecksTheContextBeforeEachStorage(t *testing.T) {
-	f := newRecoveryFixture(t)
-	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","kill_grace_ms":1500}}},"paths":{"active_profile":"green","profiles":{"green":{"models":["model.json"]},"blue":{"models":["model.json"]}}}}`, f.workspace))
-	green := filepath.Join(f.workspace, ".jad", "profiles", "green", "tools", ".processes")
-	blue := filepath.Join(f.workspace, ".jad", "profiles", "blue", "tools", ".processes")
+	f := newTwoProfileFixture(t, map[string]any{"process": map[string]any{"shell": "/bin/sh", "kill_grace_ms": 1500}})
+	green := filepath.Join(f.profileTools("green"), ".processes")
+	blue := filepath.Join(f.profileTools("blue"), ".processes")
 	stubborn := leaveOrphanRunning(t, green, "proc_green", "sh", "-c", `trap "" TERM; sleep 120`)
 	untouched := leaveOrphan(t, blue, "proc_blue")
 	time.Sleep(200 * time.Millisecond)
@@ -526,7 +594,7 @@ func TestServiceCloseCancelsTheRestOfTheScan(t *testing.T) {
 	f := newRecoveryFixture(t)
 	slow := filepath.Join(f.workspace, "slow")
 	rest := filepath.Join(f.workspace, "rest")
-	f.session(t, "a-slow", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"kill_grace_ms":1500}}}}`, f.workspace, slow))
+	f.session(t, "a-slow", map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": slow, "kill_grace_ms": 1500}})
 	f.session(t, "b-rest", f.processSetting(rest))
 	leaveOrphanRunning(t, slow, "proc_slow", "sh", "-c", `trap "" TERM; sleep 120`)
 	untouched := leaveOrphan(t, rest, "proc_rest")
@@ -548,7 +616,7 @@ func TestServiceCloseCancelsTheRestOfTheScan(t *testing.T) {
 func TestServiceCloseWaitsForTheScanToEnd(t *testing.T) {
 	f := newRecoveryFixture(t)
 	slow := filepath.Join(f.workspace, "slow")
-	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"kill_grace_ms":1500}}}}`, f.workspace, slow))
+	f.session(t, "demo", map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": slow, "kill_grace_ms": 1500}})
 	leaveOrphanRunning(t, slow, "proc_slow", "sh", "-c", `trap "" TERM; sleep 120`)
 	time.Sleep(200 * time.Millisecond)
 
@@ -567,8 +635,8 @@ func TestServiceCloseWaitsForTheScanToEnd(t *testing.T) {
 
 // ---- sub-agent run manifests ----
 
-func (f recoveryFixture) subagentSetting(storage, extra string) string {
-	return fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"subagent":{"storage_dir":%q%s,"agents":{"explore":{"description":"d","model":"child.json","instructions":"p","tools":["read"]}}}}}}`, f.workspace, storage, extra)
+func (f recoveryFixture) subagentSetting(storage string, extra map[string]any) map[string]any {
+	return map[string]any{"subagent": subagentTool(storage, extra)}
 }
 
 // leaveRun writes the manifest of a run a crashed server left in state, written by a
@@ -630,7 +698,7 @@ func waitForState(t *testing.T, path, want string, limit time.Duration) string {
 func TestRecoverStoragesMarksAnInterruptedRunLostWithoutAnyRequest(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "runs")
-	f.session(t, "demo", f.subagentSetting(storage, ""))
+	f.session(t, "demo", f.subagentSetting(storage, nil))
 	running := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
 	queued := leaveRun(t, storage, "sub_0000bbbb", "queued", time.Time{})
 	done := leaveRun(t, storage, "sub_0000cccc", "done", time.Now().Add(-time.Minute))
@@ -656,7 +724,7 @@ func TestRecoverStoragesMarksAnInterruptedRunLostWithoutAnyRequest(t *testing.T)
 func TestRecoverStoragesPrunesRunsBeyondKeepFinished(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "runs")
-	f.session(t, "demo", f.subagentSetting(storage, `,"keep_finished":1`))
+	f.session(t, "demo", f.subagentSetting(storage, map[string]any{"keep_finished": 1}))
 	oldest := leaveRun(t, storage, "sub_0000aaaa", "done", time.Now().Add(-3*time.Hour))
 	middle := leaveRun(t, storage, "sub_0000bbbb", "done", time.Now().Add(-2*time.Hour))
 	newest := leaveRun(t, storage, "sub_0000cccc", "done", time.Now().Add(-time.Hour))
@@ -675,7 +743,7 @@ func TestRecoverStoragesPrunesRunsBeyondKeepFinished(t *testing.T) {
 func TestRecoverStoragesLeavesTheRunsOfAnotherLiveServerAlone(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "runs")
-	f.session(t, "demo", f.subagentSetting(storage, ""))
+	f.session(t, "demo", f.subagentSetting(storage, nil))
 	path := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
 	// Name this very test process's parent as the owner: another live server.
 	data, _ := os.ReadFile(path)
@@ -698,7 +766,7 @@ func TestRecoverStoragesLeavesTheRunsOfAnotherLiveServerAlone(t *testing.T) {
 func TestRecoverStoragesCreatesNoRunStorageForASessionThatNeverStartedAChild(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "never-created")
-	f.session(t, "demo", f.subagentSetting(storage, ""))
+	f.session(t, "demo", f.subagentSetting(storage, nil))
 
 	report, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{SubagentRuns: true})
 	if err != nil {
@@ -715,7 +783,7 @@ func TestRecoverStoragesCreatesNoRunStorageForASessionThatNeverStartedAChild(t *
 func TestRecoverStoragesSkipsASessionThatDoesNotPersistRuns(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "runs")
-	f.session(t, "demo", f.subagentSetting(storage, `,"persist_runs":false`))
+	f.session(t, "demo", f.subagentSetting(storage, map[string]any{"persist_runs": false}))
 	path := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
 
 	report, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{SubagentRuns: true})
@@ -728,10 +796,9 @@ func TestRecoverStoragesSkipsASessionThatDoesNotPersistRuns(t *testing.T) {
 }
 
 func TestRecoverStoragesVisitsEveryProfilesRunStorage(t *testing.T) {
-	f := newRecoveryFixture(t)
-	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"subagent":{"agents":{"explore":{"description":"d","model":"child.json","instructions":"p","tools":["read"]}}}}},"paths":{"active_profile":"green","profiles":{"green":{"models":["model.json"]},"blue":{"models":["model.json"]}}}}`, f.workspace))
-	blue := leaveRun(t, filepath.Join(f.workspace, ".jad", "profiles", "blue", "tools", ".subagents"), "sub_0000aaaa", "running", time.Time{})
-	green := leaveRun(t, filepath.Join(f.workspace, ".jad", "profiles", "green", "tools", ".subagents"), "sub_0000bbbb", "running", time.Time{})
+	f := newTwoProfileFixture(t, map[string]any{"subagent": subagentTool("", nil)})
+	blue := leaveRun(t, filepath.Join(f.profileTools("blue"), ".subagents"), "sub_0000aaaa", "running", time.Time{})
+	green := leaveRun(t, filepath.Join(f.profileTools("green"), ".subagents"), "sub_0000bbbb", "running", time.Time{})
 
 	report, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{SubagentRuns: true})
 	if err != nil {
@@ -753,7 +820,7 @@ func TestRecoverStoragesOptionsAreIndependent(t *testing.T) {
 	f := newRecoveryFixture(t)
 	procs := filepath.Join(f.workspace, "procs")
 	runs := filepath.Join(f.workspace, "runs")
-	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"kill_grace_ms":200},"subagent":{"storage_dir":%q,"agents":{"explore":{"description":"d","model":"child.json","instructions":"p","tools":["read"]}}}}}}`, f.workspace, procs, runs))
+	f.session(t, "demo", map[string]any{"process": processTool(procs, nil), "subagent": subagentTool(runs, nil)})
 	crashed := leaveOrphan(t, procs, "proc_a")
 	run := leaveRun(t, runs, "sub_0000aaaa", "running", time.Time{})
 
@@ -784,7 +851,7 @@ func TestRecoverStoragesOptionsAreIndependent(t *testing.T) {
 func TestServiceRecoversInterruptedRunsAtStartInTheBackground(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "runs")
-	f.session(t, "demo", f.subagentSetting(storage, ""))
+	f.session(t, "demo", f.subagentSetting(storage, nil))
 	path := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
 
 	service, err := NewService(serviceConfig(t, f, `{}`))
@@ -802,7 +869,7 @@ func TestServiceLeavesRunsAloneWhenOnlyTheRunSwitchIsOff(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "runs")
 	procs := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"kill_grace_ms":200},"subagent":{"storage_dir":%q,"agents":{"explore":{"description":"d","model":"child.json","instructions":"p","tools":["read"]}}}}}}`, f.workspace, procs, storage))
+	f.session(t, "demo", map[string]any{"process": processTool(procs, nil), "subagent": subagentTool(storage, nil)})
 	run := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
 	crashed := leaveOrphan(t, procs, "proc_a")
 
@@ -841,7 +908,7 @@ func TestServiceRecoversRunsAtStartWhenOnlyTheProcessSwitchIsOff(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "runs")
 	procs := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", fmt.Sprintf(`{"cwd":%q,"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"kill_grace_ms":200},"subagent":{"storage_dir":%q,"agents":{"explore":{"description":"d","model":"child.json","instructions":"p","tools":["read"]}}}}}}`, f.workspace, procs, storage))
+	f.session(t, "demo", map[string]any{"process": processTool(procs, nil), "subagent": subagentTool(storage, nil)})
 	run := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
 	crashed := leaveOrphan(t, procs, "proc_a")
 

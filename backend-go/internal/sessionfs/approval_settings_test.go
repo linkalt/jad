@@ -1,35 +1,38 @@
 package sessionfs
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
-// loadApprovalSetting loads a session whose setting.json is the given object plus
-// the fields every session needs, so a test goes through the whole loader and its
-// key allow-lists rather than one normalizer.
+// loadApprovalSetting loads a catalog-layout session built from the given object, so a
+// test goes through the whole loader and its key allow-lists rather than one normalizer.
+// "tools" becomes the toolset's native block, "mcp_servers" its mcp block (one server file
+// per entry id), and every other key the session's settings.
 func loadApprovalSetting(t *testing.T, extra map[string]any) (SessionConfig, error) {
 	t.Helper()
-	root := t.TempDir()
-	sessionDir := filepath.Join(root, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting := map[string]any{"schema_version": 1, "cwd": root}
+	spec := layouttest.Spec{Settings: map[string]any{}}
 	for key, value := range extra {
-		setting[key] = value
+		switch key {
+		case "tools":
+			spec.Native = value.(map[string]any)["native"].(map[string]any)
+		case "mcp_servers":
+			spec.MCP = map[string]map[string]any{}
+			for _, entry := range value.([]any) {
+				server := entry.(map[string]any)
+				use := map[string]any{}
+				if approval, set := server["approval"]; set {
+					use["approval"] = approval
+				}
+				spec.MCP["m/"+server["id"].(string)] = use
+			}
+		default:
+			spec.Settings[key] = value
+		}
 	}
-	encoded, err := json.Marshal(setting)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), encoded, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return LoadSessionSettings(Location{SessionID: "session-1", Directory: sessionDir, Root: Root{GlobalJadRoot: root}}, "", "")
+	return loadLayoutSpec(t, spec)
 }
 
 func nativeTools(tools map[string]any) map[string]any {
@@ -91,9 +94,19 @@ func TestApprovalRejectsAnythingButOffOrAsk(t *testing.T) {
 				t.Errorf("%s approval %#v: error = %v, want %q", tool, value, err, want)
 			}
 		}
+		// A toolset's mcp use decodes approval as a string, so only a string reaches the
+		// normalizer; null is read as absent and any other type fails the toolset decode.
 		_, err := loadApprovalSetting(t, map[string]any{"mcp_servers": []any{map[string]any{"id": "fx", "config_path": "fx.json", "approval": value}}})
-		if err == nil || !strings.Contains(err.Error(), `mcp_servers[0].approval must be "off" or "ask"`) {
-			t.Errorf("mcp approval %#v: error = %v", value, err)
+		want := `mcp_servers[0].approval must be "off" or "ask"`
+		if _, isString := value.(string); !isString {
+			want = "approval"
+		}
+		if value == nil {
+			if err != nil {
+				t.Errorf("mcp approval null: error = %v, want it read as absent", err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("mcp approval %#v: error = %v, want %q", value, err, want)
 		}
 	}
 }

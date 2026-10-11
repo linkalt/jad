@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 	"example.com/agent-harness/backend-go/internal/tools/native"
 )
 
@@ -23,11 +24,7 @@ func TestHTTPRunExecutesNativeProcessStartAndWaitAcrossProviderRounds(t *testing
 		t.Skip("managed process groups require a POSIX platform")
 	}
 	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	processStorage := filepath.Join(sessionDir, "processes")
+	processStorage := filepath.Join(workspace, "processes")
 	processTool, err := native.NewProcessTool(sessionfs.NativeProcessSettings{
 		Policy:           sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}},
 		Shell:            "/bin/sh",
@@ -149,28 +146,13 @@ func TestHTTPRunExecutesNativeProcessStartAndWaitAcrossProviderRounds(t *testing
 	}))
 	defer provider.Close()
 
-	rootSetting := `{"session_roots":[{"id":"local","path":"sessions"}]}`
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(rootSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sessionSetting := fmt.Sprintf(`{"cwd":%q,"max_tool_rounds":3,"tool_definition_paths":["process.json"],"tools":{"native":{"process":{"shell":"/bin/sh","storage_dir":%q,"max_running":2,"wait_timeout_ms":1000,"max_wait_timeout_ms":2500,"stdout":{"head_bytes":128,"tail_bytes":128},"stderr":{"head_bytes":128,"tail_bytes":128},"log_cap_bytes":4096,"max_line_chars":1000,"strip_ansi":false}}}}`, workspace, processStorage)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(sessionSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	modelSetting := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q}`, provider.URL+"/v1")
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(modelSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir: workspace,
-		Environment: map[string]string{
-			"AGENT_API_TOKEN":    integrationAPIToken,
-			"FIXTURE_OPENAI_KEY": "local-provider-key",
-		},
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig() error = %v", err)
-	}
+	config, fixture := layoutConfig(t, layouttest.Spec{
+		CWD:                 workspace,
+		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json")},
+		Settings:            map[string]any{"max_tool_rounds": 3},
+		Native:              map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "max_running": 2, "wait_timeout_ms": 1000, "max_wait_timeout_ms": 2500, "stdout": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "stderr": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "log_cap_bytes": 4096, "max_line_chars": 1000, "strip_ansi": false}},
+		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -208,7 +190,7 @@ func TestHTTPRunExecutesNativeProcessStartAndWaitAcrossProviderRounds(t *testing
 	if !secondRequestHadStartResult.Load() || !thirdRequestHadWaitOutput.Load() {
 		t.Fatalf("provider inputs missing process tool output: start=%t wait=%t", secondRequestHadStartResult.Load(), thirdRequestHadWaitOutput.Load())
 	}
-	transcript, err := os.Open(filepath.Join(sessionDir, "messages.jsonl"))
+	transcript, err := os.Open(filepath.Join(profileState(fixture), "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

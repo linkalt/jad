@@ -2,7 +2,6 @@ package app
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,24 +10,24 @@ import (
 	"testing"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestHTTPCompactAndResetWithFilesystemResolver(t *testing.T) {
-	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "one")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+	config, _ := layoutConfig(t, maintenanceSpec(map[string]any{
+		"compaction":  map[string]any{"keepbatch": map[string]any{"turn": map[string]any{"type": "assistant_final", "keep": 1}}},
+		"persistence": map[string]any{"durability": "process", "max_item_bytes": 1048576, "response_metadata": "full"},
+	}, ""), map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+	location, err := sessionfs.Resolve(config.Roots, "local:one")
+	if err != nil {
 		t.Fatal(err)
 	}
-	rootSetting := `{"session_roots":[{"id":"local","path":"sessions"}],"server":{"max_body_bytes":4096,"sse_max_buffered_bytes":4096}}`
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(rootSetting), 0o600); err != nil {
+	sessionConfig, err := sessionfs.LoadSessionConfig(location, "", "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	sessionSetting := fmt.Sprintf(`{"cwd":%q,"compaction":{"keepbatch":{"turn":{"type":"assistant_final","keep":1}}},"persistence":{"durability":"process","max_item_bytes":1048576,"response_metadata":"full"}}`, workspace)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(sessionSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	model := `{"provider":"openai","model":"offline-fixture","api_key_env":"UNSET_PROVIDER_KEY"}`
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(model), 0o600); err != nil {
+	messagesPath := sessionConfig.MessagesPath
+	if err := os.MkdirAll(filepath.Dir(messagesPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	transcript := strings.Join([]string{
@@ -37,12 +36,7 @@ func TestHTTPCompactAndResetWithFilesystemResolver(t *testing.T) {
 		`{"type":"message","role":"user","content":[{"type":"input_text","text":"latest context"}]}`,
 		`{"type":"response.completed","response":{"id":"resp_2","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"latest answer"}]}]}}`,
 	}, "\n") + "\n"
-	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
 	if err := os.WriteFile(messagesPath, []byte(transcript), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken}})
-	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := NewService(config)
@@ -77,17 +71,9 @@ func TestHTTPCompactAndResetWithFilesystemResolver(t *testing.T) {
 	if contents, err := os.ReadFile(messagesPath); err != nil || len(contents) != 0 {
 		t.Fatalf("messages after compact = %q, err=%v", contents, err)
 	}
-	cachePath := filepath.Join(sessionDir, "staging", "compaction-cache.json")
+	cachePath := filepath.Join(sessionConfig.StagingDir, "compaction-cache.json")
 	if _, err := os.Stat(cachePath); err != nil {
 		t.Fatalf("compaction cache missing: %v", err)
-	}
-	location, err := sessionfs.Resolve(config.Roots, "local:one")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionConfig, err := sessionfs.LoadSessionConfig(location, "", "")
-	if err != nil {
-		t.Fatal(err)
 	}
 	shared, err := service.resolver.sharedStore(sessionConfig)
 	if err != nil {
@@ -106,7 +92,7 @@ func TestHTTPCompactAndResetWithFilesystemResolver(t *testing.T) {
 	if body := readMutationResponse(t, reset); !strings.Contains(body, `"reset":true`) {
 		t.Fatalf("reset response = %s", body)
 	}
-	for _, path := range []string{filepath.Join(sessionDir, "messages.backup.jsonl"), cachePath, cachePath + ".backup"} {
+	for _, path := range []string{filepath.Join(filepath.Dir(messagesPath), "messages.backup.jsonl"), cachePath, cachePath + ".backup"} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("reset left %s: %v", path, err)
 		}
@@ -117,29 +103,23 @@ func TestHTTPCompactAndResetWithFilesystemResolver(t *testing.T) {
 // model.json, but compact() loads the full configuration. A broken model file
 // must therefore block compact (before the transcript changes) and nothing else.
 func TestMaintenanceOnlyCompactNeedsAUsableModelFile(t *testing.T) {
-	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "one")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+	config, _ := layoutConfig(t, maintenanceSpec(map[string]any{
+		"persistence": map[string]any{"durability": "process", "max_item_bytes": 1048576, "response_metadata": "full"},
+	}, `{"provider":"acme","api_key_env":"not a valid name"}`), map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+	location, err := sessionfs.Resolve(config.Roots, "local:one")
+	if err != nil {
 		t.Fatal(err)
 	}
-	rootSetting := `{"session_roots":[{"id":"local","path":"sessions"}],"server":{"max_body_bytes":4096,"sse_max_buffered_bytes":4096}}`
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(rootSetting), 0o600); err != nil {
+	sessionSettings, err := sessionfs.LoadSessionSettings(location, "", "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	sessionSetting := fmt.Sprintf(`{"cwd":%q,"persistence":{"durability":"process","max_item_bytes":1048576,"response_metadata":"full"}}`, workspace)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(sessionSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"provider":"acme","api_key_env":"not a valid name"}`), 0o600); err != nil {
+	messagesPath := sessionSettings.MessagesPath
+	if err := os.MkdirAll(filepath.Dir(messagesPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	transcript := `{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}` + "\n"
-	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
 	if err := os.WriteFile(messagesPath, []byte(transcript), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken}})
-	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := NewService(config)
@@ -161,4 +141,19 @@ func TestMaintenanceOnlyCompactNeedsAUsableModelFile(t *testing.T) {
 	if body := readMutationResponse(t, reset); reset.StatusCode != http.StatusOK || !strings.Contains(body, `"reset":true`) {
 		t.Fatalf("reset status=%d body=%s", reset.StatusCode, body)
 	}
+}
+
+// maintenanceSpec is the session "one" the maintenance tests post to; modelRaw, when set,
+// is the exact text of its model file.
+func maintenanceSpec(settings map[string]any, modelRaw string) layouttest.Spec {
+	spec := layouttest.Spec{
+		SessionID: "one",
+		Settings:  settings,
+		Server:    map[string]any{"max_body_bytes": 4096, "sse_max_buffered_bytes": 4096},
+		ModelRaw:  modelRaw,
+	}
+	if modelRaw == "" {
+		spec.Models = map[string]map[string]any{"openai/default": {"provider": "openai", "model": "offline-fixture", "api_key_env": "UNSET_PROVIDER_KEY"}}
+	}
+	return spec
 }

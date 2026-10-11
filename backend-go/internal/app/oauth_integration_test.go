@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 // oauthFixture is one session in auth_mode openai_oauth whose "Codex endpoint" is a local
@@ -23,9 +23,11 @@ import (
 type oauthFixture struct {
 	t          *testing.T
 	sessionDir string
-	authFile   string
-	api        *httptest.Server
-	codex      *httptest.Server
+	// stateDir holds the profile's transcript, staging and HTTP debug log.
+	stateDir string
+	authFile string
+	api      *httptest.Server
+	codex    *httptest.Server
 	// logs is the server log: a failed run's detail goes there, not to the client.
 	logs *lockedBuffer
 
@@ -59,15 +61,10 @@ func (f *oauthFixture) writeAuth(accessToken, accountID string) {
 	}
 }
 
-func newOAuthFixture(t *testing.T, modelExtra string) *oauthFixture {
+func newOAuthFixture(t *testing.T, modelExtra map[string]any) *oauthFixture {
 	t.Helper()
 	root := t.TempDir()
-	sessionsDir := filepath.Join(root, "sessions")
-	sessionDir := filepath.Join(sessionsDir, "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f := &oauthFixture{t: t, sessionDir: sessionDir, authFile: filepath.Join(root, "codex-auth.json"), logs: &lockedBuffer{}}
+	f := &oauthFixture{t: t, authFile: filepath.Join(root, "codex-auth.json"), logs: &lockedBuffer{}}
 	f.codex = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
@@ -86,25 +83,18 @@ func newOAuthFixture(t *testing.T, modelExtra string) *oauthFixture {
 	}))
 	t.Cleanup(f.codex.Close)
 
-	if err := os.WriteFile(filepath.Join(root, "setting.json"), []byte(fmt.Sprintf(`{"session_roots":[{"id":"local","path":%q}]}`, sessionsDir)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	setting := fmt.Sprintf(`{"cwd":%q,"max_tool_rounds":2,"http_debug":{"enabled":true,"include_request_headers":true,"include_request_body":true,"max_body_bytes":65536}}`, root)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	model := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","auth_mode":"openai_oauth","base_url":%q,"oauth_auth_file":%q%s}`, f.codex.URL+"/codex", f.authFile, modelExtra)
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(model), 0o600); err != nil {
-		t.Fatal(err)
+	modelFile := map[string]any{"provider": "openai", "model": "gpt-test", "auth_mode": "openai_oauth", "base_url": f.codex.URL + "/codex", "oauth_auth_file": f.authFile}
+	for key, value := range modelExtra {
+		modelFile[key] = value
 	}
 	// No provider key variable exists: OAuth mode must not ask for one.
-	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir:  root,
-		Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken},
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
+	config, layout := layoutConfig(t, layouttest.Spec{
+		CWD:      root,
+		Settings: map[string]any{"max_tool_rounds": 2, "http_debug": map[string]any{"enabled": true, "include_request_headers": true, "include_request_body": true, "max_body_bytes": 65536}},
+		Models:   map[string]map[string]any{"openai/default": modelFile},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+	f.sessionDir = layout.SessionDir
+	f.stateDir = profileState(layout)
 	config.HTTP.Logger = slog.New(slog.NewTextHandler(f.logs, nil))
 	service, err := NewService(config)
 	if err != nil {
@@ -136,7 +126,7 @@ func (f *oauthFixture) run() (int, string) {
 }
 
 func TestOAuthRunSendsTheCredentialToTheConfiguredEndpointAndNothingElseChanges(t *testing.T) {
-	f := newOAuthFixture(t, "")
+	f := newOAuthFixture(t, nil)
 	access := oauthToken(time.Now().Add(time.Hour))
 	f.writeAuth(access, "acct-42")
 
@@ -178,17 +168,17 @@ func TestOAuthRunSendsTheCredentialToTheConfiguredEndpointAndNothingElseChanges(
 }
 
 func TestOAuthRunNeverWritesTheTokenOrAccountIDToTheHTTPDebugLog(t *testing.T) {
-	f := newOAuthFixture(t, "")
+	f := newOAuthFixture(t, nil)
 	access := oauthToken(time.Now().Add(time.Hour))
 	f.writeAuth(access, "acct-secret-id")
 	if status, stream := f.run(); status != http.StatusOK || !strings.Contains(stream, "event: completed") {
 		t.Fatalf("run status %d:\n%s", status, stream)
 	}
 	// The debug log must exist, or the check below proves nothing.
-	if _, err := os.Stat(filepath.Join(f.sessionDir, "debug", "http", "request1")); err != nil {
+	if _, err := os.Stat(filepath.Join(f.stateDir, "debug", "http", "request1")); err != nil {
 		t.Fatalf("the HTTP debug log was not written: %v", err)
 	}
-	err := filepath.WalkDir(f.sessionDir, func(path string, entry os.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(f.stateDir, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() {
 			return walkErr
 		}
@@ -209,7 +199,7 @@ func TestOAuthRunNeverWritesTheTokenOrAccountIDToTheHTTPDebugLog(t *testing.T) {
 }
 
 func TestOAuthRunWithAnExpiredTokenIsRefusedBeforeAnyRequestAndNamesTheFile(t *testing.T) {
-	f := newOAuthFixture(t, "")
+	f := newOAuthFixture(t, nil)
 	f.writeAuth(oauthToken(time.Now().Add(-time.Hour)), "acct")
 	_, stream := f.run()
 	if !strings.Contains(stream, "event: error") || strings.Contains(stream, "event: completed") {
@@ -225,7 +215,7 @@ func TestOAuthRunWithAnExpiredTokenIsRefusedBeforeAnyRequestAndNamesTheFile(t *t
 }
 
 func TestOAuthRunWithAMissingCredentialFileIsRefused(t *testing.T) {
-	f := newOAuthFixture(t, "")
+	f := newOAuthFixture(t, nil)
 	_, stream := f.run()
 	if !strings.Contains(stream, "event: error") || !strings.Contains(f.logs.String(), "file not found") {
 		t.Fatalf("stream:\n%s\nlog:\n%s", stream, f.logs.String())
@@ -236,7 +226,7 @@ func TestOAuthRunWithAMissingCredentialFileIsRefused(t *testing.T) {
 }
 
 func TestOAuthRunUsesATokenThatWasRefreshedBetweenRunsWithoutARestart(t *testing.T) {
-	f := newOAuthFixture(t, "")
+	f := newOAuthFixture(t, nil)
 	first := oauthToken(time.Now().Add(time.Hour))
 	f.writeAuth(first, "acct")
 	if status, stream := f.run(); status != http.StatusOK || !strings.Contains(stream, "event: completed") {
@@ -257,7 +247,7 @@ func TestOAuthRunUsesATokenThatWasRefreshedBetweenRunsWithoutARestart(t *testing
 }
 
 func TestOAuthRunFailsAtOnceWhenTheTokenExpiresBehindACachedRunner(t *testing.T) {
-	f := newOAuthFixture(t, "")
+	f := newOAuthFixture(t, nil)
 	f.writeAuth(oauthToken(time.Now().Add(time.Hour)), "acct")
 	if status, stream := f.run(); status != http.StatusOK || !strings.Contains(stream, "event: completed") {
 		t.Fatalf("first run %d:\n%s", status, stream)
@@ -279,25 +269,10 @@ func TestOAuthRunFailsAtOnceWhenTheTokenExpiresBehindACachedRunner(t *testing.T)
 }
 
 func TestAPIKeySessionStillRequiresItsEnvironmentVariableAndIgnoresOAuthSettings(t *testing.T) {
-	root := t.TempDir()
-	sessionsDir := filepath.Join(root, "sessions")
-	sessionDir := filepath.Join(sessionsDir, "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "setting.json"), []byte(fmt.Sprintf(`{"session_roots":[{"id":"local","path":%q}]}`, sessionsDir)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(fmt.Sprintf(`{"cwd":%q,"openai_oauth":{"expiry_margin_ms":1}}`, root)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"model":"gpt-test","api_key_env":"FIXTURE_MISSING_KEY"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: root, Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	config, _ := layoutConfig(t, layouttest.Spec{
+		Settings: map[string]any{"openai_oauth": map[string]any{"expiry_margin_ms": 1}},
+		Models:   map[string]map[string]any{"openai/default": {"model": "gpt-test", "api_key_env": "FIXTURE_MISSING_KEY"}},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
 	logs := &lockedBuffer{}
 	config.HTTP.Logger = slog.New(slog.NewTextHandler(logs, nil))
 	service, err := NewService(config)

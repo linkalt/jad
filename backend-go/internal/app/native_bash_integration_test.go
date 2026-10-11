@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 	"example.com/agent-harness/backend-go/internal/tools/native"
 )
 
@@ -24,10 +25,6 @@ func TestHTTPRunExecutesConfiguredNativeBashAndContinuesProviderRound(t *testing
 		t.Skip("bash is not installed")
 	}
 	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	bashTool, err := native.NewBashTool(sessionfs.NativeBashSettings{Shell: shell}, "FIXTURE_OPENAI_KEY")
 	if err != nil {
 		t.Fatal(err)
@@ -102,39 +99,13 @@ func TestHTTPRunExecutesConfiguredNativeBashAndContinuesProviderRound(t *testing
 	}))
 	defer provider.Close()
 
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(`{"session_roots":[{"id":"local","path":"sessions"}]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sessionSetting, err := json.Marshal(map[string]any{
-		"cwd": workspace, "max_tool_rounds": 2, "tool_definition_paths": []string{"bash.json"},
-		"tools": map[string]any{"native": map[string]any{"bash": map[string]any{"shell": shell, "spill": map[string]any{"enabled": false}}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), sessionSetting, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	modelSetting, err := json.Marshal(map[string]any{
-		"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), modelSetting, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir: workspace,
-		Environment: map[string]string{
-			"AGENT_API_TOKEN":    integrationAPIToken,
-			"FIXTURE_OPENAI_KEY": "local-provider-key",
-		},
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig() error = %v", err)
-	}
+	config, fixture := layoutConfig(t, layouttest.Spec{
+		CWD:                 workspace,
+		ToolDefinitionPaths: []string{filepath.Join(workspace, "bash.json")},
+		Settings:            map[string]any{"max_tool_rounds": 2},
+		Native:              map[string]any{"bash": map[string]any{"shell": shell, "spill": map[string]any{"enabled": false}}},
+		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -173,7 +144,7 @@ func TestHTTPRunExecutesConfiguredNativeBashAndContinuesProviderRound(t *testing
 		t.Fatal("second provider request did not include the native bash result")
 	}
 
-	transcript, err := os.Open(filepath.Join(sessionDir, "messages.jsonl"))
+	transcript, err := os.Open(filepath.Join(profileState(fixture), "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

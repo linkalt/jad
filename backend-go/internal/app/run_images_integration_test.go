@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -18,25 +17,21 @@ import (
 	"bytes"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 // runImagesFixture is a server with a fake Responses provider that records every
 // request body, so a test can see what the model would receive.
 type runImagesFixture struct {
-	apiURL     string
-	sessionDir string
-	mu         sync.Mutex
-	bodies     []string
+	apiURL       string
+	messagesPath string
+	mu           sync.Mutex
+	bodies       []string
 }
 
 func newRunImagesFixture(t *testing.T, server, session map[string]any) *runImagesFixture {
 	t.Helper()
 	f := &runImagesFixture{}
-	workspace := t.TempDir()
-	f.sessionDir = filepath.Join(workspace, "sessions", "demo")
-	if err := os.MkdirAll(f.sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
@@ -53,28 +48,20 @@ func newRunImagesFixture(t *testing.T, server, session map[string]any) *runImage
 		}
 	}))
 	t.Cleanup(provider.Close)
-	if session == nil {
-		session = map[string]any{}
-	}
-	if server == nil {
-		server = map[string]any{}
-	}
-	session["cwd"] = workspace
-	sessionJSON, _ := json.Marshal(session)
-	rootJSON, _ := json.Marshal(map[string]any{"session_roots": []map[string]string{{"id": "local", "path": "sessions"}}, "server": server})
-	for path, content := range map[string]string{
-		filepath.Join(f.sessionDir, "model.json"):   fmt.Sprintf(`{"provider":"openai","model":"m","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q}`, provider.URL+"/v1"),
-		filepath.Join(workspace, "setting.json"):    string(rootJSON),
-		filepath.Join(f.sessionDir, "setting.json"): string(sessionJSON),
-	} {
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"}})
+	environment := map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"}
+	config, _ := layoutConfig(t, layouttest.Spec{
+		SessionID: "demo", Settings: session, Server: server,
+		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "m", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
+	}, environment)
+	location, err := sessionfs.Resolve(config.Roots, "local:demo")
 	if err != nil {
 		t.Fatal(err)
 	}
+	sessionSettings, err := sessionfs.LoadSessionSettings(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.messagesPath = sessionSettings.MessagesPath
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +91,7 @@ func (f *runImagesFixture) do(t *testing.T, method, path, body string) (int, str
 
 func (f *runImagesFixture) transcript(t *testing.T) string {
 	t.Helper()
-	data, _ := os.ReadFile(filepath.Join(f.sessionDir, "messages.jsonl"))
+	data, _ := os.ReadFile(f.messagesPath)
 	return string(data)
 }
 

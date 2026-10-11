@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 // hostedToolsProvider is a fake Responses endpoint that answers like a provider with a
@@ -80,32 +80,26 @@ func toolTypes(tools []json.RawMessage) []string {
 
 func TestHostedToolsReachTheProviderAndTheirItemsRoundTrip(t *testing.T) {
 	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	provider := &hostedToolsProvider{}
 	server := httptest.NewServer(provider.handler(t))
 	defer server.Close()
 
-	writeModel := func(hosted string) {
-		model := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q%s}`, server.URL+"/v1", hosted)
-		if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(model), 0o600); err != nil {
+	model := func(hosted []any) map[string]any {
+		m := map[string]any{"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1"}
+		if hosted != nil {
+			m["hosted_tools"] = hosted
+		}
+		return m
+	}
+	config, fixture := layoutConfig(t, layouttest.Spec{
+		CWD:    workspace,
+		Models: map[string]map[string]any{"openai/default": model([]any{map[string]any{"type": "web_search", "search_context_size": "low"}})},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"})
+	writeModel := func(hosted []any) {
+		data, _ := json.Marshal(model(hosted))
+		if err := os.WriteFile(filepath.Join(fixture.ModelsDir, "openai", "default.json"), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
-	}
-	writeModel(`,"hosted_tools":[{"type":"web_search","search_context_size":"low"}]`)
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(`{"session_roots":[{"id":"local","path":"sessions"}]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(fmt.Sprintf(`{"cwd":%q}`, workspace)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, Environment: map[string]string{
-		"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k",
-	}})
-	if err != nil {
-		t.Fatal(err)
 	}
 	service, err := NewService(config)
 	if err != nil {
@@ -156,7 +150,7 @@ func TestHostedToolsReachTheProviderAndTheirItemsRoundTrip(t *testing.T) {
 	if !replayedSearch || !replayedCitation {
 		t.Fatalf("second request input lacks the stored provider items: web_search_call=%t url_citation=%t\n%v", replayedSearch, replayedCitation, requests[1].Input)
 	}
-	transcript, err := os.ReadFile(filepath.Join(sessionDir, "messages.jsonl"))
+	transcript, err := os.ReadFile(filepath.Join(profileState(fixture), "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,14 +159,14 @@ func TestHostedToolsReachTheProviderAndTheirItemsRoundTrip(t *testing.T) {
 	}
 
 	// 3. Editing model.json takes effect on the next run: the cached runner is replaced.
-	writeModel(`,"hosted_tools":[{"type":"web_search"},{"type":"file_search"}]`)
+	writeModel([]any{map[string]any{"type": "web_search"}, map[string]any{"type": "file_search"}})
 	run("third")
 	requests = provider.snapshot()
 	if got := toolTypes(requests[2].Tools); strings.Join(got, ",") != "web_search,file_search" {
 		t.Fatalf("after editing model.json the tools = %v, want [web_search file_search]", got)
 	}
 	// 4. Removing the key removes the tools: the request has no tools key content.
-	writeModel(``)
+	writeModel(nil)
 	run("fourth")
 	requests = provider.snapshot()
 	if requests[3].HasToolsKey {

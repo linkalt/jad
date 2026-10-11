@@ -13,11 +13,10 @@ import (
 )
 
 // profileSession is the extra session setting of a profile with a tools block.
+// profileSession puts a tools block into the session's only profile; the fixture builder
+// writes it into the profile file.
 func profileSession(tools map[string]any) map[string]any {
-	return map[string]any{"paths": map[string]any{
-		"active_profile": "lean",
-		"profiles":       map[string]any{"lean": map[string]any{"tools": tools}},
-	}}
+	return map[string]any{"__profile_extra": map[string]any{"tools": tools}}
 }
 
 // A profile that shows its model only the subagent tool: the child still reads a file,

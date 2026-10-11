@@ -1,35 +1,29 @@
 package sessionfs
 
 import (
+	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
-// oauthSession writes a session whose model.json and setting.json are given and loads its
-// model, the way a run does.
+// loadOAuthSession writes a layout session whose default model file is modelJSON and
+// whose settings are the object body of settingExtra (",\"key\":value", as before), and
+// loads its model, the way a run does.
 func loadOAuthSession(t *testing.T, modelJSON, settingExtra string) (SessionConfig, error) {
 	t.Helper()
-	rootDir := t.TempDir()
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
+	spec := layouttest.Spec{ModelRaw: modelJSON}
+	if settingExtra != "" {
+		var settings map[string]json.RawMessage
+		if err := json.Unmarshal([]byte("{"+strings.TrimPrefix(settingExtra, ",")+"}"), &settings); err != nil {
+			t.Fatal(err)
+		}
+		spec.RawSettings = settings
 	}
-	setting := `{"cwd":"` + rootDir + `"` + settingExtra + `}`
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(modelJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	location := Location{Directory: sessionDir, Root: Root{GlobalJadRoot: rootDir}}
-	config, err := LoadSessionConfig(location, "", "")
-	if err != nil {
-		return SessionConfig{}, err
-	}
-	return config.WithModel()
+	return loadLayoutConfig(t, spec)
 }
 
 func TestOpenAIOAuthModelEndpointDefaultsToCodexAndTakesBaseURLFromModelJSON(t *testing.T) {

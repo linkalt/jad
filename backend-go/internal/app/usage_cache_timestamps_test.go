@@ -22,31 +22,22 @@ type usageTimestampFixture struct {
 
 func newUsageTimestampFixture(t *testing.T) usageTimestampFixture {
 	t.Helper()
-	workspace := t.TempDir()
-	rootDir := filepath.Join(workspace, "sessions")
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting := fmt.Sprintf(`{"cwd":%q,"persistence":{"durability":"process","max_item_bytes":1048576,"response_metadata":"full"}}`, workspace)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"provider":"openai","model":"gpt-test"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	user := `{"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]}`
-	response := `{"type":"response.completed","session_turn":1,"session_step":1,"response":{"id":"usage-response-1","usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7},"output":[]}}`
-	if err := os.WriteFile(filepath.Join(sessionDir, "messages.jsonl"), []byte(user+"\n"+response+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	roots := []sessionfs.Root{{ID: "primary", Label: "Primary", Directory: rootDir}}
+	loaded, _ := layoutConfig(t, catalogSpec(), map[string]string{})
+	roots := loaded.Roots
 	location, err := sessionfs.Resolve(roots, "session-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	config, err := sessionfs.LoadSessionConfig(location, "", "")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(config.MessagesPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	user := `{"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]}`
+	response := `{"type":"response.completed","session_turn":1,"session_step":1,"response":{"id":"usage-response-1","usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7},"output":[]}}`
+	if err := os.WriteFile(config.MessagesPath, []byte(user+"\n"+response+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	resolver, err := NewResolver(roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50, MaxInlinePartBytes: 1024})

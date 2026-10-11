@@ -15,15 +15,11 @@ import (
 
 	mcpSDK "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestHTTPRunExecutesMCPToolAndPassesMultimodalOutputToNextRound(t *testing.T) {
 	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	mcpServer := mcpSDK.NewServer(&mcpSDK.Implementation{Name: "fixture", Version: "1.0.0"}, nil)
 	mcpServer.AddTool(&mcpSDK.Tool{
@@ -48,19 +44,6 @@ func TestHTTPRunExecutesMCPToolAndPassesMultimodalOutputToNextRound(t *testing.T
 	mcpHandler := mcpSDK.NewStreamableHTTPHandler(func(*http.Request) *mcpSDK.Server { return mcpServer }, nil)
 	mcpHTTP := httptest.NewServer(mcpHandler)
 	defer mcpHTTP.Close()
-	mcpConfigPath := filepath.Join(workspace, "mcp-server.json")
-	mcpConfig, err := json.Marshal(map[string]any{
-		"transport":        map[string]any{"type": "streamable_http", "url": mcpHTTP.URL},
-		"timeout_ms":       10_000,
-		"max_result_bytes": 4096,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(mcpConfigPath, mcpConfig, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
 	var providerCalls atomic.Int32
 	var nextRequestHadMCPOutput atomic.Bool
 	var providerFailure atomic.Value
@@ -151,35 +134,17 @@ func TestHTTPRunExecutesMCPToolAndPassesMultimodalOutputToNextRound(t *testing.T
 	}))
 	defer provider.Close()
 
-	rootSetting := `{"session_roots":[{"id":"local","path":"sessions"}]}`
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(rootSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sessionSetting, err := json.Marshal(map[string]any{
-		"cwd":             workspace,
-		"max_tool_rounds": 2,
-		"mcp_servers":     []any{map[string]any{"id": "fixture", "config_path": mcpConfigPath, "enabled": true, "deny_tools": []string{}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), sessionSetting, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	modelSetting := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q}`, provider.URL+"/v1")
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(modelSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir: workspace,
-		Environment: map[string]string{
-			"AGENT_API_TOKEN":    integrationAPIToken,
-			"FIXTURE_OPENAI_KEY": "local-provider-key",
-		},
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
+	config, fixture := layoutConfig(t, layouttest.Spec{
+		CWD:      workspace,
+		Settings: map[string]any{"max_tool_rounds": 2},
+		MCP:      map[string]map[string]any{"m/fixture": {"deny_tools": []string{}}},
+		MCPConfig: map[string]map[string]any{"m/fixture": {
+			"transport":        map[string]any{"type": "streamable_http", "url": mcpHTTP.URL},
+			"timeout_ms":       10_000,
+			"max_result_bytes": 4096,
+		}},
+		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -235,7 +200,7 @@ func TestHTTPRunExecutesMCPToolAndPassesMultimodalOutputToNextRound(t *testing.T
 	if providerCalls.Load() != 2 || !nextRequestHadMCPOutput.Load() {
 		t.Fatalf("provider calls=%d, next request had MCP output=%v", providerCalls.Load(), nextRequestHadMCPOutput.Load())
 	}
-	transcriptBytes, err := os.ReadFile(filepath.Join(sessionDir, "messages.jsonl"))
+	transcriptBytes, err := os.ReadFile(filepath.Join(profileState(fixture), "messages.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

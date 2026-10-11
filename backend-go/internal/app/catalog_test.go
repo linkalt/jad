@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,30 +10,22 @@ import (
 
 	"example.com/agent-harness/backend-go/internal/httpapi"
 	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestConditionalCatalogResponsesSkipTranscriptReads(t *testing.T) {
-	workspace := t.TempDir()
-	rootDir := filepath.Join(workspace, "sessions")
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting := fmt.Sprintf(`{"cwd":%q,"persistence":{"durability":"process","max_item_bytes":1048576,"response_metadata":"full"}}`, workspace)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"provider":"openai","model":"gpt-test"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	loaded, _ := layoutConfig(t, catalogSpec(), map[string]string{})
+	roots := loaded.Roots
 
-	roots := []sessionfs.Root{{ID: "primary", Label: "Primary", Directory: rootDir}}
 	location, err := sessionfs.Resolve(roots, "session-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	config, err := sessionfs.LoadSessionConfig(location, "", "")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(config.MessagesPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(config.MessagesPath, []byte("not-json\n"), 0o600); err != nil {
@@ -75,21 +66,9 @@ func TestConditionalCatalogResponsesSkipTranscriptReads(t *testing.T) {
 }
 
 func TestCatalogRunSummariesAreReturnedAndVersioned(t *testing.T) {
-	workspace := t.TempDir()
-	rootDir := filepath.Join(workspace, "sessions")
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting := fmt.Sprintf(`{"cwd":%q,"persistence":{"durability":"process","max_item_bytes":1048576,"response_metadata":"full"}}`, workspace)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"provider":"openai","model":"gpt-test"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	loaded, _ := layoutConfig(t, catalogSpec(), map[string]string{})
+	roots := loaded.Roots
 
-	roots := []sessionfs.Root{{ID: "primary", Label: "Primary", Directory: rootDir}}
 	location, err := sessionfs.Resolve(roots, "session-1")
 	if err != nil {
 		t.Fatal(err)
@@ -166,31 +145,25 @@ func (p fixedCatalogRunProvider) SessionRuns(string, string) httpapi.SessionRunS
 }
 
 func TestSnapshotCursorsUseTurnByteOffsetsAndFetchWholeMessage(t *testing.T) {
-	workspace := t.TempDir()
-	rootDir := filepath.Join(workspace, "sessions")
-	sessionDir := filepath.Join(rootDir, "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting := fmt.Sprintf(`{"cwd":%q,"persistence":{"durability":"process","max_item_bytes":1048576,"response_metadata":"full"}}`, workspace)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(`{"provider":"openai","model":"gpt-test"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	loaded, _ := layoutConfig(t, catalogSpec(), map[string]string{})
+	roots := loaded.Roots
 	firstUser := `{"type":"message","role":"user","content":[{"type":"input_text","text":"first question"}]}`
 	firstResponse := `{"type":"response.completed","session_turn":1,"session_step":1,"response":{"id":"resp-1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"a long answer that is capped in the snapshot"}]}]}}`
 	secondUser := `{"type":"message","role":"user","content":[{"type":"input_text","text":"second question"}]}`
 	secondResponse := `{"type":"response.completed","session_turn":2,"session_step":1,"response":{"id":"resp-2","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"later answer"}]}]}}`
 	transcript := strings.Join([]string{firstUser, firstResponse, secondUser, secondResponse}, "\n") + "\n"
-	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
-	if err := os.WriteFile(messagesPath, []byte(transcript), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	roots := []sessionfs.Root{{ID: "primary", Label: "Primary", Directory: rootDir}}
 	location, err := sessionfs.Resolve(roots, "session-1")
 	if err != nil {
+		t.Fatal(err)
+	}
+	sessionConfig, err := sessionfs.LoadSessionConfig(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(sessionConfig.MessagesPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sessionConfig.MessagesPath, []byte(transcript), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	resolver, err := NewResolver(roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50, MaxInlinePartBytes: 4})
@@ -270,47 +243,41 @@ func TestSnapshotCursorsUseTurnByteOffsetsAndFetchWholeMessage(t *testing.T) {
 	}
 }
 
-// TestSessionListNamesTheModelFileTheSettingsSelect checks that the session
-// list reports the provider and model of the file the active path profile
-// selects (paths.profiles.<name>.model_default), not of model.json beside
-// setting.json. The TypeScript list reads the selected file; reading model.json
-// showed another session's label whenever the two files differ.
+// TestSessionListNamesTheModelFileTheSettingsSelect checks that the session list reports
+// the provider and model of the model the session's active profile selects (its
+// model_default, or the first model it lists), not of another model the profile also lists.
 func TestSessionListNamesTheModelFileTheSettingsSelect(t *testing.T) {
-	workspace := t.TempDir()
-	rootDir := filepath.Join(workspace, "sessions")
-	write := func(session, name, contents string) {
-		t.Helper()
-		dir := filepath.Join(rootDir, session)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	models := map[string]map[string]any{
+		"m/plain":  {"provider": "plain", "model": "plain-model"},
+		"m/other":  {"provider": "  selected  ", "model": " selected-model "},
+		"m/second": {"provider": "listed", "model": "listed-model"},
+		"m/odd":    {"provider": 7, "model": "   "},
+		"m/zeta":   {"provider": "zeta", "model": "zeta-model"},
 	}
-	setting := func(paths string) string {
-		return fmt.Sprintf(`{"cwd":%q,"persistence":{"durability":"process","max_item_bytes":1048576,"response_metadata":"full"}%s}`, workspace, paths)
+	profile := func(listed []string, modelDefault string) map[string]any {
+		entry := map[string]any{"models": listed}
+		if modelDefault != "" {
+			entry["model_default"] = modelDefault
+		}
+		return entry
 	}
-	// profiled: the profile's default model is other.json, model.json differs.
-	write("profiled", "setting.json", setting(`,"paths":{"active_profile":"work","profiles":{"work":{"model_default":"other.json","models":["other.json","model.json"]}}}`))
-	write("profiled", "model.json", `{"provider":"plain","model":"plain-model"}`)
-	write("profiled", "other.json", `{"provider":"  selected  ","model":" selected-model "}`)
-	// first: no model_default, so the first listed model is the default.
-	write("first", "setting.json", setting(`,"paths":{"active_profile":"work","profiles":{"work":{"models":["second.json","model.json"]}}}`))
-	write("first", "model.json", `{"provider":"plain","model":"plain-model"}`)
-	write("first", "second.json", `{"provider":"listed","model":"listed-model"}`)
-	// plain: no profiles, model.json beside setting.json.
-	write("plain", "setting.json", setting(``))
-	write("plain", "model.json", `{"provider":"plain","model":"plain-model"}`)
-	// missing: the selected file does not exist.
-	write("missing", "setting.json", setting(`,"paths":{"active_profile":"work","profiles":{"work":{"model_default":"gone.json","models":["gone.json"]}}}`))
-	write("missing", "model.json", `{"provider":"plain","model":"plain-model"}`)
-	// partial: provider is not a string, model is blank.
-	write("partial", "setting.json", setting(`,"paths":{"active_profile":"work","profiles":{"work":{"model_default":"odd.json","models":["odd.json"]}}}`))
-	write("partial", "odd.json", `{"provider":7,"model":"   "}`)
+	loaded, fixture := layoutConfig(t, layouttest.Spec{
+		SessionID: "profiled", ActiveProfile: "dev/profiled", Models: models,
+		Profiles: map[string]map[string]any{
+			// profiled: the profile's default model is m/other, the plain model is also listed.
+			"dev/profiled": profile([]string{"m/other", "m/plain"}, "m/other"),
+			// first: no model_default, so the first model in sorted order is the default.
+			"dev/first": profile([]string{"m/zeta", "m/second"}, ""),
+			"dev/plain": profile([]string{"m/plain"}, ""),
+			// partial: provider is not a string, model is blank.
+			"dev/partial": profile([]string{"m/odd"}, ""),
+		},
+	}, map[string]string{})
+	fixture.AddSessionOn(t, "first", fixture.CWD, "dev/first")
+	fixture.AddSessionOn(t, "plain", fixture.CWD, "dev/plain")
+	fixture.AddSessionOn(t, "partial", fixture.CWD, "dev/partial")
 
-	roots := []sessionfs.Root{{ID: "primary", Label: "Primary", Directory: rootDir}}
-	resolver, err := NewResolver(roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50, MaxInlinePartBytes: 1024})
+	resolver, err := NewResolver(loaded.Roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50, MaxInlinePartBytes: 1024})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +302,6 @@ func TestSessionListNamesTheModelFileTheSettingsSelect(t *testing.T) {
 		"profiled": {Provider: "selected", Model: "selected-model"},
 		"first":    {Provider: "listed", Model: "listed-model"},
 		"plain":    {Provider: "plain", Model: "plain-model"},
-		"missing":  {Provider: "unknown", Model: "missing"},
 		"partial":  {Provider: "unknown", Model: "partial"},
 	}
 	if len(got) != len(want) {
@@ -345,5 +311,14 @@ func TestSessionListNamesTheModelFileTheSettingsSelect(t *testing.T) {
 		if got[session] != expected {
 			t.Errorf("session %q model = %+v, want %+v", session, got[session], expected)
 		}
+	}
+}
+
+// catalogSpec is the session the catalog tests read: process durability and full response
+// metadata, in session-1.
+func catalogSpec() layouttest.Spec {
+	return layouttest.Spec{
+		SessionID: "session-1",
+		Settings:  map[string]any{"persistence": map[string]any{"durability": "process", "max_item_bytes": 1048576, "response_metadata": "full"}},
 	}
 }

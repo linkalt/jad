@@ -2,47 +2,27 @@ package app
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
 )
 
 // A provider-hosted search must reach the Web UI both live (SSE) and from the
 // stored transcript (session snapshot), with its sources as citations on the answer.
 func TestHostedSearchReachesTheWebUIFromStreamAndSnapshot(t *testing.T) {
 	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "demo")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	provider := &hostedToolsProvider{}
 	server := httptest.NewServer(provider.handler(t))
 	defer server.Close()
 
-	model := fmt.Sprintf(`{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_OPENAI_KEY","base_url":%q,"hosted_tools":[{"type":"web_search"}]}`, server.URL+"/v1")
-	files := map[string]string{
-		filepath.Join(sessionDir, "model.json"):   model,
-		filepath.Join(workspace, "setting.json"):  `{"session_roots":[{"id":"local","path":"sessions"}]}`,
-		filepath.Join(sessionDir, "setting.json"): fmt.Sprintf(`{"cwd":%q}`, workspace),
-	}
-	for path, content := range files {
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, Environment: map[string]string{
-		"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k",
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	config, _ := layoutConfig(t, layouttest.Spec{
+		CWD:    workspace,
+		Models: map[string]map[string]any{"openai/default": map[string]any{"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1", "hosted_tools": []any{map[string]any{"type": "web_search"}}}},
+	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatal(err)

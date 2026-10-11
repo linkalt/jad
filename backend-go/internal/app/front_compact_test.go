@@ -107,25 +107,21 @@ func TestHTTPFrontCompactHonorsDisabledSetting(t *testing.T) {
 
 func newFrontCompactService(t *testing.T, frontSetting string) (*Service, string) {
 	t.Helper()
-	workspace := t.TempDir()
-	sessionDir := filepath.Join(workspace, "sessions", "one")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	rootSetting := `{"session_roots":[{"id":"local","path":"sessions"}],"server":{"max_body_bytes":4096,"sse_max_buffered_bytes":4096}}`
-	if err := os.WriteFile(filepath.Join(workspace, "setting.json"), []byte(rootSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sessionSetting := fmt.Sprintf(`{"cwd":%q,"front_compaction":%s,"persistence":{"durability":"process","max_item_bytes":1048576,"response_metadata":"full"}}`, workspace, frontSetting)
-	if err := os.WriteFile(filepath.Join(sessionDir, "setting.json"), []byte(sessionSetting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	model := `{"provider":"openai","model":"offline-fixture","api_key_env":"UNSET_PROVIDER_KEY"}`
-	if err := os.WriteFile(filepath.Join(sessionDir, "model.json"), []byte(model), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken}})
+	spec := maintenanceSpec(map[string]any{
+		"persistence": map[string]any{"durability": "process", "max_item_bytes": 1048576, "response_metadata": "full"},
+	}, "")
+	spec.RawSettings = map[string]json.RawMessage{"front_compaction": json.RawMessage(frontSetting)}
+	config, _ := layoutConfig(t, spec, map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+	location, err := sessionfs.Resolve(config.Roots, "local:one")
 	if err != nil {
+		t.Fatal(err)
+	}
+	sessionSettings, err := sessionfs.LoadSessionSettings(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Dir(sessionSettings.MessagesPath)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	service, err := NewService(config)
