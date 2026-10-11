@@ -70,7 +70,7 @@ func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks,
 // the children of the subagent tool. A nil launcher still lists the tool, and a call
 // to it answers that sub-agent runs are unavailable; listing tools needs no launcher.
 func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.NativeDecide == nil && config.NativeSubagent == nil {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.NativeDecide == nil && config.NativeSubagent == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -87,7 +87,7 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 	}
 	if len(config.ToolDefinitionPaths) == 0 {
 		for _, enabled := range []struct{ name, id string }{
-			{"read", readToolID}, {"write", writeToolID}, {"edit", editToolID}, {"grep", grepToolID}, {"bash", bashToolID}, {"exec", execToolID}, {"glob", globToolID}, {"process", processToolID}, {"task", taskToolID}, {"memory", memoryToolID}, {"fetch", fetchToolID}, {"request_draft", requestDraftToolID}, {"skill", skillToolID}, {"decide", decideToolID}, {"subagent", subagentToolID},
+			{"read", readToolID}, {"write", writeToolID}, {"edit", editToolID}, {"grep", grepToolID}, {"bash", bashToolID}, {"exec", execToolID}, {"glob", globToolID}, {"read_image", readImageToolID}, {"process", processToolID}, {"task", taskToolID}, {"memory", memoryToolID}, {"fetch", fetchToolID}, {"request_draft", requestDraftToolID}, {"skill", skillToolID}, {"decide", decideToolID}, {"subagent", subagentToolID},
 		} {
 			if nativeToolConfigured(config, enabled.name) {
 				return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s is configured but %s is missing from tool_definition_paths", config.SettingPath, enabled.name, enabled.id)}
@@ -192,6 +192,18 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 			return nil, err
 		}
 		tool, err := NewGlobTool(*config.NativeGlob)
+		if err != nil {
+			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		tool.Definition = definition
+		loaded = append(loaded, tool)
+	}
+	if config.NativeReadImage != nil {
+		definition, err := requireNativeDefinition(config, definitions, "read_image", readImageToolID, readImageInputSchema)
+		if err != nil {
+			return nil, err
+		}
+		tool, err := NewReadImageTool(*config.NativeReadImage, imagestore.FromSettings(config.ImageStore))
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -332,6 +344,8 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeExec != nil
 	case "glob":
 		return config.NativeGlob != nil
+	case "read_image":
+		return config.NativeReadImage != nil
 	case "process":
 		return config.NativeProcess != nil
 	case "task":

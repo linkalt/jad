@@ -20,7 +20,7 @@ type layoutSettingsCase struct {
 }
 
 // goOnlyNativeTools are native tools older error texts in the case file do not list.
-var goOnlyNativeTools = []string{"subagent", "decide"}
+var goOnlyNativeTools = []string{"subagent", "decide", "read_image"}
 
 // goOnlyToolKeys are keys of a native tool the case file's exec list does not have.
 var goOnlyToolKeys = []string{"env_file, "}

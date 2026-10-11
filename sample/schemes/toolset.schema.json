@@ -914,6 +914,20 @@
           },
           "additionalProperties": false
         },
+        "read_image": {
+          "type": "object",
+          "description": "Shows an image file (png, jpeg, webp or gif) to the model as an image. Read-only. It has no path key: it reuses the read path rules (tools.native.read.paths), so one setting governs both. Needs read_image in tool_definition_paths. Large images are kept in files when image_store is on, and image_resize applies to them.",
+          "properties": {
+            "max_image_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10485760,
+              "default": 5242880,
+              "description": "Largest image file read; a larger one is refused."
+            }
+          },
+          "additionalProperties": false
+        },
         "process": {
           "type": "object",
           "description": "Long-running shell process management. Processes are session-owned and stopped on orderly backend shutdown.",

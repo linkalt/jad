@@ -136,6 +136,7 @@ type SessionConfig struct {
 	NativeBash         *NativeBashSettings
 	NativeExec         *NativeExecSettings
 	NativeGlob         *NativeGlobSettings
+	NativeReadImage    *NativeReadImageSettings
 	NativeProcess      *NativeProcessSettings
 	NativeTask         *NativeTaskSettings
 	NativeMemory       *NativeMemorySettings
@@ -366,6 +367,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	nativeReadImage, err := normalizeNativeReadImageSettings(setting, settingPath, nativeReadPolicy)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	nativeWrite, nativeEdit, err := normalizeNativeWriteEditSettings(
 		setting,
 		location.Root.GlobalJadRoot,
@@ -534,6 +539,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeBash:            nativeBash,
 		NativeExec:            nativeExec,
 		NativeGlob:            nativeGlob,
+		NativeReadImage:       nativeReadImage,
 		NativeProcess:         nativeProcess,
 		NativeTask:            nativeTask,
 		NativeMemory:          nativeMemory,

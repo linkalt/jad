@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
-	"strings"
 
 	"example.com/agent-harness/backend-go/internal/imagedata"
 	"example.com/agent-harness/backend-go/internal/imageresize"
@@ -84,45 +82,10 @@ func decodeDecideImageData(raw string, settings sessionfs.NativeDecideSettings, 
 	return data, ""
 }
 
-// readDecideImageFile reads one image by path, under the read tool's path policy, or
-// from the image store when the path is a stored-image reference.
+// readDecideImageFile reads one image of a decide call by path, under the read tool's
+// path policy, or from the image store when the path is a stored-image reference.
 func readDecideImageFile(path string, images DecideImages, settings sessionfs.NativeDecideSettings, execution tools.ExecutionContext, label string) ([]byte, string) {
-	if name, isReference := strings.CutPrefix(path, imagestore.RefPrefix); isReference {
-		data, _, err := images.Store.Open(name)
-		if err != nil {
-			return nil, decideError(execution.CallID, tools.StatusNotFound, "image_not_found", label+": the stored image cannot be read: "+oneLine(err.Error()))
-		}
-		if int64(len(data)) > settings.MaxImageBytes {
-			return nil, decideError(execution.CallID, tools.StatusInvalidInput, "image_too_large", fmt.Sprintf("%s: the image is %d bytes; the limit is %d", label, len(data), settings.MaxImageBytes))
-		}
-		return data, ""
-	}
-	target, failure := resolveExistingTarget(path, execution.WorkspaceRoot, images.ReadPolicy, execution.CallID)
-	if failure != "" {
-		return nil, failure
-	}
-	info, err := os.Lstat(target.realPath)
-	if err != nil {
-		return nil, imageReadFailure(execution.CallID, err, target.errorPath)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, decideError(execution.CallID, tools.StatusInvalidInput, "not_a_file", label+": "+target.errorPath+" is not a regular file")
-	}
-	file, err := os.Open(target.realPath)
-	if err != nil {
-		return nil, imageReadFailure(execution.CallID, err, target.errorPath)
-	}
-	defer file.Close()
-	// Read one byte more than the limit to see that the file is over it, without reading
-	// the whole file.
-	data, within, err := readWithin(file, settings.MaxImageBytes)
-	if err != nil {
-		return nil, imageReadFailure(execution.CallID, err, target.errorPath)
-	}
-	if !within {
-		return nil, decideError(execution.CallID, tools.StatusInvalidInput, "image_too_large", fmt.Sprintf("%s: %s is larger than %d bytes", label, target.errorPath, settings.MaxImageBytes))
-	}
-	return data, ""
+	return readImageFile(path, images.ReadPolicy, images.Store, settings.MaxImageBytes, execution, label)
 }
 
 // readWithin reads at most limit bytes. It reads one byte more to learn that the source
