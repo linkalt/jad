@@ -27,6 +27,9 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if session.SchemaVersion != 0 && session.SchemaVersion != 1 {
 		return SessionConfig{}, configError("%s: unsupported schema_version %d", sessionPath, session.SchemaVersion)
 	}
+	if err := session.refuseModelDefaults(sessionPath); err != nil {
+		return SessionConfig{}, err
+	}
 	if err := checkLayoutSettings(session.Settings, sessionPath+": settings"); err != nil {
 		return SessionConfig{}, err
 	}
@@ -285,8 +288,8 @@ func (c *layoutCompose) addProfileFields(entry map[string]any, profileID string,
 	if profile.ModelDefault != "" {
 		entry["model_default"] = profile.ModelDefault
 	}
-	if chosen := c.session.ModelDefaults[profileID]; chosen != "" {
-		entry["model_default"] = chosen
+	if profile.Instructions != nil {
+		entry["instructions"] = profile.Instructions
 	}
 	if len(profile.PromptDocuments) > 0 {
 		entry["prompt_documents"] = profile.PromptDocuments

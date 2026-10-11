@@ -208,6 +208,10 @@ func mapProfileSettingsError(err error) error {
 	if errors.As(err, &configErr) {
 		return &httpapi.StatusError{Code: http.StatusBadRequest, Message: configErr.Message}
 	}
+	var conflictErr *sessionfs.ConflictError
+	if errors.As(err, &conflictErr) {
+		return &httpapi.StatusError{Code: http.StatusConflict, Message: conflictErr.Message}
+	}
 	var clientErr *sessionfs.ClientError
 	if errors.As(err, &clientErr) {
 		return &httpapi.StatusError{Code: http.StatusBadRequest, Message: clientErr.Message}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"example.com/agent-harness/backend-go/internal/httpapi"
 	"example.com/agent-harness/backend-go/internal/sessionfs"
 )
 
@@ -264,5 +266,23 @@ func TestHTTPSettingsRequestsRespectBodyLimit(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized settings body status=%d body=%s", response.StatusCode, body)
+	}
+}
+
+// A profile file that changed during an update answers 409, so the client can read it
+// again and retry; the other settings errors stay 400.
+func TestMapProfileSettingsErrorAnswersConflictWith409(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		code int
+	}{
+		"conflict":     {&sessionfs.ConflictError{Message: "p.json changed while it was being updated"}, http.StatusConflict},
+		"wrapped":      {fmt.Errorf("write: %w", &sessionfs.ConflictError{Message: "x"}), http.StatusConflict},
+		"client error": {&sessionfs.ClientError{Message: "bad"}, http.StatusBadRequest},
+	} {
+		var status *httpapi.StatusError
+		if !errors.As(mapProfileSettingsError(tc.err), &status) || status.Code != tc.code {
+			t.Errorf("%s: got %v, want status %d", name, mapProfileSettingsError(tc.err), tc.code)
+		}
 	}
 }

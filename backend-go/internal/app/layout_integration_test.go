@@ -24,6 +24,9 @@ type layoutFixture struct {
 	api       *httptest.Server
 	mu        sync.Mutex
 	models    []string
+	// captureBodies records each request body in bodies, for a test that reads the prompt.
+	captureBodies bool
+	bodies        []string
 }
 
 func newLayoutFixture(t *testing.T) *layoutFixture {
@@ -37,6 +40,9 @@ func newLayoutFixture(t *testing.T) *layoutFixture {
 		_ = json.Unmarshal(raw, &request)
 		f.mu.Lock()
 		f.models = append(f.models, request.Model)
+		if f.captureBodies {
+			f.bodies = append(f.bodies, string(raw))
+		}
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, event := range []string{
@@ -209,5 +215,89 @@ func TestSessionVersionChangesWithTheCategory(t *testing.T) {
 	moved.Category = "test"
 	if sessionVersion(base) == sessionVersion(moved) {
 		t.Fatal("sessionVersion ignores the category")
+	}
+}
+
+// The model route writes the profile's own model_default, so a second session of the same
+// profile sees the choice too; session.json is not touched.
+func TestLayoutModelRouteWritesTheProfileFileForEverySession(t *testing.T) {
+	f := newLayoutFixture(t)
+	sessionFile := filepath.Join(f.root, "sessions", "demo", "session.json")
+	profileFile := filepath.Join(f.root, "profiles", "dev", "coder.json")
+	sessionBefore, _ := os.ReadFile(sessionFile)
+	other := filepath.Join(f.root, "sessions", "other", "session.json")
+	if err := os.MkdirAll(filepath.Dir(other), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(other, sessionBefore, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/model-default?profile="+url.QueryEscape("dev/coder"), `{"model_default":"openai/large"}`)
+	if status != 200 || !strings.Contains(body, `"model_default":"openai/large"`) {
+		t.Fatalf("model-default: %d %s", status, body)
+	}
+	if after, _ := os.ReadFile(sessionFile); string(after) != string(sessionBefore) {
+		t.Fatalf("session.json changed:\n%s", after)
+	}
+	if data, _ := os.ReadFile(profileFile); !strings.Contains(string(data), `"model_default": "openai/large"`) {
+		t.Fatalf("profile file does not carry the choice:\n%s", data)
+	}
+	if status, body := f.do(t, http.MethodPost, "/api/sessions/local:other/run", `{"input":"x"}`); status != 200 {
+		t.Fatalf("run in the other session: %d %s", status, body)
+	}
+	if got := f.lastModel(); got != "model-large" {
+		t.Fatalf("the other session ran %q, want model-large: the profile is shared", got)
+	}
+	if status, _ := f.do(t, http.MethodPost, "/api/sessions/local:demo/model-default?profile="+url.QueryEscape("dev/coder"), `{"model_default":"openai/missing"}`); status != 400 {
+		t.Fatalf("a model the profile does not offer: status %d, want 400", status)
+	}
+}
+
+// A session.json that still has model_defaults answers 4xx on every route, naming the key.
+func TestLayoutStaleModelDefaultsAreRefusedOverHTTP(t *testing.T) {
+	f := newLayoutFixture(t)
+	sessionFile := filepath.Join(f.root, "sessions", "demo", "session.json")
+	data, _ := os.ReadFile(sessionFile)
+	data = []byte(strings.Replace(string(data), `"schema_version"`, `"model_defaults": {"dev/coder": "openai/large"}, "schema_version"`, 1))
+	if err := os.WriteFile(sessionFile, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, call := range map[string]struct{ method, path, body string }{
+		"run":           {http.MethodPost, "/api/sessions/local:demo/run", `{"input":"x"}`},
+		"model route":   {http.MethodPost, "/api/sessions/local:demo/model-default", `{"model_default":"openai/large"}`},
+		"profile route": {http.MethodPost, "/api/sessions/local:demo/profile", `{"active_profile":"review/reviewer"}`},
+	} {
+		status, body := f.do(t, call.method, call.path, call.body)
+		if status < 400 || status >= 500 || !strings.Contains(body, "model_defaults was removed") {
+			t.Errorf("%s: status %d, body %s", name, status, body)
+		}
+	}
+	if len(f.models) != 0 {
+		t.Errorf("the provider was reached %d times with a refused session", len(f.models))
+	}
+}
+
+// Profile instructions are sent to the provider as the prompt, in the profile's role.
+func TestLayoutProfileInstructionsReachTheProvider(t *testing.T) {
+	f := newLayoutFixture(t)
+	profileFile := filepath.Join(f.root, "profiles", "dev", "coder.json")
+	data, _ := os.ReadFile(profileFile)
+	var profile map[string]any
+	_ = json.Unmarshal(data, &profile)
+	profile["instructions"] = "You are the coder."
+	profile["prompt_role"] = "developer"
+	data, _ = json.Marshal(profile)
+	if err := os.WriteFile(profileFile, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.captureBodies = true
+	if status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run", `{"input":"hello"}`); status != 200 {
+		t.Fatalf("run: %d %s", status, body)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.bodies) != 1 || !strings.Contains(f.bodies[0], "You are the coder.") || !strings.Contains(f.bodies[0], `"role":"developer"`) {
+		t.Fatalf("provider request bodies = %v", f.bodies)
 	}
 }

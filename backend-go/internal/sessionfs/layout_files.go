@@ -42,11 +42,24 @@ type layoutSessionFile struct {
 	Category      string      `json:"category"`
 	Scope         layoutScope `json:"scope"`
 	ActiveProfile string      `json:"active_profile"`
-	// ModelDefaults is the model each profile uses in this session, profile ID to model
-	// ID. It is written by the model-default route; a profile's own model_default is
-	// shared by every session that uses the profile, so a session may not edit it.
-	ModelDefaults map[string]string          `json:"model_defaults"`
+	// ModelDefaults is only read to refuse it: the model a profile uses is the
+	// profile's own model_default, which the model-default route now writes.
+	ModelDefaults json.RawMessage            `json:"model_defaults"`
 	Settings      map[string]json.RawMessage `json:"settings"`
+}
+
+// refuseModelDefaults fails a session.json that still carries the removed model_defaults
+// key, so a model choice made before the change is never silently dropped.
+func (s layoutSessionFile) refuseModelDefaults(path string) error {
+	if s.ModelDefaults == nil {
+		return nil
+	}
+	var entries bytes.Buffer
+	if err := json.Compact(&entries, s.ModelDefaults); err != nil {
+		entries.Reset()
+		entries.Write(s.ModelDefaults)
+	}
+	return configError("%s: model_defaults was removed; the model a profile uses is its own model_default, which the model route now writes. Move each entry into that profile file's model_default (%s) and delete model_defaults", path, entries.String())
 }
 
 // layoutScope narrows what one session may use. Only profiles are scoped; models,
@@ -57,15 +70,18 @@ type layoutScope struct {
 
 // layoutProfileFile is <profiles>/<category>/<name>.json.
 type layoutProfileFile struct {
-	SchemaVersion   int                        `json:"schema_version"`
-	Description     string                     `json:"description"`
-	PromptDocuments []string                   `json:"prompt_documents"`
-	PromptRole      string                     `json:"prompt_role"`
-	Models          catalog.Selection          `json:"models"`
-	ModelDefault    string                     `json:"model_default"`
-	Toolset         string                     `json:"toolset"`
-	Tools           json.RawMessage            `json:"tools"`
-	Settings        map[string]json.RawMessage `json:"settings"`
+	SchemaVersion   int      `json:"schema_version"`
+	Description     string   `json:"description"`
+	PromptDocuments []string `json:"prompt_documents"`
+	PromptRole      string   `json:"prompt_role"`
+	// Instructions is system-prompt text placed before the prompt documents. Kept raw so
+	// that null and an empty string are refused and not read as absent.
+	Instructions json.RawMessage            `json:"instructions"`
+	Models       catalog.Selection          `json:"models"`
+	ModelDefault string                     `json:"model_default"`
+	Toolset      string                     `json:"toolset"`
+	Tools        json.RawMessage            `json:"tools"`
+	Settings     map[string]json.RawMessage `json:"settings"`
 }
 
 // layoutToolsetFile is <tools>/<category>/<name>.json. MCP stays raw because the order

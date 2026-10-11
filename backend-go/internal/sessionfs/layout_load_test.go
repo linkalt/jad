@@ -2,12 +2,14 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // copyTree copies a directory tree.
@@ -605,12 +607,15 @@ func TestLayoutSetActiveProfileWritesSessionJSONOnly(t *testing.T) {
 	}
 }
 
-// A profile file is shared by every session, so the chosen model goes into session.json.
-func TestLayoutSetModelDefaultIsPerSession(t *testing.T) {
+// The model route edits the profile file: its model_default changes, every other key keeps
+// its place and the file keeps its indentation. A session that uses the profile sees it.
+func TestLayoutSetModelDefaultWritesTheProfileFile(t *testing.T) {
 	config, root := rootFromSample(t)
 	location, _ := Resolve(config.Roots, "default")
 	profileFile := filepath.Join(root, "profiles", "dev", "coder.json")
-	before, _ := os.ReadFile(profileFile)
+	sessionFile := filepath.Join(root, "sessions", "default", "session.json")
+	profileBefore, _ := os.ReadFile(profileFile)
+	sessionBefore, _ := os.ReadFile(sessionFile)
 
 	update, err := SetLayoutModelDefault(location, "dev/coder", "openai/gpt-fast", "turn")
 	if err != nil {
@@ -620,22 +625,148 @@ func TestLayoutSetModelDefaultIsPerSession(t *testing.T) {
 		t.Fatalf("update = %+v", update)
 	}
 	loaded, err := LoadSessionSettings(location, "dev/coder", "")
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || loaded.ModelDefault != "openai/gpt-fast" {
+		t.Fatalf("model default = %q, err = %v", loaded.ModelDefault, err)
 	}
-	if loaded.ModelDefault != "openai/gpt-fast" {
-		t.Fatalf("model default = %q, want the session's choice", loaded.ModelDefault)
+	if after, _ := os.ReadFile(sessionFile); string(after) != string(sessionBefore) {
+		t.Fatal("choosing a model changed session.json")
 	}
-	if after, _ := os.ReadFile(profileFile); string(after) != string(before) {
-		t.Fatal("choosing a model changed the profile file")
+	want := strings.Replace(string(profileBefore), `"model_default": "openai/gpt-deep"`, `"model_default": "openai/gpt-fast"`, 1)
+	if after, _ := os.ReadFile(profileFile); string(after) != want {
+		t.Fatalf("profile file after:\n%s\nwant:\n%s", after, want)
 	}
 	if again, _ := SetLayoutModelDefault(location, "dev/coder", "openai/gpt-fast", "turn"); again.Changed {
 		t.Fatal("setting the same model twice reported a change")
 	}
-	// the other profile keeps its own default
+	// another profile keeps its own default
 	other, err := LoadSessionSettings(location, "review/reviewer", "")
 	if err != nil || other.ModelDefault != "openai/gpt-fast" {
 		t.Fatalf("reviewer model = %q, err = %v", other.ModelDefault, err)
+	}
+	if entries, _ := filepath.Glob(filepath.Join(root, "profiles", "dev", "*.tmp-*")); len(entries) != 0 {
+		t.Fatalf("temporary files left behind: %v", entries)
+	}
+}
+
+// A profile without model_default gets the key right after models, the file mode stays,
+// and a tab-indented file stays tab-indented.
+func TestLayoutSetModelDefaultAddsTheKeyAfterModelsAndKeepsTheMode(t *testing.T) {
+	config, root := rootFromSample(t)
+	location, _ := Resolve(config.Roots, "default")
+	profileFile := filepath.Join(root, "profiles", "dev", "coder.json")
+	text := "{\n\t\"schema_version\": 1,\n\t\"models\": [\n\t\t\"openai\"\n\t],\n\t\"toolset\": \"coding/full\"\n}\n"
+	if err := os.WriteFile(profileFile, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(profileFile, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetLayoutModelDefault(location, "dev/coder", "openai/gpt-fast", "strict"); err != nil {
+		t.Fatal(err)
+	}
+	want := "{\n\t\"schema_version\": 1,\n\t\"models\": [\n\t\t\"openai\"\n\t],\n\t\"model_default\": \"openai/gpt-fast\",\n\t\"toolset\": \"coding/full\"\n}\n"
+	if after, _ := os.ReadFile(profileFile); string(after) != want {
+		t.Fatalf("profile file after:\n%q\nwant:\n%q", after, want)
+	}
+	if info, _ := os.Stat(profileFile); info.Mode().Perm() != 0o600 {
+		t.Fatalf("file mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+// A model the profile does not offer, or a profile outside the session's scope, is a client
+// error and writes nothing.
+func TestLayoutSetModelDefaultRefusesWhatIsNotOffered(t *testing.T) {
+	config, root := rootFromSample(t)
+	location, _ := Resolve(config.Roots, "default")
+	profileFile := filepath.Join(root, "profiles", "dev", "coder.json")
+	before, _ := os.ReadFile(profileFile)
+	for name, tc := range map[string]struct{ profile, model, want string }{
+		"model not offered":    {"dev/coder", "cheap/haiku", "is not offered by profile"},
+		"unknown model":        {"dev/coder", "openai/nope", "is not offered by profile"},
+		"profile not in scope": {"other/x", "openai/gpt-fast", "is not available to this session"},
+		"blank model":          {"dev/coder", "  ", "model_default must be a non-empty string"},
+	} {
+		var client *ClientError
+		_, err := SetLayoutModelDefault(location, tc.profile, tc.model, "turn")
+		if err == nil || !asClientError(err, &client) || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error = %v, want a client error containing %q", name, err, tc.want)
+		}
+	}
+	if after, _ := os.ReadFile(profileFile); string(after) != string(before) {
+		t.Fatal("a refused update changed the profile file")
+	}
+}
+
+// The profile file changed between the read and the rename (here: by the hook the test
+// installs before the write): nothing is written and the caller gets a conflict.
+func TestWriteFileIfUnchangedReportsAConflict(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "p.json")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(path)
+	later := before.ModTime().Add(2 * time.Second)
+	if err := os.WriteFile(path, []byte("{\"x\":1}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	err := writeFileIfUnchanged(path, []byte("{\"mine\":true}\n"), before, false)
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %v, want a ConflictError", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "{\"x\":1}\n" {
+		t.Fatalf("the other writer's file was overwritten: %q", got)
+	}
+	if leftovers, _ := filepath.Glob(path + ".tmp-*"); len(leftovers) != 0 {
+		t.Fatalf("temporary files left behind: %v", leftovers)
+	}
+	// With the file as it was read, the write goes through.
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := os.Stat(path)
+	if err := writeFileIfUnchanged(path, []byte("{\"mine\":true}\n"), fresh, false); err != nil {
+		t.Fatalf("unchanged file: %v", err)
+	}
+}
+
+// An old session.json that still has model_defaults is refused, by the loader and by the
+// model route, with a message that says where the value goes now. Nothing is written.
+func TestLayoutRefusesTheRemovedModelDefaultsKey(t *testing.T) {
+	config, root := rootFromSample(t)
+	location, _ := Resolve(config.Roots, "default")
+	sessionFile := filepath.Join(root, "sessions", "default", "session.json")
+	editJSON(t, sessionFile, func(m map[string]any) {
+		m["model_defaults"] = map[string]any{"dev/coder": "openai/gpt-fast"}
+	})
+	before, _ := os.ReadFile(sessionFile)
+	profileBefore, _ := os.ReadFile(filepath.Join(root, "profiles", "dev", "coder.json"))
+	want := []string{"model_defaults was removed", `{"dev/coder":"openai/gpt-fast"}`, "profile file's model_default"}
+	check := func(what string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: no error", what)
+		}
+		for _, text := range want {
+			if !strings.Contains(err.Error(), text) {
+				t.Errorf("%s: error %q lacks %q", what, err, text)
+			}
+		}
+	}
+	_, err := LoadSessionSettings(location, "dev/coder", "")
+	check("load", err)
+	_, err = SetLayoutModelDefault(location, "dev/coder", "openai/gpt-fast", "turn")
+	check("model route", err)
+	_, err = SetLayoutActiveProfile(location, "review/reviewer", "turn")
+	check("profile route", err)
+	if after, _ := os.ReadFile(sessionFile); string(after) != string(before) {
+		t.Fatal("a refused call changed session.json")
+	}
+	if after, _ := os.ReadFile(filepath.Join(root, "profiles", "dev", "coder.json")); string(after) != string(profileBefore) {
+		t.Fatal("a refused call changed the profile file")
 	}
 }
 
@@ -1115,5 +1246,78 @@ func TestLayoutToolStorageDirIsConfigurable(t *testing.T) {
 	}
 	if want := filepath.Join(abs, "default", "dev", "coder", "tools"); config.StoragePaths.ToolStorage != want {
 		t.Fatalf("session: tool storage = %s, want %s", config.StoragePaths.ToolStorage, want)
+	}
+}
+
+// The profile's instructions come first in the prompt, then its documents, and the
+// settings loader carries them to the config.
+func TestLayoutProfileInstructionsComeBeforeThePromptDocuments(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) {
+		m["instructions"] = "You are the coder."
+	})
+	config, err := LoadLayoutSessionConfig(location, layout, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Model.PromptText != "You are the coder.\n\nrules" {
+		t.Fatalf("PromptText = %q, want the instructions, a blank line, then CLAUDE.md", config.Model.PromptText)
+	}
+	if config.Model.PromptRole != "developer" {
+		t.Fatalf("PromptRole = %q", config.Model.PromptRole)
+	}
+	// Without instructions the prompt is the documents only, as before.
+	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) { delete(m, "instructions") })
+	config, err = LoadLayoutSessionConfig(location, layout, "dev/coder", "")
+	if err != nil || config.Model.PromptText != "rules" {
+		t.Fatalf("PromptText = %q, err = %v", config.Model.PromptText, err)
+	}
+}
+
+// A profile with instructions and no documents still gets a prompt.
+func TestLayoutProfileInstructionsWithoutDocuments(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) {
+		m["instructions"] = "Only this."
+		delete(m, "prompt_documents")
+	})
+	config, err := LoadLayoutSessionConfig(location, layout, "dev/coder", "")
+	if err != nil || config.Model.PromptText != "Only this." {
+		t.Fatalf("PromptText = %q, err = %v", config.Model.PromptText, err)
+	}
+}
+
+// An empty or non-string instructions is refused. Like model_default, it is read from the
+// selected profile only.
+func TestLayoutProfileInstructionsMustBeANonEmptyString(t *testing.T) {
+	for name, value := range map[string]any{"empty": "", "blank": "  ", "number": 3, "null": nil, "list": []any{"a"}} {
+		t.Run(name, func(t *testing.T) {
+			layout, location, root := sampleLayout(t)
+			editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) { m["instructions"] = value })
+			_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+			if err == nil || !strings.Contains(err.Error(), "instructions must be a non-empty string") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+// A model file with instructions fails to load and says where the text goes now, so the
+// text a model file used to carry is never silently dropped.
+func TestLayoutModelFileInstructionsAreRefused(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	editJSON(t, filepath.Join(root, "models", "openai", "gpt-deep.json"), func(m map[string]any) {
+		m["instructions"] = "old text"
+	})
+	_, err := LoadLayoutSessionConfig(location, layout, "dev/coder", "")
+	if err == nil || !strings.Contains(err.Error(), "gpt-deep.json: instructions was removed from the model file; put the text in the profile's instructions") {
+		t.Fatalf("error = %v", err)
+	}
+	// A model the profile does not use, and a request-level key of the same name, are not
+	// affected by this rule.
+	editJSON(t, filepath.Join(root, "models", "openai", "gpt-deep.json"), func(m map[string]any) { delete(m, "instructions") })
+	editJSON(t, filepath.Join(root, "models", "cheap", "haiku.json"), func(m map[string]any) { m["instructions"] = "unused model" })
+	if _, err := LoadLayoutSessionConfig(location, layout, "dev/coder", ""); err != nil {
+		t.Fatalf("a model file the run does not load must not matter: %v", err)
 	}
 }

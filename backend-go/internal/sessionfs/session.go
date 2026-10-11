@@ -912,6 +912,9 @@ func loadModel(path, promptRole, promptText string) (Model, error) {
 	if !environmentNamePattern.MatchString(apiKeyEnv) {
 		return Model{}, configError("%s: api_key_env is not a valid environment variable name", path)
 	}
+	if _, exists := fields["instructions"]; exists {
+		return Model{}, configError("%s: instructions was removed from the model file; put the text in the profile's instructions (or a prompt document), so it is written once for every model the profile offers", path)
+	}
 	request := json.RawMessage(`{}`)
 	if raw, ok := fields["request"]; ok && string(raw) != "null" {
 		var requestFields map[string]json.RawMessage
@@ -1026,7 +1029,16 @@ func loadPrompt(setting, profile map[string]json.RawMessage, profileConfigured b
 			documents = append(documents, profileDocuments...)
 		}
 	}
-	texts := make([]string, 0, len(documents))
+	texts := make([]string, 0, len(documents)+1)
+	if profileConfigured {
+		if raw, ok := profile["instructions"]; ok {
+			text, valid := nonEmptyJSONString(raw)
+			if !valid {
+				return "", "", configError("%s: paths.profiles instructions must be a non-empty string", path)
+			}
+			texts = append(texts, text)
+		}
+	}
 	for index, document := range documents {
 		if strings.TrimSpace(document) == "" {
 			return "", "", configError("%s: prompt_documents[%d] must be a non-empty string", path, index)

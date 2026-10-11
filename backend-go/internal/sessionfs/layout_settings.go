@@ -1,8 +1,11 @@
 package sessionfs
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"example.com/agent-harness/backend-go/internal/catalog"
@@ -26,6 +29,9 @@ func ReadLayoutProfileInfo(location Location) (PathProfileInfo, error) {
 func readLayoutSession(location Location) (layoutSessionFile, error) {
 	var session layoutSessionFile
 	if err := readLayoutFile(location.SettingFile(), &session); err != nil {
+		return layoutSessionFile{}, err
+	}
+	if err := session.refuseModelDefaults(location.SettingFile()); err != nil {
 		return layoutSessionFile{}, err
 	}
 	return session, nil
@@ -74,18 +80,24 @@ func SetLayoutActiveProfile(location Location, profile string, durability string
 	return PathProfileUpdate{ActiveProfile: profile, PathProfiles: profiles.IDs(), Changed: changed}, nil
 }
 
-// SetLayoutModelDefault records, in session.json, the model the session uses for a
-// profile. The profile file is shared by every session, so it is never written.
+// ConflictError reports that a file changed between the read and the write of an update,
+// so the update was not made. The client may read again and retry.
+type ConflictError struct {
+	Message string
+}
+
+func (e *ConflictError) Error() string { return e.Message }
+
+// SetLayoutModelDefault makes model the model_default of the profile's own file, so the
+// choice holds for every session that uses the profile. The file is rewritten with its key
+// order and indentation kept. When the file changes between the read and the write, nothing
+// is written and a ConflictError is returned.
 func SetLayoutModelDefault(location Location, profile, model string, durability string) (ModelDefaultUpdate, error) {
 	layout := *location.Root.Layout
 	sessionPath := location.SettingFile()
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return ModelDefaultUpdate{}, &ClientError{Message: "model_default must be a non-empty string"}
-	}
-	setting, err := readSessionObject(sessionPath, false)
-	if err != nil {
-		return ModelDefaultUpdate{}, err
 	}
 	session, err := readLayoutSession(location)
 	if err != nil {
@@ -95,22 +107,121 @@ func SetLayoutModelDefault(location Location, profile, model string, durability 
 	if err != nil {
 		return ModelDefaultUpdate{}, err
 	}
-	if _, found := profiles.Get(profile); !found {
+	entry, found := profiles.Get(profile)
+	if !found {
 		return ModelDefaultUpdate{}, &ClientError{Message: fmt.Sprintf("profile '%s' is not available to this session", profile)}
 	}
-	chosen := make(map[string]string, len(session.ModelDefaults)+1)
-	for key, value := range session.ModelDefaults {
-		chosen[key] = value
+	before, err := os.Stat(entry.Path)
+	if err != nil {
+		return ModelDefaultUpdate{}, configError("%s: could not be read: %v", entry.Path, err)
 	}
-	changed := chosen[profile] != model
-	chosen[profile] = model
-	if changed {
-		if setting["model_defaults"], err = json.Marshal(chosen); err != nil {
-			return ModelDefaultUpdate{}, err
+	contents, err := os.ReadFile(entry.Path)
+	if err != nil {
+		return ModelDefaultUpdate{}, configError("%s: could not be read: %v", entry.Path, err)
+	}
+	var file layoutProfileFile
+	if err := readLayoutFile(entry.Path, &file); err != nil {
+		return ModelDefaultUpdate{}, err
+	}
+	models, err := catalog.Scan("model", layout.Models)
+	if err != nil {
+		return ModelDefaultUpdate{}, configError("%s: %v", entry.Path, err)
+	}
+	if models, err = models.Narrow(file.Models); err != nil {
+		return ModelDefaultUpdate{}, configError("%s: models: %v", entry.Path, err)
+	}
+	if _, offered := models.Get(model); !offered {
+		return ModelDefaultUpdate{}, &ClientError{Message: fmt.Sprintf("model '%s' is not offered by profile '%s'", model, profile)}
+	}
+	update := ModelDefaultUpdate{ActiveProfile: profile, PathProfiles: profiles.IDs(), ModelDefault: model, Changed: file.ModelDefault != model}
+	if !update.Changed {
+		return update, nil
+	}
+	rewritten, err := withModelDefault(contents, model)
+	if err != nil {
+		return ModelDefaultUpdate{}, configError("%s: %v", entry.Path, err)
+	}
+	if err := writeFileIfUnchanged(entry.Path, rewritten, before, durability == "strict"); err != nil {
+		return ModelDefaultUpdate{}, err
+	}
+	return update, nil
+}
+
+// withModelDefault returns the profile file with model_default set, keeping the order of
+// the other keys and the file's indentation. A new key goes after models, else last.
+func withModelDefault(contents []byte, model string) ([]byte, error) {
+	keys, err := orderedObjectKeys(contents)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(contents, &fields); err != nil {
+		return nil, err
+	}
+	if fields["model_default"], err = json.Marshal(model); err != nil {
+		return nil, err
+	}
+	if !containsString(keys, "model_default") {
+		at := len(keys)
+		for index, key := range keys {
+			if key == "models" {
+				at = index + 1
+			}
 		}
-		if err := writeSessionSettingsAtomic(sessionPath, setting, durability == "strict"); err != nil {
-			return ModelDefaultUpdate{}, fmt.Errorf("write session model settings: %w", err)
+		keys = append(keys[:at], append([]string{"model_default"}, keys[at:]...)...)
+	}
+	compact, err := marshalOrderedObject(fields, keys)
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	if err := json.Indent(&out, compact, "", indentOf(contents)); err != nil {
+		return nil, err
+	}
+	out.WriteByte('\n')
+	return out.Bytes(), nil
+}
+
+// indentOf is the indentation of the first indented line, two spaces when there is none.
+func indentOf(contents []byte) string {
+	for _, line := range strings.Split(string(contents), "\n")[1:] {
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed != "" && len(trimmed) < len(line) {
+			return line[:len(line)-len(trimmed)]
 		}
 	}
-	return ModelDefaultUpdate{ActiveProfile: profile, PathProfiles: profiles.IDs(), ModelDefault: model, Changed: changed}, nil
+	return "  "
+}
+
+// writeFileIfUnchanged replaces path with data through a temporary file and a rename, keeping
+// the file's mode, but only when its size and modification time still equal before.
+func writeFileIfUnchanged(path string, data []byte, before os.FileInfo, syncWrite bool) (result error) {
+	file, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-")
+	if err != nil {
+		return err
+	}
+	temporaryPath := file.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Chmod(before.Mode().Perm()); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if syncWrite {
+		if err := file.Sync(); err != nil {
+			_ = file.Close()
+			return err
+		}
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	now, err := os.Stat(path)
+	if err != nil || now.Size() != before.Size() || !now.ModTime().Equal(before.ModTime()) {
+		return &ConflictError{Message: fmt.Sprintf("%s changed while it was being updated; read it again and retry", path)}
+	}
+	return os.Rename(temporaryPath, path)
 }

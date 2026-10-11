@@ -95,6 +95,9 @@ func validateProfileFields(name string, raw json.RawMessage, settingPath string)
 					return configError("%s: prompt_documents[%d] must be a non-empty string", profilePath, index)
 				}
 			}
+		case "instructions":
+			// Checked with the prompt documents in loadPrompt; listed so the field is not
+			// refused as an unknown one.
 		case "tools":
 			// Go only: which registered tools the profile's model sees (profile_tools.go).
 			if _, err := normalizeProfileTools(value, profilePath); err != nil {

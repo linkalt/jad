@@ -25,6 +25,12 @@
         "system"
       ]
     },
+    "instructions": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "System-prompt text placed before the prompt documents, in the prompt_role. It is the profile's, so every model the profile offers gets it. A model file may not carry instructions."
+    },
     "models": {
       "type": "array",
       "items": {

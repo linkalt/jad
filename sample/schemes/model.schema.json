@@ -58,6 +58,10 @@
       },
       "additionalProperties": true
     },
+    "instructions": {
+      "not": {},
+      "description": "Not allowed. Put the text in the profile's instructions: a model file is shared by every profile, so it is written once there. A model file that has the key fails to load."
+    },
     "hosted_tools": {
       "type": "array",
       "description": "Provider-side tool definitions sent after the function tools, for example [{\"type\": \"web_search\"}]. The provider runs them, so there is no tool code here; each object is passed on unchanged. The Go backend only; the TypeScript backend ignores it. Not supported by the Anthropic adapter, which refuses non-function tools.",
