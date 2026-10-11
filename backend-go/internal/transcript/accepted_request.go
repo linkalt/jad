@@ -19,6 +19,9 @@ type AcceptedRequestSnapshot struct {
 	Action        string          `json:"action"`
 	CallID        string          `json:"call_id"`
 	Draft         json.RawMessage `json:"draft"`
+	// PendingDelivery is set by a compaction and cleared once a request has
+	// carried the draft, so the draft is sent once after each compaction.
+	PendingDelivery bool `json:"pending_delivery,omitempty"`
 }
 
 func (store *TurnStore) WriteAcceptedRequest(draft json.RawMessage, source, action, callID string) (AcceptedRequestSnapshot, error) {
@@ -74,6 +77,54 @@ func (store *TurnStore) WriteAcceptedRequest(draft json.RawMessage, source, acti
 		return AcceptedRequestSnapshot{}, fmt.Errorf("persist accepted request: %w", err)
 	}
 	return snapshot, nil
+}
+
+// MarkAcceptedRequestPending makes the next request carry the draft again.
+func (store *TurnStore) MarkAcceptedRequestPending() error {
+	if store == nil || store.journal == nil {
+		return errors.New("turn store is not initialized")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.setAcceptedRequestPendingLocked(true)
+}
+
+// ClearAcceptedRequestPending records that a request has carried the draft.
+func (store *TurnStore) ClearAcceptedRequestPending() error {
+	if store == nil || store.journal == nil {
+		return errors.New("turn store is not initialized")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.setAcceptedRequestPendingLocked(false)
+}
+
+// setAcceptedRequestPendingLocked leaves an absent or malformed snapshot alone.
+func (store *TurnStore) setAcceptedRequestPendingLocked(pending bool) error {
+	path := store.options.AcceptedRequestPath
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read accepted request: %w", err)
+	}
+	var snapshot AcceptedRequestSnapshot
+	if json.Unmarshal(data, &snapshot) != nil || !validAcceptedRequestSnapshot(snapshot) || snapshot.PendingDelivery == pending {
+		return nil
+	}
+	snapshot.PendingDelivery = pending
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("encode accepted request: %w", err)
+	}
+	if err := writeJSONAtomic(path, append(encoded, '\n'), store.journal.durability != DurabilityProcess); err != nil {
+		return fmt.Errorf("persist accepted request: %w", err)
+	}
+	return nil
 }
 
 // ReadAcceptedRequest returns false for absent or malformed derived snapshots.

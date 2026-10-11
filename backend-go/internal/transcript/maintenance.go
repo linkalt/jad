@@ -180,6 +180,9 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	if err := s.removeDerivedFiles(false); err != nil {
 		return result, err
 	}
+	if err := s.setAcceptedRequestPendingLocked(true); err != nil {
+		return result, err
+	}
 	result.Compacted = true
 	result.RetainedItems = len(retained) + len(activeTailItems)
 	return result, nil

@@ -13,7 +13,7 @@ func acceptedRequestContextPrompt(store *transcript.TurnStore, history [][]byte,
 	if err != nil {
 		return nil, err
 	}
-	if !exists || historyContainsToolOutput(history, accepted.CallID) {
+	if !exists || !accepted.PendingDelivery || historyContainsToolOutput(history, accepted.CallID) {
 		return nil, nil
 	}
 	var draft bytes.Buffer

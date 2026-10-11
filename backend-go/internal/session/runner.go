@@ -497,6 +497,11 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		if err != nil {
 			return result, err
 		}
+		if acceptedRequest != nil {
+			if err := r.store.ClearAcceptedRequestPending(); err != nil {
+				return result, fmt.Errorf("clear accepted request after delivery: %w", err)
+			}
+		}
 		result.Event = responseResult.Event
 		result.Commit = responseResult.Commit
 		trace.Mark("provider-response-complete", responseTraceDetails(result.Event))
