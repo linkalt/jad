@@ -28,7 +28,6 @@ func newRunErrorTestStore(t *testing.T) (*TurnStore, *Journal, string, string) {
 		MaxItemBytes:        1 << 20,
 		MessagesBackupPath:  filepath.Join(dir, "messages.backup.jsonl"),
 		CompactionCachePath: filepath.Join(dir, "staging", "compaction-cache.json"),
-		HistoryCachePath:    filepath.Join(dir, "staging", "history-cache.json"),
 		UsageCachePath:      filepath.Join(dir, "staging", "usage-cache.json"),
 		CursorCachePath:     filepath.Join(dir, "staging", "cursor-cache.json"),
 		RunErrorCachePath:   cache,

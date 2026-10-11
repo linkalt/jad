@@ -28,7 +28,7 @@ func TestHTTPFrontCompactArchivesSelectedTailAndInvalidatesCaches(t *testing.T) 
 	if err := os.WriteFile(messagesPath, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"history-cache.json", "usage-cache.json", "cursor-cache.json", "statecontext.json"} {
+	for _, name := range []string{"usage-cache.json", "cursor-cache.json", "statecontext.json"} {
 		path := filepath.Join(sessionDir, "staging", name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -71,7 +71,7 @@ func TestHTTPFrontCompactArchivesSelectedTailAndInvalidatesCaches(t *testing.T) 
 	if err != nil || string(archived) != target+"\n"+tail+"\n" {
 		t.Fatalf("archive = %q err=%v", archived, err)
 	}
-	for _, name := range []string{"history-cache.json", "usage-cache.json", "cursor-cache.json", "statecontext.json"} {
+	for _, name := range []string{"usage-cache.json", "cursor-cache.json", "statecontext.json"} {
 		if _, err := os.Stat(filepath.Join(sessionDir, "staging", name)); !os.IsNotExist(err) {
 			t.Errorf("front compaction left cache %s: %v", name, err)
 		}

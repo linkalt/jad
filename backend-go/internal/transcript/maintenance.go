@@ -628,7 +628,7 @@ func (s *TurnStore) removeDerivedFiles(reset bool) error {
 	}
 	// The run-error cache goes with the rest: its entries are anchored to session
 	// turn numbers and message ids that a rewrite of the transcript re-bases.
-	paths := []string{s.options.HistoryCachePath, s.options.UsageCachePath, s.options.CursorCachePath, s.options.RunErrorCachePath, s.options.StateContextPath}
+	paths := []string{s.options.UsageCachePath, s.options.CursorCachePath, s.options.RunErrorCachePath, s.options.StateContextPath}
 	if reset {
 		paths = append(paths, s.options.MessagesBackupPath, s.options.CompactionCachePath, s.options.CompactionCachePath+".backup", s.options.AcceptedRequestPath)
 	}

@@ -45,7 +45,7 @@ func TestLoadSessionConfigSelectsProfileModelAndStorage(t *testing.T) {
 	if active.Profile != "green" || active.DefaultProfile != "green" || active.MessagesPath != filepath.Join(sessionDir, "messages.jsonl") || active.StagingDir != filepath.Join(sessionDir, "staging") {
 		t.Errorf("active profile config = %+v", active)
 	}
-	if active.WorkingDir != rootDir || !active.SessionFiles.Enabled || active.StoragePaths.HistoryCache != filepath.Join(sessionDir, "staging", "history-cache.json") || active.StoragePaths.HTTPDebug != filepath.Join(sessionDir, "debug", "http") {
+	if active.WorkingDir != rootDir || !active.SessionFiles.Enabled || active.StoragePaths.HTTPDebug != filepath.Join(sessionDir, "debug", "http") {
 		t.Errorf("active file/storage settings = %+v", active)
 	}
 	if active.SessionName != "session-1" || active.SettingPath != filepath.Join(sessionDir, "setting.json") {

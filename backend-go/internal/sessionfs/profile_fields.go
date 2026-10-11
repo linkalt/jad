@@ -9,7 +9,7 @@ import (
 // TypeScript configuration loader: the only storage keys a path profile may set
 // besides its model and prompt settings.
 var sessionPathFields = map[string]struct{}{
-	"messages": {}, "messages_backup": {}, "compaction_cache": {}, "history_cache": {},
+	"messages": {}, "messages_backup": {}, "compaction_cache": {},
 	"usage_cache": {}, "cursor_cache": {}, "run_error_cache": {}, "statecontext": {}, "staging": {},
 	"http_debug": {}, "tool_storage": {},
 }

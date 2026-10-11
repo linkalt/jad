@@ -156,7 +156,7 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 		t.Fatal("profile storage settings were not written as objects")
 	}
 	for profileName, profilePaths := range map[string]map[string]json.RawMessage{"green": green, "blue": blue} {
-		for _, field := range []string{"messages", "messages_backup", "compaction_cache", "history_cache", "usage_cache", "cursor_cache", "statecontext", "staging", "http_debug"} {
+		for _, field := range []string{"messages", "messages_backup", "compaction_cache", "usage_cache", "cursor_cache", "statecontext", "staging", "http_debug"} {
 			if len(profilePaths[field]) == 0 {
 				t.Errorf("profile %s missing pinned storage path %s", profileName, field)
 			}

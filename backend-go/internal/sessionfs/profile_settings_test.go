@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -18,7 +19,6 @@ func TestSetPathProfilePinsStoragePathsAndPreservesSettings(t *testing.T) {
 		Messages:        "/session/messages.jsonl",
 		MessagesBackup:  "/session/messages.backup.jsonl",
 		CompactionCache: "/session/staging/compaction-cache.json",
-		HistoryCache:    "/session/staging/history-cache.json",
 		UsageCache:      "/session/staging/usage-cache.json",
 		CursorCache:     "/session/staging/cursor-cache.json",
 		StateContext:    "/session/staging/statecontext.json",
@@ -29,7 +29,6 @@ func TestSetPathProfilePinsStoragePathsAndPreservesSettings(t *testing.T) {
 	blue.Messages = "/session/profiles/blue/messages.jsonl"
 	blue.MessagesBackup = "/session/profiles/blue/messages.backup.jsonl"
 	blue.CompactionCache = "/session/profiles/blue/staging/compaction-cache.json"
-	blue.HistoryCache = "/session/profiles/blue/staging/history-cache.json"
 	blue.UsageCache = "/session/profiles/blue/staging/usage-cache.json"
 	blue.CursorCache = "/session/profiles/blue/staging/cursor-cache.json"
 	blue.StateContext = "/session/profiles/blue/staging/statecontext.json"
@@ -131,4 +130,16 @@ func containsText(value, fragment string) bool {
 		}
 	}
 	return false
+}
+
+// history_cache was a storage key that nothing in Go ever wrote; it is gone, so a profile
+// that still sets it fails like any other unknown key.
+func TestProfileRefusesTheRemovedHistoryCacheKey(t *testing.T) {
+	err := validateProfileFields("a", json.RawMessage(`{"history_cache":"x.json"}`), "setting.json: paths.profiles.a")
+	if err == nil || !strings.Contains(err.Error(), "paths.profiles.a.history_cache is not a supported session path or profile model setting") {
+		t.Fatalf("error = %v", err)
+	}
+	if err := validateProfileFields("a", json.RawMessage(`{"usage_cache":"x.json"}`), "setting.json: paths.profiles.a"); err != nil {
+		t.Fatalf("a kept key must still load: %v", err)
+	}
 }

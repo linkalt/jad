@@ -20,7 +20,6 @@ func TestCompactHistoryPersistsCompactionOverlayAndResetInvalidatesFiles(t *test
 		MaxItemBytes:        1 << 20,
 		MessagesBackupPath:  backup,
 		CompactionCachePath: filepath.Join(staging, "compaction-cache.json"),
-		HistoryCachePath:    filepath.Join(staging, "history-cache.json"),
 		UsageCachePath:      filepath.Join(staging, "usage-cache.json"),
 		CursorCachePath:     filepath.Join(staging, "cursor-cache.json"),
 		StateContextPath:    filepath.Join(staging, "statecontext.json"),

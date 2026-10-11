@@ -48,7 +48,7 @@ func TestFrontCompactRecoverableArchivesWholeInputBatchAndInvalidatesCaches(t *t
 	if err := os.MkdirAll(filepath.Dir(paths.compactionCache), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{paths.compactionCache, paths.historyCache, paths.usageCache, paths.cursorCache, paths.stateContext} {
+	for _, path := range []string{paths.compactionCache, paths.usageCache, paths.cursorCache, paths.stateContext} {
 		if err := os.WriteFile(path, []byte("stale"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -76,7 +76,7 @@ func TestFrontCompactRecoverableArchivesWholeInputBatchAndInvalidatesCaches(t *t
 	if string(archived) != string(original[batchStart:]) {
 		t.Fatalf("archived transcript tail differs\n got: %q\nwant: %q", archived, original[batchStart:])
 	}
-	for _, path := range []string{paths.historyCache, paths.usageCache, paths.cursorCache, paths.stateContext} {
+	for _, path := range []string{paths.usageCache, paths.cursorCache, paths.stateContext} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("front compaction left derived cache %s: %v", path, err)
 		}
@@ -159,7 +159,6 @@ func TestFrontCompactRejectsActiveResponseTurn(t *testing.T) {
 type frontCompactTestPaths struct {
 	messages        string
 	compactionCache string
-	historyCache    string
 	usageCache      string
 	cursorCache     string
 	stateContext    string
@@ -171,7 +170,6 @@ func newFrontCompactTestStore(t *testing.T) (*TurnStore, *Journal, frontCompactT
 	paths := frontCompactTestPaths{
 		messages:        filepath.Join(dir, "messages.jsonl"),
 		compactionCache: filepath.Join(dir, "staging", "compaction-cache.json"),
-		historyCache:    filepath.Join(dir, "staging", "history-cache.json"),
 		usageCache:      filepath.Join(dir, "staging", "usage-cache.json"),
 		cursorCache:     filepath.Join(dir, "staging", "cursor-cache.json"),
 		stateContext:    filepath.Join(dir, "staging", "statecontext.json"),
@@ -184,7 +182,6 @@ func newFrontCompactTestStore(t *testing.T) (*TurnStore, *Journal, frontCompactT
 		MaxItemBytes:        1 << 20,
 		MessagesBackupPath:  filepath.Join(dir, "messages.backup.jsonl"),
 		CompactionCachePath: paths.compactionCache,
-		HistoryCachePath:    paths.historyCache,
 		UsageCachePath:      paths.usageCache,
 		CursorCachePath:     paths.cursorCache,
 		StateContextPath:    paths.stateContext,

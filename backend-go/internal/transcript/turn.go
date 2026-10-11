@@ -56,7 +56,6 @@ type TurnStoreOptions struct {
 	CursorCacheCheckpointBytes int64
 	MessagesBackupPath         string
 	CompactionCachePath        string
-	HistoryCachePath           string
 	UsageCachePath             string
 	CursorCachePath            string
 	RunErrorCachePath          string

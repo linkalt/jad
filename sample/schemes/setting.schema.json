@@ -375,11 +375,6 @@
           "pattern": "\\S",
           "description": "Replaceable record of failed runs, kept outside messages.jsonl. Defaults to staging/run-error-cache.json."
         },
-        "history_cache": {
-          "type": "string",
-          "pattern": "\\S",
-          "description": "Replaceable normalized input-history cache. Defaults to history-cache.json inside the resolved staging directory."
-        },
         "statecontext": {
           "type": "string",
           "pattern": "\\S",
@@ -414,7 +409,6 @@
               "usage_cache": {"type": "string", "pattern": "\\S"},
               "cursor_cache": {"type": "string", "pattern": "\\S"},
               "run_error_cache": {"type": "string", "pattern": "\\S"},
-              "history_cache": {"type": "string", "pattern": "\\S"},
               "statecontext": {"type": "string", "pattern": "\\S"},
               "tool_storage": {
                 "type": "string",

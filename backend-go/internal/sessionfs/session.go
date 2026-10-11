@@ -100,7 +100,6 @@ type SessionStoragePaths struct {
 	Messages        string
 	MessagesBackup  string
 	CompactionCache string
-	HistoryCache    string
 	UsageCache      string
 	CursorCache     string
 	RunErrorCache   string

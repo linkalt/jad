@@ -228,7 +228,7 @@ func HarnessPaths(config sessionfs.SessionConfig) []string {
 	storage := config.StoragePaths
 	candidates := []string{
 		config.StagingDir, config.MessagesPath, config.MessagesBackupPath, config.SettingPath, config.ModelPath,
-		storage.Messages, storage.MessagesBackup, storage.CompactionCache, storage.HistoryCache, storage.UsageCache,
+		storage.Messages, storage.MessagesBackup, storage.CompactionCache, storage.UsageCache,
 		storage.CursorCache, storage.RunErrorCache, storage.StateContext, storage.Staging, storage.HTTPDebug, storage.ToolStorage,
 		config.UsageCachePath,
 	}

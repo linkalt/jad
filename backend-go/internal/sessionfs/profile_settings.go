@@ -260,7 +260,6 @@ func (p SessionStoragePaths) pathFields() map[string]string {
 		"messages":         p.Messages,
 		"messages_backup":  p.MessagesBackup,
 		"compaction_cache": p.CompactionCache,
-		"history_cache":    p.HistoryCache,
 		"usage_cache":      p.UsageCache,
 		"cursor_cache":     p.CursorCache,
 		"run_error_cache":  p.RunErrorCache,

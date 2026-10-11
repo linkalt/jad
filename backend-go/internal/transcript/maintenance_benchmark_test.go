@@ -18,7 +18,6 @@ func BenchmarkCompactHistory1000Turns(b *testing.B) {
 		MaxItemBytes:        1 << 20,
 		MessagesBackupPath:  filepath.Join(dir, "messages.backup.jsonl"),
 		CompactionCachePath: filepath.Join(staging, "compaction-cache.json"),
-		HistoryCachePath:    filepath.Join(staging, "history-cache.json"),
 		UsageCachePath:      filepath.Join(staging, "usage-cache.json"),
 		CursorCachePath:     filepath.Join(staging, "cursor-cache.json"),
 		StateContextPath:    filepath.Join(staging, "statecontext.json"),

@@ -105,7 +105,7 @@ Go-specific, accepted differences:
 
 ## Failed runs outside messages.jsonl (TypeScript 3c9a0d7, 7618a15)
 
-`messages.jsonl` is the provider request history: it holds what a provider produced and what the user sent, never an error, so it stays provider-native and cache friendly. A run that fails leaves an orphan user turn there and nothing else. The Go port keeps the failure in its own replaceable cache, like `history-cache.json` and `cursor-cache.json`:
+`messages.jsonl` is the provider request history: it holds what a provider produced and what the user sent, never an error, so it stays provider-native and cache friendly. A run that fails leaves an orphan user turn there and nothing else. The Go port keeps the failure in its own replaceable cache, like `cursor-cache.json`:
 
 - `staging/run-error-cache.json` (`paths.run_error_cache`) holds `{"schema_version":1,"errors":[{turn, message_id?, turn_id, at, message}]}`, byte-compatible with the TypeScript file. `message` is the client-safe text the browser got as the `error` event, so no response body, path or stack is stored. A missing, corrupt or foreign-version file reads as empty. The file is written atomically under the store lock; a later failure of the same turn replaces the earlier one, and the oldest entries are dropped past `persistence.run_error_cache_max_entries` (default 50, range 1–10000).
 - Only `failed` runs are recorded: a user stop is not an error, and a failure before the user input is saved has no turn to belong to. A failed cache write is logged at warn level and never changes the run's outcome.
