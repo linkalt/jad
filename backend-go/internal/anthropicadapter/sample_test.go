@@ -2,6 +2,7 @@ package anthropicadapter
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -26,6 +27,52 @@ func TestSampleConfigIsValid(t *testing.T) {
 	}
 	if _, err := LoadConfig(samplePath); err != nil {
 		t.Fatalf("the sample does not load: %v", err)
+	}
+}
+
+// Every sample variant next to the shipped one (a local copy or an untracked
+// -api / -oauth file) must also validate and load, so an edit that breaks one
+// shows up here and not at startup.
+func TestSampleConfigVariantsAreValid(t *testing.T) {
+	paths, err := filepath.Glob("../../../sample/anthropic-adapter*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no sample/anthropic-adapter*.json found")
+	}
+	schema := compileSchema(t)
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		instance, err := jsonschema.UnmarshalJSON(strings.NewReader(string(raw)))
+		if err != nil {
+			t.Errorf("%s: %v", path, err)
+			continue
+		}
+		if err := schema.Validate(instance); err != nil {
+			t.Errorf("%s does not validate against the schema: %v", path, err)
+		}
+		if _, err := LoadConfig(path); err != nil {
+			t.Errorf("%s does not load: %v", path, err)
+		}
+	}
+}
+
+// The shipped sample pins its own values (the public API URL, a 16384 max), so a
+// local edit such as a localhost base_url or a larger max cannot be committed into it.
+func TestShippedSampleKeepsItsShippedValues(t *testing.T) {
+	config, err := LoadConfig(samplePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Upstream.BaseURL != DefaultUpstreamBaseURL {
+		t.Errorf("upstream.base_url = %q, want %q", config.Upstream.BaseURL, DefaultUpstreamBaseURL)
+	}
+	if config.DefaultMaxTokens != 16384 {
+		t.Errorf("default_max_tokens = %d, want 16384", config.DefaultMaxTokens)
 	}
 }
 
