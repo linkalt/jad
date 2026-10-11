@@ -52,7 +52,7 @@ func scopedProfiles(layout Layout, session layoutSessionFile, sessionPath string
 func SetLayoutActiveProfile(location Location, profile string, durability string) (PathProfileUpdate, error) {
 	layout := *location.Root.Layout
 	sessionPath := location.SettingFile()
-	setting, err := readSessionObject(sessionPath, false)
+	setting, err := readSessionObject(sessionPath)
 	if err != nil {
 		return PathProfileUpdate{}, err
 	}

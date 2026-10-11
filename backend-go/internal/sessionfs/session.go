@@ -185,8 +185,9 @@ type SessionConfig struct {
 	Model                 Model
 }
 
-// LoadSessionSettings reads and validates setting.json for a resolved session
-// and selects, but does not read, the model file (SessionConfig.ModelPath).
+// LoadSessionSettings reads and validates a catalog-layout session (session.json plus the
+// profile, model and toolset files it names) and selects, but does not read, the model file
+// (SessionConfig.ModelPath).
 // RequestedModel is the model config path from the run body. Callers that need
 // the provider settings call WithModel afterwards; the TypeScript backend also
 // defers the model file until a run needs it, which is why a session with a
@@ -195,12 +196,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 	if location.UsesLayout() {
 		return LoadLayoutSessionSettings(location, *location.Root.Layout, requestedProfile, requestedModel)
 	}
-	settingPath := filepath.Join(location.Directory, "setting.json")
-	setting, err := readSessionObject(settingPath, true)
-	if err != nil {
-		return SessionConfig{}, err
-	}
-	return loadSessionSettingsFrom(location, setting, settingPath, location.Directory, requestedProfile, requestedModel)
+	return SessionConfig{}, configError("%s: not a catalog-layout session; it needs a session.json and a root setting.json that names the catalogs", location.Directory)
 }
 
 // loadSessionSettingsFrom validates a setting-shaped map and turns it into a
@@ -851,7 +847,7 @@ func keepBackupTurns(raw json.RawMessage, path string) (int, error) {
 }
 
 func loadModel(path, promptRole, promptText string) (Model, error) {
-	fields, err := readSessionObject(path, false)
+	fields, err := readSessionObject(path)
 	if err != nil {
 		return Model{}, err
 	}
@@ -1086,23 +1082,17 @@ func resolveConfiguredPath(fields map[string]json.RawMessage, name, fallback, ba
 }
 
 // readSessionObject mirrors the TypeScript readObject: a missing or blank file is
-// an empty object when allowMissing is set and an error otherwise. The text of an
-// invalid-JSON error carries Go's decoder message, which cannot match V8's.
-func readSessionObject(path string, allowMissing bool) (map[string]json.RawMessage, error) {
+// an error. The text of an invalid-JSON error carries Go's decoder message, which cannot
+// match V8's.
+func readSessionObject(path string) (map[string]json.RawMessage, error) {
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if allowMissing {
-				return map[string]json.RawMessage{}, nil
-			}
 			return nil, configError("%s: file is required", path)
 		}
 		return nil, configError("%s: could not read configuration: %v", path, err)
 	}
 	if len(bytes.TrimSpace(contents)) == 0 {
-		if allowMissing {
-			return map[string]json.RawMessage{}, nil
-		}
 		return nil, configError("%s: file is empty", path)
 	}
 	var value any

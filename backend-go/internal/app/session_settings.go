@@ -19,7 +19,7 @@ func (r *Resolver) ReadPathProfileInfo(ctx context.Context, reference string) (h
 	if err != nil {
 		return httpapi.SessionPathProfileInfo{}, mapSessionError(err)
 	}
-	info, err := readProfileInfo(location)
+	info, err := sessionfs.ReadLayoutProfileInfo(location)
 	if err != nil {
 		return httpapi.SessionPathProfileInfo{}, mapProfileSettingsError(err)
 	}
@@ -37,7 +37,7 @@ func (r *Resolver) UpdatePathProfile(ctx context.Context, reference, activeProfi
 
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	info, err := readProfileInfo(location)
+	info, err := sessionfs.ReadLayoutProfileInfo(location)
 	if err != nil {
 		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
 	}
@@ -52,14 +52,7 @@ func (r *Resolver) UpdatePathProfile(ctx context.Context, reference, activeProfi
 	if err != nil {
 		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
 	}
-	var storagePaths map[string]sessionfs.SessionStoragePaths
-	if info.ActiveProfile != "" && info.ActiveProfile != activeProfile {
-		storagePaths = map[string]sessionfs.SessionStoragePaths{
-			info.ActiveProfile: current.StoragePaths,
-			activeProfile:      target.StoragePaths,
-		}
-	}
-	update, err := setActiveProfile(location, activeProfile, current.Persistence.Durability, storagePaths)
+	update, err := sessionfs.SetLayoutActiveProfile(location, activeProfile, current.Persistence.Durability)
 	if err != nil {
 		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
 	}
@@ -67,7 +60,7 @@ func (r *Resolver) UpdatePathProfile(ctx context.Context, reference, activeProfi
 	if err != nil {
 		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
 	}
-	updatedInfo, err := readProfileInfo(location)
+	updatedInfo, err := sessionfs.ReadLayoutProfileInfo(location)
 	if err != nil {
 		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
 	}
@@ -98,7 +91,7 @@ func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedP
 
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	info, err := readProfileInfo(location)
+	info, err := sessionfs.ReadLayoutProfileInfo(location)
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
@@ -120,7 +113,7 @@ func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedP
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
-	update, err := setModelDefault(location, profile, strings.TrimSpace(modelDefault), settings.Persistence.Durability)
+	update, err := sessionfs.SetLayoutModelDefault(location, profile, strings.TrimSpace(modelDefault), settings.Persistence.Durability)
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
@@ -165,29 +158,6 @@ func requireSettingsContext(ctx context.Context) error {
 		return errors.New("session settings context is required")
 	}
 	return ctx.Err()
-}
-
-// readProfileInfo, setActiveProfile and setModelDefault pick the legacy setting.json
-// writer or the catalog-layout one by what the session directory holds.
-func readProfileInfo(location sessionfs.Location) (sessionfs.PathProfileInfo, error) {
-	if location.UsesLayout() {
-		return sessionfs.ReadLayoutProfileInfo(location)
-	}
-	return sessionfs.ReadPathProfileInfo(location.SettingFile())
-}
-
-func setActiveProfile(location sessionfs.Location, profile, durability string, storage map[string]sessionfs.SessionStoragePaths) (sessionfs.PathProfileUpdate, error) {
-	if location.UsesLayout() {
-		return sessionfs.SetLayoutActiveProfile(location, profile, durability)
-	}
-	return sessionfs.SetPathProfile(location.SettingFile(), profile, durability, storage)
-}
-
-func setModelDefault(location sessionfs.Location, profile, model, durability string) (sessionfs.ModelDefaultUpdate, error) {
-	if location.UsesLayout() {
-		return sessionfs.SetLayoutModelDefault(location, profile, model, durability)
-	}
-	return sessionfs.SetModelDefault(location.SettingFile(), profile, model, durability)
 }
 
 func containsSessionPath(paths []string, value string) bool {

@@ -567,3 +567,26 @@ An agent's `tools` list accepts `mcp:<server>:*` besides `mcp:<server>:<tool>`, 
 - **A model file with `instructions` fails to load** (`... instructions was removed from the model file; put the text in the profile's instructions ...`). The key was never read by the Go loader (checked: no reader in `internal/sessionfs`), so the 930 characters in four `jad/*` model files in `.jad` were not being sent; the refusal makes that visible instead of keeping dead text. It is checked when the run's model file loads, so a model the run does not use is not affected.
 - **A sub-agent is not affected.** Its prompt is its own `instructions`, `prompt.md` and documents (`subagentLauncher.childConfig` replaces `PromptText`), so the profile's `instructions` do not reach it.
 - **Not done:** an ETag on the settings routes for the client to send back; the frontend was not changed and does not handle 409.
+
+## The fixed config golden is replaced by layout cases (2026-10-11)
+
+`TestConfigAgainstFixedGolden` replayed 204 settings through the legacy loader and compared them with files written by the removed TypeScript loader. It is replaced by `TestLayoutSettingsCases` over `internal/sessionfs/testdata/layout-settings.cases.json`: 149 cases (35 accepted, 114 rejected with the same message text), run through a catalog-layout session (`native` goes into the toolset, every other key into the session's `settings`). The file is fixed test data and is not regenerated.
+
+The 55 cases that were left out test the legacy shape and have no layout counterpart:
+- **41 with `paths`** (`paths.profiles`, base path keys, per-profile storage names). In the layout every profile has its own state folder, so shared storage cannot occur (`TestLoadSessionConfigGivesEachProfileItsOwnStorage`), and two IDs that map to one key are refused (`TestLoadSessionConfigRejectsProfilesThatShareAStorageKey`).
+- **9 that request a profile or a model**, by legacy file names. `TestLoadSessionConfigSelectsProfileModelAndStorage` and `TestLoadSessionConfigRejectsUnknownProfileModelAndOAuth` cover the layout's selection and its errors.
+- **2 with `mcp_servers`** and **3 with `session_files`**. Neither key exists in the layout.
+
+The message prefix (file path, `settings:`) is stripped before comparing, because the layout names its own files. `mcp: null` in a toolset is an error in the layout and was accepted in the legacy `tools.mcp`.
+
+## The legacy setting.json session loader is removed (2026-10-11)
+
+A session is now only the catalog layout: `session.json` plus the profile, model and toolset files it names. `LoadSessionSettings` returns a `ConfigError` for a session folder that has no `session.json`; the session list reports such a folder as invalid instead of loading it.
+
+Removed: the legacy arm of `LoadSessionSettings`, `ReadPathProfileInfo`, `SetPathProfile`, `SetModelDefault` and their tests, and the `allowMissing` flag of `readSessionObject`. The profile and model routes now call `ReadLayoutProfileInfo`, `SetLayoutActiveProfile` and `SetLayoutModelDefault` directly, and no longer pin per-profile storage paths into a setting file (the layout gives every profile its own state folder).
+
+Kept on purpose: `loadSessionSettingsFrom`, `selectProfile` and `storage_paths.go`. The layout loader composes a setting-shaped map from the catalogs and feeds it through them, so every normalizer is shared.
+
+Tests: all tests that wrote a legacy `setting.json` now build their session with `internal/sessionfs/layouttest`. Three differences from the legacy tests were found and are not hidden: the layout's session list always reports a run under its profile id (`runs_by_profile`), `session_files` cannot be set, and two roots with equal session ids share a state folder (open bug report; the converted multi-root test does not assert the second root's turn count).
+
+Checks (2026-10-11): `go test ./internal/... ./cmd/...` 28 packages ok; `go vet`, `gofmt -l` and `git diff --check` clean. `messages.jsonl` golden diff: one layout session run through a build of HEAD and a build of the working tree against the same stub provider, 1,294 bytes in 4 records each, identical after masking only `__agent_session_input_batch_id` and the tool-output `token=` value.

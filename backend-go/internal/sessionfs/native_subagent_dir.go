@@ -117,7 +117,7 @@ func loadSubagentFolder(name, folder string) (NativeSubagentAgent, error) {
 		if err != nil {
 			return NativeSubagentAgent{}, configError("%s: could not read configuration: %v", settingsPath, err)
 		}
-		if fields, err = readSessionObject(settingsPath, false); err != nil {
+		if fields, err = readSessionObject(settingsPath); err != nil {
 			return NativeSubagentAgent{}, err
 		}
 		if err := validateSchemaVersion(fields, settingsPath); err != nil {
