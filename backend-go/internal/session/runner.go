@@ -113,9 +113,8 @@ type RunOptions struct {
 	// that keeps numbering continuous across it.
 	NextSessionTurn func() (int64, error)
 	// OnUsageChanged runs after an automatic compaction rewrote the transcript.
-	OnUsageChanged      func()
-	AcceptedRequestRole string
-	MaxToolRounds       int
+	OnUsageChanged func()
+	MaxToolRounds  int
 	// MaxRunTokens is the most tokens one run may use before it starts another
 	// provider round; zero means no cap. Counted from the usage the provider reported.
 	MaxRunTokens int64
@@ -294,12 +293,6 @@ func BuildRequestWithTools(settings ModelSettings, history [][]byte, responseToo
 // BuildRequestWithStateContext adds an active derived state snapshot after
 // authoritative transcript history without persisting it into messages.jsonl.
 func BuildRequestWithStateContext(settings ModelSettings, history [][]byte, responseTools []json.RawMessage, stateContext *StateContextPrompt) (json.RawMessage, error) {
-	return BuildRequestWithStateContextAndAcceptedRequest(settings, history, responseTools, stateContext, nil)
-}
-
-// BuildRequestWithStateContextAndAcceptedRequest appends active derived state and
-// accepted-request context after the authoritative transcript history.
-func BuildRequestWithStateContextAndAcceptedRequest(settings ModelSettings, history [][]byte, responseTools []json.RawMessage, stateContext, acceptedRequest *StateContextPrompt) (json.RawMessage, error) {
 	if err := validateModelSettings(settings); err != nil {
 		return nil, err
 	}
@@ -330,16 +323,6 @@ func BuildRequestWithStateContextAndAcceptedRequest(settings ModelSettings, hist
 			return nil, fmt.Errorf("serialize state context prompt: %w", err)
 		}
 		input = append(input, statePrompt)
-	}
-	if acceptedRequest != nil && acceptedRequest.Text != "" {
-		acceptedPrompt, err := json.Marshal(promptMessage{
-			Role:    acceptedRequest.Role,
-			Content: []inputTextContent{{Type: "input_text", Text: acceptedRequest.Text}},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("serialize accepted request prompt: %w", err)
-		}
-		input = append(input, acceptedPrompt)
 	}
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
@@ -466,14 +449,10 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 			}
 		}
 		trace.Mark("history-loaded", historyDetails)
-		acceptedRequest, err := acceptedRequestContextPrompt(r.store, history, options.AcceptedRequestRole)
-		if err != nil {
-			return result, fmt.Errorf("read accepted request context: %w", err)
-		}
 		// References come back as data URLs first, so the resize step sees real bytes.
 		sentHistory, restoreStats := options.ImageStore.Rehydrate(history)
 		sentHistory, resizeStats := options.ImageResizer.Apply(sentHistory, options.ToolCatalog.SourceOf)
-		request, err := BuildRequestWithStateContextAndAcceptedRequest(r.settings, sentHistory, responseTools, options.StateContext, acceptedRequest)
+		request, err := BuildRequestWithStateContext(r.settings, sentHistory, responseTools, options.StateContext)
 		if err != nil {
 			return result, fmt.Errorf("build Responses request: %w", err)
 		}
@@ -496,11 +475,6 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		responseResult, err := r.runResponse(ctx, request, sessionTurn, int64(round+1), responseTurnID, options)
 		if err != nil {
 			return result, err
-		}
-		if acceptedRequest != nil {
-			if err := r.store.ClearAcceptedRequestPending(); err != nil {
-				return result, fmt.Errorf("clear accepted request after delivery: %w", err)
-			}
 		}
 		result.Event = responseResult.Event
 		result.Commit = responseResult.Commit

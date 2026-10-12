@@ -443,7 +443,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	applyApprovalDefault(approval.Default, setting, nativeWrite, nativeEdit, nativeBash, nativeExec, nativeProcess, mcpServers)
-	stateContext, err := normalizeStateContextSettings(setting, settingPath, nativeProcess, nativeTask, nativeMemory, nativeSubagent)
+	stateContext, err := normalizeStateContextSettings(setting, settingPath, nativeProcess, nativeTask, nativeMemory, nativeSubagent, nativeRequestDraft)
 	if err != nil {
 		return SessionConfig{}, err
 	}

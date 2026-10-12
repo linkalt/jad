@@ -770,7 +770,6 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		_, err := r.shared.store.WriteAcceptedRequest(draft, source, string(answer.Decision), identity.ToolCallID)
 		return err
 	}
-	options.AcceptedRequestRole = r.config.StateContext.Role
 	options.AutomaticCompaction = &session.AutomaticCompactionSettings{
 		Enabled:       r.config.Compaction.AutoEnabled,
 		TriggerTokens: r.config.Compaction.TriggerTokens,
@@ -787,6 +786,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		snapshot, include, err := collectStateContextSnapshot(r.config, stateContextSources{
 			process: r.processManager, task: r.taskStore, memory: r.memoryStore,
 			subagent: r.resolver.sharedSubagentManager(r.config), owner: sessionKey(r.reference, r.config.Profile),
+			requestDraft: r.shared.store,
 		}, "compaction")
 		if err != nil {
 			return nil, fmt.Errorf("collect state context after automatic compaction: %w", err)

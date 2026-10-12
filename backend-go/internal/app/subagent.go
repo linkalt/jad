@@ -86,7 +86,6 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 		MaxRunTokens:         request.Agent.MaxRunTokens,
 		MaxParallelToolCalls: int(l.parent.MaxParallelToolCalls),
 		ToolCallScheduling:   l.parent.ToolCallScheduling,
-		AcceptedRequestRole:  l.parent.StateContext.Role,
 		OnResponseCommitted: func(event json.RawMessage, _ transcript.CommitResult) {
 			rounds.Add(1)
 			tokens.Add(session.ResponseTokens(event))

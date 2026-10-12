@@ -80,6 +80,8 @@ type stateContextSources struct {
 	// subagent holds the child runs; owner is the session key whose runs are listed.
 	subagent *native.SubagentManager
 	owner    string
+	// requestDraft holds the accepted-request snapshot the request_draft provider reads.
+	requestDraft *transcript.TurnStore
 }
 
 func collectStateContextSnapshot(
@@ -110,6 +112,11 @@ func collectStateContextSnapshot(
 	if config.NativeSubagent != nil {
 		collectors["subagent"] = func() (any, error) {
 			return native.CollectSubagentStateContext(sources.subagent, sources.owner, config.NativeSubagent.StateContext)
+		}
+	}
+	if config.NativeRequestDraft != nil {
+		collectors["request_draft"] = func() (any, error) {
+			return collectRequestDraftStateContext(sources.requestDraft)
 		}
 	}
 	providers := make(orderedStateContextProviders, 0, len(settings.Tools))

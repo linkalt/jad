@@ -452,7 +452,7 @@
       "properties": {
         "enabled": {"type": "boolean", "default": false},
         "trigger": {"type": "array", "items": {"type": "string", "enum": ["compaction"]}, "uniqueItems": true, "default": ["compaction"]},
-        "tools": {"type": "array", "items": {"type": "string", "enum": ["task", "memory", "process", "subagent"]}, "uniqueItems": true, "default": [], "description": "Providers copied into the snapshot. subagent is Go backend only."},
+        "tools": {"type": "array", "items": {"type": "string", "enum": ["task", "memory", "process", "subagent", "request_draft"]}, "uniqueItems": true, "default": [], "description": "Providers copied into the snapshot. Each needs its tools.native entry. subagent and request_draft are Go backend only. request_draft copies the latest user-accepted request draft, so it reaches the model on every request after a compaction."},
         "role": {"type": "string", "enum": ["system", "developer"], "default": "developer"},
         "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 10485760, "default": 65536}
       },

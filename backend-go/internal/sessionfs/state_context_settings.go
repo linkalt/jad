@@ -6,7 +6,8 @@ import (
 )
 
 // StateContextSettings controls optional context snapshots derived after
-// compaction. Configured native task, process, and memory providers are supported.
+// compaction. Configured native task, process, memory, subagent and request_draft
+// providers are supported.
 type StateContextSettings struct {
 	Enabled  bool
 	Trigger  []string
@@ -22,6 +23,7 @@ func normalizeStateContextSettings(
 	task *NativeTaskSettings,
 	memory *NativeMemorySettings,
 	subagent *NativeSubagentSettings,
+	requestDraft *NativeRequestDraftSettings,
 ) (StateContextSettings, error) {
 	settings := StateContextSettings{
 		Trigger:  []string{"compaction"},
@@ -66,14 +68,14 @@ func normalizeStateContextSettings(
 	if value, exists := fields["tools"]; exists && strings.TrimSpace(string(value)) != "null" {
 		var rawTools []json.RawMessage
 		if err := json.Unmarshal(value, &rawTools); err != nil || rawTools == nil {
-			return StateContextSettings{}, configError("%s: statecontext.tools must contain only task, memory, process, or subagent", settingPath)
+			return StateContextSettings{}, configError("%s: statecontext.tools must contain only task, memory, process, subagent, or request_draft", settingPath)
 		}
 		settings.Tools = make([]string, 0, len(rawTools))
 		seen := make(map[string]struct{}, len(rawTools))
 		for _, rawTool := range rawTools {
 			var name string
-			if err := json.Unmarshal(rawTool, &name); err != nil || (name != "task" && name != "memory" && name != "process" && name != "subagent") {
-				return StateContextSettings{}, configError("%s: statecontext.tools must contain only task, memory, process, or subagent", settingPath)
+			if err := json.Unmarshal(rawTool, &name); err != nil || (name != "task" && name != "memory" && name != "process" && name != "subagent" && name != "request_draft") {
+				return StateContextSettings{}, configError("%s: statecontext.tools must contain only task, memory, process, subagent, or request_draft", settingPath)
 			}
 			if _, exists := seen[name]; !exists {
 				settings.Tools = append(settings.Tools, name)
@@ -105,6 +107,10 @@ func normalizeStateContextSettings(
 			case "task":
 				if task == nil {
 					return StateContextSettings{}, configError("%s: statecontext provider task requires tools.native.task", settingPath)
+				}
+			case "request_draft":
+				if requestDraft == nil {
+					return StateContextSettings{}, configError("%s: statecontext provider request_draft requires tools.native.request_draft", settingPath)
 				}
 			case "subagent":
 				if subagent == nil {

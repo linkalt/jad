@@ -89,7 +89,7 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 	if compacted.Compacted {
 		snapshot, include, err := collectStateContextSnapshot(m.config, stateContextSources{
 			process: m.processManager, task: m.taskStore, memory: m.memoryStore,
-			subagent: m.subagentManager, owner: m.owner,
+			subagent: m.subagentManager, owner: m.owner, requestDraft: m.shared.store,
 		}, "compaction")
 		if err != nil {
 			return result, fmt.Errorf("collect state context after compaction: %w", err)
