@@ -58,11 +58,12 @@ type promptMessage struct {
 	Content []inputTextContent `json:"content"`
 }
 
-// StateContextPrompt is the active derived state supplied to a request without
-// rewriting transcript history.
+// StateContextPrompt is one derived-state block supplied to a request without
+// rewriting transcript history. It is sent after the first After history items.
 type StateContextPrompt struct {
-	Role string
-	Text string
+	Role  string
+	Text  string
+	After int
 }
 
 // RunOptions provides per-run identifiers and an optional raw-event observer.
@@ -102,8 +103,8 @@ type RunOptions struct {
 	// the run ends. Nil, or a service whose setting is off, means no checkpoint.
 	// A snapshot that fails is a recorded warning and never stops the call it precedes.
 	Checkpoint          *checkpoint.Service
-	StateContext        *StateContextPrompt
-	RefreshStateContext func(context.Context) (*StateContextPrompt, error)
+	StateContext        []StateContextPrompt
+	RefreshStateContext func(context.Context) ([]StateContextPrompt, error)
 	AutomaticCompaction *AutomaticCompactionSettings
 	// CompactHistory replaces the store's compaction when the caller must keep
 	// derived data (such as cumulative usage) consistent across the rewrite.
@@ -290,14 +291,15 @@ func BuildRequestWithTools(settings ModelSettings, history [][]byte, responseToo
 	return BuildRequestWithStateContext(settings, history, responseTools, nil)
 }
 
-// BuildRequestWithStateContext adds an active derived state snapshot after
-// authoritative transcript history without persisting it into messages.jsonl.
-func BuildRequestWithStateContext(settings ModelSettings, history [][]byte, responseTools []json.RawMessage, stateContext *StateContextPrompt) (json.RawMessage, error) {
+// BuildRequestWithStateContext inserts each derived-state block after the history item
+// it follows, without persisting it into messages.jsonl. Blocks are in write order. A
+// block that follows more items than the history holds is not sent.
+func BuildRequestWithStateContext(settings ModelSettings, history [][]byte, responseTools []json.RawMessage, stateContext []StateContextPrompt) (json.RawMessage, error) {
 	if err := validateModelSettings(settings); err != nil {
 		return nil, err
 	}
 
-	input := make([]json.RawMessage, 0, len(history)+2)
+	input := make([]json.RawMessage, 0, len(history)+len(stateContext)+1)
 	if settings.PromptText != "" {
 		prompt, err := json.Marshal(promptMessage{
 			Role:    settings.PromptRole,
@@ -308,21 +310,35 @@ func BuildRequestWithStateContext(settings ModelSettings, history [][]byte, resp
 		}
 		input = append(input, prompt)
 	}
+	nextBlock := 0
+	appendBlocks := func(after int) error {
+		for ; nextBlock < len(stateContext) && stateContext[nextBlock].After <= after; nextBlock++ {
+			block := stateContext[nextBlock]
+			if block.Text == "" {
+				continue
+			}
+			statePrompt, err := json.Marshal(promptMessage{
+				Role:    block.Role,
+				Content: []inputTextContent{{Type: "input_text", Text: block.Text}},
+			})
+			if err != nil {
+				return fmt.Errorf("serialize state context prompt: %w", err)
+			}
+			input = append(input, statePrompt)
+		}
+		return nil
+	}
 	for index, item := range history {
+		if err := appendBlocks(index); err != nil {
+			return nil, err
+		}
 		if !isJSONObject(item) {
 			return nil, fmt.Errorf("history item %d must be a JSON object", index)
 		}
 		input = append(input, cloneRaw(item))
 	}
-	if stateContext != nil && stateContext.Text != "" {
-		statePrompt, err := json.Marshal(promptMessage{
-			Role:    stateContext.Role,
-			Content: []inputTextContent{{Type: "input_text", Text: stateContext.Text}},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("serialize state context prompt: %w", err)
-		}
-		input = append(input, statePrompt)
+	if err := appendBlocks(len(history)); err != nil {
+		return nil, err
 	}
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
@@ -458,7 +474,7 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		}
 		trace.Mark("request-built", map[string]any{
 			"history_items":     len(history),
-			"has_state_context": options.StateContext != nil,
+			"has_state_context": len(options.StateContext) > 0,
 			"tool_count":        len(responseTools),
 			"images_resized":    resizeStats.Resized,
 			"image_bytes_saved": resizeStats.BytesBefore - resizeStats.BytesAfter,

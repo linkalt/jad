@@ -95,7 +95,7 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 			return result, fmt.Errorf("collect state context after compaction: %w", err)
 		}
 		if include {
-			if err := m.shared.store.WriteStateContextSnapshot(snapshot); err != nil {
+			if _, err := m.shared.store.AppendStateContext(snapshot, m.config.StateContext.Role); err != nil {
 				return result, fmt.Errorf("persist state context after compaction: %w", err)
 			}
 		}

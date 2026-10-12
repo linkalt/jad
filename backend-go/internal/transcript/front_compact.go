@@ -146,6 +146,9 @@ func (s *TurnStore) FrontCompactFromMessage(messageID, deleteMode string) (Front
 	if err := s.removeDerivedFiles(false, true); err != nil {
 		return FrontCompactionResult{}, err
 	}
+	if err := s.clampStateContext(); err != nil {
+		return FrontCompactionResult{}, err
+	}
 	return result, nil
 }
 

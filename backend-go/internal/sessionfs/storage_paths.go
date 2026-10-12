@@ -87,7 +87,7 @@ func resolveStoragePaths(fields map[string]json.RawMessage, profileStorageDir, s
 	if err != nil {
 		return SessionStoragePaths{}, err
 	}
-	stateContext, err := resolveConfiguredPath(fields, "statecontext", filepath.Join(staging, "statecontext.json"), settingDir)
+	stateContext, err := resolveConfiguredPath(fields, "statecontext", filepath.Join(staging, "statecontext.jsonl"), settingDir)
 	if err != nil {
 		return SessionStoragePaths{}, err
 	}

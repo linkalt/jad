@@ -215,6 +215,9 @@ Old 2.6 (snapshot stored as parts) is replaced by 2.8.
    DONE (see `DECISIONS.md`, "Statecontext prompt"). The frontend-typed prompt (2.4) stays with phase 7.
 5. Placement and sidecar store (2.8). The largest risk: golden check of the provider request for both providers
    (Responses and the Anthropic adapter), `messages.jsonl` unchanged, front-compact, reset and compaction tests.
+   DONE for the store and the placement (see `DECISIONS.md`, "Statecontext placement and sidecar store"). Anchor: the
+   count of history items. Not in this phase: the "state is now empty" block (it needs a trigger that runs on later
+   requests, so it comes with phase 7) and a live check after a rebuild.
 6. `user` trigger: endpoint, config, UI (2.4).
 7. `run_start` with change detection.
 8. Summary mode (2.5): memory first, then task, process, subagent. Gated by step 0.

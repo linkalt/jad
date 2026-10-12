@@ -141,3 +141,37 @@ func TestLastHistoryBlockRules(t *testing.T) {
 		t.Fatalf("empty text and role=system blocks must be skipped, got %+v", got)
 	}
 }
+
+// A state block now sits inside the history, after the item it follows. The history
+// breakpoint must stay on real conversation text, never on the block, and the block
+// must not merge into a neighbouring message's cacheable blocks.
+const cacheBodyMidBlock = `{"model":"m","instructions":"rules","input":[
+  {"role":"developer","content":"system prompt"},
+  {"role":"user","content":"first"},
+  {"role":"assistant","content":[{"type":"output_text","text":"answer"}]},
+  {"role":"developer","content":"state block in the middle"},
+  {"role":"user","content":"second"}],
+ "tools":[{"type":"function","name":"a","parameters":{}}]}`
+
+func TestHistoryBreakpointSkipsAStateBlockInTheMiddleOfTheHistory(t *testing.T) {
+	for name, config := range map[string]string{
+		"mid_conversation_system off": `{"cache":{"history":true}}`,
+		"mid_conversation_system on":  `{"cache":{"history":true},"default_profile":{"mid_conversation_system":true}}`,
+	} {
+		request := translateOK(t, mustConfig(t, config), cacheBodyMidBlock)
+		var marked *anthropicBlock
+		for m := range request.Messages {
+			for b := range request.Messages[m].Content {
+				if block := &request.Messages[m].Content[b]; block.CacheControl != nil {
+					if marked != nil {
+						t.Fatalf("%s: more than one history breakpoint: %s", name, asJSON(t, request))
+					}
+					marked = block
+				}
+			}
+		}
+		if marked == nil || marked.Text != "second" || marked.folded {
+			t.Errorf("%s: breakpoint on %+v, want the last real user text \"second\"\n%s", name, marked, asJSON(t, request))
+		}
+	}
+}

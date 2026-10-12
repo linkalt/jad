@@ -800,7 +800,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	options.CompactHistory = func(compaction transcript.CompactionOptions) (transcript.CompactionResult, error) {
 		return r.shared.compactPreservingUsage(r.config, compaction)
 	}
-	options.RefreshStateContext = func(context.Context) (*session.StateContextPrompt, error) {
+	options.RefreshStateContext = func(context.Context) ([]session.StateContextPrompt, error) {
 		snapshot, include, err := collectStateContextSnapshot(r.config, stateContextSources{
 			process: r.processManager, task: r.taskStore, memory: r.memoryStore,
 			subagent: r.resolver.sharedSubagentManager(r.config), owner: sessionKey(r.reference, r.config.Profile),
@@ -808,13 +808,12 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		if err != nil {
 			return nil, fmt.Errorf("collect state context after automatic compaction: %w", err)
 		}
-		if !include {
-			return nil, nil
+		if include {
+			if _, err := r.shared.store.AppendStateContext(snapshot, r.config.StateContext.Role); err != nil {
+				return nil, fmt.Errorf("persist state context after automatic compaction: %w", err)
+			}
 		}
-		if err := r.shared.store.WriteStateContextSnapshot(snapshot); err != nil {
-			return nil, fmt.Errorf("persist state context after automatic compaction: %w", err)
-		}
-		return &session.StateContextPrompt{Role: r.config.StateContext.Role, Text: snapshot.Text}, nil
+		return r.stateContextBlocks()
 	}
 	options.StateContext = nil
 	stateContext, err := r.currentStateContext()
@@ -825,20 +824,17 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	return prepared.runner.Run(ctx, input, options)
 }
 
-// currentStateContext returns the stored snapshot when its trigger is still configured.
-// With none, the session_start trigger writes one, so the model sees the stores from the
+// currentStateContext returns the stored blocks whose trigger is still configured. With
+// none, the session_start trigger writes one, so the model sees the stores from the
 // first run on and again after a compaction that found nothing to report.
-func (r boundRunner) currentStateContext() (*session.StateContextPrompt, error) {
+func (r boundRunner) currentStateContext() ([]session.StateContextPrompt, error) {
 	settings := r.config.StateContext
 	if !settings.Enabled {
 		return nil, nil
 	}
-	snapshot, exists, err := r.shared.store.ReadStateContextSnapshot()
-	if err != nil {
-		return nil, fmt.Errorf("read state context snapshot: %w", err)
-	}
-	if _, configured := settings.Triggers[snapshot.Trigger]; exists && configured {
-		return &session.StateContextPrompt{Role: settings.Role, Text: snapshot.Text}, nil
+	blocks, err := r.stateContextBlocks()
+	if err != nil || len(blocks) > 0 {
+		return blocks, err
 	}
 	if _, configured := settings.Triggers[sessionfs.StateContextTriggerSessionStart]; !configured {
 		return nil, nil
@@ -853,10 +849,30 @@ func (r boundRunner) currentStateContext() (*session.StateContextPrompt, error) 
 	if !include {
 		return nil, nil
 	}
-	if err := r.shared.store.WriteStateContextSnapshot(started); err != nil {
+	if _, err := r.shared.store.AppendStateContext(started, settings.Role); err != nil {
 		return nil, fmt.Errorf("persist state context at session start: %w", err)
 	}
-	return &session.StateContextPrompt{Role: settings.Role, Text: started.Text}, nil
+	return r.stateContextBlocks()
+}
+
+// stateContextBlocks reads the stored blocks in write order and drops those of a trigger
+// that is no longer configured.
+func (r boundRunner) stateContextBlocks() ([]session.StateContextPrompt, error) {
+	settings := r.config.StateContext
+	if !settings.Enabled {
+		return nil, nil
+	}
+	entries, err := r.shared.store.ReadStateContextEntries()
+	if err != nil {
+		return nil, fmt.Errorf("read state context: %w", err)
+	}
+	var blocks []session.StateContextPrompt
+	for _, entry := range entries {
+		if _, configured := settings.Triggers[entry.Trigger]; configured {
+			blocks = append(blocks, session.StateContextPrompt{Role: entry.Role, Text: entry.Text, After: entry.After})
+		}
+	}
+	return blocks, nil
 }
 
 // ReadRunUsageSummary reads the session's usage from inside a run, where the

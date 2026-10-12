@@ -38,7 +38,7 @@ func TestRunnerAutomaticallyCompactsBeforeToolRoundAndRefreshesStateContext(t *t
 			Enabled: true, TriggerTokens: 100, TurnType: "assistant_final", KeepTurns: 1,
 			BackupMode: "append",
 		},
-		RefreshStateContext: func(context.Context) (*StateContextPrompt, error) {
+		RefreshStateContext: func(context.Context) ([]StateContextPrompt, error) {
 			refreshCount++
 			history, err := store.ReadInputItems()
 			if err != nil {
@@ -49,7 +49,7 @@ func TestRunnerAutomaticallyCompactsBeforeToolRoundAndRefreshesStateContext(t *t
 					refreshSawToolOutput = true
 				}
 			}
-			return &StateContextPrompt{Role: "developer", Text: "fresh state after compaction"}, nil
+			return []StateContextPrompt{{Role: "developer", Text: "fresh state after compaction"}}, nil
 		},
 	})
 	if err != nil {

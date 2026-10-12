@@ -26,6 +26,8 @@ type sessionStartFixture struct {
 	config   Config
 	mu       sync.Mutex
 	requests []bool
+	// sawStale is set when any request carried the text of the stale test block.
+	sawStale bool
 }
 
 func newSessionStartFixture(t *testing.T, seedProcess bool) *sessionStartFixture {
@@ -63,6 +65,7 @@ func newSessionStartFixture(t *testing.T, seedProcess bool) *sessionStartFixture
 			return
 		}
 		carried := false
+		stale := false
 		for _, item := range request.Input {
 			var message struct {
 				Role    string `json:"role"`
@@ -75,9 +78,11 @@ func newSessionStartFixture(t *testing.T, seedProcess bool) *sessionStartFixture
 			}
 			for _, content := range message.Content {
 				carried = carried || (strings.Contains(content.Text, "STATE CONTEXT SNAPSHOT") && strings.Contains(content.Text, "proc_saved"))
+				stale = stale || strings.Contains(content.Text, "no longer configured")
 			}
 		}
 		fixture.mu.Lock()
+		fixture.sawStale = fixture.sawStale || stale
 		fixture.requests = append(fixture.requests, carried)
 		fixture.mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -184,11 +189,14 @@ func TestHTTPRunWritesNoSessionStartStateContextWhenProvidersAreEmpty(t *testing
 
 func TestHTTPRunIgnoresStoredStateContextWhoseTriggerIsNotConfigured(t *testing.T) {
 	fixture := newSessionStartFixture(t, true)
-	staleSnapshot := transcript.StateContextSnapshot{
-		SchemaVersion: 1, GeneratedAt: "2026-10-01T00:00:00.000Z", Trigger: "compaction",
-		Text: "STATE CONTEXT SNAPSHOT\nproc_saved from a trigger that is no longer configured",
+	stale := transcript.StateContextEntry{
+		StateContextSnapshot: transcript.StateContextSnapshot{
+			SchemaVersion: 1, GeneratedAt: "2026-10-01T00:00:00.000Z", Trigger: "compaction",
+			Text: "STATE CONTEXT SNAPSHOT\nstored by a trigger that is no longer configured",
+		},
+		Role: "developer",
 	}
-	encoded, err := json.Marshal(staleSnapshot)
+	encoded, err := json.Marshal(stale)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,15 +209,22 @@ func TestHTTPRunIgnoresStoredStateContextWhoseTriggerIsNotConfigured(t *testing.
 	}
 	fixture.run("first")
 
+	if len(fixture.requests) != 1 || !fixture.requests[0] || fixture.sawStale {
+		t.Fatalf("carried session_start block = %v, stale block sent = %v; want the new block and not the stale one", fixture.requests, fixture.sawStale)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stored transcript.StateContextSnapshot
-	if err := json.Unmarshal(data, &stored); err != nil {
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("state context file has %d lines, want the stale one and the new session_start one:\n%s", len(lines), data)
+	}
+	var added transcript.StateContextEntry
+	if err := json.Unmarshal([]byte(lines[1]), &added); err != nil {
 		t.Fatal(err)
 	}
-	if stored.Trigger != "session_start" || strings.Contains(stored.Text, "no longer configured") {
-		t.Fatalf("stored snapshot = %#v; want the stale compaction snapshot replaced by a session_start one", stored)
+	if added.Trigger != "session_start" || !strings.Contains(added.Text, "proc_saved") || added.After != 1 {
+		t.Fatalf("new entry = %#v; want session_start with the process, placed after the first input", added)
 	}
 }

@@ -818,7 +818,7 @@
         "statecontext": {
           "type": "string",
           "pattern": "\\S",
-          "description": "Replaceable state-context snapshot. Defaults to staging/statecontext.json."
+          "description": "Append-only state-context blocks, one JSON line each. Defaults to staging/statecontext.jsonl."
         },
         "staging": {
           "type": "string",
