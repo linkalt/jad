@@ -28,6 +28,8 @@ const (
 	defaultNativeBashSpillDir            = ".bash-output"
 	defaultNativeBashSpillFilename       = "bash-{call_id}.{stream}.log"
 	defaultNativeBashSpillPath           = "{cwd}/.bash-output/bash-{call_id}.{stream}.log"
+	defaultNativeExecSpillDir            = ".exec-output"
+	defaultNativeExecSpillPath           = "{cwd}/.exec-output/bash-{call_id}.{stream}.log"
 	defaultNativeBashKillPolicy          = "always"
 	defaultNativeBashSpillKeep           = "truncated_only"
 	maxNativeBashTimeoutMs         int64 = 3_600_000
@@ -275,6 +277,10 @@ func normalizeNativeBashStream(raw json.RawMessage, fallback NativeBashStreamBud
 }
 
 func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, sessionDir, toolStorageDir string, readPolicy, grepPolicy NativePathPolicy) (NativeBashSpillSettings, error) {
+	defaultDir, defaultPath := defaultNativeBashSpillDir, defaultNativeBashSpillPath
+	if section == "tools.native.exec" {
+		defaultDir, defaultPath = defaultNativeExecSpillDir, defaultNativeExecSpillPath
+	}
 	settings := NativeBashSpillSettings{Enabled: true, Keep: defaultNativeBashSpillKeep, CapBytes: defaultNativeBashSpillCap, RetentionDays: defaultNativeBashRetention, AllowUnreadable: false}
 	fields := map[string]json.RawMessage{}
 	if len(raw) > 0 {
@@ -314,14 +320,14 @@ func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, se
 	_, hasStderrTemplate := fields["stderr_full"]
 	legacyTemplates := hasStdoutTemplate || hasStderrTemplate
 	if legacyTemplates {
-		if storage, exists := fields["storage_dir"]; exists && strings.TrimSpace(string(storage)) != `"`+defaultNativeBashSpillDir+`"` {
+		if storage, exists := fields["storage_dir"]; exists && strings.TrimSpace(string(storage)) != `"`+defaultDir+`"` {
 			return NativeBashSpillSettings{}, configError("%s: %s.spill.storage_dir cannot be combined with deprecated stdout_full/stderr_full templates; remove the templates to use storage_dir", settingPath, section)
 		}
-		stdout, err := bashString(fields, "stdout_full", defaultNativeBashSpillPath, settingPath+": "+section+".spill", false)
+		stdout, err := bashString(fields, "stdout_full", defaultPath, settingPath+": "+section+".spill", false)
 		if err != nil {
 			return NativeBashSpillSettings{}, err
 		}
-		stderr, err := bashString(fields, "stderr_full", defaultNativeBashSpillPath, settingPath+": "+section+".spill", false)
+		stderr, err := bashString(fields, "stderr_full", defaultPath, settingPath+": "+section+".spill", false)
 		if err != nil {
 			return NativeBashSpillSettings{}, err
 		}
@@ -348,7 +354,7 @@ func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, se
 		return settings, nil
 	}
 
-	storageDir, err := bashString(fields, "storage_dir", defaultNativeBashSpillDir, settingPath+": "+section+".spill", false)
+	storageDir, err := bashString(fields, "storage_dir", defaultDir, settingPath+": "+section+".spill", false)
 	if err != nil {
 		return NativeBashSpillSettings{}, err
 	}

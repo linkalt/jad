@@ -118,3 +118,44 @@ func TestExecEnvFileErrorsNameTheExecKey(t *testing.T) {
 		}
 	}
 }
+
+func TestExecSpillDefaultsToItsOwnDirectoryNotBashs(t *testing.T) {
+	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+		"bash": map[string]any{},
+		"exec": map[string]any{},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bash, exec := config.NativeBash.Spill.StorageDir, config.NativeExec.Child.Spill.StorageDir
+	if filepath.Base(bash) != ".bash-output" || filepath.Base(exec) != ".exec-output" || filepath.Dir(bash) != filepath.Dir(exec) {
+		t.Fatalf("bash spill = %q, exec spill = %q; want sibling .bash-output and .exec-output", bash, exec)
+	}
+}
+
+func TestExecSpillStorageDirAndLegacyTemplatesStayConfigurable(t *testing.T) {
+	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+		"exec": map[string]any{"spill": map[string]any{"storage_dir": "custom-out"}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := filepath.Base(config.NativeExec.Child.Spill.StorageDir); got != "custom-out" {
+		t.Fatalf("exec storage_dir = %q, want custom-out", got)
+	}
+	config, err = loadApprovalSetting(t, nativeTools(map[string]any{
+		"exec": map[string]any{"spill": map[string]any{"storage_dir": ".exec-output", "stdout_full": "{cwd}/x/{call_id}.out", "stderr_full": "{cwd}/x/{call_id}.err"}},
+	}))
+	if err != nil {
+		t.Fatalf("explicit default storage_dir with templates: %v", err)
+	}
+	if config.NativeExec.Child.Spill.StdoutFull == "" {
+		t.Fatal("legacy stdout_full was not kept")
+	}
+	_, err = loadApprovalSetting(t, nativeTools(map[string]any{
+		"exec": map[string]any{"spill": map[string]any{"storage_dir": ".bash-output", "stdout_full": "{cwd}/x/{call_id}.out"}},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "tools.native.exec.spill.storage_dir cannot be combined") {
+		t.Fatalf("bash's directory name is a custom storage_dir for exec; error = %v", err)
+	}
+}

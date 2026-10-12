@@ -1092,7 +1092,7 @@
             },
             "exec": {
               "type": "object",
-              "description": "Inline code in a configured interpreter. It has its own child-process settings (bash_style): environment, timeouts, output budgets, spill files and path rules are read from tools.native.exec with bash's keys and defaults, and nothing is taken from tools.native.bash. exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.",
+              "description": "Inline code in a configured interpreter. It has its own child-process settings (bash_style): environment, timeouts, output budgets, spill files and path rules are read from tools.native.exec with bash's keys and defaults, and nothing is taken from tools.native.bash. Its spill files default to the folder .exec-output, not bash's .bash-output (spill.storage_dir and the legacy templates still override it). exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.",
               "allOf": [
                 {
                   "$ref": "#/$defs/bash_style"

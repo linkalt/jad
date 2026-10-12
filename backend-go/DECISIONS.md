@@ -642,8 +642,11 @@ Checks (2026-10-11): `go test ./internal/... ./cmd/...` 28 packages ok; `go vet`
 - **Exceptions (checks and wiring, not inherited values).** (1) At load, bash's and exec's `spill.storage_dir` is checked to be readable
   back by the model, using the `read` and `grep` path rules of the session (`bashSpillReadable`); `spill.allow_unreadable` turns it off.
   The rules are not copied into either tool. (2) `decide` still hands the `read` path rules to its image loader (`catalog.go`). (3) The
-  session file list in the UI uses the `read` rules. (4) Bash and exec both default `spill.storage_dir` to `.bash-output`, so they share
-  that folder unless one is set; each prunes it by its own `retention_days`.
+  session file list in the UI uses the `read` rules. (4) exec's `spill.storage_dir` defaults to `.exec-output` (and its legacy template default
+  to `{cwd}/.exec-output/...`), bash's stays `.bash-output`, so the two no longer share a folder or prune each other's files by
+  different `retention_days`. A relative value still resolves under the tool storage root. Spill files already in `.bash-output`
+  from earlier exec calls stay there until bash's retention prunes them. Item (1) is kept on purpose: it asks whether the model can
+  read the file back with `read` or `grep`, which is a check on those tools' rules, not a value exec borrows.
 - **Not changed.** Post-edit hooks run under `tools.native.bash` and still need it. The checkpoint harness paths now include exec's own
   spill directory. `messages.jsonl` is not touched.
 - **Effect on existing toolsets.** A toolset that relied on the inheritance now has narrower tools until it names `paths`. The user's
