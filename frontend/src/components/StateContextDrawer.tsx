@@ -20,9 +20,11 @@ export interface StateContextDrawerProps {
   onPreview: (prompt: string) => Promise<SessionStateContextResult>;
   onWrite: (prompt: string) => Promise<SessionStateContextResult>;
   onClose: () => void;
+  /** Called with the message of a failure that arrives after the drawer has closed. */
+  onLateError: (message: string) => void;
 }
 
-export function StateContextDrawer({isDisabled, previewMaxHeightPx, onPreview, onWrite, onClose}: StateContextDrawerProps) {
+export function StateContextDrawer({isDisabled, previewMaxHeightPx, onPreview, onWrite, onClose, onLateError}: StateContextDrawerProps) {
   const [prompt, setPrompt] = useState('');
   const [preview, setPreview] = useState<SessionStateContextResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,8 +62,11 @@ export function StateContextDrawer({isDisabled, previewMaxHeightPx, onPreview, o
       }
       setPreview(result);
     } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
       if (isMounted.current) {
-        setError(caught instanceof Error ? caught.message : String(caught));
+        setError(message);
+      } else {
+        onLateError(message);
       }
     } finally {
       if (isMounted.current) {

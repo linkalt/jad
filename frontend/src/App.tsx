@@ -5018,6 +5018,13 @@ function App() {
             onPreview={prompt => requestStateContext(prompt, true)}
             onWrite={prompt => requestStateContext(prompt, false)}
             onClose={() => setStateContextViewKey(null)}
+            onLateError={message => recordNotification({
+              sessionId: activeSessionId,
+              sessionTitle: activeRowSession.title,
+              kind: 'error',
+              title: 'State context failed',
+              message,
+            })}
           />
         ) : isComposerActionsDrawerOpen ? (
           <ChatComposerDrawer>
