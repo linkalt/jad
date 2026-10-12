@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -61,12 +62,15 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 
 	built := &layoutCompose{layout: layout, location: location, sessionPath: sessionPath, session: session, profiles: profiles, keys: keys}
-	setting, modelPaths, err := built.compose(entry)
+	setting, modelPaths, err := built.compose(entry, "")
 	if err != nil {
 		return SessionConfig{}, err
 	}
 	config, err := loadSessionSettingsFrom(location, setting, sessionPath, location.Root.GlobalJadRoot, keys[entry.ID()], requestedModel)
 	if err != nil {
+		return SessionConfig{}, err
+	}
+	if err := built.loadAgentToolsets(&config, entry); err != nil {
 		return SessionConfig{}, err
 	}
 	// The normalizers know a profile only by its storage key; callers get the ID.
@@ -83,6 +87,53 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 		return SessionConfig{}, err
 	}
 	return config, nil
+}
+
+// loadAgentToolsets reads the toolset each agent names. The session is composed again
+// with that toolset in place of the profile's own, so its tools get the same normalizers,
+// defaults and env_file as the profile's toolset, and the result is kept in
+// config.AgentToolsets for the app to build the tools and connect the servers. The
+// derived settings never carry a subagent tool: a child cannot start a child.
+func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalog.Entry) error {
+	if config.NativeSubagent == nil {
+		return nil
+	}
+	var available *catalog.Catalog
+	for _, agent := range config.NativeSubagent.Agents {
+		if agent.Toolset == "" {
+			continue
+		}
+		if _, done := config.AgentToolsets[agent.Toolset]; done {
+			continue
+		}
+		if available == nil {
+			var err error
+			if available, err = catalog.Scan("toolset", c.layout.Tools); err != nil {
+				return configError("%s: %v", c.sessionPath, err)
+			}
+		}
+		if _, err := available.Lookup(agent.Toolset); err != nil {
+			return configError("%s: tools.native.subagent agent %s: toolset: %v", c.sessionPath, agent.Name, err)
+		}
+		setting, _, err := c.compose(selected, agent.Toolset)
+		if err == nil {
+			var derived SessionConfig
+			if derived, err = loadSessionSettingsFrom(c.location, setting, c.sessionPath, c.location.Root.GlobalJadRoot, c.keys[selected.ID()], ""); err == nil {
+				derived.NativeSubagent = nil
+				if config.AgentToolsets == nil {
+					config.AgentToolsets = make(map[string]SessionConfig)
+				}
+				config.AgentToolsets[agent.Toolset] = derived
+				continue
+			}
+		}
+		var configProblem *ConfigError
+		if errors.As(err, &configProblem) {
+			return configError("agent %s uses toolset %s: %s", agent.Name, agent.Toolset, configProblem.Message)
+		}
+		return err
+	}
+	return nil
 }
 
 // resolveSubagentModels turns an agent's model ID ("<category>/<name>") into the model
@@ -156,8 +207,9 @@ type layoutCompose struct {
 }
 
 // compose builds the legacy-shaped setting for the selected profile. The returned map
-// holds the file of each model ID the profile may use.
-func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMessage, map[string]string, error) {
+// holds the file of each model ID the profile may use. A non-empty toolset replaces the
+// profile's own toolset, which is how the toolset an agent names is read.
+func (c *layoutCompose) compose(selected catalog.Entry, toolset string) (map[string]json.RawMessage, map[string]string, error) {
 	allModels, err := catalog.Scan("model", c.layout.Models)
 	if err != nil {
 		return nil, nil, configError("%s: %v", selected.Path, err)
@@ -198,8 +250,15 @@ func (c *layoutCompose) compose(selected catalog.Entry) (map[string]json.RawMess
 	if len(c.layout.ToolDefinitionPaths) > 0 {
 		setting["tool_definition_paths"], _ = json.Marshal(c.layout.ToolDefinitionPaths)
 	}
-	if profile.Toolset != "" {
-		if err := c.addToolset(setting, profile.Toolset, selected.Path, defaultEnvFile); err != nil {
+	if toolset == "" {
+		toolset = profile.Toolset
+	} else {
+		// Only the tools of this toolset are used. The state-context providers read the
+		// session's own tools, which this toolset may not have.
+		delete(setting, "statecontext")
+	}
+	if toolset != "" {
+		if err := c.addToolset(setting, toolset, selected.Path, defaultEnvFile); err != nil {
 			return nil, nil, err
 		}
 	}

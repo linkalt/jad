@@ -145,6 +145,10 @@ type SessionConfig struct {
 	NativeSkill        *NativeSkillSettings
 	NativeDecide       *NativeDecideSettings
 	NativeSubagent     *NativeSubagentSettings
+	// AgentToolsets holds, by "<category>/<name>", the settings of each toolset a
+	// sub-agent names in its toolset key. Only the tool settings and MCP servers of an
+	// entry are used; it has no subagent tool.
+	AgentToolsets map[string]SessionConfig
 	// GlobalJadRoot is the global root whose setting.json names the skill
 	// directories the skill tool reads.
 	GlobalJadRoot       string

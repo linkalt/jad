@@ -378,6 +378,8 @@ func TestAgentSchemaValidatesAgentFilesTheLoaderAccepts(t *testing.T) {
 	valid := []string{
 		`{}`,
 		`{"schema_version":1,"description":"d","model":"m.json","instructions":"i","prompt_documents":["a.md"],"tools":["read"],"max_tool_rounds":3,"max_run_tokens":100,"timeout_ms":1000}`,
+		`{"toolset":"extra/search"}`,
+		`{"toolset":"extra.v2/search-tools_1"}`,
 	}
 	invalid := map[string]string{
 		"unknown key":    `{"tool":["read"]}`,
@@ -388,6 +390,10 @@ func TestAgentSchemaValidatesAgentFilesTheLoaderAccepts(t *testing.T) {
 		"version":        `{"schema_version":2}`,
 		"description":    `{"description":"` + strings.Repeat("x", 501) + `"}`,
 		"instructions":   `{"instructions":""}`,
+		"toolset bare":   `{"toolset":"search"}`,
+		"toolset deep":   `{"toolset":"a/b/c"}`,
+		"toolset blank":  `{"toolset":""}`,
+		"toolset dash":   `{"toolset":"-a/b"}`,
 	}
 	check := func(text string) error {
 		var value any

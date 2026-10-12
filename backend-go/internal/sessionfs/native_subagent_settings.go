@@ -54,7 +54,7 @@ var (
 	allowedNativeSubagentStates     = map[string]struct{}{
 		"queued": {}, "running": {}, "done": {}, "failed": {}, "timed_out": {}, "stopped": {}, "lost": {},
 	}
-	nativeSubagentAgentKeys = []string{"description", "model", "tools", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "paths"}
+	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "paths"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
 
@@ -164,8 +164,11 @@ type NativeSubagentAgent struct {
 	Dir string
 	// Tools names the read-only native tools the child may use. HasTools is false
 	// when the key is absent, which means every read-only native tool.
-	Tools         []string
-	HasTools      bool
+	Tools    []string
+	HasTools bool
+	// Toolset is the "<category>/<name>" of the toolset file this agent draws its tools
+	// from instead of the session's own toolset; empty means the session's.
+	Toolset       string
 	MaxToolRounds int64
 	// MaxRunTokens is the most tokens the child may use; zero means no cap.
 	MaxRunTokens int64
@@ -449,6 +452,9 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 		agent.PromptDocuments = append([]string{promptFilePath}, agent.PromptDocuments...)
 	}
 	if agent.Tools, agent.HasTools, err = optionalSubagentTools(fields, settingPath, section); err != nil {
+		return NativeSubagentAgent{}, err
+	}
+	if agent.Toolset, err = optionalSubagentString(fields, "toolset", settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
 	if agent.Paths, err = optionalSubagentPaths(fields, settingPath, section); err != nil {

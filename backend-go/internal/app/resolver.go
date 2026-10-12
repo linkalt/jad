@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -410,7 +412,7 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	memoryStore := r.sharedMemoryStore(config)
 	fetchStore := r.sharedFetchStore(config)
 	subagentMCP := &native.SubagentMCP{}
-	nativeCatalog, err := native.BuildCatalogWithSubagents(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config))
+	nativeCatalog, err := native.BuildCatalogWithSubagents(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r)
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
@@ -426,8 +428,12 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
+	toolsetMCP, err := r.loadAgentToolsetMCP(ctx, config)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 	// The subagent tool was built with the native catalog, before the MCP tools existed.
-	if err := subagentMCP.Bind(mcpTools); err != nil {
+	if err := subagentMCP.BindToolsets(mcpTools, toolsetMCP); err != nil {
 		return nil, nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
 	}
 	registered, err := tools.MergeCatalogs(nativeCatalog, mcpCatalog)
@@ -585,7 +591,39 @@ func (r *Resolver) sharedFetchStore(config sessionfs.SessionConfig) *native.Fetc
 // of one server (browser-headed/betterwright, browser-headless/betterwright) need
 // separate managers, or each run would close the other's connection.
 func (r *Resolver) sharedMCPManager(config sessionfs.SessionConfig) (*mcpclient.Manager, error) {
-	key := filepath.Clean(config.SettingPath) + "\x00" + config.Profile
+	return r.mcpManagerFor(filepath.Clean(config.SettingPath) + "\x00" + config.Profile)
+}
+
+// Resources implements native.ToolsetResources: the shared stores of a toolset that a
+// sub-agent names, keyed by that toolset's own storage directories.
+func (r *Resolver) Resources(config sessionfs.SessionConfig) (native.ProcessManager, *native.TaskStore, *native.MemoryStore, *native.FetchStore) {
+	return r.sharedProcessManager(config), r.sharedTaskStore(config), r.sharedMemoryStore(config), r.sharedFetchStore(config)
+}
+
+// loadAgentToolsetMCP connects the MCP servers of every toolset a sub-agent names and
+// returns their tools by toolset ID. Each toolset has its own manager, so a server that
+// two toolsets use differently is not closed by the other's run.
+func (r *Resolver) loadAgentToolsetMCP(ctx context.Context, config sessionfs.SessionConfig) (map[string][]tools.Tool, error) {
+	if len(config.AgentToolsets) == 0 {
+		return nil, nil
+	}
+	loaded := make(map[string][]tools.Tool, len(config.AgentToolsets))
+	for _, id := range slices.Sorted(maps.Keys(config.AgentToolsets)) {
+		derived := config.AgentToolsets[id]
+		manager, err := r.mcpManagerFor(filepath.Clean(config.SettingPath) + "\x00" + config.Profile + "\x00toolset\x00" + id)
+		if err != nil {
+			return nil, err
+		}
+		mcpTools, err := manager.LoadTools(ctx, derived.MCPServers, derived.WorkingDir)
+		if err != nil {
+			return nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: toolset %s: %v", config.SettingPath, id, err)})
+		}
+		loaded[id] = mcpTools
+	}
+	return loaded, nil
+}
+
+func (r *Resolver) mcpManagerFor(key string) (*mcpclient.Manager, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {

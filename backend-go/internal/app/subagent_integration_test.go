@@ -322,6 +322,9 @@ func newSplitSubagentFixture(t *testing.T, agentSetting map[string]any) subagent
 // mcpFixture adds one in-process MCP server with a "lookup" tool to the session.
 type mcpFixture struct {
 	approval string
+	// onlyFile writes the server file but does not attach it to the session's toolset;
+	// a test attaches it through the toolset of an agent (__toolsets).
+	onlyFile bool
 	calls    *atomic.Int32
 	// image, when set, is returned as an image block beside the text.
 	image []byte
@@ -360,6 +363,13 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	delete(agentSetting, "__checkpoint")
 	sessionExtra, _ := agentSetting["__session"].(map[string]any)
 	delete(agentSetting, "__session")
+	// __toolsets writes extra toolset files (id -> file content) and __session_without
+	// removes tools from the session's own toolset, so a test can give a tool to an
+	// agent's toolset only.
+	extraToolsets, _ := agentSetting["__toolsets"].(map[string]any)
+	delete(agentSetting, "__toolsets")
+	sessionWithout, _ := agentSetting["__session_without"].([]string)
+	delete(agentSetting, "__session_without")
 	// __child_model adds fields to the child's model file (for example hosted_tools).
 	childModelExtra, _ := agentSetting["__child_model"].(map[string]any)
 	delete(agentSetting, "__child_model")
@@ -374,6 +384,7 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 
 	spec := layouttest.Spec{SessionID: "demo", CWD: workspace, ToolDefinitionPaths: definitions, ProfileModels: []string{"openai/parent"}}
+	var mcpServerFile map[string]any
 	if mcp != nil {
 		mcpServer := mcpSDK.NewServer(&mcpSDK.Implementation{Name: "fixture", Version: "1.0.0"}, nil)
 		mcpServer.AddTool(&mcpSDK.Tool{
@@ -396,10 +407,16 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		if mcp.approval != "" {
 			use["approval"] = mcp.approval
 		}
-		spec.MCP = map[string]map[string]any{"m/fixture": use}
-		spec.MCPConfig = map[string]map[string]any{"m/fixture": {
-			"transport": map[string]any{"type": "streamable_http", "url": mcpHTTP.URL}, "timeout_ms": 10_000, "max_result_bytes": 4096 + 8*len(mcp.image),
-		}}
+		serverFile := map[string]any{
+			"schema_version": 1,
+			"transport":      map[string]any{"type": "streamable_http", "url": mcpHTTP.URL}, "timeout_ms": 10_000, "max_result_bytes": 4096 + 8*len(mcp.image),
+		}
+		if mcp.onlyFile {
+			mcpServerFile = serverFile
+		} else {
+			spec.MCP = map[string]map[string]any{"m/fixture": use}
+			spec.MCPConfig = map[string]map[string]any{"m/fixture": serverFile}
+		}
 	}
 	subagent := map[string]any{"agents": map[string]any{"explore": agentSetting}}
 	if budget, ok := agentSetting["__list_max_bytes"]; ok {
@@ -431,6 +448,9 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 	if withBash {
 		spec.Native["bash"] = bashSettings
+	}
+	for _, name := range sessionWithout {
+		delete(spec.Native, name)
 	}
 	spec.Settings = map[string]any{"max_tool_rounds": 4}
 	if withCheckpoint {
@@ -466,6 +486,14 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 	spec.Models = map[string]map[string]any{"openai/parent": parentModel, "openai/child": childModel}
 	layout := layouttest.Write(t, spec)
+	if mcpServerFile != nil {
+		body, _ := json.Marshal(mcpServerFile)
+		writeFile(t, filepath.Join(layout.Root, "mcp", "m", "fixture.json"), body)
+	}
+	for id, content := range extraToolsets {
+		body, _ := json.Marshal(content)
+		writeFile(t, filepath.Join(layout.Root, "tools", filepath.FromSlash(id)+".json"), body)
+	}
 	if dir, ok := agentSetting["__agents_dir"].(string); ok {
 		// An agent folder names its model relative to itself.
 		body, _ := json.Marshal(childModel)
