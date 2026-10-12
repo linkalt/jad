@@ -321,6 +321,101 @@
           }
         }
       }
+    },
+    "layout_settings": {
+      "type": "object",
+      "propertyNames": {
+        "enum": [
+          "statecontext",
+          "max_tool_rounds",
+          "max_parallel_tool_calls",
+          "tool_call_scheduling",
+          "provider_retry",
+          "openai_oauth",
+          "max_run_tokens",
+          "approval",
+          "checkpoint",
+          "hooks",
+          "image_resize",
+          "image_store",
+          "persistence",
+          "front_compaction",
+          "compaction",
+          "http_debug",
+          "cwd",
+          "env_file",
+          "tool_storage_dir",
+          "session_files"
+        ]
+      },
+      "properties": {
+        "statecontext": {
+          "$ref": "#/properties/statecontext"
+        },
+        "max_tool_rounds": {
+          "$ref": "#/properties/max_tool_rounds"
+        },
+        "max_parallel_tool_calls": {
+          "$ref": "#/properties/max_parallel_tool_calls"
+        },
+        "tool_call_scheduling": {
+          "$ref": "#/properties/tool_call_scheduling"
+        },
+        "provider_retry": {
+          "$ref": "#/properties/provider_retry"
+        },
+        "openai_oauth": {
+          "$ref": "#/properties/openai_oauth"
+        },
+        "max_run_tokens": {
+          "$ref": "#/properties/max_run_tokens"
+        },
+        "approval": {
+          "$ref": "#/properties/approval"
+        },
+        "checkpoint": {
+          "$ref": "#/properties/checkpoint"
+        },
+        "hooks": {
+          "$ref": "#/properties/hooks"
+        },
+        "image_resize": {
+          "$ref": "#/properties/image_resize"
+        },
+        "image_store": {
+          "$ref": "#/properties/image_store"
+        },
+        "persistence": {
+          "$ref": "#/properties/persistence"
+        },
+        "front_compaction": {
+          "$ref": "#/properties/front_compaction"
+        },
+        "compaction": {
+          "$ref": "#/properties/compaction"
+        },
+        "http_debug": {
+          "$ref": "#/properties/http_debug"
+        },
+        "session_files": {
+          "$ref": "#/properties/session_files"
+        },
+        "cwd": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Working directory of runs. Absolute path (or ~). Defaults, session and profile may all set it; the nearer level wins (profile, then session, then root defaults). The session's top-level cwd beats its settings.cwd."
+        },
+        "env_file": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Dotenv file for the toolset's bash, process and exec when they name no env_file of their own. A relative path is relative to the folder of the root setting.json. Defaults, session and profile may all set it; the nearer level wins. A tool the toolset lacks is not added."
+        },
+        "tool_storage_dir": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "Folder that holds the tool storage (bash spill, memory, tasks, fetch, processes, sub-agent runs, write/edit backups), as <folder>/<session>/<category>/<name>/tools. A relative path is relative to the session cwd, so the file tools reach it with no extra path rule; the default is .jad/state. An absolute path outside the cwd needs tools.native.read.paths to allow it. The transcript and staging stay in the root state folder. Defaults, session and profile may all set it; the nearer level wins."
+        }
+      }
     }
   },
   "properties": {

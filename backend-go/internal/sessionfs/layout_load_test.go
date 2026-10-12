@@ -838,6 +838,37 @@ func TestLayoutSettingKeysMatchTheSchemas(t *testing.T) {
 		want = append(want, key)
 	}
 	sort.Strings(want)
+	settingData, err := os.ReadFile(filepath.Join("..", "..", "..", "sample", "schemes", "setting.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settingSchema struct {
+		Defs struct {
+			LayoutSettings struct {
+				PropertyNames struct {
+					Enum []string `json:"enum"`
+				} `json:"propertyNames"`
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"layout_settings"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(settingData, &settingSchema); err != nil {
+		t.Fatal(err)
+	}
+	shared := settingSchema.Defs.LayoutSettings
+	got := append([]string(nil), shared.PropertyNames.Enum...)
+	sort.Strings(got)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("layout_settings.propertyNames.enum = %v, loader keys = %v", got, want)
+	}
+	described := make([]string, 0, len(shared.Properties))
+	for key := range shared.Properties {
+		described = append(described, key)
+	}
+	sort.Strings(described)
+	if strings.Join(described, ",") != strings.Join(want, ",") {
+		t.Errorf("layout_settings.properties = %v, loader keys = %v", described, want)
+	}
 	for _, file := range []struct{ name, property string }{
 		{"session.schema.json", "settings"},
 		{"profile.schema.json", "settings"},
@@ -849,28 +880,14 @@ func TestLayoutSettingKeysMatchTheSchemas(t *testing.T) {
 		}
 		var schema struct {
 			Properties map[string]struct {
-				PropertyNames struct {
-					Enum []string `json:"enum"`
-				} `json:"propertyNames"`
-				Properties map[string]json.RawMessage `json:"properties"`
+				Ref string `json:"$ref"`
 			} `json:"properties"`
 		}
 		if err := json.Unmarshal(data, &schema); err != nil {
 			t.Fatal(err)
 		}
-		node := schema.Properties[file.property]
-		got := append([]string(nil), node.PropertyNames.Enum...)
-		sort.Strings(got)
-		if strings.Join(got, ",") != strings.Join(want, ",") {
-			t.Errorf("%s %s.propertyNames.enum = %v, loader keys = %v", file.name, file.property, got, want)
-		}
-		described := make([]string, 0, len(node.Properties))
-		for key := range node.Properties {
-			described = append(described, key)
-		}
-		sort.Strings(described)
-		if strings.Join(described, ",") != strings.Join(want, ",") {
-			t.Errorf("%s %s.properties = %v, loader keys = %v", file.name, file.property, described, want)
+		if ref := schema.Properties[file.property].Ref; ref != "setting.schema.json#/$defs/layout_settings" {
+			t.Errorf("%s %s $ref = %q, want the shared layout_settings definition", file.name, file.property, ref)
 		}
 	}
 }

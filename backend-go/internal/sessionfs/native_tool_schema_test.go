@@ -87,29 +87,30 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 	}
 }
 
-// The schema lists the same keys for exec as the loader accepts, so a key added to one is
-// caught in the other.
+// The toolset schema takes its native tool block from setting.schema.json by reference, so
+// the tool settings are written once. The schema lists the same keys for exec as the loader
+// accepts, so a key added to one is caught in the other.
 func TestExecAndReadImageSchemaKeysMatchTheLoader(t *testing.T) {
-	for _, file := range []string{"toolset.schema.json", "setting.schema.json"} {
-		data := readSchemaJSON(t, file)
-		defs, _ := data["$defs"].(map[string]any)
-		var native map[string]any
-		if file == "toolset.schema.json" {
-			native = data["properties"].(map[string]any)["native"].(map[string]any)["properties"].(map[string]any)
-		} else {
-			native = data["properties"].(map[string]any)["tools"].(map[string]any)["properties"].(map[string]any)["native"].(map[string]any)["properties"].(map[string]any)
-		}
-		for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys} {
-			if file == "toolset.schema.json" {
-				defs = readSchemaJSON(t, "setting.schema.json")["$defs"].(map[string]any)
-			}
-			got := flattenSchemaKeys(native[tool].(map[string]any), defs)
-			sort.Strings(got)
-			want = append([]string(nil), want...)
-			sort.Strings(want)
-			if strings.Join(got, ",") != strings.Join(want, ",") {
-				t.Errorf("%s: %s schema keys\n  %v\nloader accepts\n  %v", file, tool, got, want)
-			}
+	setting := readSchemaJSON(t, "setting.schema.json")
+	defs, _ := setting["$defs"].(map[string]any)
+	nativeBlock := setting["properties"].(map[string]any)["tools"].(map[string]any)["properties"].(map[string]any)["native"].(map[string]any)
+	native := nativeBlock["properties"].(map[string]any)
+
+	toolsetNative := readSchemaJSON(t, "toolset.schema.json")["properties"].(map[string]any)["native"].(map[string]any)
+	if ref := toolsetNative["$ref"]; ref != "setting.schema.json#/properties/tools/properties/native" {
+		t.Errorf("toolset.schema.json native $ref = %v, want the tools.native block of setting.schema.json", ref)
+	}
+	if _, copied := toolsetNative["properties"]; copied {
+		t.Error("toolset.schema.json native must reference setting.schema.json, not repeat the tool settings")
+	}
+
+	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys} {
+		got := flattenSchemaKeys(native[tool].(map[string]any), defs)
+		sort.Strings(got)
+		want = append([]string(nil), want...)
+		sort.Strings(want)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s schema keys\n  %v\nloader accepts\n  %v", tool, got, want)
 		}
 	}
 }
