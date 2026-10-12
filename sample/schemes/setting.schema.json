@@ -1536,7 +1536,8 @@
                     "properties": {
                       "type": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
                       "filter": {"type": "object", "default": {}},
-                      "limit": {"type": "integer", "minimum": 1, "default": 10}
+                      "limit": {"type": "integer", "minimum": 1, "default": 10},
+                      "group_by": {"type": "string", "description": "Dot-separated field path. Replaces the records with a count per value at that path; each group carries the filter of a memory list call that fetches it. The scan is bounded by max_scan_records and max_scan_bytes, and at_least reports a truncated scan. Cannot be combined with limit, and the path cannot also be a filter key."}
                     },
                     "additionalProperties": false
                   },

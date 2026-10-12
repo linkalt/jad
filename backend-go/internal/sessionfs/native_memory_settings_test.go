@@ -58,6 +58,12 @@ func TestNormalizeNativeMemorySettingsRejectsInvalidPolicies(t *testing.T) {
 		`{"statecontext":null}`,
 		`{"statecontext":[{"type":"other"}],"allowed_types":["task"]}`,
 		`{"statecontext":[{"type":"task","filter":{"a.b.c.d.e.f.g.h.i":1}}]}`,
+		`{"statecontext":[{"type":"task","group_by":3}]}`,
+		`{"statecontext":[{"type":"task","group_by":"a..b"}]}`,
+		`{"statecontext":[{"type":"task","group_by":"a.b.c.d.e.f.g.h.i"}]}`,
+		`{"statecontext":[{"type":"task","group_by":"__proto__"}]}`,
+		`{"statecontext":[{"type":"task","group_by":"status","limit":3}]}`,
+		`{"statecontext":[{"type":"task","group_by":"status","filter":{"status":"open"}}]}`,
 	} {
 		_, err := normalizeNativeMemorySettings(map[string]json.RawMessage{
 			"tools": json.RawMessage(`{"native":{"memory":` + raw + `}}`),
@@ -65,5 +71,17 @@ func TestNormalizeNativeMemorySettingsRejectsInvalidPolicies(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "tools.native.memory") {
 			t.Errorf("normalize invalid memory policy %s error = %v", raw, err)
 		}
+	}
+}
+
+func TestNormalizeNativeMemorySettingsAcceptsGroupBy(t *testing.T) {
+	settings, err := normalizeNativeMemorySettings(map[string]json.RawMessage{
+		"tools": json.RawMessage(`{"native":{"memory":{"statecontext":[{"type":"bug_report","group_by":"meta.status","filter":{"area":"core"}},{"type":"note","group_by":null}]}}}`),
+	}, "/session/setting.json", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("normalize group_by: %v", err)
+	}
+	if len(settings.StateContext) != 2 || settings.StateContext[0].GroupBy != "meta.status" || settings.StateContext[1].GroupBy != "" {
+		t.Fatalf("group_by selectors = %+v", settings.StateContext)
 	}
 }

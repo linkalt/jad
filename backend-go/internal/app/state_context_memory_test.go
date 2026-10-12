@@ -60,3 +60,41 @@ func memoryStateContextTestSettings(root string, selectorLimit int64) sessionfs.
 		StateContext: []sessionfs.NativeMemoryStateContextSelector{{Type: "note", Filter: map[string]any{}, Limit: selectorLimit}},
 	}
 }
+
+func TestCollectStateContextSnapshotSummarizesMemoryWithGroupBy(t *testing.T) {
+	root := t.TempDir()
+	settings := memoryStateContextTestSettings(root, 10)
+	settings.MaxRecordsPerType = 40
+	settings.MaxTotalRecords = 80
+	store := native.NewMemoryStore(root)
+	for index := 0; index < 30; index++ {
+		status := "open"
+		if index%3 == 0 {
+			status = "fixed"
+		}
+		if _, err := store.Create("note", map[string]any{"status": status, "title": strings.Repeat("t", 60)}, settings); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build := func(groupBy string) string {
+		settings.StateContext = []sessionfs.NativeMemoryStateContextSelector{{Type: "note", Filter: map[string]any{}, Limit: 30, GroupBy: groupBy}}
+		config := sessionfs.SessionConfig{
+			NativeMemory: &settings,
+			StateContext: sessionfs.StateContextSettings{Enabled: true, Header: sessionfs.DefaultStateContextHeader, Triggers: compactionTrigger([]string{"memory"}, 65536)},
+		}
+		snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{memory: store}, "compaction")
+		if err != nil || !include {
+			t.Fatalf("collect group_by %q = include %v, error %v", groupBy, include, err)
+		}
+		return snapshot.Text
+	}
+	items, summary := build(""), build("status")
+	for _, expected := range []string{`"group_by": "status"`, `"status": "fixed"`, `"count": 10`, `"count": 20`} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("summary missing %q: %s", expected, summary)
+		}
+	}
+	if strings.Contains(summary, "ttttt") || len(summary)*4 > len(items) {
+		t.Fatalf("summary is %d bytes against %d for items; want records omitted and at most a quarter of the size", len(summary), len(items))
+	}
+}

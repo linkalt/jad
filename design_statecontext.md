@@ -225,6 +225,8 @@ Old 2.6 (snapshot stored as parts) is replaced by 2.8.
    DONE (see `DECISIONS.md`, "Statecontext run_start trigger"). Change detection compares `data_sha256` of the latest
    block; the "state is now empty" block is the first block whose providers are all empty. Live check pending.
 8. Summary mode (2.5): memory first, then task, process, subagent. Gated by step 0.
+   Memory part DONE (see `DECISIONS.md`, "Statecontext memory summary mode"): per-selector `group_by`. Task, process and
+   subagent summaries are not done. Step-0 live byte measurements are still not taken.
 
 Order reason: 1 to 4 are small and keep today's storage, so they can ship before the risky part; 5 must precede 6 and 7;
 8 is independent and can move earlier if step 0 shows large blocks.

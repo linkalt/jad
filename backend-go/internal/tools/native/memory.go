@@ -311,11 +311,37 @@ func pluralMemorySuffix(count int) string {
 
 // MemoryStateContext is the configured record snapshot included after compaction.
 type MemoryStateContext struct {
-	Items             []MemoryStateContextItem  `json:"items"`
-	Queries           []MemoryStateContextQuery `json:"queries"`
-	HasMore           bool                      `json:"has_more"`
-	OmittedBySnapshot int                       `json:"omitted_by_snapshot,omitempty"`
-	OmittedQueries    int                       `json:"omitted_queries,omitempty"`
+	Items             []MemoryStateContextItem    `json:"items"`
+	Queries           []MemoryStateContextQuery   `json:"queries"`
+	Summaries         []MemoryStateContextSummary `json:"summaries,omitempty"`
+	HasMore           bool                        `json:"has_more"`
+	OmittedBySnapshot int                         `json:"omitted_by_snapshot,omitempty"`
+	OmittedQueries    int                         `json:"omitted_queries,omitempty"`
+}
+
+// MemoryStateContextSummary replaces the records of a group_by selector with a
+// count per field value. Each group's Filter holds the selector filter plus the
+// group value, so it is also the filter of a memory list call that fetches it.
+type MemoryStateContextSummary struct {
+	Type          string                    `json:"type"`
+	GroupBy       string                    `json:"group_by"`
+	Groups        []MemoryStateContextGroup `json:"groups"`
+	Ungrouped     int                       `json:"ungrouped,omitempty"`
+	ExcludeAny    []map[string]any          `json:"exclude_any,omitempty"`
+	AtLeast       bool                      `json:"at_least,omitempty"`
+	OmittedGroups int                       `json:"omitted_groups,omitempty"`
+}
+
+type MemoryStateContextGroup struct {
+	Filter map[string]any `json:"filter"`
+	Count  int            `json:"count"`
+}
+
+func (summary MemoryStateContextSummary) entryCount() int {
+	if summary.Ungrouped > 0 {
+		return len(summary.Groups) + 1
+	}
+	return len(summary.Groups)
 }
 
 type MemoryStateContextItem struct {
@@ -341,6 +367,15 @@ func CollectMemoryStateContext(store *MemoryStore, settings sessionfs.NativeMemo
 	}
 	state := &MemoryStateContext{Items: make([]MemoryStateContextItem, 0), Queries: make([]MemoryStateContextQuery, 0, len(selectors))}
 	for _, selector := range selectors {
+		if selector.GroupBy != "" {
+			summary, err := collectMemorySummary(store, settings, selector)
+			if err != nil {
+				return nil, err
+			}
+			state.Summaries = append(state.Summaries, summary)
+			state.HasMore = state.HasMore || summary.AtLeast
+			continue
+		}
 		listed, err := store.list(selector.Type, selector.Filter, selector.Limit, "newest", nil, settings, memoryListOptions{CreateCursor: false, ExcludeAny: selector.ExcludeAny})
 		if err != nil {
 			return nil, err
@@ -366,19 +401,58 @@ func CollectMemoryStateContext(store *MemoryStore, settings sessionfs.NativeMemo
 	return state, nil
 }
 
+func collectMemorySummary(store *MemoryStore, settings sessionfs.NativeMemorySettings, selector sessionfs.NativeMemoryStateContextSelector) (MemoryStateContextSummary, error) {
+	grouped, err := store.GroupBy(selector.Type, selector.Filter, selector.ExcludeAny, selector.GroupBy, settings)
+	if err != nil {
+		return MemoryStateContextSummary{}, err
+	}
+	summary := MemoryStateContextSummary{Type: selector.Type, GroupBy: selector.GroupBy, Groups: make([]MemoryStateContextGroup, 0, len(grouped.Groups)), Ungrouped: grouped.Ungrouped, AtLeast: grouped.AtLeast}
+	if len(selector.ExcludeAny) > 0 {
+		summary.ExcludeAny = selector.ExcludeAny
+	}
+	for _, group := range grouped.Groups {
+		filter := make(map[string]any, len(selector.Filter)+1)
+		for key, value := range selector.Filter {
+			filter[key] = value
+		}
+		filter[selector.GroupBy] = group.Value
+		summary.Groups = append(summary.Groups, MemoryStateContextGroup{Filter: filter, Count: group.Count})
+	}
+	return summary, nil
+}
+
 func (state *MemoryStateContext) StateContextItemCount() int {
 	if state == nil {
 		return 0
 	}
-	return len(state.Items)
+	count := len(state.Items)
+	for _, summary := range state.Summaries {
+		count += summary.entryCount()
+	}
+	return count
 }
 func (state *MemoryStateContext) TrimStateContextItem() bool {
-	if state == nil || len(state.Items) == 0 {
+	if state == nil {
 		return false
 	}
-	state.Items = state.Items[:len(state.Items)-1]
-	state.OmittedBySnapshot++
-	return true
+	if len(state.Items) > 0 {
+		state.Items = state.Items[:len(state.Items)-1]
+		state.OmittedBySnapshot++
+		return true
+	}
+	for index := len(state.Summaries) - 1; index >= 0; index-- {
+		summary := &state.Summaries[index]
+		if len(summary.Groups) > 0 {
+			summary.Groups = summary.Groups[:len(summary.Groups)-1]
+		} else if summary.Ungrouped > 0 {
+			summary.Ungrouped = 0
+		} else {
+			continue
+		}
+		summary.OmittedGroups++
+		return true
+	}
+	return false
 }
 func (state *MemoryStateContext) StateContextQueryCount() int {
 	if state == nil {

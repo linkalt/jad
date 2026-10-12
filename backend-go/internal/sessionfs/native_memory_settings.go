@@ -41,16 +41,20 @@ const (
 var (
 	nativeMemoryTypePattern      = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 	nativeMemoryFilterKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	// Parts must match what the memory store can read at query time.
+	nativeMemoryGroupByPartPattern = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
 )
 
 // NativeMemoryStateContextSelector selects a bounded set of records for a
 // compaction snapshot. ExcludeAny contains clauses that exclude a record when
-// every key in a clause matches.
+// every key in a clause matches. A non-empty GroupBy replaces the records with
+// a count per value at that field path; Limit is then unused.
 type NativeMemoryStateContextSelector struct {
 	Type       string
 	Filter     map[string]any
 	ExcludeAny []map[string]any
 	Limit      int64
+	GroupBy    string
 }
 
 // NativeMemorySettings contains storage, query, and state-context bounds for
@@ -303,15 +307,36 @@ func normalizeNativeMemoryStateContext(raw json.RawMessage, settingPath string, 
 		if int64(len(filterKeys)) > maxFilterFields || invalidKey {
 			return nil, configError("%s.filter/exclude_any exceeds tools.native.memory filter limits", entryPath)
 		}
+		groupBy := ""
+		if raw, exists := fields["group_by"]; exists && strings.TrimSpace(string(raw)) != "null" {
+			if json.Unmarshal(raw, &groupBy) != nil {
+				return nil, configError("%s.group_by must be a field path string", entryPath)
+			}
+			parts := strings.Split(groupBy, ".")
+			if int64(len(parts)) > maxFilterDepth {
+				return nil, configError("%s.group_by exceeds tools.native.memory filter limits", entryPath)
+			}
+			for _, part := range parts {
+				if !nativeMemoryGroupByPartPattern.MatchString(part) || part == "__proto__" || part == "prototype" || part == "constructor" {
+					return nil, configError("%s.group_by must be a dot-separated field path of identifiers", entryPath)
+				}
+			}
+			if _, constrained := filter[groupBy]; constrained {
+				return nil, configError("%s.group_by must not also be a filter key", entryPath)
+			}
+		}
 		limit := min(defaultNativeMemoryStateLimit, maxLimit)
 		if raw, exists := fields["limit"]; exists && strings.TrimSpace(string(raw)) != "null" {
+			if groupBy != "" {
+				return nil, configError("%s.limit cannot be combined with group_by", entryPath)
+			}
 			decoded, valid := configSafeInteger(raw)
 			if !valid || decoded < 1 || decoded > maxLimit {
 				return nil, configError("%s.limit must be a safe integer between 1 and %d", entryPath, maxLimit)
 			}
 			limit = decoded
 		}
-		selectors = append(selectors, NativeMemoryStateContextSelector{Type: name, Filter: filter, ExcludeAny: excludeAny, Limit: limit})
+		selectors = append(selectors, NativeMemoryStateContextSelector{Type: name, Filter: filter, ExcludeAny: excludeAny, Limit: limit, GroupBy: groupBy})
 	}
 	return selectors, nil
 }
