@@ -2,6 +2,8 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,11 +13,16 @@ const stateContextSettingPath = "/session/setting.json"
 
 func normalizeStateContextRaw(t *testing.T, raw string, process *NativeProcessSettings, task *NativeTaskSettings, memory *NativeMemorySettings, subagent *NativeSubagentSettings) (StateContextSettings, error) {
 	t.Helper()
+	return normalizeStateContextRawIn(t, t.TempDir(), raw, process, task, memory, subagent)
+}
+
+func normalizeStateContextRawIn(t *testing.T, cwd, raw string, process *NativeProcessSettings, task *NativeTaskSettings, memory *NativeMemorySettings, subagent *NativeSubagentSettings) (StateContextSettings, error) {
+	t.Helper()
 	setting := map[string]json.RawMessage{}
 	if raw != "" {
 		setting["statecontext"] = json.RawMessage(raw)
 	}
-	return normalizeStateContextSettings(setting, stateContextSettingPath, process, task, memory, subagent)
+	return normalizeStateContextSettings(setting, stateContextSettingPath, cwd, process, task, memory, subagent)
 }
 
 func TestNormalizeStateContextSettingsDefaultsAndProcessProvider(t *testing.T) {
@@ -80,7 +87,7 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 		`{"triggers":{"compaction":{"tools":"task"}}}`,
 		`{"triggers":{"compaction":{"tools":["task",3]}}}`,
 		`{"triggers":{"compaction":{"tools":["request_draft"]}}}`,
-		`{"triggers":{"compaction":{"tools":["task"],"prompt":"x"}}}`,
+		`{"triggers":{"compaction":{"tools":["task"],"timeout":1}}}`,
 		`{"role":"assistant"}`,
 		`{"triggers":{"compaction":{"tools":["task"],"max_bytes":1023}}}`,
 		`{"triggers":{"compaction":{"tools":["task"],"max_bytes":10485761}}}`,
@@ -157,6 +164,41 @@ func TestNormalizeStateContextSettingsHeader(t *testing.T) {
 	}
 }
 
+func TestNormalizeStateContextSettingsPromptAndDocuments(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "rules.md"), []byte("From a file."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := normalizeStateContextRawIn(t, cwd,
+		`{"triggers":{"compaction":{"tools":["task"],"prompt":"Inline.","prompt_documents":["rules.md"]},"session_start":{"tools":["task"]}}}`,
+		nil, &NativeTaskSettings{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configured.Triggers["compaction"].Prompt; got != "Inline.\n\nFrom a file." {
+		t.Fatalf("compaction prompt = %q; want the inline text then the file", got)
+	}
+	if got := configured.Triggers["session_start"].Prompt; got != "" {
+		t.Fatalf("session_start prompt = %q; a trigger without a prompt has none", got)
+	}
+}
+
+func TestNormalizeStateContextSettingsPromptErrors(t *testing.T) {
+	cwd := t.TempDir()
+	long := strings.Repeat("p", 1024)
+	for raw, want := range map[string]string{
+		`{"triggers":{"compaction":{"tools":["task"],"prompt_documents":["missing.md"]}}}`:        "statecontext.triggers.compaction.prompt_documents[0] could not be read",
+		`{"triggers":{"compaction":{"tools":["task"],"prompt_documents":[" "]}}}`:                 "prompt_documents[0] must be a non-empty string",
+		`{"triggers":{"compaction":{"tools":["task"],"prompt":""}}}`:                              "statecontext.triggers.compaction.prompt must be a non-empty string",
+		`{"triggers":{"compaction":{"tools":["task"],"prompt":"` + long + `","max_bytes":1024}}}`: "header plus statecontext.triggers.compaction prompt is larger",
+	} {
+		_, err := normalizeStateContextRawIn(t, cwd, raw, nil, &NativeTaskSettings{}, nil, nil)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: error = %v, want %q", raw, err, want)
+		}
+	}
+}
+
 // The schema and the loader must take and refuse the same statecontext settings.
 func TestStateContextSchemaAgreesWithTheLoader(t *testing.T) {
 	schema := compileSchema(t, "setting.schema.json")
@@ -170,7 +212,12 @@ func TestStateContextSchemaAgreesWithTheLoader(t *testing.T) {
 		{`{"triggers":{"compaction":{}}}`, false},
 		{`{"triggers":{"compaction":{"tools":[]}}}`, false},
 		{`{"triggers":{"compaction":{"tools":["request_draft"]}}}`, false},
-		{`{"triggers":{"compaction":{"tools":["task"],"prompt":"x"}}}`, false},
+		{`{"triggers":{"compaction":{"tools":["task"],"prompt":"x"}}}`, true},
+		{`{"triggers":{"compaction":{"tools":["task"],"prompt":" "}}}`, false},
+		{`{"triggers":{"compaction":{"tools":["task"],"prompt":3}}}`, false},
+		{`{"triggers":{"compaction":{"tools":["task"],"prompt_documents":[]}}}`, true},
+		{`{"triggers":{"compaction":{"tools":["task"],"prompt_documents":"a.md"}}}`, false},
+		{`{"triggers":{"compaction":{"tools":["task"],"unknown":1}}}`, false},
 		{`{"triggers":{"compaction":{"tools":["task"],"max_bytes":1023}}}`, false},
 		{`{"header":""}`, false},
 		{`{"header":"  "}`, false},

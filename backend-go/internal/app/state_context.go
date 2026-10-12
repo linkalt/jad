@@ -130,7 +130,11 @@ func collectStateContextSnapshot(
 	}
 	generatedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	document := stateContextDocument{Trigger: trigger, GeneratedAt: generatedAt, Providers: providers}
-	rendered, err := renderStateContextDocument(settings.Header, document)
+	lead := settings.Header
+	if triggerSettings.Prompt != "" {
+		lead += "\n" + triggerSettings.Prompt
+	}
+	rendered, err := renderStateContextDocument(lead, document)
 	if err != nil {
 		return transcript.StateContextSnapshot{}, false, err
 	}
@@ -161,7 +165,7 @@ func collectStateContextSnapshot(
 				return transcript.StateContextSnapshot{}, false, fmt.Errorf("statecontext metadata exceeds statecontext.triggers.%s.max_bytes", trigger)
 			}
 		}
-		rendered, err = renderStateContextDocument(settings.Header, document)
+		rendered, err = renderStateContextDocument(lead, document)
 		if err != nil {
 			return transcript.StateContextSnapshot{}, false, err
 		}

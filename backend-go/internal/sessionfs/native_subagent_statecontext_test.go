@@ -69,20 +69,20 @@ func TestNormalizeNativeSubagentStateContextRejectsBadValues(t *testing.T) {
 func TestStateContextSubagentProviderNeedsTheSubagentTool(t *testing.T) {
 	const settingPath = "/session/setting.json"
 	enabled := map[string]json.RawMessage{"statecontext": json.RawMessage(`{"enabled":true,"triggers":{"compaction":{"tools":["subagent"]}}}`)}
-	if _, err := normalizeStateContextSettings(enabled, settingPath, nil, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "requires tools.native.subagent") {
+	if _, err := normalizeStateContextSettings(enabled, settingPath, "", nil, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "requires tools.native.subagent") {
 		t.Fatalf("missing subagent provider error = %v", err)
 	}
-	configured, err := normalizeStateContextSettings(enabled, settingPath, nil, nil, nil, &NativeSubagentSettings{})
+	configured, err := normalizeStateContextSettings(enabled, settingPath, "", nil, nil, nil, &NativeSubagentSettings{})
 	if err != nil || !reflect.DeepEqual(configured.Triggers["compaction"].Tools, []string{"subagent"}) {
 		t.Fatalf("configured subagent provider = %+v, error = %v", configured, err)
 	}
 	// A disabled statecontext stays inert, as for the other providers.
 	inert := map[string]json.RawMessage{"statecontext": json.RawMessage(`{"triggers":{"compaction":{"tools":["subagent"]}}}`)}
-	if _, err := normalizeStateContextSettings(inert, settingPath, nil, nil, nil, nil); err != nil {
+	if _, err := normalizeStateContextSettings(inert, settingPath, "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("disabled subagent provider should remain inert, error = %v", err)
 	}
 	for _, raw := range []string{`{"enabled":true,"triggers":{"compaction":{"tools":["agent"]}}}`, `{"enabled":true,"triggers":{"compaction":{"tools":["request_draft"]}}}`, `{"enabled":true,"triggers":{"compaction":{"tools":["subagent",3]}}}`} {
-		_, err := normalizeStateContextSettings(map[string]json.RawMessage{"statecontext": json.RawMessage(raw)}, settingPath, nil, nil, nil, &NativeSubagentSettings{})
+		_, err := normalizeStateContextSettings(map[string]json.RawMessage{"statecontext": json.RawMessage(raw)}, settingPath, "", nil, nil, nil, &NativeSubagentSettings{})
 		if err == nil || !strings.Contains(err.Error(), "task, memory, process, or subagent") {
 			t.Errorf("%s: error = %v, want the provider list", raw, err)
 		}

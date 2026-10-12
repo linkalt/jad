@@ -212,6 +212,7 @@ Old 2.6 (snapshot stored as parts) is replaced by 2.8.
    DONE (see `DECISIONS.md`, "Statecontext triggers"). `run_start` and `user` are added to the same `triggers` map by
    phases 6 and 7.
 4. `prompt` and `prompt_documents` per trigger (2.3).
+   DONE (see `DECISIONS.md`, "Statecontext prompt"). The frontend-typed prompt (2.4) stays with phase 7.
 5. Placement and sidecar store (2.8). The largest risk: golden check of the provider request for both providers
    (Responses and the Anthropic adapter), `messages.jsonl` unchanged, front-compact, reset and compaction tests.
 6. `user` trigger: endpoint, config, UI (2.4).

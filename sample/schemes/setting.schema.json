@@ -9,7 +9,9 @@
       "type": "object",
       "properties": {
         "tools": {"type": "array", "items": {"type": "string", "enum": ["task", "memory", "process", "subagent"]}, "uniqueItems": true, "minItems": 1, "description": "Providers copied into the snapshot. Each needs its tools.native entry. subagent is Go backend only."},
-        "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 10485760, "default": 65536}
+        "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 10485760, "default": 65536},
+        "prompt": {"type": "string", "pattern": "\\S", "description": "Trusted instruction text placed after the header and before the data. It is read from the setting, not from the data."},
+        "prompt_documents": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Files whose text follows prompt, in order. Relative paths resolve from cwd; ~ is expanded. A file that cannot be read is a config error. The files are read when settings load, so an edit applies to the next snapshot written."}
       },
       "required": ["tools"],
       "additionalProperties": false

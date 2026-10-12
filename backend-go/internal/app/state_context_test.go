@@ -224,6 +224,34 @@ func TestCollectStateContextSnapshotUsesConfiguredHeader(t *testing.T) {
 	}
 }
 
+func TestCollectStateContextSnapshotPlacesPromptBetweenHeaderAndData(t *testing.T) {
+	source := &processStateSourceStub{snapshots: []native.ProcessSnapshot{
+		processStateSnapshot("proc_a", native.ProcessRunning, "2026-10-01T00:00:00.000Z", "/workspace/a"),
+	}}
+	config := processStateContextConfig(4096, 2)
+	trigger := config.StateContext.Triggers["compaction"]
+	trigger.Prompt = "Check the running processes first."
+	config.StateContext.Triggers["compaction"] = trigger
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction")
+	if err != nil || !include {
+		t.Fatalf("include = %v, err = %v", include, err)
+	}
+	want := sessionfs.DefaultStateContextHeader + "\nCheck the running processes first.\n{"
+	if !strings.HasPrefix(snapshot.Text, want) {
+		t.Fatalf("snapshot text = %q; want header, prompt, then the data", snapshot.Text)
+	}
+	if strings.Contains(snapshot.Text[len(want):], "Check the running processes first.") {
+		t.Fatal("the prompt leaked into the data JSON")
+	}
+
+	// A prompt is part of the block, so it counts toward max_bytes.
+	trigger.MaxBytes = int64(len(want)) + 20
+	config.StateContext.Triggers["compaction"] = trigger
+	if _, _, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction"); err == nil {
+		t.Fatal("a block over max_bytes was accepted; the prompt must count toward the limit")
+	}
+}
+
 func compactionTrigger(tools []string, maxBytes int64) map[string]sessionfs.StateContextTrigger {
 	return map[string]sessionfs.StateContextTrigger{"compaction": {Tools: tools, MaxBytes: maxBytes}}
 }

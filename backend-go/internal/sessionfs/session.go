@@ -447,7 +447,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	applyApprovalDefault(approval.Default, setting, nativeWrite, nativeEdit, nativeBash, nativeExec, nativeProcess, mcpServers)
-	stateContext, err := normalizeStateContextSettings(setting, settingPath, nativeProcess, nativeTask, nativeMemory, nativeSubagent)
+	stateContext, err := normalizeStateContextSettings(setting, settingPath, cwd, nativeProcess, nativeTask, nativeMemory, nativeSubagent)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -1041,20 +1041,30 @@ func loadPrompt(setting, profile map[string]json.RawMessage, profileConfigured b
 		}
 	}
 	for index, document := range documents {
-		if strings.TrimSpace(document) == "" {
-			return "", "", configError("%s: prompt_documents[%d] must be a non-empty string", path, index)
-		}
-		resolved := expandHome(document)
-		if !filepath.IsAbs(resolved) {
-			resolved = filepath.Join(cwd, resolved)
-		}
-		contents, err := os.ReadFile(filepath.Clean(resolved))
+		contents, err := readPromptDocument(document, index, "prompt_documents", cwd, path)
 		if err != nil {
-			return "", "", configError("%s: prompt_documents[%d] could not be read: %s", path, index, resolved)
+			return "", "", err
 		}
-		texts = append(texts, string(contents))
+		texts = append(texts, contents)
 	}
 	return role, strings.Join(texts, "\n\n"), nil
+}
+
+// readPromptDocument reads one prompt document: ~ is expanded and a relative path
+// resolves from cwd. field names the setting in errors.
+func readPromptDocument(document string, index int, field, cwd, path string) (string, error) {
+	if strings.TrimSpace(document) == "" {
+		return "", configError("%s: %s[%d] must be a non-empty string", path, field, index)
+	}
+	resolved := expandHome(document)
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(cwd, resolved)
+	}
+	contents, err := os.ReadFile(filepath.Clean(resolved))
+	if err != nil {
+		return "", configError("%s: %s[%d] could not be read: %s", path, field, index, resolved)
+	}
+	return string(contents), nil
 }
 
 func sessionCWD(setting map[string]json.RawMessage, fallback, path string) (string, error) {

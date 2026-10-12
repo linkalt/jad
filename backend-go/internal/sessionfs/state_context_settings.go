@@ -21,6 +21,9 @@ var stateContextTriggerNames = []string{StateContextTriggerCompaction, StateCont
 type StateContextTrigger struct {
 	Tools    []string
 	MaxBytes int64
+	// Prompt is the trusted text placed between the header and the data: the inline
+	// prompt, then each prompt document. It is empty when neither is configured.
+	Prompt string
 }
 
 // StateContextSettings controls optional context snapshots derived at a trigger.
@@ -39,6 +42,7 @@ type StateContextSettings struct {
 func normalizeStateContextSettings(
 	setting map[string]json.RawMessage,
 	settingPath string,
+	cwd string,
 	process *NativeProcessSettings,
 	task *NativeTaskSettings,
 	memory *NativeMemorySettings,
@@ -99,7 +103,7 @@ func normalizeStateContextSettings(
 			if !isStateContextTrigger(name) {
 				return StateContextSettings{}, configError("%s: statecontext.triggers.%s is not supported; use %s", settingPath, name, strings.Join(stateContextTriggerNames, ", "))
 			}
-			trigger, err := normalizeStateContextTrigger(name, triggerFields[name], settings.Header, settingPath)
+			trigger, err := normalizeStateContextTrigger(name, triggerFields[name], settings.Header, settingPath, cwd)
 			if err != nil {
 				return StateContextSettings{}, err
 			}
@@ -132,7 +136,7 @@ func isStateContextTrigger(name string) bool {
 	return false
 }
 
-func normalizeStateContextTrigger(name string, raw json.RawMessage, header, settingPath string) (StateContextTrigger, error) {
+func normalizeStateContextTrigger(name string, raw json.RawMessage, header, settingPath, cwd string) (StateContextTrigger, error) {
 	section := "statecontext.triggers." + name
 	if strings.TrimSpace(string(raw)) == "null" {
 		return StateContextTrigger{}, configError("%s: %s must be an object", settingPath, section)
@@ -142,7 +146,7 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 		return StateContextTrigger{}, err
 	}
 	for key := range fields {
-		if key != "tools" && key != "max_bytes" {
+		if key != "tools" && key != "max_bytes" && key != "prompt" && key != "prompt_documents" {
 			return StateContextTrigger{}, configError("%s: %s.%s is not supported", settingPath, section, key)
 		}
 	}
@@ -172,7 +176,40 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 	if int64(len(header)) > trigger.MaxBytes {
 		return StateContextTrigger{}, configError("%s: statecontext.header is larger than %s.max_bytes", settingPath, section)
 	}
+	if trigger.Prompt, err = stateContextTriggerPrompt(fields, section, settingPath, cwd); err != nil {
+		return StateContextTrigger{}, err
+	}
+	if int64(len(header)+len(trigger.Prompt)) > trigger.MaxBytes {
+		return StateContextTrigger{}, configError("%s: statecontext.header plus %s prompt is larger than %s.max_bytes", settingPath, section, section)
+	}
 	return trigger, nil
+}
+
+// stateContextTriggerPrompt joins the inline prompt and the prompt documents of one
+// trigger. The documents are read now, so an edit applies from the next settings load.
+func stateContextTriggerPrompt(fields map[string]json.RawMessage, section, settingPath, cwd string) (string, error) {
+	var texts []string
+	if value, exists := fields["prompt"]; exists && strings.TrimSpace(string(value)) != "null" {
+		var prompt string
+		if err := json.Unmarshal(value, &prompt); err != nil || strings.TrimSpace(prompt) == "" {
+			return "", configError("%s: %s.prompt must be a non-empty string", settingPath, section)
+		}
+		texts = append(texts, prompt)
+	}
+	if value, exists := fields["prompt_documents"]; exists && strings.TrimSpace(string(value)) != "null" {
+		var documents []string
+		if err := json.Unmarshal(value, &documents); err != nil || documents == nil {
+			return "", configError("%s: %s.prompt_documents must be an array of paths", settingPath, section)
+		}
+		for index, document := range documents {
+			contents, err := readPromptDocument(document, index, section+".prompt_documents", cwd, settingPath)
+			if err != nil {
+				return "", err
+			}
+			texts = append(texts, contents)
+		}
+	}
+	return strings.Join(texts, "\n\n"), nil
 }
 
 func checkStateContextProviders(
