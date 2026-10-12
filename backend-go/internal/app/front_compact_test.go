@@ -71,10 +71,13 @@ func TestHTTPFrontCompactArchivesSelectedTailAndInvalidatesCaches(t *testing.T) 
 	if err != nil || string(archived) != target+"\n"+tail+"\n" {
 		t.Fatalf("archive = %q err=%v", archived, err)
 	}
-	for _, name := range []string{"usage-cache.json", "cursor-cache.json", "statecontext.json"} {
+	for _, name := range []string{"usage-cache.json", "cursor-cache.json"} {
 		if _, err := os.Stat(filepath.Join(sessionDir, "staging", name)); !os.IsNotExist(err) {
 			t.Errorf("front compaction left cache %s: %v", name, err)
 		}
+	}
+	if kept, err := os.ReadFile(filepath.Join(sessionDir, "staging", "statecontext.json")); err != nil || string(kept) != "stale" {
+		t.Errorf("front compaction changed the state context snapshot: %q, err=%v", kept, err)
 	}
 }
 

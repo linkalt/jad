@@ -177,7 +177,7 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	if err := s.journal.ReplaceRecords(activeTailRecords...); err != nil {
 		return result, fmt.Errorf("replace transcript during compaction: %w", err)
 	}
-	if err := s.removeDerivedFiles(false); err != nil {
+	if err := s.removeDerivedFiles(false, false); err != nil {
 		return result, err
 	}
 	result.Compacted = true
@@ -612,7 +612,7 @@ func (s *TurnStore) Reset() error {
 	if err := s.journal.ReplaceRecords(); err != nil {
 		return err
 	}
-	if err := s.removeDerivedFiles(true); err != nil {
+	if err := s.removeDerivedFiles(true, false); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(s.journal.path + ".deleted-history"); err != nil {
@@ -621,14 +621,20 @@ func (s *TurnStore) Reset() error {
 	return nil
 }
 
-func (s *TurnStore) removeDerivedFiles(reset bool) error {
+// removeDerivedFiles deletes the caches a transcript rewrite invalidates.
+// keepStateContext leaves the state context snapshot alone: it holds application
+// state read at the last compaction, not anything anchored to message ids.
+func (s *TurnStore) removeDerivedFiles(reset, keepStateContext bool) error {
 	s.invalidateCursorCache()
 	if reset {
 		defer s.compactionGeneration.Add(1)
 	}
 	// The run-error cache goes with the rest: its entries are anchored to session
 	// turn numbers and message ids that a rewrite of the transcript re-bases.
-	paths := []string{s.options.UsageCachePath, s.options.CursorCachePath, s.options.RunErrorCachePath, s.options.StateContextPath}
+	paths := []string{s.options.UsageCachePath, s.options.CursorCachePath, s.options.RunErrorCachePath}
+	if !keepStateContext {
+		paths = append(paths, s.options.StateContextPath)
+	}
 	if reset {
 		paths = append(paths, s.options.MessagesBackupPath, s.options.CompactionCachePath, s.options.CompactionCachePath+".backup", s.options.AcceptedRequestPath)
 	}

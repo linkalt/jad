@@ -14,6 +14,7 @@ import (
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
 	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"example.com/agent-harness/backend-go/internal/tools/native"
 	"example.com/agent-harness/backend-go/internal/transcript"
 )
 
@@ -111,6 +112,61 @@ func TestRequestDraftProviderIsDroppedWhenItDoesNotFitMaxBytes(t *testing.T) {
 	}
 	if strings.Contains(snapshot.Text, strings.Repeat("x", 32)) || !strings.Contains(snapshot.Text, `"items": []`) || !strings.Contains(snapshot.Text, `"has_more": true`) {
 		t.Fatalf("oversized draft was not dropped and flagged: %s", snapshot.Text)
+	}
+}
+
+func processAndRequestDraftConfig(maxBytes int64) sessionfs.SessionConfig {
+	config := processStateContextConfig(maxBytes, 10)
+	config.StateContext.Tools = []string{"process", "request_draft"}
+	config.NativeRequestDraft = &sessionfs.NativeRequestDraftSettings{}
+	return config
+}
+
+func twoLongProcesses() *processStateSourceStub {
+	longPath := "/workspace/" + strings.Repeat("x", 700)
+	return &processStateSourceStub{snapshots: []native.ProcessSnapshot{
+		processStateSnapshot("proc_1", native.ProcessRunning, "2026-10-03T00:00:00.000Z", longPath),
+		processStateSnapshot("proc_2", native.ProcessRunning, "2026-10-02T00:00:00.000Z", longPath),
+	}}
+}
+
+func TestRequestDraftProviderKeepsTheDraftWhileOtherProvidersGiveUpTheirItems(t *testing.T) {
+	store := newRequestDraftStore(t)
+	if _, err := store.WriteAcceptedRequest(json.RawMessage(`{"goal":"keep me"}`), "user", "accept", "call-1"); err != nil {
+		t.Fatal(err)
+	}
+	config := processAndRequestDraftConfig(1024)
+	config.StateContext.Tools = []string{"request_draft", "process"}
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: twoLongProcesses(), requestDraft: store}, "compaction")
+	if err != nil || !include {
+		t.Fatalf("collect = include %v, error %v", include, err)
+	}
+	if int64(len(snapshot.Text)) > config.StateContext.MaxBytes {
+		t.Fatalf("snapshot is %d bytes, over %d", len(snapshot.Text), config.StateContext.MaxBytes)
+	}
+	if !strings.Contains(snapshot.Text, "keep me") {
+		t.Fatalf("the draft was trimmed before the process items: %s", snapshot.Text)
+	}
+	if !strings.Contains(snapshot.Text, `"omitted_by_snapshot":`) {
+		t.Fatalf("the process items were not trimmed: %s", snapshot.Text)
+	}
+}
+
+func TestRequestDraftProviderIsDroppedOnlyAfterEveryOtherProviderIsEmpty(t *testing.T) {
+	store := newRequestDraftStore(t)
+	if _, err := store.WriteAcceptedRequest(json.RawMessage(`{"payload":"`+strings.Repeat("y", 4_000)+`"}`), "user", "accept", "call-1"); err != nil {
+		t.Fatal(err)
+	}
+	config := processAndRequestDraftConfig(1024)
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: twoLongProcesses(), requestDraft: store}, "compaction")
+	if err != nil || !include {
+		t.Fatalf("collect = include %v, error %v", include, err)
+	}
+	if int64(len(snapshot.Text)) > config.StateContext.MaxBytes || strings.Contains(snapshot.Text, strings.Repeat("y", 32)) {
+		t.Fatalf("the oversized draft was kept (%d bytes): %s", len(snapshot.Text), snapshot.Text)
+	}
+	if strings.Contains(snapshot.Text, "proc_1") || strings.Contains(snapshot.Text, "proc_2") {
+		t.Fatalf("process items remain although the draft had to go too: %s", snapshot.Text)
 	}
 }
 

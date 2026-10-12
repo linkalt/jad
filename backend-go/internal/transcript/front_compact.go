@@ -143,7 +143,7 @@ func (s *TurnStore) FrontCompactFromMessage(messageID, deleteMode string) (Front
 	if err := s.journal.ReplaceWithPrefix(boundary, size, archivePath); err != nil {
 		return FrontCompactionResult{}, fmt.Errorf("front compact transcript: %w", err)
 	}
-	if err := s.removeDerivedFiles(false); err != nil {
+	if err := s.removeDerivedFiles(false, true); err != nil {
 		return FrontCompactionResult{}, err
 	}
 	return result, nil

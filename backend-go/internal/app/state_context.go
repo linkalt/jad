@@ -142,7 +142,7 @@ func collectStateContextSnapshot(
 		selectedCount := 0
 		for _, provider := range providers {
 			trimmer, ok := provider.value.(stateContextTrimmer)
-			if !ok {
+			if !ok || isRequestDraftSection(provider.value) {
 				continue
 			}
 			count := trimmer.StateContextItemCount()
@@ -160,7 +160,7 @@ func collectStateContextSnapshot(
 					break
 				}
 			}
-			if querySelected == nil || !querySelected.TrimStateContextQuery() {
+			if (querySelected == nil || !querySelected.TrimStateContextQuery()) && !dropRequestDraft(providers) {
 				return transcript.StateContextSnapshot{}, false, fmt.Errorf("statecontext metadata exceeds statecontext.max_bytes")
 			}
 		}

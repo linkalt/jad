@@ -38,6 +38,22 @@ func collectRequestDraftStateContext(store *transcript.TurnStore) (*requestDraft
 	return state, nil
 }
 
+func isRequestDraftSection(value any) bool {
+	_, ok := value.(*requestDraftStateContext)
+	return ok
+}
+
+// dropRequestDraft empties the draft section. It is the last thing trimmed: the
+// user accepted that draft explicitly, so every other provider gives up its items first.
+func dropRequestDraft(providers orderedStateContextProviders) bool {
+	for _, provider := range providers {
+		if state, ok := provider.value.(*requestDraftStateContext); ok && state.TrimStateContextItem() {
+			return true
+		}
+	}
+	return false
+}
+
 func (state *requestDraftStateContext) StateContextItemCount() int {
 	if state == nil {
 		return 0

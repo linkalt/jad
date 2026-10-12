@@ -76,10 +76,13 @@ func TestFrontCompactRecoverableArchivesWholeInputBatchAndInvalidatesCaches(t *t
 	if string(archived) != string(original[batchStart:]) {
 		t.Fatalf("archived transcript tail differs\n got: %q\nwant: %q", archived, original[batchStart:])
 	}
-	for _, path := range []string{paths.usageCache, paths.cursorCache, paths.stateContext} {
+	for _, path := range []string{paths.usageCache, paths.cursorCache} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("front compaction left derived cache %s: %v", path, err)
 		}
+	}
+	if kept, err := os.ReadFile(paths.stateContext); err != nil || string(kept) != "stale" {
+		t.Errorf("front compaction changed the state context snapshot: %q, err=%v", kept, err)
 	}
 	if _, err := os.Stat(paths.compactionCache); err != nil {
 		t.Errorf("front compaction removed the compaction overlay: %v", err)
