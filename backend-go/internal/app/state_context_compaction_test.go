@@ -122,7 +122,7 @@ func TestHTTPCompactPersistsProcessAndTaskStateContextAndInjectsItIntoNextReques
 		Settings: map[string]any{
 			"max_tool_rounds": 2,
 			"compaction":      map[string]any{"keepbatch": map[string]any{"turn": map[string]any{"type": "assistant_final", "keep": 1}}},
-			"statecontext":    map[string]any{"enabled": true, "trigger": []string{"compaction"}, "tools": []string{"process", "task"}, "role": "developer", "max_bytes": 4096},
+			"statecontext":    map[string]any{"enabled": true, "role": "developer", "triggers": map[string]any{"compaction": map[string]any{"tools": []string{"process", "task"}, "max_bytes": 4096}}},
 		},
 		Native: map[string]any{
 			"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "statecontext": map[string]any{"states": []string{"exited"}, "limit": 5}},

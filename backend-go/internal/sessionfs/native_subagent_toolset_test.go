@@ -101,12 +101,12 @@ func TestSubagentToolsetIsLoadedOncePerID(t *testing.T) {
 // which has no subagent tool, must not fail on it.
 func TestSubagentToolsetDoesNotReadTheSessionStateContext(t *testing.T) {
 	spec := toolsetSpec(map[string]any{"toolset": "extra/search"})
-	spec.Settings = map[string]any{"statecontext": map[string]any{"enabled": true, "trigger": []string{"compaction"}, "tools": []string{"subagent"}}}
+	spec.Settings = map[string]any{"statecontext": map[string]any{"enabled": true, "triggers": map[string]any{"compaction": map[string]any{"tools": []string{"subagent"}}}}}
 	config, err := loadToolsetSession(t, spec, map[string]string{"extra/search": `{"native":{"grep":{}}}`})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
-	if !config.StateContext.Enabled || len(config.StateContext.Tools) != 1 || config.StateContext.Tools[0] != "subagent" {
+	if tools := config.StateContext.Triggers["compaction"].Tools; !config.StateContext.Enabled || len(tools) != 1 || tools[0] != "subagent" {
 		t.Errorf("session state context = %+v, want subagent enabled", config.StateContext)
 	}
 }

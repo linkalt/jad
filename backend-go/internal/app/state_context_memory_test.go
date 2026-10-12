@@ -17,7 +17,7 @@ func TestCollectStateContextSnapshotIncludesConfiguredMemoryItems(t *testing.T) 
 	}
 	config := sessionfs.SessionConfig{
 		NativeMemory: &settings,
-		StateContext: sessionfs.StateContextSettings{Enabled: true, Header: sessionfs.DefaultStateContextHeader, Trigger: []string{"compaction"}, Tools: []string{"memory"}, MaxBytes: 4096},
+		StateContext: sessionfs.StateContextSettings{Enabled: true, Header: sessionfs.DefaultStateContextHeader, Triggers: compactionTrigger([]string{"memory"}, 4096)},
 	}
 	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{memory: store}, "compaction")
 	if err != nil || !include {
@@ -39,7 +39,7 @@ func TestCollectStateContextSnapshotTrimsOversizedMemoryItems(t *testing.T) {
 	}
 	config := sessionfs.SessionConfig{
 		NativeMemory: &settings,
-		StateContext: sessionfs.StateContextSettings{Enabled: true, Header: sessionfs.DefaultStateContextHeader, Trigger: []string{"compaction"}, Tools: []string{"memory"}, MaxBytes: 1024},
+		StateContext: sessionfs.StateContextSettings{Enabled: true, Header: sessionfs.DefaultStateContextHeader, Triggers: compactionTrigger([]string{"memory"}, 1024)},
 	}
 	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{memory: store}, "compaction")
 	if err != nil || !include {

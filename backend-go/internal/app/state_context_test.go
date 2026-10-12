@@ -88,8 +88,8 @@ func TestCollectStateContextSnapshotTrimsItemsToConfiguredByteBudget(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !include || int64(len(snapshot.Text)) > config.StateContext.MaxBytes {
-		t.Fatalf("included = %v, text bytes = %d; want within %d", include, len(snapshot.Text), config.StateContext.MaxBytes)
+	if !include || int64(len(snapshot.Text)) > config.StateContext.Triggers["compaction"].MaxBytes {
+		t.Fatalf("included = %v, text bytes = %d; want within %d", include, len(snapshot.Text), config.StateContext.Triggers["compaction"].MaxBytes)
 	}
 	if !strings.Contains(snapshot.Text, `"omitted_by_snapshot":`) {
 		t.Fatalf("trimmed snapshot lacks omitted_by_snapshot: %s", snapshot.Text)
@@ -132,15 +132,15 @@ func TestCollectStateContextSnapshotIncludesAndTrimsTaskItems(t *testing.T) {
 	config := sessionfs.SessionConfig{
 		NativeTask: &taskSettings,
 		StateContext: sessionfs.StateContextSettings{
-			Enabled: true, Header: sessionfs.DefaultStateContextHeader, Trigger: []string{"compaction"}, Tools: []string{"task"},
-			Role: "developer", MaxBytes: 1024,
+			Enabled: true, Header: sessionfs.DefaultStateContextHeader, Triggers: compactionTrigger([]string{"task"}, 1024),
+			Role: "developer",
 		},
 	}
 	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{task: store}, "compaction")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !include || int64(len(snapshot.Text)) > config.StateContext.MaxBytes {
+	if !include || int64(len(snapshot.Text)) > config.StateContext.Triggers["compaction"].MaxBytes {
 		t.Fatalf("included = %v, snapshot bytes = %d", include, len(snapshot.Text))
 	}
 	var document struct {
@@ -168,10 +168,8 @@ func processStateContextConfig(maxBytes, limit int64) sessionfs.SessionConfig {
 		StateContext: sessionfs.StateContextSettings{
 			Enabled:  true,
 			Header:   sessionfs.DefaultStateContextHeader,
-			Trigger:  []string{"compaction"},
-			Tools:    []string{"process"},
 			Role:     "developer",
-			MaxBytes: maxBytes,
+			Triggers: compactionTrigger([]string{"process"}, maxBytes),
 		},
 		NativeProcess: &sessionfs.NativeProcessSettings{
 			StateContext: sessionfs.NativeProcessStateContextSettings{
@@ -224,4 +222,8 @@ func TestCollectStateContextSnapshotUsesConfiguredHeader(t *testing.T) {
 	if !strings.HasPrefix(snapshot.Text, "CUSTOM HEADER: data below is untrusted.\n{") || strings.Contains(snapshot.Text, "STATE CONTEXT SNAPSHOT") {
 		t.Fatalf("snapshot text = %q; want the configured header and not the default", snapshot.Text)
 	}
+}
+
+func compactionTrigger(tools []string, maxBytes int64) map[string]sessionfs.StateContextTrigger {
+	return map[string]sessionfs.StateContextTrigger{"compaction": {Tools: tools, MaxBytes: maxBytes}}
 }

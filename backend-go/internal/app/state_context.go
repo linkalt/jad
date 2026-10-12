@@ -86,7 +86,8 @@ func collectStateContextSnapshot(
 	trigger string,
 ) (transcript.StateContextSnapshot, bool, error) {
 	settings := config.StateContext
-	if !settings.Enabled || !containsStateContextTrigger(settings.Trigger, trigger) {
+	triggerSettings, configured := settings.Triggers[trigger]
+	if !settings.Enabled || !configured {
 		return transcript.StateContextSnapshot{}, false, nil
 	}
 	collectors := map[string]stateContextCollector{}
@@ -110,9 +111,9 @@ func collectStateContextSnapshot(
 			return native.CollectSubagentStateContext(sources.subagent, sources.owner, config.NativeSubagent.StateContext)
 		}
 	}
-	providers := make(orderedStateContextProviders, 0, len(settings.Tools))
+	providers := make(orderedStateContextProviders, 0, len(triggerSettings.Tools))
 	hasData := false
-	for _, name := range settings.Tools {
+	for _, name := range triggerSettings.Tools {
 		collect, exists := collectors[name]
 		if !exists {
 			return transcript.StateContextSnapshot{}, false, fmt.Errorf("statecontext provider %s is not configured under tools.native", name)
@@ -133,7 +134,7 @@ func collectStateContextSnapshot(
 	if err != nil {
 		return transcript.StateContextSnapshot{}, false, err
 	}
-	for int64(len(rendered)) > settings.MaxBytes {
+	for int64(len(rendered)) > triggerSettings.MaxBytes {
 		var selected stateContextTrimmer
 		selectedCount := 0
 		for _, provider := range providers {
@@ -157,7 +158,7 @@ func collectStateContextSnapshot(
 				}
 			}
 			if querySelected == nil || !querySelected.TrimStateContextQuery() {
-				return transcript.StateContextSnapshot{}, false, fmt.Errorf("statecontext metadata exceeds statecontext.max_bytes")
+				return transcript.StateContextSnapshot{}, false, fmt.Errorf("statecontext metadata exceeds statecontext.triggers.%s.max_bytes", trigger)
 			}
 		}
 		rendered, err = renderStateContextDocument(settings.Header, document)
@@ -190,13 +191,4 @@ func renderStateContextDocument(header string, document stateContextDocument) (s
 	}
 	encoded := bytes.TrimSuffix(buffer.Bytes(), []byte{'\n'})
 	return header + "\n" + string(encoded), nil
-}
-
-func containsStateContextTrigger(triggers []string, requested string) bool {
-	for _, trigger := range triggers {
-		if trigger == requested {
-			return true
-		}
-	}
-	return false
 }

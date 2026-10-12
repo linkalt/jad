@@ -206,8 +206,11 @@ Old 2.6 (snapshot stored as parts) is replaced by 2.8.
    Output: numbers pasted here.
 1. Empty block is not sent (2.9). Small, independent, works on today's single snapshot file.
 2. `header` key (2.2).
+   Phases 1 and 2: DONE.
 3. `triggers` config shape and the `session_start` trigger (2.7), still one snapshot file and the old end-of-request
    placement. Settles the config surface before the storage change.
+   DONE (see `DECISIONS.md`, "Statecontext triggers"). `run_start` and `user` are added to the same `triggers` map by
+   phases 6 and 7.
 4. `prompt` and `prompt_documents` per trigger (2.3).
 5. Placement and sidecar store (2.8). The largest risk: golden check of the provider request for both providers
    (Responses and the Anthropic adapter), `messages.jsonl` unchanged, front-compact, reset and compaction tests.

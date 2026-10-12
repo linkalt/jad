@@ -1171,7 +1171,7 @@ func TestSubagentRunsAreListedInTheStateContextAfterACompaction(t *testing.T) {
 	}
 	setting := session["settings"].(map[string]any)
 	setting["compaction"] = map[string]any{"keepbatch": map[string]any{"turn": map[string]any{"type": "assistant_final", "keep": 1}}}
-	setting["statecontext"] = map[string]any{"enabled": true, "trigger": []string{"compaction"}, "tools": []string{"subagent"}, "role": "developer", "max_bytes": 8192}
+	setting["statecontext"] = map[string]any{"enabled": true, "role": "developer", "triggers": map[string]any{"compaction": map[string]any{"tools": []string{"subagent"}, "max_bytes": 8192}}}
 	rewritten, _ := json.Marshal(session)
 	writeFile(t, settingPath, rewritten)
 	old := strings.Join([]string{

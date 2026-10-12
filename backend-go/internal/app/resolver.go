@@ -817,12 +817,46 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		return &session.StateContextPrompt{Role: r.config.StateContext.Role, Text: snapshot.Text}, nil
 	}
 	options.StateContext = nil
-	if snapshot, exists, err := r.shared.store.ReadStateContextSnapshot(); err != nil {
-		return session.RunResult{}, fmt.Errorf("read state context snapshot: %w", err)
-	} else if exists && r.config.StateContext.Enabled && containsStateContextTrigger(r.config.StateContext.Trigger, snapshot.Trigger) {
-		options.StateContext = &session.StateContextPrompt{Role: r.config.StateContext.Role, Text: snapshot.Text}
+	stateContext, err := r.currentStateContext()
+	if err != nil {
+		return session.RunResult{}, err
 	}
+	options.StateContext = stateContext
 	return prepared.runner.Run(ctx, input, options)
+}
+
+// currentStateContext returns the stored snapshot when its trigger is still configured.
+// With none, the session_start trigger writes one, so the model sees the stores from the
+// first run on and again after a compaction that found nothing to report.
+func (r boundRunner) currentStateContext() (*session.StateContextPrompt, error) {
+	settings := r.config.StateContext
+	if !settings.Enabled {
+		return nil, nil
+	}
+	snapshot, exists, err := r.shared.store.ReadStateContextSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("read state context snapshot: %w", err)
+	}
+	if _, configured := settings.Triggers[snapshot.Trigger]; exists && configured {
+		return &session.StateContextPrompt{Role: settings.Role, Text: snapshot.Text}, nil
+	}
+	if _, configured := settings.Triggers[sessionfs.StateContextTriggerSessionStart]; !configured {
+		return nil, nil
+	}
+	started, include, err := collectStateContextSnapshot(r.config, stateContextSources{
+		process: r.processManager, task: r.taskStore, memory: r.memoryStore,
+		subagent: r.resolver.sharedSubagentManager(r.config), owner: sessionKey(r.reference, r.config.Profile),
+	}, sessionfs.StateContextTriggerSessionStart)
+	if err != nil {
+		return nil, fmt.Errorf("collect state context at session start: %w", err)
+	}
+	if !include {
+		return nil, nil
+	}
+	if err := r.shared.store.WriteStateContextSnapshot(started); err != nil {
+		return nil, fmt.Errorf("persist state context at session start: %w", err)
+	}
+	return &session.StateContextPrompt{Role: settings.Role, Text: started.Text}, nil
 }
 
 // ReadRunUsageSummary reads the session's usage from inside a run, where the
