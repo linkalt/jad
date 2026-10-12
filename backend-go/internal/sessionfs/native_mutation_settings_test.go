@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestNormalizeNativeWriteEditSettingsDefaultsAndInheritance(t *testing.T) {
+func TestNormalizeNativeWriteEditSettingsDefaults(t *testing.T) {
 	globalRoot := t.TempDir()
 	cwd := t.TempDir()
 	sessionDir := t.TempDir()
@@ -54,7 +54,7 @@ func TestNormalizeNativeEditSettingsDefaultsWithoutWrite(t *testing.T) {
 	}
 }
 
-func TestNormalizeNativeWriteEditSettingsOverridesAndInheritance(t *testing.T) {
+func TestNormalizeNativeWriteEditSettingsOverridesAndNeverInherit(t *testing.T) {
 	globalRoot := t.TempDir()
 	cwd := t.TempDir()
 	sessionDir := t.TempDir()
@@ -68,15 +68,21 @@ func TestNormalizeNativeWriteEditSettingsOverridesAndInheritance(t *testing.T) {
 	if write == nil || edit == nil {
 		t.Fatalf("settings = write:%+v edit:%+v", write, edit)
 	}
-	if write.MaxBytes != 128 || edit.MaxBytes != 64 || write.BackupMaxCount != 7 || edit.BackupMaxCount != 2 || write.BackupMaxTotalBytes != 0 || edit.BackupMaxTotalBytes != 0 || write.Fsync || edit.Fsync {
+	if write.MaxBytes != 128 || edit.MaxBytes != 64 || write.BackupMaxCount != 7 || edit.BackupMaxCount != 2 || write.BackupMaxTotalBytes != 0 || write.Fsync {
 		t.Fatalf("normalized settings = write:%+v edit:%+v", write, edit)
 	}
-	wantBackupDir := filepath.Join(toolStorage, "write-backups")
-	if write.BackupDir == nil || *write.BackupDir != wantBackupDir || edit.BackupDir == nil || *edit.BackupDir != wantBackupDir {
-		t.Fatalf("inherited backup dirs = write:%v edit:%v; want %q", write.BackupDir, edit.BackupDir, wantBackupDir)
+	// edit names only max_bytes, backup_max_count and a null fsync: everything else is edit's
+	// own default, not write's 0 total bytes, false fsync or write-backups folder.
+	if edit.BackupMaxTotalBytes != defaultNativeMutationBackupMaxBytes || !edit.Fsync {
+		t.Fatalf("edit took write's values: %+v", edit.NativeMutationSettings)
 	}
-	if len(write.Policy.Paths) != 2 || edit.Policy.UnrestrictedPaths != write.Policy.UnrestrictedPaths || len(edit.Policy.Paths) != len(write.Policy.Paths) {
-		t.Fatalf("path policy inheritance = write:%+v edit:%+v", write.Policy, edit.Policy)
+	wantBackupDir := filepath.Join(toolStorage, "write-backups")
+	wantEditBackupDir := filepath.Join(toolStorage, nativeMutationBackupDirectoryName)
+	if write.BackupDir == nil || *write.BackupDir != wantBackupDir || edit.BackupDir == nil || *edit.BackupDir != wantEditBackupDir {
+		t.Fatalf("backup dirs = write:%v edit:%v; want %q and %q", write.BackupDir, edit.BackupDir, wantBackupDir, wantEditBackupDir)
+	}
+	if len(write.Policy.Paths) != 2 || len(edit.Policy.Paths) != 0 || edit.Policy.UnrestrictedPaths {
+		t.Fatalf("path policies = write:%+v edit:%+v, edit must not take write's", write.Policy, edit.Policy)
 	}
 	if write.Policy.Paths[0].Action != "allow" || write.Policy.Paths[0].Path != filepath.Join(globalRoot, "outside") ||
 		write.Policy.Paths[1].Action != "deny" || write.Policy.Paths[1].Path != filepath.Join(globalRoot, "private") {

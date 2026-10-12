@@ -941,7 +941,7 @@ func TestLayoutExecEnvFileIsRelativeToTheRootFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.NativeExec == nil || config.NativeExec.EnvFile != filepath.Join(root, "exec.env") || config.NativeExec.Env["WHO"] != "exec" {
+	if config.NativeExec == nil || config.NativeExec.Child.EnvFile != filepath.Join(root, "exec.env") || config.NativeExec.Child.Env["WHO"] != "exec" {
 		t.Fatalf("exec = %+v", config.NativeExec)
 	}
 	if config.NativeBash.Env["WHO"] != "bash" {
@@ -978,7 +978,7 @@ func TestLayoutDefaultEnvFileFeedsBashProcessAndExec(t *testing.T) {
 	if config.NativeProcess == nil || config.NativeProcess.EnvFile != own {
 		t.Fatalf("process = %+v, want its own %s", config.NativeProcess, own)
 	}
-	if config.NativeExec == nil || config.NativeExec.EnvFile != want {
+	if config.NativeExec == nil || config.NativeExec.Child.EnvFile != want {
 		t.Fatalf("exec = %+v, want env file %s", config.NativeExec, want)
 	}
 }

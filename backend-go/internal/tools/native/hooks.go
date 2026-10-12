@@ -203,7 +203,7 @@ func fileDigest(path string) string {
 
 // withConfiguredHooks applies the session's post-edit checks to tool. The checks run
 // under bash's child-process settings (environment, kill policy, line cut), so enabling
-// them without tools.native.bash is a configuration error, as it is for exec.
+// them without tools.native.bash is a configuration error.
 func withConfiguredHooks(config sessionfs.SessionConfig, tool tools.Tool) (tools.Tool, error) {
 	if !config.Hooks.Active() {
 		return tool, nil

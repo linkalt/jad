@@ -623,3 +623,29 @@ Checks (2026-10-11): `go test ./internal/... ./cmd/...` 28 packages ok; `go vet`
   errors of `read`, `edit` and `write` (a directory listing could be large).
 - **Tests.** `tools/native/valid_values_errors_test.go`: one test per tool, including the empty case and that a sub-agent or another
   session is offered only its own ids.
+
+## Tools own their settings; no tool reads another's (Go only, 2026-10-12)
+
+- **Rule.** A native tool takes every value from its own `tools.native.<tool>` block or from the default of its settings shape.
+  No tool reads another tool's block. A shape that several tools have (path rules, backups, child-process settings) is defined once in
+  the schemas as `$defs` and used by each tool under its own name: `path_rules`, `read_style` (read, grep, glob, `read_image`),
+  `edit_style` (write, edit), `child_process_style` (bash, exec, process) and `bash_style` (bash, exec).
+- **Removed fallbacks.** grep, glob and `read_image` no longer take `read.paths`; edit no longer takes write's `paths`, backups, fsync
+  or `backup_dir`; bash no longer takes write's `paths`; process no longer takes bash's or write's `paths` or bash's stdout and stderr
+  budgets; exec no longer takes bash's whole settings and no longer needs `tools.native.bash`.
+- **Defaults.** A tool without `paths` gets the empty rule set (the workspace only, as `read` without `paths` always did). It is not a
+  load error: the user asked that tools inherit the default of the shape, not that they fail.
+- **exec.** `tools.native.exec` accepts every bash key (`nativeBashStyleKeys`) plus its own (`nativeExecOwnKeys`); `env_file` is one of
+  them. Its settings are `NativeExecSettings.Child`, built by the parser bash uses (`normalizeBashStyleFields`), and its errors name
+  `tools.native.exec`. The layout default `env_file` still applies to bash, process and exec separately.
+- **read_image.** It has its own `paths` key; its error text no longer points at `tools.native.read.paths`.
+- **Exceptions (checks and wiring, not inherited values).** (1) At load, bash's and exec's `spill.storage_dir` is checked to be readable
+  back by the model, using the `read` and `grep` path rules of the session (`bashSpillReadable`); `spill.allow_unreadable` turns it off.
+  The rules are not copied into either tool. (2) `decide` still hands the `read` path rules to its image loader (`catalog.go`). (3) The
+  session file list in the UI uses the `read` rules. (4) Bash and exec both default `spill.storage_dir` to `.bash-output`, so they share
+  that folder unless one is set; each prunes it by its own `retention_days`.
+- **Not changed.** Post-edit hooks run under `tools.native.bash` and still need it. The checkpoint harness paths now include exec's own
+  spill directory. `messages.jsonl` is not touched.
+- **Effect on existing toolsets.** A toolset that relied on the inheritance now has narrower tools until it names `paths`. The user's
+  `.jad/tools/jad/default.json` was edited in the same change (own `paths`, process and exec budgets, exec `spill`) so its behavior is
+  the same. A toolset that used exec without bash now loads.

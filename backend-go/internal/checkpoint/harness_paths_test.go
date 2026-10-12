@@ -36,3 +36,25 @@ func TestHarnessPathsExcludeTheSubagentStorageDirectory(t *testing.T) {
 		t.Fatalf("HarnessPaths = %v, holds a sub-agent directory although the tool is off", paths)
 	}
 }
+
+// exec spills output under its own tools.native.exec.spill.storage_dir, which is not bash's.
+func TestHarnessPathsHoldTheExecSpillDirectoryApartFromBashs(t *testing.T) {
+	workspace := t.TempDir()
+	bashSpill := filepath.Join(workspace, ".bash-out")
+	execSpill := filepath.Join(workspace, ".exec-out")
+	config := sessionfs.SessionConfig{
+		WorkingDir:  workspace,
+		SettingPath: filepath.Join(workspace, "sessions", "demo", "setting.json"),
+		NativeBash:  &sessionfs.NativeBashSettings{Spill: sessionfs.NativeBashSpillSettings{StorageDir: bashSpill}},
+		NativeExec:  &sessionfs.NativeExecSettings{Child: sessionfs.NativeBashSettings{Spill: sessionfs.NativeBashSpillSettings{StorageDir: execSpill}}},
+	}
+	paths := HarnessPaths(config)
+	if !containsPath(paths, bashSpill) || !containsPath(paths, execSpill) {
+		t.Fatalf("HarnessPaths = %v, want both %s and %s", paths, bashSpill, execSpill)
+	}
+
+	config.NativeExec = nil
+	if paths := HarnessPaths(config); containsPath(paths, execSpill) {
+		t.Fatalf("HarnessPaths = %v, holds exec's directory although the tool is off", paths)
+	}
+}

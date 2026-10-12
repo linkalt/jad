@@ -79,20 +79,18 @@ type NativeBashSettings struct {
 	EnvFile       string
 	Env           map[string]string
 	EnvDeny       []string
-	// BaseEnv, FileEnv and InlineEnv are the parts Env was built from, in that order: the
-	// built-in defaults, the env_file values, the inline `env` object. native.exec with its
-	// own env_file swaps the file values and keeps the other two.
-	BaseEnv   map[string]string
-	FileEnv   map[string]string
-	InlineEnv map[string]string
 }
+
+// nativeBashStyleKeys are the settings of a tool that runs a child process. native.bash and
+// native.exec each take them under their own name; neither reads the other's values.
+var nativeBashStyleKeys = []string{"shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_process_group", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "paths", "approval"}
 
 func normalizeNativeBashSettings(
 	setting map[string]json.RawMessage,
 	globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase string,
-	write *NativeWriteSettings,
 	readPolicy, grepPolicy NativePathPolicy,
 ) (*NativeBashSettings, error) {
+	const section = "tools.native.bash"
 	toolsRaw, exists := setting["tools"]
 	if !exists {
 		return nil, nil
@@ -113,136 +111,137 @@ func normalizeNativeBashSettings(
 	if !exists {
 		return nil, nil
 	}
-	fields, err := decodeConfigObject(raw, settingPath+": tools.native.bash")
+	fields, err := decodeConfigObject(raw, settingPath+": "+section)
 	if err != nil {
 		return nil, err
 	}
 	for key := range fields {
-		switch key {
-		case "shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_process_group", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "paths", "approval", "capture_bytes", "head_ratio":
-		default:
-			return nil, configError("%s: tools.native.bash.%s is not supported", settingPath, key)
+		if !containsString(nativeBashStyleKeys, key) && key != "capture_bytes" && key != "head_ratio" {
+			return nil, configError("%s: %s.%s is not supported", settingPath, section, key)
 		}
 	}
 	if _, exists := fields["capture_bytes"]; exists {
-		return nil, configError("%s: tools.native.bash.capture_bytes was removed; set tools.native.bash.stdout and tools.native.bash.stderr with head_bytes and tail_bytes instead", settingPath)
+		return nil, configError("%s: %s.capture_bytes was removed; set %s.stdout and %s.stderr with head_bytes and tail_bytes instead", settingPath, section, section, section)
 	}
 	if _, exists := fields["head_ratio"]; exists {
-		return nil, configError("%s: tools.native.bash.head_ratio was removed; each stream now has its own head_bytes and tail_bytes", settingPath)
+		return nil, configError("%s: %s.head_ratio was removed; each stream now has its own head_bytes and tail_bytes", settingPath, section)
 	}
 
+	return normalizeBashStyleFields(fields, section, globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase, readPolicy, grepPolicy)
+}
+
+// normalizeBashStyleFields reads the child-process settings of one tool section. Every
+// message names section, so native.exec's errors say tools.native.exec.
+func normalizeBashStyleFields(
+	fields map[string]json.RawMessage,
+	section, globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase string,
+	readPolicy, grepPolicy NativePathPolicy,
+) (*NativeBashSettings, error) {
+	var err error
 	settings := &NativeBashSettings{}
-	if settings.Approval, err = normalizeApprovalMode(fields, "tools.native.bash", settingPath); err != nil {
+	if settings.Approval, err = normalizeApprovalMode(fields, section, settingPath); err != nil {
 		return nil, err
 	}
-	if settings.Shell, err = bashString(fields, "shell", defaultNativeBashShell, settingPath+": tools.native.bash", false); err != nil {
+	if settings.Shell, err = bashString(fields, "shell", defaultNativeBashShell, settingPath+": "+section, false); err != nil {
 		return nil, err
 	}
-	if settings.LoginShell, err = bashBool(fields, "login_shell", false, settingPath+": tools.native.bash"); err != nil {
+	if settings.LoginShell, err = bashBool(fields, "login_shell", false, settingPath+": "+section); err != nil {
 		return nil, err
 	}
-	if settings.TimeoutMs, err = configuredInteger(fields, "timeout_ms", defaultNativeBashTimeoutMs, 1, maxNativeBashTimeoutMs, settingPath, "tools.native.bash"); err != nil {
+	if settings.TimeoutMs, err = configuredInteger(fields, "timeout_ms", defaultNativeBashTimeoutMs, 1, maxNativeBashTimeoutMs, settingPath, section); err != nil {
 		return nil, err
 	}
-	if settings.MaxTimeoutMs, err = configuredInteger(fields, "max_timeout_ms", defaultNativeBashMaxTimeoutMs, 1, maxNativeBashTimeoutMs, settingPath, "tools.native.bash"); err != nil {
+	if settings.MaxTimeoutMs, err = configuredInteger(fields, "max_timeout_ms", defaultNativeBashMaxTimeoutMs, 1, maxNativeBashTimeoutMs, settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.MaxTimeoutMs < settings.TimeoutMs {
-		return nil, configError("%s: tools.native.bash.max_timeout_ms must be greater than or equal to tools.native.bash.timeout_ms", settingPath)
+		return nil, configError("%s: %s.max_timeout_ms must be greater than or equal to %s.timeout_ms", settingPath, section, section)
 	}
-	if settings.KillGraceMs, err = configuredInteger(fields, "kill_grace_ms", defaultNativeBashKillGraceMs, 0, maxNativeBashKillGraceMs, settingPath, "tools.native.bash"); err != nil {
+	if settings.KillGraceMs, err = configuredInteger(fields, "kill_grace_ms", defaultNativeBashKillGraceMs, 0, maxNativeBashKillGraceMs, settingPath, section); err != nil {
 		return nil, err
 	}
 	settings.KillProcessGroup = defaultNativeBashKillPolicy
 	if value, ok := fields["kill_process_group"]; ok && strings.TrimSpace(string(value)) != "null" {
 		if err := json.Unmarshal(value, &settings.KillProcessGroup); err != nil || (settings.KillProcessGroup != "always" && settings.KillProcessGroup != "timeout_only") {
-			return nil, configError("%s: tools.native.bash.kill_process_group must be always or timeout_only", settingPath)
+			return nil, configError("%s: %s.kill_process_group must be always or timeout_only", settingPath, section)
 		}
 	}
-	if settings.MaxBytes, err = configuredInteger(fields, "max_bytes", defaultNativeBashMaxBytes, 1, maxNativeToolBytes, settingPath, "tools.native.bash"); err != nil {
+	if settings.MaxBytes, err = configuredInteger(fields, "max_bytes", defaultNativeBashMaxBytes, 1, maxNativeToolBytes, settingPath, section); err != nil {
 		return nil, err
 	}
-	settings.Stdout, err = normalizeNativeBashStream(fields["stdout"], NativeBashStreamBudget{HeadBytes: defaultNativeBashStdoutHead, TailBytes: defaultNativeBashStdoutTail}, settingPath, "tools.native.bash.stdout")
+	settings.Stdout, err = normalizeNativeBashStream(fields["stdout"], NativeBashStreamBudget{HeadBytes: defaultNativeBashStdoutHead, TailBytes: defaultNativeBashStdoutTail}, settingPath, section+".stdout")
 	if err != nil {
 		return nil, err
 	}
-	settings.Stderr, err = normalizeNativeBashStream(fields["stderr"], NativeBashStreamBudget{HeadBytes: defaultNativeBashStderrHead, TailBytes: defaultNativeBashStderrTail}, settingPath, "tools.native.bash.stderr")
+	settings.Stderr, err = normalizeNativeBashStream(fields["stderr"], NativeBashStreamBudget{HeadBytes: defaultNativeBashStderrHead, TailBytes: defaultNativeBashStderrTail}, settingPath, section+".stderr")
 	if err != nil {
 		return nil, err
 	}
 	if settings.Stdout.HeadBytes+settings.Stdout.TailBytes+settings.Stderr.HeadBytes+settings.Stderr.TailBytes > settings.MaxBytes {
-		return nil, configError("%s: tools.native.bash stream budgets exceed tools.native.bash.max_bytes", settingPath)
+		return nil, configError("%s: %s stream budgets exceed %s.max_bytes", settingPath, section, section)
 	}
-	settings.Spill, err = normalizeNativeBashSpill(fields["spill"], settingPath, cwd, sessionDir, toolStorageDir, readPolicy, grepPolicy)
+	settings.Spill, err = normalizeNativeBashSpill(fields["spill"], section, settingPath, cwd, sessionDir, toolStorageDir, readPolicy, grepPolicy)
 	if err != nil {
 		return nil, err
 	}
-	if settings.MaxLineChars, err = configuredInteger(fields, "max_line_chars", defaultNativeBashMaxLine, 20, maxNativeBashMaxLine, settingPath, "tools.native.bash"); err != nil {
+	if settings.MaxLineChars, err = configuredInteger(fields, "max_line_chars", defaultNativeBashMaxLine, 20, maxNativeBashMaxLine, settingPath, section); err != nil {
 		return nil, err
 	}
-	if settings.StdinMaxBytes, err = configuredInteger(fields, "stdin_max_bytes", defaultNativeBashStdinMax, 1, maxNativeToolBytes, settingPath, "tools.native.bash"); err != nil {
+	if settings.StdinMaxBytes, err = configuredInteger(fields, "stdin_max_bytes", defaultNativeBashStdinMax, 1, maxNativeToolBytes, settingPath, section); err != nil {
 		return nil, err
 	}
-	if settings.StripANSI, err = bashBool(fields, "strip_ansi", true, settingPath+": tools.native.bash"); err != nil {
+	if settings.StripANSI, err = bashBool(fields, "strip_ansi", true, settingPath+": "+section); err != nil {
 		return nil, err
 	}
 
-	settings.BaseEnv = map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}
-	settings.InlineEnv = map[string]string{}
 	settings.Env = map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}
 	settings.EnvDeny = []string{}
-	envFile, fileEnv, err := loadConfiguredEnvFile(fields, envFileBase, settingPath, "bash")
+	envFile, fileEnv, err := loadConfiguredEnvFile(fields, envFileBase, settingPath, strings.TrimPrefix(section, "tools.native."))
 	if err != nil {
 		return nil, err
 	}
 	settings.EnvFile = envFile
-	settings.FileEnv = fileEnv
 	for name, value := range fileEnv {
 		settings.Env[name] = value
 	}
 	if rawEnv, ok := fields["env"]; ok && strings.TrimSpace(string(rawEnv)) != "null" {
 		var values map[string]json.RawMessage
 		if err := json.Unmarshal(rawEnv, &values); err != nil || values == nil {
-			return nil, configError("%s: tools.native.bash.env must be an object", settingPath)
+			return nil, configError("%s: %s.env must be an object", settingPath, section)
 		}
 		for name, rawValue := range values {
 			if !bashEnvNamePattern.MatchString(name) {
-				return nil, configError("%s: tools.native.bash.env.%s is not a valid environment variable name", settingPath, name)
+				return nil, configError("%s: %s.env.%s is not a valid environment variable name", settingPath, section, name)
 			}
 			var value string
 			if err := json.Unmarshal(rawValue, &value); err != nil {
-				return nil, configError("%s: tools.native.bash.env.%s must be a string", settingPath, name)
+				return nil, configError("%s: %s.env.%s must be a string", settingPath, section, name)
 			}
 			settings.Env[name] = value
-			settings.InlineEnv[name] = value
 		}
 	}
 	if rawDeny, ok := fields["env_deny"]; ok && strings.TrimSpace(string(rawDeny)) != "null" {
 		var names []json.RawMessage
 		if err := json.Unmarshal(rawDeny, &names); err != nil || names == nil {
-			return nil, configError("%s: tools.native.bash.env_deny must be an array", settingPath)
+			return nil, configError("%s: %s.env_deny must be an array", settingPath, section)
 		}
 		settings.EnvDeny = make([]string, 0, len(names))
 		for index, rawName := range names {
 			var name string
 			if err := json.Unmarshal(rawName, &name); err != nil {
-				return nil, configError("%s: tools.native.bash.env_deny[%d] must be an environment variable name", settingPath, index)
+				return nil, configError("%s: %s.env_deny[%d] must be an environment variable name", settingPath, section, index)
 			}
 			name = strings.TrimSpace(name)
 			if name == "" || !bashEnvNamePattern.MatchString(name) {
-				return nil, configError("%s: tools.native.bash.env_deny[%d] must be an environment variable name", settingPath, index)
+				return nil, configError("%s: %s.env_deny[%d] must be an environment variable name", settingPath, section, index)
 			}
 			settings.EnvDeny = append(settings.EnvDeny, name)
 		}
 	}
 
-	fallbackPolicy := NativePathPolicy{Paths: []NativePathRule{}}
-	if write != nil {
-		fallbackPolicy = cloneNativePathPolicy(write.Policy)
-	}
-	settings.Policy = fallbackPolicy
+	settings.Policy = NativePathPolicy{Paths: []NativePathRule{}}
 	if paths, ok := fields["paths"]; ok {
-		settings.Policy, err = normalizeNativePathPolicy(paths, globalJadRoot, settingPath+": tools.native.bash.paths")
+		settings.Policy, err = normalizeNativePathPolicy(paths, globalJadRoot, settingPath+": "+section+".paths")
 		if err != nil {
 			return nil, err
 		}
@@ -275,12 +274,12 @@ func normalizeNativeBashStream(raw json.RawMessage, fallback NativeBashStreamBud
 	return NativeBashStreamBudget{HeadBytes: head, TailBytes: tail}, nil
 }
 
-func normalizeNativeBashSpill(raw json.RawMessage, settingPath, cwd, sessionDir, toolStorageDir string, readPolicy, grepPolicy NativePathPolicy) (NativeBashSpillSettings, error) {
+func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, sessionDir, toolStorageDir string, readPolicy, grepPolicy NativePathPolicy) (NativeBashSpillSettings, error) {
 	settings := NativeBashSpillSettings{Enabled: true, Keep: defaultNativeBashSpillKeep, CapBytes: defaultNativeBashSpillCap, RetentionDays: defaultNativeBashRetention, AllowUnreadable: false}
 	fields := map[string]json.RawMessage{}
 	if len(raw) > 0 {
 		var err error
-		fields, err = decodeConfigObject(raw, settingPath+": tools.native.bash.spill")
+		fields, err = decodeConfigObject(raw, settingPath+": "+section+".spill")
 		if err != nil {
 			return NativeBashSpillSettings{}, err
 		}
@@ -289,25 +288,25 @@ func normalizeNativeBashSpill(raw json.RawMessage, settingPath, cwd, sessionDir,
 		switch key {
 		case "enabled", "keep", "cap_bytes", "retention_days", "storage_dir", "stdout_full", "stderr_full", "allow_unreadable":
 		default:
-			return NativeBashSpillSettings{}, configError("%s: tools.native.bash.spill.%s is not supported", settingPath, key)
+			return NativeBashSpillSettings{}, configError("%s: %s.spill.%s is not supported", settingPath, section, key)
 		}
 	}
 	var err error
-	if settings.Enabled, err = bashBool(fields, "enabled", true, settingPath+": tools.native.bash.spill"); err != nil {
+	if settings.Enabled, err = bashBool(fields, "enabled", true, settingPath+": "+section+".spill"); err != nil {
 		return NativeBashSpillSettings{}, err
 	}
 	if value, ok := fields["keep"]; ok && strings.TrimSpace(string(value)) != "null" {
 		if err := json.Unmarshal(value, &settings.Keep); err != nil || (settings.Keep != "always" && settings.Keep != "truncated_only") {
-			return NativeBashSpillSettings{}, configError("%s: tools.native.bash.spill.keep must be always or truncated_only", settingPath)
+			return NativeBashSpillSettings{}, configError("%s: %s.spill.keep must be always or truncated_only", settingPath, section)
 		}
 	}
-	if settings.CapBytes, err = configuredInteger(fields, "cap_bytes", settings.CapBytes, 1, maxNativeBashSpillCap, settingPath, "tools.native.bash.spill"); err != nil {
+	if settings.CapBytes, err = configuredInteger(fields, "cap_bytes", settings.CapBytes, 1, maxNativeBashSpillCap, settingPath, section+".spill"); err != nil {
 		return NativeBashSpillSettings{}, err
 	}
-	if settings.RetentionDays, err = configuredInteger(fields, "retention_days", settings.RetentionDays, 0, maxNativeBashRetention, settingPath, "tools.native.bash.spill"); err != nil {
+	if settings.RetentionDays, err = configuredInteger(fields, "retention_days", settings.RetentionDays, 0, maxNativeBashRetention, settingPath, section+".spill"); err != nil {
 		return NativeBashSpillSettings{}, err
 	}
-	if settings.AllowUnreadable, err = bashBool(fields, "allow_unreadable", false, settingPath+": tools.native.bash.spill"); err != nil {
+	if settings.AllowUnreadable, err = bashBool(fields, "allow_unreadable", false, settingPath+": "+section+".spill"); err != nil {
 		return NativeBashSpillSettings{}, err
 	}
 
@@ -316,32 +315,32 @@ func normalizeNativeBashSpill(raw json.RawMessage, settingPath, cwd, sessionDir,
 	legacyTemplates := hasStdoutTemplate || hasStderrTemplate
 	if legacyTemplates {
 		if storage, exists := fields["storage_dir"]; exists && strings.TrimSpace(string(storage)) != `"`+defaultNativeBashSpillDir+`"` {
-			return NativeBashSpillSettings{}, configError("%s: tools.native.bash.spill.storage_dir cannot be combined with deprecated stdout_full/stderr_full templates; remove the templates to use storage_dir", settingPath)
+			return NativeBashSpillSettings{}, configError("%s: %s.spill.storage_dir cannot be combined with deprecated stdout_full/stderr_full templates; remove the templates to use storage_dir", settingPath, section)
 		}
-		stdout, err := bashString(fields, "stdout_full", defaultNativeBashSpillPath, settingPath+": tools.native.bash.spill", false)
+		stdout, err := bashString(fields, "stdout_full", defaultNativeBashSpillPath, settingPath+": "+section+".spill", false)
 		if err != nil {
 			return NativeBashSpillSettings{}, err
 		}
-		stderr, err := bashString(fields, "stderr_full", defaultNativeBashSpillPath, settingPath+": tools.native.bash.spill", false)
+		stderr, err := bashString(fields, "stderr_full", defaultNativeBashSpillPath, settingPath+": "+section+".spill", false)
 		if err != nil {
 			return NativeBashSpillSettings{}, err
 		}
-		stdout, err = normalizeBashSpillTemplate(stdout, cwd, sessionDir, toolStorageDir, settingPath, "stdout_full")
+		stdout, err = normalizeBashSpillTemplate(stdout, cwd, sessionDir, toolStorageDir, settingPath, section, "stdout_full")
 		if err != nil {
 			return NativeBashSpillSettings{}, err
 		}
-		stderr, err = normalizeBashSpillTemplate(stderr, cwd, sessionDir, toolStorageDir, settingPath, "stderr_full")
+		stderr, err = normalizeBashSpillTemplate(stderr, cwd, sessionDir, toolStorageDir, settingPath, section, "stderr_full")
 		if err != nil {
 			return NativeBashSpillSettings{}, err
 		}
 		if resolveBashSpillTemplate(stdout, cwd, sessionDir, "sample-call", "stdout") == resolveBashSpillTemplate(stderr, cwd, sessionDir, "sample-call", "stderr") {
-			return NativeBashSpillSettings{}, configError("%s: tools.native.bash.spill.stdout_full and stderr_full resolve to the same file; give them different paths or include {stream}", settingPath)
+			return NativeBashSpillSettings{}, configError("%s: %s.spill.stdout_full and stderr_full resolve to the same file; give them different paths or include {stream}", settingPath, section)
 		}
 		if !settings.AllowUnreadable {
 			for stream, template := range map[string]string{"stdout": stdout, "stderr": stderr} {
 				target := resolveBashSpillTemplate(template, cwd, sessionDir, "sample-call", stream)
 				if !bashSpillReadable(target, cwd, readPolicy, grepPolicy) {
-					return NativeBashSpillSettings{}, configError("%s: tools.native.bash.spill.%s_full resolves to a file the model could not read back; keep it under the session cwd (%s) or extend tools.native.read.paths, or set tools.native.bash.spill.allow_unreadable", settingPath, stream, cwd)
+					return NativeBashSpillSettings{}, configError("%s: %s.spill.%s_full resolves to a file the model could not read back; keep it under the session cwd (%s) or extend tools.native.read.paths, or set %s.spill.allow_unreadable", settingPath, section, stream, cwd, section)
 				}
 			}
 		}
@@ -349,7 +348,7 @@ func normalizeNativeBashSpill(raw json.RawMessage, settingPath, cwd, sessionDir,
 		return settings, nil
 	}
 
-	storageDir, err := bashString(fields, "storage_dir", defaultNativeBashSpillDir, settingPath+": tools.native.bash.spill", false)
+	storageDir, err := bashString(fields, "storage_dir", defaultNativeBashSpillDir, settingPath+": "+section+".spill", false)
 	if err != nil {
 		return NativeBashSpillSettings{}, err
 	}
@@ -367,23 +366,23 @@ func normalizeNativeBashSpill(raw json.RawMessage, settingPath, cwd, sessionDir,
 			fileName := strings.NewReplacer("{call_id}", "sample-call", "{stream}", stream).Replace(defaultNativeBashSpillFilename)
 			target := filepath.Join(settings.StorageDir, fileName)
 			if !bashSpillReadable(target, cwd, readPolicy, grepPolicy) {
-				return NativeBashSpillSettings{}, configError("%s: tools.native.bash.spill.storage_dir resolves to a location the model could not read back; keep it under the session cwd (%s) or extend tools.native.read.paths, or set tools.native.bash.spill.allow_unreadable", settingPath, cwd)
+				return NativeBashSpillSettings{}, configError("%s: %s.spill.storage_dir resolves to a location the model could not read back; keep it under the session cwd (%s) or extend tools.native.read.paths, or set %s.spill.allow_unreadable", settingPath, section, cwd, section)
 			}
 		}
 	}
 	return settings, nil
 }
 
-func normalizeBashSpillTemplate(template, cwd, sessionDir, toolStorageDir, settingPath, field string) (string, error) {
+func normalizeBashSpillTemplate(template, cwd, sessionDir, toolStorageDir, settingPath, section, field string) (string, error) {
 	for _, match := range bashSpillPlaceholderPattern.FindAllStringSubmatch(template, -1) {
 		switch match[1] {
 		case "cwd", "session_dir", "session_name", "call_id", "stream":
 		default:
-			return "", configError("%s: tools.native.bash.spill.%s uses unknown placeholder {%s}", settingPath, field, match[1])
+			return "", configError("%s: %s.spill.%s uses unknown placeholder {%s}", settingPath, section, field, match[1])
 		}
 	}
 	if !strings.Contains(template, "{call_id}") {
-		return "", configError("%s: tools.native.bash.spill.%s must contain {call_id}, otherwise every call overwrites the previous call's file", settingPath, field)
+		return "", configError("%s: %s.spill.%s must contain {call_id}, otherwise every call overwrites the previous call's file", settingPath, section, field)
 	}
 	sample := resolveBashSpillTemplate(template, cwd, sessionDir, "sample-call", "stdout")
 	if !filepath.IsAbs(sample) {

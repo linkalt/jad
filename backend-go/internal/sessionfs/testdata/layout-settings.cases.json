@@ -844,7 +844,7 @@
   "native": {
    "exec": {}
   },
-  "error": "tools.native.exec needs tools.native.bash, whose child-process settings it uses"
+  "ok": true
  },
  {
   "name": "exec null",
@@ -870,7 +870,7 @@
     "unknown_key": 1
    }
   },
-  "error": "tools.native.exec.unknown_key is not supported; supported keys are approval, code_max_bytes, default_lang, langs, line_aware, result_max_bytes"
+  "error": "tools.native.exec.unknown_key is not supported; supported keys are approval, code_max_bytes, default_lang, env, env_deny, env_file, kill_grace_ms, kill_process_group, langs, line_aware, login_shell, max_bytes, max_line_chars, max_timeout_ms, paths, result_max_bytes, shell, spill, stderr, stdin_max_bytes, stdout, strip_ansi, timeout_ms"
  },
  {
   "name": "exec approval invalid",

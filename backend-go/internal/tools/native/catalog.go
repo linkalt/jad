@@ -175,10 +175,7 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 		if err != nil {
 			return nil, err
 		}
-		if config.NativeBash == nil {
-			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.exec needs tools.native.bash, whose child-process settings it uses", config.SettingPath)}
-		}
-		tool, err := NewExecTool(*config.NativeExec, *config.NativeBash, config.Model.APIKeyEnv)
+		tool, err := NewExecTool(*config.NativeExec, config.Model.APIKeyEnv)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}

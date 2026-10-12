@@ -43,7 +43,8 @@ func requireInterpreters(t *testing.T, names ...string) {
 func runExec(t *testing.T, root string, settings sessionfs.NativeExecSettings, bash sessionfs.NativeBashSettings, arguments map[string]any) string {
 	t.Helper()
 	normalized := normalizeExecArguments(arguments, settings.DefaultLang)
-	return executeNativeExec(context.Background(), normalized, settings, bash, "", tools.ExecutionContext{
+	settings.Child = bash
+	return executeNativeExec(context.Background(), normalized, settings, "", tools.ExecutionContext{
 		CallID: "exec-call", WorkspaceRoot: root, SessionDir: root,
 	})
 }
@@ -281,6 +282,9 @@ func TestExecTimesOutUnderBashsTimeoutPolicy(t *testing.T) {
 	if execField(result, "error_code") != "timeout" {
 		t.Fatalf("result = %s", result)
 	}
+	if suggestion := execField(result, "suggestion"); !strings.Contains(suggestion, "tools.native.exec.timeout_ms") || strings.Contains(suggestion, "tools.native.bash") {
+		t.Fatalf("timeout advice = %q, want it to name tools.native.exec.timeout_ms", suggestion)
+	}
 }
 
 func TestExecCutsByLineWhileBashWithTheSameBudgetDoesNot(t *testing.T) {
@@ -405,7 +409,8 @@ func TestExecWithoutALanguageRunsTheConfiguredDefault(t *testing.T) {
 // arguments, the tool's own validator and its own normalizer.
 func callExecThroughTheCatalog(t *testing.T, root string, settings sessionfs.NativeExecSettings, arguments string, request func(tools.ApprovalCall)) string {
 	t.Helper()
-	tool, err := NewExecTool(settings, bashTestSettings(t, root), "")
+	settings.Child = bashTestSettings(t, root)
+	tool, err := NewExecTool(settings, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +451,8 @@ func TestExecThroughTheCatalogAcceptsCodeAloneAndAsksForNothingElse(t *testing.T
 	root := t.TempDir()
 	settings := execTestSettings()
 	// The schema the model sees requires code only.
-	tool, err := NewExecTool(settings, bashTestSettings(t, root), "")
+	settings.Child = bashTestSettings(t, root)
+	tool, err := NewExecTool(settings, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,24 +533,15 @@ func TestExecApprovalPreviewShowsTheLanguageAndTheCode(t *testing.T) {
 	}
 }
 
-// exec runs with its own environment when its settings carry one, and with bash's when not.
-func TestExecUsesItsOwnEnvironmentWhenConfigured(t *testing.T) {
+// exec runs with the environment of its own Child settings, not with bash's.
+func TestExecUsesItsOwnEnvironment(t *testing.T) {
 	requireInterpreters(t, "bash")
 	root := t.TempDir()
-	bash := bashTestSettings(t, root)
-	bash.Env = map[string]string{"WHO": "bash"}
+	child := bashTestSettings(t, root)
+	child.Env = map[string]string{"WHO": "exec"}
 
-	settings := execTestSettings()
-	result := runExec(t, root, settings, bash, map[string]any{"lang": "bash", "code": "echo $WHO"})
-	if got := execContent(result); got != "bash\n" {
-		t.Fatalf("without its own env: %q\n%s", got, result)
-	}
-	settings.Env = map[string]string{"WHO": "exec"}
-	result = runExec(t, root, settings, bash, map[string]any{"lang": "bash", "code": "echo $WHO"})
+	result := runExec(t, root, execTestSettings(), child, map[string]any{"lang": "bash", "code": "echo $WHO"})
 	if got := execContent(result); got != "exec\n" {
-		t.Fatalf("with its own env: %q\n%s", got, result)
-	}
-	if bash.Env["WHO"] != "bash" {
-		t.Fatal("exec changed bash's settings")
+		t.Fatalf("exec environment: %q\n%s", got, result)
 	}
 }

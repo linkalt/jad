@@ -70,8 +70,6 @@ type NativeProcessSettings struct {
 func normalizeNativeProcessSettings(
 	setting map[string]json.RawMessage,
 	globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase string,
-	bash *NativeBashSettings,
-	write *NativeWriteSettings,
 ) (*NativeProcessSettings, error) {
 	toolsRaw, exists := setting["tools"]
 	if !exists {
@@ -161,10 +159,6 @@ func normalizeNativeProcessSettings(
 	stderrFallback := NativeBashStreamBudget{HeadBytes: defaultNativeBashStderrHead, TailBytes: defaultNativeBashStderrTail}
 	maxLineFallback := defaultNativeBashMaxLine
 	stripANSIFallback := true
-	if bash != nil {
-		stdoutFallback = bash.Stdout
-		stderrFallback = bash.Stderr
-	}
 	if _, ok := fields["status_log_bytes"]; ok {
 		legacy, err := configuredInteger(fields, "status_log_bytes", 1, 1, maxNativeToolBytes, settingPath, "tools.native.process")
 		if err != nil {
@@ -254,13 +248,7 @@ func normalizeNativeProcessSettings(
 	if err != nil {
 		return nil, err
 	}
-	fallbackPolicy := NativePathPolicy{Paths: []NativePathRule{}}
-	if bash != nil {
-		fallbackPolicy = cloneNativePathPolicy(bash.Policy)
-	} else if write != nil {
-		fallbackPolicy = cloneNativePathPolicy(write.Policy)
-	}
-	settings.Policy = fallbackPolicy
+	settings.Policy = NativePathPolicy{Paths: []NativePathRule{}}
 	if raw, exists := fields["paths"]; exists {
 		settings.Policy, err = normalizeNativePathPolicy(raw, globalJadRoot, settingPath+": tools.native.process.paths")
 		if err != nil {

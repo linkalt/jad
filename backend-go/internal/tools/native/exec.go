@@ -34,9 +34,9 @@ var execInputSchema = json.RawMessage(`{
 
 const execDescription = "Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call. Write a short answer to the file named by $EXEC_RESULT to see it ahead of the raw output."
 
-// NewExecTool constructs native.exec. How a child runs is native.bash's; exec adds the
-// interpreter table, argv without a shell, line-aware cutting and a result file.
-func NewExecTool(settings sessionfs.NativeExecSettings, bash sessionfs.NativeBashSettings, apiKeyEnv string) (tools.Tool, error) {
+// NewExecTool constructs native.exec. How a child runs comes from its own settings (Child);
+// exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.
+func NewExecTool(settings sessionfs.NativeExecSettings, apiKeyEnv string) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(execInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native exec schema: %w", err)
@@ -56,7 +56,7 @@ func NewExecTool(settings sessionfs.NativeExecSettings, bash sessionfs.NativeBas
 			return normalizeExecArguments(arguments, settings.DefaultLang)
 		},
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-			return executeNativeExec(ctx, arguments, settings, bash, apiKeyEnv, execution), nil
+			return executeNativeExec(ctx, arguments, settings, apiKeyEnv, execution), nil
 		},
 	}, nil
 }
@@ -179,7 +179,6 @@ func executeNativeExec(
 	ctx context.Context,
 	arguments map[string]any,
 	settings sessionfs.NativeExecSettings,
-	bash sessionfs.NativeBashSettings,
 	apiKeyEnv string,
 	execution tools.ExecutionContext,
 ) string {
@@ -252,11 +251,6 @@ func executeNativeExec(
 	if name == settings.DefaultLang {
 		failureSuggestion = defaultLangSuggestion(name, settings.LangNames)
 	}
-	// An exec with its own env_file runs with that environment; bash's settings otherwise.
-	if settings.Env != nil {
-		bash.Env = settings.Env
-		bash.EnvFile = settings.EnvFile
-	}
 	return runShellChild(ctx, shellChildRun{
 		file:       lang.Argv[0],
 		argv:       append(append([]string(nil), programArgs...), extra...),
@@ -264,8 +258,9 @@ func executeNativeExec(
 		cwd:        common.cwd,
 		timeoutMs:  common.timeoutMs,
 		lineAware:  settings.LineAware,
+		section:    "tools.native.exec",
 		extraEnv:   map[string]string{execResultEnv: resultPath},
 		resultFile: &shellResultFile{path: resultPath, maxBytes: settings.ResultMaxBytes},
 		program:    &shellProgram{name: name, setting: "tools.native.exec.langs." + name + ".argv", failureSuggestion: failureSuggestion},
-	}, bash, apiKeyEnv, execution)
+	}, settings.Child, apiKeyEnv, execution)
 }

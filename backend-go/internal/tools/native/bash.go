@@ -161,6 +161,8 @@ type shellChildRun struct {
 	resultFile *shellResultFile
 	// program names the interpreter in the "not installed" error; nil means the shell.
 	program *shellProgram
+	// section is the settings block the run reads, named in advice: tools.native.bash or tools.native.exec.
+	section string
 }
 
 type shellResultFile struct {
@@ -175,9 +177,17 @@ type shellProgram struct {
 	failureSuggestion string
 }
 
-// runShellChild runs one child in a resolved working directory under bash's settings
-// (timeout, spill, stream budgets, environment) and renders the result. bash and exec
-// share it, so the two cannot drift in how output is bounded or reported.
+// settingsSection is the block advice points the user at; a run that names none is bash's.
+func (run shellChildRun) settingsSection() string {
+	if run.section == "" {
+		return "tools.native.bash"
+	}
+	return run.section
+}
+
+// runShellChild runs one child in a resolved working directory under the settings it is
+// given (timeout, spill, stream budgets, environment) and renders the result. bash and exec
+// each pass their own and share it, so the two cannot drift in how output is bounded or reported.
 func runShellChild(
 	ctx context.Context,
 	run shellChildRun,
@@ -231,7 +241,7 @@ func runShellChild(
 	if run.resultFile != nil {
 		answer = readShellResultFile(run.resultFile.path, run.resultFile.maxBytes)
 	}
-	return renderBashExecutionResult(execution.CallID, resolved.displayPath, run.file, timeoutMs, child, spillDecision, answer, run.program)
+	return renderBashExecutionResult(execution.CallID, resolved.displayPath, run.file, timeoutMs, child, spillDecision, answer, run.program, run.settingsSection())
 }
 
 func sortedKeys(values map[string]string) []string {
@@ -352,7 +362,7 @@ func buildNativeBashEnvironment(base []string, settings sessionfs.NativeBashSett
 	return environment
 }
 
-func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, result bashChildResult, spill bashSpillDecision, answer *shellResult, program *shellProgram) string {
+func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, result bashChildResult, spill bashSpillDecision, answer *shellResult, program *shellProgram, section string) string {
 	information := []tools.Information{{Key: "cwd", Value: cwd}}
 	if result.leftRunning {
 		information = append(information, tools.Information{Key: "left_running", Value: true})
@@ -471,7 +481,7 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 		if result.leftRunning {
 			summary += " and survived SIGKILL"
 		}
-		suggestion := fmt.Sprintf("raise timeout_ms for this call or tools.native.bash.timeout_ms, or narrow the command")
+		suggestion := "raise timeout_ms for this call or " + section + ".timeout_ms, or narrow the command"
 		if result.leftRunning {
 			suggestion = "the process is blocked in the kernel and was left to the operating system; nothing of it can be reached from here"
 		}

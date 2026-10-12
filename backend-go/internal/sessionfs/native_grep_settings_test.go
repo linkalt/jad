@@ -3,22 +3,20 @@ package sessionfs
 import (
 	"encoding/json"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestNormalizeNativeGrepSettingsDefaultsAndInheritsReadPolicy(t *testing.T) {
+func TestNormalizeNativeGrepSettingsDefaultsAndIgnoresReadPolicy(t *testing.T) {
 	globalRoot := t.TempDir()
 	settingPath := filepath.Join(globalRoot, "session", "setting.json")
 	setting := map[string]json.RawMessage{
 		"tools": json.RawMessage(`{"native":{"read":{"paths":{"allow":["allowed"],"deny":["private"]}},"grep":{}}}`),
 	}
-	read, err := normalizeNativeReadSettings(setting, globalRoot, settingPath)
-	if err != nil {
+	if _, err := normalizeNativeReadSettings(setting, globalRoot, settingPath); err != nil {
 		t.Fatalf("normalizeNativeReadSettings() error = %v", err)
 	}
-	grep, err := normalizeNativeGrepSettings(setting, globalRoot, settingPath, read.Policy)
+	grep, err := normalizeNativeGrepSettings(setting, globalRoot, settingPath)
 	if err != nil {
 		t.Fatalf("normalizeNativeGrepSettings() error = %v", err)
 	}
@@ -28,21 +26,14 @@ func TestNormalizeNativeGrepSettingsDefaultsAndInheritsReadPolicy(t *testing.T) 
 	if grep.Binary != "rg" || grep.MaxResults != 200 || grep.MaxMatchesPerFile != 20 || grep.MaxBytes != 64*1024 || grep.MaxLineChars != 240 || grep.MaxFileBytes != 8*1024*1024 || grep.TimeoutMs != 10_000 {
 		t.Fatalf("normalized grep defaults = %+v", grep)
 	}
-	wantPolicy := NativePathPolicy{
-		Paths: []NativePathRule{
-			{Action: "allow", Path: filepath.Join(globalRoot, "allowed")},
-			{Action: "deny", Path: filepath.Join(globalRoot, "private")},
-		},
-	}
-	if !reflect.DeepEqual(grep.Policy, wantPolicy) {
-		t.Fatalf("inherited grep path policy = %+v, want %+v", grep.Policy, wantPolicy)
+	if len(grep.Policy.Paths) != 0 || grep.Policy.UnrestrictedPaths {
+		t.Fatalf("grep took the read rules: %+v", grep.Policy)
 	}
 
 	withoutRead, err := normalizeNativeGrepSettings(
 		map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"grep":{}}}`)},
 		globalRoot,
 		settingPath,
-		NativePathPolicy{Paths: []NativePathRule{}},
 	)
 	if err != nil {
 		t.Fatalf("normalizeNativeGrepSettings(without read) error = %v", err)
@@ -58,7 +49,7 @@ func TestNormalizeNativeGrepSettingsOverridesAndValidates(t *testing.T) {
 	setting := map[string]json.RawMessage{
 		"tools": json.RawMessage(`{"native":{"grep":{"binary":" rg-custom ","max_results":500,"max_matches_per_file":7,"max_bytes":128,"max_line_chars":80,"max_file_bytes":2048,"timeout_ms":900,"paths":{"allow":["search-root"],"deny":["blocked"]}}}}`),
 	}
-	grep, err := normalizeNativeGrepSettings(setting, globalRoot, settingPath, NativePathPolicy{Paths: []NativePathRule{{Action: "deny", Path: "/inherited"}}})
+	grep, err := normalizeNativeGrepSettings(setting, globalRoot, settingPath)
 	if err != nil {
 		t.Fatalf("normalizeNativeGrepSettings(overrides) error = %v", err)
 	}
@@ -84,7 +75,6 @@ func TestNormalizeNativeGrepSettingsOverridesAndValidates(t *testing.T) {
 			map[string]json.RawMessage{"tools": json.RawMessage(raw)},
 			globalRoot,
 			settingPath,
-			NativePathPolicy{Paths: []NativePathRule{}},
 		)
 		if err == nil || !strings.Contains(err.Error(), "tools.native.grep") {
 			t.Errorf("normalizeNativeGrepSettings(%s) error = %v, want a grep config error", raw, err)

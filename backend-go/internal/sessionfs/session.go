@@ -353,7 +353,6 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		setting,
 		location.Root.GlobalJadRoot,
 		settingPath,
-		nativeReadPolicy,
 	)
 	if err != nil {
 		return SessionConfig{}, err
@@ -362,12 +361,11 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		setting,
 		location.Root.GlobalJadRoot,
 		settingPath,
-		nativeReadPolicy,
 	)
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeReadImage, err := normalizeNativeReadImageSettings(setting, settingPath, nativeReadPolicy)
+	nativeReadImage, err := normalizeNativeReadImageSettings(setting, location.Root.GlobalJadRoot, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -394,14 +392,13 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		location.Directory,
 		storagePaths.ToolStorage,
 		envFileBase,
-		nativeWrite,
 		nativeReadPolicy,
 		grepPolicy,
 	)
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeExec, err := normalizeNativeExecSettings(setting, settingPath, envFileBase, nativeBash)
+	nativeExec, err := normalizeNativeExecSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, location.Directory, storagePaths.ToolStorage, envFileBase, nativeReadPolicy, grepPolicy)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -441,8 +438,6 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		location.Directory,
 		storagePaths.ToolStorage,
 		envFileBase,
-		nativeBash,
-		nativeWrite,
 	)
 	if err != nil {
 		return SessionConfig{}, err

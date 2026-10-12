@@ -1,0 +1,148 @@
+package sessionfs
+
+import (
+	"encoding/json"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
+)
+
+func compileSchema(t *testing.T, name string) *jsonschema.Schema {
+	t.Helper()
+	schema, err := jsonschema.NewCompiler().Compile(filepath.Join("..", "..", "..", "sample", "schemes", name))
+	if err != nil {
+		t.Fatalf("%s does not compile: %v", name, err)
+	}
+	return schema
+}
+
+func schemaAccepts(t *testing.T, schema *jsonschema.Schema, text string) bool {
+	t.Helper()
+	var value any
+	if err := json.Unmarshal([]byte(text), &value); err != nil {
+		t.Fatal(err)
+	}
+	return schema.Validate(value) == nil
+}
+
+// The shared setting shapes (read, edit, bash style) are defined once in the schema. The
+// schema and the loader must take and refuse the same tool settings, in the toolset file
+// and in the inline tools.native block.
+func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
+	toolset := compileSchema(t, "toolset.schema.json")
+	setting := compileSchema(t, "setting.schema.json")
+	paths := `{"allow":["a"],"deny":["b"]}`
+	child := `"shell":"/bin/sh","login_shell":true,"kill_grace_ms":5,"max_line_chars":100,"stdin_max_bytes":10,"strip_ansi":false,"env":{"A":"1"},"env_deny":["B"],"paths":` + paths
+	run := `"timeout_ms":1000,"max_timeout_ms":2000,"kill_process_group":"always","max_bytes":65536,"stdout":{"head_bytes":1,"tail_bytes":1},"stderr":{"head_bytes":1,"tail_bytes":1},"spill":{"enabled":false}`
+	cases := []struct {
+		name   string
+		tool   string
+		config string
+		ok     bool
+	}{
+		{"read paths", "read", `{"paths":` + paths + `,"max_bytes":100}`, true},
+		{"read unknown", "read", `{"path":"x"}`, false},
+		{"grep paths", "grep", `{"paths":` + paths + `,"max_results":3}`, true},
+		{"grep unknown", "grep", `{"nope":1}`, false},
+		{"glob paths", "glob", `{"paths":` + paths + `}`, true},
+		{"glob unknown", "glob", `{"nope":1}`, false},
+		{"read_image paths", "read_image", `{"paths":` + paths + `,"max_image_bytes":100}`, true},
+		{"read_image unknown", "read_image", `{"nope":1}`, false},
+		{"write backups", "write", `{"backup_max_count":2,"backup_max_total_bytes":3,"fsync":false,"backup_dir":null,"paths":` + paths + `}`, true},
+		{"write unknown", "write", `{"nope":1}`, false},
+		{"edit backups", "edit", `{"backup_max_count":2,"backup_max_total_bytes":3,"fsync":false,"backup_dir":"b","paths":` + paths + `,"max_bytes":9}`, true},
+		{"edit unknown", "edit", `{"nope":1}`, false},
+		{"bash every key", "bash", `{"approval":"ask",` + child + `,` + run + `}`, true},
+		{"bash unknown", "bash", `{"nope":1}`, false},
+		{"exec every bash key", "exec", `{"approval":"ask",` + child + `,` + run + `,"line_aware":false,"default_lang":"bash","code_max_bytes":10,"result_max_bytes":10}`, true},
+		{"exec unknown", "exec", `{"nope":1}`, false},
+		{"process child keys", "process", `{"approval":"ask",` + child + `,"stdout":{"head_bytes":1,"tail_bytes":1},"max_running":2}`, true},
+		{"process unknown", "process", `{"nope":1}`, false},
+		{"process has no run keys", "process", `{"timeout_ms":1000}`, false},
+		{"bash bad type", "bash", `{"timeout_ms":"slow"}`, false},
+		{"exec bad type", "exec", `{"timeout_ms":0}`, false},
+		{"read_image bad paths", "read_image", `{"paths":3}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var config map[string]any
+			if err := json.Unmarshal([]byte(tc.config), &config); err != nil {
+				t.Fatal(err)
+			}
+			text := `{"native":{"` + tc.tool + `":` + tc.config + `}}`
+			if got := schemaAccepts(t, toolset, `{"schema_version":1,`+text[1:]); got != tc.ok {
+				t.Errorf("toolset.schema.json accepts = %v, want %v", got, tc.ok)
+			}
+			if got := schemaAccepts(t, setting, `{"tools":`+text+`}`); got != tc.ok {
+				t.Errorf("setting.schema.json accepts = %v, want %v", got, tc.ok)
+			}
+			_, err := loadApprovalSetting(t, nativeTools(map[string]any{tc.tool: config}))
+			if (err == nil) != tc.ok {
+				t.Errorf("loader accepts = %v, want %v (err: %v)", err == nil, tc.ok, err)
+			}
+		})
+	}
+}
+
+// The schema lists the same keys for exec as the loader accepts, so a key added to one is
+// caught in the other.
+func TestExecAndReadImageSchemaKeysMatchTheLoader(t *testing.T) {
+	for _, file := range []string{"toolset.schema.json", "setting.schema.json"} {
+		data := readSchemaJSON(t, file)
+		defs, _ := data["$defs"].(map[string]any)
+		var native map[string]any
+		if file == "toolset.schema.json" {
+			native = data["properties"].(map[string]any)["native"].(map[string]any)["properties"].(map[string]any)
+		} else {
+			native = data["properties"].(map[string]any)["tools"].(map[string]any)["properties"].(map[string]any)["native"].(map[string]any)["properties"].(map[string]any)
+		}
+		for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys} {
+			if file == "toolset.schema.json" {
+				defs = readSchemaJSON(t, "setting.schema.json")["$defs"].(map[string]any)
+			}
+			got := flattenSchemaKeys(native[tool].(map[string]any), defs)
+			sort.Strings(got)
+			want = append([]string(nil), want...)
+			sort.Strings(want)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Errorf("%s: %s schema keys\n  %v\nloader accepts\n  %v", file, tool, got, want)
+			}
+		}
+	}
+}
+
+func readSchemaJSON(t *testing.T, name string) map[string]any {
+	t.Helper()
+	var value map[string]any
+	readJSONFile(t, filepath.Join("..", "..", "..", "sample", "schemes", name), &value)
+	return value
+}
+
+func flattenSchemaKeys(node map[string]any, defs map[string]any) []string {
+	seen := map[string]bool{}
+	var walk func(map[string]any)
+	walk = func(n map[string]any) {
+		if props, ok := n["properties"].(map[string]any); ok {
+			for key := range props {
+				seen[key] = true
+			}
+		}
+		if all, ok := n["allOf"].([]any); ok {
+			for _, item := range all {
+				ref, _ := item.(map[string]any)["$ref"].(string)
+				if def, ok := defs[ref[strings.LastIndex(ref, "/")+1:]].(map[string]any); ok {
+					walk(def)
+				}
+			}
+		}
+	}
+	walk(node)
+	out := make([]string, 0, len(seen))
+	for key := range seen {
+		out = append(out, key)
+	}
+	return out
+}

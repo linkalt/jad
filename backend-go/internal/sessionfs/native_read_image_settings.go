@@ -7,7 +7,7 @@ import (
 
 const defaultNativeReadImageMaxBytes int64 = 5 * 1024 * 1024
 
-var nativeReadImageKeys = []string{"max_image_bytes"}
+var nativeReadImageKeys = []string{"max_image_bytes", "paths"}
 
 // NativeReadImageSettings holds the limit of native.read_image. The path policy is not
 // a key of this tool: it is the read tool's policy, so one setting governs both.
@@ -16,7 +16,7 @@ type NativeReadImageSettings struct {
 	MaxImageBytes int64
 }
 
-func normalizeNativeReadImageSettings(setting map[string]json.RawMessage, settingPath string, readPolicy NativePathPolicy) (*NativeReadImageSettings, error) {
+func normalizeNativeReadImageSettings(setting map[string]json.RawMessage, globalJadRoot, settingPath string) (*NativeReadImageSettings, error) {
 	toolsRaw, exists := setting["tools"]
 	if !exists {
 		return nil, nil
@@ -48,10 +48,15 @@ func normalizeNativeReadImageSettings(setting map[string]json.RawMessage, settin
 	}
 	for _, key := range keys {
 		if !containsString(nativeReadImageKeys, key) {
-			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeReadImageKeys, "the path policy is tools.native.read.paths")
+			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeReadImageKeys, "")
 		}
 	}
-	settings := &NativeReadImageSettings{Policy: cloneNativePathPolicy(readPolicy)}
+	settings := &NativeReadImageSettings{Policy: NativePathPolicy{Paths: []NativePathRule{}}}
+	if rawPaths, exists := fields["paths"]; exists {
+		if settings.Policy, err = normalizeNativePathPolicy(rawPaths, globalJadRoot, settingPath+": "+section+".paths"); err != nil {
+			return nil, err
+		}
+	}
 	if settings.MaxImageBytes, err = configuredInteger(fields, "max_image_bytes", defaultNativeReadImageMaxBytes, 1, maxNativeToolBytes, settingPath, section); err != nil {
 		return nil, err
 	}

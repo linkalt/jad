@@ -98,20 +98,14 @@ func normalizeNativeWriteEditSettings(
 
 	var edit *NativeEditSettings
 	if raw, exists := nativeFields["edit"]; exists {
-		mutationFallback := defaultMutation
-		policyFallback := defaultPolicy
-		if write != nil {
-			mutationFallback = write.NativeMutationSettings
-			policyFallback = cloneNativePathPolicy(write.Policy)
-		}
 		edit, err = normalizeNativeEditSettings(
 			raw,
 			settingPath,
 			globalJadRoot,
 			backupBase,
 			defaultNativeEditMaxBytes,
-			mutationFallback,
-			policyFallback,
+			defaultMutation,
+			defaultPolicy,
 		)
 		if err != nil {
 			return nil, nil, err

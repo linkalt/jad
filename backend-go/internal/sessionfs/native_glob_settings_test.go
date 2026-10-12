@@ -3,22 +3,20 @@ package sessionfs
 import (
 	"encoding/json"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestNormalizeNativeGlobSettingsDefaultsAndInheritsReadPolicy(t *testing.T) {
+func TestNormalizeNativeGlobSettingsDefaultsAndIgnoresReadPolicy(t *testing.T) {
 	globalRoot := t.TempDir()
 	settingPath := filepath.Join(globalRoot, "session", "setting.json")
 	setting := map[string]json.RawMessage{
 		"tools": json.RawMessage(`{"native":{"read":{"paths":{"allow":["allowed"],"deny":["private"]}},"glob":{}}}`),
 	}
-	read, err := normalizeNativeReadSettings(setting, globalRoot, settingPath)
-	if err != nil {
+	if _, err := normalizeNativeReadSettings(setting, globalRoot, settingPath); err != nil {
 		t.Fatalf("normalizeNativeReadSettings() error = %v", err)
 	}
-	glob, err := normalizeNativeGlobSettings(setting, globalRoot, settingPath, read.Policy)
+	glob, err := normalizeNativeGlobSettings(setting, globalRoot, settingPath)
 	if err != nil {
 		t.Fatalf("normalizeNativeGlobSettings() error = %v", err)
 	}
@@ -28,21 +26,14 @@ func TestNormalizeNativeGlobSettingsDefaultsAndInheritsReadPolicy(t *testing.T) 
 	if glob.Binary != "rg" || !glob.IncludeHidden || glob.MaxResults != 500 || glob.MaxBytes != 64*1024 || glob.MaxLineChars != 1000 || glob.TimeoutMs != 10_000 {
 		t.Fatalf("normalized glob defaults = %+v", glob)
 	}
-	wantPolicy := NativePathPolicy{
-		Paths: []NativePathRule{
-			{Action: "allow", Path: filepath.Join(globalRoot, "allowed")},
-			{Action: "deny", Path: filepath.Join(globalRoot, "private")},
-		},
-	}
-	if !reflect.DeepEqual(glob.Policy, wantPolicy) {
-		t.Fatalf("inherited glob path policy = %+v, want %+v", glob.Policy, wantPolicy)
+	if len(glob.Policy.Paths) != 0 || glob.Policy.UnrestrictedPaths {
+		t.Fatalf("glob took the read rules: %+v", glob.Policy)
 	}
 
 	withoutRead, err := normalizeNativeGlobSettings(
 		map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"glob":{}}}`)},
 		globalRoot,
 		settingPath,
-		NativePathPolicy{Paths: []NativePathRule{}},
 	)
 	if err != nil {
 		t.Fatalf("normalizeNativeGlobSettings(without read) error = %v", err)
@@ -58,7 +49,7 @@ func TestNormalizeNativeGlobSettingsOverridesAndValidates(t *testing.T) {
 	setting := map[string]json.RawMessage{
 		"tools": json.RawMessage(`{"native":{"glob":{"binary":" rg-custom ","include_hidden":false,"max_results":5000,"max_bytes":128,"max_line_chars":80,"timeout_ms":900,"paths":{"allow":["search-root"],"deny":["blocked"]}}}}`),
 	}
-	glob, err := normalizeNativeGlobSettings(setting, globalRoot, settingPath, NativePathPolicy{Paths: []NativePathRule{{Action: "deny", Path: "/inherited"}}})
+	glob, err := normalizeNativeGlobSettings(setting, globalRoot, settingPath)
 	if err != nil {
 		t.Fatalf("normalizeNativeGlobSettings(overrides) error = %v", err)
 	}
@@ -83,7 +74,6 @@ func TestNormalizeNativeGlobSettingsOverridesAndValidates(t *testing.T) {
 			map[string]json.RawMessage{"tools": json.RawMessage(raw)},
 			globalRoot,
 			settingPath,
-			NativePathPolicy{Paths: []NativePathRule{}},
 		)
 		if err == nil || !strings.Contains(err.Error(), "tools.native.glob") {
 			t.Errorf("normalizeNativeGlobSettings(%s) error = %v, want a glob config error", raw, err)

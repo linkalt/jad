@@ -34,7 +34,6 @@ type NativeGrepSettings struct {
 func normalizeNativeGrepSettings(
 	setting map[string]json.RawMessage,
 	globalJadRoot, settingPath string,
-	inheritedPolicy NativePathPolicy,
 ) (*NativeGrepSettings, error) {
 	toolsRaw, exists := setting["tools"]
 	if !exists {
@@ -95,7 +94,7 @@ func normalizeNativeGrepSettings(
 		return nil, err
 	}
 
-	settings.Policy = cloneNativePathPolicy(inheritedPolicy)
+	settings.Policy = NativePathPolicy{Paths: []NativePathRule{}}
 	if raw, exists := fields["paths"]; exists {
 		settings.Policy, err = normalizeNativePathPolicy(raw, globalJadRoot, settingPath+": tools.native.grep.paths")
 		if err != nil {

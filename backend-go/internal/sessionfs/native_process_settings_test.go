@@ -9,28 +9,18 @@ import (
 	"testing"
 )
 
-func TestNormalizeNativeProcessSettingsDefaultsAndInheritsBashPolicy(t *testing.T) {
+func TestNormalizeNativeProcessSettingsDefaultsAndIgnoresBash(t *testing.T) {
 	globalRoot := t.TempDir()
 	cwd := filepath.Join(globalRoot, "workspace")
 	settingPath := filepath.Join(globalRoot, "session", "setting.json")
-	bashPolicy := NativePathPolicy{Paths: []NativePathRule{{Action: "deny", Path: filepath.Join(cwd, "private")}}}
-	bash := &NativeBashSettings{
-		Policy:       bashPolicy,
-		Stdout:       NativeBashStreamBudget{HeadBytes: 10, TailBytes: 20},
-		Stderr:       NativeBashStreamBudget{HeadBytes: 5, TailBytes: 15},
-		MaxLineChars: 333,
-		StripANSI:    false,
-	}
 	settings, err := normalizeNativeProcessSettings(
-		map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":{}}}`)},
+		map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"bash":{"paths":{"deny":["private"]},"stdout":{"head_bytes":10,"tail_bytes":20}},"process":{}}}`)},
 		globalRoot,
 		settingPath,
 		cwd,
 		"",
 		"",
 		"",
-		bash,
-		nil,
 	)
 	if err != nil {
 		t.Fatalf("normalizeNativeProcessSettings() error = %v", err)
@@ -41,8 +31,10 @@ func TestNormalizeNativeProcessSettingsDefaultsAndInheritsBashPolicy(t *testing.
 	if settings.Shell != defaultNativeBashShell || settings.LoginShell || settings.KillGraceMs != 2_000 || settings.MaxRunning != 8 || settings.MaxCompleted != 100 || settings.RetentionDays != 14 || settings.WaitTimeoutMs != 10_000 || settings.MaxWaitTimeoutMs != 120_000 {
 		t.Fatalf("normalized process defaults = %+v", settings)
 	}
-	if settings.Stdout != bash.Stdout || settings.Stderr != bash.Stderr {
-		t.Fatalf("process stream budgets = %+v / %+v, want Bash inheritance %+v / %+v", settings.Stdout, settings.Stderr, bash.Stdout, bash.Stderr)
+	wantStdout := NativeBashStreamBudget{HeadBytes: defaultNativeBashStdoutHead, TailBytes: defaultNativeBashStdoutTail}
+	wantStderr := NativeBashStreamBudget{HeadBytes: defaultNativeBashStderrHead, TailBytes: defaultNativeBashStderrTail}
+	if settings.Stdout != wantStdout || settings.Stderr != wantStderr {
+		t.Fatalf("process stream budgets = %+v / %+v, want its own defaults %+v / %+v, not bash's", settings.Stdout, settings.Stderr, wantStdout, wantStderr)
 	}
 	if settings.MaxLineChars != 2_000 || !settings.StripANSI {
 		t.Fatalf("process output defaults = max_line_chars %d, strip_ansi %v", settings.MaxLineChars, settings.StripANSI)
@@ -53,8 +45,8 @@ func TestNormalizeNativeProcessSettingsDefaultsAndInheritsBashPolicy(t *testing.
 	if settings.StorageDir != filepath.Join(cwd, ".processes") {
 		t.Fatalf("default process storage dir = %q", settings.StorageDir)
 	}
-	if !reflect.DeepEqual(settings.Policy, bashPolicy) {
-		t.Fatalf("inherited process path policy = %+v, want %+v", settings.Policy, bashPolicy)
+	if len(settings.Policy.Paths) != 0 || settings.Policy.UnrestrictedPaths {
+		t.Fatalf("process path policy = %+v, want the empty default, not bash's rules", settings.Policy)
 	}
 	if settings.Env["NO_COLOR"] != "1" || settings.Env["GIT_TERMINAL_PROMPT"] != "0" || len(settings.EnvDeny) != 0 {
 		t.Fatalf("default process environment = %+v deny=%v", settings.Env, settings.EnvDeny)
@@ -72,7 +64,6 @@ func TestNormalizeNativeProcessSettingsOverridesAndStorage(t *testing.T) {
 	setting := map[string]json.RawMessage{
 		"tools": json.RawMessage(`{"native":{"process":{"shell":" /bin/zsh ","login_shell":true,"kill_grace_ms":0,"max_running":4,"max_completed":8,"retention_days":0,"wait_timeout_ms":1200,"max_wait_timeout_ms":3000,"stdout":{"head_bytes":11,"tail_bytes":13},"stderr":{"head_bytes":17,"tail_bytes":19},"log_cap_bytes":512,"max_line_chars":80,"stdin_max_bytes":4096,"strip_ansi":false,"env":{"PROCESS_TEST":"enabled"},"env_deny":["PROCESS_SECRET"],"storage_dir":"runtime","paths":{"allow":["shared"],"deny":["private"]},"statecontext":{"states":["exited","running","exited"],"limit":7}}}}`),
 	}
-	writePolicy := NativePathPolicy{Paths: []NativePathRule{{Action: "allow", Path: filepath.Join(cwd, "legacy")}}}
 	settings, err := normalizeNativeProcessSettings(
 		setting,
 		globalRoot,
@@ -81,8 +72,6 @@ func TestNormalizeNativeProcessSettingsOverridesAndStorage(t *testing.T) {
 		"",
 		toolStorage,
 		"",
-		nil,
-		&NativeWriteSettings{Policy: writePolicy},
 	)
 	if err != nil {
 		t.Fatalf("normalizeNativeProcessSettings(overrides) error = %v", err)
@@ -157,7 +146,7 @@ func TestNormalizeNativeProcessSettingsValidatesUnsupportedValues(t *testing.T) 
 		`{"statecontext":{"states":["unknown"]}}`,
 		`{"statecontext":{"limit":0}}`,
 	} {
-		_, err := normalizeNativeProcessSettings(base(raw), globalRoot, settingPath, globalRoot, "", "", "", nil, nil)
+		_, err := normalizeNativeProcessSettings(base(raw), globalRoot, settingPath, globalRoot, "", "", "")
 		if err == nil || !strings.Contains(err.Error(), "tools.native.process") {
 			t.Errorf("normalizeNativeProcessSettings(%s) error = %v, want process config error", raw, err)
 		}
@@ -169,7 +158,7 @@ func TestNormalizeNativeProcessLegacyStatusLogBytesDefaultsNull(t *testing.T) {
 	settingPath := filepath.Join(globalRoot, "setting.json")
 	legacy, err := normalizeNativeProcessSettings(
 		map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":{"status_log_bytes":null}}}`)},
-		globalRoot, settingPath, globalRoot, "", "", "", nil, nil,
+		globalRoot, settingPath, globalRoot, "", "", "",
 	)
 	if err != nil {
 		t.Fatalf("normalizeNativeProcessSettings(legacy null) error = %v", err)
@@ -194,9 +183,7 @@ func TestNormalizeNativeProcessSettingsLoadsEnvFileBelowInlineEnv(t *testing.T) 
 		t.Fatal(err)
 	}
 	setting := map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":{"env_file":"process.env","env":{"OVERRIDDEN":"inline"},"env_deny":["DENIED"]}}}`)}
-	// The bash env_file must not leak into process.
-	bash := &NativeBashSettings{Env: map[string]string{"BASH_ONLY": "x"}, EnvFile: filepath.Join(sessionDir, "bash.env")}
-	settings, err := normalizeNativeProcessSettings(setting, sessionDir, settingPath, sessionDir, sessionDir, "", sessionDir, bash, nil)
+	settings, err := normalizeNativeProcessSettings(setting, sessionDir, settingPath, sessionDir, sessionDir, "", sessionDir)
 	if err != nil {
 		t.Fatalf("normalizeNativeProcessSettings() error = %v", err)
 	}
@@ -227,7 +214,7 @@ func TestNormalizeNativeProcessSettingsEnvFileAbsoluteAndErrors(t *testing.T) {
 	}
 	load := func(value string) (*NativeProcessSettings, error) {
 		setting := map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":{"env_file":` + value + `}}}`)}
-		return normalizeNativeProcessSettings(setting, sessionDir, settingPath, sessionDir, sessionDir, "", sessionDir, nil, nil)
+		return normalizeNativeProcessSettings(setting, sessionDir, settingPath, sessionDir, sessionDir, "", sessionDir)
 	}
 	quoted, _ := json.Marshal(absolute)
 	settings, err := load(string(quoted))
@@ -255,7 +242,7 @@ func TestProcessStopOrphansSetting(t *testing.T) {
 	settingPath := filepath.Join(globalRoot, "session", "setting.json")
 	read := func(process string) (bool, error) {
 		setting := map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":` + process + `}}`)}
-		got, err := normalizeNativeProcessSettings(setting, globalRoot, settingPath, globalRoot, "", "", "", nil, nil)
+		got, err := normalizeNativeProcessSettings(setting, globalRoot, settingPath, globalRoot, "", "", "")
 		if err != nil {
 			return false, err
 		}

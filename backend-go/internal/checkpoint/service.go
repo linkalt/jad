@@ -250,6 +250,9 @@ func HarnessPaths(config sessionfs.SessionConfig) []string {
 	if config.NativeBash != nil {
 		candidates = append(candidates, config.NativeBash.Spill.StorageDir)
 	}
+	if config.NativeExec != nil {
+		candidates = append(candidates, config.NativeExec.Child.Spill.StorageDir)
+	}
 	if config.NativeWrite != nil && config.NativeWrite.BackupDir != nil {
 		candidates = append(candidates, *config.NativeWrite.BackupDir)
 	}

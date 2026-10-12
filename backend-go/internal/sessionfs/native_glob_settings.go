@@ -31,7 +31,6 @@ type NativeGlobSettings struct {
 func normalizeNativeGlobSettings(
 	setting map[string]json.RawMessage,
 	globalJadRoot, settingPath string,
-	inheritedPolicy NativePathPolicy,
 ) (*NativeGlobSettings, error) {
 	toolsRaw, exists := setting["tools"]
 	if !exists {
@@ -92,7 +91,7 @@ func normalizeNativeGlobSettings(
 		return nil, err
 	}
 
-	settings.Policy = cloneNativePathPolicy(inheritedPolicy)
+	settings.Policy = NativePathPolicy{Paths: []NativePathRule{}}
 	if raw, exists := fields["paths"]; exists {
 		settings.Policy, err = normalizeNativePathPolicy(raw, globalJadRoot, settingPath+": tools.native.glob.paths")
 		if err != nil {

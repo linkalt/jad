@@ -12,7 +12,7 @@ func TestLoadSessionConfigNormalizesWriteEditAndProfileToolStorage(t *testing.T)
 	rootDir := t.TempDir()
 	location, fixture := layoutLocation(t, layouttest.Spec{CWD: rootDir, Settings: map[string]any{"tool_storage_dir": "custom-tools"}, Native: map[string]any{
 		"write": map[string]any{"max_bytes": 128, "backup_max_count": 3, "backup_max_total_bytes": 512, "backup_dir": "write-backups", "fsync": false, "paths": map[string]any{"allow": []any{"allowed"}}},
-		"edit":  map[string]any{"max_bytes": 64},
+		"edit":  map[string]any{"max_bytes": 64, "backup_max_count": 3, "backup_max_total_bytes": 512, "backup_dir": "write-backups", "fsync": false, "paths": map[string]any{"allow": []any{"allowed"}}},
 	}})
 	// relative paths.allow resolve against the global root, not the session cwd
 	allowedRoot := fixture.Root
@@ -35,10 +35,10 @@ func TestLoadSessionConfigNormalizesWriteEditAndProfileToolStorage(t *testing.T)
 		t.Fatalf("backup dirs = write:%v edit:%v, want %q", config.NativeWrite.BackupDir, config.NativeEdit.BackupDir, wantBackupDir)
 	}
 	if config.NativeWrite.Fsync || config.NativeEdit.Fsync {
-		t.Fatalf("edit did not inherit write fsync: write=%t edit=%t", config.NativeWrite.Fsync, config.NativeEdit.Fsync)
+		t.Fatalf("fsync not applied: write=%t edit=%t", config.NativeWrite.Fsync, config.NativeEdit.Fsync)
 	}
 	if len(config.NativeWrite.Policy.Paths) != 1 || len(config.NativeEdit.Policy.Paths) != 1 || config.NativeWrite.Policy.Paths[0].Path != filepath.Join(allowedRoot, "allowed") || config.NativeEdit.Policy.Paths[0].Path != filepath.Join(allowedRoot, "allowed") {
-		t.Fatalf("path policy inheritance = write:%+v edit:%+v", config.NativeWrite.Policy, config.NativeEdit.Policy)
+		t.Fatalf("path policies = write:%+v edit:%+v", config.NativeWrite.Policy, config.NativeEdit.Policy)
 	}
 }
 

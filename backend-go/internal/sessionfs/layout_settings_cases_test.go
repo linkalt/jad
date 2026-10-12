@@ -22,9 +22,6 @@ type layoutSettingsCase struct {
 // goOnlyNativeTools are native tools older error texts in the case file do not list.
 var goOnlyNativeTools = []string{"subagent", "decide", "read_image"}
 
-// goOnlyToolKeys are keys of a native tool the case file's exec list does not have.
-var goOnlyToolKeys = []string{"env_file, "}
-
 // layoutErrorPrefix strips the file path (and the "settings" label) a layout error starts with.
 var layoutErrorPrefix = regexp.MustCompile(`^\S+\.json(: settings)?: `)
 
@@ -64,11 +61,6 @@ func TestLayoutSettingsCases(t *testing.T) {
 			message = layoutErrorPrefix.ReplaceAllString(message, "")
 			for _, name := range goOnlyNativeTools {
 				message = strings.Replace(message, ", "+name, "", 1)
-			}
-			if strings.HasPrefix(message, "tools.native.exec.") {
-				for _, key := range goOnlyToolKeys {
-					message = strings.Replace(message, key, "", 1)
-				}
 			}
 			if message != tc.Error {
 				t.Fatalf("error mismatch\n got:  %s\n want: %s", message, tc.Error)

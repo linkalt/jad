@@ -16,6 +16,11 @@
       "properties": {
         "read": {
           "type": "object",
+          "allOf": [
+            {
+              "$ref": "setting.schema.json#/$defs/read_style"
+            }
+          ],
           "properties": {
             "max_bytes": {
               "type": "integer",
@@ -34,77 +39,18 @@
               "type": "integer",
               "minimum": 1,
               "default": 250
-            },
-            "paths": {
-              "description": "Allow/deny path rules. Relative paths resolve from the global JAD root; absolute paths are used as-is. Paths inside cwd are allowed by default; paths outside cwd require an allow rule. The object form takes allow/deny path lists whose entries are path strings; relative entries resolve from the global JAD root, and an empty allow list lifts the cwd-only default.",
-              "anyOf": [
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "allow": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool may reach outside cwd; deny rules still win."
-                    },
-                    "deny": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool must not touch; a deny rule wins over allow and over cwd."
-                    }
-                  }
-                },
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": [
-                      "action",
-                      "path"
-                    ],
-                    "properties": {
-                      "action": {
-                        "type": "string",
-                        "enum": [
-                          "allow",
-                          "deny"
-                        ]
-                      },
-                      "path": {
-                        "type": "string",
-                        "pattern": "\\S"
-                      }
-                    },
-                    "additionalProperties": true
-                  },
-                  "default": []
-                }
-              ]
             }
           },
-          "additionalProperties": false
+          "unevaluatedProperties": false
         },
         "write": {
           "type": "object",
           "description": "Native file writes. Parent directories are created automatically; backups default to true and collect in backup_dir (the active profile's tool_storage/backups directory, or the session's backups directory without a profile); identical content is left unchanged.",
+          "allOf": [
+            {
+              "$ref": "setting.schema.json#/$defs/edit_style"
+            }
+          ],
           "properties": {
             "approval": {
               "type": "string",
@@ -119,103 +65,18 @@
               "minimum": 1,
               "maximum": 10485760,
               "default": 10485760
-            },
-            "backup_max_count": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 1000,
-              "default": 5,
-              "description": "Replacements of one file keep at most this many backups."
-            },
-            "backup_max_total_bytes": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 1073741824,
-              "default": 10485760,
-              "description": "Kept backups of one file may use this many bytes; 0 disables the size limit."
-            },
-            "backup_dir": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "description": "Directory that collects the backups of every replaced file. Relative paths resolve beneath the selected profile's tool_storage root, or from the session cwd without a profile; absolute paths are used as-is. Defaults to tool_storage/backups for a profile, otherwise the session's backups directory. null keeps each backup beside its own file."
-            },
-            "fsync": {
-              "type": "boolean",
-              "default": true,
-              "description": "Sync the new file and its directory before reporting success."
-            },
-            "paths": {
-              "description": "Allow/deny path rules. Relative paths resolve from the global JAD root; absolute paths are used as-is. Paths inside cwd are allowed by default; paths outside cwd require an allow rule. The object form takes allow/deny path lists whose entries are path strings; relative entries resolve from the global JAD root, and an empty allow list lifts the cwd-only default.",
-              "anyOf": [
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "allow": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool may reach outside cwd; deny rules still win."
-                    },
-                    "deny": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool must not touch; a deny rule wins over allow and over cwd."
-                    }
-                  }
-                },
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": [
-                      "action",
-                      "path"
-                    ],
-                    "properties": {
-                      "action": {
-                        "type": "string",
-                        "enum": [
-                          "allow",
-                          "deny"
-                        ]
-                      },
-                      "path": {
-                        "type": "string",
-                        "pattern": "\\S"
-                      }
-                    },
-                    "additionalProperties": true
-                  },
-                  "default": []
-                }
-              ]
             }
           },
-          "additionalProperties": false
+          "unevaluatedProperties": false
         },
         "edit": {
           "type": "object",
-          "description": "Native surgical text edits. oldText must match the file exactly and occur once unless replaceAll is true; backups and durability default to the tools.native.write settings and may be overridden here, and paths fall back to the write path rules.",
+          "description": "Native surgical text edits. oldText must match the file exactly and occur once unless replaceAll is true. Backups, durability and path rules are edit's own settings (edit_style); none is taken from write, so a key left out gets the default shown, not write's value.",
+          "allOf": [
+            {
+              "$ref": "setting.schema.json#/$defs/edit_style"
+            }
+          ],
           "properties": {
             "approval": {
               "type": "string",
@@ -231,100 +92,18 @@
               "maximum": 10485760,
               "default": 1048576,
               "description": "Largest file the edit tool will read and write."
-            },
-            "backup_max_count": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 1000,
-              "description": "Replacements of one file keep at most this many backups. Defaults to the tools.native.write setting."
-            },
-            "backup_max_total_bytes": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 1073741824,
-              "description": "Kept backups of one file may use this many bytes; 0 disables the size limit. Defaults to the tools.native.write setting."
-            },
-            "backup_dir": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "description": "Directory that collects the backups of every replaced file. Relative paths resolve beneath the selected profile's tool_storage root, or from the session cwd without a profile; absolute paths are used as-is. Defaults to tools.native.write.backup_dir (tool_storage/backups for a profile, or the session's backups directory without a profile). null keeps each backup beside its own file."
-            },
-            "fsync": {
-              "type": "boolean",
-              "description": "Sync the new file and its directory before reporting success. Defaults to the tools.native.write setting."
-            },
-            "paths": {
-              "description": "Allow/deny path rules. Defaults to the tools.native.write rules. The object form takes allow/deny path lists whose entries are path strings; relative entries resolve from the global JAD root, and an empty allow list lifts the cwd-only default.",
-              "anyOf": [
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "allow": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool may reach outside cwd; deny rules still win."
-                    },
-                    "deny": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool must not touch; a deny rule wins over allow and over cwd."
-                    }
-                  }
-                },
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": [
-                      "action",
-                      "path"
-                    ],
-                    "properties": {
-                      "action": {
-                        "type": "string",
-                        "enum": [
-                          "allow",
-                          "deny"
-                        ]
-                      },
-                      "path": {
-                        "type": "string",
-                        "pattern": "\\S"
-                      }
-                    },
-                    "additionalProperties": true
-                  },
-                  "default": []
-                }
-              ]
             }
           },
-          "additionalProperties": false
+          "unevaluatedProperties": false
         },
         "grep": {
           "type": "object",
-          "description": "Native content search backed by ripgrep. Bounds the matches, payload bytes, matches per file, line length, file size, and wall clock; path rules fall back to the tools.native.read rules.",
+          "description": "Native content search backed by ripgrep. Bounds the matches, payload bytes, matches per file, line length, file size, and wall clock. The path rules are grep's own (read_style); a grep without paths gets the workspace-only default, not read's rules.",
+          "allOf": [
+            {
+              "$ref": "setting.schema.json#/$defs/read_style"
+            }
+          ],
           "properties": {
             "binary": {
               "type": "string",
@@ -373,77 +152,18 @@
               "maximum": 600000,
               "default": 10000,
               "description": "Wall-clock budget for one search; the partial result is returned."
-            },
-            "paths": {
-              "description": "Allow/deny path rules. Defaults to the tools.native.read rules. The object form takes allow/deny path lists whose entries are path strings; relative entries resolve from the global JAD root, and an empty allow list lifts the cwd-only default.",
-              "anyOf": [
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "allow": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool may reach outside cwd; deny rules still win."
-                    },
-                    "deny": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool must not touch; a deny rule wins over allow and over cwd."
-                    }
-                  }
-                },
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": [
-                      "action",
-                      "path"
-                    ],
-                    "properties": {
-                      "action": {
-                        "type": "string",
-                        "enum": [
-                          "allow",
-                          "deny"
-                        ]
-                      },
-                      "path": {
-                        "type": "string",
-                        "pattern": "\\S"
-                      }
-                    },
-                    "additionalProperties": true
-                  },
-                  "default": []
-                }
-              ]
             }
           },
-          "additionalProperties": false
+          "unevaluatedProperties": false
         },
         "bash": {
           "type": "object",
           "description": "Shell command execution. Each call gets a fresh shell in a resolved working directory; the path rules only decide that directory, because the command itself runs with the backend user's rights.",
+          "allOf": [
+            {
+              "$ref": "setting.schema.json#/$defs/bash_style"
+            }
+          ],
           "properties": {
             "approval": {
               "type": "string",
@@ -452,266 +172,18 @@
                 "ask"
               ],
               "description": "ask pauses every command until the user approves it (see the top-level approval block); off runs it at once. When absent, approval.default applies (off unless set). Approval is a confirmation, not a sandbox: an approved command runs with the backend user's rights."
-            },
-            "shell": {
-              "type": "string",
-              "pattern": "\\S",
-              "default": "/bin/bash",
-              "description": "Shell executable: a PATH name or an absolute path."
-            },
-            "login_shell": {
-              "type": "boolean",
-              "default": false,
-              "description": "Add -l so profile-provided PATH entries exist; profiles may print output and change the working directory."
-            },
-            "timeout_ms": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 3600000,
-              "default": 120000,
-              "description": "Wall-clock budget for one command."
-            },
-            "max_timeout_ms": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 3600000,
-              "default": 600000,
-              "description": "Upper clamp for the per-call timeout_ms argument."
-            },
-            "kill_grace_ms": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 60000,
-              "default": 2000,
-              "description": "Time between SIGTERM and SIGKILL of the process group."
-            },
-            "kill_process_group": {
-              "type": "string",
-              "enum": [
-                "always",
-                "timeout_only"
-              ],
-              "default": "always",
-              "description": "Signal leftover descendants when a command finishes, or only on timeout."
-            },
-            "max_bytes": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 10485760,
-              "default": 65536,
-              "description": "Ceiling for the four stream budgets together."
-            },
-            "stdout": {
-              "type": "object",
-              "additionalProperties": false,
-              "description": "What the model sees of stdout: bytes from its start and from its end.",
-              "properties": {
-                "head_bytes": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 10485760,
-                  "default": 16384,
-                  "description": "Bytes kept from the start of stdout."
-                },
-                "tail_bytes": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 10485760,
-                  "default": 32768,
-                  "description": "Bytes kept from the end of stdout, where failures are reported."
-                }
-              }
-            },
-            "stderr": {
-              "type": "object",
-              "additionalProperties": false,
-              "description": "What the model sees of stderr: bytes from its start and from its end.",
-              "properties": {
-                "head_bytes": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 10485760,
-                  "default": 4096,
-                  "description": "Bytes kept from the start of stderr."
-                },
-                "tail_bytes": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 10485760,
-                  "default": 12288,
-                  "description": "Bytes kept from the end of stderr, where failures are reported."
-                }
-              }
-            },
-            "spill": {
-              "type": "object",
-              "additionalProperties": false,
-              "description": "Complete streams written to disk while they are read.",
-              "properties": {
-                "enabled": {
-                  "type": "boolean",
-                  "default": true,
-                  "description": "Write the complete streams to disk while they are read."
-                },
-                "keep": {
-                  "type": "string",
-                  "enum": [
-                    "always",
-                    "truncated_only"
-                  ],
-                  "default": "truncated_only",
-                  "description": "Keep every spill file, or only files for output the model did not see."
-                },
-                "cap_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 1073741824,
-                  "default": 67108864,
-                  "description": "Bytes written per stream before the file is left incomplete."
-                },
-                "retention_days": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 3650,
-                  "default": 14,
-                  "description": "Days a spill file survives; 0 disables pruning."
-                },
-                "storage_dir": {
-                  "type": "string",
-                  "minLength": 1,
-                  "default": ".bash-output",
-                  "description": "Directory for complete streams. Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; absolute paths are used as-is. Generated filenames are unique per call and stream."
-                },
-                "stdout_full": {
-                  "type": "string",
-                  "minLength": 1,
-                  "deprecated": true,
-                  "description": "Deprecated legacy template for stdout, retained for existing settings. If either legacy template is set it takes precedence over storage_dir; remove both templates to migrate. Do not combine these templates with a custom storage_dir."
-                },
-                "stderr_full": {
-                  "type": "string",
-                  "minLength": 1,
-                  "deprecated": true,
-                  "description": "Deprecated legacy template for stderr, retained for existing settings. If either legacy template is set it takes precedence over storage_dir; remove both templates to migrate. Do not combine these templates with a custom storage_dir."
-                },
-                "allow_unreadable": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "Allow a location the model could not read back with read or grep."
-                }
-              }
-            },
-            "max_line_chars": {
-              "type": "integer",
-              "minimum": 20,
-              "maximum": 8000,
-              "default": 2000,
-              "description": "Longest rendered output line before it is cut."
-            },
-            "stdin_max_bytes": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 10485760,
-              "default": 262144,
-              "description": "Largest stdin text one call may pipe to its command, in UTF-8 bytes. A larger text is refused with stdin_too_large, never cut."
-            },
-            "strip_ansi": {
-              "type": "boolean",
-              "default": true,
-              "description": "Remove ANSI escape sequences and other control characters."
-            },
-            "env_file": {
-              "type": "string",
-              "pattern": "\\S",
-              "description": "Dotenv file loaded before inline env overrides. A relative path resolves from the session directory in a legacy session and from the folder of the root setting.json in a catalog-layout session (a toolset is shared by many sessions); absolute paths and ~ are accepted."
-            },
-            "env": {
-              "type": "object",
-              "default": {},
-              "description": "Environment additions or overrides applied to every command, merged over the defaults (NO_COLOR, TERM, git and pager settings).",
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            "env_deny": {
-              "type": "array",
-              "default": [],
-              "description": "Environment variables removed before the command runs; the harness credential variable is always removed.",
-              "items": {
-                "type": "string",
-                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-              }
-            },
-            "paths": {
-              "description": "Allow/deny path rules for the working directory. Defaults to the tools.native.write rules. The object form takes allow/deny path lists whose entries are path strings; relative entries resolve from the global JAD root, and an empty allow list lifts the cwd-only default.",
-              "anyOf": [
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "allow": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool may reach outside cwd; deny rules still win."
-                    },
-                    "deny": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool must not touch; a deny rule wins over allow and over cwd."
-                    }
-                  }
-                },
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": [
-                      "action",
-                      "path"
-                    ],
-                    "properties": {
-                      "action": {
-                        "type": "string",
-                        "enum": [
-                          "allow",
-                          "deny"
-                        ]
-                      },
-                      "path": {
-                        "type": "string",
-                        "pattern": "\\S"
-                      }
-                    },
-                    "additionalProperties": true
-                  },
-                  "default": []
-                }
-              ]
             }
           },
-          "additionalProperties": false
+          "unevaluatedProperties": false
         },
         "exec": {
           "type": "object",
-          "description": "Inline code in a configured interpreter. Requires tools.native.bash: the environment, timeouts, output budgets, spill files and path rules of a run are bash's, so the two tools bound and report output alike. exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.",
+          "description": "Inline code in a configured interpreter. It has its own child-process settings (bash_style): environment, timeouts, output budgets, spill files and path rules are read from tools.native.exec with bash's keys and defaults, and nothing is taken from tools.native.bash. exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.",
+          "allOf": [
+            {
+              "$ref": "setting.schema.json#/$defs/bash_style"
+            }
+          ],
           "properties": {
             "approval": {
               "type": "string",
@@ -795,18 +267,18 @@
               "type": "boolean",
               "default": true,
               "description": "When a stream is cut, end the head and start the tail on line boundaries so no line is shown half. The omitted marker counts every byte dropped."
-            },
-            "env_file": {
-              "type": "string",
-              "pattern": "\\S",
-              "description": "Dotenv file for exec alone. When set, its values replace bash's env_file values for exec runs; bash's built-in defaults and inline env still apply, and an inline env value wins over this file. When absent, exec runs with bash's environment. Relative paths resolve like bash's env_file."
             }
           },
-          "additionalProperties": false
+          "unevaluatedProperties": false
         },
         "glob": {
           "type": "object",
-          "description": "File listing by name pattern. Read-only: it reuses the read path rules for the searched directory.",
+          "description": "File listing by name pattern. Read-only. The path rules for the searched directory are its own (read_style): without paths it reaches the workspace only, not what read allows.",
+          "allOf": [
+            {
+              "$ref": "setting.schema.json#/$defs/read_style"
+            }
+          ],
           "properties": {
             "binary": {
               "type": "string",
@@ -846,77 +318,18 @@
               "maximum": 600000,
               "default": 10000,
               "description": "Wall-clock budget for one listing."
-            },
-            "paths": {
-              "description": "Allow/deny path rules for the searched directory. Defaults to the tools.native.read rules. The object form takes allow/deny path lists whose entries are path strings; relative entries resolve from the global JAD root, and an empty allow list lifts the cwd-only default.",
-              "anyOf": [
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "allow": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool may reach outside cwd; deny rules still win."
-                    },
-                    "deny": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool must not touch; a deny rule wins over allow and over cwd."
-                    }
-                  }
-                },
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": [
-                      "action",
-                      "path"
-                    ],
-                    "properties": {
-                      "action": {
-                        "type": "string",
-                        "enum": [
-                          "allow",
-                          "deny"
-                        ]
-                      },
-                      "path": {
-                        "type": "string",
-                        "pattern": "\\S"
-                      }
-                    },
-                    "additionalProperties": true
-                  },
-                  "default": []
-                }
-              ]
             }
           },
-          "additionalProperties": false
+          "unevaluatedProperties": false
         },
         "read_image": {
           "type": "object",
-          "description": "Shows an image file (png, jpeg, webp or gif) to the model as an image. Read-only. It has no path key: it reuses the read path rules (tools.native.read.paths), so one setting governs both. Needs read_image in tool_definition_paths. Large images are kept in files when image_store is on, and image_resize applies to them.",
+          "description": "Shows an image file (png, jpeg, webp or gif) to the model as an image. Read-only. The path rules are its own (read_style): without paths it reaches the workspace only, not what read allows. Needs read_image in tool_definition_paths. Large images are kept in files when image_store is on, and image_resize applies to them.",
+          "allOf": [
+            {
+              "$ref": "setting.schema.json#/$defs/read_style"
+            }
+          ],
           "properties": {
             "max_image_bytes": {
               "type": "integer",
@@ -926,11 +339,16 @@
               "description": "Largest image file read; a larger one is refused."
             }
           },
-          "additionalProperties": false
+          "unevaluatedProperties": false
         },
         "process": {
           "type": "object",
           "description": "Long-running shell process management. Processes are session-owned and stopped on orderly backend shutdown.",
+          "allOf": [
+            {
+              "$ref": "setting.schema.json#/$defs/child_process_style"
+            }
+          ],
           "properties": {
             "approval": {
               "type": "string",
@@ -970,21 +388,6 @@
               },
               "additionalProperties": true
             },
-            "shell": {
-              "type": "string",
-              "pattern": "\\S",
-              "default": "/bin/bash"
-            },
-            "login_shell": {
-              "type": "boolean",
-              "default": false
-            },
-            "kill_grace_ms": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 60000,
-              "default": 2000
-            },
             "max_running": {
               "type": "integer",
               "minimum": 1,
@@ -1015,93 +418,10 @@
               "maximum": 1073741824,
               "default": 67108864
             },
-            "max_line_chars": {
-              "type": "integer",
-              "minimum": 20,
-              "maximum": 8000,
-              "default": 2000
-            },
-            "stdin_max_bytes": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 10485760,
-              "default": 262144,
-              "description": "Largest stdin text one start may write to its process, in UTF-8 bytes. A larger text is refused with stdin_too_large, never cut."
-            },
             "stop_orphans": {
               "type": "boolean",
               "default": true,
               "description": "When the server starts and finds a process a crashed server left running, stop its process group (after kill_grace_ms, then by force) instead of only marking it lost. The process is signalled only when its owner record names a server that is gone, its pid still has the start time recorded, and it still leads its own process group; otherwise it is only marked lost. A stopped orphan has stop_reason backend_restarted_stopped. Linux only for the start-time check; elsewhere nothing is signalled."
-            },
-            "strip_ansi": {
-              "type": "boolean",
-              "default": true
-            },
-            "env_file": {
-              "type": "string",
-              "pattern": "\\S",
-              "description": "Dotenv file loaded before inline env overrides. A relative path resolves from the session directory in a legacy session and from the folder of the root setting.json in a catalog-layout session (a toolset is shared by many sessions); absolute paths and ~ are accepted."
-            },
-            "env": {
-              "type": "object",
-              "default": {},
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            "env_deny": {
-              "type": "array",
-              "default": [],
-              "items": {
-                "type": "string",
-                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-              }
-            },
-            "paths": {
-              "description": "Allow/deny path rules. The object form takes allow/deny path lists whose entries are path strings; relative entries resolve from the global JAD root, and an empty allow list lifts the cwd-only default.",
-              "anyOf": [
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "allow": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool may reach outside cwd; deny rules still win."
-                    },
-                    "deny": {
-                      "oneOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      ],
-                      "description": "Paths the tool must not touch; a deny rule wins over allow and over cwd."
-                    }
-                  }
-                },
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "object"
-                  },
-                  "default": []
-                }
-              ]
             },
             "max_completed": {
               "type": "integer",
@@ -1117,7 +437,7 @@
             },
             "stdout": {
               "type": "object",
-              "description": "Bounded stdout excerpt for status, wait, and stop. Defaults to the bash stdout budget.",
+              "description": "Bounded stdout excerpt for status, wait, and stop.",
               "properties": {
                 "head_bytes": {
                   "type": "integer",
@@ -1136,7 +456,7 @@
             },
             "stderr": {
               "type": "object",
-              "description": "Bounded stderr excerpt for status, wait, and stop. Defaults to the bash stderr budget.",
+              "description": "Bounded stderr excerpt for status, wait, and stop.",
               "properties": {
                 "head_bytes": {
                   "type": "integer",
@@ -1160,7 +480,7 @@
               "description": "Managed-process manifests and full logs. Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; absolute paths are used as-is."
             }
           },
-          "additionalProperties": false
+          "unevaluatedProperties": false
         },
         "task": {
           "type": "object",
