@@ -9,18 +9,18 @@ import (
 
 func TestNormalizeStateContextSettingsDefaultsAndProcessProvider(t *testing.T) {
 	const settingPath = "/session/setting.json"
-	defaults, err := normalizeStateContextSettings(map[string]json.RawMessage{}, settingPath, nil, nil, nil, nil, nil)
+	defaults, err := normalizeStateContextSettings(map[string]json.RawMessage{}, settingPath, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("normalizeStateContextSettings(defaults) error = %v", err)
 	}
-	if defaults.Enabled || defaults.Role != "developer" || defaults.MaxBytes != 64*1024 || !reflect.DeepEqual(defaults.Trigger, []string{"compaction"}) || len(defaults.Tools) != 0 {
+	if defaults.Enabled || defaults.Role != "developer" || defaults.MaxBytes != 64*1024 || !reflect.DeepEqual(defaults.Trigger, []string{"compaction"}) || len(defaults.Tools) != 0 || defaults.Header != DefaultStateContextHeader {
 		t.Fatalf("statecontext defaults = %+v", defaults)
 	}
 
 	setting := map[string]json.RawMessage{
 		"statecontext": json.RawMessage(`{"enabled":true,"trigger":["compaction","compaction"],"tools":["process","process"],"role":"system","max_bytes":2048}`),
 	}
-	configured, err := normalizeStateContextSettings(setting, settingPath, &NativeProcessSettings{}, nil, nil, nil, nil)
+	configured, err := normalizeStateContextSettings(setting, settingPath, &NativeProcessSettings{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("normalizeStateContextSettings(process) error = %v", err)
 	}
@@ -40,8 +40,11 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 		`{"role":"assistant"}`,
 		`{"max_bytes":1023}`,
 		`{"max_bytes":10485761}`,
+		`{"header":""}`,
+		`{"header":"   "}`,
+		`{"header":7}`,
 	} {
-		_, err := normalizeStateContextSettings(map[string]json.RawMessage{"statecontext": json.RawMessage(raw)}, settingPath, nil, nil, nil, nil, nil)
+		_, err := normalizeStateContextSettings(map[string]json.RawMessage{"statecontext": json.RawMessage(raw)}, settingPath, nil, nil, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "statecontext") {
 			t.Errorf("normalizeStateContextSettings(%s) error = %v, want statecontext config error", raw, err)
 		}
@@ -50,7 +53,6 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 	_, err := normalizeStateContextSettings(
 		map[string]json.RawMessage{"statecontext": json.RawMessage(`{"enabled":true,"tools":["process"]}`)},
 		settingPath,
-		nil,
 		nil,
 		nil,
 		nil,
@@ -66,7 +68,6 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 		nil,
 		nil,
 		nil,
-		nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "requires tools.native.task") {
 		t.Fatalf("missing task provider error = %v", err)
@@ -78,7 +79,6 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 		&NativeTaskSettings{},
 		nil,
 		nil,
-		nil,
 	)
 	if err != nil || !configuredTask.Enabled || !reflect.DeepEqual(configuredTask.Tools, []string{"task"}) {
 		t.Fatalf("configured task provider = %+v, error = %v", configuredTask, err)
@@ -86,7 +86,6 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 	_, err = normalizeStateContextSettings(
 		map[string]json.RawMessage{"statecontext": json.RawMessage(`{"enabled":true,"tools":["memory"]}`)},
 		settingPath,
-		nil,
 		nil,
 		nil,
 		nil,
@@ -103,7 +102,6 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 		nil,
 		memorySettings,
 		nil,
-		nil,
 	)
 	if err != nil || !configuredMemory.Enabled || !reflect.DeepEqual(configuredMemory.Tools, []string{"memory"}) {
 		t.Fatalf("configured memory provider = %+v, error = %v", configuredMemory, err)
@@ -115,29 +113,24 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 		nil,
 		nil,
 		nil,
-		nil,
 	); err != nil {
 		t.Fatalf("disabled task provider should remain inert, error = %v", err)
 	}
 }
 
-func TestStateContextRequestDraftProviderNeedsItsToolAndIsOtherwiseInert(t *testing.T) {
-	const settingPath = "/tmp/setting.json"
-	enabled := map[string]json.RawMessage{"statecontext": json.RawMessage(`{"enabled":true,"tools":["request_draft"]}`)}
-	if _, err := normalizeStateContextSettings(enabled, settingPath, nil, nil, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "statecontext provider request_draft requires tools.native.request_draft") {
-		t.Fatalf("missing request_draft tool error = %v", err)
+func TestNormalizeStateContextSettingsHeader(t *testing.T) {
+	const settingPath = "/session/setting.json"
+	configured, err := normalizeStateContextSettings(map[string]json.RawMessage{
+		"statecontext": json.RawMessage(`{"header":"Untrusted data follows."}`),
+	}, settingPath, nil, nil, nil, nil)
+	if err != nil || configured.Header != "Untrusted data follows." {
+		t.Fatalf("custom header = %q, err = %v", configured.Header, err)
 	}
-	configured, err := normalizeStateContextSettings(enabled, settingPath, nil, nil, nil, nil, &NativeRequestDraftSettings{})
-	if err != nil || !configured.Enabled || !reflect.DeepEqual(configured.Tools, []string{"request_draft"}) {
-		t.Fatalf("configured request_draft provider = %+v, error = %v", configured, err)
-	}
-	inert := map[string]json.RawMessage{"statecontext": json.RawMessage(`{"tools":["request_draft"]}`)}
-	if _, err := normalizeStateContextSettings(inert, settingPath, nil, nil, nil, nil, nil); err != nil {
-		t.Fatalf("disabled request_draft provider should remain inert, error = %v", err)
-	}
-	both := map[string]json.RawMessage{"statecontext": json.RawMessage(`{"enabled":true,"tools":["task","request_draft","task"]}`)}
-	mixed, err := normalizeStateContextSettings(both, settingPath, nil, &NativeTaskSettings{}, nil, nil, &NativeRequestDraftSettings{})
-	if err != nil || !reflect.DeepEqual(mixed.Tools, []string{"task", "request_draft"}) {
-		t.Fatalf("task plus request_draft = %+v, error = %v", mixed, err)
+	long := strings.Repeat("h", 1025)
+	_, err = normalizeStateContextSettings(map[string]json.RawMessage{
+		"statecontext": json.RawMessage(`{"header":"` + long + `","max_bytes":1024}`),
+	}, settingPath, nil, nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "statecontext.header is larger than statecontext.max_bytes") {
+		t.Fatalf("oversized header error = %v", err)
 	}
 }

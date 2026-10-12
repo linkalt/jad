@@ -37,6 +37,17 @@ func TestHTTPRunAutomaticallyCompactsAndPersistsStateContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	writeProcessManifest(t, processStorage, native.ProcessManifest{
+		SchemaVersion: 1,
+		ID:            "proc_saved",
+		State:         native.ProcessExited,
+		CWD:           "/workspace/project",
+		StartedAt:     "2026-10-02T10:00:00.000Z",
+		EndedAt:       "2026-10-02T10:00:01.000Z",
+		ExitCode:      json.RawMessage("0"),
+		Signal:        json.RawMessage("null"),
+	})
+
 	var providerCalls atomic.Int32
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {

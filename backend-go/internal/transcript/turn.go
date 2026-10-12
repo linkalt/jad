@@ -60,7 +60,6 @@ type TurnStoreOptions struct {
 	CursorCachePath            string
 	RunErrorCachePath          string
 	StateContextPath           string
-	AcceptedRequestPath        string
 }
 
 // TurnManifest is the durable per-turn state record.

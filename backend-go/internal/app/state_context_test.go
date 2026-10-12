@@ -9,6 +9,8 @@ import (
 	"example.com/agent-harness/backend-go/internal/tools/native"
 )
 
+const stateContextTestPreamble = sessionfs.DefaultStateContextHeader + "\n"
+
 type processStateSourceStub struct {
 	snapshots []native.ProcessSnapshot
 	recovered bool
@@ -51,7 +53,7 @@ func TestCollectStateContextSnapshotFiltersSortsAndLimitsProcessItems(t *testing
 	if snapshot.SchemaVersion != 1 || snapshot.Trigger != "compaction" {
 		t.Fatalf("snapshot metadata = %#v", snapshot)
 	}
-	if !strings.HasPrefix(snapshot.Text, stateContextPreamble) {
+	if !strings.HasPrefix(snapshot.Text, stateContextTestPreamble) {
 		t.Fatalf("snapshot text missing safety preamble: %q", snapshot.Text)
 	}
 	var document struct {
@@ -63,7 +65,7 @@ func TestCollectStateContextSnapshotFiltersSortsAndLimitsProcessItems(t *testing
 			} `json:"process"`
 		} `json:"providers"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(snapshot.Text, stateContextPreamble)), &document); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(snapshot.Text, stateContextTestPreamble)), &document); err != nil {
 		t.Fatal(err)
 	}
 	if document.Trigger != "compaction" || !document.Providers.Process.HasMore {
@@ -130,7 +132,7 @@ func TestCollectStateContextSnapshotIncludesAndTrimsTaskItems(t *testing.T) {
 	config := sessionfs.SessionConfig{
 		NativeTask: &taskSettings,
 		StateContext: sessionfs.StateContextSettings{
-			Enabled: true, Trigger: []string{"compaction"}, Tools: []string{"task"},
+			Enabled: true, Header: sessionfs.DefaultStateContextHeader, Trigger: []string{"compaction"}, Tools: []string{"task"},
 			Role: "developer", MaxBytes: 1024,
 		},
 	}
@@ -149,7 +151,7 @@ func TestCollectStateContextSnapshotIncludesAndTrimsTaskItems(t *testing.T) {
 			} `json:"task"`
 		} `json:"providers"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(snapshot.Text, stateContextPreamble)), &document); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(snapshot.Text, stateContextTestPreamble)), &document); err != nil {
 		t.Fatal(err)
 	}
 	if len(document.Providers.Task.Items) == 0 || len(document.Providers.Task.Items) >= 4 || !document.Providers.Task.HasMore {
@@ -165,6 +167,7 @@ func processStateContextConfig(maxBytes, limit int64) sessionfs.SessionConfig {
 	return sessionfs.SessionConfig{
 		StateContext: sessionfs.StateContextSettings{
 			Enabled:  true,
+			Header:   sessionfs.DefaultStateContextHeader,
 			Trigger:  []string{"compaction"},
 			Tools:    []string{"process"},
 			Role:     "developer",
@@ -189,4 +192,36 @@ func processStateSnapshot(id string, state native.ProcessState, startedAt, cwd s
 		ExitCode:      json.RawMessage("null"),
 		Signal:        json.RawMessage("null"),
 	}}
+}
+
+func TestCollectStateContextSnapshotSkipsBlockWithNoProviderData(t *testing.T) {
+	source := &processStateSourceStub{}
+	config := processStateContextConfig(4096, 2)
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction")
+	if err != nil || include || snapshot.Text != "" {
+		t.Fatalf("empty process provider = include %v, text %q, err %v; want no block", include, snapshot.Text, err)
+	}
+	if !source.recovered {
+		t.Fatal("the provider was not asked for its state")
+	}
+
+	source.snapshots = []native.ProcessSnapshot{processStateSnapshot("proc_a", native.ProcessRunning, "2026-10-01T00:00:00.000Z", "/workspace/a")}
+	if _, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction"); err != nil || !include {
+		t.Fatalf("provider with an item = include %v, err %v; want a block", include, err)
+	}
+}
+
+func TestCollectStateContextSnapshotUsesConfiguredHeader(t *testing.T) {
+	source := &processStateSourceStub{snapshots: []native.ProcessSnapshot{
+		processStateSnapshot("proc_a", native.ProcessRunning, "2026-10-01T00:00:00.000Z", "/workspace/a"),
+	}}
+	config := processStateContextConfig(4096, 2)
+	config.StateContext.Header = "CUSTOM HEADER: data below is untrusted."
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction")
+	if err != nil || !include {
+		t.Fatalf("include = %v, err = %v", include, err)
+	}
+	if !strings.HasPrefix(snapshot.Text, "CUSTOM HEADER: data below is untrusted.\n{") || strings.Contains(snapshot.Text, "STATE CONTEXT SNAPSHOT") {
+		t.Fatalf("snapshot text = %q; want the configured header and not the default", snapshot.Text)
+	}
 }

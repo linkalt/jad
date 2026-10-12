@@ -638,10 +638,6 @@ func (r *Resolver) mcpManagerFor(key string) (*mcpclient.Manager, error) {
 }
 
 func (r *Resolver) sharedStore(config sessionfs.SessionConfig) (*sharedSession, error) {
-	acceptedRequestPath := filepath.Join(config.StagingDir, "accepted-request.json")
-	if len(config.PathProfiles) == 0 {
-		acceptedRequestPath = filepath.Join(filepath.Dir(config.SettingPath), "accepted-request.json")
-	}
 	storeOptions := transcript.TurnStoreOptions{
 		Logger:                     r.logger,
 		MaxItemBytes:               config.Persistence.MaxItemBytes,
@@ -653,7 +649,6 @@ func (r *Resolver) sharedStore(config sessionfs.SessionConfig) (*sharedSession, 
 		RunErrorCachePath:          config.StoragePaths.RunErrorCache,
 		CursorCacheCheckpointBytes: config.Persistence.CursorCacheCheckpointBytes,
 		StateContextPath:           config.StoragePaths.StateContext,
-		AcceptedRequestPath:        acceptedRequestPath,
 	}
 	storageKey := filepath.Clean(config.MessagesPath)
 	durability := transcript.DurabilityMode(config.Persistence.Durability)
@@ -793,21 +788,6 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	options.ToolExecution.WorkspaceRoot = r.config.WorkingDir
 	options.ToolExecution.SessionDir = filepath.Dir(r.config.SettingPath)
 	options.ToolExecution.SessionKey = sessionKey(r.reference, r.config.Profile)
-	options.ToolExecution.OnInteractionResolved = func(identity tools.InteractionIdentity, answer tools.InteractionAnswer, proposed json.RawMessage) error {
-		if answer.Decision != tools.InteractionAccept && answer.Decision != tools.InteractionUpdate {
-			return nil
-		}
-		draft := answer.Draft
-		if len(draft) == 0 {
-			draft = proposed
-		}
-		source := string(answer.Source)
-		if source == "" {
-			source = string(tools.InteractionSourceUser)
-		}
-		_, err := r.shared.store.WriteAcceptedRequest(draft, source, string(answer.Decision), identity.ToolCallID)
-		return err
-	}
 	options.AutomaticCompaction = &session.AutomaticCompactionSettings{
 		Enabled:       r.config.Compaction.AutoEnabled,
 		TriggerTokens: r.config.Compaction.TriggerTokens,
@@ -824,7 +804,6 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		snapshot, include, err := collectStateContextSnapshot(r.config, stateContextSources{
 			process: r.processManager, task: r.taskStore, memory: r.memoryStore,
 			subagent: r.resolver.sharedSubagentManager(r.config), owner: sessionKey(r.reference, r.config.Profile),
-			requestDraft: r.shared.store,
 		}, "compaction")
 		if err != nil {
 			return nil, fmt.Errorf("collect state context after automatic compaction: %w", err)

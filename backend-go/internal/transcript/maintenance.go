@@ -636,7 +636,7 @@ func (s *TurnStore) removeDerivedFiles(reset, keepStateContext bool) error {
 		paths = append(paths, s.options.StateContextPath)
 	}
 	if reset {
-		paths = append(paths, s.options.MessagesBackupPath, s.options.CompactionCachePath, s.options.CompactionCachePath+".backup", s.options.AcceptedRequestPath)
+		paths = append(paths, s.options.MessagesBackupPath, s.options.CompactionCachePath, s.options.CompactionCachePath+".backup")
 	}
 	for _, path := range paths {
 		if path == "" {
