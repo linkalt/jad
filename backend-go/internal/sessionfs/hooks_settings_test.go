@@ -3,18 +3,76 @@ package sessionfs
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
 )
 
+// defaultHooksWant is what an absent or empty hooks node loads as: off, with the child-process
+// defaults the hooks own (they match bash's defaults but are not read from it).
+func defaultHooksWant() HooksSettings {
+	return HooksSettings{
+		TimeoutMS: 60_000, MaxOutputBytes: 8192,
+		KillGraceMs: 2000, KillProcessGroup: "always", MaxLineChars: 2000, StripANSI: true,
+		Env: map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}, EnvDeny: []string{},
+	}
+}
+
+func TestHooksTakeTheirOwnChildProcessKeys(t *testing.T) {
+	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
+		"enabled": true, "kill_grace_ms": 500, "kill_process_group": "timeout_only", "max_line_chars": 120, "strip_ansi": false,
+		"env": map[string]any{"CHECK_MODE": "strict", "NO_COLOR": "0"}, "env_deny": []any{"SECRET_A"},
+	}})
+	if err != nil {
+		t.Fatalf("LoadSessionSettings: %v", err)
+	}
+	h := config.Hooks
+	if h.KillGraceMs != 500 || h.KillProcessGroup != "timeout_only" || h.MaxLineChars != 120 || h.StripANSI {
+		t.Fatalf("child keys = %+v", h)
+	}
+	if h.Env["CHECK_MODE"] != "strict" || h.Env["NO_COLOR"] != "0" || h.Env["GIT_TERMINAL_PROMPT"] != "0" || !reflect.DeepEqual(h.EnvDeny, []string{"SECRET_A"}) {
+		t.Fatalf("env = %v deny = %v", h.Env, h.EnvDeny)
+	}
+}
+
+func TestHooksReadNothingFromTheBashTool(t *testing.T) {
+	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+		"bash": map[string]any{"kill_grace_ms": 7000, "max_line_chars": 77, "strip_ansi": false, "env": map[string]any{"FROM_BASH": "1"}, "env_deny": []any{"X"}},
+	}))
+	if err != nil {
+		t.Fatalf("LoadSessionSettings: %v", err)
+	}
+	if want := defaultHooksWant(); !reflect.DeepEqual(config.Hooks, want) {
+		t.Fatalf("hooks picked up bash settings: %+v, want %+v", config.Hooks, want)
+	}
+}
+
+func TestHooksEnvFileResolvesAndLoads(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hooks.env"), []byte("FROM_FILE=yes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{"env_file": filepath.Join(dir, "hooks.env"), "env": map[string]any{"INLINE": "1"}}})
+	if err != nil {
+		t.Fatalf("LoadSessionSettings: %v", err)
+	}
+	if config.Hooks.Env["FROM_FILE"] != "yes" || config.Hooks.Env["INLINE"] != "1" || config.Hooks.EnvFile == "" {
+		t.Fatalf("env file not applied: %+v", config.Hooks)
+	}
+	_, err = loadApprovalSetting(t, map[string]any{"hooks": map[string]any{"env_file": filepath.Join(dir, "missing.env")}})
+	if err == nil || !strings.Contains(err.Error(), "hooks.env_file") {
+		t.Fatalf("error = %v, want one naming hooks.env_file", err)
+	}
+}
+
 func TestHooksDefaultToOffWithNothingToRun(t *testing.T) {
 	config, err := loadApprovalSetting(t, map[string]any{})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
-	want := HooksSettings{TimeoutMS: 60_000, MaxOutputBytes: 8192}
+	want := defaultHooksWant()
 	if !reflect.DeepEqual(config.Hooks, want) || config.Hooks.Active() {
 		t.Fatalf("default hooks = %+v, want %+v and inactive", config.Hooks, want)
 	}
@@ -31,10 +89,12 @@ func TestHooksAcceptEveryKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
-	want := HooksSettings{Enabled: true, TimeoutMS: 5000, MaxOutputBytes: 1024, PostEdit: []PostEditHook{
+	want := defaultHooksWant()
+	want.Enabled, want.TimeoutMS, want.MaxOutputBytes = true, 5000, 1024
+	want.PostEdit = []PostEditHook{
 		{Name: "go-vet", Ext: []string{".go"}, Argv: []string{"go", "vet", "./{reldir}"}, Cwd: "nearest:go.mod", OnFailureOnly: true},
 		{Name: "json", Ext: []string{".json", ".JSONC"}, Argv: []string{"jq", "empty", "{file}"}, Cwd: "file_dir"},
-	}}
+	}
 	if !reflect.DeepEqual(config.Hooks, want) || !config.Hooks.Active() {
 		t.Fatalf("hooks = %+v, want %+v", config.Hooks, want)
 	}
@@ -70,6 +130,16 @@ func TestHooksRejectBadValuesWithTheKeyInTheMessage(t *testing.T) {
 		{"timeout fraction", map[string]any{"timeout_ms": 1500.5}, "hooks.timeout_ms must be a safe integer"},
 		{"output low", map[string]any{"max_output_bytes": 255}, "hooks.max_output_bytes must be a safe integer between 256 and 1048576"},
 		{"output null", map[string]any{"max_output_bytes": nil}, "hooks.max_output_bytes must be a safe integer"},
+		{"kill grace high", map[string]any{"kill_grace_ms": 60001}, "hooks.kill_grace_ms must be a safe integer between 0 and 60000"},
+		{"kill group word", map[string]any{"kill_process_group": "never"}, "hooks.kill_process_group must be always or timeout_only"},
+		{"line chars low", map[string]any{"max_line_chars": 19}, "hooks.max_line_chars must be a safe integer between 20 and 8000"},
+		{"strip ansi string", map[string]any{"strip_ansi": "yes"}, "hooks.strip_ansi must be a boolean"},
+		{"env array", map[string]any{"env": []any{}}, "hooks.env must be an object"},
+		{"env bad name", map[string]any{"env": map[string]any{"1BAD": "x"}}, "hooks.env.1BAD is not a valid environment variable name"},
+		{"env number", map[string]any{"env": map[string]any{"A": 1}}, "hooks.env.A must be a string"},
+		{"env_deny object", map[string]any{"env_deny": map[string]any{}}, "hooks.env_deny must be an array"},
+		{"env_deny bad name", map[string]any{"env_deny": []any{"a b"}}, "hooks.env_deny[0] must be an environment variable name"},
+		{"env_file blank", map[string]any{"env_file": " "}, "hooks: env_file must be a non-empty string"},
 		{"post_edit object", map[string]any{"post_edit": map[string]any{}}, "hooks.post_edit must be a list"},
 		{"post_edit null", map[string]any{"post_edit": nil}, "hooks.post_edit must be a list"},
 		{"entry string", map[string]any{"post_edit": []any{"go vet"}}, "hooks.post_edit[0] must be an object"},

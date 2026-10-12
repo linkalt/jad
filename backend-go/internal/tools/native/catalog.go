@@ -122,10 +122,7 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 		}
 		tool.Definition = definition
 		tool.Approval = approvalMode(config.NativeWrite.Approval)
-		tool, err = withConfiguredHooks(config, tool)
-		if err != nil {
-			return nil, err
-		}
+		tool = withConfiguredHooks(config, tool)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeEdit != nil {
@@ -139,10 +136,7 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 		}
 		tool.Definition = definition
 		tool.Approval = approvalMode(config.NativeEdit.Approval)
-		tool, err = withConfiguredHooks(config, tool)
-		if err != nil {
-			return nil, err
-		}
+		tool = withConfiguredHooks(config, tool)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeGrep != nil {

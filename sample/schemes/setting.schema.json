@@ -537,10 +537,17 @@
     },
     "hooks": {
       "type": "object",
-      "description": "Optional checks that run after the native write and edit tools change a file, for example a type check. Go backend only; the TypeScript backend does not read this key. Off by default: with enabled false (or the key absent) no command is started and no tool result changes. A check never fails the write or edit; its outcome is appended to the tool result as text. Needs tools.native.bash, whose environment, kill policy and line cut it uses. A check runs without asking for approval, because its command is part of this file; it also runs for write-capable sub-agents, on the files their paths allow.",
+      "description": "Optional checks that run after the native write and edit tools change a file, for example a type check. Go backend only; the TypeScript backend does not read this key. Off by default: with enabled false (or the key absent) no command is started and no tool result changes. A check never fails the write or edit; its outcome is appended to the tool result as text. The checks have their own child-process keys (kill_grace_ms, kill_process_group, max_line_chars, strip_ansi, env_file, env, env_deny, with the same meaning and defaults as in tools.native.bash); nothing is read from tools.native.bash, and hooks need no other tool. A check runs without asking for approval, because its command is part of this file; it also runs for write-capable sub-agents, on the files their paths allow.",
       "properties": {
         "enabled": {"type": "boolean", "default": false, "description": "Run the checks in post_edit."},
         "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000, "default": 60000, "description": "Longest one check may run. A check that is still running is stopped and reported as timed out."},
+        "kill_grace_ms": {"$ref": "#/$defs/child_process_style/properties/kill_grace_ms"},
+        "kill_process_group": {"$ref": "#/$defs/bash_style/properties/kill_process_group"},
+        "max_line_chars": {"$ref": "#/$defs/child_process_style/properties/max_line_chars"},
+        "strip_ansi": {"$ref": "#/$defs/child_process_style/properties/strip_ansi"},
+        "env_file": {"$ref": "#/$defs/child_process_style/properties/env_file"},
+        "env": {"$ref": "#/$defs/child_process_style/properties/env"},
+        "env_deny": {"$ref": "#/$defs/child_process_style/properties/env_deny"},
         "max_output_bytes": {"type": "integer", "minimum": 256, "maximum": 1048576, "default": 8192, "description": "Cut of the output one check adds to the tool result, applied to stdout and stderr each (a check that writes to both can add up to twice this). The start and the end are kept and the middle is dropped."},
         "post_edit": {
           "type": "array",
@@ -1092,7 +1099,7 @@
             },
             "exec": {
               "type": "object",
-              "description": "Inline code in a configured interpreter. It has its own child-process settings (bash_style): environment, timeouts, output budgets, spill files and path rules are read from tools.native.exec with bash's keys and defaults, and nothing is taken from tools.native.bash. Its spill files default to the folder .exec-output, not bash's .bash-output (spill.storage_dir and the legacy templates still override it). exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.",
+              "description": "Inline code in a configured interpreter. It has its own child-process settings (bash_style): environment, timeouts, output budgets, spill files and path rules are read from tools.native.exec with bash's keys and defaults, and nothing is taken from tools.native.bash. Its spill files default to the folder .exec-output and are named exec-<call>.<stream>.log, not bash's .bash-output and bash-... (spill.storage_dir and the legacy templates still override the folder). exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.",
               "allOf": [
                 {
                   "$ref": "#/$defs/bash_style"

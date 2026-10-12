@@ -15,7 +15,10 @@ import (
 )
 
 func hookTestSettings(hooks ...sessionfs.PostEditHook) sessionfs.HooksSettings {
-	return sessionfs.HooksSettings{Enabled: true, TimeoutMS: 5_000, MaxOutputBytes: 2048, PostEdit: hooks}
+	return sessionfs.HooksSettings{
+		Enabled: true, TimeoutMS: 5_000, MaxOutputBytes: 2048, PostEdit: hooks,
+		KillGraceMs: 100, KillProcessGroup: "always", MaxLineChars: 2000, StripANSI: true,
+	}
 }
 
 func shHook(name, script string, extensions ...string) sessionfs.PostEditHook {
@@ -26,7 +29,6 @@ func shHook(name, script string, extensions ...string) sessionfs.PostEditHook {
 func hookedTools(t *testing.T, hooks sessionfs.HooksSettings) (write, edit tools.Tool, root string) {
 	t.Helper()
 	root = scopeWorkspace(t)
-	bash := bashTestSettings(t, root)
 	plainWrite, err := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +37,7 @@ func hookedTools(t *testing.T, hooks sessionfs.HooksSettings) (write, edit tools
 	if err != nil {
 		t.Fatal(err)
 	}
-	return WithPostEditHooks(plainWrite, hooks, bash, ""), WithPostEditHooks(plainEdit, hooks, bash, ""), root
+	return WithPostEditHooks(plainWrite, hooks, ""), WithPostEditHooks(plainEdit, hooks, ""), root
 }
 
 func callTool(t *testing.T, tool tools.Tool, root string, arguments map[string]any, onChange func(string, string)) string {
@@ -108,12 +110,12 @@ func TestHooksOffMeansTheToolIsReturnedAsIs(t *testing.T) {
 		"no entries": {Enabled: true},
 		"zero value": {},
 	} {
-		wrapped := WithPostEditHooks(plain, hooks, sessionfs.NativeBashSettings{}, "")
+		wrapped := WithPostEditHooks(plain, hooks, "")
 		if reflect.ValueOf(wrapped.Execute).Pointer() != reflect.ValueOf(plain.Execute).Pointer() {
 			t.Errorf("%s: the tool was wrapped although no check can run", name)
 		}
 	}
-	on := WithPostEditHooks(plain, hookTestSettings(shHook("x", "true", ".go")), sessionfs.NativeBashSettings{}, "")
+	on := WithPostEditHooks(plain, hookTestSettings(shHook("x", "true", ".go")), "")
 	if reflect.ValueOf(on.Execute).Pointer() == reflect.ValueOf(plain.Execute).Pointer() {
 		t.Error("an active hook set did not wrap the tool")
 	}
@@ -259,37 +261,51 @@ func TestHooksGetNoShellSoAFileNameIsNeverParsed(t *testing.T) {
 	}
 }
 
-func TestHooksWithoutBashAreAConfigurationErrorOnCatalogBuild(t *testing.T) {
+func TestHooksBuildAndRunInTheCatalogWithoutTheBashTool(t *testing.T) {
 	root := scopeWorkspace(t)
-	definition := func(file string) string {
-		data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", file))
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(root, file)
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "write.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := filepath.Join(root, "write.json")
+	if err := os.WriteFile(definition, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	write := testWriteSettings(root, 1<<20)
 	config := sessionfs.SessionConfig{
-		SettingPath: "setting.json", ToolDefinitionPaths: []string{definition("write.json")},
-		NativeWrite: &write, Hooks: hookTestSettings(shHook("lint", "true", ".go")),
+		SettingPath: "setting.json", ToolDefinitionPaths: []string{definition},
+		NativeWrite: &write, Hooks: hookTestSettings(shHook("lint", `echo "saw $0"`, ".txt")),
 	}
-	_, err := BuildCatalog(config)
-	if err == nil || !strings.Contains(err.Error(), "hooks needs tools.native.bash") {
-		t.Fatalf("error = %v, want one naming tools.native.bash", err)
+	catalog, err := BuildCatalog(config)
+	if err != nil {
+		t.Fatalf("hooks without tools.native.bash must build: %v", err)
 	}
-	config.Hooks.Enabled = false
-	if _, err := BuildCatalog(config); err != nil {
-		t.Fatalf("inactive hooks must not need bash: %v", err)
+	item := `{"type":"function_call","call_id":"c","name":"write","arguments":` + jsonString(`{"path":"docs/d.txt","content":"x\n"}`) + `}`
+	output, err := catalog.ExecuteFunctionCall(context.Background(), []byte(item), tools.ExecutionContext{CallID: "c", ToolName: "write", WorkspaceRoot: root, SessionDir: root})
+	if err != nil {
+		t.Fatal(err)
 	}
-	bash := bashTestSettings(t, root)
-	config.Hooks.Enabled, config.NativeBash = true, &bash
-	config.ToolDefinitionPaths = append(config.ToolDefinitionPaths, definition("bash.json"))
-	if _, err := BuildCatalog(config); err != nil {
-		t.Fatalf("hooks with bash must build: %v", err)
+	if !strings.Contains(string(output), "[lint] passed") || !strings.Contains(string(output), "saw d.txt") {
+		t.Fatalf("the check did not run without the bash tool:\n%s", output)
+	}
+}
+
+func TestHooksUseTheirOwnChildSettings(t *testing.T) {
+	hooks := hookTestSettings(shHook("env", `echo "v=$HOOK_VAR d=${HOOK_DENIED:-unset}"`, ".txt"))
+	hooks.Env = map[string]string{"HOOK_VAR": "from-hooks", "HOOK_DENIED": "x"}
+	hooks.EnvDeny = []string{"HOOK_DENIED"}
+	write, _, root := hookedTools(t, hooks)
+	output := callTool(t, write, root, map[string]any{"path": "docs/e.txt", "content": "x\n"}, nil)
+	if !strings.Contains(output, "v=from-hooks d=unset") {
+		t.Fatalf("hooks ignored their own env/env_deny:\n%s", output)
+	}
+
+	long := hookTestSettings(shHook("wide", `printf '%0300d\n' 0`, ".txt"))
+	long.MaxLineChars = 40
+	write, _, root = hookedTools(t, long)
+	output = callTool(t, write, root, map[string]any{"path": "docs/f.txt", "content": "x\n"}, nil)
+	if strings.Contains(output, strings.Repeat("0", 100)) {
+		t.Fatalf("hooks ignored their own max_line_chars:\n%s", output)
 	}
 }
 
@@ -361,8 +377,7 @@ func TestHooksKeepTheCallsErrorEvenWhenTheFileChanged(t *testing.T) {
 		execution.OnFileChange("docs/e.txt", "created")
 		return "", os.ErrInvalid
 	}}
-	bash := bashTestSettings(t, t.TempDir())
-	wrapped := WithPostEditHooks(failing, hookTestSettings(shHook("lint", `echo ran > ran.flag`, ".txt")), bash, "")
+	wrapped := WithPostEditHooks(failing, hookTestSettings(shHook("lint", `echo ran > ran.flag`, ".txt")), "")
 	root := scopeWorkspace(t)
 	output, err := wrapped.Execute(context.Background(), nil, tools.ExecutionContext{CallID: "c", WorkspaceRoot: root})
 	if err != os.ErrInvalid || output != "" || pathExists(filepath.Join(root, "docs", "ran.flag")) {
@@ -407,7 +422,7 @@ func TestHooksNearestSaysSoForAFileOutsideTheWorkspace(t *testing.T) {
 	near.Cwd = "nearest:go.mod"
 	root := scopeWorkspace(t)
 	outside := t.TempDir()
-	output := runPostEditHooks(context.Background(), hookTestSettings(near), bashTestSettings(t, root), "", tools.ExecutionContext{WorkspaceRoot: root}, filepath.Join(outside, "o.txt"))
+	output := runPostEditHooks(context.Background(), hookTestSettings(near), "", tools.ExecutionContext{WorkspaceRoot: root}, filepath.Join(outside, "o.txt"))
 	if !strings.Contains(output, "the file is outside the workspace") {
 		t.Fatalf("got:\n%s", output)
 	}
@@ -426,7 +441,7 @@ func TestHooksFollowASymlinkedFileToItsTarget(t *testing.T) {
 		t.Skip("symlinks are not available")
 	}
 	plain, _ := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
-	hooked := WithPostEditHooks(plain, hookTestSettings(check), bashTestSettings(t, root), "")
+	hooked := WithPostEditHooks(plain, hookTestSettings(check), "")
 	output := callTool(t, hooked, root, map[string]any{"path": "docs/link.txt", "content": "y\n"}, nil)
 	if !strings.Contains(output, filepath.Join(root, "src")) {
 		t.Fatalf("the check did not run in the symlink target's directory:\n%s", output)
@@ -445,7 +460,7 @@ func TestHooksNeverRunWithoutAChangedFileEvenWhenTheRootLooksLikeOne(t *testing.
 		t.Fatal(err)
 	}
 	plain, _ := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
-	write := WithPostEditHooks(plain, hookTestSettings(shHook("lint", `echo ran`, ".txt")), bashTestSettings(t, root), "")
+	write := WithPostEditHooks(plain, hookTestSettings(shHook("lint", `echo ran`, ".txt")), "")
 	callTool(t, write, root, map[string]any{"path": "src/a.dat", "content": "x\n"}, nil)
 	output := callTool(t, write, root, map[string]any{"path": "src/a.dat", "content": "x\n"}, nil)
 	if strings.Contains(output, "post-edit") || !strings.Contains(output, "Unchanged") {

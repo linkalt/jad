@@ -315,7 +315,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	hooks, err := normalizeHooksSettings(setting["hooks"], settingPath)
+	hooks, err := normalizeHooksSettings(setting["hooks"], settingPath, envFileBase)
 	if err != nil {
 		return SessionConfig{}, err
 	}

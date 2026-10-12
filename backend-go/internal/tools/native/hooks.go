@@ -18,7 +18,7 @@ import (
 // and appends their report to the result. Only a call that changed a file runs a check:
 // a failed call, a rejected path and an unchanged file do not. The check never changes
 // the status of the call; its outcome is text for the model.
-func WithPostEditHooks(tool tools.Tool, hooks sessionfs.HooksSettings, bash sessionfs.NativeBashSettings, apiKeyEnv string) tools.Tool {
+func WithPostEditHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEnv string) tools.Tool {
 	if !hooks.Active() {
 		return tool
 	}
@@ -36,7 +36,7 @@ func WithPostEditHooks(tool tools.Tool, hooks sessionfs.HooksSettings, bash sess
 		if err != nil || changed == "" {
 			return result, err
 		}
-		report := runPostEditHooks(ctx, hooks, bash, apiKeyEnv, execution, changed)
+		report := runPostEditHooks(ctx, hooks, apiKeyEnv, execution, changed)
 		if report == "" {
 			return result, nil
 		}
@@ -47,7 +47,7 @@ func WithPostEditHooks(tool tools.Tool, hooks sessionfs.HooksSettings, bash sess
 
 // runPostEditHooks runs every check whose extension matches the file and returns their
 // report, or "" when none matched or every matching check passed with on_failure_only.
-func runPostEditHooks(ctx context.Context, hooks sessionfs.HooksSettings, bash sessionfs.NativeBashSettings, apiKeyEnv string, execution tools.ExecutionContext, changed string) string {
+func runPostEditHooks(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv string, execution tools.ExecutionContext, changed string) string {
 	file := changed
 	if !filepath.IsAbs(file) {
 		file = filepath.Join(execution.WorkspaceRoot, filepath.FromSlash(changed))
@@ -58,7 +58,7 @@ func runPostEditHooks(ctx context.Context, hooks sessionfs.HooksSettings, bash s
 		if !hookMatchesExtension(hook, extension) {
 			continue
 		}
-		if section := runPostEditHook(ctx, hook, hooks, bash, apiKeyEnv, execution.WorkspaceRoot, file); section != "" {
+		if section := runPostEditHook(ctx, hook, hooks, apiKeyEnv, execution.WorkspaceRoot, file); section != "" {
 			sections = append(sections, section)
 		}
 	}
@@ -77,7 +77,7 @@ func hookMatchesExtension(hook sessionfs.PostEditHook, extension string) bool {
 	return false
 }
 
-func runPostEditHook(ctx context.Context, hook sessionfs.PostEditHook, hooks sessionfs.HooksSettings, bash sessionfs.NativeBashSettings, apiKeyEnv, workspaceRoot, file string) string {
+func runPostEditHook(ctx context.Context, hook sessionfs.PostEditHook, hooks sessionfs.HooksSettings, apiKeyEnv, workspaceRoot, file string) string {
 	cwd, found := hookWorkingDirectory(hook, workspaceRoot, file)
 	if !found {
 		marker := strings.TrimPrefix(hook.Cwd, sessionfs.HookCwdNearestPrefix)
@@ -92,18 +92,18 @@ func runPostEditHook(ctx context.Context, hook sessionfs.PostEditHook, hooks ses
 	collector := newBashOutputCollector(
 		bashStreamLimits{headBytes: head, tailBytes: tail},
 		bashStreamLimits{headBytes: head, tailBytes: tail},
-		int(bash.MaxLineChars),
-		bash.StripANSI,
+		int(hooks.MaxLineChars),
+		hooks.StripANSI,
 	)
 	argv := hookArguments(hook, cwd, file)
 	child := runBashCommand(ctx, bashChildRequest{
 		file:                     argv[0],
 		args:                     argv[1:],
 		cwd:                      cwd,
-		environment:              buildNativeBashEnvironment(os.Environ(), bash, apiKeyEnv),
+		environment:              buildNativeBashEnvironment(os.Environ(), sessionfs.NativeBashSettings{Env: hooks.Env, EnvDeny: hooks.EnvDeny}, apiKeyEnv),
 		timeout:                  time.Duration(hooks.TimeoutMS) * time.Millisecond,
-		killGrace:                time.Duration(bash.KillGraceMs) * time.Millisecond,
-		killProcessGroupWhenDone: bash.KillProcessGroup == "always",
+		killGrace:                time.Duration(hooks.KillGraceMs) * time.Millisecond,
+		killProcessGroupWhenDone: hooks.KillProcessGroup == "always",
 		collector:                collector,
 	})
 	label := "[" + hook.Name + "] "
@@ -202,14 +202,7 @@ func fileDigest(path string) string {
 }
 
 // withConfiguredHooks applies the session's post-edit checks to tool. The checks run
-// under bash's child-process settings (environment, kill policy, line cut), so enabling
-// them without tools.native.bash is a configuration error.
-func withConfiguredHooks(config sessionfs.SessionConfig, tool tools.Tool) (tools.Tool, error) {
-	if !config.Hooks.Active() {
-		return tool, nil
-	}
-	if config.NativeBash == nil {
-		return tools.Tool{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: hooks needs tools.native.bash, whose child-process settings it uses", config.SettingPath)}
-	}
-	return WithPostEditHooks(tool, config.Hooks, *config.NativeBash, config.Model.APIKeyEnv), nil
+// under the hooks' own child-process settings and need no other tool.
+func withConfiguredHooks(config sessionfs.SessionConfig, tool tools.Tool) tools.Tool {
+	return WithPostEditHooks(tool, config.Hooks, config.Model.APIKeyEnv)
 }

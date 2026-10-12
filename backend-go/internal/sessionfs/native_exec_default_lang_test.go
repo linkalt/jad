@@ -133,6 +133,40 @@ func TestExecSpillDefaultsToItsOwnDirectoryNotBashs(t *testing.T) {
 	}
 }
 
+func TestExecSpillFilesAreNamedForTheTool(t *testing.T) {
+	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+		"bash": map[string]any{},
+		"exec": map[string]any{},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := config.NativeBash.Spill.FilePrefix; got != "bash" {
+		t.Fatalf("bash spill file prefix = %q, want bash", got)
+	}
+	if got := config.NativeExec.Child.Spill.FilePrefix; got != "exec" {
+		t.Fatalf("exec spill file prefix = %q, want exec", got)
+	}
+	legacy, err := loadApprovalSetting(t, nativeTools(map[string]any{
+		"exec": map[string]any{"spill": map[string]any{"stdout_full": "{cwd}/.exec-output/{call_id}.{stream}"}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := legacy.NativeExec.Child.Spill.FilePrefix; got != "exec" {
+		t.Fatalf("exec spill file prefix with a legacy template = %q, want exec", got)
+	}
+	defaultTemplate, err := loadApprovalSetting(t, nativeTools(map[string]any{
+		"exec": map[string]any{"spill": map[string]any{"stdout_full": "{cwd}/x/{call_id}.out"}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := defaultTemplate.NativeExec.Child.Spill.StderrFull; !strings.Contains(got, "/.exec-output/exec-") {
+		t.Fatalf("exec default stderr template = %q, want the .exec-output/exec- file name", got)
+	}
+}
+
 func TestExecSpillStorageDirAndLegacyTemplatesStayConfigurable(t *testing.T) {
 	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
 		"exec": map[string]any{"spill": map[string]any{"storage_dir": "custom-out"}},

@@ -309,6 +309,21 @@ func TestNativeBashSpillKeepsFullOutputOnlyWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestNativeSpillFileNameFollowsTheConfiguredPrefix(t *testing.T) {
+	root := t.TempDir()
+	for _, test := range []struct{ prefix, want string }{{"", "bash"}, {"bash", "bash"}, {"exec", "exec"}} {
+		settings := bashTestSettings(t, root)
+		settings.Spill = sessionfs.NativeBashSpillSettings{
+			Enabled: true, Keep: "always", CapBytes: 1024, StorageDir: filepath.Join(root, "out-"+test.want), FilePrefix: test.prefix,
+		}
+		output := executeBashTest(t, root, "name-call", "printf 'kept\\n'", ".", settings)
+		path := filepath.Join(root, "out-"+test.want, test.want+"-name-call.stdout.log")
+		if _, err := os.Stat(path); err != nil || !strings.Contains(output, test.want+"-name-call.stdout.log") {
+			t.Fatalf("prefix %q: spill %s missing (%v); result=%s", test.prefix, path, err, output)
+		}
+	}
+}
+
 func TestNativeBashSpillCapsAndReportsFailuresWithoutFailingCommand(t *testing.T) {
 	root := t.TempDir()
 	settings := bashTestSettings(t, root)

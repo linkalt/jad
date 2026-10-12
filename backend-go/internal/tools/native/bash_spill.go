@@ -12,7 +12,13 @@ import (
 	"example.com/agent-harness/backend-go/internal/sessionfs"
 )
 
-const bashGeneratedSpillFilename = "bash-{call_id}.{stream}.log"
+func bashGeneratedSpillFilename(policy sessionfs.NativeBashSpillSettings) string {
+	prefix := policy.FilePrefix
+	if prefix == "" {
+		prefix = "bash"
+	}
+	return prefix + "-{call_id}.{stream}.log"
+}
 
 var bashSpillPlaceholderPattern = regexp.MustCompile(`\{([a-z_]+)\}`)
 
@@ -92,11 +98,11 @@ func planBashSpill(
 				path = filepath.Join(workspaceRoot, path)
 			}
 		} else {
-			pruneTemplate = bashGeneratedSpillFilename
+			pruneTemplate = bashGeneratedSpillFilename(policy)
 			path = filepath.Join(storageDir, strings.NewReplacer(
 				"{call_id}", encodeBashSpillCallID(callID),
 				"{stream}", string(stream),
-			).Replace(bashGeneratedSpillFilename))
+			).Replace(pruneTemplate))
 		}
 		pruneBashSpillFiles(filepath.Dir(path), bashSpillPruneRegexp(pruneTemplate, workspaceRoot, sessionDir), policy.RetentionDays)
 		plan.writers[stream] = &bashSpillWriter{path: path, capBytes: policy.CapBytes}

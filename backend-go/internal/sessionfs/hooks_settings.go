@@ -27,7 +27,7 @@ const (
 )
 
 var (
-	hooksKeys          = []string{"enabled", "max_output_bytes", "post_edit", "timeout_ms"}
+	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "post_edit", "strip_ansi", "timeout_ms"}
 	postEditHookKeys   = []string{"argv", "cwd", "ext", "name", "on_failure_only"}
 	hookNamePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
 	hookExtPattern     = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
@@ -47,6 +47,15 @@ type HooksSettings struct {
 	MaxOutputBytes int64
 	// PostEdit lists the checks; every entry whose extension matches the changed file runs, in order.
 	PostEdit []PostEditHook
+	// The child-process settings of a check. They are the hooks' own: nothing is read from
+	// tools.native.bash. Env and EnvDeny shape the environment on top of the shared allowlist.
+	KillGraceMs      int64
+	KillProcessGroup string
+	MaxLineChars     int64
+	StripANSI        bool
+	EnvFile          string
+	Env              map[string]string
+	EnvDeny          []string
 }
 
 // PostEditHook is one check: an argv (no shell) run after a file with one of Ext changed.
@@ -71,14 +80,14 @@ func (settings HooksSettings) Active() bool {
 
 // normalizeHooksSettings reads the `hooks` node. Only an absent key takes a default; a
 // null or misspelt value is an error so a typo cannot quietly turn a check off.
-func normalizeHooksSettings(raw json.RawMessage, settingPath string) (HooksSettings, error) {
+func normalizeHooksSettings(raw json.RawMessage, settingPath, envFileBase string) (HooksSettings, error) {
 	settings := HooksSettings{TimeoutMS: defaultHooksTimeoutMS, MaxOutputBytes: defaultHooksMaxOutputBytes}
-	if len(raw) == 0 {
-		return settings, nil
-	}
-	fields, err := decodeConfigObject(raw, settingPath+": hooks")
-	if err != nil {
-		return HooksSettings{}, configError("%s: hooks must be an object", settingPath)
+	fields := map[string]json.RawMessage{}
+	if len(raw) > 0 {
+		var err error
+		if fields, err = decodeConfigObject(raw, settingPath+": hooks"); err != nil {
+			return HooksSettings{}, configError("%s: hooks must be an object", settingPath)
+		}
 	}
 	for key := range fields {
 		if !containsString(hooksKeys, key) {
@@ -110,6 +119,9 @@ func normalizeHooksSettings(raw json.RawMessage, settingPath string) (HooksSetti
 	if err := bounded("max_output_bytes", &settings.MaxOutputBytes, minHooksMaxOutputBytes, maxHooksMaxOutputBytes); err != nil {
 		return HooksSettings{}, err
 	}
+	if err := normalizeHooksChild(&settings, fields, settingPath, envFileBase); err != nil {
+		return HooksSettings{}, err
+	}
 	if value, exists := fields["post_edit"]; exists {
 		var entries []json.RawMessage
 		if json.Unmarshal(value, &entries) != nil || entries == nil || len(entries) > maxHooksPostEdit {
@@ -129,6 +141,31 @@ func normalizeHooksSettings(raw json.RawMessage, settingPath string) (HooksSetti
 		}
 	}
 	return settings, nil
+}
+
+// normalizeHooksChild reads the child-process keys of the hooks node.
+func normalizeHooksChild(settings *HooksSettings, fields map[string]json.RawMessage, settingPath, envFileBase string) error {
+	const section = "hooks"
+	var err error
+	if settings.KillGraceMs, err = configuredInteger(fields, "kill_grace_ms", defaultNativeBashKillGraceMs, 0, maxNativeBashKillGraceMs, settingPath, section); err != nil {
+		return err
+	}
+	if settings.KillProcessGroup, err = normalizeKillProcessGroup(fields, section, settingPath); err != nil {
+		return err
+	}
+	if settings.MaxLineChars, err = configuredInteger(fields, "max_line_chars", defaultNativeBashMaxLine, 20, maxNativeBashMaxLine, settingPath, section); err != nil {
+		return err
+	}
+	if settings.StripANSI, err = bashBool(fields, "strip_ansi", true, settingPath+": "+section); err != nil {
+		return err
+	}
+	envFile, fileEnv, err := loadConfiguredEnvFile(fields, envFileBase, settingPath, section)
+	if err != nil {
+		return err
+	}
+	settings.EnvFile = envFile
+	settings.Env, settings.EnvDeny, err = normalizeChildEnvironment(fields, section, settingPath, fileEnv)
+	return err
 }
 
 func normalizePostEditHook(raw json.RawMessage, settingPath string, index int) (PostEditHook, error) {

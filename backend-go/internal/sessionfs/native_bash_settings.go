@@ -8,32 +8,33 @@ import (
 )
 
 const (
-	defaultNativeBashShell               = "/bin/bash"
-	defaultNativeBashTimeoutMs     int64 = 120_000
-	defaultNativeBashMaxTimeoutMs  int64 = 600_000
-	defaultNativeBashKillGraceMs   int64 = 2_000
-	maxNativeBashKillGraceMs       int64 = 60_000
-	defaultNativeBashMaxBytes      int64 = 64 * 1024
-	defaultNativeBashStdoutHead    int64 = 16 * 1024
-	defaultNativeBashStdoutTail    int64 = 32 * 1024
-	defaultNativeBashStderrHead    int64 = 4 * 1024
-	defaultNativeBashStderrTail    int64 = 12 * 1024
-	defaultNativeBashMaxLine       int64 = 2_000
-	maxNativeBashMaxLine           int64 = 8_000
-	defaultNativeBashStdinMax      int64 = 256 * 1024
-	defaultNativeBashSpillCap      int64 = 64 * 1024 * 1024
-	maxNativeBashSpillCap          int64 = 1024 * 1024 * 1024
-	defaultNativeBashRetention     int64 = 14
-	maxNativeBashRetention         int64 = 3650
-	defaultNativeBashSpillDir            = ".bash-output"
-	defaultNativeBashSpillFilename       = "bash-{call_id}.{stream}.log"
-	defaultNativeBashSpillPath           = "{cwd}/.bash-output/bash-{call_id}.{stream}.log"
-	defaultNativeExecSpillDir            = ".exec-output"
-	defaultNativeExecSpillPath           = "{cwd}/.exec-output/bash-{call_id}.{stream}.log"
-	defaultNativeBashKillPolicy          = "always"
-	defaultNativeBashSpillKeep           = "truncated_only"
-	maxNativeBashTimeoutMs         int64 = 3_600_000
-	NativeBashMinCallTimeoutMs     int64 = 1_000
+	defaultNativeBashShell                 = "/bin/bash"
+	defaultNativeBashTimeoutMs       int64 = 120_000
+	defaultNativeBashMaxTimeoutMs    int64 = 600_000
+	defaultNativeBashKillGraceMs     int64 = 2_000
+	maxNativeBashKillGraceMs         int64 = 60_000
+	defaultNativeBashMaxBytes        int64 = 64 * 1024
+	defaultNativeBashStdoutHead      int64 = 16 * 1024
+	defaultNativeBashStdoutTail      int64 = 32 * 1024
+	defaultNativeBashStderrHead      int64 = 4 * 1024
+	defaultNativeBashStderrTail      int64 = 12 * 1024
+	defaultNativeBashMaxLine         int64 = 2_000
+	maxNativeBashMaxLine             int64 = 8_000
+	defaultNativeBashStdinMax        int64 = 256 * 1024
+	defaultNativeBashSpillCap        int64 = 64 * 1024 * 1024
+	maxNativeBashSpillCap            int64 = 1024 * 1024 * 1024
+	defaultNativeBashRetention       int64 = 14
+	maxNativeBashRetention           int64 = 3650
+	defaultNativeBashSpillDir              = ".bash-output"
+	defaultNativeBashSpillFilePrefix       = "bash"
+	defaultNativeBashSpillPath             = "{cwd}/.bash-output/bash-{call_id}.{stream}.log"
+	defaultNativeExecSpillDir              = ".exec-output"
+	defaultNativeExecSpillFilePrefix       = "exec"
+	defaultNativeExecSpillPath             = "{cwd}/.exec-output/exec-{call_id}.{stream}.log"
+	defaultNativeBashKillPolicy            = "always"
+	defaultNativeBashSpillKeep             = "truncated_only"
+	maxNativeBashTimeoutMs           int64 = 3_600_000
+	NativeBashMinCallTimeoutMs       int64 = 1_000
 )
 
 var bashEnvNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -53,6 +54,7 @@ type NativeBashSpillSettings struct {
 	CapBytes        int64
 	RetentionDays   int64
 	StorageDir      string
+	FilePrefix      string
 	StdoutFull      string
 	StderrFull      string
 	AllowUnreadable bool
@@ -162,11 +164,8 @@ func normalizeBashStyleFields(
 	if settings.KillGraceMs, err = configuredInteger(fields, "kill_grace_ms", defaultNativeBashKillGraceMs, 0, maxNativeBashKillGraceMs, settingPath, section); err != nil {
 		return nil, err
 	}
-	settings.KillProcessGroup = defaultNativeBashKillPolicy
-	if value, ok := fields["kill_process_group"]; ok && strings.TrimSpace(string(value)) != "null" {
-		if err := json.Unmarshal(value, &settings.KillProcessGroup); err != nil || (settings.KillProcessGroup != "always" && settings.KillProcessGroup != "timeout_only") {
-			return nil, configError("%s: %s.kill_process_group must be always or timeout_only", settingPath, section)
-		}
+	if settings.KillProcessGroup, err = normalizeKillProcessGroup(fields, section, settingPath); err != nil {
+		return nil, err
 	}
 	if settings.MaxBytes, err = configuredInteger(fields, "max_bytes", defaultNativeBashMaxBytes, 1, maxNativeToolBytes, settingPath, section); err != nil {
 		return nil, err
@@ -196,49 +195,13 @@ func normalizeBashStyleFields(
 		return nil, err
 	}
 
-	settings.Env = map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}
-	settings.EnvDeny = []string{}
-	envFile, fileEnv, err := loadConfiguredEnvFile(fields, envFileBase, settingPath, strings.TrimPrefix(section, "tools.native."))
+	envFile, fileEnv, err := loadConfiguredEnvFile(fields, envFileBase, settingPath, section)
 	if err != nil {
 		return nil, err
 	}
 	settings.EnvFile = envFile
-	for name, value := range fileEnv {
-		settings.Env[name] = value
-	}
-	if rawEnv, ok := fields["env"]; ok && strings.TrimSpace(string(rawEnv)) != "null" {
-		var values map[string]json.RawMessage
-		if err := json.Unmarshal(rawEnv, &values); err != nil || values == nil {
-			return nil, configError("%s: %s.env must be an object", settingPath, section)
-		}
-		for name, rawValue := range values {
-			if !bashEnvNamePattern.MatchString(name) {
-				return nil, configError("%s: %s.env.%s is not a valid environment variable name", settingPath, section, name)
-			}
-			var value string
-			if err := json.Unmarshal(rawValue, &value); err != nil {
-				return nil, configError("%s: %s.env.%s must be a string", settingPath, section, name)
-			}
-			settings.Env[name] = value
-		}
-	}
-	if rawDeny, ok := fields["env_deny"]; ok && strings.TrimSpace(string(rawDeny)) != "null" {
-		var names []json.RawMessage
-		if err := json.Unmarshal(rawDeny, &names); err != nil || names == nil {
-			return nil, configError("%s: %s.env_deny must be an array", settingPath, section)
-		}
-		settings.EnvDeny = make([]string, 0, len(names))
-		for index, rawName := range names {
-			var name string
-			if err := json.Unmarshal(rawName, &name); err != nil {
-				return nil, configError("%s: %s.env_deny[%d] must be an environment variable name", settingPath, section, index)
-			}
-			name = strings.TrimSpace(name)
-			if name == "" || !bashEnvNamePattern.MatchString(name) {
-				return nil, configError("%s: %s.env_deny[%d] must be an environment variable name", settingPath, section, index)
-			}
-			settings.EnvDeny = append(settings.EnvDeny, name)
-		}
+	if settings.Env, settings.EnvDeny, err = normalizeChildEnvironment(fields, section, settingPath, fileEnv); err != nil {
+		return nil, err
 	}
 
 	settings.Policy = NativePathPolicy{Paths: []NativePathRule{}}
@@ -249,6 +212,62 @@ func normalizeBashStyleFields(
 		}
 	}
 	return settings, nil
+}
+
+// normalizeKillProcessGroup reads kill_process_group from the section's fields.
+func normalizeKillProcessGroup(fields map[string]json.RawMessage, section, settingPath string) (string, error) {
+	policy := defaultNativeBashKillPolicy
+	if value, ok := fields["kill_process_group"]; ok && strings.TrimSpace(string(value)) != "null" {
+		if err := json.Unmarshal(value, &policy); err != nil || (policy != "always" && policy != "timeout_only") {
+			return "", configError("%s: %s.kill_process_group must be always or timeout_only", settingPath, section)
+		}
+	}
+	return policy, nil
+}
+
+// normalizeChildEnvironment builds the variables a child process gets on top of the
+// allowlist: the defaults, then fileEnv, then the section's env; env_deny names the ones to drop.
+func normalizeChildEnvironment(fields map[string]json.RawMessage, section, settingPath string, fileEnv map[string]string) (map[string]string, []string, error) {
+	environment := map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}
+	denied := []string{}
+	for name, value := range fileEnv {
+		environment[name] = value
+	}
+	if rawEnv, ok := fields["env"]; ok && strings.TrimSpace(string(rawEnv)) != "null" {
+		var values map[string]json.RawMessage
+		if err := json.Unmarshal(rawEnv, &values); err != nil || values == nil {
+			return nil, nil, configError("%s: %s.env must be an object", settingPath, section)
+		}
+		for name, rawValue := range values {
+			if !bashEnvNamePattern.MatchString(name) {
+				return nil, nil, configError("%s: %s.env.%s is not a valid environment variable name", settingPath, section, name)
+			}
+			var value string
+			if err := json.Unmarshal(rawValue, &value); err != nil {
+				return nil, nil, configError("%s: %s.env.%s must be a string", settingPath, section, name)
+			}
+			environment[name] = value
+		}
+	}
+	if rawDeny, ok := fields["env_deny"]; ok && strings.TrimSpace(string(rawDeny)) != "null" {
+		var names []json.RawMessage
+		if err := json.Unmarshal(rawDeny, &names); err != nil || names == nil {
+			return nil, nil, configError("%s: %s.env_deny must be an array", settingPath, section)
+		}
+		denied = make([]string, 0, len(names))
+		for index, rawName := range names {
+			var name string
+			if err := json.Unmarshal(rawName, &name); err != nil {
+				return nil, nil, configError("%s: %s.env_deny[%d] must be an environment variable name", settingPath, section, index)
+			}
+			name = strings.TrimSpace(name)
+			if name == "" || !bashEnvNamePattern.MatchString(name) {
+				return nil, nil, configError("%s: %s.env_deny[%d] must be an environment variable name", settingPath, section, index)
+			}
+			denied = append(denied, name)
+		}
+	}
+	return environment, denied, nil
 }
 
 func normalizeNativeBashStream(raw json.RawMessage, fallback NativeBashStreamBudget, settingPath, section string) (NativeBashStreamBudget, error) {
@@ -277,11 +296,11 @@ func normalizeNativeBashStream(raw json.RawMessage, fallback NativeBashStreamBud
 }
 
 func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, sessionDir, toolStorageDir string, readPolicy, grepPolicy NativePathPolicy) (NativeBashSpillSettings, error) {
-	defaultDir, defaultPath := defaultNativeBashSpillDir, defaultNativeBashSpillPath
+	defaultDir, defaultPath, filePrefix := defaultNativeBashSpillDir, defaultNativeBashSpillPath, defaultNativeBashSpillFilePrefix
 	if section == "tools.native.exec" {
-		defaultDir, defaultPath = defaultNativeExecSpillDir, defaultNativeExecSpillPath
+		defaultDir, defaultPath, filePrefix = defaultNativeExecSpillDir, defaultNativeExecSpillPath, defaultNativeExecSpillFilePrefix
 	}
-	settings := NativeBashSpillSettings{Enabled: true, Keep: defaultNativeBashSpillKeep, CapBytes: defaultNativeBashSpillCap, RetentionDays: defaultNativeBashRetention, AllowUnreadable: false}
+	settings := NativeBashSpillSettings{FilePrefix: filePrefix, Enabled: true, Keep: defaultNativeBashSpillKeep, CapBytes: defaultNativeBashSpillCap, RetentionDays: defaultNativeBashRetention, AllowUnreadable: false}
 	fields := map[string]json.RawMessage{}
 	if len(raw) > 0 {
 		var err error
@@ -369,7 +388,7 @@ func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, se
 	settings.StorageDir = filepath.Clean(storageDir)
 	if !settings.AllowUnreadable {
 		for _, stream := range []string{"stdout", "stderr"} {
-			fileName := strings.NewReplacer("{call_id}", "sample-call", "{stream}", stream).Replace(defaultNativeBashSpillFilename)
+			fileName := strings.NewReplacer("{call_id}", "sample-call", "{stream}", stream).Replace(filePrefix + "-{call_id}.{stream}.log")
 			target := filepath.Join(settings.StorageDir, fileName)
 			if !bashSpillReadable(target, cwd, readPolicy, grepPolicy) {
 				return NativeBashSpillSettings{}, configError("%s: %s.spill.storage_dir resolves to a location the model could not read back; keep it under the session cwd (%s) or extend tools.native.read.paths, or set %s.spill.allow_unreadable", settingPath, section, cwd, section)
