@@ -51,7 +51,7 @@ func TestNormalizeNativeProcessSettingsDefaultsAndIgnoresBash(t *testing.T) {
 	if settings.Env["NO_COLOR"] != "1" || settings.Env["GIT_TERMINAL_PROMPT"] != "0" || len(settings.EnvDeny) != 0 {
 		t.Fatalf("default process environment = %+v deny=%v", settings.Env, settings.EnvDeny)
 	}
-	if !reflect.DeepEqual(settings.StateContext, NativeProcessStateContextSettings{States: []string{"running"}, Limit: 20}) {
+	if !reflect.DeepEqual(settings.StateContext, NativeProcessStateContextSettings{States: []string{"running"}, Limit: 20, Mode: NativeStateContextModeItems}) {
 		t.Fatalf("default process statecontext = %+v", settings.StateContext)
 	}
 }
@@ -103,7 +103,7 @@ func TestNormalizeNativeProcessSettingsOverridesAndStorage(t *testing.T) {
 	if !reflect.DeepEqual(settings.Policy, wantPolicy) {
 		t.Fatalf("explicit process path policy = %+v, want %+v", settings.Policy, wantPolicy)
 	}
-	if !reflect.DeepEqual(settings.StateContext, NativeProcessStateContextSettings{States: []string{"exited", "running"}, Limit: 7}) {
+	if !reflect.DeepEqual(settings.StateContext, NativeProcessStateContextSettings{States: []string{"exited", "running"}, Limit: 7, Mode: NativeStateContextModeItems}) {
 		t.Fatalf("normalized process statecontext = %+v", settings.StateContext)
 	}
 }

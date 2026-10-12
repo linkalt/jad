@@ -32,6 +32,7 @@ const (
 )
 
 var defaultNativeTaskStateStatuses = []string{"in-progress", "done"}
+var defaultNativeTaskDetailStatuses = []string{"in-progress"}
 var allowedNativeTaskStatuses = map[string]struct{}{
 	"todo": {}, "in-progress": {}, "blocked": {}, "done": {},
 }
@@ -41,6 +42,10 @@ var allowedNativeTaskStatuses = map[string]struct{}{
 type NativeTaskStateContextSettings struct {
 	Statuses []string
 	Limit    int64
+	// Mode is "items" (default) or "summary": a count per status, with the tasks of
+	// DetailStatuses still listed in full (at most Limit of them).
+	Mode           string
+	DetailStatuses []string
 }
 
 // NativeTaskSettings contains persistent task storage and output limits for
@@ -165,7 +170,7 @@ func normalizeNativeTaskStorageDir(fields map[string]json.RawMessage, cwd, toolS
 }
 
 func normalizeNativeTaskStateContext(raw json.RawMessage, settingPath string, maxLimit int64) (NativeTaskStateContextSettings, error) {
-	settings := NativeTaskStateContextSettings{Statuses: append([]string(nil), defaultNativeTaskStateStatuses...), Limit: min(defaultNativeTaskStateLimit, maxLimit)}
+	settings := NativeTaskStateContextSettings{Statuses: append([]string(nil), defaultNativeTaskStateStatuses...), Limit: min(defaultNativeTaskStateLimit, maxLimit), Mode: NativeStateContextModeItems}
 	if len(raw) == 0 {
 		return settings, nil
 	}
@@ -197,6 +202,12 @@ func normalizeNativeTaskStateContext(raw json.RawMessage, settingPath string, ma
 		settings.Statuses = statuses
 	}
 	if settings.Limit, err = configuredInteger(fields, "limit", min(defaultNativeTaskStateLimit, maxLimit), 1, maxLimit, settingPath, "tools.native.task.statecontext"); err != nil {
+		return NativeTaskStateContextSettings{}, err
+	}
+	if settings.Mode, err = normalizeNativeStateContextMode(fields, section); err != nil {
+		return NativeTaskStateContextSettings{}, err
+	}
+	if settings.DetailStatuses, err = normalizeNativeStateContextDetail(fields, "detail_statuses", section, settings.Mode, settings.Statuses, defaultNativeTaskDetailStatuses); err != nil {
 		return NativeTaskStateContextSettings{}, err
 	}
 	return settings, nil

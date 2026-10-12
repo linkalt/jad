@@ -15,6 +15,10 @@ type SubagentStateContext struct {
 	Items             []SubagentStateContextItem `json:"items"`
 	HasMore           bool                       `json:"has_more"`
 	OmittedBySnapshot int                        `json:"omitted_by_snapshot,omitempty"`
+	// Counts, set in summary mode, holds one entry per configured state that has runs;
+	// Items then lists only the detail states.
+	Counts        []StateContextCount `json:"counts,omitempty"`
+	OmittedCounts int                 `json:"omitted_counts,omitempty"`
 }
 
 // SubagentStateContextItem is one run. The task is the short preview the run list
@@ -47,9 +51,22 @@ func CollectSubagentStateContext(manager *SubagentManager, owner string, setting
 			matching = append(matching, view)
 		}
 	}
-	count := min(len(matching), max(int(settings.Limit), 0))
+	var counts []StateContextCount
+	listed := matching
+	if settings.Mode == sessionfs.NativeStateContextModeSummary {
+		values := make([]string, 0, len(matching))
+		listed = make([]subagentRunView, 0, len(matching))
+		for _, view := range matching {
+			values = append(values, view.state)
+			if containsState(settings.DetailStates, view.state) {
+				listed = append(listed, view)
+			}
+		}
+		counts = countStates(settings.States, values)
+	}
+	count := min(len(listed), max(int(settings.Limit), 0))
 	items := make([]SubagentStateContextItem, 0, count)
-	for _, view := range matching[:count] {
+	for _, view := range listed[:count] {
 		item := SubagentStateContextItem{
 			ID:        view.id,
 			Agent:     view.agent,
@@ -64,21 +81,29 @@ func CollectSubagentStateContext(manager *SubagentManager, owner string, setting
 		}
 		items = append(items, item)
 	}
-	return &SubagentStateContext{Items: items, HasMore: len(matching) > count}, nil
+	return &SubagentStateContext{Items: items, HasMore: len(listed) > count, Counts: counts}, nil
 }
 
 func (section *SubagentStateContext) StateContextItemCount() int {
 	if section == nil {
 		return 0
 	}
-	return len(section.Items)
+	return len(section.Items) + len(section.Counts)
 }
 
 func (section *SubagentStateContext) TrimStateContextItem() bool {
-	if section == nil || len(section.Items) == 0 {
+	if section == nil {
 		return false
 	}
-	section.Items = section.Items[:len(section.Items)-1]
-	section.OmittedBySnapshot++
-	return true
+	if len(section.Items) > 0 {
+		section.Items = section.Items[:len(section.Items)-1]
+		section.OmittedBySnapshot++
+		return true
+	}
+	if len(section.Counts) > 0 {
+		section.Counts = section.Counts[:len(section.Counts)-1]
+		section.OmittedCounts++
+		return true
+	}
+	return false
 }

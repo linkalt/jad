@@ -24,6 +24,7 @@ const (
 )
 
 var defaultNativeProcessStateNames = []string{"running"}
+var defaultNativeProcessDetailStates = []string{"running"}
 var allowedNativeProcessStates = map[string]struct{}{
 	"running": {}, "exited": {}, "stopped": {}, "failed": {}, "lost": {},
 }
@@ -33,6 +34,10 @@ var allowedNativeProcessStates = map[string]struct{}{
 type NativeProcessStateContextSettings struct {
 	States []string
 	Limit  int64
+	// Mode is "items" (default) or "summary": a count per state, with the processes of
+	// DetailStates still listed in full (at most Limit of them).
+	Mode         string
+	DetailStates []string
 }
 
 // NativeProcessSettings contains process lifecycle, output, environment, and
@@ -282,7 +287,7 @@ func normalizeNativeProcessStorageDir(fields map[string]json.RawMessage, cwd, to
 }
 
 func normalizeNativeProcessStateContext(raw json.RawMessage, settingPath string) (NativeProcessStateContextSettings, error) {
-	settings := NativeProcessStateContextSettings{States: append([]string(nil), defaultNativeProcessStateNames...), Limit: defaultNativeProcessStateLimit}
+	settings := NativeProcessStateContextSettings{States: append([]string(nil), defaultNativeProcessStateNames...), Limit: defaultNativeProcessStateLimit, Mode: NativeStateContextModeItems}
 	if len(raw) == 0 {
 		return settings, nil
 	}
@@ -314,6 +319,12 @@ func normalizeNativeProcessStateContext(raw json.RawMessage, settingPath string)
 		settings.States = states
 	}
 	if settings.Limit, err = configuredInteger(fields, "limit", defaultNativeProcessStateLimit, 1, maxNativeProcessStateContext, settingPath, "tools.native.process.statecontext"); err != nil {
+		return NativeProcessStateContextSettings{}, err
+	}
+	if settings.Mode, err = normalizeNativeStateContextMode(fields, section); err != nil {
+		return NativeProcessStateContextSettings{}, err
+	}
+	if settings.DetailStates, err = normalizeNativeStateContextDetail(fields, "detail_states", section, settings.Mode, settings.States, defaultNativeProcessDetailStates); err != nil {
 		return NativeProcessStateContextSettings{}, err
 	}
 	return settings, nil

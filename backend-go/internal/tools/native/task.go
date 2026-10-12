@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"unicode/utf16"
@@ -601,6 +602,15 @@ func pluralSuffix(count int) string {
 type TaskStateContext struct {
 	Items   []TaskStateContextItem `json:"items"`
 	HasMore bool                   `json:"has_more"`
+	// Counts, set in summary mode, holds one entry per configured status that has
+	// tasks; Items then lists only the detail statuses.
+	Counts        []TaskStateContextCount `json:"counts,omitempty"`
+	OmittedCounts int                     `json:"omitted_counts,omitempty"`
+}
+
+type TaskStateContextCount struct {
+	Status string `json:"status"`
+	Count  int    `json:"count"`
 }
 
 // TaskStateContextItem is the compact subset included in state-context snapshots.
@@ -621,29 +631,72 @@ func CollectTaskStateContext(source TaskStateSource, settings sessionfs.NativeTa
 	for _, status := range settings.Statuses {
 		statuses = append(statuses, TaskStatus(status))
 	}
+	if settings.Mode == sessionfs.NativeStateContextModeSummary {
+		return collectTaskSummary(source, settings, statuses)
+	}
 	listed, err := source.List(TaskListFilter{Statuses: statuses, Limit: int(settings.Limit)})
 	if err != nil {
 		return nil, err
 	}
 	items := make([]TaskStateContextItem, 0, len(listed.Tasks))
 	for _, task := range listed.Tasks {
-		items = append(items, TaskStateContextItem{ID: task.ID, Title: task.Title, Status: task.Status, Priority: task.Priority, Tags: append([]string{}, task.Tags...), UpdatedAt: task.UpdatedAt})
+		items = append(items, taskStateContextItem(task))
 	}
 	return &TaskStateContext{Items: items, HasMore: listed.HasMore}, nil
+}
+
+func taskStateContextItem(task TaskRecord) TaskStateContextItem {
+	return TaskStateContextItem{ID: task.ID, Title: task.Title, Status: task.Status, Priority: task.Priority, Tags: append([]string{}, task.Tags...), UpdatedAt: task.UpdatedAt}
+}
+
+// collectTaskSummary reads every configured task once, so the counts and the listed
+// detail tasks agree.
+func collectTaskSummary(source TaskStateSource, settings sessionfs.NativeTaskStateContextSettings, statuses []TaskStatus) (*TaskStateContext, error) {
+	listed, err := source.List(TaskListFilter{Statuses: statuses, Limit: math.MaxInt32})
+	if err != nil {
+		return nil, err
+	}
+	values := make([]string, 0, len(listed.Tasks))
+	items := make([]TaskStateContextItem, 0)
+	hasMore := false
+	for _, task := range listed.Tasks {
+		values = append(values, string(task.Status))
+		if !containsState(settings.DetailStatuses, string(task.Status)) {
+			continue
+		}
+		if len(items) >= int(settings.Limit) {
+			hasMore = true
+			continue
+		}
+		items = append(items, taskStateContextItem(task))
+	}
+	counts := make([]TaskStateContextCount, 0)
+	for _, count := range countStates(settings.Statuses, values) {
+		counts = append(counts, TaskStateContextCount{Status: count.State, Count: count.Count})
+	}
+	return &TaskStateContext{Items: items, HasMore: hasMore, Counts: counts}, nil
 }
 
 func (state *TaskStateContext) StateContextItemCount() int {
 	if state == nil {
 		return 0
 	}
-	return len(state.Items)
+	return len(state.Items) + len(state.Counts)
 }
 
 func (state *TaskStateContext) TrimStateContextItem() bool {
-	if state == nil || len(state.Items) == 0 {
+	if state == nil {
 		return false
 	}
-	state.Items = state.Items[:len(state.Items)-1]
-	state.HasMore = true
-	return true
+	if len(state.Items) > 0 {
+		state.Items = state.Items[:len(state.Items)-1]
+		state.HasMore = true
+		return true
+	}
+	if len(state.Counts) > 0 {
+		state.Counts = state.Counts[:len(state.Counts)-1]
+		state.OmittedCounts++
+		return true
+	}
+	return false
 }

@@ -135,6 +135,10 @@ type NativeSubagentSettings struct {
 type NativeSubagentStateContextSettings struct {
 	States []string
 	Limit  int64
+	// Mode is "items" (default) or "summary": a count per state, with the runs of
+	// DetailStates still listed in full (at most Limit of them).
+	Mode         string
+	DetailStates []string
 }
 
 // SubagentChangeTools are the native tools that let a child change files or run code.
@@ -330,7 +334,7 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 }
 
 func normalizeNativeSubagentStateContext(raw json.RawMessage, settingPath string) (NativeSubagentStateContextSettings, error) {
-	settings := NativeSubagentStateContextSettings{States: append([]string(nil), defaultNativeSubagentStateNames...), Limit: defaultNativeSubagentStateLimit}
+	settings := NativeSubagentStateContextSettings{States: append([]string(nil), defaultNativeSubagentStateNames...), Limit: defaultNativeSubagentStateLimit, Mode: NativeStateContextModeItems}
 	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
 		return settings, nil
 	}
@@ -340,8 +344,8 @@ func normalizeNativeSubagentStateContext(raw json.RawMessage, settingPath string
 		return NativeSubagentStateContextSettings{}, configError("%s: %s must be an object", settingPath, section)
 	}
 	for key := range fields {
-		if key != "states" && key != "limit" {
-			return NativeSubagentStateContextSettings{}, unsupportedToolKey(settingPath+": "+section, key, []string{"states", "limit"}, "")
+		if key != "states" && key != "limit" && key != "mode" && key != "detail_states" {
+			return NativeSubagentStateContextSettings{}, unsupportedToolKey(settingPath+": "+section, key, []string{"states", "limit", "mode", "detail_states"}, "")
 		}
 	}
 	if value, exists := fields["states"]; exists && strings.TrimSpace(string(value)) != "null" {
@@ -363,6 +367,13 @@ func normalizeNativeSubagentStateContext(raw json.RawMessage, settingPath string
 		settings.States = states
 	}
 	if settings.Limit, err = configuredInteger(fields, "limit", defaultNativeSubagentStateLimit, 1, maxNativeSubagentStateLimit, settingPath, section); err != nil {
+		return NativeSubagentStateContextSettings{}, err
+	}
+	where := settingPath + ": " + section
+	if settings.Mode, err = normalizeNativeStateContextMode(fields, where); err != nil {
+		return NativeSubagentStateContextSettings{}, err
+	}
+	if settings.DetailStates, err = normalizeNativeStateContextDetail(fields, "detail_states", where, settings.Mode, settings.States, defaultNativeSubagentStateNames); err != nil {
 		return NativeSubagentStateContextSettings{}, err
 	}
 	return settings, nil

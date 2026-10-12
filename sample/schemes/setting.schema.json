@@ -1327,7 +1327,9 @@
                       "minimum": 1,
                       "maximum": 100000,
                       "default": 20
-                    }
+                    },
+                    "mode": {"type": "string", "enum": ["items", "summary"], "default": "items", "description": "items lists the matching records. summary adds a count per state and lists in full only the processes named in detail_states, so a large section stays small; the model fetches the rest with the tool. Counts and the listed records come from one read."},
+                    "detail_states": {"type": "array", "items": {"type": "string", "enum": ["running", "exited", "stopped", "failed", "lost"]}, "uniqueItems": true, "default": ["running"], "description": "Only with mode summary: states listed in full, each of which must be in states."}
                   },
                   "additionalProperties": true
                 },
@@ -1434,7 +1436,9 @@
                   "description": "Task statuses and limit included in statecontext snapshots.",
                   "properties": {
                     "statuses": {"type": "array", "items": {"type": "string", "enum": ["todo", "in-progress", "blocked", "done"]}, "uniqueItems": true, "default": ["in-progress", "done"]},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 25}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 25},
+                    "mode": {"type": "string", "enum": ["items", "summary"], "default": "items", "description": "items lists the matching records. summary adds a count per status and lists in full only the tasks named in detail_statuses, so a large section stays small; the model fetches the rest with the tool. Counts and the listed records come from one read."},
+                    "detail_statuses": {"type": "array", "items": {"type": "string", "enum": ["todo", "in-progress", "blocked", "done"]}, "uniqueItems": true, "default": ["in-progress"], "description": "Only with mode summary: statuses listed in full, each of which must be in statuses."}
                   },
                   "additionalProperties": true
                 },
@@ -1757,7 +1761,9 @@
                   "description": "Which of the session's sub-agent runs a statecontext snapshot lists (when statecontext.tools includes subagent), so the model still has its run ids after a compaction. Each item carries the id, agent, state, a short task preview, times, rounds and tokens; never the answer.",
                   "properties": {
                     "states": {"type": "array", "items": {"type": "string", "enum": ["queued", "running", "done", "failed", "timed_out", "stopped", "lost"]}, "uniqueItems": true, "default": ["queued", "running"], "description": "Run states to list."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 20, "description": "Most runs listed, newest first."}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 20, "description": "Most runs listed, newest first."},
+                    "mode": {"type": "string", "enum": ["items", "summary"], "default": "items", "description": "items lists the matching records. summary adds a count per state and lists in full only the runs named in detail_states, so a large section stays small; the model fetches the rest with the tool. Counts and the listed records come from one read."},
+                    "detail_states": {"type": "array", "items": {"type": "string", "enum": ["queued", "running", "done", "failed", "timed_out", "stopped", "lost"]}, "uniqueItems": true, "default": ["queued", "running"], "description": "Only with mode summary: states listed in full, each of which must be in states."}
                   },
                   "additionalProperties": false
                 }

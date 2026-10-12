@@ -226,7 +226,8 @@ Old 2.6 (snapshot stored as parts) is replaced by 2.8.
    block; the "state is now empty" block is the first block whose providers are all empty. Live check pending.
 8. Summary mode (2.5): memory first, then task, process, subagent. Gated by step 0.
    Memory part DONE (see `DECISIONS.md`, "Statecontext memory summary mode"): per-selector `group_by`. Task, process and
-   subagent summaries are not done. Step-0 live byte measurements are still not taken.
+   subagent part DONE ("Statecontext task, process and subagent summary mode"): per-section `mode: "summary"` with
+   `counts` and `detail_statuses`/`detail_states`. The hybrid form of 2.5 is the detail list. Live check: memory only so far.
 
 Order reason: 1 to 4 are small and keep today's storage, so they can ship before the risky part; 5 must precede 6 and 7;
 8 is independent and can move earlier if step 0 shows large blocks.

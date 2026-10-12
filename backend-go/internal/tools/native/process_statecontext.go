@@ -22,6 +22,10 @@ type ProcessStateContext struct {
 	Items             []ProcessStateContextItem `json:"items"`
 	HasMore           bool                      `json:"has_more"`
 	OmittedBySnapshot int                       `json:"omitted_by_snapshot,omitempty"`
+	// Counts, set in summary mode, holds one entry per configured state that has
+	// processes; Items then lists only the detail states.
+	Counts        []StateContextCount `json:"counts,omitempty"`
+	OmittedCounts int                 `json:"omitted_counts,omitempty"`
 }
 
 type ProcessStateContextItem struct {
@@ -59,13 +63,26 @@ func CollectProcessStateContext(manager ProcessStateSource, settings sessionfs.N
 		}
 		return matching[i].ID < matching[j].ID
 	})
+	var counts []StateContextCount
+	listed := matching
+	if settings.Mode == sessionfs.NativeStateContextModeSummary {
+		values := make([]string, 0, len(matching))
+		listed = make([]ProcessSnapshot, 0, len(matching))
+		for _, snapshot := range matching {
+			values = append(values, string(snapshot.State))
+			if containsState(settings.DetailStates, string(snapshot.State)) {
+				listed = append(listed, snapshot)
+			}
+		}
+		counts = countStates(settings.States, values)
+	}
 	limit := int(settings.Limit)
 	if limit < 0 {
 		limit = 0
 	}
-	count := min(len(matching), limit)
+	count := min(len(listed), limit)
 	items := make([]ProcessStateContextItem, 0, count)
-	for _, snapshot := range matching[:count] {
+	for _, snapshot := range listed[:count] {
 		item := ProcessStateContextItem{
 			ID:        snapshot.ID,
 			State:     string(snapshot.State),
@@ -81,21 +98,29 @@ func CollectProcessStateContext(manager ProcessStateSource, settings sessionfs.N
 		}
 		items = append(items, item)
 	}
-	return &ProcessStateContext{Items: items, HasMore: len(matching) > count}, nil
+	return &ProcessStateContext{Items: items, HasMore: len(listed) > count, Counts: counts}, nil
 }
 
 func (section *ProcessStateContext) StateContextItemCount() int {
 	if section == nil {
 		return 0
 	}
-	return len(section.Items)
+	return len(section.Items) + len(section.Counts)
 }
 
 func (section *ProcessStateContext) TrimStateContextItem() bool {
-	if section == nil || len(section.Items) == 0 {
+	if section == nil {
 		return false
 	}
-	section.Items = section.Items[:len(section.Items)-1]
-	section.OmittedBySnapshot++
-	return true
+	if len(section.Items) > 0 {
+		section.Items = section.Items[:len(section.Items)-1]
+		section.OmittedBySnapshot++
+		return true
+	}
+	if len(section.Counts) > 0 {
+		section.Counts = section.Counts[:len(section.Counts)-1]
+		section.OmittedCounts++
+		return true
+	}
+	return false
 }
