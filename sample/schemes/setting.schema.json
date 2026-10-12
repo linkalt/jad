@@ -11,7 +11,8 @@
         "tools": {"type": "array", "items": {"type": "string", "enum": ["task", "memory", "process", "subagent"]}, "uniqueItems": true, "minItems": 1, "description": "Providers copied into the snapshot. Each needs its tools.native entry. subagent is Go backend only."},
         "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 10485760, "default": 65536},
         "prompt": {"type": "string", "pattern": "\\S", "description": "Trusted instruction text placed after the header and before the data. It is read from the setting, not from the data."},
-        "prompt_documents": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Files whose text follows prompt, in order. Relative paths resolve from cwd; ~ is expanded. A file that cannot be read is a config error. The files are read when settings load, so an edit applies to the next snapshot written."}
+        "prompt_documents": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Files whose text follows prompt, in order. Relative paths resolve from cwd; ~ is expanded. A file that cannot be read is a config error. The files are read when settings load, so an edit applies to the next snapshot written."},
+        "max_prompt_bytes": {"type": "integer", "minimum": 1, "maximum": 65536, "default": 4096, "description": "user trigger only: the most bytes of prompt text a user may type when firing the trigger. The header, the configured prompt and this limit must together fit in max_bytes."}
       },
       "required": ["tools"],
       "additionalProperties": false
@@ -466,10 +467,11 @@
         "role": {"type": "string", "enum": ["system", "developer"], "default": "developer"},
         "triggers": {
           "type": "object",
-          "description": "Only a trigger that appears here fires; there is no per-trigger enabled flag. compaction: after manual or automatic compaction. session_start: when a run finds no stored snapshot, so the model sees the stores from the first run on. The old flat trigger, tools and max_bytes keys are config errors.",
+          "description": "Only a trigger that appears here fires; there is no per-trigger enabled flag. compaction: after manual or automatic compaction. session_start: when a run finds no stored snapshot, so the model sees the stores from the first run on. user: fired by POST /api/sessions/{ref}/statecontext with a prompt the user typed; refused while a run is active. The old flat trigger, tools and max_bytes keys are config errors.",
           "properties": {
             "compaction": {"$ref": "#/$defs/statecontextTrigger"},
-            "session_start": {"$ref": "#/$defs/statecontextTrigger"}
+            "session_start": {"$ref": "#/$defs/statecontextTrigger"},
+            "user": {"$ref": "#/$defs/statecontextTrigger"}
           },
           "additionalProperties": false,
           "default": {}

@@ -85,6 +85,18 @@ func collectStateContextSnapshot(
 	sources stateContextSources,
 	trigger string,
 ) (transcript.StateContextSnapshot, bool, error) {
+	return collectStateContextSnapshotWithPrompt(config, sources, trigger, "")
+}
+
+// collectStateContextSnapshotWithPrompt adds a prompt typed by the user after the
+// configured one. A typed prompt is itself content, so the user trigger writes a block
+// with it even when the stores are empty.
+func collectStateContextSnapshotWithPrompt(
+	config sessionfs.SessionConfig,
+	sources stateContextSources,
+	trigger string,
+	typedPrompt string,
+) (transcript.StateContextSnapshot, bool, error) {
 	settings := config.StateContext
 	triggerSettings, configured := settings.Triggers[trigger]
 	if !settings.Enabled || !configured {
@@ -125,7 +137,7 @@ func collectStateContextSnapshot(
 		providers = append(providers, stateContextProviderValue{name: name, value: value})
 		hasData = hasData || stateContextProviderHasData(value)
 	}
-	if !hasData {
+	if !hasData && typedPrompt == "" {
 		return transcript.StateContextSnapshot{}, false, nil
 	}
 	generatedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
@@ -133,6 +145,9 @@ func collectStateContextSnapshot(
 	lead := settings.Header
 	if triggerSettings.Prompt != "" {
 		lead += "\n" + triggerSettings.Prompt
+	}
+	if typedPrompt != "" {
+		lead += "\n" + typedPrompt
 	}
 	rendered, err := renderStateContextDocument(lead, document)
 	if err != nil {

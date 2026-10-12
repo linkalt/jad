@@ -232,3 +232,31 @@ func TestStateContextSchemaAgreesWithTheLoader(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeStateContextSettingsUserTriggerMaxPromptBytes(t *testing.T) {
+	memory := &NativeMemorySettings{StateContext: []NativeMemoryStateContextSelector{{Type: "project", Limit: 1}}}
+	configured, err := normalizeStateContextRaw(t, `{"enabled":true,"triggers":{"user":{"tools":["memory"]}}}`, nil, nil, memory, nil)
+	if err != nil {
+		t.Fatalf("user trigger: %v", err)
+	}
+	if got := configured.Triggers["user"].MaxPromptBytes; got != defaultStateContextMaxPromptBytes {
+		t.Fatalf("default max_prompt_bytes = %d, want %d", got, defaultStateContextMaxPromptBytes)
+	}
+	custom, err := normalizeStateContextRaw(t, `{"enabled":true,"triggers":{"user":{"tools":["memory"],"max_prompt_bytes":100}}}`, nil, nil, memory, nil)
+	if err != nil || custom.Triggers["user"].MaxPromptBytes != 100 {
+		t.Fatalf("custom max_prompt_bytes = %+v, %v", custom.Triggers["user"], err)
+	}
+	for name, raw := range map[string]string{
+		"zero":              `{"enabled":true,"triggers":{"user":{"tools":["memory"],"max_prompt_bytes":0}}}`,
+		"above the cap":     `{"enabled":true,"triggers":{"user":{"tools":["memory"],"max_prompt_bytes":65537}}}`,
+		"not on compaction": `{"enabled":true,"triggers":{"compaction":{"tools":["memory"],"max_prompt_bytes":10}}}`,
+		"exceeds max_bytes": `{"enabled":true,"triggers":{"user":{"tools":["memory"],"max_bytes":1024,"max_prompt_bytes":2000}}}`,
+	} {
+		if _, err := normalizeStateContextRaw(t, raw, nil, nil, memory, nil); err == nil {
+			t.Fatalf("%s: want a config error", name)
+		}
+	}
+	if configured.Triggers["user"].MaxBytes < configured.Triggers["user"].MaxPromptBytes {
+		t.Fatal("max_prompt_bytes must fit inside max_bytes")
+	}
+}

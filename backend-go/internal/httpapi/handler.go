@@ -241,10 +241,23 @@ type FrontCompactionResponse struct {
 	ArchiveName string `json:"archive_name,omitempty"`
 }
 
+// StateContextResponse reports the block the user trigger wrote, or would write when
+// the request was a preview. Written is false when there was nothing to write.
+type StateContextResponse struct {
+	Written bool   `json:"written"`
+	Preview bool   `json:"preview,omitempty"`
+	Role    string `json:"role,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Bytes   int    `json:"bytes,omitempty"`
+}
+
 type SessionMutation interface {
 	Compact(context.Context) (CompactionResponse, error)
 	Reset(context.Context) error
 	FrontCompact(context.Context, string) (FrontCompactionResponse, error)
+	// StateContext fires the user trigger with the prompt the user typed; with preview
+	// it renders the block without storing it.
+	StateContext(ctx context.Context, prompt string, preview bool) (StateContextResponse, error)
 }
 
 type ResolvedMutation struct {
@@ -522,6 +535,8 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleSessionReset(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "front-compact":
 		h.handleSessionFrontCompact(w, r, reference, profile)
+	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "statecontext":
+		h.handleSessionStateContext(w, r, reference, profile)
 	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "checkpoints":
 		h.handleCheckpointList(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 6 && segments[3] == "checkpoints" && segments[5] == "restore":

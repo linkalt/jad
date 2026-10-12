@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,8 @@ type fakeMutation struct {
 	reset          bool
 	frontCompacted bool
 	frontMessageID string
+	statePrompt    string
+	statePreview   bool
 }
 
 func (m *fakeMutation) Compact(context.Context) (CompactionResponse, error) {
@@ -43,6 +46,12 @@ func (m *fakeMutation) FrontCompact(_ context.Context, messageID string) (FrontC
 	m.frontCompacted = true
 	m.frontMessageID = messageID
 	return FrontCompactionResponse{DeleteMode: "recoverable", ArchiveName: "messages-test.jsonl"}, nil
+}
+
+func (m *fakeMutation) StateContext(_ context.Context, prompt string, preview bool) (StateContextResponse, error) {
+	m.statePrompt = prompt
+	m.statePreview = preview
+	return StateContextResponse{Written: !preview, Preview: preview, Role: "developer", Text: "block:" + prompt, Bytes: len(prompt)}, nil
 }
 
 func TestCompactAndResetRoutesUseResolvedProfileAndFrontendPayloads(t *testing.T) {
@@ -97,5 +106,38 @@ func TestCompactAndResetRoutesUseResolvedProfileAndFrontendPayloads(t *testing.T
 	}
 	if len(resolver.calls) != 2 || resolver.calls[0] != [2]string{"session-1", "dev"} || resolver.calls[1] != [2]string{"session-1", "dev"} {
 		t.Fatalf("maintenance resolution calls = %#v", resolver.calls)
+	}
+}
+
+func TestStateContextRoutePassesPromptAndPreviewAndIsRefusedDuringARun(t *testing.T) {
+	mutation := &fakeMutation{}
+	resolver := &fakeMaintenanceResolver{
+		fakeResolver: &fakeResolver{resolved: ResolvedSession{Reference: "canonical", Profile: "dev"}},
+		mutation:     mutation,
+	}
+	handler := testHandler(t, resolver, Config{APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 4096, RunStateRetention: time.Minute})
+	defer handler.Close()
+	post := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/sessions/session-1/statecontext?profile=dev", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+testAPIToken)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	response := post(`{"prompt":"hello","preview":true}`)
+	if response.Code != http.StatusOK || mutation.statePrompt != "hello" || !mutation.statePreview || !strings.Contains(response.Body.String(), `"statecontext"`) {
+		t.Fatalf("preview = %d %s prompt=%q preview=%t", response.Code, response.Body.String(), mutation.statePrompt, mutation.statePreview)
+	}
+	if response := post(`{"prompt":1}`); response.Code != http.StatusBadRequest {
+		t.Fatalf("non-string prompt status = %d, want 400", response.Code)
+	}
+	if response := post(`{"preview":"yes"}`); response.Code != http.StatusBadRequest {
+		t.Fatalf("non-boolean preview status = %d, want 400", response.Code)
+	}
+	if _, err := handler.runs.begin("canonical\x00dev", "web-active"); err != nil {
+		t.Fatal(err)
+	}
+	if response := post(`{}`); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "while a run is active") {
+		t.Fatalf("during a run = %d %s, want 409", response.Code, response.Body.String())
 	}
 }

@@ -125,7 +125,7 @@ func (h *Handler) observeRequest(w http.ResponseWriter, r *http.Request, next fu
 // arbitrary text into the log through the URL.
 var knownSessionRoutes = map[string]bool{
 	"tools": true, "history": true, "files": true, "profile": true,
-	"model-default": true, "compact": true, "reset": true, "front-compact": true,
+	"model-default": true, "compact": true, "reset": true, "front-compact": true, "statecontext": true,
 	"run": true, "run/interaction": true, "run/interaction/extend": true,
 	"run/stream": true, "run/stop": true,
 }

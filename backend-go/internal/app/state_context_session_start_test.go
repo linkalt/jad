@@ -32,6 +32,11 @@ type sessionStartFixture struct {
 
 func newSessionStartFixture(t *testing.T, seedProcess bool) *sessionStartFixture {
 	t.Helper()
+	return newStateContextFixture(t, seedProcess, map[string]any{"session_start": map[string]any{"tools": []string{"process"}, "max_bytes": 4096}})
+}
+
+func newStateContextFixture(t *testing.T, seedProcess bool, triggers map[string]any) *sessionStartFixture {
+	t.Helper()
 	fixture := &sessionStartFixture{t: t}
 	workspace := t.TempDir()
 	processStorage := filepath.Join(workspace, "processes")
@@ -104,7 +109,7 @@ func newSessionStartFixture(t *testing.T, seedProcess bool) *sessionStartFixture
 		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json")},
 		Settings: map[string]any{
 			"max_tool_rounds": 1,
-			"statecontext":    map[string]any{"enabled": true, "triggers": map[string]any{"session_start": map[string]any{"tools": []string{"process"}, "max_bytes": 4096}}},
+			"statecontext":    map[string]any{"enabled": true, "triggers": triggers},
 		},
 		Native: map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "statecontext": map[string]any{"states": []string{"exited"}, "limit": 5}}},
 		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},

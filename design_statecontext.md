@@ -219,6 +219,8 @@ Old 2.6 (snapshot stored as parts) is replaced by 2.8.
    count of history items. Not in this phase: the "state is now empty" block (it needs a trigger that runs on later
    requests, so it comes with phase 7) and a live check after a rebuild.
 6. `user` trigger: endpoint, config, UI (2.4).
+   Backend DONE (see `DECISIONS.md`, "Statecontext user trigger"): config, `POST .../statecontext` with preview, tests. UI
+   still to do, following the frontend sequence.
 7. `run_start` with change detection.
 8. Summary mode (2.5): memory first, then task, process, subagent. Gated by step 0.
 

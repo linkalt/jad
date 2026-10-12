@@ -13,9 +13,15 @@ const DefaultStateContextHeader = "STATE CONTEXT SNAPSHOT. The following structu
 const (
 	StateContextTriggerCompaction   = "compaction"
 	StateContextTriggerSessionStart = "session_start"
+	StateContextTriggerUser         = "user"
 )
 
-var stateContextTriggerNames = []string{StateContextTriggerCompaction, StateContextTriggerSessionStart}
+const (
+	defaultStateContextMaxPromptBytes int64 = 4096
+	maxStateContextMaxPromptBytes     int64 = 64 * 1024
+)
+
+var stateContextTriggerNames = []string{StateContextTriggerCompaction, StateContextTriggerSessionStart, StateContextTriggerUser}
 
 // StateContextTrigger is the configuration of one trigger.
 type StateContextTrigger struct {
@@ -24,6 +30,9 @@ type StateContextTrigger struct {
 	// Prompt is the trusted text placed between the header and the data: the inline
 	// prompt, then each prompt document. It is empty when neither is configured.
 	Prompt string
+	// MaxPromptBytes caps the text a user types when firing the user trigger; it is
+	// zero for every other trigger.
+	MaxPromptBytes int64
 }
 
 // StateContextSettings controls optional context snapshots derived at a trigger.
@@ -146,7 +155,8 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 		return StateContextTrigger{}, err
 	}
 	for key := range fields {
-		if key != "tools" && key != "max_bytes" && key != "prompt" && key != "prompt_documents" {
+		userOnly := key == "max_prompt_bytes" && name == StateContextTriggerUser
+		if key != "tools" && key != "max_bytes" && key != "prompt" && key != "prompt_documents" && !userOnly {
 			return StateContextTrigger{}, configError("%s: %s.%s is not supported", settingPath, section, key)
 		}
 	}
@@ -179,8 +189,16 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 	if trigger.Prompt, err = stateContextTriggerPrompt(fields, section, settingPath, cwd); err != nil {
 		return StateContextTrigger{}, err
 	}
+	if name == StateContextTriggerUser {
+		if trigger.MaxPromptBytes, err = configuredInteger(fields, "max_prompt_bytes", defaultStateContextMaxPromptBytes, 1, maxStateContextMaxPromptBytes, settingPath, section); err != nil {
+			return StateContextTrigger{}, err
+		}
+	}
 	if int64(len(header)+len(trigger.Prompt)) > trigger.MaxBytes {
 		return StateContextTrigger{}, configError("%s: statecontext.header plus %s prompt is larger than %s.max_bytes", settingPath, section, section)
+	}
+	if int64(len(header)+len(trigger.Prompt))+trigger.MaxPromptBytes > trigger.MaxBytes {
+		return StateContextTrigger{}, configError("%s: statecontext.header, %s prompt and %s.max_prompt_bytes together are larger than %s.max_bytes", settingPath, section, section, section)
 	}
 	return trigger, nil
 }
