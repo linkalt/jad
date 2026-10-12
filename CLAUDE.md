@@ -90,5 +90,3 @@ Commit only when asked. Stage explicit paths; never use `git add -A` or `git com
 ## Questions and approvals
 
 Use `RequestDraft` for every question/confirmation, including ambiguous requests and risky or out-of-scope actions (deleting files, changing `messages.jsonl`, touching the backend). Include a recommendation. `decision` determines approval; `status: "answered"` alone does not. Skip questions a code read or command can answer.
-
-Treat a repeated `request_draft` or accepted draft in `STATE CONTEXT SNAPSHOT` as stale if its work already appears in `git log` or resume state: check `git log --oneline -5` and resume state once. Do not re-ask/re-summarize old work; act on the latest user message. Mention the stale draft at most once, briefly, and only if it conflicts with the latest request.
