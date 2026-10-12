@@ -7,7 +7,7 @@ Repo: `/home/www/Downloads/tmp/myagent3`. Priority: system > developer > this fi
 1. **Never restart or kill the running backend.** Tell the user if a restart is required. Never use `pkill`, `killall`, or kill by name/pattern; only stop a PID you started.
 2. **Preserve `messages.jsonl` output exactly.** Treat it as a golden contract; use `messages-golden-diff` for any potentially affecting change. Change its format only when explicitly requested.
 3. **No hardcoded configurable values.** Put limits, timeouts, flags and toggles in config with defaults; update `sample/schemes/` and config tests.
-4. **Trace before proposing or editing.** Check affected paths, callers, dependencies and tests. Follow `IMPLEMENT → RUN → TEST → MEASURE → FIX` until checks pass.
+4. **Explore and trace before proposing or editing.** Apply the Conceptual Exploration guidelines. Follow `DISCOVER/EXPLORE → IMPLEMENT → RUN → TEST → MEASURE → FIX` until checks pass.
 5. **Report only work verified in this session.** Give observed test counts, exit codes and measurements; never claim a child agent's results as your own. Report unrelated bugs via `bug-report-memory`, not silently fixed or ignored.
 
 ## Conceptual exploration
