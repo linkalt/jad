@@ -17,11 +17,8 @@ import (
 // may be empty: no store means a stored-image reference is refused, and no resizer
 // means the image is sent as it is.
 type DecideImages struct {
-	// ReadPolicy is the path policy of the read tool. Without that tool it is the zero
-	// policy, which allows the workspace only.
-	ReadPolicy sessionfs.NativePathPolicy
-	Store      *imagestore.Store
-	Resizer    *imageresize.Resizer
+	Store   *imagestore.Store
+	Resizer *imageresize.Resizer
 }
 
 // loadDecideImages replaces the path or data of every image part by a data URL. It
@@ -82,10 +79,10 @@ func decodeDecideImageData(raw string, settings sessionfs.NativeDecideSettings, 
 	return data, ""
 }
 
-// readDecideImageFile reads one image of a decide call by path, under the read tool's
-// path policy, or from the image store when the path is a stored-image reference.
+// readDecideImageFile reads one image of a decide call by path, under decide's own
+// path rules, or from the image store when the path is a stored-image reference.
 func readDecideImageFile(path string, images DecideImages, settings sessionfs.NativeDecideSettings, execution tools.ExecutionContext, label string) ([]byte, string) {
-	return readImageFile(path, images.ReadPolicy, images.Store, settings.MaxImageBytes, execution, label)
+	return readImageFile(path, settings.Policy, images.Store, settings.MaxImageBytes, execution, label)
 }
 
 // readWithin reads at most limit bytes. It reads one byte more to learn that the source

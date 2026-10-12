@@ -422,7 +422,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeDecide, err := normalizeNativeDecideSettings(setting, settingPath)
+	nativeDecide, err := normalizeNativeDecideSettings(setting, location.Root.GlobalJadRoot, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}

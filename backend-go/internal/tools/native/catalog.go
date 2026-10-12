@@ -286,9 +286,6 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 			return nil, err
 		}
 		images := DecideImages{Store: imagestore.FromSettings(config.ImageStore), Resizer: imageresize.FromSettings(config.ImageResize)}
-		if config.NativeRead != nil {
-			images.ReadPolicy = config.NativeRead.Policy
-		}
 		tool, err := NewDecideTool(*config.NativeDecide, images)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}

@@ -65,6 +65,9 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"bash bad type", "bash", `{"timeout_ms":"slow"}`, false},
 		{"exec bad type", "exec", `{"timeout_ms":0}`, false},
 		{"read_image bad paths", "read_image", `{"paths":3}`, false},
+		{"decide paths", "decide", `{"paths":` + paths + `,"max_images":2}`, true},
+		{"decide unknown", "decide", `{"nope":1}`, false},
+		{"decide bad paths", "decide", `{"paths":3}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -104,7 +107,7 @@ func TestExecAndReadImageSchemaKeysMatchTheLoader(t *testing.T) {
 		t.Error("toolset.schema.json native must reference setting.schema.json, not repeat the tool settings")
 	}
 
-	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys} {
+	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys, "decide": nativeDecideKeys} {
 		got := flattenSchemaKeys(native[tool].(map[string]any), defs)
 		sort.Strings(got)
 		want = append([]string(nil), want...)

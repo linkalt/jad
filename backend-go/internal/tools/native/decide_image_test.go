@@ -252,13 +252,13 @@ func TestDecideImagePathStaysInTheWorkspace(t *testing.T) {
 	}
 }
 
-func TestDecideImagePathHonoursTheReadToolDenyRules(t *testing.T) {
+func TestDecideImagePathHonoursItsOwnDenyRules(t *testing.T) {
 	workspace := t.TempDir()
 	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
 		workspace = resolved
 	}
 	policy := sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(workspace, "private")}}}
-	rig := newImageRig(t, "openai", DecideImages{ReadPolicy: policy}, nil)
+	rig := newImageRig(t, "openai", DecideImages{}, func(s *sessionfs.NativeDecideSettings) { s.Policy = policy })
 	rig.workspace = workspace
 	rig.write(t, "private/a.png", decidePNG(t, 8, 8))
 	rig.write(t, "public/a.png", decidePNG(t, 8, 8))
@@ -373,9 +373,9 @@ func quote(text string) string {
 	return string(encoded)
 }
 
-// BuildCatalog must hand decide the read tool's path policy and the session's image
-// store, or a deny rule would not apply to decide and a stored image could not be read.
-func TestBuildCatalogWiresReadPolicyAndImageStoreIntoDecide(t *testing.T) {
+// BuildCatalog must give decide its own path policy and the session's image store, and
+// must not lend it the read tool's policy: read's deny rule must not apply to decide.
+func TestBuildCatalogWiresOwnPolicyAndImageStoreIntoDecide(t *testing.T) {
 	workspace := t.TempDir()
 	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
 		workspace = resolved
@@ -409,8 +409,8 @@ func TestBuildCatalogWiresReadPolicyAndImageStoreIntoDecide(t *testing.T) {
 	catalog, err := BuildCatalog(sessionfs.SessionConfig{
 		SettingPath:         filepath.Join(workspace, "setting.json"),
 		ToolDefinitionPaths: []string{filepath.Join(sample, "decide.json"), filepath.Join(sample, "read.json")},
-		NativeRead:          &sessionfs.NativeReadSettings{Policy: sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(workspace, "private")}}}, MaxBytes: 1000, MaxFileBytes: 1000, DefaultLimit: 10},
-		NativeDecide:        &sessionfs.NativeDecideSettings{Backend: "openai", BaseURL: server.URL, APIKeyEnv: "PATH", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 1000, MaxResponseBytes: 4096, MaxImages: 2, MaxImageBytes: 4000},
+		NativeRead:          &sessionfs.NativeReadSettings{Policy: sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(workspace, "public")}}}, MaxBytes: 1000, MaxFileBytes: 1000, DefaultLimit: 10},
+		NativeDecide:        &sessionfs.NativeDecideSettings{Backend: "openai", BaseURL: server.URL, APIKeyEnv: "PATH", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 1000, MaxResponseBytes: 4096, MaxImages: 2, MaxImageBytes: 4000, Policy: sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(workspace, "private")}}}},
 		ImageStore:          sessionfs.ImageStoreSettings{Dir: storeDir, MinBytes: 1, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 24},
 	})
 	if err != nil {
@@ -429,10 +429,10 @@ func TestBuildCatalogWiresReadPolicyAndImageStoreIntoDecide(t *testing.T) {
 		return string(result)
 	}
 	if output := call("private/a.png"); !strings.Contains(output, "path_denied") || received != 0 {
-		t.Fatalf("a path the read tool denies was read by decide (requests %d):\n%s", received, output)
+		t.Fatalf("a path decide denies was read (requests %d):\n%s", received, output)
 	}
 	if output := call("public/a.png"); !strings.Contains(output, `status\":\"ok`) && !strings.Contains(output, `"status":"ok"`) {
-		t.Fatalf("an allowed path was refused:\n%s", output)
+		t.Fatalf("a path only the read tool denies was refused for decide:\n%s", output)
 	}
 	if output := call("stored-image://" + names[0]); !strings.Contains(output, `status\":\"ok`) && !strings.Contains(output, `"status":"ok"`) {
 		t.Fatalf("a stored image was refused:\n%s", output)

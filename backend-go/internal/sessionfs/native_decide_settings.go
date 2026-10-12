@@ -21,7 +21,7 @@ const (
 )
 
 var (
-	nativeDecideKeys     = []string{"backend", "base_url", "api_key_env", "model", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes", "max_images", "max_image_bytes"}
+	nativeDecideKeys     = []string{"backend", "base_url", "api_key_env", "model", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes", "max_images", "max_image_bytes", "paths"}
 	nativeDecideBackends = []string{"openrouter", "openai"}
 	nativeDecideEnvName  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
@@ -54,9 +54,12 @@ type NativeDecideSettings struct {
 	MaxImages int64
 	// MaxImageBytes is the largest image, as a file or as decoded base64, read for a call.
 	MaxImageBytes int64
+	// Policy is decide's own path rules for an image given by path. Without paths it is
+	// the empty policy, which reaches the workspace only.
+	Policy NativePathPolicy
 }
 
-func normalizeNativeDecideSettings(setting map[string]json.RawMessage, settingPath string) (*NativeDecideSettings, error) {
+func normalizeNativeDecideSettings(setting map[string]json.RawMessage, globalJadRoot, settingPath string) (*NativeDecideSettings, error) {
 	toolsRaw, exists := setting["tools"]
 	if !exists {
 		return nil, nil
@@ -92,7 +95,12 @@ func normalizeNativeDecideSettings(setting map[string]json.RawMessage, settingPa
 		}
 	}
 
-	settings := &NativeDecideSettings{}
+	settings := &NativeDecideSettings{Policy: NativePathPolicy{Paths: []NativePathRule{}}}
+	if rawPaths, exists := fields["paths"]; exists {
+		if settings.Policy, err = normalizeNativePathPolicy(rawPaths, globalJadRoot, settingPath+": "+section+".paths"); err != nil {
+			return nil, err
+		}
+	}
 	if settings.Backend, err = nativeDecideString(fields, "backend", defaultNativeDecideBackend, settingPath); err != nil {
 		return nil, err
 	}

@@ -16,11 +16,11 @@ func decideSettingsFor(native string) map[string]json.RawMessage {
 }
 
 func TestNormalizeNativeDecideSettingsDefaultsPerBackend(t *testing.T) {
-	absent, err := normalizeNativeDecideSettings(decideSettingsFor(`{}`), "setting.json")
+	absent, err := normalizeNativeDecideSettings(decideSettingsFor(`{}`), "/jad", "setting.json")
 	if err != nil || absent != nil {
 		t.Fatalf("absent decide = %+v, %v; want nil", absent, err)
 	}
-	noTools, err := normalizeNativeDecideSettings(map[string]json.RawMessage{}, "setting.json")
+	noTools, err := normalizeNativeDecideSettings(map[string]json.RawMessage{}, "/jad", "setting.json")
 	if err != nil || noTools != nil {
 		t.Fatalf("no tools = %+v, %v; want nil", noTools, err)
 	}
@@ -34,18 +34,46 @@ func TestNormalizeNativeDecideSettingsDefaultsPerBackend(t *testing.T) {
 		"every key set":              {`{"decide":{"backend":"openai","base_url":"http://127.0.0.1:9/v1/","api_key_env":"MY_KEY","model":"m","timeout_ms":5,"max_questions":2,"max_input_bytes":7,"max_response_bytes":9,"max_images":3,"max_image_bytes":11}}`, NativeDecideSettings{Backend: "openai", BaseURL: "http://127.0.0.1:9/v1", APIKeyEnv: "MY_KEY", Model: "m", TimeoutMS: 5, MaxQuestions: 2, MaxInputBytes: 7, MaxResponseBytes: 9, MaxImages: 3, MaxImageBytes: 11}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := normalizeNativeDecideSettings(decideSettingsFor(tc.native), "setting.json")
-			if err != nil || got == nil || *got != tc.want {
+			got, err := normalizeNativeDecideSettings(decideSettingsFor(tc.native), "/jad", "setting.json")
+			tc.want.Policy = NativePathPolicy{Paths: []NativePathRule{}}
+			if err != nil || got == nil || !reflect.DeepEqual(*got, tc.want) {
 				t.Fatalf("settings = %+v, %v\nwant %+v", got, err, tc.want)
 			}
 		})
 	}
 }
 
+// decide's path rules are its own: read's rules are not borrowed, and without paths the
+// policy is the empty default (the workspace only).
+func TestNormalizeNativeDecideSettingsTakesOnlyItsOwnPaths(t *testing.T) {
+	defaults, err := normalizeNativeDecideSettings(decideSettingsFor(`{"read":{"paths":{"allow":["/tmp/pics"]}},"decide":{}}`), "/jad", "setting.json")
+	if err != nil || defaults == nil {
+		t.Fatalf("settings = %+v, %v", defaults, err)
+	}
+	if len(defaults.Policy.Paths) != 0 || defaults.Policy.UnrestrictedPaths {
+		t.Fatalf("decide took read's rules: %+v", defaults.Policy)
+	}
+	set, err := normalizeNativeDecideSettings(decideSettingsFor(`{"decide":{"paths":{"allow":["/tmp/pics"],"deny":["private"]}}}`), "/jad", "setting.json")
+	if err != nil || set == nil {
+		t.Fatalf("settings = %+v, %v", set, err)
+	}
+	actions := map[string]string{}
+	for _, rule := range set.Policy.Paths {
+		actions[rule.Action] = rule.Path
+	}
+	if actions["allow"] != "/tmp/pics" || actions["deny"] == "" {
+		t.Fatalf("decide.paths not parsed: %+v", set.Policy.Paths)
+	}
+	_, err = normalizeNativeDecideSettings(decideSettingsFor(`{"decide":{"paths":3}}`), "/jad", "setting.json")
+	if err == nil || !strings.Contains(err.Error(), "tools.native.decide.paths") {
+		t.Fatalf("bad paths error = %v, want one naming tools.native.decide.paths", err)
+	}
+}
+
 func TestNormalizeNativeDecideSettingsRejectsInvalidSettings(t *testing.T) {
 	for name, tc := range map[string]struct{ native, want string }{
 		"typo":                {`{"decide":{"max_question":10}}`, "tools.native.decide.max_question is not supported; did you mean max_questions?"},
-		"unrelated":           {`{"decide":{"approval":"ask"}}`, "tools.native.decide.approval is not supported; supported keys are api_key_env, backend, base_url, max_image_bytes, max_images, max_input_bytes, max_questions, max_response_bytes, model, timeout_ms"},
+		"unrelated":           {`{"decide":{"approval":"ask"}}`, "tools.native.decide.approval is not supported; supported keys are api_key_env, backend, base_url, max_image_bytes, max_images, max_input_bytes, max_questions, max_response_bytes, model, paths, timeout_ms"},
 		"not object":          {`{"decide":[]}`, "tools.native.decide must be an object"},
 		"null":                {`{"decide":null}`, "tools.native.decide must be an object"},
 		"unknown backend":     {`{"decide":{"backend":"anthropic"}}`, "tools.native.decide.backend must be one of openrouter, openai"},
@@ -70,7 +98,7 @@ func TestNormalizeNativeDecideSettingsRejectsInvalidSettings(t *testing.T) {
 		"image bytes string":  {`{"decide":{"max_image_bytes":"9"}}`, "tools.native.decide.max_image_bytes must be a safe integer"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := normalizeNativeDecideSettings(decideSettingsFor(tc.native), "setting.json")
+			_, err := normalizeNativeDecideSettings(decideSettingsFor(tc.native), "/jad", "setting.json")
 			switch {
 			case tc.want == "" && err != nil:
 				t.Fatalf("rejected a valid setting: %v", err)
@@ -114,7 +142,13 @@ func TestDecideSchemaListsTheKeysTheLoaderAccepts(t *testing.T) {
 	for key := range properties {
 		got = append(got, key)
 	}
-	want := append([]string(nil), nativeDecideKeys...)
+	// paths comes from the shared read_style definition, which the flatten test covers.
+	var want []string
+	for _, key := range nativeDecideKeys {
+		if key != "paths" {
+			want = append(want, key)
+		}
+	}
 	sort.Strings(got)
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
