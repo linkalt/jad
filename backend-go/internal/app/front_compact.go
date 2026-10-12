@@ -29,7 +29,7 @@ func (m boundMutation) FrontCompact(ctx context.Context, messageID string) (http
 		return result, err
 	}
 	m.shared.invalidateTurnStarts()
-	compacted, err := m.shared.store.FrontCompactFromMessage(messageID, m.config.FrontCompactionConfig.DeleteMode)
+	compacted, err := m.shared.frontCompactPreservingUsage(m.config, messageID, m.config.FrontCompactionConfig.DeleteMode)
 	if err != nil {
 		var conflict *transcript.FrontCompactionConflict
 		if errors.As(err, &conflict) {

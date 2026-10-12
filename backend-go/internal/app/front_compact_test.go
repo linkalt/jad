@@ -71,13 +71,69 @@ func TestHTTPFrontCompactArchivesSelectedTailAndInvalidatesCaches(t *testing.T) 
 	if err != nil || string(archived) != target+"\n"+tail+"\n" {
 		t.Fatalf("archive = %q err=%v", archived, err)
 	}
-	for _, name := range []string{"usage-cache.json", "cursor-cache.json"} {
-		if _, err := os.Stat(filepath.Join(sessionDir, "staging", name)); !os.IsNotExist(err) {
-			t.Errorf("front compaction left cache %s: %v", name, err)
-		}
+	if _, err := os.Stat(filepath.Join(sessionDir, "staging", "cursor-cache.json")); !os.IsNotExist(err) {
+		t.Errorf("front compaction left the cursor cache: %v", err)
+	}
+	if kept, err := os.ReadFile(filepath.Join(sessionDir, "staging", "usage-cache.json")); err != nil || string(kept) == "stale" {
+		t.Errorf("front compaction left the stale usage cache: %q, err=%v", kept, err)
 	}
 	if kept, err := os.ReadFile(filepath.Join(sessionDir, "staging", "statecontext.json")); err != nil || string(kept) != "stale" {
 		t.Errorf("front compaction changed the state context snapshot: %q, err=%v", kept, err)
+	}
+}
+
+// Front compaction removes the response records from the transcript, but the
+// session's spend is not undone: the totals stay and only the current usage
+// resets to 0, as after a normal compaction.
+func TestHTTPFrontCompactKeepsUsageTotalsAndResetsCurrent(t *testing.T) {
+	service, sessionDir := newFrontCompactService(t, `{"enabled":true,"delete_mode":"permanent"}`)
+	defer service.Close()
+	api := httptest.NewServer(service.Handler)
+	defer api.Close()
+
+	first := `{"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]}`
+	firstResponse := `{"type":"response.completed","session_turn":1,"session_step":1,"response":{"id":"usage-response-1","usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7},"output":[]}}`
+	second := `{"type":"message","role":"user","content":[{"type":"input_text","text":"second"}]}`
+	secondResponse := `{"type":"response.completed","session_turn":2,"session_step":1,"response":{"id":"usage-response-2","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7},"output":[]}}`
+	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
+	body := first + "\n" + firstResponse + "\n" + second + "\n" + secondResponse + "\n"
+	if err := os.WriteFile(messagesPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	boundary := len(first) + len(firstResponse) + 2
+	response, err := http.DefaultClient.Do(frontCompactRequest(t, api.URL, integrationAPIToken, "session-user-o"+fmt.Sprint(boundary)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseBody, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("front-compact status=%d body=%s", response.StatusCode, responseBody)
+	}
+	current, err := os.ReadFile(messagesPath)
+	if err != nil || string(current) != first+"\n"+firstResponse+"\n" {
+		t.Fatalf("active transcript = %q err=%v", current, err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(sessionDir, "staging", "usage-cache.json"))
+	if err != nil {
+		t.Fatalf("read usage cache: %v", err)
+	}
+	var cache usageCacheFile
+	if err := json.Unmarshal(raw, &cache); err != nil {
+		t.Fatalf("decode usage cache: %v", err)
+	}
+	summary := cache.Summary
+	if summary.CompletedResponses != 2 || summary.TurnCount != 2 || summary.InputTokens == nil || *summary.InputTokens != 8 || summary.OutputTokens == nil || *summary.OutputTokens != 6 {
+		t.Fatalf("usage totals after front compaction = %+v, want both responses kept", summary)
+	}
+	latest := summary.Current
+	if latest == nil || latest.InputTokens == nil || *latest.InputTokens != 0 || latest.OutputTokens == nil || *latest.OutputTokens != 0 || latest.TotalTokens == nil || *latest.TotalTokens != 0 {
+		t.Fatalf("current usage after front compaction = %+v, want 0", latest)
+	}
+	if cache.Transcript.Offset != int64(len(current)) {
+		t.Fatalf("usage cache offset = %d, want %d", cache.Transcript.Offset, len(current))
 	}
 }
 

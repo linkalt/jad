@@ -36,6 +36,29 @@ func (s *sharedSession) compactPreservingUsage(config sessionfs.SessionConfig, o
 	return result, nil
 }
 
+// frontCompactPreservingUsage front-compacts the transcript with the same usage
+// rule as compactPreservingUsage: the totals stay and the latest response's
+// token counts reset to 0, instead of being rebuilt from the kept messages.
+func (s *sharedSession) frontCompactPreservingUsage(config sessionfs.SessionConfig, messageID, deleteMode string) (transcript.FrontCompactionResult, error) {
+	before, err := scanTranscriptIndex(s, config)
+	if err != nil {
+		return transcript.FrontCompactionResult{}, fmt.Errorf("read usage before front compaction: %w", err)
+	}
+	result, err := s.store.FrontCompactFromMessage(messageID, deleteMode)
+	if err != nil {
+		return result, err
+	}
+	info, statErr := os.Stat(config.MessagesPath)
+	if statErr != nil {
+		return result, nil
+	}
+	summary := resetLatestResponseUsage(before.usage)
+	if err := writeUsageCacheCheckpoint(config, summary, info.Size(), before.lastResponseKey); err != nil {
+		return result, fmt.Errorf("write usage cache after front compaction: %w", err)
+	}
+	return result, nil
+}
+
 // resetLatestResponseUsage zeroes the latest response's token counts while
 // leaving the cumulative totals intact, matching the post-compaction baseline.
 func resetLatestResponseUsage(summary webui.UsageSummary) webui.UsageSummary {
