@@ -23,18 +23,18 @@ Recursively trace meaningful connections from the goal across relevant code, typ
 
 1. **Find the code with the right tool:**
    - Known symbol/call chain: Codebase Memory (`home-www-Downloads-tmp-myagent3`): `search_graph`, then `get_code_snippet` or `trace_path`.
-   - Exact identifier, key or error: `Grep` with narrow `path`, `include` and limit.
-   - Unknown concept/feature spanning code: `zvec_grep_search` with repo `root`, natural-language `query`, `limit: 5`; do not duplicate the query in `fts`. Check `freshness`; confirm stale results with `Grep`.
+   - Exact identifier, key or error: `grep` with narrow `path`, `include` and limit.
+   - Unknown concept/feature spanning code: `zvec_grep_search` with repo `root`, natural-language `query`, `limit: 5`; do not duplicate the query in `fts`. Check `freshness`; confirm stale results with `grep`.
    - More than ~3 searches or likely context-heavy (e.g. all callers/readers): delegate discovery to a subagent.
-2. **Read** only the relevant range with `Read(offset, limit)`; read exact lines before editing.
-3. **Edit** existing files with `Edit`; create or replace whole files with `Write`.
+2. **Read** only the relevant range with `read(offset, limit)`; read exact lines before editing.
+3. **Edit** existing files with `edit`; create or replace whole files with `write`.
 4. **Verify** affected packages and then follow the Verify section. Always run `git diff --check`.
 
 ## Tool-use rules
 
-- Use `exec` for build/test/git/vet/gofmt and commands whose full output matters; it separates stdout/stderr and reports exit status. Use `bash` only when head/tail is enough; use `Process` for long-running work. Do not use shell `sed`, `cat`, `grep`, or Python heredocs instead of `Read`, `Grep`, or `Edit`.
-- For bulk replacements, a script is allowed only if it asserts every replacement. If `Edit` fails, reread with more context and retry; do not fall back to a script.
-- Long command output may be truncated. Use the returned log file with `Read`/`Grep`; do not rerun the command. Redirect expected-large output to `/tmp`, and write only needed counts/failures to `$EXEC_RESULT`.
+- Use `exec` for build/test/git/vet/gofmt and commands whose full output matters; it separates stdout/stderr and reports exit status. Use `bash` only when head/tail is enough; use `process` for long-running work. Do not use shell `sed`, `cat`, `grep`, or Python heredocs instead of `read`, `grep`, or `edit`.
+- For bulk replacements, a script is allowed only if it asserts every replacement. If `edit` fails, reread with more context and retry; do not fall back to a script.
+- Long command output may be truncated. Use the returned log file with `read`/`grep`; do not rerun the command. Redirect expected-large output to `/tmp`, and write only needed counts/failures to `$EXEC_RESULT`.
 - Bound searches and reads; preserve useful paths, line numbers and truncation evidence. Batch independent reads/searches; never batch dependent steps or writes to the same path.
 - Load a triggered skill once per task; don't call `skill({})` to browse or reload an already loaded skill. Prefer modular code over monoliths.
 - **Architecture:** `backend-go/` is the only backend. The TypeScript backend and differential harness were removed 2026-10-10; `legacy-final` is the last tag containing them. Keep their goldens as frozen test data; do not recreate a TypeScript twin. Sessions use `.jad/{sessions,profiles,models,tools,mcp,state}`; don't add features to the legacy `setting.json` loader being removed per `backend-go/DECISIONS.md`.
