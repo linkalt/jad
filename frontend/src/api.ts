@@ -756,6 +756,56 @@ export async function compactSession(
   };
 }
 
+export interface SessionStateContextResult {
+  written: boolean;
+  preview: boolean;
+  role?: string;
+  text?: string;
+  bytes?: number;
+}
+
+/**
+ * Fires the session's `user` state-context trigger. With `preview` the server
+ * renders the block and returns it without storing anything.
+ */
+export async function writeSessionStateContext(
+  sessionId: string,
+  body: {prompt: string; preview: boolean},
+  profile?: string,
+): Promise<SessionStateContextResult> {
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/statecontext${profileQuery(profile)}`),
+    {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(body),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  const result = isRecord(value) ? value.statecontext : undefined;
+  if (
+    !isRecord(result) ||
+    typeof result.written !== 'boolean' ||
+    (result.preview !== undefined && typeof result.preview !== 'boolean') ||
+    (result.role !== undefined && typeof result.role !== 'string') ||
+    (result.text !== undefined && typeof result.text !== 'string') ||
+    (result.bytes !== undefined &&
+      (typeof result.bytes !== 'number' || !Number.isSafeInteger(result.bytes) || result.bytes < 0))
+  ) {
+    throw new Error('the server returned invalid state context data');
+  }
+  return {
+    written: result.written,
+    preview: result.preview === true,
+    ...(result.role === undefined ? {} : {role: result.role}),
+    ...(result.text === undefined ? {} : {text: result.text}),
+    ...(result.bytes === undefined ? {} : {bytes: result.bytes}),
+  };
+}
+
 export interface FrontCompactionResult {
   delete_mode: 'permanent' | 'recoverable';
   archive_name?: string;

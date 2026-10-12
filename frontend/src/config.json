@@ -83,6 +83,7 @@
   "tool_arguments_max_height_px": 200,
   "tool_result_max_height_px": 360,
   "approval_preview_max_height_px": 200,
+  "state_context_preview_max_height_px": 240,
   "checkpoint_restore_poll_ms": 2000,
   "checkpoint_paths_preview_limit": 100,
   "checkpoint_paths_max_height_px": 200,

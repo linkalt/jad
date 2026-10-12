@@ -50,6 +50,7 @@ import {
   answerSessionRunInteraction,
   attachSessionRun,
   compactSession,
+  writeSessionStateContext,
   extendSessionRunInteraction,
   frontCompactSessionFromMessage,
   resetSession,
@@ -119,6 +120,7 @@ import {
 } from './web-ui-steps';
 import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
+import {StateContextDrawer} from './components/StateContextDrawer';
 import {ComposerErrorBoundary} from './components/ComposerErrorBoundary';
 import {
   COMPOSER_DESYNC_EVENT,
@@ -207,6 +209,22 @@ function ResetChatIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M4 7h16" />
       <path d="M10 11v6M14 11v6" />
       <path d="M5.5 7l1 13h11l1-13M9 7V4h6v3" />
+    </svg>
+  );
+}
+
+function StateContextIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <path d="M5 6h14M5 12h14M5 18h8" />
     </svg>
   );
 }
@@ -2502,6 +2520,7 @@ function App() {
   // The two destructive conversation actions live in a composer drawer rather
   // than in the toolbar row, where each sat one mis-click away from Compact.
   const [composerActionsViewKey, setComposerActionsViewKey] = useState<string | null>(null);
+  const [stateContextViewKey, setStateContextViewKey] = useState<string | null>(null);
   const [resettingViewKey, setResettingViewKey] = useState<string | null>(null);
   const [resetError, setResetError] = useState<string | null>(null);
   const [frontCompactionInfoViewKey, setFrontCompactionInfoViewKey] = useState<string | null>(null);
@@ -3336,6 +3355,7 @@ function App() {
   const isCompactionInProgress = compactingSessionRef !== null;
   const isResetDrawerOpen = resetDrawerViewKey === activeViewKey;
   const isComposerActionsDrawerOpen = composerActionsViewKey === activeViewKey;
+  const isStateContextDrawerOpen = stateContextViewKey === activeViewKey;
   const isCurrentViewResetting = resettingViewKey === activeViewKey;
   const frontCompactionSettings = activeRowSession.frontCompaction ?? {
     enabled: true,
@@ -3375,6 +3395,7 @@ function App() {
       return;
     }
     setIsUsageDrawerCollapsed(true);
+    setStateContextViewKey(null);
     setResetDrawerViewKey(null);
     setFrontCompactionInfoViewKey(null);
     setFrontCompactionError(null);
@@ -3782,6 +3803,31 @@ function App() {
     frontCompactingViewKey,
     updateViewSessionRecord,
   ]);
+
+  const requestStateContext = useCallback(
+    async (prompt: string, preview: boolean) => {
+      const sessionRef = activeSession?.sessionRef;
+      if (!sessionRef) {
+        throw new Error('no live session is selected');
+      }
+      const result = await writeSessionStateContext(
+        sessionRef,
+        {prompt, preview},
+        activeProfileRef.current,
+      );
+      if (!preview && result.written) {
+        recordNotification({
+          sessionId: activeSessionId,
+          sessionTitle: activeRowSession.title,
+          kind: 'info',
+          title: 'State context written',
+          message: `A ${result.bytes ?? 0}-byte block will be sent with the next request.`,
+        });
+      }
+      return result;
+    },
+    [activeSession?.sessionRef, activeRowSession.title, activeSessionId, recordNotification],
+  );
 
   const resetActiveSession = useCallback(async () => {
     const sessionRef = activeSession?.sessionRef;
@@ -4470,6 +4516,7 @@ function App() {
   }, [activeViewKey, pinnedViews]);
 
   useEffect(() => {
+    setStateContextViewKey(null);
     setResetDrawerViewKey(null);
     setResetError(null);
     setFrontCompactionInfoViewKey(null);
@@ -4964,6 +5011,14 @@ function App() {
             onAnswer={body => answerInteraction(pendingInteraction, body)}
             onExtend={() => extendInteraction(pendingInteraction)}
           />
+        ) : isStateContextDrawerOpen ? (
+          <StateContextDrawer
+            isDisabled={isDestructiveActionDisabled}
+            previewMaxHeightPx={appConfig.state_context_preview_max_height_px}
+            onPreview={prompt => requestStateContext(prompt, true)}
+            onWrite={prompt => requestStateContext(prompt, false)}
+            onClose={() => setStateContextViewKey(null)}
+          />
         ) : isComposerActionsDrawerOpen ? (
           <ChatComposerDrawer>
             <VStack gap={1} width="100%">
@@ -4986,6 +5041,7 @@ function App() {
                     isDisabled={isDestructiveActionDisabled}
                     onClick={() => {
                       setComposerActionsViewKey(null);
+                      setStateContextViewKey(null);
                       setFrontCompactionError(null);
                       setResetDrawerViewKey(null);
                       if (isFrontCompactionWorkflowOpen) {
@@ -5009,6 +5065,7 @@ function App() {
                   isDisabled={isDestructiveActionDisabled}
                   onClick={() => {
                     setComposerActionsViewKey(null);
+                    setStateContextViewKey(null);
                     setIsUsageDrawerCollapsed(true);
                     setFrontCompactionInfoViewKey(null);
                     setFrontCompactionTarget(null);
@@ -5237,7 +5294,10 @@ function App() {
             icon={<Icon icon="info" size="sm" />}
             variant="ghost"
             size="sm"
-            onClick={() => setIsUsageDrawerCollapsed(collapsed => !collapsed)}
+            onClick={() => {
+              setStateContextViewKey(null);
+              setIsUsageDrawerCollapsed(collapsed => !collapsed);
+            }}
           />
           {isLiveSession && activeSession.sessionRef && (
             <IconButton
@@ -5252,6 +5312,28 @@ function App() {
                 frontCompactingViewKey !== null
               }
               onClick={() => void compactActiveSession()}
+            />
+          )}
+          {isLiveSession && activeSession.sessionRef && (
+            <IconButton
+              label="State context"
+              tooltip="Write a state-context block with your own prompt"
+              icon={<Icon icon={StateContextIcon} size="sm" />}
+              variant={isStateContextDrawerOpen ? 'secondary' : 'ghost'}
+              size="sm"
+              isDisabled={isDestructiveActionDisabled}
+              onClick={() => {
+                setComposerActionsViewKey(null);
+                setIsUsageDrawerCollapsed(true);
+                setResetDrawerViewKey(null);
+                setFrontCompactionInfoViewKey(null);
+                setFrontCompactionTarget(null);
+                setFrontCompactionModeViewKey(null);
+                setFrontCompactionError(null);
+                setStateContextViewKey(current =>
+                  current === activeViewKey ? null : activeViewKey,
+                );
+              }}
             />
           )}
           {isLiveSession && activeSession.sessionRef && (
@@ -5275,6 +5357,7 @@ function App() {
               onClick={() => {
                 setFrontCompactionError(null);
                 setResetError(null);
+                setStateContextViewKey(null);
                 setComposerActionsViewKey(current =>
                   current === activeViewKey ? null : activeViewKey,
                 );
