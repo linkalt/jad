@@ -467,10 +467,11 @@
         "role": {"type": "string", "enum": ["system", "developer"], "default": "developer"},
         "triggers": {
           "type": "object",
-          "description": "Only a trigger that appears here fires; there is no per-trigger enabled flag. compaction: after manual or automatic compaction. session_start: when a run finds no stored snapshot, so the model sees the stores from the first run on. user: fired by POST /api/sessions/{ref}/statecontext with a prompt the user typed; refused while a run is active. The old flat trigger, tools and max_bytes keys are config errors.",
+          "description": "Only a trigger that appears here fires; there is no per-trigger enabled flag. compaction: after manual or automatic compaction. session_start: when a run finds no stored snapshot, so the model sees the stores from the first run on. run_start: at the start of each run, writing a block only when the provider data differs from the latest stored block (a state that became empty gets one block saying so; an empty state after an empty block writes nothing). user: fired by POST /api/sessions/{ref}/statecontext with a prompt the user typed; refused while a run is active. The old flat trigger, tools and max_bytes keys are config errors.",
           "properties": {
             "compaction": {"$ref": "#/$defs/statecontextTrigger"},
             "session_start": {"$ref": "#/$defs/statecontextTrigger"},
+            "run_start": {"$ref": "#/$defs/statecontextTrigger"},
             "user": {"$ref": "#/$defs/statecontextTrigger"}
           },
           "additionalProperties": false,

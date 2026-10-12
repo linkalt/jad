@@ -14,6 +14,7 @@ const (
 	StateContextTriggerCompaction   = "compaction"
 	StateContextTriggerSessionStart = "session_start"
 	StateContextTriggerUser         = "user"
+	StateContextTriggerRunStart     = "run_start"
 )
 
 const (
@@ -21,7 +22,7 @@ const (
 	maxStateContextMaxPromptBytes     int64 = 64 * 1024
 )
 
-var stateContextTriggerNames = []string{StateContextTriggerCompaction, StateContextTriggerSessionStart, StateContextTriggerUser}
+var stateContextTriggerNames = []string{StateContextTriggerCompaction, StateContextTriggerSessionStart, StateContextTriggerRunStart, StateContextTriggerUser}
 
 // StateContextTrigger is the configuration of one trigger.
 type StateContextTrigger struct {

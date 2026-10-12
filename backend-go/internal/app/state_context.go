@@ -2,6 +2,8 @@ package app
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -97,6 +99,50 @@ func collectStateContextSnapshotWithPrompt(
 	trigger string,
 	typedPrompt string,
 ) (transcript.StateContextSnapshot, bool, error) {
+	snapshot, hasData, err := buildStateContextSnapshot(config, sources, trigger, typedPrompt)
+	if err != nil || (!hasData && typedPrompt == "") {
+		return transcript.StateContextSnapshot{}, false, err
+	}
+	return snapshot, true, nil
+}
+
+// collectRunStartStateContext decides whether the run_start trigger writes a block: only
+// when the data differs from the latest stored block. A state that became empty differs
+// from a block that reported data, so one block says so; an empty state after an empty
+// block, or with no block at all, writes nothing.
+func collectRunStartStateContext(
+	config sessionfs.SessionConfig,
+	sources stateContextSources,
+	latest *transcript.StateContextEntry,
+) (transcript.StateContextSnapshot, bool, error) {
+	if !config.StateContext.Enabled {
+		return transcript.StateContextSnapshot{}, false, nil
+	}
+	if _, configured := config.StateContext.Triggers[sessionfs.StateContextTriggerRunStart]; !configured {
+		return transcript.StateContextSnapshot{}, false, nil
+	}
+	snapshot, hasData, err := buildStateContextSnapshot(config, sources, sessionfs.StateContextTriggerRunStart, "")
+	if err != nil {
+		return transcript.StateContextSnapshot{}, false, err
+	}
+	if latest == nil && !hasData {
+		return transcript.StateContextSnapshot{}, false, nil
+	}
+	if latest != nil && latest.DataSHA256 == snapshot.DataSHA256 {
+		return transcript.StateContextSnapshot{}, false, nil
+	}
+	return snapshot, true, nil
+}
+
+// buildStateContextSnapshot always renders the block, even when no provider returned an
+// item, and reports whether any did; the caller decides whether an empty one is written.
+// An unconfigured trigger gives a zero snapshot.
+func buildStateContextSnapshot(
+	config sessionfs.SessionConfig,
+	sources stateContextSources,
+	trigger string,
+	typedPrompt string,
+) (transcript.StateContextSnapshot, bool, error) {
 	settings := config.StateContext
 	triggerSettings, configured := settings.Triggers[trigger]
 	if !settings.Enabled || !configured {
@@ -136,9 +182,6 @@ func collectStateContextSnapshotWithPrompt(
 		}
 		providers = append(providers, stateContextProviderValue{name: name, value: value})
 		hasData = hasData || stateContextProviderHasData(value)
-	}
-	if !hasData && typedPrompt == "" {
-		return transcript.StateContextSnapshot{}, false, nil
 	}
 	generatedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	document := stateContextDocument{Trigger: trigger, GeneratedAt: generatedAt, Providers: providers}
@@ -185,12 +228,32 @@ func collectStateContextSnapshotWithPrompt(
 			return transcript.StateContextSnapshot{}, false, err
 		}
 	}
+	dataSHA256, err := stateContextDataSHA256(providers, hasData)
+	if err != nil {
+		return transcript.StateContextSnapshot{}, false, err
+	}
 	return transcript.StateContextSnapshot{
 		SchemaVersion: 1,
 		GeneratedAt:   generatedAt,
 		Trigger:       trigger,
 		Text:          rendered,
-	}, true, nil
+		DataSHA256:    dataSHA256,
+	}, hasData, nil
+}
+
+// stateContextDataSHA256 fingerprints what the model would be told, not when: the provider
+// data after trimming. Every empty state shares one fingerprint.
+func stateContextDataSHA256(providers orderedStateContextProviders, hasData bool) (string, error) {
+	content := []byte("empty")
+	if hasData {
+		encoded, err := providers.MarshalJSON()
+		if err != nil {
+			return "", fmt.Errorf("encode statecontext data: %w", err)
+		}
+		content = encoded
+	}
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // stateContextProviderHasData reports whether a provider returned anything the model

@@ -21,11 +21,15 @@ import (
 // sessionStartFixture runs a session whose only configured trigger is session_start and
 // returns, for each provider request, whether it carried a developer state block.
 type sessionStartFixture struct {
-	t        *testing.T
-	api      *httptest.Server
-	config   Config
-	mu       sync.Mutex
-	requests []bool
+	t      *testing.T
+	api    *httptest.Server
+	config Config
+	// processStorage is the directory of the process manifests the provider lists.
+	processStorage string
+	taskStore      *native.TaskStore
+	taskSettings   sessionfs.NativeTaskSettings
+	mu             sync.Mutex
+	requests       []bool
 	// sawStale is set when any request carried the text of the stale test block.
 	sawStale bool
 }
@@ -40,14 +44,25 @@ func newStateContextFixture(t *testing.T, seedProcess bool, triggers map[string]
 	fixture := &sessionStartFixture{t: t}
 	workspace := t.TempDir()
 	processStorage := filepath.Join(workspace, "processes")
+	fixture.processStorage = processStorage
 	processTool, err := native.NewProcessTool(sessionfs.NativeProcessSettings{StorageDir: processStorage, Shell: "/bin/sh"}, nil, "UNSET_PROVIDER_KEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskStorage := filepath.Join(workspace, "tasks")
+	fixture.taskSettings = sessionfs.NativeTaskSettings{
+		MaxTasks: 10, MaxStorageBytes: 64 * 1024,
+		StateContext: sessionfs.NativeTaskStateContextSettings{Statuses: []string{"in-progress"}, Limit: 5},
+	}
+	fixture.taskStore = native.NewTaskStore(taskStorage)
+	taskTool, err := native.NewTaskTool(fixture.taskSettings, fixture.taskStore)
 	if err != nil {
 		t.Fatal(err)
 	}
 	manifest, err := json.Marshal(struct {
 		SchemaVersion int   `json:"schema_version"`
 		Tools         []any `json:"tools"`
-	}{SchemaVersion: 1, Tools: []any{processTool.Definition}})
+	}{SchemaVersion: 1, Tools: []any{processTool.Definition, taskTool.Definition}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +126,10 @@ func newStateContextFixture(t *testing.T, seedProcess bool, triggers map[string]
 			"max_tool_rounds": 1,
 			"statecontext":    map[string]any{"enabled": true, "triggers": triggers},
 		},
-		Native: map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "statecontext": map[string]any{"states": []string{"exited"}, "limit": 5}}},
+		Native: map[string]any{
+			"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "statecontext": map[string]any{"states": []string{"exited"}, "limit": 5}},
+			"task":    map[string]any{"storage_dir": taskStorage, "max_tasks": 10, "statecontext": map[string]any{"statuses": []string{"in-progress"}, "limit": 5}},
+		},
 		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	fixture.config = config

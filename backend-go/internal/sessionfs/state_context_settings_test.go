@@ -260,3 +260,21 @@ func TestNormalizeStateContextSettingsUserTriggerMaxPromptBytes(t *testing.T) {
 		t.Fatal("max_prompt_bytes must fit inside max_bytes")
 	}
 }
+
+func TestNormalizeStateContextSettingsAcceptsRunStart(t *testing.T) {
+	configured, err := normalizeStateContextRaw(t,
+		`{"enabled":true,"triggers":{"run_start":{"tools":["task"],"max_bytes":4096}}}`,
+		nil, &NativeTaskSettings{}, nil, nil)
+	if err != nil {
+		t.Fatalf("run_start: %v", err)
+	}
+	want := map[string]StateContextTrigger{"run_start": {Tools: []string{"task"}, MaxBytes: 4096}}
+	if !reflect.DeepEqual(configured.Triggers, want) {
+		t.Fatalf("run_start triggers = %+v; want %+v", configured.Triggers, want)
+	}
+	if _, err := normalizeStateContextRaw(t,
+		`{"enabled":true,"triggers":{"run_start":{"tools":["task"],"max_prompt_bytes":10}}}`,
+		nil, &NativeTaskSettings{}, nil, nil); err == nil || !strings.Contains(err.Error(), "max_prompt_bytes is not supported") {
+		t.Fatalf("max_prompt_bytes on run_start error = %v; want it rejected", err)
+	}
+}

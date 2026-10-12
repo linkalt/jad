@@ -826,53 +826,95 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 
 // currentStateContext returns the stored blocks whose trigger is still configured. With
 // none, the session_start trigger writes one, so the model sees the stores from the
-// first run on and again after a compaction that found nothing to report.
+// first run on and again after a compaction that found nothing to report. Then the
+// run_start trigger writes a block if the stores differ from the latest one.
 func (r boundRunner) currentStateContext() ([]session.StateContextPrompt, error) {
 	settings := r.config.StateContext
 	if !settings.Enabled {
 		return nil, nil
 	}
-	blocks, err := r.stateContextBlocks()
-	if err != nil || len(blocks) > 0 {
-		return blocks, err
+	entries, err := r.stateContextEntries()
+	if err != nil {
+		return nil, err
 	}
-	if _, configured := settings.Triggers[sessionfs.StateContextTriggerSessionStart]; !configured {
-		return nil, nil
-	}
-	started, include, err := collectStateContextSnapshot(r.config, stateContextSources{
+	sources := stateContextSources{
 		process: r.processManager, task: r.taskStore, memory: r.memoryStore,
 		subagent: r.resolver.sharedSubagentManager(r.config), owner: sessionKey(r.reference, r.config.Profile),
-	}, sessionfs.StateContextTriggerSessionStart)
-	if err != nil {
-		return nil, fmt.Errorf("collect state context at session start: %w", err)
 	}
-	if !include {
-		return nil, nil
+	changed := false
+	if _, configured := settings.Triggers[sessionfs.StateContextTriggerSessionStart]; configured && len(entries) == 0 {
+		started, include, err := collectStateContextSnapshot(r.config, sources, sessionfs.StateContextTriggerSessionStart)
+		if err != nil {
+			return nil, fmt.Errorf("collect state context at session start: %w", err)
+		}
+		if include {
+			if _, err := r.shared.store.AppendStateContext(started, settings.Role); err != nil {
+				return nil, fmt.Errorf("persist state context at session start: %w", err)
+			}
+			changed = true
+		}
 	}
-	if _, err := r.shared.store.AppendStateContext(started, settings.Role); err != nil {
-		return nil, fmt.Errorf("persist state context at session start: %w", err)
+	if _, configured := settings.Triggers[sessionfs.StateContextTriggerRunStart]; configured {
+		if changed {
+			if entries, err = r.stateContextEntries(); err != nil {
+				return nil, err
+			}
+		}
+		var latest *transcript.StateContextEntry
+		if len(entries) > 0 {
+			latest = &entries[len(entries)-1]
+		}
+		snapshot, write, err := collectRunStartStateContext(r.config, sources, latest)
+		if err != nil {
+			return nil, fmt.Errorf("collect state context at run start: %w", err)
+		}
+		if write {
+			if _, err := r.shared.store.AppendStateContext(snapshot, settings.Role); err != nil {
+				return nil, fmt.Errorf("persist state context at run start: %w", err)
+			}
+			changed = true
+		}
+	}
+	if !changed {
+		return promptsFromStateContextEntries(entries), nil
 	}
 	return r.stateContextBlocks()
 }
 
-// stateContextBlocks reads the stored blocks in write order and drops those of a trigger
+// stateContextEntries reads the stored blocks in write order and drops those of a trigger
 // that is no longer configured.
-func (r boundRunner) stateContextBlocks() ([]session.StateContextPrompt, error) {
+func (r boundRunner) stateContextEntries() ([]transcript.StateContextEntry, error) {
 	settings := r.config.StateContext
 	if !settings.Enabled {
 		return nil, nil
 	}
-	entries, err := r.shared.store.ReadStateContextEntries()
+	stored, err := r.shared.store.ReadStateContextEntries()
 	if err != nil {
 		return nil, fmt.Errorf("read state context: %w", err)
 	}
-	var blocks []session.StateContextPrompt
-	for _, entry := range entries {
+	var entries []transcript.StateContextEntry
+	for _, entry := range stored {
 		if _, configured := settings.Triggers[entry.Trigger]; configured {
-			blocks = append(blocks, session.StateContextPrompt{Role: entry.Role, Text: entry.Text, After: entry.After})
+			entries = append(entries, entry)
 		}
 	}
-	return blocks, nil
+	return entries, nil
+}
+
+func (r boundRunner) stateContextBlocks() ([]session.StateContextPrompt, error) {
+	entries, err := r.stateContextEntries()
+	if err != nil {
+		return nil, err
+	}
+	return promptsFromStateContextEntries(entries), nil
+}
+
+func promptsFromStateContextEntries(entries []transcript.StateContextEntry) []session.StateContextPrompt {
+	var blocks []session.StateContextPrompt
+	for _, entry := range entries {
+		blocks = append(blocks, session.StateContextPrompt{Role: entry.Role, Text: entry.Text, After: entry.After})
+	}
+	return blocks
 }
 
 // ReadRunUsageSummary reads the session's usage from inside a run, where the

@@ -222,6 +222,8 @@ Old 2.6 (snapshot stored as parts) is replaced by 2.8.
    Backend DONE (see `DECISIONS.md`, "Statecontext user trigger"): config, `POST .../statecontext` with preview, tests. UI
    still to do, following the frontend sequence.
 7. `run_start` with change detection.
+   DONE (see `DECISIONS.md`, "Statecontext run_start trigger"). Change detection compares `data_sha256` of the latest
+   block; the "state is now empty" block is the first block whose providers are all empty. Live check pending.
 8. Summary mode (2.5): memory first, then task, process, subagent. Gated by step 0.
 
 Order reason: 1 to 4 are small and keep today's storage, so they can ship before the risky part; 5 must precede 6 and 7;

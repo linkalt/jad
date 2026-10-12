@@ -20,6 +20,9 @@ type StateContextSnapshot struct {
 	GeneratedAt   string `json:"generated_at"`
 	Trigger       string `json:"trigger"`
 	Text          string `json:"text"`
+	// DataSHA256 fingerprints the provider data in Text without the time, so a later
+	// snapshot of unchanged data can be recognised. Blocks written before it existed have none.
+	DataSHA256 string `json:"data_sha256,omitempty"`
 }
 
 // StateContextEntry is one block of the state-context sidecar (a JSON line). The text
@@ -116,6 +119,7 @@ func (store *TurnStore) readStateContextEntries() ([]StateContextEntry, error) {
 				GeneratedAt   *string `json:"generated_at"`
 				Trigger       *string `json:"trigger"`
 				Text          *string `json:"text"`
+				DataSHA256    string  `json:"data_sha256"`
 				Role          *string `json:"role"`
 				After         *int    `json:"after"`
 			}
@@ -125,7 +129,7 @@ func (store *TurnStore) readStateContextEntries() ([]StateContextEntry, error) {
 				entries = append(entries, StateContextEntry{
 					StateContextSnapshot: StateContextSnapshot{
 						SchemaVersion: record.SchemaVersion, GeneratedAt: *record.GeneratedAt,
-						Trigger: *record.Trigger, Text: *record.Text,
+						Trigger: *record.Trigger, Text: *record.Text, DataSHA256: record.DataSHA256,
 					},
 					Role: *record.Role, After: *record.After,
 				})
