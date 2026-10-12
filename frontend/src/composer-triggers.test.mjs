@@ -66,7 +66,7 @@ test('the @ trigger searches the list, bootstraps it, and inserts a path chip', 
   const [trigger] = createComposerTriggers({files: FILES, maxResults: 2});
   assert.equal(trigger.character, '@');
   assert.equal(trigger.menuLabel, 'Files');
-  assert.equal(trigger.emptySearchResultsText, 'No matching files');
+  assert.equal(trigger.emptySearchText, 'No matching files');
   assert.deepEqual(trigger.searchSource.bootstrap(), [
     {id: 'frontend/src/App.tsx', label: 'frontend/src/App.tsx'},
     {id: 'frontend/src/components/ComposerPane.tsx', label: 'frontend/src/components/ComposerPane.tsx'},

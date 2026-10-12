@@ -51,8 +51,7 @@ export type ComposerCommand = {
  * backend listing swaps in at the same seam.
  */
 export const BUILTIN_MENTION_FILES: readonly string[] = [
-  'AGENTS_jad.md',
-  'setting.json',
+  'CLAUDE.md',
   'MEMORY_DESIGN.md',
   'design_cursor.md',
   'design_bash.md',
@@ -244,7 +243,7 @@ export function fileMentionTrigger(searchSource: SearchSource): ChatComposerTrig
     character: FILE_TRIGGER_CHARACTER,
     searchSource,
     menuLabel: 'Files',
-    emptySearchResultsText: 'No matching files',
+    emptySearchText: 'No matching files',
     loadingText: 'Loading files…',
     onSelect: item => mentionToken(item.id),
   };
@@ -283,7 +282,7 @@ export function commandTrigger(
       bootstrap: () => matched(''),
     },
     menuLabel: 'Commands',
-    emptySearchResultsText: 'No matching commands',
+    emptySearchText: 'No matching commands',
     onSelect: item => ({
       value: `${COMMAND_TRIGGER_CHARACTER}${item.id}`,
       label: `${COMMAND_TRIGGER_CHARACTER}${item.id}`,
