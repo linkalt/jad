@@ -373,6 +373,12 @@ func (c *layoutCompose) addToolset(setting map[string]json.RawMessage, id, profi
 		}
 		setting["tools"], _ = json.Marshal(map[string]any{"native": native})
 	}
+	if len(toolset.Hooks) > 0 {
+		if _, set := setting["hooks"]; set {
+			return configError("%s: hooks is set here and in the settings (defaults, session or profile); keep it in one place", entry.Path)
+		}
+		setting["hooks"] = toolset.Hooks
+	}
 	servers, err := c.mcpServers(toolset, entry.Path)
 	if err != nil {
 		return err

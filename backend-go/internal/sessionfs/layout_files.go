@@ -92,6 +92,8 @@ type layoutToolsetFile struct {
 	Description   string                     `json:"description"`
 	Native        map[string]json.RawMessage `json:"native"`
 	MCP           json.RawMessage            `json:"mcp"`
+	// Hooks has the shape of the settings key; kept raw so null is refused by the normalizer.
+	Hooks json.RawMessage `json:"hooks"`
 }
 
 // layoutToolsetMCP is one server entry of a toolset.

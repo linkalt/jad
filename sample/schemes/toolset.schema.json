@@ -15,6 +15,10 @@
       "$ref": "setting.schema.json#/properties/tools/properties/native",
       "description": "Native tool settings, key by key as tools.native in setting.schema.json. A tool listed here is enabled; a tool not listed is not."
     },
+    "hooks": {
+      "$ref": "setting.schema.json#/properties/hooks",
+      "description": "Commands around tool calls (post_edit, pre_tool, post_tool), key by key as hooks in setting.schema.json. Set hooks here or in the settings, not both: a toolset that sets hooks while the defaults, session or profile settings also set it is a config error. A sub-agent that names this toolset runs these hooks."
+    },
     "mcp": {
       "type": "object",
       "description": "MCP servers this toolset enables. Each key is <category>/<name> of a file under mcp/, for example \"browser-headed/betterwright\". The file holds the connection and its environment; here only how this toolset uses it. Two keys with the same file name are refused: they would give the same tool names.",
