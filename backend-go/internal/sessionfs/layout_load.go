@@ -366,6 +366,12 @@ func (c *layoutCompose) addToolset(setting map[string]json.RawMessage, id, profi
 	if err := readLayoutFile(entry.Path, &toolset); err != nil {
 		return err
 	}
+	return c.applyToolset(setting, toolset, entry.Path, defaultEnvFile)
+}
+
+// applyToolset puts one decoded toolset into the setting; path names its file in errors.
+func (c *layoutCompose) applyToolset(setting map[string]json.RawMessage, toolset layoutToolsetFile, path string, defaultEnvFile json.RawMessage) error {
+	entry := catalog.Entry{Path: path}
 	if len(toolset.Native) > 0 {
 		native, err := withDefaultEnvFile(toolset.Native, defaultEnvFile, entry.Path)
 		if err != nil {

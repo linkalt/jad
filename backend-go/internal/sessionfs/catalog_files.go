@@ -19,6 +19,7 @@ type CatalogKind string
 const (
 	CatalogProfiles CatalogKind = "profile"
 	CatalogModels   CatalogKind = "model"
+	CatalogToolsets CatalogKind = "toolset"
 )
 
 // CatalogErrorKind says which precondition a catalog file operation failed.
@@ -83,6 +84,8 @@ func (l Layout) catalogDir(kind CatalogKind) (string, error) {
 		return l.Profiles, nil
 	case CatalogModels:
 		return l.Models, nil
+	case CatalogToolsets:
+		return l.Tools, nil
 	}
 	return "", &CatalogError{Kind: CatalogBadID, Message: fmt.Sprintf("unknown catalog %q", kind)}
 }
@@ -140,7 +143,7 @@ func ReadCatalogFile(layout Layout, kind CatalogKind, id string) (CatalogFile, e
 // condition must hold: IfNoneMatch "*" creates a file that does not exist, IfMatch replaces
 // the version it names. The replacement is a temporary file and a rename, and it is refused
 // when the file changed while it was being written. The result says whether the file is new.
-func WriteCatalogFile(layout Layout, kind CatalogKind, id string, data []byte, condition WriteCondition, syncWrite bool) (CatalogFileInfo, bool, error) {
+func WriteCatalogFile(layout Layout, roots []Root, kind CatalogKind, id string, data []byte, condition WriteCondition, syncWrite bool) (CatalogFileInfo, bool, error) {
 	path, err := layout.catalogPath(kind, id)
 	if err != nil {
 		return CatalogFileInfo{}, false, err
@@ -149,7 +152,7 @@ func WriteCatalogFile(layout Layout, kind CatalogKind, id string, data []byte, c
 	if err != nil {
 		return CatalogFileInfo{}, false, err
 	}
-	if err := validateCatalogFile(layout, kind, path, data); err != nil {
+	if err := validateCatalogFile(layout, roots, kind, path, data); err != nil {
 		return CatalogFileInfo{}, false, err
 	}
 	if exists {
@@ -231,15 +234,26 @@ func DeleteCatalogFile(layout Layout, roots []Root, kind CatalogKind, id, ifMatc
 			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("model %q is needed by profile %s", id, strings.Join(users, ", "))}
 		}
 	}
+	if kind == CatalogToolsets {
+		users, err := toolsetUsers(layout, id)
+		if err != nil {
+			return err
+		}
+		if len(users) > 0 {
+			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("toolset %q is needed by profile %s", id, strings.Join(users, ", "))}
+		}
+	}
 	return os.Remove(path)
 }
 
-func validateCatalogFile(layout Layout, kind CatalogKind, path string, data []byte) error {
+func validateCatalogFile(layout Layout, roots []Root, kind CatalogKind, path string, data []byte) error {
 	switch kind {
 	case CatalogProfiles:
 		return validateProfileFile(layout, path, data)
 	case CatalogModels:
 		return validateModelFile(path, data)
+	case CatalogToolsets:
+		return validateToolsetFile(layout, roots, path, data)
 	}
 	return nil
 }

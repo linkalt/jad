@@ -12,6 +12,7 @@ import (
 var catalogFileKinds = map[string]sessionfs.CatalogKind{
 	"profiles": sessionfs.CatalogProfiles,
 	"models":   sessionfs.CatalogModels,
+	"toolsets": sessionfs.CatalogToolsets,
 }
 
 func (r *Resolver) catalogLayout(ctx context.Context, kind string) (sessionfs.Layout, sessionfs.CatalogKind, error) {
@@ -65,7 +66,7 @@ func (r *Resolver) WriteCatalogFile(ctx context.Context, kind, id string, data [
 	}
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	info, created, err := sessionfs.WriteCatalogFile(layout, known, id, data, sessionfs.WriteCondition{IfMatch: ifMatch, IfNoneMatch: ifNoneMatch}, true)
+	info, created, err := sessionfs.WriteCatalogFile(layout, r.roots, known, id, data, sessionfs.WriteCondition{IfMatch: ifMatch, IfNoneMatch: ifNoneMatch}, true)
 	if err != nil {
 		return httpapi.CatalogFileInfo{}, false, mapCatalogFileError(err)
 	}
