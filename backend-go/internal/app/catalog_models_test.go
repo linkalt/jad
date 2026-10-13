@@ -149,6 +149,49 @@ func TestCatalogModelDeleteIsRefusedWhileAProfileNeedsIt(t *testing.T) {
 	}
 }
 
+func TestCatalogDeleteRemovesAnEmptyCategoryDirectoryOnly(t *testing.T) {
+	f := newLayoutFixture(t)
+	create := func(id string) {
+		t.Helper()
+		if reply := f.catalogCall(t, "PUT", "/api/catalog/models/"+id, f.modelBody("m-"+id), map[string]string{"If-None-Match": "*"}); reply.status != http.StatusCreated {
+			t.Fatalf("create %s = %d %s", id, reply.status, reply.body)
+		}
+	}
+	remove := func(id string) {
+		t.Helper()
+		current := f.catalogCall(t, "GET", "/api/catalog/models/"+id, "", nil)
+		if reply := f.catalogCall(t, "DELETE", "/api/catalog/models/"+id, "", map[string]string{"If-Match": current.etag}); reply.status != http.StatusNoContent {
+			t.Fatalf("delete %s = %d %s", id, reply.status, reply.body)
+		}
+	}
+	directory := filepath.Join(f.root, "models", "scratch")
+	exists := func() bool {
+		_, err := os.Stat(directory)
+		return err == nil
+	}
+
+	create("scratch/a")
+	create("scratch/b")
+	remove("scratch/a")
+	if !exists() {
+		t.Fatal("category directory removed while another model is still in it")
+	}
+	remove("scratch/b")
+	if exists() {
+		t.Fatal("empty category directory left behind after the last delete")
+	}
+	create("scratch/a")
+	remove("scratch/a")
+
+	current := f.catalogCall(t, "GET", "/api/catalog/models/openai/large", "", nil)
+	if reply := f.catalogCall(t, "DELETE", "/api/catalog/models/openai/large", "", map[string]string{"If-Match": current.etag}); reply.status != http.StatusConflict {
+		t.Fatalf("refused delete = %d", reply.status)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "models", "openai")); err != nil {
+		t.Fatalf("a refused delete touched the directory: %v", err)
+	}
+}
+
 func TestCatalogModelDeleteNeedsIfMatch(t *testing.T) {
 	f := newLayoutFixture(t)
 	path := "/api/catalog/models/openai/spare"

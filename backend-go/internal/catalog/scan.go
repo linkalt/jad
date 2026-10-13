@@ -72,6 +72,9 @@ func Scan(kind, dir string) (*Catalog, error) {
 
 func scanCategory(kind, category, dir string) ([]Entry, error) {
 	files, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil // the folder was removed after the category list was read
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s catalog %s: %w", kind, dir, err)
 	}

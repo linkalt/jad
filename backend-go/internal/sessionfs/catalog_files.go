@@ -259,7 +259,12 @@ func DeleteCatalogFile(layout Layout, roots []Root, kind CatalogKind, id, ifMatc
 			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("MCP server %q is needed by toolset %s", id, strings.Join(users, ", "))}
 		}
 	}
-	return os.Remove(path)
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	// Removing a directory succeeds only when it is empty, so a file created meanwhile stays.
+	_ = os.Remove(filepath.Dir(path))
+	return nil
 }
 
 func validateCatalogFile(layout Layout, roots []Root, kind CatalogKind, path string, data []byte, validateServer ServerFileValidator) error {
@@ -396,15 +401,24 @@ func profileUsers(layout Layout, roots []Root, id string) ([]string, error) {
 	return users, nil
 }
 
+const createDirectoryAttempts = 32
+
 // createFileExclusive stores data at path only if nothing is there: the contents go to a
 // temporary file that is then hard-linked into place, so a concurrent creator loses.
 func createFileExclusive(path string, data []byte, syncWrite bool) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	file, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-")
-	if err != nil {
-		return err
+	var file *os.File
+	// A delete may remove the then-empty category directory between MkdirAll and CreateTemp.
+	// Each such removal needs a file that existed, so the loop makes progress; the bound is a guard.
+	for attempt := 1; file == nil; attempt++ {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		created, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-")
+		if err == nil {
+			file = created
+		} else if attempt >= createDirectoryAttempts || !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 	}
 	temporaryPath := file.Name()
 	defer func() { _ = os.Remove(temporaryPath) }()
