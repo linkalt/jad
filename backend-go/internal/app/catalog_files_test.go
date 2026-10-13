@@ -314,6 +314,24 @@ func TestCatalogProfileListShowsTheNameTheFileSets(t *testing.T) {
 	if got["dev/fast"] != "Fast reviewer" || got["dev/coder"] != "" {
 		t.Fatalf("names = %v", got)
 	}
+	padded := `{"name":"  Padded  ","models":["openai/small"],"toolset":"coding/none"}`
+	blank := `{"name":"   ","models":["openai/small"],"toolset":"coding/none"}`
+	for id, body := range map[string]string{"dev/padded": padded, "dev/blank": blank} {
+		if reply := f.catalogCall(t, "PUT", "/api/catalog/profiles/"+id, body, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusCreated {
+			t.Fatalf("create %s = %d %s", id, reply.status, reply.body)
+		}
+	}
+	list = f.catalogCall(t, "GET", "/api/catalog/profiles", "", nil)
+	listing.Files = nil
+	if err := json.Unmarshal([]byte(list.body), &listing); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range listing.Files {
+		got[file.ID] = file.Name
+	}
+	if got["dev/padded"] != "Padded" || got["dev/blank"] != "" {
+		t.Fatalf("a padded or blank name should be trimmed in the list: %v", got)
+	}
 	numeric := `{"name":7,"models":["openai/small"],"toolset":"coding/none"}`
 	if reply := f.catalogCall(t, "PUT", "/api/catalog/profiles/dev/bad", numeric, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusUnprocessableEntity {
 		t.Fatalf("a numeric name = %d %s, want 422", reply.status, reply.body)

@@ -137,14 +137,14 @@ func ListCatalogFiles(layout Layout, kind CatalogKind) ([]CatalogFileInfo, error
 	return infos, nil
 }
 
-// fileDisplayName is the "name" a file sets. A file that does not parse, or sets a name
+// fileDisplayName is the trimmed "name" a file sets. A file that does not parse, or sets a name
 // that is not a string, has none, so it is still listed and can be opened and repaired.
 func fileDisplayName(data []byte) string {
 	var named struct {
 		Name string `json:"name"`
 	}
 	_ = json.Unmarshal(data, &named)
-	return named.Name
+	return strings.TrimSpace(named.Name)
 }
 
 // ReadCatalogFile returns one file as it is on disk.
