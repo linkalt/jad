@@ -48,6 +48,12 @@ type subagentProvider struct {
 	childWritesByTask bool
 	childEntered      chan struct{}
 	childCancelled    chan struct{}
+	// childRounds makes the child ask for notes.txt in its first childRounds requests,
+	// whatever its history holds, and answer in the next one. childInputTokens is the
+	// input size every child response reports, which is what a compaction trigger reads.
+	childRounds      int
+	childInputTokens int
+	childRequests    int
 	// detach scripts the parent to start the child with wait_ms 0, so the call returns
 	// a run id at once, and then to collect the answer with that id. childHold keeps
 	// the child's first request waiting until the parent has seen the handoff.
@@ -120,6 +126,11 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		p.requests = append(p.requests, record)
 		fail := body.Model == "child-model" && p.childFails != 0
 		status := p.childFails
+		childRequest := 0
+		if body.Model == "child-model" {
+			p.childRequests++
+			childRequest = p.childRequests
+		}
 		block := body.Model == "child-model" && (p.childBlocks || (p.childPartial && strings.Contains(record.Text, "function_call_output")))
 		p.mu.Unlock()
 
@@ -177,6 +188,9 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 			events = functionCallEvents("call-sub", "subagent", `{"task":"find the answer"}`)
 		case body.Model == "parent-model":
 			events = messageEvents("parent saw: "+lastOutput(record.Text), 31)
+		case body.Model == "child-model" && p.childRounds > 0 && childRequest <= p.childRounds:
+			events = functionCallEvents(fmt.Sprintf("call-read-%d", childRequest), "read", `{"path":"notes.txt"}`)
+			events[len(events)-1] = strings.Replace(events[len(events)-1], `"id":"resp-call"`, fmt.Sprintf(`"id":"resp-child-%d"`, childRequest), 1)
 		case !strings.Contains(record.Text, "function_call_output"):
 			// A child's first round: its own history holds no tool result yet. Judging by the
 			// request's own history, not a global count, keeps several children apart.
@@ -199,6 +213,10 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, event := range events {
+			if body.Model == "child-model" && p.childInputTokens > 0 {
+				event = strings.Replace(event, `"input_tokens":10,`, fmt.Sprintf(`"input_tokens":%d,`, p.childInputTokens), 1)
+				event = strings.Replace(event, `"input_tokens":16,`, fmt.Sprintf(`"input_tokens":%d,`, p.childInputTokens), 1)
+			}
 			var head struct {
 				Type string `json:"type"`
 			}

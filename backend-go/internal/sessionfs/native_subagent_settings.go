@@ -54,7 +54,7 @@ var (
 	allowedNativeSubagentStates     = map[string]struct{}{
 		"queued": {}, "running": {}, "done": {}, "failed": {}, "timed_out": {}, "stopped": {}, "lost": {},
 	}
-	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "paths"}
+	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "paths", "auto_compaction", "compaction_trigger_tokens", "state_context"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
 
@@ -177,6 +177,16 @@ type NativeSubagentAgent struct {
 	// MaxRunTokens is the most tokens the child may use; zero means no cap.
 	MaxRunTokens int64
 	TimeoutMS    int64
+	// HasAutoCompaction is true when auto_compaction is written; AutoCompaction is its
+	// value. Absent, the child follows the session's compaction.auto_enabled, or is on
+	// when CompactionTriggerTokens is set.
+	AutoCompaction    bool
+	HasAutoCompaction bool
+	// CompactionTriggerTokens is the input size, in tokens, at which this agent's child
+	// compacts its own transcript. Zero means the session's compaction.trigger_tokens.
+	CompactionTriggerTokens int64
+	// StateContext sends the session's newest stored state-context block to the child.
+	StateContext bool
 	// Paths narrows where the agent's write and edit may change files; it never widens
 	// the session's own rules.
 	Paths NativeSubagentPaths
@@ -483,6 +493,18 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 	if agent.TimeoutMS, err = configuredInteger(fields, "timeout_ms", defaultNativeSubagentTimeoutMS, 1000, maxNativeSubagentTimeoutMS, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
+	if agent.AutoCompaction, agent.HasAutoCompaction, err = optionalSubagentBool(fields, "auto_compaction", settingPath, section); err != nil {
+		return NativeSubagentAgent{}, err
+	}
+	if agent.CompactionTriggerTokens, err = configuredInteger(fields, "compaction_trigger_tokens", 0, 1, maxCompactionTriggerTokens, settingPath, section); err != nil {
+		return NativeSubagentAgent{}, err
+	}
+	if agent.HasAutoCompaction && !agent.AutoCompaction && agent.CompactionTriggerTokens > 0 {
+		return NativeSubagentAgent{}, configError("%s: %s.compaction_trigger_tokens has no effect when auto_compaction is false", settingPath, section)
+	}
+	if agent.StateContext, _, err = optionalSubagentBool(fields, "state_context", settingPath, section); err != nil {
+		return NativeSubagentAgent{}, err
+	}
 	return agent, nil
 }
 
@@ -527,6 +549,19 @@ func loadSubagentPrompt(fields map[string]json.RawMessage, leading []string, cwd
 		resolvedPaths = append(resolvedPaths, resolved)
 	}
 	return resolvedPaths, strings.Join(parts, "\n\n"), nil
+}
+
+// optionalSubagentBool reads a boolean that may be absent or null; has reports whether
+// a value was written.
+func optionalSubagentBool(fields map[string]json.RawMessage, name, settingPath, section string) (value, has bool, err error) {
+	raw, exists := fields[name]
+	if !exists || strings.TrimSpace(string(raw)) == "null" {
+		return false, false, nil
+	}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, false, configError("%s: %s.%s must be a boolean", settingPath, section, name)
+	}
+	return value, true, nil
 }
 
 // optionalSubagentString reads a string that may be absent or null; a present

@@ -40,8 +40,9 @@ func (r *Resolver) subagentLauncherFor(config sessionfs.SessionConfig) native.Su
 
 // Run starts one child with a fresh transcript and returns its final answer. The
 // child is an ordinary session.Runner run: its own store, its own model client and
-// the read-only catalog the tool chose, with no approval, checkpoint or state
-// context, because it cannot change anything.
+// the catalog the tool chose, with no approval or checkpoint. It compacts its own
+// transcript when the agent's trigger is reached, and sees the session's newest
+// state-context block when the agent asks for it.
 func (l subagentLauncher) Run(ctx context.Context, request native.SubagentRequest) (native.SubagentResult, error) {
 	config, err := l.childConfig(request)
 	if err != nil {
@@ -73,6 +74,10 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 		return native.SubagentResult{}, fmt.Errorf("encode sub-agent task: %w", err)
 	}
 
+	stateContext, err := l.stateContextFor(request.Agent)
+	if err != nil {
+		return native.SubagentResult{}, err
+	}
 	var rounds, tokens atomic.Int64
 	// lastText is the newest assistant text of any round. A child that is cut off has
 	// no final answer, but what it wrote last is the best partial work it has.
@@ -86,6 +91,9 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 		MaxRunTokens:         request.Agent.MaxRunTokens,
 		MaxParallelToolCalls: int(l.parent.MaxParallelToolCalls),
 		ToolCallScheduling:   l.parent.ToolCallScheduling,
+		StateContext:         stateContext,
+		AutomaticCompaction:  l.compactionFor(request.Agent),
+		CompactHistory:       compactWhileWorking(store),
 		OnResponseCommitted: func(event json.RawMessage, _ transcript.CommitResult) {
 			rounds.Add(1)
 			tokens.Add(session.ResponseTokens(event))
@@ -101,6 +109,63 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	}
 	outcome.Text = native.SubagentAnswerText(result.Event)
 	return outcome, nil
+}
+
+// compactionFor is the automatic compaction of one child. The agent's own trigger and
+// switch win; what it leaves out comes from the session's compaction settings, so a
+// cheap model can compact at a different size than the master.
+func (l subagentLauncher) compactionFor(agent sessionfs.NativeSubagentAgent) *session.AutomaticCompactionSettings {
+	compaction := l.parent.Compaction
+	enabled := compaction.AutoEnabled
+	if agent.CompactionTriggerTokens > 0 {
+		enabled = true
+		compaction.TriggerTokens = agent.CompactionTriggerTokens
+	}
+	if agent.HasAutoCompaction {
+		enabled = agent.AutoCompaction
+	}
+	return &session.AutomaticCompactionSettings{
+		Enabled:       enabled,
+		TriggerTokens: compaction.TriggerTokens,
+		TurnType:      compaction.TurnType,
+		KeepTurns:     compaction.KeepTurns,
+		KeepToolPairs: compaction.KeepToolPairs,
+		BackupMode:    compaction.BackupMode,
+	}
+}
+
+// compactWhileWorking compacts only a round that asked for tools. After a final answer
+// the child is done, and compacting would empty its messages.jsonl, which a restart
+// reads to restore the run's answer.
+func compactWhileWorking(store *transcript.TurnStore) func(transcript.CompactionOptions) (transcript.CompactionResult, error) {
+	return func(options transcript.CompactionOptions) (transcript.CompactionResult, error) {
+		if options.PreserveResponseID == "" {
+			return transcript.CompactionResult{}, nil
+		}
+		return store.CompactHistory(options)
+	}
+}
+
+// stateContextFor returns the session's newest stored state-context block for an agent
+// that asks for it, placed before the child's history so it is sent in every request,
+// compaction or not. A child has no stores of its own, so it never collects a block.
+func (l subagentLauncher) stateContextFor(agent sessionfs.NativeSubagentAgent) ([]session.StateContextPrompt, error) {
+	if !agent.StateContext {
+		return nil, nil
+	}
+	shared, err := l.resolver.sharedStore(l.parent)
+	if err != nil {
+		return nil, fmt.Errorf("read the session state context: %w", err)
+	}
+	entries, err := boundRunner{resolver: l.resolver, shared: shared, config: l.parent}.stateContextEntries()
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	newest := entries[len(entries)-1]
+	return []session.StateContextPrompt{{Role: newest.Role, Text: newest.Text}}, nil
 }
 
 // childConfig is the parent's configuration with the agent's model and instructions.
@@ -142,9 +207,10 @@ func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request nati
 		return nil, "", fmt.Errorf("create sub-agent transcript: %w", err)
 	}
 	store, err := transcript.NewTurnStore(journal, filepath.Join(directory, "staging"), transcript.TurnStoreOptions{
-		Logger:           l.resolver.logger,
-		MaxItemBytes:     config.Persistence.MaxItemBytes,
-		ResponseMetadata: transcript.ResponseMetadataMode(config.Persistence.ResponseMetadata),
+		CompactionCachePath: filepath.Join(directory, "compaction-cache.json"),
+		Logger:              l.resolver.logger,
+		MaxItemBytes:        config.Persistence.MaxItemBytes,
+		ResponseMetadata:    transcript.ResponseMetadataMode(config.Persistence.ResponseMetadata),
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("create sub-agent turn store: %w", err)

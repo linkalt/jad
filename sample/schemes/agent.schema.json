@@ -62,6 +62,21 @@
       "maximum": 1000000000000,
       "description": "Most tokens one run may use before it starts another provider round. Absent means no cap."
     },
+    "auto_compaction": {
+      "type": "boolean",
+      "description": "Whether this agent's child compacts its own transcript when it grows. Absent follows the session's compaction.auto_enabled, or is on when compaction_trigger_tokens is set."
+    },
+    "compaction_trigger_tokens": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000000,
+      "description": "Input size, in tokens, at which this agent's child compacts. Absent uses the session's compaction.trigger_tokens, which is sized for the master's model, so set it for a model with a different context window or price. Not allowed with auto_compaction false."
+    },
+    "state_context": {
+      "type": "boolean",
+      "default": false,
+      "description": "Send the newest state-context block stored for the session to this agent's child, in every request. A child collects none of its own. Nothing is sent when the session's statecontext is off or has no block yet."
+    },
     "timeout_ms": {
       "type": "integer",
       "minimum": 1000,
