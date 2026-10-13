@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"example.com/agent-harness/backend-go/internal/sessionfs"
@@ -29,7 +31,11 @@ type sessionStartFixture struct {
 	taskStore      *native.TaskStore
 	taskSettings   sessionfs.NativeTaskSettings
 	mu             sync.Mutex
-	requests       []bool
+	// failProvider makes the provider answer every request with a 400.
+	failProvider atomic.Bool
+	// onProviderRequest, when set before a run, is called as each provider request arrives.
+	onProviderRequest func()
+	requests          []bool
 	// sawStale is set when any request carried the text of the stale test block.
 	sawStale bool
 }
@@ -40,6 +46,12 @@ func newSessionStartFixture(t *testing.T, seedProcess bool) *sessionStartFixture
 }
 
 func newStateContextFixture(t *testing.T, seedProcess bool, triggers map[string]any) *sessionStartFixture {
+	t.Helper()
+	return newStateContextFixtureWith(t, seedProcess, triggers, nil, nil)
+}
+
+// newStateContextFixtureWith adds session settings and a server logger to the fixture.
+func newStateContextFixtureWith(t *testing.T, seedProcess bool, triggers, extraSettings map[string]any, logger *slog.Logger) *sessionStartFixture {
 	t.Helper()
 	fixture := &sessionStartFixture{t: t}
 	workspace := t.TempDir()
@@ -77,6 +89,13 @@ func newStateContextFixture(t *testing.T, seedProcess bool, triggers map[string]
 		})
 	}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fixture.onProviderRequest != nil {
+			fixture.onProviderRequest()
+		}
+		if fixture.failProvider.Load() {
+			http.Error(w, `{"error":{"message":"provider said no"}}`, http.StatusBadRequest)
+			return
+		}
 		var request struct {
 			Input []json.RawMessage `json:"input"`
 		}
@@ -118,20 +137,27 @@ func newStateContextFixture(t *testing.T, seedProcess bool, triggers map[string]
 	}))
 	t.Cleanup(provider.Close)
 
+	settings := map[string]any{
+		"max_tool_rounds": 1,
+		"statecontext":    map[string]any{"enabled": true, "triggers": triggers},
+	}
+	for key, value := range extraSettings {
+		settings[key] = value
+	}
 	config, _ := layoutConfig(t, layouttest.Spec{
 		SessionID:           "one",
 		CWD:                 workspace,
 		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json")},
-		Settings: map[string]any{
-			"max_tool_rounds": 1,
-			"statecontext":    map[string]any{"enabled": true, "triggers": triggers},
-		},
+		Settings:            settings,
 		Native: map[string]any{
 			"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "statecontext": map[string]any{"states": []string{"exited"}, "limit": 5}},
 			"task":    map[string]any{"storage_dir": taskStorage, "max_tasks": 10, "statecontext": map[string]any{"statuses": []string{"in-progress"}, "limit": 5}},
 		},
 		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	if logger != nil {
+		config.HTTP.Logger = logger
+	}
 	fixture.config = config
 	service, err := NewService(config)
 	if err != nil {
@@ -164,7 +190,7 @@ func (fixture *sessionStartFixture) run(input string) {
 	}
 }
 
-func (fixture *sessionStartFixture) snapshotPath() string {
+func (fixture *sessionStartFixture) sessionConfig() sessionfs.SessionConfig {
 	fixture.t.Helper()
 	location, err := sessionfs.Resolve(fixture.config.Roots, "local:one")
 	if err != nil {
@@ -174,7 +200,17 @@ func (fixture *sessionStartFixture) snapshotPath() string {
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
-	return sessionConfig.StoragePaths.StateContext
+	return sessionConfig
+}
+
+func (fixture *sessionStartFixture) snapshotPath() string {
+	fixture.t.Helper()
+	return fixture.sessionConfig().StoragePaths.StateContext
+}
+
+func (fixture *sessionStartFixture) messagesPath() string {
+	fixture.t.Helper()
+	return fixture.sessionConfig().StoragePaths.Messages
 }
 
 func TestHTTPRunWritesSessionStartStateContextBeforeAnyCompaction(t *testing.T) {

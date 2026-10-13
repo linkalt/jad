@@ -26,14 +26,16 @@ const (
 	maxHooksMaxPayloadBytes     int64 = 1024 * 1024
 	maxHooksPostEdit                  = 32
 	maxHooksToolEvent                 = 32
+	maxHooksRunEvent                  = 32
 	maxHookArgv                       = 32
 	maxHookExtensions                 = 32
 )
 
 var (
-	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "max_payload_bytes", "post_edit", "post_tool", "pre_tool", "strip_ansi", "timeout_ms"}
+	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "max_payload_bytes", "post_edit", "post_tool", "pre_tool", "run_end", "run_start", "strip_ansi", "timeout_ms"}
 	postEditHookKeys   = []string{"argv", "cwd", "ext", "name", "on_failure_only"}
 	toolEventHookKeys  = []string{"argv", "match", "name", "on_failure_only"}
+	runEventHookKeys   = []string{"argv", "name", "on_failure_only"}
 	hookMatchPattern   = regexp.MustCompile(`^(\*|[A-Za-z0-9_-]{1,64}|mcp:[A-Za-z0-9_.-]{1,64}:(\*|[A-Za-z0-9_.-]{1,128}))$`)
 	hookNamePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
 	hookExtPattern     = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
@@ -56,7 +58,10 @@ type HooksSettings struct {
 	// PreTool and PostTool run around any tool call whose tool the entry's Match covers.
 	PreTool  []ToolEventHook
 	PostTool []ToolEventHook
-	// MaxPayloadBytes cuts the event JSON a PreTool or PostTool command reads on stdin.
+	// RunStart and RunEnd run once around every run of the session itself (not its sub-agents).
+	RunStart []RunEventHook
+	RunEnd   []RunEventHook
+	// MaxPayloadBytes cuts the event JSON a command reads on stdin.
 	MaxPayloadBytes int64
 	// The child-process settings of a check. They are the hooks' own: nothing is read from
 	// tools.native.bash. Env and EnvDeny shape the environment on top of the shared allowlist.
@@ -96,9 +101,24 @@ type ToolEventHook struct {
 	OnFailureOnly bool
 }
 
+// RunEventHook is one command run at the start or the end of a run. It reads the event as
+// JSON on stdin; its report goes to the server log, never to the model or the transcript.
+type RunEventHook struct {
+	Name string
+	// Argv is the program and its arguments, run with no shell and no placeholders.
+	Argv []string
+	// OnFailureOnly leaves a passing command out of the log.
+	OnFailureOnly bool
+}
+
 // Active reports whether any check can run.
 func (settings HooksSettings) Active() bool {
-	return settings.PostEditActive() || settings.ToolEventsActive()
+	return settings.PostEditActive() || settings.ToolEventsActive() || settings.RunEventsActive()
+}
+
+// RunEventsActive reports whether a run_start or run_end command can run.
+func (settings HooksSettings) RunEventsActive() bool {
+	return settings.Enabled && (len(settings.RunStart) > 0 || len(settings.RunEnd) > 0)
 }
 
 // PostEditActive reports whether a post_edit check can run.
@@ -181,6 +201,12 @@ func normalizeHooksSettings(raw json.RawMessage, settingPath, envFileBase string
 		return HooksSettings{}, err
 	}
 	if settings.PostTool, err = normalizeToolEventHooks(fields, "post_tool", settingPath); err != nil {
+		return HooksSettings{}, err
+	}
+	if settings.RunStart, err = normalizeRunEventHooks(fields, "run_start", settingPath); err != nil {
+		return HooksSettings{}, err
+	}
+	if settings.RunEnd, err = normalizeRunEventHooks(fields, "run_end", settingPath); err != nil {
 		return HooksSettings{}, err
 	}
 	return settings, nil
@@ -280,13 +306,27 @@ func validHookCwd(cwd string) bool {
 }
 
 func normalizeToolEventHooks(fields map[string]json.RawMessage, event, settingPath string) ([]ToolEventHook, error) {
+	return normalizeEventHookList(fields, event, settingPath, maxHooksToolEvent)
+}
+
+// normalizeRunEventHooks reads run_start or run_end: the entries of a tool event without match.
+func normalizeRunEventHooks(fields map[string]json.RawMessage, event, settingPath string) ([]RunEventHook, error) {
+	entries, err := normalizeEventHookList(fields, event, settingPath, maxHooksRunEvent)
+	var hooks []RunEventHook
+	for _, entry := range entries {
+		hooks = append(hooks, RunEventHook{Name: entry.Name, Argv: entry.Argv, OnFailureOnly: entry.OnFailureOnly})
+	}
+	return hooks, err
+}
+
+func normalizeEventHookList(fields map[string]json.RawMessage, event, settingPath string, maximum int) ([]ToolEventHook, error) {
 	value, exists := fields[event]
 	if !exists {
 		return nil, nil
 	}
 	var entries []json.RawMessage
-	if json.Unmarshal(value, &entries) != nil || entries == nil || len(entries) > maxHooksToolEvent {
-		return nil, configError("%s: hooks.%s must be a list of at most %d commands", settingPath, event, maxHooksToolEvent)
+	if json.Unmarshal(value, &entries) != nil || entries == nil || len(entries) > maximum {
+		return nil, configError("%s: hooks.%s must be a list of at most %d commands", settingPath, event, maximum)
 	}
 	var hooks []ToolEventHook
 	seen := map[string]bool{}
@@ -310,9 +350,13 @@ func normalizeToolEventHook(raw json.RawMessage, settingPath, event string, inde
 	if err != nil {
 		return ToolEventHook{}, configError("%s must be an object", path)
 	}
+	allowed := toolEventHookKeys
+	if event == "run_start" || event == "run_end" {
+		allowed = runEventHookKeys
+	}
 	for key := range fields {
-		if !containsString(toolEventHookKeys, key) {
-			return ToolEventHook{}, unsupportedToolKey(path, key, toolEventHookKeys, "")
+		if !containsString(allowed, key) {
+			return ToolEventHook{}, unsupportedToolKey(path, key, allowed, "")
 		}
 	}
 	hook := ToolEventHook{Match: "*"}

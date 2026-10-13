@@ -822,7 +822,11 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		return session.RunResult{}, err
 	}
 	options.StateContext = stateContext
-	return prepared.runner.Run(ctx, input, options)
+	r.fireRunHook(ctx, native.RunEvent{Event: native.HookEventRunStart, TurnID: options.TurnID})
+	finish := r.runEndHook(ctx)
+	result, err := prepared.runner.Run(ctx, input, options)
+	finish(result.TurnID, err)
+	return result, err
 }
 
 // currentStateContext returns the stored blocks whose trigger is still configured. With
