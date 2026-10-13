@@ -292,6 +292,7 @@ type Handler struct {
 	catalog                   SessionCatalog
 	toolLister                SessionToolLister
 	settings                  SessionSettings
+	catalogFiles              CatalogFiles
 	images                    SessionImages
 	messageImages             MessageImages
 	maintenance               SessionMaintenance
@@ -401,6 +402,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	catalog, _ := resolver.(SessionCatalog)
 	toolLister, _ := resolver.(SessionToolLister)
 	settings, _ := resolver.(SessionSettings)
+	catalogFiles, _ := resolver.(CatalogFiles)
 	images, _ := resolver.(SessionImages)
 	messageImages, _ := resolver.(MessageImages)
 	maintenance, _ := resolver.(SessionMaintenance)
@@ -416,6 +418,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		catalog:                   catalog,
 		toolLister:                toolLister,
 		settings:                  settings,
+		catalogFiles:              catalogFiles,
 		maintenance:               maintenance,
 		library:                   library,
 		tokenHash:                 sha256.Sum256([]byte(config.APIToken)),
@@ -479,6 +482,15 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		h.handleRootLibrary(w, r, segments)
+		return
+	}
+	if len(segments) >= 2 && segments[0] == "api" && segments[1] == "catalog" {
+		if !h.authorized(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="jad"`)
+			writeJSONError(w, &StatusError{Code: http.StatusUnauthorized, Message: "API token required"})
+			return
+		}
+		h.handleCatalogFiles(w, r, segments)
 		return
 	}
 	if len(segments) < 2 || segments[0] != "api" || segments[1] != "sessions" {
@@ -567,9 +579,9 @@ func (h *Handler) applyCORS(w http.ResponseWriter, r *http.Request) bool {
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Add("Vary", "Origin")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, If-None-Match")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, If-Match, If-None-Match")
 	w.Header().Set("Access-Control-Expose-Headers", "ETag")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 	return true
 }
 

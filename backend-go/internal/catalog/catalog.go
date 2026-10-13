@@ -135,6 +135,17 @@ func (c *Catalog) Narrow(sel Selection) (*Catalog, error) {
 	return newCatalog(c.kind, kept), nil
 }
 
+// Without returns the catalog minus the entry with this ID.
+func (c *Catalog) Without(id string) *Catalog {
+	kept := make([]Entry, 0, len(c.entries))
+	for _, entry := range c.entries {
+		if entry.ID() != id {
+			kept = append(kept, entry)
+		}
+	}
+	return newCatalog(c.kind, kept)
+}
+
 func quoteList(values []string) string {
 	quoted := make([]string, len(values))
 	for i, value := range values {

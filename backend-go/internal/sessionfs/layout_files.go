@@ -110,6 +110,11 @@ func readLayoutFile(path string, into any) error {
 	if err != nil {
 		return configError("%s: could not be read: %v", path, err)
 	}
+	return parseLayoutFile(path, contents, into)
+}
+
+// parseLayoutFile is readLayoutFile for contents already read; path only names the file in errors.
+func parseLayoutFile(path string, contents []byte, into any) error {
 	if strings.TrimSpace(string(contents)) == "" {
 		return configError("%s: expected a JSON object", path)
 	}

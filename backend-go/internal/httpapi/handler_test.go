@@ -561,6 +561,16 @@ func TestHealthAuthCORSAndBodyLimit(t *testing.T) {
 		t.Errorf("preflight response = %d headers=%v", preflightResponse.Code, preflightResponse.Header())
 	}
 
+	catalogPreflight := httptest.NewRequest(http.MethodOptions, "/api/catalog/profiles/dev/coder", nil)
+	catalogPreflight.Header.Set("Origin", "https://ui.example.test")
+	catalogPreflightResponse := httptest.NewRecorder()
+	handler.ServeHTTP(catalogPreflightResponse, catalogPreflight)
+	allowedMethods := catalogPreflightResponse.Header().Get("Access-Control-Allow-Methods")
+	allowedHeaders := catalogPreflightResponse.Header().Get("Access-Control-Allow-Headers")
+	if catalogPreflightResponse.Code != http.StatusNoContent || !strings.Contains(allowedMethods, "PUT") || !strings.Contains(allowedMethods, "DELETE") || !strings.Contains(allowedHeaders, "If-Match") {
+		t.Errorf("catalog preflight = %d methods=%q headers=%q", catalogPreflightResponse.Code, allowedMethods, allowedHeaders)
+	}
+
 	oversized := httptest.NewRequest(http.MethodPost, "/api/sessions/s1/run", strings.NewReader(`{"input":"this request exceeds the configured body limit"}`))
 	oversized.Header.Set("Authorization", "Bearer "+testAPIToken)
 	oversizedResponse := httptest.NewRecorder()

@@ -14,6 +14,10 @@ func readProfile(path string, allModels *catalog.Catalog) (layoutProfileFile, *c
 	if err := readLayoutFile(path, &profile); err != nil {
 		return layoutProfileFile{}, nil, err
 	}
+	return checkProfile(path, profile, allModels)
+}
+
+func checkProfile(path string, profile layoutProfileFile, allModels *catalog.Catalog) (layoutProfileFile, *catalog.Catalog, error) {
 	if profile.SchemaVersion != 0 && profile.SchemaVersion != 1 {
 		return layoutProfileFile{}, nil, configError("%s: unsupported schema_version %d", path, profile.SchemaVersion)
 	}
