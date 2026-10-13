@@ -1346,3 +1346,54 @@ func TestLayoutSessionFilesErrors(t *testing.T) {
 		})
 	}
 }
+
+// A profile's name reaches the config for every profile in the session's scope, the selected
+// one and the others alike; a profile without a name, or with a blank one, has no entry.
+func TestLayoutProfileNamesReachTheConfig(t *testing.T) {
+	layout, location, _ := sampleLayout(t)
+	editJSON(t, filepath.Join(layout.Profiles, "dev", "coder.json"), func(m map[string]any) { m["name"] = "  Coder  " })
+	editJSON(t, filepath.Join(layout.Profiles, "review", "reviewer.json"), func(m map[string]any) { m["name"] = "   " })
+	for _, selected := range []string{"dev/coder", "review/reviewer"} {
+		config, err := LoadLayoutSessionConfig(location, layout, selected, "")
+		if err != nil {
+			t.Fatalf("%s: %v", selected, err)
+		}
+		if got := config.ProfileNames; len(got) != 1 || got["dev/coder"] != "Coder" {
+			t.Errorf("selected %s: ProfileNames = %v, want only dev/coder = Coder", selected, got)
+		}
+	}
+}
+
+func TestListCatalogFilesReportsTheNameAProfileSets(t *testing.T) {
+	layout, _, _ := sampleLayout(t)
+	editJSON(t, filepath.Join(layout.Profiles, "dev", "coder.json"), func(m map[string]any) { m["name"] = "Coder" })
+	editJSON(t, filepath.Join(layout.Profiles, "review", "reviewer.json"), func(m map[string]any) { m["name"] = 7 })
+	files, err := ListCatalogFiles(layout, CatalogProfiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, file := range files {
+		got[file.ID] = file.Name
+	}
+	if len(got) != 2 || got["dev/coder"] != "Coder" || got["review/reviewer"] != "" {
+		t.Fatalf("names = %v, want dev/coder = Coder and review/reviewer unnamed", got)
+	}
+	models, err := ListCatalogFiles(layout, CatalogModels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range models {
+		if file.Name != "" {
+			t.Errorf("model %s has a name %q; only sessions and profiles report one", file.ID, file.Name)
+		}
+	}
+}
+
+func TestLayoutProfileNameMustBeAString(t *testing.T) {
+	layout, location, _ := sampleLayout(t)
+	editJSON(t, filepath.Join(layout.Profiles, "dev", "coder.json"), func(m map[string]any) { m["name"] = 7 })
+	if _, err := LoadLayoutSessionConfig(location, layout, "dev/coder", ""); err == nil || !strings.Contains(err.Error(), "name") {
+		t.Fatalf("a numeric profile name must be refused naming the key: %v", err)
+	}
+}

@@ -54,6 +54,11 @@ export function isPinnedViewKey(key: string): boolean {
   return key.includes(KEY_SEPARATOR);
 }
 
+/** What a profile is called: the name its file sets, or its ID. */
+export function profileLabel(profile: string, names?: Readonly<Record<string, string>>): string {
+  return names?.[profile] ?? profile;
+}
+
 /** What a row is called: the session, and the profile when it is pinned to one. */
 export function viewLabel(sessionLabel: string, profile?: string): string {
   const base = sessionLabel.trim();
@@ -312,6 +317,7 @@ export function sessionListGroups(
     title: string;
     category?: string;
     profiles?: readonly string[];
+    profileNames?: Readonly<Record<string, string>>;
     activeProfile?: string;
   }[],
   views: readonly PinnedView[],
@@ -325,6 +331,7 @@ export function sessionListGroups(
       isPinned: false,
     };
     const profiles = session.profiles ?? [];
+    const labelOf = (profile: string) => profileLabel(profile, session.profileNames);
     if (profiles.length === 0) {
       return {sessionRef: session.id, title: session.title, ...category, children: [], ownRow};
     }
@@ -340,7 +347,7 @@ export function sessionListGroups(
       children.push({
         key: session.id,
         sessionRef: session.id,
-        label: session.activeProfile ?? session.title,
+        label: session.activeProfile === undefined ? session.title : labelOf(session.activeProfile),
         isPinned: false,
       });
     }
@@ -348,12 +355,12 @@ export function sessionListGroups(
       if (name === session.activeProfile) {
         // Listed: this is the own row. Unlisted: the own row was added above.
         if (listed.has(name)) {
-          children.push({key: session.id, sessionRef: session.id, label: name, isPinned: false});
+          children.push({key: session.id, sessionRef: session.id, label: labelOf(name), isPinned: false});
         }
         // A view pinned before this profile became the stored default keeps its
         // row, so it can still be removed and still counts where the user sees it.
         if (pinnedProfiles.has(name)) {
-          children.push({key: viewKey(session.id, name), sessionRef: session.id, profile: name, label: name, isPinned: true});
+          children.push({key: viewKey(session.id, name), sessionRef: session.id, profile: name, label: labelOf(name), isPinned: true});
         }
         continue;
       }
@@ -361,7 +368,7 @@ export function sessionListGroups(
         key: viewKey(session.id, name),
         sessionRef: session.id,
         profile: name,
-        label: name,
+        label: labelOf(name),
         isPinned: pinnedProfiles.has(name),
       });
     }

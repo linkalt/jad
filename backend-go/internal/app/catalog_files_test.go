@@ -54,6 +54,9 @@ func TestCatalogProfilesListAndRead(t *testing.T) {
 	if len(listing.Files) != 2 || listing.Files[0].ID != "dev/coder" || listing.Files[1].ID != "review/reviewer" {
 		t.Fatalf("listing = %+v", listing.Files)
 	}
+	if strings.Contains(list.body, `"name"`) {
+		t.Fatalf("unnamed profiles must list without a name: %s", list.body)
+	}
 	read := f.catalogCall(t, "GET", "/api/catalog/profiles/dev/coder", "", nil)
 	if read.status != http.StatusOK || read.etag == "" || read.etag != listing.Files[0].ETag {
 		t.Fatalf("read = %d etag %q, listed %q", read.status, read.etag, listing.Files[0].ETag)
@@ -288,5 +291,31 @@ func TestCatalogProfileDeleteRefusedWhenOnlyTheActiveFileGoes(t *testing.T) {
 	}
 	if status, body := f.do(t, "GET", "/api/sessions/local:demo", ""); status != http.StatusOK {
 		t.Fatalf("session no longer loads: %d %s", status, body)
+	}
+}
+
+func TestCatalogProfileListShowsTheNameTheFileSets(t *testing.T) {
+	f := newLayoutFixture(t)
+	named := `{"name":"Fast reviewer","models":["openai/small"],"model_default":"openai/small","toolset":"coding/none"}`
+	if reply := f.catalogCall(t, "PUT", "/api/catalog/profiles/dev/fast", named, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusCreated {
+		t.Fatalf("create a named profile = %d %s", reply.status, reply.body)
+	}
+	var listing struct {
+		Files []struct{ ID, Name string }
+	}
+	list := f.catalogCall(t, "GET", "/api/catalog/profiles", "", nil)
+	if err := json.Unmarshal([]byte(list.body), &listing); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, file := range listing.Files {
+		got[file.ID] = file.Name
+	}
+	if got["dev/fast"] != "Fast reviewer" || got["dev/coder"] != "" {
+		t.Fatalf("names = %v", got)
+	}
+	numeric := `{"name":7,"models":["openai/small"],"toolset":"coding/none"}`
+	if reply := f.catalogCall(t, "PUT", "/api/catalog/profiles/dev/bad", numeric, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusUnprocessableEntity {
+		t.Fatalf("a numeric name = %d %s, want 422", reply.status, reply.body)
 	}
 }

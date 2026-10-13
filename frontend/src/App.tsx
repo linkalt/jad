@@ -184,6 +184,7 @@ import {
   setGroupCollapsed,
   sessionRefOfViewKey,
   viewKey,
+  profileLabel,
   viewLabel,
   type PinnedView,
   type SessionListGroup,
@@ -414,6 +415,7 @@ interface Session {
   category?: string;
   activeProfile?: string;
   profiles?: string[];
+  profileNames?: Record<string, string>;
   modelDefault?: string;
   models?: string[];
   frontCompaction?: SessionSnapshot['front_compaction'];
@@ -778,6 +780,7 @@ function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
     ...(snapshot.category ? {category: snapshot.category} : {}),
     ...(snapshot.active_profile === undefined ? {} : {activeProfile: snapshot.active_profile}),
     ...(snapshot.profiles === undefined ? {} : {profiles: snapshot.profiles}),
+    ...(snapshot.profile_names === undefined ? {} : {profileNames: snapshot.profile_names}),
     ...(snapshot.model_default === undefined ? {} : {modelDefault: snapshot.model_default}),
     ...(snapshot.models === undefined ? {} : {models: snapshot.models}),
     ...(snapshot.front_compaction === undefined
@@ -3013,6 +3016,7 @@ function App() {
         title: session.title,
         ...(session.category === undefined ? {} : {category: session.category}),
         ...(session.profiles === undefined ? {} : {profiles: session.profiles}),
+        ...(session.profileNames === undefined ? {} : {profileNames: session.profileNames}),
         ...(session.activeProfile === undefined ? {} : {activeProfile: session.activeProfile}),
       })),
       pinnedViews,
@@ -3070,7 +3074,7 @@ function App() {
         id: activeViewKey,
         sessionRef: activeSessionId,
         profile: activeProfile,
-        title: viewLabel(activeSession.title, activeProfile),
+        title: viewLabel(activeSession.title, activeProfile === undefined ? undefined : profileLabel(activeProfile, activeSession.profileNames)),
         time: activeSession.time,
         turns: 0,
         state: sessionUiStateForRun(rowRunStatus(activeRow, activeSession)?.status),
@@ -3079,6 +3083,9 @@ function App() {
         ...(activeSession.profiles === undefined
           ? {}
           : {profiles: activeSession.profiles}),
+        ...(activeSession.profileNames === undefined
+          ? {}
+          : {profileNames: activeSession.profileNames}),
       };
 
   /** Apply a live result to the row that initiated it, not its master session. */
@@ -3137,7 +3144,7 @@ function App() {
           id: key,
           sessionRef,
           profile,
-          title: viewLabel(fromSnapshot.title, profile),
+          title: viewLabel(fromSnapshot.title, profileLabel(profile, fromSnapshot.profileNames)),
         };
         return deepEqual(current[key], record) ? current : {...current, [key]: record};
       });
@@ -5206,6 +5213,7 @@ function App() {
           activeRowSession.profiles.length > 0 ? (
             <SessionProfilePicker
               profiles={activeRowSession.profiles}
+              profileNames={activeRowSession.profileNames}
               activeProfile={activeRowSession.activeProfile}
               isDisabled={isRunning || isCompactionInProgress || isProfileSwitching || isModelDefaultUpdating || resettingViewKey !== null || frontCompactingViewKey !== null}
               onSelect={profile => {

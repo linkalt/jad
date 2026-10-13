@@ -44,7 +44,7 @@ func (r *Resolver) ListCatalogFiles(ctx context.Context, kind string) ([]httpapi
 	}
 	listing := make([]httpapi.CatalogFileInfo, len(files))
 	for index, file := range files {
-		listing[index] = httpapi.CatalogFileInfo{ID: file.ID, ETag: file.ETag}
+		listing[index] = httpapi.CatalogFileInfo{ID: file.ID, ETag: file.ETag, Name: file.Name}
 	}
 	return listing, nil
 }

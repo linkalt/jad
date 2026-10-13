@@ -53,6 +53,14 @@ test('fetchCatalogFile refuses a response with no version and an id that is not 
   await assert.rejects(fetchCatalogFile('profiles', 'a/b/c'), /<category>\/<name>/);
 });
 
+test('fetchCatalogFiles keeps a profile name too', async () => {
+  reply = () => json({files: [{id: 'dev/coder', etag: '"a"', name: ' Coder '}, {id: 'dev/x', etag: '"b"'}]});
+  assert.deepEqual(await fetchCatalogFiles('profiles'), [
+    {id: 'dev/coder', etag: '"a"', name: 'Coder'},
+    {id: 'dev/x', etag: '"b"'},
+  ]);
+});
+
 test('saveCatalogFile replaces with If-Match and creates with If-None-Match', async () => {
   requests.length = 0;
   reply = () => json({id: 'a/b', etag: '"v2"'}, 200);

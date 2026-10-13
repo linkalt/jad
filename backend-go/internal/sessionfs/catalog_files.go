@@ -3,6 +3,7 @@ package sessionfs
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -50,7 +51,7 @@ func (e *CatalogError) Error() string { return e.Message }
 type CatalogFileInfo struct {
 	ID   string
 	ETag string
-	// Name is the display name a session file sets; empty for every other kind and when unset.
+	// Name is the display name a session or profile file sets; empty for every other kind and when unset.
 	Name string
 }
 
@@ -127,9 +128,23 @@ func ListCatalogFiles(layout Layout, kind CatalogKind) ([]CatalogFileInfo, error
 		if err != nil {
 			return nil, configError("%s: could not be read: %v", entry.Path, err)
 		}
-		infos = append(infos, CatalogFileInfo{ID: entry.ID(), ETag: CatalogETag(data)})
+		info := CatalogFileInfo{ID: entry.ID(), ETag: CatalogETag(data)}
+		if kind == CatalogProfiles {
+			info.Name = fileDisplayName(data)
+		}
+		infos = append(infos, info)
 	}
 	return infos, nil
+}
+
+// fileDisplayName is the "name" a file sets. A file that does not parse, or sets a name
+// that is not a string, has none, so it is still listed and can be opened and repaired.
+func fileDisplayName(data []byte) string {
+	var named struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(data, &named)
+	return named.Name
 }
 
 // ReadCatalogFile returns one file as it is on disk.

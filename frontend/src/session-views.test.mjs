@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   addPinnedView,
+  profileLabel,
   profileSelection,
   hasPinnedView,
   groupByCategory,
@@ -329,4 +330,35 @@ test('no sessions give no sections, and no categories give a single unnamed sect
   assert.equal(only.category, undefined);
   assert.equal(only.groups.length, 1);
   assert.equal(rest.length, 0);
+});
+
+test('a profile is labelled by the name its file sets, else by its ID', () => {
+  assert.equal(profileLabel('dev/coder'), 'dev/coder');
+  assert.equal(profileLabel('dev/coder', {}), 'dev/coder');
+  assert.equal(profileLabel('dev/coder', {'dev/coder': 'Coder'}), 'Coder');
+  assert.equal(profileLabel('dev/other', {'dev/coder': 'Coder'}), 'dev/other');
+});
+
+test('child rows use the profile name but keep the profile ID as the key and the target', () => {
+  const [group] = sessionListGroups(
+    [{...grouped('s1', 'S', ['a/one', 'a/two', 'a/three'], 'a/two'), profileNames: {'a/one': 'One', 'a/two': 'Two'}}],
+    [{sessionRef: 's1', profile: 'a/two'}],
+  );
+  assert.deepEqual(
+    group.children.map(child => [child.key, child.label, child.profile, child.isPinned]),
+    [
+      [`s1\u0000a/one`, 'One', 'a/one', false],
+      ['s1', 'Two', undefined, false],
+      [`s1\u0000a/two`, 'Two', 'a/two', true],
+      [`s1\u0000a/three`, 'a/three', 'a/three', false],
+    ],
+  );
+});
+
+test('the own row of a stored profile the session no longer lists uses its name too', () => {
+  const [group] = sessionListGroups(
+    [{...grouped('s1', 'S', ['a/one'], 'a/gone'), profileNames: {'a/gone': 'Gone'}}],
+    [],
+  );
+  assert.equal(group.children[0].label, 'Gone');
 });

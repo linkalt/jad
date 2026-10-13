@@ -1,9 +1,11 @@
 import {DropdownMenu} from '@astryxdesign/core/DropdownMenu';
 import {Icon} from '@astryxdesign/core/Icon';
 import {composerPickerButton} from '../picker-button';
+import {profileLabel} from '../session-views';
 
 type SessionProfilePickerProps = {
   profiles: readonly string[];
+  profileNames?: Readonly<Record<string, string>> | undefined;
   activeProfile: string | undefined;
   isDisabled?: boolean;
   onSelect: (profile: string) => void;
@@ -11,6 +13,7 @@ type SessionProfilePickerProps = {
 
 export function SessionProfilePicker({
   profiles,
+  profileNames,
   activeProfile,
   isDisabled = false,
   onSelect,
@@ -25,7 +28,7 @@ export function SessionProfilePicker({
         label: 'Profile',
         tooltip: activeProfile === undefined
           ? 'Select a session profile'
-          : `Active session profile: ${activeProfile}`,
+          : `Active session profile: ${profileLabel(activeProfile, profileNames)}`,
         icon: <Icon icon="app:profile" size="sm" />,
         isDisabled,
       })}
@@ -34,7 +37,8 @@ export function SessionProfilePicker({
       menuWidth="max-content"
       items={profiles.map(profile => ({
         id: profile,
-        label: profile,
+        label: profileLabel(profile, profileNames),
+        ...(profileNames?.[profile] === undefined ? {} : {description: profile}),
         ...(profile === activeProfile ? {endContent: <Icon icon="check" size="sm" />} : {}),
         isDisabled,
         onClick: () => onSelect(profile),

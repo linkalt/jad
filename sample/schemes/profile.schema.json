@@ -11,6 +11,11 @@
     "description": {
       "type": "string"
     },
+    "name": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Display name of the profile, shown beside its ID in lists and the profile picker. Defaults to the profile ID."
+    },
     "prompt_documents": {
       "type": "array",
       "items": {

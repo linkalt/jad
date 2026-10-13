@@ -323,3 +323,68 @@ func TestLayoutProfileInstructionsReachTheProvider(t *testing.T) {
 		t.Fatalf("provider request bodies = %v", f.bodies)
 	}
 }
+
+// A profile's name reaches the session list, and renaming it changes the list ETag, or a
+// client holding the old list would get 304 and keep the old label.
+func TestSessionListCarriesProfileNames(t *testing.T) {
+	f := newLayoutFixture(t)
+	file := filepath.Join(f.root, "profiles", "dev", "coder.json")
+	editProfileName := func(name any) {
+		var profile map[string]any
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(data, &profile); err != nil {
+			t.Fatal(err)
+		}
+		profile["name"] = name
+		data, _ = json.Marshal(profile)
+		if err := os.WriteFile(file, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func() (map[string]string, string) {
+		status, body := f.do(t, http.MethodGet, "/api/sessions", "")
+		if status != 200 {
+			t.Fatalf("session list: %d %s", status, body)
+		}
+		var list struct {
+			Sessions []struct {
+				ProfileNames map[string]string `json:"profile_names"`
+			} `json:"sessions"`
+		}
+		if err := json.Unmarshal([]byte(body), &list); err != nil || len(list.Sessions) != 1 {
+			t.Fatalf("decode %s: %v", body, err)
+		}
+		return list.Sessions[0].ProfileNames, body
+	}
+	if got, body := names(); len(got) != 0 || strings.Contains(body, "profile_names") {
+		t.Fatalf("unnamed profiles: %v in %s", got, body)
+	}
+	editProfileName("Coder")
+	if got, _ := names(); len(got) != 1 || got["dev/coder"] != "Coder" {
+		t.Fatalf("profile_names = %v", got)
+	}
+}
+
+func TestSessionVersionChangesWithAProfileName(t *testing.T) {
+	base := sessionfs.SessionConfig{Profile: "a/b", DefaultProfile: "a/b", Profiles: []string{"a/b", "a/c"}}
+	named := base
+	named.ProfileNames = map[string]string{"a/b": "B"}
+	renamed := base
+	renamed.ProfileNames = map[string]string{"a/b": "B2"}
+	moved := base
+	moved.ProfileNames = map[string]string{"a/c": "B"}
+	versions := map[string]string{
+		"none": sessionVersion(base), "named": sessionVersion(named),
+		"renamed": sessionVersion(renamed), "moved": sessionVersion(moved),
+	}
+	seen := map[string]string{}
+	for label, version := range versions {
+		if other, dup := seen[version]; dup {
+			t.Errorf("sessionVersion is the same for %s and %s", label, other)
+		}
+		seen[version] = label
+	}
+}

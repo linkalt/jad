@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -62,6 +64,7 @@ type sessionListRecord struct {
 	ActiveProfile   string                             `json:"active_profile,omitempty"`
 	DefaultProfile  string                             `json:"default_profile,omitempty"`
 	Profiles        []string                           `json:"profiles,omitempty"`
+	ProfileNames    map[string]string                  `json:"profile_names,omitempty"`
 	ModelDefault    string                             `json:"model_default,omitempty"`
 	Models          *[]string                          `json:"models,omitempty"`
 	FrontCompaction json.RawMessage                    `json:"front_compaction,omitempty"`
@@ -486,6 +489,7 @@ func makeSessionListRecord(location sessionfs.Location, config sessionfs.Session
 		ActiveProfile:   config.Profile,
 		DefaultProfile:  config.DefaultProfile,
 		Profiles:        append([]string(nil), config.Profiles...),
+		ProfileNames:    maps.Clone(config.ProfileNames),
 		ModelDefault:    config.ModelDefault,
 		FrontCompaction: append(json.RawMessage(nil), config.FrontCompaction...),
 		Model: modelSummary{
@@ -575,6 +579,7 @@ func sessionVersion(config sessionfs.SessionConfig) string {
 		config.Category,
 		config.ModelDefault,
 		strings.Join(config.Profiles, "\x00"),
+		profileNamesVersion(config.ProfileNames),
 		fileStamp(config.MessagesPath),
 		fileStamp(config.MessagesBackupPath),
 		fileStamp(config.UsageCachePath),
@@ -585,6 +590,16 @@ func sessionVersion(config sessionfs.SessionConfig) string {
 		fileStamp(config.ModelPath),
 	}
 	return makeETag(strings.Join(parts, "|"))
+}
+
+// profileNamesVersion is the names in profile ID order, so renaming a profile changes the version.
+func profileNamesVersion(names map[string]string) string {
+	ids := slices.Sorted(maps.Keys(names))
+	parts := make([]string, 0, 2*len(ids))
+	for _, id := range ids {
+		parts = append(parts, id, names[id])
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func fileStamp(path string) string {

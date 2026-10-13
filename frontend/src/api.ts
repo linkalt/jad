@@ -224,6 +224,8 @@ export interface SessionSnapshot {
   category?: string;
   active_profile?: string;
   profiles?: string[];
+  /** Display name each profile file sets, by profile ID; a profile without one is absent. */
+  profile_names?: Record<string, string>;
   model_default?: string;
   models?: string[];
   front_compaction?: {enabled: boolean; delete_mode: 'permanent' | 'recoverable'};
@@ -1857,7 +1859,7 @@ export type CatalogKind = 'profiles' | 'models' | 'sessions' | 'toolsets' | 'mcp
 export interface CatalogFileInfo {
   id: string;
   etag: string;
-  /** Display name a session file sets; absent for other kinds and when unset. */
+  /** Display name a session or profile file sets; absent for other kinds and when unset. */
   name?: string;
 }
 

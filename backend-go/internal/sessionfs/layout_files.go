@@ -71,8 +71,10 @@ type layoutScope struct {
 
 // layoutProfileFile is <profiles>/<category>/<name>.json.
 type layoutProfileFile struct {
-	SchemaVersion   int      `json:"schema_version"`
-	Description     string   `json:"description"`
+	SchemaVersion int    `json:"schema_version"`
+	Description   string `json:"description"`
+	// Name is the display name; it defaults to the profile ID.
+	Name            string   `json:"name"`
 	PromptDocuments []string `json:"prompt_documents"`
 	PromptRole      string   `json:"prompt_role"`
 	// Instructions is system-prompt text placed before the prompt documents. Kept raw so

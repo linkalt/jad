@@ -79,6 +79,7 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	config.DefaultProfile = session.ActiveProfile
 	config.Category = session.Category
 	config.Profiles = profiles.IDs()
+	config.ProfileNames = built.profileNames
 	name := requestedModel
 	if name == "" {
 		name = config.ModelDefault
@@ -205,6 +206,8 @@ type layoutCompose struct {
 	session     layoutSessionFile
 	profiles    *catalog.Catalog
 	keys        map[string]string
+	// profileNames maps a profile ID to the name its file sets; a profile without one is absent.
+	profileNames map[string]string
 }
 
 // compose builds the legacy-shaped setting for the selected profile. The returned map
@@ -269,10 +272,12 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolset string) (map[str
 	if err != nil {
 		return nil, nil, configError("%s: %v", c.sessionPath, err)
 	}
+	c.profileNames = map[string]string{}
 	for _, other := range c.profiles.Entries() {
 		entry := c.storageEntry(other, toolBase)
 		if other.ID() == selected.ID() {
 			c.addProfileFields(entry, other.ID(), profile, models)
+			c.noteProfileName(other.ID(), profile)
 		} else {
 			unselected, _, err := readProfile(other.Path, allModels)
 			if err == nil {
@@ -281,6 +286,7 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolset string) (map[str
 			if err != nil {
 				return nil, nil, err
 			}
+			c.noteProfileName(other.ID(), unselected)
 		}
 		raw, err := json.Marshal(entry)
 		if err != nil {
@@ -293,6 +299,12 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolset string) (map[str
 		return nil, nil, err
 	}
 	return setting, modelPaths, nil
+}
+
+func (c *layoutCompose) noteProfileName(id string, profile layoutProfileFile) {
+	if name := strings.TrimSpace(profile.Name); name != "" {
+		c.profileNames[id] = name
+	}
 }
 
 // storageEntry is the part of a profile entry every profile gets: where its state lives,

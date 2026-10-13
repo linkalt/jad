@@ -117,10 +117,12 @@ type SessionConfig struct {
 	Profile        string
 	DefaultProfile string
 	Profiles       []string
-	ModelPath      string
-	ModelDefault   string
-	Models         []string
-	SettingPath    string
+	// ProfileNames maps a profile ID to the display name its file sets; a profile without a name is absent.
+	ProfileNames map[string]string
+	ModelPath    string
+	ModelDefault string
+	Models       []string
+	SettingPath  string
 	// StateDir is <state>/<session id>: the folder the session keeps its state in, and the
 	// "session directory" of relative image_store.dir and the {session_dir} spill placeholder.
 	StateDir           string
