@@ -147,3 +147,37 @@ test('problems are clamped into a document that has since shrunk', () => {
     {from: 4, to: 4, message: 'c'},
   ]);
 });
+
+test('a valid model has no problems, extra keys are allowed and a wrong type is underlined', () => {
+  const model = {schema_version: 1, provider: 'openai', model: 'gpt-x', api_key_env: 'OPENAI_API_KEY', request: {reasoning: {effort: 'high'}}};
+  assert.deepEqual(validator.validate('models', pretty(model)), []);
+  assert.deepEqual(validator.validate('models', pretty({...model, vendor_note: 1})), []);
+  const text = pretty({...model, model: 5});
+  const [problem] = validator.validate('models', text);
+  assert.equal(sliceOf(text, problem), '"model"');
+  assert.match(problem.message, /string/);
+});
+
+test('the model template is refused until the model name is filled in', () => {
+  const problems = validator.validate('models', '{\n  "schema_version": 1,\n  "provider": "openai",\n  "model": ""\n}\n');
+  assert.equal(problems.length, 1);
+  assert.match(problems[0].message, /model/);
+  assert.deepEqual(validator.validate('models', '{"model": "x"}'), []);
+});
+
+test('every model in the local layout passes the scheme', t => {
+  const root = new URL('../../.jad/models/', import.meta.url);
+  if (!existsSync(root)) {
+    t.skip('.jad is git-ignored and absent in this checkout');
+    return;
+  }
+  let checked = 0;
+  for (const category of readdirSync(root, {withFileTypes: true}).filter(entry => entry.isDirectory())) {
+    for (const file of readdirSync(new URL(`${category.name}/`, root)).filter(name => name.endsWith('.json'))) {
+      const text = readFileSync(new URL(`${category.name}/${file}`, root), 'utf8');
+      assert.deepEqual(validator.validate('models', text), [], `${category.name}/${file}`);
+      checked += 1;
+    }
+  }
+  assert.ok(checked >= 1);
+});

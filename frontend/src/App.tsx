@@ -1869,7 +1869,7 @@ function SessionNavigation({
           onClick={() => onSelectLeftPanel('settings')}
         />
         <SideNavItem
-          label="Edit profiles"
+          label="Edit catalog"
           icon={<Icon icon="wrench" size="sm" />}
           onClick={onOpenProfileEditor}
         />

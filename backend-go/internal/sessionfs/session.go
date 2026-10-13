@@ -856,6 +856,13 @@ func loadModel(path, promptRole, promptText string) (Model, error) {
 	if err != nil {
 		return Model{}, err
 	}
+	return modelFromFields(fields, path, promptRole, promptText)
+}
+
+// modelFromFields applies the model file rules to an already decoded file; path only names
+// the file in errors and anchors relative paths.
+func modelFromFields(fields map[string]json.RawMessage, path, promptRole, promptText string) (Model, error) {
+	var err error
 	if err := validateSchemaVersion(fields, path); err != nil {
 		return Model{}, err
 	}
@@ -1107,6 +1114,10 @@ func readSessionObject(path string) (map[string]json.RawMessage, error) {
 		}
 		return nil, configError("%s: could not read configuration: %v", path, err)
 	}
+	return parseSessionObject(path, contents)
+}
+
+func parseSessionObject(path string, contents []byte) (map[string]json.RawMessage, error) {
 	if len(bytes.TrimSpace(contents)) == 0 {
 		return nil, configError("%s: file is empty", path)
 	}

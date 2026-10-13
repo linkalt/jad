@@ -77,3 +77,15 @@ test('deleteCatalogFile sends If-Match and reports a profile that is in use', as
   reply = () => json({error: 'profile "a/b" is needed by session test'}, 409);
   await assert.rejects(deleteCatalogFile('profiles', 'a/b', '"v1"'), error => error.status === 409 && /needed by session/.test(error.message));
 });
+
+test('the models catalog uses its own path and the same preconditions', async () => {
+  requests.length = 0;
+  reply = () => json({files: []});
+  await fetchCatalogFiles('models');
+  assert.match(requests[0].url, /\/catalog\/models$/);
+  reply = () => new Response(null, {status: 204});
+  await deleteCatalogFile('models', 'a/b', '"v1"');
+  assert.match(requests[1].url, /\/catalog\/models\/a\/b$/);
+  assert.equal(requests[1].init.method, 'DELETE');
+  assert.equal(sentHeaders(requests[1])['if-match'], '"v1"');
+});

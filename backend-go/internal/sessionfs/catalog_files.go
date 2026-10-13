@@ -18,6 +18,7 @@ type CatalogKind string
 
 const (
 	CatalogProfiles CatalogKind = "profile"
+	CatalogModels   CatalogKind = "model"
 )
 
 // CatalogErrorKind says which precondition a catalog file operation failed.
@@ -80,6 +81,8 @@ func (l Layout) catalogDir(kind CatalogKind) (string, error) {
 	switch kind {
 	case CatalogProfiles:
 		return l.Profiles, nil
+	case CatalogModels:
+		return l.Models, nil
 	}
 	return "", &CatalogError{Kind: CatalogBadID, Message: fmt.Sprintf("unknown catalog %q", kind)}
 }
@@ -183,7 +186,8 @@ func WriteCatalogFile(layout Layout, kind CatalogKind, id string, data []byte, c
 }
 
 // DeleteCatalogFile removes the version of a file that IfMatch names. A profile that a
-// session needs is refused with the sessions listed.
+// session needs is refused with the sessions listed, and so is a model that a profile
+// needs, with the profiles listed.
 func DeleteCatalogFile(layout Layout, roots []Root, kind CatalogKind, id, ifMatch string) error {
 	path, err := layout.catalogPath(kind, id)
 	if err != nil {
@@ -208,6 +212,15 @@ func DeleteCatalogFile(layout Layout, roots []Root, kind CatalogKind, id, ifMatc
 			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("profile %q is needed by session %s", id, strings.Join(users, ", "))}
 		}
 	}
+	if kind == CatalogModels {
+		users, err := modelUsers(layout, id)
+		if err != nil {
+			return err
+		}
+		if len(users) > 0 {
+			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("model %q is needed by profile %s", id, strings.Join(users, ", "))}
+		}
+	}
 	return os.Remove(path)
 }
 
@@ -215,8 +228,49 @@ func validateCatalogFile(layout Layout, kind CatalogKind, path string, data []by
 	switch kind {
 	case CatalogProfiles:
 		return validateProfileFile(layout, path, data)
+	case CatalogModels:
+		return validateModelFile(path, data)
 	}
 	return nil
+}
+
+// validateModelFile applies the rules the loader applies to a model file the run uses.
+func validateModelFile(path string, data []byte) error {
+	fields, err := parseSessionObject(path, data)
+	if err != nil {
+		return err
+	}
+	_, err = modelFromFields(fields, path, "", "")
+	return err
+}
+
+// modelUsers lists the profiles that stop resolving when the model is removed: their models
+// selection or model_default names it, or the selection loses its last member of a category.
+// A profile that does not resolve today is not counted.
+func modelUsers(layout Layout, id string) ([]string, error) {
+	all, err := catalog.Scan("model", layout.Models)
+	if err != nil {
+		return nil, configError("%v", err)
+	}
+	remaining := all.Without(id)
+	profiles, err := catalog.Scan("profile", layout.Profiles)
+	if err != nil {
+		return nil, configError("%v", err)
+	}
+	var users []string
+	for _, entry := range profiles.Entries() {
+		var profile layoutProfileFile
+		if err := readLayoutFile(entry.Path, &profile); err != nil {
+			continue
+		}
+		if _, _, err := checkProfile(entry.Path, profile, all); err != nil {
+			continue
+		}
+		if _, _, err := checkProfile(entry.Path, profile, remaining); err != nil {
+			users = append(users, entry.ID())
+		}
+	}
+	return users, nil
 }
 
 // validateProfileFile applies what the loader applies to every profile of a session's scope,

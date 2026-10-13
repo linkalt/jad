@@ -1,10 +1,10 @@
 /**
  * @file CatalogEditorDialog.tsx
  * @input Whether the dialog is open, and a callback to close it
- * @output A modal that lists the profile files and edits one as raw JSON
- * @position The management surface for <.jad>/profiles; every write goes through the catalog routes
+ * @output A modal that lists the profile or model files and edits one as raw JSON
+ * @position The management surface for <.jad>/profiles and <.jad>/models; every write goes through the catalog routes
  *
- * The text is checked against the profile scheme as you type; the server's loader
+ * The text is checked against the kind's scheme as you type; the server's loader
  * has the last word, and its message is shown verbatim when it refuses a write.
  * A save carries the version the file had when it was opened, so an edit made
  * elsewhere in the meantime is refused instead of overwritten.
@@ -15,6 +15,7 @@ import {Banner, Button, Dialog, DialogHeader, HStack, Layout, LayoutContent, Lay
 import {AlertDialog} from '@astryxdesign/core/AlertDialog';
 import {EmptyState} from '@astryxdesign/core/EmptyState';
 import {List, ListItem} from '@astryxdesign/core/List';
+import {SegmentedControl, SegmentedControlItem} from '@astryxdesign/core/SegmentedControl';
 
 import {
   deleteCatalogFile,
@@ -22,12 +23,13 @@ import {
   fetchCatalogFiles,
   saveCatalogFile,
   type CatalogFileInfo,
+  type CatalogKind,
 } from '../api';
 import appConfig from '../config.json' with {type: 'json'};
 import {createCatalogValidator} from '../catalog-validation';
 import type {DocumentProblem} from '../json-document';
 import {
-  NEW_PROFILE_TEXT,
+  CATALOG_KIND_VIEWS,
   canSave as canSaveGate,
   deleteFailure,
   hasUnsavedWork,
@@ -38,7 +40,7 @@ import {
 } from '../catalog-editor-view';
 import {JsonCodeEditor} from './JsonCodeEditor';
 
-const KIND = 'profiles' as const;
+const KINDS: readonly CatalogKind[] = ['profiles', 'models'];
 
 type Draft =
   | {mode: 'none'}
@@ -46,7 +48,12 @@ type Draft =
   | {mode: 'existing'; id: string; etag: string; savedText: string}
   | {mode: 'new'; id: string};
 
-type Pending = {kind: 'switch'; target: string | 'new'} | {kind: 'close'} | {kind: 'delete'} | null;
+type Pending =
+  | {kind: 'switch'; target: string | 'new'}
+  | {kind: 'change-kind'; target: CatalogKind}
+  | {kind: 'close'}
+  | {kind: 'delete'}
+  | null;
 
 type Notice = {kind: 'error' | 'success'; title: string; message: string};
 
@@ -55,11 +62,12 @@ const NO_PROBLEMS: DocumentProblem[] = [];
 export interface CatalogEditorDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Called after a profile is created, replaced or deleted, so the app re-reads session data. */
+  /** Called after a file is created, replaced or deleted, so the app re-reads session data. */
   onChanged: () => void;
 }
 
 export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorDialogProps) {
+  const [kind, setKind] = useState<CatalogKind>('profiles');
   const [files, setFiles] = useState<CatalogFileInfo[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>({mode: 'none'});
@@ -74,17 +82,18 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const validatorRef = useRef<ReturnType<typeof createCatalogValidator> | null>(null);
   const loadToken = useRef(0);
 
+  const view = CATALOG_KIND_VIEWS[kind];
   const ids = useMemo(() => sortedIds(files.map(file => file.id)), [files]);
-  const savedText = draft.mode === 'existing' ? draft.savedText : draft.mode === 'new' ? NEW_PROFILE_TEXT : '';
-  const unsaved = hasUnsavedWork(draft.mode, text, savedText, newId);
-  const idProblem = draft.mode === 'new' ? newIdProblem(newId, ids) : null;
+  const savedText = draft.mode === 'existing' ? draft.savedText : draft.mode === 'new' ? view.template : '';
+  const unsaved = hasUnsavedWork(draft.mode, text, savedText, newId, view.template);
+  const idProblem = draft.mode === 'new' ? newIdProblem(newId, ids, view.noun) : null;
   const isChecked = checked.text === text;
   // The editor keeps the last result while a new check is pending, so squiggles do not blink while typing.
   const problems = checked.problems;
 
   const reloadList = useCallback(async (signal?: AbortSignal): Promise<CatalogFileInfo[]> => {
     try {
-      const next = await fetchCatalogFiles(KIND, signal);
+      const next = await fetchCatalogFiles(kind, signal);
       setFiles(next);
       setListError(null);
       setIsListLoading(false);
@@ -95,7 +104,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
       setIsListLoading(false);
       return [];
     }
-  }, []);
+  }, [kind]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -107,6 +116,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
 
   useEffect(() => {
     if (!isOpen) {
+      setKind('profiles');
       setDraft({mode: 'none'});
       setText('');
       setNotice(null);
@@ -128,7 +138,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
             const {default: schemes} = await import('virtual:catalog-schemes');
             validatorRef.current = createCatalogValidator(schemes);
           }
-          const result = validatorRef.current.validate(KIND, text);
+          const result = validatorRef.current.validate(kind, text);
           if (!cancelled) {
             setCheckError(null);
             setChecked({text, problems: result});
@@ -142,14 +152,14 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [isOpen, draft.mode, text]);
+  }, [isOpen, kind, draft.mode, text]);
 
   const openExisting = useCallback(async (id: string): Promise<void> => {
     const token = ++loadToken.current;
     setDraft({mode: 'loading', id});
     setNotice(null);
     try {
-      const file = await fetchCatalogFile(KIND, id);
+      const file = await fetchCatalogFile(kind, id);
       if (token !== loadToken.current) return;
       const loaded = normalizeLineBreaks(file.text);
       setText(loaded);
@@ -158,17 +168,37 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
       if (token !== loadToken.current) return;
       setDraft({mode: 'none'});
       setText('');
-      setNotice({kind: 'error', title: 'Could not open the profile', message: caught instanceof Error ? caught.message : String(caught)});
+      setNotice({kind: 'error', title: `Could not open the ${view.noun}`, message: caught instanceof Error ? caught.message : String(caught)});
     }
-  }, []);
+  }, [kind, view.noun]);
 
   const startNew = useCallback((): void => {
     loadToken.current += 1;
     setNewId('');
-    setText(NEW_PROFILE_TEXT);
+    setText(view.template);
     setNotice(null);
     setDraft({mode: 'new', id: ''});
-  }, []);
+  }, [view.template]);
+
+  const changeKind = (target: CatalogKind): void => {
+    loadToken.current += 1;
+    setKind(target);
+    setFiles([]);
+    setListError(null);
+    setIsListLoading(true);
+    setDraft({mode: 'none'});
+    setText('');
+    setNewId('');
+    setNotice(null);
+    setCheckError(null);
+    setChecked({text: '', problems: NO_PROBLEMS});
+  };
+
+  const requestKind = (target: CatalogKind): void => {
+    if (target === kind) return;
+    if (unsaved) setPending({kind: 'change-kind', target});
+    else changeKind(target);
+  };
 
   const requestSwitch = (target: string | 'new'): void => {
     if (unsaved) {
@@ -190,6 +220,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setPending(null);
     if (!action) return;
     if (action.kind === 'close') onClose();
+    else if (action.kind === 'change-kind') changeKind(action.target);
     else if (action.kind === 'switch') {
       if (action.target === 'new') startNew();
       else void openExisting(action.target);
@@ -203,7 +234,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setIsBusy(true);
     setNotice(null);
     try {
-      const result = await saveCatalogFile(KIND, id, text, isCreate ? null : draft.mode === 'existing' ? draft.etag : null);
+      const result = await saveCatalogFile(kind, id, text, isCreate ? null : draft.mode === 'existing' ? draft.etag : null);
       setDraft({mode: 'existing', id, etag: result.info.etag, savedText: text});
       setNotice({kind: 'success', title: 'Done', message: isCreate ? `Created ${id}.` : `Saved ${id}.`});
       await reloadList();
@@ -221,7 +252,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setIsBusy(true);
     setNotice(null);
     try {
-      await deleteCatalogFile(KIND, draft.id, draft.etag);
+      await deleteCatalogFile(kind, draft.id, draft.etag);
       const removed = draft.id;
       setDraft({mode: 'none'});
       setText('');
@@ -250,7 +281,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     isBusy,
     idProblem,
   });
-  const title = draft.mode === 'existing' ? draft.id : draft.mode === 'new' ? 'New profile' : 'Profiles';
+  const title = draft.mode === 'existing' ? draft.id : draft.mode === 'new' ? `New ${view.noun}` : view.plural;
 
   return (
     <>
@@ -263,26 +294,31 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
         purpose="form"
       >
         <Layout
-          header={<DialogHeader title="Edit profiles" subtitle={title} onOpenChange={open => { if (!open) requestClose(); }} />}
+          header={<DialogHeader title="Edit catalog" subtitle={title} onOpenChange={open => { if (!open) requestClose(); }} />}
           content={
             <LayoutContent>
               <HStack gap={4} align="start">
                 <VStack gap={2} width={appConfig.catalog_file_list_width_px}>
-                  <Button label="New profile" variant="primary" width="100%" onClick={() => requestSwitch('new')} isDisabled={isBusy} />
+                  <SegmentedControl label="Catalog" layout="fill" value={kind} onChange={value => requestKind(value as CatalogKind)} isDisabled={isBusy}>
+                    {KINDS.map(option => (
+                      <SegmentedControlItem key={option} value={option} label={CATALOG_KIND_VIEWS[option].plural} />
+                    ))}
+                  </SegmentedControl>
+                  <Button label={`New ${view.noun}`} variant="primary" width="100%" onClick={() => requestSwitch('new')} isDisabled={isBusy} />
                   {listError !== null ? (
                     <Banner
                       status="error"
-                      title="Could not list profiles"
+                      title={`Could not list ${view.plural.toLowerCase()}`}
                       description={listError}
                       collapsible={false}
                       endContent={<Button label="Retry" size="sm" onClick={() => { setIsListLoading(true); void reloadList(); }} />}
                     />
                   ) : isListLoading ? (
-                    <Text type="supporting" color="secondary">Loading profiles…</Text>
+                    <Text type="supporting" color="secondary">Loading {view.plural.toLowerCase()}…</Text>
                   ) : ids.length === 0 ? (
-                    <EmptyState title="No profiles" description="Create the first one." />
+                    <EmptyState title={`No ${view.plural.toLowerCase()}`} description="Create the first one." />
                   ) : (
-                    <List density="compact" header={<Text type="label">Profiles</Text>}>
+                    <List density="compact" header={<Text type="label">{view.plural}</Text>}>
                       {ids.map(id => (
                         <ListItem
                           key={id}
@@ -307,7 +343,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                     />
                   )}
                   {draft.mode === 'none' && (
-                    <EmptyState title="Select a profile" description="Pick one from the list, or create a new one." />
+                    <EmptyState title={`Select a ${view.noun}`} description="Pick one from the list, or create a new one." />
                   )}
                   {draft.mode === 'loading' && <Text type="supporting" color="secondary">Loading {draft.id}…</Text>}
                   {draft.mode === 'new' && (
@@ -323,7 +359,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                   {hasEditor && (
                     <>
                       <JsonCodeEditor
-                        label={draft.mode === 'new' ? 'New profile JSON' : `${draft.id} JSON`}
+                        label={draft.mode === 'new' ? `New ${view.noun} JSON` : `${draft.id} JSON`}
                         value={text}
                         problems={problems}
                         isReadOnly={isBusy}
@@ -383,10 +419,10 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
         onOpenChange={open => {
           if (!open) setPending(null);
         }}
-        title={pending?.kind === 'delete' ? 'Delete this profile?' : 'Discard your changes?'}
+        title={pending?.kind === 'delete' ? `Delete this ${view.noun}?` : 'Discard your changes?'}
         description={
           pending?.kind === 'delete'
-            ? `${draft.mode === 'existing' ? draft.id : 'This profile'} will be removed. The server refuses this while a session needs it.`
+            ? `${draft.mode === 'existing' ? draft.id : `This ${view.noun}`} will be removed. The server refuses this while ${view.usedBy} needs it.`
             : 'The text has changes that are not saved.'
         }
         actionLabel={pending?.kind === 'delete' ? 'Delete' : 'Discard'}

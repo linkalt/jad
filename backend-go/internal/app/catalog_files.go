@@ -11,6 +11,7 @@ import (
 
 var catalogFileKinds = map[string]sessionfs.CatalogKind{
 	"profiles": sessionfs.CatalogProfiles,
+	"models":   sessionfs.CatalogModels,
 }
 
 func (r *Resolver) catalogLayout(ctx context.Context, kind string) (sessionfs.Layout, sessionfs.CatalogKind, error) {

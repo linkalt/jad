@@ -5,8 +5,28 @@
  * @position Pure rules behind the catalog dialog; no React and no network
  */
 import {CatalogRequestError} from './api.ts';
+import type {CatalogKind} from './api.ts';
 
-export const NEW_PROFILE_TEXT = '{\n  "schema_version": 1\n}\n';
+export interface CatalogKindView {
+  /** Singular noun for messages: "profile". */
+  noun: string;
+  /** Heading for the list: "Profiles". */
+  plural: string;
+  /** Who refuses a delete while the file is in use: "a session". */
+  usedBy: string;
+  /** The text a new file starts from. */
+  template: string;
+}
+
+export const CATALOG_KIND_VIEWS: Record<CatalogKind, CatalogKindView> = {
+  profiles: {noun: 'profile', plural: 'Profiles', usedBy: 'a session', template: '{\n  "schema_version": 1\n}\n'},
+  models: {
+    noun: 'model',
+    plural: 'Models',
+    usedBy: 'a profile',
+    template: '{\n  "schema_version": 1,\n  "provider": "openai",\n  "model": ""\n}\n',
+  },
+};
 
 export const STALE_FILE_MESSAGE =
   'This file changed on the server after you opened it. Reload it to see the current version; your edits are not saved.';
@@ -17,7 +37,7 @@ const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
  * The server accepts `<category>/<name>` with letters, digits, '-', '_' and '.', and no
  * leading separator. The editor checks the same rule so a bad name never costs a round trip.
  */
-export function newIdProblem(id: string, existing: readonly string[]): string | null {
+export function newIdProblem(id: string, existing: readonly string[], noun = 'profile'): string | null {
   const trimmed = id.trim();
   if (trimmed === '') return 'Enter a name written <category>/<name>.';
   const parts = trimmed.split('/');
@@ -28,7 +48,7 @@ export function newIdProblem(id: string, existing: readonly string[]): string | 
       return `"${part}" may only hold letters, digits, '-', '_' and '.', and must start with a letter or digit.`;
     }
   }
-  if (existing.includes(trimmed)) return `A profile named "${trimmed}" already exists.`;
+  if (existing.includes(trimmed)) return `A ${noun} named "${trimmed}" already exists.`;
   return null;
 }
 
@@ -77,10 +97,10 @@ export function isDirty(text: string, savedText: string): boolean {
 
 export type EditorMode = 'none' | 'loading' | 'existing' | 'new';
 
-/** A new profile is unsaved work as soon as the name or the text differs from the empty template. */
-export function hasUnsavedWork(mode: EditorMode, text: string, savedText: string, newId: string): boolean {
+/** A new file is unsaved work as soon as the name or the text differs from the kind's template. */
+export function hasUnsavedWork(mode: EditorMode, text: string, savedText: string, newId: string, template: string): boolean {
   if (mode === 'none' || mode === 'loading') return false;
-  if (mode === 'new') return isDirty(text, NEW_PROFILE_TEXT) || newId.trim() !== '';
+  if (mode === 'new') return isDirty(text, template) || newId.trim() !== '';
   return isDirty(text, savedText);
 }
 

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
 const {CatalogRequestError} = await import('./api.ts');
-const {NEW_PROFILE_TEXT, STALE_FILE_MESSAGE, canSave, deleteFailure, hasUnsavedWork, isDirty, newIdProblem, normalizeLineBreaks, saveFailure, sortedIds} =
+const {CATALOG_KIND_VIEWS, STALE_FILE_MESSAGE, canSave, deleteFailure, hasUnsavedWork, isDirty, newIdProblem, normalizeLineBreaks, saveFailure, sortedIds} =
   await import('./catalog-editor-view.ts');
+
+const NEW_PROFILE_TEXT = CATALOG_KIND_VIEWS.profiles.template;
 
 test('a new id must be <category>/<name> with the characters the server accepts', () => {
   assert.equal(newIdProblem('coding/full', []), null);
@@ -70,17 +72,17 @@ test('dirty means the text differs from the saved text', () => {
 });
 
 test('a new profile with a typed name is unsaved work even when the template is untouched', () => {
-  assert.equal(hasUnsavedWork('new', NEW_PROFILE_TEXT, NEW_PROFILE_TEXT, ''), false);
-  assert.equal(hasUnsavedWork('new', NEW_PROFILE_TEXT, NEW_PROFILE_TEXT, '  '), false);
-  assert.equal(hasUnsavedWork('new', NEW_PROFILE_TEXT, NEW_PROFILE_TEXT, 'a/b'), true);
-  assert.equal(hasUnsavedWork('new', '{}', NEW_PROFILE_TEXT, ''), true);
+  assert.equal(hasUnsavedWork('new', NEW_PROFILE_TEXT, NEW_PROFILE_TEXT, '', NEW_PROFILE_TEXT), false);
+  assert.equal(hasUnsavedWork('new', NEW_PROFILE_TEXT, NEW_PROFILE_TEXT, '  ', NEW_PROFILE_TEXT), false);
+  assert.equal(hasUnsavedWork('new', NEW_PROFILE_TEXT, NEW_PROFILE_TEXT, 'a/b', NEW_PROFILE_TEXT), true);
+  assert.equal(hasUnsavedWork('new', '{}', NEW_PROFILE_TEXT, '', NEW_PROFILE_TEXT), true);
 });
 
 test('an existing profile is unsaved work only when the text changed, and nothing is while loading or empty', () => {
-  assert.equal(hasUnsavedWork('existing', 'a', 'a', ''), false);
-  assert.equal(hasUnsavedWork('existing', 'ab', 'a', ''), true);
-  assert.equal(hasUnsavedWork('loading', 'x', '', 'a/b'), false);
-  assert.equal(hasUnsavedWork('none', 'x', '', 'a/b'), false);
+  assert.equal(hasUnsavedWork('existing', 'a', 'a', '', NEW_PROFILE_TEXT), false);
+  assert.equal(hasUnsavedWork('existing', 'ab', 'a', '', NEW_PROFILE_TEXT), true);
+  assert.equal(hasUnsavedWork('loading', 'x', '', 'a/b', NEW_PROFILE_TEXT), false);
+  assert.equal(hasUnsavedWork('none', 'x', '', 'a/b', NEW_PROFILE_TEXT), false);
 });
 
 const gate = overrides => ({
@@ -117,4 +119,22 @@ test('line breaks are normalised to the editor form', () => {
   assert.equal(normalizeLineBreaks('{\r\n  "a": 1\r\n}\r\n'), '{\n  "a": 1\n}\n');
   assert.equal(normalizeLineBreaks('a\rb\nc'), 'a\nb\nc');
   assert.equal(normalizeLineBreaks('no breaks'), 'no breaks');
+});
+
+test('a model template is a loadable model body that still needs its model name', () => {
+  const template = JSON.parse(CATALOG_KIND_VIEWS.models.template);
+  assert.equal(template.schema_version, 1);
+  assert.equal(template.model, '');
+});
+
+test('the unsaved check uses the template of the kind being edited', () => {
+  const profile = CATALOG_KIND_VIEWS.profiles.template;
+  const model = CATALOG_KIND_VIEWS.models.template;
+  assert.equal(hasUnsavedWork('new', model, '', '', model), false);
+  assert.equal(hasUnsavedWork('new', model, '', '', profile), true);
+});
+
+test('the duplicate-name message names the kind', () => {
+  assert.match(newIdProblem('a/b', ['a/b'], 'model'), /A model named "a\/b" already exists/);
+  assert.match(newIdProblem('a/b', ['a/b']), /A profile named/);
 });
