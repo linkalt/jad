@@ -1,8 +1,8 @@
 /**
  * @file CatalogEditorDialog.tsx
  * @input Whether the dialog is open, and a callback to close it
- * @output A modal that lists the profile, model or session files and edits one as raw JSON
- * @position The management surface for <.jad>/profiles, <.jad>/models and the session files; every write goes through the catalog routes
+ * @output A modal that lists the profile, model, session, toolset or MCP server files and edits one as raw JSON
+ * @position The management surface for <.jad>/{profiles,models,tools,mcp} and the session files; every write goes through the catalog routes
  *
  * The text is checked against the kind's scheme as you type; the server's loader
  * has the last word, and its message is shown verbatim when it refuses a write.
@@ -16,7 +16,7 @@ import {AlertDialog} from '@astryxdesign/core/AlertDialog';
 import {CheckboxInput} from '@astryxdesign/core/CheckboxInput';
 import {EmptyState} from '@astryxdesign/core/EmptyState';
 import {List, ListItem} from '@astryxdesign/core/List';
-import {SegmentedControl, SegmentedControlItem} from '@astryxdesign/core/SegmentedControl';
+import {Selector} from '@astryxdesign/core/Selector';
 
 import {
   deleteCatalogFile,
@@ -41,7 +41,8 @@ import {
 } from '../catalog-editor-view';
 import {JsonCodeEditor} from './JsonCodeEditor';
 
-const KINDS: readonly CatalogKind[] = ['profiles', 'models', 'sessions'];
+const KINDS = Object.keys(CATALOG_KIND_VIEWS) as CatalogKind[];
+const KIND_OPTIONS = KINDS.map(option => ({value: option, label: CATALOG_KIND_VIEWS[option].plural}));
 
 type Draft =
   | {mode: 'none'}
@@ -306,11 +307,13 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
             <LayoutContent>
               <HStack gap={4} align="start">
                 <VStack gap={2} width={appConfig.catalog_file_list_width_px}>
-                  <SegmentedControl label="Catalog" layout="fill" value={kind} onChange={value => requestKind(value as CatalogKind)} isDisabled={isBusy}>
-                    {KINDS.map(option => (
-                      <SegmentedControlItem key={option} value={option} label={CATALOG_KIND_VIEWS[option].plural} />
-                    ))}
-                  </SegmentedControl>
+                  <Selector
+                    label="Catalog"
+                    options={KIND_OPTIONS}
+                    value={kind}
+                    onChange={value => requestKind(value as CatalogKind)}
+                    isDisabled={isBusy}
+                  />
                   <Button label={`New ${view.noun}`} variant="primary" width="100%" onClick={() => requestSwitch('new')} isDisabled={isBusy} />
                   {listError !== null ? (
                     <Banner

@@ -151,7 +151,7 @@ test('a session name is <name> or <root>:<name>', () => {
 });
 
 test('every kind has its own hint, delete note and template', () => {
-  for (const kind of ['profiles', 'models', 'sessions']) {
+  for (const kind of ['profiles', 'models', 'sessions', 'toolsets', 'mcp']) {
     const view = CATALOG_KIND_VIEWS[kind];
     assert.ok(view.idHint.length > 0 && view.deleteNote.length > 0 && view.noun.length > 0, kind);
     JSON.parse(view.template);

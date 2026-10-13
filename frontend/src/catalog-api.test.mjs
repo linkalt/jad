@@ -112,3 +112,17 @@ test('sessions are addressed by one path segment and delete can ask for the stat
   await deleteCatalogFile('profiles', 'a/b', '"v1"', {deleteState: true});
   assert.doesNotMatch(requests[5].url, /state=/);
 });
+
+test('toolsets and MCP servers are addressed as category/name under their own paths', async () => {
+  requests.length = 0;
+  reply = () => json({files: []});
+  await fetchCatalogFiles('toolsets');
+  await fetchCatalogFiles('mcp');
+  assert.match(requests[0].url, /\/catalog\/toolsets$/);
+  assert.match(requests[1].url, /\/catalog\/mcp$/);
+  reply = () => new Response(null, {status: 204});
+  await deleteCatalogFile('mcp', 'jad/zvec-grep', '"v1"');
+  assert.match(requests[2].url, /\/catalog\/mcp\/jad\/zvec-grep$/);
+  assert.equal(requests[2].init.method, 'DELETE');
+  await assert.rejects(fetchCatalogFile('toolsets', 'one'), /<category>\/<name>/);
+});

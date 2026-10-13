@@ -14,6 +14,8 @@ export const CATALOG_SCHEMES = {
   profiles: 'profile.schema.json',
   models: 'model.schema.json',
   sessions: 'session.schema.json',
+  toolsets: 'toolset.schema.json',
+  mcp: 'mcp-server.schema.json',
 } as const;
 
 export type CatalogKind = keyof typeof CATALOG_SCHEMES;
@@ -37,6 +39,31 @@ function describe(error: ErrorObject): string {
     return `missing required key "${(error.params as {missingProperty: string}).missingProperty}"`;
   }
   return error.message ?? 'is not valid';
+}
+
+const ONE_OF_BRANCH = /^(.*\/oneOf\/\d+)\//;
+
+/**
+ * A oneOf over a discriminator (the MCP transport type) reports every branch. Branches whose
+ * discriminator const failed do not apply, so their errors and the oneOf wrapper are noise.
+ * If no branch applies, the full list stays: it says which values were allowed.
+ */
+function relevantErrors(errors: readonly ErrorObject[]): readonly ErrorObject[] {
+  const branchOf = (error: ErrorObject): string | undefined => ONE_OF_BRANCH.exec(error.schemaPath)?.[1];
+  const mismatched = new Set<string>();
+  const branches = new Set<string>();
+  for (const error of errors) {
+    const branch = branchOf(error);
+    if (branch === undefined) continue;
+    branches.add(branch);
+    if (error.keyword === 'const') mismatched.add(branch);
+  }
+  if (mismatched.size === 0 || mismatched.size === branches.size) return errors;
+  return errors.filter(error => {
+    const branch = branchOf(error);
+    if (branch !== undefined) return !mismatched.has(branch);
+    return error.keyword !== 'oneOf';
+  });
 }
 
 function escapePointer(segment: string): string {
@@ -83,7 +110,7 @@ export function createCatalogValidator(schemes: Readonly<Record<string, unknown>
       if (check(JSON.parse(text))) return [];
       const problems: DocumentProblem[] = [];
       const seen = new Set<string>();
-      for (const error of check.errors ?? []) {
+      for (const error of relevantErrors(check.errors ?? [])) {
         // The wrapper adds nothing: the failing key's own error carries the detail.
         if (error.keyword === 'propertyNames') continue;
         const {pointer, preferKey} = anchor(error);

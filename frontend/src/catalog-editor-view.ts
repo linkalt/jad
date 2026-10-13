@@ -48,6 +48,22 @@ export const CATALOG_KIND_VIEWS: Record<CatalogKind, CatalogKindView> = {
     deleteNote: 'A run in progress is stopped first.',
     template: '{\n  "schema_version": 1,\n  "cwd": "",\n  "active_profile": ""\n}\n',
   },
+  toolsets: {
+    noun: 'toolset',
+    plural: 'Toolsets',
+    idHint: 'Written <category>/<name>, for example coding/review.',
+    idForm: 'category/name',
+    deleteNote: 'The server refuses this while a profile needs it.',
+    template: '{\n  "schema_version": 1\n}\n',
+  },
+  mcp: {
+    noun: 'MCP server',
+    plural: 'MCP servers',
+    idHint: 'Written <category>/<name>, for example jad/zvec-grep.',
+    idForm: 'category/name',
+    deleteNote: 'The server refuses this while a toolset needs it.',
+    template: '{\n  "schema_version": 1,\n  "transport": {\n    "type": "stdio",\n    "command": ""\n  }\n}\n',
+  },
 };
 
 export const STALE_FILE_MESSAGE =

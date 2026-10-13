@@ -219,3 +219,98 @@ test('every session in the local layout passes the scheme', t => {
   }
   assert.ok(checked >= 1);
 });
+
+function localJson(dir, t) {
+  const root = new URL(`../../.jad/${dir}/`, import.meta.url);
+  if (!existsSync(root)) {
+    t.skip('.jad is git-ignored and absent in this checkout');
+    return [];
+  }
+  const files = [];
+  for (const category of readdirSync(root, {withFileTypes: true}).filter(entry => entry.isDirectory())) {
+    for (const file of readdirSync(new URL(`${category.name}/`, root)).filter(name => name.endsWith('.json'))) {
+      files.push([`${category.name}/${file}`, readFileSync(new URL(`${category.name}/${file}`, root), 'utf8')]);
+    }
+  }
+  return files;
+}
+
+test('every toolset in the local layout passes the scheme', t => {
+  const files = localJson('tools', t);
+  for (const [name, text] of files) assert.deepEqual(validator.validate('toolsets', text), [], name);
+});
+
+test('every MCP server file in the local layout passes the scheme', t => {
+  const files = localJson('mcp', t);
+  for (const [name, text] of files) assert.deepEqual(validator.validate('mcp', text), [], name);
+});
+
+test('a toolset with an unknown key or an unknown top-level section is flagged at the key', () => {
+  const text = pretty({schema_version: 1, bogus: 1});
+  const [problem] = validator.validate('toolsets', text);
+  assert.equal(sliceOf(text, problem), '"bogus"');
+  assert.match(problem.message, /unknown key "bogus"/);
+});
+
+test('the toolset template is valid', () => {
+  assert.deepEqual(validator.validate('toolsets', '{\n  "schema_version": 1\n}\n'), []);
+});
+
+test('the MCP template is refused until the stdio command is filled in', () => {
+  const template = '{\n  "schema_version": 1,\n  "transport": {\n    "type": "stdio",\n    "command": ""\n  }\n}\n';
+  const problems = validator.validate('mcp', template);
+  assert.ok(problems.some(problem => /command/.test(problem.message)), JSON.stringify(problems));
+  const filled = template.replace('"command": ""', '"command": "bunx"');
+  assert.deepEqual(validator.validate('mcp', filled), []);
+});
+
+test('the MCP scheme flags an unknown top-level key, which the server accepts', () => {
+  const text = pretty({schema_version: 1, transport: {type: 'stdio', command: 'x'}, bogus: 1});
+  const [problem] = validator.validate('mcp', text);
+  assert.equal(sliceOf(text, problem), '"bogus"');
+});
+
+test('the MCP scheme refuses a missing transport and a wrong transport type', () => {
+  assert.ok(validator.validate('mcp', pretty({schema_version: 1})).some(p => /transport/.test(p.message)));
+  assert.ok(validator.validate('mcp', pretty({schema_version: 1, transport: {type: 'pipe'}})).length > 0);
+  assert.deepEqual(
+    validator.validate('mcp', pretty({schema_version: 1, transport: {type: 'streamable_http', url: 'http://h/mcp'}})),
+    [],
+  );
+});
+
+test('an MCP transport error names only the branch the type selects', () => {
+  const template = pretty({schema_version: 1, transport: {type: 'stdio', command: ''}});
+  const messages = validator.validate('mcp', template).map(problem => problem.message);
+  assert.equal(messages.length, 1, messages.join(' | '));
+  assert.match(messages[0], /command/);
+  const http = pretty({schema_version: 1, transport: {type: 'streamable_http'}});
+  const httpMessages = validator.validate('mcp', http).map(problem => problem.message);
+  assert.ok(httpMessages.some(message => /missing required key "url"/.test(message)), httpMessages.join(' | '));
+  assert.ok(httpMessages.every(message => !/stdio|command/.test(message)), httpMessages.join(' | '));
+});
+
+test('an unknown MCP transport type still lists what was allowed', () => {
+  const messages = validator.validate('mcp', pretty({schema_version: 1, transport: {type: 'pipe'}})).map(problem => problem.message);
+  assert.ok(messages.includes('/transport/type: must be "stdio"'), messages.join(' | '));
+  assert.ok(messages.includes('/transport/type: must be "streamable_http"'), messages.join(' | '));
+});
+
+test('without a usable transport type no branch is hidden, so the allowed shapes stay visible', () => {
+  const none = validator.validate('mcp', pretty({schema_version: 1, transport: {}})).map(problem => problem.message);
+  assert.ok(none.includes('/transport: missing required key "type"'), none.join(' | '));
+  assert.ok(none.includes('/transport: missing required key "command"'), none.join(' | '));
+  assert.ok(none.includes('/transport: missing required key "url"'), none.join(' | '));
+  const text = validator.validate('mcp', pretty({schema_version: 1, transport: 'x'})).map(problem => problem.message);
+  assert.ok(text.includes('/transport: must be object'), text.join(' | '));
+  const five = validator.validate('mcp', pretty({schema_version: 1, transport: {type: 5}})).map(problem => problem.message);
+  assert.ok(five.includes('/transport/type: must be "stdio"'), five.join(' | '));
+});
+
+test('documents without a discriminated oneOf keep every error', () => {
+  const messages = validator
+    .validate('profiles', pretty({...goodProfile, tools: {allow: 5}}))
+    .map(problem => problem.message);
+  assert.ok(messages.length >= 1, messages.join(' | '));
+  assert.ok(messages.every(message => /tools/.test(message)), messages.join(' | '));
+});

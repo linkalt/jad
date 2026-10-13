@@ -1852,7 +1852,7 @@ export async function stopSessionRun(
   };
 }
 
-export type CatalogKind = 'profiles' | 'models' | 'sessions';
+export type CatalogKind = 'profiles' | 'models' | 'sessions' | 'toolsets' | 'mcp';
 
 export interface CatalogFileInfo {
   id: string;
