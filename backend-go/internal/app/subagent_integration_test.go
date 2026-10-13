@@ -31,6 +31,8 @@ type subagentProvider struct {
 	requests []providerRequest
 	// childFails makes every child request answer with this HTTP status when non-zero.
 	childFails int
+	// childFailFirst makes the first this-many child requests answer 503; later ones work.
+	childFailFirst int
 	// childBlocks makes every child request wait until the client goes away. The
 	// channels are created by the test before the run starts.
 	childBlocks bool
@@ -130,6 +132,9 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		if body.Model == "child-model" {
 			p.childRequests++
 			childRequest = p.childRequests
+			if childRequest <= p.childFailFirst {
+				fail, status = true, http.StatusServiceUnavailable
+			}
 		}
 		block := body.Model == "child-model" && (p.childBlocks || (p.childPartial && strings.Contains(record.Text, "function_call_output")))
 		p.mu.Unlock()
@@ -923,6 +928,20 @@ func TestSubagentWithoutAModelFileUsesTheCallingSessionsModel(t *testing.T) {
 	}
 	if childRequests == 0 {
 		t.Fatal("no request with a fresh context reached the parent's model, so the child did not run with it")
+	}
+}
+
+// A child's client is built like the master's, so a failed opening request is retried by
+// provider_retry (the default of two retries here) and the child still answers.
+func TestSubagentRetriesAFailedProviderRequestLikeTheMaster(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	f.provider.childFailFirst = 2
+	body := f.run(t)
+	if !strings.Contains(body, "event: completed") || !strings.Contains(body, "the answer is 42") {
+		t.Fatalf("the child did not recover from two 503 answers:\n%s", body)
+	}
+	if got := f.provider.forModel("child-model"); len(got) != 4 {
+		t.Fatalf("the child made %d requests, want 4 (2 failed, 1 tool round, 1 answer)", len(got))
 	}
 }
 

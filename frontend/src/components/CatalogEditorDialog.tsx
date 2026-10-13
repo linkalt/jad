@@ -160,6 +160,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const openExisting = useCallback(async (id: string): Promise<void> => {
     const token = ++loadToken.current;
     setDraft({mode: 'loading', id});
+    setDeleteState(false);
     setNotice(null);
     try {
       const file = await fetchCatalogFile(kind, id);
@@ -179,6 +180,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     loadToken.current += 1;
     setNewId('');
     setText(view.template);
+    setDeleteState(false);
     setNotice(null);
     setDraft({mode: 'new', id: ''});
   }, [view.template]);

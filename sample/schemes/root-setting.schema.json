@@ -284,7 +284,7 @@
     },
     "defaults": {
       "$ref": "setting.schema.json#/$defs/layout_settings",
-      "description": "Setting values every session starts from. Objects merge key by key with the level below it (profile, session); arrays and scalars replace. Each value follows the same key in setting.schema.json."
+      "description": "Setting values every session starts from. Objects merge key by key with the level below it (profile, session); arrays and scalars replace. Each value follows the same key in setting.schema.json. This file is read once when the server starts, so a change here (defaults included) applies only after a restart; the profile and session files are read on every request."
     }
   },
   "required": ["session_roots"],
