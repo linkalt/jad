@@ -17,7 +17,7 @@ const schemesModuleId = 'virtual:catalog-schemes';
 function catalogSchemes(): Plugin {
   return {
     name: 'catalog-schemes',
-    resolveId: id => (id === schemesModuleId ? `\0${schemesModuleId}` : undefined),
+    resolveId: id => (id === schemesModuleId || id === `\0${schemesModuleId}` ? `\0${schemesModuleId}` : undefined),
     load(id) {
       if (id !== `\0${schemesModuleId}`) return undefined;
       const schemes: Record<string, unknown> = {};
