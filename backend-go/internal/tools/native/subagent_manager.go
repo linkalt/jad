@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -591,6 +592,30 @@ func (m *SubagentManager) CancelOwner(owner string) int {
 	}
 	cancelled := 0
 	for _, run := range m.ownedRuns(owner) {
+		if run.active() {
+			run.cancel()
+			cancelled++
+		}
+	}
+	return cancelled
+}
+
+// CancelOwnersWithPrefix is CancelOwner for every session key that starts with prefix, so a
+// session is cancelled whatever profile started the run.
+func (m *SubagentManager) CancelOwnersWithPrefix(prefix string) int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	var runs []*subagentRun
+	for _, run := range m.runs {
+		if strings.HasPrefix(run.owner, prefix) {
+			runs = append(runs, run)
+		}
+	}
+	m.mu.Unlock()
+	cancelled := 0
+	for _, run := range runs {
 		if run.active() {
 			run.cancel()
 			cancelled++

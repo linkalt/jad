@@ -129,6 +129,7 @@ func TestServerNumberRangeErrorsUseTheTypeScriptWording(t *testing.T) {
 		{"sse_heartbeat_interval_ms", "-1", "server.sse_heartbeat_interval_ms must be a safe integer between 0 and 300000"},
 		{"read_header_timeout_ms", "-1", "server.read_header_timeout_ms must be a safe integer between 0 and 300000"},
 		{"idle_timeout_ms", "-1", "server.idle_timeout_ms must be a safe integer between 0 and 3600000"},
+		{"session_delete_stop_wait_ms", "-1", "server.session_delete_stop_wait_ms must be a safe integer between 0 and 300000"},
 		{"snapshot_turns", "-1", "server.snapshot_turns must be a safe integer between 0 and 100000"},
 		{"max_page_turns", "0", "server.max_page_turns must be a safe integer between 1 and 1000"},
 		{"max_inline_part_bytes", "-1", "server.max_inline_part_bytes must be a safe integer between 0 and 16777216"},
@@ -649,5 +650,46 @@ func TestLoadIgnoresFoldersThatAreNotLayoutSessions(t *testing.T) {
 	}
 	if _, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}}); err != nil {
 		t.Fatalf("empty folder with the same name: %v", err)
+	}
+}
+
+func TestSessionDeleteStopWaitSettingDefaultsAndValidation(t *testing.T) {
+	if got := Defaults().SessionDeleteStopWait; got != 10*time.Second {
+		t.Fatalf("default session delete stop wait = %v, want 10s", got)
+	}
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	load := func(server string) (Config, error) {
+		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+	}
+	for _, accepted := range []struct {
+		server string
+		want   time.Duration
+	}{
+		{`{}`, 10 * time.Second},
+		{`{"session_delete_stop_wait_ms":null}`, 10 * time.Second},
+		{`{"session_delete_stop_wait_ms":0}`, 0},
+		{`{"session_delete_stop_wait_ms":250}`, 250 * time.Millisecond},
+		{`{"session_delete_stop_wait_ms":300000}`, 5 * time.Minute},
+	} {
+		config, err := load(accepted.server)
+		if err != nil {
+			t.Fatalf("Load(%s) error = %v", accepted.server, err)
+		}
+		if config.Server.SessionDeleteStopWait != accepted.want {
+			t.Errorf("Load(%s) wait = %v, want %v", accepted.server, config.Server.SessionDeleteStopWait, accepted.want)
+		}
+	}
+	for _, rejected := range []string{`-1`, `300001`, `1.5`, `"5000"`} {
+		_, err := load(`{"session_delete_stop_wait_ms":` + rejected + `}`)
+		if err == nil || !strings.Contains(err.Error(), "session_delete_stop_wait_ms") {
+			t.Errorf("Load(session_delete_stop_wait_ms=%s) error = %v, want a message naming the field", rejected, err)
+		}
 	}
 }

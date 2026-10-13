@@ -145,32 +145,9 @@ func WriteCatalogFile(layout Layout, kind CatalogKind, id string, data []byte, c
 	if err != nil {
 		return CatalogFileInfo{}, false, err
 	}
-	before, statErr := os.Stat(path)
-	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
-		return CatalogFileInfo{}, false, configError("%s: could not be read: %v", path, statErr)
-	}
-	exists := statErr == nil
-	if exists {
-		if condition.IfNoneMatch != "" {
-			return CatalogFileInfo{}, false, &CatalogError{Kind: CatalogPreconditionFailed, Message: fmt.Sprintf("%s %q already exists", kind, id)}
-		}
-		if condition.IfMatch == "" {
-			return CatalogFileInfo{}, false, &CatalogError{Kind: CatalogPreconditionRequired, Message: "If-Match is required to replace a file"}
-		}
-		current, err := os.ReadFile(path)
-		if err != nil {
-			return CatalogFileInfo{}, false, configError("%s: could not be read: %v", path, err)
-		}
-		if !IfMatchSatisfied(condition.IfMatch, CatalogETag(current)) {
-			return CatalogFileInfo{}, false, &CatalogError{Kind: CatalogPreconditionFailed, Message: fmt.Sprintf("%s %q changed since it was read; read it again", kind, id)}
-		}
-	} else {
-		if condition.IfMatch != "" {
-			return CatalogFileInfo{}, false, &CatalogError{Kind: CatalogPreconditionFailed, Message: fmt.Sprintf("%s %q does not exist", kind, id)}
-		}
-		if condition.IfNoneMatch != "*" {
-			return CatalogFileInfo{}, false, &CatalogError{Kind: CatalogPreconditionRequired, Message: `If-None-Match: * is required to create a file`}
-		}
+	exists, before, err := checkWritePrecondition(path, string(kind), id, condition)
+	if err != nil {
+		return CatalogFileInfo{}, false, err
 	}
 	if err := validateCatalogFile(layout, kind, path, data); err != nil {
 		return CatalogFileInfo{}, false, err
@@ -183,6 +160,39 @@ func WriteCatalogFile(layout Layout, kind CatalogKind, id string, data []byte, c
 		return CatalogFileInfo{}, false, err
 	}
 	return CatalogFileInfo{ID: id, ETag: CatalogETag(data)}, !exists, nil
+}
+
+// checkWritePrecondition applies the request's precondition to the file at path: a file that
+// exists needs the IfMatch version, one that does not needs IfNoneMatch "*". It returns
+// whether the file exists and, if it does, what it looked like, for writeFileIfUnchanged.
+func checkWritePrecondition(path, kind, id string, condition WriteCondition) (bool, os.FileInfo, error) {
+	before, statErr := os.Stat(path)
+	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+		return false, nil, configError("%s: could not be read: %v", path, statErr)
+	}
+	if statErr != nil {
+		if condition.IfMatch != "" {
+			return false, nil, &CatalogError{Kind: CatalogPreconditionFailed, Message: fmt.Sprintf("%s %q does not exist", kind, id)}
+		}
+		if condition.IfNoneMatch != "*" {
+			return false, nil, &CatalogError{Kind: CatalogPreconditionRequired, Message: `If-None-Match: * is required to create a file`}
+		}
+		return false, nil, nil
+	}
+	if condition.IfNoneMatch != "" {
+		return false, nil, &CatalogError{Kind: CatalogPreconditionFailed, Message: fmt.Sprintf("%s %q already exists", kind, id)}
+	}
+	if condition.IfMatch == "" {
+		return false, nil, &CatalogError{Kind: CatalogPreconditionRequired, Message: "If-Match is required to replace a file"}
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		return false, nil, configError("%s: could not be read: %v", path, err)
+	}
+	if !IfMatchSatisfied(condition.IfMatch, CatalogETag(current)) {
+		return false, nil, &CatalogError{Kind: CatalogPreconditionFailed, Message: fmt.Sprintf("%s %q changed since it was read; read it again", kind, id)}
+	}
+	return true, before, nil
 }
 
 // DeleteCatalogFile removes the version of a file that IfMatch names. A profile that a

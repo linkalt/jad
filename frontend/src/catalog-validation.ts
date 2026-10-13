@@ -13,6 +13,7 @@ import {locatePointer, problemRange, syntaxProblem, type DocumentProblem} from '
 export const CATALOG_SCHEMES = {
   profiles: 'profile.schema.json',
   models: 'model.schema.json',
+  sessions: 'session.schema.json',
 } as const;
 
 export type CatalogKind = keyof typeof CATALOG_SCHEMES;

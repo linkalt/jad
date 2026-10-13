@@ -100,6 +100,30 @@ func TestServerClosesIdleKeepAliveConnection(t *testing.T) {
 	}
 }
 
+func TestLoadConfigCarriesTheSessionDeleteStopWait(t *testing.T) {
+	load := func(server string) Config {
+		cwd := t.TempDir()
+		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return config
+	}
+	if got := load(`{}`).HTTP.SessionDeleteStopWait; got != 10*time.Second {
+		t.Errorf("default = %v, want 10s", got)
+	}
+	if got := load(`{"session_delete_stop_wait_ms":2500}`).HTTP.SessionDeleteStopWait; got != 2500*time.Millisecond {
+		t.Errorf("configured = %v, want 2.5s", got)
+	}
+	if got := load(`{"session_delete_stop_wait_ms":0}`).HTTP.SessionDeleteStopWait; got != 0 {
+		t.Errorf("zero = %v, want 0", got)
+	}
+}
+
 func TestLoadConfigCarriesTimeoutsFromRootSettings(t *testing.T) {
 	cwd := t.TempDir()
 	setting := `{"session_roots":[{"path":"sessions"}],"server":{"read_header_timeout_ms":2000,"idle_timeout_ms":900}}`

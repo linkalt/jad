@@ -1852,7 +1852,7 @@ export async function stopSessionRun(
   };
 }
 
-export type CatalogKind = 'profiles' | 'models';
+export type CatalogKind = 'profiles' | 'models' | 'sessions';
 
 export interface CatalogFileInfo {
   id: string;
@@ -1875,6 +1875,12 @@ export class CatalogRequestError extends Error {
 }
 
 function catalogFilePath(kind: CatalogKind, id: string): string {
+  if (kind === 'sessions') {
+    if (id === '' || id.includes('/')) {
+      throw new Error(`"${id}" must be written <name> or <root>:<name>`);
+    }
+    return `/catalog/sessions/${encodeURIComponent(id)}`;
+  }
   const [category, name, ...rest] = id.split('/');
   if (!category || !name || rest.length > 0) {
     throw new Error(`"${id}" must be written <category>/<name>`);
@@ -1940,8 +1946,15 @@ export async function saveCatalogFile(
   return {info: {id: value.id, etag: value.etag}, created: response.status === 201};
 }
 
-export async function deleteCatalogFile(kind: CatalogKind, id: string, etag: string): Promise<void> {
-  const response = await authenticatedFetch(apiUrl(catalogFilePath(kind, id)), {
+/** `deleteState` also removes a session's transcripts and tool state; it only applies to sessions. */
+export async function deleteCatalogFile(
+  kind: CatalogKind,
+  id: string,
+  etag: string,
+  options: {deleteState?: boolean} = {},
+): Promise<void> {
+  const query = kind === 'sessions' && options.deleteState === true ? '?state=delete' : '';
+  const response = await authenticatedFetch(apiUrl(`${catalogFilePath(kind, id)}${query}`), {
     method: 'DELETE',
     headers: {'If-Match': etag},
   });

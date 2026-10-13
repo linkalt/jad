@@ -57,6 +57,9 @@ type ServerSettings struct {
 	// IdleTimeout is how long an idle keep-alive connection stays open between
 	// requests; zero disables the limit.
 	IdleTimeout time.Duration
+	// SessionDeleteStopWait is how long deleting a session waits for its stopped runs to end
+	// before it gives up with a conflict; zero does not wait.
+	SessionDeleteStopWait time.Duration
 	// LogLevel, LogFormat and LogFile configure the Go backend's structured log.
 	// LogFile is absolute (resolved against the setting file) or empty for stderr.
 	LogLevel  string
@@ -155,6 +158,7 @@ func Defaults() ServerSettings {
 		SSEHeartbeatInterval:       time.Duration(serverconfig.DefaultSSEHeartbeatIntervalMS) * time.Millisecond,
 		ReadHeaderTimeout:          time.Duration(serverconfig.DefaultReadHeaderTimeoutMS) * time.Millisecond,
 		IdleTimeout:                time.Duration(serverconfig.DefaultIdleTimeoutMS) * time.Millisecond,
+		SessionDeleteStopWait:      time.Duration(serverconfig.DefaultSessionDeleteStopWaitMS) * time.Millisecond,
 		LogLevel:                   serverconfig.DefaultLogLevel,
 		LogFormat:                  serverconfig.DefaultLogFormat,
 		RecoverProcessesAtStart:    serverconfig.DefaultRecoverProcessesAtStart,
@@ -566,6 +570,11 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		return ServerSettings{}, err
 	}
 	settings.IdleTimeout = time.Duration(idleTimeout) * time.Millisecond
+	deleteWait := int64(settings.SessionDeleteStopWait / time.Millisecond)
+	if err := readInt("session_delete_stop_wait_ms", &deleteWait, 0, serverconfig.MaxSessionDeleteStopWaitMS); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.SessionDeleteStopWait = time.Duration(deleteWait) * time.Millisecond
 	if err := readChoice(fields, "log_level", &settings.LogLevel, serverconfig.IsLogLevel, "debug, info, warn, error or off", path); err != nil {
 		return ServerSettings{}, err
 	}

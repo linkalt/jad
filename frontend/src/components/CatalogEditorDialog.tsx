@@ -1,8 +1,8 @@
 /**
  * @file CatalogEditorDialog.tsx
  * @input Whether the dialog is open, and a callback to close it
- * @output A modal that lists the profile or model files and edits one as raw JSON
- * @position The management surface for <.jad>/profiles and <.jad>/models; every write goes through the catalog routes
+ * @output A modal that lists the profile, model or session files and edits one as raw JSON
+ * @position The management surface for <.jad>/profiles, <.jad>/models and the session files; every write goes through the catalog routes
  *
  * The text is checked against the kind's scheme as you type; the server's loader
  * has the last word, and its message is shown verbatim when it refuses a write.
@@ -13,6 +13,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
 import {Banner, Button, Dialog, DialogHeader, HStack, Layout, LayoutContent, LayoutFooter, Text, TextInput, VStack} from '@astryxdesign/core';
 import {AlertDialog} from '@astryxdesign/core/AlertDialog';
+import {CheckboxInput} from '@astryxdesign/core/CheckboxInput';
 import {EmptyState} from '@astryxdesign/core/EmptyState';
 import {List, ListItem} from '@astryxdesign/core/List';
 import {SegmentedControl, SegmentedControlItem} from '@astryxdesign/core/SegmentedControl';
@@ -40,7 +41,7 @@ import {
 } from '../catalog-editor-view';
 import {JsonCodeEditor} from './JsonCodeEditor';
 
-const KINDS: readonly CatalogKind[] = ['profiles', 'models'];
+const KINDS: readonly CatalogKind[] = ['profiles', 'models', 'sessions'];
 
 type Draft =
   | {mode: 'none'}
@@ -78,6 +79,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const [isListLoading, setIsListLoading] = useState(true);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const [deleteState, setDeleteState] = useState(false);
   const [pending, setPending] = useState<Pending>(null);
   const validatorRef = useRef<ReturnType<typeof createCatalogValidator> | null>(null);
   const loadToken = useRef(0);
@@ -86,7 +88,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const ids = useMemo(() => sortedIds(files.map(file => file.id)), [files]);
   const savedText = draft.mode === 'existing' ? draft.savedText : draft.mode === 'new' ? view.template : '';
   const unsaved = hasUnsavedWork(draft.mode, text, savedText, newId, view.template);
-  const idProblem = draft.mode === 'new' ? newIdProblem(newId, ids, view.noun) : null;
+  const idProblem = draft.mode === 'new' ? newIdProblem(newId, ids, view.noun, view.idForm) : null;
   const isChecked = checked.text === text;
   // The editor keeps the last result while a new check is pending, so squiggles do not blink while typing.
   const problems = checked.problems;
@@ -117,6 +119,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   useEffect(() => {
     if (!isOpen) {
       setKind('profiles');
+      setDeleteState(false);
       setDraft({mode: 'none'});
       setText('');
       setNotice(null);
@@ -183,6 +186,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const changeKind = (target: CatalogKind): void => {
     loadToken.current += 1;
     setKind(target);
+    setDeleteState(false);
     setFiles([]);
     setListError(null);
     setIsListLoading(true);
@@ -252,10 +256,11 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setIsBusy(true);
     setNotice(null);
     try {
-      await deleteCatalogFile(kind, draft.id, draft.etag);
+      await deleteCatalogFile(kind, draft.id, draft.etag, {deleteState});
       const removed = draft.id;
       setDraft({mode: 'none'});
       setText('');
+      setDeleteState(false);
       setNotice({kind: 'success', title: 'Done', message: `Deleted ${removed}.`});
       await reloadList();
       onChanged();
@@ -349,11 +354,20 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                   {draft.mode === 'new' && (
                     <TextInput
                       label="Name"
-                      description="Written <category>/<name>, for example coding/review."
+                      description={view.idHint}
                       value={newId}
                       onChange={setNewId}
                       hasAutoFocus
                       status={newId !== '' && idProblem !== null ? {type: 'error', message: idProblem} : undefined}
+                    />
+                  )}
+                  {draft.mode === 'existing' && kind === 'sessions' && (
+                    <CheckboxInput
+                      label="Also delete its transcripts and tool state when deleting"
+                      description="Off keeps the state folder, so a session created again under this name finds it."
+                      value={deleteState}
+                      onChange={setDeleteState}
+                      isDisabled={isBusy}
                     />
                   )}
                   {hasEditor && (
@@ -422,7 +436,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
         title={pending?.kind === 'delete' ? `Delete this ${view.noun}?` : 'Discard your changes?'}
         description={
           pending?.kind === 'delete'
-            ? `${draft.mode === 'existing' ? draft.id : `This ${view.noun}`} will be removed. The server refuses this while ${view.usedBy} needs it.`
+            ? `${draft.mode === 'existing' ? draft.id : `This ${view.noun}`} will be removed. ${view.deleteNote}${kind === 'sessions' ? (deleteState ? ' Its transcripts and tool state are deleted too.' : ' Its transcripts and tool state are kept.') : ''}`
             : 'The text has changes that are not saved.'
         }
         actionLabel={pending?.kind === 'delete' ? 'Delete' : 'Discard'}

@@ -138,3 +138,25 @@ test('the duplicate-name message names the kind', () => {
   assert.match(newIdProblem('a/b', ['a/b'], 'model'), /A model named "a\/b" already exists/);
   assert.match(newIdProblem('a/b', ['a/b']), /A profile named/);
 });
+
+test('a session name is <name> or <root>:<name>', () => {
+  for (const good of ['demo', 'local:demo', 'a.b_c-1', '  demo  ']) {
+    assert.equal(newIdProblem(good, [], 'session', 'session'), null, good);
+  }
+  for (const bad of ['', '   ', 'a/b', 'a:b:c', ':x', 'x:', '-a', 'a b', 'local:-x', 'é', 'x'.repeat(129)]) {
+    assert.notEqual(newIdProblem(bad, [], 'session', 'session'), null, JSON.stringify(bad));
+  }
+  assert.equal(newIdProblem('x'.repeat(128), [], 'session', 'session'), null);
+  assert.match(newIdProblem('local:demo', ['local:demo'], 'session', 'session'), /A session named "local:demo" already exists/);
+});
+
+test('every kind has its own hint, delete note and template', () => {
+  for (const kind of ['profiles', 'models', 'sessions']) {
+    const view = CATALOG_KIND_VIEWS[kind];
+    assert.ok(view.idHint.length > 0 && view.deleteNote.length > 0 && view.noun.length > 0, kind);
+    JSON.parse(view.template);
+  }
+  assert.equal(CATALOG_KIND_VIEWS.sessions.idForm, 'session');
+  assert.equal(CATALOG_KIND_VIEWS.profiles.idForm, 'category/name');
+  assert.notEqual(CATALOG_KIND_VIEWS.sessions.deleteNote, CATALOG_KIND_VIEWS.profiles.deleteNote);
+});

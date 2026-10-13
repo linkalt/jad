@@ -32,6 +32,10 @@ type CatalogFiles interface {
 
 // handleCatalogFiles serves /api/catalog/{kind} and /api/catalog/{kind}/{category}/{name}.
 func (h *Handler) handleCatalogFiles(w http.ResponseWriter, r *http.Request, segments []string) {
+	if len(segments) >= 3 && segments[2] == "sessions" {
+		h.handleCatalogSessions(w, r, segments)
+		return
+	}
 	if h.catalogFiles == nil {
 		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "catalog files are unavailable"})
 		return

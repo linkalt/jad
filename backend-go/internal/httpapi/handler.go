@@ -52,7 +52,9 @@ type Config struct {
 	SSEMaxBufferedBytes int
 	// SSEHeartbeatInterval is the gap between keep-alive comment frames on a
 	// run stream with nothing else to send. Zero disables them.
-	SSEHeartbeatInterval       time.Duration
+	SSEHeartbeatInterval time.Duration
+	// SessionDeleteStopWait is how long a session delete waits for the session's stopped runs.
+	SessionDeleteStopWait      time.Duration
 	RunStateRetention          time.Duration
 	AllowZeroRunStateRetention bool
 	ToolStreamInterval         time.Duration
@@ -293,6 +295,7 @@ type Handler struct {
 	toolLister                SessionToolLister
 	settings                  SessionSettings
 	catalogFiles              CatalogFiles
+	catalogSessions           CatalogSessions
 	images                    SessionImages
 	messageImages             MessageImages
 	maintenance               SessionMaintenance
@@ -303,6 +306,7 @@ type Handler struct {
 	runInputLimits            RunInputLimits
 	toolStreamInterval        time.Duration
 	sseHeartbeatInterval      time.Duration
+	sessionDeleteStopWait     time.Duration
 	conditionalRequests       bool
 	snapshotTurns             int
 	maxPageTurns              int
@@ -348,6 +352,9 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	}
 	if config.SSEMaxBufferedBytes < 1024 {
 		return nil, errors.New("maximum SSE buffered bytes must be at least 1024")
+	}
+	if config.SessionDeleteStopWait < 0 || config.SessionDeleteStopWait > time.Duration(serverconfig.MaxSessionDeleteStopWaitMS)*time.Millisecond {
+		return nil, fmt.Errorf("session delete stop wait must be between 0 and %d milliseconds", serverconfig.MaxSessionDeleteStopWaitMS)
 	}
 	if config.SSEHeartbeatInterval < 0 || config.SSEHeartbeatInterval > time.Duration(serverconfig.MaxSSEHeartbeatIntervalMS)*time.Millisecond {
 		return nil, fmt.Errorf("SSE heartbeat interval must be between 0 and %d milliseconds", serverconfig.MaxSSEHeartbeatIntervalMS)
@@ -403,6 +410,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	toolLister, _ := resolver.(SessionToolLister)
 	settings, _ := resolver.(SessionSettings)
 	catalogFiles, _ := resolver.(CatalogFiles)
+	catalogSessions, _ := resolver.(CatalogSessions)
 	images, _ := resolver.(SessionImages)
 	messageImages, _ := resolver.(MessageImages)
 	maintenance, _ := resolver.(SessionMaintenance)
@@ -419,6 +427,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		toolLister:                toolLister,
 		settings:                  settings,
 		catalogFiles:              catalogFiles,
+		catalogSessions:           catalogSessions,
 		maintenance:               maintenance,
 		library:                   library,
 		tokenHash:                 sha256.Sum256([]byte(config.APIToken)),
@@ -427,6 +436,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		runInputLimits:            RunInputLimits{MaxImages: config.MaxRequestImages, MaxImageBytes: config.MaxRequestImageBytes, MaxFiles: config.MaxRequestFiles, MaxFileBytes: config.MaxRequestFileBytes},
 		toolStreamInterval:        config.ToolStreamInterval,
 		sseHeartbeatInterval:      config.SSEHeartbeatInterval,
+		sessionDeleteStopWait:     config.SessionDeleteStopWait,
 		conditionalRequests:       config.ConditionalRequests,
 		snapshotTurns:             config.SnapshotTurns,
 		maxPageTurns:              config.MaxPageTurns,

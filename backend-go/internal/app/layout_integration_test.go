@@ -27,11 +27,23 @@ type layoutFixture struct {
 	// captureBodies records each request body in bodies, for a test that reads the prompt.
 	captureBodies bool
 	bodies        []string
+	// hold, when set, makes the provider announce each request on reached and then wait until
+	// the client gives up, so a test can have a run in flight.
+	hold    bool
+	reached chan struct{}
+	// server is merged into the root setting's server object before the config is loaded.
+	server map[string]any
 }
 
 func newLayoutFixture(t *testing.T) *layoutFixture {
 	t.Helper()
-	f := &layoutFixture{root: t.TempDir(), cwd: t.TempDir()}
+	return newLayoutFixtureWithServer(t, nil)
+}
+
+// newLayoutFixtureWithServer is newLayoutFixture with extra keys in the root setting's server object.
+func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixture {
+	t.Helper()
+	f := &layoutFixture{root: t.TempDir(), cwd: t.TempDir(), server: server}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		var request struct {
@@ -43,7 +55,13 @@ func newLayoutFixture(t *testing.T) *layoutFixture {
 		if f.captureBodies {
 			f.bodies = append(f.bodies, string(raw))
 		}
+		hold, reached := f.hold, f.reached
 		f.mu.Unlock()
+		if hold {
+			reached <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, event := range []string{
 			`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}`,
@@ -71,11 +89,15 @@ func newLayoutFixture(t *testing.T) *layoutFixture {
 	model := func(name string) map[string]any {
 		return map[string]any{"provider": "openai", "model": name, "api_key_env": "FIXTURE_KEY", "base_url": provider.URL + "/v1"}
 	}
-	write("setting.json", map[string]any{
+	rootSetting := map[string]any{
 		"schema_version": 1,
 		"session_roots":  []any{map[string]any{"id": "local", "path": "sessions"}},
 		"catalogs":       map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": filepath.Join(f.cwd, ".jad", "state")},
-	})
+	}
+	if len(server) > 0 {
+		rootSetting["server"] = server
+	}
+	write("setting.json", rootSetting)
 	write("models/openai/small.json", model("model-small"))
 	write("models/openai/large.json", model("model-large"))
 	write("tools/coding/none.json", map[string]any{"native": map[string]any{}, "mcp": map[string]any{}})

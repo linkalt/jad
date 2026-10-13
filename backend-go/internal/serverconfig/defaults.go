@@ -10,6 +10,8 @@ const (
 	DefaultReadHeaderTimeoutMS           = 60_000
 	MaxReadHeaderTimeoutMS               = 5 * 60 * 1000
 	DefaultIdleTimeoutMS                 = 5_000
+	DefaultSessionDeleteStopWaitMS       = 10_000
+	MaxSessionDeleteStopWaitMS           = 5 * 60 * 1000
 	MaxIdleTimeoutMS                     = 60 * 60 * 1000
 	DefaultRunContentMemoryBytes         = 100 * 1024
 	DefaultRunContentWriteBatchBytes     = 32 * 1024

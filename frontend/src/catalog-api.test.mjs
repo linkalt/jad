@@ -89,3 +89,26 @@ test('the models catalog uses its own path and the same preconditions', async ()
   assert.equal(requests[1].init.method, 'DELETE');
   assert.equal(sentHeaders(requests[1])['if-match'], '"v1"');
 });
+
+test('sessions are addressed by one path segment and delete can ask for the state to go', async () => {
+  requests.length = 0;
+  reply = () => json({files: []});
+  await fetchCatalogFiles('sessions');
+  assert.match(requests[0].url, /\/catalog\/sessions$/);
+  reply = () => new Response('{}', {status: 200, headers: {etag: '"v1"'}});
+  await fetchCatalogFile('sessions', 'local:demo');
+  assert.match(requests[1].url, /\/catalog\/sessions\/local%3Ademo$/);
+  await assert.rejects(fetchCatalogFile('sessions', 'a/b'), /<name> or <root>:<name>/);
+  await assert.rejects(fetchCatalogFile('sessions', ''), /<name> or <root>:<name>/);
+
+  reply = () => new Response(null, {status: 204});
+  await deleteCatalogFile('sessions', 'demo', '"v1"');
+  await deleteCatalogFile('sessions', 'demo', '"v1"', {deleteState: false});
+  await deleteCatalogFile('sessions', 'demo', '"v1"', {deleteState: true});
+  assert.equal(requests.length, 5);
+  assert.match(requests[2].url, /\/catalog\/sessions\/demo$/);
+  assert.match(requests[3].url, /\/catalog\/sessions\/demo$/);
+  assert.match(requests[4].url, /\/catalog\/sessions\/demo\?state=delete$/);
+  await deleteCatalogFile('profiles', 'a/b', '"v1"', {deleteState: true});
+  assert.doesNotMatch(requests[5].url, /state=/);
+});

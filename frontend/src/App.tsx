@@ -22,7 +22,6 @@ import {
   Layout,
   LayoutContent,
   SideNav,
-  SideNavHeading,
   SideNavItem,
   SideNavSection,
   StatusDot,
@@ -1750,7 +1749,6 @@ function SessionNavigation({
   onOpenProfile,
   onRemoveView,
   canPinProfile,
-  onNewSession,
   openLeftPanel,
   onSelectLeftPanel,
   rightPanel,
@@ -1774,7 +1772,6 @@ function SessionNavigation({
   onOpenProfile: (sessionRef: string, profile: string) => void;
   onRemoveView: (viewKey: string) => void;
   canPinProfile: boolean;
-  onNewSession: () => void;
   openLeftPanel: LeftPanelId | null;
   onSelectLeftPanel: (panel: LeftPanelId) => void;
   rightPanel: RightPanelId | null;
@@ -1788,36 +1785,6 @@ function SessionNavigation({
   return (
     <SideNav
       aria-label="Agent sessions"
-      header={
-        <SideNavHeading
-          superheading="Local playground"
-          heading="Forge"
-          subheading="Agent harness"
-          icon={<Icon icon="wrench" color="accent" />}
-        />
-      }
-      topContent={
-        <Button
-          label="New session"
-          variant="primary"
-          width="100%"
-          icon={<Icon icon="arrowUp" size="sm" />}
-          onClick={onNewSession}
-        />
-      }
-      footer={
-        <VStack gap={1}>
-          <HStack align="center" gap={2}>
-            <StatusDot variant="success" label="Backend ready" />
-            <Text type="supporting" color="secondary">
-              Live session available
-            </Text>
-          </HStack>
-          <Text type="supporting" color="secondary">
-            Live sessions stream from the backend; seeded runs remain previews.
-          </Text>
-        </VStack>
-      }
       footerIcons={
         <HStack align="center" justify="between" gap={2} width="100%">
           <IconButton
@@ -4415,33 +4382,6 @@ function App() {
     ],
   );
 
-  const createSession = useCallback(() => {
-    const sessionId = `run-${Date.now()}`;
-    const newSession: Session = {
-      id: sessionId,
-      title: 'New agent run',
-      time: 'Now',
-      turns: 1,
-      state: 'accent',
-      source: 'sample',
-    };
-    setSessions(current => [newSession, ...current]);
-    setThreads(current => ({
-      ...current,
-      [sessionId]: [
-        {
-          id: `${sessionId}-system`,
-          sender: 'system',
-          text: 'New run ready · reasoning preview enabled',
-          timestamp: 'Now',
-        },
-      ],
-    }));
-    hasChosenSessionRef.current = true;
-    setActiveViewKey(sessionId);
-    setRunProgressForView(sessionId, 0);
-  }, [setRunProgressForView]);
-
   /** Move the visible composer and transcript without disturbing another view's run. */
   const activateView = useCallback((nextViewKey: string) => {
     hasChosenSessionRef.current = true;
@@ -5468,7 +5408,6 @@ function App() {
           onOpenProfile={openProfileView}
           onRemoveView={removePinnedRow}
           canPinProfile={!profileRowLimitReached}
-          onNewSession={createSession}
           openLeftPanel={leftPanel}
           onSelectLeftPanel={selectLeftPanel}
           rightPanel={rightPanel}

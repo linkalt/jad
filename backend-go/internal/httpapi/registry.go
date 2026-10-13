@@ -302,6 +302,26 @@ func (r *runRegistry) stop(key string) stopRunResult {
 	return run.stop()
 }
 
+// runningInSession returns the runs of every profile of a session that are still going.
+func (r *runRegistry) runningInSession(reference string) []*activeRun {
+	prefix := reference + "\x00"
+	r.mu.Lock()
+	var candidates []*activeRun
+	for key, entries := range r.runs {
+		if strings.HasPrefix(key, prefix) {
+			candidates = append(candidates, entries...)
+		}
+	}
+	r.mu.Unlock()
+	running := candidates[:0]
+	for _, run := range candidates {
+		if run.state() == "running" {
+			running = append(running, run)
+		}
+	}
+	return running
+}
+
 func (r *runRegistry) close() {
 	r.mu.Lock()
 	r.closed = true

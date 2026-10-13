@@ -181,3 +181,41 @@ test('every model in the local layout passes the scheme', t => {
   }
   assert.ok(checked >= 1);
 });
+
+test('a valid session has no problems and an unknown key is underlined', () => {
+  const session = {
+    schema_version: 1,
+    cwd: '/tmp/work',
+    active_profile: 'dev/coder',
+    category: 'work',
+    scope: {profiles: ['dev']},
+  };
+  assert.deepEqual(validator.validate('sessions', pretty(session)), []);
+  const text = pretty({...session, bogus: 1});
+  const [problem] = validator.validate('sessions', text);
+  assert.equal(sliceOf(text, problem), '"bogus"');
+});
+
+test('the session template is refused until cwd and active_profile are filled in', () => {
+  const template = '{\n  "schema_version": 1,\n  "cwd": "",\n  "active_profile": ""\n}\n';
+  const problems = validator.validate('sessions', template);
+  assert.ok(problems.length >= 2, JSON.stringify(problems));
+  assert.ok(problems.some(problem => /cwd/.test(problem.message)));
+  assert.ok(problems.some(problem => /active_profile/.test(problem.message)));
+});
+
+test('every session in the local layout passes the scheme', t => {
+  const root = new URL('../../.jad/sessions/', import.meta.url);
+  if (!existsSync(root)) {
+    t.skip('.jad is git-ignored and absent in this checkout');
+    return;
+  }
+  let checked = 0;
+  for (const session of readdirSync(root, {withFileTypes: true}).filter(entry => entry.isDirectory())) {
+    const file = new URL(`${session.name}/session.json`, root);
+    if (!existsSync(file)) continue;
+    assert.deepEqual(validator.validate('sessions', readFileSync(file, 'utf8')), [], session.name);
+    checked += 1;
+  }
+  assert.ok(checked >= 1);
+});

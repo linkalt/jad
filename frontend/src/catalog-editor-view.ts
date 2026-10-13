@@ -7,24 +7,46 @@
 import {CatalogRequestError} from './api.ts';
 import type {CatalogKind} from './api.ts';
 
+export type IdForm = 'category/name' | 'session';
+
 export interface CatalogKindView {
   /** Singular noun for messages: "profile". */
   noun: string;
   /** Heading for the list: "Profiles". */
   plural: string;
-  /** Who refuses a delete while the file is in use: "a session". */
-  usedBy: string;
+  /** How a name is written, shown under the name field. */
+  idHint: string;
+  idForm: IdForm;
+  /** What the delete confirmation tells the user besides the name. */
+  deleteNote: string;
   /** The text a new file starts from. */
   template: string;
 }
 
 export const CATALOG_KIND_VIEWS: Record<CatalogKind, CatalogKindView> = {
-  profiles: {noun: 'profile', plural: 'Profiles', usedBy: 'a session', template: '{\n  "schema_version": 1\n}\n'},
+  profiles: {
+    noun: 'profile',
+    plural: 'Profiles',
+    idHint: 'Written <category>/<name>, for example coding/review.',
+    idForm: 'category/name',
+    deleteNote: 'The server refuses this while a session needs it.',
+    template: '{\n  "schema_version": 1\n}\n',
+  },
   models: {
     noun: 'model',
     plural: 'Models',
-    usedBy: 'a profile',
+    idHint: 'Written <category>/<name>, for example openai/gpt-deep.',
+    idForm: 'category/name',
+    deleteNote: 'The server refuses this while a profile needs it.',
     template: '{\n  "schema_version": 1,\n  "provider": "openai",\n  "model": ""\n}\n',
+  },
+  sessions: {
+    noun: 'session',
+    plural: 'Sessions',
+    idHint: 'Written <name>, or <root>:<name> when there is more than one session root.',
+    idForm: 'session',
+    deleteNote: 'A run in progress is stopped first.',
+    template: '{\n  "schema_version": 1,\n  "cwd": "",\n  "active_profile": ""\n}\n',
   },
 };
 
@@ -37,8 +59,14 @@ const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
  * The server accepts `<category>/<name>` with letters, digits, '-', '_' and '.', and no
  * leading separator. The editor checks the same rule so a bad name never costs a round trip.
  */
-export function newIdProblem(id: string, existing: readonly string[], noun = 'profile'): string | null {
+export function newIdProblem(
+  id: string,
+  existing: readonly string[],
+  noun = 'profile',
+  form: IdForm = 'category/name',
+): string | null {
   const trimmed = id.trim();
+  if (form === 'session') return newSessionIdProblem(trimmed, existing);
   if (trimmed === '') return 'Enter a name written <category>/<name>.';
   const parts = trimmed.split('/');
   if (parts.length !== 2) return 'Write the name as <category>/<name>.';
@@ -49,6 +77,25 @@ export function newIdProblem(id: string, existing: readonly string[], noun = 'pr
     }
   }
   if (existing.includes(trimmed)) return `A ${noun} named "${trimmed}" already exists.`;
+  return null;
+}
+
+const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SESSION_ROOT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** A session is `<name>`, or `<root>:<name>`; neither part may hold a slash or a second colon. */
+function newSessionIdProblem(trimmed: string, existing: readonly string[]): string | null {
+  if (trimmed === '') return 'Enter a name written <name> or <root>:<name>.';
+  const parts = trimmed.split(':');
+  if (parts.length > 2) return 'Write the name as <name> or <root>:<name>.';
+  const name = parts[parts.length - 1];
+  if (parts.length === 2 && !SESSION_ROOT_ID.test(parts[0])) {
+    return `The root "${parts[0]}" may only hold letters, digits, '-', '_' and '.', and must start with a letter or digit.`;
+  }
+  if (!SESSION_ID.test(name)) {
+    return `"${name}" may only hold letters, digits, '-', '_' and '.', must start with a letter or digit, and holds at most 128 characters.`;
+  }
+  if (existing.includes(trimmed)) return `A session named "${trimmed}" already exists.`;
   return null;
 }
 
