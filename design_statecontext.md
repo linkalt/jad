@@ -26,7 +26,7 @@ that shows exactly the intended difference and nothing else.
   (`app/resolver.go:819-823`). Compaction replaces it; front-compaction keeps it; reset deletes it.
 - Delivery: `session/runner.go:317` appends it as ONE extra message AFTER the whole history on every request, never in
   `messages.jsonl`. In a tool loop the history grows by a call and a result each round, so the block moves to the end each
-  time: its tokens are re-processed every round and every request. Sub-agent runs get none (`app/subagent.go`).
+  time: its tokens are re-processed every round and every request. Sub-agent runs get none unless the agent sets `state_context: true`, which sends the session's newest stored block (`app/subagent.go`).
 - Adapter: the Anthropic adapter folds a mid-history system or developer message into the previous user message, or sends it
   as a `system` role if `mid_conversation_system` is set (`anthropicadapter/input.go` `addSystem`). Its cache breakpoint on the
   history skips folded blocks (`anthropicadapter/cache.go` `lastHistoryBlock`).
