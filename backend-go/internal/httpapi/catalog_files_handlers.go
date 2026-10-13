@@ -12,6 +12,8 @@ import (
 type CatalogFileInfo struct {
 	ID   string `json:"id"`
 	ETag string `json:"etag"`
+	// Name is the display name of a session file; it is left out when unset.
+	Name string `json:"name,omitempty"`
 }
 
 // CatalogFile is one catalog file as stored.

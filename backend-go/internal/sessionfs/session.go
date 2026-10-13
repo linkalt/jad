@@ -218,7 +218,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err := validateToolSettingsShape(setting, settingPath); err != nil {
 		return SessionConfig{}, err
 	}
-	sessionName, err := stringField(setting, "session_name", filepath.Base(location.Directory), settingPath)
+	sessionName, err := stringField(setting, "session_name", location.SessionID, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}

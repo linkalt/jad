@@ -1,6 +1,7 @@
 package sessionfs
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -40,7 +41,12 @@ func ListSessionFiles(roots []Root) ([]CatalogFileInfo, error) {
 			if err != nil {
 				return nil, configError("%s: could not be read: %v", location.SettingFile(), err)
 			}
-			infos = append(infos, CatalogFileInfo{ID: location.Reference, ETag: CatalogETag(data)})
+			// A file that does not parse is still listed, so it can be opened and repaired.
+			var named struct {
+				Name string `json:"name"`
+			}
+			_ = json.Unmarshal(data, &named)
+			infos = append(infos, CatalogFileInfo{ID: location.Reference, ETag: CatalogETag(data), Name: named.Name})
 		}
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })

@@ -1857,6 +1857,8 @@ export type CatalogKind = 'profiles' | 'models' | 'sessions' | 'toolsets' | 'mcp
 export interface CatalogFileInfo {
   id: string;
   etag: string;
+  /** Display name a session file sets; absent for other kinds and when unset. */
+  name?: string;
 }
 
 export interface CatalogFileContent extends CatalogFileInfo {
@@ -1901,11 +1903,21 @@ export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal)
   if (
     !isRecord(value) ||
     !Array.isArray(value.files) ||
-    !value.files.every(file => isRecord(file) && typeof file.id === 'string' && typeof file.etag === 'string')
+    !value.files.every(
+      file =>
+        isRecord(file) &&
+        typeof file.id === 'string' &&
+        typeof file.etag === 'string' &&
+        (file.name === undefined || typeof file.name === 'string'),
+    )
   ) {
     throw new Error('the server returned an invalid catalog list');
   }
-  return value.files.map(file => ({id: file.id as string, etag: file.etag as string}));
+  return value.files.map(file => ({
+    id: file.id as string,
+    etag: file.etag as string,
+    ...(typeof file.name === 'string' && file.name.trim() !== '' ? {name: file.name.trim()} : {}),
+  }));
 }
 
 export async function fetchCatalogFile(

@@ -87,6 +87,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
 
   const view = CATALOG_KIND_VIEWS[kind];
   const ids = useMemo(() => sortedIds(files.map(file => file.id)), [files]);
+  const names = useMemo(() => new Map(files.flatMap(file => (file.name === undefined ? [] : [[file.id, file.name] as const]))), [files]);
   const savedText = draft.mode === 'existing' ? draft.savedText : draft.mode === 'new' ? view.template : '';
   const unsaved = hasUnsavedWork(draft.mode, text, savedText, newId, view.template);
   const idProblem = draft.mode === 'new' ? newIdProblem(newId, ids, view.noun, view.idForm) : null;
@@ -332,7 +333,8 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                       {ids.map(id => (
                         <ListItem
                           key={id}
-                          label={id}
+                          label={names.get(id) ?? id}
+                          {...(names.has(id) ? {description: id} : {})}
                           isSelected={(draft.mode === 'existing' || draft.mode === 'loading') && draft.id === id}
                           isDisabled={isBusy}
                           onClick={() => requestSwitch(id)}

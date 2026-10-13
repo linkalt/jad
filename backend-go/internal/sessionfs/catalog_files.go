@@ -50,6 +50,8 @@ func (e *CatalogError) Error() string { return e.Message }
 type CatalogFileInfo struct {
 	ID   string
 	ETag string
+	// Name is the display name a session file sets; empty for every other kind and when unset.
+	Name string
 }
 
 // CatalogFile is one catalog file with its bytes.

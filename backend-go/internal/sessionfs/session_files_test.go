@@ -89,6 +89,41 @@ func TestListSessionFilesSkipsRootsAndFoldersWithoutALayoutSession(t *testing.T)
 	}
 }
 
+func TestListSessionFilesReportsTheNameAFileSets(t *testing.T) {
+	roots := sessionRoots(t, 1)
+	for id, body := range map[string]string{
+		"named":    `{"name":"Main work","cwd":"/x"}`,
+		"unnamed":  `{"cwd":"/x"}`,
+		"notjson":  `{"name":`,
+		"wrongtyp": `{"name":7}`,
+	} {
+		dir := filepath.Join(roots[0].Directory, id)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := ListSessionFiles(roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, file := range files {
+		got[file.ID] = file.Name
+	}
+	want := map[string]string{"named": "Main work", "unnamed": "", "notjson": "", "wrongtyp": ""}
+	if len(got) != len(want) {
+		t.Fatalf("listed %v, want %v", got, want)
+	}
+	for id, name := range want {
+		if got[id] != name {
+			t.Errorf("name of %s = %q, want %q", id, got[id], name)
+		}
+	}
+}
+
 func TestDeleteSessionFileKeepsOrRemovesState(t *testing.T) {
 	for _, deleteState := range []bool{false, true} {
 		roots := sessionRoots(t, 1)
