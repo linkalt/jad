@@ -58,6 +58,8 @@ type ExecutionContext struct {
 	// ProcessOwnerLimit is the most processes ProcessOwner may have running at once;
 	// zero means no limit beyond the session's own. It only counts with ProcessOwner.
 	ProcessOwnerLimit int64
+	// AgentName is the sub-agent the call runs for; empty in the session's own run.
+	AgentName string
 }
 
 // PathScope is a per-call narrowing of a tool's path policy. Allow, when not empty,

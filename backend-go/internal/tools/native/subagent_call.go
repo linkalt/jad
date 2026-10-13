@@ -58,6 +58,7 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 	childExecution := tools.ExecutionContext{
 		WorkspaceRoot: execution.WorkspaceRoot,
 		SessionDir:    execution.SessionDir,
+		AgentName:     agent.config.Name,
 	}
 	if agent.config.Paths.Set() {
 		childExecution.PathScope = &tools.PathScope{

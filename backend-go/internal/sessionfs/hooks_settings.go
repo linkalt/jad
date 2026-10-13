@@ -15,20 +15,26 @@ const (
 	HookCwdWorkspace     = "workspace"
 	HookCwdNearestPrefix = "nearest:"
 
-	defaultHooksTimeoutMS      int64 = 60_000
-	minHooksTimeoutMS          int64 = 1_000
-	maxHooksTimeoutMS          int64 = 600_000
-	defaultHooksMaxOutputBytes int64 = 8 * 1024
-	minHooksMaxOutputBytes     int64 = 256
-	maxHooksMaxOutputBytes     int64 = 1024 * 1024
-	maxHooksPostEdit                 = 32
-	maxHookArgv                      = 32
-	maxHookExtensions                = 32
+	defaultHooksTimeoutMS       int64 = 60_000
+	minHooksTimeoutMS           int64 = 1_000
+	maxHooksTimeoutMS           int64 = 600_000
+	defaultHooksMaxOutputBytes  int64 = 8 * 1024
+	minHooksMaxOutputBytes      int64 = 256
+	maxHooksMaxOutputBytes      int64 = 1024 * 1024
+	defaultHooksMaxPayloadBytes int64 = 64 * 1024
+	minHooksMaxPayloadBytes     int64 = 1024
+	maxHooksMaxPayloadBytes     int64 = 1024 * 1024
+	maxHooksPostEdit                  = 32
+	maxHooksToolEvent                 = 32
+	maxHookArgv                       = 32
+	maxHookExtensions                 = 32
 )
 
 var (
-	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "post_edit", "strip_ansi", "timeout_ms"}
+	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "max_payload_bytes", "post_edit", "post_tool", "pre_tool", "strip_ansi", "timeout_ms"}
 	postEditHookKeys   = []string{"argv", "cwd", "ext", "name", "on_failure_only"}
+	toolEventHookKeys  = []string{"argv", "match", "name", "on_failure_only"}
+	hookMatchPattern   = regexp.MustCompile(`^(\*|[A-Za-z0-9_-]{1,64}|mcp:[A-Za-z0-9_.-]{1,64}:(\*|[A-Za-z0-9_.-]{1,128}))$`)
 	hookNamePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
 	hookExtPattern     = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
 	hookMarkerPattern  = regexp.MustCompile(`^[A-Za-z0-9._+-][A-Za-z0-9._ +-]{0,63}$`)
@@ -47,6 +53,11 @@ type HooksSettings struct {
 	MaxOutputBytes int64
 	// PostEdit lists the checks; every entry whose extension matches the changed file runs, in order.
 	PostEdit []PostEditHook
+	// PreTool and PostTool run around any tool call whose tool the entry's Match covers.
+	PreTool  []ToolEventHook
+	PostTool []ToolEventHook
+	// MaxPayloadBytes cuts the event JSON a PreTool or PostTool command reads on stdin.
+	MaxPayloadBytes int64
 	// The child-process settings of a check. They are the hooks' own: nothing is read from
 	// tools.native.bash. Env and EnvDeny shape the environment on top of the shared allowlist.
 	KillGraceMs      int64
@@ -73,15 +84,37 @@ type PostEditHook struct {
 	OnFailureOnly bool
 }
 
+// ToolEventHook is one command run around a tool call. It reads the event as JSON on stdin.
+type ToolEventHook struct {
+	Name string
+	// Match is "*" (every tool), a native tool name, "mcp:<server>:<tool>" or
+	// "mcp:<server>:*", the same entries a profile's tools.allow takes.
+	Match string
+	// Argv is the program and its arguments, run with no shell and no placeholders.
+	Argv []string
+	// OnFailureOnly leaves a passing command out of the tool result.
+	OnFailureOnly bool
+}
+
 // Active reports whether any check can run.
 func (settings HooksSettings) Active() bool {
+	return settings.PostEditActive() || settings.ToolEventsActive()
+}
+
+// PostEditActive reports whether a post_edit check can run.
+func (settings HooksSettings) PostEditActive() bool {
 	return settings.Enabled && len(settings.PostEdit) > 0
+}
+
+// ToolEventsActive reports whether a pre_tool or post_tool command can run.
+func (settings HooksSettings) ToolEventsActive() bool {
+	return settings.Enabled && (len(settings.PreTool) > 0 || len(settings.PostTool) > 0)
 }
 
 // normalizeHooksSettings reads the `hooks` node. Only an absent key takes a default; a
 // null or misspelt value is an error so a typo cannot quietly turn a check off.
 func normalizeHooksSettings(raw json.RawMessage, settingPath, envFileBase string) (HooksSettings, error) {
-	settings := HooksSettings{TimeoutMS: defaultHooksTimeoutMS, MaxOutputBytes: defaultHooksMaxOutputBytes}
+	settings := HooksSettings{TimeoutMS: defaultHooksTimeoutMS, MaxOutputBytes: defaultHooksMaxOutputBytes, MaxPayloadBytes: defaultHooksMaxPayloadBytes}
 	fields := map[string]json.RawMessage{}
 	if len(raw) > 0 {
 		var err error
@@ -119,6 +152,9 @@ func normalizeHooksSettings(raw json.RawMessage, settingPath, envFileBase string
 	if err := bounded("max_output_bytes", &settings.MaxOutputBytes, minHooksMaxOutputBytes, maxHooksMaxOutputBytes); err != nil {
 		return HooksSettings{}, err
 	}
+	if err := bounded("max_payload_bytes", &settings.MaxPayloadBytes, minHooksMaxPayloadBytes, maxHooksMaxPayloadBytes); err != nil {
+		return HooksSettings{}, err
+	}
 	if err := normalizeHooksChild(&settings, fields, settingPath, envFileBase); err != nil {
 		return HooksSettings{}, err
 	}
@@ -139,6 +175,13 @@ func normalizeHooksSettings(raw json.RawMessage, settingPath, envFileBase string
 			seen[hook.Name] = true
 			settings.PostEdit = append(settings.PostEdit, hook)
 		}
+	}
+	var err error
+	if settings.PreTool, err = normalizeToolEventHooks(fields, "pre_tool", settingPath); err != nil {
+		return HooksSettings{}, err
+	}
+	if settings.PostTool, err = normalizeToolEventHooks(fields, "post_tool", settingPath); err != nil {
+		return HooksSettings{}, err
 	}
 	return settings, nil
 }
@@ -234,4 +277,74 @@ func validHookCwd(cwd string) bool {
 	}
 	marker, found := strings.CutPrefix(cwd, HookCwdNearestPrefix)
 	return found && marker != "." && marker != ".." && hookMarkerPattern.MatchString(marker)
+}
+
+func normalizeToolEventHooks(fields map[string]json.RawMessage, event, settingPath string) ([]ToolEventHook, error) {
+	value, exists := fields[event]
+	if !exists {
+		return nil, nil
+	}
+	var entries []json.RawMessage
+	if json.Unmarshal(value, &entries) != nil || entries == nil || len(entries) > maxHooksToolEvent {
+		return nil, configError("%s: hooks.%s must be a list of at most %d commands", settingPath, event, maxHooksToolEvent)
+	}
+	var hooks []ToolEventHook
+	seen := map[string]bool{}
+	for index, entry := range entries {
+		hook, err := normalizeToolEventHook(entry, settingPath, event, index)
+		if err != nil {
+			return nil, err
+		}
+		if seen[hook.Name] {
+			return nil, configError("%s: hooks.%s[%d].name %q is used twice", settingPath, event, index, hook.Name)
+		}
+		seen[hook.Name] = true
+		hooks = append(hooks, hook)
+	}
+	return hooks, nil
+}
+
+func normalizeToolEventHook(raw json.RawMessage, settingPath, event string, index int) (ToolEventHook, error) {
+	path := settingPath + ": hooks." + event + "[" + strconv.Itoa(index) + "]"
+	fields, err := decodeConfigObject(raw, path)
+	if err != nil {
+		return ToolEventHook{}, configError("%s must be an object", path)
+	}
+	for key := range fields {
+		if !containsString(toolEventHookKeys, key) {
+			return ToolEventHook{}, unsupportedToolKey(path, key, toolEventHookKeys, "")
+		}
+	}
+	hook := ToolEventHook{Match: "*"}
+	var name string
+	if json.Unmarshal(fields["name"], &name) != nil || !hookNamePattern.MatchString(name) {
+		return ToolEventHook{}, configError("%s.name must match %s", path, hookNamePattern.String())
+	}
+	hook.Name = name
+	if value, exists := fields["match"]; exists {
+		var match string
+		if json.Unmarshal(value, &match) != nil || !hookMatchPattern.MatchString(match) {
+			return ToolEventHook{}, configError("%s.match must be \"*\", a native tool name, \"mcp:<server>:<tool>\" or \"mcp:<server>:*\"", path)
+		}
+		hook.Match = match
+	}
+	var argv []string
+	if json.Unmarshal(fields["argv"], &argv) != nil || len(argv) == 0 || len(argv) > maxHookArgv {
+		return ToolEventHook{}, configError("%s.argv must be 1 to %d non-empty strings: the program and its arguments", path, maxHookArgv)
+	}
+	for position, item := range argv {
+		if strings.TrimSpace(item) == "" {
+			return ToolEventHook{}, configError("%s.argv must be 1 to %d non-empty strings: the program and its arguments", path, maxHookArgv)
+		}
+		if hookPlaceholderRef.MatchString(item) {
+			return ToolEventHook{}, configError("%s.argv[%d] has a placeholder; a %s command reads the event as JSON on stdin", path, position, event)
+		}
+	}
+	hook.Argv = argv
+	if value, exists := fields["on_failure_only"]; exists {
+		if json.Unmarshal(value, &hook.OnFailureOnly) != nil || strings.TrimSpace(string(value)) == "null" {
+			return ToolEventHook{}, configError("%s.on_failure_only must be a boolean", path)
+		}
+	}
+	return hook, nil
 }

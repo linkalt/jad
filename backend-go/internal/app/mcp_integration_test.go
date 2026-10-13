@@ -20,6 +20,7 @@ import (
 
 func TestHTTPRunExecutesMCPToolAndPassesMultimodalOutputToNextRound(t *testing.T) {
 	workspace := t.TempDir()
+	hookMarker := filepath.Join(t.TempDir(), "mcp-event.json")
 
 	mcpServer := mcpSDK.NewServer(&mcpSDK.Implementation{Name: "fixture", Version: "1.0.0"}, nil)
 	mcpServer.AddTool(&mcpSDK.Tool{
@@ -135,9 +136,11 @@ func TestHTTPRunExecutesMCPToolAndPassesMultimodalOutputToNextRound(t *testing.T
 	defer provider.Close()
 
 	config, fixture := layoutConfig(t, layouttest.Spec{
-		CWD:      workspace,
-		Settings: map[string]any{"max_tool_rounds": 2},
-		MCP:      map[string]map[string]any{"m/fixture": {"deny_tools": []string{}}},
+		CWD: workspace,
+		Settings: map[string]any{"max_tool_rounds": 2, "hooks": map[string]any{"enabled": true, "pre_tool": []any{
+			map[string]any{"name": "log", "match": "mcp:fixture:*", "argv": []string{"sh", "-c", "cat > " + hookMarker}, "on_failure_only": true},
+		}}},
+		MCP: map[string]map[string]any{"m/fixture": {"deny_tools": []string{}}},
 		MCPConfig: map[string]map[string]any{"m/fixture": {
 			"transport":        map[string]any{"type": "streamable_http", "url": mcpHTTP.URL},
 			"timeout_ms":       10_000,
@@ -199,6 +202,9 @@ func TestHTTPRunExecutesMCPToolAndPassesMultimodalOutputToNextRound(t *testing.T
 	}
 	if providerCalls.Load() != 2 || !nextRequestHadMCPOutput.Load() {
 		t.Fatalf("provider calls=%d, next request had MCP output=%v", providerCalls.Load(), nextRequestHadMCPOutput.Load())
+	}
+	if event, err := os.ReadFile(hookMarker); err != nil || !strings.Contains(string(event), `"event":"pre_tool"`) || !strings.Contains(string(event), `"tool_id":"mcp:fixture:echo"`) {
+		t.Fatalf("the pre_tool hook did not see the MCP call: %q, %v", event, err)
 	}
 	transcriptBytes, err := os.ReadFile(filepath.Join(profileState(fixture), "messages.jsonl"))
 	if err != nil {

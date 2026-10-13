@@ -19,7 +19,7 @@ import (
 // a failed call, a rejected path and an unchanged file do not. The check never changes
 // the status of the call; its outcome is text for the model.
 func WithPostEditHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEnv string) tools.Tool {
-	if !hooks.Active() {
+	if !hooks.PostEditActive() {
 		return tool
 	}
 	inner := tool.Execute
@@ -86,7 +86,36 @@ func runPostEditHook(ctx context.Context, hook sessionfs.PostEditHook, hooks ses
 		}
 		return "[" + hook.Name + "] skipped: no " + marker + " between the file and the workspace root"
 	}
-	before := fileDigest(file)
+	return runHookChild(ctx, hooks, apiKeyEnv, workspaceRoot, hookChild{
+		name:          hook.Name,
+		setting:       "hooks.post_edit[" + hook.Name + "].argv",
+		argv:          hookArguments(hook, cwd, file),
+		cwd:           cwd,
+		watched:       file,
+		onFailureOnly: hook.OnFailureOnly,
+	})
+}
+
+// hookChild is one command a hook starts: what to run, where, and what to report about it.
+type hookChild struct {
+	name    string
+	setting string
+	argv    []string
+	cwd     string
+	stdin   string
+	// watched is a file whose change by the command is reported; empty watches nothing.
+	watched       string
+	onFailureOnly bool
+}
+
+// runHookChild runs one hook command under the hooks' own child-process settings and
+// returns its section of the report, or "" for a passing on_failure_only command.
+func runHookChild(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv, workspaceRoot string, hook hookChild) string {
+	before := ""
+	if hook.watched != "" {
+		before = fileDigest(hook.watched)
+	}
+	cwd := hook.cwd
 	maximum := int(hooks.MaxOutputBytes)
 	head, tail := maximum*3/4, maximum-maximum*3/4
 	collector := newBashOutputCollector(
@@ -95,10 +124,10 @@ func runPostEditHook(ctx context.Context, hook sessionfs.PostEditHook, hooks ses
 		int(hooks.MaxLineChars),
 		hooks.StripANSI,
 	)
-	argv := hookArguments(hook, cwd, file)
 	child := runBashCommand(ctx, bashChildRequest{
-		file:                     argv[0],
-		args:                     argv[1:],
+		file:                     hook.argv[0],
+		args:                     hook.argv[1:],
+		stdin:                    hook.stdin,
 		cwd:                      cwd,
 		environment:              buildNativeBashEnvironment(os.Environ(), sessionfs.NativeBashSettings{Env: hooks.Env, EnvDeny: hooks.EnvDeny}, apiKeyEnv),
 		timeout:                  time.Duration(hooks.TimeoutMS) * time.Millisecond,
@@ -106,22 +135,22 @@ func runPostEditHook(ctx context.Context, hook sessionfs.PostEditHook, hooks ses
 		killProcessGroupWhenDone: hooks.KillProcessGroup == "always",
 		collector:                collector,
 	})
-	label := "[" + hook.Name + "] "
+	label := "[" + hook.name + "] "
 	timing := fmt.Sprintf("%d ms, in %s", child.durationMs, displayPath(workspaceRoot, cwd))
 	switch {
 	case child.spawnError != nil:
-		return label + "could not start: " + child.spawnError.Error() + " (setting: hooks.post_edit[" + hook.Name + "].argv)"
+		return label + "could not start: " + child.spawnError.Error() + " (setting: " + hook.setting + ")"
 	case child.aborted:
 		return label + "stopped before it finished"
 	case child.timedOut:
 		return label + fmt.Sprintf("timed out after %d ms (setting: hooks.timeout_ms)", hooks.TimeoutMS) + hookOutputBlock(child.output, maximum)
 	}
 	changedNote := ""
-	if after := fileDigest(file); before != after {
+	if hook.watched != "" && fileDigest(hook.watched) != before {
 		changedNote = "; the check changed the file, read it again before the next edit"
 	}
 	if child.hasExitCode && child.exitCode == 0 {
-		if hook.OnFailureOnly && changedNote == "" {
+		if hook.onFailureOnly && changedNote == "" {
 			return ""
 		}
 		return label + "passed (" + timing + ")" + changedNote + hookOutputBlock(child.output, maximum)

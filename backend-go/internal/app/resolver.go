@@ -424,6 +424,7 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
+	mcpTools = native.WithToolEventHooksAll(mcpTools, config.Hooks, config.Model.APIKeyEnv)
 	mcpCatalog, err := tools.NewCatalog(mcpTools)
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
@@ -618,7 +619,7 @@ func (r *Resolver) loadAgentToolsetMCP(ctx context.Context, config sessionfs.Ses
 		if err != nil {
 			return nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: toolset %s: %v", config.SettingPath, id, err)})
 		}
-		loaded[id] = mcpTools
+		loaded[id] = native.WithToolEventHooksAll(mcpTools, derived.Hooks, config.Model.APIKeyEnv)
 	}
 	return loaded, nil
 }

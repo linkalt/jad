@@ -101,7 +101,7 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 		// The agent list is part of the description the model sees, so it is kept on top
 		// of the manifest's text and not replaced by it.
 		tool.Definition.Description = definition.Description + subagentListText(subagentSettings)
-		loaded = append(loaded, tool)
+		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
 	}
 	return tools.NewCatalog(loaded)
 }
@@ -356,7 +356,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
-	return loaded, definitions, manager, nil
+	return WithToolEventHooksAll(loaded, config.Hooks, config.Model.APIKeyEnv), definitions, manager, nil
 }
 
 // approvalMode maps a tool's normalized approval setting to the catalog's field:

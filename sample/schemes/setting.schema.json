@@ -559,9 +559,9 @@
     },
     "hooks": {
       "type": "object",
-      "description": "Optional checks that run after the native write and edit tools change a file, for example a type check. Go backend only; the TypeScript backend does not read this key. Off by default: with enabled false (or the key absent) no command is started and no tool result changes. A check never fails the write or edit; its outcome is appended to the tool result as text. The checks have their own child-process keys (kill_grace_ms, kill_process_group, max_line_chars, strip_ansi, env_file, env, env_deny, with the same meaning and defaults as in tools.native.bash); nothing is read from tools.native.bash, and hooks need no other tool. A check runs without asking for approval, because its command is part of this file; it also runs for write-capable sub-agents, on the files their paths allow.",
+      "description": "Optional commands around tool calls. post_edit runs checks after the native write and edit tools change a file, for example a type check; pre_tool and post_tool run a command before and after any tool call, with the event as JSON on stdin. Go backend only; the TypeScript backend does not read this key. Off by default: with enabled false (or the key absent) no command is started and no tool result changes. A check never fails the write or edit; its outcome is appended to the tool result as text. The checks have their own child-process keys (kill_grace_ms, kill_process_group, max_line_chars, strip_ansi, env_file, env, env_deny, with the same meaning and defaults as in tools.native.bash); nothing is read from tools.native.bash, and hooks need no other tool. A check runs without asking for approval, because its command is part of this file; it also runs for write-capable sub-agents, on the files their paths allow.",
       "properties": {
-        "enabled": {"type": "boolean", "default": false, "description": "Run the checks in post_edit."},
+        "enabled": {"type": "boolean", "default": false, "description": "Run the commands in post_edit, pre_tool and post_tool."},
         "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000, "default": 60000, "description": "Longest one check may run. A check that is still running is stopped and reported as timed out."},
         "kill_grace_ms": {"$ref": "#/$defs/child_process_style/properties/kill_grace_ms"},
         "kill_process_group": {"$ref": "#/$defs/bash_style/properties/kill_process_group"},
@@ -571,6 +571,41 @@
         "env": {"$ref": "#/$defs/child_process_style/properties/env"},
         "env_deny": {"$ref": "#/$defs/child_process_style/properties/env_deny"},
         "max_output_bytes": {"type": "integer", "minimum": 256, "maximum": 1048576, "default": 8192, "description": "Cut of the output one check adds to the tool result, applied to stdout and stderr each (a check that writes to both can add up to twice this). The start and the end are kept and the middle is dropped."},
+        "max_payload_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576, "default": 65536, "description": "Size budget of the event JSON a pre_tool or post_tool command reads on stdin. Arguments larger than half of it are left out (arguments_omitted) and the result is cut to the other half (result_cut)."},
+        "pre_tool": {
+          "type": "array",
+          "maxItems": 32,
+          "default": [],
+          "description": "Commands run before a tool call, in the order listed. Each one reads the event as JSON on stdin (event, tool, tool_id, call_id, agent, workspace_root, arguments) and runs in the workspace root. A command never blocks or fails the call; its outcome is appended to the call's own result. Applies to native and MCP tools, and to sub-agents (the agent field names them).",
+          "items": {
+            "type": "object",
+            "required": ["name", "argv"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$", "description": "Unique label within this list, shown in the tool result."},
+              "match": {"type": "string", "default": "*", "pattern": "^(\\*|[A-Za-z0-9_-]{1,64}|mcp:[A-Za-z0-9_.-]{1,64}:(\\*|[A-Za-z0-9_.-]{1,128}))$", "description": "Which tools the command covers, the same entries a profile's tools.allow takes: * (every tool), a native tool name, mcp:<server>:<tool> or mcp:<server>:*."},
+              "argv": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}, "description": "The program and its arguments, run directly with no shell. There are no placeholders: the command reads the event from stdin."},
+              "on_failure_only": {"type": "boolean", "default": false, "description": "Leave a passing command out of the tool result."}
+            },
+            "additionalProperties": false
+          }
+        },
+        "post_tool": {
+          "type": "array",
+          "maxItems": 32,
+          "default": [],
+          "description": "Commands run after a tool call, in the order listed. Each one reads the event as JSON on stdin (event, tool, tool_id, call_id, agent, workspace_root, arguments, status, result, result_cut) and runs in the workspace root. A command never blocks or fails the call; its outcome is appended to the call's own result. Applies to native and MCP tools, and to sub-agents (the agent field names them).",
+          "items": {
+            "type": "object",
+            "required": ["name", "argv"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$", "description": "Unique label within this list, shown in the tool result."},
+              "match": {"type": "string", "default": "*", "pattern": "^(\\*|[A-Za-z0-9_-]{1,64}|mcp:[A-Za-z0-9_.-]{1,64}:(\\*|[A-Za-z0-9_.-]{1,128}))$", "description": "Which tools the command covers, the same entries a profile's tools.allow takes: * (every tool), a native tool name, mcp:<server>:<tool> or mcp:<server>:*."},
+              "argv": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}, "description": "The program and its arguments, run directly with no shell. There are no placeholders: the command reads the event from stdin."},
+              "on_failure_only": {"type": "boolean", "default": false, "description": "Leave a passing command out of the tool result."}
+            },
+            "additionalProperties": false
+          }
+        },
         "post_edit": {
           "type": "array",
           "maxItems": 32,

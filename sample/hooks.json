@@ -8,6 +8,13 @@
       {"name": "tsc", "ext": [".ts", ".tsx"], "argv": ["node_modules/.bin/tsc", "-b", "--pretty", "false"], "cwd": "nearest:tsconfig.json"},
       {"name": "ruff", "ext": [".py"], "argv": ["ruff", "check", "{file}"], "cwd": "file_dir", "on_failure_only": true},
       {"name": "json", "ext": [".json"], "argv": ["jq", "empty", "{file}"], "cwd": "file_dir", "on_failure_only": true}
+    ],
+    "max_payload_bytes": 65536,
+    "pre_tool": [
+      {"name": "log-call", "match": "*", "argv": ["sh", "-c", "cat >> .jad/hook-events.jsonl"], "on_failure_only": true}
+    ],
+    "post_tool": [
+      {"name": "docs-audit", "match": "mcp:docs:*", "argv": ["node", "scripts/audit-tool-result.mjs"], "on_failure_only": true}
     ]
   }
 }

@@ -82,3 +82,29 @@ func TestHooksOffLeaveTheToolOutputExactlyAsItWas(t *testing.T) {
 		t.Fatal("a disabled hook reported")
 	}
 }
+
+// A child's tool call fires the session's tool-event hooks, and the payload names the agent.
+func TestToolEventHooksRunForAChildAndNameTheAgent(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "event.json")
+	f := hooksFixture(t, map[string]any{"enabled": true, "pre_tool": []any{
+		map[string]any{"name": "log", "match": "write", "argv": []string{"sh", "-c", "cat > " + marker}},
+	}})
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("the hook did not run for the child's write: %v", err)
+	}
+	for _, want := range []string{`"event":"pre_tool"`, `"tool":"write"`, `"agent":"`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("payload lacks %q: %s", want, data)
+		}
+	}
+	if strings.Contains(string(data), `"agent":""`) {
+		t.Errorf("the child's agent name is empty: %s", data)
+	}
+	if output := childWriteResult(t, f); !strings.Contains(output, "Created made.txt") {
+		t.Errorf("the write itself changed: %s", output)
+	}
+}

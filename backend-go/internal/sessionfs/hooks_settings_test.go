@@ -14,7 +14,7 @@ import (
 // defaults the hooks own (they match bash's defaults but are not read from it).
 func defaultHooksWant() HooksSettings {
 	return HooksSettings{
-		TimeoutMS: 60_000, MaxOutputBytes: 8192,
+		TimeoutMS: 60_000, MaxOutputBytes: 8192, MaxPayloadBytes: 65_536,
 		KillGraceMs: 2000, KillProcessGroup: "always", MaxLineChars: 2000, StripANSI: true,
 		Env: map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}, EnvDeny: []string{},
 	}
@@ -100,6 +100,31 @@ func TestHooksAcceptEveryKey(t *testing.T) {
 	}
 }
 
+func TestHooksToolEventsLoadWithDefaults(t *testing.T) {
+	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
+		"enabled":           true,
+		"max_payload_bytes": 2048,
+		"pre_tool":          []any{map[string]any{"name": "gate", "argv": []any{"./gate.sh", "--strict"}}},
+		"post_tool": []any{
+			map[string]any{"name": "audit", "match": "mcp:docs:*", "argv": []any{"audit"}, "on_failure_only": true},
+			map[string]any{"name": "grep-log", "match": "grep", "argv": []any{"log"}},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := defaultHooksWant()
+	want.Enabled, want.MaxPayloadBytes = true, 2048
+	want.PreTool = []ToolEventHook{{Name: "gate", Match: "*", Argv: []string{"./gate.sh", "--strict"}}}
+	want.PostTool = []ToolEventHook{
+		{Name: "audit", Match: "mcp:docs:*", Argv: []string{"audit"}, OnFailureOnly: true},
+		{Name: "grep-log", Match: "grep", Argv: []string{"log"}},
+	}
+	if !reflect.DeepEqual(config.Hooks, want) || !config.Hooks.ToolEventsActive() || config.Hooks.PostEditActive() || !config.Hooks.Active() {
+		t.Fatalf("hooks = %+v, want %+v", config.Hooks, want)
+	}
+}
+
 func TestHooksEnabledWithoutChecksIsInactive(t *testing.T) {
 	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{"enabled": true}})
 	if err != nil || config.Hooks.Active() {
@@ -163,6 +188,22 @@ func TestHooksRejectBadValuesWithTheKeyInTheMessage(t *testing.T) {
 		{"cwd marker with slash", good(func(e map[string]any) { e["cwd"] = "nearest:../go.mod" }), "hooks.post_edit[0].cwd must be"},
 		{"failure only string", good(func(e map[string]any) { e["on_failure_only"] = "yes" }), "hooks.post_edit[0].on_failure_only must be a boolean"},
 		{"failure only null", good(func(e map[string]any) { e["on_failure_only"] = nil }), "hooks.post_edit[0].on_failure_only must be a boolean"},
+		{"pre_tool object", map[string]any{"pre_tool": map[string]any{}}, "hooks.pre_tool must be a list"},
+		{"post_tool null", map[string]any{"post_tool": nil}, "hooks.post_tool must be a list"},
+		{"pre_tool entry string", map[string]any{"pre_tool": []any{"echo"}}, "hooks.pre_tool[0] must be an object"},
+		{"pre_tool unknown key", map[string]any{"pre_tool": []any{map[string]any{"name": "a", "argv": []any{"a"}, "ext": []any{".go"}}}}, "hooks.pre_tool[0].ext is not supported"},
+		{"pre_tool name", map[string]any{"pre_tool": []any{map[string]any{"name": "A b", "argv": []any{"a"}}}}, "hooks.pre_tool[0].name must match"},
+		{"pre_tool argv missing", map[string]any{"pre_tool": []any{map[string]any{"name": "a"}}}, "hooks.pre_tool[0].argv must be 1 to 32"},
+		{"pre_tool argv blank", map[string]any{"pre_tool": []any{map[string]any{"name": "a", "argv": []any{"a", " "}}}}, "hooks.pre_tool[0].argv must be 1 to 32"},
+		{"post_tool placeholder", map[string]any{"post_tool": []any{map[string]any{"name": "a", "argv": []any{"a", "{file}"}}}}, "hooks.post_tool[0].argv[1] has a placeholder"},
+		{"post_tool match path", map[string]any{"post_tool": []any{map[string]any{"name": "a", "argv": []any{"a"}, "match": "../x"}}}, "hooks.post_tool[0].match must be"},
+		{"post_tool match number", map[string]any{"post_tool": []any{map[string]any{"name": "a", "argv": []any{"a"}, "match": 7}}}, "hooks.post_tool[0].match must be"},
+		{"post_tool failure only", map[string]any{"post_tool": []any{map[string]any{"name": "a", "argv": []any{"a"}, "on_failure_only": "yes"}}}, "hooks.post_tool[0].on_failure_only must be a boolean"},
+		{"pre_tool duplicate", map[string]any{"pre_tool": []any{
+			map[string]any{"name": "a", "argv": []any{"a"}},
+			map[string]any{"name": "a", "argv": []any{"b"}},
+		}}, `hooks.pre_tool[1].name "a" is used twice`},
+		{"payload too small", map[string]any{"max_payload_bytes": 10}, "hooks.max_payload_bytes must be a safe integer between 1024 and 1048576"},
 		{"duplicate name", map[string]any{"post_edit": []any{
 			map[string]any{"name": "lint", "ext": []any{".go"}, "argv": []any{"a"}},
 			map[string]any{"name": "lint", "ext": []any{".ts"}, "argv": []any{"b"}},
@@ -232,6 +273,16 @@ func TestHooksSampleFileLoadsAndMatchesTheSchema(t *testing.T) {
 	for key := range schema.Properties.Hooks.Properties["post_edit"].Items.Properties {
 		entryKeys = append(entryKeys, key)
 	}
+	var eventKeys []string
+	for key := range schema.Properties.Hooks.Properties["pre_tool"].Items.Properties {
+		eventKeys = append(eventKeys, key)
+	}
+	sort.Strings(eventKeys)
+	wantEvent := append([]string(nil), toolEventHookKeys...)
+	sort.Strings(wantEvent)
+	if !reflect.DeepEqual(eventKeys, wantEvent) || !reflect.DeepEqual(eventKeys, sortedItemKeys(schema.Properties.Hooks.Properties["post_tool"].Items.Properties)) {
+		t.Fatalf("schema pre_tool/post_tool entry keys %v, loader accepts %v", eventKeys, wantEvent)
+	}
 	sort.Strings(topKeys)
 	sort.Strings(entryKeys)
 	wantTop := append([]string(nil), hooksKeys...)
@@ -241,4 +292,13 @@ func TestHooksSampleFileLoadsAndMatchesTheSchema(t *testing.T) {
 	if !reflect.DeepEqual(topKeys, wantTop) || !reflect.DeepEqual(entryKeys, wantEntry) {
 		t.Fatalf("schema keys %v / %v, loader accepts %v / %v", topKeys, entryKeys, wantTop, wantEntry)
 	}
+}
+
+func sortedItemKeys(properties map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(properties))
+	for key := range properties {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
