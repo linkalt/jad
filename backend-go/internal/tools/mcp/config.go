@@ -56,6 +56,18 @@ type loadedConfig struct {
 }
 
 func normalizeConfig(raw json.RawMessage, reference sessionfs.MCPServerReference, cwd string, environment map[string]string) (loadedConfig, error) {
+	return normalizeConfigFor(raw, reference, cwd, environment, true)
+}
+
+// ValidateServerFile applies the loader's rules for the contents of an MCP server file. It
+// does not check what depends on the run rather than the file: that the variables named by
+// env_from and headers_from are set, and that a stdio cwd exists under the session's cwd.
+func ValidateServerFile(path string, raw []byte) error {
+	_, err := normalizeConfigFor(raw, sessionfs.MCPServerReference{ConfigPath: path}, "", nil, false)
+	return err
+}
+
+func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerReference, cwd string, environment map[string]string, atRun bool) (loadedConfig, error) {
 	path := reference.ConfigPath
 	fields, err := objectFields(raw, path, "expected a JSON object")
 	if err != nil {
@@ -78,13 +90,13 @@ func normalizeConfig(raw json.RawMessage, reference sessionfs.MCPServerReference
 	var transport transportConfig
 	switch transportType {
 	case "stdio":
-		config, fingerprint, err := normalizeStdio(transportFields, cwd, path, environment)
+		config, fingerprint, err := normalizeStdio(transportFields, cwd, path, environment, atRun)
 		if err != nil {
 			return loadedConfig{}, err
 		}
 		transport = transportConfig{stdio: config, fingerprint: fingerprint}
 	case "streamable_http":
-		config, fingerprint, err := normalizeStreamableHTTP(transportFields, path, environment)
+		config, fingerprint, err := normalizeStreamableHTTP(transportFields, path, environment, atRun)
 		if err != nil {
 			return loadedConfig{}, err
 		}
@@ -118,7 +130,7 @@ func normalizeConfig(raw json.RawMessage, reference sessionfs.MCPServerReference
 	}, nil
 }
 
-func normalizeStdio(fields map[string]json.RawMessage, sessionCWD, path string, environment map[string]string) (*stdioConfig, any, error) {
+func normalizeStdio(fields map[string]json.RawMessage, sessionCWD, path string, environment map[string]string, atRun bool) (*stdioConfig, any, error) {
 	command, err := requiredString(fields["command"], path+": transport.command")
 	if err != nil {
 		return nil, nil, err
@@ -135,12 +147,14 @@ func normalizeStdio(fields map[string]json.RawMessage, sessionCWD, path string, 
 		}
 		serverCWD = resolvePath(sessionCWD, configuredCWD)
 	}
-	cwdInfo, err := os.Stat(serverCWD)
-	if err != nil {
-		return nil, nil, configError(path, "stdio cwd does not exist: %s", serverCWD)
-	}
-	if !cwdInfo.IsDir() {
-		return nil, nil, configError(path, "stdio cwd is not a directory: %s", serverCWD)
+	if atRun {
+		cwdInfo, err := os.Stat(serverCWD)
+		if err != nil {
+			return nil, nil, configError(path, "stdio cwd does not exist: %s", serverCWD)
+		}
+		if !cwdInfo.IsDir() {
+			return nil, nil, configError(path, "stdio cwd is not a directory: %s", serverCWD)
+		}
 	}
 	configuredEnv, err := stringMap(fields["env"], environmentNamePattern, path+": transport.env", false)
 	if err != nil {
@@ -158,7 +172,7 @@ func normalizeStdio(fields map[string]json.RawMessage, sessionCWD, path string, 
 	resolvedEnv := defaultEnvironment(environment, runtime.GOOS)
 	for target, source := range envFrom {
 		secret, exists := environment[source]
-		if !exists || secret == "" {
+		if atRun && (!exists || secret == "") {
 			return nil, nil, configError(path, "environment variable %s required by transport.env_from.%s is not set", source, target)
 		}
 		resolvedEnv[target] = secret
@@ -177,7 +191,7 @@ func normalizeStdio(fields map[string]json.RawMessage, sessionCWD, path string, 
 	return config, fingerprint, nil
 }
 
-func normalizeStreamableHTTP(fields map[string]json.RawMessage, path string, environment map[string]string) (*streamableHTTPConfig, any, error) {
+func normalizeStreamableHTTP(fields map[string]json.RawMessage, path string, environment map[string]string, atRun bool) (*streamableHTTPConfig, any, error) {
 	urlText, err := requiredString(fields["url"], path+": transport.url")
 	if err != nil {
 		return nil, nil, err
@@ -193,7 +207,7 @@ func normalizeStreamableHTTP(fields map[string]json.RawMessage, path string, env
 	resolvedHeaders := make(map[string]string, len(headersFrom))
 	for header, source := range headersFrom {
 		secret, exists := environment[source]
-		if !exists || secret == "" {
+		if atRun && (!exists || secret == "") {
 			return nil, nil, configError(path, "environment variable %s required by transport.headers_from.%s is not set", source, header)
 		}
 		resolvedHeaders[header] = secret

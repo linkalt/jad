@@ -7,12 +7,14 @@ import (
 
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/sessionfs"
+	mcpclient "jad/backend-go/internal/tools/mcp"
 )
 
 var catalogFileKinds = map[string]sessionfs.CatalogKind{
 	"profiles": sessionfs.CatalogProfiles,
 	"models":   sessionfs.CatalogModels,
 	"toolsets": sessionfs.CatalogToolsets,
+	"mcp":      sessionfs.CatalogMCP,
 }
 
 func (r *Resolver) catalogLayout(ctx context.Context, kind string) (sessionfs.Layout, sessionfs.CatalogKind, error) {
@@ -66,7 +68,7 @@ func (r *Resolver) WriteCatalogFile(ctx context.Context, kind, id string, data [
 	}
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	info, created, err := sessionfs.WriteCatalogFile(layout, r.roots, known, id, data, sessionfs.WriteCondition{IfMatch: ifMatch, IfNoneMatch: ifNoneMatch}, true)
+	info, created, err := sessionfs.WriteCatalogFile(layout, r.roots, known, id, data, sessionfs.WriteCondition{IfMatch: ifMatch, IfNoneMatch: ifNoneMatch}, true, mcpclient.ValidateServerFile)
 	if err != nil {
 		return httpapi.CatalogFileInfo{}, false, mapCatalogFileError(err)
 	}
