@@ -230,69 +230,6 @@ func encodeTerminalEvents(message webUIMessage) ([]streamEvent, error) {
 	return []streamEvent{uiEvent, completedEvent, doneEvent}, nil
 }
 
-func messageFromResponse(event json.RawMessage, id, timestamp string) webUIMessage {
-	var envelope struct {
-		Response json.RawMessage `json:"response"`
-	}
-	_ = json.Unmarshal(event, &envelope)
-	var response struct {
-		Output []json.RawMessage `json:"output"`
-	}
-	_ = json.Unmarshal(envelope.Response, &response)
-
-	parts := make([]webUIPart, 0)
-	var text strings.Builder
-	for _, rawOutput := range response.Output {
-		var output struct {
-			Type      string `json:"type"`
-			CallID    string `json:"call_id"`
-			Name      string `json:"name"`
-			Arguments string `json:"arguments"`
-			Content   []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		}
-		if json.Unmarshal(rawOutput, &output) != nil {
-			continue
-		}
-		switch output.Type {
-		case "message":
-			for _, content := range output.Content {
-				switch content.Type {
-				case "output_text", "refusal":
-					if content.Text != "" {
-						text.WriteString(content.Text)
-						parts = appendTextPart(parts, "text", content.Text)
-					}
-				case "reasoning":
-					if content.Text != "" {
-						parts = appendTextPart(parts, "reasoning", content.Text)
-					}
-				}
-			}
-		case "function_call":
-			if output.CallID != "" && output.Name != "" {
-				arguments := output.Arguments
-				parts = append(parts, webUIPart{
-					Type:      "tool_call",
-					CallID:    output.CallID,
-					Name:      output.Name,
-					Arguments: &arguments,
-				})
-			}
-		}
-	}
-	return webUIMessage{
-		ID:        id,
-		Sender:    "assistant",
-		Timestamp: timestamp,
-		Parts:     parts,
-		Status:    "complete",
-		Text:      text.String(),
-	}
-}
-
 // UserMessageFromTranscriptRecord converts one persisted user item to the
 // frontend Web UI message shape. The offset makes the ID stable across paging.
 func UserMessageFromTranscriptRecord(record json.RawMessage, offset int64) (json.RawMessage, bool, error) {
@@ -323,38 +260,6 @@ func UserMessageFromTranscriptRecord(record json.RawMessage, offset int64) (json
 	return encoded, true, err
 }
 
-// AssistantMessageFromTranscriptRecord converts a committed response record to
-// the same message representation used by the live run stream.
-func AssistantMessageFromTranscriptRecord(record json.RawMessage, offset int64) (json.RawMessage, bool, error) {
-	var transcriptRecord struct {
-		Type     string          `json:"type"`
-		Response json.RawMessage `json:"response"`
-	}
-	if err := json.Unmarshal(record, &transcriptRecord); err != nil {
-		return nil, false, fmt.Errorf("decode transcript response: %w", err)
-	}
-	if transcriptRecord.Type != "response.completed" {
-		return nil, false, nil
-	}
-	var response struct {
-		ID        string          `json:"id"`
-		CreatedAt json.RawMessage `json:"created_at"`
-	}
-	if err := json.Unmarshal(transcriptRecord.Response, &response); err != nil {
-		return nil, false, fmt.Errorf("decode transcript response envelope: %w", err)
-	}
-	id := response.ID
-	if id == "" {
-		id = fmt.Sprintf("session-assistant-o%d", offset)
-	}
-	message := messageFromResponse(record, id, timestampFromRaw(response.CreatedAt))
-	if len(message.Parts) == 0 {
-		return nil, false, nil
-	}
-	encoded, err := json.Marshal(message)
-	return encoded, true, err
-}
-
 func timestampFromRaw(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
@@ -373,14 +278,6 @@ func timestampFromRaw(raw json.RawMessage) string {
 		}
 	}
 	return ""
-}
-
-func appendTextPart(parts []webUIPart, kind, text string) []webUIPart {
-	if len(parts) > 0 && parts[len(parts)-1].Type == kind {
-		parts[len(parts)-1].Text += text
-		return parts
-	}
-	return append(parts, webUIPart{Type: kind, Text: text})
 }
 
 func textParts(text string) []webUIPart {
