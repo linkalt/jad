@@ -2699,7 +2699,13 @@ function App() {
     if (!appConfig.selection_quote_enabled) {
       return;
     }
-    const readSelection = () => setQuoteTarget(selectionQuoteTarget());
+    // A double or triple click finishes selecting after its mouseup, so the
+    // selection is read once the event has been handled.
+    let pendingRead: number | undefined;
+    const readSelection = () => {
+      window.clearTimeout(pendingRead);
+      pendingRead = window.setTimeout(() => setQuoteTarget(selectionQuoteTarget()), 0);
+    };
     // A selection is made with the pointer or with the keyboard, so both ends
     // of the gesture are watched.
     document.addEventListener('mouseup', readSelection);
@@ -2715,6 +2721,7 @@ function App() {
       setQuoteTarget(current => (current === null ? current : selectionQuoteTarget()));
     window.addEventListener('scroll', handleScroll, true);
     return () => {
+      window.clearTimeout(pendingRead);
       document.removeEventListener('mouseup', readSelection);
       document.removeEventListener('keyup', readSelection);
       window.removeEventListener('scroll', handleScroll, true);
