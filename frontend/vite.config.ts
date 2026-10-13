@@ -17,13 +17,24 @@ const schemesModuleId = 'virtual:catalog-schemes';
 function catalogSchemes(): Plugin {
   return {
     name: 'catalog-schemes',
+    // addWatchFile is not used: after a scheme changes it makes Vite's resolver read
+    // the broken package.json above the repo and answer 500 for this module.
+    configureServer(server) {
+      server.watcher.add(schemesDir);
+      const onChange = (file: string) => {
+        if (path.dirname(file) !== schemesDir || !file.endsWith('.json')) return;
+        const mod = server.moduleGraph.getModuleById(`\0${schemesModuleId}`);
+        if (mod) server.moduleGraph.invalidateModule(mod);
+        server.ws.send({type: 'full-reload'});
+      };
+      server.watcher.on('change', onChange).on('add', onChange).on('unlink', onChange);
+    },
     resolveId: id => (id === schemesModuleId || id === `\0${schemesModuleId}` ? `\0${schemesModuleId}` : undefined),
     load(id) {
       if (id !== `\0${schemesModuleId}`) return undefined;
       const schemes: Record<string, unknown> = {};
       for (const file of fs.readdirSync(schemesDir).filter(name => name.endsWith('.json')).sort()) {
         const filePath = path.join(schemesDir, file);
-        this.addWatchFile(filePath);
         schemes[file] = JSON.parse(fs.readFileSync(filePath, 'utf8'));
       }
       return `export default ${JSON.stringify(schemes)};`;
