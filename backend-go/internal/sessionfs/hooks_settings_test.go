@@ -273,15 +273,19 @@ func TestHooksSampleFileLoadsAndMatchesTheSchema(t *testing.T) {
 	for key := range schema.Properties.Hooks.Properties["post_edit"].Items.Properties {
 		entryKeys = append(entryKeys, key)
 	}
-	var eventKeys []string
-	for key := range schema.Properties.Hooks.Properties["pre_tool"].Items.Properties {
-		eventKeys = append(eventKeys, key)
-	}
-	sort.Strings(eventKeys)
-	wantEvent := append([]string(nil), toolEventHookKeys...)
-	sort.Strings(wantEvent)
-	if !reflect.DeepEqual(eventKeys, wantEvent) || !reflect.DeepEqual(eventKeys, sortedItemKeys(schema.Properties.Hooks.Properties["post_tool"].Items.Properties)) {
-		t.Fatalf("schema pre_tool/post_tool entry keys %v, loader accepts %v", eventKeys, wantEvent)
+	for list, loader := range map[string][]string{
+		"pre_tool":    preToolHookKeys,
+		"post_tool":   toolEventHookKeys,
+		"run_start":   runEventHookKeys,
+		"run_end":     runEventHookKeys,
+		"pre_compact": runEventHookKeys,
+	} {
+		got := sortedItemKeys(schema.Properties.Hooks.Properties[list].Items.Properties)
+		want := append([]string(nil), loader...)
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("schema %s entry keys %v, loader accepts %v", list, got, want)
+		}
 	}
 	sort.Strings(topKeys)
 	sort.Strings(entryKeys)

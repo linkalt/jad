@@ -32,8 +32,12 @@ type toolEventPayload struct {
 // WithToolEventHooks returns tool unchanged unless a pre_tool or post_tool command covers
 // it. Otherwise it returns a copy that runs the pre_tool commands before the call and the
 // post_tool commands after it, and appends their report to the call's own result. A command
-// never changes the status of the call, and a call that returns an error runs no post_tool
-// command. It wraps Execute and ExecuteOutput alike, so native and MCP tools are covered.
+// never changes the status of the call, except a pre_tool command with blocking set that
+// does not exit 0: the call is then not run, later pre_tool commands do not start, no
+// post_tool command runs, and the result is a "blocked" one carrying the report. A call that
+// returns an error runs no post_tool command. It wraps Execute and ExecuteOutput alike, so
+// native and MCP tools are covered. It runs inside the approval step, so a call the user
+// approved can still be blocked here.
 func WithToolEventHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEnv string) tools.Tool {
 	if !hooks.ToolEventsActive() {
 		return tool
@@ -43,20 +47,24 @@ func WithToolEventHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEn
 	if len(pre) == 0 && len(post) == 0 {
 		return tool
 	}
-	fire := func(ctx context.Context, event string, list []sessionfs.ToolEventHook, arguments map[string]any, execution tools.ExecutionContext, result string) string {
+	fire := func(ctx context.Context, event string, list []sessionfs.ToolEventHook, arguments map[string]any, execution tools.ExecutionContext, result string) (string, string) {
 		if len(list) == 0 {
-			return ""
+			return "", ""
 		}
 		return fireToolEvent(ctx, hooks, apiKeyEnv, event, list, tool.Definition, arguments, execution, result)
 	}
 	if inner := tool.Execute; inner != nil {
 		tool.Execute = func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-			preReport := fire(ctx, hookEventPreTool, pre, arguments, execution, "")
+			preReport, blockedBy := fire(ctx, hookEventPreTool, pre, arguments, execution, "")
+			if blockedBy != "" {
+				return blockedResult(execution.CallID, tool.Definition.Name, blockedBy, preReport), nil
+			}
 			result, err := inner(ctx, arguments, execution)
 			if err != nil {
 				return result, err
 			}
-			report := joinHookReports(preReport, fire(ctx, hookEventPostTool, post, arguments, execution, result))
+			postReport, _ := fire(ctx, hookEventPostTool, post, arguments, execution, result)
+			report := joinHookReports(preReport, postReport)
 			if report == "" {
 				return result, nil
 			}
@@ -65,12 +73,16 @@ func WithToolEventHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEn
 	}
 	if inner := tool.ExecuteOutput; inner != nil {
 		tool.ExecuteOutput = func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (json.RawMessage, error) {
-			preReport := fire(ctx, hookEventPreTool, pre, arguments, execution, "")
+			preReport, blockedBy := fire(ctx, hookEventPreTool, pre, arguments, execution, "")
+			if blockedBy != "" {
+				return json.Marshal(blockedResult(execution.CallID, tool.Definition.Name, blockedBy, preReport))
+			}
 			output, err := inner(ctx, arguments, execution)
 			if err != nil {
 				return output, err
 			}
-			report := joinHookReports(preReport, fire(ctx, hookEventPostTool, post, arguments, execution, string(output)))
+			postReport, _ := fire(ctx, hookEventPostTool, post, arguments, execution, string(output))
+			report := joinHookReports(preReport, postReport)
 			if report == "" {
 				return output, nil
 			}
@@ -112,13 +124,35 @@ func joinHookReports(reports ...string) string {
 	return strings.Join(kept, "\n")
 }
 
-// fireToolEvent runs every command of list for one call, in order, and returns their report
-// ("" when none had anything to say).
-func fireToolEvent(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv, event string, list []sessionfs.ToolEventHook, definition tools.Definition, arguments map[string]any, execution tools.ExecutionContext, result string) string {
+// blockedResult is the result of a call a blocking pre_tool command stopped: the same
+// "blocked" envelope an unapproved call gets, with the hooks' report as its content.
+func blockedResult(callID, toolName, hookName, report string) string {
+	result, err := tools.RenderToolResult(tools.ResultOptions{
+		ID:      callID,
+		Status:  tools.StatusBlocked,
+		Summary: "Not run: pre_tool hook " + hookName + " blocked this call.",
+		Information: []tools.Information{
+			{Key: "error_type", Value: "execution"},
+			{Key: "error_code", Value: "blocked_by_hook"},
+			{Key: "tool", Value: toolName},
+			{Key: "hook", Value: hookName},
+		},
+		Content: &tools.Content{Text: report},
+	})
+	if err != nil {
+		return ""
+	}
+	return result
+}
+
+// fireToolEvent runs the commands of list for one call, in order, and returns their report
+// ("" when none had anything to say). blockedBy names the blocking pre_tool command that did
+// not pass; the commands after it are not started.
+func fireToolEvent(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv, event string, list []sessionfs.ToolEventHook, definition tools.Definition, arguments map[string]any, execution tools.ExecutionContext, result string) (report, blockedBy string) {
 	payload := buildToolEventPayload(hooks, event, definition, arguments, execution, result)
 	var sections []string
 	for _, hook := range list {
-		section := runHookChild(ctx, hooks, apiKeyEnv, execution.WorkspaceRoot, hookChild{
+		section, passed := runHookChildPassed(ctx, hooks, apiKeyEnv, execution.WorkspaceRoot, hookChild{
 			name:          hook.Name,
 			setting:       "hooks." + event + "[" + hook.Name + "].argv",
 			argv:          hook.Argv,
@@ -129,15 +163,19 @@ func fireToolEvent(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv
 		if section != "" {
 			sections = append(sections, section)
 		}
+		if event == hookEventPreTool && hook.Blocking && !passed {
+			blockedBy = hook.Name
+			break
+		}
 	}
 	if len(sections) == 0 {
-		return ""
+		return "", blockedBy
 	}
 	label := "pre-tool hooks for "
 	if event == hookEventPostTool {
 		label = "post-tool hooks for "
 	}
-	return label + definition.Name + "\n" + strings.Join(sections, "\n")
+	return label + definition.Name + "\n" + strings.Join(sections, "\n"), blockedBy
 }
 
 // buildToolEventPayload encodes the event within hooks.MaxPayloadBytes: arguments over half

@@ -8,6 +8,7 @@ import {
   type RestorePlan,
 } from './checkpoint-view.ts';
 import {parseInteractionEnd, type InteractionEnd} from './interaction-end.ts';
+import {parseHookReport, type HookReport} from './hook-report-view.ts';
 import {parseProviderRetryWait, type ProviderRetryWait} from './provider-retry-view.ts';
 import type {RunInputPart} from './image-attachments.ts';
 
@@ -1202,6 +1203,7 @@ export interface StreamSessionRunOptions {
    * notice (the wait ended, or the event was malformed, so a bad one never sticks).
    */
   onProviderRetry?: (turnId: string, wait: ProviderRetryWait | undefined) => void;
+  onHookReport?: (turnId: string, report: HookReport) => void;
   onIdle?: () => void;
   /**
    * How long the run response or event stream may stay silent before it counts
@@ -1293,6 +1295,13 @@ async function consumeRunStream(
               options.onInteractionEnd?.(message.data.turn_id, end);
             }
           }
+        }
+        continue;
+      }
+      if (message.event === 'hook_report') {
+        const report = parseHookReport(message.data);
+        if (report !== undefined) {
+          options.onHookReport?.(report.turnId, report.report);
         }
         continue;
       }

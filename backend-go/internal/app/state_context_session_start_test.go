@@ -173,6 +173,12 @@ func newStateContextFixtureWith(t *testing.T, seedProcess bool, triggers, extraS
 
 func (fixture *sessionStartFixture) run(input string) {
 	fixture.t.Helper()
+	fixture.runBody(input)
+}
+
+// runBody runs the input and returns the run's SSE stream.
+func (fixture *sessionStartFixture) runBody(input string) string {
+	fixture.t.Helper()
 	request, err := http.NewRequest(http.MethodPost, fixture.api.URL+"/api/sessions/local:one/run", strings.NewReader(`{"input":"`+input+`"}`))
 	if err != nil {
 		fixture.t.Fatal(err)
@@ -188,6 +194,7 @@ func (fixture *sessionStartFixture) run(input string) {
 	if err != nil || response.StatusCode != http.StatusOK {
 		fixture.t.Fatalf("run %q: status=%d err=%v body=%s", input, response.StatusCode, err, body)
 	}
+	return string(body)
 }
 
 func (fixture *sessionStartFixture) sessionConfig() sessionfs.SessionConfig {

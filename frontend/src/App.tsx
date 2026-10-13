@@ -46,6 +46,7 @@ import {
   type ActivityNotification,
   type NewActivityNotification,
 } from './activity-notifications';
+import {hookReportNotification, type HookReport} from './hook-report-view';
 import {
   answerSessionRunInteraction,
   attachSessionRun,
@@ -2849,6 +2850,15 @@ function App() {
       message: notice.message,
     });
   }, [recordNotification]);
+  const recordHookReport = useCallback((
+    viewKey: string,
+    sessionTitle: string,
+    turnId: string,
+    report: HookReport,
+  ) => {
+    if (activeRunTurnRefs.current.get(viewKey) !== turnId) return;
+    recordNotification(hookReportNotification(viewKey, sessionTitle, report));
+  }, [recordNotification]);
   const clearRunInteraction = useCallback((viewKey: string, turnId?: string) => {
     const activeTurnId = activeRunTurnRefs.current.get(viewKey);
     if (turnId !== undefined && activeTurnId !== undefined && activeTurnId !== turnId) return;
@@ -4088,6 +4098,8 @@ function App() {
             recordRunInteraction(sessionId, turnId, interaction),
           onInteractionEnd: (turnId, end) =>
             recordInteractionEnd(sessionId, activeRowSession.title, turnId, end),
+          onHookReport: (turnId, report) =>
+            recordHookReport(sessionId, activeRowSession.title, turnId, report),
           onProviderRetry: (turnId, wait) => recordRunRetry(sessionId, turnId, wait),
           onMessage: message => {
             setStreamingMessageForView(sessionId, message);
@@ -4236,6 +4248,7 @@ function App() {
       applyRunPart,
       recordRunStarted,
       recordInteractionEnd,
+      recordHookReport,
       recordRunInteraction,
       recordRunRetry,
       clearRunInteraction,
@@ -4283,6 +4296,8 @@ function App() {
           recordRunInteraction(sessionId, pendingTurnId, interaction),
         onInteractionEnd: (endTurnId, end) =>
           recordInteractionEnd(sessionId, sessionTitle, endTurnId, end),
+        onHookReport: (reportTurnId, report) =>
+          recordHookReport(sessionId, sessionTitle, reportTurnId, report),
         onProviderRetry: (pendingTurnId, wait) =>
           recordRunRetry(sessionId, pendingTurnId, wait),
         onMessage: message => setStreamingMessageForView(sessionId, message),
@@ -4375,6 +4390,7 @@ function App() {
       clearRunInteraction,
       recordNotification,
       recordInteractionEnd,
+      recordHookReport,
       recordRunInteraction,
       recordRunRetry,
       recordRunStarted,

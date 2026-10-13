@@ -82,6 +82,11 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 			publishRunUsage(run, runner, ctx, logger)
 		},
 		OnUsageChanged: func() { publishRunUsage(run, runner, ctx, logger) },
+		OnHookReport: func(report session.HookReport) {
+			if err := run.publish("hook_report", map[string]any{"turn_id": run.turnID, "event": report.Event, "trigger": report.Trigger, "report": report.Report}); err != nil {
+				logger.Warn("failed to publish hook report", slog.Any("error", err))
+			}
+		},
 		OnEvent: func(event responses.Event) error {
 			if event.Type == "response.output_text.delta" {
 				var payload struct {

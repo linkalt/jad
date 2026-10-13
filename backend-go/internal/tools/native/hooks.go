@@ -111,6 +111,13 @@ type hookChild struct {
 // runHookChild runs one hook command under the hooks' own child-process settings and
 // returns its section of the report, or "" for a passing on_failure_only command.
 func runHookChild(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv, workspaceRoot string, hook hookChild) string {
+	section, _ := runHookChildPassed(ctx, hooks, apiKeyEnv, workspaceRoot, hook)
+	return section
+}
+
+// runHookChildPassed is runHookChild that also says whether the command exited 0. A command
+// that could not start, was stopped, timed out or was killed by a signal did not pass.
+func runHookChildPassed(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv, workspaceRoot string, hook hookChild) (string, bool) {
 	before := ""
 	if hook.watched != "" {
 		before = fileDigest(hook.watched)
@@ -139,11 +146,11 @@ func runHookChild(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv,
 	timing := fmt.Sprintf("%d ms, in %s", child.durationMs, displayPath(workspaceRoot, cwd))
 	switch {
 	case child.spawnError != nil:
-		return label + "could not start: " + child.spawnError.Error() + " (setting: " + hook.setting + ")"
+		return label + "could not start: " + child.spawnError.Error() + " (setting: " + hook.setting + ")", false
 	case child.aborted:
-		return label + "stopped before it finished"
+		return label + "stopped before it finished", false
 	case child.timedOut:
-		return label + fmt.Sprintf("timed out after %d ms (setting: hooks.timeout_ms)", hooks.TimeoutMS) + hookOutputBlock(child.output, maximum)
+		return label + fmt.Sprintf("timed out after %d ms (setting: hooks.timeout_ms)", hooks.TimeoutMS) + hookOutputBlock(child.output, maximum), false
 	}
 	changedNote := ""
 	if hook.watched != "" && fileDigest(hook.watched) != before {
@@ -151,9 +158,9 @@ func runHookChild(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv,
 	}
 	if child.hasExitCode && child.exitCode == 0 {
 		if hook.onFailureOnly && changedNote == "" {
-			return ""
+			return "", true
 		}
-		return label + "passed (" + timing + ")" + changedNote + hookOutputBlock(child.output, maximum)
+		return label + "passed (" + timing + ")" + changedNote + hookOutputBlock(child.output, maximum), true
 	}
 	status := "failed"
 	if child.signal != "" {
@@ -161,7 +168,7 @@ func runHookChild(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv,
 	} else if child.hasExitCode {
 		status += fmt.Sprintf(", exit %d", child.exitCode)
 	}
-	return label + status + " (" + timing + ")" + changedNote + hookOutputBlock(child.output, maximum)
+	return label + status + " (" + timing + ")" + changedNote + hookOutputBlock(child.output, maximum), false
 }
 
 // hookWorkingDirectory resolves the check's directory. found is false only for a

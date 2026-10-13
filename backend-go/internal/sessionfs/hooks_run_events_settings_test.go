@@ -78,3 +78,76 @@ func TestHooksRunEventsRejectBadValuesWithTheKeyInTheMessage(t *testing.T) {
 		})
 	}
 }
+
+func TestHooksPreCompactLoadsWithDefaults(t *testing.T) {
+	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
+		"enabled":     true,
+		"pre_compact": []any{map[string]any{"name": "snapshot", "argv": []any{"./snap.sh"}, "on_failure_only": true}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := defaultHooksWant()
+	want.Enabled = true
+	want.PreCompact = []RunEventHook{{Name: "snapshot", Argv: []string{"./snap.sh"}, OnFailureOnly: true}}
+	if !reflect.DeepEqual(config.Hooks, want) || !config.Hooks.RunEventsActive() || config.Hooks.ToolEventsActive() {
+		t.Fatalf("hooks = %+v, want %+v", config.Hooks, want)
+	}
+}
+
+func TestHooksPreCompactRejectsBadValues(t *testing.T) {
+	entry := func(extra map[string]any) map[string]any {
+		value := map[string]any{"name": "a", "argv": []any{"a"}}
+		for key, item := range extra {
+			value[key] = item
+		}
+		return value
+	}
+	cases := []struct {
+		name  string
+		hooks map[string]any
+		want  string
+	}{
+		{"object", map[string]any{"pre_compact": map[string]any{}}, "hooks.pre_compact must be a list"},
+		{"too long", map[string]any{"pre_compact": make([]any, 33)}, "hooks.pre_compact must be a list of at most 32"},
+		{"match", map[string]any{"pre_compact": []any{entry(map[string]any{"match": "*"})}}, "hooks.pre_compact[0].match is not supported"},
+		{"blocking", map[string]any{"pre_compact": []any{entry(map[string]any{"blocking": true})}}, "hooks.pre_compact[0].blocking is not supported"},
+		{"duplicate", map[string]any{"pre_compact": []any{entry(nil), entry(nil)}}, `hooks.pre_compact[1].name "a" is used twice`},
+		{"run_start blocking", map[string]any{"run_start": []any{entry(map[string]any{"blocking": true})}}, "hooks.run_start[0].blocking is not supported"},
+		{"post_tool blocking", map[string]any{"post_tool": []any{entry(map[string]any{"blocking": true})}}, "hooks.post_tool[0].blocking is not supported"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := loadApprovalSetting(t, map[string]any{"hooks": test.hooks})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want one containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestHooksPreToolBlockingLoads(t *testing.T) {
+	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
+		"enabled": true,
+		"pre_tool": []any{
+			map[string]any{"name": "gate", "match": "write", "argv": []any{"gate"}, "blocking": true},
+			map[string]any{"name": "note", "argv": []any{"note"}, "blocking": false},
+			map[string]any{"name": "plain", "argv": []any{"plain"}},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := config.Hooks.PreTool
+	if len(got) != 3 || !got[0].Blocking || got[1].Blocking || got[2].Blocking {
+		t.Fatalf("pre_tool = %+v; only the first entry blocks", got)
+	}
+	_, err = loadApprovalSetting(t, map[string]any{"hooks": map[string]any{"pre_tool": []any{map[string]any{"name": "a", "argv": []any{"a"}, "blocking": "yes"}}}})
+	if err == nil || !strings.Contains(err.Error(), "hooks.pre_tool[0].blocking must be a boolean") {
+		t.Fatalf("error = %v", err)
+	}
+	_, err = loadApprovalSetting(t, map[string]any{"hooks": map[string]any{"pre_tool": []any{map[string]any{"name": "a", "argv": []any{"a"}, "blocking": nil}}}})
+	if err == nil || !strings.Contains(err.Error(), "hooks.pre_tool[0].blocking must be a boolean") {
+		t.Fatalf("null blocking: error = %v", err)
+	}
+}

@@ -799,6 +799,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	}
 	options.NextSessionTurn = nextSessionTurn
 	options.CompactHistory = func(compaction transcript.CompactionOptions) (transcript.CompactionResult, error) {
+		r.fireRunHook(ctx, native.RunEvent{Event: native.HookEventPreCompact, TurnID: options.TurnID, Trigger: native.CompactTriggerAutomatic}, options.OnHookReport)
 		return r.shared.compactPreservingUsage(r.config, compaction)
 	}
 	options.RefreshStateContext = func(context.Context) ([]session.StateContextPrompt, error) {
@@ -822,8 +823,8 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		return session.RunResult{}, err
 	}
 	options.StateContext = stateContext
-	r.fireRunHook(ctx, native.RunEvent{Event: native.HookEventRunStart, TurnID: options.TurnID})
-	finish := r.runEndHook(ctx)
+	r.fireRunHook(ctx, native.RunEvent{Event: native.HookEventRunStart, TurnID: options.TurnID}, options.OnHookReport)
+	finish := r.runEndHook(ctx, options.OnHookReport)
 	result, err := prepared.runner.Run(ctx, input, options)
 	finish(result.TurnID, err)
 	return result, err

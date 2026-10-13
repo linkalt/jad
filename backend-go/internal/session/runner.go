@@ -76,8 +76,19 @@ type AutomaticCompactionSettings struct {
 	BackupMode    string
 }
 
+// HookReport is the report of one run_start, run_end or pre_compact command, for a caller
+// that shows it live. It is never stored.
+type HookReport struct {
+	Event   string
+	Trigger string
+	Report  string
+}
+
 type RunOptions struct {
-	TurnID        string
+	TurnID string
+	// OnHookReport receives each run hook report as it happens; nil drops them (they are
+	// always written to the server log).
+	OnHookReport  func(HookReport)
 	OnEvent       responses.EventHandler
 	OnTurnStarted func(partialContentPath string)
 	// OnInputAccepted runs once the user input is stored, before anything that

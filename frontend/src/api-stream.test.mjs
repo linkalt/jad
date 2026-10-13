@@ -527,6 +527,30 @@ test('a keep-alive comment frame resets the stall watchdog and is otherwise igno
   assert.equal(result.message?.text, 'finished after a long tool call');
 });
 
+test('a hook_report event reaches the caller, and a malformed one is ignored', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const runningRun = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  const finalMessage = message('complete', 'done');
+  responses.push(streamResponse([
+    {event: 'run', data: runningRun},
+    {event: 'hook_report', data: {turn_id: 'turn-1', event: 'run_start', trigger: '', report: '[a] passed (1 ms, in .)'}},
+    {event: 'hook_report', data: {turn_id: 'turn-1', event: 'pre_tool', trigger: '', report: 'nope'}},
+    {event: 'hook_report', data: {event: 'run_end', report: 'no turn'}},
+    {event: 'hook_report', data: {turn_id: 'turn-1', event: 'pre_compact', trigger: 'automatic', report: '[b] failed, exit 1 (2 ms, in .)'}},
+    {event: 'completed', data: {message: finalMessage, committed: true}},
+    {event: 'done', data: {}},
+  ]));
+  const seen = [];
+  await streamSessionRun('session-1', 'hello', {
+    onHookReport: (turnId, report) => seen.push([turnId, report.event, report.trigger, report.report]),
+  });
+  assert.deepEqual(seen, [
+    ['turn-1', 'run_start', '', '[a] passed (1 ms, in .)'],
+    ['turn-1', 'pre_compact', 'automatic', '[b] failed, exit 1 (2 ms, in .)'],
+  ]);
+});
+
 test('a provider_retry event reaches the caller as a wait, and null or a malformed one clears it', async () => {
   requests.length = 0;
   responses.length = 0;

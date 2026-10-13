@@ -32,9 +32,10 @@ const (
 )
 
 var (
-	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "max_payload_bytes", "post_edit", "post_tool", "pre_tool", "run_end", "run_start", "strip_ansi", "timeout_ms"}
+	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "max_payload_bytes", "post_edit", "post_tool", "pre_compact", "pre_tool", "run_end", "run_start", "strip_ansi", "timeout_ms"}
 	postEditHookKeys   = []string{"argv", "cwd", "ext", "name", "on_failure_only"}
 	toolEventHookKeys  = []string{"argv", "match", "name", "on_failure_only"}
+	preToolHookKeys    = []string{"argv", "blocking", "match", "name", "on_failure_only"}
 	runEventHookKeys   = []string{"argv", "name", "on_failure_only"}
 	hookMatchPattern   = regexp.MustCompile(`^(\*|[A-Za-z0-9_-]{1,64}|mcp:[A-Za-z0-9_.-]{1,64}:(\*|[A-Za-z0-9_.-]{1,128}))$`)
 	hookNamePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
@@ -61,6 +62,8 @@ type HooksSettings struct {
 	// RunStart and RunEnd run once around every run of the session itself (not its sub-agents).
 	RunStart []RunEventHook
 	RunEnd   []RunEventHook
+	// PreCompact runs before every compaction attempt of the session, automatic or manual.
+	PreCompact []RunEventHook
 	// MaxPayloadBytes cuts the event JSON a command reads on stdin.
 	MaxPayloadBytes int64
 	// The child-process settings of a check. They are the hooks' own: nothing is read from
@@ -99,9 +102,12 @@ type ToolEventHook struct {
 	Argv []string
 	// OnFailureOnly leaves a passing command out of the tool result.
 	OnFailureOnly bool
+	// Blocking (pre_tool only) stops the call when the command does not exit 0: a non-zero
+	// exit, a signal, a timeout or a command that could not start.
+	Blocking bool
 }
 
-// RunEventHook is one command run at the start or the end of a run. It reads the event as
+// RunEventHook is one command run at the start or the end of a run, or before a compaction. It reads the event as
 // JSON on stdin; its report goes to the server log, never to the model or the transcript.
 type RunEventHook struct {
 	Name string
@@ -116,9 +122,9 @@ func (settings HooksSettings) Active() bool {
 	return settings.PostEditActive() || settings.ToolEventsActive() || settings.RunEventsActive()
 }
 
-// RunEventsActive reports whether a run_start or run_end command can run.
+// RunEventsActive reports whether a run_start, run_end or pre_compact command can run.
 func (settings HooksSettings) RunEventsActive() bool {
-	return settings.Enabled && (len(settings.RunStart) > 0 || len(settings.RunEnd) > 0)
+	return settings.Enabled && (len(settings.RunStart) > 0 || len(settings.RunEnd) > 0 || len(settings.PreCompact) > 0)
 }
 
 // PostEditActive reports whether a post_edit check can run.
@@ -207,6 +213,9 @@ func normalizeHooksSettings(raw json.RawMessage, settingPath, envFileBase string
 		return HooksSettings{}, err
 	}
 	if settings.RunEnd, err = normalizeRunEventHooks(fields, "run_end", settingPath); err != nil {
+		return HooksSettings{}, err
+	}
+	if settings.PreCompact, err = normalizeRunEventHooks(fields, "pre_compact", settingPath); err != nil {
 		return HooksSettings{}, err
 	}
 	return settings, nil
@@ -309,7 +318,7 @@ func normalizeToolEventHooks(fields map[string]json.RawMessage, event, settingPa
 	return normalizeEventHookList(fields, event, settingPath, maxHooksToolEvent)
 }
 
-// normalizeRunEventHooks reads run_start or run_end: the entries of a tool event without match.
+// normalizeRunEventHooks reads run_start, run_end or pre_compact: the entries of a tool event without match.
 func normalizeRunEventHooks(fields map[string]json.RawMessage, event, settingPath string) ([]RunEventHook, error) {
 	entries, err := normalizeEventHookList(fields, event, settingPath, maxHooksRunEvent)
 	var hooks []RunEventHook
@@ -351,7 +360,10 @@ func normalizeToolEventHook(raw json.RawMessage, settingPath, event string, inde
 		return ToolEventHook{}, configError("%s must be an object", path)
 	}
 	allowed := toolEventHookKeys
-	if event == "run_start" || event == "run_end" {
+	switch event {
+	case "pre_tool":
+		allowed = preToolHookKeys
+	case "run_start", "run_end", "pre_compact":
 		allowed = runEventHookKeys
 	}
 	for key := range fields {
@@ -388,6 +400,11 @@ func normalizeToolEventHook(raw json.RawMessage, settingPath, event string, inde
 	if value, exists := fields["on_failure_only"]; exists {
 		if json.Unmarshal(value, &hook.OnFailureOnly) != nil || strings.TrimSpace(string(value)) == "null" {
 			return ToolEventHook{}, configError("%s.on_failure_only must be a boolean", path)
+		}
+	}
+	if value, exists := fields["blocking"]; exists {
+		if json.Unmarshal(value, &hook.Blocking) != nil || strings.TrimSpace(string(value)) == "null" {
+			return ToolEventHook{}, configError("%s.blocking must be a boolean", path)
 		}
 	}
 	return hook, nil

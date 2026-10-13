@@ -108,3 +108,36 @@ func TestToolEventHooksRunForAChildAndNameTheAgent(t *testing.T) {
 		t.Errorf("the write itself changed: %s", output)
 	}
 }
+
+// A blocking pre_tool command stops a child's write before it touches the disk, and the
+// model's next request carries the blocked result and the hook's report.
+func TestBlockingPreToolHookStopsAChildWriteAndTheModelSeesWhy(t *testing.T) {
+	f := hooksFixture(t, map[string]any{"enabled": true, "pre_tool": []any{
+		map[string]any{"name": "freeze", "match": "write", "blocking": true, "argv": []string{"sh", "-c", "echo writes-are-frozen; exit 1"}},
+	}})
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	if _, err := os.Stat(filepath.Join(f.workspace, "made.txt")); err == nil {
+		t.Fatal("the write ran although a blocking pre_tool hook failed")
+	}
+	output := childWriteResult(t, f)
+	for _, want := range []string{`blocked`, `blocked_by_hook`, `hook: freeze`, `writes-are-frozen`} {
+		if !strings.Contains(output, want) {
+			t.Errorf("the model's tool result lacks %q:\n%s", want, output)
+		}
+	}
+}
+
+// The same hook with blocking left off only reports: the write goes ahead.
+func TestNonBlockingPreToolHookLetsAChildWriteGoAhead(t *testing.T) {
+	f := hooksFixture(t, map[string]any{"enabled": true, "pre_tool": []any{
+		map[string]any{"name": "freeze", "match": "write", "argv": []string{"sh", "-c", "echo writes-are-frozen; exit 1"}},
+	}})
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	if data, err := os.ReadFile(filepath.Join(f.workspace, "made.txt")); err != nil || string(data) != "by the child" {
+		t.Fatalf("made.txt = %q, %v; a non-blocking hook must not stop the write", data, err)
+	}
+}

@@ -139,7 +139,7 @@ func TestRunEndHookReportsACancelledRunOnAContextTheStopCannotCancel(t *testing.
 		}},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	finish := runner.runEndHook(ctx)
+	finish := runner.runEndHook(ctx, nil)
 	cancel()
 	finish("turn-9", context.Canceled)
 	lines := readHookLines(t, events)
@@ -169,4 +169,44 @@ func between(text, before, after string) string {
 	}
 	value, _, _ := strings.Cut(rest, after)
 	return value
+}
+
+func TestRunHookReportsReachTheRunStreamLiveAndAreNotStored(t *testing.T) {
+	fixture, _ := newRunHooksFixture(t, map[string]any{"enabled": true,
+		"run_start": []any{runHookEntry("begin", "echo STREAM-START")},
+		"run_end":   []any{runHookEntry("finish", "echo STREAM-END")},
+	})
+	body := fixture.runBody("hello")
+	frames := map[string]string{}
+	for _, block := range strings.Split(body, "\n\n") {
+		event, data, found := strings.Cut(block, "\ndata: ")
+		if found && strings.HasSuffix(event, "event: hook_report") {
+			switch {
+			case strings.Contains(data, "STREAM-START"):
+				frames["run_start"] = data
+			case strings.Contains(data, "STREAM-END"):
+				frames["run_end"] = data
+			}
+		}
+	}
+	for event, data := range frames {
+		for _, want := range []string{`"event":"` + event + `"`, `"turn_id":"`, `"report":"`} {
+			if !strings.Contains(data, want) {
+				t.Errorf("%s frame lacks %s: %s", event, want, data)
+			}
+		}
+	}
+	if len(frames) != 2 {
+		t.Fatalf("want a hook_report frame for run_start and run_end, got %v in:\n%s", frames, body)
+	}
+	if strings.Index(body, "STREAM-START") > strings.Index(body, "event: completed") {
+		t.Errorf("run_start's report must arrive before the run completes:\n%s", body)
+	}
+	messages, err := os.ReadFile(fixture.messagesPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(messages), "STREAM-") || strings.Contains(string(messages), "hook_report") {
+		t.Errorf("a hook report reached messages.jsonl:\n%s", messages)
+	}
 }

@@ -561,7 +561,7 @@
       "type": "object",
       "description": "Optional commands around tool calls. post_edit runs checks after the native write and edit tools change a file, for example a type check; pre_tool and post_tool run a command before and after any tool call, with the event as JSON on stdin; run_start and run_end run a command at the start and the end of each run of the session. Go backend only; the TypeScript backend does not read this key. Off by default: with enabled false (or the key absent) no command is started and no tool result changes. A check never fails the write or edit; its outcome is appended to the tool result as text. The checks have their own child-process keys (kill_grace_ms, kill_process_group, max_line_chars, strip_ansi, env_file, env, env_deny, with the same meaning and defaults as in tools.native.bash); nothing is read from tools.native.bash, and hooks need no other tool. A check runs without asking for approval, because its command is part of this file; it also runs for write-capable sub-agents, on the files their paths allow.",
       "properties": {
-        "enabled": {"type": "boolean", "default": false, "description": "Run the commands in post_edit, pre_tool, post_tool, run_start and run_end."},
+        "enabled": {"type": "boolean", "default": false, "description": "Run the commands in post_edit, pre_tool, post_tool, run_start, run_end and pre_compact."},
         "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000, "default": 60000, "description": "Longest one check may run. A check that is still running is stopped and reported as timed out."},
         "kill_grace_ms": {"$ref": "#/$defs/child_process_style/properties/kill_grace_ms"},
         "kill_process_group": {"$ref": "#/$defs/bash_style/properties/kill_process_group"},
@@ -576,7 +576,7 @@
           "type": "array",
           "maxItems": 32,
           "default": [],
-          "description": "Commands run before a tool call, in the order listed. Each one reads the event as JSON on stdin (event, tool, tool_id, call_id, agent, workspace_root, arguments) and runs in the workspace root. A command never blocks or fails the call; its outcome is appended to the call's own result. Applies to native and MCP tools, and to sub-agents (the agent field names them).",
+          "description": "Commands run before a tool call, in the order listed. Each one reads the event as JSON on stdin (event, tool, tool_id, call_id, agent, workspace_root, arguments) and runs in the workspace root. Unless an entry sets blocking, a command never blocks or fails the call; its outcome is appended to the call's own result. A blocking entry that does not exit 0 (a non-zero exit, a signal, a timeout or a command that could not start) stops the call: the tool does not run, the later pre_tool commands do not start, no post_tool command runs, and the model gets a result with status blocked and error_code blocked_by_hook that names the hook and carries the report. It is checked after the approval step, so an approved call can still be blocked. Applies to native and MCP tools, and to sub-agents (the agent field names them).",
           "items": {
             "type": "object",
             "required": ["name", "argv"],
@@ -584,7 +584,8 @@
               "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$", "description": "Unique label within this list, shown in the tool result."},
               "match": {"type": "string", "default": "*", "pattern": "^(\\*|[A-Za-z0-9_-]{1,64}|mcp:[A-Za-z0-9_.-]{1,64}:(\\*|[A-Za-z0-9_.-]{1,128}))$", "description": "Which tools the command covers, the same entries a profile's tools.allow takes: * (every tool), a native tool name, mcp:<server>:<tool> or mcp:<server>:*."},
               "argv": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}, "description": "The program and its arguments, run directly with no shell. There are no placeholders: the command reads the event from stdin."},
-              "on_failure_only": {"type": "boolean", "default": false, "description": "Leave a passing command out of the tool result."}
+              "on_failure_only": {"type": "boolean", "default": false, "description": "Leave a passing command out of the tool result."},
+              "blocking": {"type": "boolean", "default": false, "description": "Stop the call when the command does not exit 0. Only pre_tool takes it."}
             },
             "additionalProperties": false
           }
@@ -610,7 +611,7 @@
           "type": "array",
           "maxItems": 32,
           "default": [],
-          "description": "Commands run once at the start of each run, after the session's tools are ready and before the first request to the model, in the order listed. Each one reads the event as JSON on stdin (event, session, profile, turn_id, workspace_root) and runs in the workspace root. A command never blocks or fails the run, and its output is not shown to the model or stored in messages.jsonl: each report is written to the server log. It does not run for sub-agent runs or when the run fails during setup.",
+          "description": "Commands run once at the start of each run, after the session's tools are ready and before the first request to the model, in the order listed. Each one reads the event as JSON on stdin (event, session, profile, turn_id, workspace_root) and runs in the workspace root. A command never blocks or fails the run, and its output is not shown to the model or stored in messages.jsonl: each report is written to the server log and sent live on the run's event stream as a hook_report event, which the web UI shows as a notification (not stored, not replayed after a reload). It does not run for sub-agent runs or when the run fails during setup.",
           "items": {
             "type": "object",
             "required": ["name", "argv"],
@@ -626,7 +627,23 @@
           "type": "array",
           "maxItems": 32,
           "default": [],
-          "description": "Commands run once when each run ends, whatever its outcome, in the order listed. Each one reads the event as JSON on stdin (event, session, profile, turn_id, workspace_root, outcome (ok, error or cancelled), error, error_cut) and runs in the workspace root. A command never blocks or fails the run, and its output is not shown to the model or stored in messages.jsonl: each report is written to the server log. It runs on a context a stop request cannot cancel, so a stopped run still reports, and it delays the end of the run by the time the commands take (each is limited by timeout_ms). It does not run for sub-agent runs.",
+          "description": "Commands run once when each run ends, whatever its outcome, in the order listed. Each one reads the event as JSON on stdin (event, session, profile, turn_id, workspace_root, outcome (ok, error or cancelled), error, error_cut) and runs in the workspace root. A command never blocks or fails the run, and its output is not shown to the model or stored in messages.jsonl: each report is written to the server log and sent live on the run's event stream as a hook_report event, which the web UI shows as a notification (not stored, not replayed after a reload). It runs on a context a stop request cannot cancel, so a stopped run still reports, and it delays the end of the run by the time the commands take (each is limited by timeout_ms). It does not run for sub-agent runs.",
+          "items": {
+            "type": "object",
+            "required": ["name", "argv"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$", "description": "Unique label within this list, shown in the log."},
+              "argv": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}, "description": "The program and its arguments, run directly with no shell. There are no placeholders: the command reads the event from stdin."},
+              "on_failure_only": {"type": "boolean", "default": false, "description": "Leave a passing command out of the log."}
+            },
+            "additionalProperties": false
+          }
+        },
+        "pre_compact": {
+          "type": "array",
+          "maxItems": 32,
+          "default": [],
+          "description": "Commands run before each compaction attempt of the session, automatic (inside a run) or manual (the compact request), in the order listed. Each one reads the event as JSON on stdin (event, session, profile, trigger automatic or manual, turn_id for an automatic one, workspace_root) and runs in the workspace root. A command never blocks, changes or cancels the compaction, and its output is not shown to the model or stored in messages.jsonl: each report is written to the server log and sent live on the run's event stream as a hook_report event, which the web UI shows as a notification (not stored, not replayed after a reload). A manual pre_compact has no run stream, so it is log-only. It runs even when the compaction then finds nothing to compact.",
           "items": {
             "type": "object",
             "required": ["name", "argv"],

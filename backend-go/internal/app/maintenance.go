@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"example.com/agent-harness/backend-go/internal/httpapi"
 	"example.com/agent-harness/backend-go/internal/sessionfs"
@@ -43,6 +44,7 @@ func (r *Resolver) ResolveMaintenance(ctx context.Context, reference, profile st
 		Session: boundMutation{
 			shared: shared, config: config, processManager: processManager, taskStore: taskStore, memoryStore: memoryStore,
 			subagentManager: r.sharedSubagentManager(config), owner: sessionKey(location.Reference, config.Profile),
+			reference: location.Reference, logger: r.logger,
 		},
 	}, nil
 }
@@ -55,7 +57,9 @@ type boundMutation struct {
 	memoryStore     *native.MemoryStore
 	subagentManager *native.SubagentManager
 	// owner is the session key of the sub-agent runs this session started.
-	owner string
+	owner     string
+	reference string
+	logger    *slog.Logger
 }
 
 func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse, error) {
@@ -77,6 +81,7 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 		return result, mapSessionError(err)
 	}
 	m.shared.invalidateTurnStarts()
+	fireSessionHook(ctx, m.logger, m.reference, m.config, native.RunEvent{Event: native.HookEventPreCompact, Trigger: native.CompactTriggerManual}, nil)
 	compacted, err := m.shared.compactPreservingUsage(m.config, transcript.CompactionOptions{
 		TurnType:      m.config.Compaction.TurnType,
 		KeepTurns:     m.config.Compaction.KeepTurns,
