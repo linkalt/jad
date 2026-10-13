@@ -1,11 +1,35 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {defineConfig} from 'vite';
+import {defineConfig, type Plugin} from 'vite';
 import react from '@vitejs/plugin-react';
 import stylex from '@stylexjs/unplugin';
 import appConfig from './src/config.json' with {type: 'json'};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const schemesDir = path.resolve(__dirname, '../sample/schemes');
+const schemesModuleId = 'virtual:catalog-schemes';
+
+// The editor validates against the repo's JSON schemes. They are read with fs, not
+// imported, because Vite looks up the nearest package.json of every imported file
+// and a broken one above the repo would fail the build.
+function catalogSchemes(): Plugin {
+  return {
+    name: 'catalog-schemes',
+    resolveId: id => (id === schemesModuleId ? `\0${schemesModuleId}` : undefined),
+    load(id) {
+      if (id !== `\0${schemesModuleId}`) return undefined;
+      const schemes: Record<string, unknown> = {};
+      for (const file of fs.readdirSync(schemesDir).filter(name => name.endsWith('.json')).sort()) {
+        const filePath = path.join(schemesDir, file);
+        this.addWatchFile(filePath);
+        schemes[file] = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      }
+      return `export default ${JSON.stringify(schemes)};`;
+    },
+  };
+}
 
 const lightningcssTargets = {
   chrome: appConfig.browser_targets.chrome_major << 16,
@@ -15,6 +39,7 @@ const lightningcssTargets = {
 
 export default defineConfig(({command}) => ({
   plugins: [
+    catalogSchemes(),
     {
       name: 'astryx-css-layer-order',
       transformIndexHtml() {
@@ -91,6 +116,8 @@ export default defineConfig(({command}) => ({
           groups: [
             {name: 'vendor-react', test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/},
             {name: 'vendor-astryx', test: /node_modules[\\/]@astryxdesign[\\/]/},
+            // Only the lazy catalog editor imports these; a shared group would load them at startup.
+            {name: 'vendor-editor', test: /node_modules[\\/](@codemirror|@lezer|ajv|fast-deep-equal|fast-uri|json-schema-traverse|require-from-string|style-mod|w3c-keyname|crelt|@marijn)[\\/]/},
             {name: 'vendor', test: /node_modules[\\/]/},
           ],
         },

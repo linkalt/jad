@@ -1,0 +1,79 @@
+import assert from 'node:assert/strict';
+import {after, test} from 'node:test';
+
+const originalFetch = globalThis.fetch;
+const requests = [];
+let reply = () => new Response('{}', {status: 200});
+globalThis.fetch = async (input, init = {}) => {
+  requests.push({url: String(input), init});
+  return reply();
+};
+
+const {fetchCatalogFiles, fetchCatalogFile, saveCatalogFile, deleteCatalogFile, CatalogRequestError} = await import('./api.ts');
+
+after(() => {
+  globalThis.fetch = originalFetch;
+});
+
+const sentHeaders = request => Object.fromEntries(new Headers(request.init.headers).entries());
+const json = (value, status = 200, headers = {}) => new Response(JSON.stringify(value), {status, headers});
+
+test('fetchCatalogFiles reads the list and rejects a malformed one', async () => {
+  requests.length = 0;
+  reply = () => json({files: [{id: 'jad/default', etag: '"a"'}]});
+  assert.deepEqual(await fetchCatalogFiles('profiles'), [{id: 'jad/default', etag: '"a"'}]);
+  assert.match(requests[0].url, /\/catalog\/profiles$/);
+  reply = () => json({files: [{id: 'x'}]});
+  await assert.rejects(fetchCatalogFiles('profiles'), /invalid catalog list/);
+});
+
+test('fetchCatalogFile returns the raw text with the version header and encodes the id', async () => {
+  requests.length = 0;
+  reply = () => new Response('{\n  "a": 1\n}\n', {status: 200, headers: {etag: '"v1"'}});
+  const file = await fetchCatalogFile('profiles', 'my cat/p.1');
+  assert.deepEqual(file, {id: 'my cat/p.1', etag: '"v1"', text: '{\n  "a": 1\n}\n'});
+  assert.match(requests[0].url, /\/catalog\/profiles\/my%20cat\/p\.1$/);
+});
+
+test('fetchCatalogFile refuses a response with no version and an id that is not category/name', async () => {
+  reply = () => new Response('{}', {status: 200});
+  await assert.rejects(fetchCatalogFile('profiles', 'a/b'), /without a version/);
+  await assert.rejects(fetchCatalogFile('profiles', 'only'), /<category>\/<name>/);
+  await assert.rejects(fetchCatalogFile('profiles', 'a/b/c'), /<category>\/<name>/);
+});
+
+test('saveCatalogFile replaces with If-Match and creates with If-None-Match', async () => {
+  requests.length = 0;
+  reply = () => json({id: 'a/b', etag: '"v2"'}, 200);
+  const replaced = await saveCatalogFile('profiles', 'a/b', '{}', '"v1"');
+  assert.deepEqual(replaced, {info: {id: 'a/b', etag: '"v2"'}, created: false});
+  assert.equal(requests[0].init.method, 'PUT');
+  assert.deepEqual(sentHeaders(requests[0]), {'if-match': '"v1"'});
+  assert.equal(requests[0].init.body, '{}');
+  reply = () => json({id: 'a/b', etag: '"v1"'}, 201);
+  const created = await saveCatalogFile('profiles', 'a/b', '{}', null);
+  assert.equal(created.created, true);
+  assert.deepEqual(sentHeaders(requests[1]), {'if-none-match': '*'});
+});
+
+test('a refused write keeps its status and the server message', async () => {
+  reply = () => json({error: 'profile "a/b" changed since it was read; read it again'}, 412);
+  await assert.rejects(saveCatalogFile('profiles', 'a/b', '{}', '"old"'), error => {
+    assert.ok(error instanceof CatalogRequestError);
+    assert.equal(error.status, 412);
+    assert.match(error.message, /changed since it was read/);
+    return true;
+  });
+  reply = () => json({error: 'toolset: not available'}, 422);
+  await assert.rejects(saveCatalogFile('profiles', 'a/b', '{}', null), error => error.status === 422);
+});
+
+test('deleteCatalogFile sends If-Match and reports a profile that is in use', async () => {
+  requests.length = 0;
+  reply = () => new Response(null, {status: 204});
+  await deleteCatalogFile('profiles', 'a/b', '"v1"');
+  assert.equal(requests[0].init.method, 'DELETE');
+  assert.deepEqual(sentHeaders(requests[0]), {'if-match': '"v1"'});
+  reply = () => json({error: 'profile "a/b" is needed by session test'}, 409);
+  await assert.rejects(deleteCatalogFile('profiles', 'a/b', '"v1"'), error => error.status === 409 && /needed by session/.test(error.message));
+});

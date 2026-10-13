@@ -1851,3 +1851,101 @@ export async function stopSessionRun(
     ...(typeof turnId === 'string' ? {turn_id: turnId} : {}),
   };
 }
+
+export type CatalogKind = 'profiles';
+
+export interface CatalogFileInfo {
+  id: string;
+  etag: string;
+}
+
+export interface CatalogFileContent extends CatalogFileInfo {
+  text: string;
+}
+
+/** A refused catalog request. `status` tells a stale file (412) from a file in use (409) or a bad body (422). */
+export class CatalogRequestError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'CatalogRequestError';
+    this.status = status;
+  }
+}
+
+function catalogFilePath(kind: CatalogKind, id: string): string {
+  const [category, name, ...rest] = id.split('/');
+  if (!category || !name || rest.length > 0) {
+    throw new Error(`"${id}" must be written <category>/<name>`);
+  }
+  return `/catalog/${kind}/${encodeURIComponent(category)}/${encodeURIComponent(name)}`;
+}
+
+async function catalogFailure(response: Response): Promise<CatalogRequestError> {
+  return new CatalogRequestError(response.status, await readError(response));
+}
+
+export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal): Promise<CatalogFileInfo[]> {
+  const response = await authenticatedFetch(apiUrl(`/catalog/${kind}`), signal === undefined ? {} : {signal});
+  if (!response.ok) {
+    throw await catalogFailure(response);
+  }
+  const value: unknown = await response.json();
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.files) ||
+    !value.files.every(file => isRecord(file) && typeof file.id === 'string' && typeof file.etag === 'string')
+  ) {
+    throw new Error('the server returned an invalid catalog list');
+  }
+  return value.files.map(file => ({id: file.id as string, etag: file.etag as string}));
+}
+
+export async function fetchCatalogFile(
+  kind: CatalogKind,
+  id: string,
+  signal?: AbortSignal,
+): Promise<CatalogFileContent> {
+  const response = await authenticatedFetch(apiUrl(catalogFilePath(kind, id)), signal === undefined ? {} : {signal});
+  if (!response.ok) {
+    throw await catalogFailure(response);
+  }
+  const etag = response.headers.get('etag');
+  if (!etag) {
+    throw new Error('the server returned a catalog file without a version');
+  }
+  return {id, etag, text: await response.text()};
+}
+
+/** `etag` replaces the file only if it still has that version; `null` creates it and fails if it exists. */
+export async function saveCatalogFile(
+  kind: CatalogKind,
+  id: string,
+  text: string,
+  etag: string | null,
+): Promise<{info: CatalogFileInfo; created: boolean}> {
+  const response = await authenticatedFetch(apiUrl(catalogFilePath(kind, id)), {
+    method: 'PUT',
+    headers: etag === null ? {'If-None-Match': '*'} : {'If-Match': etag},
+    body: text,
+  });
+  if (!response.ok) {
+    throw await catalogFailure(response);
+  }
+  const value: unknown = await response.json();
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.etag !== 'string') {
+    throw new Error('the server returned an invalid catalog write result');
+  }
+  return {info: {id: value.id, etag: value.etag}, created: response.status === 201};
+}
+
+export async function deleteCatalogFile(kind: CatalogKind, id: string, etag: string): Promise<void> {
+  const response = await authenticatedFetch(apiUrl(catalogFilePath(kind, id)), {
+    method: 'DELETE',
+    headers: {'If-Match': etag},
+  });
+  if (!response.ok) {
+    throw await catalogFailure(response);
+  }
+}

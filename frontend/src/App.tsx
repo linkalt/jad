@@ -1,4 +1,4 @@
-import {Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {Fragment, Suspense, lazy, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import type {ChangeEvent, CSSProperties, SVGProps} from 'react';
 import * as stylex from '@stylexjs/stylex';
 import {
@@ -131,6 +131,7 @@ import {
   type ComposerDesync,
 } from './desync-watch';
 import {ApprovalDrawer} from './components/ApprovalDrawer';
+import {LazyLoadBoundary} from './components/LazyLoadBoundary';
 import {DraftRequestDrawer} from './components/DraftRequestDrawer';
 import {interactionFailureTitle} from './approval-answer';
 import type {DraftDecision} from './draft-answer';
@@ -1707,6 +1708,10 @@ function AgentAvatar({isRunning = false}: {isRunning?: boolean}) {
   );
 }
 
+const CatalogEditorDialog = lazy(() =>
+  import('./components/CatalogEditorDialog').then(module => ({default: module.CatalogEditorDialog})),
+);
+
 /** Datasets the floating left panel can show. One slot, so only one at a time. */
 const LEFT_PANELS = {
   prompts: {label: 'prompt library'},
@@ -1753,6 +1758,7 @@ function SessionNavigation({
   hasUnreadError,
   onToggleNotifications,
   onToggleCheckpoints,
+  onOpenProfileEditor,
 }: {
   /** Every session as a group, with a child row for each of its profiles. */
   groups: SessionListGroup[];
@@ -1776,6 +1782,7 @@ function SessionNavigation({
   hasUnreadError: boolean;
   onToggleNotifications: () => void;
   onToggleCheckpoints: () => void;
+  onOpenProfileEditor: () => void;
 }) {
   const categorySections = useMemo(() => groupByCategory(groups), [groups]);
   return (
@@ -1860,6 +1867,11 @@ function SessionNavigation({
           icon={<Icon icon="funnel" size="sm" />}
           isSelected={openLeftPanel === 'settings'}
           onClick={() => onSelectLeftPanel('settings')}
+        />
+        <SideNavItem
+          label="Edit profiles"
+          icon={<Icon icon="wrench" size="sm" />}
+          onClick={onOpenProfileEditor}
         />
       </SideNavSection>
       <SideNavSection title="Activity">
@@ -2489,6 +2501,8 @@ function App() {
     },
     [],
   );
+  const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
+  const [hasOpenedProfileEditor, setHasOpenedProfileEditor] = useState(false);
   const [rightPanel, setRightPanel] = useState<RightPanelId | null>(
     appConfig.show_inspector_by_default ? 'inspector' : null,
   );
@@ -5462,6 +5476,10 @@ function App() {
           hasUnreadError={hasUnreadError}
           onToggleNotifications={toggleNotifications}
           onToggleCheckpoints={toggleCheckpoints}
+          onOpenProfileEditor={() => {
+            setHasOpenedProfileEditor(true);
+            setIsProfileEditorOpen(true);
+          }}
         />
       }
     >
@@ -5668,6 +5686,17 @@ function App() {
           />
         )}
       </VStack>
+      {hasOpenedProfileEditor && (
+        <LazyLoadBoundary name="the profile editor">
+          <Suspense fallback={null}>
+            <CatalogEditorDialog
+              isOpen={isProfileEditorOpen}
+              onClose={() => setIsProfileEditorOpen(false)}
+              onChanged={() => refreshSessionsRef.current?.()}
+            />
+          </Suspense>
+        </LazyLoadBoundary>
+      )}
     </AppShell>
   );
 }
