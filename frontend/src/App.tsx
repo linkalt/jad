@@ -649,7 +649,7 @@ const defaultTools: ChatToolCallItem[] = [
     key: 'draft-layout',
     name: 'draft_layout',
     status: 'complete',
-    target: 'Agent harness regions',
+    target: 'Jad regions',
     duration: '680ms',
     node: 'planner',
     additions: 3,

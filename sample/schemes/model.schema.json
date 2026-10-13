@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "model.schema.json",
-  "title": "Agent Harness model.json",
+  "title": "Jad model.json",
   "description": "Session model and provider configuration. Secrets are referenced through an environment variable name, never stored here.",
   "type": "object",
   "required": ["model"],

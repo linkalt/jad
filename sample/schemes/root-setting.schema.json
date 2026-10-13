@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "root-setting.schema.json",
-  "title": "Agent Harness root setting.json",
+  "title": "Jad root setting.json",
   "description": "Workspace-level session roots used by the web UI session list.",
   "type": "object",
   "properties": {

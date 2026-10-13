@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "setting.schema.json",
-  "title": "Agent Harness setting.json",
+  "title": "Jad setting.json",
   "description": "Session-specific settings, including the per-session native tool allow-list and policies.",
   "type": "object",
   "$defs": {

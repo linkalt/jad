@@ -21,7 +21,7 @@ func main() {
 	if err := run(); err != nil {
 		// A startup or shutdown failure is always reported on stderr, whatever
 		// server.log_level says: it explains why the process exited.
-		fmt.Fprintf(os.Stderr, "agent-backend: %v\n", err)
+		fmt.Fprintf(os.Stderr, "jad: %v\n", err)
 		os.Exit(1)
 	}
 }
