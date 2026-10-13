@@ -76,7 +76,7 @@ func (h *Handler) handleCatalogSession(w http.ResponseWriter, r *http.Request, r
 			writeJSONError(w, &StatusError{Code: http.StatusBadRequest, Message: "request body could not be read"})
 			return
 		}
-		unlock := h.sessionLocks.lock(reference)
+		unlock := h.lockSession(reference)
 		defer unlock()
 		info, created, err := h.catalogSessions.WriteSessionConfig(r.Context(), reference, data, strings.TrimSpace(r.Header.Get("If-Match")), strings.TrimSpace(r.Header.Get("If-None-Match")))
 		if err != nil {
@@ -110,7 +110,7 @@ func (h *Handler) deleteCatalogSession(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
-	unlock := h.sessionLocks.lock(reference)
+	unlock := h.lockSession(reference)
 	defer unlock()
 	canonical, err := h.catalogSessions.CheckSessionConfigDelete(r.Context(), reference, ifMatch)
 	if err != nil {

@@ -31,3 +31,15 @@ func (h *Handler) lockSessionSettingsProcess(ctx context.Context, reference stri
 	}
 	return release, nil
 }
+
+// lockSession takes the in-process lock of one session. It is keyed by the canonical
+// reference, so a request that spells the session differently still excludes the others.
+// A reference that does not resolve keeps its own key: the request fails later anyway.
+func (h *Handler) lockSession(reference string) func() {
+	if references, ok := h.resolver.(SessionReferences); ok {
+		if canonical, err := references.CanonicalSessionReference(reference); err == nil {
+			reference = canonical
+		}
+	}
+	return h.sessionLocks.lock(reference)
+}

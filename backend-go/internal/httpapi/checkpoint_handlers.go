@@ -94,7 +94,7 @@ func (h *Handler) handleCheckpointRestore(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer h.endMutation(key)
-	unlock := h.sessionLocks.lock(reference)
+	unlock := h.lockSession(reference)
 	defer unlock()
 	// A run holds the cross-process session lock until it ends, so the run is
 	// checked first: waiting on that lock would delay the refusal until the run

@@ -28,7 +28,7 @@ func (h *Handler) handleSessionCompact(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	defer h.endMutation(key)
-	unlock := h.sessionLocks.lock(reference)
+	unlock := h.lockSession(reference)
 	defer unlock()
 	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
 	if err != nil {
@@ -74,7 +74,7 @@ func (h *Handler) handleSessionReset(w http.ResponseWriter, r *http.Request, ref
 		return
 	}
 	defer h.endMutation(key)
-	unlock := h.sessionLocks.lock(reference)
+	unlock := h.lockSession(reference)
 	defer unlock()
 	// A run holds the transcript lock until it ends, so the check has to come
 	// before waiting for that lock: after it, the run is over and the reset would

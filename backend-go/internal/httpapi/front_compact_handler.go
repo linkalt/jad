@@ -33,7 +33,7 @@ func (h *Handler) handleSessionFrontCompact(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer h.endMutation(key)
-	unlock := h.sessionLocks.lock(reference)
+	unlock := h.lockSession(reference)
 	defer unlock()
 	// Checked before waiting for the transcript lock a run holds (see handleSessionReset).
 	if h.runIsActive(key) {

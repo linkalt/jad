@@ -107,6 +107,13 @@ type SessionProcessLocker interface {
 	LockSessionSettings(context.Context, string) (func(), error)
 }
 
+// SessionReferences is an optional adapter that names a session the one way every
+// spelling of it resolves to (with a single session root, "demo" and "local:demo" are the
+// same session).
+type SessionReferences interface {
+	CanonicalSessionReference(reference string) (string, error)
+}
+
 // SessionChildren is an optional adapter for work a session started that outlives
 // the run, such as sub-agent runs handed off with a run id. CancelSessionChildren asks
 // all of it to stop and reports how many were still going; it must not block.
@@ -622,7 +629,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	var processUnlock func()
 	var startErr error
 	func() {
-		unlock := h.sessionLocks.lock(reference)
+		unlock := h.lockSession(reference)
 		defer unlock()
 		processUnlock, startErr = h.lockSessionProcess(r.Context(), reference, profile, body.Model)
 		if startErr != nil {

@@ -101,3 +101,13 @@ func (r *Resolver) CancelAllSessionChildren(reference string) int {
 	}
 	return cancelled
 }
+
+// CanonicalSessionReference implements httpapi.SessionReferences. It does not need the
+// session to exist, except to choose a root for an unqualified reference with several roots.
+func (r *Resolver) CanonicalSessionReference(reference string) (string, error) {
+	location, err := sessionfs.Resolve(r.roots, reference)
+	if err != nil {
+		return "", err
+	}
+	return location.Reference, nil
+}

@@ -30,7 +30,7 @@ func (h *Handler) handleSessionProfile(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 
-	unlock := h.sessionLocks.lock(reference)
+	unlock := h.lockSession(reference)
 	defer unlock()
 	processUnlock, err := h.lockSessionSettingsProcess(r.Context(), reference)
 	if err != nil {
@@ -73,7 +73,7 @@ func (h *Handler) handleSessionModelDefault(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	modelDefault = strings.TrimSpace(modelDefault)
-	unlock := h.sessionLocks.lock(reference)
+	unlock := h.lockSession(reference)
 	defer unlock()
 	processUnlock, err := h.lockSessionSettingsProcess(r.Context(), reference)
 	if err != nil {

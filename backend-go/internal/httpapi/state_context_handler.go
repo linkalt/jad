@@ -46,7 +46,7 @@ func (h *Handler) handleSessionStateContext(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer h.endMutation(key)
-	unlock := h.sessionLocks.lock(reference)
+	unlock := h.lockSession(reference)
 	defer unlock()
 	if h.runIsActive(key) {
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot write state context while a run is active"})
