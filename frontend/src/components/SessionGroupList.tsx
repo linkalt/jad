@@ -2,6 +2,7 @@ import {useState} from 'react';
 import * as stylex from '@stylexjs/stylex';
 import {Badge, Icon, IconButton, SideNavItem, StatusDot} from '@astryxdesign/core';
 import {ContextMenu} from '@astryxdesign/core/ContextMenu';
+import {Tooltip} from '@astryxdesign/core/Tooltip';
 import type {SessionRunStatus} from '../api';
 import {sessionUiStateForRun, type SessionUiState} from '../session-run-status';
 import {
@@ -39,6 +40,7 @@ export type SessionGroupListProps = {
   activeViewKey: string;
   collapsedRefs: readonly string[];
   canPinProfile: boolean;
+  pinLimitHint: string;
   onCollapsedChange: (sessionRef: string, isCollapsed: boolean) => void;
   onSelect: (viewKey: string) => void;
   onOpenProfile: (sessionRef: string, profile: string) => void;
@@ -54,14 +56,17 @@ export function SessionGroupList({
   activeViewKey,
   collapsedRefs,
   canPinProfile,
+  pinLimitHint,
   onCollapsedChange,
   onSelect,
   onOpenProfile,
   onRemoveView,
 }: SessionGroupListProps) {
-  // Hover is tracked on the row itself (the context-menu trigger), not on the
-  // row button: the remove control sits beside that button.
+  // Hover and focus are tracked on the row itself (the context-menu trigger),
+  // not on the row button: the remove control sits beside that button. Focus
+  // reveals the control too, or a keyboard could never reach it.
   const [hoveredViewKey, setHoveredViewKey] = useState<string | null>(null);
+  const [focusedViewKey, setFocusedViewKey] = useState<string | null>(null);
 
   const rowState = (row: SessionListRow, session: SessionGroupSession): SessionUiState => {
     if (rowHasRunningRun(row, session, runningViewKeys)) {
@@ -98,7 +103,11 @@ export function SessionGroupList({
               icon={<Icon icon="close" size="sm" />}
               variant="ghost"
               size="sm"
-              xstyle={hoveredViewKey === row.key ? undefined : styles.rowActionHidden}
+              xstyle={
+                hoveredViewKey === row.key || focusedViewKey === row.key
+                  ? undefined
+                  : styles.rowActionHidden
+              }
               onClick={() => onRemoveView(row.key)}
             />
           ) : undefined
@@ -114,9 +123,8 @@ export function SessionGroupList({
     // swap the element type: React keeps the row (and its keyboard focus).
     // The menu only has an entry on a pinned profile; elsewhere the browser's
     // own menu shows.
-    return (
+    const menu = (
       <ContextMenu
-        key={row.key}
         label={`${fullLabel} actions`}
         isDisabled={!isPinnedProfile}
         items={[
@@ -128,9 +136,28 @@ export function SessionGroupList({
         ]}
         onMouseEnter={() => setHoveredViewKey(row.key)}
         onMouseLeave={() => setHoveredViewKey(current => (current === row.key ? null : current))}
+        onFocus={() => setFocusedViewKey(row.key)}
+        onBlur={event => {
+          if (event.currentTarget.contains(event.relatedTarget)) {
+            return;
+          }
+          setFocusedViewKey(current => (current === row.key ? null : current));
+        }}
       >
         {item}
       </ContextMenu>
+    );
+    // A disabled unpinned profile says why, instead of just greying out. The
+    // wrapper is always there so reaching the limit does not remount the rows.
+    return (
+      <Tooltip
+        key={row.key}
+        content={pinLimitHint}
+        placement="end"
+        isEnabled={isUnpinnedProfile && !canPinProfile}
+      >
+        {menu}
+      </Tooltip>
     );
   };
 

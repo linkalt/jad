@@ -1816,6 +1816,7 @@ function SessionNavigation({
             activeViewKey={activeViewKey}
             collapsedRefs={collapsedRefs}
             canPinProfile={canPinProfile}
+            pinLimitHint={appConfig.session_views_limit_hint}
             onCollapsedChange={onCollapsedChange}
             onSelect={onSelect}
             onOpenProfile={onOpenProfile}

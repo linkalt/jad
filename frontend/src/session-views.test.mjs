@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 
 import {
   addPinnedView,
@@ -361,4 +362,11 @@ test('the own row of a stored profile the session no longer lists uses its name 
     [],
   );
   assert.equal(group.children[0].label, 'Gone');
+});
+
+test('the pin limit and the text shown when it is reached are configured', async () => {
+  const config = JSON.parse(await readFile(new URL('./config.json', import.meta.url), 'utf8'));
+  assert.ok(Number.isInteger(config.session_views_max) && config.session_views_max > 0);
+  assert.equal(typeof config.session_views_limit_hint, 'string');
+  assert.notEqual(config.session_views_limit_hint.trim(), '');
 });
