@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"sync"
 
-	"example.com/agent-harness/backend-go/internal/checkpoint"
-	"example.com/agent-harness/backend-go/internal/tools"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/checkpoint"
+	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/transcript"
 )
 
 // repairPendingToolCalls gives every tool call without a result a failure

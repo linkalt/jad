@@ -12,10 +12,10 @@ import (
 	"sort"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/transcript"
-	"example.com/agent-harness/backend-go/internal/webui"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/transcript"
+	"jad/backend-go/internal/webui"
 )
 
 type modelSummary struct {
@@ -61,7 +61,7 @@ type sessionListRecord struct {
 	Turns           int64                              `json:"turns"`
 	ActiveProfile   string                             `json:"active_profile,omitempty"`
 	DefaultProfile  string                             `json:"default_profile,omitempty"`
-	PathProfiles    []string                           `json:"path_profiles,omitempty"`
+	Profiles        []string                           `json:"profiles,omitempty"`
 	ModelDefault    string                             `json:"model_default,omitempty"`
 	Models          *[]string                          `json:"models,omitempty"`
 	FrontCompaction json.RawMessage                    `json:"front_compaction,omitempty"`
@@ -484,7 +484,7 @@ func makeSessionListRecord(location sessionfs.Location, config sessionfs.Session
 		Turns:           turns,
 		ActiveProfile:   config.Profile,
 		DefaultProfile:  config.DefaultProfile,
-		PathProfiles:    append([]string(nil), config.PathProfiles...),
+		Profiles:        append([]string(nil), config.Profiles...),
 		ModelDefault:    config.ModelDefault,
 		FrontCompaction: append(json.RawMessage(nil), config.FrontCompaction...),
 		Model: modelSummary{
@@ -573,7 +573,7 @@ func sessionVersion(config sessionfs.SessionConfig) string {
 		config.DefaultProfile,
 		config.Category,
 		config.ModelDefault,
-		strings.Join(config.PathProfiles, "\x00"),
+		strings.Join(config.Profiles, "\x00"),
 		fileStamp(config.MessagesPath),
 		fileStamp(config.MessagesBackupPath),
 		fileStamp(config.UsageCachePath),

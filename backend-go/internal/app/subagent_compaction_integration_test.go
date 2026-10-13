@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 const childStateBlockMarker = "STATE BLOCK MARKER 7731"

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/logging"
+	"jad/backend-go/internal/logging"
 )
 
 // observedWriter records what a handler did to the response so ServeHTTP can log

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/tools"
 )
 
 // persistedCatalog builds the tool over a manager that keeps manifests in dir, as the

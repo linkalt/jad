@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/logging"
+	"jad/backend-go/internal/logging"
 )
 
 const runPartialOwnerSuffix = ".owner"

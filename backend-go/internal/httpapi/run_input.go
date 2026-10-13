@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/imagedata"
+	"jad/backend-go/internal/imagedata"
 )
 
 // RunInputLimits bounds the images and files of one run request. The values come from the

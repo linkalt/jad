@@ -10,10 +10,10 @@ import (
 	"os"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/transcript"
-	"example.com/agent-harness/backend-go/internal/webui"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/transcript"
+	"jad/backend-go/internal/webui"
 )
 
 // historyReference points a snapshot at its history block. ETag is null when

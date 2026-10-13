@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/session"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/session"
+	"jad/backend-go/internal/transcript"
 )
 
 // recordingRunner is a run session that, like the real bound runner, saves the

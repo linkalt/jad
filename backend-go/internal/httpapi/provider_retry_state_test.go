@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/responses"
-	"example.com/agent-harness/backend-go/internal/session"
+	"jad/backend-go/internal/responses"
+	"jad/backend-go/internal/session"
 )
 
 func newRetryTestHandler(t *testing.T) *Handler {

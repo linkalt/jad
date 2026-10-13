@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // Two profile IDs can map to one internal storage key ("/" becomes "__"); the layout loader

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/sessionlock"
+	"jad/backend-go/internal/sessionlock"
 )
 
 // SessionFileListing is the safe, bounded @path completion response.

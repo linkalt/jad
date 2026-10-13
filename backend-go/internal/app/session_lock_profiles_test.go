@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // newTwoProfileLockFixture builds one session with two path profiles that keep
@@ -109,7 +109,7 @@ func TestSwitchingProfilesWhileBlueRunsKeepsBlueTranscript(t *testing.T) {
 	}
 	defer releaseBlue()
 
-	if _, err := resolver.UpdatePathProfile(context.Background(), "session-1", "dev/blue"); err != nil {
+	if _, err := resolver.UpdateProfile(context.Background(), "session-1", "dev/blue"); err != nil {
 		t.Fatalf("switching the active profile to the running one failed: %v", err)
 	}
 	if release, err := lockWithin(t, resolver, "dev/blue", 300*time.Millisecond); err == nil {

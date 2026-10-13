@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/webui"
+	"jad/backend-go/internal/webui"
 )
 
 func int64Pointer(value int64) *int64 { return &value }

@@ -3,7 +3,7 @@ package native
 import (
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 func seedGroupRecords(t *testing.T, store *MemoryStore, settings sessionfs.NativeMemorySettings) {

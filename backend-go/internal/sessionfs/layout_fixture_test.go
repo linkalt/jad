@@ -3,7 +3,7 @@ package sessionfs
 import (
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // layoutLocation writes the spec as a catalog-layout session and resolves it through the

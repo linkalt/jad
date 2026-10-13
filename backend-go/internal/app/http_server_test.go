@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 func startTimeoutServer(t *testing.T, config Config) string {
@@ -106,7 +106,7 @@ func TestLoadConfigCarriesTimeoutsFromRootSettings(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken}})
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 	if err != nil {
 		t.Fatal(err)
 	}

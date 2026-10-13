@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 type lockedBuffer struct {

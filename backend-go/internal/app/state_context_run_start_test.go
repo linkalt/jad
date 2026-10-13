@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/tools/native"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/tools/native"
+	"jad/backend-go/internal/transcript"
 )
 
 func (fixture *sessionStartFixture) storedBlocks() []transcript.StateContextEntry {

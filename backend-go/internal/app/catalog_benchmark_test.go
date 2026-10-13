@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // newCatalogBenchmarkResolver builds a root holding sessionCount sessions, each

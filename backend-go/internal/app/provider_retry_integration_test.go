@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // retryFixture is one session whose provider answers each request from a script: a status
@@ -57,7 +57,7 @@ func newRetryFixture(t *testing.T, providerRetry string, status int) *retryFixtu
 		Settings:    map[string]any{"max_tool_rounds": 2},
 		RawSettings: retryRawSettings(providerRetry),
 		Models:      map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	fixture.sessionDir = layout.SessionDir
 	fixture.stateDir = profileState(layout)
 	service, err := NewService(config)

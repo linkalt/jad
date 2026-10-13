@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 func scopeRun(t *testing.T, tool tools.Tool, root string, scope *tools.PathScope, arguments map[string]any) string {

@@ -10,8 +10,8 @@ import (
 	"regexp"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
 )
 
 type usageTimestampFixture struct {

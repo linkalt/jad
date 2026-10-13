@@ -14,11 +14,11 @@ import (
 
 	mcpSDK "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
-const mcpFixtureEnvironment = "AGENT_HARNESS_MCP_FIXTURE"
+const mcpFixtureEnvironment = "JAD_MCP_FIXTURE"
 
 func TestMCPFixtureProcess(t *testing.T) {
 	if os.Getenv(mcpFixtureEnvironment) != "1" {

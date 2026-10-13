@@ -3,7 +3,7 @@ package sessionfs
 import (
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/catalog"
+	"jad/backend-go/internal/catalog"
 )
 
 // readProfile reads one profile file and checks what can be checked without composing the

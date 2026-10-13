@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/tools"
 )
 
 // execute runs one call of the subagent tool. There are three kinds: a call with an

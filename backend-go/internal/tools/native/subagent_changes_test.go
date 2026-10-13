@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/tools"
 )
 
 func TestWriteAndEditReportOnlyRealChanges(t *testing.T) {

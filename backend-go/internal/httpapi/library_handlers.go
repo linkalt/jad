@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"example.com/agent-harness/backend-go/internal/contentlibrary"
+	"jad/backend-go/internal/contentlibrary"
 )
 
 func (h *Handler) handleRootLibrary(w http.ResponseWriter, r *http.Request, segments []string) {

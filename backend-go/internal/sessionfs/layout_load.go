@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/catalog"
+	"jad/backend-go/internal/catalog"
 )
 
 const layoutSessionFileName = "session.json"
@@ -77,7 +77,7 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	config.Profile = entry.ID()
 	config.DefaultProfile = session.ActiveProfile
 	config.Category = session.Category
-	config.PathProfiles = profiles.IDs()
+	config.Profiles = profiles.IDs()
 	name := requestedModel
 	if name == "" {
 		name = config.ModelDefault

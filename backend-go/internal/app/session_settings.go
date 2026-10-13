@@ -3,70 +3,70 @@ package app
 import (
 	"context"
 	"errors"
-	"example.com/agent-harness/backend-go/internal/imagestore"
+	"jad/backend-go/internal/imagestore"
 	"net/http"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
 )
 
-func (r *Resolver) ReadPathProfileInfo(ctx context.Context, reference string) (httpapi.SessionPathProfileInfo, error) {
+func (r *Resolver) ReadProfileInfo(ctx context.Context, reference string) (httpapi.SessionProfileInfo, error) {
 	if err := requireSettingsContext(ctx); err != nil {
-		return httpapi.SessionPathProfileInfo{}, err
+		return httpapi.SessionProfileInfo{}, err
 	}
 	location, err := sessionfs.Resolve(r.roots, reference)
 	if err != nil {
-		return httpapi.SessionPathProfileInfo{}, mapSessionError(err)
+		return httpapi.SessionProfileInfo{}, mapSessionError(err)
 	}
 	info, err := sessionfs.ReadLayoutProfileInfo(location)
 	if err != nil {
-		return httpapi.SessionPathProfileInfo{}, mapProfileSettingsError(err)
+		return httpapi.SessionProfileInfo{}, mapProfileSettingsError(err)
 	}
-	return httpapi.SessionPathProfileInfo{ActiveProfile: info.ActiveProfile, PathProfiles: info.PathProfiles}, nil
+	return httpapi.SessionProfileInfo{ActiveProfile: info.ActiveProfile, Profiles: info.Profiles}, nil
 }
 
-func (r *Resolver) UpdatePathProfile(ctx context.Context, reference, activeProfile string) (httpapi.SessionPathProfileUpdate, error) {
+func (r *Resolver) UpdateProfile(ctx context.Context, reference, activeProfile string) (httpapi.SessionProfileUpdate, error) {
 	if err := requireSettingsContext(ctx); err != nil {
-		return httpapi.SessionPathProfileUpdate{}, err
+		return httpapi.SessionProfileUpdate{}, err
 	}
 	location, err := sessionfs.Resolve(r.roots, reference)
 	if err != nil {
-		return httpapi.SessionPathProfileUpdate{}, mapSessionError(err)
+		return httpapi.SessionProfileUpdate{}, mapSessionError(err)
 	}
 
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
 	info, err := sessionfs.ReadLayoutProfileInfo(location)
 	if err != nil {
-		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
+		return httpapi.SessionProfileUpdate{}, mapProfileSettingsError(err)
 	}
-	if len(info.PathProfiles) == 0 {
-		return httpapi.SessionPathProfileUpdate{}, &httpapi.StatusError{Code: http.StatusBadRequest, Message: "session has no configured path profiles"}
+	if len(info.Profiles) == 0 {
+		return httpapi.SessionProfileUpdate{}, &httpapi.StatusError{Code: http.StatusBadRequest, Message: "session has no configured path profiles"}
 	}
 	current, err := sessionfs.LoadSessionConfig(location, info.ActiveProfile, "")
 	if err != nil {
-		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
+		return httpapi.SessionProfileUpdate{}, mapProfileSettingsError(err)
 	}
 	target, err := sessionfs.LoadSessionConfig(location, activeProfile, "")
 	if err != nil {
-		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
+		return httpapi.SessionProfileUpdate{}, mapProfileSettingsError(err)
 	}
 	update, err := sessionfs.SetLayoutActiveProfile(location, activeProfile, current.Persistence.Durability)
 	if err != nil {
-		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
+		return httpapi.SessionProfileUpdate{}, mapProfileSettingsError(err)
 	}
 	target, err = sessionfs.LoadSessionConfig(location, activeProfile, "")
 	if err != nil {
-		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
+		return httpapi.SessionProfileUpdate{}, mapProfileSettingsError(err)
 	}
 	updatedInfo, err := sessionfs.ReadLayoutProfileInfo(location)
 	if err != nil {
-		return httpapi.SessionPathProfileUpdate{}, mapProfileSettingsError(err)
+		return httpapi.SessionProfileUpdate{}, mapProfileSettingsError(err)
 	}
-	response := httpapi.SessionPathProfileUpdate{
+	response := httpapi.SessionProfileUpdate{
 		ActiveProfile: update.ActiveProfile,
-		PathProfiles:  updatedInfo.PathProfiles,
+		Profiles:      updatedInfo.Profiles,
 		Changed:       update.Changed,
 	}
 	if target.ModelDefault != "" {
@@ -99,7 +99,7 @@ func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedP
 	if profile == "" {
 		profile = info.ActiveProfile
 	}
-	if profile == "" || len(info.PathProfiles) == 0 {
+	if profile == "" || len(info.Profiles) == 0 {
 		return httpapi.SessionModelDefaultUpdate{}, &httpapi.StatusError{Code: http.StatusBadRequest, Message: "model config path is not available in the active session path profile"}
 	}
 	settings, err := sessionfs.LoadSessionConfig(location, profile, "")
@@ -123,7 +123,7 @@ func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedP
 	}
 	return httpapi.SessionModelDefaultUpdate{
 		ActiveProfile: update.ActiveProfile,
-		PathProfiles:  update.PathProfiles,
+		Profiles:      update.Profiles,
 		ModelDefault:  update.ModelDefault,
 		Models:        append([]string{}, models...),
 		Model: httpapi.SessionModelInfo{

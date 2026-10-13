@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
-	"example.com/agent-harness/backend-go/internal/tools/native"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/tools/native"
 )
 
 func TestHTTPRunExecutesNativeProcessStartAndWaitAcrossProviderRounds(t *testing.T) {
@@ -152,7 +152,7 @@ func TestHTTPRunExecutesNativeProcessStartAndWaitAcrossProviderRounds(t *testing
 		Settings:            map[string]any{"max_tool_rounds": 3},
 		Native:              map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "max_running": 2, "wait_timeout_ms": 1000, "max_wait_timeout_ms": 2500, "stdout": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "stderr": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "log_cap_bytes": 4096, "max_line_chars": 1000, "strip_ansi": false}},
 		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)

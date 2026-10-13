@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/tools"
 )
 
 func memoryCall(t *testing.T, catalog *tools.Catalog, arguments string) string {

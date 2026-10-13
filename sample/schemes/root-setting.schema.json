@@ -186,7 +186,7 @@
           "type": "array",
           "items": {"type": "string", "format": "uri", "pattern": "^https?://[^/]+$"},
           "default": [],
-          "description": "Exact browser origins permitted to call the API; configure the frontend dev-server origin when using its proxy. The server also requires AGENT_API_TOKEN in the environment."
+          "description": "Exact browser origins permitted to call the API; configure the frontend dev-server origin when using its proxy. The server also requires JAD_API_TOKEN in the environment."
         }
       },
       "additionalProperties": true,

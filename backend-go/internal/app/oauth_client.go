@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/openaioauth"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/openaioauth"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // oauthPlaceholderKey is given to the SDK in OAuth mode. It only has to be non-empty so

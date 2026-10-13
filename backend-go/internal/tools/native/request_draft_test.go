@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 func TestRequestDraftToolRendersUpdatedAnswerAndReportsChangedPaths(t *testing.T) {

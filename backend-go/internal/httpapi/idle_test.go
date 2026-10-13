@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/session"
+	"jad/backend-go/internal/session"
 )
 
 func TestIdleRunStreamAndResolverNotFound(t *testing.T) {

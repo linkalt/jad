@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
-	"example.com/agent-harness/backend-go/internal/tools/native"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/tools/native"
 )
 
 // orderingOutcome is what one edit+edit+edit+read response left behind.

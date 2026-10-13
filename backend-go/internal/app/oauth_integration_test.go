@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // oauthFixture is one session in auth_mode openai_oauth whose "Codex endpoint" is a local
@@ -92,7 +92,7 @@ func newOAuthFixture(t *testing.T, modelExtra map[string]any) *oauthFixture {
 		CWD:      root,
 		Settings: map[string]any{"max_tool_rounds": 2, "http_debug": map[string]any{"enabled": true, "include_request_headers": true, "include_request_body": true, "max_body_bytes": 65536}},
 		Models:   map[string]map[string]any{"openai/default": modelFile},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken})
 	f.sessionDir = layout.SessionDir
 	f.stateDir = profileState(layout)
 	config.HTTP.Logger = slog.New(slog.NewTextHandler(f.logs, nil))
@@ -272,7 +272,7 @@ func TestAPIKeySessionStillRequiresItsEnvironmentVariableAndIgnoresOAuthSettings
 	config, _ := layoutConfig(t, layouttest.Spec{
 		Settings: map[string]any{"openai_oauth": map[string]any{"expiry_margin_ms": 1}},
 		Models:   map[string]map[string]any{"openai/default": {"model": "gpt-test", "api_key_env": "FIXTURE_MISSING_KEY"}},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken})
 	logs := &lockedBuffer{}
 	config.HTTP.Logger = slog.New(slog.NewTextHandler(logs, nil))
 	service, err := NewService(config)

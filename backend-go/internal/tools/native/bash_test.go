@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 func bashTestSettings(t *testing.T, root string) sessionfs.NativeBashSettings {
@@ -159,12 +159,12 @@ func TestNormalizeBashArgumentsAcceptsNearMissAliases(t *testing.T) {
 
 func TestBuildNativeBashEnvironmentFiltersCredentialsAndUnlistedVariables(t *testing.T) {
 	settings := sessionfs.NativeBashSettings{
-		Env:     map[string]string{"EXTRA_ALLOWED": "configured", "FIXTURE_SECRET": "configured-secret", "AGENT_API_TOKEN": "server-secret"},
+		Env:     map[string]string{"EXTRA_ALLOWED": "configured", "FIXTURE_SECRET": "configured-secret", "JAD_API_TOKEN": "server-secret"},
 		EnvDeny: []string{"DENIED_BY_SETTING"},
 	}
 	base := []string{
 		"PATH=/usr/bin:/bin", "HOME=/tmp", "LANG=C", "FIXTURE_SECRET=ambient-secret",
-		"AGENT_API_TOKEN=server-secret", "UNLISTED_SECRET=do-not-pass", "DENIED_BY_SETTING=denied",
+		"JAD_API_TOKEN=server-secret", "UNLISTED_SECRET=do-not-pass", "DENIED_BY_SETTING=denied",
 	}
 	environment := buildNativeBashEnvironment(base, settings, "FIXTURE_SECRET")
 	values := make(map[string]string)
@@ -177,7 +177,7 @@ func TestBuildNativeBashEnvironmentFiltersCredentialsAndUnlistedVariables(t *tes
 	if values["PATH"] != "/usr/bin:/bin" || values["HOME"] != "/tmp" || values["LANG"] != "C" || values["EXTRA_ALLOWED"] != "configured" {
 		t.Fatalf("allowed environment entries = %#v", values)
 	}
-	for _, name := range []string{"FIXTURE_SECRET", "AGENT_API_TOKEN", "UNLISTED_SECRET", "DENIED_BY_SETTING"} {
+	for _, name := range []string{"FIXTURE_SECRET", "JAD_API_TOKEN", "UNLISTED_SECRET", "DENIED_BY_SETTING"} {
 		if _, exists := values[name]; exists {
 			t.Errorf("environment unexpectedly contains %s: %#v", name, values)
 		}

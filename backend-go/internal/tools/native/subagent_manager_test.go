@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/tools"
 )
 
 var subagentRunIDPattern = regexp.MustCompile(`sub_[0-9a-f]{8}`)

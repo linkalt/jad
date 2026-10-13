@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 const (
@@ -339,7 +339,7 @@ func environmentWithoutServerToken() []string {
 	environment := os.Environ()
 	safe := make([]string, 0, len(environment))
 	for _, value := range environment {
-		if !strings.HasPrefix(value, "AGENT_API_TOKEN=") {
+		if !strings.HasPrefix(value, "JAD_API_TOKEN=") {
 			safe = append(safe, value)
 		}
 	}

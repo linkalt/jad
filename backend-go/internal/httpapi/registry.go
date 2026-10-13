@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	interactionbroker "example.com/agent-harness/backend-go/internal/interactions"
-	"example.com/agent-harness/backend-go/internal/tools"
-	"example.com/agent-harness/backend-go/internal/webui"
+	interactionbroker "jad/backend-go/internal/interactions"
+	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/webui"
 )
 
 type streamEvent struct {

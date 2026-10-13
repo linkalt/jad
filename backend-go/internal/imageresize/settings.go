@@ -1,6 +1,6 @@
 package imageresize
 
-import "example.com/agent-harness/backend-go/internal/sessionfs"
+import "jad/backend-go/internal/sessionfs"
 
 // FromSettings builds the resizer of the session's image_resize setting. It returns nil
 // when the setting is off, so a caller sends the images as they are.

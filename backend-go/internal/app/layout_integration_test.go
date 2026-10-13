@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // layoutFixture is a session in the catalog layout (setting.json with catalogs, a
@@ -88,7 +88,7 @@ func newLayoutFixture(t *testing.T) *layoutFixture {
 
 	config, err := LoadConfig(sessionfs.LoadOptions{
 		WorkingDir: f.root, RootSettingPath: filepath.Join(f.root, "setting.json"),
-		Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_KEY": "k"},
+		Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_KEY": "k"},
 	})
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)

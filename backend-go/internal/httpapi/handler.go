@@ -17,12 +17,12 @@ import (
 	"sync"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/contentlibrary"
-	"example.com/agent-harness/backend-go/internal/logging"
-	"example.com/agent-harness/backend-go/internal/memorytrace"
-	"example.com/agent-harness/backend-go/internal/serverconfig"
-	"example.com/agent-harness/backend-go/internal/session"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/contentlibrary"
+	"jad/backend-go/internal/logging"
+	"jad/backend-go/internal/memorytrace"
+	"jad/backend-go/internal/serverconfig"
+	"jad/backend-go/internal/session"
+	"jad/backend-go/internal/tools"
 )
 
 const (
@@ -170,14 +170,14 @@ type SessionTools struct {
 	Hidden []tools.Definition `json:"hidden,omitempty"`
 }
 
-type SessionPathProfileInfo struct {
+type SessionProfileInfo struct {
 	ActiveProfile string   `json:"active_profile,omitempty"`
-	PathProfiles  []string `json:"path_profiles"`
+	Profiles      []string `json:"profiles"`
 }
 
-type SessionPathProfileUpdate struct {
+type SessionProfileUpdate struct {
 	ActiveProfile string    `json:"active_profile"`
-	PathProfiles  []string  `json:"path_profiles"`
+	Profiles      []string  `json:"profiles"`
 	ModelDefault  *string   `json:"model_default,omitempty"`
 	Models        *[]string `json:"models,omitempty"`
 	Changed       bool      `json:"changed"`
@@ -190,7 +190,7 @@ type SessionModelInfo struct {
 
 type SessionModelDefaultUpdate struct {
 	ActiveProfile string           `json:"active_profile"`
-	PathProfiles  []string         `json:"path_profiles"`
+	Profiles      []string         `json:"profiles"`
 	ModelDefault  string           `json:"model_default"`
 	Models        []string         `json:"models"`
 	Model         SessionModelInfo `json:"model"`
@@ -205,8 +205,8 @@ type SessionFileListing struct {
 // SessionSettings is an optional filesystem-backed extension for session
 // profile/model changes and safe session-file suggestions.
 type SessionSettings interface {
-	ReadPathProfileInfo(context.Context, string) (SessionPathProfileInfo, error)
-	UpdatePathProfile(context.Context, string, string) (SessionPathProfileUpdate, error)
+	ReadProfileInfo(context.Context, string) (SessionProfileInfo, error)
+	UpdateProfile(context.Context, string, string) (SessionProfileUpdate, error)
 	UpdateModelDefault(context.Context, string, string, string) (SessionModelDefaultUpdate, error)
 	ListSessionFiles(context.Context, string, string) (SessionFileListing, error)
 }
@@ -473,7 +473,7 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(segments) >= 2 && segments[0] == "api" && segments[1] == "library" {
 		if !h.authorized(r) {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-harness"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="jad"`)
 			writeJSONError(w, &StatusError{Code: http.StatusUnauthorized, Message: "API token required"})
 			return
 		}
@@ -486,7 +486,7 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.authorized(r) {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="agent-harness"`)
+		w.Header().Set("WWW-Authenticate", `Bearer realm="jad"`)
 		writeJSONError(w, &StatusError{Code: http.StatusUnauthorized, Message: "API token required"})
 		return
 	}

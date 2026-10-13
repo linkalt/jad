@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/tools"
 )
 
 // subagentFileChange is one file a child's write or edit changed.

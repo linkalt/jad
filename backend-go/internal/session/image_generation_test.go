@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/imagestore"
-	"example.com/agent-harness/backend-go/internal/responses"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/imagestore"
+	"jad/backend-go/internal/responses"
+	"jad/backend-go/internal/transcript"
 )
 
 // generatedRounds: round 1 carries a provider-generated image (as a bare base64 string and

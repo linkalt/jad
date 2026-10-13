@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/logging"
+	"jad/backend-go/internal/logging"
 )
 
 func TestCleanupOrphanedPartialFilesRemovesOnlyConfirmedDeadLocalCache(t *testing.T) {

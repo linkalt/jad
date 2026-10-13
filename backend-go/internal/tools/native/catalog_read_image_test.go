@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // sampleReadImageManifest is the manifest users are told to list in tool_definition_paths.

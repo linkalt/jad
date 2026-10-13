@@ -16,8 +16,8 @@ import (
 
 	"bytes"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // runImagesFixture is a server with a fake Responses provider that records every
@@ -48,7 +48,7 @@ func newRunImagesFixture(t *testing.T, server, session map[string]any) *runImage
 		}
 	}))
 	t.Cleanup(provider.Close)
-	environment := map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"}
+	environment := map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"}
 	config, _ := layoutConfig(t, layouttest.Spec{
 		SessionID: "demo", Settings: session, Server: server,
 		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "m", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},

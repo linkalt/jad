@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/transcript"
 )
 
 func TestRunReportsTheAcceptedInputBeforeAFailureAndTheOffsetStartsItsRecord(t *testing.T) {

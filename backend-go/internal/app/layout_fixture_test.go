@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // layoutConfig writes the spec as a catalog-layout session (id "demo" unless the spec names

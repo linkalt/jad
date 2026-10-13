@@ -570,7 +570,7 @@ func TestLayoutSetActiveProfileWritesSessionJSONOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !update.Changed || update.ActiveProfile != "review/reviewer" || strings.Join(update.PathProfiles, ",") != "dev/coder,review/reviewer" {
+	if !update.Changed || update.ActiveProfile != "review/reviewer" || strings.Join(update.Profiles, ",") != "dev/coder,review/reviewer" {
 		t.Fatalf("update = %+v", update)
 	}
 	info, err := ReadLayoutProfileInfo(location)

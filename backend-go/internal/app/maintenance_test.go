@@ -9,15 +9,15 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestHTTPCompactAndResetWithFilesystemResolver(t *testing.T) {
 	config, _ := layoutConfig(t, maintenanceSpec(map[string]any{
 		"compaction":  map[string]any{"keepbatch": map[string]any{"turn": map[string]any{"type": "assistant_final", "keep": 1}}},
 		"persistence": map[string]any{"durability": "process", "max_item_bytes": 1048576, "response_metadata": "full"},
-	}, ""), map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+	}, ""), map[string]string{"JAD_API_TOKEN": integrationAPIToken})
 	location, err := sessionfs.Resolve(config.Roots, "local:one")
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestHTTPCompactAndResetWithFilesystemResolver(t *testing.T) {
 func TestMaintenanceOnlyCompactNeedsAUsableModelFile(t *testing.T) {
 	config, _ := layoutConfig(t, maintenanceSpec(map[string]any{
 		"persistence": map[string]any{"durability": "process", "max_item_bytes": 1048576, "response_metadata": "full"},
-	}, `{"provider":"acme","api_key_env":"not a valid name"}`), map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+	}, `{"provider":"acme","api_key_env":"not a valid name"}`), map[string]string{"JAD_API_TOKEN": integrationAPIToken})
 	location, err := sessionfs.Resolve(config.Roots, "local:one")
 	if err != nil {
 		t.Fatal(err)

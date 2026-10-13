@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 
-	"example.com/agent-harness/backend-go/internal/checkpoint"
-	"example.com/agent-harness/backend-go/internal/httpapi"
+	"jad/backend-go/internal/checkpoint"
+	"jad/backend-go/internal/httpapi"
 )
 
 // ListCheckpoints lists the session's checkpoints, newest first. Reading needs no

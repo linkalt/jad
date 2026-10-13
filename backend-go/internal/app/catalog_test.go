@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestConditionalCatalogResponsesSkipTranscriptReads(t *testing.T) {

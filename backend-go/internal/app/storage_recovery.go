@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // StorageRecoveryOptions chooses which storages RecoverStorages visits.
@@ -114,7 +114,7 @@ func (r *Resolver) recoverSessionStorages(
 	// The active profile is the base config; every other profile may keep its tool
 	// storage, and so its processes and child runs, in its own folder, so each is read.
 	configs := []sessionfs.SessionConfig{base}
-	for _, profile := range base.PathProfiles {
+	for _, profile := range base.Profiles {
 		if profile == base.Profile {
 			continue
 		}

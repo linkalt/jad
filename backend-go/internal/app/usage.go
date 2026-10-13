@@ -11,8 +11,8 @@ import (
 	"reflect"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/webui"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/webui"
 )
 
 const maxSafeUsageInteger int64 = 9007199254740991

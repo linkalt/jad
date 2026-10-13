@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // toolsetSpec is a session whose own toolset has only read and the subagent tool, with one

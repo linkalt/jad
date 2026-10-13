@@ -116,7 +116,7 @@ type SessionConfig struct {
 	Category           string
 	Profile            string
 	DefaultProfile     string
-	PathProfiles       []string
+	Profiles           []string
 	ModelPath          string
 	ModelDefault       string
 	Models             []string
@@ -518,7 +518,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		SessionName:           sessionName,
 		Profile:               profile,
 		DefaultProfile:        defaultProfile,
-		PathProfiles:          pathProfiles,
+		Profiles:              pathProfiles,
 		ModelPath:             resolvedModelPath,
 		ModelDefault:          modelDefault,
 		Models:                models,

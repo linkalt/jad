@@ -8,23 +8,23 @@ import (
 	"sort"
 )
 
-// PathProfileInfo describes the active and available profiles of a session.
-type PathProfileInfo struct {
+// ProfileInfo describes the active and available profiles of a session.
+type ProfileInfo struct {
 	ActiveProfile string
-	PathProfiles  []string
+	Profiles      []string
 }
 
-// PathProfileUpdate is the persisted result of changing the active path profile.
-type PathProfileUpdate struct {
+// ProfileUpdate is the persisted result of changing the active path profile.
+type ProfileUpdate struct {
 	ActiveProfile string
-	PathProfiles  []string
+	Profiles      []string
 	Changed       bool
 }
 
 // ModelDefaultUpdate is the persisted model selection for one path profile.
 type ModelDefaultUpdate struct {
 	ActiveProfile string
-	PathProfiles  []string
+	Profiles      []string
 	ModelDefault  string
 	Changed       bool
 }

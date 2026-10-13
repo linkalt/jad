@@ -11,10 +11,10 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"example.com/agent-harness/backend-go/internal/imageresize"
-	"example.com/agent-harness/backend-go/internal/imagestore"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/imageresize"
+	"jad/backend-go/internal/imagestore"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 var definitionDocumentSchema = json.RawMessage(`{

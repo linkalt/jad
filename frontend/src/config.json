@@ -1,6 +1,6 @@
 {
   "api_base_path": "/api",
-  "api_token_storage_key": "agent-harness.api-token",
+  "api_token_storage_key": "jad.api-token",
   "api_token_fragment_param": "api-token",
   "stop_request_timeout_ms": 15000,
   "interaction_answer_timeout_ms": 15000,
@@ -42,7 +42,7 @@
   "mention_source": "cwd",
   "defer_offscreen_transcript_rows": true,
   "transcript_row_estimate_px": 120,
-  "row_height_storage_key": "agent-harness.row-heights",
+  "row_height_storage_key": "jad.row-heights",
   "row_height_max_entries": 2000,
   "row_height_save_delay_ms": 500,
   "row_height_width_bucket_px": 50,
@@ -57,7 +57,7 @@
   "scroll_unlock_attempts": 3,
   "composer_markdown_shortcuts": true,
   "composer_preview_enabled": true,
-  "composer_draft_storage_key": "agent-harness.composer-drafts",
+  "composer_draft_storage_key": "jad.composer-drafts",
   "composer_draft_save_delay_ms": 300,
   "selection_quote_enabled": true,
   "selection_quote_max_chars": 2000,
@@ -74,7 +74,7 @@
   "attach_image_accept": "image/png,image/jpeg,image/webp,image/gif",
   "attach_image_max_count": 8,
   "attach_image_max_bytes": 5242880,
-  "prompt_library_storage_key": "agent-harness.prompt-library",
+  "prompt_library_storage_key": "jad.prompt-library",
   "session_search_max_results": 50,
   "chunk_size_warning_limit_kb": 700,
   "reasoning_title_max_length": 80,
@@ -93,8 +93,19 @@
   "transcript_page_turns": 5,
   "session_refresh_interval_ms_streaming": 5000,
   "session_views": [],
-  "session_views_storage_key": "agent-harness.session-views",
-  "session_groups_storage_key": "agent-harness.session-groups",
+  "session_views_storage_key": "jad.session-views",
+  "session_groups_storage_key": "jad.session-groups",
   "session_uncategorized_title": "Recent runs",
-  "session_views_max": 8
+  "session_views_max": 8,
+  "storage_key_migrations": [
+    {"from": "agent-harness.api-token", "to": "jad.api-token", "area": "session"},
+    {"from": "agent-harness.row-heights", "to": "jad.row-heights", "area": "local"},
+    {"from": "agent-harness.composer-drafts", "to": "jad.composer-drafts", "area": "local"},
+    {"from": "agent-harness.prompt-library", "to": "jad.prompt-library", "area": "local"},
+    {"from": "agent-harness.session-views", "to": "jad.session-views", "area": "local"},
+    {"from": "agent-harness.session-groups", "to": "jad.session-groups", "area": "local"},
+    {"from": "astryx-resizable:agent-harness-conversation-width", "to": "astryx-resizable:jad-conversation-width", "area": "local"},
+    {"from": "astryx-resizable:agent-harness-run-inspector", "to": "astryx-resizable:jad-run-inspector", "area": "local"},
+    {"from": "astryx-resizable:agent-harness-prompt-library", "to": "astryx-resizable:jad-prompt-library", "area": "local"}
+  ]
 }

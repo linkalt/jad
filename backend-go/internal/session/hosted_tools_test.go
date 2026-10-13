@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/openaiapi"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/openaiapi"
+	"jad/backend-go/internal/transcript"
 )
 
 func requestTools(t *testing.T, request json.RawMessage) []map[string]any {

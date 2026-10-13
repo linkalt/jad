@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/contentlibrary"
-	"example.com/agent-harness/backend-go/internal/httpapi"
+	"jad/backend-go/internal/contentlibrary"
+	"jad/backend-go/internal/httpapi"
 )
 
 // Service owns the HTTP adapter and filesystem resolver for one server

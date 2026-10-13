@@ -19,8 +19,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpSDK "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 type connection struct {
@@ -236,7 +236,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 
 	structuredCapture := newStructuredContentCapture()
 	transport = &structuredContentTransport{inner: transport, capture: structuredCapture}
-	client := mcpSDK.NewClient(&mcpSDK.Implementation{Name: "agent-harness-" + server.ID, Version: "1.0.0"}, nil)
+	client := mcpSDK.NewClient(&mcpSDK.Implementation{Name: "jad-" + server.ID, Version: "1.0.0"}, nil)
 	connectCtx, cancel := context.WithTimeout(ctx, config.timeout)
 	clientSession, err := client.Connect(connectCtx, transport, nil)
 	cancel()

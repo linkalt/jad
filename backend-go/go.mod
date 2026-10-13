@@ -1,4 +1,4 @@
-module example.com/agent-harness/backend-go
+module jad/backend-go
 
 go 1.26.0
 

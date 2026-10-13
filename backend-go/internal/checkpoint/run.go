@@ -3,7 +3,7 @@ package checkpoint
 import (
 	"encoding/json"
 
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/tools"
 )
 
 // CallChangesWorkspace reports whether a call can change files or start something

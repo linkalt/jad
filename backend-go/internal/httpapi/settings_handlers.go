@@ -38,7 +38,7 @@ func (h *Handler) handleSessionProfile(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	defer processUnlock()
-	info, err := h.settings.ReadPathProfileInfo(r.Context(), reference)
+	info, err := h.settings.ReadProfileInfo(r.Context(), reference)
 	if err != nil {
 		writeJSONError(w, err)
 		return
@@ -49,7 +49,7 @@ func (h *Handler) handleSessionProfile(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 	}
-	updated, err := h.settings.UpdatePathProfile(r.Context(), reference, activeProfile)
+	updated, err := h.settings.UpdateProfile(r.Context(), reference, activeProfile)
 	if err != nil {
 		writeJSONError(w, err)
 		return

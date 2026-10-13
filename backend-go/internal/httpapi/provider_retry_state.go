@@ -3,7 +3,7 @@ package httpapi
 import (
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/responses"
+	"jad/backend-go/internal/responses"
 )
 
 // providerRetryWait is the wire form of a retry the run is waiting on, the `waiting`

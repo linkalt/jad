@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // hostedToolsProvider is a fake Responses endpoint that answers like a provider with a
@@ -94,7 +94,7 @@ func TestHostedToolsReachTheProviderAndTheirItemsRoundTrip(t *testing.T) {
 	config, fixture := layoutConfig(t, layouttest.Spec{
 		CWD:    workspace,
 		Models: map[string]map[string]any{"openai/default": model([]any{map[string]any{"type": "web_search", "search_context_size": "low"}})},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"})
 	writeModel := func(hosted []any) {
 		data, _ := json.Marshal(model(hosted))
 		if err := os.WriteFile(filepath.Join(fixture.ModelsDir, "openai", "default.json"), data, 0o600); err != nil {

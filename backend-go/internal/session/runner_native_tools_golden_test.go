@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/responses"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
-	"example.com/agent-harness/backend-go/internal/tools/native"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/responses"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/tools/native"
+	"jad/backend-go/internal/transcript"
 )
 
 //go:embed testdata/native-write-edit.messages.jsonl

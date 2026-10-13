@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/imagedata"
-	"example.com/agent-harness/backend-go/internal/imagestore"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/imagedata"
+	"jad/backend-go/internal/imagestore"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 const readImageToolID = "native.read_image"

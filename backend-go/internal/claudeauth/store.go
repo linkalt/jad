@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionlock"
+	"jad/backend-go/internal/sessionlock"
 )
 
 // ExpiresAtLayout is the time format of expires_at and last_refresh in the file.

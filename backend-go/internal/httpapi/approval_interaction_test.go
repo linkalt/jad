@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/session"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/session"
+	"jad/backend-go/internal/tools"
 )
 
 func parseReply(t *testing.T, body string, kind tools.InteractionKind) (tools.InteractionReply, error) {

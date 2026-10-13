@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // A provider-hosted search must reach the Web UI both live (SSE) and from the
@@ -22,7 +22,7 @@ func TestHostedSearchReachesTheWebUIFromStreamAndSnapshot(t *testing.T) {
 	config, _ := layoutConfig(t, layouttest.Spec{
 		CWD:    workspace,
 		Models: map[string]map[string]any{"openai/default": map[string]any{"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1", "hosted_tools": []any{map[string]any{"type": "web_search"}}}},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatal(err)

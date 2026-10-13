@@ -13,10 +13,10 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/imageresize"
-	"example.com/agent-harness/backend-go/internal/responses"
-	"example.com/agent-harness/backend-go/internal/tools"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/imageresize"
+	"jad/backend-go/internal/responses"
+	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/transcript"
 )
 
 // bigPNGURL is a 400x400 gradient: large enough to be resized to 100 pixels.

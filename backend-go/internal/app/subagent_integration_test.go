@@ -20,8 +20,8 @@ import (
 
 	mcpSDK "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // subagentProvider is a fake Responses endpoint. It tells the parent run and the child
@@ -482,7 +482,7 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		spec.Settings[key] = value
 	}
 
-	environment := map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"}
+	environment := map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"}
 	parentModel := map[string]any{"provider": "openai", "model": "parent-model", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1"}
 	childModel := map[string]any{"provider": "openai", "model": "child-model", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1"}
 	for key, value := range childModelExtra {

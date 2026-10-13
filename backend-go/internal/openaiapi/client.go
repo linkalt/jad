@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	streamresponses "example.com/agent-harness/backend-go/internal/responses"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/ssestream"
 	sdkresponses "github.com/openai/openai-go/v3/responses"
+	streamresponses "jad/backend-go/internal/responses"
 )
 
 // Config configures the OpenAI-compatible Responses API client.

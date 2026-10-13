@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/transcript"
 )
 
 func newRunErrorSnapshotFixture(t *testing.T) (*Resolver, sessionfs.Location, sessionfs.SessionConfig) {

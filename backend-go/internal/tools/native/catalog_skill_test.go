@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 func writeSkillManifest(t *testing.T, directory string) string {

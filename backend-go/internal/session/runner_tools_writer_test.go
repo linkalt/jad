@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/checkpoint"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/checkpoint"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 // hookedCatalog holds a read-only tool that can still say a call changes files, the

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/transcript"
 )
 
 type turnStartsCache struct {

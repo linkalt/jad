@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/serverconfig"
+	"jad/backend-go/internal/serverconfig"
 )
 
 func BenchmarkRunContentCacheAppendAndSnapshot(b *testing.B) {

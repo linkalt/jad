@@ -1,8 +1,8 @@
 package httpapi
 
 import (
-	"example.com/agent-harness/backend-go/internal/tools"
-	"example.com/agent-harness/backend-go/internal/webui"
+	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/webui"
 )
 
 func (r *activeRun) canRequestInteraction() bool {

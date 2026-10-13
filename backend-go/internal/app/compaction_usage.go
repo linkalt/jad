@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/transcript"
-	"example.com/agent-harness/backend-go/internal/webui"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/transcript"
+	"jad/backend-go/internal/webui"
 )
 
 // compactPreservingUsage compacts the transcript without losing the session's

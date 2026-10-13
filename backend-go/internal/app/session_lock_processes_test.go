@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // These tests put the second server on the other side of a process boundary.
@@ -84,7 +84,7 @@ func TestAppLockHelperProcess(t *testing.T) {
 			fmt.Println("error:", err)
 			os.Exit(2)
 		}
-		_, err = resolver.UpdatePathProfile(ctx, "session-1", arg)
+		_, err = resolver.UpdateProfile(ctx, "session-1", arg)
 		release()
 		if err != nil {
 			fmt.Println("error:", err)
@@ -102,7 +102,7 @@ func TestAppLockHelperProcess(t *testing.T) {
 				fmt.Println("error:", err)
 				os.Exit(2)
 			}
-			_, err = resolver.UpdatePathProfile(ctx, "session-1", target)
+			_, err = resolver.UpdateProfile(ctx, "session-1", target)
 			release()
 			if err != nil {
 				fmt.Println("error:", err)

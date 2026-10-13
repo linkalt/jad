@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestLoadSessionConfigSelectsProfileModelAndStorage(t *testing.T) {
@@ -45,8 +45,8 @@ func TestLoadSessionConfigSelectsProfileModelAndStorage(t *testing.T) {
 	if active.SessionName != "session-1" || active.SettingPath != filepath.Join(fixture.SessionDir, "session.json") {
 		t.Errorf("session metadata = name %q, setting %q", active.SessionName, active.SettingPath)
 	}
-	if len(active.PathProfiles) != 2 || active.PathProfiles[0] != "dev/blue" || active.PathProfiles[1] != "dev/green" {
-		t.Errorf("path profiles = %#v", active.PathProfiles)
+	if len(active.Profiles) != 2 || active.Profiles[0] != "dev/blue" || active.Profiles[1] != "dev/green" {
+		t.Errorf("path profiles = %#v", active.Profiles)
 	}
 	if active.ModelDefault != "openai/alternate" || len(active.Models) != 2 {
 		t.Errorf("model selection metadata = default %q, models %#v", active.ModelDefault, active.Models)

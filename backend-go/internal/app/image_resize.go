@@ -1,9 +1,9 @@
 package app
 
 import (
-	"example.com/agent-harness/backend-go/internal/imageresize"
-	"example.com/agent-harness/backend-go/internal/imagestore"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/imageresize"
+	"jad/backend-go/internal/imagestore"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // newImageResizer builds the resizer of one run from the session's image_resize setting.

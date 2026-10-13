@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 func nativeGrepSettings(binary string) sessionfs.NativeGrepSettings {
@@ -311,9 +311,9 @@ func TestNativeGrepReportsUnavailableExecutable(t *testing.T) {
 }
 
 func TestEnvironmentWithoutServerToken(t *testing.T) {
-	t.Setenv("AGENT_API_TOKEN", "test-secret")
+	t.Setenv("JAD_API_TOKEN", "test-secret")
 	for _, value := range environmentWithoutServerToken() {
-		if strings.HasPrefix(value, "AGENT_API_TOKEN=") {
+		if strings.HasPrefix(value, "JAD_API_TOKEN=") {
 			t.Fatalf("server token leaked into child environment: %q", value)
 		}
 	}

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/serverconfig"
+	"jad/backend-go/internal/serverconfig"
 )
 
 const (

@@ -13,10 +13,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
-	"example.com/agent-harness/backend-go/internal/tools/native"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/tools/native"
+	"jad/backend-go/internal/transcript"
 )
 
 func TestHTTPRunAutomaticallyCompactsAndPersistsStateContext(t *testing.T) {
@@ -84,7 +84,7 @@ func TestHTTPRunAutomaticallyCompactsAndPersistsStateContext(t *testing.T) {
 		},
 		Native: map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "statecontext": map[string]any{"states": []string{"exited"}, "limit": 5}}},
 		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	messages := strings.Join([]string{
 		`{"type":"message","role":"user","content":[{"type":"input_text","text":"old context"}]}`,
 		`{"type":"response.completed","response":{"id":"resp_old","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old answer"}]}]}}`,

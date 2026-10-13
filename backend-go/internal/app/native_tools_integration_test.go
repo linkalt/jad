@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
-	"example.com/agent-harness/backend-go/internal/tools/native"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/tools/native"
 )
 
 func TestHTTPRunExecutesConfiguredNativeReadAndContinuesProviderRound(t *testing.T) {
@@ -110,7 +110,7 @@ func TestHTTPRunExecutesConfiguredNativeReadAndContinuesProviderRound(t *testing
 		Settings:            map[string]any{"max_tool_rounds": 2},
 		Native:              map[string]any{"read": map[string]any{"max_bytes": 1024, "max_file_bytes": 4096, "default_limit": 250}},
 		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -283,7 +283,7 @@ func TestHTTPRunExecutesConfiguredNativeWriteAndEditAcrossRounds(t *testing.T) {
 		Settings:            map[string]any{"max_tool_rounds": 3},
 		Native:              map[string]any{"write": map[string]any{"max_bytes": 1024}, "edit": map[string]any{"max_bytes": 1024}},
 		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)

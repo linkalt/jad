@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools/native"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools/native"
 )
 
 const stateContextTestPreamble = sessionfs.DefaultStateContextHeader + "\n"

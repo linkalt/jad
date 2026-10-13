@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/imagestore"
+	"jad/backend-go/internal/imagestore"
 )
 
 // imagePlaceholder stands in for the text of a user message that has images and no text,

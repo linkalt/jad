@@ -26,7 +26,7 @@ export interface ComposerDesync {
 }
 
 /** The event the app listens for, so the evidence reaches the notifications. */
-export const COMPOSER_DESYNC_EVENT = 'agent-harness:composer-desync';
+export const COMPOSER_DESYNC_EVENT = 'jad:composer-desync';
 
 /** How many composer operations are kept as breadcrumbs. */
 export const BREADCRUMB_LIMIT = 8;

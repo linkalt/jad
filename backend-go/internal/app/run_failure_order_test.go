@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // A run stores the user message first and only then reads the model file,
@@ -39,7 +39,7 @@ func TestRunStoresInputBeforeModelToolsAndCredentialAreResolved(t *testing.T) {
 	first := strings.ReplaceAll(cases[0].name, " ", "-")
 	config, fixture := layoutConfig(t, layouttest.Spec{
 		SessionID: first, Models: models, Profiles: profiles, ActiveProfile: "dev/" + first,
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_KEY": "k"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_KEY": "k"})
 	for _, test := range cases[1:] {
 		name := strings.ReplaceAll(test.name, " ", "-")
 		fixture.AddSessionOn(t, name, fixture.CWD, "dev/"+name)

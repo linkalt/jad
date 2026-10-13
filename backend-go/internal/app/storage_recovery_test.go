@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
-	"example.com/agent-harness/backend-go/internal/tools/native"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/tools/native"
 )
 
 // orphan is a real sleep that a "crashed server" left running, with the manifest and
@@ -420,7 +420,7 @@ func serviceConfig(t *testing.T, f recoveryFixture, server string) Config {
 	config, err := LoadConfig(sessionfs.LoadOptions{
 		WorkingDir:      f.layout.Root,
 		RootSettingPath: f.layout.RootSetting,
-		Environment:     map[string]string{"AGENT_API_TOKEN": integrationAPIToken},
+		Environment:     map[string]string{"JAD_API_TOKEN": integrationAPIToken},
 	})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)

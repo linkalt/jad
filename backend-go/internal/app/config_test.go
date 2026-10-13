@@ -3,10 +3,11 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 func TestLoadConfigAppliesRootSettingsAndEnvironmentOverrides(t *testing.T) {
@@ -18,9 +19,9 @@ func TestLoadConfigAppliesRootSettingsAndEnvironmentOverrides(t *testing.T) {
 	config, err := LoadConfig(sessionfs.LoadOptions{
 		WorkingDir: cwd,
 		Environment: map[string]string{
-			"AGENT_API_TOKEN": integrationAPIToken,
-			"HOST":            "localhost",
-			"PORT":            "0",
+			"JAD_API_TOKEN": integrationAPIToken,
+			"HOST":          "localhost",
+			"PORT":          "0",
 		},
 	})
 	if err != nil {
@@ -59,6 +60,17 @@ func TestLoadConfigRejectsInvalidPortAndServiceRequiresToken(t *testing.T) {
 		t.Fatalf("LoadConfig(defaults) error = %v", err)
 	}
 	if _, err := NewService(config); err == nil {
-		t.Fatal("NewService() without AGENT_API_TOKEN succeeded")
+		t.Fatal("NewService() without JAD_API_TOKEN succeeded")
+	}
+}
+
+func TestLoadConfigRejectsLegacyAPITokenName(t *testing.T) {
+	cwd := t.TempDir()
+	_, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken}})
+	if err == nil || !strings.Contains(err.Error(), "JAD_API_TOKEN") || !strings.Contains(err.Error(), "AGENT_API_TOKEN") {
+		t.Fatalf("LoadConfig(legacy token only) error = %v, want one naming both variables", err)
+	}
+	if _, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"AGENT_API_TOKEN": "old", "JAD_API_TOKEN": integrationAPIToken}}); err != nil {
+		t.Fatalf("LoadConfig(both set) error = %v, want success", err)
 	}
 }

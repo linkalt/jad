@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
@@ -58,7 +58,7 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 		ActiveProfile: "dev/green",
 		Native:        map[string]any{"read": map[string]any{"paths": []map[string]string{{"action": "deny", "path": filepath.Join(projectDir, "private")}}}},
 		Settings:      map[string]any{"persistence": map[string]any{"durability": "process"}},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "fixture-key"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "fixture-key"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -92,7 +92,7 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 	}
 	var profileUpdate struct {
 		ActiveProfile string   `json:"active_profile"`
-		PathProfiles  []string `json:"path_profiles"`
+		Profiles      []string `json:"profiles"`
 		ModelDefault  string   `json:"model_default"`
 		Models        []string `json:"models"`
 		Changed       bool     `json:"changed"`
@@ -100,7 +100,7 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 	if err := json.Unmarshal(profileBody, &profileUpdate); err != nil {
 		t.Fatal(err)
 	}
-	if profileUpdate.ActiveProfile != "dev/blue" || !reflect.DeepEqual(profileUpdate.PathProfiles, []string{"dev/blue", "dev/green"}) || profileUpdate.ModelDefault != "openai/model" || !reflect.DeepEqual(profileUpdate.Models, []string{"openai/model"}) || !profileUpdate.Changed {
+	if profileUpdate.ActiveProfile != "dev/blue" || !reflect.DeepEqual(profileUpdate.Profiles, []string{"dev/blue", "dev/green"}) || profileUpdate.ModelDefault != "openai/model" || !reflect.DeepEqual(profileUpdate.Models, []string{"openai/model"}) || !profileUpdate.Changed {
 		t.Fatalf("profile update = %+v", profileUpdate)
 	}
 
@@ -143,7 +143,7 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 	}
 	var modelUpdate struct {
 		ActiveProfile string   `json:"active_profile"`
-		PathProfiles  []string `json:"path_profiles"`
+		Profiles      []string `json:"profiles"`
 		ModelDefault  string   `json:"model_default"`
 		Models        []string `json:"models"`
 		Model         struct {
@@ -175,7 +175,7 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 func TestHTTPSettingsRequestsRespectBodyLimit(t *testing.T) {
 	config, _ := layoutConfig(t, layouttest.Spec{
 		SessionID: "missing", Server: map[string]any{"max_body_bytes": 32, "sse_max_buffered_bytes": 4096, "max_inline_part_bytes": 64},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -235,7 +235,7 @@ func TestHTTPSessionFilesRouteIsForbiddenWhenDisabled(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			config, _ := layoutConfig(t, layouttest.Spec{SessionID: "files", CWD: projectDir, Settings: tc.settings},
-				map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+				map[string]string{"JAD_API_TOKEN": integrationAPIToken})
 			service, err := NewService(config)
 			if err != nil {
 				t.Fatalf("NewService() error = %v", err)

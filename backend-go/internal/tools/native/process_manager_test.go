@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 func TestProcessManagerPersistsBoundedLogsAndRecoversManifest(t *testing.T) {

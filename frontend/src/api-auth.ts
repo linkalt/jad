@@ -63,7 +63,7 @@ export function createAuthenticatedFetch(
   }
   const askForToken = async (): Promise<string | null> => {
     if (typeof window === 'undefined' || typeof window.prompt !== 'function') return null;
-    tokenPrompt ??= Promise.resolve().then(() => window.prompt('Enter the backend API token (AGENT_API_TOKEN):'))
+    tokenPrompt ??= Promise.resolve().then(() => window.prompt('Enter the backend API token (JAD_API_TOKEN):'))
       .finally(() => { tokenPrompt = undefined; });
     return tokenPrompt;
   };

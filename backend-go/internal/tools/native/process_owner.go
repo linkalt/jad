@@ -1,6 +1,6 @@
 package native
 
-import "example.com/agent-harness/backend-go/internal/tools"
+import "jad/backend-go/internal/tools"
 
 // processOwnership is what a process manager must offer to be shared with sub-agents:
 // who started a process, and a way to stop everything one owner started.

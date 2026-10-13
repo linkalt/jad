@@ -15,8 +15,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 const bashToolID = "native.bash"
@@ -321,7 +321,7 @@ func bashArgumentInteger(value any) (int64, bool) {
 }
 
 func buildNativeBashEnvironment(base []string, settings sessionfs.NativeBashSettings, apiKeyEnv string) []string {
-	denied := map[string]struct{}{"AGENT_API_TOKEN": {}}
+	denied := map[string]struct{}{"JAD_API_TOKEN": {}}
 	if apiKeyEnv != "" {
 		denied[apiKeyEnv] = struct{}{}
 	}

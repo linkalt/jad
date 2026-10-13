@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // The catalog layout has no "tools" node: the toolset file holds `native` and `mcp`

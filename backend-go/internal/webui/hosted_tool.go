@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"example.com/agent-harness/backend-go/internal/imagestore"
+	"jad/backend-go/internal/imagestore"
 )
 
 // handledItemTypes are the response output items the reducers already turn into

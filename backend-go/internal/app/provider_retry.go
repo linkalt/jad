@@ -4,8 +4,8 @@ import (
 	"log/slog"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/openaiapi"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/openaiapi"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // providerRetryConfig turns the session's provider_retry setting into the client's retry

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 const integrationAPIToken = "0123456789abcdef0123456789abcdef"
@@ -51,7 +51,7 @@ func TestMultiRootHTTPRunUsesQualifiedSessionAndGoldenTranscript(t *testing.T) {
 		Server:   map[string]any{"max_body_bytes": 4096, "sse_max_buffered_bytes": 4096, "max_inline_part_bytes": 3},
 		Settings: sharedSettings,
 		Models:   map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	fixture.AddSessionInRoot(t, "beta", "second", fixture.CWD, "dev/coder", sharedSettings)
 	alphaLocation, err := sessionfs.Resolve(config.Roots, "alpha:shared")
 	if err != nil {

@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/contentlibrary"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/contentlibrary"
+	"jad/backend-go/internal/sessionfs"
 )
 
 func TestRootLibraryHTTPRoutesMatchFrontendContract(t *testing.T) {
@@ -23,7 +23,7 @@ func TestRootLibraryHTTPRoutesMatchFrontendContract(t *testing.T) {
 
 	config, err := LoadConfig(sessionfs.LoadOptions{
 		WorkingDir:  workspace,
-		Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken},
+		Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken},
 	})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)

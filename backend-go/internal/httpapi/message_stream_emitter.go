@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/logging"
-	"example.com/agent-harness/backend-go/internal/webui"
+	"jad/backend-go/internal/logging"
+	"jad/backend-go/internal/webui"
 )
 
 // messageStreamEmitter coalesces append-only Web UI snapshots while preserving

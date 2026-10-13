@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 func subagentSettingsFor(subagent string) map[string]json.RawMessage {

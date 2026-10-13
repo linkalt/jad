@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/imagestore"
+	"jad/backend-go/internal/imagestore"
 )
 
 // NormalizeTranscript converts JSONL transcript entries into frontend messages.

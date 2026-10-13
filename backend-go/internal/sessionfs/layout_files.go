@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/catalog"
+	"jad/backend-go/internal/catalog"
 )
 
 // Layout is where the catalog layout keeps its files (sample/jad shows one). Every

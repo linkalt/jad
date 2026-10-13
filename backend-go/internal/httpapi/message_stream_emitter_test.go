@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/webui"
+	"jad/backend-go/internal/webui"
 )
 
 func TestMessageStreamEmitterCoalescesTextAndFlushesStructuralChange(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"example.com/agent-harness/backend-go/internal/serverconfig"
+	"jad/backend-go/internal/serverconfig"
 )
 
 // Settings selects the level, encoding and destination of the logger. The zero

@@ -10,13 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/contentlibrary"
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/logging"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/contentlibrary"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/logging"
+	"jad/backend-go/internal/sessionfs"
 )
 
-const apiTokenEnvironmentName = "AGENT_API_TOKEN"
+const apiTokenEnvironmentName = "JAD_API_TOKEN"
+const legacyAPITokenEnvironmentName = "AGENT_API_TOKEN"
 
 // Config contains all runtime dependencies and settings loaded before serving.
 type Config struct {
@@ -48,6 +49,11 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 		environment = currentEnvironment()
 	}
 	options.Environment = environment
+	if _, hasNew := environment[apiTokenEnvironmentName]; !hasNew {
+		if _, hasOld := environment[legacyAPITokenEnvironmentName]; hasOld {
+			return Config{}, fmt.Errorf("%s is no longer read; set %s instead", legacyAPITokenEnvironmentName, apiTokenEnvironmentName)
+		}
+	}
 	loaded, err := sessionfs.Load(options)
 	if err != nil {
 		return Config{}, err

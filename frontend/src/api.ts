@@ -223,7 +223,7 @@ export interface SessionSnapshot {
   /** The session's category (session.json); absent when it has none. */
   category?: string;
   active_profile?: string;
-  path_profiles?: string[];
+  profiles?: string[];
   model_default?: string;
   models?: string[];
   front_compaction?: {enabled: boolean; delete_mode: 'permanent' | 'recoverable'};
@@ -255,9 +255,9 @@ export interface SessionSnapshot {
   failures?: SessionRunFailure[];
 }
 
-export interface SessionPathProfileUpdate {
+export interface SessionProfileUpdate {
   active_profile: string;
-  path_profiles: string[];
+  profiles: string[];
   model_default?: string;
   models?: string[];
   changed: boolean;
@@ -265,7 +265,7 @@ export interface SessionPathProfileUpdate {
 
 export interface SessionPathModelDefaultUpdate {
   active_profile: string;
-  path_profiles: string[];
+  profiles: string[];
   model_default: string;
   models: string[];
   model: {provider: string; model: string};
@@ -408,10 +408,10 @@ export async function fetchSession(
  * snapshot a committed step produces. A `304` means the held copy is still the
  * one the server would send.
  */
-export async function updateSessionPathProfile(
+export async function updateSessionProfile(
   sessionRef: string,
   activeProfile: string,
-): Promise<SessionPathProfileUpdate> {
+): Promise<SessionProfileUpdate> {
   const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/profile`),
     {
@@ -427,8 +427,8 @@ export async function updateSessionPathProfile(
   if (
     !isRecord(value) ||
     typeof value.active_profile !== 'string' ||
-    !Array.isArray(value.path_profiles) ||
-    !value.path_profiles.every(profile => typeof profile === 'string') ||
+    !Array.isArray(value.profiles) ||
+    !value.profiles.every(profile => typeof profile === 'string') ||
     typeof value.changed !== 'boolean' ||
     (value.model_default !== undefined && typeof value.model_default !== 'string') ||
     (value.models !== undefined &&
@@ -436,7 +436,7 @@ export async function updateSessionPathProfile(
   ) {
     throw new Error('the server returned invalid session path profile settings');
   }
-  return value as unknown as SessionPathProfileUpdate;
+  return value as unknown as SessionProfileUpdate;
 }
 
 export async function updateSessionProfileModelDefault(
@@ -459,8 +459,8 @@ export async function updateSessionProfileModelDefault(
   if (
     !isRecord(value) ||
     typeof value.active_profile !== 'string' ||
-    !Array.isArray(value.path_profiles) ||
-    !value.path_profiles.every(profile => typeof profile === 'string') ||
+    !Array.isArray(value.profiles) ||
+    !value.profiles.every(profile => typeof profile === 'string') ||
     typeof value.model_default !== 'string' ||
     !Array.isArray(value.models) ||
     !value.models.every(model => typeof model === 'string') ||

@@ -1,6 +1,6 @@
 package native
 
-import "example.com/agent-harness/backend-go/internal/tools"
+import "jad/backend-go/internal/tools"
 
 // reportFileChange tells the call's OnFileChange hook, if any, that a file was changed.
 func reportFileChange(execution tools.ExecutionContext, path, action string) {

@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/tools"
 )
 
 // profileSession is the extra session setting of a profile with a tools block.

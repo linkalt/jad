@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/tools"
 )
 
 func executeBashWithStdin(t *testing.T, root, callID, command, stdin string, settingsLimit int64) string {

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/session"
+	"jad/backend-go/internal/session"
 )
 
 // slowRunner stays quiet for the given duration, like a long tool call, then

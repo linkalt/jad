@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 func execTestSettings() sessionfs.NativeExecSettings {
@@ -266,8 +266,8 @@ func TestExecUsesBashsEnvironmentAndNeverShowsTheHarnessCredential(t *testing.T)
 	root := t.TempDir()
 	bash := bashTestSettings(t, root)
 	bash.Env["EXEC_VISIBLE"] = "yes"
-	t.Setenv("AGENT_API_TOKEN", "secret-token-value")
-	result := runExec(t, root, execTestSettings(), bash, map[string]any{"lang": "bash", "code": `echo "visible=$EXEC_VISIBLE token=${AGENT_API_TOKEN:-none}"`})
+	t.Setenv("JAD_API_TOKEN", "secret-token-value")
+	result := runExec(t, root, execTestSettings(), bash, map[string]any{"lang": "bash", "code": `echo "visible=$EXEC_VISIBLE token=${JAD_API_TOKEN:-none}"`})
 	if got := execContent(result); got != "visible=yes token=none\n" {
 		t.Fatalf("content = %q", got)
 	}

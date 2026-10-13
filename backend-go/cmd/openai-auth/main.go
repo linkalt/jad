@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/openaiauth"
+	"jad/backend-go/internal/openaiauth"
 )
 
 // Exit statuses. status uses 0, 1 and 2 as documented in the README; the other commands use

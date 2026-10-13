@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // A provider-hosted fetch is not special-cased anywhere: its item reaches the Web
@@ -47,7 +47,7 @@ func TestHostedFetchReachesTheWebUIAsAGenericCappedPart(t *testing.T) {
 		CWD:    workspace,
 		Server: map[string]any{"max_inline_part_bytes": inlineCap},
 		Models: map[string]map[string]any{"openai/default": map[string]any{"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1", "hosted_tools": []any{map[string]any{"type": "web_fetch"}}}},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "k"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatal(err)

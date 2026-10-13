@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/tools"
 )
 
 // Broker owns at most one user decision for a run and publishes pending state

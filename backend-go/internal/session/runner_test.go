@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/memorytrace"
-	"example.com/agent-harness/backend-go/internal/openaiapi"
-	"example.com/agent-harness/backend-go/internal/responses"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/memorytrace"
+	"jad/backend-go/internal/openaiapi"
+	"jad/backend-go/internal/responses"
+	"jad/backend-go/internal/transcript"
 )
 
 func TestNormalizeInputAndBuildRequest(t *testing.T) {

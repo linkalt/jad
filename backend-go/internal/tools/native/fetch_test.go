@@ -18,8 +18,8 @@ import (
 
 	htmltomarkdown "github.com/xberg-io/html-to-markdown/packages/go/v3"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 type staticFetchResolver struct {

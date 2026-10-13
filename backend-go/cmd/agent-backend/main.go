@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"syscall"
 
-	"example.com/agent-harness/backend-go/internal/app"
-	"example.com/agent-harness/backend-go/internal/logging"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/app"
+	"jad/backend-go/internal/logging"
+	"jad/backend-go/internal/sessionfs"
 )
 
 func main() {

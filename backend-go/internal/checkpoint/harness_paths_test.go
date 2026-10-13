@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 func containsPath(paths []string, want string) bool {

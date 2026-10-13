@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 const preCompactTranscript = `{"type":"message","role":"user","content":[{"type":"input_text","text":"old context"}]}
@@ -36,7 +36,7 @@ func startPreCompactService(t *testing.T, settings map[string]any, provider *htt
 	if provider != nil {
 		spec.Models["openai/default"]["base_url"] = provider.URL + "/v1"
 	}
-	config, fixture := layoutConfig(t, spec, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	config, fixture := layoutConfig(t, spec, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	config.HTTP.Logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	messagesPath := filepath.Join(profileState(fixture), "messages.jsonl")
 	if err := os.MkdirAll(filepath.Dir(messagesPath), 0o755); err != nil {

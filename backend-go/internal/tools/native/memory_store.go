@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 var (

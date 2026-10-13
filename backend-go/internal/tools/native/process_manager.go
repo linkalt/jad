@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 type ProcessState string
@@ -668,7 +668,7 @@ func buildNativeProcessEnvironment(base []string, overrides map[string]string, a
 	for name, value := range overrides {
 		values[name] = value
 	}
-	delete(values, "AGENT_API_TOKEN")
+	delete(values, "JAD_API_TOKEN")
 	if apiKeyEnv != "" {
 		delete(values, apiKeyEnv)
 	}

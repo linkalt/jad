@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionlock"
+	"jad/backend-go/internal/sessionlock"
 )
 
 // File is the credential file. Keys this tool does not know are kept and written back, because

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	streamresponses "example.com/agent-harness/backend-go/internal/responses"
 	openai "github.com/openai/openai-go/v3"
+	streamresponses "jad/backend-go/internal/responses"
 )
 
 func apiError(status int, headers map[string]string) error {

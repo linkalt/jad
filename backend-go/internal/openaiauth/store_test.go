@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/openaioauth"
+	"jad/backend-go/internal/openaioauth"
 )
 
 var fixedNow = time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)

@@ -17,13 +17,13 @@ import (
 	"strings"
 	"sync"
 
-	"example.com/agent-harness/backend-go/internal/checkpoint"
-	"example.com/agent-harness/backend-go/internal/imageresize"
-	"example.com/agent-harness/backend-go/internal/imagestore"
-	"example.com/agent-harness/backend-go/internal/memorytrace"
-	"example.com/agent-harness/backend-go/internal/responses"
-	"example.com/agent-harness/backend-go/internal/tools"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/checkpoint"
+	"jad/backend-go/internal/imageresize"
+	"jad/backend-go/internal/imagestore"
+	"jad/backend-go/internal/memorytrace"
+	"jad/backend-go/internal/responses"
+	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/transcript"
 )
 
 const maxSafeJSONInteger int64 = 9007199254740991

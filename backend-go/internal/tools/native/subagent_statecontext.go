@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // SubagentStateContext is the subagent provider section of a compaction snapshot. It

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // loadProfileTools loads a layout session with profiles dev/lean (the given file) and

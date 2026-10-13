@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/logging"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/logging"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // File names under the session staging directory.

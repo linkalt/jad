@@ -13,8 +13,8 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 const requestDraftToolID = "native.request_draft"

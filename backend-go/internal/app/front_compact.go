@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/transcript"
 )
 
 func (m boundMutation) FrontCompact(ctx context.Context, messageID string) (httpapi.FrontCompactionResponse, error) {

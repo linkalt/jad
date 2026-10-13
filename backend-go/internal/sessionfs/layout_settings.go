@@ -8,22 +8,22 @@ import (
 	"path/filepath"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/catalog"
+	"jad/backend-go/internal/catalog"
 )
 
 // ReadLayoutProfileInfo returns the profiles a catalog-layout session offers and its
 // active profile, both as <category>/<name> IDs.
-func ReadLayoutProfileInfo(location Location) (PathProfileInfo, error) {
+func ReadLayoutProfileInfo(location Location) (ProfileInfo, error) {
 	layout := *location.Root.Layout
 	session, err := readLayoutSession(location)
 	if err != nil {
-		return PathProfileInfo{}, err
+		return ProfileInfo{}, err
 	}
 	profiles, err := scopedProfiles(layout, session, location.SettingFile())
 	if err != nil {
-		return PathProfileInfo{}, err
+		return ProfileInfo{}, err
 	}
-	return PathProfileInfo{ActiveProfile: session.ActiveProfile, PathProfiles: profiles.IDs()}, nil
+	return ProfileInfo{ActiveProfile: session.ActiveProfile, Profiles: profiles.IDs()}, nil
 }
 
 func readLayoutSession(location Location) (layoutSessionFile, error) {
@@ -49,35 +49,35 @@ func scopedProfiles(layout Layout, session layoutSessionFile, sessionPath string
 }
 
 // SetLayoutActiveProfile makes profile the session's active profile in session.json.
-func SetLayoutActiveProfile(location Location, profile string, durability string) (PathProfileUpdate, error) {
+func SetLayoutActiveProfile(location Location, profile string, durability string) (ProfileUpdate, error) {
 	layout := *location.Root.Layout
 	sessionPath := location.SettingFile()
 	setting, err := readSessionObject(sessionPath)
 	if err != nil {
-		return PathProfileUpdate{}, err
+		return ProfileUpdate{}, err
 	}
 	session, err := readLayoutSession(location)
 	if err != nil {
-		return PathProfileUpdate{}, err
+		return ProfileUpdate{}, err
 	}
 	profiles, err := scopedProfiles(layout, session, sessionPath)
 	if err != nil {
-		return PathProfileUpdate{}, err
+		return ProfileUpdate{}, err
 	}
 	profile = strings.TrimSpace(profile)
 	if _, found := profiles.Get(profile); !found {
-		return PathProfileUpdate{}, &ClientError{Message: fmt.Sprintf("profile '%s' is not available to this session; available: %s", profile, strings.Join(profiles.IDs(), ", "))}
+		return ProfileUpdate{}, &ClientError{Message: fmt.Sprintf("profile '%s' is not available to this session; available: %s", profile, strings.Join(profiles.IDs(), ", "))}
 	}
 	changed := session.ActiveProfile != profile
 	if changed {
 		if setting["active_profile"], err = json.Marshal(profile); err != nil {
-			return PathProfileUpdate{}, err
+			return ProfileUpdate{}, err
 		}
 		if err := writeSessionSettingsAtomic(sessionPath, setting, durability == "strict"); err != nil {
-			return PathProfileUpdate{}, fmt.Errorf("write session profile: %w", err)
+			return ProfileUpdate{}, fmt.Errorf("write session profile: %w", err)
 		}
 	}
-	return PathProfileUpdate{ActiveProfile: profile, PathProfiles: profiles.IDs(), Changed: changed}, nil
+	return ProfileUpdate{ActiveProfile: profile, Profiles: profiles.IDs(), Changed: changed}, nil
 }
 
 // ConflictError reports that a file changed between the read and the write of an update,
@@ -133,7 +133,7 @@ func SetLayoutModelDefault(location Location, profile, model string, durability 
 	if _, offered := models.Get(model); !offered {
 		return ModelDefaultUpdate{}, &ClientError{Message: fmt.Sprintf("model '%s' is not offered by profile '%s'", model, profile)}
 	}
-	update := ModelDefaultUpdate{ActiveProfile: profile, PathProfiles: profiles.IDs(), ModelDefault: model, Changed: file.ModelDefault != model}
+	update := ModelDefaultUpdate{ActiveProfile: profile, Profiles: profiles.IDs(), ModelDefault: model, Changed: file.ModelDefault != model}
 	if !update.Changed {
 		return update, nil
 	}

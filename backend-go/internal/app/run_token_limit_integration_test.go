@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
-	"example.com/agent-harness/backend-go/internal/tools/native"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/tools/native"
 )
 
 // tokenCapFixture is one session with a real read tool whose provider asks for another
@@ -84,7 +84,7 @@ func newTokenCapFixture(t *testing.T, maxRunTokens string, finalAfter int32) *to
 		Native:   map[string]any{"read": map[string]any{"max_bytes": 1024, "max_file_bytes": 4096, "default_limit": 250}},
 		Settings: settings,
 		Models:   map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
-	}, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	location, err := sessionfs.Resolve(config.Roots, "local:demo")
 	if err != nil {
 		t.Fatal(err)

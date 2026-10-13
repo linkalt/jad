@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/rootsetting"
-	"example.com/agent-harness/backend-go/internal/serverconfig"
+	"jad/backend-go/internal/rootsetting"
+	"jad/backend-go/internal/serverconfig"
 )
 
 var (

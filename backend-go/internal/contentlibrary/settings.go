@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"example.com/agent-harness/backend-go/internal/rootsetting"
+	"jad/backend-go/internal/rootsetting"
 )
 
 //go:embed library_defaults.json

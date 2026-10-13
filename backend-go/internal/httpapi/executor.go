@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/logging"
-	"example.com/agent-harness/backend-go/internal/responses"
-	"example.com/agent-harness/backend-go/internal/session"
-	"example.com/agent-harness/backend-go/internal/tools"
-	"example.com/agent-harness/backend-go/internal/transcript"
-	"example.com/agent-harness/backend-go/internal/webui"
+	"jad/backend-go/internal/logging"
+	"jad/backend-go/internal/responses"
+	"jad/backend-go/internal/session"
+	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/transcript"
+	"jad/backend-go/internal/webui"
 )
 
 type webUIPart = webui.Part

@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools/native"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools/native"
+	"jad/backend-go/internal/transcript"
 )
 
 func (r *Resolver) ResolveMaintenance(ctx context.Context, reference, profile string) (httpapi.ResolvedMutation, error) {

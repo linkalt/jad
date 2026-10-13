@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // ProcessStateSource is the small process-manager view used by the

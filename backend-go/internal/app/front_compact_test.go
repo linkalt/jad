@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs"
 )
 
 func TestHTTPFrontCompactArchivesSelectedTailAndInvalidatesCaches(t *testing.T) {
@@ -170,7 +170,7 @@ func newFrontCompactService(t *testing.T, frontSetting string) (*Service, string
 		"persistence": map[string]any{"durability": "process", "max_item_bytes": 1048576, "response_metadata": "full"},
 	}, "")
 	spec.RawSettings = map[string]json.RawMessage{"front_compaction": json.RawMessage(frontSetting)}
-	config, _ := layoutConfig(t, spec, map[string]string{"AGENT_API_TOKEN": integrationAPIToken})
+	config, _ := layoutConfig(t, spec, map[string]string{"JAD_API_TOKEN": integrationAPIToken})
 	location, err := sessionfs.Resolve(config.Roots, "local:one")
 	if err != nil {
 		t.Fatal(err)

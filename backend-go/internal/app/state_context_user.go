@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"example.com/agent-harness/backend-go/internal/httpapi"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // StateContext fires the user trigger with a prompt typed by the user.

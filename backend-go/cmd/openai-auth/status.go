@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/openaiauth"
+	"jad/backend-go/internal/openaiauth"
 )
 
 func runStatus(args []string, stdout, stderr io.Writer, now func() time.Time) int {

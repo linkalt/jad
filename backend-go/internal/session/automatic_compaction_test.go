@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/agent-harness/backend-go/internal/responses"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/responses"
+	"jad/backend-go/internal/transcript"
 )
 
 func TestRunnerAutomaticallyCompactsBeforeToolRoundAndRefreshesStateContext(t *testing.T) {

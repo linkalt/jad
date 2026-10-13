@@ -5,9 +5,9 @@ import (
 	"errors"
 	"log/slog"
 
-	"example.com/agent-harness/backend-go/internal/session"
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools/native"
+	"jad/backend-go/internal/session"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools/native"
 )
 
 // fireRunHook runs the run_start or run_end commands of the session and writes each

@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/sessionfs/layouttest"
-	"example.com/agent-harness/backend-go/internal/tools/native"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/tools/native"
 )
 
 // providerStep is one scripted provider response: a function call, a final
@@ -135,7 +135,7 @@ func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *check
 		spec.SessionsDir = filepath.Join(workspace, ".jad", "sessions")
 		spec.StateDir = filepath.Join(workspace, ".jad", "state")
 	}
-	config, layout := layoutConfig(t, spec, map[string]string{"AGENT_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	config, layout := layoutConfig(t, spec, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	fixture.sessionDir = layout.SessionDir
 	fixture.stateDir = profileState(layout)
 	service, err := NewService(config)

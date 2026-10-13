@@ -59,7 +59,7 @@ import {
   fetchSessionHistory,
   fetchSessionMessage,
   fetchSessions,
-  updateSessionPathProfile,
+  updateSessionProfile,
   updateSessionProfileModelDefault,
   stopSessionRun,
   streamSessionRun,
@@ -413,7 +413,7 @@ interface Session {
   /** Groups sessions in the list; absent when the session has none. */
   category?: string;
   activeProfile?: string;
-  pathProfiles?: string[];
+  profiles?: string[];
   modelDefault?: string;
   models?: string[];
   frontCompaction?: SessionSnapshot['front_compaction'];
@@ -777,7 +777,7 @@ function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
     ...(snapshot.root_label ? {rootLabel: snapshot.root_label} : {}),
     ...(snapshot.category ? {category: snapshot.category} : {}),
     ...(snapshot.active_profile === undefined ? {} : {activeProfile: snapshot.active_profile}),
-    ...(snapshot.path_profiles === undefined ? {} : {pathProfiles: snapshot.path_profiles}),
+    ...(snapshot.profiles === undefined ? {} : {profiles: snapshot.profiles}),
     ...(snapshot.model_default === undefined ? {} : {modelDefault: snapshot.model_default}),
     ...(snapshot.models === undefined ? {} : {models: snapshot.models}),
     ...(snapshot.front_compaction === undefined
@@ -2650,7 +2650,7 @@ function App() {
     minSize: pixel(appConfig.conversation_lane_min_size),
     maxSize: pixel(appConfig.conversation_lane_max_size),
     direction: 'horizontal',
-    autoSaveId: 'agent-harness-conversation-width',
+    autoSaveId: 'jad-conversation-width',
   });
   // The in-flight assistant bubble is rendered here rather than through
   // AssistantMessage, so it measures its own row width for title fitting.
@@ -2661,7 +2661,7 @@ function App() {
     minSize: pixel(appConfig.inspector_min_size),
     maxSize: pixel(appConfig.inspector_max_size),
     direction: 'horizontal',
-    autoSaveId: 'agent-harness-run-inspector',
+    autoSaveId: 'jad-run-inspector',
   });
   // The left-hand counterpart of the inspector, hosting whichever workspace
   // dataset is selected. One region serves them all, so the width the user
@@ -2671,7 +2671,7 @@ function App() {
     minSize: pixel(appConfig.left_panel_min_size),
     maxSize: pixel(appConfig.left_panel_max_size),
     direction: 'horizontal',
-    autoSaveId: 'agent-harness-prompt-library',
+    autoSaveId: 'jad-prompt-library',
   });
 
   // Filled by ComposerPane, which owns the drafts. Views outside the composer
@@ -3031,7 +3031,7 @@ function App() {
         id: session.id,
         title: session.title,
         ...(session.category === undefined ? {} : {category: session.category}),
-        ...(session.pathProfiles === undefined ? {} : {profiles: session.pathProfiles}),
+        ...(session.profiles === undefined ? {} : {profiles: session.profiles}),
         ...(session.activeProfile === undefined ? {} : {activeProfile: session.activeProfile}),
       })),
       pinnedViews,
@@ -3095,9 +3095,9 @@ function App() {
         state: sessionUiStateForRun(rowRunStatus(activeRow, activeSession)?.status),
         source: 'live',
         activeProfile,
-        ...(activeSession.pathProfiles === undefined
+        ...(activeSession.profiles === undefined
           ? {}
-          : {pathProfiles: activeSession.pathProfiles}),
+          : {profiles: activeSession.profiles}),
       };
 
   /** Apply a live result to the row that initiated it, not its master session. */
@@ -3204,7 +3204,7 @@ function App() {
       updateViewSessionRecord(targetViewKey, session => ({
         ...session,
         activeProfile: result.active_profile,
-        pathProfiles: result.path_profiles,
+        profiles: result.profiles,
         modelDefault: result.model_default,
         models: result.models,
         model: result.model,
@@ -3422,7 +3422,7 @@ function App() {
     isRunning,
     resettingViewKey,
   ]);
-  const selectSessionPathProfile = useCallback(
+  const selectSessionProfile = useCallback(
     async (profile: string) => {
       const sessionRef = activeSession?.sessionRef;
       if (
@@ -3439,7 +3439,7 @@ function App() {
       }
       setIsProfileSwitching(true);
       try {
-        const result = await updateSessionPathProfile(sessionRef, profile);
+        const result = await updateSessionProfile(sessionRef, profile);
         setSessions(current =>
           current.map(session => {
             if (session.sessionRef !== sessionRef) {
@@ -3448,7 +3448,7 @@ function App() {
             const next = {
               ...session,
               activeProfile: result.active_profile,
-              pathProfiles: result.path_profiles,
+              profiles: result.profiles,
             };
             if (result.model_default === undefined) {
               delete next.modelDefault;
@@ -5248,10 +5248,10 @@ function App() {
       toolbarActions={
         <HStack align="center" gap={1}>
           {activeSession.sessionRef &&
-          activeRowSession.pathProfiles &&
-          activeRowSession.pathProfiles.length > 0 ? (
+          activeRowSession.profiles &&
+          activeRowSession.profiles.length > 0 ? (
             <SessionProfilePicker
-              profiles={activeRowSession.pathProfiles}
+              profiles={activeRowSession.profiles}
               activeProfile={activeRowSession.activeProfile}
               isDisabled={isRunning || isCompactionInProgress || isProfileSwitching || isModelDefaultUpdating || resettingViewKey !== null || frontCompactingViewKey !== null}
               onSelect={profile => {
@@ -5273,7 +5273,7 @@ function App() {
                   removePinnedRow(activeViewKey);
                   return;
                 }
-                void selectSessionPathProfile(profile);
+                void selectSessionProfile(profile);
               }}
             />
           ) : null}

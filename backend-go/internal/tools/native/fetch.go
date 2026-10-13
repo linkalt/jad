@@ -20,8 +20,8 @@ import (
 	brotli "github.com/andybalholm/brotli"
 	htmltomarkdown "github.com/xberg-io/html-to-markdown/packages/go/v3"
 
-	"example.com/agent-harness/backend-go/internal/sessionfs"
-	"example.com/agent-harness/backend-go/internal/tools"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 //go:generate go run github.com/xberg-io/html-to-markdown/packages/go/v3/cmd/setup -dir .

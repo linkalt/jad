@@ -9,7 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"example.com/agent-harness/backend-go/internal/imagedata"
+	"jad/backend-go/internal/imagedata"
 )
 
 // maxFilenameRunes bounds the file name kept in the transcript and shown in the Web UI.

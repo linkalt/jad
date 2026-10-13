@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
-	"example.com/agent-harness/backend-go/internal/imagestore"
-	"example.com/agent-harness/backend-go/internal/responses"
-	"example.com/agent-harness/backend-go/internal/transcript"
+	"jad/backend-go/internal/imagestore"
+	"jad/backend-go/internal/responses"
+	"jad/backend-go/internal/transcript"
 )
 
 // runResponse streams and commits one provider response. Each tool round gets

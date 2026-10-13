@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"example.com/agent-harness/backend-go/internal/anthropicadapter"
+	"jad/backend-go/internal/anthropicadapter"
 )
 
 const shutdownGrace = 10 * time.Second
