@@ -70,7 +70,7 @@ func TestTransportLogsRedactedHeadersAndBoundedBodies(t *testing.T) {
 	transport.logger.pending.Wait()
 
 	requestRecord := readRecord(t, directory, "request1")
-	if requestRecord["method"] != "POST" || requestRecord["url"] != server.URL+"/v1/responses" || requestRecord["body"] != "requ" || requestRecord["body_truncated"] != true {
+	if requestRecord["method"] != "POST" || requestRecord["url"] != server.URL+"/v1/responses" || requestRecord["body_file"] != "request1.body" || requestRecord["body_bytes"] != float64(4) || requestRecord["body_truncated"] != true {
 		t.Fatalf("request record = %#v", requestRecord)
 	}
 	requestHeaders, ok := requestRecord["headers"].(map[string]any)
@@ -79,12 +79,104 @@ func TestTransportLogsRedactedHeadersAndBoundedBodies(t *testing.T) {
 	}
 
 	responseRecord := readRecord(t, directory, "response1")
-	if responseRecord["status"] != float64(http.StatusCreated) || responseRecord["status_text"] != "Created" || responseRecord["body"] != "resp" || responseRecord["body_truncated"] != true {
+	if responseRecord["status"] != float64(http.StatusCreated) || responseRecord["status_text"] != "Created" || responseRecord["body_file"] != "response1.body" || responseRecord["body_bytes"] != float64(4) || responseRecord["body_truncated"] != true {
 		t.Fatalf("response record = %#v", responseRecord)
 	}
 	responseHeaders, ok := responseRecord["headers"].(map[string]any)
 	if !ok || responseHeaders["content-type"] != "text/plain" {
 		t.Fatalf("response headers = %#v", responseRecord["headers"])
+	}
+	if got := readRaw(t, directory, "request1.body"); got != "requ" {
+		t.Fatalf("request body file = %q, want the first 4 bytes", got)
+	}
+	if got := readRaw(t, directory, "response1.body"); got != "resp" {
+		t.Fatalf("response body file = %q, want the first 4 bytes", got)
+	}
+}
+
+// Each SSE frame is saved exactly as the provider sent it: no JSON re-encoding of the
+// payload, and the request keeps the bytes that went on the wire, escapes included.
+func TestTransportSavesRawStreamBytesAndRequestBytes(t *testing.T) {
+	const requestBody = `{"input":"<b>&","stream":true,  "z":{"b":1,  "a":2}}`
+	frames := []string{
+		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"h\\u00e9\"}\n\n",
+		": keep-alive\n\n",
+		"event: response.completed\ndata:   {\"type\":\"response.completed\"}\n\n",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		for _, frame := range frames {
+			_, _ = io.WriteString(writer, frame)
+			writer.(http.Flusher).Flush()
+		}
+	}))
+	defer server.Close()
+	directory := t.TempDir()
+	transport := NewTransport(directory, Settings{Enabled: true, IncludeRequestBody: true, IncludeResponseBody: true, MaxBodyBytes: 1 << 20}, server.Client().Transport).(*Transport)
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/responses", strings.NewReader(requestBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := (&http.Client{Transport: transport}).Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, response.Body); err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	transport.logger.pending.Wait()
+
+	if got := readRaw(t, directory, "response1.body"); got != strings.Join(frames, "") {
+		t.Fatalf("response body file = %q, want the provider bytes %q", got, strings.Join(frames, ""))
+	}
+	if got := readRaw(t, directory, "request1.body"); got != requestBody {
+		t.Fatalf("request body file = %q, want %q", got, requestBody)
+	}
+	record := readRecord(t, directory, "response1")
+	if record["body_bytes"] != float64(len(strings.Join(frames, ""))) || record["body_truncated"] != false || record["body_file"] != "response1.body" {
+		t.Fatalf("response record = %#v", record)
+	}
+}
+
+// A stream that is stopped part-way keeps the bytes that arrived, in the file and in the
+// record.
+func TestTransportKeepsTheBytesOfAnInterruptedStream(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: first\n\n")
+		writer.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-request.Context().Done():
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	directory := t.TempDir()
+	transport := NewTransport(directory, Settings{Enabled: true, IncludeResponseBody: true, MaxBodyBytes: 1 << 20}, server.Client().Transport).(*Transport)
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := (&http.Client{Transport: transport}).Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 64)
+	n, err := response.Body.Read(buffer)
+	if err != nil || string(buffer[:n]) != "data: first\n\n" {
+		t.Fatalf("first read = %q, %v", buffer[:n], err)
+	}
+	_ = response.Body.Close()
+	transport.logger.pending.Wait()
+
+	if got := readRaw(t, directory, "response1.body"); got != "data: first\n\n" {
+		t.Fatalf("response body file = %q", got)
+	}
+	if record := readRecord(t, directory, "response1"); record["body_bytes"] != float64(len("data: first\n\n")) || record["body_truncated"] != false {
+		t.Fatalf("response record = %#v", record)
 	}
 }
 
@@ -149,6 +241,15 @@ func readRecord(t *testing.T, directory, name string) map[string]any {
 		t.Fatalf("decode %s: %v", name, err)
 	}
 	return record
+}
+
+func readRaw(t *testing.T, directory, name string) string {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(directory, name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return string(contents)
 }
 
 func TestTransportReportsDebugDirectoryFailureOnTheInjectedLogger(t *testing.T) {

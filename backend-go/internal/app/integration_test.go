@@ -43,7 +43,7 @@ func TestMultiRootHTTPRunUsesQualifiedSessionAndGoldenTranscript(t *testing.T) {
 	defer provider.Close()
 
 	sharedSettings := map[string]any{
-		"http_debug":  map[string]any{"enabled": true, "include_request_headers": true},
+		"http_debug":  map[string]any{"enabled": true, "include_request_headers": true, "include_request_body": true, "include_response_body": true},
 		"persistence": map[string]any{"durability": "process", "max_item_bytes": 1048576, "response_metadata": "full"},
 	}
 	config, fixture := layoutConfig(t, layouttest.Spec{
@@ -103,6 +103,14 @@ func TestMultiRootHTTPRunUsesQualifiedSessionAndGoldenTranscript(t *testing.T) {
 	responseHeaders, ok := debugResponse["headers"].(map[string]any)
 	if !ok || debugResponse["direction"] != "response" || debugResponse["status"] != float64(http.StatusOK) || responseHeaders["content-type"] != "text/event-stream" {
 		t.Fatalf("HTTP debug response record = %#v", debugResponse)
+	}
+	rawResponse, err := os.ReadFile(filepath.Join(alpha.StoragePaths.HTTPDebug, "response1.body"))
+	if err != nil || !strings.HasSuffix(string(rawResponse), "data: [DONE]\n\n") || !strings.Contains(string(rawResponse), "data: "+delta1+"\n\n") {
+		t.Fatalf("raw provider stream was not saved as received: %q, %v", rawResponse, err)
+	}
+	rawRequest, err := os.ReadFile(filepath.Join(alpha.StoragePaths.HTTPDebug, "request1.body"))
+	if err != nil || !json.Valid(rawRequest) || debugRequest["body_bytes"] != float64(len(rawRequest)) {
+		t.Fatalf("raw request body = %q, %v, record %#v", rawRequest, err, debugRequest)
 	}
 	for _, value := range []string{`"input_tokens":7`, `"output_tokens":2`, `"total_tokens":9`, `"completed_responses":1`, `"turn_count":1`, `"history_partial":true`} {
 		if !strings.Contains(string(responseText), value) {

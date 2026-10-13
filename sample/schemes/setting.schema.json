@@ -1884,7 +1884,7 @@
     },
     "http_debug": {
       "type": "object",
-      "description": "Optional native HTTP diagnostics written as numbered request/response files under paths.http_debug. Disabled by default.",
+      "description": "Optional native HTTP diagnostics written as numbered request/response records under paths.http_debug. With include_request_body or include_response_body, the body is saved raw in a sibling NAME.body file: the request bytes as sent on the wire, the response bytes (the SSE stream) exactly as received, appended as they arrive. The record holds body_file, body_bytes and body_truncated, not the body. max_body_bytes caps each body file. Disabled by default.",
       "properties": {
         "enabled": {
           "type": "boolean",

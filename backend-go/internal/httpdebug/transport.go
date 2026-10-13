@@ -19,6 +19,9 @@ import (
 
 const redactedValue = "[REDACTED]"
 
+// bodyFileSuffix names the raw body file next to a request or response record.
+const bodyFileSuffix = ".body"
+
 var (
 	sensitiveHeaderPattern = regexp.MustCompile(`(?i)(?:authorization|api[-_]?key|cookie|set-cookie|proxy-authorization)`)
 	debugFilePattern       = regexp.MustCompile(`^(?:request|response)([0-9]+)$`)
@@ -80,9 +83,7 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		requestRecord["headers"] = requestHeaders(request.Header)
 	}
 	if t.settings.IncludeRequestBody {
-		for key, value := range captureRequestBody(request, t.settings.MaxBodyBytes) {
-			requestRecord[key] = value
-		}
+		t.recordRequestBody(requestRecord, requestID, request)
 	}
 	t.logger.enqueue("request"+strconv.FormatInt(requestID, 10), requestRecord)
 
@@ -115,38 +116,58 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		t.logger.enqueue("response"+strconv.FormatInt(requestID, 10), responseRecord)
 		return response, nil
 	}
-	response.Body = &responseBodyCapture{
+	name := "response" + strconv.FormatInt(requestID, 10)
+	capture := &responseBodyCapture{
 		body:     response.Body,
 		logger:   t.logger,
-		fileName: "response" + strconv.FormatInt(requestID, 10),
+		fileName: name,
 		record:   responseRecord,
 		maxBytes: t.settings.MaxBodyBytes,
-		captured: make([]byte, 0),
+		file:     t.logger.createBodyFile(name),
 	}
+	responseRecord["body_file"] = name + bodyFileSuffix
+	t.logger.enqueue(name, responseRecord)
+	response.Body = capture
 	return response, nil
 }
 
-func captureRequestBody(request *http.Request, maxBytes int64) map[string]any {
+// recordRequestBody saves the bytes the request will carry, exactly as sent, to its own
+// file and describes them in the request record. The SDK has already encoded the body, so
+// these are the wire bytes, not the JSON the runner built.
+func (t *Transport) recordRequestBody(record map[string]any, requestID int64, request *http.Request) {
+	data, truncated, ok := captureRequestBody(request, t.settings.MaxBodyBytes)
+	if !ok {
+		record["body_unavailable"] = true
+		return
+	}
+	name := "request" + strconv.FormatInt(requestID, 10)
+	if t.logger.writeBodyFile(name, data) {
+		record["body_file"] = name + bodyFileSuffix
+	}
+	record["body_bytes"] = len(data)
+	record["body_truncated"] = truncated
+}
+
+func captureRequestBody(request *http.Request, maxBytes int64) (data []byte, truncated, ok bool) {
 	if request.Body == nil || request.Body == http.NoBody {
-		return map[string]any{"body": "", "body_truncated": false}
+		return nil, false, true
 	}
 	if request.GetBody == nil {
-		return map[string]any{"body_unavailable": true}
+		return nil, false, false
 	}
 	body, err := request.GetBody()
 	if err != nil {
-		return map[string]any{"body_unavailable": true}
+		return nil, false, false
 	}
 	captured, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
 	_ = body.Close()
 	if err != nil {
-		return map[string]any{"body_unavailable": true}
+		return nil, false, false
 	}
-	truncated := int64(len(captured)) > maxBytes
-	if truncated {
-		captured = captured[:maxBytes]
+	if int64(len(captured)) > maxBytes {
+		return captured[:maxBytes], true, true
 	}
-	return map[string]any{"body": string(captured), "body_truncated": truncated}
+	return captured, false, true
 }
 
 func requestHeaders(headers http.Header) map[string]string {
@@ -184,6 +205,9 @@ func responseStatusText(response *http.Response) string {
 	return ""
 }
 
+// responseBodyCapture copies the provider's response bytes to a file as they are read,
+// so an interrupted stream keeps what arrived. The record file is rewritten at the end
+// with the size and whether the cap cut the copy.
 type responseBodyCapture struct {
 	body     io.ReadCloser
 	logger   *fileLogger
@@ -192,7 +216,8 @@ type responseBodyCapture struct {
 	maxBytes int64
 
 	mu       sync.Mutex
-	captured []byte
+	file     *os.File
+	written  int64
 	finished bool
 }
 
@@ -218,14 +243,21 @@ func (c *responseBodyCapture) capture(chunk []byte) {
 	if c.finished {
 		return
 	}
-	remaining := c.maxBytes - int64(len(c.captured))
+	remaining := c.maxBytes - c.written
 	if remaining > 0 {
 		if int64(len(chunk)) > remaining {
 			chunk = chunk[:remaining]
 		}
-		c.captured = append(c.captured, chunk...)
+		if c.file != nil {
+			if _, err := c.file.Write(chunk); err != nil {
+				c.logger.log.Warn("unable to write HTTP debug body", slog.String("record", c.fileName), slog.Any("error", err))
+				_ = c.file.Close()
+				c.file = nil
+			}
+		}
+		c.written += int64(len(chunk))
 	}
-	if int64(len(c.captured)) >= c.maxBytes {
+	if c.written >= c.maxBytes {
 		c.finishLocked(true)
 	}
 }
@@ -240,10 +272,14 @@ func (c *responseBodyCapture) finishLocked(truncated bool) {
 	if c.finished {
 		return
 	}
-	if int64(len(c.captured)) >= c.maxBytes {
+	if c.written >= c.maxBytes {
 		truncated = true
 	}
-	c.record["body"] = string(c.captured)
+	if c.file != nil {
+		_ = c.file.Close()
+		c.file = nil
+	}
+	c.record["body_bytes"] = c.written
 	c.record["body_truncated"] = truncated
 	c.finished = true
 	c.logger.enqueue(c.fileName, c.record)
@@ -343,4 +379,24 @@ func (l *fileLogger) writeQueue() {
 		}
 		l.pending.Done()
 	}
+}
+
+// createBodyFile opens the raw body file of a record, or returns nil (and logs) when it
+// cannot, so the response is still passed through untouched.
+func (l *fileLogger) createBodyFile(name string) *os.File {
+	file, err := os.OpenFile(filepath.Join(l.directory, name+bodyFileSuffix), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		l.log.Warn("unable to create HTTP debug body file", slog.String("record", name), slog.Any("error", err))
+		return nil
+	}
+	return file
+}
+
+func (l *fileLogger) writeBodyFile(name string, data []byte) bool {
+	path := filepath.Join(l.directory, name+bodyFileSuffix)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		l.log.Warn("unable to write HTTP debug body file", slog.String("path", path), slog.Any("error", err))
+		return false
+	}
+	return true
 }
