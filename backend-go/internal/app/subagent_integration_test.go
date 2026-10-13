@@ -296,7 +296,9 @@ func lastOutput(dump string) string {
 }
 
 type subagentFixture struct {
-	workspace  string
+	workspace   string
+	sessionFile string
+	// sessionDir is the session's state folder, the base of a relative image_store.dir.
 	sessionDir string
 	// stateDir holds the profile's messages.jsonl and staging; toolDir its tool storage
 	// (.subagents, ...); modelsDir the model files; config is the loaded server config.
@@ -561,7 +563,7 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 	profileState := filepath.Join(layout.StateDir, "demo", "dev", "coder")
 	return subagentFixture{
-		workspace: workspace, sessionDir: layout.SessionDir, apiURL: apiURL, provider: provider, childProvider: childProvider, restart: restart,
+		workspace: workspace, sessionFile: layout.SessionFile, sessionDir: layout.SessionStateDir, apiURL: apiURL, provider: provider, childProvider: childProvider, restart: restart,
 		stateDir: profileState, toolDir: filepath.Join(workspace, ".jad", "state", "demo", "dev", "coder", "tools"),
 		modelsDir: filepath.Join(layout.Root, "models", "openai"), config: config,
 	}
@@ -1197,7 +1199,7 @@ func TestResettingTheSessionCancelsAChildHandedOffInAnEarlierRun(t *testing.T) {
 
 func TestSubagentRunsAreListedInTheStateContextAfterACompaction(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
-	settingPath := filepath.Join(f.sessionDir, "session.json")
+	settingPath := f.sessionFile
 	var session map[string]any
 	data, err := os.ReadFile(settingPath)
 	if err != nil {

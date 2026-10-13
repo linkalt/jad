@@ -45,8 +45,8 @@ func sampleLayout(t *testing.T) (Layout, Location, string) {
 	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte("rules"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sessionDir := filepath.Join(root, "sessions", "default")
-	editJSON(t, filepath.Join(sessionDir, "session.json"), func(m map[string]any) { m["cwd"] = cwd })
+	sessionFile := filepath.Join(root, "sessions", "default.json")
+	editJSON(t, sessionFile, func(m map[string]any) { m["cwd"] = cwd })
 	// agents_dir in the toolset is relative to the session cwd
 	if err := os.MkdirAll(filepath.Join(cwd, ".jad", "subagents", "x"), 0o755); err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func sampleLayout(t *testing.T) (Layout, Location, string) {
 		Tools: filepath.Join(root, "tools"), MCP: filepath.Join(root, "mcp"), State: filepath.Join(cwd, ".jad", "state"),
 	}
 	location := Location{
-		Reference: "default", SessionID: "default", Directory: sessionDir,
+		Reference: "default", SessionID: "default", File: sessionFile,
 		Root: Root{ID: "local", Directory: filepath.Join(root, "sessions"), GlobalJadRoot: root},
 	}
 	return layout, location, root
@@ -310,7 +310,7 @@ func asClientError(err error, target **ClientError) bool {
 func TestLayoutSessionScopesProfilesByCategoryAndFile(t *testing.T) {
 	layout, location, _ := sampleLayout(t)
 	scope := func(items ...any) {
-		editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+		editJSON(t, location.File, func(m map[string]any) {
 			m["scope"].(map[string]any)["profiles"] = items
 		})
 	}
@@ -337,13 +337,13 @@ func TestLayoutSessionScopesProfilesByCategoryAndFile(t *testing.T) {
 func TestLayoutSessionHasNoScopeExceptProfiles(t *testing.T) {
 	layout, location, _ := sampleLayout(t)
 	for _, key := range []string{"models", "mcp", "toolsets", "tools"} {
-		editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+		editJSON(t, location.File, func(m map[string]any) {
 			m["scope"].(map[string]any)[key] = []any{"openai"}
 		})
 		if _, err := LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err == nil || !strings.Contains(err.Error(), key) {
 			t.Errorf("scope.%s must be refused by name: %v", key, err)
 		}
-		editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+		editJSON(t, location.File, func(m map[string]any) {
 			delete(m["scope"].(map[string]any), key)
 		})
 	}
@@ -425,7 +425,7 @@ func TestLayoutSessionOverridesDefaultsAndProfileOverridesSession(t *testing.T) 
 		"max_tool_rounds": json.RawMessage("10"),
 		"hooks":           json.RawMessage(`{"enabled":false,"timeout_ms":1000}`),
 	}
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+	editJSON(t, location.File, func(m map[string]any) {
 		m["settings"] = map[string]any{"max_tool_rounds": 20}
 	})
 	config, err := LoadLayoutSessionSettings(location, layout, "review/reviewer", "")
@@ -476,7 +476,7 @@ func rootFromSample(t *testing.T) (Config, string) {
 	t.Helper()
 	_, _, root := sampleLayout(t)
 	var cwd string
-	editJSON(t, filepath.Join(root, "sessions", "default", "session.json"), func(m map[string]any) { cwd = m["cwd"].(string) })
+	editJSON(t, filepath.Join(root, "sessions", "default.json"), func(m map[string]any) { cwd = m["cwd"].(string) })
 	// State must sit under the session cwd, or the read policy refuses the bash spill folder.
 	editJSON(t, filepath.Join(root, "setting.json"), func(m map[string]any) {
 		delete(m["libraries"].(map[string]any), "tool_definition_paths")
@@ -537,14 +537,14 @@ func TestRootSettingCatalogsAreReadAndChecked(t *testing.T) {
 	}
 }
 
-// The session loaders the server calls read the catalog layout when session.json exists.
+// The session loaders the server calls read the catalog layout when <id>.json exists.
 func TestLoadSessionConfigUsesTheLayoutWhenSessionJSONExists(t *testing.T) {
 	config, _ := rootFromSample(t)
 	location, err := Resolve(config.Roots, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !location.UsesLayout() || filepath.Base(location.SettingFile()) != "session.json" {
+	if !location.UsesLayout() || filepath.Base(location.SettingFile()) != "default.json" {
 		t.Fatalf("layout = %v, file = %s", location.UsesLayout(), location.SettingFile())
 	}
 	loaded, err := LoadSessionConfig(location, "", "")
@@ -601,7 +601,7 @@ func TestLayoutSetModelDefaultWritesTheProfileFile(t *testing.T) {
 	config, root := rootFromSample(t)
 	location, _ := Resolve(config.Roots, "default")
 	profileFile := filepath.Join(root, "profiles", "dev", "coder.json")
-	sessionFile := filepath.Join(root, "sessions", "default", "session.json")
+	sessionFile := filepath.Join(root, "sessions", "default.json")
 	profileBefore, _ := os.ReadFile(profileFile)
 	sessionBefore, _ := os.ReadFile(sessionFile)
 
@@ -726,7 +726,7 @@ func TestWriteFileIfUnchangedReportsAConflict(t *testing.T) {
 func TestLayoutRefusesTheRemovedModelDefaultsKey(t *testing.T) {
 	config, root := rootFromSample(t)
 	location, _ := Resolve(config.Roots, "default")
-	sessionFile := filepath.Join(root, "sessions", "default", "session.json")
+	sessionFile := filepath.Join(root, "sessions", "default.json")
 	editJSON(t, sessionFile, func(m map[string]any) {
 		m["model_defaults"] = map[string]any{"dev/coder": "openai/gpt-fast"}
 	})
@@ -774,7 +774,7 @@ func TestLayoutCWDComesFromDefaultsThenSessionThenProfile(t *testing.T) {
 		}
 	}
 	sessionCWD := ""
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+	editJSON(t, location.File, func(m map[string]any) {
 		sessionCWD, _ = m["cwd"].(string)
 		delete(m, "cwd")
 	})
@@ -790,18 +790,18 @@ func TestLayoutCWDComesFromDefaultsThenSessionThenProfile(t *testing.T) {
 	if got := load(); got != fromDefaults {
 		t.Fatalf("defaults only: cwd = %q, want %q", got, fromDefaults)
 	}
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) { m["cwd"] = sessionCWD })
+	editJSON(t, location.File, func(m map[string]any) { m["cwd"] = sessionCWD })
 	if got := load(); got != sessionCWD {
 		t.Fatalf("session top-level cwd must beat defaults: cwd = %q, want %q", got, sessionCWD)
 	}
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+	editJSON(t, location.File, func(m map[string]any) {
 		delete(m, "cwd")
 		m["settings"] = map[string]any{"cwd": fromSettings}
 	})
 	if got := load(); got != fromSettings {
 		t.Fatalf("session settings.cwd must beat defaults: cwd = %q, want %q", got, fromSettings)
 	}
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) { m["cwd"] = sessionCWD })
+	editJSON(t, location.File, func(m map[string]any) { m["cwd"] = sessionCWD })
 	editJSON(t, filepath.Join(root, "profiles", "review", "reviewer.json"), func(m map[string]any) {
 		m["settings"] = map[string]any{"cwd": fromProfile}
 	})
@@ -1039,7 +1039,7 @@ func TestLayoutEnvFileNearestLevelWins(t *testing.T) {
 		}
 	}
 	check("defaults", "env")
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+	editJSON(t, location.File, func(m map[string]any) {
 		m["settings"] = map[string]any{"env_file": "session.env"}
 	})
 	check("session", "session.env")
@@ -1067,7 +1067,7 @@ func TestLayoutDefaultEnvFileMissingFileFails(t *testing.T) {
 func TestLayoutRequiresACWD(t *testing.T) {
 	layout, location, _ := sampleLayout(t)
 	var cwd string
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+	editJSON(t, location.File, func(m map[string]any) {
 		cwd = m["cwd"].(string)
 		delete(m, "cwd")
 	})
@@ -1086,7 +1086,7 @@ func TestLayoutRequiresACWD(t *testing.T) {
 func setAgentModel(t *testing.T, location Location, model string) string {
 	t.Helper()
 	var cwd string
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) { cwd = m["cwd"].(string) })
+	editJSON(t, location.File, func(m map[string]any) { cwd = m["cwd"].(string) })
 	agent := map[string]any{"description": "x"}
 	if model != "" {
 		agent["model"] = model
@@ -1205,7 +1205,7 @@ func TestLayoutToolStorageDirIsConfigurable(t *testing.T) {
 		t.Fatalf("defaults: tool storage = %s, want %s", config.StoragePaths.ToolStorage, want)
 	}
 	abs := filepath.Join(config.WorkingDir, "abs-tools")
-	editJSON(t, filepath.Join(root, "sessions", "default", "session.json"), func(m map[string]any) {
+	editJSON(t, filepath.Join(root, "sessions", "default.json"), func(m map[string]any) {
 		m["settings"].(map[string]any)["tool_storage_dir"] = abs
 	})
 	config, err = LoadLayoutSessionSettings(location, layout, "", "")
@@ -1311,7 +1311,7 @@ func TestLayoutSessionFilesComeFromDefaultsSessionAndProfile(t *testing.T) {
 		t.Fatalf("from defaults = %+v", got)
 	}
 
-	editJSON(t, filepath.Join(location.Directory, "session.json"), func(m map[string]any) {
+	editJSON(t, location.File, func(m map[string]any) {
 		m["settings"] = map[string]any{"session_files": map[string]any{"max_depth": 5, "ignore_directories": []any{"a", "b"}}}
 	})
 	got := load()

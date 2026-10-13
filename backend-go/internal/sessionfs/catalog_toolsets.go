@@ -35,7 +35,7 @@ func validateToolsetFile(layout Layout, roots []Root, path string, data []byte) 
 	if len(roots) > 0 {
 		globalRoot = roots[0].GlobalJadRoot
 	}
-	location := Location{SessionID: "toolset-check", Directory: scratch, Root: Root{GlobalJadRoot: globalRoot}}
+	location := Location{SessionID: "toolset-check", Root: Root{GlobalJadRoot: globalRoot, Layout: &Layout{State: scratch}}}
 	_, err = loadSessionSettingsFrom(location, setting, path, globalRoot, "", "")
 	return err
 }

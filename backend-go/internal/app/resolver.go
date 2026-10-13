@@ -213,14 +213,14 @@ func (r *Resolver) resolveLockLocation(ctx context.Context, reference string) (s
 	if err != nil {
 		return sessionfs.Location{}, mapSessionError(err)
 	}
-	info, err := os.Stat(location.Directory)
+	info, err := os.Stat(location.File)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return sessionfs.Location{}, &httpapi.StatusError{Code: http.StatusNotFound, Message: "session not found"}
 		}
-		return sessionfs.Location{}, fmt.Errorf("inspect session directory: %w", err)
+		return sessionfs.Location{}, fmt.Errorf("inspect session file: %w", err)
 	}
-	if !info.IsDir() {
+	if !info.Mode().IsRegular() {
 		return sessionfs.Location{}, &httpapi.StatusError{Code: http.StatusNotFound, Message: "session not found"}
 	}
 	return location, nil
@@ -787,7 +787,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		options.Checkpoint = checkpoint.ForSession(r.config, r.resolver.logger)
 	}
 	options.ToolExecution.WorkspaceRoot = r.config.WorkingDir
-	options.ToolExecution.SessionDir = filepath.Dir(r.config.SettingPath)
+	options.ToolExecution.SessionDir = r.config.StateDir
 	options.ToolExecution.SessionKey = sessionKey(r.reference, r.config.Profile)
 	options.AutomaticCompaction = &session.AutomaticCompactionSettings{
 		Enabled:       r.config.Compaction.AutoEnabled,

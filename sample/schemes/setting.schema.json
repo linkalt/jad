@@ -439,7 +439,7 @@
     "session_name": {
       "type": "string",
       "pattern": "\\S",
-      "description": "Human-readable session name. Defaults to the session directory name."
+      "description": "Human-readable session name. Defaults to the session id."
     },
     "cwd": {
       "type": "string",
@@ -742,7 +742,7 @@
         "dir": {
           "type": "string",
           "minLength": 1,
-          "description": "Directory of the image files; a relative path is resolved against the session directory. It is created on the first write with mode 0700, files get 0600."
+          "description": "Directory of the image files; a relative path is resolved against the session state folder, <state>/<session id>. It is created on the first write with mode 0700, files get 0600."
         },
         "min_bytes": {
           "type": "integer",

@@ -211,10 +211,9 @@ test('every session in the local layout passes the scheme', t => {
     return;
   }
   let checked = 0;
-  for (const session of readdirSync(root, {withFileTypes: true}).filter(entry => entry.isDirectory())) {
-    const file = new URL(`${session.name}/session.json`, root);
-    if (!existsSync(file)) continue;
-    assert.deepEqual(validator.validate('sessions', readFileSync(file, 'utf8')), [], session.name);
+  const sessions = readdirSync(root, {withFileTypes: true}).filter(entry => entry.isFile() && /^[A-Za-z0-9][^.]*\.json$/.test(entry.name));
+  for (const session of sessions) {
+    assert.deepEqual(validator.validate('sessions', readFileSync(new URL(session.name, root), 'utf8')), [], session.name);
     checked += 1;
   }
   assert.ok(checked >= 1);

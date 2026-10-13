@@ -136,7 +136,7 @@ func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *check
 		spec.StateDir = filepath.Join(workspace, ".jad", "state")
 	}
 	config, layout := layoutConfig(t, spec, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
-	fixture.sessionDir = layout.SessionDir
+	fixture.sessionDir = layout.SessionStateDir
 	fixture.stateDir = profileState(layout)
 	service, err := NewService(config)
 	if err != nil {

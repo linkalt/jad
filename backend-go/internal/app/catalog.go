@@ -119,10 +119,11 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			return httpapi.CatalogResponse{}, fmt.Errorf("read session root %q: %w", root.ID, err)
 		}
 		for _, entry := range entries {
-			if !entry.IsDir() {
+			id, ok := sessionfs.SessionFileID(entry)
+			if !ok {
 				continue
 			}
-			location, err := sessionfs.Resolve(r.roots, root.ID+":"+entry.Name())
+			location, err := sessionfs.Resolve(r.roots, root.ID+":"+id)
 			if err != nil {
 				var resolveErr *sessionfs.ResolveError
 				if errors.As(err, &resolveErr) {

@@ -33,7 +33,7 @@ var layoutSettingKeys = map[string]struct{}{
 	"session_files": {},
 }
 
-// layoutSessionFile is <session>/session.json.
+// layoutSessionFile is <sessions root>/<id>.json.
 type layoutSessionFile struct {
 	SchemaVersion int    `json:"schema_version"`
 	Description   string `json:"description"`

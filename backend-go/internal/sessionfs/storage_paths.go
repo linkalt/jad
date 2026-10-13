@@ -142,7 +142,7 @@ func validateProfileStoragePaths(settingPath string, storage SessionStoragePaths
 func validateAllStoragePaths(location Location, settingPath string, paths, basePaths map[string]json.RawMessage, pathProfiles []string, activeProfile string, profileConfigured bool) error {
 	settingDir := filepath.Dir(settingPath)
 	if !profileConfigured {
-		storage, err := resolveStoragePaths(basePaths, location.Directory, settingDir, false)
+		storage, err := resolveStoragePaths(basePaths, location.StateDir(), settingDir, false)
 		if err != nil {
 			return err
 		}
@@ -163,7 +163,7 @@ func validateAllStoragePaths(location Location, settingPath string, paths, baseP
 		if err != nil {
 			return err
 		}
-		selected, storageDir := selectProfileStoragePaths(location.Directory, basePaths, profileSettings, profile, activeProfile, true)
+		selected, storageDir := selectProfileStoragePaths(location.StateDir(), basePaths, profileSettings, profile, activeProfile, true)
 		storage, err := resolveStoragePaths(selected, storageDir, settingDir, true)
 		if err != nil {
 			return err

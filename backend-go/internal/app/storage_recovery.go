@@ -68,14 +68,15 @@ func (r *Resolver) RecoverStorages(ctx context.Context, options StorageRecoveryO
 			return report, fmt.Errorf("read session root %q: %w", root.ID, err)
 		}
 		for _, entry := range entries {
-			if !entry.IsDir() {
+			id, ok := sessionfs.SessionFileID(entry)
+			if !ok {
 				continue
 			}
 			// Loading a session's settings is the cost of a session without the tools.
 			if err := ctx.Err(); err != nil {
 				return report, err
 			}
-			if err := r.recoverSessionStorages(ctx, root, entry.Name(), options, seenProcess, seenRuns, &report); err != nil {
+			if err := r.recoverSessionStorages(ctx, root, id, options, seenProcess, seenRuns, &report); err != nil {
 				return report, err
 			}
 		}

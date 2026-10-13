@@ -18,8 +18,8 @@ import (
 // retryFixture is one session whose provider answers each request from a script: a status
 // (with a short Retry-After-Ms so the waits stay small) or a streamed final message.
 type retryFixture struct {
-	t          *testing.T
-	sessionDir string
+	t           *testing.T
+	sessionFile string
 	// stateDir holds the profile's transcript.
 	stateDir    string
 	api         *httptest.Server
@@ -58,7 +58,7 @@ func newRetryFixture(t *testing.T, providerRetry string, status int) *retryFixtu
 		RawSettings: retryRawSettings(providerRetry),
 		Models:      map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
-	fixture.sessionDir = layout.SessionDir
+	fixture.sessionFile = layout.SessionFile
 	fixture.stateDir = profileState(layout)
 	service, err := NewService(config)
 	if err != nil {
@@ -74,7 +74,7 @@ func newRetryFixture(t *testing.T, providerRetry string, status int) *retryFixtu
 
 func (f *retryFixture) writeSetting(providerRetry string) {
 	f.t.Helper()
-	path := filepath.Join(f.sessionDir, "session.json")
+	path := f.sessionFile
 	var session map[string]any
 	data, err := os.ReadFile(path)
 	if err != nil {

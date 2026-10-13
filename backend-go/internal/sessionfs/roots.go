@@ -97,8 +97,8 @@ type Root struct {
 	Label         string
 	Directory     string
 	GlobalJadRoot string
-	// Layout is set when the root setting file is read. A session directory of this root
-	// that holds a session.json is stored in the catalog layout (see Location.UsesLayout).
+	// Layout is set when the root setting file is read. A <session id>.json file in the
+	// root directory is a session of the catalog layout (see Location.UsesLayout).
 	Layout *Layout
 }
 
@@ -143,7 +143,8 @@ type Location struct {
 	Reference string
 	SessionID string
 	Root      Root
-	Directory string
+	// File is the session file, <root directory>/<session id>.json.
+	File string
 }
 
 // Defaults returns the TypeScript root server defaults, converted to Go units.
@@ -270,18 +271,15 @@ func Resolve(roots []Root, reference string) (Location, error) {
 
 	var matches []Root
 	for _, root := range roots {
-		entries, readErr := os.ReadDir(root.Directory)
-		if readErr != nil {
-			if errors.Is(readErr, os.ErrNotExist) {
+		info, statErr := os.Stat(makeLocation(root, sessionID, len(roots)).File)
+		if statErr != nil {
+			if errors.Is(statErr, os.ErrNotExist) {
 				continue
 			}
-			return Location{}, fmt.Errorf("read session root %q: %w", root.ID, readErr)
+			return Location{}, fmt.Errorf("inspect session %q in root %q: %w", sessionID, root.ID, statErr)
 		}
-		for _, entry := range entries {
-			if entry.IsDir() && entry.Name() == sessionID {
-				matches = append(matches, root)
-				break
-			}
+		if info.Mode().IsRegular() {
+			matches = append(matches, root)
 		}
 	}
 	switch len(matches) {
@@ -303,7 +301,7 @@ func makeLocation(root Root, sessionID string, rootCount int) Location {
 		Reference: reference,
 		SessionID: sessionID,
 		Root:      root,
-		Directory: filepath.Join(root.Directory, sessionID),
+		File:      filepath.Join(root.Directory, sessionID+sessionFileSuffix),
 	}
 }
 

@@ -41,7 +41,7 @@ func TestCatalogSessionsListReadAndCreate(t *testing.T) {
 		t.Fatalf("list = %d %s", list.status, list.body)
 	}
 	read := f.catalogCall(t, "GET", catalogSessionsPath+"/demo", "", nil)
-	onDisk, _ := os.ReadFile(filepath.Join(f.root, "sessions", "demo", "session.json"))
+	onDisk, _ := os.ReadFile(filepath.Join(f.root, "sessions", "demo.json"))
 	if read.status != http.StatusOK || read.body != string(onDisk) || read.etag == "" {
 		t.Fatalf("read = %d %q etag %q", read.status, read.body, read.etag)
 	}
@@ -74,11 +74,11 @@ func TestCatalogSessionsListReadAndCreate(t *testing.T) {
 func TestCatalogSessionWriteIsCheckedByTheLoader(t *testing.T) {
 	f := newLayoutFixture(t)
 	path := catalogSessionsPath + "/demo"
-	target := filepath.Join(f.root, "sessions", "demo", "session.json")
+	target := filepath.Join(f.root, "sessions", "demo.json")
 	before := f.catalogCall(t, "GET", path, "", nil)
 	cases := map[string]struct{ body, want string }{
 		"empty":            {``, "expected a JSON object"},
-		"not json":         {`{"cwd":`, "session.json"},
+		"not json":         {`{"cwd":`, "demo.json"},
 		"unknown key":      {`{"cwd":"` + f.cwd + `","active_profile":"dev/coder","nope":1}`, "nope"},
 		"no active":        {`{"cwd":"` + f.cwd + `"}`, "active_profile"},
 		"unknown profile":  {`{"cwd":"` + f.cwd + `","active_profile":"dev/missing"}`, "dev/missing"},
@@ -103,8 +103,8 @@ func TestCatalogSessionWriteIsCheckedByTheLoader(t *testing.T) {
 	if reply := f.catalogCall(t, "PUT", catalogSessionsPath+"/fresh", `{"cwd":"/no/such/folder","active_profile":"dev/coder"}`, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusUnprocessableEntity {
 		t.Fatalf("refused create = %d", reply.status)
 	}
-	if _, err := os.Stat(filepath.Join(f.root, "sessions", "fresh")); err == nil {
-		t.Fatal("a refused create left a session folder behind")
+	if _, err := os.Stat(filepath.Join(f.root, "sessions", "fresh.json")); err == nil {
+		t.Fatal("a refused create left a session file behind")
 	}
 	scratch, _ := filepath.Glob(filepath.Join(os.TempDir(), "jad-session-check-*"))
 	if len(scratch) != 0 {
@@ -130,7 +130,7 @@ func TestCatalogSessionReplaceNeedsTheCurrentVersion(t *testing.T) {
 	if replaced.status != http.StatusOK || replaced.etag == before.etag {
 		t.Fatalf("replace = %d %s", replaced.status, replaced.body)
 	}
-	if onDisk, _ := os.ReadFile(filepath.Join(f.root, "sessions", "demo", "session.json")); string(onDisk) != next {
+	if onDisk, _ := os.ReadFile(filepath.Join(f.root, "sessions", "demo.json")); string(onDisk) != next {
 		t.Fatalf("stored %q", onDisk)
 	}
 	if status, body := f.do(t, "GET", "/api/sessions/local:demo", ""); status != http.StatusOK || !strings.Contains(body, `"category":"other"`) {
@@ -158,14 +158,17 @@ func TestCatalogSessionDeleteKeepsTheStateByDefault(t *testing.T) {
 	if reply := f.catalogCall(t, "DELETE", path+"?state=bogus", "", map[string]string{"If-Match": current.etag}); reply.status != http.StatusBadRequest {
 		t.Fatalf("bad state value = %d", reply.status)
 	}
-	if _, err := os.Stat(filepath.Join(f.root, "sessions", "demo", "session.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(f.root, "sessions", "demo.json")); err != nil {
 		t.Fatalf("a refused delete removed the session: %v", err)
 	}
 	if reply := f.catalogCall(t, "DELETE", path, "", map[string]string{"If-Match": current.etag}); reply.status != http.StatusNoContent {
 		t.Fatalf("delete = %d %s", reply.status, reply.body)
 	}
-	if _, err := os.Stat(filepath.Join(f.root, "sessions", "demo")); err == nil {
-		t.Fatal("the session folder is still there")
+	if _, err := os.Stat(filepath.Join(f.root, "sessions", "demo.json")); err == nil {
+		t.Fatal("the session file is still there")
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "sessions", ".demo.json.jad-lock")); err == nil {
+		t.Fatal("the session lock file is still there")
 	}
 	if _, err := os.Stat(state); err != nil {
 		t.Fatalf("the state folder was removed although it was to be kept: %v", err)
@@ -209,25 +212,6 @@ func TestCatalogSessionDeleteCanRemoveTheState(t *testing.T) {
 	}
 }
 
-func TestCatalogSessionDeleteRefusesAFolderWithOtherFiles(t *testing.T) {
-	f := newLayoutFixture(t)
-	extra := filepath.Join(f.root, "sessions", "demo", "notes.txt")
-	if err := os.WriteFile(extra, []byte("keep"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	path := catalogSessionsPath + "/demo"
-	current := f.catalogCall(t, "GET", path, "", nil)
-	reply := f.catalogCall(t, "DELETE", path, "", map[string]string{"If-Match": current.etag})
-	if reply.status != http.StatusConflict || !strings.Contains(reply.body, "notes.txt") {
-		t.Fatalf("delete = %d %s, want 409 naming the file", reply.status, reply.body)
-	}
-	for _, name := range []string{"session.json", "notes.txt"} {
-		if _, err := os.Stat(filepath.Join(f.root, "sessions", "demo", name)); err != nil {
-			t.Fatalf("%s removed although refused: %v", name, err)
-		}
-	}
-}
-
 func TestCatalogSessionDeleteStopsAnActiveRun(t *testing.T) {
 	f := newLayoutFixture(t)
 	f.mu.Lock()
@@ -259,8 +243,11 @@ func TestCatalogSessionDeleteStopsAnActiveRun(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the run was not stopped by the delete")
 	}
-	if _, err := os.Stat(filepath.Join(f.root, "sessions", "demo")); err == nil {
-		t.Fatal("the session folder is still there")
+	if _, err := os.Stat(filepath.Join(f.root, "sessions", "demo.json")); err == nil {
+		t.Fatal("the session file is still there")
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "sessions", ".demo.json.jad-lock")); err == nil {
+		t.Fatal("the session lock file is still there")
 	}
 }
 
@@ -289,7 +276,7 @@ func TestCatalogSessionDeleteWithAStaleTagLeavesTheRunGoing(t *testing.T) {
 		t.Fatalf("a refused delete ended the run: %s", body)
 	case <-time.After(300 * time.Millisecond):
 	}
-	if _, err := os.Stat(filepath.Join(f.root, "sessions", "demo", "session.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(f.root, "sessions", "demo.json")); err != nil {
 		t.Fatalf("a refused delete removed the session: %v", err)
 	}
 	current := f.catalogCall(t, "GET", catalogSessionsPath+"/demo", "", nil)

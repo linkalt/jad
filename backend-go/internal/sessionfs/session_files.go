@@ -9,13 +9,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"jad/backend-go/internal/sessionlock"
 )
 
-// sessionLockFileName is the lock the settings writers hold next to session.json.
-const sessionLockFileName = "." + layoutSessionFileName + ".jad-lock"
-
 // ListSessionFiles lists the catalog-layout sessions of every root with the version of each
-// session.json. The ID is the session reference the other routes take.
+// <id>.json file. The ID is the session reference the other routes take.
 func ListSessionFiles(roots []Root) ([]CatalogFileInfo, error) {
 	var infos []CatalogFileInfo
 	for _, root := range roots {
@@ -30,13 +29,11 @@ func ListSessionFiles(roots []Root) ([]CatalogFileInfo, error) {
 			return nil, fmt.Errorf("read session root %q: %w", root.ID, err)
 		}
 		for _, entry := range entries {
-			if !entry.IsDir() {
+			id, ok := SessionFileID(entry)
+			if !ok {
 				continue
 			}
-			location := makeLocation(root, entry.Name(), len(roots))
-			if !location.UsesLayout() {
-				continue
-			}
+			location := makeLocation(root, id, len(roots))
 			data, err := os.ReadFile(location.SettingFile())
 			if err != nil {
 				return nil, configError("%s: could not be read: %v", location.SettingFile(), err)
@@ -98,7 +95,7 @@ func newLayoutSession(roots []Root, reference string) (Location, error) {
 	return makeLocation(*chosen, sessionID, len(roots)), nil
 }
 
-// ReadSessionFile returns one session.json as it is on disk.
+// ReadSessionFile returns one session file as it is on disk.
 func ReadSessionFile(roots []Root, reference string) (CatalogFile, error) {
 	location, err := existingLayoutSession(roots, reference)
 	if err != nil {
@@ -111,14 +108,14 @@ func ReadSessionFile(roots []Root, reference string) (CatalogFile, error) {
 	return CatalogFile{CatalogFileInfo: CatalogFileInfo{ID: location.Reference, ETag: CatalogETag(data)}, Data: data}, nil
 }
 
-// WriteSessionFile checks data with the loader and stores it as the session's session.json,
+// WriteSessionFile checks data with the loader and stores it as the session file <id>.json,
 // under the same preconditions as WriteCatalogFile. The result says whether the session is new.
 func WriteSessionFile(roots []Root, reference string, data []byte, condition WriteCondition, syncWrite bool) (CatalogFileInfo, bool, error) {
 	location, err := newLayoutSession(roots, reference)
 	if err != nil {
 		return CatalogFileInfo{}, false, err
 	}
-	path := filepath.Join(location.Directory, layoutSessionFileName)
+	path := location.File
 	exists, before, err := checkWritePrecondition(path, "session", location.Reference, condition)
 	if err != nil {
 		return CatalogFileInfo{}, false, err
@@ -145,17 +142,16 @@ func validateSessionFile(location Location, data []byte) error {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(scratch) }()
-	scratchFile := filepath.Join(scratch, layoutSessionFileName)
+	scratchFile := filepath.Join(scratch, filepath.Base(location.File))
 	if err := os.WriteFile(scratchFile, data, 0o600); err != nil {
 		return err
 	}
 	probe := location
-	probe.Directory = scratch
-	target := filepath.Join(location.Directory, layoutSessionFileName)
+	probe.File = scratchFile
 	if _, err := LoadLayoutSessionSettings(probe, *location.Root.Layout, "", ""); err != nil {
 		var problem *ConfigError
 		if errors.As(err, &problem) {
-			return configError("%s", strings.ReplaceAll(problem.Message, scratchFile, target))
+			return configError("%s", strings.ReplaceAll(problem.Message, scratchFile, location.File))
 		}
 		return err
 	}
@@ -182,41 +178,28 @@ func CheckSessionDelete(roots []Root, reference, ifMatch string) (Location, erro
 	return location, nil
 }
 
-// DeleteSessionFile removes the version of a session that ifMatch names: session.json and
-// the lock file beside it, then the folder, which must hold nothing else. With deleteState it
-// also removes <state>/<session>, the transcripts of every profile, and returns that folder so
-// the caller can drop what it cached for it; otherwise the state stays and the result is "".
-// The caller has stopped the session's runs.
+// DeleteSessionFile removes the version of a session that ifMatch names: its file and the lock
+// file beside it. With deleteState it also removes <state>/<session>, the transcripts of every
+// profile, and returns that folder so the caller can drop what it cached for it; otherwise the
+// state stays and the result is "". The caller has stopped the session's runs.
 func DeleteSessionFile(roots []Root, reference, ifMatch string, deleteState bool) (string, error) {
 	location, err := CheckSessionDelete(roots, reference, ifMatch)
 	if err != nil {
 		return "", err
 	}
-	entries, err := os.ReadDir(location.Directory)
+	if err := os.Remove(location.File); err != nil {
+		return "", err
+	}
+	lock, err := sessionlock.PathFor(location.File)
 	if err != nil {
 		return "", err
 	}
-	var extra []string
-	for _, entry := range entries {
-		if name := entry.Name(); name != layoutSessionFileName && name != sessionLockFileName {
-			extra = append(extra, name)
-		}
-	}
-	if len(extra) > 0 {
-		return "", &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("session folder %s holds files besides session.json: %s; remove them first", location.Directory, strings.Join(extra, ", "))}
-	}
-	if err := os.Remove(location.SettingFile()); err != nil {
-		return "", err
-	}
-	if err := os.Remove(filepath.Join(location.Directory, sessionLockFileName)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", err
-	}
-	if err := os.Remove(location.Directory); err != nil {
+	if err := os.Remove(lock); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}
 	if !deleteState {
 		return "", nil
 	}
-	stateDir := filepath.Join(location.Root.Layout.State, location.SessionID)
+	stateDir := location.StateDir()
 	return stateDir, os.RemoveAll(stateDir)
 }

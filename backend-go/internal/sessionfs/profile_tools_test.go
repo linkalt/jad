@@ -179,7 +179,7 @@ func TestProfileOutsideTheScopeIsNotChecked(t *testing.T) {
 		ActiveProfile: "dev/full",
 		Profiles:      map[string]map[string]any{"dev/lean": {"instructions": " "}, "dev/full": {}},
 	})
-	editJSON(t, location.Directory+"/session.json", func(m map[string]any) {
+	editJSON(t, location.File, func(m map[string]any) {
 		m["scope"] = map[string]any{"profiles": []any{"dev/full"}}
 	})
 	if _, err := LoadSessionSettings(location, "", ""); err != nil {

@@ -103,7 +103,7 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 	write("tools/coding/none.json", map[string]any{"native": map[string]any{}, "mcp": map[string]any{}})
 	write("profiles/dev/coder.json", map[string]any{"models": []string{"openai/small", "openai/large"}, "model_default": "openai/small", "toolset": "coding/none"})
 	write("profiles/review/reviewer.json", map[string]any{"models": []string{"openai/large"}, "toolset": "coding/none"})
-	write("sessions/demo/session.json", map[string]any{
+	write("sessions/demo.json", map[string]any{
 		"schema_version": 1, "cwd": f.cwd, "active_profile": "dev/coder", "category": "work",
 		"scope": map[string]any{"profiles": []string{"dev", "review"}},
 	})
@@ -244,10 +244,10 @@ func TestSessionVersionChangesWithTheCategory(t *testing.T) {
 // profile sees the choice too; session.json is not touched.
 func TestLayoutModelRouteWritesTheProfileFileForEverySession(t *testing.T) {
 	f := newLayoutFixture(t)
-	sessionFile := filepath.Join(f.root, "sessions", "demo", "session.json")
+	sessionFile := filepath.Join(f.root, "sessions", "demo.json")
 	profileFile := filepath.Join(f.root, "profiles", "dev", "coder.json")
 	sessionBefore, _ := os.ReadFile(sessionFile)
-	other := filepath.Join(f.root, "sessions", "other", "session.json")
+	other := filepath.Join(f.root, "sessions", "other.json")
 	if err := os.MkdirAll(filepath.Dir(other), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestLayoutModelRouteWritesTheProfileFileForEverySession(t *testing.T) {
 // A session.json that still has model_defaults answers 4xx on every route, naming the key.
 func TestLayoutStaleModelDefaultsAreRefusedOverHTTP(t *testing.T) {
 	f := newLayoutFixture(t)
-	sessionFile := filepath.Join(f.root, "sessions", "demo", "session.json")
+	sessionFile := filepath.Join(f.root, "sessions", "demo.json")
 	data, _ := os.ReadFile(sessionFile)
 	data = []byte(strings.Replace(string(data), `"schema_version"`, `"model_defaults": {"dev/coder": "openai/large"}, "schema_version"`, 1))
 	if err := os.WriteFile(sessionFile, data, 0o600); err != nil {

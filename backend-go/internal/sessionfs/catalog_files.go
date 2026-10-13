@@ -373,10 +373,11 @@ func profileUsers(layout Layout, roots []Root, id string) ([]string, error) {
 			return nil, fmt.Errorf("read session root %q: %w", root.ID, err)
 		}
 		for _, entry := range entries {
-			if !entry.IsDir() {
+			sessionID, ok := SessionFileID(entry)
+			if !ok {
 				continue
 			}
-			location, err := Resolve(roots, root.ID+":"+entry.Name())
+			location, err := Resolve(roots, root.ID+":"+sessionID)
 			if err != nil || !location.UsesLayout() {
 				continue
 			}

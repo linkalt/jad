@@ -113,14 +113,17 @@ type SessionConfig struct {
 	SessionName string
 	// Category groups sessions in a listing (session.json "category"); empty when unset.
 	// It does not change the session id or any path.
-	Category           string
-	Profile            string
-	DefaultProfile     string
-	Profiles           []string
-	ModelPath          string
-	ModelDefault       string
-	Models             []string
-	SettingPath        string
+	Category       string
+	Profile        string
+	DefaultProfile string
+	Profiles       []string
+	ModelPath      string
+	ModelDefault   string
+	Models         []string
+	SettingPath    string
+	// StateDir is <state>/<session id>: the folder the session keeps its state in, and the
+	// "session directory" of relative image_store.dir and the {session_dir} spill placeholder.
+	StateDir           string
 	MessagesPath       string
 	MessagesBackupPath string
 	UsageCachePath     string
@@ -201,7 +204,7 @@ func LoadSessionSettings(location Location, requestedProfile, requestedModel str
 	if location.UsesLayout() {
 		return LoadLayoutSessionSettings(location, *location.Root.Layout, requestedProfile, requestedModel)
 	}
-	return SessionConfig{}, configError("%s: not a catalog-layout session; it needs a session.json and a root setting.json that names the catalogs", location.Directory)
+	return SessionConfig{}, configError("%s: not a catalog-layout session; it needs a <session id>.json file in a session root and a root setting.json that names the catalogs", location.File)
 }
 
 // loadSessionSettingsFrom validates a setting-shaped map and turns it into a
@@ -251,7 +254,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err := validateBasePathFields(basePaths, settingPath); err != nil {
 		return SessionConfig{}, err
 	}
-	selectedPaths, profileStorageDir := selectProfileStoragePaths(location.Directory, basePaths, profileSettings, profile, defaultProfile, profileConfigured)
+	selectedPaths, profileStorageDir := selectProfileStoragePaths(location.StateDir(), basePaths, profileSettings, profile, defaultProfile, profileConfigured)
 	settingDir := filepath.Dir(settingPath)
 	if err := validateAllStoragePaths(location, settingPath, paths, basePaths, pathProfiles, defaultProfile, profileConfigured); err != nil {
 		return SessionConfig{}, err
@@ -333,7 +336,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	imageStore, err := normalizeImageStoreSettings(setting["image_store"], location.Directory, settingPath)
+	imageStore, err := normalizeImageStoreSettings(setting["image_store"], location.StateDir(), settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -378,7 +381,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		location.Root.GlobalJadRoot,
 		settingPath,
 		cwd,
-		location.Directory,
+		location.StateDir(),
 		storagePaths.ToolStorage,
 	)
 	if err != nil {
@@ -393,7 +396,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		location.Root.GlobalJadRoot,
 		settingPath,
 		cwd,
-		location.Directory,
+		location.StateDir(),
 		storagePaths.ToolStorage,
 		envFileBase,
 		nativeReadPolicy,
@@ -402,7 +405,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeExec, err := normalizeNativeExecSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, location.Directory, storagePaths.ToolStorage, envFileBase, nativeReadPolicy, grepPolicy)
+	nativeExec, err := normalizeNativeExecSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, location.StateDir(), storagePaths.ToolStorage, envFileBase, nativeReadPolicy, grepPolicy)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -439,7 +442,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		location.Root.GlobalJadRoot,
 		settingPath,
 		cwd,
-		location.Directory,
+		location.StateDir(),
 		storagePaths.ToolStorage,
 		envFileBase,
 	)
@@ -523,6 +526,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		ModelDefault:          modelDefault,
 		Models:                models,
 		SettingPath:           settingPath,
+		StateDir:              location.StateDir(),
 		MessagesPath:          messagesPath,
 		MessagesBackupPath:    messagesBackupPath,
 		UsageCachePath:        usageCachePath,

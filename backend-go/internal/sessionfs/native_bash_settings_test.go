@@ -145,3 +145,12 @@ func TestParseNativeBashEnvFileQuotesAndRejectsMalformedLines(t *testing.T) {
 		}
 	}
 }
+
+// {session_name} is the last element of the session's state folder, which is <state>/<id>.
+func TestBashSpillTemplateSessionNameIsTheSessionID(t *testing.T) {
+	stateDir := filepath.Join("state", "demo")
+	got := resolveBashSpillTemplate("{session_dir}/out/{session_name}-{call_id}.{stream}", "/work", stateDir, "c1", "stdout")
+	if want := filepath.Join("state", "demo") + "/out/demo-c1.stdout"; got != want {
+		t.Fatalf("resolveBashSpillTemplate = %q, want %q", got, want)
+	}
+}

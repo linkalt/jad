@@ -185,14 +185,13 @@ func (f recoveryFixture) session(t *testing.T, name string, native map[string]an
 	f.layout.AddSession(t, name, f.workspace, native, nil)
 }
 
-// brokenSession adds a session whose session.json is not JSON.
+// brokenSession adds a session whose file is not JSON.
 func (f recoveryFixture) brokenSession(t *testing.T, name string) {
 	t.Helper()
-	dir := filepath.Join(f.layout.SessionsDir, name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(f.layout.SessionsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte(`{ this is not json`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(f.layout.SessionsDir, name+".json"), []byte(`{ this is not json`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -278,8 +277,8 @@ func TestRecoverProcessesLeavesNoNewDirectoryForASessionThatNeverStartedAProcess
 func TestRecoverProcessesSkipsSessionsWithoutTheProcessTool(t *testing.T) {
 	f := newRecoveryFixture(t)
 	f.session(t, "plain", nil)
-	// A directory with no session.json is not a session.
-	if err := os.MkdirAll(filepath.Join(f.layout.SessionsDir, "not-a-session"), 0o755); err != nil {
+	// A file that is not <id>.json is not a session.
+	if err := os.WriteFile(filepath.Join(f.layout.SessionsDir, "not-a-session.txt"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	report, err := f.resolver(t).RecoverProcesses(context.Background())

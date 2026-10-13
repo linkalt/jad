@@ -93,7 +93,7 @@ func newOAuthFixture(t *testing.T, modelExtra map[string]any) *oauthFixture {
 		Settings: map[string]any{"max_tool_rounds": 2, "http_debug": map[string]any{"enabled": true, "include_request_headers": true, "include_request_body": true, "max_body_bytes": 65536}},
 		Models:   map[string]map[string]any{"openai/default": modelFile},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken})
-	f.sessionDir = layout.SessionDir
+	f.sessionDir = layout.SessionStateDir
 	f.stateDir = profileState(layout)
 	config.HTTP.Logger = slog.New(slog.NewTextHandler(f.logs, nil))
 	service, err := NewService(config)

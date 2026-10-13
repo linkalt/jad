@@ -10,17 +10,18 @@ import (
 	"jad/backend-go/internal/catalog"
 )
 
-const layoutSessionFileName = "session.json"
+// sessionFileSuffix ends the name of a session file: <session id>.json in a session root.
+const sessionFileSuffix = ".json"
 
 // LoadLayoutSessionSettings is LoadSessionSettings for the catalog layout. It reads
-// <session>/session.json, narrows the profile catalog by the session scope, takes the
+// <id>.json, narrows the profile catalog by the session scope, takes the
 // profile (requested, else active_profile) and composes the setting-shaped map the
 // existing normalizers read, so a normalizer or applyApprovalDefault needs no second copy.
 //
 // Every file is named "<category>/<name>", on the wire and in the files: the profile, the
 // run's model, SessionConfig.Models and ModelDefault. ModelPath is the absolute file.
 func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfile, requestedModel string) (SessionConfig, error) {
-	sessionPath := filepath.Join(location.Directory, layoutSessionFileName)
+	sessionPath := location.File
 	var session layoutSessionFile
 	if err := readLayoutFile(sessionPath, &session); err != nil {
 		return SessionConfig{}, err

@@ -42,7 +42,7 @@ func TestLoadSessionConfigSelectsProfileModelAndStorage(t *testing.T) {
 	if active.WorkingDir != cwd || !active.SessionFiles.Enabled || active.StoragePaths.HTTPDebug != filepath.Join(stateDir, "dev", "green", "debug", "http") {
 		t.Errorf("active file/storage settings = %+v", active)
 	}
-	if active.SessionName != "session-1" || active.SettingPath != filepath.Join(fixture.SessionDir, "session.json") {
+	if active.SessionName != "session-1" || active.SettingPath != fixture.SessionFile {
 		t.Errorf("session metadata = name %q, setting %q", active.SessionName, active.SettingPath)
 	}
 	if len(active.Profiles) != 2 || active.Profiles[0] != "dev/blue" || active.Profiles[1] != "dev/green" {

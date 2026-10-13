@@ -16,6 +16,7 @@ import (
 
 	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionlock"
 )
 
 // File names under the session staging directory.
@@ -259,9 +260,15 @@ func HarnessPaths(config sessionfs.SessionConfig) []string {
 	if config.NativeEdit != nil && config.NativeEdit.BackupDir != nil {
 		candidates = append(candidates, *config.NativeEdit.BackupDir)
 	}
-	// The session directory itself is harness-owned unless the workspace is that directory.
-	if sessionDir := filepath.Dir(config.SettingPath); config.SettingPath != "" && filepath.Clean(sessionDir) != filepath.Clean(config.WorkingDir) {
-		candidates = append(candidates, sessionDir)
+	// The session's state folder is harness-owned unless the workspace is that folder.
+	if config.StateDir != "" && filepath.Clean(config.StateDir) != filepath.Clean(config.WorkingDir) {
+		candidates = append(candidates, config.StateDir)
+	}
+	// The lock file sits beside the session file; a restore replacing it would change its inode.
+	if config.SettingPath != "" {
+		if lock, err := sessionlock.PathFor(config.SettingPath); err == nil {
+			candidates = append(candidates, lock)
+		}
 	}
 	paths := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {

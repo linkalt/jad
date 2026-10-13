@@ -16,7 +16,7 @@ func TestLoadRootsAndResolveAmbiguousReferences(t *testing.T) {
 	first := filepath.Join(cwd, "roots", "first")
 	second := filepath.Join(cwd, "roots", "second")
 	for _, directory := range []string{first, second} {
-		if err := os.MkdirAll(filepath.Join(directory, "shared-session"), 0o755); err != nil {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -54,6 +54,12 @@ func TestLoadRootsAndResolveAmbiguousReferences(t *testing.T) {
 		t.Errorf("allowed origins = %#v", got)
 	}
 
+	// Load refuses two roots that already hold the same id, so the second copy appears later.
+	for _, directory := range []string{first, second} {
+		if err := os.WriteFile(filepath.Join(directory, "shared-session.json"), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := Resolve(config.Roots, "shared-session"); err == nil {
 		t.Fatal("Resolve(unqualified duplicate) succeeded, want ambiguity error")
 	} else {
@@ -69,7 +75,7 @@ func TestLoadRootsAndResolveAmbiguousReferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve(qualified) error = %v", err)
 	}
-	if location.Reference != "alpha:shared-session" || location.Directory != filepath.Join(first, "shared-session") {
+	if location.Reference != "alpha:shared-session" || location.File != filepath.Join(first, "shared-session.json") {
 		t.Errorf("qualified location = %+v", location)
 	}
 }
@@ -642,10 +648,10 @@ func TestLoadRefusesTheSameLayoutSessionInTwoRoots(t *testing.T) {
 	}
 }
 
-// A folder without a session.json is not a session, so it does not collide.
+// A folder is not a session, so a folder named like a session file's id does not collide.
 func TestLoadIgnoresFoldersThatAreNotLayoutSessions(t *testing.T) {
 	fixture := layouttest.Write(t, layouttest.Spec{SessionID: "shared", RootID: "alpha", ExtraRoots: []string{"beta"}})
-	if err := os.MkdirAll(filepath.Join(fixture.RootDirs["beta"], "shared"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(fixture.RootDirs["beta"], "shared.json"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}}); err != nil {

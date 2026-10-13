@@ -12,7 +12,7 @@ import (
 
 // Spec describes one session. Every field is optional.
 type Spec struct {
-	// SessionID is the session folder name; default "session-1".
+	// SessionID is the session id (the file name without .json); default "session-1".
 	SessionID string
 	// CWD is the session's working directory; default a fresh temp dir.
 	CWD string
@@ -23,7 +23,7 @@ type Spec struct {
 	// StateDir is where transcripts and staging live; default <root>/state. A test sets it
 	// inside the working directory to check that the state folder is left out of snapshots.
 	StateDir string
-	// SessionsDir is where the session folders live; default <root>/sessions.
+	// SessionsDir is where the session files live; default <root>/sessions.
 	SessionsDir string
 	// Server is the root setting's `server` object.
 	Server map[string]any
@@ -76,10 +76,12 @@ type Fixture struct {
 	Root        string
 	RootSetting string
 	SessionsDir string
-	SessionDir  string
-	SessionID   string
-	CWD         string
-	StateDir    string
+	// SessionFile is <sessions dir>/<id>.json; SessionStateDir is <state>/<id>.
+	SessionFile     string
+	SessionStateDir string
+	SessionID       string
+	CWD             string
+	StateDir        string
 	// ModelsDir holds the model files, <category>/<name>.json.
 	ModelsDir string
 	// RootDirs maps every session root ID to its folder.
@@ -232,7 +234,7 @@ func Write(t *testing.T, spec Spec) Fixture {
 		session[key] = value
 	}
 	if !spec.NoSession {
-		sessionFile := filepath.Join(sessionsPath(spec, root), spec.SessionID, "session.json")
+		sessionFile := filepath.Join(sessionsPath(spec, root), spec.SessionID+".json")
 		if err := os.MkdirAll(filepath.Dir(sessionFile), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -247,7 +249,7 @@ func Write(t *testing.T, spec Spec) Fixture {
 
 	return Fixture{
 		Root: root, RootSetting: filepath.Join(root, "setting.json"), SessionsDir: sessionsPath(spec, root),
-		SessionDir: filepath.Join(sessionsPath(spec, root), spec.SessionID), SessionID: spec.SessionID, CWD: spec.CWD, StateDir: stateDir, ModelsDir: filepath.Join(root, "models"), RootDirs: rootDirs,
+		SessionFile: filepath.Join(sessionsPath(spec, root), spec.SessionID+".json"), SessionStateDir: filepath.Join(stateDir, spec.SessionID), SessionID: spec.SessionID, CWD: spec.CWD, StateDir: stateDir, ModelsDir: filepath.Join(root, "models"), RootDirs: rootDirs,
 	}
 }
 
@@ -293,7 +295,7 @@ func (f Fixture) AddSession(t *testing.T, id, cwd string, native map[string]any,
 	if settings != nil {
 		session["settings"] = settings
 	}
-	put(filepath.Join(f.SessionsDir, id, "session.json"), session)
+	put(filepath.Join(f.SessionsDir, id+".json"), session)
 }
 
 // AddSessionOn writes one more session that uses an existing profile (for example
@@ -304,7 +306,7 @@ func (f Fixture) AddSessionOn(t *testing.T, id, cwd, profile string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(f.SessionsDir, id, "session.json")
+	path := filepath.Join(f.SessionsDir, id+".json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +331,7 @@ func (f Fixture) AddSessionInRoot(t *testing.T, rootID, id, cwd, profile string,
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, id, "session.json")
+	path := filepath.Join(dir, id+".json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}

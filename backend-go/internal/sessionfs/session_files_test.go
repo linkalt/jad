@@ -33,7 +33,7 @@ func catalogErrorKind(err error) (CatalogErrorKind, bool) {
 func TestNewLayoutSessionNeedsAnUnambiguousRoot(t *testing.T) {
 	one := sessionRoots(t, 1)
 	location, err := newLayoutSession(one, "demo")
-	if err != nil || location.Reference != "demo" || location.Directory != filepath.Join(one[0].Directory, "demo") {
+	if err != nil || location.Reference != "demo" || location.File != filepath.Join(one[0].Directory, "demo.json") {
 		t.Fatalf("one root: %+v %v", location, err)
 	}
 	if location, err = newLayoutSession(one, "a:demo"); err != nil || location.SessionID != "demo" {
@@ -59,24 +59,27 @@ func TestNewLayoutSessionNeedsAnUnambiguousRoot(t *testing.T) {
 	}
 }
 
-func TestListSessionFilesSkipsRootsAndFoldersWithoutALayoutSession(t *testing.T) {
+func TestListSessionFilesListsOnlyIDDotJSONFilesOfRootsWithALayout(t *testing.T) {
 	roots := sessionRoots(t, 2)
 	write := func(root Root, name, body string) {
-		dir := filepath.Join(root.Directory, name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(root.Directory, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if body != "" {
-			if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte(body), 0o600); err != nil {
-				t.Fatal(err)
-			}
+		if err := os.WriteFile(filepath.Join(root.Directory, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
 		}
 	}
-	write(roots[0], "one", `{"a":1}`)
-	write(roots[0], "empty", "")
-	write(roots[1], "two", `{"b":2}`)
+	write(roots[0], "one.json", `{"a":1}`)
+	write(roots[0], "notes.txt", "x")
+	write(roots[0], ".one.json.jad-lock", "")
+	write(roots[0], "one.json.tmp-123", "{}")
+	write(roots[0], "bad name.json", "{}")
+	if err := os.Mkdir(filepath.Join(roots[0].Directory, "dir.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(roots[1], "two.json", `{"b":2}`)
 	roots = append(roots, Root{ID: "plain", Directory: t.TempDir()})
-	write(roots[2], "legacy", `{"c":3}`)
+	write(roots[2], "legacy.json", `{"c":3}`)
 	files, err := ListSessionFiles(roots)
 	if err != nil {
 		t.Fatal(err)
@@ -97,11 +100,7 @@ func TestListSessionFilesReportsTheNameAFileSets(t *testing.T) {
 		"notjson":  `{"name":`,
 		"wrongtyp": `{"name":7}`,
 	} {
-		dir := filepath.Join(roots[0].Directory, id)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte(body), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(roots[0].Directory, id+".json"), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -127,13 +126,11 @@ func TestListSessionFilesReportsTheNameAFileSets(t *testing.T) {
 func TestDeleteSessionFileKeepsOrRemovesState(t *testing.T) {
 	for _, deleteState := range []bool{false, true} {
 		roots := sessionRoots(t, 1)
-		dir := filepath.Join(roots[0].Directory, "demo")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
+		file := filepath.Join(roots[0].Directory, "demo.json")
+		lock := filepath.Join(roots[0].Directory, ".demo.json.jad-lock")
 		body := []byte(`{"x":1}`)
-		for name, data := range map[string][]byte{"session.json": body, sessionLockFileName: nil} {
-			if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+		for path, data := range map[string][]byte{file: body, lock: nil} {
+			if err := os.WriteFile(path, data, 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -148,8 +145,10 @@ func TestDeleteSessionFileKeepsOrRemovesState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("state=%v: %v", deleteState, err)
 		}
-		if _, err := os.Stat(dir); err == nil {
-			t.Errorf("state=%v: the session folder is still there", deleteState)
+		for _, path := range []string{file, lock} {
+			if _, err := os.Stat(path); err == nil {
+				t.Errorf("state=%v: %s is still there", deleteState, path)
+			}
 		}
 		_, stateErr := os.Stat(state)
 		if deleteState && (stateErr == nil || removed != filepath.Join(roots[0].Layout.State, "demo")) {
@@ -158,5 +157,60 @@ func TestDeleteSessionFileKeepsOrRemovesState(t *testing.T) {
 		if !deleteState && (stateErr != nil || removed != "") {
 			t.Errorf("state=%v: state lost (%v) or a folder was reported: %q", deleteState, stateErr, removed)
 		}
+	}
+}
+
+func TestSessionFilesWithDottedIDsAreListedReadAndDeleted(t *testing.T) {
+	roots := sessionRoots(t, 1)
+	for _, id := range []string{"v1.2", "a.json", "x-y_z"} {
+		if err := os.WriteFile(filepath.Join(roots[0].Directory, id+".json"), []byte(`{"cwd":"/x"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := ListSessionFiles(roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]bool{}
+	for _, file := range files {
+		listed[file.ID] = true
+	}
+	if len(listed) != 3 || !listed["v1.2"] || !listed["a.json"] || !listed["x-y_z"] {
+		t.Fatalf("listed %v", listed)
+	}
+	if file, err := ReadSessionFile(roots, "a.json"); err != nil || string(file.Data) != `{"cwd":"/x"}` {
+		t.Fatalf("ReadSessionFile(a.json) = %q, %v", file.Data, err)
+	}
+	if _, err := DeleteSessionFile(roots, "a.json", CatalogETag([]byte(`{"cwd":"/x"}`)), false); err != nil {
+		t.Fatalf("DeleteSessionFile(a.json) = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(roots[0].Directory, "a.json.json")); !os.IsNotExist(err) {
+		t.Fatalf("a.json.json still exists after delete: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(roots[0].Directory, "v1.2.json")); err != nil {
+		t.Fatalf("deleting a.json removed another session: %v", err)
+	}
+	if _, err := newLayoutSession(roots, ".hidden"); err == nil {
+		t.Fatal(".hidden was accepted as a session id")
+	}
+}
+
+func TestTheFolderFormOfASessionIsNeitherListedNorRead(t *testing.T) {
+	roots := sessionRoots(t, 1)
+	folder := filepath.Join(roots[0].Directory, "old")
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "session.json"), []byte(`{"cwd":"/x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := ListSessionFiles(roots)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("ListSessionFiles = %+v, %v; want nothing", files, err)
+	}
+	if _, err := ReadSessionFile(roots, "old"); err == nil {
+		t.Fatal("a session in the old folder form was read")
+	} else if kind, ok := catalogErrorKind(err); !ok || kind != CatalogNotFound {
+		t.Fatalf("ReadSessionFile(old) error = %v, want not found", err)
 	}
 }

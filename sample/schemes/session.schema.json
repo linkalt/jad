@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "session.schema.json",
   "title": "Session",
-  "description": "<root>/<session>/session.json. A session is a working context: a cwd, the part of the catalogs it may use, and the active profile. It holds no model, tool or MCP definitions.",
+  "description": "<root>/<session id>.json; the file name without .json is the session id. A session is a working context: a cwd, the part of the catalogs it may use, and the active profile. It holds no model, tool or MCP definitions.",
   "type": "object",
   "properties": {
     "schema_version": {
@@ -14,7 +14,7 @@
     "name": {
       "type": "string",
       "pattern": "\\S",
-      "description": "Display name of the session. Defaults to the folder name."
+      "description": "Display name of the session, shown beside its id. Defaults to the session id."
     },
     "cwd": {
       "type": "string",

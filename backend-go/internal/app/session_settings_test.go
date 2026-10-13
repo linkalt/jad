@@ -105,7 +105,7 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 	}
 
 	var storedSession map[string]json.RawMessage
-	storedBytes, err := os.ReadFile(filepath.Join(fixture.SessionDir, "session.json"))
+	storedBytes, err := os.ReadFile(fixture.SessionFile)
 	if err != nil || json.Unmarshal(storedBytes, &storedSession) != nil {
 		t.Fatalf("read updated session: err=%v", err)
 	}

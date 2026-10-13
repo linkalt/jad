@@ -123,7 +123,7 @@ func TestParentSessionTranscriptIsNotCompactedByAChild(t *testing.T) {
 // block in it, as a compaction of the session would have.
 func enableSessionStateContext(t *testing.T, f subagentFixture, enabled bool) {
 	t.Helper()
-	settingPath := filepath.Join(f.sessionDir, "session.json")
+	settingPath := f.sessionFile
 	var session map[string]any
 	data, err := os.ReadFile(settingPath)
 	if err != nil {

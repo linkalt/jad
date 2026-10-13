@@ -16,6 +16,25 @@ func containsPath(paths []string, want string) bool {
 	return false
 }
 
+// The session file shares its folder with other sessions and its lock file, so the lock is
+// excluded on its own; a restore that replaced it would break the stable-inode guarantee.
+func TestHarnessPathsExcludeTheSessionLockFileAndStateDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	sessionFile := filepath.Join(workspace, "sessions", "demo.json")
+	state := filepath.Join(workspace, "state", "demo")
+	config := sessionfs.SessionConfig{WorkingDir: workspace, SettingPath: sessionFile, StateDir: state}
+	paths := HarnessPaths(config)
+	if want := filepath.Join(workspace, "sessions", ".demo.json.jad-lock"); !containsPath(paths, want) {
+		t.Fatalf("HarnessPaths = %v, want the lock file %s", paths, want)
+	}
+	if !containsPath(paths, state) {
+		t.Fatalf("HarnessPaths = %v, want the state directory %s", paths, state)
+	}
+	if !containsPath(paths, sessionFile) {
+		t.Fatalf("HarnessPaths = %v, want the session file %s", paths, sessionFile)
+	}
+}
+
 // A sub-agent writes its transcripts under tools.native.subagent.storage_dir. When that
 // directory sits inside the workspace, a checkpoint must not record it as a change the
 // run made, or restoring would delete the transcripts of children that finished.
