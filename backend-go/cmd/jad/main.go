@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -19,6 +20,9 @@ import (
 
 func main() {
 	if err := run(); err != nil {
+		if errors.Is(err, errCheckFailed) {
+			os.Exit(1)
+		}
 		// A startup or shutdown failure is always reported on stderr, whatever
 		// server.log_level says: it explains why the process exited.
 		fmt.Fprintf(os.Stderr, "jad: %v\n", err)
@@ -26,7 +30,34 @@ func main() {
 	}
 }
 
+// errCheckFailed is returned by "jad check" when it found a problem; the problems are
+// already printed, so main exits 1 without adding a message.
+var errCheckFailed = errors.New("check failed")
+
+// runCommand runs "jad check": it reads the root setting and every catalog and session file
+// as the server would, starts nothing, needs no API token, and fails when a file is invalid.
+func runCommand(args []string, stdout io.Writer) error {
+	if args[0] != "check" || len(args) > 1 {
+		return fmt.Errorf("unknown arguments %q; the only command is \"check\"", args)
+	}
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{})
+	if err != nil {
+		return fmt.Errorf("load server configuration: %w", err)
+	}
+	valid, err := app.CheckFiles(loaded.Roots, stdout)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return errCheckFailed
+	}
+	return nil
+}
+
 func run() error {
+	if len(os.Args) > 1 {
+		return runCommand(os.Args[1:], os.Stdout)
+	}
 	shutdownSignal, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
