@@ -597,6 +597,12 @@ Kept on purpose: `loadSessionSettingsFrom`, `selectProfile` and `storage_paths.g
 
 Tests: all tests that wrote a legacy `setting.json` now build their session with `internal/sessionfs/layouttest`. Three differences from the legacy tests were found and are not hidden: the layout's session list always reports a run under its profile id (`runs_by_profile`), `session_files` could not be set (fixed below), and two roots with equal session ids share a state folder (fixed below).
 
+### The legacy keys are removed from `setting.schema.json` (2026-10-16)
+
+`sample/schemes/setting.schema.json` no longer has the seven top-level properties that only the removed loader read: `schema_version`, `session_name`, `prompt_documents`, `prompt_role`, `paths` (with `paths.profiles` and the old `active_profile`), `tool_definition_paths` and `mcp_servers`. What stays is what the layout schemes reference: `$defs/layout_settings`, `properties/tools/properties/native` and `properties/hooks`, plus the setting keys `layout_settings` shares.
+
+The profile `tools` allow/deny rule (entry pattern, `uniqueItems`) lived only under `paths.profiles`. It moved into `profile.schema.json`, which is where a layout profile is validated, and `TestProfileToolsSchemaMatchesTheLoader` reads it from there. The Go loader code (`loadSessionSettingsFrom`, `selectProfile`, `storage_paths.go`) is unchanged: the layout loader still feeds its setting-shaped map through it.
+
 ### Follow-ups (2026-10-11)
 
 - **Every profile in scope is checked at load.** `LoadLayoutSessionSettings` used to read only the selected profile's file, so a typo in another profile appeared only when it was selected (the legacy loader checked all). `compose` now reads each other profile in the scope with `readProfile` (schema_version, settings keys, models, model_default) and `checkUnselectedProfile` (instructions, prompt_documents entries, `tools` block). It does not read prompt documents or the toolset of those profiles. A profile the session's `scope.profiles` leaves out is not read. Cost: one file read per profile per load. The error names the profile file.

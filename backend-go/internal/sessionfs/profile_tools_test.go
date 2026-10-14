@@ -188,35 +188,25 @@ func TestProfileOutsideTheScopeIsNotChecked(t *testing.T) {
 
 // The schema file documents the same keys and entry forms the loader accepts.
 func TestProfileToolsSchemaMatchesTheLoader(t *testing.T) {
-	data, err := os.ReadFile("../../../sample/schemes/setting.schema.json")
+	data, err := os.ReadFile("../../../sample/schemes/profile.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var schema struct {
 		Properties struct {
-			Paths struct {
-				Properties struct {
-					Profiles struct {
-						AdditionalProperties struct {
-							Properties struct {
-								Tools struct {
-									Properties map[string]json.RawMessage `json:"properties"`
-									AnyOf      []struct {
-										Required []string `json:"required"`
-									} `json:"anyOf"`
-									AdditionalProperties bool `json:"additionalProperties"`
-								} `json:"tools"`
-							} `json:"properties"`
-						} `json:"additionalProperties"`
-					} `json:"profiles"`
-				} `json:"properties"`
-			} `json:"paths"`
+			Tools struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+				AnyOf      []struct {
+					Required []string `json:"required"`
+				} `json:"anyOf"`
+				AdditionalProperties bool `json:"additionalProperties"`
+			} `json:"tools"`
 		} `json:"properties"`
 	}
 	if err := json.Unmarshal(data, &schema); err != nil {
 		t.Fatal(err)
 	}
-	tools := schema.Properties.Paths.Properties.Profiles.AdditionalProperties.Properties.Tools
+	tools := schema.Properties.Tools
 	var keys []string
 	for key := range tools.Properties {
 		keys = append(keys, key)

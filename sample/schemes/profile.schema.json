@@ -57,19 +57,23 @@
     },
     "tools": {
       "type": "object",
-      "description": "Which registered tools the profile's model sees. allow lists them, deny takes some away and wins over allow; without allow every registered tool is shown except what deny names. deny also limits the profile's sub-agents. Each entry is a native tool name, mcp:<server>:<tool> or mcp:<server>:*; setting.schema.json has the full rules.",
+      "description": "Which registered tools the profile's model sees. allow lists them, deny takes some away and wins over allow; without allow every registered tool is shown except what deny names. deny also limits the profile's sub-agents: a tool it covers is in no agent's catalog, and an agent that lists only denied tools fails to load. A tool left out is hidden from the profile's model only; a sub-agent can still use it when its agent lists it. Each entry is a native tool name, mcp:<server>:<tool> or mcp:<server>:*. An entry that names a tool the session does not register is a configuration error. An empty allow array hides every registered tool; hosted tools from the model file (such as web search) are not registered tools and stay.",
       "properties": {
         "allow": {
           "type": "array",
           "items": {
-            "type": "string"
-          }
+            "type": "string",
+            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|task|memory|fetch|request_draft|skill|subagent|decide|mcp:[A-Za-z0-9_-]+:\\S+)$"
+          },
+          "uniqueItems": true
         },
         "deny": {
           "type": "array",
           "items": {
-            "type": "string"
-          }
+            "type": "string",
+            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|task|memory|fetch|request_draft|skill|subagent|decide|mcp:[A-Za-z0-9_-]+:\\S+)$"
+          },
+          "uniqueItems": true
         }
       },
       "anyOf": [{"required": ["allow"]}, {"required": ["deny"]}],
