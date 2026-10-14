@@ -56,6 +56,7 @@ export function SessionGroupList({
 
   const renderRow = (row: SessionListRow, session: SessionGroupSession, isChild: boolean) => {
     const state = rowState(row, session);
+    const turns = row.profile === undefined ? (rowTurns[row.key] ?? session.turns) : rowTurns[row.key];
     // The visible label of a child is the profile; its accessible names carry the
     // session too, because the same profile name repeats in every group.
     const fullLabel = isChild ? viewLabel(session.title, row.label) : row.label;
@@ -68,11 +69,7 @@ export function SessionGroupList({
           row.profile !== undefined ? onOpenProfile(row.sessionRef, row.profile) : onSelect(row.key)
         }
         icon={<StatusDot variant={state} label={`${fullLabel} ${state}`} />}
-        endContent={
-          row.profile === undefined ? (
-            <Badge label={String(rowTurns[row.key] ?? session.turns)} />
-          ) : undefined
-        }
+        endContent={turns === undefined ? undefined : <Badge label={String(turns)} />}
       />
     );
   };
