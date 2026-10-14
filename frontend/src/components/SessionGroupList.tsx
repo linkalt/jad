@@ -34,7 +34,7 @@ export type SessionGroupListProps = {
   onOpenProfile: (sessionRef: string, profile: string) => void;
 };
 
-/** The children of a `SideNavSection`: one collapsible group per session, one row per profile. */
+/** The children of a category `SideNavItem`: one collapsible group per session, one row per profile. */
 export function SessionGroupList({
   groups,
   sessions,

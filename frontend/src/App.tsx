@@ -23,7 +23,7 @@ import {
   Layout,
   LayoutContent,
   SideNav,
-  SideNavSection,
+  SideNavItem,
   StatusDot,
   Text,
   VStack,
@@ -145,6 +145,7 @@ import {MarkdownText} from './components/MarkdownText';
 import {SelectionMenu} from './components/SelectionMenu';
 import type {QuoteAnchor} from './components/SelectionMenu';
 import {quoteDraftForSelection} from './selection-quote';
+import {FolderIcon} from './components/FolderIcon';
 import {PromptLibraryPanel} from './components/PromptLibraryPanel';
 import {RunSettingsPanel} from './components/RunSettingsPanel';
 import {SessionSearchPanel} from './components/SessionSearchPanel';
@@ -1848,9 +1849,11 @@ function SessionNavigation({
       collapsible={{isCollapsed, onCollapsedChange: setIsCollapsed}}
     >
       {categorySections.map(section => (
-        <SideNavSection
+        <SideNavItem
           key={section.category ?? ''}
-          title={section.category ?? appConfig.session_uncategorized_title}
+          label={section.category ?? appConfig.session_uncategorized_title}
+          icon={FolderIcon}
+          collapsible={false}
         >
           <Divider />
           <SessionGroupList
@@ -1864,7 +1867,7 @@ function SessionNavigation({
             onSelect={onSelect}
             onOpenProfile={onOpenProfile}
           />
-        </SideNavSection>
+        </SideNavItem>
       ))}
     </SideNav>
   );
