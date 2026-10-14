@@ -23,9 +23,10 @@ test('ignores user messages and messages without a tool call', () => {
 });
 
 test('finds the newest assistant message that carries a tool list', () => {
-  const withTools = {id: 'a', sender: 'assistant', tools: [{name: 'read'}]};
-  const messages = [{id: 'u', sender: 'user', tools: [{name: 'x'}]}, withTools, {id: 'b', sender: 'assistant'}];
+  const older = {id: 'a', sender: 'assistant', tools: [{name: 'read'}]};
+  const newer = {id: 'c', sender: 'assistant', tools: [{name: 'write'}]};
+  const messages = [{id: 'u', sender: 'user', tools: [{name: 'x'}]}, older, newer, {id: 'b', sender: 'assistant'}];
 
-  assert.equal(latestToolsMessage(messages), withTools);
+  assert.equal(latestToolsMessage(messages), newer);
   assert.equal(latestToolsMessage([{id: 'a', sender: 'assistant'}]), undefined);
 });
