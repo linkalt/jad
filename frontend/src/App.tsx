@@ -170,6 +170,7 @@ import {
 } from '@astryxdesign/core/theme/tokens.stylex';
 import {
   addPinnedView,
+  hasPinnedView,
   isPinnedViewKey,
   profileOfViewKey,
   profileSelection,
@@ -463,7 +464,6 @@ const INITIAL_VIEWS = restoreViews({
   stored: readStoredViews(appConfig.session_views_storage_key),
   seed: appConfig.session_views,
   liveSessionId: LIVE_SESSION_ID,
-  limit: appConfig.session_views_max,
 });
 
 /** Storage is best effort: a blocked or full store must not break the list. */
@@ -1750,8 +1750,6 @@ function SessionNavigation({
   activeViewKey,
   onSelect,
   onOpenProfile,
-  onRemoveView,
-  canPinProfile,
   openLeftPanel,
   onSelectLeftPanel,
   rightPanel,
@@ -1773,8 +1771,6 @@ function SessionNavigation({
   activeViewKey: string;
   onSelect: (viewKey: string) => void;
   onOpenProfile: (sessionRef: string, profile: string) => void;
-  onRemoveView: (viewKey: string) => void;
-  canPinProfile: boolean;
   openLeftPanel: LeftPanelId | null;
   onSelectLeftPanel: (panel: LeftPanelId) => void;
   rightPanel: RightPanelId | null;
@@ -1815,12 +1811,9 @@ function SessionNavigation({
             runningViewKeys={runningViewKeys}
             activeViewKey={activeViewKey}
             collapsedRefs={collapsedRefs}
-            canPinProfile={canPinProfile}
-            pinLimitHint={appConfig.session_views_limit_hint}
             onCollapsedChange={onCollapsedChange}
             onSelect={onSelect}
             onOpenProfile={onOpenProfile}
-            onRemoveView={onRemoveView}
           />
         </SideNavSection>
       ))}
@@ -3027,9 +3020,8 @@ function App() {
         ...(session.profileNames === undefined ? {} : {profileNames: session.profileNames}),
         ...(session.activeProfile === undefined ? {} : {activeProfile: session.activeProfile}),
       })),
-      pinnedViews,
     ),
-    [pinnedViews, sessions],
+    [sessions],
   );
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>(() =>
     readCollapsedGroups(appConfig.session_groups_storage_key),
@@ -3040,7 +3032,6 @@ function App() {
   useEffect(() => {
     writeCollapsedGroups(appConfig.session_groups_storage_key, collapsedGroups);
   }, [collapsedGroups]);
-  const profileRowLimitReached = pinnedViews.length >= appConfig.session_views_max;
 
   /**
    * What each row's own snapshot reported about it, keyed by row.
@@ -4418,7 +4409,7 @@ function App() {
   const openProfileView = useCallback(
     (sessionRef: string, profile: string) => {
       setPinnedViews(current =>
-        addPinnedView(current, {sessionRef, profile}, appConfig.session_views_max),
+        addPinnedView(current, {sessionRef, profile}),
       );
       activateView(viewKey(sessionRef, profile));
     },
@@ -4435,14 +4426,14 @@ function App() {
     (key: string, profile: string) => {
       const sessionRef = sessionRefOfViewKey(key);
       setPinnedViews(current =>
-        addPinnedView(removePinnedView(current, key), {sessionRef, profile}, appConfig.session_views_max),
+        addPinnedView(removePinnedView(current, key), {sessionRef, profile}),
       );
       activateView(viewKey(sessionRef, profile));
     },
     [activateView],
   );
 
-  /** The row's ✕: drop the row. Nothing on the server is touched. */
+  /** Drop a pinned row (the picker chose the stored default). Nothing on the server is touched. */
   const removePinnedRow = useCallback(
     (key: string) => {
       if (key === activeViewKeyRef.current) {
@@ -4473,12 +4464,21 @@ function App() {
       return;
     }
     const knownIds = new Set(sessions.map(session => session.id));
-    const prunedPinnedViews = prunePinnedViews(pinnedViews, [...knownIds]);
+    const prunedPinnedViews = prunePinnedViews(pinnedViews, sessions);
     const retainedPinnedViews = prunedPinnedViews.length === pinnedViews.length
       ? pinnedViews
       : prunedPinnedViews;
     if (retainedPinnedViews !== pinnedViews) {
       setPinnedViews(retainedPinnedViews);
+      const activeProfileOfKey = profileOfViewKey(activeViewKey);
+      const activeSessionOfKey = sessionRefOfViewKey(activeViewKey);
+      if (
+        activeProfileOfKey !== undefined &&
+        knownIds.has(activeSessionOfKey) &&
+        !hasPinnedView(retainedPinnedViews, {sessionRef: activeSessionOfKey, profile: activeProfileOfKey})
+      ) {
+        setActiveViewKey(viewKey(activeSessionOfKey));
+      }
     }
 
     const retainedViewKeys = new Set(knownIds);
@@ -5422,8 +5422,6 @@ function App() {
           activeViewKey={activeViewKey}
           onSelect={activateView}
           onOpenProfile={openProfileView}
-          onRemoveView={removePinnedRow}
-          canPinProfile={!profileRowLimitReached}
           openLeftPanel={leftPanel}
           onSelectLeftPanel={selectLeftPanel}
           rightPanel={rightPanel}

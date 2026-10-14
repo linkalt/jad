@@ -42,16 +42,16 @@ test('a view key names a session, and the profile when it is pinned', () => {
 });
 
 test('pinning a profile adds one row and never a duplicate', () => {
-  const one = addPinnedView([], {sessionRef: 'session1', profile: 'chatgpt'}, 4);
+  const one = addPinnedView([], {sessionRef: 'session1', profile: 'chatgpt'});
   assert.deepEqual(one, [{sessionRef: 'session1', profile: 'chatgpt'}]);
-  assert.deepEqual(addPinnedView(one, {sessionRef: 'session1', profile: 'chatgpt'}, 4), one);
+  assert.deepEqual(addPinnedView(one, {sessionRef: 'session1', profile: 'chatgpt'}), one);
   assert.equal(hasPinnedView(one, {sessionRef: 'session1', profile: 'chatgpt'}), true);
   assert.equal(hasPinnedView(one, {sessionRef: 'session1'}), false);
 
-  const two = addPinnedView(one, {sessionRef: 'session1', profile: 'default'}, 4);
+  const two = addPinnedView(one, {sessionRef: 'session1', profile: 'default'});
   assert.equal(two.length, 2);
-  // The limit holds the list to its configured size.
-  assert.deepEqual(addPinnedView(two, {sessionRef: 'session2', profile: 'x'}, 2), two);
+  // There is no cap: a third row is added too.
+  assert.equal(addPinnedView(two, {sessionRef: 'session2', profile: 'x'}).length, 3);
 });
 
 test('removing a row drops that view and leaves the session row alone', () => {
@@ -72,10 +72,25 @@ test('a row whose session disappeared is dropped', () => {
     {sessionRef: 'session1', profile: 'chatgpt'},
     {sessionRef: 'gone', profile: 'chatgpt'},
   ];
-  assert.deepEqual(prunePinnedViews(views, ['session1', 'session2']), [
+  assert.deepEqual(prunePinnedViews(views, [{id: 'session1'}, {id: 'session2'}]), [
     {sessionRef: 'session1', profile: 'chatgpt'},
   ]);
   assert.deepEqual(prunePinnedViews(views, []), []);
+});
+
+test('a row whose profile the session dropped, or made its default, is dropped', () => {
+  const views = [
+    {sessionRef: 's1', profile: 'p1'},
+    {sessionRef: 's1', profile: 'p2'},
+    {sessionRef: 's1', profile: 'gone'},
+    {sessionRef: 's2', profile: 'x'},
+  ];
+  assert.deepEqual(
+    prunePinnedViews(views, [{id: 's1', profiles: ['p1', 'p2'], activeProfile: 'p2'}, {id: 's2'}]),
+    [{sessionRef: 's1', profile: 'p1'}, {sessionRef: 's2', profile: 'x'}],
+  );
+  // A session whose profiles are not known keeps its rows.
+  assert.deepEqual(prunePinnedViews(views.slice(0, 1), [{id: 's1', profiles: []}]), views.slice(0, 1));
 });
 
 test('the list shows each session, then the rows pinned to it', () => {
@@ -88,11 +103,11 @@ test('the list shows each session, then the rows pinned to it', () => {
     ],
   );
   assert.deepEqual(rows, [
-    {key: 'session1', sessionRef: 'session1', label: 'One', isPinned: false},
-    {key: `session1\u0000chatgpt`, sessionRef: 'session1', profile: 'chatgpt', label: 'One: chatgpt', isPinned: true},
-    {key: `session1\u0000default`, sessionRef: 'session1', profile: 'default', label: 'One: default', isPinned: true},
-    {key: 'session2', sessionRef: 'session2', label: 'Two', isPinned: false},
-    {key: `session2\u0000alternate`, sessionRef: 'session2', profile: 'alternate', label: 'Two: alternate', isPinned: true},
+    {key: 'session1', sessionRef: 'session1', label: 'One'},
+    {key: `session1\u0000chatgpt`, sessionRef: 'session1', profile: 'chatgpt', label: 'One: chatgpt'},
+    {key: `session1\u0000default`, sessionRef: 'session1', profile: 'default', label: 'One: default'},
+    {key: 'session2', sessionRef: 'session2', label: 'Two'},
+    {key: `session2\u0000alternate`, sessionRef: 'session2', profile: 'alternate', label: 'Two: alternate'},
   ]);
   // A row for a session the list does not know about is not shown at all.
   assert.deepEqual(sessionListRows([session('session2', 'Two')], [{sessionRef: 'gone', profile: 'x'}]).length, 1);
@@ -146,14 +161,14 @@ test('a stored arrangement is restored as it was, defensively', () => {
     views: [{sessionRef: 'session1', profile: 'chatgpt'}],
     activeViewKey: `session1\u0000chatgpt`,
   };
-  assert.deepEqual(restoreViews({stored, liveSessionId: 'live', limit: 8}), {
+  assert.deepEqual(restoreViews({stored, liveSessionId: 'live'}), {
     views: [{sessionRef: 'session1', profile: 'chatgpt'}],
     activeViewKey: `session1\u0000chatgpt`,
     restored: true,
   });
   // A stored selection without pinned rows is still a choice worth restoring.
   assert.deepEqual(
-    restoreViews({stored: {views: [], activeViewKey: 'session2'}, liveSessionId: 'live', limit: 8}),
+    restoreViews({stored: {views: [], activeViewKey: 'session2'}, liveSessionId: 'live'}),
     {views: [], activeViewKey: 'session2', restored: true},
   );
   // Duplicates, junk entries, and an over-long list are rejected.
@@ -172,28 +187,27 @@ test('a stored arrangement is restored as it was, defensively', () => {
     ),
     {views: [{sessionRef: 'session1', profile: 'chatgpt'}], activeViewKey: ''},
   );
-  assert.equal(parseStoredViews({views: [{sessionRef: 'a', profile: 'p'}, {sessionRef: 'b', profile: 'q'}]}, 1).views.length, 1);
-  assert.deepEqual(parseStoredViews(undefined, 8), {views: [], activeViewKey: ''});
-  assert.deepEqual(parseStoredViews('garbage', 8), {views: [], activeViewKey: ''});
+  assert.equal(parseStoredViews({views: [{sessionRef: 'a', profile: 'p'}, {sessionRef: 'b', profile: 'q'}]}).views.length, 2);
+  assert.deepEqual(parseStoredViews(undefined), {views: [], activeViewKey: ''});
+  assert.deepEqual(parseStoredViews('garbage'), {views: [], activeViewKey: ''});
 });
 
 test('a fresh page follows the configured seed, else the live session', () => {
   assert.deepEqual(
     restoreViews({
       seed: [{sessionRef: 'session1', profile: 'chatgpt'}],
-      liveSessionId: 'live',
-      limit: 8,
+      liveSessionId: 'live'
     }),
     {views: [{sessionRef: 'session1', profile: 'chatgpt'}], activeViewKey: 'live', restored: false},
   );
-  assert.deepEqual(restoreViews({liveSessionId: 'live', limit: 8}), {
+  assert.deepEqual(restoreViews({liveSessionId: 'live'}), {
     views: [],
     activeViewKey: 'live',
     restored: false,
   });
   // A seed entry without a profile names no view and is ignored.
   assert.deepEqual(
-    restoreViews({seed: [{sessionRef: 'a'}, {sessionRef: 'b', profile: 'p'}], liveSessionId: 'live', limit: 8}),
+    restoreViews({seed: [{sessionRef: 'a'}, {sessionRef: 'b', profile: 'p'}], liveSessionId: 'live'}),
     {views: [{sessionRef: 'b', profile: 'p'}], activeViewKey: 'live', restored: false},
   );
 });
@@ -214,46 +228,34 @@ test('picking a profile lands on the row on screen', () => {
 const grouped = (id, title, profiles, activeProfile) => ({id, title, profiles, activeProfile});
 
 test('a session with profiles is one group with a child row per profile', () => {
-  const [group] = sessionListGroups([grouped('s1', 'Session1', ['p1', 'p2'], 'p1')], []);
+  const [group] = sessionListGroups([grouped('s1', 'Session1', ['p1', 'p2'], 'p1')]);
   assert.equal(group.sessionRef, 's1');
   assert.deepEqual(
-    group.children.map(child => [child.key, child.label, child.profile, child.isPinned]),
+    group.children.map(child => [child.key, child.label, child.profile]),
     [
-      ['s1', 'p1', undefined, false],
-      [`s1\u0000p2`, 'p2', 'p2', false],
+      ['s1', 'p1', undefined],
+      [`s1\u0000p2`, 'p2', 'p2'],
     ],
   );
 });
 
 test('the stored default profile is the session own row, so it keeps following the default', () => {
-  const [group] = sessionListGroups([grouped('s1', 'S', ['a', 'b', 'c'], 'b')], []);
+  const [group] = sessionListGroups([grouped('s1', 'S', ['a', 'b', 'c'], 'b')]);
   assert.deepEqual(group.children.map(child => child.label), ['a', 'b', 'c']);
   const own = group.children.find(child => child.label === 'b');
   assert.equal(own.key, 's1');
   assert.equal(own.profile, undefined);
 });
 
-test('a pinned profile is marked, and a pinned profile the session dropped stays listed last', () => {
-  const [group] = sessionListGroups(
-    [grouped('s1', 'S', ['p1', 'p2'], 'p1')],
-    [{sessionRef: 's1', profile: 'p2'}, {sessionRef: 's1', profile: 'gone'}, {sessionRef: 's2', profile: 'p2'}],
-  );
-  assert.deepEqual(group.children.map(child => [child.label, child.isPinned]), [
-    ['p1', false],
-    ['p2', true],
-    ['gone', true],
-  ]);
-});
-
 test('a session without profiles is a group with no children, only its own row', () => {
-  const [group] = sessionListGroups([grouped('s1', 'Plain', undefined, undefined)], []);
+  const [group] = sessionListGroups([grouped('s1', 'Plain', undefined, undefined)]);
   assert.deepEqual(group.children, []);
   assert.equal(group.ownRow.key, 's1');
   assert.equal(group.ownRow.label, 'Plain');
 });
 
 test('a stored default that is not listed still gets its own child row, first', () => {
-  const [group] = sessionListGroups([grouped('s1', 'S', ['p1'], 'other')], []);
+  const [group] = sessionListGroups([grouped('s1', 'S', ['p1'], 'other')]);
   assert.deepEqual(group.children.map(child => [child.key, child.label]), [
     ['s1', 'other'],
     [`s1\u0000p1`, 'p1'],
@@ -263,7 +265,6 @@ test('a stored default that is not listed still gets its own child row, first', 
 test('groups are expanded unless the user collapsed them, even the one holding the active row', () => {
   const groups = sessionListGroups(
     [grouped('s1', 'A', ['p1', 'p2'], 'p1'), grouped('s2', 'B', ['q1', 'q2'], 'q1')],
-    [],
   );
   assert.equal(isGroupExpanded(groups[0], []), true);
   assert.equal(isGroupExpanded(groups[0], ['s1']), false);
@@ -282,42 +283,21 @@ test('a stored collapsed set keeps only non-empty strings, once each', () => {
   assert.deepEqual(parseCollapsedGroups(undefined), []);
 });
 
-test('an unlisted stored default has one own row, and a view pinned for it keeps its own removable row', () => {
-  const [group] = sessionListGroups(
-    [grouped('s1', 'S', ['p1'], 'other')],
-    [{sessionRef: 's1', profile: 'other'}],
-  );
-  assert.deepEqual(group.children.map(child => child.key), ['s1', `s1\u0000p1`, `s1\u0000other`]);
-});
-
-test('a view pinned for the profile that became the stored default keeps a removable row', () => {
-  const [group] = sessionListGroups(
-    [grouped('s1', 'S', ['p1', 'p2'], 'p2')],
-    [{sessionRef: 's1', profile: 'p2'}],
-  );
-  assert.deepEqual(group.children.map(child => [child.key, child.isPinned]), [
-    [`s1\u0000p1`, false],
-    ['s1', false],
-    [`s1\u0000p2`, true],
-  ]);
-});
-
 test('a profile listed twice is one child row', () => {
-  const [group] = sessionListGroups([grouped('s1', 'S', ['p1', 'p2', 'p2'], 'p1')], []);
+  const [group] = sessionListGroups([grouped('s1', 'S', ['p1', 'p2', 'p2'], 'p1')]);
   assert.deepEqual(group.children.map(child => child.label), ['p1', 'p2']);
 });
 
 const inCategory = (id, category) => ({...grouped(id, id, ['p'], 'p'), category});
 
 test('a session carries its category into the group, and an empty one counts as none', () => {
-  const groups = sessionListGroups([inCategory('a', 'work'), inCategory('b', ''), grouped('c', 'c', ['p'], 'p')], []);
+  const groups = sessionListGroups([inCategory('a', 'work'), inCategory('b', ''), grouped('c', 'c', ['p'], 'p')]);
   assert.deepEqual(groups.map(group => group.category), ['work', undefined, undefined]);
 });
 
 test('sessions are split by category in first-seen order, uncategorised last', () => {
   const groups = sessionListGroups(
     [inCategory('a', 'work'), grouped('n', 'n', ['p'], 'p'), inCategory('b', 'test'), inCategory('c', 'work')],
-    [],
   );
   assert.deepEqual(
     groupByCategory(groups).map(section => [section.category, section.groups.map(group => group.sessionRef)]),
@@ -327,7 +307,7 @@ test('sessions are split by category in first-seen order, uncategorised last', (
 
 test('no sessions give no sections, and no categories give a single unnamed section', () => {
   assert.deepEqual(groupByCategory([]), []);
-  const [only, ...rest] = groupByCategory(sessionListGroups([grouped('a', 'a', ['p'], 'p')], []));
+  const [only, ...rest] = groupByCategory(sessionListGroups([grouped('a', 'a', ['p'], 'p')]));
   assert.equal(only.category, undefined);
   assert.equal(only.groups.length, 1);
   assert.equal(rest.length, 0);
@@ -343,15 +323,13 @@ test('a profile is labelled by the name its file sets, else by its ID', () => {
 test('child rows use the profile name but keep the profile ID as the key and the target', () => {
   const [group] = sessionListGroups(
     [{...grouped('s1', 'S', ['a/one', 'a/two', 'a/three'], 'a/two'), profileNames: {'a/one': 'One', 'a/two': 'Two'}}],
-    [{sessionRef: 's1', profile: 'a/two'}],
   );
   assert.deepEqual(
-    group.children.map(child => [child.key, child.label, child.profile, child.isPinned]),
+    group.children.map(child => [child.key, child.label, child.profile]),
     [
-      [`s1\u0000a/one`, 'One', 'a/one', false],
-      ['s1', 'Two', undefined, false],
-      [`s1\u0000a/two`, 'Two', 'a/two', true],
-      [`s1\u0000a/three`, 'a/three', 'a/three', false],
+      [`s1\u0000a/one`, 'One', 'a/one'],
+      ['s1', 'Two', undefined],
+      [`s1\u0000a/three`, 'a/three', 'a/three'],
     ],
   );
 });
@@ -359,14 +337,6 @@ test('child rows use the profile name but keep the profile ID as the key and the
 test('the own row of a stored profile the session no longer lists uses its name too', () => {
   const [group] = sessionListGroups(
     [{...grouped('s1', 'S', ['a/one'], 'a/gone'), profileNames: {'a/gone': 'Gone'}}],
-    [],
   );
   assert.equal(group.children[0].label, 'Gone');
-});
-
-test('the pin limit and the text shown when it is reached are configured', async () => {
-  const config = JSON.parse(await readFile(new URL('./config.json', import.meta.url), 'utf8'));
-  assert.ok(Number.isInteger(config.session_views_max) && config.session_views_max > 0);
-  assert.equal(typeof config.session_views_limit_hint, 'string');
-  assert.notEqual(config.session_views_limit_hint.trim(), '');
 });

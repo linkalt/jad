@@ -80,14 +80,10 @@ export function hasPinnedView(views: readonly PinnedView[], target: ViewTarget):
  * Adds a pinned row.
  *
  * A view that is already open is left alone — the caller selects it by setting
- * the active key to `viewKeyOf(target)` — and the list stops growing at `limit`.
+ * the active key to `viewKeyOf(target)`.
  */
-export function addPinnedView(
-  views: readonly PinnedView[],
-  target: PinnedView,
-  limit: number,
-): PinnedView[] {
-  if (views.length >= limit || hasPinnedView(views, target)) {
+export function addPinnedView(views: readonly PinnedView[], target: PinnedView): PinnedView[] {
+  if (hasPinnedView(views, target)) {
     return [...views];
   }
   return [...views, {sessionRef: target.sessionRef, profile: target.profile}];
@@ -103,13 +99,27 @@ export function removePinnedView(views: readonly PinnedView[], key: string): Pin
   return views.filter(view => !(view.sessionRef === sessionRef && view.profile === profile));
 }
 
-/** Drops rows whose session the backend no longer lists. */
+/**
+ * Drops rows that no longer have a place in the list: the session is gone, the
+ * session no longer lists the profile, or the profile is now the stored default
+ * (that conversation is the session's own row). A session whose profiles are not
+ * known yet keeps its rows.
+ */
 export function prunePinnedViews(
   views: readonly PinnedView[],
-  knownSessionRefs: readonly string[],
+  sessions: readonly {id: string; profiles?: readonly string[]; activeProfile?: string}[],
 ): PinnedView[] {
-  const known = new Set(knownSessionRefs);
-  return views.filter(view => known.has(view.sessionRef));
+  const byId = new Map(sessions.map(session => [session.id, session]));
+  return views.filter(view => {
+    const session = byId.get(view.sessionRef);
+    if (session === undefined) {
+      return false;
+    }
+    if (session.profiles === undefined || session.profiles.length === 0) {
+      return true;
+    }
+    return session.profiles.includes(view.profile) && view.profile !== session.activeProfile;
+  });
 }
 
 /**
@@ -142,7 +152,6 @@ export type SessionListRow = {
   sessionRef: string;
   profile?: string;
   label: string;
-  isPinned: boolean;
 };
 
 /**
@@ -155,7 +164,7 @@ export function sessionListRows(
 ): SessionListRow[] {
   const rows: SessionListRow[] = [];
   for (const session of sessions) {
-    rows.push({key: session.id, sessionRef: session.id, label: session.title, isPinned: false});
+    rows.push({key: session.id, sessionRef: session.id, label: session.title});
     for (const view of views) {
       if (view.sessionRef !== session.id) {
         continue;
@@ -165,7 +174,6 @@ export function sessionListRows(
         sessionRef: view.sessionRef,
         profile: view.profile,
         label: viewLabel(session.title, view.profile),
-        isPinned: true,
       });
     }
   }
@@ -240,21 +248,19 @@ export function restoreViews(input: {
   stored?: unknown;
   seed?: readonly PinnedView[];
   liveSessionId: string;
-  limit: number;
 }): StoredViews & {restored: boolean} {
-  const stored = parseStoredViews(input.stored, input.limit);
+  const stored = parseStoredViews(input.stored);
   if (stored.views.length > 0 || stored.activeViewKey.length > 0) {
     return {...stored, restored: true};
   }
   const seed = (input.seed ?? [])
     .filter(view => typeof view?.sessionRef === 'string' && view.sessionRef.length > 0 && typeof view?.profile === 'string' && view.profile.length > 0)
-    .slice(0, input.limit)
     .map(view => ({sessionRef: view.sessionRef, profile: view.profile}));
   return {views: seed, activeViewKey: input.liveSessionId, restored: false};
 }
 
 /** The persisted shape, defended against anything a storage key may hold. */
-export function parseStoredViews(value: unknown, limit: number): StoredViews {
+export function parseStoredViews(value: unknown): StoredViews {
   if (typeof value !== 'object' || value === null) {
     return {views: [], activeViewKey: ''};
   }
@@ -274,7 +280,7 @@ export function parseStoredViews(value: unknown, limit: number): StoredViews {
       continue;
     }
     const target = {sessionRef: candidate.sessionRef, profile: candidate.profile};
-    if (hasPinnedView(views, target) || views.length >= limit) {
+    if (hasPinnedView(views, target)) {
       continue;
     }
     views.push(target);
@@ -306,10 +312,8 @@ export type SessionListGroup = {
  *
  * The profile that is the session's stored default is the session's own row
  * (`key` = the session id, no `profile`), so it keeps following the stored
- * default exactly as before. Any other profile is the pinned view of that
- * profile (`session\u0000profile`), whether or not this client has pinned it yet.
- * A pinned view whose profile the session no longer lists stays visible, after
- * the listed ones, so the row on screen always has a place in the list.
+ * default exactly as before. Any other profile is the view of that profile
+ * (`session\u0000profile`). Every child row looks the same.
  */
 export function sessionListGroups(
   sessions: readonly {
@@ -320,57 +324,29 @@ export function sessionListGroups(
     profileNames?: Readonly<Record<string, string>>;
     activeProfile?: string;
   }[],
-  views: readonly PinnedView[],
 ): SessionListGroup[] {
   return sessions.map(session => {
     const category = session.category === undefined || session.category === '' ? {} : {category: session.category};
-    const ownRow: SessionListRow = {
-      key: session.id,
-      sessionRef: session.id,
-      label: session.title,
-      isPinned: false,
-    };
-    const profiles = session.profiles ?? [];
-    const labelOf = (profile: string) => profileLabel(profile, session.profileNames);
+    const ownRow: SessionListRow = {key: session.id, sessionRef: session.id, label: session.title};
+    const profiles = [...new Set(session.profiles ?? [])];
     if (profiles.length === 0) {
       return {sessionRef: session.id, title: session.title, ...category, children: [], ownRow};
     }
-    const pinnedProfiles = new Set(
-      views.filter(view => view.sessionRef === session.id).map(view => view.profile),
-    );
-    const listed = new Set(profiles);
-    const names = [
-      ...new Set([...profiles, ...[...pinnedProfiles].filter(profile => !listed.has(profile))]),
-    ];
+    const labelOf = (profile: string) => profileLabel(profile, session.profileNames);
     const children: SessionListRow[] = [];
-    if (session.activeProfile === undefined || !listed.has(session.activeProfile)) {
+    if (session.activeProfile === undefined || !profiles.includes(session.activeProfile)) {
       children.push({
         key: session.id,
         sessionRef: session.id,
         label: session.activeProfile === undefined ? session.title : labelOf(session.activeProfile),
-        isPinned: false,
       });
     }
-    for (const name of names) {
-      if (name === session.activeProfile) {
-        // Listed: this is the own row. Unlisted: the own row was added above.
-        if (listed.has(name)) {
-          children.push({key: session.id, sessionRef: session.id, label: labelOf(name), isPinned: false});
-        }
-        // A view pinned before this profile became the stored default keeps its
-        // row, so it can still be removed and still counts where the user sees it.
-        if (pinnedProfiles.has(name)) {
-          children.push({key: viewKey(session.id, name), sessionRef: session.id, profile: name, label: labelOf(name), isPinned: true});
-        }
-        continue;
-      }
-      children.push({
-        key: viewKey(session.id, name),
-        sessionRef: session.id,
-        profile: name,
-        label: labelOf(name),
-        isPinned: pinnedProfiles.has(name),
-      });
+    for (const name of profiles) {
+      children.push(
+        name === session.activeProfile
+          ? {key: session.id, sessionRef: session.id, label: labelOf(name)}
+          : {key: viewKey(session.id, name), sessionRef: session.id, profile: name, label: labelOf(name)},
+      );
     }
     return {sessionRef: session.id, title: session.title, ...category, children, ownRow};
   });

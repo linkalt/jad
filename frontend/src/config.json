@@ -101,8 +101,6 @@
   "session_views_storage_key": "jad.session-views",
   "session_groups_storage_key": "jad.session-groups",
   "session_uncategorized_title": "Recent runs",
-  "session_views_max": 8,
-  "session_views_limit_hint": "Pinned view limit reached. Remove a pinned profile to open another.",
   "storage_key_migrations": [
     {"from": "agent-harness.api-token", "to": "jad.api-token", "area": "session"},
     {"from": "agent-harness.row-heights", "to": "jad.row-heights", "area": "local"},

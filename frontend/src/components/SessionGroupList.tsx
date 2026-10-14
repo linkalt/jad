@@ -1,8 +1,4 @@
-import {useState} from 'react';
-import * as stylex from '@stylexjs/stylex';
-import {Badge, Icon, IconButton, SideNavItem, StatusDot} from '@astryxdesign/core';
-import {ContextMenu} from '@astryxdesign/core/ContextMenu';
-import {Tooltip} from '@astryxdesign/core/Tooltip';
+import {Badge, SideNavItem, StatusDot} from '@astryxdesign/core';
 import type {SessionRunStatus} from '../api';
 import {sessionUiStateForRun, type SessionUiState} from '../session-run-status';
 import {
@@ -13,14 +9,6 @@ import {
   type SessionListRow,
   viewLabel,
 } from '../session-views';
-
-const styles = stylex.create({
-  // The remove control stays mounted so the row's shape never changes under the
-  // pointer; only its own display toggles.
-  rowActionHidden: {
-    display: 'none',
-  },
-});
 
 type SessionGroupSession = {
   id: string;
@@ -39,12 +27,9 @@ export type SessionGroupListProps = {
   runningViewKeys: ReadonlySet<string>;
   activeViewKey: string;
   collapsedRefs: readonly string[];
-  canPinProfile: boolean;
-  pinLimitHint: string;
   onCollapsedChange: (sessionRef: string, isCollapsed: boolean) => void;
   onSelect: (viewKey: string) => void;
   onOpenProfile: (sessionRef: string, profile: string) => void;
-  onRemoveView: (viewKey: string) => void;
 };
 
 /** The children of a `SideNavSection`: one collapsible group per session, one row per profile. */
@@ -55,19 +40,10 @@ export function SessionGroupList({
   runningViewKeys,
   activeViewKey,
   collapsedRefs,
-  canPinProfile,
-  pinLimitHint,
   onCollapsedChange,
   onSelect,
   onOpenProfile,
-  onRemoveView,
 }: SessionGroupListProps) {
-  // Hover and focus are tracked on the row itself (the context-menu trigger),
-  // not on the row button: the remove control sits beside that button. Focus
-  // reveals the control too, or a keyboard could never reach it.
-  const [hoveredViewKey, setHoveredViewKey] = useState<string | null>(null);
-  const [focusedViewKey, setFocusedViewKey] = useState<string | null>(null);
-
   const rowState = (row: SessionListRow, session: SessionGroupSession): SessionUiState => {
     if (rowHasRunningRun(row, session, runningViewKeys)) {
       return 'accent';
@@ -83,81 +59,21 @@ export function SessionGroupList({
     // The visible label of a child is the profile; its accessible names carry the
     // session too, because the same profile name repeats in every group.
     const fullLabel = isChild ? viewLabel(session.title, row.label) : row.label;
-    const isUnpinnedProfile = row.profile !== undefined && !row.isPinned;
-    const isPinnedProfile = row.profile !== undefined && row.isPinned;
-    const item = (
+    return (
       <SideNavItem
+        key={row.key}
         label={row.label}
         isSelected={row.key === activeViewKey}
-        isDisabled={isUnpinnedProfile && !canPinProfile}
         onClick={() =>
-          row.profile !== undefined && !row.isPinned
-            ? onOpenProfile(row.sessionRef, row.profile)
-            : onSelect(row.key)
+          row.profile !== undefined ? onOpenProfile(row.sessionRef, row.profile) : onSelect(row.key)
         }
         icon={<StatusDot variant={state} label={`${fullLabel} ${state}`} />}
-        actions={
-          isPinnedProfile ? (
-            <IconButton
-              label={`Remove ${fullLabel}`}
-              icon={<Icon icon="close" size="sm" />}
-              variant="ghost"
-              size="sm"
-              xstyle={
-                hoveredViewKey === row.key || focusedViewKey === row.key
-                  ? undefined
-                  : styles.rowActionHidden
-              }
-              onClick={() => onRemoveView(row.key)}
-            />
-          ) : undefined
-        }
         endContent={
           row.profile === undefined ? (
             <Badge label={String(rowTurns[row.key] ?? session.turns)} />
           ) : undefined
         }
       />
-    );
-    // Every child row sits in the same wrapper, so pinning a profile does not
-    // swap the element type: React keeps the row (and its keyboard focus).
-    // The menu only has an entry on a pinned profile; elsewhere the browser's
-    // own menu shows.
-    const menu = (
-      <ContextMenu
-        label={`${fullLabel} actions`}
-        isDisabled={!isPinnedProfile}
-        items={[
-          {
-            id: `remove-${row.key}`,
-            label: `Remove ${fullLabel}`,
-            onClick: () => onRemoveView(row.key),
-          },
-        ]}
-        onMouseEnter={() => setHoveredViewKey(row.key)}
-        onMouseLeave={() => setHoveredViewKey(current => (current === row.key ? null : current))}
-        onFocus={() => setFocusedViewKey(row.key)}
-        onBlur={event => {
-          if (event.currentTarget.contains(event.relatedTarget)) {
-            return;
-          }
-          setFocusedViewKey(current => (current === row.key ? null : current));
-        }}
-      >
-        {item}
-      </ContextMenu>
-    );
-    // A disabled unpinned profile says why, instead of just greying out. The
-    // wrapper is always there so reaching the limit does not remount the rows.
-    return (
-      <Tooltip
-        key={row.key}
-        content={pinLimitHint}
-        placement="end"
-        isEnabled={isUnpinnedProfile && !canPinProfile}
-      >
-        {menu}
-      </Tooltip>
     );
   };
 
