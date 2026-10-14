@@ -1,4 +1,4 @@
-import {Badge, SideNavItem, StatusDot} from '@astryxdesign/core';
+import {SideNavItem, StatusDot, Text, VisuallyHidden} from '@astryxdesign/core';
 import type {SessionRunStatus} from '../api';
 import {sessionUiStateForRun, type SessionUiState} from '../session-run-status';
 import {
@@ -71,7 +71,14 @@ export function SessionGroupList({
           row.profile !== undefined ? onOpenProfile(row.sessionRef, row.profile) : onSelect(row.key)
         }
         icon={<StatusDot variant={state} label={`${fullLabel} ${state}`} />}
-        endContent={turns === undefined ? undefined : <Badge label={String(turns)} />}
+        endContent={
+          turns === undefined ? undefined : (
+            <Text type="supporting" hasTabularNumbers>
+              {turns}
+              <VisuallyHidden> turns</VisuallyHidden>
+            </Text>
+          )
+        }
       />
     );
   };
