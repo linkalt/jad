@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
 
 import {
   addPinnedView,
@@ -15,6 +14,7 @@ import {
   isPinnedViewKey,
   parseStoredViews,
   profileOfViewKey,
+  activeKeyAfterPrune,
   prunePinnedViews,
   removePinnedView,
   restoreViews,
@@ -91,6 +91,15 @@ test('a row whose profile the session dropped, or made its default, is dropped',
   );
   // A session whose profiles are not known keeps its rows.
   assert.deepEqual(prunePinnedViews(views.slice(0, 1), [{id: 's1', profiles: []}]), views.slice(0, 1));
+});
+
+test('an active profile row whose pin was pruned falls back to its session row', () => {
+  const known = new Set(['s1']);
+  const kept = [{sessionRef: 's1', profile: 'p1'}];
+  assert.equal(activeKeyAfterPrune(viewKey('s1', 'p2'), kept, known), 's1');
+  assert.equal(activeKeyAfterPrune(viewKey('s1', 'p1'), kept, known), viewKey('s1', 'p1'));
+  assert.equal(activeKeyAfterPrune('s1', [], known), 's1');
+  assert.equal(activeKeyAfterPrune(viewKey('gone', 'p1'), [], known), viewKey('gone', 'p1'));
 });
 
 test('the list shows each session, then the rows pinned to it', () => {
@@ -171,20 +180,17 @@ test('a stored arrangement is restored as it was, defensively', () => {
     restoreViews({stored: {views: [], activeViewKey: 'session2'}, liveSessionId: 'live'}),
     {views: [], activeViewKey: 'session2', restored: true},
   );
-  // Duplicates, junk entries, and an over-long list are rejected.
+  // Duplicates and junk entries are rejected.
   assert.deepEqual(
-    parseStoredViews(
-      {
-        views: [
-          {sessionRef: 'session1', profile: 'chatgpt'},
-          {sessionRef: 'session1', profile: 'chatgpt'},
-          {sessionRef: 'session1'},
-          {sessionRef: '', profile: 'x'},
-          'nope',
-        ],
-      },
-      8,
-    ),
+    parseStoredViews({
+      views: [
+        {sessionRef: 'session1', profile: 'chatgpt'},
+        {sessionRef: 'session1', profile: 'chatgpt'},
+        {sessionRef: 'session1'},
+        {sessionRef: '', profile: 'x'},
+        'nope',
+      ],
+    }),
     {views: [{sessionRef: 'session1', profile: 'chatgpt'}], activeViewKey: ''},
   );
   assert.equal(parseStoredViews({views: [{sessionRef: 'a', profile: 'p'}, {sessionRef: 'b', profile: 'q'}]}).views.length, 2);

@@ -123,6 +123,27 @@ export function prunePinnedViews(
 }
 
 /**
+ * The active view after pruning: an active profile row whose pin was dropped falls
+ * back to its session's own row, as long as that session still exists.
+ */
+export function activeKeyAfterPrune(
+  activeViewKey: string,
+  retained: readonly PinnedView[],
+  knownSessionIds: ReadonlySet<string>,
+): string {
+  const profile = profileOfViewKey(activeViewKey);
+  const sessionRef = sessionRefOfViewKey(activeViewKey);
+  if (
+    profile !== undefined &&
+    knownSessionIds.has(sessionRef) &&
+    !hasPinnedView(retained, {sessionRef, profile})
+  ) {
+    return viewKey(sessionRef);
+  }
+  return activeViewKey;
+}
+
+/**
  * What picking a profile in the composer means for the row on screen.
  *
  * Every control of the composer acts on the view, not on the session behind it,

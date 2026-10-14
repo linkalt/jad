@@ -170,10 +170,10 @@ import {
 } from '@astryxdesign/core/theme/tokens.stylex';
 import {
   addPinnedView,
-  hasPinnedView,
   isPinnedViewKey,
   profileOfViewKey,
   profileSelection,
+  activeKeyAfterPrune,
   prunePinnedViews,
   removePinnedView,
   restoreViews,
@@ -4405,7 +4405,7 @@ function App() {
     [activateView],
   );
 
-  /** The profile menu: pin that profile to a row of its own and open it. */
+  /** A profile row click: pin that profile to a row of its own and open it. */
   const openProfileView = useCallback(
     (sessionRef: string, profile: string) => {
       setPinnedViews(current =>
@@ -4470,14 +4470,9 @@ function App() {
       : prunedPinnedViews;
     if (retainedPinnedViews !== pinnedViews) {
       setPinnedViews(retainedPinnedViews);
-      const activeProfileOfKey = profileOfViewKey(activeViewKey);
-      const activeSessionOfKey = sessionRefOfViewKey(activeViewKey);
-      if (
-        activeProfileOfKey !== undefined &&
-        knownIds.has(activeSessionOfKey) &&
-        !hasPinnedView(retainedPinnedViews, {sessionRef: activeSessionOfKey, profile: activeProfileOfKey})
-      ) {
-        setActiveViewKey(viewKey(activeSessionOfKey));
+      const nextActiveKey = activeKeyAfterPrune(activeViewKey, retainedPinnedViews, knownIds);
+      if (nextActiveKey !== activeViewKey) {
+        setActiveViewKey(nextActiveKey);
       }
     }
 
