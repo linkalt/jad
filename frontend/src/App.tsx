@@ -2778,6 +2778,9 @@ function App() {
   const attachedTurnRefs = useRef(new Map<string, string>());
   const activeRunTurnRefs = useRef(new Map<string, string>());
   const setRunRunningForView = useCallback((viewKey: string, running: boolean) => {
+    // A local run edits the thread ahead of the server, so the view's etag no
+    // longer describes it.
+    snapshotEtagsRef.current.delete(viewKey);
     if (running) {
       activeRunViewKeysRef.current.add(viewKey);
     } else {
@@ -2885,7 +2888,9 @@ function App() {
   // Conditional polling: each resource is revalidated with the fingerprint of
   // the last body the client accepted.
   const sessionsEtagRef = useRef<string | undefined>(undefined);
-  const snapshotEtagRef = useRef<string | undefined>(undefined);
+  // Per view, and only while that view's caches hold the body it names: eviction
+  // and resets delete the entry, so a 304 can never meet an empty view.
+  const snapshotEtagsRef = useRef<Map<string, string>>(new Map());
   const activeViewRef = useRef<{
     viewKey: string;
     ref: string | undefined;
@@ -3069,9 +3074,7 @@ function App() {
       );
       hydratedMessagesRef.current.delete(key);
       hydratedTranscriptSessionIdsRef.current.delete(key);
-    }
-    if (viewKeys.has(activeViewKeyRef.current)) {
-      snapshotEtagRef.current = undefined;
+      snapshotEtagsRef.current.delete(key);
     }
     updateHistoryBlocks(blocks => forgetHistoryBlocks(blocks, viewKeys));
     setThreads(current => removeViewKeys(current, viewKeys));
@@ -3211,9 +3214,7 @@ function App() {
         model: result.model,
       }), targetRowSession);
       sessionsEtagRef.current = undefined;
-      if (activeViewKeyRef.current === targetViewKey) {
-        snapshotEtagRef.current = undefined;
-      }
+      snapshotEtagsRef.current.delete(targetViewKey);
       refreshSessionsRef.current?.();
     } catch (error) {
       recordNotification({
@@ -3826,9 +3827,7 @@ function App() {
       setFrontCompactionModeViewKey(current => current === targetViewKey ? null : current);
       setFrontCompactionError(null);
       sessionsEtagRef.current = undefined;
-      if (activeViewKeyRef.current === targetViewKey) {
-        snapshotEtagRef.current = undefined;
-      }
+      snapshotEtagsRef.current.delete(targetViewKey);
       recordNotification({
         sessionId: targetViewKey,
         sessionTitle: targetRowSession.title,
@@ -3845,9 +3844,7 @@ function App() {
       const message = error instanceof Error ? error.message : String(error);
       setResetError(message);
       sessionsEtagRef.current = undefined;
-      if (activeViewKeyRef.current === targetViewKey) {
-        snapshotEtagRef.current = undefined;
-      }
+      snapshotEtagsRef.current.delete(targetViewKey);
       recordNotification({
         sessionId: targetViewKey,
         sessionTitle: targetRowSession.title,
@@ -3923,9 +3920,7 @@ function App() {
       setFrontCompactionTarget(null);
       setFrontCompactionModeViewKey(null);
       sessionsEtagRef.current = undefined;
-      if (activeViewKeyRef.current === targetViewKey) {
-        snapshotEtagRef.current = undefined;
-      }
+      snapshotEtagsRef.current.delete(targetViewKey);
       recordNotification({
         sessionId: targetViewKey,
         sessionTitle: targetRowSession.title,
@@ -3940,9 +3935,7 @@ function App() {
       const messageText = error instanceof Error ? error.message : String(error);
       setFrontCompactionError(messageText);
       sessionsEtagRef.current = undefined;
-      if (activeViewKeyRef.current === targetViewKey) {
-        snapshotEtagRef.current = undefined;
-      }
+      snapshotEtagsRef.current.delete(targetViewKey);
       recordNotification({
         sessionId: targetViewKey,
         sessionTitle: targetRowSession.title,
@@ -4425,10 +4418,9 @@ function App() {
       previous.viewKey !== activeViewKey ||
       previous.profile !== activeProfile
     ) {
-      // A different view: nothing the client holds applies to it. The list is
-      // revalidated in full too — a run detached on the way here may have been
-      // dropped from this client's copy of that session.
-      snapshotEtagRef.current = undefined;
+      // The list is revalidated in full on a switch — a run detached on the way
+      // here may have been dropped from this client's copy of that session. The
+      // view's own snapshot keeps its etag, which already covers run state.
       sessionsEtagRef.current = undefined;
     }
     activeSessionIdRef.current = activeSessionId;
@@ -4557,7 +4549,7 @@ function App() {
         return;
       }
       const result = await fetchSession(sessionRef, {
-        etag: snapshotEtagRef.current,
+        etag: snapshotEtagsRef.current.get(uiId),
         ...(profile === undefined ? {} : {profile}),
         signal: transcriptRefreshController.signal,
       });
@@ -4567,11 +4559,6 @@ function App() {
         result.kind !== 'ok'
       ) {
         return;
-      }
-      // A prior view's request can finish after a switch. Keep its useful cached
-      // transcript, but do not overwrite the active view's conditional token.
-      if (activeViewRef.current.viewKey === uiId) {
-        snapshotEtagRef.current = result.etag;
       }
       const snapshot = result.value;
       await ensureHistory(
@@ -4612,6 +4599,11 @@ function App() {
         return {...current, [uiId]: failures};
       });
       hydratedTranscriptSessionIdsRef.current.add(uiId);
+      if (result.etag === undefined) {
+        snapshotEtagsRef.current.delete(uiId);
+      } else {
+        snapshotEtagsRef.current.set(uiId, result.etag);
+      }
       applyRowSnapshot(uiId, sessionRef, profile, snapshot);
     }, error => {
       if (!cancelled) {
