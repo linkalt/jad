@@ -6,6 +6,7 @@ import {
   profileLabel,
   hasPinnedView,
   groupByCategory,
+  groupHasRunningRun,
   isGroupExpanded,
   parseCollapsedGroups,
   sessionListGroups,
@@ -370,4 +371,13 @@ test('a row shows its live count, else the server count for its profile', () => 
   assert.equal(rowTurnCount(reviewer, data, {[reviewer.key]: 0}), 0);
   assert.equal(rowTurnCount(reviewer, {turns: 4}, {}), undefined);
   assert.equal(rowTurnCount({...reviewer, profile: 'other/x'}, data, {}), undefined);
+});
+
+test('a session group runs when a profile row or a detached profile run is running', () => {
+  const [group] = sessionListGroups([grouped('a', 'a', ['p1', 'p2'], 'p1')]);
+  const idle = {activeProfile: 'p1', run: {status: 'completed'}, runsByProfile: {p1: {status: 'completed'}, p2: {status: 'completed'}}};
+  assert.equal(groupHasRunningRun(group, idle, new Set()), false);
+  assert.equal(groupHasRunningRun(group, {...idle, runsByProfile: {...idle.runsByProfile, p2: {status: 'running'}}}, new Set()), true);
+  assert.equal(groupHasRunningRun(group, idle, new Set([group.children[1].key])), true);
+  assert.equal(groupHasRunningRun(group, undefined, new Set()), false);
 });

@@ -4,7 +4,7 @@
  * @output A search bar, a filter, a New button and a table of the matching files
  * @position The right panel of the catalog editor while no file is open
  */
-import {useMemo, useState} from 'react';
+import {useMemo} from 'react';
 
 import {Banner, Button, HStack, StackItem, Text, TextInput, VStack} from '@astryxdesign/core';
 import {EmptyState} from '@astryxdesign/core/EmptyState';
@@ -35,6 +35,10 @@ export interface CatalogListPaneProps {
   isDisabled: boolean;
   query: string;
   filter: string;
+  sort: SortEntry[];
+  columnWidths: Record<string, number>;
+  onSortChange: (sort: SortEntry[]) => void;
+  onColumnWidthsChange: (widths: Record<string, number>) => void;
   onQueryChange: (query: string) => void;
   onFilterChange: (filter: string) => void;
   onOpen: (id: string) => void;
@@ -42,19 +46,23 @@ export interface CatalogListPaneProps {
   onRetry: () => void;
 }
 
-const DEFAULT_SORT: SortEntry[] = [
+export const DEFAULT_CATALOG_SORT: SortEntry[] = [
   {sortKey: 'category', direction: 'ascending'},
   {sortKey: 'id', direction: 'ascending'},
 ];
 
+const textColumnWidth = proportional(appConfig.catalog_table_text_column_weight, {
+  minWidth: appConfig.catalog_table_text_column_min_width_px,
+});
+
 function tableColumns(showSession: boolean): TableColumn<CatalogRow>[] {
   const columns: TableColumn<CatalogRow>[] = [
     {key: 'category', header: 'Category', sortable: true, renderCell: row => <Text type="supporting" color="secondary">{row.category}</Text>},
-    {key: 'id', header: 'ID', sortable: true, width: proportional(1.4, {minWidth: 120}), renderCell: row => <Link isStandalone>{row.id}</Link>},
-    {key: 'name', header: 'Name', sortable: true, width: proportional(1.4, {minWidth: 120}), renderCell: row => <Text type="body">{row.name}</Text>},
+    {key: 'id', header: 'ID', sortable: true, width: textColumnWidth, renderCell: row => <Link isStandalone>{row.id}</Link>},
+    {key: 'name', header: 'Name', sortable: true, width: textColumnWidth, renderCell: row => <Text type="body">{row.name}</Text>},
   ];
   if (showSession) {
-    columns.unshift({key: 'sessions', header: 'Session', sortable: true, width: proportional(1.4, {minWidth: 120}), renderCell: row => <Text type="supporting" color="secondary">{row.sessions}</Text>});
+    columns.unshift({key: 'sessions', header: 'Session', sortable: true, width: textColumnWidth, renderCell: row => <Text type="supporting" color="secondary">{row.sessions}</Text>});
   }
   return columns;
 }
@@ -68,6 +76,10 @@ export function CatalogListPane({
   isDisabled,
   query,
   filter,
+  sort,
+  columnWidths,
+  onSortChange,
+  onColumnWidthsChange,
   onQueryChange,
   onFilterChange,
   onOpen,
@@ -77,17 +89,15 @@ export function CatalogListPane({
   const options = useMemo(() => filterOptions(kind, files), [kind, files]);
   const known = useMemo(() => filterValues(options), [options]);
   const activeFilter = known.includes(filter) ? filter : known[0];
-  const [sort, setSort] = useState<SortEntry[]>(DEFAULT_SORT);
-  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const matched = useMemo(() => filterCatalogFiles(kind, files, query, activeFilter), [kind, files, query, activeFilter]);
   const rows = useMemo(() => sortCatalogRows(catalogRows(kind, matched), sort), [kind, matched, sort]);
   const plural = view.plural.toLowerCase();
   const showSession = filtersBySession(kind);
   const columns = useMemo(() => tableColumns(showSession), [showSession]);
-  const sortPlugin = useTableSortable<CatalogRow>({sort, onSortChange: next => setSort([...next])});
+  const sortPlugin = useTableSortable<CatalogRow>({sort, onSortChange: next => onSortChange([...next])});
   const resizePlugin = useTableColumnResize({
     columnWidths,
-    onColumnResizeEnd: updates => setColumnWidths(previous => ({...previous, ...updates})),
+    onColumnResizeEnd: updates => onColumnWidthsChange({...columnWidths, ...updates}),
     columns: columns as TableColumn<Record<string, unknown>>[],
   }) as TablePlugin<CatalogRow>;
   const openPlugin = useMemo<TablePlugin<CatalogRow>>(
@@ -96,7 +106,7 @@ export function CatalogListPane({
         ...props,
         htmlProps: {
           ...props.htmlProps,
-          style: {...props.htmlProps.style, cursor: isDisabled ? 'default' : 'pointer'},
+          'data-catalog-row': isDisabled ? 'disabled' : 'open',
           onClick: () => {
             if (!isDisabled) onOpen(item.id);
           },

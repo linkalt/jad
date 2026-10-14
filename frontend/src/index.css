@@ -27,3 +27,5 @@
 .astryx-code-block code *::highlight(astryx-constant) { color: var(--color-syntax-constant); }
 .astryx-code-block code *::highlight(astryx-punctuation) { color: var(--color-syntax-punctuation); }
 .astryx-code-block code *::highlight(astryx-variable) { color: var(--color-syntax-variable); }
+
+[data-catalog-row='open'] { cursor: pointer; }

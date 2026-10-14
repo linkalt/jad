@@ -445,3 +445,12 @@ export function groupByCategory(groups: readonly SessionListGroup[]): CategorySe
   }
   return sections;
 }
+
+/** True when any row of the session group, the aggregate own row included, has a running run. */
+export function groupHasRunningRun(
+  group: SessionListGroup,
+  session: Parameters<typeof rowHasRunningRun>[1],
+  locallyRunningViewKeys: ReadonlySet<string>,
+): boolean {
+  return [...group.children, group.ownRow].some(row => rowHasRunningRun(row, session, locallyRunningViewKeys));
+}

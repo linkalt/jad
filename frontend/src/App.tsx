@@ -24,6 +24,7 @@ import {
   LayoutContent,
   SideNav,
   SideNavItem,
+  Spinner,
   StatusDot,
   Text,
   VStack,
@@ -179,6 +180,7 @@ import {
   rowRunStatus,
   parseCollapsedGroups,
   groupByCategory,
+  groupHasRunningRun,
   sessionListGroups,
   sessionListRows,
   setGroupCollapsed,
@@ -1856,11 +1858,15 @@ function SessionNavigation({
     >
       {categorySections.map(section => {
         const key = section.category ?? '';
+        const label = section.category ?? appConfig.session_uncategorized_title;
+        const hasRunning = section.groups.some(group =>
+          groupHasRunningRun(group, sessions.find(candidate => candidate.id === group.sessionRef), runningViewKeys),
+        );
         return (
           <Fragment key={key}>
             <SideNavItem
-              label={section.category ?? appConfig.session_uncategorized_title}
-              icon={FolderIcon}
+              label={label}
+              icon={hasRunning ? <Spinner size="sm" aria-label={`${label} running`} /> : FolderIcon}
               endContent={
                 <VisuallyHidden>{collapsedCategories.includes(key) ? 'collapsed' : 'expanded'}</VisuallyHidden>
               }

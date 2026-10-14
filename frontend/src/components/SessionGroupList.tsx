@@ -2,6 +2,7 @@ import {SideNavItem, Spinner, StatusDot, Text, VisuallyHidden} from '@astryxdesi
 import type {SessionRunStatus} from '../api';
 import {sessionUiStateForRun, type SessionUiState} from '../session-run-status';
 import {
+  groupHasRunningRun,
   isGroupExpanded,
   rowHasRunningRun,
   rowRunStatus,
@@ -100,9 +101,7 @@ export function SessionGroupList({
         if (group.children.length === 0) {
           return renderRow(group.ownRow, session, false);
         }
-        const hasRunning = [...group.children, group.ownRow].some(row =>
-          rowHasRunningRun(row, session, runningViewKeys),
-        );
+        const hasRunning = groupHasRunningRun(group, session, runningViewKeys);
         const state: SessionUiState = hasRunning ? 'accent' : session.state;
         return (
           <SideNavItem

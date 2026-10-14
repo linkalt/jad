@@ -93,6 +93,8 @@
   "catalog_dialog_width_px": 1040,
   "catalog_file_list_width_px": 140,
   "catalog_category_filter_width_px": 180,
+  "catalog_table_text_column_weight": 1.4,
+  "catalog_table_text_column_min_width_px": 120,
   "catalog_body_height_px": 520,
   "catalog_body_viewport_percent": 62,
   "catalog_dialog_max_height": "92dvh",

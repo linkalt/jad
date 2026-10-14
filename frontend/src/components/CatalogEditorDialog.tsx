@@ -9,7 +9,7 @@
  * A save carries the version the file had when it was opened, so an edit made
  * elsewhere in the meantime is refused instead of overwritten.
  */
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react';
 
 import {Banner, Button, Dialog, HStack, Icon, IconButton, Layout, LayoutContent, LayoutFooter, StackItem, Text, TextInput, VStack} from '@astryxdesign/core';
 import {AlertDialog} from '@astryxdesign/core/AlertDialog';
@@ -29,7 +29,7 @@ import {
   type CatalogFileInfo,
   type CatalogKind,
 } from '../api';
-import {FILTER_ALL} from '../catalog-list-view';
+import {FILTER_ALL, type SortEntry} from '../catalog-list-view';
 import {cappedHeight} from '../catalog-layout';
 import appConfig from '../config.json' with {type: 'json'};
 import {createCatalogValidator} from '../catalog-validation';
@@ -44,7 +44,7 @@ import {
   saveFailure,
   sortedIds,
 } from '../catalog-editor-view';
-import {CatalogListPane} from './CatalogListPane';
+import {CatalogListPane, DEFAULT_CATALOG_SORT} from './CatalogListPane';
 import {CatalogSchemaTab} from './CatalogSchemaTab';
 import {JsonCodeEditor} from './JsonCodeEditor';
 
@@ -104,7 +104,11 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const [pending, setPending] = useState<Pending>(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState(FILTER_ALL);
+  const [sort, setSort] = useState<SortEntry[]>(DEFAULT_CATALOG_SORT);
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [tab, setTab] = useState<EditorTab>('editor');
+  const panelBaseId = useId();
+  const panelId = (value: EditorTab) => `${panelBaseId}-${value}`;
   const validatorRef = useRef<ReturnType<typeof createCatalogValidator> | null>(null);
   const loadToken = useRef(0);
 
@@ -149,6 +153,8 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
       setLists({});
       setQuery('');
       setFilter(FILTER_ALL);
+      setSort(DEFAULT_CATALOG_SORT);
+      setColumnWidths({});
       setTab('editor');
       setDeleteState(false);
       setDraft({mode: 'none'});
@@ -223,6 +229,8 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setKind(target);
     setQuery('');
     setFilter(FILTER_ALL);
+    setSort(DEFAULT_CATALOG_SORT);
+    setColumnWidths({});
     setTab('editor');
     setDeleteState(false);
     setDraft({mode: 'none'});
@@ -399,6 +407,10 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                       isDisabled={isBusy}
                       query={query}
                       filter={filter}
+                      sort={sort}
+                      columnWidths={columnWidths}
+                      onSortChange={setSort}
+                      onColumnWidthsChange={setColumnWidths}
                       onQueryChange={setQuery}
                       onFilterChange={setFilter}
                       onOpen={id => requestSwitch(id)}
@@ -434,13 +446,13 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                     />
                   )}
                   {hasEditor && (
-                    <TabList aria-label="Editor view" value={tab} onChange={value => setTab(value as EditorTab)} hasDivider>
-                      <Tab value="editor" label="JSON" />
-                      <Tab value="schema" label="Schema" />
+                    <TabList role="tablist" aria-label="Editor view" value={tab} onChange={value => setTab(value as EditorTab)} hasDivider>
+                      <Tab value="editor" label="JSON" panelId={panelId('editor')} />
+                      <Tab value="schema" label="Schema" panelId={panelId('schema')} />
                     </TabList>
                   )}
                   {hasEditor && tab === 'schema' && (
-                    <StackItem size="fill" isScrollable>
+                    <StackItem size="fill" isScrollable id={panelId('schema')} role="tabpanel" aria-label="Schema">
                       <CatalogSchemaTab kind={kind} />
                     </StackItem>
                   )}
@@ -455,7 +467,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                   )}
                   {hasEditor && tab === 'editor' && (
                     <>
-                      <StackItem size="fill">
+                      <StackItem size="fill" id={panelId('editor')} role="tabpanel" aria-label="JSON">
                         <JsonCodeEditor
                           label={draft.mode === 'new' ? `New ${view.noun} JSON` : `${draft.id} JSON`}
                           value={text}
