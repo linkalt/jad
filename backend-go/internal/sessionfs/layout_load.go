@@ -316,13 +316,31 @@ func (c *layoutCompose) noteProfileName(id string, profile layoutProfileFile) {
 // backups) lives under the session cwd, in toolBase, so the file tools reach it with no
 // extra path rule and a project keeps its own tool state.
 func (c *layoutCompose) storageEntry(profile catalog.Entry, toolBase string) map[string]any {
-	dir := filepath.Join(c.layout.State, c.location.SessionID, profile.Category, profile.Name)
+	dir := profileStateDir(c.layout, c.location.SessionID, profile.Category, profile.Name)
 	return map[string]any{
 		"messages":     filepath.Join(dir, "messages.jsonl"),
 		"staging":      filepath.Join(dir, "staging"),
 		"http_debug":   filepath.Join(dir, "debug", "http"),
 		"tool_storage": filepath.Join(toolBase, c.location.SessionID, profile.Category, profile.Name, "tools"),
 	}
+}
+
+func profileStateDir(layout Layout, sessionID, category, name string) string {
+	return filepath.Join(layout.State, sessionID, category, name)
+}
+
+// ProfileMessagesPath is the transcript of a profile ID ("<category>/<name>") in this
+// session, as LoadSessionSettings would report it, without loading anything. It is
+// false for a location outside the catalog layout or an ID that is not two parts.
+func (l Location) ProfileMessagesPath(profileID string) (string, bool) {
+	if !l.UsesLayout() {
+		return "", false
+	}
+	category, name, ok := strings.Cut(profileID, "/")
+	if !ok || category == "" || name == "" {
+		return "", false
+	}
+	return filepath.Join(profileStateDir(*l.Root.Layout, l.SessionID, category, name), "messages.jsonl"), true
 }
 
 // defaultToolStorageDir is the folder under the cwd that holds tool storage when

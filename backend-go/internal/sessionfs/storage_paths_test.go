@@ -34,3 +34,25 @@ func TestLoadSessionConfigGivesEachProfileItsOwnStorage(t *testing.T) {
 		t.Fatalf("profiles share storage: %q vs %q", one.MessagesPath, two.MessagesPath)
 	}
 }
+
+// The session list names a profile's transcript without loading the profile; the path
+// must be the one the loader reports, or its validator would watch the wrong file.
+func TestProfileMessagesPathMatchesTheLoadedTranscript(t *testing.T) {
+	spec := layouttest.Spec{Profiles: map[string]map[string]any{"dev/one": {}, "review/two.x": {}}}
+	location, _ := layoutLocation(t, spec)
+	for _, profile := range []string{"dev/one", "review/two.x"} {
+		config, err := LoadSessionConfig(location, profile, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := location.ProfileMessagesPath(profile)
+		if !ok || got != config.MessagesPath {
+			t.Fatalf("ProfileMessagesPath(%q) = %q, %v; the loader reports %q", profile, got, ok, config.MessagesPath)
+		}
+	}
+	for _, id := range []string{"", "dev", "/two", "dev/"} {
+		if got, ok := location.ProfileMessagesPath(id); ok {
+			t.Fatalf("ProfileMessagesPath(%q) = %q, want it refused", id, got)
+		}
+	}
+}

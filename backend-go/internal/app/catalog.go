@@ -108,8 +108,6 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 		location sessionfs.Location
 		config   sessionfs.SessionConfig
 		runs     httpapi.SessionRunSummaries
-		// others holds the other profiles in scope, which have a transcript of their own.
-		others map[string]sessionfs.SessionConfig
 	}
 	candidates := make([]candidate, 0)
 	versions := make([]string, 0)
@@ -160,9 +158,8 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			if runStates != nil {
 				sessionRuns = runStates.SessionRuns(location.Reference, config.Profile)
 			}
-			others := otherProfileConfigs(location, config)
-			candidates = append(candidates, candidate{location: location, config: config, runs: sessionRuns, others: others})
-			versions = append(versions, location.Reference+":"+sessionVersionForCatalog(location, config, r.catalog.MaxInlinePartBytes, sessionRuns)+profileTranscriptStamps(others))
+			candidates = append(candidates, candidate{location: location, config: config, runs: sessionRuns})
+			versions = append(versions, location.Reference+":"+sessionVersionForCatalog(location, config, r.catalog.MaxInlinePartBytes, sessionRuns)+profileTranscriptStamps(location, config))
 		}
 	}
 	sort.Strings(versions)
@@ -185,7 +182,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			return httpapi.CatalogResponse{}, fmt.Errorf("read session transcript %q: %w", candidate.location.Reference, err)
 		}
 		record := makeSessionListRecord(candidate.location, candidate.config, index.turns, index.usage, candidate.runs)
-		record.ProfileTurns = r.profileTurns(candidate.config, index.turns, candidate.others)
+		record.ProfileTurns = r.profileTurns(candidate.config, index.turns, otherProfileConfigs(candidate.location, candidate.config))
 		record.Model = listingModelSummary(candidate.location, candidate.config)
 		// The TypeScript list reports usage only from an existing usage cache, so
 		// a session that has never completed a response carries no usage block.
@@ -196,7 +193,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 	}
 	finalVersions := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
-		finalVersions = append(finalVersions, candidate.location.Reference+":"+sessionVersionForCatalog(candidate.location, candidate.config, r.catalog.MaxInlinePartBytes, candidate.runs)+profileTranscriptStamps(candidate.others))
+		finalVersions = append(finalVersions, candidate.location.Reference+":"+sessionVersionForCatalog(candidate.location, candidate.config, r.catalog.MaxInlinePartBytes, candidate.runs)+profileTranscriptStamps(candidate.location, candidate.config))
 	}
 	sort.Strings(finalVersions)
 	etag = makeETag(strings.Join(finalVersions, "|"))
@@ -226,15 +223,21 @@ func otherProfileConfigs(location sessionfs.Location, config sessionfs.SessionCo
 }
 
 // profileTranscriptStamps changes when any of the other profiles' transcripts does,
-// so a list validator covers the counts it reports. It is empty, and the validator
+// so a list validator covers the counts it reports. It names the transcripts by path
+// and loads no profile, which keeps a 304 cheap. It is empty, and the validator
 // unchanged, for a session with no other profile.
-func profileTranscriptStamps(others map[string]sessionfs.SessionConfig) string {
-	if len(others) == 0 {
-		return ""
+func profileTranscriptStamps(location sessionfs.Location, config sessionfs.SessionConfig) string {
+	parts := make([]string, 0, 2*len(config.Profiles))
+	for _, profile := range config.Profiles {
+		if profile == config.Profile {
+			continue
+		}
+		if path, ok := location.ProfileMessagesPath(profile); ok {
+			parts = append(parts, profile, fileStamp(path))
+		}
 	}
-	parts := make([]string, 0, 2*len(others))
-	for _, profile := range slices.Sorted(maps.Keys(others)) {
-		parts = append(parts, profile, fileStamp(others[profile].MessagesPath))
+	if len(parts) == 0 {
+		return ""
 	}
 	return ":" + strings.Join(parts, "\x00")
 }
