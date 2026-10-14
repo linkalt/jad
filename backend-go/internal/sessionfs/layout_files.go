@@ -38,15 +38,29 @@ type layoutSessionFile struct {
 	SchemaVersion int    `json:"schema_version"`
 	Description   string `json:"description"`
 	// Name is the display name; it defaults to the folder name.
-	Name          string      `json:"name"`
-	CWD           string      `json:"cwd"`
-	Category      string      `json:"category"`
-	Scope         layoutScope `json:"scope"`
-	ActiveProfile string      `json:"active_profile"`
+	Name     string      `json:"name"`
+	CWD      string      `json:"cwd"`
+	Category string      `json:"category"`
+	Scope    layoutScope `json:"scope"`
+	// ActiveProfile is the profile a request that names none uses. Optional: without it
+	// the first profile in scope is used (defaultProfile).
+	ActiveProfile string `json:"active_profile"`
 	// ModelDefaults is only read to refuse it: the model a profile uses is the
 	// profile's own model_default, which the model-default route now writes.
 	ModelDefaults json.RawMessage            `json:"model_defaults"`
 	Settings      map[string]json.RawMessage `json:"settings"`
+}
+
+// defaultProfile is the profile a request that names none uses: active_profile, else the
+// first profile in scope by ID. It is empty when the scope holds no profile.
+func (s layoutSessionFile) defaultProfile(scoped *catalog.Catalog) string {
+	if s.ActiveProfile != "" {
+		return s.ActiveProfile
+	}
+	if ids := scoped.IDs(); len(ids) > 0 {
+		return ids[0]
+	}
+	return ""
 }
 
 // refuseModelDefaults fails a session.json that still carries the removed model_defaults

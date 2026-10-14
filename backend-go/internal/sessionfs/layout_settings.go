@@ -23,7 +23,7 @@ func ReadLayoutProfileInfo(location Location) (ProfileInfo, error) {
 	if err != nil {
 		return ProfileInfo{}, err
 	}
-	return ProfileInfo{ActiveProfile: session.ActiveProfile, Profiles: profiles.IDs()}, nil
+	return ProfileInfo{ActiveProfile: session.defaultProfile(profiles), Profiles: profiles.IDs()}, nil
 }
 
 func readLayoutSession(location Location) (layoutSessionFile, error) {

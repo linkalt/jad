@@ -80,7 +80,7 @@ func TestCatalogSessionWriteIsCheckedByTheLoader(t *testing.T) {
 		"empty":            {``, "expected a JSON object"},
 		"not json":         {`{"cwd":`, "demo.json"},
 		"unknown key":      {`{"cwd":"` + f.cwd + `","active_profile":"dev/coder","nope":1}`, "nope"},
-		"no active":        {`{"cwd":"` + f.cwd + `"}`, "active_profile"},
+		"empty scope":      {`{"cwd":"` + f.cwd + `","scope":{"profiles":[]}}`, "matches no profile"},
 		"unknown profile":  {`{"cwd":"` + f.cwd + `","active_profile":"dev/missing"}`, "dev/missing"},
 		"outside scope":    {`{"cwd":"` + f.cwd + `","active_profile":"dev/coder","scope":{"profiles":["review"]}}`, "dev/coder"},
 		"bad version":      {`{"schema_version":7,"cwd":"` + f.cwd + `","active_profile":"dev/coder"}`, "schema_version"},
@@ -99,6 +99,9 @@ func TestCatalogSessionWriteIsCheckedByTheLoader(t *testing.T) {
 	}
 	if onDisk, _ := os.ReadFile(target); string(onDisk) != before.body {
 		t.Fatalf("a refused write changed the file: %q", onDisk)
+	}
+	if reply := f.catalogCall(t, "PUT", path, `{"cwd":"`+f.cwd+`"}`, map[string]string{"If-Match": before.etag}); reply.status != http.StatusOK {
+		t.Fatalf("a session without active_profile = %d %s, want it accepted", reply.status, reply.body)
 	}
 	if reply := f.catalogCall(t, "PUT", catalogSessionsPath+"/fresh", `{"cwd":"/no/such/folder","active_profile":"dev/coder"}`, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusUnprocessableEntity {
 		t.Fatalf("refused create = %d", reply.status)

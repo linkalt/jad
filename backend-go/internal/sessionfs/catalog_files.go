@@ -409,7 +409,7 @@ func profileUsers(layout Layout, roots []Root, id string) ([]string, error) {
 			}
 			left, err := remaining.Narrow(session.Scope.Profiles)
 			if err == nil {
-				_, err = left.Lookup(session.ActiveProfile)
+				_, err = left.Lookup(session.defaultProfile(left))
 			}
 			if err != nil {
 				users = append(users, location.Reference)

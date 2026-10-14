@@ -196,12 +196,12 @@ test('a valid session has no problems and an unknown key is underlined', () => {
   assert.equal(sliceOf(text, problem), '"bogus"');
 });
 
-test('the session template is refused until cwd and active_profile are filled in', () => {
-  const template = '{\n  "schema_version": 1,\n  "cwd": "",\n  "active_profile": ""\n}\n';
+test('the session template is refused until cwd is filled in, and needs no active_profile', () => {
+  const template = '{\n  "schema_version": 1,\n  "cwd": ""\n}\n';
   const problems = validator.validate('sessions', template);
-  assert.ok(problems.length >= 2, JSON.stringify(problems));
-  assert.ok(problems.some(problem => /cwd/.test(problem.message)));
-  assert.ok(problems.some(problem => /active_profile/.test(problem.message)));
+  assert.ok(problems.some(problem => /cwd/.test(problem.message)), JSON.stringify(problems));
+  assert.ok(!problems.some(problem => /active_profile/.test(problem.message)));
+  assert.deepEqual(validator.validate('sessions', template.replace('"cwd": ""', '"cwd": "/tmp/work"')), []);
 });
 
 test('every session in the local layout passes the scheme', t => {

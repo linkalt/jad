@@ -15,7 +15,7 @@ const sessionFileSuffix = ".json"
 
 // LoadLayoutSessionSettings is LoadSessionSettings for the catalog layout. It reads
 // <id>.json, narrows the profile catalog by the session scope, takes the
-// profile (requested, else active_profile) and composes the setting-shaped map the
+// profile (requested, else active_profile, else the first in scope) and composes the setting-shaped map the
 // existing normalizers read, so a normalizer or applyApprovalDefault needs no second copy.
 //
 // Every file is named "<category>/<name>", on the wire and in the files: the profile, the
@@ -46,12 +46,13 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if profiles, err = profiles.Narrow(session.Scope.Profiles); err != nil {
 		return SessionConfig{}, configError("%s: scope.profiles: %v", sessionPath, err)
 	}
+	defaultProfile := session.defaultProfile(profiles)
 	selected := requestedProfile
 	if selected == "" {
-		selected = session.ActiveProfile
+		selected = defaultProfile
 	}
 	if selected == "" {
-		return SessionConfig{}, configError("%s: active_profile is required", sessionPath)
+		return SessionConfig{}, configError("%s: scope.profiles matches no profile, so there is no profile to run", sessionPath)
 	}
 	entry, err := profiles.Lookup(selected)
 	if err != nil {
@@ -76,7 +77,7 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 	// The normalizers know a profile only by its storage key; callers get the ID.
 	config.Profile = entry.ID()
-	config.DefaultProfile = session.ActiveProfile
+	config.DefaultProfile = defaultProfile
 	config.Category = session.Category
 	config.Profiles = profiles.IDs()
 	config.ProfileNames = built.profileNames

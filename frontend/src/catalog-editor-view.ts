@@ -46,7 +46,7 @@ export const CATALOG_KIND_VIEWS: Record<CatalogKind, CatalogKindView> = {
     idHint: 'Written <name>, or <root>:<name> when there is more than one session root.',
     idForm: 'session',
     deleteNote: 'A run in progress is stopped first.',
-    template: '{\n  "schema_version": 1,\n  "cwd": "",\n  "active_profile": ""\n}\n',
+    template: '{\n  "schema_version": 1,\n  "cwd": ""\n}\n',
   },
   toolsets: {
     noun: 'toolset',

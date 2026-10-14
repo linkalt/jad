@@ -595,6 +595,45 @@ func TestLayoutSetActiveProfileWritesSessionJSONOnly(t *testing.T) {
 	}
 }
 
+// A session without active_profile uses the first profile in scope by ID, in every reader
+// of the default; naming one keeps winning, and an empty scope has no profile to run.
+func TestLayoutSessionWithoutActiveProfileUsesTheFirstInScope(t *testing.T) {
+	config, root := rootFromSample(t)
+	sessionFile := filepath.Join(root, "sessions", "default.json")
+	editJSON(t, sessionFile, func(m map[string]any) { delete(m, "active_profile") })
+	location, _ := Resolve(config.Roots, "default")
+
+	loaded, err := LoadSessionConfig(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Profile != "dev/coder" || loaded.DefaultProfile != "dev/coder" {
+		t.Fatalf("profile = %q, default = %q, want dev/coder", loaded.Profile, loaded.DefaultProfile)
+	}
+	info, err := ReadLayoutProfileInfo(location)
+	if err != nil || info.ActiveProfile != "dev/coder" {
+		t.Fatalf("info = %+v, err = %v", info, err)
+	}
+	other, err := LoadSessionConfig(location, "review/reviewer", "")
+	if err != nil || other.Profile != "review/reviewer" || other.DefaultProfile != "dev/coder" {
+		t.Fatalf("requested profile = %+v, err = %v", other, err)
+	}
+
+	editJSON(t, sessionFile, func(m map[string]any) { m["active_profile"] = "review/reviewer" })
+	named, err := LoadSessionConfig(location, "", "")
+	if err != nil || named.Profile != "review/reviewer" || named.DefaultProfile != "review/reviewer" {
+		t.Fatalf("named profile = %+v, err = %v", named, err)
+	}
+
+	editJSON(t, sessionFile, func(m map[string]any) {
+		delete(m, "active_profile")
+		m["scope"] = map[string]any{"profiles": []string{}}
+	})
+	if _, err := LoadSessionConfig(location, "", ""); err == nil || !strings.Contains(err.Error(), "matches no profile") {
+		t.Fatalf("empty scope error = %v", err)
+	}
+}
+
 // The model route edits the profile file: its model_default changes, every other key keeps
 // its place and the file keeps its indentation. A session that uses the profile sees it.
 func TestLayoutSetModelDefaultWritesTheProfileFile(t *testing.T) {
