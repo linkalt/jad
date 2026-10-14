@@ -121,7 +121,7 @@ function ImageRow({ids, load, noun}: ImageRowProps) {
   }
   const ready = images.flatMap(image => (image.state === 'ready' ? [image] : []));
   return (
-    <VStack gap={1} width="100%">
+    <VStack gap={1}>
       <HStack gap={2} wrap="wrap">
         {images.map(image => {
           if (image.state === 'ready') {

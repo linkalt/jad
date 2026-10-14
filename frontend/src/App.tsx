@@ -1569,9 +1569,11 @@ function WebUiActivityGroup({
           return index === firstToolCallIndex ? (
             <Fragment key={`tool-calls-${index}`}>
               <ChatToolCalls calls={toolCallItems} xstyle={styles.toolCallsFlush} />
-              {toolCallResults.map(result => (
-                <ToolResultImages key={result.callId} result={result} source={source} />
-              ))}
+              <HStack gap={2} wrap="wrap" align="start">
+                {toolCallResults.map(result => (
+                  <ToolResultImages key={result.callId} result={result} source={source} />
+                ))}
+              </HStack>
             </Fragment>
           ) : null;
         }
