@@ -22,6 +22,8 @@ import {
   useImageAttachments,
 } from './ImageAttachments';
 import {FileAttachmentPicker, FileIcon} from './FileAttachments';
+import {readCaretEdges} from './composerCaret';
+import {IDLE_HISTORY, stepHistory, type HistoryCursor} from '../input-history';
 import {fetchRootLibrary, fetchRootLibraryAsset, fetchSessionFiles} from '../api';
 import {createSlashSource, type SlashCommand, type SlashSelection} from '../slash-commands';
 import {useFileDrop} from './FileDrop';
@@ -64,6 +66,8 @@ type ComposerPaneProps = {
   activeSessionId: string;
   /** The row identity used to keep each profile view's draft independent. */
   draftKey: string;
+  /** Earlier user messages of this view, oldest first, for ArrowUp / ArrowDown recall. */
+  inputHistory: readonly string[];
   /**
    * Returns true when the message was accepted, so the draft is only cleared on a real send.
    * `images` are the draft's attached images; the text may be empty when there are some.
@@ -416,6 +420,7 @@ const DROP_HIGHLIGHT = {
 export function ComposerPane({
   activeSessionId,
   draftKey,
+  inputHistory,
   onSubmit,
   onStop,
   isRunning,
@@ -536,6 +541,35 @@ export function ComposerPane({
     [draftKey, setDraft],
   );
 
+  const historyCursorRef = useRef<HistoryCursor>(IDLE_HISTORY);
+  useEffect(() => {
+    historyCursorRef.current = IDLE_HISTORY;
+  }, [draftKey]);
+
+  const handleHistoryKey = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>): boolean => {
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return false;
+      if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false;
+      if (event.nativeEvent.isComposing || inputHistory.length === 0) return false;
+      const edges = readCaretEdges(findEditable(inputRootRef.current));
+      const input = inputRef.current;
+      if (edges === null || input === null) return false;
+      const step = stepHistory(
+        inputHistory,
+        historyCursorRef.current,
+        input.getValue(),
+        event.key,
+        edges,
+      );
+      if (step === null) return false;
+      event.preventDefault();
+      historyCursorRef.current = step.cursor;
+      setDraft(draftKey, step.text);
+      return true;
+    },
+    [draftKey, inputHistory, setDraft],
+  );
+
   const handleSubmit = useCallback(
     (text: string) => {
       if (isDisabled) {
@@ -544,6 +578,7 @@ export function ComposerPane({
       const sentImages = attachments.images;
       const sentFiles = fileAttachments.images;
       if (onSubmit(text, sentImages, sentFiles)) {
+        historyCursorRef.current = IDLE_HISTORY;
         setDraft(draftKey, '');
         attachments.clear(sentImages);
         fileAttachments.clear(sentFiles);
@@ -553,7 +588,7 @@ export function ComposerPane({
   );
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
-    if (handleShiftEnter(event)) {
+    if (handleShiftEnter(event) || handleHistoryKey(event)) {
       return;
     }
     // The composer ignores an empty draft, but a message of images alone is valid.
@@ -593,7 +628,7 @@ export function ComposerPane({
       event.preventDefault();
       applyInlineMarker(editable, marker);
     }
-  }, [handleShiftEnter, handleSubmit, hasAttachments, isRunning]);
+  }, [handleHistoryKey, handleShiftEnter, handleSubmit, hasAttachments, isRunning]);
 
   const handleChange = useCallback(
     (next: string) => {
@@ -776,6 +811,7 @@ export function ComposerPane({
           placeholder={composerPlaceholderForDraft(value, placeholder)}
           triggers={composerTriggers.length > 0 ? composerTriggers : undefined}
           onKeyDown={handleKeyDown}
+          hasHistory={false}
           onFiles={
             isImageAttachEnabled || isFileAttachEnabled ? fileDrop.handleFiles : undefined
           }

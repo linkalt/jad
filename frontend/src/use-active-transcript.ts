@@ -5,6 +5,7 @@ import type {SessionRunFailure, WebUiMessage, WebUiPart} from './api';
 import {useTranscriptWindow} from './components/TranscriptWindow';
 import appConfig from './config.json';
 import {historyMessagesFor, type HistoryBlocks} from './history-blocks';
+import {recentUserTexts} from './input-history';
 import {placeRunFailures} from './run-failures';
 import {latestToolCallMessage, latestToolsMessage} from './transcript-facts';
 
@@ -91,7 +92,13 @@ export function useActiveTranscript<Message extends TranscriptMessage>({
     );
   }, [fallbackTools, isLiveSession, isRunning, messages]);
 
+  const inputHistory = useMemo(
+    () => recentUserTexts(messages, appConfig.composer_input_history_size),
+    [messages],
+  );
+
   return {
+    inputHistory,
     visibleMessages,
     hiddenCount,
     revealEarlier,

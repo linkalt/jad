@@ -63,6 +63,7 @@
   "composer_preview_enabled": true,
   "composer_draft_storage_key": "jad.composer-drafts",
   "composer_draft_save_delay_ms": 300,
+  "composer_input_history_size": 50,
   "selection_quote_enabled": true,
   "selection_quote_max_chars": 2000,
   "selection_quote_menu_gap_px": 8,

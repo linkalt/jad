@@ -3306,6 +3306,7 @@ function App() {
     (rowRunStatus(activeRow, activeSession)?.status === 'running' ||
       attachedRunViewKeysRef.current.has(activeViewKey));
   const {
+    inputHistory,
     visibleMessages,
     hiddenCount,
     revealEarlier,
@@ -4908,6 +4909,7 @@ function App() {
     <ComposerPane
       activeSessionId={activeSessionId}
       draftKey={activeViewKey}
+      inputHistory={inputHistory}
       onSubmit={submitMessage}
       onStop={stopRun}
       isRunning={isRunning}
