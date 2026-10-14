@@ -89,16 +89,6 @@ export function addPinnedView(views: readonly PinnedView[], target: PinnedView):
   return [...views, {sessionRef: target.sessionRef, profile: target.profile}];
 }
 
-/** Removes the row a view key names; a session's own row cannot be removed. */
-export function removePinnedView(views: readonly PinnedView[], key: string): PinnedView[] {
-  const profile = profileOfViewKey(key);
-  if (profile === undefined) {
-    return [...views];
-  }
-  const sessionRef = sessionRefOfViewKey(key);
-  return views.filter(view => !(view.sessionRef === sessionRef && view.profile === profile));
-}
-
 /**
  * Drops rows that no longer have a place in the list: the session is gone, the
  * session no longer lists the profile, or the profile is now the stored default
@@ -141,29 +131,6 @@ export function activeKeyAfterPrune(
     return viewKey(sessionRef);
   }
   return activeViewKey;
-}
-
-/**
- * What picking a profile in the composer means for the row on screen.
- *
- * Every control of the composer acts on the view, not on the session behind it,
- * so the choice lands where the pointer is:
- *
- * - the session's own row follows whichever profile it is given — that is the
- *   stored default every other client sees (`'session'`);
- * - a pinned row shows the picked profile in that row (`'repin'`), except when
- *   the pick is the stored default: that conversation *is* the session's own row,
- *   so the row is dropped and `'session'` says where to go.
- */
-export function profileSelection(
-  row: {profile?: string},
-  picked: string,
-  session: {activeProfile?: string},
-): "session" | "repin" {
-  if (row.profile === undefined || picked === session.activeProfile) {
-    return "session";
-  }
-  return "repin";
 }
 
 /** One row of the left list. */

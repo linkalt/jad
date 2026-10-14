@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import {
   addPinnedView,
   profileLabel,
-  profileSelection,
   hasPinnedView,
   groupByCategory,
   isGroupExpanded,
@@ -16,7 +15,6 @@ import {
   profileOfViewKey,
   activeKeyAfterPrune,
   prunePinnedViews,
-  removePinnedView,
   restoreViews,
   rowHasRunningRun,
   rowRunStatus,
@@ -53,19 +51,6 @@ test('pinning a profile adds one row and never a duplicate', () => {
   assert.equal(two.length, 2);
   // There is no cap: a third row is added too.
   assert.equal(addPinnedView(two, {sessionRef: 'session2', profile: 'x'}).length, 3);
-});
-
-test('removing a row drops that view and leaves the session row alone', () => {
-  const views = [
-    {sessionRef: 'session1', profile: 'chatgpt'},
-    {sessionRef: 'session1', profile: 'default'},
-  ];
-  assert.deepEqual(removePinnedView(views, viewKey('session1', 'chatgpt')), [
-    {sessionRef: 'session1', profile: 'default'},
-  ]);
-  // The session's own row is not a pinned view: asking to remove it does nothing.
-  assert.deepEqual(removePinnedView(views, 'session1'), views);
-  assert.deepEqual(removePinnedView(views, viewKey('session2', 'chatgpt')), views);
 });
 
 test('a row whose session disappeared is dropped', () => {
@@ -217,19 +202,6 @@ test('a fresh page follows the configured seed, else the live session', () => {
     restoreViews({seed: [{sessionRef: 'a'}, {sessionRef: 'b', profile: 'p'}], liveSessionId: 'live'}),
     {views: [{sessionRef: 'b', profile: 'p'}], activeViewKey: 'live', restored: false},
   );
-});
-
-test('picking a profile lands on the row on screen', () => {
-  const session = {activeProfile: 'default'};
-  // The session's own row follows the profile it is given.
-  assert.equal(profileSelection({}, 'chatgpt', session), 'session');
-  assert.equal(profileSelection({}, 'default', session), 'session');
-  // A pinned row shows the pick in that row.
-  assert.equal(profileSelection({profile: 'chatgpt'}, 'alternate', session), 'repin');
-  assert.equal(profileSelection({profile: 'chatgpt'}, 'chatgpt', session), 'repin');
-  // Picking the stored default from a pinned row goes to the session's own row:
-  // the same conversation must not exist twice in the list.
-  assert.equal(profileSelection({profile: 'chatgpt'}, 'default', session), 'session');
 });
 
 const grouped = (id, title, profiles, activeProfile) => ({id, title, profiles, activeProfile});

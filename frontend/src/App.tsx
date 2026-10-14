@@ -58,7 +58,6 @@ import {
   fetchSessionHistory,
   fetchSessionMessage,
   fetchSessions,
-  updateSessionProfile,
   updateSessionProfileModelDefault,
   stopSessionRun,
   streamSessionRun,
@@ -139,7 +138,6 @@ import {ModelPicker} from './components/ModelPicker';
 import {CitationList} from './components/CitationList';
 import {InlineImages, StoredImages, StoredImageScopeProvider} from './components/StoredImages';
 import {hostedToolStatus} from './web-search-view';
-import {SessionProfilePicker} from './components/SessionProfilePicker';
 import {FloatingPanel} from './components/FloatingPanel';
 import {NotificationPanel} from './components/NotificationPanel';
 import {CheckpointPanel} from './components/CheckpointPanel';
@@ -173,10 +171,8 @@ import {
   addPinnedView,
   isPinnedViewKey,
   profileOfViewKey,
-  profileSelection,
   activeKeyAfterPrune,
   prunePinnedViews,
-  removePinnedView,
   restoreViews,
   rowRunStatus,
   parseCollapsedGroups,
@@ -2444,7 +2440,6 @@ function App() {
       INITIAL_VIEWS.activeViewKey,
     ]);
   }
-  const [isProfileSwitching, setIsProfileSwitching] = useState(false);
   const [isModelDefaultUpdating, setIsModelDefaultUpdating] = useState(false);
   const isModelDefaultUpdatingRef = useRef(false);
   // A restored arrangement is the user's own: the "open the configured session"
@@ -3190,7 +3185,6 @@ function App() {
     if (
       sessionRef === undefined ||
       targetRowSession.modelDefault === modelDefault ||
-      isProfileSwitching ||
       resettingViewKey !== null ||
       frontCompactingViewKey !== null ||
       isModelDefaultUpdatingRef.current
@@ -3236,7 +3230,6 @@ function App() {
     activeViewKey,
     activeProfile,
     activeRowSession,
-    isProfileSwitching,
     recordNotification,
     resettingViewKey,
     frontCompactingViewKey,
@@ -3383,7 +3376,6 @@ function App() {
     isLiveSession &&
     !isRunning &&
     !isCompactionInProgress &&
-    !isProfileSwitching &&
     !isModelDefaultUpdating &&
     resettingViewKey === null &&
     frontCompactingViewKey === null;
@@ -3401,7 +3393,6 @@ function App() {
       !isLiveSession ||
       isRunning ||
       isCompactionInProgress ||
-      isProfileSwitching ||
       isModelDefaultUpdating ||
       resettingViewKey !== null ||
       frontCompactingViewKey !== null
@@ -3422,77 +3413,9 @@ function App() {
     isFrontCompactionSelectionMode,
     isLiveSession,
     isModelDefaultUpdating,
-    isProfileSwitching,
     isRunning,
     resettingViewKey,
   ]);
-  const selectSessionProfile = useCallback(
-    async (profile: string) => {
-      const sessionRef = activeSession?.sessionRef;
-      if (
-        sessionRef === undefined ||
-        activeSession.activeProfile === profile ||
-        isRunning ||
-        isCompactionInProgress ||
-        isProfileSwitching ||
-        isModelDefaultUpdating ||
-        resettingViewKey !== null ||
-        frontCompactingViewKey !== null
-      ) {
-        return;
-      }
-      setIsProfileSwitching(true);
-      try {
-        const result = await updateSessionProfile(sessionRef, profile);
-        setSessions(current =>
-          current.map(session => {
-            if (session.sessionRef !== sessionRef) {
-              return session;
-            }
-            const next = {
-              ...session,
-              activeProfile: result.active_profile,
-              profiles: result.profiles,
-            };
-            if (result.model_default === undefined) {
-              delete next.modelDefault;
-            } else {
-              next.modelDefault = result.model_default;
-            }
-            if (result.models === undefined) {
-              delete next.models;
-            } else {
-              next.models = result.models;
-            }
-            return next;
-          }),
-        );
-        snapshotEtagRef.current = undefined;
-        refreshSessionsRef.current?.();
-      } catch (error) {
-        recordNotification({
-          sessionId: activeSessionId,
-          sessionTitle: activeSession?.title ?? 'Session',
-          kind: 'error',
-          title: 'Unable to change session profile',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        setIsProfileSwitching(false);
-      }
-    },
-    [
-      activeSession,
-      activeSessionId,
-      isCompactionInProgress,
-      isModelDefaultUpdating,
-      isProfileSwitching,
-      isRunning,
-      recordNotification,
-      resettingViewKey,
-      frontCompactingViewKey,
-    ],
-  );
   const isActiveSessionCompacting = activeSessionRef !== undefined && compactingSessionRef === activeSessionRef;
   const unreadNotificationCount = unreadActivityNotificationCount(notifications);
   const hasUnreadError = hasUnreadActivityError(notifications);
@@ -3853,7 +3776,6 @@ function App() {
       !sessionRef ||
       isRunning ||
       isCompactionInProgress ||
-      isProfileSwitching ||
       isModelDefaultUpdating ||
       resettingViewKey !== null ||
       frontCompactingViewKey !== null
@@ -3943,7 +3865,6 @@ function App() {
     isCompactionInProgress,
     isLiveSession,
     isModelDefaultUpdating,
-    isProfileSwitching,
     isRunning,
     recordNotification,
     resettingViewKey,
@@ -3964,7 +3885,6 @@ function App() {
       !isActiveTranscriptUserMessage(message) ||
       isRunning ||
       isCompactionInProgress ||
-      isProfileSwitching ||
       isModelDefaultUpdating ||
       resettingViewKey !== null ||
       frontCompactingViewKey !== null
@@ -4042,7 +3962,6 @@ function App() {
     isCompactionInProgress,
     isLiveSession,
     isModelDefaultUpdating,
-    isProfileSwitching,
     isRunning,
     recordNotification,
     resettingViewKey,
@@ -4430,35 +4349,6 @@ function App() {
         addPinnedView(current, {sessionRef, profile}),
       );
       activateView(viewKey(sessionRef, profile));
-    },
-    [activateView],
-  );
-
-  /**
-   * The picker inside a pinned row: show another profile in it.
-   *
-   * The session's stored default is untouched — that is the session's own row —
-   * so the row becomes the view of the profile that was picked.
-   */
-  const repinRow = useCallback(
-    (key: string, profile: string) => {
-      const sessionRef = sessionRefOfViewKey(key);
-      setPinnedViews(current =>
-        addPinnedView(removePinnedView(current, key), {sessionRef, profile}),
-      );
-      activateView(viewKey(sessionRef, profile));
-    },
-    [activateView],
-  );
-
-  /** Drop a pinned row (the picker chose the stored default). Nothing on the server is touched. */
-  const removePinnedRow = useCallback(
-    (key: string) => {
-      if (key === activeViewKeyRef.current) {
-        // Fall back to the session's own row before the row disappears.
-        activateView(viewKey(sessionRefOfViewKey(key)));
-      }
-      setPinnedViews(current => removePinnedView(current, key));
     },
     [activateView],
   );
@@ -4966,7 +4856,6 @@ function App() {
   const isDestructiveActionDisabled =
     isRunning ||
     isCompactionInProgress ||
-    isProfileSwitching ||
     isModelDefaultUpdating ||
     resettingViewKey !== null ||
     frontCompactingViewKey !== null;
@@ -5119,7 +5008,6 @@ function App() {
                     activeSession.sessionRef === undefined ||
                     isRunning ||
                     isCompactionInProgress ||
-                    isProfileSwitching ||
                     isModelDefaultUpdating ||
                     frontCompactingViewKey !== null
                   }
@@ -5151,7 +5039,6 @@ function App() {
                     !frontCompactionSettings.enabled ||
                     isRunning ||
                     isCompactionInProgress ||
-                    isProfileSwitching ||
                     isModelDefaultUpdating ||
                     resettingViewKey !== null ||
                     frontCompactingViewKey !== null
@@ -5206,7 +5093,6 @@ function App() {
                     activeSession.sessionRef === undefined ||
                     isRunning ||
                     isCompactionInProgress ||
-                    isProfileSwitching ||
                     isModelDefaultUpdating ||
                     resettingViewKey !== null ||
                     frontCompactingViewKey !== null
@@ -5230,37 +5116,6 @@ function App() {
       }
       toolbarActions={isReadmeShown ? undefined : (
         <HStack align="center" gap={1}>
-          {activeSession.sessionRef &&
-          activeRowSession.profiles &&
-          activeRowSession.profiles.length > 0 ? (
-            <SessionProfilePicker
-              profiles={activeRowSession.profiles}
-              profileNames={activeRowSession.profileNames}
-              activeProfile={activeRowSession.activeProfile}
-              isDisabled={isRunning || isCompactionInProgress || isProfileSwitching || isModelDefaultUpdating || resettingViewKey !== null || frontCompactingViewKey !== null}
-              onSelect={profile => {
-                // The choice lands on the row on screen: a pinned row shows the
-                // profile, the session's own row follows it. Picking the profile
-                // the session already follows from a pinned row goes to that row
-                // instead of leaving the same conversation in the list twice.
-                const view = {...(isPinnedView ? {profile: activeProfile} : {})};
-                const target = {
-                  ...(activeSession.activeProfile === undefined
-                    ? {}
-                    : {activeProfile: activeSession.activeProfile}),
-                };
-                if (profileSelection(view, profile, target) === 'repin') {
-                  repinRow(activeViewKey, profile);
-                  return;
-                }
-                if (isPinnedView) {
-                  removePinnedRow(activeViewKey);
-                  return;
-                }
-                void selectSessionProfile(profile);
-              }}
-            />
-          ) : null}
           {activeRowSession.models && activeRowSession.models.length > 0 ? (
             <ModelPicker
               models={activeRowSession.models}
@@ -5269,7 +5124,6 @@ function App() {
                 activeSession.sessionRef === undefined ||
                 isRunning ||
                 isCompactionInProgress ||
-                isProfileSwitching ||
                 isModelDefaultUpdating ||
                 resettingViewKey !== null ||
                 frontCompactingViewKey !== null

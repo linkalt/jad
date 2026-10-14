@@ -259,14 +259,6 @@ export interface SessionSnapshot {
   failures?: SessionRunFailure[];
 }
 
-export interface SessionProfileUpdate {
-  active_profile: string;
-  profiles: string[];
-  model_default?: string;
-  models?: string[];
-  changed: boolean;
-}
-
 export interface SessionPathModelDefaultUpdate {
   active_profile: string;
   profiles: string[];
@@ -404,45 +396,6 @@ export async function fetchSession(
   );
 }
 
-/**
- * The history block a snapshot referred to.
- *
- * Turns a compaction removed, folded from the backup, are static until the next
- * compaction — so they are fetched once per identity instead of riding on every
- * snapshot a committed step produces. A `304` means the held copy is still the
- * one the server would send.
- */
-export async function updateSessionProfile(
-  sessionRef: string,
-  activeProfile: string,
-): Promise<SessionProfileUpdate> {
-  const response = await authenticatedFetch(
-    apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/profile`),
-    {
-      method: 'POST',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify({active_profile: activeProfile}),
-    },
-  );
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
-  const value: unknown = await response.json();
-  if (
-    !isRecord(value) ||
-    typeof value.active_profile !== 'string' ||
-    !Array.isArray(value.profiles) ||
-    !value.profiles.every(profile => typeof profile === 'string') ||
-    typeof value.changed !== 'boolean' ||
-    (value.model_default !== undefined && typeof value.model_default !== 'string') ||
-    (value.models !== undefined &&
-      (!Array.isArray(value.models) || !value.models.every(model => typeof model === 'string')))
-  ) {
-    throw new Error('the server returned invalid session path profile settings');
-  }
-  return value as unknown as SessionProfileUpdate;
-}
-
 export async function updateSessionProfileModelDefault(
   sessionRef: string,
   modelDefault: string,
@@ -478,6 +431,14 @@ export async function updateSessionProfileModelDefault(
   return value as unknown as SessionPathModelDefaultUpdate;
 }
 
+/**
+ * The history block a snapshot referred to.
+ *
+ * Turns a compaction removed, folded from the backup, are static until the next
+ * compaction — so they are fetched once per identity instead of riding on every
+ * snapshot a committed step produces. A `304` means the held copy is still the
+ * one the server would send.
+ */
 export async function fetchSessionHistory(
   sessionId: string,
   etag?: string,

@@ -20,7 +20,6 @@ import type {IconRegistry, NamespacedIconName} from '@astryxdesign/core/Icon';
 import {
   BookOpen,
   Brain,
-  SlidersHorizontal,
   X,
   ChevronDown,
   ChevronLeft,
@@ -92,12 +91,9 @@ export const neutralIconRegistry: IconRegistry &
   stop: <Square {...iconProps} />,
   microphone: <Mic {...iconProps} />,
 
-  // App vocabulary for the two composer pickers, which have no Astryx semantic
-  // name: `app:model` is the model that answers a turn, `app:profile` is the
-  // session's path/config profile. `funnel` is the run-settings panel and
-  // `viewColumns` the run inspector, so neither could be reused.
-  'app:profile': <SlidersHorizontal {...iconProps} />,
+  // App vocabulary for the composer's model picker, which has no Astryx semantic
+  // name: `app:model` is the model that answers a turn.
   'app:model': <Brain {...iconProps} />,
-  // The README of the session's working directory.
+  // The Jad usage page.
   'app:readme': <BookOpen {...iconProps} />,
 };

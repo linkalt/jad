@@ -186,7 +186,6 @@ test('a valid session has no problems and an unknown key is underlined', () => {
   const session = {
     schema_version: 1,
     cwd: '/tmp/work',
-    active_profile: 'dev/coder',
     category: 'work',
     scope: {profiles: ['dev']},
   };
@@ -196,7 +195,13 @@ test('a valid session has no problems and an unknown key is underlined', () => {
   assert.equal(sliceOf(text, problem), '"bogus"');
 });
 
-test('the session template is refused until cwd is filled in, and needs no active_profile', () => {
+test('a session that still names an active_profile is underlined', () => {
+  const text = pretty({schema_version: 1, cwd: '/tmp/work', active_profile: 'dev/coder'});
+  const [problem] = validator.validate('sessions', text);
+  assert.equal(sliceOf(text, problem), '"active_profile"');
+});
+
+test('the session template is refused until cwd is filled in', () => {
   const template = '{\n  "schema_version": 1,\n  "cwd": ""\n}\n';
   const problems = validator.validate('sessions', template);
   assert.ok(problems.some(problem => /cwd/.test(problem.message)), JSON.stringify(problems));
