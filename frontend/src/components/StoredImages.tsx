@@ -13,12 +13,14 @@ import {HStack, Text, VStack} from '@astryxdesign/core';
 import {Lightbox} from '@astryxdesign/core/Lightbox';
 import {Thumbnail} from '@astryxdesign/core/Thumbnail';
 
-import {fetchMessageImage, fetchSessionImage} from '../api';
+import {fetchLiveRunImage, fetchMessageImage, fetchSessionImage} from '../api';
 
 /** Where stored images are read from: the session on screen and its profile. */
 export interface StoredImageScope {
   sessionRef: string;
   profile?: string;
+  /** True under the message of the run that is still going: its images are not in the transcript yet. */
+  live?: boolean;
 }
 
 const StoredImageScopeContext = createContext<StoredImageScope | undefined>(undefined);
@@ -49,7 +51,8 @@ export function StoredImages({names}: StoredImagesProps) {
 }
 
 export interface InlineImagesProps {
-  messageId: string;
+  /** Message that carries the result. Not needed under a live scope, which addresses the run's call id. */
+  messageId?: string;
   callId: string;
   /** How many images the result still holds inline, from `inlineImages`. */
   count: number;
@@ -57,19 +60,26 @@ export interface InlineImagesProps {
   cursor?: number;
 }
 
-/** Images a tool result still holds inline in the transcript; the server decodes each on demand. */
+/**
+ * Images a tool result still holds inline in the transcript; the server decodes each on
+ * demand. Under a live scope the result is not in the transcript yet, so the run's own copy is read.
+ */
 export function InlineImages({messageId, callId, count, cursor}: InlineImagesProps) {
   const scope = useContext(StoredImageScopeContext);
   const sessionRef = scope?.sessionRef;
   const profile = scope?.profile;
+  const isLive = scope?.live === true;
   const ids = useMemo(() => Array.from({length: count}, (_, index) => String(index)), [count]);
   const load = useCallback(
-    (position: string, signal: AbortSignal) =>
-      sessionRef === undefined
-        ? Promise.reject(new Error('no session'))
-        : fetchMessageImage(sessionRef, messageId, callId, Number(position), cursor, profile, signal),
-    [sessionRef, messageId, callId, cursor, profile],
+    (position: string, signal: AbortSignal) => {
+      if (sessionRef === undefined) return Promise.reject(new Error('no session'));
+      if (isLive) return fetchLiveRunImage(sessionRef, callId, Number(position), profile, signal);
+      if (messageId === undefined) return Promise.reject(new Error('no message'));
+      return fetchMessageImage(sessionRef, messageId, callId, Number(position), cursor, profile, signal);
+    },
+    [sessionRef, messageId, callId, cursor, profile, isLive],
   );
+  if (!isLive && messageId === undefined) return null;
   return <ImageRow ids={ids} load={load} noun="Image" />;
 }
 

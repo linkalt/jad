@@ -9,7 +9,7 @@ globalThis.fetch = async (input, init = {}) => {
   return reply();
 };
 
-const {attachSessionRun, fetchMessageImage, fetchSessionImage, STORED_IMAGE_NAME} = await import('./api.ts');
+const {attachSessionRun, fetchLiveRunImage, fetchMessageImage, fetchSessionImage, STORED_IMAGE_NAME} = await import('./api.ts');
 
 after(() => {
   globalThis.fetch = originalFetch;
@@ -81,6 +81,26 @@ test('fetchMessageImage refuses a position that is not a non-negative integer, w
 test('fetchMessageImage reports a server error', async () => {
   reply = () => new Response(JSON.stringify({error: 'image not found'}), {status: 404});
   await assert.rejects(() => fetchMessageImage('s', 'm', 'c', 0), /image not found/);
+});
+
+test('fetchLiveRunImage asks the running run for one image by call id and position', async () => {
+  reply = () => new Response(new Uint8Array([1, 2, 3]), {status: 200});
+  requests.length = 0;
+  const blob = await fetchLiveRunImage('my session', 'call/1', 2, 'p 1');
+  assert.equal(blob.size, 3);
+  const url = new URL(requests[0].url, 'http://localhost');
+  assert.match(url.pathname, /\/sessions\/my%20session\/run\/images\/call%2F1\/2$/);
+  assert.equal(url.searchParams.get('profile'), 'p 1');
+});
+
+test('fetchLiveRunImage refuses a bad position without a request and reports a server error', async () => {
+  requests.length = 0;
+  for (const bad of [-1, 1.5, Number.NaN]) {
+    await assert.rejects(() => fetchLiveRunImage('s', 'c', bad), /invalid image position/, String(bad));
+  }
+  assert.equal(requests.length, 0);
+  reply = () => new Response(JSON.stringify({error: 'image not found'}), {status: 404});
+  await assert.rejects(() => fetchLiveRunImage('s', 'c', 0), /image not found/);
 });
 
 test('a streamed tool result keeps inlineImages, and a bad count is dropped as an invalid message', async () => {

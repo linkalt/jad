@@ -666,6 +666,30 @@ export async function fetchMessageImage(
   return response.blob();
 }
 
+/**
+ * One image of a tool result of the run that is still going. The result is not in the
+ * transcript yet, so it is addressed by call id and position, not by message.
+ */
+export async function fetchLiveRunImage(
+  sessionId: string,
+  callId: string,
+  index: number,
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error('invalid image position');
+  }
+  const response = await authenticatedFetch(
+    apiUrl(
+      `/sessions/${encodeURIComponent(sessionId)}/run/images/${encodeURIComponent(callId)}/${index}${profileQuery(profile)}`,
+    ),
+    signal === undefined ? {} : {signal},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  return response.blob();
+}
+
 export async function fetchSessionTools(sessionId: string, profile?: string): Promise<ToolDefinition[]> {  const response = await authenticatedFetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/tools${profileQuery(profile)}`));
   if (!response.ok) {
     throw new Error(await readError(response));

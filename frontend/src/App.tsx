@@ -1112,12 +1112,12 @@ function ToolResultImages({result, source}: {result: WebUiToolResult; source?: T
   return (
     <>
       {result.images !== undefined && <StoredImages names={result.images} />}
-      {result.inlineImages !== undefined && result.inlineImages > 0 && source !== undefined && (
+      {result.inlineImages !== undefined && result.inlineImages > 0 && (
         <InlineImages
-          messageId={source.message.id}
+          messageId={source?.message.id}
           callId={result.callId}
           count={result.inlineImages}
-          cursor={source.message.cursor}
+          cursor={source?.message.cursor}
         />
       )}
     </>
@@ -3311,6 +3311,10 @@ function App() {
     () => (activeSessionRef === undefined ? undefined : {sessionRef: activeSessionRef, profile: activeProfile}),
     [activeSessionRef, activeProfile],
   );
+  const liveImageScope = useMemo(
+    () => (storedImageScope === undefined ? undefined : {...storedImageScope, live: true}),
+    [storedImageScope],
+  );
   const activeSessionPage = sessionPages[activeViewKey];
   // Older turns exist on the server but are not part of this client's copy yet.
   const hasOlderTurns =
@@ -5386,12 +5390,14 @@ function App() {
                             name={<AssistantIdentity model={activeRowSession.model} />}
                           >
                             {isLiveSession && streamingMessage ? (
-                              <WebUiParts
-                                parts={streamingMessage.parts}
-                                steps={streamingMessage.steps}
-                                rowWidthPx={liveBubbleWidthPx}
-                                isStreaming={pendingInteraction === undefined}
-                              />
+                              <StoredImageScopeProvider value={liveImageScope}>
+                                <WebUiParts
+                                  parts={streamingMessage.parts}
+                                  steps={streamingMessage.steps}
+                                  rowWidthPx={liveBubbleWidthPx}
+                                  isStreaming={pendingInteraction === undefined}
+                                />
+                              </StoredImageScopeProvider>
                             ) : (
                               <VStack gap={3} width="100%">
                                 <ReasoningBlock
