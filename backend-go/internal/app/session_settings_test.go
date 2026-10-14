@@ -96,7 +96,7 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 	if err := json.Unmarshal(filesBody, &listing); err != nil {
 		t.Fatal(err)
 	}
-	if listing.Truncated || !reflect.DeepEqual(listing.Files, []string{"README.md", "src/main.go"}) {
+	if listing.Truncated || !reflect.DeepEqual(listing.Files, []string{"README.md", "src/", "src/main.go"}) {
 		t.Fatalf("file listing = %+v", listing)
 	}
 

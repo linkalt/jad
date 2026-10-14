@@ -15,12 +15,14 @@ const (
 
 // SessionFileListingSettings bounds the read-only file list offered by the UI.
 type SessionFileListingSettings struct {
-	Enabled           bool
-	MaxDepth          int
-	MaxEntries        int
-	MaxResults        int
-	IncludeHidden     bool
-	IgnoreDirectories []string
+	Enabled       bool
+	MaxDepth      int
+	MaxEntries    int
+	MaxResults    int
+	IncludeHidden bool
+	// IncludeDirectories also lists each readable folder, as its path with a trailing slash.
+	IncludeDirectories bool
+	IgnoreDirectories  []string
 }
 
 // NativePathRule is one resolved allow/deny path rule for native read access.
@@ -40,10 +42,11 @@ type NativePathPolicy struct {
 
 func defaultSessionFileListingSettings() SessionFileListingSettings {
 	return SessionFileListingSettings{
-		Enabled:    true,
-		MaxDepth:   12,
-		MaxEntries: 5000,
-		MaxResults: 2000,
+		Enabled:            true,
+		IncludeDirectories: true,
+		MaxDepth:           12,
+		MaxEntries:         5000,
+		MaxResults:         2000,
 		IgnoreDirectories: []string{
 			"node_modules", ".git", "dist", "build", "coverage", ".next",
 			"__pycache__", ".venv", "venv", ".cache",
@@ -64,6 +67,9 @@ func normalizeSessionFileListing(raw json.RawMessage, path string) (SessionFileL
 		return SessionFileListingSettings{}, err
 	}
 	if settings.IncludeHidden, err = sessionFileBool(fields, "include_hidden", settings.IncludeHidden, path); err != nil {
+		return SessionFileListingSettings{}, err
+	}
+	if settings.IncludeDirectories, err = sessionFileBool(fields, "include_directories", settings.IncludeDirectories, path); err != nil {
 		return SessionFileListingSettings{}, err
 	}
 	if settings.MaxDepth, err = sessionFileInteger(fields, "max_depth", settings.MaxDepth, maxSessionFileDepth, path); err != nil {

@@ -16,9 +16,9 @@ type SessionFileListing struct {
 	Truncated bool     `json:"truncated"`
 }
 
-// CollectSessionFiles enumerates regular files under the configured workspace.
-// It never follows directory symlinks, bounds work by settings, and filters
-// entries denied by the native read policy.
+// CollectSessionFiles enumerates regular files, and with IncludeDirectories the
+// folders (as "path/"), under the configured workspace. It never follows directory
+// symlinks, bounds work by settings, and filters entries denied by the native read policy.
 func CollectSessionFiles(root string, settings SessionFileListingSettings, policy NativePathPolicy) SessionFileListing {
 	listing := SessionFileListing{Files: []string{}}
 	workspaceRoot, err := filepath.EvalSymlinks(root)
@@ -93,8 +93,18 @@ func CollectSessionFiles(root string, settings SessionFileListingSettings, polic
 					relativePath = filepath.ToSlash(filepath.Join(filepath.FromSlash(relativeDirectory), name))
 				}
 				if entry.IsDir() {
-					if _, skip := ignored[name]; !skip {
-						nextLevel = append(nextLevel, relativePath)
+					if _, skip := ignored[name]; skip {
+						continue
+					}
+					nextLevel = append(nextLevel, relativePath)
+					if settings.IncludeDirectories {
+						folderPath := filepath.Join(root, filepath.FromSlash(relativePath))
+						// A folder that is not contained is left out here; its own level
+						// marks the listing truncated when it is visited.
+						resolvedFolder, contained := resolveContainedDirectory(folderPath, workspaceRoot, false)
+						if contained && allowedByNativeReadPolicy(folderPath, root, resolvedFolder, workspaceRoot, policy) {
+							listing.Files = append(listing.Files, relativePath+"/")
+						}
 					}
 					continue
 				}

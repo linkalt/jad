@@ -1303,12 +1303,12 @@ func TestLayoutSessionFilesComeFromDefaultsSessionAndProfile(t *testing.T) {
 		}
 		return config.SessionFiles
 	}
-	if got := load(); !got.Enabled || got.MaxDepth != 12 || got.MaxResults != 2000 || got.IncludeHidden {
+	if got := load(); !got.Enabled || got.MaxDepth != 12 || got.MaxResults != 2000 || got.IncludeHidden || !got.IncludeDirectories {
 		t.Fatalf("defaults = %+v", got)
 	}
 
-	layout.Defaults = map[string]json.RawMessage{"session_files": json.RawMessage(`{"max_depth":3,"include_hidden":true,"max_results":50}`)}
-	if got := load(); got.MaxDepth != 3 || !got.IncludeHidden || got.MaxResults != 50 || !got.Enabled {
+	layout.Defaults = map[string]json.RawMessage{"session_files": json.RawMessage(`{"max_depth":3,"include_hidden":true,"include_directories":false,"max_results":50}`)}
+	if got := load(); got.MaxDepth != 3 || !got.IncludeHidden || got.IncludeDirectories || got.MaxResults != 50 || !got.Enabled {
 		t.Fatalf("from defaults = %+v", got)
 	}
 
@@ -1334,6 +1334,7 @@ func TestLayoutSessionFilesErrors(t *testing.T) {
 	for name, tc := range map[string]struct{ value, want string }{
 		"not an object":  {`3`, "session_files"},
 		"enabled string": {`{"enabled":"no"}`, "session_files.enabled must be a boolean"},
+		"folders string": {`{"include_directories":"yes"}`, "session_files.include_directories must be a boolean"},
 		"depth too big":  {`{"max_depth":65}`, "session_files.max_depth must be a safe integer between 0 and 64"},
 		"ignore blank":   {`{"ignore_directories":[" "]}`, "session_files.ignore_directories[0] must be a non-empty string"},
 	} {

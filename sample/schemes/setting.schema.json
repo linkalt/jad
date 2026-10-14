@@ -1685,6 +1685,7 @@
       "properties": {
         "enabled": {"type": "boolean", "default": true, "description": "Turns the listing on or off."},
         "include_hidden": {"type": "boolean", "default": false, "description": "List files and folders whose name starts with a dot."},
+        "include_directories": {"type": "boolean", "default": true, "description": "List each readable folder too, as its path with a trailing slash (src/). Folders count against max_results."},
         "max_depth": {"type": "integer", "minimum": 0, "maximum": 64, "default": 12, "description": "Deepest folder level listed."},
         "max_entries": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 5000, "description": "Directory entries examined before the listing stops and is marked truncated."},
         "max_results": {"type": "integer", "minimum": 0, "maximum": 100000, "default": 2000, "description": "Files returned before the listing stops and is marked truncated."},

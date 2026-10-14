@@ -38,9 +38,49 @@ func TestCollectSessionFilesFiltersHiddenIgnoredSymlinkAndDeniedPaths(t *testing
 	settings.IgnoreDirectories = append(settings.IgnoreDirectories, "vendor")
 	policy := NativePathPolicy{Paths: []NativePathRule{{Action: "deny", Path: filepath.Join(root, "private")}}}
 	listing := CollectSessionFiles(root, settings, policy)
-	want := []string{"README.md", "src/main.go"}
+	want := []string{"README.md", "src/", "src/main.go"}
 	if !reflect.DeepEqual(listing.Files, want) || listing.Truncated {
 		t.Fatalf("listing = %+v, want files %v and complete result", listing, want)
+	}
+
+	settings.IncludeDirectories = false
+	listing = CollectSessionFiles(root, settings, policy)
+	want = []string{"README.md", "src/main.go"}
+	if !reflect.DeepEqual(listing.Files, want) || listing.Truncated {
+		t.Fatalf("include_directories off: listing = %+v, want files %v", listing, want)
+	}
+}
+
+func TestCollectSessionFilesListsNestedFoldersAndCountsThemAgainstTheCap(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a/b/c.txt", "a/d.txt", "empty/.keep"} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, "void"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+
+	settings := defaultSessionFileListingSettings()
+	listing := CollectSessionFiles(root, settings, NativePathPolicy{})
+	want := []string{"a/", "empty/", "void/", "a/b/", "a/d.txt", "a/b/c.txt"}
+	if !reflect.DeepEqual(listing.Files, want) || listing.Truncated {
+		t.Fatalf("listing = %+v, want %v (empty folders listed, the symlinked folder left out)", listing, want)
+	}
+
+	settings.MaxResults = 2
+	listing = CollectSessionFiles(root, settings, NativePathPolicy{})
+	if !listing.Truncated || len(listing.Files) != 2 {
+		t.Fatalf("max_results 2 listing = %+v, want two entries and truncated", listing)
 	}
 }
 
