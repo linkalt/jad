@@ -22,7 +22,6 @@ import {
   Layout,
   LayoutContent,
   SideNav,
-  SideNavItem,
   SideNavSection,
   StatusDot,
   Text,
@@ -1785,23 +1784,82 @@ function SessionNavigation({
   onOpenProfileEditor: () => void;
 }) {
   const categorySections = useMemo(() => groupByCategory(groups), [groups]);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const FooterStack = isCollapsed ? VStack : HStack;
   return (
     <SideNav
       aria-label="Agent sessions"
       footerIcons={
-        <HStack align="center" justify="between" gap={2} width="100%">
+        <FooterStack align="center" justify="between" gap={isCollapsed ? 1 : 0} width="100%">
           <IconButton
             data-panel-toggle=""
             label="Search sessions"
+            tooltip="Search sessions"
             icon={<Icon icon="search" size="sm" />}
             variant={openLeftPanel === 'search' ? 'secondary' : 'ghost'}
             size="sm"
             onClick={() => onSelectLeftPanel('search')}
           />
-          <Avatar name="You" size="sm" />
-        </HStack>
+          <IconButton
+            data-panel-toggle=""
+            label="Prompt library"
+            tooltip="Prompt library"
+            icon={<Icon icon="copy" size="sm" />}
+            variant={openLeftPanel === 'prompts' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => onSelectLeftPanel('prompts')}
+          />
+          <IconButton
+            data-panel-toggle=""
+            label="Run settings"
+            tooltip="Run settings"
+            icon={<Icon icon="funnel" size="sm" />}
+            variant={openLeftPanel === 'settings' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => onSelectLeftPanel('settings')}
+          />
+          <IconButton
+            label="Edit catalog"
+            tooltip="Edit catalog"
+            icon={<Icon icon="wrench" size="sm" />}
+            variant="ghost"
+            size="sm"
+            onClick={onOpenProfileEditor}
+          />
+          <IconButton
+            data-panel-toggle=""
+            label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+            tooltip={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : 'Notifications'}
+            icon={<Icon icon={NotificationBellIcon} size="sm" />}
+            variant={
+              unreadCount > 0
+                ? hasUnreadError ? 'destructive' : 'primary'
+                : rightPanel === 'notifications' ? 'secondary' : 'ghost'
+            }
+            size="sm"
+            onClick={onToggleNotifications}
+          />
+          <IconButton
+            data-panel-toggle=""
+            label="README"
+            tooltip="README"
+            icon={<Icon icon="app:readme" size="sm" />}
+            variant={isReadmeShown ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={onShowReadme}
+          />
+          <IconButton
+            data-panel-toggle=""
+            label="Checkpoints"
+            tooltip="Checkpoints"
+            icon={<Icon icon="clock" size="sm" />}
+            variant={rightPanel === 'checkpoints' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={onToggleCheckpoints}
+          />
+        </FooterStack>
       }
-      collapsible
+      collapsible={{isCollapsed, onCollapsedChange: setIsCollapsed}}
     >
       {categorySections.map(section => (
         <SideNavSection
@@ -1821,53 +1879,6 @@ function SessionNavigation({
           />
         </SideNavSection>
       ))}
-      <SideNavSection title="Workspace">
-        <SideNavItem
-          data-panel-toggle=""
-          label="Prompt library"
-          icon={<Icon icon="copy" size="sm" />}
-          isSelected={openLeftPanel === 'prompts'}
-          onClick={() => onSelectLeftPanel('prompts')}
-        />
-        <SideNavItem
-          data-panel-toggle=""
-          label="Run settings"
-          icon={<Icon icon="funnel" size="sm" />}
-          isSelected={openLeftPanel === 'settings'}
-          onClick={() => onSelectLeftPanel('settings')}
-        />
-        <SideNavItem
-          label="Edit catalog"
-          icon={<Icon icon="wrench" size="sm" />}
-          onClick={onOpenProfileEditor}
-        />
-      </SideNavSection>
-      <SideNavSection title="Activity">
-        <SideNavItem
-          data-panel-toggle=""
-          label="Notifications"
-          icon={<Icon icon={NotificationBellIcon} size="sm" />}
-          isSelected={rightPanel === 'notifications'}
-          endContent={unreadCount > 0 ? (
-            <Badge label={String(unreadCount)} variant={hasUnreadError ? 'error' : 'info'} />
-          ) : undefined}
-          onClick={onToggleNotifications}
-        />
-        <SideNavItem
-          data-panel-toggle=""
-          label="README"
-          icon={<Icon icon="app:readme" size="sm" />}
-          isSelected={isReadmeShown}
-          onClick={onShowReadme}
-        />
-        <SideNavItem
-          data-panel-toggle=""
-          label="Checkpoints"
-          icon={<Icon icon="clock" size="sm" />}
-          isSelected={rightPanel === 'checkpoints'}
-          onClick={onToggleCheckpoints}
-        />
-      </SideNavSection>
     </SideNav>
   );
 }
