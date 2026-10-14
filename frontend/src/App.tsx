@@ -143,7 +143,7 @@ import {SessionProfilePicker} from './components/SessionProfilePicker';
 import {FloatingPanel} from './components/FloatingPanel';
 import {NotificationPanel} from './components/NotificationPanel';
 import {CheckpointPanel} from './components/CheckpointPanel';
-import {ReadmePanel} from './components/ReadmePanel';
+import {JadReadme} from './components/JadReadme';
 import {MarkdownText} from './components/MarkdownText';
 import {SelectionMenu} from './components/SelectionMenu';
 import type {QuoteAnchor} from './components/SelectionMenu';
@@ -1760,7 +1760,8 @@ function SessionNavigation({
   hasUnreadError,
   onToggleNotifications,
   onToggleCheckpoints,
-  onToggleReadme,
+  onShowReadme,
+  isReadmeShown,
   onOpenProfileEditor,
 }: {
   /** Every session as a group, with a child row for each of its profiles. */
@@ -1782,7 +1783,8 @@ function SessionNavigation({
   hasUnreadError: boolean;
   onToggleNotifications: () => void;
   onToggleCheckpoints: () => void;
-  onToggleReadme: () => void;
+  onShowReadme: () => void;
+  isReadmeShown: boolean;
   onOpenProfileEditor: () => void;
 }) {
   const categorySections = useMemo(() => groupByCategory(groups), [groups]);
@@ -1858,8 +1860,8 @@ function SessionNavigation({
           data-panel-toggle=""
           label="README"
           icon={<Icon icon="app:readme" size="sm" />}
-          isSelected={rightPanel === 'readme'}
-          onClick={onToggleReadme}
+          isSelected={isReadmeShown}
+          onClick={onShowReadme}
         />
         <SideNavItem
           data-panel-toggle=""
@@ -2480,8 +2482,11 @@ function App() {
   const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
   const [hasOpenedProfileEditor, setHasOpenedProfileEditor] = useState(false);
   const [rightPanel, setRightPanel] = useState<RightPanelId | null>(
-    appConfig.show_readme_by_default ? 'readme' : appConfig.show_inspector_by_default ? 'inspector' : null,
+    appConfig.show_inspector_by_default ? 'inspector' : null,
   );
+  // The Jad README stands in for the transcript until a row is chosen.
+  const [isReadmeShown, setIsReadmeShown] = useState(appConfig.start_with_readme);
+  const showReadme = useCallback(() => setIsReadmeShown(true), []);
   const rightPanelRef = useRef<RightPanelId | null>(rightPanel);
   const setRightPanelMode = useCallback((nextPanel: RightPanelId | null) => {
     rightPanelRef.current = nextPanel;
@@ -2489,9 +2494,6 @@ function App() {
   }, []);
   const toggleInspector = useCallback(() => {
     setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'inspector'));
-  }, [setRightPanelMode]);
-  const toggleReadme = useCallback(() => {
-    setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'readme'));
   }, [setRightPanelMode]);
   const toggleCheckpoints = useCallback(() => {
     setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'checkpoints'));
@@ -4406,6 +4408,7 @@ function App() {
   /** Move the visible composer and transcript without disturbing another view's run. */
   const activateView = useCallback((nextViewKey: string) => {
     hasChosenSessionRef.current = true;
+    setIsReadmeShown(false);
     if (nextViewKey === activeViewKeyRef.current) {
       return;
     }
@@ -4975,7 +4978,8 @@ function App() {
       onSubmit={submitMessage}
       onStop={stopRun}
       isRunning={isRunning}
-      placeholder="Ask the agent to inspect a task…"
+      isDisabled={isReadmeShown}
+      placeholder={isReadmeShown ? 'Choose a session to start chatting' : 'Ask the agent to inspect a task…'}
       showInspector={rightPanel === 'inspector'}
       onToggleInspector={toggleInspector}
       isLeftPanelOpen={leftPanel !== null}
@@ -5224,7 +5228,7 @@ function App() {
           />
         )
       }
-      toolbarActions={
+      toolbarActions={isReadmeShown ? undefined : (
         <HStack align="center" gap={1}>
           {activeSession.sessionRef &&
           activeRowSession.profiles &&
@@ -5368,7 +5372,7 @@ function App() {
             />
           )}
         </HStack>
-      }
+      )}
       footerNote={
         <HStack align="center" gap={2}>
           <Text type="supporting" color="secondary">
@@ -5429,7 +5433,7 @@ function App() {
           rowTurns={rowTurns}
           sessions={sessions}
           runningViewKeys={sidebarRunningViewKeys}
-          activeViewKey={activeViewKey}
+          activeViewKey={isReadmeShown ? '' : activeViewKey}
           onSelect={activateView}
           onOpenProfile={openProfileView}
           openLeftPanel={leftPanel}
@@ -5439,7 +5443,8 @@ function App() {
           hasUnreadError={hasUnreadError}
           onToggleNotifications={toggleNotifications}
           onToggleCheckpoints={toggleCheckpoints}
-          onToggleReadme={toggleReadme}
+          onShowReadme={showReadme}
+          isReadmeShown={isReadmeShown}
           onOpenProfileEditor={() => {
             setHasOpenedProfileEditor(true);
             setIsProfileEditorOpen(true);
@@ -5467,7 +5472,7 @@ function App() {
               {/* The visual header is gone; this keeps the session title as the
                   page's top-level heading for assistive technology. */}
               <VisuallyHidden as="div">
-                <Heading level={1}>{activeRowSession.title}</Heading>
+                <Heading level={1}>{isReadmeShown ? 'Jad' : activeRowSession.title}</Heading>
               </VisuallyHidden>
               <StoredImageScopeProvider value={storedImageScope}>
               <ChatLayout
@@ -5489,6 +5494,9 @@ function App() {
                     height="100%"
                     xstyle={styles.conversationLane}
                   >
+                    {isReadmeShown ? (
+                      <JadReadme />
+                    ) : (
                     <ChatMessageList
                       density="balanced"
                       align="top"
@@ -5577,6 +5585,7 @@ function App() {
                         />
                       )}
                     </ChatMessageList>
+                    )}
                   </VStack>
                 </HStack>
               </ChatLayout>
@@ -5635,14 +5644,6 @@ function App() {
               selectSession(sessionId);
               setRightPanelMode(null);
             }}
-          />
-        )}
-        {rightPanel === 'readme' && (
-          <ReadmePanel
-            sessionId={activeSessionId}
-            profile={activeProfile}
-            region={inspector}
-            onClose={() => setRightPanelMode(null)}
           />
         )}
         {rightPanel === 'checkpoints' && (

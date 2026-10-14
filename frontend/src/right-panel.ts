@@ -1,5 +1,5 @@
 /** The right edge shows one panel at a time. */
-export type RightPanelId = 'inspector' | 'notifications' | 'checkpoints' | 'readme';
+export type RightPanelId = 'inspector' | 'notifications' | 'checkpoints';
 
 /**
  * The rule shared by every control that owns the right edge: clicking the item

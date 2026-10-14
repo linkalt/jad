@@ -166,8 +166,8 @@ export function RunSettingsPanel({
             endContent={<Value>{onOff(appConfig.show_inspector_by_default)}</Value>}
           />
           <ListItem
-            label="README on start"
-            endContent={<Value>{onOff(appConfig.show_readme_by_default)}</Value>}
+            label="Jad README on start"
+            endContent={<Value>{onOff(appConfig.start_with_readme)}</Value>}
           />
           <ListItem
             label="Left panel on start"

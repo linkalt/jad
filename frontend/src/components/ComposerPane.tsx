@@ -70,6 +70,8 @@ type ComposerPaneProps = {
   onSubmit: (value: string, images: AttachedImage[], files: AttachedFile[]) => boolean;
   onStop: () => void;
   isRunning: boolean;
+  /** Turns off typing, sending, attaching, dropping and inserting. */
+  isDisabled?: boolean;
   placeholder: string;
   /** Whether the run inspector is open. Its toggle is the only way back once it is closed. */
   showInspector: boolean;
@@ -411,6 +413,7 @@ export function ComposerPane({
   onSubmit,
   onStop,
   isRunning,
+  isDisabled = false,
   placeholder,
   showInspector,
   onToggleInspector,
@@ -516,6 +519,9 @@ export function ComposerPane({
 
   const handleSubmit = useCallback(
     (text: string) => {
+      if (isDisabled) {
+        return;
+      }
       const sentImages = attachments.images;
       const sentFiles = fileAttachments.images;
       if (onSubmit(text, sentImages, sentFiles)) {
@@ -524,7 +530,7 @@ export function ComposerPane({
         fileAttachments.clear(sentFiles);
       }
     },
-    [attachments, draftKey, fileAttachments, onSubmit, setDraft],
+    [attachments, draftKey, fileAttachments, isDisabled, onSubmit, setDraft],
   );
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
@@ -672,12 +678,12 @@ export function ComposerPane({
     addImages: attachments.add,
     addFiles: fileAttachments.add,
   });
-  const isDropEnabled = appConfig.drop_files_enabled;
+  const isDropEnabled = appConfig.drop_files_enabled && !isDisabled;
 
   useEffect(() => {
-    onRegisterInsert?.(insertActions);
+    onRegisterInsert?.(isDisabled ? null : insertActions);
     return () => onRegisterInsert?.(null);
-  }, [insertActions, onRegisterInsert]);
+  }, [insertActions, isDisabled, onRegisterInsert]);
 
   /**
    * Drafts are user content, so they outlive the tab: the newest draft is
@@ -714,12 +720,13 @@ export function ComposerPane({
     <ChatComposer
       {...(isDropEnabled ? fileDrop.targetProps : {})}
       style={isDropEnabled && fileDrop.isDragging ? DROP_HIGHLIGHT : undefined}
+      isDisabled={isDisabled}
       value={value}
       onChange={handleChange}
       onSubmit={handleSubmit}
       sendButton={
         <ChatSendButton
-          isDisabled={value.trim() === '' && !hasAttachments}
+          isDisabled={isDisabled || (value.trim() === '' && !hasAttachments)}
           onSend={() => handleSubmit(value)}
         />
       }
@@ -772,6 +779,7 @@ export function ComposerPane({
             <>
               <IconButton
                 label="Attach image"
+                isDisabled={isDisabled}
                 icon={<Icon icon="upload" size="sm" />}
                 variant="ghost"
                 size="sm"
@@ -788,6 +796,7 @@ export function ComposerPane({
             <>
               <IconButton
                 label="Attach file"
+                isDisabled={isDisabled}
                 icon={<Icon icon={FileIcon} size="sm" />}
                 variant="ghost"
                 size="sm"
@@ -803,6 +812,7 @@ export function ComposerPane({
           {isPreviewEnabled ? (
             <IconButton
               label={isPreviewOpen ? 'Hide markdown preview' : 'Preview markdown'}
+              isDisabled={isDisabled}
               icon={<Icon icon={PreviewIcon} size="sm" />}
               variant={isPreviewOpen ? 'secondary' : 'ghost'}
               size="sm"
