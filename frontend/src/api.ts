@@ -9,6 +9,7 @@ import {
 } from './checkpoint-view.ts';
 import {parseInteractionEnd, type InteractionEnd} from './interaction-end.ts';
 import {parseHookReport, type HookReport} from './hook-report-view.ts';
+import {parseSessionReadme, README_MISSING_MESSAGE, type SessionReadme} from './readme-view.ts';
 import {parseProviderRetryWait, type ProviderRetryWait} from './provider-retry-view.ts';
 import type {RunInputPart} from './image-attachments.ts';
 
@@ -863,6 +864,26 @@ export async function resetSession(sessionId: string, profile?: string): Promise
   if (!isRecord(value) || value.reset !== true) {
     throw new Error('the server returned invalid reset data');
   }
+}
+
+/** The README of the session's working directory, or `null` when the directory has none. */
+export async function fetchSessionReadme(
+  sessionId: string,
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<SessionReadme | null> {
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/readme${profileQuery(profile)}`),
+    signal === undefined ? undefined : {signal},
+  );
+  if (!response.ok) {
+    const message = await readError(response);
+    if (response.status === 404 && message === README_MISSING_MESSAGE) {
+      return null;
+    }
+    throw new Error(message);
+  }
+  return parseSessionReadme(await response.json());
 }
 
 /** The session's checkpoints, newest first, and whether the session keeps any. */

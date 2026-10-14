@@ -143,6 +143,7 @@ import {SessionProfilePicker} from './components/SessionProfilePicker';
 import {FloatingPanel} from './components/FloatingPanel';
 import {NotificationPanel} from './components/NotificationPanel';
 import {CheckpointPanel} from './components/CheckpointPanel';
+import {ReadmePanel} from './components/ReadmePanel';
 import {MarkdownText} from './components/MarkdownText';
 import {SelectionMenu} from './components/SelectionMenu';
 import type {QuoteAnchor} from './components/SelectionMenu';
@@ -1759,6 +1760,7 @@ function SessionNavigation({
   hasUnreadError,
   onToggleNotifications,
   onToggleCheckpoints,
+  onToggleReadme,
   onOpenProfileEditor,
 }: {
   /** Every session as a group, with a child row for each of its profiles. */
@@ -1780,6 +1782,7 @@ function SessionNavigation({
   hasUnreadError: boolean;
   onToggleNotifications: () => void;
   onToggleCheckpoints: () => void;
+  onToggleReadme: () => void;
   onOpenProfileEditor: () => void;
 }) {
   const categorySections = useMemo(() => groupByCategory(groups), [groups]);
@@ -1850,6 +1853,13 @@ function SessionNavigation({
             <Badge label={String(unreadCount)} variant={hasUnreadError ? 'error' : 'info'} />
           ) : undefined}
           onClick={onToggleNotifications}
+        />
+        <SideNavItem
+          data-panel-toggle=""
+          label="README"
+          icon={<Icon icon="app:readme" size="sm" />}
+          isSelected={rightPanel === 'readme'}
+          onClick={onToggleReadme}
         />
         <SideNavItem
           data-panel-toggle=""
@@ -2470,7 +2480,7 @@ function App() {
   const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
   const [hasOpenedProfileEditor, setHasOpenedProfileEditor] = useState(false);
   const [rightPanel, setRightPanel] = useState<RightPanelId | null>(
-    appConfig.show_inspector_by_default ? 'inspector' : null,
+    appConfig.show_readme_by_default ? 'readme' : appConfig.show_inspector_by_default ? 'inspector' : null,
   );
   const rightPanelRef = useRef<RightPanelId | null>(rightPanel);
   const setRightPanelMode = useCallback((nextPanel: RightPanelId | null) => {
@@ -2479,6 +2489,9 @@ function App() {
   }, []);
   const toggleInspector = useCallback(() => {
     setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'inspector'));
+  }, [setRightPanelMode]);
+  const toggleReadme = useCallback(() => {
+    setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'readme'));
   }, [setRightPanelMode]);
   const toggleCheckpoints = useCallback(() => {
     setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'checkpoints'));
@@ -5426,6 +5439,7 @@ function App() {
           hasUnreadError={hasUnreadError}
           onToggleNotifications={toggleNotifications}
           onToggleCheckpoints={toggleCheckpoints}
+          onToggleReadme={toggleReadme}
           onOpenProfileEditor={() => {
             setHasOpenedProfileEditor(true);
             setIsProfileEditorOpen(true);
@@ -5621,6 +5635,14 @@ function App() {
               selectSession(sessionId);
               setRightPanelMode(null);
             }}
+          />
+        )}
+        {rightPanel === 'readme' && (
+          <ReadmePanel
+            sessionId={activeSessionId}
+            profile={activeProfile}
+            region={inspector}
+            onClose={() => setRightPanelMode(null)}
           />
         )}
         {rightPanel === 'checkpoints' && (

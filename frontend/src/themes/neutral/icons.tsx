@@ -18,6 +18,7 @@ void React;
 import type {IconRegistry, NamespacedIconName} from '@astryxdesign/core/Icon';
 
 import {
+  BookOpen,
   Brain,
   SlidersHorizontal,
   X,
@@ -97,4 +98,6 @@ export const neutralIconRegistry: IconRegistry &
   // `viewColumns` the run inspector, so neither could be reused.
   'app:profile': <SlidersHorizontal {...iconProps} />,
   'app:model': <Brain {...iconProps} />,
+  // The README of the session's working directory.
+  'app:readme': <BookOpen {...iconProps} />,
 };
