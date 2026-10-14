@@ -38,7 +38,8 @@ func TestRunStoresInputBeforeModelToolsAndCredentialAreResolved(t *testing.T) {
 	}
 	first := strings.ReplaceAll(cases[0].name, " ", "-")
 	config, fixture := layoutConfig(t, layouttest.Spec{
-		SessionID: first, Models: models, Profiles: profiles, ActiveProfile: "dev/" + first,
+		SessionID: first, Models: models, Profiles: profiles,
+		Session: map[string]any{"scope": map[string]any{"profiles": []string{"dev/" + first}}},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_KEY": "k"})
 	for _, test := range cases[1:] {
 		name := strings.ReplaceAll(test.name, " ", "-")

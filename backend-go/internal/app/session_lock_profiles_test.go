@@ -9,7 +9,7 @@ import (
 )
 
 // newTwoProfileLockFixture builds one session with two path profiles that keep
-// separate transcripts: green (active) and blue.
+// separate transcripts: green and blue.
 func newTwoProfileLockFixture(t *testing.T) *Resolver {
 	t.Helper()
 	config, _ := layoutConfig(t, lockSpec(), map[string]string{})
@@ -21,7 +21,7 @@ func newTwoProfileLockFixture(t *testing.T) *Resolver {
 }
 
 // lockSpec is the layout session the lock tests share: session-1 with profiles dev/green
-// (active) and dev/blue, both offering model and model2.
+// and dev/blue, both offering model and model2.
 func lockSpec() layouttest.Spec {
 	return layouttest.Spec{
 		SessionID: "session-1",
@@ -30,7 +30,6 @@ func lockSpec() layouttest.Spec {
 			"dev/green": {"models": []any{"openai/model", "openai/model2"}, "model_default": "openai/model"},
 			"dev/blue":  {"models": []any{"openai/model", "openai/model2"}, "model_default": "openai/model"},
 		},
-		ActiveProfile: "dev/green",
 	}
 }
 
@@ -79,7 +78,7 @@ func TestLockSessionStillSerializesTwoRunsOfTheSameProfile(t *testing.T) {
 	release()
 }
 
-// Settings writes (profile switch, model default) take LockSessionSettings.
+// Settings writes (model default) take LockSessionSettings.
 // They only need to wait for a run to read its paths, not for the run to end.
 func TestSettingsLockIsFreeWhileARunIsInProgress(t *testing.T) {
 	resolver := newTwoProfileLockFixture(t)
@@ -96,30 +95,4 @@ func TestSettingsLockIsFreeWhileARunIsInProgress(t *testing.T) {
 		t.Fatalf("the settings lock is still held by the running profile: %v", err)
 	}
 	releaseSettings()
-}
-
-// Switching the active profile while the other one runs pins the storage of
-// both, so the running profile keeps its transcript and a new run on it still
-// waits for the running one.
-func TestSwitchingProfilesWhileBlueRunsKeepsBlueTranscript(t *testing.T) {
-	resolver := newTwoProfileLockFixture(t)
-	releaseBlue, err := lockWithin(t, resolver, "dev/blue", time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer releaseBlue()
-
-	if _, err := resolver.UpdateProfile(context.Background(), "session-1", "dev/blue"); err != nil {
-		t.Fatalf("switching the active profile to the running one failed: %v", err)
-	}
-	if release, err := lockWithin(t, resolver, "dev/blue", 300*time.Millisecond); err == nil {
-		release()
-		t.Fatal("after the switch, blue resolved to a different transcript than the running blue")
-	}
-	// green, now not active, must not share blue's transcript either.
-	releaseGreen, err := lockWithin(t, resolver, "dev/green", time.Second)
-	if err != nil {
-		t.Fatalf("green could not start after the switch: %v", err)
-	}
-	releaseGreen()
 }

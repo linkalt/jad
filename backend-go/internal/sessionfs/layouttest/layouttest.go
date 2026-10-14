@@ -40,8 +40,6 @@ type Spec struct {
 	// Profiles maps "<category>/<name>" to a profile file. Default: one profile, "dev/coder",
 	// which lists every model and uses the toolset when there is one.
 	Profiles map[string]map[string]any
-	// ActiveProfile defaults to the only profile, or "dev/coder".
-	ActiveProfile string
 	// Native is the toolset's `native` object. With MCP, it makes the toolset "coding/default".
 	Native map[string]any
 	// MCP maps "<category>/<name>" to the toolset's use of that server; the server file is
@@ -205,18 +203,11 @@ func Write(t *testing.T, spec Spec) Fixture {
 		}
 		profiles = map[string]map[string]any{"dev/coder": profile}
 	}
-	active := spec.ActiveProfile
 	for id, profile := range profiles {
 		put("profiles/"+id+".json", profile)
-		if active == "" {
-			active = id
-		}
-	}
-	if spec.ActiveProfile == "" && len(profiles) > 1 {
-		active = "dev/coder"
 	}
 
-	session := map[string]any{"schema_version": 1, "cwd": spec.CWD, "active_profile": active}
+	session := map[string]any{"schema_version": 1, "cwd": spec.CWD}
 	if spec.Category != "" {
 		session["category"] = spec.Category
 	}
@@ -291,7 +282,7 @@ func (f Fixture) AddSession(t *testing.T, id, cwd string, native map[string]any,
 		profile = "dev/" + id
 		put(filepath.Join(f.Root, "profiles", profile+".json"), map[string]any{"models": []string{"openai/default"}, "model_default": "openai/default", "toolset": toolset})
 	}
-	session := map[string]any{"schema_version": 1, "cwd": cwd, "active_profile": profile}
+	session := map[string]any{"schema_version": 1, "cwd": cwd, "scope": map[string]any{"profiles": []string{profile}}}
 	if settings != nil {
 		session["settings"] = settings
 	}
@@ -302,7 +293,7 @@ func (f Fixture) AddSession(t *testing.T, id, cwd string, native map[string]any,
 // "dev/coder") and no settings.
 func (f Fixture) AddSessionOn(t *testing.T, id, cwd, profile string) {
 	t.Helper()
-	data, err := json.MarshalIndent(map[string]any{"schema_version": 1, "cwd": cwd, "active_profile": profile}, "", "  ")
+	data, err := json.MarshalIndent(map[string]any{"schema_version": 1, "cwd": cwd, "scope": map[string]any{"profiles": []string{profile}}}, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +314,7 @@ func (f Fixture) AddSessionInRoot(t *testing.T, rootID, id, cwd, profile string,
 	if !ok {
 		t.Fatalf("no session root %q", rootID)
 	}
-	session := map[string]any{"schema_version": 1, "cwd": cwd, "active_profile": profile}
+	session := map[string]any{"schema_version": 1, "cwd": cwd, "scope": map[string]any{"profiles": []string{profile}}}
 	if settings != nil {
 		session["settings"] = settings
 	}

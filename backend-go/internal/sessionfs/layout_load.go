@@ -15,7 +15,7 @@ const sessionFileSuffix = ".json"
 
 // LoadLayoutSessionSettings is LoadSessionSettings for the catalog layout. It reads
 // <id>.json, narrows the profile catalog by the session scope, takes the
-// profile (requested, else active_profile, else the first in scope) and composes the setting-shaped map the
+// profile (requested, else the first in scope) and composes the setting-shaped map the
 // existing normalizers read, so a normalizer or applyApprovalDefault needs no second copy.
 //
 // Every file is named "<category>/<name>", on the wire and in the files: the profile, the

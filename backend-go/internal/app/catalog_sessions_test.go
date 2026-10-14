@@ -30,8 +30,8 @@ func (f *layoutFixture) postRun(input string) (int, string) {
 	return response.StatusCode, string(data)
 }
 
-func (f *layoutFixture) sessionBody(profile string) string {
-	return `{"schema_version":1,"cwd":"` + f.cwd + `","active_profile":"` + profile + `","scope":{"profiles":["dev"]}}`
+func (f *layoutFixture) sessionBody() string {
+	return `{"schema_version":1,"cwd":"` + f.cwd + `","scope":{"profiles":["dev"]}}`
 }
 
 func TestCatalogSessionsListReadAndCreate(t *testing.T) {
@@ -53,14 +53,14 @@ func TestCatalogSessionsListReadAndCreate(t *testing.T) {
 	}
 
 	path := catalogSessionsPath + "/extra"
-	if reply := f.catalogCall(t, "PUT", path, f.sessionBody("dev/coder"), nil); reply.status != http.StatusPreconditionRequired {
+	if reply := f.catalogCall(t, "PUT", path, f.sessionBody(), nil); reply.status != http.StatusPreconditionRequired {
 		t.Fatalf("create without a precondition = %d", reply.status)
 	}
-	created := f.catalogCall(t, "PUT", path, f.sessionBody("dev/coder"), map[string]string{"If-None-Match": "*"})
+	created := f.catalogCall(t, "PUT", path, f.sessionBody(), map[string]string{"If-None-Match": "*"})
 	if created.status != http.StatusCreated || created.etag == "" {
 		t.Fatalf("create = %d %s", created.status, created.body)
 	}
-	if again := f.catalogCall(t, "PUT", path, f.sessionBody("dev/coder"), map[string]string{"If-None-Match": "*"}); again.status != http.StatusPreconditionFailed {
+	if again := f.catalogCall(t, "PUT", path, f.sessionBody(), map[string]string{"If-None-Match": "*"}); again.status != http.StatusPreconditionFailed {
 		t.Fatalf("create over an existing session = %d", again.status)
 	}
 	if status, body := f.do(t, "GET", "/api/sessions/extra", ""); status != http.StatusOK {
@@ -79,14 +79,14 @@ func TestCatalogSessionWriteIsCheckedByTheLoader(t *testing.T) {
 	cases := map[string]struct{ body, want string }{
 		"empty":            {``, "expected a JSON object"},
 		"not json":         {`{"cwd":`, "demo.json"},
-		"unknown key":      {`{"cwd":"` + f.cwd + `","active_profile":"dev/coder","nope":1}`, "nope"},
+		"unknown key":      {`{"cwd":"` + f.cwd + `","nope":1}`, "nope"},
+		"active_profile":   {`{"cwd":"` + f.cwd + `","active_profile":"dev/coder"}`, "active_profile"},
 		"empty scope":      {`{"cwd":"` + f.cwd + `","scope":{"profiles":[]}}`, "matches no profile"},
-		"unknown profile":  {`{"cwd":"` + f.cwd + `","active_profile":"dev/missing"}`, "dev/missing"},
-		"outside scope":    {`{"cwd":"` + f.cwd + `","active_profile":"dev/coder","scope":{"profiles":["review"]}}`, "dev/coder"},
-		"bad version":      {`{"schema_version":7,"cwd":"` + f.cwd + `","active_profile":"dev/coder"}`, "schema_version"},
-		"cwd not a folder": {`{"cwd":"/no/such/folder","active_profile":"dev/coder"}`, "cwd"},
-		"model_defaults":   {`{"cwd":"` + f.cwd + `","active_profile":"dev/coder","model_defaults":{}}`, "model_defaults"},
-		"settings key":     {`{"cwd":"` + f.cwd + `","active_profile":"dev/coder","settings":{"model":"x"}}`, "settings may not carry"},
+		"unknown profile":  {`{"cwd":"` + f.cwd + `","scope":{"profiles":["dev/missing"]}}`, "dev/missing"},
+		"bad version":      {`{"schema_version":7,"cwd":"` + f.cwd + `"}`, "schema_version"},
+		"cwd not a folder": {`{"cwd":"/no/such/folder"}`, "cwd"},
+		"model_defaults":   {`{"cwd":"` + f.cwd + `","model_defaults":{}}`, "model_defaults"},
+		"settings key":     {`{"cwd":"` + f.cwd + `","settings":{"model":"x"}}`, "settings may not carry"},
 	}
 	for name, tc := range cases {
 		reply := f.catalogCall(t, "PUT", path, tc.body, map[string]string{"If-Match": before.etag})
@@ -101,9 +101,9 @@ func TestCatalogSessionWriteIsCheckedByTheLoader(t *testing.T) {
 		t.Fatalf("a refused write changed the file: %q", onDisk)
 	}
 	if reply := f.catalogCall(t, "PUT", path, `{"cwd":"`+f.cwd+`"}`, map[string]string{"If-Match": before.etag}); reply.status != http.StatusOK {
-		t.Fatalf("a session without active_profile = %d %s, want it accepted", reply.status, reply.body)
+		t.Fatalf("a session with only a cwd = %d %s, want it accepted", reply.status, reply.body)
 	}
-	if reply := f.catalogCall(t, "PUT", catalogSessionsPath+"/fresh", `{"cwd":"/no/such/folder","active_profile":"dev/coder"}`, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusUnprocessableEntity {
+	if reply := f.catalogCall(t, "PUT", catalogSessionsPath+"/fresh", `{"cwd":"/no/such/folder"}`, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusUnprocessableEntity {
 		t.Fatalf("refused create = %d", reply.status)
 	}
 	if _, err := os.Stat(filepath.Join(f.root, "sessions", "fresh.json")); err == nil {
@@ -119,7 +119,7 @@ func TestCatalogSessionReplaceNeedsTheCurrentVersion(t *testing.T) {
 	f := newLayoutFixture(t)
 	path := catalogSessionsPath + "/demo"
 	before := f.catalogCall(t, "GET", path, "", nil)
-	next := `{"schema_version":1,"cwd":"` + f.cwd + `","active_profile":"dev/coder","category":"other","scope":{"profiles":["dev","review"]}}`
+	next := `{"schema_version":1,"cwd":"` + f.cwd + `","category":"other","scope":{"profiles":["dev","review"]}}`
 	if reply := f.catalogCall(t, "PUT", path, next, nil); reply.status != http.StatusPreconditionRequired {
 		t.Fatalf("replace without If-Match = %d", reply.status)
 	}
@@ -199,7 +199,7 @@ func TestCatalogSessionDeleteCanRemoveTheState(t *testing.T) {
 		t.Fatal("the state folder is still there")
 	}
 
-	created := f.catalogCall(t, "PUT", path, f.sessionBody("dev/coder"), map[string]string{"If-None-Match": "*"})
+	created := f.catalogCall(t, "PUT", path, f.sessionBody(), map[string]string{"If-None-Match": "*"})
 	if created.status != http.StatusCreated {
 		t.Fatalf("create again = %d %s", created.status, created.body)
 	}

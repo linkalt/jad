@@ -13,7 +13,7 @@ import (
 
 func TestLoadSessionConfigSelectsProfileModelAndStorage(t *testing.T) {
 	cwd := t.TempDir()
-	for name, text := range map[string]string{"prompt.md": "system instructions", "profile-green.md": "green instructions", "profile-blue.md": "blue instructions"} {
+	for name, text := range map[string]string{"prompt.md": "system instructions", "profile-blue.md": "blue instructions", "profile-green.md": "green instructions"} {
 		if err := os.WriteFile(filepath.Join(cwd, name), []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -23,11 +23,10 @@ func TestLoadSessionConfigSelectsProfileModelAndStorage(t *testing.T) {
 		CWD:    cwd,
 		Models: map[string]map[string]any{"openai/model": model, "openai/alternate": model},
 		Profiles: map[string]map[string]any{
-			"dev/green": {"models": []any{"openai/model", "openai/alternate"}, "prompt_role": "developer", "prompt_documents": []any{"prompt.md", "profile-green.md"}},
-			"dev/blue":  {"models": []any{"openai/model", "openai/alternate"}, "model_default": "openai/alternate", "prompt_role": "developer", "prompt_documents": []any{"prompt.md", "profile-blue.md"}},
+			"dev/blue":  {"models": []any{"openai/model", "openai/alternate"}, "prompt_role": "developer", "prompt_documents": []any{"prompt.md", "profile-blue.md"}},
+			"dev/green": {"models": []any{"openai/model", "openai/alternate"}, "model_default": "openai/alternate", "prompt_role": "developer", "prompt_documents": []any{"prompt.md", "profile-green.md"}},
 		},
-		ActiveProfile: "dev/green",
-		Settings:      map[string]any{"persistence": map[string]any{"durability": "process", "max_item_bytes": 4096, "response_metadata": "full"}},
+		Settings: map[string]any{"persistence": map[string]any{"durability": "process", "max_item_bytes": 4096, "response_metadata": "full"}},
 	})
 	modelsDir := filepath.Join(fixture.Root, "models", "openai")
 	stateDir := filepath.Join(fixture.StateDir, "session-1")
@@ -36,10 +35,10 @@ func TestLoadSessionConfigSelectsProfileModelAndStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSessionConfig(active) error = %v", err)
 	}
-	if active.Profile != "dev/green" || active.DefaultProfile != "dev/green" || active.MessagesPath != filepath.Join(stateDir, "dev", "green", "messages.jsonl") || active.StagingDir != filepath.Join(stateDir, "dev", "green", "staging") {
+	if active.Profile != "dev/blue" || active.DefaultProfile != "dev/blue" || active.MessagesPath != filepath.Join(stateDir, "dev", "blue", "messages.jsonl") || active.StagingDir != filepath.Join(stateDir, "dev", "blue", "staging") {
 		t.Errorf("active profile config = %+v", active)
 	}
-	if active.WorkingDir != cwd || !active.SessionFiles.Enabled || active.StoragePaths.HTTPDebug != filepath.Join(stateDir, "dev", "green", "debug", "http") {
+	if active.WorkingDir != cwd || !active.SessionFiles.Enabled || active.StoragePaths.HTTPDebug != filepath.Join(stateDir, "dev", "blue", "debug", "http") {
 		t.Errorf("active file/storage settings = %+v", active)
 	}
 	if active.SessionName != "session-1" || active.SettingPath != fixture.SessionFile {
@@ -57,24 +56,24 @@ func TestLoadSessionConfigSelectsProfileModelAndStorage(t *testing.T) {
 	if active.Model.BaseURL != "https://api.example.test/v1" || active.Model.APIKeyEnv != "TEST_OPENAI_KEY" {
 		t.Errorf("provider config = %+v", active.Model)
 	}
-	if active.Model.PromptRole != "developer" || active.Model.PromptText != "system instructions\n\ngreen instructions" {
+	if active.Model.PromptRole != "developer" || active.Model.PromptText != "system instructions\n\nblue instructions" {
 		t.Errorf("prompt config = role %q, text %q", active.Model.PromptRole, active.Model.PromptText)
 	}
 	if active.Persistence.Durability != "process" || active.Persistence.MaxItemBytes != 4096 || active.Persistence.ResponseMetadata != "full" {
 		t.Errorf("persistence config = %+v", active.Persistence)
 	}
 
-	other, err := LoadSessionConfig(location, "dev/blue", "")
+	other, err := LoadSessionConfig(location, "dev/green", "")
 	if err != nil {
-		t.Fatalf("LoadSessionConfig(blue) error = %v", err)
+		t.Fatalf("LoadSessionConfig(green) error = %v", err)
 	}
-	if other.Profile != "dev/blue" || other.ModelPath != filepath.Join(modelsDir, "alternate.json") {
+	if other.Profile != "dev/green" || other.ModelPath != filepath.Join(modelsDir, "alternate.json") {
 		t.Errorf("non-default profile = %+v", other)
 	}
-	if other.Model.PromptText != "system instructions\n\nblue instructions" {
+	if other.Model.PromptText != "system instructions\n\ngreen instructions" {
 		t.Errorf("profile-specific prompt text = %q", other.Model.PromptText)
 	}
-	if other.MessagesPath != filepath.Join(stateDir, "dev", "blue", "messages.jsonl") || other.StagingDir != filepath.Join(stateDir, "dev", "blue", "staging") {
+	if other.MessagesPath != filepath.Join(stateDir, "dev", "green", "messages.jsonl") || other.StagingDir != filepath.Join(stateDir, "dev", "green", "staging") {
 		t.Errorf("non-default storage = messages %q, staging %q", other.MessagesPath, other.StagingDir)
 	}
 }

@@ -1877,9 +1877,7 @@
         "max_depth": {"type": "integer", "minimum": 0, "maximum": 64, "default": 12, "description": "Deepest folder level listed."},
         "max_entries": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 5000, "description": "Directory entries examined before the listing stops and is marked truncated."},
         "max_results": {"type": "integer", "minimum": 0, "maximum": 100000, "default": 2000, "description": "Files returned before the listing stops and is marked truncated."},
-        "ignore_directories": {"type": "array", "items": {"type": "string", "minLength": 1}, "default": ["node_modules", ".git", "dist", "build", "coverage", ".next", "__pycache__", ".venv", "venv", ".cache"], "description": "Folder names that are not entered."},
-        "readme_file": {"type": "string", "pattern": "^[^/\\\\]+$", "not": {"enum": [".", ".."]}, "default": "README.md", "description": "Name of the file at the top of the working directory that GET .../readme returns and the UI shows by default. A name only, no folder. A link that leaves the working directory, or a path the read policy denies, is treated as missing."},
-        "readme_max_bytes": {"type": "integer", "minimum": 0, "maximum": 16777216, "default": 262144, "description": "Most bytes of that file the route returns; a longer file is cut on a character boundary and marked truncated."}
+        "ignore_directories": {"type": "array", "items": {"type": "string", "minLength": 1}, "default": ["node_modules", ".git", "dist", "build", "coverage", ".next", "__pycache__", ".venv", "venv", ".cache"], "description": "Folder names that are not entered."}
       },
       "additionalProperties": false,
       "default": {}

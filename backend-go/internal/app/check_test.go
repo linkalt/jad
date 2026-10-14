@@ -87,8 +87,9 @@ func TestCheckFilesReportsEachBrokenFileOnce(t *testing.T) {
 		{"toolset that names a missing server", "tools/coding/none.json", `{"mcp":{"ext/none":{}}}`, []string{"toolset coding/none:", "ext/none"}, 1},
 		{"profile that names a missing toolset", "profiles/review/reviewer.json", `{"models":["openai/large"],"toolset":"coding/missing"}`, []string{"profile review/reviewer:", "coding/missing"}, 1},
 		{"profile with an unknown key", "profiles/dev/coder.json", `{"models":["openai/small"],"toolset":"coding/none","bogus":1}`, []string{"profile dev/coder:", "bogus"}, 1},
-		{"session with an unknown key", "sessions/demo.json", `{"schema_version":1,"cwd":"/","active_profile":"dev/coder","scope":{"profiles":["dev","review"]},"bogus":1}`, []string{"session demo:", "bogus"}, 1},
-		{"session whose active profile is outside its scope", "sessions/demo.json", `{"schema_version":1,"cwd":"/","active_profile":"review/reviewer","scope":{"profiles":["dev"]}}`, []string{"session demo:", "review/reviewer"}, 1},
+		{"session with an unknown key", "sessions/demo.json", `{"schema_version":1,"cwd":"/","scope":{"profiles":["dev","review"]},"bogus":1}`, []string{"session demo:", "bogus"}, 1},
+		{"session that still names an active profile", "sessions/demo.json", `{"schema_version":1,"cwd":"/","active_profile":"dev/coder"}`, []string{"session demo:", "active_profile"}, 1},
+		{"session whose scope matches no profile", "sessions/demo.json", `{"schema_version":1,"cwd":"/","scope":{"profiles":["nothing"]}}`, []string{"session demo:", "nothing"}, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,7 +122,7 @@ func TestCheckFilesLoadsEveryProfileOfASession(t *testing.T) {
 	// settings set as well.
 	f.overwrite(t, "tools/coding/hooked.json", `{"hooks":{"enabled":true,"timeout_ms":5000,"post_tool":[{"name":"audit","argv":["true"]}]}}`)
 	f.overwrite(t, "profiles/review/reviewer.json", `{"models":["openai/large"],"toolset":"coding/hooked"}`)
-	f.overwrite(t, "sessions/demo.json", `{"schema_version":1,"cwd":"`+f.cwd+`","active_profile":"dev/coder","scope":{"profiles":["dev","review"]},"settings":{"hooks":{"enabled":false}}}`)
+	f.overwrite(t, "sessions/demo.json", `{"schema_version":1,"cwd":"`+f.cwd+`","scope":{"profiles":["dev","review"]},"settings":{"hooks":{"enabled":false}}}`)
 	valid, out := f.checkFiles(t)
 	if valid || !strings.Contains(out, "session demo (profile review/reviewer):") || !strings.Contains(out, "hooks is set here and in the settings") {
 		t.Fatalf("valid = %v, output %q", valid, out)
@@ -172,7 +173,7 @@ func TestCheckFilesReportsTwoSessionsThatFailWithTheSameMessage(t *testing.T) {
 	// toolset but not the session, so the two lines are told apart only by the session.
 	f.overwrite(t, "tools/coding/hooked.json", `{"hooks":{"enabled":true,"timeout_ms":5000,"post_tool":[{"name":"audit","argv":["true"]}]}}`)
 	f.overwrite(t, "tools/coding/none.json", `{"native":{"subagent":{"agents":{"helper":{"description":"d","instructions":"p","model":"openai/small","toolset":"coding/hooked"}}}}}`)
-	body := `{"schema_version":1,"cwd":"` + f.cwd + `","active_profile":"dev/coder","scope":{"profiles":["dev"]},"settings":{"hooks":{"enabled":false}}}`
+	body := `{"schema_version":1,"cwd":"` + f.cwd + `","scope":{"profiles":["dev"]},"settings":{"hooks":{"enabled":false}}}`
 	f.overwrite(t, "sessions/demo.json", body)
 	f.overwrite(t, "sessions/second.json", body)
 	valid, out := f.checkFiles(t)

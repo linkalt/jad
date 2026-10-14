@@ -179,19 +179,6 @@ type SessionTools struct {
 	Hidden []tools.Definition `json:"hidden,omitempty"`
 }
 
-type SessionProfileInfo struct {
-	ActiveProfile string   `json:"active_profile,omitempty"`
-	Profiles      []string `json:"profiles"`
-}
-
-type SessionProfileUpdate struct {
-	ActiveProfile string    `json:"active_profile"`
-	Profiles      []string  `json:"profiles"`
-	ModelDefault  *string   `json:"model_default,omitempty"`
-	Models        *[]string `json:"models,omitempty"`
-	Changed       bool      `json:"changed"`
-}
-
 type SessionModelInfo struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
@@ -214,23 +201,8 @@ type SessionFileListing struct {
 // SessionSettings is an optional filesystem-backed extension for session
 // profile/model changes and safe session-file suggestions.
 type SessionSettings interface {
-	ReadProfileInfo(context.Context, string) (SessionProfileInfo, error)
-	UpdateProfile(context.Context, string, string) (SessionProfileUpdate, error)
 	UpdateModelDefault(context.Context, string, string, string) (SessionModelDefaultUpdate, error)
 	ListSessionFiles(context.Context, string, string) (SessionFileListing, error)
-}
-
-// SessionReadme is the README file of a session's working directory.
-type SessionReadme struct {
-	Name      string `json:"name"`
-	Content   string `json:"content"`
-	Truncated bool   `json:"truncated"`
-}
-
-// SessionReadmes is an optional extension that serves the README file of a session's
-// working directory (session_files.readme_file), read-only.
-type SessionReadmes interface {
-	ReadSessionReadme(ctx context.Context, reference, profile string) (SessionReadme, error)
 }
 
 // SessionImage is one stored image file.
@@ -317,7 +289,6 @@ type Handler struct {
 	catalogFiles              CatalogFiles
 	catalogSessions           CatalogSessions
 	images                    SessionImages
-	readmes                   SessionReadmes
 	messageImages             MessageImages
 	maintenance               SessionMaintenance
 	library                   RootLibrary
@@ -433,7 +404,6 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	catalogFiles, _ := resolver.(CatalogFiles)
 	catalogSessions, _ := resolver.(CatalogSessions)
 	images, _ := resolver.(SessionImages)
-	readmes, _ := resolver.(SessionReadmes)
 	messageImages, _ := resolver.(MessageImages)
 	maintenance, _ := resolver.(SessionMaintenance)
 	trace := config.MemoryTrace
@@ -444,7 +414,6 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		logger:                    logging.Or(config.Logger),
 		resolver:                  resolver,
 		images:                    images,
-		readmes:                   readmes,
 		messageImages:             messageImages,
 		catalog:                   catalog,
 		toolLister:                toolLister,
@@ -570,10 +539,6 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleSessionImage(w, r, reference, profile, segments[4])
 	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "files":
 		h.handleSessionFiles(w, r, reference, profile)
-	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "readme":
-		h.handleSessionReadme(w, r, reference, profile)
-	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "profile":
-		h.handleSessionProfile(w, r, reference)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "model-default":
 		h.handleSessionModelDefault(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "compact":

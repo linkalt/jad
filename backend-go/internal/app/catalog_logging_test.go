@@ -34,6 +34,7 @@ func (b *lockedBuffer) String() string {
 func TestSessionListLogsAnInvalidSessionOncePerReason(t *testing.T) {
 	loaded, fixture := layoutConfig(t, layouttest.Spec{
 		SessionID: "good",
+		Session:   map[string]any{"scope": map[string]any{"profiles": []string{"dev/coder"}}},
 		Settings:  map[string]any{"persistence": map[string]any{"durability": "process", "max_item_bytes": 1048576}},
 	}, map[string]string{})
 	fixture.AddSession(t, "broken", fixture.CWD, map[string]any{"nonexistent_tool": map[string]any{}}, nil)

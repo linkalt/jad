@@ -104,7 +104,7 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 	write("profiles/dev/coder.json", map[string]any{"models": []string{"openai/small", "openai/large"}, "model_default": "openai/small", "toolset": "coding/none"})
 	write("profiles/review/reviewer.json", map[string]any{"models": []string{"openai/large"}, "toolset": "coding/none"})
 	write("sessions/demo.json", map[string]any{
-		"schema_version": 1, "cwd": f.cwd, "active_profile": "dev/coder", "category": "work",
+		"schema_version": 1, "cwd": f.cwd, "category": "work",
 		"scope": map[string]any{"profiles": []string{"dev", "review"}},
 	})
 
@@ -147,7 +147,7 @@ func (f *layoutFixture) lastModel() string {
 	return f.models[len(f.models)-1]
 }
 
-func TestLayoutSessionRunsSwitchesProfileAndKeepsStatePerProfile(t *testing.T) {
+func TestLayoutSessionRunsAndKeepsStatePerProfile(t *testing.T) {
 	f := newLayoutFixture(t)
 	const session = "/api/sessions/local:demo"
 
@@ -185,12 +185,9 @@ func TestLayoutSessionRunsSwitchesProfileAndKeepsStatePerProfile(t *testing.T) {
 		t.Fatalf("a model outside the profile: status %d, want 400", status)
 	}
 
-	// Switching the profile writes session.json and the other profile gets its own state.
-	if status, body := f.do(t, http.MethodPost, session+"/profile", `{"active_profile":"review/reviewer"}`); status != 200 || !strings.Contains(body, "review/reviewer") {
-		t.Fatalf("profile switch: %d %s", status, body)
-	}
-	if status, body := f.do(t, http.MethodPost, session+"/run", `{"input":"four"}`); status != 200 {
-		t.Fatalf("run on the new profile: %d %s", status, body)
+	// The other profile gets its own state.
+	if status, body := f.do(t, http.MethodPost, session+"/run?profile="+url.QueryEscape("review/reviewer"), `{"input":"four"}`); status != 200 {
+		t.Fatalf("run on the other profile: %d %s", status, body)
 	}
 	if got := f.lastModel(); got != "model-large" {
 		t.Fatalf("reviewer model = %q", got)
@@ -199,11 +196,22 @@ func TestLayoutSessionRunsSwitchesProfileAndKeepsStatePerProfile(t *testing.T) {
 	if data, err := os.ReadFile(reviewerMessages); err != nil || !strings.Contains(string(data), "four") || strings.Contains(string(data), "one") {
 		t.Fatalf("transcript of review/reviewer: %v %s", err, data)
 	}
-	if status, _ := f.do(t, http.MethodPost, session+"/profile", `{"active_profile":"coder"}`); status != 400 {
-		t.Fatalf("a bare profile name: status %d, want 400", status)
-	}
 	if status, body := f.do(t, http.MethodGet, "/api/sessions", ""); status != 200 || !strings.Contains(body, `"demo"`) {
 		t.Fatalf("session list: %d %s", status, body)
+	}
+}
+
+// The routes that chose a profile in the session file and read the working directory's
+// README are gone: a call to either is not answered with success.
+func TestLayoutRemovedProfileAndReadmeRoutesAreGone(t *testing.T) {
+	f := newLayoutFixture(t)
+	for name, call := range map[string]struct{ method, path, body string }{
+		"profile route": {http.MethodPost, "/api/sessions/local:demo/profile", `{"active_profile":"review/reviewer"}`},
+		"readme route":  {http.MethodGet, "/api/sessions/local:demo/readme", ""},
+	} {
+		if status, body := f.do(t, call.method, call.path, call.body); status < 400 || status >= 500 {
+			t.Errorf("%s: status %d body %s, want a 4xx", name, status, body)
+		}
 	}
 }
 
@@ -286,9 +294,8 @@ func TestLayoutStaleModelDefaultsAreRefusedOverHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, call := range map[string]struct{ method, path, body string }{
-		"run":           {http.MethodPost, "/api/sessions/local:demo/run", `{"input":"x"}`},
-		"model route":   {http.MethodPost, "/api/sessions/local:demo/model-default", `{"model_default":"openai/large"}`},
-		"profile route": {http.MethodPost, "/api/sessions/local:demo/profile", `{"active_profile":"review/reviewer"}`},
+		"run":         {http.MethodPost, "/api/sessions/local:demo/run", `{"input":"x"}`},
+		"model route": {http.MethodPost, "/api/sessions/local:demo/model-default", `{"model_default":"openai/large"}`},
 	} {
 		status, body := f.do(t, call.method, call.path, call.body)
 		if status < 400 || status >= 500 || !strings.Contains(body, "model_defaults was removed") {

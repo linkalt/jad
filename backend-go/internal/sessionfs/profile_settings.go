@@ -3,8 +3,6 @@ package sessionfs
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"sort"
 )
 
@@ -12,13 +10,6 @@ import (
 type ProfileInfo struct {
 	ActiveProfile string
 	Profiles      []string
-}
-
-// ProfileUpdate is the persisted result of changing the active path profile.
-type ProfileUpdate struct {
-	ActiveProfile string
-	Profiles      []string
-	Changed       bool
 }
 
 // ModelDefaultUpdate is the persisted model selection for one path profile.
@@ -78,34 +69,4 @@ func marshalOrderedObject(fields map[string]json.RawMessage, preferredOrder []st
 	}
 	output.WriteByte('}')
 	return output.Bytes(), nil
-}
-
-func writeSessionSettingsAtomic(path string, setting map[string]json.RawMessage, syncWrite bool) (result error) {
-	data, err := json.Marshal(setting)
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	file, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-")
-	if err != nil {
-		return err
-	}
-	temporaryPath := file.Name()
-	defer func() {
-		_ = os.Remove(temporaryPath)
-	}()
-	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if syncWrite {
-		if err := file.Sync(); err != nil {
-			_ = file.Close()
-			return err
-		}
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, path)
 }

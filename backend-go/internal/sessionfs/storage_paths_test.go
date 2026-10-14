@@ -11,8 +11,7 @@ import (
 // refuses the pair, so two profiles never share a messages file.
 func TestLoadSessionConfigRejectsProfilesThatShareAStorageKey(t *testing.T) {
 	_, err := loadLayoutConfig(t, layouttest.Spec{
-		ActiveProfile: "a/b__c",
-		Profiles:      map[string]map[string]any{"a/b__c": {}, "a__b/c": {}},
+		Profiles: map[string]map[string]any{"a/b__c": {}, "a__b/c": {}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot both be used") {
 		t.Fatalf("error = %v, want the shared storage key refused", err)

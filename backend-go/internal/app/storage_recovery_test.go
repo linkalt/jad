@@ -161,14 +161,14 @@ func recoveryFixtureFrom(t *testing.T, workspace string, layout layouttest.Fixtu
 	return recoveryFixture{workspace: workspace, layout: layout, roots: config.Roots}
 }
 
-// newTwoProfileFixture is one session, demo, whose profiles dev/green (active) and
+// newTwoProfileFixture is one session, demo, whose profiles dev/green and
 // dev/blue share a toolset, so each keeps its tool storage in its own folder.
 func newTwoProfileFixture(t *testing.T, native map[string]any) recoveryFixture {
 	t.Helper()
 	workspace := t.TempDir()
 	profile := map[string]any{"models": []string{"openai/default"}, "model_default": "openai/default", "toolset": "coding/default"}
 	layout := layouttest.Write(t, layouttest.Spec{
-		SessionID: "demo", CWD: workspace, Native: native, ActiveProfile: "dev/green",
+		SessionID: "demo", CWD: workspace, Native: native,
 		Profiles: map[string]map[string]any{"dev/green": profile, "dev/blue": profile},
 	})
 	return recoveryFixtureFrom(t, workspace, layout)
@@ -563,14 +563,14 @@ func TestRecoverProcessesChecksTheContextBeforeEachSession(t *testing.T) {
 }
 
 // Cancelling while one storage is being recovered must keep the next storage of the same
-// session untouched. The active profile (green) is recovered first and holds an orphan
-// that ignores the polite signal, so its recovery lasts the kill grace.
+// session untouched. The default profile (blue, the first by ID) is recovered first and
+// holds an orphan that ignores the polite signal, so its recovery lasts the kill grace.
 func TestRecoverProcessesChecksTheContextBeforeEachStorage(t *testing.T) {
 	f := newTwoProfileFixture(t, map[string]any{"process": map[string]any{"shell": "/bin/sh", "kill_grace_ms": 1500}})
-	green := filepath.Join(f.profileTools("green"), ".processes")
 	blue := filepath.Join(f.profileTools("blue"), ".processes")
-	stubborn := leaveOrphanRunning(t, green, "proc_green", "sh", "-c", `trap "" TERM; sleep 120`)
-	untouched := leaveOrphan(t, blue, "proc_blue")
+	green := filepath.Join(f.profileTools("green"), ".processes")
+	stubborn := leaveOrphanRunning(t, blue, "proc_blue", "sh", "-c", `trap "" TERM; sleep 120`)
+	untouched := leaveOrphan(t, green, "proc_green")
 	time.Sleep(200 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())

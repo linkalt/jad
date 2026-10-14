@@ -16,10 +16,10 @@ import (
 // dev/full (an empty one); active names the selected one.
 func loadProfileTools(t *testing.T, active string, lean map[string]any) (SessionConfig, error) {
 	t.Helper()
-	return loadLayoutSpec(t, layouttest.Spec{
-		ActiveProfile: "dev/" + active,
-		Profiles:      map[string]map[string]any{"dev/lean": lean, "dev/full": {}},
+	location, _ := layoutLocation(t, layouttest.Spec{
+		Profiles: map[string]map[string]any{"dev/lean": lean, "dev/full": {}},
 	})
+	return LoadSessionSettings(location, "dev/"+active, "")
 }
 
 func TestProfileToolsLoadAndReachTheConfig(t *testing.T) {
@@ -176,8 +176,7 @@ func TestUnselectedProfilesAreCheckedAtLoad(t *testing.T) {
 // A profile the session's scope leaves out is not read, so a broken file there loads.
 func TestProfileOutsideTheScopeIsNotChecked(t *testing.T) {
 	location, _ := layoutLocation(t, layouttest.Spec{
-		ActiveProfile: "dev/full",
-		Profiles:      map[string]map[string]any{"dev/lean": {"instructions": " "}, "dev/full": {}},
+		Profiles: map[string]map[string]any{"dev/lean": {"instructions": " "}, "dev/full": {}},
 	})
 	editJSON(t, location.File, func(m map[string]any) {
 		m["scope"] = map[string]any{"profiles": []any{"dev/full"}}

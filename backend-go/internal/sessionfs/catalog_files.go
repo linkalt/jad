@@ -370,7 +370,7 @@ func validateProfileFile(layout Layout, path string, data []byte) error {
 }
 
 // profileUsers lists the sessions that stop loading when the profile is removed: it is in
-// the session's scope and is its active profile, or the scope no longer resolves without it.
+// the session's scope and the scope no longer resolves without it.
 // A session that does not load today is not counted.
 func profileUsers(layout Layout, roots []Root, id string) ([]string, error) {
 	all, err := catalog.Scan("profile", layout.Profiles)

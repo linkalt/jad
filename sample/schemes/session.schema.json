@@ -42,11 +42,6 @@
       },
       "additionalProperties": false
     },
-    "active_profile": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
-      "description": "Profile used when a request names none, written <category>/<name>, for example \"dev/coder\". Must be inside scope.profiles. Optional: without it the first profile in scope, by ID, is used."
-    },
     "settings": {
       "$ref": "setting.schema.json#/$defs/layout_settings",
       "description": "Overrides of the setting keys listed in propertyNames. Objects merge key by key with the level above; arrays and scalars replace it. Each value follows the same key in setting.schema.json."

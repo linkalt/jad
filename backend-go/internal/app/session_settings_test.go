@@ -54,10 +54,9 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 			"openai/model":     {"provider": "openai", "model": "gpt-main", "api_key_env": "FIXTURE_OPENAI_KEY"},
 			"openai/alternate": {"provider": "openai", "model": "gpt-alternate", "api_key_env": "FIXTURE_OPENAI_KEY"},
 		},
-		Profiles:      map[string]map[string]any{"dev/green": green, "dev/blue": blue},
-		ActiveProfile: "dev/green",
-		Native:        map[string]any{"read": map[string]any{"paths": []map[string]string{{"action": "deny", "path": filepath.Join(projectDir, "private")}}}},
-		Settings:      map[string]any{"persistence": map[string]any{"durability": "process"}},
+		Profiles: map[string]map[string]any{"dev/green": green, "dev/blue": blue},
+		Native:   map[string]any{"read": map[string]any{"paths": []map[string]string{{"action": "deny", "path": filepath.Join(projectDir, "private")}}}},
+		Settings: map[string]any{"persistence": map[string]any{"durability": "process"}},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "fixture-key"})
 	service, err := NewService(config)
 	if err != nil {
@@ -82,40 +81,6 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 			t.Fatal(err)
 		}
 		return response
-	}
-
-	profileResponse := postJSON("/api/sessions/local:settings/profile", `{"active_profile":"dev/blue"}`)
-	profileBody, err := io.ReadAll(profileResponse.Body)
-	profileResponse.Body.Close()
-	if err != nil || profileResponse.StatusCode != http.StatusOK {
-		t.Fatalf("profile update status=%d err=%v body=%s", profileResponse.StatusCode, err, profileBody)
-	}
-	var profileUpdate struct {
-		ActiveProfile string   `json:"active_profile"`
-		Profiles      []string `json:"profiles"`
-		ModelDefault  string   `json:"model_default"`
-		Models        []string `json:"models"`
-		Changed       bool     `json:"changed"`
-	}
-	if err := json.Unmarshal(profileBody, &profileUpdate); err != nil {
-		t.Fatal(err)
-	}
-	if profileUpdate.ActiveProfile != "dev/blue" || !reflect.DeepEqual(profileUpdate.Profiles, []string{"dev/blue", "dev/green"}) || profileUpdate.ModelDefault != "openai/model" || !reflect.DeepEqual(profileUpdate.Models, []string{"openai/model"}) || !profileUpdate.Changed {
-		t.Fatalf("profile update = %+v", profileUpdate)
-	}
-
-	var storedSession map[string]json.RawMessage
-	storedBytes, err := os.ReadFile(fixture.SessionFile)
-	if err != nil || json.Unmarshal(storedBytes, &storedSession) != nil {
-		t.Fatalf("read updated session: err=%v", err)
-	}
-	var storedActive string
-	if json.Unmarshal(storedSession["active_profile"], &storedActive) != nil || storedActive != "dev/blue" {
-		t.Fatalf("session.json active_profile = %s, want dev/blue", storedSession["active_profile"])
-	}
-	var storedSettings map[string]json.RawMessage
-	if json.Unmarshal(storedSession["settings"], &storedSettings) != nil || len(storedSettings["persistence"]) == 0 {
-		t.Fatalf("the profile switch dropped the session settings: %s", storedSession["settings"])
 	}
 
 	filesResponse := getAPI(t, api.URL, "/api/sessions/local:settings/files?profile=dev/blue", integrationAPIToken, "")
@@ -159,13 +124,6 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 		t.Fatalf("model update = %+v", modelUpdate)
 	}
 
-	badProfile := postJSON("/api/sessions/local:settings/profile", `{"active_profile":"not-defined"}`)
-	badProfileBody, _ := io.ReadAll(badProfile.Body)
-	badProfile.Body.Close()
-	if badProfile.StatusCode != http.StatusBadRequest {
-		t.Fatalf("unknown profile status=%d body=%s", badProfile.StatusCode, badProfileBody)
-	}
-
 	storedProfile, err := os.ReadFile(filepath.Join(fixture.Root, "profiles", "dev", "green.json"))
 	if err != nil || !strings.Contains(string(storedProfile), `"model_default": "openai/alternate"`) {
 		t.Fatalf("the model choice was not written to the profile file: err=%v\n%s", err, storedProfile)
@@ -185,7 +143,7 @@ func TestHTTPSettingsRequestsRespectBodyLimit(t *testing.T) {
 		service.Close()
 		api.Close()
 	}()
-	request, err := http.NewRequest(http.MethodPost, api.URL+"/api/sessions/local:missing/profile", strings.NewReader(fmt.Sprintf(`{"active_profile":"%s"}`, strings.Repeat("a", 64))))
+	request, err := http.NewRequest(http.MethodPost, api.URL+"/api/sessions/local:missing/model-default", strings.NewReader(fmt.Sprintf(`{"model_default":"%s"}`, strings.Repeat("a", 64))))
 	if err != nil {
 		t.Fatal(err)
 	}

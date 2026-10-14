@@ -9,54 +9,6 @@ import (
 	"sync"
 )
 
-func (h *Handler) handleSessionProfile(w http.ResponseWriter, r *http.Request, reference string) {
-	if h.settings == nil {
-		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "session profile updates are unavailable"})
-		return
-	}
-	fields, err := readSettingsObject(w, r, h.maxBodyBytes)
-	if err != nil {
-		writeJSONError(w, err)
-		return
-	}
-	var activeProfile string
-	if raw, exists := fields["active_profile"]; !exists || json.Unmarshal(raw, &activeProfile) != nil || strings.TrimSpace(activeProfile) == "" {
-		writeJSONError(w, &StatusError{Code: http.StatusBadRequest, Message: "active_profile must be a non-empty string"})
-		return
-	}
-	activeProfile = strings.TrimSpace(activeProfile)
-	if !profileNamePattern.MatchString(activeProfile) {
-		writeJSONError(w, &StatusError{Code: http.StatusBadRequest, Message: "active_profile must contain only letters, numbers, underscores, or hyphens"})
-		return
-	}
-
-	unlock := h.lockSession(reference)
-	defer unlock()
-	processUnlock, err := h.lockSessionSettingsProcess(r.Context(), reference)
-	if err != nil {
-		writeJSONError(w, err)
-		return
-	}
-	defer processUnlock()
-	info, err := h.settings.ReadProfileInfo(r.Context(), reference)
-	if err != nil {
-		writeJSONError(w, err)
-		return
-	}
-	if info.ActiveProfile != "" {
-		if run := h.runs.current(reference + "\x00" + info.ActiveProfile); run != nil && run.state() == "running" {
-			writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot change the session path profile while a run is active"})
-			return
-		}
-	}
-	updated, err := h.settings.UpdateProfile(r.Context(), reference, activeProfile)
-	if err != nil {
-		writeJSONError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, updated)
-}
-
 func (h *Handler) handleSessionModelDefault(w http.ResponseWriter, r *http.Request, reference, profile string) {
 	if h.settings == nil {
 		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "session model updates are unavailable"})
@@ -100,19 +52,6 @@ func (h *Handler) handleSessionFiles(w http.ResponseWriter, r *http.Request, ref
 		return
 	}
 	writeJSON(w, http.StatusOK, listing)
-}
-
-func (h *Handler) handleSessionReadme(w http.ResponseWriter, r *http.Request, reference, profile string) {
-	if h.readmes == nil {
-		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "session README is unavailable"})
-		return
-	}
-	readme, err := h.readmes.ReadSessionReadme(r.Context(), reference, profile)
-	if err != nil {
-		writeJSONError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, readme)
 }
 
 func readSettingsObject(w http.ResponseWriter, r *http.Request, maxBytes int64) (map[string]json.RawMessage, error) {

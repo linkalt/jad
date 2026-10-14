@@ -233,17 +233,12 @@ func TestCatalogProfileDelete(t *testing.T) {
 
 func TestCatalogProfileDeleteRefusedWhileASessionNeedsIt(t *testing.T) {
 	f := newLayoutFixture(t)
-	active := f.catalogCall(t, "GET", "/api/catalog/profiles/dev/coder", "", nil)
-	reply := f.catalogCall(t, "DELETE", "/api/catalog/profiles/dev/coder", "", map[string]string{"If-Match": active.etag})
-	if reply.status != http.StatusConflict || !strings.Contains(reply.body, "session demo") {
-		t.Fatalf("delete of the active profile = %d %s, want 409 naming the session", reply.status, reply.body)
-	}
-	only := f.catalogCall(t, "GET", "/api/catalog/profiles/review/reviewer", "", nil)
-	reply = f.catalogCall(t, "DELETE", "/api/catalog/profiles/review/reviewer", "", map[string]string{"If-Match": only.etag})
-	if reply.status != http.StatusConflict || !strings.Contains(reply.body, "session demo") {
-		t.Fatalf("delete of the last profile of a scoped category = %d %s, want 409", reply.status, reply.body)
-	}
 	for _, id := range []string{"dev/coder", "review/reviewer"} {
+		current := f.catalogCall(t, "GET", "/api/catalog/profiles/"+id, "", nil)
+		reply := f.catalogCall(t, "DELETE", "/api/catalog/profiles/"+id, "", map[string]string{"If-Match": current.etag})
+		if reply.status != http.StatusConflict || !strings.Contains(reply.body, "session demo") {
+			t.Fatalf("delete of %s, the last profile of a scoped category = %d %s, want 409 naming the session", id, reply.status, reply.body)
+		}
 		if _, err := os.Stat(filepath.Join(f.root, "profiles", filepath.FromSlash(id)+".json")); err != nil {
 			t.Fatalf("%s removed although refused: %v", id, err)
 		}
@@ -279,18 +274,28 @@ func TestCatalogProfileConcurrentCreatesLetOneWin(t *testing.T) {
 	}
 }
 
-func TestCatalogProfileDeleteRefusedWhenOnlyTheActiveFileGoes(t *testing.T) {
+func TestCatalogProfileDeleteAllowedWhileTheCategoryKeepsAnother(t *testing.T) {
 	f := newLayoutFixture(t)
 	if reply := f.catalogCall(t, "PUT", "/api/catalog/profiles/dev/extra", catalogProfileBody, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusCreated {
 		t.Fatalf("create = %d %s", reply.status, reply.body)
 	}
-	active := f.catalogCall(t, "GET", "/api/catalog/profiles/dev/coder", "", nil)
-	reply := f.catalogCall(t, "DELETE", "/api/catalog/profiles/dev/coder", "", map[string]string{"If-Match": active.etag})
-	if reply.status != http.StatusConflict || !strings.Contains(reply.body, "session demo") {
-		t.Fatalf("delete of the active profile while its category has another = %d %s, want 409", reply.status, reply.body)
+	first := f.catalogCall(t, "GET", "/api/catalog/profiles/dev/coder", "", nil)
+	reply := f.catalogCall(t, "DELETE", "/api/catalog/profiles/dev/coder", "", map[string]string{"If-Match": first.etag})
+	if reply.status != http.StatusNoContent {
+		t.Fatalf("delete of the session's default profile while its category has another = %d %s, want 204", reply.status, reply.body)
 	}
-	if status, body := f.do(t, "GET", "/api/sessions/local:demo", ""); status != http.StatusOK {
-		t.Fatalf("session no longer loads: %d %s", status, body)
+	status, body := f.do(t, "GET", "/api/sessions", "")
+	var list struct {
+		Sessions []struct {
+			SessionID      string `json:"session_id"`
+			DefaultProfile string `json:"default_profile"`
+		} `json:"sessions"`
+	}
+	if status != http.StatusOK || json.Unmarshal([]byte(body), &list) != nil || len(list.Sessions) != 1 {
+		t.Fatalf("session list: %d %s", status, body)
+	}
+	if got := list.Sessions[0].DefaultProfile; got != "dev/extra" {
+		t.Fatalf("default profile after the delete = %q, want dev/extra", got)
 	}
 }
 

@@ -48,38 +48,6 @@ func scopedProfiles(layout Layout, session layoutSessionFile, sessionPath string
 	return profiles, nil
 }
 
-// SetLayoutActiveProfile makes profile the session's active profile in session.json.
-func SetLayoutActiveProfile(location Location, profile string, durability string) (ProfileUpdate, error) {
-	layout := *location.Root.Layout
-	sessionPath := location.SettingFile()
-	setting, err := readSessionObject(sessionPath)
-	if err != nil {
-		return ProfileUpdate{}, err
-	}
-	session, err := readLayoutSession(location)
-	if err != nil {
-		return ProfileUpdate{}, err
-	}
-	profiles, err := scopedProfiles(layout, session, sessionPath)
-	if err != nil {
-		return ProfileUpdate{}, err
-	}
-	profile = strings.TrimSpace(profile)
-	if _, found := profiles.Get(profile); !found {
-		return ProfileUpdate{}, &ClientError{Message: fmt.Sprintf("profile '%s' is not available to this session; available: %s", profile, strings.Join(profiles.IDs(), ", "))}
-	}
-	changed := session.ActiveProfile != profile
-	if changed {
-		if setting["active_profile"], err = json.Marshal(profile); err != nil {
-			return ProfileUpdate{}, err
-		}
-		if err := writeSessionSettingsAtomic(sessionPath, setting, durability == "strict"); err != nil {
-			return ProfileUpdate{}, fmt.Errorf("write session profile: %w", err)
-		}
-	}
-	return ProfileUpdate{ActiveProfile: profile, Profiles: profiles.IDs(), Changed: changed}, nil
-}
-
 // ConflictError reports that a file changed between the read and the write of an update,
 // so the update was not made. The client may read again and retry.
 type ConflictError struct {

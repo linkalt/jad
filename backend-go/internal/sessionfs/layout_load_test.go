@@ -560,47 +560,12 @@ func TestLoadSessionConfigUsesTheLayoutWhenSessionJSONExists(t *testing.T) {
 
 }
 
-func TestLayoutSetActiveProfileWritesSessionJSONOnly(t *testing.T) {
-	config, root := rootFromSample(t)
-	location, _ := Resolve(config.Roots, "default")
-	profileFile := filepath.Join(root, "profiles", "review", "reviewer.json")
-	before, _ := os.ReadFile(profileFile)
-
-	update, err := SetLayoutActiveProfile(location, "review/reviewer", "turn")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !update.Changed || update.ActiveProfile != "review/reviewer" || strings.Join(update.Profiles, ",") != "dev/coder,review/reviewer" {
-		t.Fatalf("update = %+v", update)
-	}
-	info, err := ReadLayoutProfileInfo(location)
-	if err != nil || info.ActiveProfile != "review/reviewer" {
-		t.Fatalf("info = %+v, err = %v", info, err)
-	}
-	if after, _ := os.ReadFile(profileFile); string(after) != string(before) {
-		t.Fatal("setting the active profile changed a profile file")
-	}
-	if again, err := SetLayoutActiveProfile(location, "review/reviewer", "turn"); err != nil || again.Changed {
-		t.Fatalf("second set = %+v, err = %v", again, err)
-	}
-	for _, bad := range []string{"coder", "dev/missing", "other/x"} {
-		var client *ClientError
-		if _, err := SetLayoutActiveProfile(location, bad, "turn"); err == nil || !asClientError(err, &client) {
-			t.Fatalf("profile %q error = %v, want a client error", bad, err)
-		}
-	}
-	// the written file is still a valid session
-	if _, err := LoadSessionConfig(location, "", ""); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A session without active_profile uses the first profile in scope by ID, in every reader
-// of the default; naming one keeps winning, and an empty scope has no profile to run.
-func TestLayoutSessionWithoutActiveProfileUsesTheFirstInScope(t *testing.T) {
+// A session names no profile: its default is the first profile in scope by ID, the load
+// and the profile list agree, a requested profile still wins, and an empty scope has no
+// profile to run. The removed active_profile key is refused like any unknown key.
+func TestLayoutSessionDefaultIsTheFirstProfileInScope(t *testing.T) {
 	config, root := rootFromSample(t)
 	sessionFile := filepath.Join(root, "sessions", "default.json")
-	editJSON(t, sessionFile, func(m map[string]any) { delete(m, "active_profile") })
 	location, _ := Resolve(config.Roots, "default")
 
 	loaded, err := LoadSessionConfig(location, "", "")
@@ -620,9 +585,8 @@ func TestLayoutSessionWithoutActiveProfileUsesTheFirstInScope(t *testing.T) {
 	}
 
 	editJSON(t, sessionFile, func(m map[string]any) { m["active_profile"] = "review/reviewer" })
-	named, err := LoadSessionConfig(location, "", "")
-	if err != nil || named.Profile != "review/reviewer" || named.DefaultProfile != "review/reviewer" {
-		t.Fatalf("named profile = %+v, err = %v", named, err)
+	if _, err := LoadSessionConfig(location, "", ""); err == nil || !strings.Contains(err.Error(), "active_profile") {
+		t.Fatalf("a session with active_profile: err = %v, want it refused by name", err)
 	}
 
 	editJSON(t, sessionFile, func(m map[string]any) {
@@ -787,8 +751,6 @@ func TestLayoutRefusesTheRemovedModelDefaultsKey(t *testing.T) {
 	check("load", err)
 	_, err = SetLayoutModelDefault(location, "dev/coder", "openai/gpt-fast", "turn")
 	check("model route", err)
-	_, err = SetLayoutActiveProfile(location, "review/reviewer", "turn")
-	check("profile route", err)
 	if after, _ := os.ReadFile(sessionFile); string(after) != string(before) {
 		t.Fatal("a refused call changed session.json")
 	}

@@ -11,7 +11,6 @@ const (
 	maxSessionFileDepth   = 64
 	maxSessionFileEntries = 1_000_000
 	maxSessionFileResults = 100_000
-	maxSessionReadmeBytes = 16 << 20
 )
 
 // SessionFileListingSettings bounds the read-only file list offered by the UI.
@@ -22,10 +21,6 @@ type SessionFileListingSettings struct {
 	MaxResults        int
 	IncludeHidden     bool
 	IgnoreDirectories []string
-	// ReadmeFile is the file of the working directory the UI shows by default, and
-	// ReadmeMaxBytes the most of it the route returns.
-	ReadmeFile     string
-	ReadmeMaxBytes int
 }
 
 // NativePathRule is one resolved allow/deny path rule for native read access.
@@ -45,12 +40,10 @@ type NativePathPolicy struct {
 
 func defaultSessionFileListingSettings() SessionFileListingSettings {
 	return SessionFileListingSettings{
-		Enabled:        true,
-		MaxDepth:       12,
-		MaxEntries:     5000,
-		MaxResults:     2000,
-		ReadmeFile:     "README.md",
-		ReadmeMaxBytes: 256 << 10,
+		Enabled:    true,
+		MaxDepth:   12,
+		MaxEntries: 5000,
+		MaxResults: 2000,
 		IgnoreDirectories: []string{
 			"node_modules", ".git", "dist", "build", "coverage", ".next",
 			"__pycache__", ".venv", "venv", ".cache",
@@ -81,16 +74,6 @@ func normalizeSessionFileListing(raw json.RawMessage, path string) (SessionFileL
 	}
 	if settings.MaxResults, err = sessionFileInteger(fields, "max_results", settings.MaxResults, maxSessionFileResults, path); err != nil {
 		return SessionFileListingSettings{}, err
-	}
-	if settings.ReadmeMaxBytes, err = sessionFileInteger(fields, "readme_max_bytes", settings.ReadmeMaxBytes, maxSessionReadmeBytes, path); err != nil {
-		return SessionFileListingSettings{}, err
-	}
-	if rawReadme, ok := fields["readme_file"]; ok {
-		name, err := sessionFileString(rawReadme)
-		if err != nil || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
-			return SessionFileListingSettings{}, configError("%s: session_files.readme_file must be a file name with no folder", path)
-		}
-		settings.ReadmeFile = name
 	}
 	if rawIgnore, ok := fields["ignore_directories"]; ok {
 		var values []json.RawMessage

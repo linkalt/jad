@@ -284,7 +284,7 @@ func TestRunRequestBodyLimitAllowsAllowedImagesOnly(t *testing.T) {
 		t.Fatalf("an image over the limit: status %d, want 413", status)
 	}
 	// Other routes keep max_body_bytes: a body bigger than it is refused with 413.
-	if status, _ := f.do(t, http.MethodPost, "/api/sessions/local:demo/profile", `{"active_profile":"`+strings.Repeat("p", 2000)+`"}`); status != http.StatusRequestEntityTooLarge {
+	if status, _ := f.do(t, http.MethodPost, "/api/sessions/local:demo/model-default", `{"model_default":"`+strings.Repeat("p", 2000)+`"}`); status != http.StatusRequestEntityTooLarge {
 		t.Fatalf("another route with a long body: status %d, want 413", status)
 	}
 }

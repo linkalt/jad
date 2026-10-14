@@ -262,7 +262,7 @@ func TestSessionListNamesTheModelFileTheSettingsSelect(t *testing.T) {
 		return entry
 	}
 	loaded, fixture := layoutConfig(t, layouttest.Spec{
-		SessionID: "profiled", ActiveProfile: "dev/profiled", Models: models,
+		SessionID: "profiled", Session: map[string]any{"scope": map[string]any{"profiles": []string{"dev/profiled"}}}, Models: models,
 		Profiles: map[string]map[string]any{
 			// profiled: the profile's default model is m/other, the plain model is also listed.
 			"dev/profiled": profile([]string{"m/other", "m/plain"}, "m/other"),
