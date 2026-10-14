@@ -57,12 +57,12 @@ const textColumnWidth = proportional(appConfig.catalog_table_text_column_weight,
 
 function tableColumns(showSession: boolean): TableColumn<CatalogRow>[] {
   const columns: TableColumn<CatalogRow>[] = [
-    {key: 'category', header: 'Category', sortable: true, renderCell: row => <Text type="supporting" color="secondary">{row.category}</Text>},
+    {key: 'category', header: 'Category', sortable: true, renderCell: row => <Text type="supporting" color="secondary" maxLines={1}>{row.category}</Text>},
     {key: 'id', header: 'ID', sortable: true, width: textColumnWidth, renderCell: row => <Link isStandalone>{row.id}</Link>},
-    {key: 'name', header: 'Name', sortable: true, width: textColumnWidth, renderCell: row => <Text type="body">{row.name}</Text>},
+    {key: 'name', header: 'Name', sortable: true, width: textColumnWidth, renderCell: row => <Text type="body" maxLines={1}>{row.name}</Text>},
   ];
   if (showSession) {
-    columns.unshift({key: 'sessions', header: 'Session', sortable: true, width: textColumnWidth, renderCell: row => <Text type="supporting" color="secondary">{row.sessions}</Text>});
+    columns.unshift({key: 'sessions', header: 'Session', sortable: true, width: textColumnWidth, renderCell: row => <Text type="supporting" color="secondary" maxLines={1}>{row.sessions}</Text>});
   }
   return columns;
 }

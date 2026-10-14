@@ -383,10 +383,6 @@ const styles = stylex.create({
     minWidth: 0,
     flex: 1,
   },
-  inspectorNote: {
-    borderBlockStart: `${borderVars['--border-width']} solid ${colorVars['--color-border']}`,
-    paddingBlockStart: spacingVars['--spacing-3'],
-  },
 });
 
 type SessionState = SessionUiState;
@@ -1722,11 +1718,7 @@ function AgentAvatar({isRunning = false}: {isRunning?: boolean}) {
       name="Astra"
       size="sm"
       status={
-        <StatusDot
-          variant={isRunning ? 'accent' : 'success'}
-          label={isRunning ? 'Working' : 'Ready'}
-          isPulsing={isRunning}
-        />
+        isRunning ? <StatusDot variant="accent" label="Working" isPulsing /> : undefined
       }
     />
   );
@@ -1981,7 +1973,7 @@ function RunInspector({
         {(!isLive || steps.length > 0) && (
           <VStack as="section" gap={2}>
             <HStack align="center" justify="between" gap={2}>
-              <Heading level={2} accessibilityLevel={3} xstyle={styles.sectionHeading}>
+              <Heading level={3} xstyle={styles.sectionHeading}>
                 Reasoning trace
               </Heading>
               <Text type="supporting" color="secondary">
@@ -1994,23 +1986,12 @@ function RunInspector({
 
         <VStack as="section" gap={2} ref={toolListRef}>
           <HStack align="center" justify="between" gap={2}>
-            <Heading level={2} accessibilityLevel={3}>
+            <Heading level={3} xstyle={styles.sectionHeading}>
               Tool activity
             </Heading>
             <Badge label={String(toolItems.length)} />
           </HStack>
           <ChatToolCalls calls={toolItems} defaultIsExpanded />
-        </VStack>
-
-        <VStack gap={2} xstyle={styles.inspectorNote}>
-          <Text type="label" weight="semibold">
-            Harness note
-          </Text>
-          <Text type="supporting" color="secondary">
-            {isLive
-              ? 'Live provider reasoning is shown within the assistant response when available.'
-              : 'The seeded preview keeps these regions as the contract for run state.'}
-          </Text>
         </VStack>
     </FloatingPanel>
   );
@@ -2258,15 +2239,7 @@ function AssistantMessage({
             </>
           )}
           {message.tools && message.tools.length > 0 && (
-            <VStack gap={2}>
-              <HStack align="center" gap={2}>
-                <Text type="label" weight="semibold">
-                  Tool activity
-                </Text>
-                <Badge label={String(message.tools.length)} />
-              </HStack>
-              <ChatToolCalls calls={message.tools} defaultIsExpanded />
-            </VStack>
+            <ChatToolCalls calls={message.tools} defaultIsExpanded />
           )}
         </VStack>
       </ChatMessageBubble>

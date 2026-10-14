@@ -448,11 +448,11 @@ export function CheckpointPanel({
     >
       <VStack gap={3} width="100%">
         {review === null ? (
-          <HStack align="center" justify="between" gap={2}>
+          <HStack align="center" gap={2}>
+            <Button label="Refresh" variant="secondary" size="sm" isLoading={isLoading} onClick={load} />
             <Text type="supporting" color="secondary">
               {list === null || !list.enabled ? '' : `${list.checkpoints.length} ${list.checkpoints.length === 1 ? 'checkpoint' : 'checkpoints'}`}
             </Text>
-            <Button label="Refresh" variant="ghost" size="sm" isLoading={isLoading} onClick={load} />
           </HStack>
         ) : null}
         {loadError === null ? null : (

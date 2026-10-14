@@ -835,7 +835,7 @@ export function ComposerPane({
         </>
       }
       headerActions={
-        <HStack align="center" gap={1}>
+        <HStack align="center" gap={4}>
           <IconButton
             data-panel-toggle=""
             label={`${isPromptLibraryOpen ? 'Hide' : 'Show'} prompt library`}
@@ -847,50 +847,52 @@ export function ComposerPane({
             onClick={onTogglePromptLibrary}
           />
           {toolbarActions}
-          {isImageAttachEnabled ? (
-            <>
+          <HStack align="center" gap={1}>
+            {isImageAttachEnabled ? (
+              <>
+                <IconButton
+                  label="Attach image"
+                  isDisabled={isDisabled}
+                  icon={<Icon icon="upload" size="sm" />}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openImagePickerRef.current?.()}
+                />
+                <ImageAttachmentPicker
+                  accept={appConfig.attach_image_accept}
+                  onFiles={files => void attachments.add(files)}
+                  openRef={openImagePickerRef}
+                />
+              </>
+            ) : null}
+            {isFileAttachEnabled ? (
+              <>
+                <IconButton
+                  label="Attach file"
+                  isDisabled={isDisabled}
+                  icon={<Icon icon={FileIcon} size="sm" />}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openFilePickerRef.current?.()}
+                />
+                <FileAttachmentPicker
+                  accept={appConfig.attach_file_accept}
+                  onFiles={files => void fileAttachments.add(files)}
+                  openRef={openFilePickerRef}
+                />
+              </>
+            ) : null}
+            {isPreviewEnabled ? (
               <IconButton
-                label="Attach image"
+                label={isPreviewOpen ? 'Hide markdown preview' : 'Preview markdown'}
                 isDisabled={isDisabled}
-                icon={<Icon icon="upload" size="sm" />}
-                variant="ghost"
+                icon={<Icon icon={PreviewIcon} size="sm" />}
+                variant={isPreviewOpen ? 'secondary' : 'ghost'}
                 size="sm"
-                onClick={() => openImagePickerRef.current?.()}
+                onClick={() => setIsPreviewOpen(current => !current)}
               />
-              <ImageAttachmentPicker
-                accept={appConfig.attach_image_accept}
-                onFiles={files => void attachments.add(files)}
-                openRef={openImagePickerRef}
-              />
-            </>
-          ) : null}
-          {isFileAttachEnabled ? (
-            <>
-              <IconButton
-                label="Attach file"
-                isDisabled={isDisabled}
-                icon={<Icon icon={FileIcon} size="sm" />}
-                variant="ghost"
-                size="sm"
-                onClick={() => openFilePickerRef.current?.()}
-              />
-              <FileAttachmentPicker
-                accept={appConfig.attach_file_accept}
-                onFiles={files => void fileAttachments.add(files)}
-                openRef={openFilePickerRef}
-              />
-            </>
-          ) : null}
-          {isPreviewEnabled ? (
-            <IconButton
-              label={isPreviewOpen ? 'Hide markdown preview' : 'Preview markdown'}
-              isDisabled={isDisabled}
-              icon={<Icon icon={PreviewIcon} size="sm" />}
-              variant={isPreviewOpen ? 'secondary' : 'ghost'}
-              size="sm"
-              onClick={() => setIsPreviewOpen(current => !current)}
-            />
-          ) : null}
+            ) : null}
+          </HStack>
         </HStack>
       }
       headerContext={
