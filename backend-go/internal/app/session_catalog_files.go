@@ -19,7 +19,7 @@ func (r *Resolver) ListSessionConfigs(ctx context.Context) ([]httpapi.CatalogFil
 	}
 	listing := make([]httpapi.CatalogFileInfo, len(files))
 	for index, file := range files {
-		listing[index] = httpapi.CatalogFileInfo{ID: file.ID, ETag: file.ETag, Name: file.Name}
+		listing[index] = httpapi.CatalogFileInfo{ID: file.ID, ETag: file.ETag, Name: file.Name, Category: file.Category}
 	}
 	return listing, nil
 }

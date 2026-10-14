@@ -1,6 +1,7 @@
 package sessionfs
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"jad/backend-go/internal/catalog"
 	"jad/backend-go/internal/sessionlock"
 )
 
@@ -47,11 +49,47 @@ func listSessionFiles(roots []Root, onUnreadable func(location Location, err err
 				}
 				return nil, configError("%s: could not be read: %v", location.SettingFile(), err)
 			}
-			infos = append(infos, CatalogFileInfo{ID: location.Reference, ETag: CatalogETag(data), Name: fileDisplayName(data)})
+			infos = append(infos, CatalogFileInfo{ID: location.Reference, ETag: CatalogETag(data), Name: fileDisplayName(data), Category: fileCategory(data), scope: fileScope(data)})
 		}
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
 	return infos, nil
+}
+
+// fileScope is the profile selection a session file sets. A file that does not parse selects nothing
+// it could be told apart from, so it is treated as selecting every profile, as an absent scope does.
+func fileScope(data []byte) catalog.Selection {
+	var scoped struct {
+		Scope layoutScope `json:"scope"`
+	}
+	if json.Unmarshal(data, &scoped) != nil {
+		return catalog.All()
+	}
+	return scoped.Scope.Profiles
+}
+
+// ProfileSessions maps each profile ID to the sessions whose scope.profiles selects it. A session
+// whose scope names a profile that does not exist selects nothing, as it would at run time.
+func ProfileSessions(layout Layout, roots []Root) (map[string][]SessionRef, error) {
+	profiles, err := catalog.Scan(string(CatalogProfiles), layout.Profiles)
+	if err != nil {
+		return nil, configError("%v", err)
+	}
+	sessions, err := listSessionFiles(roots, func(Location, error) {})
+	if err != nil {
+		return nil, err
+	}
+	byProfile := make(map[string][]SessionRef)
+	for _, session := range sessions {
+		narrowed, err := profiles.Narrow(session.scope)
+		if err != nil {
+			continue
+		}
+		for _, id := range narrowed.IDs() {
+			byProfile[id] = append(byProfile[id], SessionRef{ID: session.ID, Name: session.Name, Category: session.Category})
+		}
+	}
+	return byProfile, nil
 }
 
 // existingLayoutSession resolves a reference to a session that is stored in the catalog layout.

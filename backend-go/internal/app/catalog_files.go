@@ -42,9 +42,19 @@ func (r *Resolver) ListCatalogFiles(ctx context.Context, kind string) ([]httpapi
 	if err != nil {
 		return nil, mapCatalogFileError(err)
 	}
+	var bySession map[string][]sessionfs.SessionRef
+	if known == sessionfs.CatalogProfiles {
+		if bySession, err = sessionfs.ProfileSessions(layout, r.roots); err != nil {
+			return nil, mapCatalogFileError(err)
+		}
+	}
 	listing := make([]httpapi.CatalogFileInfo, len(files))
 	for index, file := range files {
-		listing[index] = httpapi.CatalogFileInfo{ID: file.ID, ETag: file.ETag, Name: file.Name}
+		info := httpapi.CatalogFileInfo{ID: file.ID, ETag: file.ETag, Name: file.Name}
+		for _, session := range bySession[file.ID] {
+			info.Sessions = append(info.Sessions, httpapi.CatalogSessionRef{ID: session.ID, Name: session.Name, Category: session.Category})
+		}
+		listing[index] = info
 	}
 	return listing, nil
 }

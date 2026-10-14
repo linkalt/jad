@@ -5,6 +5,7 @@
   "type": "object",
   "properties": {
     "schema_version": {"type": "integer", "const": 1, "default": 1},
+    "name": {"type": "string", "pattern": "\\S", "description": "Display name of the MCP server, shown beside its ID in the catalog editor. Changes no behavior and no tool name; defaults to the ID."},
     "transport": {
       "oneOf": [
         {

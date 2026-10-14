@@ -846,6 +846,12 @@ func modelFromFields(fields map[string]json.RawMessage, path, promptRole, prompt
 	if err := validateSchemaVersion(fields, path); err != nil {
 		return Model{}, err
 	}
+	if raw, ok := fields["name"]; ok {
+		var displayName string
+		if json.Unmarshal(raw, &displayName) != nil {
+			return Model{}, configError("%s: name must be a string", path)
+		}
+	}
 	provider, err := stringField(fields, "provider", "openai", path)
 	if err != nil {
 		return Model{}, err

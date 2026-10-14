@@ -79,6 +79,12 @@ func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerRefere
 			return loadedConfig{}, configError(path, "unsupported schema_version %s", strings.TrimSpace(string(value)))
 		}
 	}
+	if value, exists := fields["name"]; exists {
+		var displayName string
+		if json.Unmarshal(value, &displayName) != nil {
+			return loadedConfig{}, configError(path, "name must be a string")
+		}
+	}
 	transportFields, err := objectFields(fields["transport"], path, "transport must be an object")
 	if err != nil {
 		return loadedConfig{}, err

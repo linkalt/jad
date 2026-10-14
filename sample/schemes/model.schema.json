@@ -11,6 +11,11 @@
       "const": 1,
       "default": 1
     },
+    "name": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Display name of the model, shown beside its ID in the catalog editor. Changes no behavior; defaults to the ID."
+    },
     "provider": {
       "type": "string",
       "pattern": "\\S",

@@ -51,8 +51,20 @@ func (e *CatalogError) Error() string { return e.Message }
 type CatalogFileInfo struct {
 	ID   string
 	ETag string
-	// Name is the display name a session or profile file sets; empty for every other kind and when unset.
+	// Name is the display name the file sets; empty when unset.
 	Name string
+	// Category is the folder a session file sets to group its listing; empty for every other
+	// kind, whose category is the first part of the ID, and when unset.
+	Category string
+	// scope is the profile selection of a session file, read for ProfileSessions; zero for other kinds.
+	scope catalog.Selection
+}
+
+// SessionRef names a session in a listing.
+type SessionRef struct {
+	ID       string
+	Name     string
+	Category string
 }
 
 // CatalogFile is one catalog file with its bytes.
@@ -128,11 +140,7 @@ func ListCatalogFiles(layout Layout, kind CatalogKind) ([]CatalogFileInfo, error
 		if err != nil {
 			return nil, configError("%s: could not be read: %v", entry.Path, err)
 		}
-		info := CatalogFileInfo{ID: entry.ID(), ETag: CatalogETag(data)}
-		if kind == CatalogProfiles {
-			info.Name = fileDisplayName(data)
-		}
-		infos = append(infos, info)
+		infos = append(infos, CatalogFileInfo{ID: entry.ID(), ETag: CatalogETag(data), Name: fileDisplayName(data)})
 	}
 	return infos, nil
 }
@@ -145,6 +153,15 @@ func fileDisplayName(data []byte) string {
 	}
 	_ = json.Unmarshal(data, &named)
 	return strings.TrimSpace(named.Name)
+}
+
+// fileCategory is the trimmed "category" a session file sets, with the same leniency as fileDisplayName.
+func fileCategory(data []byte) string {
+	var grouped struct {
+		Category string `json:"category"`
+	}
+	_ = json.Unmarshal(data, &grouped)
+	return strings.TrimSpace(grouped.Category)
 }
 
 // ReadCatalogFile returns one file as it is on disk.

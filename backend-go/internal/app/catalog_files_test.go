@@ -342,3 +342,107 @@ func TestCatalogProfileListShowsTheNameTheFileSets(t *testing.T) {
 		t.Fatalf("a numeric name = %d %s, want 422", reply.status, reply.body)
 	}
 }
+
+func TestCatalogListShowsTheNameEveryKindSets(t *testing.T) {
+	f := newLayoutFixture(t)
+	create := func(path, body string) {
+		t.Helper()
+		if reply := f.catalogCall(t, "PUT", path, body, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusCreated {
+			t.Fatalf("create %s = %d %s", path, reply.status, reply.body)
+		}
+	}
+	create("/api/catalog/models/openai/named", `{"name":" Named model ","model":"gpt-x"}`)
+	create("/api/catalog/toolsets/coding/named", `{"name":"Named toolset"}`)
+	create("/api/catalog/mcp/ext/named", `{"name":"Named server","transport":{"type":"streamable_http","url":"http://127.0.0.1:1/mcp"}}`)
+	create("/api/catalog/sessions/grouped", `{"name":"Named session","category":" work ","cwd":"`+f.cwd+`","scope":{"profiles":["dev"]}}`)
+	for _, c := range []struct{ kind, id, name, category string }{
+		{"models", "openai/named", "Named model", ""},
+		{"toolsets", "coding/named", "Named toolset", ""},
+		{"mcp", "ext/named", "Named server", ""},
+		{"sessions", "grouped", "Named session", "work"},
+	} {
+		var listing struct {
+			Files []struct{ ID, Name, Category string }
+		}
+		list := f.catalogCall(t, "GET", "/api/catalog/"+c.kind, "", nil)
+		if err := json.Unmarshal([]byte(list.body), &listing); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, file := range listing.Files {
+			if file.ID == c.id {
+				found = true
+				if file.Name != c.name || file.Category != c.category {
+					t.Errorf("%s %s = name %q category %q, want %q %q", c.kind, c.id, file.Name, file.Category, c.name, c.category)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s %s missing from %s", c.kind, c.id, list.body)
+		}
+	}
+}
+
+func TestCatalogRefusesANameThatIsNotAString(t *testing.T) {
+	f := newLayoutFixture(t)
+	for path, body := range map[string]string{
+		"/api/catalog/models/openai/bad":   `{"name":7,"model":"gpt-x"}`,
+		"/api/catalog/toolsets/coding/bad": `{"name":7}`,
+		"/api/catalog/mcp/ext/bad":         `{"name":7,"transport":{"type":"streamable_http","url":"http://127.0.0.1:1/mcp"}}`,
+	} {
+		if reply := f.catalogCall(t, "PUT", path, body, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusUnprocessableEntity {
+			t.Errorf("%s = %d %s, want 422", path, reply.status, reply.body)
+		}
+	}
+}
+
+func TestCatalogProfileListNamesTheSessionsThatCanUseEachProfile(t *testing.T) {
+	f := newLayoutFixture(t)
+	create := func(path, body string) {
+		t.Helper()
+		if reply := f.catalogCall(t, "PUT", path, body, map[string]string{"If-None-Match": "*"}); reply.status != http.StatusCreated {
+			t.Fatalf("create %s = %d %s", path, reply.status, reply.body)
+		}
+	}
+	create("/api/catalog/profiles/solo/only", `{"models":["openai/small"],"toolset":"coding/none"}`)
+	create("/api/catalog/sessions/narrow", `{"name":"Narrow","category":"lab","cwd":"`+f.cwd+`","scope":{"profiles":["dev/coder"]}}`)
+	create("/api/catalog/sessions/open", `{"cwd":"`+f.cwd+`"}`)
+
+	var listing struct {
+		Files []struct {
+			ID       string
+			Sessions []struct{ ID, Name, Category string }
+		}
+	}
+	list := f.catalogCall(t, "GET", "/api/catalog/profiles", "", nil)
+	if err := json.Unmarshal([]byte(list.body), &listing); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, file := range listing.Files {
+		var ids []string
+		for _, session := range file.Sessions {
+			ids = append(ids, session.ID)
+		}
+		got[file.ID] = strings.Join(ids, ",")
+	}
+	want := map[string]string{
+		"dev/coder":       "demo,narrow,open",
+		"review/reviewer": "demo,open",
+		"solo/only":       "open",
+	}
+	for id, sessions := range want {
+		if got[id] != sessions {
+			t.Errorf("profile %s sessions = %q, want %q (all: %v)", id, got[id], sessions, got)
+		}
+	}
+	for _, file := range listing.Files {
+		if file.ID == "dev/coder" {
+			for _, session := range file.Sessions {
+				if session.ID == "narrow" && (session.Name != "Narrow" || session.Category != "lab") {
+					t.Errorf("session ref = %+v, want its name and category", session)
+				}
+			}
+		}
+	}
+}

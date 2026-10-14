@@ -98,10 +98,12 @@ type layoutProfileFile struct {
 // layoutToolsetFile is <tools>/<category>/<name>.json. MCP stays raw because the order
 // of its keys is the order of the servers.
 type layoutToolsetFile struct {
-	SchemaVersion int                        `json:"schema_version"`
-	Description   string                     `json:"description"`
-	Native        map[string]json.RawMessage `json:"native"`
-	MCP           json.RawMessage            `json:"mcp"`
+	SchemaVersion int    `json:"schema_version"`
+	Description   string `json:"description"`
+	// Name is the display name shown beside the ID in the catalog editor; it changes no behavior.
+	Name   string                     `json:"name"`
+	Native map[string]json.RawMessage `json:"native"`
+	MCP    json.RawMessage            `json:"mcp"`
 	// Hooks has the shape of the settings key; kept raw so null is refused by the normalizer.
 	Hooks json.RawMessage `json:"hooks"`
 }

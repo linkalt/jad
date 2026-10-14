@@ -11,6 +11,11 @@
     "description": {
       "type": "string"
     },
+    "name": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Display name of the toolset, shown beside its ID in the catalog editor. Changes no behavior; defaults to the ID."
+    },
     "native": {
       "$ref": "setting.schema.json#/properties/tools/properties/native",
       "description": "Native tool settings, key by key as tools.native in setting.schema.json. A tool listed here is enabled; a tool not listed is not."
