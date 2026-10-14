@@ -117,6 +117,7 @@ import {
   visibleWebUiItems,
   webUiStepAtPartIndex,
 } from './web-ui-steps';
+import {toolResultText} from './tool-result-view';
 import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
 import {StateContextDrawer} from './components/StateContextDrawer';
@@ -1102,6 +1103,27 @@ function partialToolTarget(argumentsText: string, budgetPx: number): string {
   return cutRowText(progress, budgetPx);
 }
 
+function resultText(result: WebUiToolResult): string | undefined {
+  return toolResultText(result.output, result);
+}
+
+/** The images of one tool result, shown under its row without opening it. */
+function ToolResultImages({result, source}: {result: WebUiToolResult; source?: TruncatedSource}) {
+  return (
+    <>
+      {result.images !== undefined && <StoredImages names={result.images} />}
+      {result.inlineImages !== undefined && result.inlineImages > 0 && source !== undefined && (
+        <InlineImages
+          messageId={source.message.id}
+          callId={result.callId}
+          count={result.inlineImages}
+          cursor={source.message.cursor}
+        />
+      )}
+    </>
+  );
+}
+
 function visibleToolOutput(output: string): string {
   const limit = appConfig.tool_output_max_chars;
   if (output.length <= limit) {
@@ -1231,24 +1253,15 @@ function toolCallItem(
           maxHeight={appConfig.tool_arguments_max_height_px}
           hasCopyButton
         />
-        {result && (
+        {result && resultText(result) !== undefined && (
           <CodeBlock
-            code={visibleToolOutput(result.output)}
+            code={visibleToolOutput(resultText(result) ?? '')}
             language="text"
             size="sm"
             width="100%"
             container="card"
             maxHeight={appConfig.tool_result_max_height_px}
             hasCopyButton
-          />
-        )}
-        {result?.images !== undefined && <StoredImages names={result.images} />}
-        {result?.inlineImages !== undefined && result.inlineImages > 0 && source !== undefined && (
-          <InlineImages
-            messageId={source.message.id}
-            callId={result.callId}
-            count={result.inlineImages}
-            cursor={source.message.cursor}
           />
         )}
         {result?.truncated !== undefined && (
@@ -1276,24 +1289,18 @@ function OrphanToolResultBlock({
             variant={result.status === 'error' ? 'error' : result.status === 'success' ? 'success' : 'neutral'}
           />
         </HStack>
-        <CodeBlock
-          code={visibleToolOutput(result.output)}
-          language="text"
-          size="sm"
-          width="100%"
-          container="section"
-          maxHeight={appConfig.tool_result_max_height_px}
-          hasCopyButton
-        />
-        {result.images !== undefined && <StoredImages names={result.images} />}
-        {result.inlineImages !== undefined && result.inlineImages > 0 && source !== undefined && (
-          <InlineImages
-            messageId={source.message.id}
-            callId={result.callId}
-            count={result.inlineImages}
-            cursor={source.message.cursor}
+        {resultText(result) !== undefined && (
+          <CodeBlock
+            code={visibleToolOutput(resultText(result) ?? '')}
+            language="text"
+            size="sm"
+            width="100%"
+            container="section"
+            maxHeight={appConfig.tool_result_max_height_px}
+            hasCopyButton
           />
         )}
+        <ToolResultImages result={result} source={source} />
         {result.truncated !== undefined && (
           <TruncatedNotice bytes={result.truncated.bytes} source={source} />
         )}
@@ -1548,17 +1555,24 @@ function WebUiActivityGroup({
   const firstToolCallIndex = group.items.find(
     ({part}) => part.type === 'tool_call',
   )?.index;
+  const callIds = new Set(
+    group.items.flatMap(({part}) => (part.type === 'tool_call' ? [part.callId] : [])),
+  );
+  const toolCallResults = group.items.flatMap(({part}) =>
+    part.type === 'tool_result' && callIds.has(part.callId) ? [part] : [],
+  );
 
   return (
     <VStack gap={1} width="100%" xstyle={styles.activityGroup}>
       {group.items.map(({part, index}, itemIndex) => {
         if (part.type === 'tool_call') {
           return index === firstToolCallIndex ? (
-            <ChatToolCalls
-              key={`tool-calls-${index}`}
-              calls={toolCallItems}
-              xstyle={styles.toolCallsFlush}
-            />
+            <Fragment key={`tool-calls-${index}`}>
+              <ChatToolCalls calls={toolCallItems} xstyle={styles.toolCallsFlush} />
+              {toolCallResults.map(result => (
+                <ToolResultImages key={result.callId} result={result} source={source} />
+              ))}
+            </Fragment>
           ) : null;
         }
         const hasCall = group.items
