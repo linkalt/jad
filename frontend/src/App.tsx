@@ -2360,12 +2360,6 @@ const ASSISTANT_BUBBLE_SELECTOR = '.astryx-chat-message-bubble[data-sender="assi
 /** Tool call rows and their result detail are the tool's output, not a reply. */
 const TOOL_OUTPUT_SELECTOR = '.astryx-chat-tool-calls';
 
-/** Clearance between the selection and its menu. */
-const SELECTION_MENU_GAP_PX = 8;
-
-/** With less room than this above the selection, the menu opens below it. */
-const SELECTION_MENU_MIN_TOP_PX = 56;
-
 function elementOf(node: Node): Element | null {
   return node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
 }
@@ -2412,12 +2406,14 @@ function selectionQuoteTarget(): {draft: string; anchor: QuoteAnchor} | null {
     return null;
   }
   const rect = range.getBoundingClientRect();
-  const isAbove = rect.top - SELECTION_MENU_GAP_PX >= SELECTION_MENU_MIN_TOP_PX;
+  const isAbove = rect.top - appConfig.selection_quote_menu_gap_px >= appConfig.selection_quote_menu_min_top_px;
   return {
     draft,
     anchor: {
       x: rect.left,
-      y: isAbove ? rect.top - SELECTION_MENU_GAP_PX : rect.bottom + SELECTION_MENU_GAP_PX,
+      y: isAbove
+        ? rect.top - appConfig.selection_quote_menu_gap_px
+        : rect.bottom + appConfig.selection_quote_menu_gap_px,
       isAbove,
     },
   };
@@ -5317,10 +5313,13 @@ function App() {
               label="Agent conversation"
             >
               {/* The visual header is gone; this keeps the session title as the
-                  page's top-level heading for assistive technology. */}
-              <VisuallyHidden as="div">
-                <Heading level={1}>{isReadmeShown ? 'Jad' : activeRowSession.title}</Heading>
-              </VisuallyHidden>
+                  page's top-level heading for assistive technology. The README
+                  brings its own h1. */}
+              {!isReadmeShown && (
+                <VisuallyHidden as="div">
+                  <Heading level={1}>{activeRowSession.title}</Heading>
+                </VisuallyHidden>
+              )}
               <StoredImageScopeProvider value={storedImageScope}>
               <ChatLayout
                 density="balanced"

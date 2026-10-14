@@ -62,6 +62,8 @@
   "composer_draft_save_delay_ms": 300,
   "selection_quote_enabled": true,
   "selection_quote_max_chars": 2000,
+  "selection_quote_menu_gap_px": 8,
+  "selection_quote_menu_min_top_px": 56,
   "attach_context_enabled": true,
   "attach_context_accept": ".txt,.md,.markdown,.json,.jsonl,.csv,.log,.yml,.yaml,.ts,.tsx,.js,.jsx,.py,.css,.html,.sh",
   "attach_context_max_chars_per_file": 20000,
