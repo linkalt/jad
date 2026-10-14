@@ -1781,6 +1781,12 @@ function SessionNavigation({
 }) {
   const categorySections = useMemo(() => groupByCategory(groups), [groups]);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [collapsedCategories, setCollapsedCategories] = useState<readonly string[]>([]);
+  const toggleCategory = useCallback((key: string) => {
+    setCollapsedCategories(current =>
+      current.includes(key) ? current.filter(entry => entry !== key) : [...current, key],
+    );
+  }, []);
   const FooterStack = isCollapsed ? VStack : HStack;
   return (
     <SideNav
@@ -1848,27 +1854,37 @@ function SessionNavigation({
       }
       collapsible={{isCollapsed, onCollapsedChange: setIsCollapsed}}
     >
-      {categorySections.map(section => (
-        <SideNavItem
-          key={section.category ?? ''}
-          label={section.category ?? appConfig.session_uncategorized_title}
-          icon={FolderIcon}
-          collapsible={false}
-        >
-          <Divider />
-          <SessionGroupList
-            groups={section.groups}
-            sessions={sessions}
-            rowTurns={rowTurns}
-            runningViewKeys={runningViewKeys}
-            activeViewKey={activeViewKey}
-            collapsedRefs={collapsedRefs}
-            onCollapsedChange={onCollapsedChange}
-            onSelect={onSelect}
-            onOpenProfile={onOpenProfile}
-          />
-        </SideNavItem>
-      ))}
+      {categorySections.map(section => {
+        const key = section.category ?? '';
+        return (
+          <Fragment key={key}>
+            <SideNavItem
+              label={section.category ?? appConfig.session_uncategorized_title}
+              icon={FolderIcon}
+              endContent={
+                <VisuallyHidden>{collapsedCategories.includes(key) ? 'collapsed' : 'expanded'}</VisuallyHidden>
+              }
+              onClick={() => toggleCategory(key)}
+            />
+            <Divider />
+            {collapsedCategories.includes(key) ? null : (
+              <VStack gap={0} paddingInlineStart={2}>
+                <SessionGroupList
+                  groups={section.groups}
+                  sessions={sessions}
+                  rowTurns={rowTurns}
+                  runningViewKeys={runningViewKeys}
+                  activeViewKey={activeViewKey}
+                  collapsedRefs={collapsedRefs}
+                  onCollapsedChange={onCollapsedChange}
+                  onSelect={onSelect}
+                  onOpenProfile={onOpenProfile}
+                />
+              </VStack>
+            )}
+          </Fragment>
+        );
+      })}
     </SideNav>
   );
 }
