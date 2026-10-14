@@ -11,7 +11,7 @@
  * identity across reloads and two rows can never name the same view.
  */
 
-export type ViewTarget = {
+type ViewTarget = {
   sessionRef: string;
   /** A path profile of that session; absent means "follow the stored default". */
   profile?: string;
@@ -32,10 +32,6 @@ const KEY_SEPARATOR = '\u0000';
 /** The id of one view: the session, plus the profile when it is pinned. */
 export function viewKey(sessionRef: string, profile?: string): string {
   return profile === undefined ? sessionRef : `${sessionRef}${KEY_SEPARATOR}${profile}`;
-}
-
-export function viewKeyOf(target: ViewTarget): string {
-  return viewKey(target.sessionRef, target.profile);
 }
 
 /** The session a view key names, whatever profile it was pinned to. */
@@ -65,7 +61,7 @@ export function viewLabel(sessionLabel: string, profile?: string): string {
   return profile === undefined ? base : `${base}: ${profile}`;
 }
 
-export function findPinnedView(views: readonly PinnedView[], target: ViewTarget): PinnedView | undefined {
+function findPinnedView(views: readonly PinnedView[], target: ViewTarget): PinnedView | undefined {
   if (target.profile === undefined) {
     return undefined;
   }
@@ -80,7 +76,7 @@ export function hasPinnedView(views: readonly PinnedView[], target: ViewTarget):
  * Adds a pinned row.
  *
  * A view that is already open is left alone — the caller selects it by setting
- * the active key to `viewKeyOf(target)`.
+ * the active key to `viewKey(target.sessionRef, target.profile)`.
  */
 export function addPinnedView(views: readonly PinnedView[], target: PinnedView): PinnedView[] {
   if (hasPinnedView(views, target)) {

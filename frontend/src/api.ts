@@ -246,8 +246,6 @@ export interface SessionSnapshot {
    * stored default's. A tab pinned to a profile reads its status here.
    */
   runs_by_profile?: Record<string, SessionRunState>;
-  /** The profile the session stores as its default; `active_profile` is the one this response resolved. */
-  default_profile?: string;
   /** Set when the transcript was capped; `next_before` fetches older turns. */
   page?: SessionPage;
   /**

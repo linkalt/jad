@@ -93,7 +93,6 @@ import {suppressAttachedRunTranscriptTail} from './active-run-transcript';
 import {stopRunAfterConfirmation} from './stop-run';
 import {
   isSessionRunning,
-  reconcileDetachedRunSessionIds,
   sessionUiStateForRun,
   snapshotEndsLocalRun,
   withSnapshotRun,
@@ -2514,9 +2513,6 @@ function App() {
   const [runningViewKeys, setRunningViewKeys] = useState<ReadonlySet<string>>(
     new Set(),
   );
-  const [detachedRunSessionIds, setDetachedRunSessionIds] = useState<ReadonlySet<string>>(
-    new Set(),
-  );
   const [compactingSessionRef, setCompactingSessionRef] = useState<string | null>(null);
   const [resetDrawerViewKey, setResetDrawerViewKey] = useState<string | null>(null);
   // The two destructive conversation actions live in a composer drawer rather
@@ -3258,12 +3254,10 @@ function App() {
   const isRunning = isSessionRunning(
     runningViewKeys.has(activeViewKey),
     rowRunStatus(activeRow, activeSession)?.status,
-    detachedRunSessionIds.has(activeViewKey),
   );
   const hasLiveAttachedRun =
     isLiveSession &&
     (rowRunStatus(activeRow, activeSession)?.status === 'running' ||
-      detachedRunSessionIds.has(activeViewKey) ||
       attachedRunViewKeysRef.current.has(activeViewKey));
   const transcriptMessages = useMemo(
     () => suppressAttachedRunTranscriptTail(messages, hasLiveAttachedRun),
@@ -4364,16 +4358,6 @@ function App() {
     [activateView],
   );
 
-  // The sidebar gets exact view identities so one profile's detached run marks
-  // its own row. The session row can still aggregate runs from pinned profiles.
-  const sidebarRunningViewKeys = useMemo(() => {
-    const viewKeys = new Set(detachedRunSessionIds);
-    for (const viewKey of runningViewKeys) {
-      viewKeys.add(viewKey);
-    }
-    return viewKeys;
-  }, [detachedRunSessionIds, runningViewKeys]);
-
   // A server-confirmed session list owns which view caches are still useful.
   // Keep first-paint placeholders until that list arrives, then evict unpinned
   // views and sessions that disappeared. Their next visit can hydrate from the
@@ -4667,21 +4651,6 @@ function App() {
             snapshot,
             id: sessionUiId(snapshot, initialSessions),
           }));
-          // Every view of these sessions that has a run: the stored default's,
-          // plus one per profile the server reports.
-          const liveRunKeys = liveItems.flatMap(item => [
-            {id: item.id, status: item.snapshot.run?.status},
-            ...Object.entries(item.snapshot.runs_by_profile ?? {}).map(([profile, run]) => ({
-              id: viewKey(item.id, profile),
-              status: run.status,
-            })),
-          ]);
-          setDetachedRunSessionIds(current =>
-            reconcileDetachedRunSessionIds(
-              current,
-              liveRunKeys,
-            ),
-          );
           const activeRunViewKeys = new Set(activeRunViewKeysRef.current);
           const activeRunSessionRefs = new Set(
             [...activeRunViewKeys].map(sessionRefOfViewKey),
@@ -5310,7 +5279,7 @@ function App() {
           onCollapsedChange={changeGroupCollapsed}
           rowTurns={rowTurns}
           sessions={sessions}
-          runningViewKeys={sidebarRunningViewKeys}
+          runningViewKeys={runningViewKeys}
           activeViewKey={isReadmeShown ? '' : activeViewKey}
           onSelect={activateView}
           onOpenProfile={openProfileView}

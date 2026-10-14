@@ -3,7 +3,6 @@ import test from 'node:test';
 
 import {
   isSessionRunning,
-  reconcileDetachedRunSessionIds,
   sessionUiStateForRun,
   snapshotEndsLocalRun,
   withSnapshotRun,
@@ -31,37 +30,6 @@ test('only this client\'s own turn, ending, drops the local run', () => {
   assert.equal(snapshotEndsLocalRun(null, run('turn-1', 'completed')), false);
 });
 
-test('a detached run stays active until a fresh snapshot reports it ended', () => {
-  const detached = new Set(['session-a', 'session-b']);
-
-  assert.equal(isSessionRunning(false, undefined, detached.has('session-a')), true);
-  assert.deepEqual(
-    reconcileDetachedRunSessionIds(detached, [
-      {id: 'session-a', status: 'running'},
-      {id: 'session-b', status: 'completed'},
-    ]),
-    new Set(['session-a']),
-  );
-  assert.equal(
-    isSessionRunning(false, 'running', detached.has('session-a')),
-    true,
-  );
-  assert.deepEqual(
-    reconcileDetachedRunSessionIds(new Set(['session-a']), [
-      {id: 'session-a', status: 'completed'},
-    ]),
-    new Set(),
-  );
-  assert.equal(isSessionRunning(false, 'completed', false), false);
-});
-
-test('detached runs disappear when their session is no longer listed', () => {
-  assert.deepEqual(
-    reconcileDetachedRunSessionIds(new Set(['deleted-session']), []),
-    new Set(),
-  );
-});
-
 test('terminal run states restore the expected UI state', () => {
   assert.equal(isSessionRunning(false, 'completed'), false);
   assert.equal(sessionUiStateForRun('completed'), 'success');
@@ -87,7 +55,7 @@ test('a polled snapshot refreshes the run a streamed session carries', () => {
     started_at: '2026-01-02T00:00:00.000Z',
     status: 'running',
   });
-  assert.equal(isSessionRunning(false, merged.run.status, false), true);
+  assert.equal(isSessionRunning(false, merged.run.status), true);
   // Fields the local stream owns are untouched.
   assert.equal(merged.state, 'accent');
   assert.equal(merged.turns, 7);
@@ -148,5 +116,5 @@ test('a snapshot without a run clears a stale one', () => {
   const cleared = withSnapshotRun(session, {});
 
   assert.equal('run' in cleared, false);
-  assert.equal(isSessionRunning(false, cleared.run?.status, false), false);
+  assert.equal(isSessionRunning(false, cleared.run?.status), false);
 });
