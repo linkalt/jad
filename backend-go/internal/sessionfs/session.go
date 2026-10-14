@@ -228,7 +228,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 
-	profile, profileSettings, profileConfigured, err := selectProfile(setting, requestedProfile, settingPath)
+	profile, profileSettings, err := selectProfile(setting, requestedProfile, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -237,19 +237,16 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	defaultProfile := stringFieldOr(paths, "active_profile", "")
-	var pathProfiles []string
-	if profiles, exists := paths["profiles"]; exists {
-		pathProfiles, err = orderedObjectKeys(profiles)
-		if err != nil {
-			return SessionConfig{}, configError("%s: paths.profiles must be a JSON object", settingPath)
-		}
+	pathProfiles, err := orderedObjectKeys(paths["profiles"])
+	if err != nil {
+		return SessionConfig{}, configError("%s: paths.profiles must be a JSON object", settingPath)
 	}
-	selectedPaths, profileStorageDir := selectProfileStoragePaths(location.StateDir(), profileSettings, profile, defaultProfile, profileConfigured)
+	profileStorageDir := selectProfileStorageDir(location.StateDir(), profileSettings, profile, defaultProfile)
 	settingDir := filepath.Dir(settingPath)
-	if err := validateAllStoragePaths(location, settingPath, paths, pathProfiles, defaultProfile, profileConfigured); err != nil {
+	if err := validateAllStoragePaths(location, settingPath, paths, pathProfiles, defaultProfile); err != nil {
 		return SessionConfig{}, err
 	}
-	storagePaths, err := resolveStoragePaths(selectedPaths, profileStorageDir, settingDir, profileConfigured)
+	storagePaths, err := resolveStoragePaths(profileSettings, profileStorageDir, settingDir)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -271,7 +268,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	toolStorageDir, err := normalizeToolStorageDir(profileSettings, profile, profileConfigured, cwd, settingPath)
+	toolStorageDir, err := normalizeToolStorageDir(profileSettings, profile, cwd, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -317,7 +314,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	var profileTools ProfileToolSettings
-	if raw, ok := profileSettings["tools"]; ok && profileConfigured {
+	if raw, ok := profileSettings["tools"]; ok {
 		if profileTools, err = normalizeProfileTools(raw, settingPath+": paths.profiles."+profile); err != nil {
 			return SessionConfig{}, err
 		}
@@ -448,7 +445,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	promptRole, promptText, err := loadPrompt(setting, profileSettings, profileConfigured, cwd, settingPath)
+	promptRole, promptText, err := loadPrompt(setting, profileSettings, cwd, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -457,39 +454,37 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	modelDefault := ""
 	allowedModels, hasAllowedModels := []string(nil), false
 	hasModelDefault := false
-	if profileConfigured {
-		if raw, ok := profileSettings["models"]; ok {
-			if err := json.Unmarshal(raw, &allowedModels); err != nil || allowedModels == nil {
-				return SessionConfig{}, configError("%s: paths.profiles.%s.models must be an array", settingPath, profile)
+	if raw, ok := profileSettings["models"]; ok {
+		if err := json.Unmarshal(raw, &allowedModels); err != nil || allowedModels == nil {
+			return SessionConfig{}, configError("%s: paths.profiles.%s.models must be an array", settingPath, profile)
+		}
+		for index, modelPath := range allowedModels {
+			if strings.TrimSpace(modelPath) == "" {
+				return SessionConfig{}, configError("%s: paths.profiles.%s.models[%d] must be a non-empty string", settingPath, profile, index)
 			}
-			for index, modelPath := range allowedModels {
-				if strings.TrimSpace(modelPath) == "" {
-					return SessionConfig{}, configError("%s: paths.profiles.%s.models[%d] must be a non-empty string", settingPath, profile, index)
-				}
-				allowedModels[index] = strings.TrimSpace(modelPath)
-			}
+			allowedModels[index] = strings.TrimSpace(modelPath)
+		}
+		hasAllowedModels = true
+	}
+	if raw, ok := profileSettings["model_default"]; ok {
+		var configured string
+		if err := json.Unmarshal(raw, &configured); err != nil || strings.TrimSpace(configured) == "" {
+			return SessionConfig{}, configError("%s: paths.profiles.%s.model_default must be a non-empty string", settingPath, profile)
+		}
+		modelPathValue = strings.TrimSpace(configured)
+		modelDefault = modelPathValue
+		hasModelDefault = true
+		if !hasAllowedModels {
+			allowedModels = []string{modelPathValue}
 			hasAllowedModels = true
 		}
-		if raw, ok := profileSettings["model_default"]; ok {
-			var configured string
-			if err := json.Unmarshal(raw, &configured); err != nil || strings.TrimSpace(configured) == "" {
-				return SessionConfig{}, configError("%s: paths.profiles.%s.model_default must be a non-empty string", settingPath, profile)
-			}
-			modelPathValue = strings.TrimSpace(configured)
-			modelDefault = modelPathValue
-			hasModelDefault = true
-			if !hasAllowedModels {
-				allowedModels = []string{modelPathValue}
-				hasAllowedModels = true
-			}
-		} else if len(allowedModels) > 0 {
-			modelPathValue = allowedModels[0]
-			modelDefault = modelPathValue
-			hasModelDefault = true
-		}
-		if hasModelDefault && hasAllowedModels && !containsString(allowedModels, modelPathValue) {
-			return SessionConfig{}, configError("%s: paths.profiles.%s.model_default must be included in models", settingPath, profile)
-		}
+	} else if len(allowedModels) > 0 {
+		modelPathValue = allowedModels[0]
+		modelDefault = modelPathValue
+		hasModelDefault = true
+	}
+	if hasModelDefault && hasAllowedModels && !containsString(allowedModels, modelPathValue) {
+		return SessionConfig{}, configError("%s: paths.profiles.%s.model_default must be included in models", settingPath, profile)
 	}
 	if requestedModel != "" {
 		if !hasAllowedModels || !containsString(allowedModels, requestedModel) {
@@ -591,60 +586,51 @@ func (c SessionConfig) WithModel() (SessionConfig, error) {
 	return c, nil
 }
 
-func selectProfile(setting map[string]json.RawMessage, requested, path string) (string, map[string]json.RawMessage, bool, error) {
+func selectProfile(setting map[string]json.RawMessage, requested, path string) (string, map[string]json.RawMessage, error) {
 	paths, err := objectField(setting, "paths", path)
 	if err != nil {
-		return "", nil, false, err
-	}
-	profilesRaw, exists := paths["profiles"]
-	if !exists {
-		if _, activeExists := paths["active_profile"]; activeExists {
-			return "", nil, false, configError("%s: paths.active_profile requires paths.profiles", path)
-		}
-		if requested != "" {
-			return "", nil, false, configError("%s: profile '%s' was requested but the session configures no paths.profiles", path, requested)
-		}
-		return "", nil, false, nil
+		return "", nil, err
 	}
 	var profiles map[string]json.RawMessage
+	profilesRaw := paths["profiles"]
 	if err := json.Unmarshal(profilesRaw, &profiles); err != nil || len(profiles) == 0 {
-		return "", nil, false, configError("%s: paths.profiles must be a non-empty object", path)
+		return "", nil, configError("%s: paths.profiles must be a non-empty object", path)
 	}
 	active, err := requiredStringField(paths, "active_profile", path+": paths")
 	if err != nil {
-		return "", nil, false, err
+		return "", nil, err
 	}
 	if !profileNamePattern.MatchString(active) {
-		return "", nil, false, configError("%s: paths.active_profile must contain only letters, numbers, underscores, or hyphens", path)
+		return "", nil, configError("%s: paths.active_profile must contain only letters, numbers, underscores, or hyphens", path)
 	}
 	selected := requested
 	if selected == "" {
 		selected = active
 	}
 	if !profileNamePattern.MatchString(selected) {
-		return "", nil, false, configError("%s: path profile '%s' must contain only letters, numbers, underscores, or hyphens", path, selected)
+		return "", nil, configError("%s: path profile '%s' must contain only letters, numbers, underscores, or hyphens", path, selected)
 	}
 	raw, exists := profiles[selected]
 	if !exists {
-		return "", nil, false, configError("%s: path profile '%s' is not defined in paths.profiles", path, selected)
+		return "", nil, configError("%s: path profile '%s' is not defined in paths.profiles", path, selected)
 	}
 	var profile map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &profile); err != nil || profile == nil {
-		return "", nil, false, configError("%s: paths.profiles.%s must be an object", path, selected)
+		return "", nil, configError("%s: paths.profiles.%s must be an object", path, selected)
 	}
 	names, err := orderedObjectKeys(profilesRaw)
 	if err != nil {
-		return "", nil, false, configError("%s: paths.profiles must be a non-empty object", path)
+		return "", nil, configError("%s: paths.profiles must be a non-empty object", path)
 	}
 	for _, name := range names {
 		if !profileNamePattern.MatchString(name) {
-			return "", nil, false, configError("%s: invalid paths.profiles key '%s'", path, name)
+			return "", nil, configError("%s: invalid paths.profiles key '%s'", path, name)
 		}
 		if err := validateProfileFields(name, profiles[name], path); err != nil {
-			return "", nil, false, err
+			return "", nil, err
 		}
 	}
-	return selected, profile, true, nil
+	return selected, profile, nil
 }
 
 func normalizePersistence(raw json.RawMessage, path string) (Persistence, error) {
@@ -1009,7 +995,7 @@ func oauthAuthFilePath(fields map[string]json.RawMessage, path string) (string, 
 	return filepath.Clean(expanded), nil
 }
 
-func loadPrompt(setting, profile map[string]json.RawMessage, profileConfigured bool, cwd, path string) (string, string, error) {
+func loadPrompt(setting, profile map[string]json.RawMessage, cwd, path string) (string, string, error) {
 	role := "system"
 	if raw, ok := setting["prompt_role"]; ok {
 		if err := json.Unmarshal(raw, &role); err != nil || (role != "system" && role != "developer") {
@@ -1022,24 +1008,20 @@ func loadPrompt(setting, profile map[string]json.RawMessage, profileConfigured b
 			return "", "", configError("%s: prompt_documents must be an array", path)
 		}
 	}
-	if profileConfigured {
-		if raw, ok := profile["prompt_documents"]; ok {
-			var profileDocuments []string
-			if err := json.Unmarshal(raw, &profileDocuments); err != nil || profileDocuments == nil {
-				return "", "", configError("%s: paths.profiles prompt_documents must be an array", path)
-			}
-			documents = append(documents, profileDocuments...)
+	if raw, ok := profile["prompt_documents"]; ok {
+		var profileDocuments []string
+		if err := json.Unmarshal(raw, &profileDocuments); err != nil || profileDocuments == nil {
+			return "", "", configError("%s: paths.profiles prompt_documents must be an array", path)
 		}
+		documents = append(documents, profileDocuments...)
 	}
 	texts := make([]string, 0, len(documents)+1)
-	if profileConfigured {
-		if raw, ok := profile["instructions"]; ok {
-			text, valid := nonEmptyJSONString(raw)
-			if !valid {
-				return "", "", configError("%s: paths.profiles instructions must be a non-empty string", path)
-			}
-			texts = append(texts, text)
+	if raw, ok := profile["instructions"]; ok {
+		text, valid := nonEmptyJSONString(raw)
+		if !valid {
+			return "", "", configError("%s: paths.profiles instructions must be a non-empty string", path)
 		}
+		texts = append(texts, text)
 	}
 	for index, document := range documents {
 		contents, err := readPromptDocument(document, index, "prompt_documents", cwd, path)

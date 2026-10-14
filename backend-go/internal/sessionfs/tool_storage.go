@@ -10,12 +10,8 @@ import (
 func normalizeToolStorageDir(
 	profileFields map[string]json.RawMessage,
 	profile string,
-	profileConfigured bool,
 	cwd, settingPath string,
 ) (string, error) {
-	if !profileConfigured {
-		return "", nil
-	}
 	configured := filepath.Join(".jad", "profiles", profile, "tools")
 	if raw, exists := profileFields["tool_storage"]; exists && strings.TrimSpace(string(raw)) != "null" {
 		if err := json.Unmarshal(raw, &configured); err != nil || strings.TrimSpace(configured) == "" {

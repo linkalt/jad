@@ -117,23 +117,19 @@ func TestNormalizeNativeWriteEditSettingsRejectsInvalidValues(t *testing.T) {
 
 func TestNormalizeToolStorageDirProfiles(t *testing.T) {
 	cwd := t.TempDir()
-	profile, err := normalizeToolStorageDir(nil, "work", false, cwd, "/session/setting.json")
-	if err != nil || profile != "" {
-		t.Fatalf("unprofiled tool storage = %q, error = %v", profile, err)
-	}
-	profile, err = normalizeToolStorageDir(map[string]json.RawMessage{}, "work", true, cwd, "/session/setting.json")
+	profile, err := normalizeToolStorageDir(map[string]json.RawMessage{}, "work", cwd, "/session/setting.json")
 	if err != nil || profile != filepath.Join(cwd, ".jad", "profiles", "work", "tools") {
 		t.Fatalf("default profile tool storage = %q, error = %v", profile, err)
 	}
 	profile, err = normalizeToolStorageDir(map[string]json.RawMessage{
 		"tool_storage": json.RawMessage(`"custom/tools"`),
-	}, "work", true, cwd, "/session/setting.json")
+	}, "work", cwd, "/session/setting.json")
 	if err != nil || profile != filepath.Join(cwd, "custom", "tools") {
 		t.Fatalf("configured profile tool storage = %q, error = %v", profile, err)
 	}
 	if _, err := normalizeToolStorageDir(map[string]json.RawMessage{
 		"tool_storage": json.RawMessage(`"  "`),
-	}, "work", true, cwd, "/session/setting.json"); err == nil {
+	}, "work", cwd, "/session/setting.json"); err == nil {
 		t.Fatal("empty profile tool storage was accepted")
 	}
 }

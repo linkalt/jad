@@ -24,26 +24,18 @@ func (p SessionStoragePaths) pathEntries() []storagePathEntry {
 	}
 }
 
-func selectProfileStoragePaths(directory string, profileSettings map[string]json.RawMessage, profile, activeProfile string, profileConfigured bool) (map[string]json.RawMessage, string) {
-	if !profileConfigured {
-		return nil, directory
-	}
+func selectProfileStorageDir(directory string, profileSettings map[string]json.RawMessage, profile, activeProfile string) string {
 	_, hasMessages := profileSettings["messages"]
 	_, hasStaging := profileSettings["staging"]
-	profileStorageDir := directory
 	if profile != activeProfile || hasMessages || hasStaging {
-		profileStorageDir = filepath.Join(directory, "profiles", profile)
+		return filepath.Join(directory, "profiles", profile)
 	}
-	return profileSettings, profileStorageDir
+	return directory
 }
 
-func resolveStoragePaths(fields map[string]json.RawMessage, profileStorageDir, settingDir string, profileConfigured bool) (SessionStoragePaths, error) {
-	messagesFallback := "messages.jsonl"
-	stagingFallback := "staging"
-	if profileConfigured {
-		messagesFallback = filepath.Join(profileStorageDir, "messages.jsonl")
-		stagingFallback = filepath.Join(profileStorageDir, "staging")
-	}
+func resolveStoragePaths(fields map[string]json.RawMessage, profileStorageDir, settingDir string) (SessionStoragePaths, error) {
+	messagesFallback := filepath.Join(profileStorageDir, "messages.jsonl")
+	stagingFallback := filepath.Join(profileStorageDir, "staging")
 	messages, err := resolveConfiguredPath(fields, "messages", messagesFallback, settingDir)
 	if err != nil {
 		return SessionStoragePaths{}, err
@@ -52,13 +44,7 @@ func resolveStoragePaths(fields map[string]json.RawMessage, profileStorageDir, s
 	if err != nil {
 		return SessionStoragePaths{}, err
 	}
-	// Only profile-scoped storage keeps the backup beside the transcript; the
-	// legacy layout always defaults it into the session directory.
-	messagesBackupFallback := "messages.backup.jsonl"
-	if profileConfigured {
-		messagesBackupFallback = filepath.Join(filepath.Dir(messages), "messages.backup.jsonl")
-	}
-	messagesBackup, err := resolveConfiguredPath(fields, "messages_backup", messagesBackupFallback, settingDir)
+	messagesBackup, err := resolveConfiguredPath(fields, "messages_backup", filepath.Join(filepath.Dir(messages), "messages.backup.jsonl"), settingDir)
 	if err != nil {
 		return SessionStoragePaths{}, err
 	}
@@ -82,11 +68,7 @@ func resolveStoragePaths(fields map[string]json.RawMessage, profileStorageDir, s
 	if err != nil {
 		return SessionStoragePaths{}, err
 	}
-	httpDebugFallback := filepath.Join("debug", "http")
-	if profileConfigured {
-		httpDebugFallback = filepath.Join(profileStorageDir, "debug", "http")
-	}
-	httpDebug, err := resolveConfiguredPath(fields, "http_debug", httpDebugFallback, settingDir)
+	httpDebug, err := resolveConfiguredPath(fields, "http_debug", filepath.Join(profileStorageDir, "debug", "http"), settingDir)
 	if err != nil {
 		return SessionStoragePaths{}, err
 	}
@@ -130,16 +112,8 @@ func validateProfileStoragePaths(settingPath string, storage SessionStoragePaths
 	return nil
 }
 
-func validateAllStoragePaths(location Location, settingPath string, paths map[string]json.RawMessage, pathProfiles []string, activeProfile string, profileConfigured bool) error {
+func validateAllStoragePaths(location Location, settingPath string, paths map[string]json.RawMessage, pathProfiles []string, activeProfile string) error {
 	settingDir := filepath.Dir(settingPath)
-	if !profileConfigured {
-		storage, err := resolveStoragePaths(nil, location.StateDir(), settingDir, false)
-		if err != nil {
-			return err
-		}
-		return validateProfileStoragePaths(settingPath+": paths", storage)
-	}
-
 	profiles, err := rawObject(paths["profiles"], settingPath+": paths.profiles")
 	if err != nil {
 		return err
@@ -154,8 +128,7 @@ func validateAllStoragePaths(location Location, settingPath string, paths map[st
 		if err != nil {
 			return err
 		}
-		selected, storageDir := selectProfileStoragePaths(location.StateDir(), profileSettings, profile, activeProfile, true)
-		storage, err := resolveStoragePaths(selected, storageDir, settingDir, true)
+		storage, err := resolveStoragePaths(profileSettings, selectProfileStorageDir(location.StateDir(), profileSettings, profile, activeProfile), settingDir)
 		if err != nil {
 			return err
 		}

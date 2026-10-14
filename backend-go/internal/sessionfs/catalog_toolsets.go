@@ -26,7 +26,8 @@ func validateToolsetFile(layout Layout, roots []Root, path string, data []byte) 
 	defer func() { _ = os.RemoveAll(scratch) }()
 
 	cwd, _ := json.Marshal(scratch)
-	setting := map[string]json.RawMessage{"schema_version": json.RawMessage("1"), "cwd": cwd}
+	paths := json.RawMessage(`{"profiles":{"toolset-check":{}},"active_profile":"toolset-check"}`)
+	setting := map[string]json.RawMessage{"schema_version": json.RawMessage("1"), "cwd": cwd, "paths": paths}
 	compose := &layoutCompose{layout: layout}
 	if err := compose.applyToolset(setting, toolset, path, nil); err != nil {
 		return err
