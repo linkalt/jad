@@ -39,6 +39,12 @@ type CatalogConfig struct {
 	MaxInlinePartBytes int
 }
 
+// profileTurnsEntry is a profile's turn count with the file stamp of the transcript it was counted from.
+type profileTurnsEntry struct {
+	stamp string
+	turns int64
+}
+
 type Resolver struct {
 	logger      *slog.Logger
 	skipped     skippedSessions
@@ -46,17 +52,19 @@ type Resolver struct {
 	environment map[string]string
 	catalog     CatalogConfig
 
-	mu               sync.Mutex
-	settingsMu       sync.Mutex
-	stores           map[string]*sharedSession
-	processManagers  map[string]*native.ManagedProcessManager
-	subagentManagers map[string]*native.SubagentManager
-	mcpManagers      map[string]*mcpclient.Manager
-	taskStores       map[string]*native.TaskStore
-	memoryStores     map[string]*native.MemoryStore
-	fetchStores      map[string]*native.FetchStore
-	mutationLock     *native.PathLocks
-	closed           bool
+	mu                sync.Mutex
+	settingsMu        sync.Mutex
+	stores            map[string]*sharedSession
+	profileTurnsMu    sync.Mutex
+	profileTurnCounts map[string]profileTurnsEntry
+	processManagers   map[string]*native.ManagedProcessManager
+	subagentManagers  map[string]*native.SubagentManager
+	mcpManagers       map[string]*mcpclient.Manager
+	taskStores        map[string]*native.TaskStore
+	memoryStores      map[string]*native.MemoryStore
+	fetchStores       map[string]*native.FetchStore
+	mutationLock      *native.PathLocks
+	closed            bool
 
 	// subagentBuilds holds the managers being built, by storage directory. Building
 	// one reads, rewrites and may delete a lot of files, so it runs outside mu; a
@@ -140,18 +148,19 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		option(&resolverOptions)
 	}
 	return &Resolver{
-		logger:           resolverOptions.logger,
-		roots:            copyRoots,
-		environment:      copyEnvironment,
-		catalog:          catalog,
-		stores:           make(map[string]*sharedSession),
-		processManagers:  make(map[string]*native.ManagedProcessManager),
-		subagentManagers: make(map[string]*native.SubagentManager),
-		mcpManagers:      make(map[string]*mcpclient.Manager),
-		taskStores:       make(map[string]*native.TaskStore),
-		memoryStores:     make(map[string]*native.MemoryStore),
-		fetchStores:      make(map[string]*native.FetchStore),
-		mutationLock:     native.NewPathLocks(),
+		logger:            resolverOptions.logger,
+		roots:             copyRoots,
+		environment:       copyEnvironment,
+		catalog:           catalog,
+		stores:            make(map[string]*sharedSession),
+		profileTurnCounts: make(map[string]profileTurnsEntry),
+		processManagers:   make(map[string]*native.ManagedProcessManager),
+		subagentManagers:  make(map[string]*native.SubagentManager),
+		mcpManagers:       make(map[string]*mcpclient.Manager),
+		taskStores:        make(map[string]*native.TaskStore),
+		memoryStores:      make(map[string]*native.MemoryStore),
+		fetchStores:       make(map[string]*native.FetchStore),
+		mutationLock:      native.NewPathLocks(),
 
 		subagentBuilds:               make(map[string]*subagentBuild),
 		newPersistentSubagentManager: native.NewPersistentSubagentManager,

@@ -182,7 +182,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			return httpapi.CatalogResponse{}, fmt.Errorf("read session transcript %q: %w", candidate.location.Reference, err)
 		}
 		record := makeSessionListRecord(candidate.location, candidate.config, index.turns, index.usage, candidate.runs)
-		record.ProfileTurns = r.profileTurns(candidate.config, index.turns, otherProfileConfigs(candidate.location, candidate.config))
+		record.ProfileTurns = r.profileTurns(candidate.location, candidate.config, index.turns)
 		record.Model = listingModelSummary(candidate.location, candidate.config)
 		// The TypeScript list reports usage only from an existing usage cache, so
 		// a session that has never completed a response carries no usage block.
@@ -207,21 +207,6 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 	return httpapi.CatalogResponse{Body: body, ETag: etag}, nil
 }
 
-// otherProfileConfigs loads every profile in scope except the one config was
-// loaded for. A profile that does not load is left out: the list shows no count for it.
-func otherProfileConfigs(location sessionfs.Location, config sessionfs.SessionConfig) map[string]sessionfs.SessionConfig {
-	others := make(map[string]sessionfs.SessionConfig)
-	for _, profile := range config.Profiles {
-		if profile == config.Profile {
-			continue
-		}
-		if other, err := sessionfs.LoadSessionSettings(location, profile, ""); err == nil {
-			others[profile] = other
-		}
-	}
-	return others
-}
-
 // profileTranscriptStamps changes when any of the other profiles' transcripts does,
 // so a list validator covers the counts it reports. It names the transcripts by path
 // and loads no profile, which keeps a 304 cheap. It is empty, and the validator
@@ -243,18 +228,36 @@ func profileTranscriptStamps(location sessionfs.Location, config sessionfs.Sessi
 }
 
 // profileTurns is the turn count of each profile in scope. A profile that has never
-// run has no transcript file, and counts 0 without creating one. A profile whose
-// transcript cannot be read is left out, so one damaged profile does not fail the list.
-func (r *Resolver) profileTurns(config sessionfs.SessionConfig, turns int64, others map[string]sessionfs.SessionConfig) map[string]int64 {
+// run has no transcript file, and counts 0 without creating one or loading the profile.
+// A profile whose transcript cannot be read or loaded is left out, so one damaged
+// profile does not fail the list. A count is reused while the transcript's file stamp
+// is unchanged, so an idle profile costs one stat per list.
+func (r *Resolver) profileTurns(location sessionfs.Location, config sessionfs.SessionConfig, turns int64) map[string]int64 {
 	if len(config.Profiles) == 0 {
 		return nil
 	}
 	counts := map[string]int64{config.Profile: turns}
-	for profile, other := range others {
-		if _, err := os.Stat(other.MessagesPath); err != nil {
+	for _, profile := range config.Profiles {
+		if profile == config.Profile {
+			continue
+		}
+		path, ok := location.ProfileMessagesPath(profile)
+		if !ok {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				counts[profile] = 0
 			}
+			continue
+		}
+		stamp := fileStamp(path)
+		if count, ok := r.cachedProfileTurns(path, stamp); ok {
+			counts[profile] = count
+			continue
+		}
+		other, err := sessionfs.LoadSessionSettings(location, profile, "")
+		if err != nil {
 			continue
 		}
 		shared, err := r.sharedStore(other)
@@ -266,8 +269,24 @@ func (r *Resolver) profileTurns(config sessionfs.SessionConfig, turns int64, oth
 			continue
 		}
 		counts[profile] = index.turns
+		// The stamp was taken before the scan, so a transcript that grew meanwhile
+		// has a different stamp on the next list and is counted again.
+		r.rememberProfileTurns(path, stamp, index.turns)
 	}
 	return counts
+}
+
+func (r *Resolver) cachedProfileTurns(path, stamp string) (int64, bool) {
+	r.profileTurnsMu.Lock()
+	defer r.profileTurnsMu.Unlock()
+	entry, ok := r.profileTurnCounts[path]
+	return entry.turns, ok && entry.stamp == stamp
+}
+
+func (r *Resolver) rememberProfileTurns(path, stamp string, turns int64) {
+	r.profileTurnsMu.Lock()
+	defer r.profileTurnsMu.Unlock()
+	r.profileTurnCounts[path] = profileTurnsEntry{stamp: stamp, turns: turns}
 }
 
 // ReadSessionSnapshot implements the transcript-backed portion of the

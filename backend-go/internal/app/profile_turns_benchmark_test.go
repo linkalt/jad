@@ -14,7 +14,7 @@ import (
 
 // newProfileTurnsBenchmarkResolver builds one catalog-layout session whose scope holds
 // profileCount profiles, each with turnsPerProfile completed turns in its own transcript.
-func newProfileTurnsBenchmarkResolver(b *testing.B, profileCount, turnsPerProfile int) *Resolver {
+func newProfileTurnsBenchmarkResolver(b testing.TB, profileCount, turnsPerProfile int) *Resolver {
 	b.Helper()
 	root, cwd := b.TempDir(), b.TempDir()
 	write := func(rel string, value any) {

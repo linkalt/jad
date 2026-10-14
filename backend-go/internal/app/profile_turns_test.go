@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -111,5 +112,58 @@ func TestSessionListSurvivesAnUnreadableTranscriptOfAnotherProfile(t *testing.T)
 	got := sessions[0].ProfileTurns
 	if _, present := got["review/reviewer"]; present || got["dev/coder"] != 0 {
 		t.Fatalf("profile_turns = %v, want only dev/coder", got)
+	}
+}
+
+func TestProfileTurnsAreCountedAgainOnlyWhenTheTranscriptChanges(t *testing.T) {
+	resolver := newProfileTurnsBenchmarkResolver(t, 2, 3)
+	ctx := context.Background()
+	turnsOf := func(profile string) int64 {
+		t.Helper()
+		response, err := resolver.ListSessions(ctx, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Sessions []listedSession `json:"sessions"`
+		}
+		if err := json.Unmarshal(response.Body, &body); err != nil || len(body.Sessions) != 1 {
+			t.Fatalf("list body: %v %s", err, response.Body)
+		}
+		return body.Sessions[0].ProfileTurns[profile]
+	}
+	if got := turnsOf("dev/p01"); got != 3 {
+		t.Fatalf("first count = %d, want 3", got)
+	}
+
+	resolver.profileTurnsMu.Lock()
+	if len(resolver.profileTurnCounts) != 1 {
+		t.Fatalf("cache entries = %d, want one for the one other profile", len(resolver.profileTurnCounts))
+	}
+	for path, entry := range resolver.profileTurnCounts {
+		entry.turns = 99
+		resolver.profileTurnCounts[path] = entry
+	}
+	resolver.profileTurnsMu.Unlock()
+	if got := turnsOf("dev/p01"); got != 99 {
+		t.Fatalf("an unchanged transcript was counted again: %d, want the cached 99", got)
+	}
+
+	var transcriptPath string
+	resolver.profileTurnsMu.Lock()
+	for path := range resolver.profileTurnCounts {
+		transcriptPath = path
+	}
+	resolver.profileTurnsMu.Unlock()
+	file, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.WriteString(`{"type":"message","role":"user","content":[{"type":"input_text","text":"another"}]}` + "\n")
+	if closeErr := file.Close(); err != nil || closeErr != nil {
+		t.Fatalf("append: %v %v", err, closeErr)
+	}
+	if got := turnsOf("dev/p01"); got != 4 {
+		t.Fatalf("count after the transcript grew = %d, want 4", got)
 	}
 }
