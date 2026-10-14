@@ -102,6 +102,19 @@ func (h *Handler) handleSessionFiles(w http.ResponseWriter, r *http.Request, ref
 	writeJSON(w, http.StatusOK, listing)
 }
 
+func (h *Handler) handleSessionReadme(w http.ResponseWriter, r *http.Request, reference, profile string) {
+	if h.readmes == nil {
+		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "session README is unavailable"})
+		return
+	}
+	readme, err := h.readmes.ReadSessionReadme(r.Context(), reference, profile)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, readme)
+}
+
 func readSettingsObject(w http.ResponseWriter, r *http.Request, maxBytes int64) (map[string]json.RawMessage, error) {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes))
 	var body json.RawMessage

@@ -220,6 +220,19 @@ type SessionSettings interface {
 	ListSessionFiles(context.Context, string, string) (SessionFileListing, error)
 }
 
+// SessionReadme is the README file of a session's working directory.
+type SessionReadme struct {
+	Name      string `json:"name"`
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated"`
+}
+
+// SessionReadmes is an optional extension that serves the README file of a session's
+// working directory (session_files.readme_file), read-only.
+type SessionReadmes interface {
+	ReadSessionReadme(ctx context.Context, reference, profile string) (SessionReadme, error)
+}
+
 // SessionImage is one stored image file.
 type SessionImage struct {
 	ContentType string
@@ -304,6 +317,7 @@ type Handler struct {
 	catalogFiles              CatalogFiles
 	catalogSessions           CatalogSessions
 	images                    SessionImages
+	readmes                   SessionReadmes
 	messageImages             MessageImages
 	maintenance               SessionMaintenance
 	library                   RootLibrary
@@ -419,6 +433,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	catalogFiles, _ := resolver.(CatalogFiles)
 	catalogSessions, _ := resolver.(CatalogSessions)
 	images, _ := resolver.(SessionImages)
+	readmes, _ := resolver.(SessionReadmes)
 	messageImages, _ := resolver.(MessageImages)
 	maintenance, _ := resolver.(SessionMaintenance)
 	trace := config.MemoryTrace
@@ -429,6 +444,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		logger:                    logging.Or(config.Logger),
 		resolver:                  resolver,
 		images:                    images,
+		readmes:                   readmes,
 		messageImages:             messageImages,
 		catalog:                   catalog,
 		toolLister:                toolLister,
@@ -554,6 +570,8 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleSessionImage(w, r, reference, profile, segments[4])
 	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "files":
 		h.handleSessionFiles(w, r, reference, profile)
+	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "readme":
+		h.handleSessionReadme(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "profile":
 		h.handleSessionProfile(w, r, reference)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "model-default":

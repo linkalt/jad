@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"jad/backend-go/internal/imagestore"
 	"net/http"
 	"strings"
@@ -151,6 +152,36 @@ func (r *Resolver) ListSessionFiles(ctx context.Context, reference, profile stri
 	}
 	listing := sessionfs.CollectSessionFiles(settings.WorkingDir, settings.SessionFiles, settings.NativeReadPolicy)
 	return httpapi.SessionFileListing{Files: listing.Files, Truncated: listing.Truncated}, nil
+}
+
+// ReadSessionReadme serves the README file of the session's working directory. It follows
+// the file listing's switch and read rules: session_files.enabled false answers 403, and a
+// missing, unreadable or hidden file answers 404.
+func (r *Resolver) ReadSessionReadme(ctx context.Context, reference, profile string) (httpapi.SessionReadme, error) {
+	if err := requireSettingsContext(ctx); err != nil {
+		return httpapi.SessionReadme{}, err
+	}
+	location, err := sessionfs.Resolve(r.roots, reference)
+	if err != nil {
+		return httpapi.SessionReadme{}, mapSessionError(err)
+	}
+	settings, err := sessionfs.LoadSessionConfig(location, profile, "")
+	if err != nil {
+		return httpapi.SessionReadme{}, mapSessionError(err)
+	}
+	if !settings.SessionFiles.Enabled {
+		return httpapi.SessionReadme{}, &httpapi.StatusError{Code: http.StatusForbidden, Message: "file listing is disabled"}
+	}
+	readme, err := sessionfs.ReadSessionReadme(settings.WorkingDir, settings.SessionFiles, settings.NativeReadPolicy)
+	switch {
+	case errors.Is(err, sessionfs.ErrReadmeMissing):
+		return httpapi.SessionReadme{}, &httpapi.StatusError{Code: http.StatusNotFound, Message: "no README file"}
+	case errors.Is(err, sessionfs.ErrReadmeNotText):
+		return httpapi.SessionReadme{}, &httpapi.StatusError{Code: http.StatusUnsupportedMediaType, Message: err.Error()}
+	case err != nil:
+		return httpapi.SessionReadme{}, fmt.Errorf("read session README: %w", err)
+	}
+	return httpapi.SessionReadme(readme), nil
 }
 
 func requireSettingsContext(ctx context.Context) error {
