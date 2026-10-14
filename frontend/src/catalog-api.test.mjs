@@ -38,6 +38,28 @@ test('fetchCatalogFiles keeps a session name, trims it, and drops a blank or non
   await assert.rejects(fetchCatalogFiles('sessions'), /invalid catalog list/);
 });
 
+test('fetchCatalogFiles keeps a trimmed session category and drops a blank or non-string one', async () => {
+  reply = () => json({files: [{id: 'a', etag: '"1"', category: ' work '}, {id: 'b', etag: '"2"', category: '  '}]});
+  assert.deepEqual(await fetchCatalogFiles('sessions'), [
+    {id: 'a', etag: '"1"', category: 'work'},
+    {id: 'b', etag: '"2"'},
+  ]);
+  reply = () => json({files: [{id: 'a', etag: '"1"', category: 7}]});
+  await assert.rejects(fetchCatalogFiles('sessions'), /invalid catalog list/);
+});
+
+test('fetchCatalogFiles keeps the sessions of a profile, trimmed, and rejects a malformed list of them', async () => {
+  reply = () => json({files: [{id: 'a/b', etag: '"1"', sessions: [{id: 's', name: ' S ', category: ' c '}, {id: 't', name: '  '}]}, {id: 'c/d', etag: '"2"', sessions: []}]});
+  assert.deepEqual(await fetchCatalogFiles('profiles'), [
+    {id: 'a/b', etag: '"1"', sessions: [{id: 's', name: 'S', category: 'c'}, {id: 't'}]},
+    {id: 'c/d', etag: '"2"'},
+  ]);
+  reply = () => json({files: [{id: 'a/b', etag: '"1"', sessions: [{name: 'x'}]}]});
+  await assert.rejects(fetchCatalogFiles('profiles'), /invalid catalog list/);
+  reply = () => json({files: [{id: 'a/b', etag: '"1"', sessions: 'x'}]});
+  await assert.rejects(fetchCatalogFiles('profiles'), /invalid catalog list/);
+});
+
 test('fetchCatalogFile returns the raw text with the version header and encodes the id', async () => {
   requests.length = 0;
   reply = () => new Response('{\n  "a": 1\n}\n', {status: 200, headers: {etag: '"v1"'}});

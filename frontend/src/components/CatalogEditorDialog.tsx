@@ -11,12 +11,15 @@
  */
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
-import {Banner, Button, Dialog, DialogHeader, HStack, Layout, LayoutContent, LayoutFooter, Text, TextInput, VStack} from '@astryxdesign/core';
+import {Banner, Button, Dialog, HStack, Icon, IconButton, Layout, LayoutContent, LayoutFooter, StackItem, Text, TextInput, VStack} from '@astryxdesign/core';
 import {AlertDialog} from '@astryxdesign/core/AlertDialog';
 import {CheckboxInput} from '@astryxdesign/core/CheckboxInput';
-import {EmptyState} from '@astryxdesign/core/EmptyState';
-import {List, ListItem} from '@astryxdesign/core/List';
-import {Selector} from '@astryxdesign/core/Selector';
+import {Divider} from '@astryxdesign/core/Divider';
+import {Item} from '@astryxdesign/core/Item';
+import {Breadcrumbs, BreadcrumbItem} from '@astryxdesign/core/Breadcrumbs';
+import {Tab, TabList} from '@astryxdesign/core/TabList';
+import * as stylex from '@stylexjs/stylex';
+import {colorVars, fontWeightVars} from '@astryxdesign/core/theme/tokens.stylex';
 
 import {
   deleteCatalogFile,
@@ -26,6 +29,8 @@ import {
   type CatalogFileInfo,
   type CatalogKind,
 } from '../api';
+import {FILTER_ALL} from '../catalog-list-view';
+import {cappedHeight} from '../catalog-layout';
 import appConfig from '../config.json' with {type: 'json'};
 import {createCatalogValidator} from '../catalog-validation';
 import type {DocumentProblem} from '../json-document';
@@ -39,10 +44,26 @@ import {
   saveFailure,
   sortedIds,
 } from '../catalog-editor-view';
+import {CatalogListPane} from './CatalogListPane';
+import {CatalogSchemaTab} from './CatalogSchemaTab';
 import {JsonCodeEditor} from './JsonCodeEditor';
 
-const KINDS = Object.keys(CATALOG_KIND_VIEWS) as CatalogKind[];
-const KIND_OPTIONS = KINDS.map(option => ({value: option, label: CATALOG_KIND_VIEWS[option].plural}));
+const MENU_KINDS: readonly CatalogKind[] = ['sessions', 'profiles', 'models', 'toolsets', 'mcp'];
+
+// Item's own selected fill (--color-accent-muted) equals the dialog surface in dark mode.
+const menuStyles = stylex.create({
+  selected: {
+    backgroundColor: colorVars['--color-border-emphasized'],
+    fontWeight: fontWeightVars['--font-weight-medium'],
+  },
+});
+
+type EditorTab = 'editor' | 'schema';
+
+/** One kind's file list as last fetched, or the reason it could not be. */
+type CatalogList = {files: CatalogFileInfo[]; error: string | null};
+
+const NO_FILES: CatalogFileInfo[] = [];
 
 type Draft =
   | {mode: 'none'}
@@ -53,6 +74,7 @@ type Draft =
 type Pending =
   | {kind: 'switch'; target: string | 'new'}
   | {kind: 'change-kind'; target: CatalogKind}
+  | {kind: 'back'}
   | {kind: 'close'}
   | {kind: 'delete'}
   | null;
@@ -70,24 +92,26 @@ export interface CatalogEditorDialogProps {
 
 export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorDialogProps) {
   const [kind, setKind] = useState<CatalogKind>('profiles');
-  const [files, setFiles] = useState<CatalogFileInfo[]>([]);
-  const [listError, setListError] = useState<string | null>(null);
+  const [lists, setLists] = useState<Partial<Record<CatalogKind, CatalogList>>>({});
   const [draft, setDraft] = useState<Draft>({mode: 'none'});
   const [text, setText] = useState('');
   const [newId, setNewId] = useState('');
   const [checked, setChecked] = useState<{text: string; problems: DocumentProblem[]}>({text: '', problems: []});
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [isListLoading, setIsListLoading] = useState(true);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [deleteState, setDeleteState] = useState(false);
   const [pending, setPending] = useState<Pending>(null);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState(FILTER_ALL);
+  const [tab, setTab] = useState<EditorTab>('editor');
   const validatorRef = useRef<ReturnType<typeof createCatalogValidator> | null>(null);
   const loadToken = useRef(0);
 
   const view = CATALOG_KIND_VIEWS[kind];
+  const list = lists[kind];
+  const files = list?.files ?? NO_FILES;
   const ids = useMemo(() => sortedIds(files.map(file => file.id)), [files]);
-  const names = useMemo(() => new Map(files.flatMap(file => (file.name === undefined ? [] : [[file.id, file.name] as const]))), [files]);
   const savedText = draft.mode === 'existing' ? draft.savedText : draft.mode === 'new' ? view.template : '';
   const unsaved = hasUnsavedWork(draft.mode, text, savedText, newId, view.template);
   const idProblem = draft.mode === 'new' ? newIdProblem(newId, ids, view.noun, view.idForm) : null;
@@ -95,32 +119,37 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   // The editor keeps the last result while a new check is pending, so squiggles do not blink while typing.
   const problems = checked.problems;
 
-  const reloadList = useCallback(async (signal?: AbortSignal): Promise<CatalogFileInfo[]> => {
+  const loadList = useCallback(async (target: CatalogKind, signal?: AbortSignal): Promise<void> => {
     try {
-      const next = await fetchCatalogFiles(kind, signal);
-      setFiles(next);
-      setListError(null);
-      setIsListLoading(false);
-      return next;
+      const next = await fetchCatalogFiles(target, signal);
+      setLists(previous => ({...previous, [target]: {files: next, error: null}}));
     } catch (caught) {
-      if (signal?.aborted) return [];
-      setListError(caught instanceof Error ? caught.message : String(caught));
-      setIsListLoading(false);
-      return [];
+      if (signal?.aborted) return;
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setLists(previous => ({...previous, [target]: {files: previous[target]?.files ?? NO_FILES, error: message}}));
     }
-  }, [kind]);
+  }, []);
 
+  // A profile's Session column is read from the session files, so a session change refreshes profiles too.
+  const reloadList = useCallback(async (): Promise<void> => {
+    await Promise.all(kind === 'sessions' ? [loadList('sessions'), loadList('profiles')] : [loadList(kind)]);
+  }, [kind, loadList]);
+
+  // Every kind is fetched when the dialog opens, so the menu switches without waiting.
   useEffect(() => {
     if (!isOpen) return undefined;
     const controller = new AbortController();
-    setIsListLoading(true);
-    void reloadList(controller.signal);
+    for (const target of MENU_KINDS) void loadList(target, controller.signal);
     return () => controller.abort();
-  }, [isOpen, reloadList]);
+  }, [isOpen, loadList]);
 
   useEffect(() => {
     if (!isOpen) {
       setKind('profiles');
+      setLists({});
+      setQuery('');
+      setFilter(FILTER_ALL);
+      setTab('editor');
       setDeleteState(false);
       setDraft({mode: 'none'});
       setText('');
@@ -162,6 +191,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const openExisting = useCallback(async (id: string): Promise<void> => {
     const token = ++loadToken.current;
     setDraft({mode: 'loading', id});
+    setTab('editor');
     setDeleteState(false);
     setNotice(null);
     try {
@@ -182,6 +212,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     loadToken.current += 1;
     setNewId('');
     setText(view.template);
+    setTab('editor');
     setDeleteState(false);
     setNotice(null);
     setDraft({mode: 'new', id: ''});
@@ -190,10 +221,10 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const changeKind = (target: CatalogKind): void => {
     loadToken.current += 1;
     setKind(target);
+    setQuery('');
+    setFilter(FILTER_ALL);
+    setTab('editor');
     setDeleteState(false);
-    setFiles([]);
-    setListError(null);
-    setIsListLoading(true);
     setDraft({mode: 'none'});
     setText('');
     setNewId('');
@@ -202,8 +233,29 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setChecked({text: '', problems: NO_PROBLEMS});
   };
 
+  const backToList = (): void => {
+    loadToken.current += 1;
+    setDraft({mode: 'none'});
+    setText('');
+    setNewId('');
+    setTab('editor');
+    setDeleteState(false);
+    setNotice(null);
+    setCheckError(null);
+    setChecked({text: '', problems: NO_PROBLEMS});
+  };
+
+  const requestBack = (): void => {
+    if (isBusy || draft.mode === 'none') return;
+    if (unsaved) setPending({kind: 'back'});
+    else backToList();
+  };
+
   const requestKind = (target: CatalogKind): void => {
-    if (target === kind) return;
+    if (target === kind) {
+      requestBack();
+      return;
+    }
     if (unsaved) setPending({kind: 'change-kind', target});
     else changeKind(target);
   };
@@ -229,6 +281,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     if (!action) return;
     if (action.kind === 'close') onClose();
     else if (action.kind === 'change-kind') changeKind(action.target);
+    else if (action.kind === 'back') backToList();
     else if (action.kind === 'switch') {
       if (action.target === 'new') startNew();
       else void openExisting(action.target);
@@ -290,7 +343,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     isBusy,
     idProblem,
   });
-  const title = draft.mode === 'existing' ? draft.id : draft.mode === 'new' ? `New ${view.noun}` : view.plural;
+  const title = draft.mode === 'existing' ? `${view.noun}: ${draft.id}` : draft.mode === 'new' ? `New ${view.noun}` : view.plural;
 
   return (
     <>
@@ -300,50 +353,32 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
           if (!open) requestClose();
         }}
         width={appConfig.catalog_dialog_width_px}
+        maxHeight={appConfig.catalog_dialog_max_height}
         purpose="form"
+        aria-label={`Catalog: ${title}`}
       >
         <Layout
-          header={<DialogHeader title="Edit catalog" subtitle={title} onOpenChange={open => { if (!open) requestClose(); }} />}
           content={
-            <LayoutContent>
-              <HStack gap={4} align="start">
-                <VStack gap={2} width={appConfig.catalog_file_list_width_px}>
-                  <Selector
-                    label="Catalog"
-                    options={KIND_OPTIONS}
-                    value={kind}
-                    onChange={value => requestKind(value as CatalogKind)}
-                    isDisabled={isBusy}
-                  />
-                  <Button label={`New ${view.noun}`} variant="primary" width="100%" onClick={() => requestSwitch('new')} isDisabled={isBusy} />
-                  {listError !== null ? (
-                    <Banner
-                      status="error"
-                      title={`Could not list ${view.plural.toLowerCase()}`}
-                      description={listError}
-                      collapsible={false}
-                      endContent={<Button label="Retry" size="sm" onClick={() => { setIsListLoading(true); void reloadList(); }} />}
-                    />
-                  ) : isListLoading ? (
-                    <Text type="supporting" color="secondary">Loading {view.plural.toLowerCase()}…</Text>
-                  ) : ids.length === 0 ? (
-                    <EmptyState title={`No ${view.plural.toLowerCase()}`} description="Create the first one." />
-                  ) : (
-                    <List density="compact" header={<Text type="label">{view.plural}</Text>}>
-                      {ids.map(id => (
-                        <ListItem
-                          key={id}
-                          label={names.get(id) ?? id}
-                          {...(names.has(id) ? {description: id} : {})}
-                          isSelected={(draft.mode === 'existing' || draft.mode === 'loading') && draft.id === id}
-                          isDisabled={isBusy}
-                          onClick={() => requestSwitch(id)}
-                        />
-                      ))}
-                    </List>
-                  )}
-                </VStack>
-                <VStack gap={3} width="100%">
+            <LayoutContent padding={0}>
+              <HStack gap={3} align="stretch" padding={4} height={cappedHeight(appConfig.catalog_body_height_px, appConfig.catalog_body_viewport_percent)}>
+                <StackItem size="static">
+                  <VStack gap={1} width={appConfig.catalog_file_list_width_px} role="navigation" aria-label="Catalog kinds">
+                    {MENU_KINDS.map(option => (
+                      <Item
+                        key={option}
+                        label={CATALOG_KIND_VIEWS[option].plural}
+                        isSelected={option === kind}
+                        xstyle={option === kind ? menuStyles.selected : undefined}
+                        isDisabled={isBusy}
+                        aria-current={option === kind ? 'page' : undefined}
+                        onClick={() => requestKind(option)}
+                      />
+                    ))}
+                  </VStack>
+                </StackItem>
+                <VStack><Divider orientation="vertical" variant="strong" /></VStack>
+                <StackItem size="fill">
+                <VStack gap={3} width="100%" height="100%">
                   {notice !== null && (
                     <Banner
                       status={notice.kind}
@@ -355,12 +390,42 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                     />
                   )}
                   {draft.mode === 'none' && (
-                    <EmptyState title={`Select a ${view.noun}`} description="Pick one from the list, or create a new one." />
+                    <CatalogListPane
+                      kind={kind}
+                      view={view}
+                      files={files}
+                      isLoading={list === undefined}
+                      error={list?.error ?? null}
+                      isDisabled={isBusy}
+                      query={query}
+                      filter={filter}
+                      onQueryChange={setQuery}
+                      onFilterChange={setFilter}
+                      onOpen={id => requestSwitch(id)}
+                      onNew={() => requestSwitch('new')}
+                      onRetry={() => void reloadList()}
+                    />
+                  )}
+                  {draft.mode !== 'none' && (
+                    <HStack gap={2} align="center">
+                      <IconButton
+                        label={`Back to ${view.plural.toLowerCase()}`}
+                        tooltip={`Back to ${view.plural.toLowerCase()}`}
+                        icon={<Icon icon="chevronLeft" />}
+                        variant="ghost"
+                        isDisabled={isBusy}
+                        onClick={requestBack}
+                      />
+                      <Breadcrumbs label="Catalog location">
+                        <BreadcrumbItem onClick={requestBack}>{view.plural}</BreadcrumbItem>
+                        <BreadcrumbItem isCurrent>{draft.mode === 'new' ? 'New' : draft.id}</BreadcrumbItem>
+                      </Breadcrumbs>
+                    </HStack>
                   )}
                   {draft.mode === 'loading' && <Text type="supporting" color="secondary">Loading {draft.id}…</Text>}
                   {draft.mode === 'new' && (
                     <TextInput
-                      label="Name"
+                      label="ID"
                       description={view.idHint}
                       value={newId}
                       onChange={setNewId}
@@ -368,7 +433,18 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                       status={newId !== '' && idProblem !== null ? {type: 'error', message: idProblem} : undefined}
                     />
                   )}
-                  {draft.mode === 'existing' && kind === 'sessions' && (
+                  {hasEditor && (
+                    <TabList aria-label="Editor view" value={tab} onChange={value => setTab(value as EditorTab)} hasDivider>
+                      <Tab value="editor" label="JSON" />
+                      <Tab value="schema" label="Schema" />
+                    </TabList>
+                  )}
+                  {hasEditor && tab === 'schema' && (
+                    <StackItem size="fill" isScrollable>
+                      <CatalogSchemaTab kind={kind} />
+                    </StackItem>
+                  )}
+                  {draft.mode === 'existing' && kind === 'sessions' && tab === 'editor' && (
                     <CheckboxInput
                       label="Also delete its transcripts and tool state when deleting"
                       description="Off keeps the state folder, so a session created again under this name finds it."
@@ -377,19 +453,22 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                       isDisabled={isBusy}
                     />
                   )}
-                  {hasEditor && (
+                  {hasEditor && tab === 'editor' && (
                     <>
-                      <JsonCodeEditor
-                        label={draft.mode === 'new' ? `New ${view.noun} JSON` : `${draft.id} JSON`}
-                        value={text}
-                        problems={problems}
-                        isReadOnly={isBusy}
-                        heightPx={appConfig.catalog_editor_height_px}
-                        onChange={setText}
-                      />
+                      <StackItem size="fill">
+                        <JsonCodeEditor
+                          label={draft.mode === 'new' ? `New ${view.noun} JSON` : `${draft.id} JSON`}
+                          value={text}
+                          problems={problems}
+                          isReadOnly={isBusy}
+                          height="100%"
+                          onChange={setText}
+                        />
+                      </StackItem>
                       {checkError !== null && (
                         <Banner status="warning" title="The schema check could not run" description={checkError} collapsible={false} />
                       )}
+                      <StackItem size="static">
                       <VStack
                         gap={1}
                         isScrollable
@@ -409,9 +488,11 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                           ))
                         )}
                       </VStack>
+                      </StackItem>
                     </>
                   )}
                 </VStack>
+                </StackItem>
               </HStack>
             </LayoutContent>
           }
@@ -428,7 +509,9 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                 </HStack>
                 <HStack gap={2}>
                   <Button label="Close" variant="secondary" isDisabled={isBusy} onClick={requestClose} />
-                  <Button label={draft.mode === 'new' ? 'Create' : 'Save'} variant="primary" isDisabled={!canSave} isLoading={isBusy} onClick={() => void save()} />
+                  {hasEditor && (
+                    <Button label={draft.mode === 'new' ? 'Create' : 'Save'} variant="primary" isDisabled={!canSave} isLoading={isBusy} onClick={() => void save()} />
+                  )}
                 </HStack>
               </HStack>
             </LayoutFooter>

@@ -23,7 +23,7 @@ Pick a session in the left panel to start chatting. This page is shown only at s
 
 ## Changing the setup
 
-Open **Edit catalog** in the side navigation to create, edit and delete profiles, models, sessions, toolsets and MCP servers. The editor checks every file against its schema and refuses a file the server would not load.
+Open **Catalog** in the side navigation to create, edit and delete profiles, models, sessions, toolsets and MCP servers. The editor checks every file against its schema and refuses a file the server would not load.
 
 From a terminal, `jad check` reads every catalog and session file the way the server does, starts nothing, and exits 1 when any file is invalid. It needs no API token.
 

@@ -90,7 +90,8 @@ export interface JsonCodeEditorProps {
   value: string;
   problems: readonly DocumentProblem[];
   isReadOnly?: boolean;
-  heightPx: number;
+  /** A pixel count, or a CSS length such as min(420px, 40dvh). */
+  height: number | string;
   onChange: (value: string) => void;
 }
 
@@ -100,7 +101,7 @@ function editableExtensions(isReadOnly: boolean) {
   return [EditorState.readOnly.of(isReadOnly), EditorView.editable.of(!isReadOnly)];
 }
 
-export function JsonCodeEditor({label, value, problems, isReadOnly = false, heightPx, onChange}: JsonCodeEditorProps) {
+export function JsonCodeEditor({label, value, problems, isReadOnly = false, height, onChange}: JsonCodeEditorProps) {
   const hostRef = useRef<HTMLElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -124,6 +125,7 @@ export function JsonCodeEditor({label, value, problems, isReadOnly = false, heig
           lintGutter(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           editorTheme,
+          EditorView.lineWrapping,
           EditorView.contentAttributes.of({'aria-label': label, 'aria-multiline': 'true'}),
           editableCompartment.of(editableExtensions(isReadOnly)),
           EditorView.updateListener.of(update => {
@@ -160,5 +162,5 @@ export function JsonCodeEditor({label, value, problems, isReadOnly = false, heig
     view.dispatch(setDiagnostics(view.state, toDiagnostics(problems, view.state.doc.length)));
   }, [problems, value, label]);
 
-  return <VStack ref={hostRef} height={heightPx} width="100%" />;
+  return <VStack ref={hostRef} height={height} width="100%" />;
 }

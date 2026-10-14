@@ -1820,8 +1820,18 @@ export type CatalogKind = 'profiles' | 'models' | 'sessions' | 'toolsets' | 'mcp
 export interface CatalogFileInfo {
   id: string;
   etag: string;
-  /** Display name a session or profile file sets; absent for other kinds and when unset. */
+  /** Display name the file sets; absent when unset. */
   name?: string;
+  /** Folder a session file sets to group its listing; other kinds are grouped by the ID. */
+  category?: string;
+  /** The sessions whose scope selects this profile; set for profiles only. */
+  sessions?: CatalogSessionRef[];
+}
+
+export interface CatalogSessionRef {
+  id: string;
+  name?: string;
+  category?: string;
 }
 
 export interface CatalogFileContent extends CatalogFileInfo {
@@ -1857,6 +1867,24 @@ async function catalogFailure(response: Response): Promise<CatalogRequestError> 
   return new CatalogRequestError(response.status, await readError(response));
 }
 
+function isSessionRef(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    (value.name === undefined || typeof value.name === 'string') &&
+    (value.category === undefined || typeof value.category === 'string')
+  );
+}
+
+function toSessionRef(value: unknown): CatalogSessionRef {
+  const ref = value as {id: string; name?: string; category?: string};
+  return {
+    id: ref.id,
+    ...(typeof ref.name === 'string' && ref.name.trim() !== '' ? {name: ref.name.trim()} : {}),
+    ...(typeof ref.category === 'string' && ref.category.trim() !== '' ? {category: ref.category.trim()} : {}),
+  };
+}
+
 export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal): Promise<CatalogFileInfo[]> {
   const response = await authenticatedFetch(apiUrl(`/catalog/${kind}`), signal === undefined ? {} : {signal});
   if (!response.ok) {
@@ -1871,7 +1899,9 @@ export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal)
         isRecord(file) &&
         typeof file.id === 'string' &&
         typeof file.etag === 'string' &&
-        (file.name === undefined || typeof file.name === 'string'),
+        (file.name === undefined || typeof file.name === 'string') &&
+        (file.category === undefined || typeof file.category === 'string') &&
+        (file.sessions === undefined || (Array.isArray(file.sessions) && file.sessions.every(isSessionRef))),
     )
   ) {
     throw new Error('the server returned an invalid catalog list');
@@ -1880,6 +1910,8 @@ export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal)
     id: file.id as string,
     etag: file.etag as string,
     ...(typeof file.name === 'string' && file.name.trim() !== '' ? {name: file.name.trim()} : {}),
+    ...(typeof file.category === 'string' && file.category.trim() !== '' ? {category: file.category.trim()} : {}),
+    ...(Array.isArray(file.sessions) && file.sessions.length > 0 ? {sessions: (file.sessions as unknown[]).map(toSessionRef)} : {}),
   }));
 }
 

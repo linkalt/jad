@@ -1812,8 +1812,8 @@ function SessionNavigation({
             onClick={() => onSelectLeftPanel('settings')}
           />
           <IconButton
-            label="Edit catalog"
-            tooltip="Edit catalog"
+            label="Catalog"
+            tooltip="Catalog"
             icon={<Icon icon="wrench" size="sm" />}
             variant="ghost"
             size="sm"
