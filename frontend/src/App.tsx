@@ -117,7 +117,7 @@ import {
   visibleWebUiItems,
   webUiStepAtPartIndex,
 } from './web-ui-steps';
-import {toolResultText} from './tool-result-view';
+import {hasToolResultImages, toolResultText} from './tool-result-view';
 import {applyPart, applyPartDelta} from './messagePatch';
 import {ComposerPane} from './components/ComposerPane';
 import {StateContextDrawer} from './components/StateContextDrawer';
@@ -1569,11 +1569,13 @@ function WebUiActivityGroup({
           return index === firstToolCallIndex ? (
             <Fragment key={`tool-calls-${index}`}>
               <ChatToolCalls calls={toolCallItems} xstyle={styles.toolCallsFlush} />
-              <HStack gap={2} wrap="wrap" align="start">
-                {toolCallResults.map(result => (
-                  <ToolResultImages key={result.callId} result={result} source={source} />
-                ))}
-              </HStack>
+              {toolCallResults.some(hasToolResultImages) && (
+                <HStack gap={2} wrap="wrap" align="start">
+                  {toolCallResults.map(result => (
+                    <ToolResultImages key={result.callId} result={result} source={source} />
+                  ))}
+                </HStack>
+              )}
             </Fragment>
           ) : null;
         }
