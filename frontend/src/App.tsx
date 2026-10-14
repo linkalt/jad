@@ -99,6 +99,7 @@ import {
   type SessionUiState,
 } from './session-run-status';
 import {shouldSkipTranscriptLoad} from './transcript-load-policy';
+import {forgetSnapshotEtags, rememberSnapshotEtag} from './snapshot-etags';
 import {
   EMPTY_HISTORY_BLOCKS,
   forgetHistoryBlock,
@@ -3074,8 +3075,8 @@ function App() {
       );
       hydratedMessagesRef.current.delete(key);
       hydratedTranscriptSessionIdsRef.current.delete(key);
-      snapshotEtagsRef.current.delete(key);
     }
+    forgetSnapshotEtags(snapshotEtagsRef.current, viewKeys);
     updateHistoryBlocks(blocks => forgetHistoryBlocks(blocks, viewKeys));
     setThreads(current => removeViewKeys(current, viewKeys));
     setSessionPages(current => removeViewKeys(current, viewKeys));
@@ -4599,11 +4600,7 @@ function App() {
         return {...current, [uiId]: failures};
       });
       hydratedTranscriptSessionIdsRef.current.add(uiId);
-      if (result.etag === undefined) {
-        snapshotEtagsRef.current.delete(uiId);
-      } else {
-        snapshotEtagsRef.current.set(uiId, result.etag);
-      }
+      rememberSnapshotEtag(snapshotEtagsRef.current, uiId, result.etag);
       applyRowSnapshot(uiId, sessionRef, profile, snapshot);
     }, error => {
       if (!cancelled) {
