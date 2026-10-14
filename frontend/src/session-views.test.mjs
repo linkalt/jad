@@ -14,7 +14,9 @@ import {
   parseStoredViews,
   profileOfViewKey,
   activeKeyAfterPrune,
+  nextRecentViewKeys,
   prunePinnedViews,
+  retainedPinnedViewKeys,
   restoreViews,
   rowHasRunningRun,
   rowRunStatus,
@@ -86,6 +88,42 @@ test('an active profile row whose pin was pruned falls back to its session row',
   assert.equal(activeKeyAfterPrune(viewKey('s1', 'p1'), kept, known), viewKey('s1', 'p1'));
   assert.equal(activeKeyAfterPrune('s1', [], known), 's1');
   assert.equal(activeKeyAfterPrune(viewKey('gone', 'p1'), [], known), viewKey('gone', 'p1'));
+});
+
+test('the visit order puts the active pinned view first and forgets dropped pins', () => {
+  const a = viewKey('s1', 'a');
+  const b = viewKey('s1', 'b');
+  const c = viewKey('s1', 'c');
+  const pinned = new Set([a, b, c]);
+  let recent = nextRecentViewKeys([], a, pinned);
+  recent = nextRecentViewKeys(recent, b, pinned);
+  recent = nextRecentViewKeys(recent, c, pinned);
+  assert.deepEqual(recent, [c, b, a]);
+  assert.deepEqual(nextRecentViewKeys(recent, a, pinned), [a, c, b]);
+  // A session's own row is not a pin: it leads nothing and does not displace one.
+  assert.deepEqual(nextRecentViewKeys(recent, 's1', pinned), [c, b, a]);
+  assert.deepEqual(nextRecentViewKeys(recent, c, new Set([c, a])), [c, a]);
+});
+
+test('a pinned view keeps its caches while active, running or recently visited', () => {
+  const [a, b, c, d] = ['a', 'b', 'c', 'd'].map(profile => viewKey('s1', profile));
+  const pinned = new Set([a, b, c, d]);
+  const recent = [c, b, a];
+  const none = new Set();
+  const retained = (active, max, running = none) =>
+    [...retainedPinnedViewKeys(pinned, recent, active, max, running)].sort();
+  assert.deepEqual(retained(c, 2), [a, b, c].sort());
+  assert.deepEqual(retained(c, 1), [b, c].sort());
+  assert.deepEqual(retained('s1', 2), [b, c].sort());
+  // Only the active view and running views stay when the cap is zero or invalid.
+  assert.deepEqual(retained(c, 0), [c]);
+  assert.deepEqual(retained(c, -1), [c]);
+  assert.deepEqual(retained(c, Number.NaN), [c]);
+  assert.deepEqual(retained(c, 1.5), [c]);
+  // A running view outside the recent window, even one never visited, survives.
+  assert.deepEqual(retained(c, 0, new Set([a, d])), [a, c, d].sort());
+  // A running key that is not pinned is not invented.
+  assert.deepEqual(retained(c, 0, new Set(['s1'])), [c]);
 });
 
 test('the list shows each session, then the rows pinned to it', () => {

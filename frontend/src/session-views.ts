@@ -133,6 +133,39 @@ export function activeKeyAfterPrune(
   return activeViewKey;
 }
 
+/** Visit order of pinned views, newest first; a dropped pin leaves the list. */
+export function nextRecentViewKeys(
+  recent: readonly string[],
+  activeViewKey: string,
+  pinnedKeys: ReadonlySet<string>,
+): string[] {
+  const rest = recent.filter(key => key !== activeViewKey && pinnedKeys.has(key));
+  return pinnedKeys.has(activeViewKey) ? [activeViewKey, ...rest] : rest;
+}
+
+/**
+ * The pinned views whose caches stay: the active one, any with a run in
+ * progress, and the `max` most recently visited others. A `max` that is not a
+ * positive integer keeps none of the others.
+ */
+export function retainedPinnedViewKeys(
+  pinnedKeys: ReadonlySet<string>,
+  recent: readonly string[],
+  activeViewKey: string,
+  max: number,
+  runningKeys: ReadonlySet<string>,
+): Set<string> {
+  const limit = Number.isInteger(max) && max > 0 ? max : 0;
+  const recentOthers = new Set(recent.filter(key => key !== activeViewKey).slice(0, limit));
+  const retained = new Set<string>();
+  for (const key of pinnedKeys) {
+    if (key === activeViewKey || runningKeys.has(key) || recentOthers.has(key)) {
+      retained.add(key);
+    }
+  }
+  return retained;
+}
+
 /** One row of the left list. */
 export type SessionListRow = {
   /** The view this row opens: `session` or `session\u0000profile`. */

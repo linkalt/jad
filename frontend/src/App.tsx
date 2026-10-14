@@ -172,6 +172,8 @@ import {
   isPinnedViewKey,
   profileOfViewKey,
   activeKeyAfterPrune,
+  nextRecentViewKeys,
+  retainedPinnedViewKeys,
   prunePinnedViews,
   restoreViews,
   rowRunStatus,
@@ -2440,6 +2442,7 @@ function App() {
   const activeSessionId = sessionRefOfViewKey(activeViewKey);
   const activeProfile = profileOfViewKey(activeViewKey);
   const isPinnedView = isPinnedViewKey(activeViewKey);
+  const recentPinnedViewKeysRef = useRef<string[]>([]);
   const previousViewKeysRef = useRef<Set<string> | null>(null);
   if (previousViewKeysRef.current === null) {
     previousViewKeysRef.current = new Set([
@@ -4392,9 +4395,22 @@ function App() {
       }
     }
 
+    const pinnedKeys = new Set(
+      retainedPinnedViews.map(view => viewKey(view.sessionRef, view.profile)),
+    );
+    const recentKeys = nextRecentViewKeys(recentPinnedViewKeysRef.current, activeViewKey, pinnedKeys);
+    recentPinnedViewKeysRef.current = recentKeys;
+
+    // A later visit to an evicted pinned view hydrates from the transcript again.
     const retainedViewKeys = new Set(knownIds);
-    for (const view of retainedPinnedViews) {
-      retainedViewKeys.add(viewKey(view.sessionRef, view.profile));
+    for (const key of retainedPinnedViewKeys(
+      pinnedKeys,
+      recentKeys,
+      activeViewKey,
+      appConfig.session_view_cache_max,
+      runningViewKeys,
+    )) {
+      retainedViewKeys.add(key);
     }
     const activeSessionRef = sessionRefOfViewKey(activeViewKey);
     if (knownIds.has(activeSessionRef)) {
@@ -4405,7 +4421,7 @@ function App() {
     if (previousViewKeys !== null) {
       forgetViewCaches(removedViewKeys(previousViewKeys, retainedViewKeys));
     }
-  }, [activeViewKey, forgetViewCaches, pinnedViews, sessions]);
+  }, [activeViewKey, forgetViewCaches, pinnedViews, runningViewKeys, sessions]);
 
   useEffect(() => {
     writeStoredViews(appConfig.session_views_storage_key, {views: pinnedViews, activeViewKey});
