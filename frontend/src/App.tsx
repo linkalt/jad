@@ -2089,6 +2089,44 @@ async function copyMarkdownToClipboard(value: string): Promise<void> {
   }
 }
 
+/** Copies `value` and reports `copied` or `error` for the configured feedback time. */
+function useCopyToClipboard(value: string): [CopyState, () => void] {
+  const [copyState, setCopyState] = useState<CopyState>('idle');
+  const resetTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current !== null) {
+        window.clearTimeout(resetTimerRef.current);
+      }
+    };
+  }, []);
+
+  const setTemporaryCopyState = useCallback((state: CopyState) => {
+    if (resetTimerRef.current !== null) {
+      window.clearTimeout(resetTimerRef.current);
+    }
+    setCopyState(state);
+    resetTimerRef.current = window.setTimeout(() => {
+      resetTimerRef.current = null;
+      setCopyState('idle');
+    }, appConfig.copy_feedback_duration_ms);
+  }, []);
+
+  const copy = useCallback(() => {
+    void (async () => {
+      try {
+        await copyMarkdownToClipboard(value);
+        setTemporaryCopyState('copied');
+      } catch {
+        setTemporaryCopyState('error');
+      }
+    })();
+  }, [value, setTemporaryCopyState]);
+
+  return [copyState, copy];
+}
+
 function assistantOutputMarkdown(message: MessageRecord): string {
   if (message.text.length > 0 || !message.parts) {
     return message.text;
@@ -2099,14 +2137,37 @@ function assistantOutputMarkdown(message: MessageRecord): string {
     .join('');
 }
 
-function copyActionLabel(state: CopyState): string {
+function copyActionLabel(state: CopyState, noun: string): string {
   if (state === 'copied') {
-    return 'Copied as Markdown';
+    return `Copied ${noun}`;
   }
   if (state === 'error') {
     return 'Copy failed';
   }
-  return 'Copy as Markdown';
+  return `Copy ${noun}`;
+}
+
+/** The copy icon on a message row: `noun` finishes "Copy …", e.g. "as Markdown". */
+function CopyMessageButton({text, noun}: {text: string; noun: string}) {
+  const [copyState, copy] = useCopyToClipboard(text);
+  const label = copyActionLabel(copyState, noun);
+  return (
+    <IconButton
+      label={label}
+      tooltip={label}
+      icon={
+        <Icon
+          icon={copyState === 'copied' ? 'check' : copyState === 'error' ? 'error' : 'copy'}
+          size="xsm"
+          color="secondary"
+        />
+      }
+      variant="ghost"
+      size="sm"
+      isDisabled={text.length === 0}
+      onClick={copy}
+    />
+  );
 }
 
 /**
@@ -2143,37 +2204,7 @@ function AssistantMessage({
 }) {
   const [rowRef, rowWidthPx] = useRowWidth();
   const rowHeightRef = useRowHeightRef(message.id);
-  const [copyState, setCopyState] = useState<CopyState>('idle');
-  const resetTimerRef = useRef<number | null>(null);
   const markdown = assistantOutputMarkdown(message);
-
-  useEffect(() => {
-    return () => {
-      if (resetTimerRef.current !== null) {
-        window.clearTimeout(resetTimerRef.current);
-      }
-    };
-  }, []);
-
-  const setTemporaryCopyState = useCallback((state: CopyState) => {
-    if (resetTimerRef.current !== null) {
-      window.clearTimeout(resetTimerRef.current);
-    }
-    setCopyState(state);
-    resetTimerRef.current = window.setTimeout(() => {
-      resetTimerRef.current = null;
-      setCopyState('idle');
-    }, appConfig.copy_feedback_duration_ms);
-  }, []);
-
-  const copyAsMarkdown = useCallback(async () => {
-    try {
-      await copyMarkdownToClipboard(markdown);
-      setTemporaryCopyState('copied');
-    } catch {
-      setTemporaryCopyState('error');
-    }
-  }, [markdown, setTemporaryCopyState]);
 
   return (
     <ChatMessage
@@ -2195,21 +2226,7 @@ function AssistantMessage({
                 {message.timestamp ? (
                   <Text type="inherit" color="inherit">{message.timestamp}</Text>
                 ) : null}
-                <IconButton
-                  label={copyActionLabel(copyState)}
-                  tooltip={copyActionLabel(copyState)}
-                  icon={
-                    <Icon
-                      icon={copyState === 'copied' ? 'check' : copyState === 'error' ? 'error' : 'copy'}
-                      size="xsm"
-                      color="secondary"
-                    />
-                  }
-                  variant="ghost"
-                  size="sm"
-                  isDisabled={markdown.length === 0}
-                  onClick={() => { void copyAsMarkdown(); }}
-                />
+                <CopyMessageButton text={markdown} noun="as Markdown" />
                 <DeliveryStatus status="delivered" />
               </HStack>
             }
@@ -2368,6 +2385,7 @@ const TranscriptRow = memo(
                     {message.timestamp ? (
                       <Text type="inherit" color="inherit">{message.timestamp}</Text>
                     ) : null}
+                    <CopyMessageButton text={userImages.text} noun="message" />
                     <DeliveryStatus status="read" />
                   </HStack>
                 }
