@@ -731,7 +731,7 @@ export function ComposerPane({
         />
       }
       onStop={onStop}
-      isStopShown={isRunning}
+      isStopShown={isRunning && !isDisabled}
       placeholder={placeholder}
       input={
         <ChatComposerInput
@@ -748,7 +748,7 @@ export function ComposerPane({
       }
       drawer={
         <>
-          {drawer}
+          {isDisabled ? null : drawer}
           {isImageAttachEnabled || isFileAttachEnabled || isDropEnabled ? (
             <ImageAttachmentsDrawer
               images={attachments.images}
