@@ -244,21 +244,9 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 			return SessionConfig{}, configError("%s: paths.profiles must be a JSON object", settingPath)
 		}
 	}
-	basePaths := paths
-	if profileConfigured {
-		basePaths = make(map[string]json.RawMessage)
-		for name, value := range paths {
-			if name != "profiles" && name != "active_profile" {
-				basePaths[name] = value
-			}
-		}
-	}
-	if err := validateBasePathFields(basePaths, settingPath); err != nil {
-		return SessionConfig{}, err
-	}
-	selectedPaths, profileStorageDir := selectProfileStoragePaths(location.StateDir(), basePaths, profileSettings, profile, defaultProfile, profileConfigured)
+	selectedPaths, profileStorageDir := selectProfileStoragePaths(location.StateDir(), profileSettings, profile, defaultProfile, profileConfigured)
 	settingDir := filepath.Dir(settingPath)
-	if err := validateAllStoragePaths(location, settingPath, paths, basePaths, pathProfiles, defaultProfile, profileConfigured); err != nil {
+	if err := validateAllStoragePaths(location, settingPath, paths, pathProfiles, defaultProfile, profileConfigured); err != nil {
 		return SessionConfig{}, err
 	}
 	storagePaths, err := resolveStoragePaths(selectedPaths, profileStorageDir, settingDir, profileConfigured)

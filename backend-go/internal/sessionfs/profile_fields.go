@@ -16,28 +16,6 @@ var sessionPathFields = map[string]struct{}{
 
 const removedProcessTaskPathsMessage = "%s: paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir"
 
-// validateBasePathFields rejects session path keys that were removed or must be
-// scoped to a profile. basePaths excludes profiles and active_profile.
-func validateBasePathFields(basePaths map[string]json.RawMessage, settingPath string) error {
-	if _, exists := basePaths["model"]; exists {
-		return configError("%s: paths.model was removed; configure model config paths with paths.profiles.<name>.model_default/models, or use the session model.json default", settingPath)
-	}
-	_, hasDefault := basePaths["model_default"]
-	_, hasModels := basePaths["models"]
-	if hasDefault || hasModels {
-		return configError("%s: model_default and models must be configured within paths.profiles", settingPath)
-	}
-	_, hasProcesses := basePaths["processes"]
-	_, hasTasks := basePaths["tasks"]
-	if hasProcesses || hasTasks {
-		return configError(removedProcessTaskPathsMessage, settingPath)
-	}
-	if _, exists := basePaths["tool_storage"]; exists {
-		return configError("%s: paths.tool_storage must be configured within paths.profiles.<name>", settingPath)
-	}
-	return nil
-}
-
 // validateProfileFields applies the TypeScript per-profile shape checks to one
 // paths.profiles entry. Fields are visited in document order, as TypeScript does.
 func validateProfileFields(name string, raw json.RawMessage, settingPath string) error {

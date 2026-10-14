@@ -593,7 +593,7 @@ A session is now only the catalog layout: `session.json` plus the profile, model
 
 Removed: the legacy arm of `LoadSessionSettings`, `ReadPathProfileInfo`, `SetPathProfile`, `SetModelDefault` and their tests, and the `allowMissing` flag of `readSessionObject`. The profile and model routes now call `ReadLayoutProfileInfo`, `SetLayoutActiveProfile` (removed 2026-10-16, see below) and `SetLayoutModelDefault` directly, and no longer pin per-profile storage paths into a setting file (the layout gives every profile its own state folder).
 
-Kept on purpose: `loadSessionSettingsFrom`, `selectProfile` and `storage_paths.go`. The layout loader composes a setting-shaped map from the catalogs and feeds it through them, so every normalizer is shared.
+Kept on purpose: `loadSessionSettingsFrom`, `selectProfile` and `storage_paths.go`. The layout loader composes a setting-shaped map from the catalogs and feeds it through them, so every normalizer is shared. Re-checked 2026-10-15: all three still have a live caller (`layout_load.go`, `catalog_toolsets.go`), so none can go without rewriting the composer. Only the part no composer output can reach was removed: the top-level `paths` keys beside `profiles` and `active_profile` (`validateBasePathFields`, the `basePaths` merge). The composer replaces `paths` outright, and a `paths` key in `settings` is refused earlier.
 
 Tests: all tests that wrote a legacy `setting.json` now build their session with `internal/sessionfs/layouttest`. Three differences from the legacy tests were found and are not hidden: the layout's session list always reports a run under its profile id (`runs_by_profile`), `session_files` could not be set (fixed below), and two roots with equal session ids share a state folder (fixed below).
 
