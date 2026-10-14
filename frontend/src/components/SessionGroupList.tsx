@@ -7,6 +7,7 @@ import {
   rowRunStatus,
   type SessionListGroup,
   type SessionListRow,
+  rowTurnCount,
   viewLabel,
 } from '../session-views';
 
@@ -14,6 +15,7 @@ type SessionGroupSession = {
   id: string;
   title: string;
   turns: number;
+  profileTurns?: Readonly<Record<string, number>>;
   state: SessionUiState;
   activeProfile?: string;
   run?: {status?: SessionRunStatus};
@@ -56,7 +58,7 @@ export function SessionGroupList({
 
   const renderRow = (row: SessionListRow, session: SessionGroupSession, isChild: boolean) => {
     const state = rowState(row, session);
-    const turns = row.profile === undefined ? (rowTurns[row.key] ?? session.turns) : rowTurns[row.key];
+    const turns = rowTurnCount(row, session, rowTurns);
     // The visible label of a child is the profile; its accessible names carry the
     // session too, because the same profile name repeats in every group.
     const fullLabel = isChild ? viewLabel(session.title, row.label) : row.label;

@@ -61,6 +61,7 @@ type sessionListRecord struct {
 	SessionName     string                             `json:"session_name"`
 	Category        string                             `json:"category,omitempty"`
 	Turns           int64                              `json:"turns"`
+	ProfileTurns    map[string]int64                   `json:"profile_turns,omitempty"`
 	ActiveProfile   string                             `json:"active_profile,omitempty"`
 	DefaultProfile  string                             `json:"default_profile,omitempty"`
 	Profiles        []string                           `json:"profiles,omitempty"`
@@ -107,6 +108,8 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 		location sessionfs.Location
 		config   sessionfs.SessionConfig
 		runs     httpapi.SessionRunSummaries
+		// others holds the other profiles in scope, which have a transcript of their own.
+		others map[string]sessionfs.SessionConfig
 	}
 	candidates := make([]candidate, 0)
 	versions := make([]string, 0)
@@ -157,8 +160,9 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			if runStates != nil {
 				sessionRuns = runStates.SessionRuns(location.Reference, config.Profile)
 			}
-			candidates = append(candidates, candidate{location: location, config: config, runs: sessionRuns})
-			versions = append(versions, location.Reference+":"+sessionVersionForCatalog(location, config, r.catalog.MaxInlinePartBytes, sessionRuns))
+			others := otherProfileConfigs(location, config)
+			candidates = append(candidates, candidate{location: location, config: config, runs: sessionRuns, others: others})
+			versions = append(versions, location.Reference+":"+sessionVersionForCatalog(location, config, r.catalog.MaxInlinePartBytes, sessionRuns)+profileTranscriptStamps(others))
 		}
 	}
 	sort.Strings(versions)
@@ -181,6 +185,10 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			return httpapi.CatalogResponse{}, fmt.Errorf("read session transcript %q: %w", candidate.location.Reference, err)
 		}
 		record := makeSessionListRecord(candidate.location, candidate.config, index.turns, index.usage, candidate.runs)
+		record.ProfileTurns, err = r.profileTurns(candidate.config, index.turns, candidate.others)
+		if err != nil {
+			return httpapi.CatalogResponse{}, fmt.Errorf("read session transcript %q: %w", candidate.location.Reference, err)
+		}
 		record.Model = listingModelSummary(candidate.location, candidate.config)
 		// The TypeScript list reports usage only from an existing usage cache, so
 		// a session that has never completed a response carries no usage block.
@@ -191,7 +199,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 	}
 	finalVersions := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
-		finalVersions = append(finalVersions, candidate.location.Reference+":"+sessionVersionForCatalog(candidate.location, candidate.config, r.catalog.MaxInlinePartBytes, candidate.runs))
+		finalVersions = append(finalVersions, candidate.location.Reference+":"+sessionVersionForCatalog(candidate.location, candidate.config, r.catalog.MaxInlinePartBytes, candidate.runs)+profileTranscriptStamps(candidate.others))
 	}
 	sort.Strings(finalVersions)
 	etag = makeETag(strings.Join(finalVersions, "|"))
@@ -203,6 +211,63 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 		return httpapi.CatalogResponse{}, fmt.Errorf("encode session list: %w", err)
 	}
 	return httpapi.CatalogResponse{Body: body, ETag: etag}, nil
+}
+
+// otherProfileConfigs loads every profile in scope except the one config was
+// loaded for. A profile that does not load is left out: the list shows no count for it.
+func otherProfileConfigs(location sessionfs.Location, config sessionfs.SessionConfig) map[string]sessionfs.SessionConfig {
+	others := make(map[string]sessionfs.SessionConfig)
+	for _, profile := range config.Profiles {
+		if profile == config.Profile {
+			continue
+		}
+		if other, err := sessionfs.LoadSessionSettings(location, profile, ""); err == nil {
+			others[profile] = other
+		}
+	}
+	return others
+}
+
+// profileTranscriptStamps changes when any of the other profiles' transcripts does,
+// so a list validator covers the counts it reports. It is empty, and the validator
+// unchanged, for a session with no other profile.
+func profileTranscriptStamps(others map[string]sessionfs.SessionConfig) string {
+	if len(others) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 2*len(others))
+	for _, profile := range slices.Sorted(maps.Keys(others)) {
+		parts = append(parts, profile, fileStamp(others[profile].MessagesPath))
+	}
+	return ":" + strings.Join(parts, "\x00")
+}
+
+// profileTurns is the turn count of each profile in scope. A profile that has never
+// run has no transcript file, and counts 0 without creating one.
+func (r *Resolver) profileTurns(config sessionfs.SessionConfig, turns int64, others map[string]sessionfs.SessionConfig) (map[string]int64, error) {
+	if len(config.Profiles) == 0 {
+		return nil, nil
+	}
+	counts := map[string]int64{config.Profile: turns}
+	for profile, other := range others {
+		if _, err := os.Stat(other.MessagesPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				counts[profile] = 0
+				continue
+			}
+			return nil, fmt.Errorf("stat transcript of profile %q: %w", profile, err)
+		}
+		shared, err := r.sharedStore(other)
+		if err != nil {
+			return nil, err
+		}
+		index, err := scanTranscriptIndex(shared, other)
+		if err != nil {
+			return nil, fmt.Errorf("profile %q: %w", profile, err)
+		}
+		counts[profile] = index.turns
+	}
+	return counts, nil
 }
 
 // ReadSessionSnapshot implements the transcript-backed portion of the

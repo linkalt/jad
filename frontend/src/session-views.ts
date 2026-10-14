@@ -218,6 +218,24 @@ export function rowRunStatus<T>(
 }
 
 /**
+ * The turn count a row shows.
+ *
+ * A row opened in this tab reports its own live count. Before that, the
+ * session's own row shows the session's count and a profile row shows the
+ * server's count for that profile, or nothing when the server sent none.
+ */
+export function rowTurnCount(
+  row: SessionListRow,
+  session: {turns: number; profileTurns?: Readonly<Record<string, number>>},
+  liveTurns: Readonly<Record<string, number>>,
+): number | undefined {
+  if (row.profile === undefined) {
+    return liveTurns[row.key] ?? session.turns;
+  }
+  return liveTurns[row.key] ?? session.profileTurns?.[row.profile];
+}
+
+/**
  * Whether a row should show an active-run marker.
  *
  * A pinned row only reflects its own profile's run. The session's stored-default

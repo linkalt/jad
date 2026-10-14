@@ -20,6 +20,7 @@ import {
   restoreViews,
   rowHasRunningRun,
   rowRunStatus,
+  rowTurnCount,
   sessionListRows,
   sessionRefOfViewKey,
   viewKey,
@@ -345,4 +346,18 @@ test('the own row of a stored profile the session no longer lists uses its name 
     [{...grouped('s1', 'S', ['a/one'], 'a/gone'), profileNames: {'a/gone': 'Gone'}}],
   );
   assert.equal(group.children[0].label, 'Gone');
+});
+
+test('a row shows its live count, else the server count for its profile', () => {
+  const own = {key: 'a', sessionRef: 'a', label: 'A'};
+  const reviewer = {key: viewKey('a', 'review/reviewer'), sessionRef: 'a', profile: 'review/reviewer', label: 'R'};
+  const data = {turns: 4, profileTurns: {'review/reviewer': 7, 'dev/coder': 4}};
+
+  assert.equal(rowTurnCount(own, data, {}), 4);
+  assert.equal(rowTurnCount(own, data, {a: 5}), 5);
+  assert.equal(rowTurnCount(reviewer, data, {}), 7);
+  assert.equal(rowTurnCount(reviewer, data, {[reviewer.key]: 8}), 8);
+  assert.equal(rowTurnCount(reviewer, data, {[reviewer.key]: 0}), 0);
+  assert.equal(rowTurnCount(reviewer, {turns: 4}, {}), undefined);
+  assert.equal(rowTurnCount({...reviewer, profile: 'other/x'}, data, {}), undefined);
 });

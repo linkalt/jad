@@ -231,6 +231,8 @@ export interface SessionSnapshot {
   front_compaction?: {enabled: boolean; delete_mode: 'permanent' | 'recoverable'};
   session_name: string;
   turns: number;
+  /** Turns in each profile's transcript, by profile ID; absent when the session has no profiles. */
+  profile_turns?: Record<string, number>;
   /** Absent in the session list: transcripts are fetched per session. */
   messages?: WebUiMessage[];
   model?: {

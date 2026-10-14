@@ -408,6 +408,7 @@ interface Session {
   title: string;
   time: string;
   turns: number;
+  profileTurns?: Record<string, number>;
   state: SessionState;
   source: 'live' | 'sample';
   sessionRef?: string;
@@ -770,6 +771,7 @@ function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
     title: oneLine(snapshot.session_name) || snapshot.session_id || snapshot.id,
     time: snapshot.turns > 0 ? 'Local transcript' : 'Ready',
     turns: snapshot.turns,
+    ...(snapshot.profile_turns === undefined ? {} : {profileTurns: snapshot.profile_turns}),
     state: sessionUiStateForRun(snapshot.run?.status),
     source: 'live',
     sessionRef: snapshot.id,
