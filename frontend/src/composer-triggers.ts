@@ -1,5 +1,5 @@
 /**
- * The composer's `@` file menu — and the shape a `/` command menu will take.
+ * The composer's `@` file menu and `/` command menu.
  *
  * Astryx renders the menu itself: `ChatComposerInput` takes trigger definitions,
  * detects the character at a word boundary, searches the trigger's
@@ -28,18 +28,12 @@ import type {
   SearchableItem,
   SearchSource,
 } from '@astryxdesign/core';
+import type {SlashSelection} from './slash-commands';
 
 /** Character that opens the file menu. */
 export const FILE_TRIGGER_CHARACTER = '@';
 /** Character that opens the command menu. */
 export const COMMAND_TRIGGER_CHARACTER = '/';
-
-export type ComposerCommand = {
-  /** Command name without the leading slash, e.g. `compact`. */
-  name: string;
-  /** Extra match terms, so a command is still found by an alias. */
-  keywords?: readonly string[];
-};
 
 /**
  * Paths offered by the `@` menu when the app ships without a listing service.
@@ -99,7 +93,9 @@ function matchScore(path: string, needle: string): number | null {
   if (lowerPath === needle) {
     return 0;
   }
-  const base = lowerPath.slice(lowerPath.lastIndexOf('/') + 1);
+  // A folder is listed as `src/`; its own name is the part before that slash.
+  const trimmed = lowerPath.endsWith('/') ? lowerPath.slice(0, -1) : lowerPath;
+  const base = trimmed.slice(trimmed.lastIndexOf('/') + 1);
   if (base === needle) {
     return 1;
   }
@@ -250,44 +246,25 @@ export function fileMentionTrigger(searchSource: SearchSource): ChatComposerTrig
 }
 
 /**
- * The `/` trigger. Nothing selects one yet — the app has no command layer — but
- * the definition is complete, so `createComposerTriggers` only needs a list of
- * commands to put the menu on screen.
+ * The `/` trigger over a slash source. Picking an entry does not put text in the
+ * draft: the selection goes to `onPick`, which runs the command or fetches the
+ * library item, and the `/query` the user typed is removed.
  */
-export function commandTrigger(
-  commands: readonly ComposerCommand[],
-  maxResults: number,
+export function slashTrigger(
+  searchSource: SearchSource,
+  onPick: (selection: SlashSelection) => void,
 ): ChatComposerTrigger {
-  const limit = Math.max(0, Math.floor(maxResults));
-  const entries = commands.map(command => ({
-    item: {id: command.name, label: `${COMMAND_TRIGGER_CHARACTER}${command.name}`},
-    keywords: command.keywords ?? [],
-  }));
-  const matched = (query: string): SearchableItem[] => {
-    const needle = query.trim().toLowerCase();
-    return entries
-      .filter(
-        ({item, keywords}) =>
-          needle === '' ||
-          item.label.toLowerCase().includes(needle) ||
-          keywords.some(keyword => keyword.toLowerCase().includes(needle)),
-      )
-      .slice(0, limit)
-      .map(({item}) => item);
-  };
   return {
     character: COMMAND_TRIGGER_CHARACTER,
-    searchSource: {
-      search: matched,
-      bootstrap: () => matched(''),
+    searchSource,
+    menuLabel: 'Commands and library',
+    emptySearchText: 'No matching command or library item',
+    loadingText: 'Loading library…',
+    onSelect: item => {
+      const selection = item.auxiliaryData as SlashSelection | undefined;
+      if (selection !== undefined) onPick(selection);
+      return '';
     },
-    menuLabel: 'Commands',
-    emptySearchText: 'No matching commands',
-    onSelect: item => ({
-      value: `${COMMAND_TRIGGER_CHARACTER}${item.id}`,
-      label: `${COMMAND_TRIGGER_CHARACTER}${item.id}`,
-      variant: 'yellow',
-    }),
   };
 }
 
@@ -300,11 +277,8 @@ export type ComposerTriggerOptions = {
    * list, which stays behind as the fallback for a listing that fails.
    */
   sessionFiles?: SessionFilesLoader;
-  /**
-   * Slash commands. Empty — the default — leaves the `/` menu out entirely,
-   * rather than opening a menu whose only possible answer is "no matches".
-   */
-  commands?: readonly ComposerCommand[];
+  /** The `/` menu. Left out, the composer has no slash trigger. */
+  slash?: {source: SearchSource; onPick: (selection: SlashSelection) => void};
 };
 
 /** Every trigger the composer should carry, in menu-character order. */
@@ -312,14 +286,14 @@ export function createComposerTriggers({
   files,
   maxResults,
   sessionFiles,
-  commands = [],
+  slash,
 }: ComposerTriggerOptions): ChatComposerTrigger[] {
   const mentionSource = sessionFiles
     ? createSessionFileSource({loadFiles: sessionFiles, fallbackFiles: files, maxResults})
     : createFileMentionSource(files, maxResults);
   const triggers = [fileMentionTrigger(mentionSource)];
-  if (commands.length > 0) {
-    triggers.push(commandTrigger(commands, maxResults));
+  if (slash !== undefined) {
+    triggers.push(slashTrigger(slash.source, slash.onPick));
   }
   return triggers;
 }

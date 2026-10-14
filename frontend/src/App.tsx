@@ -119,6 +119,7 @@ import {
 } from './web-ui-steps';
 import {hasToolResultImages, toolResultText} from './tool-result-view';
 import {applyPart, applyPartDelta} from './messagePatch';
+import {SLASH_COMMANDS, type SlashCommandName} from './slash-commands';
 import {ComposerPane} from './components/ComposerPane';
 import {StateContextDrawer} from './components/StateContextDrawer';
 import {ComposerErrorBoundary} from './components/ComposerErrorBoundary';
@@ -4862,6 +4863,47 @@ function App() {
     resettingViewKey !== null ||
     frontCompactingViewKey !== null;
 
+  /** Runs a `/` command the way its toolbar button does; a busy session refuses it with a notice. */
+  const runSlashCommand = (name: SlashCommandName) => {
+    if (isDestructiveActionDisabled) {
+      recordNotification({
+        sessionId: activeSessionId,
+        sessionTitle: activeRowSession.title,
+        kind: 'info',
+        title: `/${name} is unavailable`,
+        message: 'Wait for the run, compaction or settings change in progress to finish.',
+      });
+      return;
+    }
+    if (name === 'compact') {
+      void compactActiveSession();
+      return;
+    }
+    setComposerActionsViewKey(null);
+    setIsUsageDrawerCollapsed(true);
+    setFrontCompactionInfoViewKey(null);
+    setFrontCompactionTarget(null);
+    setFrontCompactionModeViewKey(null);
+    setFrontCompactionError(null);
+    setResetError(null);
+    if (name === 'state') {
+      setResetDrawerViewKey(null);
+      setStateContextViewKey(activeViewKey);
+    } else {
+      setStateContextViewKey(null);
+      setResetDrawerViewKey(activeViewKey);
+    }
+  };
+  const reportSlashError = (message: string) => {
+    recordNotification({
+      sessionId: activeSessionId,
+      sessionTitle: activeRowSession.title,
+      kind: 'error',
+      title: 'Library item not inserted',
+      message,
+    });
+  };
+
   const composerPane = (
     <ComposerPane
       activeSessionId={activeSessionId}
@@ -4876,6 +4918,9 @@ function App() {
       isPromptLibraryOpen={rightPanel === 'prompts'}
       onTogglePromptLibrary={togglePromptLibrary}
       onRegisterInsert={registerComposerInsert}
+      slashCommands={isLiveSession && activeSession.sessionRef ? SLASH_COMMANDS : undefined}
+      onSlashCommand={runSlashCommand}
+      onSlashError={reportSlashError}
       drawer={
         pendingInteraction?.kind === 'approval' ? (
           <ApprovalDrawer

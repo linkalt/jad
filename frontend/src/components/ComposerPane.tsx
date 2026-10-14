@@ -22,9 +22,10 @@ import {
   useImageAttachments,
 } from './ImageAttachments';
 import {FileAttachmentPicker, FileIcon} from './FileAttachments';
-import {fetchSessionFiles} from '../api';
+import {fetchRootLibrary, fetchRootLibraryAsset, fetchSessionFiles} from '../api';
+import {createSlashSource, type SlashCommand, type SlashSelection} from '../slash-commands';
 import {useFileDrop} from './FileDrop';
-import {createComposerTriggers, resolveMentionFiles} from '../composer-triggers';
+import {createComposerTriggers, resolveMentionFiles, slashTrigger} from '../composer-triggers';
 import {loadDrafts, saveDrafts} from '../draftStore';
 import {carriesReactInternals, noteComposerOperation} from '../desync-watch';
 import {
@@ -86,6 +87,12 @@ type ComposerPaneProps = {
    * outside without a registered writer like this one.
    */
   onRegisterInsert?: (insert: ComposerInsertActions | null) => void;
+  /** The built-in `/` commands this view can run; none leaves only the library entries. */
+  slashCommands?: readonly SlashCommand[];
+  /** Runs the picked built-in command. */
+  onSlashCommand?: (name: SlashCommand['name']) => void;
+  /** Reports a `/` library item that could not be loaded. */
+  onSlashError?: (message: string) => void;
   drawer?: ReactNode;
   /** Content actions (attach, usage, compact), placed in the bottom action bar. */
   toolbarActions?: ReactNode;
@@ -419,6 +426,9 @@ export function ComposerPane({
   isPromptLibraryOpen,
   onTogglePromptLibrary,
   onRegisterInsert,
+  slashCommands,
+  onSlashCommand,
+  onSlashError,
   drawer,
   toolbarActions,
   footerNote,
@@ -434,21 +444,32 @@ export function ComposerPane({
    * lists the active session's files, and handing the composer a fresh array on
    * every render would restart its trigger search while the user is typing.
    */
-  const composerTriggers = useMemo(
-    () =>
-      appConfig.mention_files_enabled
-        ? createComposerTriggers({
-            files: resolveMentionFiles(appConfig.mention_files),
-            maxResults: appConfig.mention_max_results,
-            sessionFiles:
-              appConfig.mention_source === 'cwd'
-                ? signal =>
-                    fetchSessionFiles(activeSessionId, signal).then(listing => listing.files)
-                : undefined,
-          })
-        : [],
-    [activeSessionId],
-  );
+  const slashPickRef = useRef<(selection: SlashSelection) => void>(() => undefined);
+  const composerTriggers = useMemo(() => {
+    const slash = appConfig.slash_menu_enabled
+      ? {
+          source: createSlashSource({
+            commands: slashCommands ?? [],
+            loadCatalog: () => fetchRootLibrary(),
+            maxResults: appConfig.slash_menu_max_results,
+            refreshMs: appConfig.slash_menu_refresh_ms,
+          }),
+          onPick: (selection: SlashSelection) => slashPickRef.current(selection),
+        }
+      : undefined;
+    if (!appConfig.mention_files_enabled) {
+      return slash ? [slashTrigger(slash.source, slash.onPick)] : [];
+    }
+    return createComposerTriggers({
+      files: resolveMentionFiles(appConfig.mention_files),
+      maxResults: appConfig.mention_max_results,
+      sessionFiles:
+        appConfig.mention_source === 'cwd'
+          ? signal => fetchSessionFiles(activeSessionId, signal).then(listing => listing.files)
+          : undefined,
+      slash,
+    });
+  }, [activeSessionId, slashCommands]);
 
   const imageLimits = useMemo(
     () => ({
@@ -660,6 +681,23 @@ export function ComposerPane({
     () => ({text: insertText, prompt: insertPrompt, skill: insertSkill}),
     [insertPrompt, insertSkill, insertText],
   );
+
+  // A library pick inserts the way the prompt library panel does: a prompt by its
+  // length rule, a template as plain text, a skill as a badge.
+  slashPickRef.current = selection => {
+    if (selection.type === 'command') {
+      onSlashCommand?.(selection.name);
+      return;
+    }
+    fetchRootLibraryAsset(selection.kind, selection.id).then(
+      asset => {
+        if (asset.kind === 'prompt') insertPrompt(asset.content, asset.name);
+        else if (asset.kind === 'template') insertText(asset.content);
+        else insertSkill(asset.content, asset.name);
+      },
+      reason => onSlashError?.(reason instanceof Error ? reason.message : String(reason)),
+    );
+  };
 
   const dropRules = useMemo(
     () => ({

@@ -4,7 +4,6 @@ import test from 'node:test';
 
 import {
   BUILTIN_MENTION_FILES,
-  commandTrigger,
   createComposerTriggers,
   createSessionFileSource,
   mentionItems,
@@ -82,44 +81,37 @@ test('the @ trigger searches the list, bootstraps it, and inserts a path chip', 
   });
 });
 
-test('an empty command list leaves the slash menu out entirely', () => {
-  assert.deepEqual(createComposerTriggers({files: FILES, maxResults: 5}).length, 1);
-  assert.deepEqual(createComposerTriggers({files: FILES, maxResults: 5, commands: []}).length, 1);
+test('without a slash option the composer has only the @ trigger', () => {
+  assert.equal(createComposerTriggers({files: FILES, maxResults: 5}).length, 1);
 });
 
-test('commands add a slash trigger that matches aliases and inserts a yellow chip', () => {
+test('the slash trigger hands the selection to onPick and inserts no text', () => {
+  const picked = [];
+  const source = {search: () => [], bootstrap: () => []};
   const triggers = createComposerTriggers({
     files: FILES,
     maxResults: 5,
-    commands: [
-      {name: 'compact', keywords: ['shrink', 'summarise']},
-      {name: 'clear'},
-    ],
+    slash: {source, onPick: selection => picked.push(selection)},
   });
   assert.equal(triggers.length, 2);
-  const command = triggers[1];
-  assert.equal(command.character, '/');
-  assert.deepEqual(
-    command.searchSource.search('shrink').map(item => item.id),
-    ['compact'],
-  );
-  assert.deepEqual(
-    command.searchSource.bootstrap().map(item => item.label),
-    ['/compact', '/clear'],
-  );
-  assert.deepEqual(command.onSelect({id: 'compact', label: '/compact'}), {
-    value: '/compact',
-    label: '/compact',
-    variant: 'yellow',
-  });
+  const slash = triggers[1];
+  assert.equal(slash.character, '/');
+  assert.equal(slash.searchSource, source);
+  const selection = {type: 'command', name: 'compact'};
+  assert.equal(slash.onSelect({id: 'compact', label: '/compact', auxiliaryData: selection}), '');
+  assert.deepEqual(picked, [selection]);
+  assert.equal(slash.onSelect({id: 'x', label: '/x'}), '', 'an item without a selection inserts nothing');
+  assert.equal(picked.length, 1);
 });
 
-test('the command trigger alone also caps its menu', () => {
-  const trigger = commandTrigger([{name: 'a'}, {name: 'b'}, {name: 'c'}], 2);
-  assert.deepEqual(
-    trigger.searchSource.bootstrap().map(item => item.id),
-    ['a', 'b'],
-  );
+test('a folder is ranked by its own name, and its trailing slash is not part of it', () => {
+  const paths = ['frontend/src/components/', 'frontend/src/components/Card.tsx', 'src/', 'docs/src-notes.md'];
+  assert.deepEqual(rankMentionFiles(paths, 'components', 10), [
+    'frontend/src/components/',
+    'frontend/src/components/Card.tsx',
+  ]);
+  assert.deepEqual(rankMentionFiles(paths, 'src', 10), ['src/', 'docs/src-notes.md', 'frontend/src/components/', 'frontend/src/components/Card.tsx']);
+  assert.deepEqual(rankMentionFiles(paths, 'src/', 10), ['src/', 'frontend/src/components/', 'frontend/src/components/Card.tsx']);
 });
 
 test('every built-in path is relative, unique, and exists in this repository', () => {
