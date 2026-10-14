@@ -18,7 +18,6 @@ import (
 	"jad/backend-go/internal/webui"
 )
 
-type webUIPart = webui.Part
 type webUIMessage = webui.Message
 
 // runUsageSummaryReader reads usage from inside a run. Like the TypeScript run,
@@ -228,64 +227,6 @@ func encodeTerminalEvents(message webUIMessage) ([]streamEvent, error) {
 		return nil, err
 	}
 	return []streamEvent{uiEvent, completedEvent, doneEvent}, nil
-}
-
-// UserMessageFromTranscriptRecord converts one persisted user item to the
-// frontend Web UI message shape. The offset makes the ID stable across paging.
-func UserMessageFromTranscriptRecord(record json.RawMessage, offset int64) (json.RawMessage, bool, error) {
-	var input struct {
-		Type      string                  `json:"type"`
-		Role      string                  `json:"role"`
-		CreatedAt json.RawMessage         `json:"created_at"`
-		Content   []webui.UserContentPart `json:"content"`
-	}
-	if err := json.Unmarshal(record, &input); err != nil {
-		return nil, false, fmt.Errorf("decode transcript input message: %w", err)
-	}
-	if input.Type != "message" || input.Role != "user" {
-		return nil, false, nil
-	}
-	text, images, files, visible := webui.UserContent(input.Content)
-	if !visible {
-		return nil, false, nil
-	}
-	message := webUIMessage{
-		ID:        fmt.Sprintf("session-user-o%d", offset),
-		Sender:    "user",
-		Timestamp: timestampFromRaw(input.CreatedAt),
-		Parts:     []webUIPart{{Type: "text", Text: text, Images: images, Files: files}},
-		Text:      text,
-	}
-	encoded, err := json.Marshal(message)
-	return encoded, true, err
-}
-
-func timestampFromRaw(raw json.RawMessage) string {
-	if len(raw) == 0 || string(raw) == "null" {
-		return ""
-	}
-	var seconds float64
-	if err := json.Unmarshal(raw, &seconds); err == nil {
-		return time.Unix(0, int64(seconds*float64(time.Second))).Local().Format("3:04 PM")
-	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil || value == "" {
-		return ""
-	}
-	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.000Z07:00", "2006-01-02"} {
-		if parsed, err := time.Parse(layout, value); err == nil {
-			return parsed.Local().Format("3:04 PM")
-		}
-	}
-	return ""
-}
-
-func textParts(text string) []webUIPart {
-	parts := make([]webUIPart, 0, 1)
-	if text != "" {
-		parts = append(parts, webUIPart{Type: "text", Text: text})
-	}
-	return parts
 }
 
 // runLogAttrs identifies a run in the log by its session reference, profile and

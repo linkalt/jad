@@ -93,3 +93,23 @@ func TestSessionListCountsTheTurnsOfEveryProfile(t *testing.T) {
 		t.Fatalf("turns = %d, want the default profile's 2", sessions[0].Turns)
 	}
 }
+
+func TestSessionListSurvivesAnUnreadableTranscriptOfAnotherProfile(t *testing.T) {
+	f := newLayoutFixture(t)
+	reviewerDir := filepath.Join(f.cwd, ".jad", "state", "demo", "review", "reviewer")
+	if err := os.MkdirAll(reviewerDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A directory where the transcript file belongs: it exists but cannot be read.
+	if err := os.Mkdir(filepath.Join(reviewerDir, "messages.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	status, _, sessions := f.listSessions(t, "")
+	if status != http.StatusOK || len(sessions) != 1 {
+		t.Fatalf("list = %d %v, want 200 with the session", status, sessions)
+	}
+	got := sessions[0].ProfileTurns
+	if _, present := got["review/reviewer"]; present || got["dev/coder"] != 0 {
+		t.Fatalf("profile_turns = %v, want only dev/coder", got)
+	}
+}

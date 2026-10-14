@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"jad/backend-go/internal/webui"
 )
 
 // bigSnapshot is a full message snapshot far larger than the small budgets the
@@ -148,4 +150,12 @@ func TestEventQueueResynchronizesWithinBufferedByteLimit(t *testing.T) {
 	if !ok || second.name != "done" {
 		t.Fatalf("second replay event = %#v, ok=%v", second, ok)
 	}
+}
+
+func textParts(text string) []webui.Part {
+	parts := make([]webui.Part, 0, 1)
+	if text != "" {
+		parts = append(parts, webui.Part{Type: "text", Text: text})
+	}
+	return parts
 }

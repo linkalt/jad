@@ -150,34 +150,3 @@ func TestRunBodyLimitGrowsOnlyWhenImagesAreAllowed(t *testing.T) {
 		t.Fatalf("images on: %d, want about %d", got, 1000+2*400)
 	}
 }
-
-func TestUserMessageFromTranscriptRecordCarriesImages(t *testing.T) {
-	name := strings.Repeat("e", 64) + ".png"
-	record := json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_image","image_url":"stored-image://` + name + `"}]}`)
-	encoded, visible, err := UserMessageFromTranscriptRecord(record, 42)
-	if err != nil || !visible {
-		t.Fatalf("%v, visible %v", err, visible)
-	}
-	var message struct {
-		ID    string
-		Text  string
-		Parts []struct {
-			Type   string
-			Images []string
-		}
-	}
-	if err := json.Unmarshal(encoded, &message); err != nil {
-		t.Fatal(err)
-	}
-	if message.ID != "session-user-o42" || message.Text != "[image]" || len(message.Parts) != 1 || len(message.Parts[0].Images) != 1 || message.Parts[0].Images[0] != name {
-		t.Fatalf("%s", encoded)
-	}
-	// A message with no text, image or file is still not a message.
-	if _, visible, _ := UserMessageFromTranscriptRecord(json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_audio"}]}`), 1); visible {
-		t.Fatal("a message without text, image or file must stay hidden")
-	}
-	encoded, visible, err = UserMessageFromTranscriptRecord(json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_file","filename":"a.pdf","file_data":"data:application/pdf;base64,JVBERi0="}]}`), 2)
-	if err != nil || !visible || !strings.Contains(string(encoded), `"files":["a.pdf"]`) || strings.Contains(string(encoded), "JVBERi0") {
-		t.Fatalf("a file-only message: visible=%v err=%v %s", visible, err, encoded)
-	}
-}

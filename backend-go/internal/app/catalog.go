@@ -185,10 +185,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			return httpapi.CatalogResponse{}, fmt.Errorf("read session transcript %q: %w", candidate.location.Reference, err)
 		}
 		record := makeSessionListRecord(candidate.location, candidate.config, index.turns, index.usage, candidate.runs)
-		record.ProfileTurns, err = r.profileTurns(candidate.config, index.turns, candidate.others)
-		if err != nil {
-			return httpapi.CatalogResponse{}, fmt.Errorf("read session transcript %q: %w", candidate.location.Reference, err)
-		}
+		record.ProfileTurns = r.profileTurns(candidate.config, index.turns, candidate.others)
 		record.Model = listingModelSummary(candidate.location, candidate.config)
 		// The TypeScript list reports usage only from an existing usage cache, so
 		// a session that has never completed a response carries no usage block.
@@ -243,31 +240,31 @@ func profileTranscriptStamps(others map[string]sessionfs.SessionConfig) string {
 }
 
 // profileTurns is the turn count of each profile in scope. A profile that has never
-// run has no transcript file, and counts 0 without creating one.
-func (r *Resolver) profileTurns(config sessionfs.SessionConfig, turns int64, others map[string]sessionfs.SessionConfig) (map[string]int64, error) {
+// run has no transcript file, and counts 0 without creating one. A profile whose
+// transcript cannot be read is left out, so one damaged profile does not fail the list.
+func (r *Resolver) profileTurns(config sessionfs.SessionConfig, turns int64, others map[string]sessionfs.SessionConfig) map[string]int64 {
 	if len(config.Profiles) == 0 {
-		return nil, nil
+		return nil
 	}
 	counts := map[string]int64{config.Profile: turns}
 	for profile, other := range others {
 		if _, err := os.Stat(other.MessagesPath); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				counts[profile] = 0
-				continue
 			}
-			return nil, fmt.Errorf("stat transcript of profile %q: %w", profile, err)
+			continue
 		}
 		shared, err := r.sharedStore(other)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		index, err := scanTranscriptIndex(shared, other)
 		if err != nil {
-			return nil, fmt.Errorf("profile %q: %w", profile, err)
+			continue
 		}
 		counts[profile] = index.turns
 	}
-	return counts, nil
+	return counts
 }
 
 // ReadSessionSnapshot implements the transcript-backed portion of the
