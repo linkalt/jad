@@ -167,3 +167,32 @@ func TestProfileTurnsAreCountedAgainOnlyWhenTheTranscriptChanges(t *testing.T) {
 		t.Fatalf("count after the transcript grew = %d, want 4", got)
 	}
 }
+
+// TestSessionListAllocationsPerProfile guards the cost of a list by the allocations it
+// makes, which are stable where timings are not. A list that loads each other profile
+// (on the 304 path or when its count is cached) allocates thousands per profile; the
+// limit sits well above the measured cost. Timings: see backend-go/README.md.
+func TestSessionListAllocationsPerProfile(t *testing.T) {
+	ctx := context.Background()
+	allocations := func(profiles int) (conditional, full float64) {
+		resolver := newProfileTurnsBenchmarkResolver(t, profiles, 50)
+		first, err := resolver.ListSessions(ctx, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conditional = testing.AllocsPerRun(10, func() { resolver.ListSessions(ctx, first.ETag, nil) })
+		full = testing.AllocsPerRun(10, func() { resolver.ListSessions(ctx, "", nil) })
+		return conditional, full
+	}
+	const profiles = 8
+	// Measured: about 176 allocations per extra profile on the 304 path and 220 on the full list.
+	const perProfileLimit = 400
+	oneConditional, oneFull := allocations(1)
+	manyConditional, manyFull := allocations(profiles)
+	if perProfile := (manyConditional - oneConditional) / (profiles - 1); perProfile > perProfileLimit {
+		t.Errorf("a 304 list allocates %.0f per extra profile, limit %d", perProfile, perProfileLimit)
+	}
+	if perProfile := (manyFull - oneFull) / (profiles - 1); perProfile > perProfileLimit {
+		t.Errorf("a full list allocates %.0f per extra profile, limit %d", perProfile, perProfileLimit)
+	}
+}

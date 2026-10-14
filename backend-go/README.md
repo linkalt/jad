@@ -12,6 +12,23 @@ go generate ./internal/tools/native
 
 This downloads and verifies the host-platform native library in the user cache and writes a machine-local cgo link shim. The shim (and the Windows DLL, if generated) is ignored by Git. Re-run the generator after upgrading the Xberg package. The generator detects the host platform; cross-compilation requires provisioning the matching target library and cgo link flags separately, and deployments must include the native runtime library.
 
+## Performance regressions
+
+Timings differ between machines and runs, so none is stored in a test. Two checks split the work:
+
+- **Allocations, in `go test`.** `TestSessionListAllocationsPerProfile` fails when a session list allocates much more per extra profile, as it would if a 304 loaded each profile again. Allocation counts are stable, so a failure is a real change in the work done.
+- **Timings, by hand, on one machine.** Run the benchmark on the old code and on the new code and compare with `benchstat`:
+
+```sh
+cd backend-go
+go test ./internal/app -run '^$' -bench ListSessionsProfiles -benchtime 50x -count=10 > /tmp/old.txt
+# switch to the code under test, then:
+go test ./internal/app -run '^$' -bench ListSessionsProfiles -benchtime 50x -count=10 > /tmp/new.txt
+(cd /tmp && go run golang.org/x/perf/cmd/benchstat@latest old.txt new.txt)
+```
+
+Treat a difference under about 5% as noise: two runs of the same code showed +4% at p=0.009 for the 304 path. Do not commit the result files.
+
 ## ChatGPT sign-in: `openai-auth`
 
 `cmd/openai-auth` signs in to a ChatGPT account, refreshes its tokens and reports the credential file that a session with `auth_mode: "openai_oauth"` reads. The backend never writes that file. See `cmd/openai-auth/README.md`.
