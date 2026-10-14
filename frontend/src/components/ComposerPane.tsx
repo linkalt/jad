@@ -77,9 +77,8 @@ type ComposerPaneProps = {
   showInspector: boolean;
   onToggleInspector: () => void;
   /** Whether the left data panel is open, and which dataset the toggle would open. */
-  isLeftPanelOpen: boolean;
-  leftPanelLabel: string;
-  onToggleLeftPanel: () => void;
+  isPromptLibraryOpen: boolean;
+  onTogglePromptLibrary: () => void;
   /**
    * Hands the pane's insert function to the app, so a view outside the composer
    * (the prompt library) can load text into the active draft. Drafts have to
@@ -417,9 +416,8 @@ export function ComposerPane({
   placeholder,
   showInspector,
   onToggleInspector,
-  isLeftPanelOpen,
-  leftPanelLabel,
-  onToggleLeftPanel,
+  isPromptLibraryOpen,
+  onTogglePromptLibrary,
   onRegisterInsert,
   drawer,
   toolbarActions,
@@ -766,13 +764,13 @@ export function ComposerPane({
         <HStack align="center" gap={1}>
           <IconButton
             data-panel-toggle=""
-            label={`${isLeftPanelOpen ? 'Hide' : 'Show'} ${leftPanelLabel}`}
+            label={`${isPromptLibraryOpen ? 'Hide' : 'Show'} prompt library`}
             icon={
-              <Icon icon={isLeftPanelOpen ? 'chevronLeft' : 'chevronRight'} size="sm" />
+              <Icon icon={isPromptLibraryOpen ? 'chevronLeft' : 'chevronRight'} size="sm" />
             }
-            variant={isLeftPanelOpen ? 'secondary' : 'ghost'}
+            variant={isPromptLibraryOpen ? 'secondary' : 'ghost'}
             size="sm"
-            onClick={onToggleLeftPanel}
+            onClick={onTogglePromptLibrary}
           />
           {toolbarActions}
           {isImageAttachEnabled ? (

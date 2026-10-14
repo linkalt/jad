@@ -93,7 +93,7 @@ type FloatingPanelProps = {
  * toggle never dismisses anything.
  *
  * Both sides use this one shell, so a new dataset only has to supply content:
- * the run inspector fills the right edge, the prompt library the left.
+ * the run inspector and the prompt library fill the right edge, session search the left.
  *
  * Each panel's scrollbar sits on its outer edge — the window edge — so the
  * `start` panels put it on the left and the `end` panels keep it on the right.

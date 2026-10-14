@@ -175,7 +175,7 @@ export function PromptLibraryPanel({
 
   return (
     <FloatingPanel
-      side="start"
+      side="end"
       label="Prompt library"
       title="Prompt library"
       subtitle={subtitle}

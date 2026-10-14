@@ -1714,13 +1714,7 @@ const CatalogEditorDialog = lazy(() =>
 );
 
 /** Datasets the floating left panel can show. One slot, so only one at a time. */
-const LEFT_PANELS = {
-  prompts: {label: 'prompt library'},
-  search: {label: 'session search'},
-  settings: {label: 'run settings'},
-} as const;
-
-type LeftPanelId = keyof typeof LEFT_PANELS;
+type LeftPanelId = 'search' | 'settings';
 
 function NotificationBellIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -1799,15 +1793,6 @@ function SessionNavigation({
             variant={openLeftPanel === 'search' ? 'secondary' : 'ghost'}
             size="sm"
             onClick={() => onSelectLeftPanel('search')}
-          />
-          <IconButton
-            data-panel-toggle=""
-            label="Prompt library"
-            tooltip="Prompt library"
-            icon={<Icon icon="copy" size="sm" />}
-            variant={openLeftPanel === 'prompts' ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={() => onSelectLeftPanel('prompts')}
           />
           <IconButton
             data-panel-toggle=""
@@ -2494,7 +2479,9 @@ function App() {
   const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
   const [hasOpenedProfileEditor, setHasOpenedProfileEditor] = useState(false);
   const [rightPanel, setRightPanel] = useState<RightPanelId | null>(
-    appConfig.show_inspector_by_default ? 'inspector' : null,
+    appConfig.show_inspector_by_default
+      ? 'inspector'
+      : appConfig.show_prompt_library_by_default ? 'prompts' : null,
   );
   // The Jad README stands in for the transcript until a row is chosen.
   const [isReadmeShown, setIsReadmeShown] = useState(appConfig.start_with_readme);
@@ -2507,16 +2494,15 @@ function App() {
   const toggleInspector = useCallback(() => {
     setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'inspector'));
   }, [setRightPanelMode]);
+  const togglePromptLibrary = useCallback(() => {
+    setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'prompts'));
+  }, [setRightPanelMode]);
   const toggleCheckpoints = useCallback(() => {
     setRightPanelMode(selectionAfterPanelToggle(rightPanelRef.current, 'checkpoints'));
   }, [setRightPanelMode]);
-  // One left slot, several datasets: the panel shows whichever workspace view
-  // was picked last, so two panels never stack on the same edge. The closed
-  // state remembers that choice, because the composer toggle reopens it.
-  const [leftPanel, setLeftPanel] = useState<LeftPanelId | null>(
-    appConfig.show_prompt_library_by_default ? 'prompts' : null,
-  );
-  const [lastLeftPanel, setLastLeftPanel] = useState<LeftPanelId>('prompts');
+  // One left slot, several datasets: the panel shows whichever view was picked
+  // last, so two panels never stack on the same edge.
+  const [leftPanel, setLeftPanel] = useState<LeftPanelId | null>(null);
   const [runningViewKeys, setRunningViewKeys] = useState<ReadonlySet<string>>(
     new Set(),
   );
@@ -2667,9 +2653,9 @@ function App() {
     direction: 'horizontal',
     autoSaveId: 'jad-run-inspector',
   });
-  // The left-hand counterpart of the inspector, hosting whichever workspace
-  // dataset is selected. One region serves them all, so the width the user
-  // dragged is the width every left-hand view opens at.
+  // The narrower region for the side panels: session search and run settings
+  // on the left, the prompt library on the right. One region serves them all,
+  // so the width the user dragged is the width each of them opens at.
   const leftPanelRegion = useResizable({
     defaultSize: pixel(appConfig.left_panel_default_size),
     minSize: pixel(appConfig.left_panel_min_size),
@@ -2684,11 +2670,7 @@ function App() {
   const registerComposerInsert = useCallback((insert: ComposerInsertActions | null) => {
     insertIntoComposerRef.current = insert;
   }, []);
-  const toggleLeftPanel = useCallback(() => {
-    setLeftPanel(current => (current ? null : lastLeftPanel));
-  }, [lastLeftPanel]);
   const selectLeftPanel = useCallback((panel: LeftPanelId) => {
-    setLastLeftPanel(panel);
     setLeftPanel(current => (current === panel ? null : panel));
   }, []);
   const usePrompt = useCallback((prompt: RootLibraryAsset) => {
@@ -4824,9 +4806,8 @@ function App() {
       placeholder={isReadmeShown ? 'Choose a session to start chatting' : 'Ask the agent to inspect a task…'}
       showInspector={rightPanel === 'inspector'}
       onToggleInspector={toggleInspector}
-      isLeftPanelOpen={leftPanel !== null}
-      leftPanelLabel={LEFT_PANELS[leftPanel ?? lastLeftPanel].label}
-      onToggleLeftPanel={toggleLeftPanel}
+      isPromptLibraryOpen={rightPanel === 'prompts'}
+      onTogglePromptLibrary={togglePromptLibrary}
       onRegisterInsert={registerComposerInsert}
       drawer={
         pendingInteraction?.kind === 'approval' ? (
@@ -5404,15 +5385,6 @@ function App() {
             </LayoutContent>
           }
         />
-        {leftPanel === 'prompts' && (
-          <PromptLibraryPanel
-            region={leftPanelRegion}
-            onClose={() => setLeftPanel(null)}
-            onUsePrompt={usePrompt}
-            onUseTemplate={useTemplate}
-            onUseSkill={useSkill}
-          />
-        )}
         {leftPanel === 'search' && (
           <SessionSearchPanel
             region={leftPanelRegion}
@@ -5455,6 +5427,15 @@ function App() {
               selectSession(sessionId);
               setRightPanelMode(null);
             }}
+          />
+        )}
+        {rightPanel === 'prompts' && (
+          <PromptLibraryPanel
+            region={leftPanelRegion}
+            onClose={() => setRightPanelMode(null)}
+            onUsePrompt={usePrompt}
+            onUseTemplate={useTemplate}
+            onUseSkill={useSkill}
           />
         )}
         {rightPanel === 'checkpoints' && (
