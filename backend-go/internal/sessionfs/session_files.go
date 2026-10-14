@@ -15,6 +15,12 @@ import (
 // ListSessionFiles lists the catalog-layout sessions of every root with the version of each
 // <id>.json file. The ID is the session reference the other routes take.
 func ListSessionFiles(roots []Root) ([]CatalogFileInfo, error) {
+	return listSessionFiles(roots, nil)
+}
+
+// listSessionFiles is ListSessionFiles; with onUnreadable set, a session file that cannot
+// be read is passed to it and skipped instead of failing the listing.
+func listSessionFiles(roots []Root, onUnreadable func(location Location, err error)) ([]CatalogFileInfo, error) {
 	var infos []CatalogFileInfo
 	for _, root := range roots {
 		if root.Layout == nil {
@@ -35,6 +41,10 @@ func ListSessionFiles(roots []Root) ([]CatalogFileInfo, error) {
 			location := makeLocation(root, id, len(roots))
 			data, err := os.ReadFile(location.SettingFile())
 			if err != nil {
+				if onUnreadable != nil {
+					onUnreadable(location, err)
+					continue
+				}
 				return nil, configError("%s: could not be read: %v", location.SettingFile(), err)
 			}
 			infos = append(infos, CatalogFileInfo{ID: location.Reference, ETag: CatalogETag(data), Name: fileDisplayName(data)})

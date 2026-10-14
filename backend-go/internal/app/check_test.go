@@ -186,3 +186,25 @@ func TestCheckFilesReportsTwoSessionsThatFailWithTheSameMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckFilesChecksTheOtherSessionsWhenOneCannotBeRead(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.overwrite(t, "sessions/second.json", `{"schema_version":1,"cwd":"`+f.cwd+`","scope":{"profiles":["dev"]},"bogus":1}`)
+	unreadable := filepath.Join(f.root, "sessions", "demo.json")
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o600) })
+	if _, err := os.ReadFile(unreadable); err == nil {
+		t.Skip("the file is readable despite mode 0, as for root")
+	}
+	valid, out := f.checkFiles(t)
+	if valid {
+		t.Fatalf("broken sessions were accepted: %s", out)
+	}
+	for _, want := range []string{"session demo:", "permission denied", "session second:", "bogus"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}

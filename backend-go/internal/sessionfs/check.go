@@ -89,7 +89,10 @@ func (r *CheckReport) checkCatalog(layout Layout, roots []Root, kind CatalogKind
 }
 
 func (r *CheckReport) checkSessions(roots []Root) {
-	files, err := ListSessionFiles(roots)
+	files, err := listSessionFiles(roots, func(location Location, err error) {
+		r.Checked++
+		r.add("session", location.Reference, err)
+	})
 	if err != nil {
 		r.add("session", "", err)
 		return
