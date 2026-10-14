@@ -73,6 +73,8 @@ type FloatingPanelProps = {
   /** Size and drag props from `useResizable`. */
   region: ResizableRegion;
   onClose: () => void;
+  /** Treat clicks on session rows (`data-session-row`) as inside, for panels that follow the active session. */
+  followsSession?: boolean;
   /** Fixed bar pinned below the scrolling content, e.g. the library control bar. */
   footer?: ReactNode;
   children: ReactNode;
@@ -105,10 +107,14 @@ export function FloatingPanel({
   subtitle,
   region,
   onClose,
+  followsSession = false,
   footer,
   children,
 }: FloatingPanelProps) {
   const accessibleName = label.toLowerCase();
+  const insideSelector = followsSession
+    ? '[data-floating-panel], [data-panel-toggle], [data-session-row]'
+    : '[data-floating-panel], [data-panel-toggle]';
 
   // The latest callback lives in a ref so the document listener can be
   // registered once per mount. Re-registering on every render is not just
@@ -131,14 +137,14 @@ export function FloatingPanel({
       if (!(target instanceof Element)) {
         return;
       }
-      if (target.closest('[data-floating-panel], [data-panel-toggle]')) {
+      if (target.closest(insideSelector)) {
         return;
       }
       onCloseRef.current();
     };
     document.addEventListener('pointerdown', handlePointerDown);
     return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, []);
+  }, [insideSelector]);
 
   // Reversed when the handle sits on the panel's inner left edge, matching how
   // the conversation lane's own handles are configured.

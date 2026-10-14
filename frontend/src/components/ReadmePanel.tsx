@@ -84,6 +84,7 @@ export function ReadmePanel({sessionId, profile, region, onClose}: ReadmePanelPr
       subtitle={readme?.name ?? 'Project overview'}
       region={region}
       onClose={onClose}
+      followsSession
     >
       <VStack gap={3} width="100%">
         <HStack align="center" justify="end" gap={2}>

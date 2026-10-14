@@ -65,6 +65,7 @@ export function SessionGroupList({
     return (
       <SideNavItem
         key={row.key}
+        data-session-row=""
         label={row.label}
         isSelected={row.key === activeViewKey}
         onClick={() =>
@@ -93,6 +94,7 @@ export function SessionGroupList({
         return (
           <SideNavItem
             key={group.sessionRef}
+            data-session-row=""
             label={group.title}
             icon={<StatusDot variant={state} label={`${group.title} ${state}`} />}
             collapsible={{
