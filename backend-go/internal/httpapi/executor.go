@@ -102,6 +102,7 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 			return emitter.push(message)
 		},
 		OnToolResult: func(item json.RawMessage) {
+			run.keepLiveImages(item)
 			message, changed := normalizedRun.AddToolResult(item)
 			if changed {
 				if err := emitter.push(message); err != nil {

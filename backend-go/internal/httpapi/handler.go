@@ -561,6 +561,8 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleRunStart(w, r, reference, profile)
 	case r.Method == http.MethodGet && len(segments) == 5 && segments[3] == "run" && segments[4] == "stream":
 		h.handleRunStream(w, r, reference, profile)
+	case r.Method == http.MethodGet && len(segments) == 7 && segments[3] == "run" && segments[4] == "images":
+		h.handleLiveRunImage(w, r, reference, profile, segments[5], segments[6])
 	case r.Method == http.MethodPost && len(segments) == 5 && segments[3] == "run" && segments[4] == "stop":
 		h.handleRunStop(w, r, reference, profile)
 	default:

@@ -195,6 +195,10 @@ type activeRun struct {
 	// providerRetry is the provider retry the run is waiting on, replayed to a client
 	// that attaches mid-wait. nil when the run is not waiting. Guarded by mu.
 	providerRetry *providerRetryWait
+
+	// liveImages holds the decoded inline images of the run's tool results by call id,
+	// served by the live image route. Guarded by mu.
+	liveImages map[string][]SessionImage
 }
 
 type runRegistry struct {
@@ -599,6 +603,7 @@ func (r *activeRun) disposeContent() {
 	r.mu.Lock()
 	cache := r.content
 	r.content = nil
+	r.liveImages = nil
 	r.mu.Unlock()
 	if cache != nil {
 		cache.Close(true)
