@@ -89,7 +89,7 @@ import {
   revealScrollOptions,
   type ScrollPositionSnapshot,
 } from './components/scroll-position';
-import {suppressAttachedRunTranscriptTail} from './active-run-transcript';
+import {useActiveTranscript} from './use-active-transcript';
 import {stopRunAfterConfirmation} from './stop-run';
 import {
   isSessionRunning,
@@ -106,7 +106,6 @@ import {
   forgetHistoryBlocks,
   historyBlockFor,
   historyEtagFromHeader,
-  historyMessagesFor,
   putHistoryBlock,
   type HistoryBlock,
   type HistoryBlocks,
@@ -149,7 +148,7 @@ import {quoteDraftForSelection} from './selection-quote';
 import {PromptLibraryPanel} from './components/PromptLibraryPanel';
 import {RunSettingsPanel} from './components/RunSettingsPanel';
 import {SessionSearchPanel} from './components/SessionSearchPanel';
-import {EarlierMessagesControl, useTranscriptWindow} from './components/TranscriptWindow';
+import {EarlierMessagesControl} from './components/TranscriptWindow';
 import {UsageDetailsDrawer} from './components/UsageDetailsDrawer';
 import {
   ResizeHandle,
@@ -189,7 +188,7 @@ import {
   type PinnedView,
   type SessionListGroup,
 } from './session-views';
-import {placeRunFailures, runFailureText} from './run-failures';
+import {runFailureText} from './run-failures';
 import {ProviderRetryNotice} from './components/ProviderRetryNotice';
 import {SessionGroupList} from './components/SessionGroupList';
 import {interactionEndNotice, type InteractionEnd} from './interaction-end';
@@ -3240,14 +3239,6 @@ function App() {
     frontCompactingViewKey,
     updateViewSessionRecord,
   ]);
-  const threadMessages = threads[activeViewKey] ?? [];
-  // The history block renders ahead of the transcript: it holds the turns a
-  // compaction removed, which are older than everything the transcript carries.
-  const messages = useMemo(() => {
-    const block = historyMessagesFor(historyBlocks, activeViewKey);
-    return block === undefined ? threadMessages : [...block, ...threadMessages];
-  }, [threadMessages, activeViewKey, historyBlocks]);
-
   const isLiveSession = activeSession?.source === 'live';
   const isRunning = isSessionRunning(
     runningViewKeys.has(activeViewKey),
@@ -3257,20 +3248,25 @@ function App() {
     isLiveSession &&
     (rowRunStatus(activeRow, activeSession)?.status === 'running' ||
       attachedRunViewKeysRef.current.has(activeViewKey));
-  const transcriptMessages = useMemo(
-    () => suppressAttachedRunTranscriptTail(messages, hasLiveAttachedRun),
-    [messages, hasLiveAttachedRun],
-  );
-  const {visibleMessages, hiddenCount, revealEarlier} = useTranscriptWindow({
-    messages: transcriptMessages,
-    sessionId: activeViewKey,
-    initialCount: appConfig.transcript_window_messages,
-    pageSize: appConfig.transcript_window_page_messages,
+  const {
+    visibleMessages,
+    hiddenCount,
+    revealEarlier,
+    placedFailures,
+    streamingMessageCommitted,
+    liveToolParts,
+    tools,
+  } = useActiveTranscript({
+    threads,
+    historyBlocks,
+    viewKey: activeViewKey,
+    hasLiveAttachedRun,
+    failures: sessionFailures[activeViewKey],
+    isLiveSession,
+    isRunning,
+    streamingMessage,
+    fallbackTools: defaultTools,
   });
-  const placedFailures = useMemo(
-    () => placeRunFailures(sessionFailures[activeViewKey], visibleMessages.map(message => message.id)),
-    [sessionFailures, activeViewKey, visibleMessages],
-  );
   const activeSessionRef = activeSession?.sessionRef;
   // Where a tool result's stored images are read from; memoised so the rows do not refetch.
   const storedImageScope = useMemo(
@@ -3422,9 +3418,6 @@ function App() {
   const isActiveSessionCompacting = activeSessionRef !== undefined && compactingSessionRef === activeSessionRef;
   const unreadNotificationCount = unreadActivityNotificationCount(notifications);
   const hasUnreadError = hasUnreadActivityError(notifications);
-  const streamingMessageCommitted = streamingMessage !== null && transcriptMessages.some(
-    message => message.id === streamingMessage.id,
-  );
 
   /**
    * The question this composer can answer. Prefer independent run state so the
@@ -3441,35 +3434,6 @@ function App() {
     const steps = isLiveSession ? [] : baseReasoning;
     return getTraceForSteps(steps, isRunning ? runProgress : steps.length);
   }, [isLiveSession, isRunning, runProgress]);
-
-  const liveToolParts = useMemo(() => {
-    if (!isLiveSession || (isRunning && !streamingMessage)) {
-      return null;
-    }
-    const sourceMessage = streamingMessage ?? [...messages]
-      .reverse()
-      .find(message => message.sender === 'assistant' && message.parts?.some(part => part.type === 'tool_call'));
-    return sourceMessage?.parts ?? null;
-  }, [isLiveSession, isRunning, messages, streamingMessage]);
-
-  const tools = useMemo(() => {
-    const latestAssistant = [...messages]
-      .reverse()
-      .find(message => message.sender === 'assistant' && message.tools);
-    const sourceTools = latestAssistant?.tools ?? defaultTools;
-
-    if (!isRunning || isLiveSession) {
-      return sourceTools;
-    }
-
-    return sourceTools.map(
-      (tool, index): ChatToolCallItem => ({
-        ...tool,
-        status: index === 0 ? 'running' : 'pending',
-        duration: undefined,
-      }),
-    );
-  }, [isLiveSession, isRunning, messages]);
 
   /**
    * Drops this client's view of a run without touching the run itself: the
