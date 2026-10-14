@@ -1,4 +1,4 @@
-import {SideNavItem, StatusDot, Text, VisuallyHidden} from '@astryxdesign/core';
+import {SideNavItem, Spinner, StatusDot, Text, VisuallyHidden} from '@astryxdesign/core';
 import type {SessionRunStatus} from '../api';
 import {sessionUiStateForRun, type SessionUiState} from '../session-run-status';
 import {
@@ -58,6 +58,7 @@ export function SessionGroupList({
 
   const renderRow = (row: SessionListRow, session: SessionGroupSession, isChild: boolean) => {
     const state = rowState(row, session);
+    const isRunning = rowHasRunningRun(row, session, runningViewKeys);
     const turns = rowTurnCount(row, session, rowTurns);
     // The visible label of a child is the profile; its accessible names carry the
     // session too, because the same profile name repeats in every group.
@@ -70,7 +71,13 @@ export function SessionGroupList({
         onClick={() =>
           row.profile !== undefined ? onOpenProfile(row.sessionRef, row.profile) : onSelect(row.key)
         }
-        icon={<StatusDot variant={state} label={`${fullLabel} ${state}`} />}
+        icon={
+          isRunning ? (
+            <Spinner size="sm" aria-label={`${fullLabel} running`} />
+          ) : (
+            <StatusDot variant={state} label={`${fullLabel} ${state}`} />
+          )
+        }
         endContent={
           turns === undefined ? undefined : (
             <Text type="supporting" hasTabularNumbers>
@@ -101,7 +108,13 @@ export function SessionGroupList({
           <SideNavItem
             key={group.sessionRef}
             label={group.title}
-            icon={<StatusDot variant={state} label={`${group.title} ${state}`} />}
+            icon={
+              hasRunning ? (
+                <Spinner size="sm" aria-label={`${group.title} running`} />
+              ) : (
+                <StatusDot variant={state} label={`${group.title} ${state}`} />
+              )
+            }
             collapsible={{
               isCollapsed: !isGroupExpanded(group, collapsedRefs),
               onCollapsedChange: isCollapsed => onCollapsedChange(group.sessionRef, isCollapsed),

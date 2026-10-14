@@ -15,6 +15,7 @@ import {
   ChatMessageMetadata,
   ChatSystemMessage,
   ChatToolCalls,
+  Divider,
   Heading,
   HStack,
   Icon,
@@ -1851,6 +1852,7 @@ function SessionNavigation({
           key={section.category ?? ''}
           title={section.category ?? appConfig.session_uncategorized_title}
         >
+          <Divider />
           <SessionGroupList
             groups={section.groups}
             sessions={sessions}
