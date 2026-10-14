@@ -5325,6 +5325,7 @@ function App() {
                 density="balanced"
                 xstyle={styles.chat}
                 composer={centeredComposer}
+                {...(isReadmeShown ? {tabIndex: 0, role: 'region', 'aria-label': 'Jad README'} : {})}
               >
                 <HStack
                   align="stretch"
