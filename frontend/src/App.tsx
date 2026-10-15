@@ -35,6 +35,7 @@ import type {
   StatusDotVariant,
 } from '@astryxdesign/core';
 import {Popover} from '@astryxdesign/core/Popover';
+import {useAppShellMobile} from '@astryxdesign/core/AppShell';
 import {ChatComposerDrawer} from '@astryxdesign/core/Chat';
 import {useToast} from '@astryxdesign/core/Toast';
 import {
@@ -1802,6 +1803,7 @@ function SessionNavigation({
   const categorySections = useMemo(() => groupByCategory(groups), [groups]);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
+  const {isMobile} = useAppShellMobile();
   const [collapsedCategories, setCollapsedCategories] = useState<readonly string[]>([]);
   const toggleCategory = useCallback((key: string) => {
     setCollapsedCategories(current =>
@@ -1855,7 +1857,7 @@ function SessionNavigation({
           />
           <Popover
             label="More"
-            placement="end"
+            placement={isMobile ? 'below' : 'end'}
             alignment="end"
             padding={1}
             isOpen={isMoreOpen}
