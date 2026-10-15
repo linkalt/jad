@@ -38,6 +38,15 @@ func ValidateIdentifier(text string) error {
 // naming the path. The same name may appear in several categories; that is
 // how one program gets different settings (see Catalog.Unique).
 func Scan(kind, dir string) (*Catalog, error) {
+	return ScanObserved(kind, dir, nil)
+}
+
+// ScanObserved is Scan that calls observe with each folder just before it lists it, so a
+// caller can record the folder's state from before the listing.
+func ScanObserved(kind, dir string, observe func(folder string)) (*Catalog, error) {
+	if observe != nil {
+		observe(dir)
+	}
 	categories, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return newCatalog(kind, nil), nil
@@ -60,6 +69,9 @@ func Scan(kind, dir string) (*Catalog, error) {
 		}
 		if err := ValidateIdentifier(item.Name()); err != nil {
 			return nil, fmt.Errorf("%s catalog: category folder %s: %w", kind, path, err)
+		}
+		if observe != nil {
+			observe(path)
 		}
 		found, err := scanCategory(kind, item.Name(), path)
 		if err != nil {

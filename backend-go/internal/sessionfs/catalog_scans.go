@@ -13,6 +13,10 @@ import (
 type CatalogScans struct {
 	mu      sync.Mutex
 	results map[scanKey]scanResult
+
+	// recording is set for a load whose SettingsStamp the caller wants.
+	recording bool
+	files     []fileStamp
 }
 
 type scanKey struct{ kind, dir string }
@@ -39,7 +43,29 @@ func (s *CatalogScans) Scan(kind, dir string) (*catalog.Catalog, error) {
 	if result, seen := s.results[key]; seen {
 		return result.catalog, result.err
 	}
-	scanned, err := catalog.Scan(kind, dir)
+	var observe func(string)
+	if s.recording {
+		observe = func(folder string) { s.files = append(s.files, statStamp(folder)) }
+	}
+	scanned, err := catalog.ScanObserved(kind, dir, observe)
 	s.results[key] = scanResult{catalog: scanned, err: err}
 	return scanned, err
+}
+
+// noteFile stamps path before the caller reads it. A nil or non-recording scans does
+// nothing.
+func (s *CatalogScans) noteFile(path string) {
+	if s == nil || !s.recording {
+		return
+	}
+	stamp := statStamp(path)
+	s.mu.Lock()
+	s.files = append(s.files, stamp)
+	s.mu.Unlock()
+}
+
+func (s *CatalogScans) stamp() SettingsStamp {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return SettingsStamp{files: append([]fileStamp(nil), s.files...)}
 }

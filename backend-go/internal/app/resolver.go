@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/httpdebug"
@@ -52,6 +53,7 @@ type Resolver struct {
 
 	mu                sync.Mutex
 	settingsMu        sync.Mutex
+	lockedConfigs     lockedConfigs
 	stores            map[string]*sharedSession
 	profileTurnsMu    sync.Mutex
 	profileTurnCounts map[string]profileTurnsEntry
@@ -173,10 +175,11 @@ func (r *Resolver) LockSession(ctx context.Context, reference, profile, modelPat
 	// Locking needs only the storage paths. The model file is not read until the
 	// run itself needs it, so a broken model.json cannot block a run from
 	// reaching the point where its input is stored.
-	config, err := sessionfs.LoadSessionSettings(location, profile, modelPath)
+	config, stamp, err := sessionfs.LoadSessionSettingsStamped(location, profile, modelPath)
 	if err != nil {
 		return nil, mapSessionError(err)
 	}
+	loaded := time.Now()
 	transcriptLockPath, err := sessionlock.PathFor(config.MessagesPath)
 	if err != nil {
 		return nil, err
@@ -185,7 +188,15 @@ func (r *Resolver) LockSession(ctx context.Context, reference, profile, modelPat
 	if err != nil {
 		return nil, fmt.Errorf("lock session transcript: %w", err)
 	}
-	return func() { _ = transcriptLock.Close() }, nil
+	key := lockedConfigKey{file: location.File, profile: profile, modelPath: modelPath}
+	// After a wait the config may be old, and Resolve loads its own under the lock.
+	if !transcriptLock.Waited() {
+		r.lockedConfigs.put(key, lockedConfig{config: config, stamp: stamp, loaded: loaded})
+	}
+	return func() {
+		r.lockedConfigs.drop(key)
+		_ = transcriptLock.Close()
+	}, nil
 }
 
 // LockSessionSettings serializes writes to setting.json across processes.
@@ -249,9 +260,12 @@ func (r *Resolver) Resolve(ctx context.Context, reference, profile, modelPath st
 	// file, the tool servers and the credentials are not needed to resolve a
 	// session (to attach to a run, stop one, or accept a message); they are
 	// prepared by the run itself, after its user input is stored.
-	config, err := sessionfs.LoadSessionSettings(location, profile, modelPath)
-	if err != nil {
-		return httpapi.ResolvedSession{}, mapSessionError(err)
+	config, reused := r.lockedConfigs.take(lockedConfigKey{file: location.File, profile: profile, modelPath: modelPath}, time.Now())
+	if !reused {
+		config, err = sessionfs.LoadSessionSettings(location, profile, modelPath)
+		if err != nil {
+			return httpapi.ResolvedSession{}, mapSessionError(err)
+		}
 	}
 	shared, err := r.sharedStore(config)
 	if err != nil {

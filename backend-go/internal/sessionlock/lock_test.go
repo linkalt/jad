@@ -150,3 +150,29 @@ func waitForFileFor(path string, duration time.Duration) bool {
 		}
 	}
 }
+
+func TestLockWaitedIsTrueOnlyWhenAnotherHolderMadeAcquireWait(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".x.jad-lock")
+	first, err := Acquire(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Waited() {
+		t.Fatal("an uncontended Acquire reports it waited")
+	}
+	done := make(chan *Lock, 1)
+	go func() {
+		second, err := Acquire(context.Background(), path)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- second
+	}()
+	time.Sleep(3 * acquirePollInterval)
+	_ = first.Close()
+	second := <-done
+	defer second.Close()
+	if !second.Waited() {
+		t.Fatal("an Acquire that waited for another holder reports it did not")
+	}
+}

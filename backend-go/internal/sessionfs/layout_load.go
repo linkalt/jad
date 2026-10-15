@@ -27,6 +27,7 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 func loadLayoutSessionSettings(location Location, layout Layout, requestedProfile, requestedModel string, scans *CatalogScans) (SessionConfig, error) {
 	sessionPath := location.File
 	var session layoutSessionFile
+	scans.noteFile(sessionPath)
 	if err := readLayoutFile(sessionPath, &session); err != nil {
 		return SessionConfig{}, err
 	}
@@ -226,6 +227,7 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolset string) (map[str
 	if err != nil {
 		return nil, nil, configError("%s: %v", selected.Path, err)
 	}
+	c.scans.noteFile(selected.Path)
 	profile, models, err := readProfile(selected.Path, allModels)
 	if err != nil {
 		return nil, nil, err
@@ -287,6 +289,7 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolset string) (map[str
 			c.addProfileFields(entry, other.ID(), profile, models)
 			c.noteProfileName(other.ID(), profile)
 		} else {
+			c.scans.noteFile(other.Path)
 			unselected, _, err := readProfile(other.Path, allModels)
 			if err == nil {
 				err = checkUnselectedProfile(other.Path, unselected)
@@ -402,6 +405,7 @@ func (c *layoutCompose) addToolset(setting map[string]json.RawMessage, id, profi
 		return configError("%s: toolset: %v", profilePath, err)
 	}
 	var toolset layoutToolsetFile
+	c.scans.noteFile(entry.Path)
 	if err := readLayoutFile(entry.Path, &toolset); err != nil {
 		return err
 	}

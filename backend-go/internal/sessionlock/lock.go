@@ -42,8 +42,14 @@ func IsLockFileName(name string) bool {
 // safe to call more than once.
 type Lock struct {
 	file      *os.File
+	waited    bool
 	closeOnce sync.Once
 	closeErr  error
+}
+
+// Waited reports whether another holder made Acquire wait for this lock.
+func (l *Lock) Waited() bool {
+	return l != nil && l.waited
 }
 
 // Acquire waits until path can be locked or ctx is cancelled. Callers should
@@ -87,6 +93,7 @@ func Acquire(ctx context.Context, path string) (*Lock, error) {
 			}
 			return lock, nil
 		}
+		lock.waited = true
 		select {
 		case <-ctx.Done():
 			_ = file.Close()
