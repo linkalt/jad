@@ -155,11 +155,9 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		fetchStore = NewFetchStore(config.NativeFetch.StorageDir)
 	}
 	if len(config.ToolDefinitionPaths) == 0 {
-		for _, enabled := range []struct{ name, id string }{
-			{"read", readToolID}, {"write", writeToolID}, {"edit", editToolID}, {"grep", grepToolID}, {"bash", bashToolID}, {"exec", execToolID}, {"glob", globToolID}, {"read_image", readImageToolID}, {"process", processToolID}, {"task", taskToolID}, {"memory", memoryToolID}, {"fetch", fetchToolID}, {"request_draft", requestDraftToolID}, {"skill", skillToolID}, {"decide", decideToolID}, {"subagent", subagentToolID},
-		} {
-			if nativeToolConfigured(config, enabled.name) {
-				return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s is configured but %s is missing from tool_definition_paths", config.SettingPath, enabled.name, enabled.id)}
+		for _, name := range sessionfs.NativeToolNames() {
+			if nativeToolConfigured(config, name) {
+				return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s is configured but native.%s is missing from tool_definition_paths", config.SettingPath, name, name)}
 			}
 		}
 	}

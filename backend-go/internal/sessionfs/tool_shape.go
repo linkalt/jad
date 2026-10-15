@@ -14,6 +14,11 @@ var (
 	}
 )
 
+// NativeToolNames lists the names tools.native accepts, in registration order.
+func NativeToolNames() []string {
+	return append([]string(nil), nativeToolNames...)
+}
+
 // validateToolSettingsShape mirrors the TypeScript loader's namespace checks.
 // Individual tool normalizers validate the keys inside each known native tool.
 func validateToolSettingsShape(setting map[string]json.RawMessage, settingPath string) error {
