@@ -3,7 +3,6 @@ package anthropicadapter
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -115,7 +114,7 @@ func (s *sseSink) event(kind string, fields map[string]any) {
 		return
 	}
 	s.events++
-	s.write(fmt.Sprintf("event: %s\ndata: %s\n\n", kind, encoded))
+	s.write("event: " + kind + "\ndata: " + string(encoded) + "\n\n")
 }
 
 // done ends the stream the way the Responses API does.

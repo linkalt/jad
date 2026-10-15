@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -253,6 +254,15 @@ func TestStartQueuedBehindACompactionRunsAfterIt(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("compact did not wait for the transcript")
 	}
+	var gateHeldOnRelease atomic.Bool
+	f.resolver.setOnRelease(func() {
+		f.handler.mutationMu.Lock()
+		_, held := f.handler.mutations["canonical\x00dev"]
+		f.handler.mutationMu.Unlock()
+		if held && f.mutation.compacted {
+			gateHeldOnRelease.Store(true)
+		}
+	})
 	start := f.serve(context.Background(), "/api/sessions/s/run?profile=dev", `{"input":"three"}`)
 	waitQueueLen(t, &f.handler.startTurns, f.handler.turnKey("s", "dev"), 2)
 	close(f.release)
@@ -268,6 +278,9 @@ func TestStartQueuedBehindACompactionRunsAfterIt(t *testing.T) {
 	}
 	if !f.mutation.compacted {
 		t.Fatal("compact did not run")
+	}
+	if gateHeldOnRelease.Load() {
+		t.Fatal("compact gave the transcript back while its mutation gate was still set")
 	}
 }
 

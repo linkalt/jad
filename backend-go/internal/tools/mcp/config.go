@@ -325,5 +325,5 @@ func cloneStringMap(source map[string]string) map[string]string {
 }
 
 func configError(path, format string, args ...any) error {
-	return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %s", path, fmt.Sprintf(format, args...))}
+	return &sessionfs.ConfigError{Message: path + ": " + fmt.Sprintf(format, args...)}
 }

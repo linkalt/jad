@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,12 +22,31 @@ type transcriptLockedResolver struct {
 	*fakeMaintenanceResolver
 	transcript chan struct{}
 	waiting    chan struct{}
+
+	hookMu    sync.Mutex
+	onRelease func()
+}
+
+func (r *transcriptLockedResolver) setOnRelease(hook func()) {
+	r.hookMu.Lock()
+	r.onRelease = hook
+	r.hookMu.Unlock()
+}
+
+func (r *transcriptLockedResolver) releaseTranscript() {
+	r.hookMu.Lock()
+	hook := r.onRelease
+	r.hookMu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	<-r.transcript
 }
 
 func (r *transcriptLockedResolver) TryLockSession(context.Context, string, string, string) (func(), error) {
 	select {
 	case r.transcript <- struct{}{}:
-		return func() { <-r.transcript }, nil
+		return r.releaseTranscript, nil
 	default:
 		return nil, ErrSessionBusy
 	}
@@ -39,7 +59,7 @@ func (r *transcriptLockedResolver) LockSession(ctx context.Context, _, _, _ stri
 	}
 	select {
 	case r.transcript <- struct{}{}:
-		return func() { <-r.transcript }, nil
+		return r.releaseTranscript, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
