@@ -34,6 +34,7 @@ import type {
   ChatToolCallItem,
   StatusDotVariant,
 } from '@astryxdesign/core';
+import {Popover} from '@astryxdesign/core/Popover';
 import {ChatComposerDrawer} from '@astryxdesign/core/Chat';
 import {useToast} from '@astryxdesign/core/Toast';
 import {
@@ -1800,6 +1801,7 @@ function SessionNavigation({
 }) {
   const categorySections = useMemo(() => groupByCategory(groups), [groups]);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [collapsedCategories, setCollapsedCategories] = useState<readonly string[]>([]);
   const toggleCategory = useCallback((key: string) => {
     setCollapsedCategories(current =>
@@ -1820,15 +1822,6 @@ function SessionNavigation({
             variant={openLeftPanel === 'search' ? 'secondary' : 'ghost'}
             size="sm"
             onClick={() => onSelectLeftPanel('search')}
-          />
-          <IconButton
-            data-panel-toggle=""
-            label="Run settings"
-            tooltip="Run settings"
-            icon={<Icon icon="funnel" size="sm" />}
-            variant={openLeftPanel === 'settings' ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={() => onSelectLeftPanel('settings')}
           />
           <IconButton
             label="Catalog"
@@ -1853,15 +1846,6 @@ function SessionNavigation({
           />
           <IconButton
             data-panel-toggle=""
-            label="README"
-            tooltip="README"
-            icon={<Icon icon="app:readme" size="sm" />}
-            variant={isReadmeShown ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={onShowReadme}
-          />
-          <IconButton
-            data-panel-toggle=""
             label="Checkpoints"
             tooltip="Checkpoints"
             icon={<Icon icon="clock" size="sm" />}
@@ -1869,14 +1853,59 @@ function SessionNavigation({
             size="sm"
             onClick={onToggleCheckpoints}
           />
-          <IconButton
-            label={colorScheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            tooltip={colorScheme === 'dark' ? 'Light theme' : 'Dark theme'}
-            icon={<Icon icon={colorScheme === 'dark' ? SunIcon : MoonIcon} size="sm" />}
-            variant="ghost"
-            size="sm"
-            onClick={onToggleColorScheme}
-          />
+          <Popover
+            label="More"
+            placement="end"
+            alignment="end"
+            padding={1}
+            isOpen={isMoreOpen}
+            onOpenChange={setIsMoreOpen}
+            content={
+              <VStack gap={1}>
+                <IconButton
+                  data-panel-toggle=""
+                  label="README"
+                  tooltip="README"
+                  icon={<Icon icon="app:readme" size="sm" />}
+                  variant={isReadmeShown ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={() => {
+                    setIsMoreOpen(false);
+                    onShowReadme();
+                  }}
+                />
+                <IconButton
+                  data-panel-toggle=""
+                  label="Run settings"
+                  tooltip="Run settings"
+                  icon={<Icon icon="funnel" size="sm" />}
+                  variant={openLeftPanel === 'settings' ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={() => {
+                    setIsMoreOpen(false);
+                    onSelectLeftPanel('settings');
+                  }}
+                />
+                <IconButton
+                  data-panel-toggle=""
+                  label={colorScheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+                  tooltip={colorScheme === 'dark' ? 'Light theme' : 'Dark theme'}
+                  icon={<Icon icon={colorScheme === 'dark' ? SunIcon : MoonIcon} size="sm" />}
+                  variant="ghost"
+                  size="sm"
+                  onClick={onToggleColorScheme}
+                />
+              </VStack>
+            }>
+            <IconButton
+              data-panel-toggle=""
+              label="More"
+              tooltip="More"
+              icon={<Icon icon="app:more" size="sm" />}
+              variant={isMoreOpen ? 'secondary' : 'ghost'}
+              size="sm"
+            />
+          </Popover>
         </FooterStack>
       }
       collapsible={{isCollapsed, onCollapsedChange: setIsCollapsed}}
