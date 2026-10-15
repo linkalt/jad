@@ -426,29 +426,30 @@ func (r *activeRun) detach(queue *eventQueue) {
 }
 
 func (r *activeRun) publishMessage(message webUIMessage) error {
+	// Encoding a large message takes milliseconds and only needs the previous one, so
+	// it runs outside the lock. If another writer replaced the previous message in
+	// between, the frames are built again under the lock against the current one.
+	r.mu.Lock()
+	if r.status != "running" {
+		r.mu.Unlock()
+		return errors.New("run is not active")
+	}
+	previous := r.latestMessage
+	r.mu.Unlock()
+	frames, latest, err := messageFrames(previous, message)
+	if err != nil {
+		return err
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.status != "running" {
 		return errors.New("run is not active")
 	}
-
-	var updates []webui.StreamEvent
-	if r.latestMessage == nil {
-		updates = []webui.StreamEvent{{Name: "ui.message", Data: map[string]any{"message": message}}}
-	} else {
-		updates = webui.Increments(*r.latestMessage, message)
-	}
-	frames := make([]streamEvent, 0, len(updates))
-	for _, update := range updates {
-		event, err := makeSSEEvent(update.Name, update.Data)
-		if err != nil {
+	if r.latestMessage != previous {
+		if frames, latest, err = messageFrames(r.latestMessage, message); err != nil {
 			return err
 		}
-		frames = append(frames, event)
-	}
-	latest, err := makeSSEEvent("ui.message", map[string]any{"message": message})
-	if err != nil {
-		return err
 	}
 	latestMessage := message
 	r.latestMessage = &latestMessage
@@ -461,6 +462,31 @@ func (r *activeRun) publishMessage(message webUIMessage) error {
 		}
 	}
 	return nil
+}
+
+// messageFrames returns the SSE frames that take a client from previous to message
+// (the whole message when there is no previous one) and the frame a late subscriber
+// receives.
+func messageFrames(previous *webUIMessage, message webUIMessage) ([]streamEvent, streamEvent, error) {
+	var updates []webui.StreamEvent
+	if previous == nil {
+		updates = []webui.StreamEvent{{Name: "ui.message", Data: map[string]any{"message": message}}}
+	} else {
+		updates = webui.Increments(*previous, message)
+	}
+	frames := make([]streamEvent, 0, len(updates))
+	for _, update := range updates {
+		event, err := makeSSEEvent(update.Name, update.Data)
+		if err != nil {
+			return nil, streamEvent{}, err
+		}
+		frames = append(frames, event)
+	}
+	latest, err := makeSSEEvent("ui.message", map[string]any{"message": message})
+	if err != nil {
+		return nil, streamEvent{}, err
+	}
+	return frames, latest, nil
 }
 
 func (r *activeRun) setContentCache(cache *runContentCache) {

@@ -203,8 +203,14 @@ type SessionConfig struct {
 // defers the model file until a run needs it, which is why a session with a
 // broken model.json still lists, snapshots and accepts a user message.
 func LoadSessionSettings(location Location, requestedProfile, requestedModel string) (SessionConfig, error) {
+	return LoadSessionSettingsScoped(location, requestedProfile, requestedModel, nil)
+}
+
+// LoadSessionSettingsScoped is LoadSessionSettings that reads each catalog directory
+// once per scans, however many sessions load through it. A nil scans reads every time.
+func LoadSessionSettingsScoped(location Location, requestedProfile, requestedModel string, scans *CatalogScans) (SessionConfig, error) {
 	if location.UsesLayout() {
-		return LoadLayoutSessionSettings(location, *location.Root.Layout, requestedProfile, requestedModel)
+		return loadLayoutSessionSettings(location, *location.Root.Layout, requestedProfile, requestedModel, scans)
 	}
 	return SessionConfig{}, configError("%s: not a catalog-layout session; it needs a <session id>.json file in a session root and a root setting.json that names the catalogs", location.File)
 }

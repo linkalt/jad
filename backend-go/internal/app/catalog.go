@@ -111,6 +111,8 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 	}
 	candidates := make([]candidate, 0)
 	versions := make([]string, 0)
+	// The sessions of one list share their catalogs: each directory is scanned once.
+	scans := sessionfs.NewCatalogScans()
 	for _, root := range r.roots {
 		if err := ctx.Err(); err != nil {
 			return httpapi.CatalogResponse{}, err
@@ -144,7 +146,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			}
 			// The list needs only the settings: a session whose model.json is
 			// missing or malformed is still listed, like in the TypeScript backend.
-			config, err := sessionfs.LoadSessionSettings(location, "", "")
+			config, err := sessionfs.LoadSessionSettingsScoped(location, "", "", scans)
 			if err != nil {
 				var configErr *sessionfs.ConfigError
 				if errors.As(err, &configErr) {

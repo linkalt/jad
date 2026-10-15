@@ -21,6 +21,10 @@ const sessionFileSuffix = ".json"
 // Every file is named "<category>/<name>", on the wire and in the files: the profile, the
 // run's model, SessionConfig.Models and ModelDefault. ModelPath is the absolute file.
 func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfile, requestedModel string) (SessionConfig, error) {
+	return loadLayoutSessionSettings(location, layout, requestedProfile, requestedModel, nil)
+}
+
+func loadLayoutSessionSettings(location Location, layout Layout, requestedProfile, requestedModel string, scans *CatalogScans) (SessionConfig, error) {
 	sessionPath := location.File
 	var session layoutSessionFile
 	if err := readLayoutFile(sessionPath, &session); err != nil {
@@ -39,7 +43,7 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 		return SessionConfig{}, err
 	}
 
-	profiles, err := catalog.Scan("profile", layout.Profiles)
+	profiles, err := scans.Scan("profile", layout.Profiles)
 	if err != nil {
 		return SessionConfig{}, configError("%s: %v", sessionPath, err)
 	}
@@ -63,7 +67,7 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 		return SessionConfig{}, err
 	}
 
-	built := &layoutCompose{layout: layout, location: location, sessionPath: sessionPath, session: session, profiles: profiles, keys: keys}
+	built := &layoutCompose{layout: layout, location: location, sessionPath: sessionPath, session: session, profiles: profiles, keys: keys, scans: scans}
 	setting, modelPaths, err := built.compose(entry, "")
 	if err != nil {
 		return SessionConfig{}, err
@@ -86,7 +90,7 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 		name = config.ModelDefault
 	}
 	config.ModelPath = modelPaths[name]
-	if err := resolveSubagentModels(config.NativeSubagent, layout.Models, sessionPath); err != nil {
+	if err := resolveSubagentModels(config.NativeSubagent, layout.Models, sessionPath, scans); err != nil {
 		return SessionConfig{}, err
 	}
 	return config, nil
@@ -111,7 +115,7 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 		}
 		if available == nil {
 			var err error
-			if available, err = catalog.Scan("toolset", c.layout.Tools); err != nil {
+			if available, err = c.scans.Scan("toolset", c.layout.Tools); err != nil {
 				return configError("%s: %v", c.sessionPath, err)
 			}
 		}
@@ -144,7 +148,7 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 // name any model of the catalog, not only the ones its caller's profile lists: a cheap
 // reviewer model should not have to be listed in every main profile. An unknown ID is a
 // config error that lists the available ones.
-func resolveSubagentModels(settings *NativeSubagentSettings, modelsDir, sessionPath string) error {
+func resolveSubagentModels(settings *NativeSubagentSettings, modelsDir, sessionPath string, scans *CatalogScans) error {
 	if settings == nil {
 		return nil
 	}
@@ -156,7 +160,7 @@ func resolveSubagentModels(settings *NativeSubagentSettings, modelsDir, sessionP
 		}
 		if models == nil {
 			var err error
-			if models, err = catalog.Scan("model", modelsDir); err != nil {
+			if models, err = scans.Scan("model", modelsDir); err != nil {
 				return configError("%s: %v", sessionPath, err)
 			}
 		}
@@ -209,13 +213,16 @@ type layoutCompose struct {
 	keys        map[string]string
 	// profileNames maps a profile ID to the name its file sets; a profile without one is absent.
 	profileNames map[string]string
+	// scans is the catalog scans one list call shares between its sessions; nil scans
+	// every catalog directory afresh.
+	scans *CatalogScans
 }
 
 // compose builds the legacy-shaped setting for the selected profile. The returned map
 // holds the file of each model ID the profile may use. A non-empty toolset replaces the
 // profile's own toolset, which is how the toolset an agent names is read.
 func (c *layoutCompose) compose(selected catalog.Entry, toolset string) (map[string]json.RawMessage, map[string]string, error) {
-	allModels, err := catalog.Scan("model", c.layout.Models)
+	allModels, err := c.scans.Scan("model", c.layout.Models)
 	if err != nil {
 		return nil, nil, configError("%s: %v", selected.Path, err)
 	}
@@ -386,7 +393,7 @@ func (c *layoutCompose) addProfileFields(entry map[string]any, profileID string,
 // addToolset puts the toolset's native settings and MCP servers into the setting. The
 // toolset is "<category>/<name>" under tools/.
 func (c *layoutCompose) addToolset(setting map[string]json.RawMessage, id, profilePath string, defaultEnvFile json.RawMessage) error {
-	toolsets, err := catalog.Scan("toolset", c.layout.Tools)
+	toolsets, err := c.scans.Scan("toolset", c.layout.Tools)
 	if err != nil {
 		return configError("%s: %v", profilePath, err)
 	}
@@ -446,7 +453,7 @@ func (c *layoutCompose) mcpServers(toolset layoutToolsetFile, toolsetPath string
 	if err := decoder.Decode(&uses); err != nil {
 		return nil, configError("%s: mcp: %v", toolsetPath, err)
 	}
-	available, err := catalog.Scan("mcp", c.layout.MCP)
+	available, err := c.scans.Scan("mcp", c.layout.MCP)
 	if err != nil {
 		return nil, configError("%s: %v", toolsetPath, err)
 	}
