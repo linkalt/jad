@@ -177,11 +177,11 @@ func (s *TurnStore) readInputItemsWithCache(handle *InputHistory, cache *compact
 				items = append(items, append([]byte(nil), item...))
 			}
 		}
-		currentHash, err := hashTranscriptFile(s.journal.path)
+		sourceIsTranscript, err := s.cacheSourceIsTranscript(cache)
 		if err != nil {
 			return nil, err
 		}
-		if currentHash == cache.SourceSHA256 {
+		if sourceIsTranscript {
 			if handle != nil {
 				tail, err := handle.compaction.activeTailItems(cache)
 				if err != nil {

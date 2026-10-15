@@ -108,6 +108,18 @@ func (j *Journal) ReplaceRecords(records ...[]byte) error {
 	return nil
 }
 
+// byteSize is the current size of the transcript file, 0 when it does not exist.
+func (j *Journal) byteSize() (int64, error) {
+	info, err := os.Stat(j.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
 func (j *Journal) Append(records ...[]byte) error {
 	_, err := j.AppendAt(records...)
 	return err

@@ -15,6 +15,17 @@ const (
 	SourceUser   = "user"
 )
 
+var inputImageMarker = []byte(`"input_image"`)
+
+func anyContains(history [][]byte, marker []byte) bool {
+	for _, item := range history {
+		if bytes.Contains(item, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // Stats says what one Apply call did.
 type Stats struct {
 	// Images is the number of images of an applicable source that were looked at.
@@ -58,10 +69,13 @@ func (r *Resizer) Apply(history [][]byte, sourceOf SourceOf) ([][]byte, Stats) {
 	if r == nil || len(r.appliesTo) == 0 {
 		return history, stats
 	}
+	if !anyContains(history, inputImageMarker) {
+		return history, stats
+	}
 	var calls map[string]json.RawMessage
 	var result [][]byte
 	for index, item := range history {
-		if !bytes.Contains(item, []byte(`"input_image"`)) && !bytes.Contains(item, []byte(`"function_call"`)) {
+		if !bytes.Contains(item, inputImageMarker) && !bytes.Contains(item, []byte(`"function_call"`)) {
 			continue
 		}
 		var header struct {
@@ -87,7 +101,7 @@ func (r *Resizer) Apply(history [][]byte, sourceOf SourceOf) ([][]byte, Stats) {
 		case (header.Type == "message" || header.Type == "") && header.Role == "user":
 			source = SourceUser
 		}
-		if !r.appliesTo[source] || !bytes.Contains(item, []byte(`"input_image"`)) {
+		if !r.appliesTo[source] || !bytes.Contains(item, inputImageMarker) {
 			continue
 		}
 		rewritten, changed := r.rewriteItem(item, &stats)

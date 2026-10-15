@@ -15,6 +15,7 @@ import (
 type compactionCache struct {
 	SchemaVersion            int               `json:"schema_version"`
 	SourceSHA256             string            `json:"source_sha256"`
+	SourceBytes              int64             `json:"source_bytes,omitempty"`
 	Items                    []json.RawMessage `json:"items"`
 	AssistantFinalItems      []string          `json:"assistant_final_items"`
 	ActiveTail               []json.RawMessage `json:"active_tail"`
@@ -134,7 +135,7 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	if compactedInputBytes(retainedWithActiveTail) >= compactedInputBytes(history) {
 		return result, nil
 	}
-	sourceHash, err := hashTranscriptFile(s.journal.path)
+	sourceHash, sourceBytes, err := hashTranscriptFile(s.journal.path)
 	if err != nil {
 		return result, err
 	}
@@ -146,6 +147,7 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	cache := compactionCache{
 		SchemaVersion:            1,
 		SourceSHA256:             sourceHash,
+		SourceBytes:              sourceBytes,
 		Items:                    make([]json.RawMessage, len(retained)),
 		AssistantFinalItems:      make([]string, 0),
 		ActiveTail:               compactedActiveTail,
@@ -662,7 +664,7 @@ func (s *TurnStore) readCompactionCache() (*compactionCache, error) {
 			return nil, err
 		}
 		var cache compactionCache
-		if json.Unmarshal(encoded, &cache) != nil || cache.SchemaVersion != 1 || len(cache.SourceSHA256) != 64 {
+		if json.Unmarshal(encoded, &cache) != nil || cache.SchemaVersion != 1 || len(cache.SourceSHA256) != 64 || cache.SourceBytes < 0 {
 			continue
 		}
 		if _, err := hex.DecodeString(cache.SourceSHA256); err != nil {
@@ -737,19 +739,43 @@ func writeCompactionJSONAtomic(path string, encoded []byte, durability Durabilit
 	return os.Rename(tempPath, path)
 }
 
-func hashTranscriptFile(path string) (string, error) {
+func hashTranscriptFile(path string) (string, int64, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		empty := sha256.Sum256(nil)
-		return hex.EncodeToString(empty[:]), nil
+		return hex.EncodeToString(empty[:]), 0, nil
 	}
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer file.Close()
 	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
+	size, err := io.Copy(hash, file)
+	if err != nil {
+		return "", 0, err
 	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return hex.EncodeToString(hash.Sum(nil)), size, nil
+}
+
+// cacheSourceIsTranscript reports whether the transcript still holds the bytes the
+// compaction cache was built from. That is true only between writing the cache and
+// replacing the transcript; after a finished compaction the transcript is the
+// shorter active tail. A cache that recorded its source size is compared by size
+// first, because a different size cannot hash equal, so the whole-file hash runs
+// only when the sizes agree. A cache written before the size was recorded always hashes.
+func (s *TurnStore) cacheSourceIsTranscript(cache *compactionCache) (bool, error) {
+	if cache.SourceBytes > 0 {
+		size, err := s.journal.byteSize()
+		if err != nil {
+			return false, err
+		}
+		if size != cache.SourceBytes {
+			return false, nil
+		}
+	}
+	hash, _, err := hashTranscriptFile(s.journal.path)
+	if err != nil {
+		return false, err
+	}
+	return hash == cache.SourceSHA256, nil
 }
