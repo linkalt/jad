@@ -1860,6 +1860,7 @@ function SessionNavigation({
             placement={isMobile ? 'below' : 'end'}
             alignment="end"
             padding={1}
+            hasAutoFocus={false}
             isOpen={isMoreOpen}
             onOpenChange={setIsMoreOpen}
             content={
