@@ -497,7 +497,11 @@ func scanTranscriptIndex(shared *sharedSession, config sessionfs.SessionConfig) 
 		if recordType != "response.completed" {
 			return nil
 		}
-		responseKey := usageCacheResponseKey(line)
+		var response map[string]json.RawMessage
+		if json.Unmarshal(fields["response"], &response) != nil {
+			response = nil
+		}
+		responseKey := usageCacheResponseKey(line, response)
 		if responseKey != "" {
 			if responseKey == lastResponseKey {
 				return nil
@@ -525,7 +529,7 @@ func scanTranscriptIndex(shared *sharedSession, config sessionfs.SessionConfig) 
 		if turnCount > index.usage.TurnCount {
 			index.usage.TurnCount = turnCount
 		}
-		if err := webui.AddCompletedResponse(&index.usage, line, seenResponses); err != nil {
+		if err := webui.AddCompletedRecord(&index.usage, line, fields, response, seenResponses); err != nil {
 			return fmt.Errorf("accumulate usage at byte %d: %w", offset, err)
 		}
 		return nil

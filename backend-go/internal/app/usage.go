@@ -174,13 +174,8 @@ func signedOrUnsignedInt(value reflect.Value) (int64, bool) {
 	return 0, false
 }
 
-func usageCacheResponseKey(raw json.RawMessage) string {
-	var record map[string]json.RawMessage
-	if json.Unmarshal(raw, &record) != nil || record == nil || stringField(record["type"]) != "response.completed" {
-		return ""
-	}
-	var response map[string]json.RawMessage
-	if json.Unmarshal(record["response"], &response) != nil || response == nil {
+func usageCacheResponseKey(raw json.RawMessage, response map[string]json.RawMessage) string {
+	if response == nil {
 		return ""
 	}
 	identity := "record:" + string(raw)

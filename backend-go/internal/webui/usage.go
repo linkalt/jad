@@ -9,22 +9,16 @@ import (
 
 const maxSafeJSONInteger int64 = 9007199254740991
 
-// AddCompletedResponse updates a cumulative summary from one persisted
-// response.completed record. seenResponseKeys prevents duplicate records from
-// inflating totals when a transcript contains a repeated response ID.
-func AddCompletedResponse(summary *UsageSummary, raw json.RawMessage, seenResponseKeys map[string]struct{}) error {
+// AddCompletedRecord updates a cumulative summary from one persisted
+// response.completed record that the caller already decoded: record holds its
+// top-level fields and response its "response" object (nil when that is not an
+// object). seenResponseKeys prevents duplicate records from inflating totals
+// when a transcript contains a repeated response ID.
+func AddCompletedRecord(summary *UsageSummary, raw json.RawMessage, record, response map[string]json.RawMessage, seenResponseKeys map[string]struct{}) error {
 	if summary == nil {
 		return fmt.Errorf("usage summary is required")
 	}
-	var record map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &record); err != nil || record == nil {
-		return fmt.Errorf("usage record must be a JSON object")
-	}
-	if stringField(record["type"]) != "response.completed" {
-		return nil
-	}
-	var response map[string]json.RawMessage
-	if err := json.Unmarshal(record["response"], &response); err != nil || response == nil {
+	if response == nil {
 		return fmt.Errorf("completed response record must contain an object response")
 	}
 	responseID := stringField(response["id"])
