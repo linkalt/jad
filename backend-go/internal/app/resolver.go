@@ -168,6 +168,16 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 // lock from run start found no scenario where it mattered (cross-process
 // tests in session_lock_processes_test.go).
 func (r *Resolver) LockSession(ctx context.Context, reference, profile, modelPath string) (func(), error) {
+	return r.lockSession(ctx, reference, profile, modelPath, false)
+}
+
+// TryLockSession is LockSession without the wait: it returns httpapi.ErrSessionBusy at once
+// when another run holds the transcript.
+func (r *Resolver) TryLockSession(ctx context.Context, reference, profile, modelPath string) (func(), error) {
+	return r.lockSession(ctx, reference, profile, modelPath, true)
+}
+
+func (r *Resolver) lockSession(ctx context.Context, reference, profile, modelPath string, try bool) (func(), error) {
 	location, err := r.resolveLockLocation(ctx, reference)
 	if err != nil {
 		return nil, err
@@ -184,7 +194,15 @@ func (r *Resolver) LockSession(ctx context.Context, reference, profile, modelPat
 	if err != nil {
 		return nil, err
 	}
-	transcriptLock, err := sessionlock.Acquire(ctx, transcriptLockPath)
+	var transcriptLock *sessionlock.Lock
+	if try {
+		transcriptLock, err = sessionlock.TryAcquire(ctx, transcriptLockPath)
+		if errors.Is(err, sessionlock.ErrBusy) {
+			return nil, httpapi.ErrSessionBusy
+		}
+	} else {
+		transcriptLock, err = sessionlock.Acquire(ctx, transcriptLockPath)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("lock session transcript: %w", err)
 	}

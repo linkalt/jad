@@ -416,45 +416,30 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 		return
 	}
 
-	var resolved ResolvedSession
-	var input []byte
-	var run *activeRun
-	var processUnlock func()
-	var startErr error
-	func() {
-		unlock := h.lockSession(reference)
-		defer unlock()
-		processUnlock, startErr = h.lockSessionProcess(r.Context(), reference, profile, body.Model)
-		if startErr != nil {
-			return
-		}
-		resolved, startErr = h.resolve(r.Context(), reference, profile, body.Model)
-		if startErr != nil {
-			return
-		}
-		input = body.Input
-		turnID, err := newWebTurnID()
+	// The transcript lock is only tried while the session lock is held. When another run
+	// holds it, the wait happens outside the session lock, so settings, state context and
+	// the other profile's start are not blocked behind a queued start. Taking the lock and
+	// registering the run stay in one session-lock section: that is what lets reset, front
+	// compact, state context and checkpoint restore trust runIsActive.
+	var started startedRun
+	for {
+		var busy bool
+		started, busy, err = h.tryStartRun(r.Context(), reference, profile, body.Model)
 		if err != nil {
-			startErr = &StatusError{Code: http.StatusInternalServerError, Message: "could not create run ID"}
+			writeJSONError(w, err)
 			return
 		}
-		run, err = h.beginRun(h.runKey(resolved), turnID)
+		if !busy {
+			break
+		}
+		release, err := h.lockSessionProcess(r.Context(), reference, profile, body.Model)
 		if err != nil {
-			var statusErr *StatusError
-			if errors.As(err, &statusErr) {
-				startErr = statusErr
-			} else {
-				startErr = &StatusError{Code: http.StatusServiceUnavailable, Message: "server is shutting down"}
-			}
+			writeJSONError(w, err)
+			return
 		}
-	}()
-	if startErr != nil {
-		if processUnlock != nil {
-			processUnlock()
-		}
-		writeJSONError(w, startErr)
-		return
+		release()
 	}
+	run, resolved, processUnlock := started.run, started.resolved, started.processUnlock
 	run.mu.Lock()
 	run.supportsInteraction = body.SupportsInteraction
 	run.mu.Unlock()
@@ -464,9 +449,52 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	queue := run.subscribe()
 	go func() {
 		defer processUnlock()
-		h.executeRun(run, resolved.Runner, input)
+		h.executeRun(run, resolved.Runner, body.Input)
 	}()
 	h.serveSSE(w, r, run, queue)
+}
+
+// startedRun is a run that holds the transcript lock and is registered.
+type startedRun struct {
+	resolved      ResolvedSession
+	run           *activeRun
+	processUnlock func()
+}
+
+// tryStartRun takes the session lock, tries the transcript lock, resolves the session and
+// registers the run, all inside one session-lock section. busy is true when another run
+// holds the transcript; nothing is held then.
+func (h *Handler) tryStartRun(ctx context.Context, reference, profile, model string) (started startedRun, busy bool, err error) {
+	unlock := h.lockSession(reference)
+	defer unlock()
+	processUnlock, err := h.tryLockSessionProcess(ctx, reference, profile, model)
+	if errors.Is(err, ErrSessionBusy) {
+		return startedRun{}, true, nil
+	}
+	if err != nil {
+		return startedRun{}, false, err
+	}
+	fail := func(err error) (startedRun, bool, error) {
+		processUnlock()
+		return startedRun{}, false, err
+	}
+	resolved, err := h.resolve(ctx, reference, profile, model)
+	if err != nil {
+		return fail(err)
+	}
+	turnID, err := newWebTurnID()
+	if err != nil {
+		return fail(&StatusError{Code: http.StatusInternalServerError, Message: "could not create run ID"})
+	}
+	run, err := h.beginRun(h.runKey(resolved), turnID)
+	if err != nil {
+		var statusErr *StatusError
+		if errors.As(err, &statusErr) {
+			return fail(statusErr)
+		}
+		return fail(&StatusError{Code: http.StatusServiceUnavailable, Message: "server is shutting down"})
+	}
+	return startedRun{resolved: resolved, run: run, processUnlock: processUnlock}, false, nil
 }
 
 func (h *Handler) handleRunStream(w http.ResponseWriter, r *http.Request, reference, profile string) {

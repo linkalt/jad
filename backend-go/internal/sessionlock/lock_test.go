@@ -176,3 +176,42 @@ func TestLockWaitedIsTrueOnlyWhenAnotherHolderMadeAcquireWait(t *testing.T) {
 		t.Fatal("an Acquire that waited for another holder reports it did not")
 	}
 }
+
+func TestTryAcquireReportsBusyAtOnceAndSucceedsAfterRelease(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), ".session.lock")
+	held, err := Acquire(context.Background(), lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if _, err := TryAcquire(context.Background(), lockPath); !errors.Is(err, ErrBusy) {
+		t.Fatalf("TryAcquire on a held lock = %v, want ErrBusy", err)
+	}
+	if elapsed := time.Since(started); elapsed >= acquirePollInterval {
+		t.Fatalf("TryAcquire waited %v on a held lock", elapsed)
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := TryAcquire(context.Background(), lockPath)
+	if err != nil {
+		t.Fatalf("TryAcquire after release: %v", err)
+	}
+	if lock.Waited() {
+		t.Fatal("a lock taken without waiting reports Waited")
+	}
+	if _, err := TryAcquire(context.Background(), lockPath); !errors.Is(err, ErrBusy) {
+		t.Fatalf("second TryAcquire = %v, want ErrBusy", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTryAcquireHonoursACancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := TryAcquire(ctx, filepath.Join(t.TempDir(), ".session.lock")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("TryAcquire with a cancelled context = %v, want context.Canceled", err)
+	}
+}

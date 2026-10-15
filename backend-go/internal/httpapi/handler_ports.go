@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"jad/backend-go/internal/contentlibrary"
 	"jad/backend-go/internal/session"
@@ -33,6 +34,15 @@ type SessionResolver interface {
 type SessionProcessLocker interface {
 	LockSession(context.Context, string, string, string) (func(), error)
 	LockSessionSettings(context.Context, string) (func(), error)
+}
+
+// ErrSessionBusy is what TryLockSession returns when another run holds the transcript.
+var ErrSessionBusy = errors.New("session transcript is locked by another run")
+
+// SessionProcessTryLocker adds a lock attempt that does not wait. A run start uses it so
+// it never waits for the transcript while holding the in-process session lock.
+type SessionProcessTryLocker interface {
+	TryLockSession(context.Context, string, string, string) (func(), error)
 }
 
 // SessionReferences is an optional adapter that names a session the one way every

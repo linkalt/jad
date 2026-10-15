@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessionfs/layouttest"
 )
@@ -316,5 +318,34 @@ func TestLockedConfigIsNotParkedAfterWaitingForTheLock(t *testing.T) {
 	defer second.release()
 	if resolver.lockedConfigs.len() != 0 {
 		t.Fatalf("parked configs after a waited lock = %d, want 0 (the config was read before the wait)", resolver.lockedConfigs.len())
+	}
+}
+
+func TestTryLockSessionReturnsBusyWhileAnotherRunHoldsTheTranscript(t *testing.T) {
+	resolver, _ := newLockedConfigFixture(t)
+	ctx := context.Background()
+	held, err := resolver.LockSession(ctx, "session-1", "dev/green", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if release, err := resolver.TryLockSession(ctx, "session-1", "dev/green", ""); !errors.Is(err, httpapi.ErrSessionBusy) || release != nil {
+		t.Fatalf("TryLockSession on a held transcript = (%v, %v), want ErrSessionBusy", release != nil, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("TryLockSession waited %v", elapsed)
+	}
+	// The busy attempt must not park a config or drop the holder's.
+	if resolver.lockedConfigs.len() != 1 {
+		t.Fatalf("parked configs after a busy attempt = %d, want 1 (the holder's)", resolver.lockedConfigs.len())
+	}
+	held()
+	release, err := resolver.TryLockSession(ctx, "session-1", "dev/green", "")
+	if err != nil {
+		t.Fatalf("TryLockSession after release: %v", err)
+	}
+	defer release()
+	if resolver.lockedConfigs.len() != 1 {
+		t.Fatalf("parked configs after TryLockSession = %d, want 1 (the lock was not waited for)", resolver.lockedConfigs.len())
 	}
 }

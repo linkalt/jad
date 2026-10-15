@@ -52,9 +52,28 @@ func (l *Lock) Waited() bool {
 	return l != nil && l.waited
 }
 
-// Acquire waits until path can be locked or ctx is cancelled. Callers should
-// use a stable path shared by all processes that mutate the same session.
-func Acquire(ctx context.Context, path string) (*Lock, error) {
+// ErrBusy is returned by TryAcquire when another holder has the lock.
+var ErrBusy = errors.New("session lock is held")
+
+// TryAcquire locks path without waiting and returns ErrBusy when it is held.
+func TryAcquire(ctx context.Context, path string) (*Lock, error) {
+	file, err := openLockFile(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	acquired, tryErr := tryAcquire(file)
+	if tryErr != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("acquire session lock: %w", tryErr)
+	}
+	if !acquired {
+		_ = file.Close()
+		return nil, ErrBusy
+	}
+	return &Lock{file: file}, nil
+}
+
+func openLockFile(ctx context.Context, path string) (*os.File, error) {
 	if ctx == nil {
 		return nil, errors.New("session lock context is required")
 	}
@@ -75,6 +94,16 @@ func Acquire(ctx context.Context, path string) (*Lock, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open session lock: %w", err)
+	}
+	return file, nil
+}
+
+// Acquire waits until path can be locked or ctx is cancelled. Callers should
+// use a stable path shared by all processes that mutate the same session.
+func Acquire(ctx context.Context, path string) (*Lock, error) {
+	file, err := openLockFile(ctx, path)
+	if err != nil {
+		return nil, err
 	}
 	lock := &Lock{file: file}
 

@@ -17,6 +17,24 @@ func (h *Handler) lockSessionProcess(ctx context.Context, reference, profile, mo
 	return release, nil
 }
 
+// tryLockSessionProcess is lockSessionProcess without the wait. It returns ErrSessionBusy
+// when another run holds the transcript. A resolver without the try form takes the
+// blocking lock instead.
+func (h *Handler) tryLockSessionProcess(ctx context.Context, reference, profile, modelPath string) (func(), error) {
+	locker, ok := h.resolver.(SessionProcessTryLocker)
+	if !ok {
+		return h.lockSessionProcess(ctx, reference, profile, modelPath)
+	}
+	release, err := locker.TryLockSession(ctx, reference, profile, modelPath)
+	if err != nil {
+		return nil, err
+	}
+	if release == nil {
+		return func() {}, nil
+	}
+	return release, nil
+}
+
 func (h *Handler) lockSessionSettingsProcess(ctx context.Context, reference string) (func(), error) {
 	locker, ok := h.resolver.(SessionProcessLocker)
 	if !ok {
