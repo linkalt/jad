@@ -234,14 +234,13 @@ export function rowTurnCount(
 /**
  * Whether a row should show an active-run marker.
  *
- * A pinned row only reflects its own profile's run. The session's stored-default
- * row also acts as an aggregate indicator for detached or remotely running
- * pinned profiles, without making sibling pinned rows look active.
+ * A row reflects only its own run: the session's own row follows the stored
+ * default profile, a pinned row its own profile. Other profiles of the session
+ * are `groupHasRunningRun`'s concern.
  */
 export function rowHasRunningRun(
   row: SessionListRow | undefined,
   session: {
-    activeProfile?: string;
     run?: {status?: string};
     runsByProfile?: Record<string, {status?: string}>;
   } | undefined,
@@ -250,20 +249,7 @@ export function rowHasRunningRun(
   if (row === undefined || session === undefined) {
     return false;
   }
-  if (locallyRunningViewKeys.has(row.key) || rowRunStatus(row, session)?.status === "running") {
-    return true;
-  }
-  if (row.profile !== undefined) {
-    return false;
-  }
-  if (Object.entries(session.runsByProfile ?? {}).some(
-    ([profile, run]) => profile !== session.activeProfile && run.status === "running",
-  )) {
-    return true;
-  }
-  return [...locallyRunningViewKeys].some(
-    (key) => sessionRefOfViewKey(key) === row.sessionRef && profileOfViewKey(key) !== undefined,
-  );
+  return locallyRunningViewKeys.has(row.key) || rowRunStatus(row, session)?.status === "running";
 }
 
 export type StoredViews = {
@@ -446,11 +432,24 @@ export function groupByCategory(groups: readonly SessionListGroup[]): CategorySe
   return sections;
 }
 
-/** True when any row of the session group, the aggregate own row included, has a running run. */
+/**
+ * True when any profile of the session has a running run, listed as a row or not
+ * (a profile running remotely or in another tab has no row here).
+ */
 export function groupHasRunningRun(
   group: SessionListGroup,
-  session: Parameters<typeof rowHasRunningRun>[1],
+  session: (Parameters<typeof rowHasRunningRun>[1] & {activeProfile?: string}) | undefined,
   locallyRunningViewKeys: ReadonlySet<string>,
 ): boolean {
-  return [...group.children, group.ownRow].some(row => rowHasRunningRun(row, session, locallyRunningViewKeys));
+  if ([...group.children, group.ownRow].some(row => rowHasRunningRun(row, session, locallyRunningViewKeys))) {
+    return true;
+  }
+  if (Object.entries(session?.runsByProfile ?? {}).some(
+    ([profile, run]) => profile !== session?.activeProfile && run.status === "running",
+  )) {
+    return true;
+  }
+  return [...locallyRunningViewKeys].some(
+    key => sessionRefOfViewKey(key) === group.sessionRef && profileOfViewKey(key) !== undefined,
+  );
 }

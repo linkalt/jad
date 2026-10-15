@@ -47,8 +47,8 @@ export function SessionGroupList({
   onSelect,
   onOpenProfile,
 }: SessionGroupListProps) {
-  const rowState = (row: SessionListRow, session: SessionGroupSession): SessionUiState => {
-    if (rowHasRunningRun(row, session, runningViewKeys)) {
+  const rowState = (row: SessionListRow, session: SessionGroupSession, isRunning: boolean): SessionUiState => {
+    if (isRunning) {
       return 'accent';
     }
     if (row.profile === undefined) {
@@ -57,9 +57,13 @@ export function SessionGroupList({
     return sessionUiStateForRun(rowRunStatus(row, session)?.status);
   };
 
-  const renderRow = (row: SessionListRow, session: SessionGroupSession, isChild: boolean) => {
-    const state = rowState(row, session);
-    const isRunning = rowHasRunningRun(row, session, runningViewKeys);
+  const renderRow = (
+    row: SessionListRow,
+    session: SessionGroupSession,
+    isChild: boolean,
+    isRunning: boolean = rowHasRunningRun(row, session, runningViewKeys),
+  ) => {
+    const state = rowState(row, session, isRunning);
     const turns = rowTurnCount(row, session, rowTurns);
     // The visible label of a child is the profile; its accessible names carry the
     // session too, because the same profile name repeats in every group.
@@ -99,7 +103,7 @@ export function SessionGroupList({
           return null;
         }
         if (group.children.length === 0) {
-          return renderRow(group.ownRow, session, false);
+          return renderRow(group.ownRow, session, false, groupHasRunningRun(group, session, runningViewKeys));
         }
         const hasRunning = groupHasRunningRun(group, session, runningViewKeys);
         const state: SessionUiState = hasRunning ? 'accent' : session.state;

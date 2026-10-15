@@ -162,7 +162,7 @@ test('a row shows the run of its own profile, not the session default', () => {
   assert.equal(rowRunStatus(rows[0], undefined), undefined);
 });
 
-test('run markers stay profile-specific while the session row aggregates pinned runs', () => {
+test('run markers stay profile-specific; only the group header aggregates', () => {
   const rows = sessionListRows(
     [{id: 'session1', title: 'One'}],
     [{sessionRef: 'session1', profile: 'chatgpt'}, {sessionRef: 'session1', profile: 'alternate'}],
@@ -177,13 +177,15 @@ test('run markers stay profile-specific while the session row aggregates pinned 
     },
   };
 
-  assert.equal(rowHasRunningRun(rows[0], session, new Set()), true);
+  assert.equal(rowHasRunningRun(rows[0], session, new Set()), false);
   assert.equal(rowHasRunningRun(rows[1], session, new Set()), true);
   assert.equal(rowHasRunningRun(rows[2], session, new Set()), false);
   assert.equal(
     rowHasRunningRun(rows[0], {...session, runsByProfile: {}}, new Set([rows[1].key])),
-    true,
+    false,
   );
+  assert.equal(rowHasRunningRun(rows[0], {...session, run: {status: 'running'}}, new Set()), true);
+  assert.equal(rowHasRunningRun(rows[0], session, new Set([rows[0].key])), true);
   assert.equal(
     rowHasRunningRun(rows[1], {...session, runsByProfile: {}}, new Set([rows[2].key])),
     false,
@@ -380,4 +382,16 @@ test('a session group runs when a profile row or a detached profile run is runni
   assert.equal(groupHasRunningRun(group, {...idle, runsByProfile: {...idle.runsByProfile, p2: {status: 'running'}}}, new Set()), true);
   assert.equal(groupHasRunningRun(group, idle, new Set([group.children[1].key])), true);
   assert.equal(groupHasRunningRun(group, undefined, new Set()), false);
+  assert.equal(groupHasRunningRun(group, idle, new Set([viewKey('a', 'unlisted')])), true);
+  assert.equal(groupHasRunningRun(group, {...idle, runsByProfile: {...idle.runsByProfile, ghost: {status: 'running'}}}, new Set()), true);
+  assert.equal(groupHasRunningRun(group, {...idle, run: {status: 'running'}}, new Set()), true);
+});
+
+test('a group without listed profiles still aggregates a running non-default profile', () => {
+  const [group] = sessionListGroups([grouped('a', 'a', [], 'p1')]);
+  assert.equal(group.children.length, 0);
+  const idle = {activeProfile: 'p1', run: {status: 'completed'}, runsByProfile: {p1: {status: 'completed'}}};
+  assert.equal(groupHasRunningRun(group, idle, new Set()), false);
+  assert.equal(groupHasRunningRun(group, {...idle, runsByProfile: {...idle.runsByProfile, p2: {status: 'running'}}}, new Set()), true);
+  assert.equal(groupHasRunningRun(group, idle, new Set([viewKey('a', 'p2')])), true);
 });
