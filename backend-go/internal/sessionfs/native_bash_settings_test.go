@@ -31,6 +31,9 @@ func TestNormalizeNativeBashSettingsDefaultsAndIgnoresWritePolicy(t *testing.T) 
 	if !settings.Spill.Enabled || settings.Spill.Keep != "truncated_only" || settings.Spill.CapBytes != 64*1024*1024 || settings.Spill.RetentionDays != 14 || settings.Spill.StorageDir != filepath.Join(cwd, ".bash-output") || settings.MaxLineChars != 2_000 || !settings.StripANSI {
 		t.Fatalf("default bash output settings = %+v", settings)
 	}
+	if settings.Spill.PruneIntervalSeconds != 3600 {
+		t.Fatalf("default spill.prune_interval_seconds = %d, want 3600", settings.Spill.PruneIntervalSeconds)
+	}
 	if settings.StdinMaxBytes != 256*1024 {
 		t.Fatalf("default stdin_max_bytes = %d, want %d", settings.StdinMaxBytes, 256*1024)
 	}
@@ -52,7 +55,7 @@ func TestNormalizeNativeBashSettingsOverridesAndLoadsEnvFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	setting := map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"bash":{"shell":" /bin/sh ","login_shell":true,"timeout_ms":30000,"max_timeout_ms":45000,"kill_grace_ms":400,"kill_process_group":"timeout_only","max_bytes":1024,"stdout":{"head_bytes":100,"tail_bytes":100},"stderr":{"head_bytes":50,"tail_bytes":50},"spill":{"enabled":false,"keep":"always","storage_dir":"custom-spill"},"max_line_chars":200,"stdin_max_bytes":4096,"strip_ansi":false,"env_file":"command.env","env":{"OVERRIDDEN":"inline"},"env_deny":[" DENIED "],"paths":{"deny":["private"]}}}}`),
+		"tools": json.RawMessage(`{"native":{"bash":{"shell":" /bin/sh ","login_shell":true,"timeout_ms":30000,"max_timeout_ms":45000,"kill_grace_ms":400,"kill_process_group":"timeout_only","max_bytes":1024,"stdout":{"head_bytes":100,"tail_bytes":100},"stderr":{"head_bytes":50,"tail_bytes":50},"spill":{"enabled":false,"keep":"always","prune_interval_seconds":0,"storage_dir":"custom-spill"},"max_line_chars":200,"stdin_max_bytes":4096,"strip_ansi":false,"env_file":"command.env","env":{"OVERRIDDEN":"inline"},"env_deny":[" DENIED "],"paths":{"deny":["private"]}}}}`),
 	}
 	settings, err := normalizeNativeBashSettings(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", sessionDir, NativePathPolicy{}, NativePathPolicy{})
 	if err != nil {
@@ -66,6 +69,9 @@ func TestNormalizeNativeBashSettingsOverridesAndLoadsEnvFile(t *testing.T) {
 	}
 	if settings.StdinMaxBytes != 4096 {
 		t.Fatalf("normalized stdin_max_bytes = %d, want 4096", settings.StdinMaxBytes)
+	}
+	if settings.Spill.PruneIntervalSeconds != 0 {
+		t.Fatalf("normalized spill.prune_interval_seconds = %d, want 0", settings.Spill.PruneIntervalSeconds)
 	}
 	if settings.Spill.Enabled || settings.Spill.Keep != "always" || settings.Spill.StorageDir != filepath.Join(cwd, "custom-spill") {
 		t.Fatalf("normalized spill settings = %+v", settings.Spill)
@@ -102,6 +108,9 @@ func TestNormalizeNativeBashSettingsValidatesConfiguration(t *testing.T) {
 		`{"native":{"bash":{"spill":{"stdout_full":"{cwd}/same-{call_id}.log","stderr_full":"{cwd}/same-{call_id}.log"}}}}`,
 		`{"native":{"bash":{"spill":{"keep":"sometimes"}}}}`,
 		`{"native":{"bash":{"spill":{"cap_bytes":0}}}}`,
+		`{"native":{"bash":{"spill":{"prune_interval_seconds":-1}}}}`,
+		`{"native":{"bash":{"spill":{"prune_interval_seconds":86401}}}}`,
+		`{"native":{"bash":{"spill":{"prune_interval_seconds":"60"}}}}`,
 		`{"native":{"bash":{"spill":{"storage_dir":"` + outside + `"}}}}`,
 		`{"native":{"bash":{"max_line_chars":5}}}`,
 		`{"native":{"bash":{"stdin_max_bytes":0}}}`,
@@ -120,6 +129,36 @@ func TestNormalizeNativeBashSettingsValidatesConfiguration(t *testing.T) {
 		_, err := normalizeNativeBashSettings(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", sessionDir, NativePathPolicy{}, NativePathPolicy{})
 		if err == nil || !strings.Contains(err.Error(), "tools.native.bash") {
 			t.Errorf("normalizeNativeBashSettings(%s) error = %v; want a bash config error", raw, err)
+		}
+	}
+}
+
+func TestNormalizeNativeBashSpillPruneInterval(t *testing.T) {
+	cwd := t.TempDir()
+	sessionDir := t.TempDir()
+	settingPath := filepath.Join(sessionDir, "setting.json")
+	for _, section := range []string{"tools.native.bash", "tools.native.exec"} {
+		for raw, want := range map[string]int64{
+			``:                                 3600,
+			`{}`:                               3600,
+			`{"prune_interval_seconds":null}`:  3600,
+			`{"prune_interval_seconds":60}`:    60,
+			`{"prune_interval_seconds":86400}`: 86400,
+			`{"prune_interval_seconds":0}`:     0,
+		} {
+			spill, err := normalizeNativeBashSpill(json.RawMessage(raw), section, settingPath, cwd, sessionDir, "", NativePathPolicy{}, NativePathPolicy{})
+			if err != nil {
+				t.Fatalf("%s spill %q: error = %v", section, raw, err)
+			}
+			if spill.PruneIntervalSeconds != want {
+				t.Errorf("%s spill %q: prune_interval_seconds = %d, want %d", section, raw, spill.PruneIntervalSeconds, want)
+			}
+		}
+		for _, raw := range []string{`{"prune_interval_seconds":-1}`, `{"prune_interval_seconds":86401}`, `{"prune_interval_seconds":1.5}`, `{"prune_interval_seconds":"60"}`} {
+			_, err := normalizeNativeBashSpill(json.RawMessage(raw), section, settingPath, cwd, sessionDir, "", NativePathPolicy{}, NativePathPolicy{})
+			if err == nil || !strings.Contains(err.Error(), section+".spill.prune_interval_seconds") {
+				t.Errorf("%s spill %q: error = %v; want one naming %s.spill.prune_interval_seconds", section, raw, err, section)
+			}
 		}
 	}
 }

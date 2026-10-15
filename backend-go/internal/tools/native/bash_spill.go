@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"jad/backend-go/internal/sessionfs"
@@ -104,7 +105,7 @@ func planBashSpill(
 				"{stream}", string(stream),
 			).Replace(pruneTemplate))
 		}
-		pruneBashSpillFiles(filepath.Dir(path), bashSpillPruneRegexp(pruneTemplate, workspaceRoot, sessionDir), policy.RetentionDays)
+		pruneBashSpillFilesThrottled(filepath.Dir(path), bashSpillPruneRegexp(pruneTemplate, workspaceRoot, sessionDir), policy.RetentionDays, time.Duration(policy.PruneIntervalSeconds)*time.Second)
 		plan.writers[stream] = &bashSpillWriter{path: path, capBytes: policy.CapBytes}
 	}
 	return plan
@@ -261,6 +262,31 @@ func bashSpillPruneRegexp(template, workspaceRoot, sessionDir string) *regexp.Re
 	}
 	fallback, _ := regexp.Compile("^" + regexp.QuoteMeta(name) + "$")
 	return fallback
+}
+
+var bashSpillPrunes = struct {
+	sync.Mutex
+	last map[string]time.Time
+}{last: map[string]time.Time{}}
+
+func pruneBashSpillFilesThrottled(directory string, pattern *regexp.Regexp, retentionDays int64, interval time.Duration) {
+	if retentionDays <= 0 || pattern == nil {
+		return
+	}
+	if interval > 0 {
+		key := directory + "\x00" + pattern.String()
+		bashSpillPrunes.Lock()
+		last, scanned := bashSpillPrunes.last[key]
+		due := !scanned || time.Since(last) >= interval
+		if due {
+			bashSpillPrunes.last[key] = time.Now()
+		}
+		bashSpillPrunes.Unlock()
+		if !due {
+			return
+		}
+	}
+	pruneBashSpillFiles(directory, pattern, retentionDays)
 }
 
 func pruneBashSpillFiles(directory string, pattern *regexp.Regexp, retentionDays int64) {

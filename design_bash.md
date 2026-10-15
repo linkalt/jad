@@ -162,6 +162,7 @@ hint: the complete output is in .bash-output/bash-c1.stdout.log; read or grep it
 | Spill directory | `spill.storage_dir` | `.bash-output` | Relative paths resolve from the selected profile's `tool_storage` root, or the session cwd without a profile; absolute paths are used as-is. |
 | Spill file | `spill.cap_bytes` | 67108864 | Bytes per stream written to disk before the file is left incomplete. |
 | Spill retention | `spill.retention_days` | 14 | Expired spill files are pruned; 0 disables age-based pruning. |
+| Spill prune interval | `spill.prune_interval_seconds` | 3600 | Minimum seconds between prune scans of one spill directory, so a command does not list a large directory every time; 0 scans before every command. |
 | Line length | `max_line_chars` | 2000 | Cuts pathological single lines. |
 
 * Each stream keeps its own *head* window (the start) and *tail* window (the end), so a chatty build
@@ -269,6 +270,7 @@ turn waits for `timeout_ms`. Wiring cancellation into `AgentSession.run` is a se
         "keep": "truncated_only",  // or "always": a file per call
         "cap_bytes": 67108864,
         "retention_days": 14,
+        "prune_interval_seconds": 3600,
         "storage_dir": ".bash-output",
         "allow_unreadable": false   // false refuses a location read/grep could not open
       },

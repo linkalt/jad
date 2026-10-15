@@ -664,6 +664,10 @@ Checks (2026-10-11): `go test ./internal/... ./cmd/...` 28 packages ok; `go vet`
   `NativeBashSpillSettings.FilePrefix`, set by the loader per tool, and an empty value means `bash`. A relative value still resolves under the tool storage root. Spill files already in `.bash-output`
   from earlier exec calls stay there until bash's retention prunes them. Item (1) is kept on purpose: it asks whether the model can
   read the file back with `read` or `grep`, which is a check on those tools' rules, not a value exec borrows.
+- **Spill pruning is throttled.** `spill.prune_interval_seconds` (default 3600, 0 to 86400, 0 = scan before every command) sets the minimum time
+  between prune scans of one spill directory and filename pattern. Before it, every bash and exec call listed the whole directory twice (once per
+  stream); at 3000 files that cost about 16 ms against a 2 ms command. The last-scan times are in memory, so the first command after a backend start scans once.
+  It applies to both tools through the shared `bash_style` block. `retention_days` is unchanged, and an expired file now survives up to one interval longer.
 - **Hooks.** Post-edit hooks now have their own child-process keys and no longer read or need `tools.native.bash` (see the `hooks` section). The checkpoint harness paths now include exec's own
   spill directory. `messages.jsonl` is not touched.
 - **Effect on existing toolsets.** A toolset that relied on the inheritance now has narrower tools until it names `paths`. The user's

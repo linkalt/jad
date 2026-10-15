@@ -25,6 +25,8 @@ const (
 	maxNativeBashSpillCap            int64 = 1024 * 1024 * 1024
 	defaultNativeBashRetention       int64 = 14
 	maxNativeBashRetention           int64 = 3650
+	defaultNativeBashPruneInterval   int64 = 3600
+	maxNativeBashPruneInterval       int64 = 86_400
 	defaultNativeBashSpillDir              = ".bash-output"
 	defaultNativeBashSpillFilePrefix       = "bash"
 	defaultNativeBashSpillPath             = "{cwd}/.bash-output/bash-{call_id}.{stream}.log"
@@ -49,15 +51,18 @@ type NativeBashStreamBudget struct {
 
 // NativeBashSpillSettings controls optional complete-output files.
 type NativeBashSpillSettings struct {
-	Enabled         bool
-	Keep            string
-	CapBytes        int64
-	RetentionDays   int64
-	StorageDir      string
-	FilePrefix      string
-	StdoutFull      string
-	StderrFull      string
-	AllowUnreadable bool
+	Enabled       bool
+	Keep          string
+	CapBytes      int64
+	RetentionDays int64
+	// PruneIntervalSeconds is the minimum time between prune scans of one spill
+	// directory; 0 scans before every command.
+	PruneIntervalSeconds int64
+	StorageDir           string
+	FilePrefix           string
+	StdoutFull           string
+	StderrFull           string
+	AllowUnreadable      bool
 }
 
 // NativeBashSettings contains normalized shell, path, output, and environment
@@ -300,7 +305,7 @@ func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, se
 	if section == "tools.native.exec" {
 		defaultDir, defaultPath, filePrefix = defaultNativeExecSpillDir, defaultNativeExecSpillPath, defaultNativeExecSpillFilePrefix
 	}
-	settings := NativeBashSpillSettings{FilePrefix: filePrefix, Enabled: true, Keep: defaultNativeBashSpillKeep, CapBytes: defaultNativeBashSpillCap, RetentionDays: defaultNativeBashRetention, AllowUnreadable: false}
+	settings := NativeBashSpillSettings{FilePrefix: filePrefix, Enabled: true, Keep: defaultNativeBashSpillKeep, CapBytes: defaultNativeBashSpillCap, RetentionDays: defaultNativeBashRetention, PruneIntervalSeconds: defaultNativeBashPruneInterval, AllowUnreadable: false}
 	fields := map[string]json.RawMessage{}
 	if len(raw) > 0 {
 		var err error
@@ -311,7 +316,7 @@ func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, se
 	}
 	for key := range fields {
 		switch key {
-		case "enabled", "keep", "cap_bytes", "retention_days", "storage_dir", "stdout_full", "stderr_full", "allow_unreadable":
+		case "enabled", "keep", "cap_bytes", "retention_days", "prune_interval_seconds", "storage_dir", "stdout_full", "stderr_full", "allow_unreadable":
 		default:
 			return NativeBashSpillSettings{}, configError("%s: %s.spill.%s is not supported", settingPath, section, key)
 		}
@@ -329,6 +334,9 @@ func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, se
 		return NativeBashSpillSettings{}, err
 	}
 	if settings.RetentionDays, err = configuredInteger(fields, "retention_days", settings.RetentionDays, 0, maxNativeBashRetention, settingPath, section+".spill"); err != nil {
+		return NativeBashSpillSettings{}, err
+	}
+	if settings.PruneIntervalSeconds, err = configuredInteger(fields, "prune_interval_seconds", settings.PruneIntervalSeconds, 0, maxNativeBashPruneInterval, settingPath, section+".spill"); err != nil {
 		return NativeBashSpillSettings{}, err
 	}
 	if settings.AllowUnreadable, err = bashBool(fields, "allow_unreadable", false, settingPath+": "+section+".spill"); err != nil {
