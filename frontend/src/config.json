@@ -47,6 +47,7 @@
   "defer_offscreen_transcript_rows": true,
   "transcript_row_estimate_px": 120,
   "row_height_storage_key": "jad.row-heights",
+  "color_scheme_storage_key": "jad.color-scheme",
   "row_height_max_entries": 2000,
   "row_height_save_delay_ms": 500,
   "row_height_width_bucket_px": 50,

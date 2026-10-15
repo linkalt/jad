@@ -148,7 +148,9 @@ import {MarkdownText} from './components/MarkdownText';
 import {SelectionMenu} from './components/SelectionMenu';
 import type {QuoteAnchor} from './components/SelectionMenu';
 import {quoteDraftForSelection} from './selection-quote';
+import {MoonIcon, SunIcon} from './components/ColorSchemeIcon';
 import {FolderIcon} from './components/FolderIcon';
+import type {ColorScheme} from './color-scheme';
 import {PromptLibraryPanel} from './components/PromptLibraryPanel';
 import {RunSettingsPanel} from './components/RunSettingsPanel';
 import {SessionSearchPanel} from './components/SessionSearchPanel';
@@ -1768,6 +1770,8 @@ function SessionNavigation({
   onShowReadme,
   isReadmeShown,
   onOpenProfileEditor,
+  colorScheme,
+  onToggleColorScheme,
 }: {
   /** Every session as a group, with a child row for each of its profiles. */
   groups: SessionListGroup[];
@@ -1791,6 +1795,8 @@ function SessionNavigation({
   onShowReadme: () => void;
   isReadmeShown: boolean;
   onOpenProfileEditor: () => void;
+  colorScheme: ColorScheme;
+  onToggleColorScheme: () => void;
 }) {
   const categorySections = useMemo(() => groupByCategory(groups), [groups]);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -1862,6 +1868,14 @@ function SessionNavigation({
             variant={rightPanel === 'checkpoints' ? 'secondary' : 'ghost'}
             size="sm"
             onClick={onToggleCheckpoints}
+          />
+          <IconButton
+            label={colorScheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            tooltip={colorScheme === 'dark' ? 'Light theme' : 'Dark theme'}
+            icon={<Icon icon={colorScheme === 'dark' ? SunIcon : MoonIcon} size="sm" />}
+            variant="ghost"
+            size="sm"
+            onClick={onToggleColorScheme}
           />
         </FooterStack>
       }
@@ -2452,7 +2466,13 @@ function selectionQuoteTarget(): {draft: string; anchor: QuoteAnchor} | null {
   };
 }
 
-function App() {
+function App({
+  colorScheme,
+  onToggleColorScheme,
+}: {
+  colorScheme: ColorScheme;
+  onToggleColorScheme: () => void;
+}) {
   const showToast = useToast();
   const showToastRef = useRef(showToast);
   useEffect(() => {
@@ -5320,6 +5340,8 @@ function App() {
           onToggleCheckpoints={toggleCheckpoints}
           onShowReadme={showReadme}
           isReadmeShown={isReadmeShown}
+          colorScheme={colorScheme}
+          onToggleColorScheme={onToggleColorScheme}
           onOpenProfileEditor={() => {
             setHasOpenedProfileEditor(true);
             setIsProfileEditorOpen(true);

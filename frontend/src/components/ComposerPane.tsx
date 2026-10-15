@@ -836,17 +836,19 @@ export function ComposerPane({
       }
       headerActions={
         <HStack align="center" gap={4}>
-          <IconButton
-            data-panel-toggle=""
-            label={`${isPromptLibraryOpen ? 'Hide' : 'Show'} prompt library`}
-            icon={
-              <Icon icon={isPromptLibraryOpen ? 'chevronLeft' : 'chevronRight'} size="sm" />
-            }
-            variant={isPromptLibraryOpen ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={onTogglePromptLibrary}
-          />
-          {toolbarActions}
+          <HStack align="center" gap={1}>
+            <IconButton
+              data-panel-toggle=""
+              label={`${isPromptLibraryOpen ? 'Hide' : 'Show'} prompt library`}
+              icon={
+                <Icon icon={isPromptLibraryOpen ? 'chevronLeft' : 'chevronRight'} size="sm" />
+              }
+              variant={isPromptLibraryOpen ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={onTogglePromptLibrary}
+            />
+            {toolbarActions}
+          </HStack>
           <HStack align="center" gap={1}>
             {isImageAttachEnabled ? (
               <>
