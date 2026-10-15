@@ -969,8 +969,8 @@ func isJSONObject(raw []byte) bool {
 	if !json.Valid(raw) {
 		return false
 	}
-	_, err := decodeJSONObject(raw)
-	return err == nil
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '{'
 }
 
 func cloneRaw(raw []byte) []byte {
