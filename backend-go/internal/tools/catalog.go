@@ -384,12 +384,12 @@ func (c *Catalog) ExecuteFunctionCall(ctx context.Context, call json.RawMessage,
 
 	var output json.RawMessage
 	if tool.ExecuteOutput != nil {
-		output, err = tool.ExecuteOutput(ctx, object, execution)
+		output, err = executeOutputRecovered(tool, ctx, object, execution)
 		if err != nil || !json.Valid(output) {
 			output, _ = json.Marshal(ExecutionError(callID, StatusError, "tool_execution_failed", "Tool "+name+" failed during execution"))
 		}
 	} else {
-		result, executeErr := tool.Execute(ctx, object, execution)
+		result, executeErr := executeRecovered(tool, ctx, object, execution)
 		if executeErr != nil {
 			result = ExecutionError(callID, StatusError, "tool_execution_failed", "Tool "+name+" failed during execution")
 		}
@@ -399,6 +399,24 @@ func (c *Catalog) ExecuteFunctionCall(ctx context.Context, call json.RawMessage,
 		}
 	}
 	return encodeFunctionCallOutputValue(callID, output)
+}
+
+// A call runs on a batch worker goroutine that nothing above can recover, so a
+// panicking tool would end the whole process. These turn it into an error.
+func executeRecovered(tool Tool, ctx context.Context, arguments map[string]any, execution ExecutionContext) (result string, err error) {
+	defer recoverToolPanic(&err)
+	return tool.Execute(ctx, arguments, execution)
+}
+
+func executeOutputRecovered(tool Tool, ctx context.Context, arguments map[string]any, execution ExecutionContext) (output json.RawMessage, err error) {
+	defer recoverToolPanic(&err)
+	return tool.ExecuteOutput(ctx, arguments, execution)
+}
+
+func recoverToolPanic(err *error) {
+	if recovered := recover(); recovered != nil {
+		*err = fmt.Errorf("tool panicked: %v", recovered)
+	}
 }
 
 func encodeFunctionCallOutput(callID, output string) (json.RawMessage, error) {

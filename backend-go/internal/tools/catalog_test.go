@@ -168,6 +168,40 @@ func TestCatalogConvertsBadCallsAndExecutionFailuresToToolOutputs(t *testing.T) 
 	}
 }
 
+// A tool runs on a batch worker goroutine, where an unrecovered panic ends the
+// whole process. It must come back as the same output a returned error gives.
+func TestCatalogConvertsToolPanicsToToolOutputs(t *testing.T) {
+	panicking := testTool(t)
+	panicking.Execute = func(context.Context, map[string]any, ExecutionContext) (string, error) {
+		panic("private panic details")
+	}
+	panickingOutput := testTool(t)
+	panickingOutput.Definition.ID = "native.echo_output"
+	panickingOutput.Definition.Name = "echo_output"
+	panickingOutput.Execute = nil
+	panickingOutput.ExecuteOutput = func(context.Context, map[string]any, ExecutionContext) (json.RawMessage, error) {
+		var values map[string]int
+		values["boom"] = 1
+		return nil, nil
+	}
+	catalog := newTestCatalog(t, panicking, panickingOutput)
+	for _, name := range []string{"echo", "echo_output"} {
+		t.Run(name, func(t *testing.T) {
+			output, err := catalog.ExecuteFunctionCall(context.Background(), callJSON(t, "call-panic", name, `{"command":"x"}`), ExecutionContext{})
+			if err != nil {
+				t.Fatalf("ExecuteFunctionCall() error = %v", err)
+			}
+			callID, text := decodeOutput(t, output)
+			if callID != "call-panic" || !strings.Contains(text, "tool_execution_failed") {
+				t.Fatalf("tool output = (%q, %s)", callID, text)
+			}
+			if strings.Contains(text, "private panic details") || strings.Contains(text, "nil map") {
+				t.Fatalf("panic value leaked: %s", text)
+			}
+		})
+	}
+}
+
 // The example the model sees after a rejected call must keep the key order the
 // tool declared, not the alphabetical order a Go map would produce.
 func TestSchemaErrorKeepsExampleKeyOrder(t *testing.T) {
