@@ -6,9 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +27,8 @@ const bodyFileSuffix = ".body"
 var (
 	sensitiveHeaderPattern = regexp.MustCompile(`(?i)(?:authorization|api[-_]?key|cookie|set-cookie|proxy-authorization)`)
 	debugFilePattern       = regexp.MustCompile(`^(?:request|response)([0-9]+)$`)
+	debugAnyFilePattern    = regexp.MustCompile(`^(?:request|response)[0-9]+(?:\.body)?$`)
+	sensitiveQueryPattern  = regexp.MustCompile(`(?i)(?:key|token|secret|signature|sig|password|passwd|auth|credential)`)
 )
 
 // Settings controls opt-in HTTP diagnostics. Body capture is bounded before
@@ -39,6 +43,9 @@ type Settings struct {
 	IncludeResponseHeaders bool
 	IncludeResponseBody    bool
 	MaxBodyBytes           int64
+	// MaxTotalBytes bounds the request and response files kept in the directory: when a
+	// run starts logging, the oldest files beyond it are removed. 0 keeps everything.
+	MaxTotalBytes int64
 }
 
 // NewTransport wraps next with best-effort provider HTTP logging. A nil next
@@ -53,7 +60,7 @@ func NewTransport(directory string, settings Settings, next http.RoundTripper) h
 	return &Transport{
 		next:     next,
 		settings: settings,
-		logger:   newFileLogger(directory, logging.Or(settings.Logger)),
+		logger:   newFileLogger(directory, settings.MaxTotalBytes, logging.Or(settings.Logger)),
 	}
 }
 
@@ -77,7 +84,7 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 		"direction": "request",
 		"method":    strings.ToUpper(request.Method),
-		"url":       request.URL.String(),
+		"url":       redactURL(request.URL),
 	}
 	if t.settings.IncludeRequestHeaders {
 		requestRecord["headers"] = requestHeaders(request.Header)
@@ -92,7 +99,7 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		t.logger.enqueue("response"+strconv.FormatInt(requestID, 10), map[string]any{
 			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 			"direction": "response",
-			"url":       request.URL.String(),
+			"url":       redactURL(request.URL),
 			"error":     err.Error(),
 		})
 		return response, err
@@ -184,18 +191,44 @@ func requestHeaders(headers http.Header) map[string]string {
 }
 
 func responseHeaders(headers http.Header) map[string]string {
-	result := make(map[string]string, len(headers))
-	for name, values := range headers {
-		result[strings.ToLower(name)] = strings.Join(values, ", ")
-	}
-	return result
+	return requestHeaders(headers)
 }
 
 func responseURL(response *http.Response, request *http.Request) string {
 	if response.Request != nil && response.Request.URL != nil {
-		return response.Request.URL.String()
+		return redactURL(response.Request.URL)
 	}
-	return request.URL.String()
+	return redactURL(request.URL)
+}
+
+// redactURL drops the password of the userinfo and masks the value of every query
+// parameter whose name looks like a credential, so a key in a configured base_url does
+// not reach the debug files. The order and the other parameters are kept.
+func redactURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	clean := *u
+	if clean.User != nil {
+		clean.User = url.User("REDACTED")
+	}
+	if clean.RawQuery != "" {
+		parts := strings.Split(clean.RawQuery, "&")
+		for index, part := range parts {
+			name, _, hasValue := strings.Cut(part, "=")
+			if !hasValue {
+				continue
+			}
+			if decoded, err := url.QueryUnescape(name); err == nil {
+				name = decoded
+			}
+			if sensitiveQueryPattern.MatchString(name) {
+				parts[index] = part[:strings.IndexByte(part, '=')+1] + redactedValue
+			}
+		}
+		clean.RawQuery = strings.Join(parts, "&")
+	}
+	return clean.String()
 }
 
 func responseStatusText(response *http.Response) string {
@@ -292,6 +325,7 @@ type fileWrite struct {
 
 type fileLogger struct {
 	directory      string
+	maxTotalBytes  int64
 	initializeOnce sync.Once
 	mu             sync.Mutex
 	nextID         int64
@@ -301,8 +335,8 @@ type fileLogger struct {
 	log            *slog.Logger
 }
 
-func newFileLogger(directory string, logger *slog.Logger) *fileLogger {
-	return &fileLogger{directory: directory, nextID: 1, log: logger}
+func newFileLogger(directory string, maxTotalBytes int64, logger *slog.Logger) *fileLogger {
+	return &fileLogger{directory: directory, maxTotalBytes: maxTotalBytes, nextID: 1, log: logger}
 }
 
 func (l *fileLogger) reserve() int64 {
@@ -315,7 +349,7 @@ func (l *fileLogger) reserve() int64 {
 }
 
 func (l *fileLogger) initialize() {
-	if err := os.MkdirAll(l.directory, 0o755); err != nil {
+	if err := os.MkdirAll(l.directory, 0o700); err != nil {
 		l.log.Warn("unable to initialize HTTP debug directory", slog.String("directory", l.directory), slog.Any("error", err))
 		return
 	}
@@ -341,6 +375,45 @@ func (l *fileLogger) initialize() {
 	l.mu.Lock()
 	l.nextID = next
 	l.mu.Unlock()
+	if l.maxTotalBytes > 0 {
+		l.prune(entries)
+	}
+}
+
+// prune removes the oldest request and response files until the rest fit in maxTotalBytes.
+func (l *fileLogger) prune(entries []os.DirEntry) {
+	type kept struct {
+		name    string
+		size    int64
+		modTime time.Time
+	}
+	var files []kept
+	var total int64
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !debugAnyFilePattern.MatchString(entry.Name()) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, kept{entry.Name(), info.Size(), info.ModTime()})
+		total += info.Size()
+	}
+	if total <= l.maxTotalBytes {
+		return
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].modTime.Before(files[j].modTime) })
+	for _, file := range files {
+		if total <= l.maxTotalBytes {
+			return
+		}
+		if err := os.Remove(filepath.Join(l.directory, file.name)); err != nil {
+			l.log.Warn("unable to prune HTTP debug file", slog.String("name", file.name), slog.Any("error", err))
+			continue
+		}
+		total -= file.size
+	}
 }
 
 func (l *fileLogger) enqueue(name string, record map[string]any) {

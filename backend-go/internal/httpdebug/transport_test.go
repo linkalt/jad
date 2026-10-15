@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestTransportLogsRedactedHeadersAndBoundedBodies(t *testing.T) {
@@ -299,4 +301,100 @@ func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+func TestRedactURLMasksCredentialsAndKeepsTheRest(t *testing.T) {
+	for _, test := range []struct{ in, want string }{
+		{"https://api.example.com/v1/responses", "https://api.example.com/v1/responses"},
+		{"https://user:pw@api.example.com/v1", "https://REDACTED@api.example.com/v1"},
+		{"https://h/v1?key=abc&model=gpt&access_token=zzz", "https://h/v1?key=[REDACTED]&model=gpt&access_token=[REDACTED]"},
+		{"https://h/v1?api%5Fkey=abc&flag&X-Signature=s", "https://h/v1?api%5Fkey=[REDACTED]&flag&X-Signature=[REDACTED]"},
+	} {
+		parsed, err := url.Parse(test.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := redactURL(parsed); got != test.want {
+			t.Errorf("redactURL(%q) = %q, want %q", test.in, got, test.want)
+		}
+	}
+	if redactURL(nil) != "" {
+		t.Error("redactURL(nil) must be empty")
+	}
+}
+
+func TestTransportRedactsResponseHeadersAndQueryAndUsesPrivateDirectory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Set-Cookie", "sid=secret")
+		writer.Header().Set("X-Request-Id", "req-1")
+		_, _ = io.WriteString(writer, "ok")
+	}))
+	defer server.Close()
+	directory := filepath.Join(t.TempDir(), "debug", "http")
+	transport := NewTransport(directory, Settings{Enabled: true, IncludeRequestHeaders: true, IncludeResponseHeaders: true, MaxBodyBytes: 8}, server.Client().Transport).(*Transport)
+	response, err := (&http.Client{Transport: transport}).Get(server.URL + "/v1?key=query-secret&model=m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	transport.logger.pending.Wait()
+
+	record := readRecord(t, directory, "response1")
+	headers := record["headers"].(map[string]any)
+	if headers["set-cookie"] != "[REDACTED]" || headers["x-request-id"] != "req-1" {
+		t.Errorf("response headers = %#v", headers)
+	}
+	for _, name := range []string{"request1", "response1"} {
+		if raw := readRaw(t, directory, name); strings.Contains(raw, "query-secret") || strings.Contains(raw, "sid=secret") {
+			t.Errorf("%s leaks a credential: %s", name, raw)
+		}
+	}
+	info, err := os.Stat(directory)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("debug directory mode = %v, error=%v, want 0700", info.Mode().Perm(), err)
+	}
+}
+
+func TestTransportPrunesOldestFilesBeyondTheTotalCap(t *testing.T) {
+	directory := t.TempDir()
+	base := time.Now().Add(-time.Hour)
+	for index, name := range []string{"request1", "response1", "request2.body", "response2"} {
+		path := filepath.Join(directory, name)
+		if err := os.WriteFile(path, make([]byte, 100), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		stamp := base.Add(time.Duration(index) * time.Minute)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	foreign := filepath.Join(directory, "notes.txt")
+	if err := os.WriteFile(foreign, make([]byte, 500), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger := newFileLogger(directory, 250, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	firstID := logger.reserve()
+	for name, wantKept := range map[string]bool{"request1": false, "response1": false, "request2.body": true, "response2": true, "notes.txt": true} {
+		_, err := os.Stat(filepath.Join(directory, name))
+		if (err == nil) != wantKept {
+			t.Errorf("%s kept=%v, want %v", name, err == nil, wantKept)
+		}
+	}
+	// ids continue after the pruned files so new records never reuse a name
+	if firstID != 3 {
+		t.Errorf("first id = %d, want 3", firstID)
+	}
+}
+
+func TestTransportKeepsEverythingWhenTheTotalCapIsZero(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"request1", "response1"} {
+		if err := os.WriteFile(filepath.Join(directory, name), make([]byte, 100), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newFileLogger(directory, 0, slog.New(slog.NewTextHandler(io.Discard, nil))).reserve()
+	if entries, _ := os.ReadDir(directory); len(entries) != 2 {
+		t.Fatalf("files = %d, want 2", len(entries))
+	}
 }

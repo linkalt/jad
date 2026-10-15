@@ -27,6 +27,7 @@ var (
 	memoryFilenamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}-[0-9]{8}T[0-9]{6}\.[0-9]{3}Z-(?:[0-9]{16}-)?[0-9a-f-]{36}\.json$`)
 	memoryCursorIDPattern = regexp.MustCompile(`^m_([0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})$`)
 	memoryUUIDPattern     = regexp.MustCompile(`^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$`)
+	memorySequencePattern = regexp.MustCompile(`^[0-9]+$`)
 	memoryPathSegment     = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
 )
 
@@ -738,7 +739,7 @@ func (s *MemoryStore) nextSequence() (uint64, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {
 		text := strings.TrimSuffix(string(data), "\n")
-		if text == "" || strings.TrimSpace(text) != text || !regexp.MustCompile(`^[0-9]+$`).MatchString(text) {
+		if text == "" || strings.TrimSpace(text) != text || !memorySequencePattern.MatchString(text) {
 			return 0, &MemoryStoreError{Message: "memory sequence is malformed"}
 		}
 		current, err = strconv.ParseUint(text, 10, 64)

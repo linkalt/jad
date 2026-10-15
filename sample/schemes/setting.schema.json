@@ -1716,7 +1716,7 @@
     },
     "http_debug": {
       "type": "object",
-      "description": "Optional native HTTP diagnostics written as numbered request/response records under paths.http_debug. With include_request_body or include_response_body, the body is saved raw in a sibling NAME.body file: the request bytes as sent on the wire, the response bytes (the SSE stream) exactly as received, appended as they arrive. The record holds body_file, body_bytes and body_truncated, not the body. max_body_bytes caps each body file. Disabled by default.",
+      "description": "Optional native HTTP diagnostics written as numbered request/response records under paths.http_debug. With include_request_body or include_response_body, the body is saved raw in a sibling NAME.body file: the request bytes as sent on the wire, the response bytes (the SSE stream) exactly as received, appended as they arrive. The record holds body_file, body_bytes and body_truncated, not the body. max_body_bytes caps each body file. Credential headers (request and response) and credential-like URL query values are written as [REDACTED]. Disabled by default.",
       "properties": {
         "enabled": {
           "type": "boolean",
@@ -1743,6 +1743,13 @@
           "minimum": 1,
           "maximum": 10485760,
           "default": 65536
+        },
+        "max_total_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1099511627776,
+          "default": 268435456,
+          "description": "Go backend only. The most the request and response files in the http_debug directory may hold. When a run starts logging, the oldest files beyond it are removed. 0 keeps everything."
         }
       },
       "additionalProperties": true

@@ -403,6 +403,7 @@ func (r *Resolver) newProviderStreamer(config sessionfs.SessionConfig, apiKey st
 			IncludeResponseHeaders: config.HTTPDebug.IncludeResponseHeaders,
 			IncludeResponseBody:    config.HTTPDebug.IncludeResponseBody,
 			MaxBodyBytes:           config.HTTPDebug.MaxBodyBytes,
+			MaxTotalBytes:          config.HTTPDebug.MaxTotalBytes,
 		}, network)
 		httpClient = &http.Client{Transport: transport}
 	}

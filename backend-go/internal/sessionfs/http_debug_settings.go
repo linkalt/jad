@@ -9,6 +9,8 @@ import (
 const (
 	defaultHTTPDebugBodyBytes int64 = 64 * 1024
 	maxHTTPDebugBodyBytes     int64 = 10 * 1024 * 1024
+	defaultHTTPDebugTotal     int64 = 256 * 1024 * 1024
+	maxHTTPDebugTotalBytes    int64 = 1 << 40
 )
 
 // HTTPDebugSettings controls opt-in capture of provider HTTP requests and
@@ -21,12 +23,14 @@ type HTTPDebugSettings struct {
 	IncludeResponseHeaders bool  `json:"include_response_headers"`
 	IncludeResponseBody    bool  `json:"include_response_body"`
 	MaxBodyBytes           int64 `json:"max_body_bytes"`
+	MaxTotalBytes          int64 `json:"max_total_bytes"`
 }
 
 func defaultHTTPDebugSettings() HTTPDebugSettings {
 	return HTTPDebugSettings{
 		IncludeResponseHeaders: true,
 		MaxBodyBytes:           defaultHTTPDebugBodyBytes,
+		MaxTotalBytes:          defaultHTTPDebugTotal,
 	}
 }
 
@@ -64,6 +68,13 @@ func normalizeHTTPDebugSettings(raw json.RawMessage, path string) (HTTPDebugSett
 			return HTTPDebugSettings{}, configError("%s: http_debug.max_body_bytes must be a safe integer between 1 and 10485760", path)
 		}
 		settings.MaxBodyBytes = int64(number)
+	}
+	if value, exists := fields["max_total_bytes"]; exists && strings.TrimSpace(string(value)) != "null" {
+		var number float64
+		if err := json.Unmarshal(value, &number); err != nil || math.Trunc(number) != number || number < 0 || number > float64(maxHTTPDebugTotalBytes) {
+			return HTTPDebugSettings{}, configError("%s: http_debug.max_total_bytes must be a safe integer between 0 and 1099511627776", path)
+		}
+		settings.MaxTotalBytes = int64(number)
 	}
 	return settings, nil
 }
