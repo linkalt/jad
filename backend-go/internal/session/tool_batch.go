@@ -1,6 +1,25 @@
 package session
 
-import "sync"
+import (
+	"fmt"
+	"log/slog"
+	"runtime/debug"
+	"sync"
+)
+
+// toolBatchPanic is a panic recovered on a batch worker. Its text names only the
+// panic value, because it can reach a model (a sub-agent's failure reason); the stack
+// is added to the server log by LogValue when the error is logged.
+type toolBatchPanic struct {
+	value any
+	stack []byte
+}
+
+func (p *toolBatchPanic) Error() string { return fmt.Sprintf("tool batch call panicked: %v", p.value) }
+
+func (p *toolBatchPanic) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("message", p.Error()), slog.String("stack", string(p.stack)))
+}
 
 // toolBatchConcurrency is how many calls of one response may run at once. With
 // "ordered" scheduling a response holding a call that can change state runs one
@@ -70,6 +89,21 @@ func runToolBatch[Call, Output any](
 		}
 		mu.Unlock()
 	}
+	// A panic in execute or onFinished runs on this worker goroutine, where
+	// nothing above can recover it; it would end the process. It becomes the
+	// call's error instead.
+	runOne := func(call Call) (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = &toolBatchPanic{value: recovered, stack: debug.Stack()}
+			}
+		}()
+		output, err := execute(call)
+		if err == nil {
+			err = onFinished(call, output)
+		}
+		return err
+	}
 	worker := func() {
 		defer wg.Done()
 		for {
@@ -77,11 +111,7 @@ func runToolBatch[Call, Output any](
 			if !ok {
 				return
 			}
-			output, err := execute(call)
-			if err == nil {
-				err = onFinished(call, output)
-			}
-			if err != nil {
+			if err := runOne(call); err != nil {
 				fail(err)
 			}
 		}

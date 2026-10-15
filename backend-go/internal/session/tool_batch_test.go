@@ -1,9 +1,12 @@
 package session
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -158,6 +161,47 @@ func TestRunToolBatchReportsAFinishedHookErrorLikeAnExecutionError(t *testing.T)
 		func(int, int) error { return publishFailed }, nil)
 	if !errors.Is(err, publishFailed) {
 		t.Fatalf("error = %v, want publish failed", err)
+	}
+}
+
+func TestRunToolBatchTurnsAPanicIntoTheCallsError(t *testing.T) {
+	cases := map[string]struct {
+		execute    func(int) (int, error)
+		onFinished func(int, int) error
+	}{
+		"execute": {
+			execute:    func(int) (int, error) { panic("boom in execute") },
+			onFinished: func(int, int) error { return nil },
+		},
+		"onFinished": {
+			execute:    func(call int) (int, error) { return call, nil },
+			onFinished: func(int, int) error { panic("boom in onFinished") },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			started := make(chan int, 4)
+			err := runToolBatch([]int{0, 1, 2, 3}, 1,
+				func(call int) (int, error) {
+					started <- call
+					return tc.execute(call)
+				},
+				tc.onFinished, nil)
+			if err == nil || !strings.Contains(err.Error(), "panicked: boom in "+name) {
+				t.Fatalf("error = %v, want the recovered panic", err)
+			}
+			if strings.Contains(err.Error(), "goroutine") || strings.Contains(err.Error(), ".go:") {
+				t.Fatalf("error text %q carries a stack; it can reach a model", err.Error())
+			}
+			var logged bytes.Buffer
+			slog.New(slog.NewTextHandler(&logged, nil)).Error("run failed", slog.Any("error", err))
+			if !strings.Contains(logged.String(), "goroutine") {
+				t.Fatalf("log line %q has no stack for the server log", logged.String())
+			}
+			if len(started) != 1 {
+				t.Fatalf("%d calls started, want 1: a panic fails the batch like any error", len(started))
+			}
+		})
 	}
 }
 

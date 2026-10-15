@@ -27,6 +27,9 @@ type Config struct {
 	// Retry, when set, replaces the SDK's own retries for the request that opens a
 	// response stream. When nil the SDK's defaults apply, as before the setting existed.
 	Retry *RetryConfig
+	// IdleTimeout fails a call whose stream sends nothing for this long. Zero turns the
+	// guard off.
+	IdleTimeout time.Duration
 }
 
 // Event and EventHandler remain aliases for the provider-neutral stream
@@ -39,6 +42,8 @@ type EventHandler = streamresponses.EventHandler
 type Client struct {
 	sdk   *openai.Client
 	retry *RetryConfig
+	// idleTimeout is the longest a provider call may stay silent; zero means no limit.
+	idleTimeout time.Duration
 	// sleep and random are replaced by tests so a retry wait costs no time.
 	sleep  func(context.Context, time.Duration) error
 	random func() float64
@@ -59,7 +64,7 @@ func NewClient(config Config) *Client {
 		options = append(options, option.WithHTTPClient(config.HTTPClient))
 	}
 	sdk := openai.NewClient(options...)
-	return &Client{sdk: &sdk, retry: config.Retry, sleep: sleepContext, random: defaultRandom}
+	return &Client{sdk: &sdk, retry: config.Retry, idleTimeout: config.IdleTimeout, sleep: sleepContext, random: defaultRandom}
 }
 
 // Stream posts a JSON Responses request and forwards each server-sent event
@@ -78,7 +83,10 @@ func (c *Client) Stream(ctx context.Context, request json.RawMessage, handle Eve
 		return err
 	}
 
-	stream := c.openStream(ctx, requestOptions)
+	parent := ctx
+	ctx, guard, release := newIdleGuard(parent, c.idleTimeout)
+	defer release()
+	stream := c.openStream(ctx, requestOptions, guard)
 	defer func() { _ = stream.Close() }()
 
 	for stream.Next() {
@@ -87,11 +95,17 @@ func (c *Client) Stream(ctx context.Context, request json.RawMessage, handle Eve
 		if !json.Valid(raw) {
 			return fmt.Errorf("OpenAI stream event %q did not contain valid raw JSON", current.Type)
 		}
+		// The handler's own time is not the provider's silence.
+		guard.Stop()
 		if err := handle(Event{Type: current.Type, Raw: raw}); err != nil {
 			return fmt.Errorf("handle OpenAI stream event %q: %w", current.Type, err)
 		}
+		guard.Reset()
 	}
 	if err := stream.Err(); err != nil {
+		if idle := guard.Err(parent); idle != nil {
+			return idle
+		}
 		err = fmt.Errorf("read OpenAI Responses stream: %w", err)
 		var apiError *openai.Error
 		if errors.As(err, &apiError) && apiError.StatusCode > 0 {
@@ -107,7 +121,7 @@ func (c *Client) Stream(ctx context.Context, request json.RawMessage, handle Eve
 // The SDK records an opening failure in the stream before any event is read, so
 // stream.Err() right after NewStreaming separates "the request failed" from "the stream
 // broke later": only the first is retried, because after that partial output was shown.
-func (c *Client) openStream(ctx context.Context, requestOptions []option.RequestOption) *ssestream.Stream[sdkresponses.ResponseStreamEventUnion] {
+func (c *Client) openStream(ctx context.Context, requestOptions []option.RequestOption, guard *idleGuard) *ssestream.Stream[sdkresponses.ResponseStreamEventUnion] {
 	if c.retry == nil {
 		return c.sdk.Responses.NewStreaming(ctx, sdkresponses.ResponseNewParams{}, requestOptions...)
 	}
@@ -136,10 +150,12 @@ func (c *Client) openStream(ctx context.Context, requestOptions []option.Request
 			reported = true
 			notify(&streamresponses.RetryWait{Attempt: attempt + 1, MaxRetries: c.retry.MaxRetries, Status: statusOf(err), Delay: delay})
 		}
+		guard.Stop()
 		if sleepErr := c.sleep(ctx, delay); sleepErr != nil {
 			// The run was stopped during the wait: report the stop, not the earlier failure.
 			return ssestream.NewStream[sdkresponses.ResponseStreamEventUnion](nil, sleepErr)
 		}
+		guard.Reset()
 	}
 }
 

@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	interactionbroker "jad/backend-go/internal/interactions"
+	"jad/backend-go/internal/serverconfig"
 	"jad/backend-go/internal/tools"
 	"jad/backend-go/internal/webui"
 )
@@ -206,15 +208,32 @@ type runRegistry struct {
 	runs      map[string][]*activeRun
 	retention time.Duration
 	maxQueue  int
-	closed    bool
+	// maxRuns is the most runs that may be running at once; 0 means no cap.
+	maxRuns int
+	closed  bool
 }
 
-func newRunRegistry(retention time.Duration, maxBufferedBytes int) *runRegistry {
+func newRunRegistry(retention time.Duration, maxBufferedBytes, maxRuns int) *runRegistry {
 	return &runRegistry{
 		runs:      make(map[string][]*activeRun),
 		retention: retention,
 		maxQueue:  maxBufferedBytes,
+		maxRuns:   maxRuns,
 	}
+}
+
+// runningLocked counts the runs still going. The caller holds r.mu; run.state takes
+// the run's own lock after it, the order SessionRuns uses.
+func (r *runRegistry) runningLocked() int {
+	count := 0
+	for _, entries := range r.runs {
+		for _, run := range entries {
+			if run.state() == "running" {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func (r *runRegistry) begin(key, turnID string) (*activeRun, error) {
@@ -222,6 +241,13 @@ func (r *runRegistry) begin(key, turnID string) (*activeRun, error) {
 	defer r.mu.Unlock()
 	if r.closed {
 		return nil, errors.New("run registry is closed")
+	}
+	if r.maxRuns > 0 && r.runningLocked() >= r.maxRuns {
+		return nil, &StatusError{
+			Code:              http.StatusTooManyRequests,
+			Message:           fmt.Sprintf("the server is already running %d runs (server.max_concurrent_runs); try again shortly", r.maxRuns),
+			RetryAfterSeconds: serverconfig.RunCapRetryAfterSeconds,
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	run := &activeRun{

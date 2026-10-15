@@ -385,7 +385,7 @@ func (r *Resolver) newProviderStreamer(config sessionfs.SessionConfig, apiKey st
 		httpClient = &http.Client{Transport: transport}
 	}
 	retry := providerRetryConfig(config.ProviderRetry, r.logger)
-	return openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: config.Model.BaseURL, HTTPClient: httpClient, Retry: &retry})
+	return openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: config.Model.BaseURL, HTTPClient: httpClient, Retry: &retry, IdleTimeout: time.Duration(config.ProviderStream.IdleTimeoutMS) * time.Millisecond})
 }
 
 // ListTools implements httpapi.SessionToolLister without requiring a provider
@@ -804,26 +804,29 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		HTTPDebugDir string
 		// The runner holds the retry settings, so a changed setting needs a new runner.
 		ProviderRetry sessionfs.ProviderRetrySettings
+		// The client holds the idle timeout too.
+		ProviderStream sessionfs.ProviderStreamSettings
 		// The runner holds the OAuth transport, so the credential file and the endpoint
 		// and margin it was built with identify the runner. The token is not included.
 		OAuthAuthFile string
 		OpenAIOAuth   sessionfs.OpenAIOAuthSettings
 	}{
-		ModelPath:     config.ModelPath,
-		Provider:      config.Model.Provider,
-		Model:         config.Model.Name,
-		APIKeyEnv:     config.Model.APIKeyEnv,
-		BaseURL:       config.Model.BaseURL,
-		AuthMode:      config.Model.AuthMode,
-		Request:       config.Model.Request,
-		HostedTools:   config.Model.HostedTools,
-		PromptRole:    config.Model.PromptRole,
-		PromptText:    config.Model.PromptText,
-		HTTPDebug:     config.HTTPDebug,
-		HTTPDebugDir:  config.StoragePaths.HTTPDebug,
-		ProviderRetry: config.ProviderRetry,
-		OAuthAuthFile: config.Model.OAuthAuthFile,
-		OpenAIOAuth:   config.OpenAIOAuth,
+		ModelPath:      config.ModelPath,
+		Provider:       config.Model.Provider,
+		Model:          config.Model.Name,
+		APIKeyEnv:      config.Model.APIKeyEnv,
+		BaseURL:        config.Model.BaseURL,
+		AuthMode:       config.Model.AuthMode,
+		Request:        config.Model.Request,
+		HostedTools:    config.Model.HostedTools,
+		PromptRole:     config.Model.PromptRole,
+		PromptText:     config.Model.PromptText,
+		HTTPDebug:      config.HTTPDebug,
+		HTTPDebugDir:   config.StoragePaths.HTTPDebug,
+		ProviderRetry:  config.ProviderRetry,
+		ProviderStream: config.ProviderStream,
+		OAuthAuthFile:  config.Model.OAuthAuthFile,
+		OpenAIOAuth:    config.OpenAIOAuth,
 	}
 	keyHash := sha256.Sum256([]byte(apiKey))
 	identity.APIKeyHash = hex.EncodeToString(keyHash[:])

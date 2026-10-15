@@ -194,3 +194,55 @@ func processTestRequest(workspace, command string, logCap int64) ProcessStartReq
 		},
 	}
 }
+
+func TestBuildNativeProcessEnvironmentKeepsOnlyAllowlistedVariables(t *testing.T) {
+	base := []string{
+		"PATH=/usr/bin:/bin", "HOME=/tmp", "FIXTURE_SECRET=ambient-secret", "UNLISTED_SECRET=do-not-pass",
+		"JAD_API_TOKEN=server-secret", "DENIED_BY_SETTING=denied",
+	}
+	overrides := map[string]string{"NO_COLOR": "1", "FROM_ENV_FILE": "configured", "DENIED_BY_SETTING": "configured"}
+	environment := buildNativeProcessEnvironment(base, overrides, "FIXTURE_SECRET", []string{"DENIED_BY_SETTING"})
+	values := make(map[string]string)
+	for _, item := range environment {
+		name, value, _ := strings.Cut(item, "=")
+		values[name] = value
+	}
+	want := map[string]string{"PATH": "/usr/bin:/bin", "HOME": "/tmp", "NO_COLOR": "1", "FROM_ENV_FILE": "configured"}
+	if len(values) != len(want) {
+		t.Fatalf("environment = %v, want %v", values, want)
+	}
+	for name, value := range want {
+		if values[name] != value {
+			t.Fatalf("environment = %v, want %v", values, want)
+		}
+	}
+}
+
+func TestProcessChildDoesNotInheritServerSecrets(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed process groups require a POSIX platform")
+	}
+	t.Setenv("PROCESS_CANARY_SECRET", "canary-value")
+	directory := t.TempDir()
+	manager := NewProcessManager(filepath.Join(directory, "processes"))
+	defer manager.Close()
+	snapshot, err := manager.Start(processTestRequest(directory, `printf 'canary=[%s] path=[%s]' "$PROCESS_CANARY_SECRET" "$PATH"`, 1<<16))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waited := manager.Wait(snapshot.ID, 3000)
+	if !waited.Found || waited.Snapshot == nil || waited.Snapshot.State != ProcessExited {
+		t.Fatalf("Wait() = %#v, want an exited process", waited)
+	}
+	output, err := os.ReadFile(filepath.Join(directory, "processes", snapshot.ID, "stdout.log"))
+	if err != nil {
+		entries, _ := os.ReadDir(filepath.Join(directory, "processes", snapshot.ID))
+		t.Fatalf("read stdout log: %v (entries %v)", err, entries)
+	}
+	if strings.Contains(string(output), "canary-value") || !strings.Contains(string(output), "canary=[]") {
+		t.Fatalf("child output = %q, want the canary variable hidden", output)
+	}
+	if strings.Contains(string(output), "path=[]") {
+		t.Fatalf("child output = %q, want PATH kept", output)
+	}
+}

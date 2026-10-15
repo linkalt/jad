@@ -104,6 +104,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 			MaxRequestImageBytes:       loaded.Server.MaxRequestImageBytes,
 			MaxRequestFiles:            loaded.Server.MaxRequestFiles,
 			MaxRequestFileBytes:        loaded.Server.MaxRequestFileBytes,
+			MaxConcurrentRuns:          loaded.Server.MaxConcurrentRuns,
 			RunContentMemoryBytes:      loaded.Server.RunContentMemoryBytes,
 			RunContentWriteBatchBytes:  loaded.Server.RunContentWriteBatchBytes,
 			RunContentFlushInterval:    loaded.Server.RunContentFlushInterval,

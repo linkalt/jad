@@ -36,6 +36,9 @@ func TestLoadConfigAppliesRootSettingsAndEnvironmentOverrides(t *testing.T) {
 	if config.HTTP.APIToken != integrationAPIToken || config.HTTP.MaxBodyBytes != 8192 || config.HTTP.RunStateRetention != 0 || !config.HTTP.AllowZeroRunStateRetention {
 		t.Errorf("HTTP settings = %+v", config.HTTP)
 	}
+	if config.HTTP.MaxConcurrentRuns != 0 {
+		t.Errorf("max concurrent runs = %d, want the default 0 (no cap)", config.HTTP.MaxConcurrentRuns)
+	}
 	if config.HTTP.ToolStreamInterval != 17*time.Millisecond {
 		t.Errorf("tool stream interval = %s, want 17ms", config.HTTP.ToolStreamInterval)
 	}
@@ -72,5 +75,20 @@ func TestLoadConfigRejectsLegacyAPITokenName(t *testing.T) {
 	}
 	if _, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"AGENT_API_TOKEN": "old", "JAD_API_TOKEN": integrationAPIToken}}); err != nil {
 		t.Fatalf("LoadConfig(both set) error = %v, want success", err)
+	}
+}
+
+func TestLoadConfigPassesMaxConcurrentRunsToTheHTTPConfig(t *testing.T) {
+	cwd := t.TempDir()
+	setting := `{"session_roots":[{"id":"work","path":"sessions"}],"server":{"max_concurrent_runs":7}}`
+	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.HTTP.MaxConcurrentRuns != 7 {
+		t.Fatalf("HTTP.MaxConcurrentRuns = %d, want 7 from server.max_concurrent_runs", config.HTTP.MaxConcurrentRuns)
 	}
 }

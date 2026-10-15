@@ -189,6 +189,9 @@ func recordRunFailure(runner RunSession, accepted *session.PersistedInput, turnI
 // provider answered with.
 type providerStatusError interface{ ProviderStatus() int }
 
+// streamIdleError is implemented by an error for a provider stream that went silent.
+type streamIdleError interface{ IdleTimeout() time.Duration }
+
 // clientRunErrorMessage is the only description of a failed run a client gets:
 // the provider's HTTP status when there was one, otherwise a generic line. The
 // detail (a response body, a path, a tool server's message) stays in the server
@@ -198,6 +201,10 @@ func clientRunErrorMessage(err error) string {
 	var tokenLimit *session.RunTokenLimitError
 	if errors.As(err, &tokenLimit) {
 		return tokenLimit.Error()
+	}
+	var idle streamIdleError
+	if errors.As(err, &idle) {
+		return fmt.Sprintf("The model provider sent nothing for %s, so the run was ended. Details are in the server log.", idle.IdleTimeout().Round(time.Second))
 	}
 	var provider providerStatusError
 	if errors.As(err, &provider) {

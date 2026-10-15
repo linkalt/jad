@@ -9,7 +9,7 @@ import (
 // describeAll: a run without a named profile is the session's `run`, while
 // runs_by_profile lists only runs of named profiles.
 func TestSessionRunsReportsProfileLessRunOnlyAsDefault(t *testing.T) {
-	registry := newRunRegistry(time.Minute, 4096)
+	registry := newRunRegistry(time.Minute, 4096, 0)
 	if _, err := registry.begin("alpha\x00", "turn-plain"); err != nil {
 		t.Fatalf("begin profile-less run: %v", err)
 	}

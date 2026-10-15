@@ -40,6 +40,14 @@ const (
 	MaxMaxRequestFileBytes     = 25 * 1024 * 1024
 )
 
+// Runs at the same time (server.max_concurrent_runs). 0 means no cap.
+const (
+	DefaultMaxConcurrentRuns = 0
+	MaxMaxConcurrentRuns     = 1024
+	// RunCapRetryAfterSeconds is the Retry-After of a run start refused by the cap.
+	RunCapRetryAfterSeconds = 5
+)
+
 // DefaultRecoverProcessesAtStart is the default of server.recover_processes_at_start.
 const DefaultRecoverProcessesAtStart = true
 

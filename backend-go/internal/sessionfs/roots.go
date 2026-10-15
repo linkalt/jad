@@ -81,8 +81,11 @@ type ServerSettings struct {
 	MaxRequestImageBytes int64
 	// MaxRequestFiles is the most files (PDF) one run request may carry; 0 refuses file
 	// input. MaxRequestFileBytes is the largest decoded file of such a request.
-	MaxRequestFiles            int
-	MaxRequestFileBytes        int64
+	MaxRequestFiles     int
+	MaxRequestFileBytes int64
+	// MaxConcurrentRuns is the most runs that may be running at once across all
+	// sessions; 0 means no cap.
+	MaxConcurrentRuns          int
 	RunContentMemoryBytes      int
 	RunContentWriteBatchBytes  int
 	RunContentFlushInterval    time.Duration
@@ -171,6 +174,7 @@ func Defaults() ServerSettings {
 		MaxRequestImages:           serverconfig.DefaultMaxRequestImages,
 		MaxRequestImageBytes:       serverconfig.DefaultMaxRequestImageBytes,
 		MaxRequestFiles:            serverconfig.DefaultMaxRequestFiles,
+		MaxConcurrentRuns:          serverconfig.DefaultMaxConcurrentRuns,
 		MaxRequestFileBytes:        serverconfig.DefaultMaxRequestFileBytes,
 		RunContentMemoryBytes:      serverconfig.DefaultRunContentMemoryBytes,
 		RunContentWriteBatchBytes:  serverconfig.DefaultRunContentWriteBatchBytes,
@@ -626,6 +630,11 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 	if err := readInt("max_request_file_bytes", &settings.MaxRequestFileBytes, 1, serverconfig.MaxMaxRequestFileBytes); err != nil {
 		return ServerSettings{}, err
 	}
+	concurrentRuns := int64(settings.MaxConcurrentRuns)
+	if err := readInt("max_concurrent_runs", &concurrentRuns, 0, serverconfig.MaxMaxConcurrentRuns); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.MaxConcurrentRuns = int(concurrentRuns)
 	runContentMemoryBytes := int64(settings.RunContentMemoryBytes)
 	if err := readInt("run_content_memory_bytes", &runContentMemoryBytes, 0, serverconfig.MaxRunContentMemoryBytes); err != nil {
 		return ServerSettings{}, err

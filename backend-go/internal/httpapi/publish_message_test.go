@@ -29,7 +29,7 @@ func drainFrames(t *testing.T, queue *eventQueue, want int) []string {
 // lock: the whole message first, then increments that take a client from one message
 // to the next.
 func TestPublishMessageSendsWholeMessageThenIncrements(t *testing.T) {
-	registry := newRunRegistry(time.Minute, 1<<20)
+	registry := newRunRegistry(time.Minute, 1<<20, 0)
 	run, err := registry.begin("key", "turn")
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestPublishMessageSendsWholeMessageThenIncrements(t *testing.T) {
 // agree on the text, so a delta built against a stale previous message would show up
 // as a client that holds something the run does not.
 func TestPublishMessageConcurrentPublishersKeepAConsistentChain(t *testing.T) {
-	registry := newRunRegistry(time.Minute, 1<<26)
+	registry := newRunRegistry(time.Minute, 1<<26, 0)
 	run, err := registry.begin("key", "turn")
 	if err != nil {
 		t.Fatal(err)

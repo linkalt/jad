@@ -661,11 +661,21 @@ func processTerminal(state ProcessState) bool {
 	return state != ProcessRunning
 }
 
+// buildNativeProcessEnvironment keeps only the allowlisted variables of base, the
+// same set bash and exec pass, so a variable bash cannot read is not reachable
+// through a managed process either. overrides (env_file, env) are added on top.
 func buildNativeProcessEnvironment(base []string, overrides map[string]string, apiKeyEnv string, denied []string) []string {
+	allowed := make(map[string]struct{}, len(bashEnvironmentAllowlist))
+	for _, name := range bashEnvironmentAllowlist {
+		allowed[name] = struct{}{}
+	}
 	values := make(map[string]string)
 	for _, item := range base {
 		name, value, found := strings.Cut(item, "=")
-		if found {
+		if !found {
+			continue
+		}
+		if _, ok := allowed[name]; ok {
 			values[name] = value
 		}
 	}

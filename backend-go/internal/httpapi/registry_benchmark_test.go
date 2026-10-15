@@ -40,7 +40,7 @@ func benchmarkMessage(parts, bytesPerPart int, revision int) webUIMessage {
 func BenchmarkPublishMessage(b *testing.B) {
 	for _, shape := range []struct{ parts, bytes int }{{1, 2048}, {1, 50 << 10}, {100, 2048}, {100, 20 << 10}} {
 		b.Run(fmt.Sprintf("%dx%dB", shape.parts, shape.bytes), func(b *testing.B) {
-			registry := newRunRegistry(time.Minute, 1<<30)
+			registry := newRunRegistry(time.Minute, 1<<30, 0)
 			run, err := registry.begin("key", "turn")
 			if err != nil {
 				b.Fatal(err)
@@ -70,7 +70,7 @@ func BenchmarkPublishMessage(b *testing.B) {
 // BenchmarkRunStateWhilePublishing is how long a polling route (state) waits for the
 // run lock while another goroutine publishes a large message back to back.
 func BenchmarkRunStateWhilePublishing(b *testing.B) {
-	registry := newRunRegistry(time.Minute, 1<<30)
+	registry := newRunRegistry(time.Minute, 1<<30, 0)
 	run, err := registry.begin("key", "turn")
 	if err != nil {
 		b.Fatal(err)

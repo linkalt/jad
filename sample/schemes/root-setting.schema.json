@@ -182,6 +182,13 @@
           "default": 4,
           "description": "Go backend only. The most files one run request may carry in an array input ({\"type\":\"file\",\"name\":<file name>,\"data\":<base64 or data URL>}). Only PDF files are accepted, judged by their first bytes. 0 refuses file input. The TypeScript backend ignores this key."
         },
+        "max_concurrent_runs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024,
+          "default": 0,
+          "description": "Go backend only. The most runs that may be running at the same time across all sessions. A run start beyond it is refused with HTTP 429 and a Retry-After of 5 seconds, and nothing is changed. 0 means no cap. Runs of sub-agents are not counted; they are part of their parent run."
+        },
         "max_request_file_bytes": {
           "type": "integer",
           "minimum": 1,

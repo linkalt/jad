@@ -67,8 +67,11 @@ type Config struct {
 	// MaxRequestFiles and MaxRequestFileBytes bound the files (PDF) a run request may
 	// carry (server.max_request_files, server.max_request_file_bytes). Zero files turns
 	// file input off.
-	MaxRequestFiles           int
-	MaxRequestFileBytes       int64
+	MaxRequestFiles     int
+	MaxRequestFileBytes int64
+	// MaxConcurrentRuns is the most runs running at once (server.max_concurrent_runs);
+	// a start beyond it is refused with 429. Zero means no cap.
+	MaxConcurrentRuns         int
 	RunContentMemoryBytes     int
 	RunContentWriteBatchBytes int
 	RunContentFlushInterval   time.Duration
@@ -83,6 +86,8 @@ type Config struct {
 type StatusError struct {
 	Code    int
 	Message string
+	// RetryAfterSeconds, when positive, is sent as the Retry-After header.
+	RetryAfterSeconds int
 }
 
 func (e *StatusError) Error() string { return e.Message }
@@ -181,6 +186,9 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	if config.MaxRequestFiles < 0 || config.MaxRequestFileBytes < 0 || (config.MaxRequestFiles > 0 && config.MaxRequestFileBytes < 1) {
 		return nil, errors.New("request file limits must not be negative, and a file limit needs a byte limit")
 	}
+	if config.MaxConcurrentRuns < 0 || config.MaxConcurrentRuns > serverconfig.MaxMaxConcurrentRuns {
+		return nil, fmt.Errorf("maximum concurrent runs must be between 0 and %d", serverconfig.MaxMaxConcurrentRuns)
+	}
 	if config.RunContentMemoryBytes < 0 || config.RunContentMemoryBytes > serverconfig.MaxRunContentMemoryBytes {
 		return nil, errors.New("run content memory bytes must be between 0 and 16777216")
 	}
@@ -246,7 +254,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		runContentMemoryBytes:     config.RunContentMemoryBytes,
 		runContentWriteBatchBytes: config.RunContentWriteBatchBytes,
 		runContentFlushInterval:   config.RunContentFlushInterval,
-		runs:                      newRunRegistry(config.RunStateRetention, config.SSEMaxBufferedBytes),
+		runs:                      newRunRegistry(config.RunStateRetention, config.SSEMaxBufferedBytes, config.MaxConcurrentRuns),
 		mutations:                 make(map[string]struct{}),
 	}, nil
 }
@@ -872,6 +880,9 @@ func writeJSONError(w http.ResponseWriter, err error) {
 	}
 	var statusErr *StatusError
 	if errors.As(err, &statusErr) {
+		if statusErr.RetryAfterSeconds > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(statusErr.RetryAfterSeconds))
+		}
 		writeJSON(w, statusErr.Code, map[string]string{"error": statusErr.Message})
 		return
 	}
