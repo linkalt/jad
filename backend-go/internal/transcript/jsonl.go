@@ -37,6 +37,9 @@ type Journal struct {
 	// reset, front compaction). Readers that cache parsed content use it to
 	// drop that cache; it is only read and written while mu is held.
 	generation uint64
+	// index remembers the line hashes of the transcript for idempotent appends;
+	// guarded by mu.
+	index *lineIndex
 }
 
 // NewJournal constructs a JSONL writer for path using the requested durability.
@@ -448,7 +451,7 @@ func (j *Journal) appendFileIfAbsent(sourcePath string) (inserted bool, result e
 	if _, err := repairTrailingPartialLine(transcript); err != nil {
 		return false, fmt.Errorf("repair transcript tail: %w", err)
 	}
-	present, err := containsLineHash(transcript, targetHash)
+	present, err := j.containsLine(transcript, targetHash)
 	if err != nil {
 		return false, fmt.Errorf("check transcript duplicate: %w", err)
 	}
