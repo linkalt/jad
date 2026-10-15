@@ -158,9 +158,30 @@ func lineAwareWindows(headText, tailText string) (string, string) {
 	return headText, tailText
 }
 
+// frozenStream is a copy of what a stream collector holds, so it can be rendered
+// after the lock that guards the collector is released.
+type frozenStream struct {
+	head, tail    string
+	producedBytes int64
+	binary        bool
+}
+
+func (collector *bashStreamCollector) freeze() frozenStream {
+	return frozenStream{
+		head:          string(collector.head),
+		tail:          string(collector.tail),
+		producedBytes: collector.producedBytes,
+		binary:        collector.binary,
+	}
+}
+
 func (collector *bashStreamCollector) renderWithProducedBytes(maxLineChars int, stripANSI bool, producedBytes int64, lineAware bool) bashStreamOutput {
-	headText := sanitizeBashOutput(string(collector.head), stripANSI)
-	tailText := sanitizeBashOutput(string(collector.tail), stripANSI)
+	return collector.freeze().renderWithProducedBytes(maxLineChars, stripANSI, producedBytes, lineAware)
+}
+
+func (frozen frozenStream) renderWithProducedBytes(maxLineChars int, stripANSI bool, producedBytes int64, lineAware bool) bashStreamOutput {
+	headText := sanitizeBashOutput(frozen.head, stripANSI)
+	tailText := sanitizeBashOutput(frozen.tail, stripANSI)
 	shown := int64(len(headText) + len(tailText))
 	if producedBytes < shown {
 		producedBytes = shown
@@ -224,12 +245,39 @@ func (collector *bashOutputCollector) end() {
 }
 
 func (collector *bashOutputCollector) render() bashRenderedOutput {
-	return collector.renderWithProducedBytes(collector.stdout.producedBytes, collector.stderr.producedBytes)
+	return collector.freeze().render()
 }
 
 func (collector *bashOutputCollector) renderWithProducedBytes(stdoutProducedBytes, stderrProducedBytes int64) bashRenderedOutput {
-	stdout := collector.stdout.renderWithProducedBytes(collector.maxLineChars, collector.stripANSI, stdoutProducedBytes, collector.lineAware)
-	stderr := collector.stderr.renderWithProducedBytes(collector.maxLineChars, collector.stripANSI, stderrProducedBytes, collector.lineAware)
+	return collector.freeze().renderWithProducedBytes(stdoutProducedBytes, stderrProducedBytes)
+}
+
+// frozenOutput is a copy of both streams and the render settings. Taking it is cheap
+// (the windows are a few KB); rendering it is not, and needs no lock.
+type frozenOutput struct {
+	stdout, stderr frozenStream
+	maxLineChars   int
+	stripANSI      bool
+	lineAware      bool
+}
+
+func (collector *bashOutputCollector) freeze() frozenOutput {
+	return frozenOutput{
+		stdout:       collector.stdout.freeze(),
+		stderr:       collector.stderr.freeze(),
+		maxLineChars: collector.maxLineChars,
+		stripANSI:    collector.stripANSI,
+		lineAware:    collector.lineAware,
+	}
+}
+
+func (frozen frozenOutput) render() bashRenderedOutput {
+	return frozen.renderWithProducedBytes(frozen.stdout.producedBytes, frozen.stderr.producedBytes)
+}
+
+func (frozen frozenOutput) renderWithProducedBytes(stdoutProducedBytes, stderrProducedBytes int64) bashRenderedOutput {
+	stdout := frozen.stdout.renderWithProducedBytes(frozen.maxLineChars, frozen.stripANSI, stdoutProducedBytes, frozen.lineAware)
+	stderr := frozen.stderr.renderWithProducedBytes(frozen.maxLineChars, frozen.stripANSI, stderrProducedBytes, frozen.lineAware)
 	labeled := stdout.text != "" && stderr.text != ""
 	sections := make([]string, 0, 2)
 	if stdout.text != "" {
@@ -263,7 +311,7 @@ func (collector *bashOutputCollector) renderWithProducedBytes(stdoutProducedByte
 		stderr:        stderr,
 		truncated:     stdout.truncated || stderr.truncated,
 		omittedBytes:  stdout.omittedBytes + stderr.omittedBytes,
-		binary:        collector.stdout.binary || collector.stderr.binary,
+		binary:        frozen.stdout.binary || frozen.stderr.binary,
 		returnedBytes: int64(len(text)),
 	}
 }

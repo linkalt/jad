@@ -581,18 +581,19 @@ func (manager *ManagedProcessManager) finish(entry *managedProcess, state Proces
 		if err := manager.persistManifest(manifest); err != nil {
 			entry.finalizeErr = fmt.Errorf("persist process manifest: %w", err)
 		}
+		// done closes before the prune: a Wait on this process must not also wait for
+		// the removal of other, older processes' directories.
+		close(entry.done)
 		if err := manager.prune(entry.maxCompleted, entry.retentionDays); err != nil && entry.finalizeErr == nil {
 			entry.finalizeErr = fmt.Errorf("prune managed processes: %w", err)
 		}
-		close(entry.done)
 	})
 	return entry.finalizeErr
 }
 
 func (manager *ManagedProcessManager) snapshotEntry(entry *managedProcess) ProcessSnapshot {
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	output := entry.collector.render()
+	frozen := entry.collector.freeze()
 	manifest := cloneProcessManifest(entry.manifest)
 	stdoutStored := int64(0)
 	stderrStored := int64(0)
@@ -606,9 +607,12 @@ func (manager *ManagedProcessManager) snapshotEntry(entry *managedProcess) Proce
 		stderrStored = entry.stderr.written
 		stderrCapped = entry.stderr.capped
 	}
+	entry.mu.Unlock()
+	// Rendering walks both windows; the child's writer waits on entry.mu meanwhile
+	// if it is still held.
 	return ProcessSnapshot{
 		ProcessManifest:   manifest,
-		Output:            output,
+		Output:            frozen.render(),
 		StdoutStoredBytes: stdoutStored,
 		StderrStoredBytes: stderrStored,
 		StdoutCapped:      stdoutCapped,

@@ -130,6 +130,11 @@ type MemoryStore struct {
 	root  string
 	locks *PathLocks
 	now   func() time.Time
+	// sizes remembers the byte size of every record file this store has seen, by
+	// type directory and file name, so the quota scan stats only files it has not seen.
+	// Guarded by the root lock (withLock). A record another store instance rewrites in
+	// place keeps its remembered size until this store rewrites it.
+	sizes map[string]map[string]int64
 }
 
 // NewMemoryStore creates a memory store. An optional shared PathLocks enables
@@ -145,7 +150,7 @@ func NewMemoryStore(root string, shared ...*PathLocks) *MemoryStore {
 	if len(shared) > 0 && shared[0] != nil {
 		locks = shared[0]
 	}
-	return &MemoryStore{root: root, locks: locks, now: time.Now}
+	return &MemoryStore{root: root, locks: locks, now: time.Now, sizes: make(map[string]map[string]int64)}
 }
 
 // Create persists a new record using JSON object data.
@@ -189,6 +194,7 @@ func (s *MemoryStore) CreateValue(recordType string, value *memoryJSONValue, dat
 		if err := s.atomicWrite(path, []byte(text)); err != nil {
 			return err
 		}
+		s.rememberSize(recordType, name, int64(len(text)))
 		item = MemoryItem{Ref: recordType + "/" + name, ETag: memoryETag([]byte(text)), Data: data, value: value, rawText: []byte(text)}
 		return nil
 	}); err != nil {
@@ -254,6 +260,7 @@ func (s *MemoryStore) UpdateValue(recordType, ref, ifMatch string, value *memory
 		if err := s.atomicWrite(path, []byte(next)); err != nil {
 			return err
 		}
+		s.rememberSize(recordType, strings.TrimPrefix(ref, recordType+"/"), int64(len(next)))
 		item = MemoryItem{Ref: ref, ETag: memoryETag([]byte(next)), Data: data, value: value, rawText: []byte(next)}
 		return nil
 	})
@@ -562,6 +569,12 @@ func (s *MemoryStore) typeDirectory(recordType string, create bool) (string, err
 }
 
 func (s *MemoryStore) files(recordType string) ([]string, error) {
+	return s.filesKnowing(recordType, nil)
+}
+
+// filesKnowing is files that skips the name check for a name in known: the store has
+// already validated that name as a record file, and the entry is still a regular file.
+func (s *MemoryStore) filesKnowing(recordType string, known map[string]int64) ([]string, error) {
 	directory, err := s.typeDirectory(recordType, false)
 	if err != nil || directory == "" {
 		return []string{}, err
@@ -570,13 +583,28 @@ func (s *MemoryStore) files(recordType string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0)
+	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Type().IsRegular() && memoryFilenamePattern.MatchString(entry.Name()) && strings.HasPrefix(entry.Name(), recordType+"-") {
-			names = append(names, entry.Name())
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		name := entry.Name()
+		if _, seen := known[name]; seen {
+			names = append(names, name)
+			continue
+		}
+		if memoryFilenamePattern.MatchString(name) && strings.HasPrefix(name, recordType+"-") {
+			names = append(names, name)
 		}
 	}
 	return names, nil
+}
+
+func (s *MemoryStore) rememberSize(recordType, name string, size int64) {
+	if s.sizes[recordType] == nil {
+		s.sizes[recordType] = make(map[string]int64)
+	}
+	s.sizes[recordType][name] = size
 }
 
 func (s *MemoryStore) totals(recordType string, policy sessionfs.NativeMemorySettings) (memoryTotals, error) {
@@ -588,22 +616,30 @@ func (s *MemoryStore) totals(recordType string, policy sessionfs.NativeMemorySet
 	if err != nil {
 		return totals, err
 	}
+	scanned := make(map[string]map[string]int64, len(directories))
 	for _, directory := range directories {
 		if !directory.IsDir() || !memoryTypePattern.MatchString(directory.Name()) {
 			continue
 		}
 		totals.types++
-		names, err := s.files(directory.Name())
+		known := s.sizes[directory.Name()]
+		names, err := s.filesKnowing(directory.Name(), known)
 		if err != nil {
 			return memoryTotals{}, err
 		}
+		current := make(map[string]int64, len(names))
 		for _, name := range names {
-			info, err := os.Stat(filepath.Join(s.root, directory.Name(), name))
-			if err != nil {
-				return memoryTotals{}, err
+			size, seen := known[name]
+			if !seen {
+				info, err := os.Stat(filepath.Join(s.root, directory.Name(), name))
+				if err != nil {
+					return memoryTotals{}, err
+				}
+				size = info.Size()
 			}
+			current[name] = size
 			totals.records++
-			totals.bytes += info.Size()
+			totals.bytes += size
 			if directory.Name() == recordType {
 				totals.typeRecords++
 			}
@@ -611,7 +647,9 @@ func (s *MemoryStore) totals(recordType string, policy sessionfs.NativeMemorySet
 				return memoryTotals{}, &MemoryStoreError{Message: "memory quota scan exceeded its configured budget"}
 			}
 		}
+		scanned[directory.Name()] = current
 	}
+	s.sizes = scanned
 	return totals, nil
 }
 
