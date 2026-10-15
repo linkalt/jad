@@ -20,6 +20,30 @@ type StreamingRun struct {
 	callIDsByItemID       map[string]string
 	callIDsByOutputIndex  map[int]string
 	hostedRawLimit        int
+	// delta accumulates the text of parts[deltaPart-1] so a stream of small
+	// deltas appends in amortized constant time instead of copying the whole
+	// part each time. deltaPart 0 means no part is tracked.
+	delta     strings.Builder
+	deltaPart int
+}
+
+// appendDelta adds streamed text to the last part of the given kind, or starts
+// a new part. parts[i].Text always holds the full text so far.
+func (r *StreamingRun) appendDelta(kind, text string) {
+	if text == "" {
+		return
+	}
+	last := len(r.parts) - 1
+	if last >= 0 && r.parts[last].Type == kind && r.deltaPart == last+1 && r.delta.Len() == len(r.parts[last].Text) {
+		r.delta.WriteString(text)
+		r.parts[last].Text = r.delta.String()
+		return
+	}
+	r.parts = appendTextPart(r.parts, kind, text)
+	last = len(r.parts) - 1
+	r.delta.Reset()
+	r.delta.WriteString(r.parts[last].Text)
+	r.deltaPart = last + 1
 }
 
 // SetHostedRawLimit caps the raw JSON of provider-hosted tool parts in live
@@ -60,14 +84,14 @@ func (r *StreamingRun) Update(raw json.RawMessage) (Message, bool) {
 	case "response.output_text.delta":
 		if delta := stringField(fields["delta"]); delta != "" {
 			r.ensureStep("")
-			r.parts = appendTextPart(r.parts, "text", delta)
+			r.appendDelta("text", delta)
 			r.updateCurrentStep(false)
 			return r.Message("streaming"), true
 		}
 	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
 		if delta := stringField(fields["delta"]); strings.TrimSpace(delta) != "" {
 			r.ensureStep("")
-			r.parts = appendTextPart(r.parts, "reasoning", delta)
+			r.appendDelta("reasoning", delta)
 			r.updateCurrentStep(false)
 			return r.Message("streaming"), true
 		}
@@ -294,6 +318,7 @@ func (r *StreamingRun) updateToolCall(callID string, update func(string) string,
 }
 
 func (r *StreamingRun) mergeCompletedResponse(response map[string]json.RawMessage) {
+	r.deltaPart = 0
 	r.ensureStep(stringField(response["id"]))
 	completed := responseParts(response)
 	currentStepStart := 0
