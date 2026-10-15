@@ -208,7 +208,7 @@ func grepSearchFlags(args grepArgs) []string {
 func deniedGrepTraversalFlags(policy sessionfs.NativePathPolicy, workspaceRoot string) []string {
 	flags := make([]string, 0)
 	for _, rule := range policy.Paths {
-		if rule.Action != "deny" || !isWithin(workspaceRoot, rule.Path) {
+		if rule.Action != "deny" || !sessionfs.PathWithin(workspaceRoot, rule.Path) {
 			continue
 		}
 		path := displayPath(workspaceRoot, rule.Path)

@@ -490,51 +490,6 @@ func (r *activeRun) cacheContent(delta string) {
 	}
 }
 
-func (r *activeRun) publishTextDelta(delta string) error {
-	if delta == "" {
-		return nil
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.status != "running" {
-		return errors.New("run is not active")
-	}
-	if r.content == nil {
-		return errors.New("run content cache is not initialized")
-	}
-	r.content.Append(delta)
-	message := webUIMessage{ID: r.turnID, Sender: "assistant", Status: "streaming"}
-	if r.latestMessage != nil {
-		message = *r.latestMessage
-		message.Parts = append([]webui.Part(nil), message.Parts...)
-	}
-	message.Text = ""
-	message.Status = "streaming"
-	eventName := "ui.delta"
-	var eventData any
-	partIndex := 0
-	if len(message.Parts) == 0 || message.Parts[0].Type != "text" {
-		message.Parts = append(message.Parts, webui.Part{Type: "text"})
-		partIndex = len(message.Parts) - 1
-		eventName = "ui.part"
-		eventData = map[string]any{"id": message.ID, "index": partIndex, "part": webui.Part{Type: "text", Text: delta}}
-	} else {
-		eventData = map[string]any{"id": message.ID, "index": partIndex, "append": delta}
-	}
-	message.Parts[partIndex].Text = ""
-	r.latestMessage = &message
-	event, err := makeSSEEvent(eventName, eventData)
-	if err != nil {
-		return err
-	}
-	for queue := range r.subscribers {
-		if !queue.push(event, false) {
-			delete(r.subscribers, queue)
-		}
-	}
-	return nil
-}
-
 func (r *activeRun) currentMessage() *webUIMessage {
 	r.mu.Lock()
 	defer r.mu.Unlock()

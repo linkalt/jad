@@ -81,7 +81,7 @@ func runPostEditHook(ctx context.Context, hook sessionfs.PostEditHook, hooks ses
 	cwd, found := hookWorkingDirectory(hook, workspaceRoot, file)
 	if !found {
 		marker := strings.TrimPrefix(hook.Cwd, sessionfs.HookCwdNearestPrefix)
-		if !isWithin(workspaceRoot, file) {
+		if !sessionfs.PathWithin(workspaceRoot, file) {
 			return "[" + hook.Name + "] skipped: the file is outside the workspace, so nearest:" + marker + " has nowhere to look"
 		}
 		return "[" + hook.Name + "] skipped: no " + marker + " between the file and the workspace root"
@@ -182,7 +182,7 @@ func hookWorkingDirectory(hook sessionfs.PostEditHook, workspaceRoot, file strin
 		return directory, true
 	}
 	marker := strings.TrimPrefix(hook.Cwd, sessionfs.HookCwdNearestPrefix)
-	for isWithin(workspaceRoot, directory) {
+	for sessionfs.PathWithin(workspaceRoot, directory) {
 		if _, err := os.Stat(filepath.Join(directory, marker)); err == nil {
 			return directory, true
 		}

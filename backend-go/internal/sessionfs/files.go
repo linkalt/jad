@@ -170,7 +170,7 @@ func resolveContainedDirectory(path, workspaceRoot string, isRoot bool) (string,
 		return "", false
 	}
 	resolved = filepath.Clean(resolved)
-	if !isPathWithin(workspaceRoot, resolved) || (isRoot && resolved != workspaceRoot) {
+	if !PathWithin(workspaceRoot, resolved) || (isRoot && resolved != workspaceRoot) {
 		return "", false
 	}
 	info, err := os.Stat(resolved)
@@ -186,7 +186,7 @@ func containedRegularFile(path, workspaceRoot string) (string, bool) {
 		return "", false
 	}
 	resolved = filepath.Clean(resolved)
-	if !isPathWithin(workspaceRoot, resolved) {
+	if !PathWithin(workspaceRoot, resolved) {
 		return "", false
 	}
 	info, err := os.Stat(resolved)
@@ -198,22 +198,23 @@ func containedRegularFile(path, workspaceRoot string) (string, bool) {
 
 func allowedByNativeReadPolicy(path, root, resolvedPath, workspaceRoot string, policy NativePathPolicy) bool {
 	for _, rule := range policy.Paths {
-		if rule.Action == "deny" && isPathWithin(rule.Path, path) {
+		if rule.Action == "deny" && PathWithin(rule.Path, path) {
 			return false
 		}
 	}
-	if policy.UnrestrictedPaths || isPathWithin(root, path) || isPathWithin(workspaceRoot, resolvedPath) {
+	if policy.UnrestrictedPaths || PathWithin(root, path) || PathWithin(workspaceRoot, resolvedPath) {
 		return true
 	}
 	for _, rule := range policy.Paths {
-		if rule.Action == "allow" && isPathWithin(rule.Path, path) {
+		if rule.Action == "allow" && PathWithin(rule.Path, path) {
 			return true
 		}
 	}
 	return false
 }
 
-func isPathWithin(root, target string) bool {
+// PathWithin reports whether target is root or lies under it, after making both absolute.
+func PathWithin(root, target string) bool {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return false

@@ -58,7 +58,7 @@ func scopeRoot(workspaceRoot, entry string) string {
 
 func withinAny(roots []string, target string) bool {
 	for _, root := range roots {
-		if isWithin(root, target) {
+		if sessionfs.PathWithin(root, target) {
 			return true
 		}
 	}

@@ -136,3 +136,24 @@ func TestCollectSessionFilesMissingWorkspaceIsEmpty(t *testing.T) {
 		t.Fatalf("missing workspace listing = %+v", listing)
 	}
 }
+
+func TestPathWithinAcceptsRootAndDescendantsOnly(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "work", "space")
+	cases := []struct {
+		target string
+		want   bool
+	}{
+		{root, true},
+		{filepath.Join(root, "a", "b"), true},
+		{filepath.Join(root, "..", "space", "a"), true},
+		{filepath.Join(root, ".."), false},
+		{filepath.Join(root, "..", "other"), false},
+		{root + "-sibling", false},
+		{filepath.Join(root, "..hidden"), true},
+	}
+	for _, tc := range cases {
+		if got := PathWithin(root, tc.target); got != tc.want {
+			t.Errorf("PathWithin(%q, %q) = %v, want %v", root, tc.target, got, tc.want)
+		}
+	}
+}

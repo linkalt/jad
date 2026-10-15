@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
@@ -60,7 +59,7 @@ func resolveExistingTarget(requestedPath, workspaceRoot string, policy sessionfs
 		return resolvedTarget{}, tools.ExecutionError(callID, tools.StatusError, "path_resolution_failed", "The requested path could not be resolved", tools.Information{Key: "path", Value: candidateErrorPath})
 	}
 	realPath = filepath.Clean(realPath)
-	if realPath != candidate && !isWithin(root, realPath) && pathPolicyError(realPath, root, policy, callID) != "" {
+	if realPath != candidate && !sessionfs.PathWithin(root, realPath) && pathPolicyError(realPath, root, policy, callID) != "" {
 		return resolvedTarget{}, tools.ExecutionError(callID, tools.StatusForbidden, "symlink_outside_workspace", "The requested path resolves outside the workspace", tools.Information{Key: "path", Value: candidateErrorPath})
 	}
 	if denied := pathPolicyError(realPath, root, policy, callID); denied != "" {
@@ -76,7 +75,7 @@ func resolveExistingTarget(requestedPath, workspaceRoot string, policy sessionfs
 
 func pathPolicyError(target, workspaceRoot string, policy sessionfs.NativePathPolicy, callID string) string {
 	for _, rule := range policy.Paths {
-		if rule.Action == "deny" && isWithin(rule.Path, target) {
+		if rule.Action == "deny" && sessionfs.PathWithin(rule.Path, target) {
 			return tools.ExecutionError(callID, tools.StatusForbidden, "path_denied", "The requested path is denied by the native tool policy", tools.Information{Key: "path", Value: safeErrorPath(workspaceRoot, target)})
 		}
 	}
@@ -90,35 +89,19 @@ func pathPolicyError(target, workspaceRoot string, policy sessionfs.NativePathPo
 }
 
 func pathAllowed(target, workspaceRoot string, policy sessionfs.NativePathPolicy) bool {
-	if policy.UnrestrictedPaths || isWithin(workspaceRoot, target) {
+	if policy.UnrestrictedPaths || sessionfs.PathWithin(workspaceRoot, target) {
 		return true
 	}
 	for _, rule := range policy.Paths {
-		if rule.Action == "allow" && isWithin(rule.Path, target) {
+		if rule.Action == "allow" && sessionfs.PathWithin(rule.Path, target) {
 			return true
 		}
 	}
 	return false
 }
 
-func isWithin(root, target string) bool {
-	root, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	target, err = filepath.Abs(target)
-	if err != nil {
-		return false
-	}
-	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(target))
-	if err != nil || filepath.IsAbs(relative) {
-		return false
-	}
-	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
-}
-
 func displayPath(root, target string) string {
-	if !isWithin(root, target) {
+	if !sessionfs.PathWithin(root, target) {
 		return target
 	}
 	relative, err := filepath.Rel(root, target)
@@ -129,7 +112,7 @@ func displayPath(root, target string) string {
 }
 
 func safeErrorPath(root, target string) string {
-	if isWithin(root, target) {
+	if sessionfs.PathWithin(root, target) {
 		return displayPath(root, target)
 	}
 	name := filepath.Base(target)

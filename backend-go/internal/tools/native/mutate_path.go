@@ -171,7 +171,7 @@ func prepareMutateParent(path resolvedMutatePath, policy sessionfs.NativePathPol
 	if err != nil || !nearestInfo.IsDir() {
 		return mutationPathError(callID, path.workspaceRoot, path.candidate, "parent_not_directory", "The parent directory is not a directory", tools.StatusError)
 	}
-	if isWithin(path.workspaceRoot, path.candidate) {
+	if sessionfs.PathWithin(path.workspaceRoot, path.candidate) {
 		if denied := pathPolicyError(nearestRealPath, path.workspaceRoot, policy, callID); denied != "" {
 			return denied
 		}
@@ -202,7 +202,7 @@ func prepareMutateParent(path resolvedMutatePath, policy sessionfs.NativePathPol
 	if realParent != parent && !resolvedPathAllowed(realParent, path.workspaceRoot, policy, callID) {
 		return mutationPathError(callID, path.workspaceRoot, path.candidate, "symlink_forbidden", "The path contains a symlinked directory", tools.StatusForbidden)
 	}
-	if isWithin(path.workspaceRoot, path.candidate) {
+	if sessionfs.PathWithin(path.workspaceRoot, path.candidate) {
 		return pathPolicyError(realParent, path.workspaceRoot, policy, callID)
 	}
 	return ""
