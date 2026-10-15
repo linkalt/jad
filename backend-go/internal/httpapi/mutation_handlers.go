@@ -27,15 +27,18 @@ func (h *Handler) handleSessionCompact(w http.ResponseWriter, r *http.Request, r
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "session profile or compaction is already changing"})
 		return
 	}
-	defer h.endMutation(key)
-	unlock := h.lockSession(reference)
-	defer unlock()
-	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
+	release, err := h.lockSessionAndTranscript(r.Context(), reference, profile)
 	if err != nil {
+		h.endMutation(key)
 		writeJSONError(w, err)
 		return
 	}
-	defer processUnlock()
+	// The gate is cleared before the locks are given back: a start queued behind this
+	// compaction takes the session lock the moment it is free, and must not find the gate.
+	defer func() {
+		h.endMutation(key)
+		release()
+	}()
 	result, err := resolved.Session.Compact(r.Context())
 	if err != nil {
 		writeJSONError(w, err)

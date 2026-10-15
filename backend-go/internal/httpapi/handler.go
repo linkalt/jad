@@ -117,6 +117,7 @@ type Handler struct {
 	runContentFlushInterval   time.Duration
 	runs                      *runRegistry
 	sessionLocks              keyedLocker
+	startTurns                turnQueue
 	mutationMu                sync.Mutex
 	mutations                 map[string]struct{}
 
@@ -421,25 +422,19 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	// the other profile's start are not blocked behind a queued start. Taking the lock and
 	// registering the run stay in one session-lock section: that is what lets reset, front
 	// compact, state context and checkpoint restore trust runIsActive.
-	var started startedRun
-	for {
-		var busy bool
-		started, busy, err = h.tryStartRun(r.Context(), reference, profile, body.Model)
-		if err != nil {
-			writeJSONError(w, err)
-			return
-		}
-		if !busy {
-			break
-		}
-		release, err := h.lockSessionProcess(r.Context(), reference, profile, body.Model)
-		if err != nil {
-			writeJSONError(w, err)
-			return
-		}
-		release()
+	started, err := h.acquireRun(r.Context(), reference, profile, body.Model)
+	if err != nil {
+		writeJSONError(w, err)
+		return
 	}
 	run, resolved, processUnlock := started.run, started.resolved, started.processUnlock
+	launched := false
+	defer func() {
+		if !launched {
+			run.finish("failed", nil)
+			processUnlock()
+		}
+	}()
 	run.mu.Lock()
 	run.supportsInteraction = body.SupportsInteraction
 	run.mu.Unlock()
@@ -447,6 +442,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	contentCache.logger = h.logger.With(runLogAttrs(run)...)
 	run.setContentCache(contentCache)
 	queue := run.subscribe()
+	launched = true
 	go func() {
 		defer processUnlock()
 		h.executeRun(run, resolved.Runner, body.Input)
@@ -474,26 +470,29 @@ func (h *Handler) tryStartRun(ctx context.Context, reference, profile, model str
 	if err != nil {
 		return startedRun{}, false, err
 	}
-	fail := func(err error) (startedRun, bool, error) {
-		processUnlock()
-		return startedRun{}, false, err
-	}
+	handedOver := false
+	defer func() {
+		if !handedOver {
+			processUnlock()
+		}
+	}()
 	resolved, err := h.resolve(ctx, reference, profile, model)
 	if err != nil {
-		return fail(err)
+		return startedRun{}, false, err
 	}
 	turnID, err := newWebTurnID()
 	if err != nil {
-		return fail(&StatusError{Code: http.StatusInternalServerError, Message: "could not create run ID"})
+		return startedRun{}, false, &StatusError{Code: http.StatusInternalServerError, Message: "could not create run ID"}
 	}
 	run, err := h.beginRun(h.runKey(resolved), turnID)
 	if err != nil {
 		var statusErr *StatusError
 		if errors.As(err, &statusErr) {
-			return fail(statusErr)
+			return startedRun{}, false, statusErr
 		}
-		return fail(&StatusError{Code: http.StatusServiceUnavailable, Message: "server is shutting down"})
+		return startedRun{}, false, &StatusError{Code: http.StatusServiceUnavailable, Message: "server is shutting down"}
 	}
+	handedOver = true
 	return startedRun{resolved: resolved, run: run, processUnlock: processUnlock}, false, nil
 }
 
