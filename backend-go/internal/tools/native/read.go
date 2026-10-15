@@ -1,7 +1,6 @@
 package native
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -386,7 +385,7 @@ func renderDirectory(callID string, target resolvedTarget, settings sessionfs.Na
 			SizeBytes       *int64 `json:"size_bytes,omitempty"`
 			SizeUnavailable bool   `json:"size_unavailable,omitempty"`
 		}{Name: entry.Name(), Kind: kind, SizeBytes: sizeBytes, SizeUnavailable: sizeUnavailable}
-		encoded, err := marshalJSON(entryValue)
+		encoded, err := tools.MarshalJSON(entryValue)
 		if err != nil {
 			return "", err
 		}
@@ -699,14 +698,4 @@ func boundedEnd(start, limit, maximum int64) int64 {
 		return maximum
 	}
 	return start + limit
-}
-
-func marshalJSON(value any) ([]byte, error) {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(buffer.Bytes(), []byte{'\n'}), nil
 }

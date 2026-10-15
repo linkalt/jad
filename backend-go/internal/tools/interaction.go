@@ -80,6 +80,12 @@ type PendingInteraction struct {
 	ExtendMS     int64           `json:"extend_ms"`
 }
 
+// Clone returns a copy that shares no memory with the receiver.
+func (pending PendingInteraction) Clone() PendingInteraction {
+	pending.Draft = append([]byte(nil), pending.Draft...)
+	return pending
+}
+
 // InteractionEnd says why a question left the run. It is published once, with
 // the event that clears the question, so a client that only sees the question
 // vanish does not have to guess whether it was answered here, answered in

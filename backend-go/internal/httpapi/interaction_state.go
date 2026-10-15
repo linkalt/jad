@@ -22,7 +22,7 @@ func (r *activeRun) setPendingInteraction(pending *tools.PendingInteraction, end
 	}
 	var next *tools.PendingInteraction
 	if pending != nil {
-		copy := clonePendingInteraction(*pending)
+		copy := pending.Clone()
 		next = &copy
 	}
 
@@ -76,11 +76,6 @@ func (r *activeRun) setPendingInteraction(pending *tools.PendingInteraction, end
 		}
 	}
 	r.mu.Unlock()
-}
-
-func clonePendingInteraction(pending tools.PendingInteraction) tools.PendingInteraction {
-	pending.Draft = append([]byte(nil), pending.Draft...)
-	return pending
 }
 
 func pendingToWebUI(pending tools.PendingInteraction) *webui.Interaction {

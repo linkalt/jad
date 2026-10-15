@@ -32,3 +32,23 @@ func containsState(states []string, wanted string) bool {
 	}
 	return false
 }
+
+func stateContextItemCount[Item any](items []Item, counts []StateContextCount) int {
+	return len(items) + len(counts)
+}
+
+// trimStateContextItem drops the last detail item, or when none are left the last
+// count, and records the omission.
+func trimStateContextItem[Item any](items *[]Item, omittedItems *int, counts *[]StateContextCount, omittedCounts *int) bool {
+	if len(*items) > 0 {
+		*items = (*items)[:len(*items)-1]
+		*omittedItems++
+		return true
+	}
+	if len(*counts) > 0 {
+		*counts = (*counts)[:len(*counts)-1]
+		*omittedCounts++
+		return true
+	}
+	return false
+}

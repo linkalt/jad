@@ -88,22 +88,12 @@ func (section *SubagentStateContext) StateContextItemCount() int {
 	if section == nil {
 		return 0
 	}
-	return len(section.Items) + len(section.Counts)
+	return stateContextItemCount(section.Items, section.Counts)
 }
 
 func (section *SubagentStateContext) TrimStateContextItem() bool {
 	if section == nil {
 		return false
 	}
-	if len(section.Items) > 0 {
-		section.Items = section.Items[:len(section.Items)-1]
-		section.OmittedBySnapshot++
-		return true
-	}
-	if len(section.Counts) > 0 {
-		section.Counts = section.Counts[:len(section.Counts)-1]
-		section.OmittedCounts++
-		return true
-	}
-	return false
+	return trimStateContextItem(&section.Items, &section.OmittedBySnapshot, &section.Counts, &section.OmittedCounts)
 }

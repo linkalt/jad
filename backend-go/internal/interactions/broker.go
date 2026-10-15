@@ -44,7 +44,7 @@ func (b *Broker) Pending() *tools.PendingInteraction {
 	if b.entry == nil {
 		return nil
 	}
-	pending := clonePending(b.entry.pending)
+	pending := b.entry.pending.Clone()
 	return &pending
 }
 
@@ -198,7 +198,7 @@ func (b *Broker) Extend(id string) tools.InteractionExtendStatus {
 	entry.expiresAt = next
 	entry.pending.ExpiresAt = interactionTimestamp(next)
 	entry.timer.Reset(maxDuration(0, next.Sub(now)))
-	pending := clonePending(entry.pending)
+	pending := entry.pending.Clone()
 	b.mu.Unlock()
 	b.notify(&pending, nil)
 	return tools.InteractionExtendExtended
@@ -290,7 +290,7 @@ func (b *Broker) notify(pending *tools.PendingInteraction, ended *tools.Interact
 		b.onChange(nil, ended)
 		return
 	}
-	copy := clonePending(*pending)
+	copy := pending.Clone()
 	b.onChange(&copy, nil)
 }
 
@@ -357,11 +357,6 @@ func interactionTimestamp(value time.Time) string {
 func parseInteractionTimestamp(value string) time.Time {
 	parsed, _ := time.Parse("2006-01-02T15:04:05.000Z", value)
 	return parsed
-}
-
-func clonePending(pending tools.PendingInteraction) tools.PendingInteraction {
-	pending.Draft = append([]byte(nil), pending.Draft...)
-	return pending
 }
 
 func cloneString(value *string) *string {

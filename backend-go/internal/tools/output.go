@@ -45,7 +45,7 @@ type ResultOptions struct {
 }
 
 func RenderToolResult(options ResultOptions) (string, error) {
-	header, err := marshalJSON(struct {
+	header, err := MarshalJSON(struct {
 		ID      string `json:"id"`
 		Status  Status `json:"status"`
 		Summary string `json:"summary"`
@@ -122,7 +122,7 @@ func InvalidArgumentsJSONError(id, name string, example json.RawMessage) string 
 func valueText(value any) string {
 	if text, ok := value.(string); ok {
 		if strings.Contains(text, "\n") {
-			encoded, err := marshalJSON(text)
+			encoded, err := MarshalJSON(text)
 			if err == nil {
 				return string(encoded)
 			}
@@ -141,14 +141,14 @@ func valueText(value any) string {
 	if stringer, ok := value.(fmt.Stringer); ok {
 		return stringer.String()
 	}
-	encoded, err := marshalJSON(value)
+	encoded, err := MarshalJSON(value)
 	if err != nil {
 		return "null"
 	}
 	return string(encoded)
 }
 
-func marshalJSON(value any) ([]byte, error) {
+func MarshalJSON(value any) ([]byte, error) {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
 	encoder.SetEscapeHTML(false)

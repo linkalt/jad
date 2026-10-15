@@ -391,7 +391,7 @@ func (r *activeRun) subscribe() *eventQueue {
 		if r.interactionKnown {
 			var pending any
 			if r.pendingInteraction != nil {
-				copy := clonePendingInteraction(*r.pendingInteraction)
+				copy := r.pendingInteraction.Clone()
 				pending = &copy
 			}
 			if event, err := makeSSEEvent("interaction", map[string]any{"turn_id": r.turnID, "pending": pending}); err == nil {
