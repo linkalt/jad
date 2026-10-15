@@ -416,7 +416,15 @@ func renderFileRange(callID string, target resolvedTarget, data []byte, args rea
 	if !args.HasLimit {
 		limit = settings.DefaultLimit
 	}
-	spans := lineSpans(data)
+	first := int64(0)
+	if args.HasOffset && args.Offset > 1 && rangeType == "lines" {
+		first = args.Offset - 1
+	}
+	collect := int64(0)
+	if rangeType == "lines" && limit > 0 {
+		collect = limit
+	}
+	totalLines, spans := scanLines(data, first, collect, settings.MaxBytes)
 	information := []tools.Information{
 		{Key: "path", Value: target.displayPath},
 		{Key: "kind", Value: "file"},
@@ -430,7 +438,7 @@ func renderFileRange(callID string, target resolvedTarget, data []byte, args rea
 		information = append(information, tools.Information{Key: "line_ending", Value: ending})
 	}
 	information = append(information,
-		tools.Information{Key: "total_line_count", Value: len(spans)},
+		tools.Information{Key: "total_line_count", Value: totalLines},
 		tools.Information{Key: "range_type", Value: rangeType},
 	)
 	if rangeType == "lines" {
@@ -443,8 +451,8 @@ func renderFileRange(callID string, target resolvedTarget, data []byte, args rea
 			offset = 1
 		}
 		offsetAdjusted := offset != requestedOffset
-		offsetClamped := offset-1 > int64(len(spans))
-		startIndex := int64(len(spans))
+		offsetClamped := offset-1 > totalLines
+		startIndex := totalLines
 		if offset-1 < startIndex {
 			startIndex = offset - 1
 		}
@@ -452,8 +460,8 @@ func renderFileRange(callID string, target resolvedTarget, data []byte, args rea
 		if requestedCount < 0 {
 			requestedCount = 0
 		}
-		if requestedCount > int64(len(spans))-startIndex {
-			requestedCount = int64(len(spans)) - startIndex
+		if requestedCount > totalLines-startIndex {
+			requestedCount = totalLines - startIndex
 		}
 		requestedEnd := startIndex + requestedCount
 		endIndex := startIndex
@@ -461,7 +469,7 @@ func renderFileRange(callID string, target resolvedTarget, data []byte, args rea
 		contentTruncated := false
 		lineExceedsLimit := false
 		for endIndex < requestedEnd {
-			span := spans[endIndex]
+			span := spans[endIndex-first]
 			spanBytes := int64(span.fullEnd - span.start)
 			if returnedBytes+spanBytes > settings.MaxBytes {
 				contentTruncated = true
@@ -471,10 +479,10 @@ func renderFileRange(callID string, target resolvedTarget, data []byte, args rea
 			returnedBytes += spanBytes
 			endIndex++
 		}
-		remaining := endIndex < int64(len(spans))
+		remaining := endIndex < totalLines
 		var selected []byte
 		if endIndex > startIndex {
-			selected = data[spans[startIndex].start:spans[endIndex-1].fullEnd]
+			selected = data[spans[startIndex-first].start:spans[endIndex-1-first].fullEnd]
 		} else {
 			selected = []byte{}
 		}
@@ -569,8 +577,20 @@ func renderFileRange(callID string, target resolvedTarget, data []byte, args rea
 	return tools.RenderToolResult(tools.ResultOptions{ID: callID, Status: tools.StatusOK, Summary: summary, Information: information, Content: content})
 }
 
-func lineSpans(data []byte) []lineSpan {
-	spans := make([]lineSpan, 0)
+// scanLines counts the lines of data and returns the spans of the lines from index
+// first on, at most maxCount of them and no more than needed to pass maxBytes. A
+// caller indexes the result with the line index minus first.
+func scanLines(data []byte, first, maxCount, maxBytes int64) (int64, []lineSpan) {
+	var total int64
+	var window []lineSpan
+	var windowBytes int64
+	add := func(span lineSpan) {
+		if total >= first && int64(len(window)) < maxCount && windowBytes <= maxBytes {
+			window = append(window, span)
+			windowBytes += int64(span.fullEnd - span.start)
+		}
+		total++
+	}
 	start := 0
 	for cursor := 0; cursor < len(data); {
 		if data[cursor] != '\n' && data[cursor] != '\r' {
@@ -582,14 +602,14 @@ func lineSpans(data []byte) []lineSpan {
 		if data[cursor] == '\r' && fullEnd < len(data) && data[fullEnd] == '\n' {
 			fullEnd++
 		}
-		spans = append(spans, lineSpan{start: start, end: end, fullEnd: fullEnd})
+		add(lineSpan{start: start, end: end, fullEnd: fullEnd})
 		start = fullEnd
 		cursor = fullEnd
 	}
 	if start < len(data) {
-		spans = append(spans, lineSpan{start: start, end: len(data), fullEnd: len(data)})
+		add(lineSpan{start: start, end: len(data), fullEnd: len(data)})
 	}
-	return spans
+	return total, window
 }
 
 func lineEnding(data []byte) string {

@@ -1,6 +1,7 @@
 package native
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -132,11 +133,16 @@ func readVerifiedRegularFile(path string, before os.FileInfo, maxBytes int64) ([
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
 		return nil, nil, errors.New("file changed while being opened")
 	}
-	limited := io.LimitReader(file, maxBytes+1)
-	data, err := io.ReadAll(limited)
-	if err != nil {
+	// Sized from the file so the read does not grow its buffer by doubling; a file
+	// that grew meanwhile still reads to the limit.
+	var buffer bytes.Buffer
+	if size := opened.Size(); size > 0 && size <= maxBytes {
+		buffer.Grow(int(size) + bytes.MinRead)
+	}
+	if _, err := buffer.ReadFrom(io.LimitReader(file, maxBytes+1)); err != nil {
 		return nil, nil, err
 	}
+	data := buffer.Bytes()
 	after, err := file.Stat()
 	if err != nil || !os.SameFile(after, opened) || int64(len(data)) != after.Size() {
 		return nil, nil, errors.New("file changed while being read")

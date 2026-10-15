@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -262,10 +263,27 @@ type shellResult struct {
 // readShellResultFile reads the answer, cut to maxBytes without splitting a character and
 // with trailing whitespace removed. A missing, empty or blank file is no answer.
 func readShellResultFile(path string, maxBytes int64) *shellResult {
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
+	file, err := os.Open(path)
+	if err != nil {
 		return nil
 	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || info.Size() == 0 {
+		return nil
+	}
+	// Read the cap plus one character's worth of bytes: enough to find a character
+	// boundary at the cut, without loading a file the program made far larger.
+	want := info.Size()
+	if want > maxBytes+utf8.UTFMax {
+		want = maxBytes + utf8.UTFMax
+	}
+	data := make([]byte, want)
+	read, err := io.ReadFull(file, data)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil
+	}
+	data = data[:read]
 	end := len(data)
 	if int64(end) > maxBytes {
 		end = int(maxBytes)
@@ -277,7 +295,7 @@ func readShellResultFile(path string, maxBytes int64) *shellResult {
 	if text == "" {
 		return nil
 	}
-	return &shellResult{text: text, cutBytes: int64(len(data) - end)}
+	return &shellResult{text: text, cutBytes: info.Size() - int64(end)}
 }
 
 func effectiveBashTimeoutMs(requested *int64, settings sessionfs.NativeBashSettings) int64 {

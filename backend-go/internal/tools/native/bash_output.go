@@ -1,6 +1,7 @@
 package native
 
 import (
+	"bytes"
 	"strings"
 	"unicode/utf8"
 )
@@ -41,20 +42,46 @@ type bashUTF8Tracker struct {
 }
 
 func (tracker *bashUTF8Tracker) push(chunk []byte) {
-	input := make([]byte, 0, len(tracker.pending)+len(chunk))
-	input = append(input, tracker.pending...)
-	input = append(input, chunk...)
-	tracker.pending = nil
-	for len(input) > 0 {
-		if !utf8.FullRune(input) {
-			tracker.pending = append(tracker.pending[:0], input...)
+	if len(tracker.pending) > 0 {
+		// Finish the sequence left over from the last chunk with at most
+		// utf8.UTFMax-1 bytes of this one; the rest is scanned in place.
+		take := utf8.UTFMax - len(tracker.pending)
+		if take > len(chunk) {
+			take = len(chunk)
+		}
+		joined := append(tracker.pending, chunk[:take]...)
+		if !utf8.FullRune(joined) {
+			tracker.pending = joined
 			return
 		}
-		r, size := utf8.DecodeRune(input)
+		r, size := utf8.DecodeRune(joined)
 		if r == utf8.RuneError && size == 1 {
 			tracker.invalid = true
 		}
-		input = input[size:]
+		tracker.pending = tracker.pending[:0]
+		if consumed := size - (len(joined) - take); consumed >= 0 {
+			chunk = chunk[consumed:]
+		} else {
+			// The decode stopped inside the old pending bytes (an invalid lead byte):
+			// scan the bytes after it again together with the part taken from chunk.
+			tracker.push(append([]byte(nil), joined[size:]...))
+			chunk = chunk[take:]
+		}
+	}
+	for len(chunk) > 0 {
+		if chunk[0] < utf8.RuneSelf {
+			chunk = chunk[1:]
+			continue
+		}
+		if !utf8.FullRune(chunk) {
+			tracker.pending = append(tracker.pending[:0], chunk...)
+			return
+		}
+		r, size := utf8.DecodeRune(chunk)
+		if r == utf8.RuneError && size == 1 {
+			tracker.invalid = true
+		}
+		chunk = chunk[size:]
 	}
 }
 
@@ -80,11 +107,8 @@ func newBashStreamCollector(limits bashStreamLimits) *bashStreamCollector {
 
 func (collector *bashStreamCollector) push(chunk []byte) {
 	collector.producedBytes += int64(len(chunk))
-	for _, value := range chunk {
-		if value == 0 {
-			collector.binary = true
-			break
-		}
+	if !collector.binary && bytes.IndexByte(chunk, 0) >= 0 {
+		collector.binary = true
 	}
 	collector.utf8Tracker.push(chunk)
 
