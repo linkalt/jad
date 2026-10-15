@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 )
@@ -165,7 +164,7 @@ func (s *TurnStore) cursorCacheMatches(state *cursorCacheState, size, modifiedAt
 	if size == state.offset && modifiedAtNS != state.modifiedAtNS {
 		return false
 	}
-	hash, err := hashTranscriptRange(s.journal.path, state.checkpointStart, state.offset)
+	hash, err := HashFileRange(s.journal.path, state.checkpointStart, state.offset)
 	return err == nil && hash == state.checkpointSHA256
 }
 
@@ -174,7 +173,7 @@ func (s *TurnStore) makeCursorCacheState(runs []CursorRun, offset, modifiedAtNS 
 	if checkpointStart < 0 {
 		checkpointStart = 0
 	}
-	checkpointSHA256, err := hashTranscriptRange(s.journal.path, checkpointStart, offset)
+	checkpointSHA256, err := HashFileRange(s.journal.path, checkpointStart, offset)
 	if err != nil {
 		return nil, fmt.Errorf("hash transcript cursor checkpoint: %w", err)
 	}
@@ -283,29 +282,6 @@ func (s *TurnStore) persistCursorCache(state *cursorCacheState) error {
 		}
 	}
 	return nil
-}
-
-func hashTranscriptRange(path string, start, end int64) (string, error) {
-	if start < 0 || end < start {
-		return "", errors.New("transcript hash range is invalid")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	hash := sha256.New()
-	length := end - start
-	if length > 0 {
-		written, err := io.CopyN(hash, io.NewSectionReader(file, start, length), length)
-		if err != nil {
-			return "", err
-		}
-		if written != length {
-			return "", io.ErrUnexpectedEOF
-		}
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func (s *TurnStore) invalidateCursorCache() {

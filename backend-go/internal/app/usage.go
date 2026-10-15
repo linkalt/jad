@@ -5,13 +5,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"time"
 
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/transcript"
 	"jad/backend-go/internal/webui"
 )
 
@@ -76,7 +76,7 @@ func readUsageCacheState(config sessionfs.SessionConfig) (usageCacheFile, bool) 
 		}
 		return cache, true
 	}
-	actual, err := hashFileRange(config.MessagesPath, checkpoint.CheckpointStart, checkpoint.Offset)
+	actual, err := transcript.HashFileRange(config.MessagesPath, checkpoint.CheckpointStart, checkpoint.Offset)
 	if err != nil || actual != checkpoint.CheckpointSHA {
 		return usageCacheFile{}, false
 	}
@@ -174,23 +174,6 @@ func signedOrUnsignedInt(value reflect.Value) (int64, bool) {
 	return 0, false
 }
 
-func hashFileRange(path string, start, end int64) (string, error) {
-	if start < 0 || end < start {
-		return "", os.ErrInvalid
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	hash := sha256.New()
-	section := io.NewSectionReader(file, start, end-start)
-	if _, err := io.Copy(hash, section); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
 func usageCacheResponseKey(raw json.RawMessage) string {
 	var record map[string]json.RawMessage
 	if json.Unmarshal(raw, &record) != nil || record == nil || stringField(record["type"]) != "response.completed" {
@@ -236,7 +219,7 @@ func writeUsageCacheCheckpoint(config sessionfs.SessionConfig, summary webui.Usa
 	if checkpointStart < 0 {
 		checkpointStart = 0
 	}
-	checkpointHash, err := hashFileRange(config.MessagesPath, checkpointStart, offset)
+	checkpointHash, err := transcript.HashFileRange(config.MessagesPath, checkpointStart, offset)
 	if err != nil {
 		return fmt.Errorf("hash transcript for usage cache: %w", err)
 	}

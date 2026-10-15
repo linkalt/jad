@@ -1,11 +1,8 @@
 package transcript
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"time"
 )
@@ -90,7 +87,7 @@ func (s *TurnStore) readTranscriptItemsMemo(memo *transcriptMemo) ([][]byte, err
 		if checkpointStart < 0 {
 			checkpointStart = 0
 		}
-		checkpoint, err := hashFileSection(file, checkpointStart, size)
+		checkpoint, err := hashSection(file, checkpointStart, size)
 		if err != nil {
 			return fmt.Errorf("hash transcript history checkpoint: %w", err)
 		}
@@ -133,20 +130,6 @@ func (m *transcriptMemo) matches(generation uint64, file *os.File, info os.FileI
 			return false
 		}
 	}
-	hash, err := hashFileSection(file, m.checkpointStart, m.offset)
+	hash, err := hashSection(file, m.checkpointStart, m.offset)
 	return err == nil && hash == m.checkpointSHA256
-}
-
-func hashFileSection(file *os.File, start, end int64) (string, error) {
-	hash := sha256.New()
-	if length := end - start; length > 0 {
-		written, err := io.Copy(hash, io.NewSectionReader(file, start, length))
-		if err != nil {
-			return "", err
-		}
-		if written != length {
-			return "", io.ErrUnexpectedEOF
-		}
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }
