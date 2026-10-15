@@ -411,6 +411,8 @@ func TestLoadServerReadHeaderAndIdleTimeouts(t *testing.T) {
 		{`{"read_header_timeout_ms":0,"idle_timeout_ms":0}`, 0, 0},
 		{`{"read_header_timeout_ms":1500,"idle_timeout_ms":250}`, 1500 * time.Millisecond, 250 * time.Millisecond},
 		{`{"read_header_timeout_ms":300000,"idle_timeout_ms":3600000}`, 5 * time.Minute, time.Hour},
+		{`{"shutdown_timeout_ms":300000}`, 60 * time.Second, 5 * time.Second},
+		{`{"shutdown_timeout_ms":null}`, 60 * time.Second, 5 * time.Second},
 	} {
 		config, err := load(accepted.server)
 		if err != nil {
@@ -429,6 +431,10 @@ func TestLoadServerReadHeaderAndIdleTimeouts(t *testing.T) {
 		{"idle_timeout_ms", `3600001`},
 		{"idle_timeout_ms", `1.5`},
 		{"idle_timeout_ms", `"5000"`},
+		{"shutdown_timeout_ms", `-1`},
+		{"shutdown_timeout_ms", `300001`},
+		{"shutdown_timeout_ms", `1.5`},
+		{"shutdown_timeout_ms", `"10000"`},
 	} {
 		_, err := load(`{"` + rejected.field + `":` + rejected.value + `}`)
 		if err == nil || !strings.Contains(err.Error(), "server."+rejected.field) {

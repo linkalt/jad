@@ -57,6 +57,9 @@ type ServerSettings struct {
 	// IdleTimeout is how long an idle keep-alive connection stays open between
 	// requests; zero disables the limit.
 	IdleTimeout time.Duration
+	// ShutdownTimeout is how long shutdown waits for in-flight requests before it
+	// closes their connections; zero waits without a limit.
+	ShutdownTimeout time.Duration
 	// SessionDeleteStopWait is how long deleting a session waits for its stopped runs to end
 	// before it gives up with a conflict; zero does not wait.
 	SessionDeleteStopWait time.Duration
@@ -162,6 +165,7 @@ func Defaults() ServerSettings {
 		SSEHeartbeatInterval:       time.Duration(serverconfig.DefaultSSEHeartbeatIntervalMS) * time.Millisecond,
 		ReadHeaderTimeout:          time.Duration(serverconfig.DefaultReadHeaderTimeoutMS) * time.Millisecond,
 		IdleTimeout:                time.Duration(serverconfig.DefaultIdleTimeoutMS) * time.Millisecond,
+		ShutdownTimeout:            time.Duration(serverconfig.DefaultShutdownTimeoutMS) * time.Millisecond,
 		SessionDeleteStopWait:      time.Duration(serverconfig.DefaultSessionDeleteStopWaitMS) * time.Millisecond,
 		LogLevel:                   serverconfig.DefaultLogLevel,
 		LogFormat:                  serverconfig.DefaultLogFormat,
@@ -572,6 +576,11 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		return ServerSettings{}, err
 	}
 	settings.IdleTimeout = time.Duration(idleTimeout) * time.Millisecond
+	shutdownTimeout := int64(settings.ShutdownTimeout / time.Millisecond)
+	if err := readInt("shutdown_timeout_ms", &shutdownTimeout, 0, serverconfig.MaxShutdownTimeoutMS); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.ShutdownTimeout = time.Duration(shutdownTimeout) * time.Millisecond
 	deleteWait := int64(settings.SessionDeleteStopWait / time.Millisecond)
 	if err := readInt("session_delete_stop_wait_ms", &deleteWait, 0, serverconfig.MaxSessionDeleteStopWaitMS); err != nil {
 		return ServerSettings{}, err

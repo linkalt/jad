@@ -2,11 +2,16 @@ package app
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/sessionfs"
+	mcpclient "jad/backend-go/internal/tools/mcp"
+	"jad/backend-go/internal/tools/native"
 )
 
 func (r *Resolver) ListSessionConfigs(ctx context.Context) ([]httpapi.CatalogFileInfo, error) {
@@ -65,11 +70,58 @@ func (r *Resolver) DeleteSessionConfig(ctx context.Context, reference, ifMatch s
 	}
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
+	location, locateErr := sessionfs.Resolve(r.roots, reference)
 	stateDir, err := sessionfs.DeleteSessionFile(r.roots, reference, ifMatch, deleteState)
 	if stateDir != "" {
 		r.forgetStores(stateDir)
 	}
+	if locateErr == nil && (err == nil || sessionFileGone(location.File)) {
+		r.releaseSessionChildren(location.File)
+	}
 	return mapCatalogFileError(err)
+}
+
+// sessionFileGone reports whether a delete that returned an error had already removed the
+// session file; the session is unreachable then, so its children must still be released.
+func sessionFileGone(file string) bool {
+	_, err := os.Stat(file)
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// releaseSessionChildren stops the MCP server processes and the managed processes that
+// belong to the deleted session file. Without it they would run until the server stops,
+// with no session left to reach them. A session created again under the same name gets
+// new managers.
+func (r *Resolver) releaseSessionChildren(settingPath string) {
+	settingPath = filepath.Clean(settingPath)
+	mcpPrefix := settingPath + "\x00"
+	r.mu.Lock()
+	var mcpManagers []*mcpclient.Manager
+	for key, manager := range r.mcpManagers {
+		if strings.HasPrefix(key, mcpPrefix) {
+			mcpManagers = append(mcpManagers, manager)
+			delete(r.mcpManagers, key)
+		}
+	}
+	var processManagers []*native.ManagedProcessManager
+	for key, sessions := range r.processSessions {
+		if _, used := sessions[settingPath]; !used {
+			continue
+		}
+		delete(sessions, settingPath)
+		if len(sessions) == 0 {
+			processManagers = append(processManagers, r.processManagers[key])
+			delete(r.processManagers, key)
+			delete(r.processSessions, key)
+		}
+	}
+	r.mu.Unlock()
+	for _, manager := range mcpManagers {
+		_ = manager.Close()
+	}
+	for _, manager := range processManagers {
+		_ = manager.Close()
+	}
 }
 
 // forgetStores drops the transcript stores cached for files under dir, so a session created

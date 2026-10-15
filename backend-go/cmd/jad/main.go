@@ -101,8 +101,7 @@ func run() error {
 	}
 
 	service.Close()
-	if err := server.Shutdown(context.Background()); err != nil {
-		_ = server.Close()
+	if _, err := config.ShutdownHTTPServer(server, logger); err != nil {
 		return fmt.Errorf("shut down HTTP server: %w", err)
 	}
 	if err := <-serveErrors; !errors.Is(err, http.ErrServerClosed) {

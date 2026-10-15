@@ -48,6 +48,13 @@ const (
 	RunCapRetryAfterSeconds = 5
 )
 
+// How long shutdown waits for in-flight requests before it closes their connections
+// (server.shutdown_timeout_ms). 0 waits without a limit.
+const (
+	DefaultShutdownTimeoutMS = 10_000
+	MaxShutdownTimeoutMS     = 5 * 60 * 1000
+)
+
 // DefaultRecoverProcessesAtStart is the default of server.recover_processes_at_start.
 const DefaultRecoverProcessesAtStart = true
 

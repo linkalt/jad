@@ -22,6 +22,7 @@ import (
 type layoutFixture struct {
 	root, cwd string
 	api       *httptest.Server
+	service   *Service
 	mu        sync.Mutex
 	models    []string
 	// captureBodies records each request body in bodies, for a test that reads the prompt.
@@ -119,6 +120,7 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
+	f.service = service
 	f.api = httptest.NewServer(service.Handler)
 	t.Cleanup(func() { service.Close(); f.api.Close() })
 	return f

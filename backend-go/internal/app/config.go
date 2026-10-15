@@ -28,6 +28,9 @@ type Config struct {
 	// would cut long-lived SSE run streams.
 	ReadHeaderTimeout time.Duration
 	IdleTimeout       time.Duration
+	// ShutdownTimeout bounds how long ShutdownHTTPServer waits for in-flight requests;
+	// zero waits without a limit.
+	ShutdownTimeout time.Duration
 	// Log configures the structured logger built by main; see internal/logging.
 	Log logging.Settings
 	// RecoverProcessesAtStart starts a background recovery of every session's managed
@@ -78,6 +81,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 		Port:              port,
 		ReadHeaderTimeout: loaded.Server.ReadHeaderTimeout,
 		IdleTimeout:       loaded.Server.IdleTimeout,
+		ShutdownTimeout:   loaded.Server.ShutdownTimeout,
 		Log: logging.Settings{
 			Level:  loaded.Server.LogLevel,
 			Format: loaded.Server.LogFormat,

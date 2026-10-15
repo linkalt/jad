@@ -102,6 +102,13 @@
           "default": 5000,
           "description": "Time an idle keep-alive connection stays open between requests before it is closed. 0 disables the limit."
         },
+        "shutdown_timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300000,
+          "default": 10000,
+          "description": "Go backend only. How long the server waits for in-flight requests to finish after SIGINT or SIGTERM, once active runs are cancelled. When it runs out, the remaining connections are closed and the server exits. 0 waits without a limit."
+        },
         "session_delete_stop_wait_ms": {
           "type": "integer",
           "minimum": 0,

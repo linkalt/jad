@@ -54,17 +54,21 @@ type Resolver struct {
 	mu                sync.Mutex
 	settingsMu        sync.Mutex
 	lockedConfigs     lockedConfigs
-	stores            map[string]*sharedSession
+	stores            map[string]*storeEntry
 	profileTurnsMu    sync.Mutex
 	profileTurnCounts map[string]profileTurnsEntry
 	processManagers   map[string]*native.ManagedProcessManager
-	subagentManagers  map[string]*native.SubagentManager
-	mcpManagers       map[string]*mcpclient.Manager
-	taskStores        map[string]*native.TaskStore
-	memoryStores      map[string]*native.MemoryStore
-	fetchStores       map[string]*native.FetchStore
-	mutationLock      *native.PathLocks
-	closed            bool
+	// processSessions lists the session files that use each process manager, by the same
+	// storage key, so deleting the last of them can stop its processes. An explicit
+	// tools.native.process.storage_dir may be shared by several sessions.
+	processSessions  map[string]map[string]struct{}
+	subagentManagers map[string]*native.SubagentManager
+	mcpManagers      map[string]*mcpclient.Manager
+	taskStores       map[string]*native.TaskStore
+	memoryStores     map[string]*native.MemoryStore
+	fetchStores      map[string]*native.FetchStore
+	mutationLock     *native.PathLocks
+	closed           bool
 
 	// subagentBuilds holds the managers being built, by storage directory. Building
 	// one reads, rewrites and may delete a lot of files, so it runs outside mu; a
@@ -74,6 +78,22 @@ type Resolver struct {
 	// newPersistentSubagentManager builds a manager that keeps run manifests; tests
 	// replace it to hold a build open.
 	newPersistentSubagentManager func(native.SubagentManagerOptions) *native.SubagentManager
+	// openStore opens one transcript store; tests replace it to hold a build open.
+	openStore func(sessionfs.SessionConfig, transcript.TurnStoreOptions, transcript.DurabilityMode) (*sharedSession, error)
+}
+
+// errStoreForgotten is what a caller gets when its session was deleted while its transcript
+// store was being opened: the store is not handed out, because nothing caches it any more
+// and a second open of the same file would follow.
+var errStoreForgotten = &httpapi.StatusError{Code: http.StatusNotFound, Message: "session was deleted"}
+
+// storeEntry is one transcript store being built or built. Opening a store creates
+// directories, opens the journal and recovers the transcript tail, so it runs outside
+// Resolver.mu: callers of the same key wait on ready, other keys do not wait at all.
+type storeEntry struct {
+	ready  chan struct{}
+	shared *sharedSession
+	err    error
 }
 
 type sharedSession struct {
@@ -140,15 +160,17 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		roots:             copyRoots,
 		environment:       copyEnvironment,
 		catalog:           catalog,
-		stores:            make(map[string]*sharedSession),
+		stores:            make(map[string]*storeEntry),
 		profileTurnCounts: make(map[string]profileTurnsEntry),
 		processManagers:   make(map[string]*native.ManagedProcessManager),
+		processSessions:   make(map[string]map[string]struct{}),
 		subagentManagers:  make(map[string]*native.SubagentManager),
 		mcpManagers:       make(map[string]*mcpclient.Manager),
 		taskStores:        make(map[string]*native.TaskStore),
 		memoryStores:      make(map[string]*native.MemoryStore),
 		fetchStores:       make(map[string]*native.FetchStore),
 		mutationLock:      native.NewPathLocks(),
+		openStore:         openSharedSession,
 
 		subagentBuilds:               make(map[string]*subagentBuild),
 		newPersistentSubagentManager: native.NewPersistentSubagentManager,
@@ -479,6 +501,7 @@ func (r *Resolver) sharedProcessManager(config sessionfs.SessionConfig) native.P
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if manager := r.processManagers[storageKey]; manager != nil {
+		r.processSessions[storageKey][filepath.Clean(config.SettingPath)] = struct{}{}
 		return manager
 	}
 	if r.closed {
@@ -486,6 +509,7 @@ func (r *Resolver) sharedProcessManager(config sessionfs.SessionConfig) native.P
 	}
 	manager := native.NewConfiguredProcessManager(*config.NativeProcess)
 	r.processManagers[storageKey] = manager
+	r.processSessions[storageKey] = map[string]struct{}{filepath.Clean(config.SettingPath): {}}
 	return manager
 }
 
@@ -681,41 +705,75 @@ func (r *Resolver) sharedStore(config sessionfs.SessionConfig) (*sharedSession, 
 	storageKey := filepath.Clean(config.MessagesPath)
 	durability := transcript.DurabilityMode(config.Persistence.Durability)
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.closed {
+		r.mu.Unlock()
 		return nil, &httpapi.StatusError{Code: http.StatusServiceUnavailable, Message: "server is shutting down"}
 	}
-	shared := r.stores[storageKey]
-	if shared == nil {
-		if err := os.MkdirAll(filepath.Dir(config.MessagesPath), 0o755); err != nil {
-			return nil, fmt.Errorf("create transcript directory: %w", err)
+	entry := r.stores[storageKey]
+	if entry == nil {
+		entry = &storeEntry{ready: make(chan struct{})}
+		r.stores[storageKey] = entry
+		r.mu.Unlock()
+		entry.shared, entry.err = r.buildStore(config, storeOptions, durability)
+		r.mu.Lock()
+		if entry.err != nil && r.stores[storageKey] == entry {
+			delete(r.stores, storageKey)
 		}
-		journal, err := transcript.NewJournal(config.MessagesPath, durability)
-		if err != nil {
-			return nil, fmt.Errorf("create transcript journal: %w", err)
+		if r.stores[storageKey] != entry && entry.err == nil {
+			entry.shared, entry.err = nil, errStoreForgotten
 		}
-		store, err := transcript.NewTurnStore(journal, config.StagingDir, storeOptions)
-		if err != nil {
-			return nil, fmt.Errorf("create transcript turn store: %w", err)
-		}
-		if _, err := store.Recover(); err != nil {
-			return nil, fmt.Errorf("recover session transcript: %w", err)
-		}
-		shared = &sharedSession{
-			store:      store,
-			staging:    filepath.Clean(config.StagingDir),
-			durability: durability,
-			options:    storeOptions,
-			runners:    make(map[string]*session.Runner),
-		}
-		r.stores[storageKey] = shared
-	} else if shared.options != storeOptions || shared.staging != filepath.Clean(config.StagingDir) || shared.durability != durability {
+		close(entry.ready)
+		r.mu.Unlock()
+		return entry.shared, entry.err
+	}
+	r.mu.Unlock()
+	<-entry.ready
+	if entry.err != nil {
+		return nil, entry.err
+	}
+	shared := entry.shared
+	if shared.options != storeOptions || shared.staging != filepath.Clean(config.StagingDir) || shared.durability != durability {
 		return nil, &httpapi.StatusError{
 			Code:    http.StatusUnprocessableEntity,
 			Message: "session path profiles share transcript storage but have incompatible staging or persistence settings",
 		}
 	}
 	return shared, nil
+}
+
+// buildStore runs the store opener and turns a panic into an error, so the callers waiting
+// on the entry are always released.
+func (r *Resolver) buildStore(config sessionfs.SessionConfig, storeOptions transcript.TurnStoreOptions, durability transcript.DurabilityMode) (shared *sharedSession, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			shared, err = nil, fmt.Errorf("open transcript store: panic: %v", recovered)
+		}
+	}()
+	return r.openStore(config, storeOptions, durability)
+}
+
+func openSharedSession(config sessionfs.SessionConfig, storeOptions transcript.TurnStoreOptions, durability transcript.DurabilityMode) (*sharedSession, error) {
+	if err := os.MkdirAll(filepath.Dir(config.MessagesPath), 0o755); err != nil {
+		return nil, fmt.Errorf("create transcript directory: %w", err)
+	}
+	journal, err := transcript.NewJournal(config.MessagesPath, durability)
+	if err != nil {
+		return nil, fmt.Errorf("create transcript journal: %w", err)
+	}
+	store, err := transcript.NewTurnStore(journal, config.StagingDir, storeOptions)
+	if err != nil {
+		return nil, fmt.Errorf("create transcript turn store: %w", err)
+	}
+	if _, err := store.Recover(); err != nil {
+		return nil, fmt.Errorf("recover session transcript: %w", err)
+	}
+	return &sharedSession{
+		store:      store,
+		staging:    filepath.Clean(config.StagingDir),
+		durability: durability,
+		options:    storeOptions,
+		runners:    make(map[string]*session.Runner),
+	}, nil
 }
 
 // Close prevents new resolutions and stops managed native processes.
