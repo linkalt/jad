@@ -189,6 +189,26 @@ func TestTurnQueueDoesNotLoseTurnsUnderContention(t *testing.T) {
 	}
 }
 
+type defaultProfileResolver struct{ *fakeResolver }
+
+func (defaultProfileResolver) CanonicalSessionProfile(_, profile string) (string, error) {
+	if profile == "" {
+		return "dev", nil
+	}
+	return profile, nil
+}
+
+func TestTurnKeyTreatsAnEmptyProfileAsTheDefaultProfile(t *testing.T) {
+	handler := testHandler(t, defaultProfileResolver{&fakeResolver{}}, Config{APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 4096, RunStateRetention: time.Minute})
+	defer handler.Close()
+	if empty, named := handler.turnKey("s", ""), handler.turnKey("s", "dev"); empty != named {
+		t.Fatalf("empty profile key %q differs from the default's key %q", empty, named)
+	}
+	if other := handler.turnKey("s", "other"); other == handler.turnKey("s", "dev") {
+		t.Fatalf("another profile shares the default's key %q", other)
+	}
+}
+
 type panickingResolver struct {
 	*transcriptLockedResolver
 }

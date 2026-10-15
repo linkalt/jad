@@ -736,7 +736,9 @@ The invariant that stays: taking the transcript lock and `beginRun` happen in on
 
 **Order (added after the first version).** Run starts and compactions of one session and profile go through `turnQueue` (`start_turn.go`), a FIFO keyed by canonical reference and profile. A start or compaction holds the turn until it has taken the locks (a start) or finished (a compaction), so one that arrived later cannot take the transcript each time the 25 ms file-lock poll releases it. A cancelled request leaves the queue. Compact clears its mutation gate before giving back the locks, so a start queued behind it does not meet the gate and get a 409 from `beginRun`. A compaction that finds the session changing is still refused at once, before it queues, as before.
 
-**Not in the queue:** reset, front compact, state context and checkpoint restore. They still take the session lock and wait for the transcript while holding it, as before; they are not ordered against the queue.
+**Queue key.** A request that names no profile is keyed as the session's default profile (`SessionProfiles.CanonicalSessionProfile`, implemented by the resolver), because it resolves to that profile's transcript. Without it, an unnamed start and an explicit `default` start would sit in two queues and could race for the transcript.
+
+**Not in the queue:** reset, front compact, state context and checkpoint restore. They still take the session lock and wait for the transcript while holding it, as before; they are not ordered against the queue. All four check for an active run before they wait, so a queued start behind a running run still gets them an immediate 409. Reset is covered by `TestResetIsRefusedWhileARunIsActiveAndAStartIsQueued`; the other three by `TestHandlersRefuseAtOnceWhileARunIsActiveAndAStartIsQueued`.
 
 **Panics.** `tryStartRun` releases the transcript lock if it panics before the run is registered, and `handleRunStart` finishes the run as failed and releases the lock if it panics before the run goroutine starts.
 

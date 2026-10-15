@@ -52,6 +52,13 @@ type SessionReferences interface {
 	CanonicalSessionReference(reference string) (string, error)
 }
 
+// SessionProfiles is an optional adapter that names the profile a request resolves to: a
+// request that names none uses the session's default, which is the same transcript as a
+// request that names that default.
+type SessionProfiles interface {
+	CanonicalSessionProfile(reference, profile string) (string, error)
+}
+
 // SessionChildren is an optional adapter for work a session started that outlives
 // the run, such as sub-agent runs handed off with a run id. CancelSessionChildren asks
 // all of it to stop and reports how many were still going; it must not block.

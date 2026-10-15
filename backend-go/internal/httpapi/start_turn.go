@@ -69,11 +69,17 @@ func (q *turnQueue) len(key string) int {
 	return 0
 }
 
-// turnKey is the queue key of one transcript, spelled as lockSession spells the session.
+// turnKey is the queue key of one transcript, spelled as lockSession spells the session,
+// with a request that names no profile keyed as the session's default profile.
 func (h *Handler) turnKey(reference, profile string) string {
 	if references, ok := h.resolver.(SessionReferences); ok {
 		if canonical, err := references.CanonicalSessionReference(reference); err == nil {
 			reference = canonical
+		}
+	}
+	if profiles, ok := h.resolver.(SessionProfiles); ok {
+		if canonical, err := profiles.CanonicalSessionProfile(reference, profile); err == nil {
+			profile = canonical
 		}
 	}
 	return reference + "\x00" + profile

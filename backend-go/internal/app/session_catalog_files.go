@@ -111,3 +111,24 @@ func (r *Resolver) CanonicalSessionReference(reference string) (string, error) {
 	}
 	return location.Reference, nil
 }
+
+// CanonicalSessionProfile implements httpapi.SessionProfiles. A named profile is returned as
+// it is; an empty one becomes the session's default profile, read without loading the
+// session's settings.
+func (r *Resolver) CanonicalSessionProfile(reference, profile string) (string, error) {
+	if profile != "" {
+		return profile, nil
+	}
+	location, err := sessionfs.Resolve(r.roots, reference)
+	if err != nil {
+		return "", err
+	}
+	if !location.UsesLayout() {
+		return profile, nil
+	}
+	info, err := sessionfs.ReadLayoutProfileInfo(location)
+	if err != nil {
+		return "", err
+	}
+	return info.ActiveProfile, nil
+}
