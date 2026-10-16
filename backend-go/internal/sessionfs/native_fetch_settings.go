@@ -19,7 +19,10 @@ const (
 	defaultNativeFetchStorageBytes    int64 = 64 * 1024 * 1024
 	defaultNativeFetchTimeoutMS       int64 = 15_000
 	defaultNativeFetchMaxRedirects    int64 = 5
+	defaultNativeFetchKeepAliveMS     int64 = 30_000
+	defaultNativeFetchKeepAliveHosts  int64 = 8
 	maxNativeFetchTimeoutMS           int64 = 300_000
+	maxNativeFetchKeepAliveHosts      int64 = 64
 	maxNativeFetchRedirects           int64 = 20
 )
 
@@ -36,10 +39,15 @@ type NativeFetchSettings struct {
 	MaxStorageBytes  int64
 	TimeoutMS        int64
 	MaxRedirects     int64
-	IncludeMetadata  bool
-	IncludeImages    bool
-	AllowedHosts     []string
-	DeniedHosts      []string
+	// KeepAliveMS is how long an idle connection to a fetched host stays open for
+	// the next fetch; 0 opens a fresh connection per request.
+	KeepAliveMS int64
+	// MaxKeepAliveHosts bounds how many hosts keep a connection open at once.
+	MaxKeepAliveHosts int64
+	IncludeMetadata   bool
+	IncludeImages     bool
+	AllowedHosts      []string
+	DeniedHosts       []string
 }
 
 func normalizeNativeFetchSettings(setting map[string]json.RawMessage, settingPath, cwd, toolStorageDir string) (*NativeFetchSettings, error) {
@@ -69,7 +77,7 @@ func normalizeNativeFetchSettings(setting map[string]json.RawMessage, settingPat
 	}
 	for key := range fields {
 		switch key {
-		case "storage_dir", "default_limit", "max_limit", "max_response_bytes", "max_document_chars", "max_storage_bytes", "timeout_ms", "max_redirects", "include_metadata", "include_images", "allowed_hosts", "denied_hosts":
+		case "storage_dir", "default_limit", "max_limit", "max_response_bytes", "max_document_chars", "max_storage_bytes", "timeout_ms", "max_redirects", "keep_alive_ms", "max_keep_alive_hosts", "include_metadata", "include_images", "allowed_hosts", "denied_hosts":
 		default:
 			return nil, configError("%s: tools.native.fetch.%s is not supported", settingPath, key)
 		}
@@ -95,6 +103,12 @@ func normalizeNativeFetchSettings(setting map[string]json.RawMessage, settingPat
 		return nil, err
 	}
 	if settings.MaxRedirects, err = configuredInteger(fields, "max_redirects", defaultNativeFetchMaxRedirects, 1, maxNativeFetchRedirects, settingPath, "tools.native.fetch"); err != nil {
+		return nil, err
+	}
+	if settings.KeepAliveMS, err = configuredInteger(fields, "keep_alive_ms", defaultNativeFetchKeepAliveMS, 0, maxNativeFetchTimeoutMS, settingPath, "tools.native.fetch"); err != nil {
+		return nil, err
+	}
+	if settings.MaxKeepAliveHosts, err = configuredInteger(fields, "max_keep_alive_hosts", defaultNativeFetchKeepAliveHosts, 1, maxNativeFetchKeepAliveHosts, settingPath, "tools.native.fetch"); err != nil {
 		return nil, err
 	}
 	if settings.IncludeMetadata, err = nativeFetchBoolean(fields, "include_metadata", defaultNativeFetchIncludeMetadata, settingPath); err != nil {

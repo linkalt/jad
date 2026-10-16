@@ -63,11 +63,17 @@ var fetchCursorPattern = regexp.MustCompile(`(?i)^([0-9a-f]{8}-(?:[0-9a-f]{4}-){
 type FetchStore struct {
 	directory string
 	mu        sync.Mutex
+	// transports holds the keep-alive connections of native.fetch calls that share
+	// this store.
+	transports fetchTransportPool
 }
 
 func NewFetchStore(directory string) *FetchStore {
 	return &FetchStore{directory: directory}
 }
+
+// Close drops the pooled fetch connections; the store keeps working without them.
+func (s *FetchStore) Close() { s.transports.close() }
 
 // Create stores a fetched document, enforcing per-document and aggregate quotas.
 func (s *FetchStore) Create(document FetchDocument, policy sessionfs.NativeFetchSettings) (FetchDocument, error) {

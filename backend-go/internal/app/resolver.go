@@ -800,6 +800,10 @@ func (r *Resolver) Close() {
 	for _, manager := range r.subagentManagers {
 		subagentManagers = append(subagentManagers, manager)
 	}
+	fetchStores := make([]*native.FetchStore, 0, len(r.fetchStores))
+	for _, store := range r.fetchStores {
+		fetchStores = append(fetchStores, store)
+	}
 	// A manager being built is not in the map yet. Its builder closes it (the resolver
 	// is closed), but Close still waits for the build to end, as it did when the build
 	// held mu: no file work of a build outlives Close.
@@ -820,6 +824,9 @@ func (r *Resolver) Close() {
 	}
 	for _, manager := range mcpManagers {
 		_ = manager.Close()
+	}
+	for _, store := range fetchStores {
+		store.Close()
 	}
 }
 

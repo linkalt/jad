@@ -4,7 +4,6 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,7 +83,13 @@ type validatedFetchURL struct {
 	Address net.IPAddr
 }
 
-type pinnedFetchRequester struct{}
+// pinnedFetchRequester reuses connections through pool when keepAlive is positive;
+// a zero value opens a fresh connection for every request.
+type pinnedFetchRequester struct {
+	pool      *fetchTransportPool
+	keepAlive time.Duration
+	maxHosts  int
+}
 
 type fetchRequestError struct {
 	Code    string
@@ -98,7 +103,11 @@ func NewFetchTool(settings sessionfs.NativeFetchSettings, store *FetchStore) (to
 	if store == nil {
 		store = NewFetchStore(settings.StorageDir)
 	}
-	return newFetchTool(settings, store, net.DefaultResolver, pinnedFetchRequester{})
+	return newFetchTool(settings, store, net.DefaultResolver, newPinnedFetchRequester(settings, store))
+}
+
+func newPinnedFetchRequester(settings sessionfs.NativeFetchSettings, store *FetchStore) pinnedFetchRequester {
+	return pinnedFetchRequester{pool: &store.transports, keepAlive: time.Duration(settings.KeepAliveMS) * time.Millisecond, maxHosts: int(settings.MaxKeepAliveHosts)}
 }
 
 func newFetchTool(settings sessionfs.NativeFetchSettings, store *FetchStore, resolver fetchIPResolver, requester fetchRequester) (tools.Tool, error) {
@@ -470,7 +479,7 @@ func isPublicFetchAddress(address net.IPAddr) bool {
 	return true
 }
 
-func (pinnedFetchRequester) Do(ctx context.Context, target validatedFetchURL) (*http.Response, error) {
+func (r pinnedFetchRequester) Do(ctx context.Context, target validatedFetchURL) (*http.Response, error) {
 	port := target.URL.Port()
 	if port == "" {
 		if target.URL.Scheme == "https" {
@@ -479,20 +488,23 @@ func (pinnedFetchRequester) Do(ctx context.Context, target validatedFetchURL) (*
 			port = "80"
 		}
 	}
-	dialer := &net.Dialer{}
-	transport := &http.Transport{
-		Proxy:              nil,
-		DisableCompression: true,
-		DisableKeepAlives:  true,
-		TLSClientConfig:    &tls.Config{ServerName: target.URL.Hostname()},
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			if target.Address.IP.To4() != nil {
-				network = "tcp4"
-			} else {
-				network = "tcp6"
-			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(target.Address.IP.String(), port))
-		},
+	keepAlive := time.Duration(0)
+	var transport *http.Transport
+	pooled := r.pool != nil && r.keepAlive > 0
+	if pooled {
+		keepAlive = r.keepAlive
+		key := fetchTransportKey{scheme: target.URL.Scheme, host: target.URL.Hostname(), port: port, ip: target.Address.IP.String()}
+		transport = r.pool.get(key, keepAlive, r.maxHosts, func() *http.Transport {
+			return newPinnedFetchTransport(target, port, keepAlive)
+		})
+	}
+	if transport == nil {
+		pooled = false
+		transport = newPinnedFetchTransport(target, port, 0)
+	}
+	release := func() {}
+	if !pooled {
+		release = transport.CloseIdleConnections
 	}
 	client := &http.Client{
 		Transport: transport,
@@ -502,17 +514,17 @@ func (pinnedFetchRequester) Do(ctx context.Context, target validatedFetchURL) (*
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.URL.String(), nil)
 	if err != nil {
-		transport.CloseIdleConnections()
+		release()
 		return nil, err
 	}
 	request.Header.Set("Accept", "text/*, application/*")
 	request.Header.Set("Accept-Encoding", "gzip, deflate, br")
 	response, err := client.Do(request)
 	if err != nil {
-		transport.CloseIdleConnections()
+		release()
 		return nil, err
 	}
-	response.Body = &fetchResponseBody{ReadCloser: response.Body, closeIdle: transport.CloseIdleConnections}
+	response.Body = &fetchResponseBody{ReadCloser: response.Body, closeIdle: release}
 	return response, nil
 }
 

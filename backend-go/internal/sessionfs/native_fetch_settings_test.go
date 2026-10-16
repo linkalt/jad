@@ -38,6 +38,34 @@ func TestNormalizeNativeFetchSettingsDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestNormalizeNativeFetchSettingsKeepAlive(t *testing.T) {
+	cwd := t.TempDir()
+	load := func(raw string) (*NativeFetchSettings, error) {
+		return normalizeNativeFetchSettings(map[string]json.RawMessage{
+			"tools": json.RawMessage(`{"native":{"fetch":` + raw + `}}`),
+		}, "/session/setting.json", cwd, "")
+	}
+	defaults, err := load(`{}`)
+	if err != nil || defaults.KeepAliveMS != 30_000 || defaults.MaxKeepAliveHosts != 8 {
+		t.Fatalf("keep-alive defaults = %+v, %v", defaults, err)
+	}
+	custom, err := load(`{"keep_alive_ms":0,"max_keep_alive_hosts":3}`)
+	if err != nil || custom.KeepAliveMS != 0 || custom.MaxKeepAliveHosts != 3 {
+		t.Fatalf("keep-alive overrides = %+v, %v", custom, err)
+	}
+	for _, raw := range []string{
+		`{"keep_alive_ms":-1}`,
+		`{"keep_alive_ms":300001}`,
+		`{"keep_alive_ms":"30"}`,
+		`{"max_keep_alive_hosts":0}`,
+		`{"max_keep_alive_hosts":65}`,
+	} {
+		if _, err := load(raw); err == nil || !strings.Contains(err.Error(), "tools.native.fetch") {
+			t.Errorf("load(%s) error = %v", raw, err)
+		}
+	}
+}
+
 func TestNormalizeNativeFetchSettingsRejectsInvalidSettings(t *testing.T) {
 	cwd := t.TempDir()
 	for _, raw := range []string{
