@@ -22,7 +22,6 @@ import {
   useImageAttachments,
 } from './ImageAttachments';
 import {FileAttachmentPicker, FileIcon} from './FileAttachments';
-import {IconGroup} from './IconGroup';
 import {readCaretEdges} from './composerCaret';
 import {IDLE_HISTORY, stepHistory, type HistoryCursor} from '../input-history';
 import {fetchRootLibrary, fetchRootLibraryAsset, fetchSessionFiles} from '../api';
@@ -842,7 +841,12 @@ export function ComposerPane({
         </>
       }
       headerActions={
-        <HStack align="center" gap={4}>
+        /*
+          One row, one gap: the icons from the prompt-library toggle to the
+          preview toggle are one run, so no cluster boundary is left showing as
+          a wider space.
+        */
+        <HStack align="center" gap={1}>
           <HStack align="center" gap={1}>
             <IconButton
               data-panel-toggle=""
@@ -858,47 +862,44 @@ export function ComposerPane({
           </HStack>
           <HStack align="center" gap={1}>
             {/*
-              The attachment buttons are one group: a single highlighted
-              surface, so which icons belong together is visible at a glance.
-              Each button keeps its own picker and its own direct action.
+              The attachment buttons are plain toolbar icons like their
+              neighbours: no surface sets them apart as a group. Each keeps its
+              own picker and its own direct action, and each appears only while
+              its own attach flag is on.
             */}
-            {isImageAttachEnabled || isFileAttachEnabled ? (
-              <IconGroup label="Attach image or file" tone="blue">
-                {isImageAttachEnabled ? (
-                  <>
-                    <IconButton
-                      label="Attach image"
-                      isDisabled={isDisabled}
-                      icon={<Icon icon="upload" size="sm" />}
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openImagePickerRef.current?.()}
-                    />
-                    <ImageAttachmentPicker
-                      accept={appConfig.attach_image_accept}
-                      onFiles={files => void attachments.add(files)}
-                      openRef={openImagePickerRef}
-                    />
-                  </>
-                ) : null}
-                {isFileAttachEnabled ? (
-                  <>
-                    <IconButton
-                      label="Attach file"
-                      isDisabled={isDisabled}
-                      icon={<Icon icon={FileIcon} size="sm" />}
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openFilePickerRef.current?.()}
-                    />
-                    <FileAttachmentPicker
-                      accept={appConfig.attach_file_accept}
-                      onFiles={files => void fileAttachments.add(files)}
-                      openRef={openFilePickerRef}
-                    />
-                  </>
-                ) : null}
-              </IconGroup>
+            {isImageAttachEnabled ? (
+              <>
+                <IconButton
+                  label="Attach image"
+                  isDisabled={isDisabled}
+                  icon={<Icon icon="upload" size="sm" />}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openImagePickerRef.current?.()}
+                />
+                <ImageAttachmentPicker
+                  accept={appConfig.attach_image_accept}
+                  onFiles={files => void attachments.add(files)}
+                  openRef={openImagePickerRef}
+                />
+              </>
+            ) : null}
+            {isFileAttachEnabled ? (
+              <>
+                <IconButton
+                  label="Attach file"
+                  isDisabled={isDisabled}
+                  icon={<Icon icon={FileIcon} size="sm" />}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openFilePickerRef.current?.()}
+                />
+                <FileAttachmentPicker
+                  accept={appConfig.attach_file_accept}
+                  onFiles={files => void fileAttachments.add(files)}
+                  openRef={openFilePickerRef}
+                />
+              </>
             ) : null}
             {isPreviewEnabled ? (
               <IconButton
