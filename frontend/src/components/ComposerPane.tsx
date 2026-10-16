@@ -99,8 +99,13 @@ type ComposerPaneProps = {
   /** Reports a `/` library item that could not be loaded. */
   onSlashError?: (message: string) => void;
   drawer?: ReactNode;
-  /** Content actions (attach, usage, compact), placed in the bottom action bar. */
+  /** Content actions (model, usage, state context), placed at the start of the header row. */
   toolbarActions?: ReactNode;
+  /**
+   * Row controls placed with the run inspector at the end of the header row, where
+   * the row is right-aligned: the conversation actions and the compaction control.
+   */
+  headerContextActions?: ReactNode;
   /** Informational text shown after the actions (shortcuts hint, compaction feedback). */
   footerNote?: ReactNode;
   status?: ComponentProps<typeof ChatComposer>['status'];
@@ -437,6 +442,7 @@ export function ComposerPane({
   onSlashError,
   drawer,
   toolbarActions,
+  headerContextActions,
   footerNote,
   status,
 }: ComposerPaneProps) {
@@ -908,14 +914,17 @@ export function ComposerPane({
         </HStack>
       }
       headerContext={
-        <IconButton
-          data-panel-toggle=""
-          label={showInspector ? 'Hide run inspector' : 'Show run inspector'}
-          icon={<Icon icon="viewColumns" size="sm" />}
-          variant={showInspector ? 'secondary' : 'ghost'}
-          size="sm"
-          onClick={onToggleInspector}
-        />
+        <HStack align="center" gap={1}>
+          {headerContextActions}
+          <IconButton
+            data-panel-toggle=""
+            label={showInspector ? 'Hide run inspector' : 'Show run inspector'}
+            icon={<Icon icon="viewColumns" size="sm" />}
+            variant={showInspector ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={onToggleInspector}
+          />
+        </HStack>
       }
       footerActions={footerNote}
       status={status}

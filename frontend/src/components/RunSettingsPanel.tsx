@@ -151,10 +151,6 @@ export function RunSettingsPanel({
             }
           />
           <ListItem
-            label="Attach context"
-            endContent={<Value>{onOff(appConfig.attach_context_enabled)}</Value>}
-          />
-          <ListItem
             label="Preserve line breaks"
             endContent={<Value>{onOff(appConfig.preserve_line_breaks)}</Value>}
           />

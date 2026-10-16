@@ -5,12 +5,11 @@ import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {useToast} from '@astryxdesign/core/Toast';
 import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
-import {type ChangeEvent, Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {type ActivityNotification, type NewActivityNotification, hasUnreadActivityError, isRunOutcomeUnknown, markActivityNotificationsRead, prependActivityNotification, runOutcomeUnknownNotification, unreadActivityNotificationCount} from './activity-notifications';
 import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, frontCompactSessionFromMessage, resetSession, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';
 import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
 import {interactionFailureTitle} from './approval-answer';
-import {readAttachmentBlocks} from './attachment-reading';
 import {createCoalescedRefresh} from './coalesced-refresh';
 import {type ColorScheme} from './color-scheme';
 import {FrontCompactionIcon, ResetChatIcon, StateContextIcon} from './components/AppIcons';
@@ -467,23 +466,6 @@ function App({
   useEffect(() => {
     setQuoteTarget(null);
   }, [activeViewKey]);
-  // "Attach context" reads the chosen files in the browser and hands their text
-  // to the composer through the same registered insert the prompt library uses,
-  // so no draft state has to move back up into App.
-  const attachInputRef = useRef<HTMLInputElement | null>(null);
-  const handleAttachFiles = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = '';
-    if (files.length === 0) {
-      return;
-    }
-    const blocks = await readAttachmentBlocks(
-      files,
-      appConfig.attach_context_max_chars_per_file,
-      appConfig.attach_context_read_concurrency,
-    );
-    insertIntoComposerRef.current?.text(blocks.join('\n\n'));
-  }, []);
   const runAbortRefs = useRef(new Map<string, AbortController>());
   const stopPendingViewKeysRef = useRef(new Set<string>());
   /** Interaction work is keyed by view so another profile can answer independently. */
@@ -2845,6 +2827,53 @@ function App({
           />
         )
       }
+      headerContextActions={
+        !isReadmeShown && isLiveSession && activeSession.sessionRef ? (
+          <>
+            {/*
+             * The two destructive actions share one trigger, and the row's right
+             * end holds the compaction control first, then that trigger, then the
+             * run inspector. The trigger wears the warning glyph — the icon set
+             * ships no delete/trash icon — and each action still asks for
+             * confirmation in the composer drawer.
+             */}
+            <IconButton
+              label={isActiveSessionCompacting ? 'Compacting conversation history' : 'Compact conversation history'}
+              icon={<Icon icon="arrowsUpDown" size="sm" />}
+              variant="ghost"
+              size="sm"
+              isDisabled={
+                isRunning ||
+                isCompactionInProgress ||
+                resettingViewKey !== null ||
+                frontCompactingViewKey !== null
+              }
+              onClick={() => void compactActiveSession()}
+            />
+            <IconButton
+              label="Conversation actions"
+              tooltip="Reset this conversation or delete a run"
+              icon={<Icon icon="warning" size="sm" />}
+              variant={
+                isComposerActionsDrawerOpen ||
+                isResetDrawerOpen ||
+                isFrontCompactionWorkflowOpen
+                  ? 'secondary'
+                  : 'ghost'
+              }
+              size="sm"
+              onClick={() => {
+                setFrontCompactionError(null);
+                setResetError(null);
+                setStateContextViewKey(null);
+                setComposerActionsViewKey(current =>
+                  current === activeViewKey ? null : activeViewKey,
+                );
+              }}
+            />
+          </>
+        ) : undefined
+      }
       toolbarActions={isReadmeShown ? undefined : (
         <HStack align="center" gap={1}>
           {activeRowSession.models && activeRowSession.models.length > 0 ? (
@@ -2862,25 +2891,6 @@ function App({
               onSelect={model => { void selectSessionModel(model); }}
             />
           ) : null}
-          {appConfig.attach_context_enabled ? (
-            <>
-              <IconButton
-                label="Attach context"
-                icon={<Icon icon="copy" size="sm" />}
-                variant="ghost"
-                size="sm"
-                onClick={() => attachInputRef.current?.click()}
-              />
-              <input
-                ref={attachInputRef}
-                type="file"
-                multiple
-                accept={appConfig.attach_context_accept}
-                onChange={handleAttachFiles}
-                hidden
-              />
-            </>
-          ) : null}
           <IconButton
             label={isUsageDrawerCollapsed ? 'Show usage details' : 'Hide usage details'}
             icon={<Icon icon="info" size="sm" />}
@@ -2891,21 +2901,6 @@ function App({
               setIsUsageDrawerCollapsed(collapsed => !collapsed);
             }}
           />
-          {isLiveSession && activeSession.sessionRef && (
-            <IconButton
-              label={isActiveSessionCompacting ? 'Compacting conversation history' : 'Compact conversation history'}
-              icon={<Icon icon="arrowsUpDown" size="sm" />}
-              variant="ghost"
-              size="sm"
-              isDisabled={
-                isRunning ||
-                isCompactionInProgress ||
-                resettingViewKey !== null ||
-                frontCompactingViewKey !== null
-              }
-              onClick={() => void compactActiveSession()}
-            />
-          )}
           {isLiveSession && activeSession.sessionRef && (
             <IconButton
               label="State context"
@@ -2923,34 +2918,6 @@ function App({
                 setFrontCompactionModeViewKey(null);
                 setFrontCompactionError(null);
                 setStateContextViewKey(current =>
-                  current === activeViewKey ? null : activeViewKey,
-                );
-              }}
-            />
-          )}
-          {isLiveSession && activeSession.sessionRef && (
-            /*
-             * The two destructive actions share one trigger, last in the row.
-             * Neither is a stray click away from the compact button any more,
-             * and each still asks for confirmation in the composer drawer.
-             */
-            <IconButton
-              label="Conversation actions"
-              tooltip="Reset this conversation or delete a run"
-              icon={<Icon icon="moreHorizontal" size="sm" />}
-              variant={
-                isComposerActionsDrawerOpen ||
-                isResetDrawerOpen ||
-                isFrontCompactionWorkflowOpen
-                  ? 'secondary'
-                  : 'ghost'
-              }
-              size="sm"
-              onClick={() => {
-                setFrontCompactionError(null);
-                setResetError(null);
-                setStateContextViewKey(null);
-                setComposerActionsViewKey(current =>
                   current === activeViewKey ? null : activeViewKey,
                 );
               }}
