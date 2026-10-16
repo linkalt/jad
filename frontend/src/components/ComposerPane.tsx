@@ -22,6 +22,7 @@ import {
   useImageAttachments,
 } from './ImageAttachments';
 import {FileAttachmentPicker, FileIcon} from './FileAttachments';
+import {IconGroup} from './IconGroup';
 import {readCaretEdges} from './composerCaret';
 import {IDLE_HISTORY, stepHistory, type HistoryCursor} from '../input-history';
 import {fetchRootLibrary, fetchRootLibraryAsset, fetchSessionFiles} from '../api';
@@ -850,39 +851,48 @@ export function ComposerPane({
             {toolbarActions}
           </HStack>
           <HStack align="center" gap={1}>
-            {isImageAttachEnabled ? (
-              <>
-                <IconButton
-                  label="Attach image"
-                  isDisabled={isDisabled}
-                  icon={<Icon icon="upload" size="sm" />}
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openImagePickerRef.current?.()}
-                />
-                <ImageAttachmentPicker
-                  accept={appConfig.attach_image_accept}
-                  onFiles={files => void attachments.add(files)}
-                  openRef={openImagePickerRef}
-                />
-              </>
-            ) : null}
-            {isFileAttachEnabled ? (
-              <>
-                <IconButton
-                  label="Attach file"
-                  isDisabled={isDisabled}
-                  icon={<Icon icon={FileIcon} size="sm" />}
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openFilePickerRef.current?.()}
-                />
-                <FileAttachmentPicker
-                  accept={appConfig.attach_file_accept}
-                  onFiles={files => void fileAttachments.add(files)}
-                  openRef={openFilePickerRef}
-                />
-              </>
+            {/*
+              The attachment buttons are one group: a single highlighted
+              surface, so which icons belong together is visible at a glance.
+              Each button keeps its own picker and its own direct action.
+            */}
+            {isImageAttachEnabled || isFileAttachEnabled ? (
+              <IconGroup label="Attach image or file" tone="blue">
+                {isImageAttachEnabled ? (
+                  <>
+                    <IconButton
+                      label="Attach image"
+                      isDisabled={isDisabled}
+                      icon={<Icon icon="upload" size="sm" />}
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openImagePickerRef.current?.()}
+                    />
+                    <ImageAttachmentPicker
+                      accept={appConfig.attach_image_accept}
+                      onFiles={files => void attachments.add(files)}
+                      openRef={openImagePickerRef}
+                    />
+                  </>
+                ) : null}
+                {isFileAttachEnabled ? (
+                  <>
+                    <IconButton
+                      label="Attach file"
+                      isDisabled={isDisabled}
+                      icon={<Icon icon={FileIcon} size="sm" />}
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openFilePickerRef.current?.()}
+                    />
+                    <FileAttachmentPicker
+                      accept={appConfig.attach_file_accept}
+                      onFiles={files => void fileAttachments.add(files)}
+                      openRef={openFilePickerRef}
+                    />
+                  </>
+                ) : null}
+              </IconGroup>
             ) : null}
             {isPreviewEnabled ? (
               <IconButton
