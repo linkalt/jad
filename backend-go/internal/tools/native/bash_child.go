@@ -10,6 +10,7 @@ import (
 )
 
 const (
+	// Used when a request leaves killDeadline or drainAfterExit at zero (glob).
 	bashDrainAfterExit = 500 * time.Millisecond
 	bashKillDeadline   = 2 * time.Second
 	bashReadChunkSize  = 32 * 1024
@@ -28,12 +29,16 @@ type bashSpillSink interface {
 }
 
 type bashChildRequest struct {
-	file                     string
-	args                     []string
-	cwd                      string
-	environment              []string
-	timeout                  time.Duration
-	killGrace                time.Duration
+	file        string
+	args        []string
+	cwd         string
+	environment []string
+	timeout     time.Duration
+	killGrace   time.Duration
+	// killDeadline is how long a call waits for the child after SIGKILL; drainAfterExit is
+	// how long the output pipes may stay open after the child exited. Zero takes the default.
+	killDeadline             time.Duration
+	drainAfterExit           time.Duration
 	killProcessGroupWhenDone bool
 	collector                *bashOutputCollector
 	spill                    map[bashStream]bashSpillSink
@@ -64,6 +69,12 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if request.killDeadline <= 0 {
+		request.killDeadline = bashKillDeadline
+	}
+	if request.drainAfterExit <= 0 {
+		request.drainAfterExit = bashDrainAfterExit
 	}
 	if ctx.Err() != nil {
 		result.aborted = true
@@ -172,7 +183,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 
 	startDrain := func() {
 		if !readersFinished && drainTimer == nil {
-			drainTimer = time.NewTimer(bashDrainAfterExit)
+			drainTimer = time.NewTimer(request.drainAfterExit)
 			drainChannel = drainTimer.C
 		}
 	}
@@ -219,7 +230,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 			graceChannel = nil
 			result.termination = "sigkill"
 			signalProcessGroup(command, true)
-			killTimer = time.NewTimer(bashKillDeadline)
+			killTimer = time.NewTimer(request.killDeadline)
 			killChannel = killTimer.C
 		case <-killChannel:
 			killChannel = nil

@@ -13,6 +13,10 @@ const (
 	defaultNativeBashMaxTimeoutMs    int64 = 600_000
 	defaultNativeBashKillGraceMs     int64 = 2_000
 	maxNativeBashKillGraceMs         int64 = 60_000
+	defaultNativeBashKillDeadlineMs  int64 = 2_000
+	maxNativeBashKillDeadlineMs      int64 = 60_000
+	defaultNativeBashDrainAfterExit  int64 = 500
+	maxNativeBashDrainAfterExitMs    int64 = 60_000
 	defaultNativeBashMaxBytes        int64 = 64 * 1024
 	defaultNativeBashStdoutHead      int64 = 16 * 1024
 	defaultNativeBashStdoutTail      int64 = 32 * 1024
@@ -70,12 +74,17 @@ type NativeBashSpillSettings struct {
 type NativeBashSettings struct {
 	Policy NativePathPolicy
 	// Approval is "off" (default) or "ask".
-	Approval         string
-	Shell            string
-	LoginShell       bool
-	TimeoutMs        int64
-	MaxTimeoutMs     int64
-	KillGraceMs      int64
+	Approval     string
+	Shell        string
+	LoginShell   bool
+	TimeoutMs    int64
+	MaxTimeoutMs int64
+	KillGraceMs  int64
+	// KillDeadlineMs is how long a call waits for the child after SIGKILL before it reports
+	// the child as left running. DrainAfterExitMs is how long the output pipes may stay open
+	// after the child exited (a descendant still holding them) before the output is cut.
+	KillDeadlineMs   int64
+	DrainAfterExitMs int64
 	KillProcessGroup string
 	MaxBytes         int64
 	Stdout           NativeBashStreamBudget
@@ -92,7 +101,7 @@ type NativeBashSettings struct {
 
 // nativeBashStyleKeys are the settings of a tool that runs a child process. native.bash and
 // native.exec each take them under their own name; neither reads the other's values.
-var nativeBashStyleKeys = []string{"shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_process_group", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "paths", "approval"}
+var nativeBashStyleKeys = []string{"shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_deadline_ms", "drain_after_exit_ms", "kill_process_group", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "paths", "approval"}
 
 func normalizeNativeBashSettings(
 	setting map[string]json.RawMessage,
@@ -167,6 +176,12 @@ func normalizeBashStyleFields(
 		return nil, configError("%s: %s.max_timeout_ms must be greater than or equal to %s.timeout_ms", settingPath, section, section)
 	}
 	if settings.KillGraceMs, err = configuredInteger(fields, "kill_grace_ms", defaultNativeBashKillGraceMs, 0, maxNativeBashKillGraceMs, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.KillDeadlineMs, err = configuredInteger(fields, "kill_deadline_ms", defaultNativeBashKillDeadlineMs, 1, maxNativeBashKillDeadlineMs, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.DrainAfterExitMs, err = configuredInteger(fields, "drain_after_exit_ms", defaultNativeBashDrainAfterExit, 1, maxNativeBashDrainAfterExitMs, settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.KillProcessGroup, err = normalizeKillProcessGroup(fields, section, settingPath); err != nil {

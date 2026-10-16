@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	interactionbroker "jad/backend-go/internal/interactions"
@@ -210,6 +211,9 @@ type runRegistry struct {
 	maxQueue  int
 	// maxRuns is the most runs that may be running at once; 0 means no cap.
 	maxRuns int
+	// running counts the runs whose status is "running": begin adds one under mu, finish
+	// removes one when the run leaves that state, so the cap check never scans retained runs.
+	running atomic.Int64
 	closed  bool
 }
 
@@ -222,27 +226,13 @@ func newRunRegistry(retention time.Duration, maxBufferedBytes, maxRuns int) *run
 	}
 }
 
-// runningLocked counts the runs still going. The caller holds r.mu; run.state takes
-// the run's own lock after it, the order SessionRuns uses.
-func (r *runRegistry) runningLocked() int {
-	count := 0
-	for _, entries := range r.runs {
-		for _, run := range entries {
-			if run.state() == "running" {
-				count++
-			}
-		}
-	}
-	return count
-}
-
 func (r *runRegistry) begin(key, turnID string) (*activeRun, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
 		return nil, errors.New("run registry is closed")
 	}
-	if r.maxRuns > 0 && r.runningLocked() >= r.maxRuns {
+	if r.maxRuns > 0 && r.running.Load() >= int64(r.maxRuns) {
 		return nil, &StatusError{
 			Code:              http.StatusTooManyRequests,
 			Message:           fmt.Sprintf("the server is already running %d runs (server.max_concurrent_runs); try again shortly", r.maxRuns),
@@ -263,6 +253,7 @@ func (r *runRegistry) begin(key, turnID string) (*activeRun, error) {
 	}
 	run.interactions = interactionbroker.NewBroker(run.setPendingInteraction)
 	r.runs[key] = append(r.runs[key], run)
+	r.running.Add(1)
 	return run, nil
 }
 
@@ -648,6 +639,7 @@ func (r *activeRun) finish(status string, terminal []streamEvent) {
 		return
 	}
 	r.status = status
+	r.registry.running.Add(-1)
 	r.providerRetry = nil
 	r.finishedAt = time.Now()
 	r.terminal = append([]streamEvent(nil), terminal...)

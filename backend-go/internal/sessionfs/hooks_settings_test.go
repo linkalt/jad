@@ -15,21 +15,21 @@ import (
 func defaultHooksWant() HooksSettings {
 	return HooksSettings{
 		TimeoutMS: 60_000, MaxOutputBytes: 8192, MaxPayloadBytes: 65_536,
-		KillGraceMs: 2000, KillProcessGroup: "always", MaxLineChars: 2000, StripANSI: true,
+		KillGraceMs: 2000, KillDeadlineMs: 2000, DrainAfterExitMs: 500, KillProcessGroup: "always", MaxLineChars: 2000, StripANSI: true,
 		Env: map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}, EnvDeny: []string{},
 	}
 }
 
 func TestHooksTakeTheirOwnChildProcessKeys(t *testing.T) {
 	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
-		"enabled": true, "kill_grace_ms": 500, "kill_process_group": "timeout_only", "max_line_chars": 120, "strip_ansi": false,
+		"enabled": true, "kill_grace_ms": 500, "kill_deadline_ms": 900, "drain_after_exit_ms": 70, "kill_process_group": "timeout_only", "max_line_chars": 120, "strip_ansi": false,
 		"env": map[string]any{"CHECK_MODE": "strict", "NO_COLOR": "0"}, "env_deny": []any{"SECRET_A"},
 	}})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
 	h := config.Hooks
-	if h.KillGraceMs != 500 || h.KillProcessGroup != "timeout_only" || h.MaxLineChars != 120 || h.StripANSI {
+	if h.KillGraceMs != 500 || h.KillDeadlineMs != 900 || h.DrainAfterExitMs != 70 || h.KillProcessGroup != "timeout_only" || h.MaxLineChars != 120 || h.StripANSI {
 		t.Fatalf("child keys = %+v", h)
 	}
 	if h.Env["CHECK_MODE"] != "strict" || h.Env["NO_COLOR"] != "0" || h.Env["GIT_TERMINAL_PROMPT"] != "0" || !reflect.DeepEqual(h.EnvDeny, []string{"SECRET_A"}) {
@@ -156,6 +156,8 @@ func TestHooksRejectBadValuesWithTheKeyInTheMessage(t *testing.T) {
 		{"output low", map[string]any{"max_output_bytes": 255}, "hooks.max_output_bytes must be a safe integer between 256 and 1048576"},
 		{"output null", map[string]any{"max_output_bytes": nil}, "hooks.max_output_bytes must be a safe integer"},
 		{"kill grace high", map[string]any{"kill_grace_ms": 60001}, "hooks.kill_grace_ms must be a safe integer between 0 and 60000"},
+		{"kill deadline zero", map[string]any{"kill_deadline_ms": 0}, "hooks.kill_deadline_ms must be a safe integer between 1 and 60000"},
+		{"drain high", map[string]any{"drain_after_exit_ms": 60001}, "hooks.drain_after_exit_ms must be a safe integer between 1 and 60000"},
 		{"kill group word", map[string]any{"kill_process_group": "never"}, "hooks.kill_process_group must be always or timeout_only"},
 		{"line chars low", map[string]any{"max_line_chars": 19}, "hooks.max_line_chars must be a safe integer between 20 and 8000"},
 		{"strip ansi string", map[string]any{"strip_ansi": "yes"}, "hooks.strip_ansi must be a boolean"},

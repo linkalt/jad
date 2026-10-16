@@ -1226,6 +1226,19 @@ export interface StreamSessionRunOptions {
    * `run_stream_stall_timeout_ms`.
    */
   stallTimeoutMs?: number;
+  /**
+   * The run stream dropped and the client is trying to restore it. Called with the
+   * state before each attempt (`offline` while it waits for the network to return) and
+   * with `undefined` once the stream is back or the reconnect has ended.
+   */
+  onReconnecting?: (state: RunStreamReconnectState | undefined) => void;
+}
+
+export interface RunStreamReconnectState {
+  /** Reconnect attempts made so far; 0 before the first. */
+  attempt: number;
+  /** The browser reports no network; the next attempt waits for it to return. */
+  offline: boolean;
 }
 
 export interface StreamSessionRunResult {
@@ -1454,6 +1467,49 @@ function waitForRunStreamReconnect(delayMs: number, signal?: AbortSignal): Promi
   });
 }
 
+function browserIsOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
+/**
+ * Resolves when the browser reports a network again, or after `recheckMs` so a browser
+ * that wrongly reports offline (a "work offline" switch, some VPN adapters) cannot park
+ * the run forever; rejects when the caller aborts.
+ */
+function waitForBrowserOnline(recheckMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = (): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      globalThis.removeEventListener?.('online', onOnline);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const onOnline = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onAbort = (): void => {
+      cleanup();
+      reject(new Error('the run stream was aborted'));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    if (!browserIsOffline()) {
+      resolve();
+      return;
+    }
+    globalThis.addEventListener?.('online', onOnline);
+    signal?.addEventListener('abort', onAbort, {once: true});
+    if (Number.isFinite(recheckMs) && recheckMs > 0) {
+      timer = setTimeout(onOnline, recheckMs);
+    }
+  });
+}
+
 async function fetchRunStreamResponse(
   path: string,
   init: RequestInit,
@@ -1541,6 +1597,19 @@ async function reconnectRunStream(
   previous: StreamSessionRunResult,
   initialError?: Error,
 ): Promise<StreamSessionRunResult> {
+  try {
+    return await runStreamReconnectLoop(sessionRef, options, previous, initialError);
+  } finally {
+    options.onReconnecting?.(undefined);
+  }
+}
+
+async function runStreamReconnectLoop(
+  sessionRef: string,
+  options: StreamSessionRunOptions,
+  previous: StreamSessionRunResult,
+  initialError?: Error,
+): Promise<StreamSessionRunResult> {
   let result = previous;
   let lastConnectionError = initialError;
   let attached = previous.attached === true;
@@ -1557,8 +1626,15 @@ async function reconnectRunStream(
   // caller detaches. A bounded batch alone leaves an active run looking stuck
   // after every connection in that batch is interrupted.
   while (attempt < appConfig.run_stream_reconnect_max_attempts || attached) {
+    options.onReconnecting?.({attempt, offline: browserIsOffline()});
     await waitForRunStreamReconnect(reconnectDelayMs(attempt), options.signal);
+    if (browserIsOffline()) {
+      // A dead network only burns attempts; wait for it instead of retrying into it.
+      options.onReconnecting?.({attempt, offline: true});
+      await waitForBrowserOnline(appConfig.run_stream_offline_recheck_ms, options.signal);
+    }
     attempt += 1;
+    options.onReconnecting?.({attempt, offline: false});
     let response: Response;
     try {
       response = await fetchAttachedRunStream(sessionRef, trackedOptions);
@@ -1573,6 +1649,7 @@ async function reconnectRunStream(
       continue;
     }
 
+    options.onReconnecting?.(undefined);
     let consumed: ConsumedRunStream;
     try {
       consumed = await consumeRunStream(response, trackedOptions);

@@ -139,6 +139,8 @@ func runHookChildPassed(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 		environment:              buildNativeBashEnvironment(os.Environ(), sessionfs.NativeBashSettings{Env: hooks.Env, EnvDeny: hooks.EnvDeny}, apiKeyEnv),
 		timeout:                  time.Duration(hooks.TimeoutMS) * time.Millisecond,
 		killGrace:                time.Duration(hooks.KillGraceMs) * time.Millisecond,
+		killDeadline:             time.Duration(hooks.KillDeadlineMs) * time.Millisecond,
+		drainAfterExit:           time.Duration(hooks.DrainAfterExitMs) * time.Millisecond,
 		killProcessGroupWhenDone: hooks.KillProcessGroup == "always",
 		collector:                collector,
 	})

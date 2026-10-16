@@ -32,7 +32,7 @@ const (
 )
 
 var (
-	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "max_payload_bytes", "post_edit", "post_tool", "pre_compact", "pre_tool", "run_end", "run_start", "strip_ansi", "timeout_ms"}
+	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_deadline_ms", "drain_after_exit_ms", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "max_payload_bytes", "post_edit", "post_tool", "pre_compact", "pre_tool", "run_end", "run_start", "strip_ansi", "timeout_ms"}
 	postEditHookKeys   = []string{"argv", "cwd", "ext", "name", "on_failure_only"}
 	toolEventHookKeys  = []string{"argv", "match", "name", "on_failure_only"}
 	preToolHookKeys    = []string{"argv", "blocking", "match", "name", "on_failure_only"}
@@ -69,6 +69,8 @@ type HooksSettings struct {
 	// The child-process settings of a check. They are the hooks' own: nothing is read from
 	// tools.native.bash. Env and EnvDeny shape the environment on top of the shared allowlist.
 	KillGraceMs      int64
+	KillDeadlineMs   int64
+	DrainAfterExitMs int64
 	KillProcessGroup string
 	MaxLineChars     int64
 	StripANSI        bool
@@ -226,6 +228,12 @@ func normalizeHooksChild(settings *HooksSettings, fields map[string]json.RawMess
 	const section = "hooks"
 	var err error
 	if settings.KillGraceMs, err = configuredInteger(fields, "kill_grace_ms", defaultNativeBashKillGraceMs, 0, maxNativeBashKillGraceMs, settingPath, section); err != nil {
+		return err
+	}
+	if settings.KillDeadlineMs, err = configuredInteger(fields, "kill_deadline_ms", defaultNativeBashKillDeadlineMs, 1, maxNativeBashKillDeadlineMs, settingPath, section); err != nil {
+		return err
+	}
+	if settings.DrainAfterExitMs, err = configuredInteger(fields, "drain_after_exit_ms", defaultNativeBashDrainAfterExit, 1, maxNativeBashDrainAfterExitMs, settingPath, section); err != nil {
 		return err
 	}
 	if settings.KillProcessGroup, err = normalizeKillProcessGroup(fields, section, settingPath); err != nil {

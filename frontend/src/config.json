@@ -11,6 +11,7 @@
   "run_stream_reconnect_max_delay_ms": 2000,
   "run_stream_reconnect_max_attempts": 8,
   "run_stream_stall_timeout_ms": 20000,
+  "run_stream_offline_recheck_ms": 15000,
   "dev_api_proxy_target": "http://127.0.0.1:8787",
   "browser_targets": {
     "chrome_major": 123,

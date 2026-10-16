@@ -74,7 +74,7 @@ resolve cwd (path policy, must be an existing directory)
 * **The ladder always ends.** SIGKILL cannot be caught, but a process blocked in uninterruptible I/O does
   not act on it either; a kill deadline (2 s after SIGKILL) therefore resolves the call regardless of
   whether the process was reaped, reporting `left_running: true` so the model knows the process is still
-  owned by the operating system. A call can wait at most `timeout_ms + kill_grace_ms + 2 s + 0.5 s`.
+  owned by the operating system. A call can wait at most `timeout_ms + kill_grace_ms + kill_deadline_ms + drain_after_exit_ms` (2 s and 0.5 s by default).
 * **Group cleanup on completion** (`kill_process_group: "always"`, recommended): when the shell exits, its
   remaining descendants are signalled, so `nohup server &` cannot leave stray processes behind.
   Signalling happens on the child's `exit` event, before the child is reaped, and `ESRCH` is ignored, so a
@@ -155,7 +155,8 @@ hint: the complete output is in .bash-output/bash-c1.stdout.log; read or grep it
 | Wall clock | `timeout_ms` | 120000 | Bounds the only blocking resource a command can hold. |
 | Per-call ceiling | `max_timeout_ms` | 600000 | Upper clamp for the `timeout_ms` argument. |
 | Kill grace | `kill_grace_ms` | 2000 | Time between SIGTERM and SIGKILL of the process group. |
-| Kill deadline | (fixed) | 2000 | Time after SIGKILL before the call returns anyway, reporting `left_running`. |
+| Kill deadline | `kill_deadline_ms` | 2000 | Time after SIGKILL before the call returns anyway, reporting `left_running`. |
+| Drain after exit | `drain_after_exit_ms` | 500 | Time the output pipes may stay open after the shell exited (a descendant holds them) before the output is cut. |
 | Returned bytes | `max_bytes` | 65536 | Ceiling the four stream budgets must fit inside. |
 | stdout window | `stdout.head_bytes` / `stdout.tail_bytes` | 16384 / 32768 | What the model sees of stdout: its start and its end. |
 | stderr window | `stderr.head_bytes` / `stderr.tail_bytes` | 4096 / 12288 | Same for stderr, which noise from stdout can no longer evict. |

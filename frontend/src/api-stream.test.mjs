@@ -56,6 +56,15 @@ function slowStream(events, gapMs) {
   }), {headers: {'Content-Type': 'text/event-stream'}});
 }
 
+/** Polls until `check()` is true, failing after `limitMs` instead of racing a fixed sleep. */
+async function waitUntil(check, limitMs = 2000) {
+  const deadline = Date.now() + limitMs;
+  while (!check()) {
+    assert.ok(Date.now() < deadline, 'condition not reached in time');
+    await new Promise(resolve => setTimeout(resolve, 2));
+  }
+}
+
 function message(status, text) {
   return {
     id: 'turn-1',
@@ -264,6 +273,165 @@ test('keeps reconnecting after the configured batch when the run is known active
     assert.equal(result.message?.text, 'the complete response');
   } finally {
     appConfig.run_stream_reconnect_max_attempts = originalConfig.attempts;
+    appConfig.run_stream_reconnect_base_delay_ms = originalConfig.baseDelay;
+    appConfig.run_stream_reconnect_max_delay_ms = originalConfig.maxDelay;
+  }
+});
+
+test('reports each reconnect attempt and clears the state once the stream is back', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const originalConfig = {
+    baseDelay: appConfig.run_stream_reconnect_base_delay_ms,
+    maxDelay: appConfig.run_stream_reconnect_max_delay_ms,
+  };
+  appConfig.run_stream_reconnect_base_delay_ms = 0;
+  appConfig.run_stream_reconnect_max_delay_ms = 0;
+  const runningRun = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  responses.push(
+    stalledStream([{event: 'run', data: runningRun}]),
+    new Response('upstream down', {status: 503}),
+    completedStream(),
+  );
+  const states = [];
+
+  try {
+    const result = await streamSessionRun('session-1', 'hello', {
+      stallTimeoutMs: 5,
+      onReconnecting: state => states.push(state),
+    });
+
+    assert.equal(result.message?.text, 'the complete response');
+    const attempts = states.filter(state => state !== undefined).map(state => state.attempt);
+    assert.ok(attempts.includes(2), 'the second attempt is reported');
+    assert.deepEqual(attempts, [...attempts].sort((left, right) => left - right), 'attempts never go back');
+    assert.ok(states.every(state => state === undefined || state.offline === false));
+    assert.equal(states.at(-1), undefined, 'the notice never outlives the reconnect');
+  } finally {
+    appConfig.run_stream_reconnect_base_delay_ms = originalConfig.baseDelay;
+    appConfig.run_stream_reconnect_max_delay_ms = originalConfig.maxDelay;
+  }
+});
+
+test('waits for the browser to come back online instead of burning attempts', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const originalConfig = {
+    baseDelay: appConfig.run_stream_reconnect_base_delay_ms,
+    maxDelay: appConfig.run_stream_reconnect_max_delay_ms,
+  };
+  appConfig.run_stream_reconnect_base_delay_ms = 0;
+  appConfig.run_stream_reconnect_max_delay_ms = 0;
+  const runningRun = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  responses.push(
+    stalledStream([{event: 'run', data: runningRun}]),
+    completedStream(),
+  );
+  const states = [];
+  const hadNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  let online = false;
+  Object.defineProperty(globalThis, 'navigator', {configurable: true, value: {get onLine() { return online; }}});
+  const listeners = new Set();
+  const originalAdd = globalThis.addEventListener;
+  const originalRemove = globalThis.removeEventListener;
+  globalThis.addEventListener = (type, listener) => { if (type === 'online') listeners.add(listener); };
+  globalThis.removeEventListener = (type, listener) => { if (type === 'online') listeners.delete(listener); };
+
+  try {
+    const run = streamSessionRun('session-1', 'hello', {
+      stallTimeoutMs: 5,
+      onReconnecting: state => states.push(state),
+    });
+    await waitUntil(() => listeners.size === 1);
+    assert.equal(requests.length, 1, 'no reconnect request is made while offline');
+    assert.deepEqual(states.at(-1), {attempt: 0, offline: true});
+    assert.equal(listeners.size, 1, 'the wait listens for the online event');
+
+    online = true;
+    for (const listener of [...listeners]) listener();
+    const result = await run;
+
+    assert.equal(result.message?.text, 'the complete response');
+    assert.equal(requests.length, 2);
+    assert.equal(listeners.size, 0, 'the online listener is removed');
+  } finally {
+    if (hadNavigator) Object.defineProperty(globalThis, 'navigator', hadNavigator);
+    else delete globalThis.navigator;
+    globalThis.addEventListener = originalAdd;
+    globalThis.removeEventListener = originalRemove;
+    appConfig.run_stream_reconnect_base_delay_ms = originalConfig.baseDelay;
+    appConfig.run_stream_reconnect_max_delay_ms = originalConfig.maxDelay;
+  }
+});
+
+test('a browser that keeps reporting offline is retried after the recheck interval', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const originalConfig = {
+    baseDelay: appConfig.run_stream_reconnect_base_delay_ms,
+    maxDelay: appConfig.run_stream_reconnect_max_delay_ms,
+    recheck: appConfig.run_stream_offline_recheck_ms,
+  };
+  appConfig.run_stream_reconnect_base_delay_ms = 0;
+  appConfig.run_stream_reconnect_max_delay_ms = 0;
+  appConfig.run_stream_offline_recheck_ms = 20;
+  const runningRun = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  responses.push(stalledStream([{event: 'run', data: runningRun}]), completedStream());
+  const hadNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {configurable: true, value: {onLine: false}});
+
+  try {
+    const result = await streamSessionRun('session-1', 'hello', {stallTimeoutMs: 5});
+    assert.equal(result.message?.text, 'the complete response');
+    assert.equal(requests.length, 2, 'the run is retried although the browser never says online');
+  } finally {
+    if (hadNavigator) Object.defineProperty(globalThis, 'navigator', hadNavigator);
+    else delete globalThis.navigator;
+    appConfig.run_stream_reconnect_base_delay_ms = originalConfig.baseDelay;
+    appConfig.run_stream_reconnect_max_delay_ms = originalConfig.maxDelay;
+    appConfig.run_stream_offline_recheck_ms = originalConfig.recheck;
+  }
+});
+
+test('aborting while offline ends the wait and clears the reconnect state', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const originalConfig = {
+    baseDelay: appConfig.run_stream_reconnect_base_delay_ms,
+    maxDelay: appConfig.run_stream_reconnect_max_delay_ms,
+  };
+  appConfig.run_stream_reconnect_base_delay_ms = 0;
+  appConfig.run_stream_reconnect_max_delay_ms = 0;
+  const runningRun = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  responses.push(stalledStream([{event: 'run', data: runningRun}]));
+  const states = [];
+  const hadNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {configurable: true, value: {onLine: false}});
+  const listeners = new Set();
+  const originalAdd = globalThis.addEventListener;
+  const originalRemove = globalThis.removeEventListener;
+  globalThis.addEventListener = (type, listener) => { if (type === 'online') listeners.add(listener); };
+  globalThis.removeEventListener = (type, listener) => { if (type === 'online') listeners.delete(listener); };
+  const controller = new AbortController();
+
+  try {
+    const run = streamSessionRun('session-1', 'hello', {
+      stallTimeoutMs: 5,
+      signal: controller.signal,
+      onReconnecting: state => states.push(state),
+    });
+    const settled = run.then(() => 'resolved', () => 'rejected');
+    await waitUntil(() => listeners.size === 1);
+    controller.abort();
+
+    assert.equal(await settled, 'rejected');
+    assert.equal(listeners.size, 0, 'abort removes the online listener');
+    assert.equal(states.at(-1), undefined);
+  } finally {
+    if (hadNavigator) Object.defineProperty(globalThis, 'navigator', hadNavigator);
+    else delete globalThis.navigator;
+    globalThis.addEventListener = originalAdd;
+    globalThis.removeEventListener = originalRemove;
     appConfig.run_stream_reconnect_base_delay_ms = originalConfig.baseDelay;
     appConfig.run_stream_reconnect_max_delay_ms = originalConfig.maxDelay;
   }

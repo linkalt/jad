@@ -216,6 +216,20 @@
           "default": 600000,
           "description": "Upper clamp for the per-call timeout_ms argument."
         },
+        "kill_deadline_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000,
+          "default": 2000,
+          "description": "How long a call waits for the child after SIGKILL before it reports the child as left running."
+        },
+        "drain_after_exit_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000,
+          "default": 500,
+          "description": "How long the output pipes may stay open after the child exited, because a descendant still holds them, before the output is cut."
+        },
         "kill_process_group": {
           "type": "string",
           "enum": [
@@ -562,6 +576,8 @@
         "enabled": {"type": "boolean", "default": false, "description": "Run the commands in post_edit, pre_tool, post_tool, run_start, run_end and pre_compact."},
         "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000, "default": 60000, "description": "Longest one check may run. A check that is still running is stopped and reported as timed out."},
         "kill_grace_ms": {"$ref": "#/$defs/child_process_style/properties/kill_grace_ms"},
+        "kill_deadline_ms": {"$ref": "#/$defs/bash_style/properties/kill_deadline_ms"},
+        "drain_after_exit_ms": {"$ref": "#/$defs/bash_style/properties/drain_after_exit_ms"},
         "kill_process_group": {"$ref": "#/$defs/bash_style/properties/kill_process_group"},
         "max_line_chars": {"$ref": "#/$defs/child_process_style/properties/max_line_chars"},
         "strip_ansi": {"$ref": "#/$defs/child_process_style/properties/strip_ansi"},

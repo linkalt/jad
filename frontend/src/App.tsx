@@ -64,6 +64,7 @@ import {
   updateSessionProfileModelDefault,
   stopSessionRun,
   streamSessionRun,
+  type RunStreamReconnectState,
   type SessionPage,
   type SessionRunFailure,
   type SessionSnapshot,
@@ -200,6 +201,7 @@ import {
 } from './session-views';
 import {runFailureText} from './run-failures';
 import {ProviderRetryNotice} from './components/ProviderRetryNotice';
+import {RunReconnectNotice} from './components/RunReconnectNotice';
 import {SessionGroupList} from './components/SessionGroupList';
 import {interactionEndNotice, type InteractionEnd} from './interaction-end';
 import type {ProviderRetryWait} from './provider-retry-view';
@@ -2681,6 +2683,9 @@ function App({
   // The provider retry each view's run is waiting on; absent when it is not waiting.
   const [runRetriesByView, setRunRetriesByView] =
     useState<Record<string, RunRetryState>>({});
+  // The reconnect each view's run stream is in; absent while the stream is up.
+  const [runReconnectsByView, setRunReconnectsByView] =
+    useState<Record<string, RunStreamReconnectState>>({});
   const [interactionUiByView, setInteractionUiByView] =
     useState<Record<string, InteractionUiState>>({});
   const activeInteractionUi = interactionUiByView[activeViewKey];
@@ -2945,10 +2950,20 @@ function App({
     if (activeRunTurnRefs.current.get(viewKey) !== turnId) return;
     recordNotification(hookReportNotification(viewKey, sessionTitle, report));
   }, [recordNotification]);
+  const recordRunReconnect = useCallback((
+    viewKey: string,
+    controller: AbortController,
+    state: RunStreamReconnectState | undefined,
+  ) => {
+    // A stale run's reconnect must not paint a notice over a newer run of the view.
+    if (runAbortRefs.current.get(viewKey) !== controller) return;
+    setRunReconnectsByView(current => updateViewState(current, viewKey, () => state));
+  }, []);
   const clearRunInteraction = useCallback((viewKey: string, turnId?: string) => {
     const activeTurnId = activeRunTurnRefs.current.get(viewKey);
     if (turnId !== undefined && activeTurnId !== undefined && activeTurnId !== turnId) return;
     activeRunTurnRefs.current.delete(viewKey);
+    setRunReconnectsByView(current => updateViewState(current, viewKey, () => undefined));
     // A run that is no longer ours cannot still be waiting on the provider.
     setRunRetriesByView(current => updateViewState(current, viewKey, () => undefined));
     setRunInteractionStatesByView(current => updateViewState(current, viewKey, state =>
@@ -3513,6 +3528,7 @@ function App({
    * compatibility fallback. The question stays on the view where its run waits.
    */
   const activeRunRetry = runRetriesByView[activeViewKey];
+  const activeRunReconnect = runReconnectsByView[activeViewKey];
   const activeRunInteractionState = runInteractionStatesByView[activeViewKey];
   const pendingInteraction = activeRunInteractionState?.received
     ? activeRunInteractionState.pending
@@ -4071,6 +4087,7 @@ function App({
           onHookReport: (turnId, report) =>
             recordHookReport(sessionId, activeRowSession.title, turnId, report),
           onProviderRetry: (turnId, wait) => recordRunRetry(sessionId, turnId, wait),
+          onReconnecting: state => recordRunReconnect(sessionId, controller, state),
           onMessage: message => {
             setStreamingMessageForView(sessionId, message);
             setRunProgressForView(sessionId, 1);
@@ -4221,6 +4238,7 @@ function App({
       recordHookReport,
       recordRunInteraction,
       recordRunRetry,
+      recordRunReconnect,
       clearRunInteraction,
       clearInteractionUiForView,
       setRunProgressForView,
@@ -4270,6 +4288,7 @@ function App({
           recordHookReport(sessionId, sessionTitle, reportTurnId, report),
         onProviderRetry: (pendingTurnId, wait) =>
           recordRunRetry(sessionId, pendingTurnId, wait),
+        onReconnecting: state => recordRunReconnect(sessionId, controller, state),
         onMessage: message => setStreamingMessageForView(sessionId, message),
         onDelta: (messageId, index, append) =>
           applyRunDelta(sessionId, messageId, index, append),
@@ -4363,6 +4382,7 @@ function App({
       recordHookReport,
       recordRunInteraction,
       recordRunRetry,
+      recordRunReconnect,
       recordRunStarted,
       setRunProgressForView,
       setRunRunningForView,
@@ -5513,6 +5533,9 @@ function App({
                             )}
                           </ChatMessageBubble>
                         </ChatMessage>
+                      )}
+                      {isRunning && activeRunReconnect !== undefined && (
+                        <RunReconnectNotice state={activeRunReconnect} />
                       )}
                       {isRunning && activeRunRetry !== undefined && (
                         <ProviderRetryNotice

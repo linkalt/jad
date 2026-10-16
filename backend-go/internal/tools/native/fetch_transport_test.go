@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -257,5 +258,68 @@ func TestPinnedFetchRequesterIsBuiltFromFetchSettings(t *testing.T) {
 		if got := opened.Load(); got != test.opened {
 			t.Fatalf("keep_alive_ms=%d opened %d connections, want %d", test.keepAliveMS, got, test.opened)
 		}
+	}
+}
+
+// rebindingFetchResolver answers each lookup with the next address, the way a
+// hostile DNS server does between two calls.
+type rebindingFetchResolver struct {
+	mu        sync.Mutex
+	addresses []string
+	calls     int
+}
+
+func (r *rebindingFetchResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	address := r.addresses[min(r.calls, len(r.addresses)-1)]
+	r.calls++
+	return []net.IPAddr{{IP: net.ParseIP(address)}}, nil
+}
+
+func TestFetchToolPinsEveryCallAndRedirectHopToItsOwnValidatedAddress(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	resolver := &rebindingFetchResolver{addresses: []string{"93.184.216.34", "93.184.216.35", "93.184.216.36"}}
+	requester := &queuedFetchRequester{responses: []*http.Response{
+		fetchTestResponse(http.StatusOK, "text/plain", "first"),
+		{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{"/next"}}, Body: io.NopCloser(strings.NewReader(""))},
+		fetchTestResponse(http.StatusOK, "text/plain", "second"),
+	}}
+	tool, err := newFetchTool(settings, NewFetchStore(settings.StorageDir), resolver, requester)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeFetchTestTool(t, tool, map[string]any{"url": "https://rebind.example/a"}, "one")
+	executeFetchTestTool(t, tool, map[string]any{"url": "https://rebind.example/b"}, "two")
+	want := []string{"93.184.216.34", "93.184.216.35", "93.184.216.36"}
+	if len(requester.targets) != len(want) {
+		t.Fatalf("requests = %d, want %d", len(requester.targets), len(want))
+	}
+	for index, target := range requester.targets {
+		if got := target.Address.IP.String(); got != want[index] {
+			t.Fatalf("request %d pinned to %s, want the address validated for it (%s)", index, got, want[index])
+		}
+	}
+}
+
+func TestPinnedFetchTransportVerifiesTLSAgainstTheURLHostnameNotTheIP(t *testing.T) {
+	pool := &fetchTransportPool{}
+	t.Cleanup(pool.close)
+	port := "443"
+	seen := map[*http.Transport]bool{}
+	for _, hostname := range []string{"one.example", "two.example"} {
+		target := validatedFetchURL{
+			URL:     &url.URL{Scheme: "https", Host: hostname, Path: "/"},
+			Address: net.IPAddr{IP: net.ParseIP("93.184.216.34")},
+		}
+		key := fetchTransportKey{scheme: "https", host: hostname, port: port, ip: "93.184.216.34"}
+		transport := pool.get(key, time.Minute, 4, func() *http.Transport { return newPinnedFetchTransport(target, port, time.Minute) })
+		if got := transport.TLSClientConfig.ServerName; got != hostname {
+			t.Fatalf("TLS ServerName = %q, want %q", got, hostname)
+		}
+		if seen[transport] {
+			t.Fatalf("hostname %s reused another hostname's transport on the same IP", hostname)
+		}
+		seen[transport] = true
 	}
 }
