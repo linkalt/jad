@@ -24,6 +24,12 @@ export function takeTokenFromFragment(
   return token;
 }
 
+/** The built-in way to ask for the token: the browser's own prompt, when it has one. */
+export function promptForToken(): Promise<string | null> {
+  if (typeof window === 'undefined' || typeof window.prompt !== 'function') return Promise.resolve(null);
+  return Promise.resolve(window.prompt('Enter the backend API token (JAD_API_TOKEN):'));
+}
+
 /* Keep the API secret out of the bundled configuration. A tab takes it from
  * the URL fragment when one is given, otherwise asks for it on the first 401,
  * and holds it only in sessionStorage (and in memory if storage is blocked). */
@@ -31,6 +37,7 @@ export function createAuthenticatedFetch(
   storageKey: string,
   transport: typeof globalThis.fetch = globalThis.fetch,
   fragmentParam?: string,
+  requestToken: () => Promise<string | null> = promptForToken,
 ): typeof globalThis.fetch {
   let tokenPrompt: Promise<string | null> | undefined;
   let heldToken: string | null = null;
@@ -62,9 +69,7 @@ export function createAuthenticatedFetch(
     });
   }
   const askForToken = async (): Promise<string | null> => {
-    if (typeof window === 'undefined' || typeof window.prompt !== 'function') return null;
-    tokenPrompt ??= Promise.resolve().then(() => window.prompt('Enter the backend API token (JAD_API_TOKEN):'))
-      .finally(() => { tokenPrompt = undefined; });
+    tokenPrompt ??= Promise.resolve().then(requestToken).finally(() => { tokenPrompt = undefined; });
     return tokenPrompt;
   };
 

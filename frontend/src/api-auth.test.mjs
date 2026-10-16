@@ -227,3 +227,50 @@ test('a fragment added to an already loaded page is taken on hashchange', async 
     }
   }
 });
+
+function stubStorage(entries) {
+  const previous = globalThis.sessionStorage;
+  globalThis.sessionStorage = memoryStorage(entries);
+  return () => {
+    if (previous === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = previous;
+  };
+}
+
+test('an injected token requester replaces window.prompt and its token is sent on the retry', async () => {
+  const previousWindow = globalThis.window;
+  const restore = stubStorage(new Map());
+  let prompts = 0;
+  globalThis.window = {prompt: () => { prompts += 1; return 'from-prompt'; }};
+  try {
+    const sent = [];
+    const request = createAuthenticatedFetch('api-secret', async (_url, init) => {
+      const header = new Headers(init.headers).get('Authorization');
+      sent.push(header);
+      return new Response(null, {status: header === 'Bearer typed' ? 200 : 401});
+    }, undefined, async () => 'typed');
+    assert.equal((await request('/api/sessions')).status, 200);
+    assert.deepEqual(sent, [null, 'Bearer typed']);
+    assert.equal(prompts, 0);
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    restore();
+  }
+});
+
+test('an injected requester that returns null leaves the 401, and concurrent 401s ask once', async () => {
+  const restore = stubStorage(new Map());
+  try {
+    let asked = 0;
+    const request = createAuthenticatedFetch('api-secret', async () => new Response(null, {status: 401}), undefined, async () => {
+      asked += 1;
+      return null;
+    });
+    const results = await Promise.all([request('/api/a'), request('/api/b')]);
+    assert.deepEqual(results.map(response => response.status), [401, 401]);
+    assert.equal(asked, 1);
+  } finally {
+    restore();
+  }
+});

@@ -39,7 +39,9 @@ func run() error {
 		return fmt.Errorf("listen on %s: %w", config.Listen, err)
 	}
 	handler := anthropicadapter.NewHandler(config, nil)
-	handler.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	handler.SetLogger(logger)
+	warnIfExposed(logger, listener.Addr())
 	server := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: shutdownGrace,
@@ -61,4 +63,15 @@ func run() error {
 	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
 	return server.Shutdown(shutdownContext)
+}
+
+// warnIfExposed logs when the adapter, which holds the upstream credential and
+// has no caller authentication, is reachable from other machines.
+func warnIfExposed(logger *slog.Logger, addr net.Addr) {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok || tcp.IP.IsLoopback() {
+		return
+	}
+	logger.Warn("adapter is listening on a non-loopback address and has no caller authentication; anyone who can reach it can use the upstream credential",
+		"addr", addr.String())
 }

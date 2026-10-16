@@ -123,6 +123,7 @@ import {hasToolResultImages, toolResultText} from './tool-result-view';
 import {applyPart, applyPartDelta} from './messagePatch';
 import {SLASH_COMMANDS, type SlashCommandName} from './slash-commands';
 import {ComposerPane} from './components/ComposerPane';
+import {TokenRequestDialog} from './components/TokenRequestDialog';
 import {StateContextDrawer} from './components/StateContextDrawer';
 import {ComposerErrorBoundary} from './components/ComposerErrorBoundary';
 import {
@@ -5605,6 +5606,7 @@ function App({
           </Suspense>
         </LazyLoadBoundary>
       )}
+      <TokenRequestDialog />
     </AppShell>
   );
 }

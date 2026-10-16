@@ -1,5 +1,6 @@
 import appConfig from './config.json' with {type: 'json'};
 import {createAuthenticatedFetch} from './api-auth.ts';
+import {requestApiToken} from './token-request.ts';
 import {
   parseCheckpointList,
   parseRestorePlan,
@@ -16,6 +17,7 @@ const authenticatedFetch = createAuthenticatedFetch(
   appConfig.api_token_storage_key,
   globalThis.fetch,
   appConfig.api_token_fragment_param,
+  requestApiToken,
 );
 
 function apiUrl(path: string): string {
