@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -61,8 +62,7 @@ func parseRunInput(raw json.RawMessage, limits RunInputLimits) (json.RawMessage,
 // image and file allowance.
 func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMessage, int64, error) {
 	imageChars := int64(0)
-	trimmed := strings.TrimSpace(string(raw))
-	if !strings.HasPrefix(trimmed, "[") {
+	if !bytes.HasPrefix(bytes.TrimSpace(raw), []byte("[")) {
 		var text string
 		if json.Unmarshal(raw, &text) != nil || strings.TrimSpace(text) == "" {
 			return nil, 0, badInput("input must be a non-empty string")

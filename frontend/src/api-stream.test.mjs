@@ -362,6 +362,37 @@ test('parses CRLF frames wherever the network splits the stream', async () => {
   assert.deepEqual(failures, []);
 });
 
+test('a large frame split into many small chunks is parsed in linear time', async () => {
+  const text = 'x'.repeat(8 * 1024 * 1024);
+  const finalMessage = message('complete', text);
+  const wire = new TextEncoder().encode(
+    [
+      {event: 'run', data: {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'}},
+      {event: 'completed', data: {message: finalMessage, committed: true}},
+      {event: 'done', data: {}},
+    ].map(({event, data}) => sse(event, data)).join('').replace(/\n/g, '\r\n'),
+  );
+  const chunkSize = 1024;
+  requests.length = 0;
+  responses.length = 0;
+  responses.push(new Response(new ReadableStream({
+    start(controller) {
+      for (let offset = 0; offset < wire.length; offset += chunkSize) {
+        controller.enqueue(wire.slice(offset, offset + chunkSize));
+      }
+      controller.close();
+    },
+  }), {headers: {'Content-Type': 'text/event-stream'}}));
+
+  const started = performance.now();
+  const result = await attachSessionRun('session-1');
+  const elapsedMs = performance.now() - started;
+
+  assert.equal(result.message?.text.length, text.length);
+  assert.equal(requests.length, 1);
+  assert.ok(elapsedMs < 3000, `parsing took ${Math.round(elapsedMs)} ms`);
+});
+
 test('retries a temporary server error when attaching to a run', async () => {
   requests.length = 0;
   responses.length = 0;

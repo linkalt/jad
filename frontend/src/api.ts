@@ -908,7 +908,9 @@ async function* readSse(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = '';
+  let pieces: string[] = [];
+  let lastChar = '';
+  let pendingReturn = '';
 
   /**
    * A socket that stops delivering frames — a sleeping laptop, a dropped
@@ -972,22 +974,46 @@ async function* readSse(
         }
         throw new RunStreamConnectionError('the run stream connection was interrupted');
       }
-      // Normalize the whole buffer, not just this chunk: a CRLF pair can be split
-      // across two chunks, and the lone `\r` left from the previous chunk only
-      // pairs with its `\n` once they are in the same string.
-      buffer = (buffer + decoder.decode(chunk.value, {stream: !chunk.done})).replace(/\r\n/g, '\n');
-      let separator = buffer.indexOf('\n\n');
-      while (separator >= 0) {
-        const block = buffer.slice(0, separator);
-        buffer = buffer.slice(separator + 2);
+      // The frame is kept as pieces and only the new text is searched, so one
+      // large frame split into many chunks stays linear: concatenating onto one
+      // string and searching it would copy the whole buffer for every chunk.
+      // A CRLF pair can be split across chunks, so a trailing `\r` is held back
+      // until the next chunk shows whether `\n` follows; a `\n\n` can straddle
+      // the previous end too, which `lastChar` covers.
+      let incoming = pendingReturn + decoder.decode(chunk.value, {stream: !chunk.done});
+      pendingReturn = '';
+      if (!chunk.done && incoming.endsWith('\r')) {
+        pendingReturn = '\r';
+        incoming = incoming.slice(0, -1);
+      }
+      const text = incoming.replace(/\r\n/g, '\n');
+      let offset = 0;
+      while (true) {
+        let block: string;
+        if (offset === 0 && lastChar === '\n' && text.startsWith('\n')) {
+          block = pieces.join('').slice(0, -1);
+          offset = 1;
+        } else {
+          const separator = text.indexOf('\n\n', offset);
+          if (separator < 0) {
+            break;
+          }
+          block = pieces.join('') + text.slice(offset, separator);
+          offset = separator + 2;
+        }
+        pieces = [];
+        lastChar = '';
         const message = parseBlock(block);
         if (message) {
           yield message;
         }
-        separator = buffer.indexOf('\n\n');
+      }
+      if (offset < text.length) {
+        pieces.push(offset === 0 ? text : text.slice(offset));
+        lastChar = text[text.length - 1];
       }
       if (chunk.done) {
-        const message = parseBlock(buffer.trim());
+        const message = parseBlock(pieces.join('').trim());
         if (message) {
           yield message;
         }
