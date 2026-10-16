@@ -11,6 +11,7 @@ import {
   rowTurnCount,
   viewLabel,
 } from '../session-views';
+import type {RowMenuTarget} from './RowContextMenu';
 
 type SessionGroupSession = {
   id: string;
@@ -33,6 +34,8 @@ export type SessionGroupListProps = {
   onCollapsedChange: (sessionRef: string, isCollapsed: boolean) => void;
   onSelect: (viewKey: string) => void;
   onOpenProfile: (sessionRef: string, profile: string) => void;
+  /** Opens the shared right-click menu anchored to the right-clicked row. */
+  onRowContextMenu: (target: RowMenuTarget, anchor: HTMLElement) => void;
 };
 
 /** The children of a category `SideNavItem`: one collapsible group per session, one row per profile. */
@@ -46,6 +49,7 @@ export function SessionGroupList({
   onCollapsedChange,
   onSelect,
   onOpenProfile,
+  onRowContextMenu,
 }: SessionGroupListProps) {
   const rowState = (row: SessionListRow, session: SessionGroupSession, isRunning: boolean): SessionUiState => {
     if (isRunning) {
@@ -76,6 +80,16 @@ export function SessionGroupList({
         onClick={() =>
           row.profile !== undefined ? onOpenProfile(row.sessionRef, row.profile) : onSelect(row.key)
         }
+        onContextMenu={event => {
+          event.preventDefault();
+          event.stopPropagation();
+          onRowContextMenu(
+            isChild
+              ? {kind: 'profile', id: row.key, label: fullLabel}
+              : {kind: 'session', id: row.sessionRef, label: fullLabel},
+            event.currentTarget,
+          );
+        }}
         icon={
           isRunning ? (
             <Spinner size="sm" aria-label={`${fullLabel} running`} />
@@ -118,6 +132,14 @@ export function SessionGroupList({
                 <StatusDot variant={state} label={`${group.title} ${state}`} />
               )
             }
+            onContextMenu={event => {
+              event.preventDefault();
+              event.stopPropagation();
+              onRowContextMenu(
+                {kind: 'session', id: group.sessionRef, label: group.title},
+                event.currentTarget,
+              );
+            }}
             collapsible={{
               isCollapsed: !isGroupExpanded(group, collapsedRefs),
               onCollapsedChange: isCollapsed => onCollapsedChange(group.sessionRef, isCollapsed),
