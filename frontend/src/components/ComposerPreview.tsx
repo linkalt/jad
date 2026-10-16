@@ -19,9 +19,30 @@ import {ChatComposerDrawer} from '@astryxdesign/core/Chat';
 import {MarkdownText} from './MarkdownText';
 
 const styles = stylex.create({
+  // The drawer renders its children into a wrapping flex row, so a child that
+  // does not ask for a width is sized by its content. A draft holding one long
+  // unbreakable run of characters (a URL, a hash, an identifier) then sized the
+  // whole preview past the drawer, which clips its own overflow — the "something
+  // overflows" case. Asking for the width takes the drawer's, and minWidth lets
+  // it shrink below its content instead of pushing past the edge.
+  frame: {
+    width: '100%',
+    minWidth: 0,
+  },
   body: {
     maxHeight: '40vh',
     overflowY: 'auto',
+    minWidth: 0,
+  },
+  // The markdown element carries its own `overflow-wrap: break-word` from Astryx,
+  // and `break-word` leaves the min-content width alone: a 160-character run with
+  // no space in it kept the whole preview 1291px wide inside an 883px drawer even
+  // once the frame asked for the width. `anywhere` is the value that also shrinks
+  // the min-content width, so the run wraps inside the frame instead of widening
+  // it. It has to be set on that element: the element's own rule wins over an
+  // inherited value.
+  content: {
+    overflowWrap: 'anywhere',
   },
 });
 
@@ -29,20 +50,33 @@ export function ComposerPreview({value}: {value: string}) {
   const isEmpty = value.trim().length === 0;
   return (
     <ChatComposerDrawer>
-      <VStack gap={4} padding={4}>
+      <VStack gap={4} padding={4} xstyle={styles.frame}>
         <VStack gap={0.5}>
           <Heading level={2}>Preview</Heading>
           <Text type="supporting" color="secondary">
             How this message will be rendered
           </Text>
         </VStack>
-        <VStack gap={2} xstyle={styles.body}>
+        <VStack
+          gap={2}
+          xstyle={styles.body}
+          /*
+           * Astryx draws a list with `margin-inline: -8px` on the `ol`/`ul` and
+           * `padding-inline: 8px` on each `li`, so the list box is 8px wider than
+           * its container on each side. overflow-y here computes overflow-x to
+           * `auto`, which turned that bleed into a horizontal scrollbar on every
+           * draft containing a list. The same 8px as inline padding gives the
+           * bleed somewhere to land, and lines the list text up with the
+           * paragraphs above it.
+           */
+          paddingInline={2}
+        >
           {isEmpty ? (
             <Text type="supporting" color="secondary">
               Nothing to preview yet.
             </Text>
           ) : (
-            <MarkdownText density="compact" contentWidth="100%" headingLevelStart={3}>
+            <MarkdownText density="compact" contentWidth="100%" headingLevelStart={3} xstyle={styles.content}>
               {value}
             </MarkdownText>
           )}
