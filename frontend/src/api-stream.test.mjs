@@ -437,6 +437,102 @@ test('aborting while offline ends the wait and clears the reconnect state', asyn
   }
 });
 
+function hiddenTabHarness() {
+  const listeners = new Set();
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const doc = {
+    visibilityState: 'hidden',
+    addEventListener: (type, listener) => { if (type === 'visibilitychange') listeners.add(listener); },
+    removeEventListener: (type, listener) => { if (type === 'visibilitychange') listeners.delete(listener); },
+  };
+  Object.defineProperty(globalThis, 'document', {configurable: true, value: doc});
+  const config = {
+    baseDelay: appConfig.run_stream_reconnect_base_delay_ms,
+    maxDelay: appConfig.run_stream_reconnect_max_delay_ms,
+    recheck: appConfig.run_stream_hidden_recheck_ms,
+  };
+  appConfig.run_stream_reconnect_base_delay_ms = 0;
+  appConfig.run_stream_reconnect_max_delay_ms = 0;
+  return {
+    doc,
+    listeners,
+    restore() {
+      if (original) Object.defineProperty(globalThis, 'document', original);
+      else delete globalThis.document;
+      appConfig.run_stream_reconnect_base_delay_ms = config.baseDelay;
+      appConfig.run_stream_reconnect_max_delay_ms = config.maxDelay;
+      appConfig.run_stream_hidden_recheck_ms = config.recheck;
+    },
+  };
+}
+
+test('a hidden tab waits for the page to be shown before reconnecting', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const runningRun = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  responses.push(
+    stalledStream([{event: 'run', data: runningRun}]),
+    completedStream(),
+  );
+  appConfig.run_stream_hidden_recheck_ms = 60000;
+  const harness = hiddenTabHarness();
+  try {
+    const run = streamSessionRun('session-1', 'hello', {stallTimeoutMs: 5});
+    await waitUntil(() => harness.listeners.size === 1);
+    assert.equal(requests.length, 1, 'no reconnect request is made while the tab is hidden');
+
+    harness.doc.visibilityState = 'visible';
+    for (const listener of [...harness.listeners]) listener();
+    const result = await run;
+
+    assert.equal(result.message?.text, 'the complete response');
+    assert.equal(requests.length, 2);
+    assert.equal(harness.listeners.size, 0, 'the listener is removed once the wait ends');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('a tab that stays hidden still reconnects after the recheck interval', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const runningRun = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  responses.push(
+    stalledStream([{event: 'run', data: runningRun}]),
+    completedStream(),
+  );
+  const harness = hiddenTabHarness();
+  appConfig.run_stream_hidden_recheck_ms = 20;
+  try {
+    const result = await streamSessionRun('session-1', 'hello', {stallTimeoutMs: 5});
+    assert.equal(result.message?.text, 'the complete response');
+    assert.equal(requests.length, 2, 'the hidden tab retried without a visibility event');
+    assert.equal(harness.listeners.size, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('aborting while the tab is hidden ends the wait and removes the listener', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const runningRun = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  responses.push(stalledStream([{event: 'run', data: runningRun}]));
+  appConfig.run_stream_hidden_recheck_ms = 60000;
+  const harness = hiddenTabHarness();
+  const controller = new AbortController();
+  try {
+    const run = streamSessionRun('session-1', 'hello', {stallTimeoutMs: 5, signal: controller.signal});
+    const settled = run.then(() => 'resolved', () => 'rejected');
+    await waitUntil(() => harness.listeners.size === 1);
+    controller.abort();
+    assert.equal(await settled, 'rejected');
+    assert.equal(harness.listeners.size, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
 test('a reconnect that finds no run reports an unknown outcome instead of failing', async () => {
   requests.length = 0;
   responses.length = 0;

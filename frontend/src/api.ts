@@ -1471,22 +1471,32 @@ function browserIsOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
 
+function tabIsHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
 /**
- * Resolves when the browser reports a network again, or after `recheckMs` so a browser
- * that wrongly reports offline (a "work offline" switch, some VPN adapters) cannot park
- * the run forever; rejects when the caller aborts.
+ * Resolves when `blocked()` is false, when `eventName` fires on `target` (the page says the
+ * condition changed), or after `recheckMs` so a wrong report (a "work offline" switch, some
+ * VPN adapters) cannot park the run forever; rejects when the caller aborts.
  */
-function waitForBrowserOnline(recheckMs: number, signal?: AbortSignal): Promise<void> {
+function waitWhileBlocked(
+  target: EventTarget | undefined,
+  eventName: string,
+  blocked: () => boolean,
+  recheckMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const cleanup = (): void => {
       if (timer !== undefined) {
         clearTimeout(timer);
       }
-      globalThis.removeEventListener?.('online', onOnline);
+      target?.removeEventListener?.(eventName, onChange);
       signal?.removeEventListener('abort', onAbort);
     };
-    const onOnline = (): void => {
+    const onChange = (): void => {
       cleanup();
       resolve();
     };
@@ -1498,16 +1508,32 @@ function waitForBrowserOnline(recheckMs: number, signal?: AbortSignal): Promise<
       onAbort();
       return;
     }
-    if (!browserIsOffline()) {
+    if (!blocked()) {
       resolve();
       return;
     }
-    globalThis.addEventListener?.('online', onOnline);
+    target?.addEventListener?.(eventName, onChange);
     signal?.addEventListener('abort', onAbort, {once: true});
     if (Number.isFinite(recheckMs) && recheckMs > 0) {
-      timer = setTimeout(onOnline, recheckMs);
+      timer = setTimeout(onChange, recheckMs);
     }
   });
+}
+
+function waitForBrowserOnline(recheckMs: number, signal?: AbortSignal): Promise<void> {
+  return waitWhileBlocked(globalThis as EventTarget, 'online', browserIsOffline, recheckMs, signal);
+}
+
+// A hidden tab keeps retrying, only less often: the run's completion still reaches the
+// notifications, and the tab catches up at once when it is shown again.
+function waitForTabVisible(recheckMs: number, signal?: AbortSignal): Promise<void> {
+  return waitWhileBlocked(
+    typeof document === 'undefined' ? undefined : document,
+    'visibilitychange',
+    tabIsHidden,
+    recheckMs,
+    signal,
+  );
 }
 
 async function fetchRunStreamResponse(
@@ -1632,6 +1658,9 @@ async function runStreamReconnectLoop(
       // A dead network only burns attempts; wait for it instead of retrying into it.
       options.onReconnecting?.({attempt, offline: true});
       await waitForBrowserOnline(appConfig.run_stream_offline_recheck_ms, options.signal);
+    }
+    if (tabIsHidden()) {
+      await waitForTabVisible(appConfig.run_stream_hidden_recheck_ms, options.signal);
     }
     attempt += 1;
     options.onReconnecting?.({attempt, offline: false});
