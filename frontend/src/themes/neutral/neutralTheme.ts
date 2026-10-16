@@ -1,6 +1,8 @@
 import {
   defineTheme,
   defineSyntaxTheme,
+  resolveThemeToken,
+  type ColorVarName,
   type TokenValue,
 } from '@astryxdesign/core/theme';
 import {neutralIconRegistry} from './icons';
@@ -9,6 +11,20 @@ import {neutralPaletteRefs} from './neutralPaletteRefs.generated';
 const {blue, cyan, green, neutral, orange, pink, purple, red, teal, yellow} =
   neutralPaletteRefs;
 const withAlpha = (color: string, alpha: string) => `${color}${alpha}`;
+
+/**
+ * Astryx's own light value for a token.
+ *
+ * The palette mappings below are tuned for text contrast on white, so every
+ * status and icon hue lands on the palette's darkest step: in light mode a
+ * success dot came out #00490b, which reads as black next to the text. Status
+ * dots and icon glyphs are fills rather than text, so light mode keeps the
+ * framework's own color for them and only dark mode uses these steps. Asking
+ * the framework for the value keeps the two in sync instead of copying its
+ * hexes here.
+ */
+const astryxLight = (name: ColorVarName): string =>
+  resolveThemeToken(null, name, {mode: 'light'});
 
 const neutralSyntax = defineSyntaxTheme({
   name: 'astryx-neutral',
@@ -147,9 +163,9 @@ export const neutralTheme = defineTheme({
     '--color-icon-secondary': [neutral.light[45], neutral.dark[65]],
     '--color-icon-disabled': [neutral.light[60], neutral.dark[35]],
 
-    '--color-success': [green.light[25], green.light[80]],
-    '--color-error': [red.light[25], red.dark[85]],
-    '--color-warning': [yellow.light[25], yellow.light[85]],
+    '--color-success': [astryxLight('--color-success'), green.light[80]],
+    '--color-error': [astryxLight('--color-error'), red.dark[85]],
+    '--color-warning': [astryxLight('--color-warning'), yellow.light[85]],
     '--color-success-muted': [green.dark[85], withAlpha(green.light[75], '3D')],
     '--color-error-muted': [red.light[85], withAlpha(red.dark[75], '3D')],
     '--color-warning-muted': [
@@ -173,52 +189,52 @@ export const neutralTheme = defineTheme({
 
     '--color-background-red': [red.light[85], red.dark[25]],
     '--color-border-red': [red.light[80], red.light[65]],
-    '--color-icon-red': [red.light[25], red.dark[75]],
+    '--color-icon-red': [astryxLight('--color-icon-red'), red.dark[75]],
     '--color-text-red': [red.light[25], red.dark[80]],
 
     '--color-background-orange': [orange.light[85], orange.dark[25]],
     '--color-border-orange': [orange.light[85], orange.dark[65]],
-    '--color-icon-orange': [orange.light[25], orange.light[75]],
+    '--color-icon-orange': [astryxLight('--color-icon-orange'), orange.light[75]],
     '--color-text-orange': [orange.light[25], orange.dark[80]],
 
     '--color-background-yellow': [yellow.dark[90], yellow.dark[25]],
     '--color-border-yellow': [yellow.dark[80], yellow.light[65]],
-    '--color-icon-yellow': [yellow.light[25], yellow.light[75]],
+    '--color-icon-yellow': [astryxLight('--color-icon-yellow'), yellow.light[75]],
     '--color-text-yellow': [yellow.light[25], yellow.light[80]],
 
     '--color-background-green': [green.dark[85], green.dark[25]],
     '--color-border-green': [green.dark[80], green.light[65]],
-    '--color-icon-green': [green.light[25], green.light[75]],
+    '--color-icon-green': [astryxLight('--color-icon-green'), green.light[75]],
     '--color-text-green': [green.light[25], green.light[75]],
 
     '--color-background-teal': [teal.light[85], teal.dark[25]],
     '--color-border-teal': [teal.light[80], teal.dark[65]],
-    '--color-icon-teal': [teal.light[25], teal.dark[75]],
+    '--color-icon-teal': [astryxLight('--color-icon-teal'), teal.dark[75]],
     '--color-text-teal': [teal.light[25], teal.light[80]],
 
     '--color-background-cyan': [cyan.dark[85], cyan.dark[25]],
     '--color-border-cyan': [cyan.dark[80], cyan.dark[65]],
-    '--color-icon-cyan': [cyan.light[25], cyan.dark[75]],
+    '--color-icon-cyan': [astryxLight('--color-icon-cyan'), cyan.dark[75]],
     '--color-text-cyan': [cyan.light[25], cyan.dark[80]],
 
     '--color-background-blue': [blue.light[85], blue.dark[25]],
     '--color-border-blue': [blue.light[80], blue.dark[65]],
-    '--color-icon-blue': [blue.light[25], blue.dark[75]],
+    '--color-icon-blue': [astryxLight('--color-icon-blue'), blue.dark[75]],
     '--color-text-blue': [blue.light[25], blue.dark[80]],
 
     '--color-background-purple': [purple.light[90], purple.dark[25]],
     '--color-border-purple': [purple.light[85], purple.light[70]],
-    '--color-icon-purple': [purple.light[25], purple.light[75]],
+    '--color-icon-purple': [astryxLight('--color-icon-purple'), purple.light[75]],
     '--color-text-purple': [purple.light[25], purple.dark[80]],
 
     '--color-background-pink': [pink.light[85], pink.dark[25]],
     '--color-border-pink': [pink.light[85], pink.light[70]],
-    '--color-icon-pink': [pink.light[25], pink.dark[75]],
+    '--color-icon-pink': [astryxLight('--color-icon-pink'), pink.dark[75]],
     '--color-text-pink': [pink.light[25], pink.dark[80]],
 
     '--color-background-gray': [neutral.light[90], neutral.dark[20]],
     '--color-border-gray': [neutral.light[85], neutral.dark[15]],
-    '--color-icon-gray': [neutral.light[30], neutral.dark[65]],
+    '--color-icon-gray': [astryxLight('--color-icon-gray'), neutral.dark[65]],
     '--color-text-gray': [neutral.light[10], neutral.dark[85]],
 
     // =========================================================================
