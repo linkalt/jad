@@ -8,6 +8,11 @@ export type RowMenuTarget = {
   kind: 'category' | 'session' | 'profile';
   /** The row id (category key, session ref, or row key). */
   id: string;
+  /**
+   * The session whose list owns the row. Present for session and profile rows,
+   * absent for a category, and it is what lets a group host its own rows' menu.
+   */
+  sessionRef?: string;
   /** The visible row label, used to name the placeholder actions. */
   label: string;
 };
@@ -54,6 +59,28 @@ export function RowContextMenu({
     document.addEventListener('mousedown', dismissOnOutsidePress);
     return () => document.removeEventListener('mousedown', dismissOnOutsidePress);
   }, [isOpen, onOpenChange, target]);
+
+  // A menu opened from a row of the collapsed rail's hover flyout is rendered
+  // inside that flyout, so it is unrendered as soon as the flyout closes while
+  // its own state still says open — it would reappear, misplaced, the next time
+  // the flyout opens. Close it with the layer that hosts it. The anchor row
+  // stays mounted when the flyout closes, so the flyout is still findable here.
+  useEffect(() => {
+    if (!isOpen || target === null) {
+      return;
+    }
+    const flyout = anchorRef.current?.closest('[popover]');
+    if (flyout == null) {
+      return;
+    }
+    const closeWithFlyout = (event: Event) => {
+      if ((event as Event & {newState?: string}).newState === 'closed') {
+        onOpenChange(false);
+      }
+    };
+    flyout.addEventListener('toggle', closeWithFlyout);
+    return () => flyout.removeEventListener('toggle', closeWithFlyout);
+  }, [anchorRef, isOpen, onOpenChange, target]);
 
   if (target === null) {
     return null;

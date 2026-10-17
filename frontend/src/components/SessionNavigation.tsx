@@ -241,16 +241,21 @@ export function SessionNavigation({
                   onSelect={onSelect}
                   onOpenProfile={onOpenProfile}
                   onRowContextMenu={openRowMenu}
+                  rowMenuTarget={rowMenuTarget}
+                  rowMenuAnchorRef={rowMenuAnchorRef}
+                  onRowMenuOpenChange={handleRowMenuOpenChange}
                 />
               </VStack>
             )}
           </Fragment>
         );
       })}
+      {/* Profile rows host their own menu inside their group; a category or
+          session row's menu lives here, beside the rail it belongs to. */}
       <RowContextMenu
-        target={rowMenuTarget}
+        target={rowMenuTarget?.kind === 'profile' ? null : rowMenuTarget}
         anchorRef={rowMenuAnchorRef}
-        isOpen={rowMenuTarget !== null}
+        isOpen={rowMenuTarget !== null && rowMenuTarget.kind !== 'profile'}
         onOpenChange={handleRowMenuOpenChange}
       />
     </SideNav>

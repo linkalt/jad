@@ -1,4 +1,5 @@
 import {SideNavItem, Spinner, StatusDot, Text, VisuallyHidden} from '@astryxdesign/core';
+import type {RefObject} from 'react';
 import type {SessionRunStatus} from '../api';
 import {sessionUiStateForRun, type SessionUiState} from '../session-run-status';
 import {
@@ -11,7 +12,7 @@ import {
   rowTurnCount,
   viewLabel,
 } from '../session-views';
-import type {RowMenuTarget} from './RowContextMenu';
+import {RowContextMenu, type RowMenuTarget} from './RowContextMenu';
 
 type SessionGroupSession = {
   id: string;
@@ -36,6 +37,17 @@ export type SessionGroupListProps = {
   onOpenProfile: (sessionRef: string, profile: string) => void;
   /** Opens the shared right-click menu anchored to the right-clicked row. */
   onRowContextMenu: (target: RowMenuTarget, anchor: HTMLElement) => void;
+  /**
+   * The row menu that is currently open, when it belongs to a profile row of
+   * one of these groups. Each group hosts its own rows' menu so the menu is a
+   * child of the group in the DOM: in the collapsed rail the group's rows live
+   * inside the hover flyout, and a menu rendered outside it would take the
+   * pointer out of the flyout and close it (moving the menu's anchor away).
+   */
+  rowMenuTarget: RowMenuTarget | null;
+  /** The right-clicked row element the menu is anchored to. */
+  rowMenuAnchorRef: RefObject<HTMLElement | null>;
+  onRowMenuOpenChange: (isOpen: boolean) => void;
 };
 
 /** The children of a category `SideNavItem`: one collapsible group per session, one row per profile. */
@@ -50,6 +62,9 @@ export function SessionGroupList({
   onSelect,
   onOpenProfile,
   onRowContextMenu,
+  rowMenuTarget,
+  rowMenuAnchorRef,
+  onRowMenuOpenChange,
 }: SessionGroupListProps) {
   const rowState = (row: SessionListRow, session: SessionGroupSession, isRunning: boolean): SessionUiState => {
     if (isRunning) {
@@ -85,8 +100,8 @@ export function SessionGroupList({
           event.stopPropagation();
           onRowContextMenu(
             isChild
-              ? {kind: 'profile', id: row.key, label: fullLabel}
-              : {kind: 'session', id: row.sessionRef, label: fullLabel},
+              ? {kind: 'profile', id: row.key, label: fullLabel, sessionRef: row.sessionRef}
+              : {kind: 'session', id: row.sessionRef, label: fullLabel, sessionRef: row.sessionRef},
             event.currentTarget,
           );
         }}
@@ -121,6 +136,18 @@ export function SessionGroupList({
         }
         const hasRunning = groupHasRunningRun(group, session, runningViewKeys);
         const state: SessionUiState = hasRunning ? 'accent' : session.state;
+        // A profile row's menu is rendered inside this group, next to the rows
+        // it acts on: in the collapsed rail those rows live in the hover flyout,
+        // so a menu mounted outside it would sit in a second layer, take the
+        // pointer out of the flyout and let it close — and with the flyout gone
+        // its row (the menu's anchor) is unmounted, which drops the menu at the
+        // viewport edge. Rendered here it is part of the flyout's own subtree.
+        const profileTarget =
+          rowMenuTarget !== null &&
+          rowMenuTarget.kind === 'profile' &&
+          rowMenuTarget.sessionRef === group.sessionRef
+            ? rowMenuTarget
+            : null;
         return (
           <SideNavItem
             key={group.sessionRef}
@@ -136,7 +163,7 @@ export function SessionGroupList({
               event.preventDefault();
               event.stopPropagation();
               onRowContextMenu(
-                {kind: 'session', id: group.sessionRef, label: group.title},
+                {kind: 'session', id: group.sessionRef, label: group.title, sessionRef: group.sessionRef},
                 event.currentTarget,
               );
             }}
@@ -146,6 +173,14 @@ export function SessionGroupList({
             }}
           >
             {group.children.map(row => renderRow(row, session, true))}
+            {profileTarget === null ? null : (
+              <RowContextMenu
+                target={profileTarget}
+                anchorRef={rowMenuAnchorRef}
+                isOpen
+                onOpenChange={onRowMenuOpenChange}
+              />
+            )}
           </SideNavItem>
         );
       })}
