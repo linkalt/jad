@@ -20,12 +20,18 @@ export type RowMenuTarget = {
 /**
  * Placeholder right-click menu for a category, session or profile row.
  *
- * One shared instance lives in `SessionNavigation`: a row's `onContextMenu`
- * anchors it to that row and it opens beside the row (`placement="end"`,
- * `alignment="start"`, so its top aligns with the row label), showing the
- * same icon-only vertical stack as the bottom More menu — New, Edit,
- * Delete from top to bottom, each with an `end` tooltip. The buttons only
- * dismiss the menu; no row action is wired yet.
+ * A row's `onContextMenu` anchors it to that row and it opens beside the row
+ * (`placement="end"`, `alignment="start"`, so its top aligns with the row
+ * label), showing the same icon-only vertical stack as the bottom More menu —
+ * New, Edit, Delete from top to bottom, each with an `end` tooltip. The buttons
+ * only dismiss the menu; no row action is wired yet. A profile row gets Edit
+ * and Delete only: a profile is created from the catalog, not from a row, so
+ * New there would have nothing to create.
+ *
+ * Each group in `SessionGroupList` renders the menu for its own profile rows,
+ * so that in the collapsed rail the menu is part of the hover flyout's DOM
+ * subtree rather than a second layer outside it; `SessionNavigation` keeps one
+ * instance at rail level for category and session rows.
  *
  * The menu dismisses itself rather than leaving it to the Popover's light
  * dismiss, which is the native `popover="auto"` one. Firefox counts the mouseup
@@ -105,15 +111,19 @@ export function RowContextMenu({
       onOpenChange={onOpenChange}
       content={
         <VStack ref={menuRef} gap={1}>
-          <Tooltip content="New" placement="end">
-            <IconButton
-              label={`New ${target.label}`}
-              icon={<Icon icon={PlusIcon} size="sm" />}
-              variant="ghost"
-              size="sm"
-              onClick={dismiss}
-            />
-          </Tooltip>
+          {/* No New for a profile: profiles come from the catalog, not from a
+              row, so an added entry would have nothing to create. */}
+          {target.kind === 'profile' ? null : (
+            <Tooltip content="New" placement="end">
+              <IconButton
+                label={`New ${target.label}`}
+                icon={<Icon icon={PlusIcon} size="sm" />}
+                variant="ghost"
+                size="sm"
+                onClick={dismiss}
+              />
+            </Tooltip>
+          )}
           <Tooltip content="Edit" placement="end">
             <IconButton
               label={`Edit ${target.label}`}

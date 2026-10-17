@@ -62,3 +62,15 @@ test('a row menu closes with the layer that hosts it', () => {
   assert.match(rowMenu, /addEventListener\('toggle'/, 'it must listen for that layer closing');
   assert.match(rowMenu, /\.newState === 'closed'/, 'only a close of the hosting layer dismisses the menu');
 });
+
+// A profile is created from the catalog, not from a row, so New has nothing to
+// create there. Session and category rows keep it.
+test('only a profile row menu drops the New entry', () => {
+  assert.match(
+    rowMenu,
+    /\{target\.kind === 'profile' \? null : \(\s*<Tooltip content="New"/,
+    'the New entry must be skipped for a profile row only',
+  );
+  assert.match(rowMenu, /<Tooltip content="Edit"/, 'Edit stays for every row kind');
+  assert.match(rowMenu, /<Tooltip content="Delete"/, 'Delete stays for every row kind');
+});
