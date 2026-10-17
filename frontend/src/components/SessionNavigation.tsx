@@ -17,6 +17,25 @@ import {SessionGroupList} from './SessionGroupList';
 /** Datasets the floating left panel can show. One slot, so only one at a time. */
 export type LeftPanelId = 'search' | 'settings';
 
+/**
+ * Close the hover flyout of a collapsed-rail row, if one is open.
+ *
+ * In the collapsed rail a session row with profiles shows that profile list as a
+ * hover flyout: a popover `SideNavItem` renders as a sibling of the row inside
+ * the row's own wrapper. The session's right-click menu opens where the flyout
+ * is, so leaving the flyout up stacks the two panels on one spot — and the
+ * flyout does not reliably go away by itself, because the panel's own invoker is
+ * exempt from its light dismiss. Closing it here makes the row menu the only
+ * panel, the way the flyout's own light dismiss would: Astryx syncs a
+ * browser-initiated close back into the flyout's state.
+ */
+function closeHoverFlyout(anchor: HTMLElement): void {
+  const flyout = anchor.parentElement?.querySelector<HTMLElement>('[popover]');
+  if (flyout?.matches(':popover-open')) {
+    flyout.hidePopover();
+  }
+}
+
 export function SessionNavigation({
   groups,
   collapsedRefs,
@@ -80,6 +99,9 @@ export function SessionNavigation({
   const rowMenuAnchorRef = useRef<HTMLElement | null>(null);
   const [rowMenuTarget, setRowMenuTarget] = useState<RowMenuTarget | null>(null);
   const openRowMenu = useCallback((target: RowMenuTarget, anchor: HTMLElement) => {
+    if (target.kind === 'session') {
+      closeHoverFlyout(anchor);
+    }
     rowMenuAnchorRef.current = anchor;
     setRowMenuTarget(target);
   }, []);
