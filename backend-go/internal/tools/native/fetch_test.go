@@ -219,6 +219,15 @@ func TestFetchURLPolicyAndPublicAddressRanges(t *testing.T) {
 		{"fe80::1", false},
 		{"2001:db8::1", false},
 		{"2606:4700:4700::1111", true},
+		{"fec0::1", false},
+		{"64:ff9b::7f00:1", false},
+		{"64:ff9b::a00:1", false},
+		{"64:ff9b::a9fe:a9fe", false},
+		{"64:ff9b::808:808", true},
+		{"64:ff9b:1::808:808", false},
+		{"2002:7f00:1::", false},
+		{"2002:a00:1::", false},
+		{"2002:808:808::", true},
 	} {
 		address := net.ParseIP(test.address)
 		if got := isPublicFetchAddress(net.IPAddr{IP: address}); got != test.public {

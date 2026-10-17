@@ -94,6 +94,9 @@ Instead, limits are enforced by the backend and reported loudly:
 | Characters per line | `max_line_chars` | 240 | Long lines are cut when rendering, marked `[... truncated line]`; minified or single-line files cannot dominate the result. |
 | File size searched | `max_file_bytes` | 8 MiB | ripgrep `--max-filesize`; larger files are not read at all. |
 | Wall clock | `timeout_ms` | 10 s | The backend kills ripgrep; the partial result is returned as `ok` with `truncation_reason: timeout`. |
+| SIGTERM to SIGKILL | `kill_grace_ms` | 250 ms | Wait before the process group is killed. |
+| Wait after a stop | `kill_deadline_ms` | 1000 ms | How long the call waits for ripgrep after a stop request before it returns. |
+| Pipe drain after exit | `drain_after_exit_ms` | 500 ms | How long the pipes may stay open after ripgrep exited (a descendant holds them) before the output is cut. |
 
 A timeout or byte cap is a successful partial answer, not an error, because the agent can act on what came back and narrow the next call.
 

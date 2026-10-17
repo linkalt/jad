@@ -23,7 +23,7 @@ func TestNormalizeNativeGrepSettingsDefaultsAndIgnoresReadPolicy(t *testing.T) {
 	if grep == nil {
 		t.Fatal("normalizeNativeGrepSettings() returned nil")
 	}
-	if grep.Binary != "rg" || grep.MaxResults != 200 || grep.MaxMatchesPerFile != 20 || grep.MaxBytes != 64*1024 || grep.MaxLineChars != 240 || grep.MaxFileBytes != 8*1024*1024 || grep.TimeoutMs != 10_000 {
+	if grep.Binary != "rg" || grep.MaxResults != 200 || grep.MaxMatchesPerFile != 20 || grep.MaxBytes != 64*1024 || grep.MaxLineChars != 240 || grep.MaxFileBytes != 8*1024*1024 || grep.TimeoutMs != 10_000 || grep.KillGraceMs != 250 || grep.KillDeadlineMs != 1000 || grep.DrainAfterExitMs != 500 {
 		t.Fatalf("normalized grep defaults = %+v", grep)
 	}
 	if len(grep.Policy.Paths) != 0 || grep.Policy.UnrestrictedPaths {
@@ -47,13 +47,13 @@ func TestNormalizeNativeGrepSettingsOverridesAndValidates(t *testing.T) {
 	globalRoot := t.TempDir()
 	settingPath := filepath.Join(globalRoot, "setting.json")
 	setting := map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"grep":{"binary":" rg-custom ","max_results":500,"max_matches_per_file":7,"max_bytes":128,"max_line_chars":80,"max_file_bytes":2048,"timeout_ms":900,"paths":{"allow":["search-root"],"deny":["blocked"]}}}}`),
+		"tools": json.RawMessage(`{"native":{"grep":{"binary":" rg-custom ","max_results":500,"max_matches_per_file":7,"max_bytes":128,"max_line_chars":80,"max_file_bytes":2048,"timeout_ms":900,"kill_grace_ms":40,"kill_deadline_ms":700,"drain_after_exit_ms":60,"paths":{"allow":["search-root"],"deny":["blocked"]}}}}`),
 	}
 	grep, err := normalizeNativeGrepSettings(setting, globalRoot, settingPath)
 	if err != nil {
 		t.Fatalf("normalizeNativeGrepSettings(overrides) error = %v", err)
 	}
-	if grep.Binary != "rg-custom" || grep.MaxResults != 500 || grep.MaxMatchesPerFile != 7 || grep.MaxBytes != 128 || grep.MaxLineChars != 80 || grep.MaxFileBytes != 2048 || grep.TimeoutMs != 900 {
+	if grep.Binary != "rg-custom" || grep.MaxResults != 500 || grep.MaxMatchesPerFile != 7 || grep.MaxBytes != 128 || grep.MaxLineChars != 80 || grep.MaxFileBytes != 2048 || grep.TimeoutMs != 900 || grep.KillGraceMs != 40 || grep.KillDeadlineMs != 700 || grep.DrainAfterExitMs != 60 {
 		t.Fatalf("normalized grep overrides = %+v", grep)
 	}
 	if len(grep.Policy.Paths) != 2 || grep.Policy.Paths[0].Path != filepath.Join(globalRoot, "search-root") || grep.Policy.Paths[1].Path != filepath.Join(globalRoot, "blocked") {
@@ -69,6 +69,11 @@ func TestNormalizeNativeGrepSettingsOverridesAndValidates(t *testing.T) {
 		`{"native":{"grep":{"max_line_chars":19}}}`,
 		`{"native":{"grep":{"max_file_bytes":0}}}`,
 		`{"native":{"grep":{"timeout_ms":0}}}`,
+		`{"native":{"grep":{"kill_grace_ms":0}}}`,
+		`{"native":{"grep":{"kill_deadline_ms":0}}}`,
+		`{"native":{"grep":{"kill_deadline_ms":60001}}}`,
+		`{"native":{"grep":{"drain_after_exit_ms":0}}}`,
+		`{"native":{"grep":{"drain_after_exit_ms":"soon"}}}`,
 		`{"native":{"grep":{"paths":null}}}`,
 	} {
 		_, err := normalizeNativeGrepSettings(

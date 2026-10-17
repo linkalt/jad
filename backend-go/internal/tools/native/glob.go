@@ -21,7 +21,6 @@ import (
 
 const (
 	globToolID                  = "native.glob"
-	globKillGrace               = 2 * time.Second
 	globPatternAlternativeLimit = 64
 	globTruncatedLineMarker     = " [... truncated line]"
 )
@@ -236,7 +235,9 @@ func executeNativeGlob(
 		cwd:                      resolved.workspaceRoot,
 		environment:              environmentWithoutServerToken(),
 		timeout:                  time.Duration(settings.TimeoutMs) * time.Millisecond,
-		killGrace:                globKillGrace,
+		killGrace:                time.Duration(settings.KillGraceMs) * time.Millisecond,
+		killDeadline:             time.Duration(settings.KillDeadlineMs) * time.Millisecond,
+		drainAfterExit:           time.Duration(settings.DrainAfterExitMs) * time.Millisecond,
 		killProcessGroupWhenDone: true,
 		collector:                stdoutCollector,
 	})

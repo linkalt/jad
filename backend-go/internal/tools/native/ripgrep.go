@@ -21,10 +21,11 @@ import (
 
 const (
 	ripgrepMaxStderrBytes = 8 * 1024
-	ripgrepKillGrace      = 250 * time.Millisecond
-	ripgrepKillDeadline   = time.Second
-	ripgrepDrainDeadline  = 500 * time.Millisecond
-	maxDiagnosticChars    = 200
+	// Used when settings leave the grace and deadlines at zero.
+	ripgrepKillGrace     = 250 * time.Millisecond
+	ripgrepKillDeadline  = time.Second
+	ripgrepDrainDeadline = 500 * time.Millisecond
+	maxDiagnosticChars   = 200
 )
 
 type ripgrepEntryKind string
@@ -170,6 +171,18 @@ func runRipgrep(
 	contextChannel := ctx.Done()
 	var deadlineTimer *time.Timer
 	var deadlineChannel <-chan time.Time
+	killGrace := time.Duration(settings.KillGraceMs) * time.Millisecond
+	if killGrace <= 0 {
+		killGrace = ripgrepKillGrace
+	}
+	killDeadline := time.Duration(settings.KillDeadlineMs) * time.Millisecond
+	if killDeadline <= 0 {
+		killDeadline = ripgrepKillDeadline
+	}
+	drainDeadline := time.Duration(settings.DrainAfterExitMs) * time.Millisecond
+	if drainDeadline <= 0 {
+		drainDeadline = ripgrepDrainDeadline
+	}
 	cleanupStarted := false
 	forceFinish := false
 	startCleanup := func(reason string) {
@@ -181,10 +194,10 @@ func runRipgrep(
 		}
 		cleanupStarted = true
 		signalProcessGroup(command, false)
-		time.AfterFunc(ripgrepKillGrace, func() { signalProcessGroup(command, true) })
-		deadline := ripgrepDrainDeadline
+		time.AfterFunc(killGrace, func() { signalProcessGroup(command, true) })
+		deadline := drainDeadline
 		if reason != "" {
-			deadline = ripgrepKillDeadline
+			deadline = killDeadline
 		}
 		deadlineTimer = time.NewTimer(deadline)
 		deadlineChannel = deadlineTimer.C

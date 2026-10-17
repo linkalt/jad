@@ -117,6 +117,9 @@ src/sub/b.test.ts
 | Listed files | `max_results` | 500 | Bounds the context cost of a broad pattern. |
 | Payload bytes | `max_bytes` | 65536 | Bounds the frame even with very long paths. |
 | Wall clock | `timeout_ms` | 10000 | A huge tree must not hold the turn open. |
+| SIGTERM to SIGKILL | `kill_grace_ms` | 2000 | Wait before the process group is killed; 0 kills at once. |
+| Wait after SIGKILL | `kill_deadline_ms` | 2000 | How long the call waits for ripgrep before it returns anyway. |
+| Pipe drain after exit | `drain_after_exit_ms` | 500 | How long the pipes may stay open after ripgrep exited before the output is cut. |
 
 Truncation and timeouts stay successful results: the listing is a snapshot, and a partial snapshot plus a
 narrowing hint is more useful than an error. Only `timeout` also stops the child, which reuses the process

@@ -13,6 +13,9 @@ const (
 	defaultNativeGrepMaxLineChars int64 = 240
 	defaultNativeGrepMaxFileBytes int64 = 8 * 1024 * 1024
 	defaultNativeGrepTimeoutMs    int64 = 10_000
+	defaultNativeGrepKillGraceMs  int64 = 250
+	defaultNativeGrepKillDeadline int64 = 1_000
+	defaultNativeGrepDrainAfter   int64 = 500
 	maxNativeGrepMaxResults       int64 = 10_000
 	maxNativeGrepMaxMatches       int64 = 1_000
 	maxNativeGrepMaxLineChars     int64 = 4_000
@@ -29,6 +32,12 @@ type NativeGrepSettings struct {
 	MaxLineChars      int64
 	MaxFileBytes      int64
 	TimeoutMs         int64
+	// KillGraceMs is the wait between SIGTERM and SIGKILL; KillDeadlineMs is how long the call
+	// waits for ripgrep after a stop request; DrainAfterExitMs is how long the pipes may stay
+	// open after ripgrep exited.
+	KillGraceMs      int64
+	KillDeadlineMs   int64
+	DrainAfterExitMs int64
 }
 
 func normalizeNativeGrepSettings(
@@ -61,7 +70,7 @@ func normalizeNativeGrepSettings(
 	}
 	for key := range fields {
 		switch key {
-		case "binary", "max_results", "max_matches_per_file", "max_bytes", "max_line_chars", "max_file_bytes", "timeout_ms", "paths":
+		case "binary", "max_results", "max_matches_per_file", "max_bytes", "max_line_chars", "max_file_bytes", "timeout_ms", "kill_grace_ms", "kill_deadline_ms", "drain_after_exit_ms", "paths":
 		default:
 			return nil, configError("%s: tools.native.grep.%s is not supported", settingPath, key)
 		}
@@ -91,6 +100,15 @@ func normalizeNativeGrepSettings(
 		return nil, err
 	}
 	if settings.TimeoutMs, err = configuredInteger(fields, "timeout_ms", defaultNativeGrepTimeoutMs, 1, maxNativeGrepTimeoutMs, settingPath, "tools.native.grep"); err != nil {
+		return nil, err
+	}
+	if settings.KillGraceMs, err = configuredInteger(fields, "kill_grace_ms", defaultNativeGrepKillGraceMs, 1, maxNativeBashKillGraceMs, settingPath, "tools.native.grep"); err != nil {
+		return nil, err
+	}
+	if settings.KillDeadlineMs, err = configuredInteger(fields, "kill_deadline_ms", defaultNativeGrepKillDeadline, 1, maxNativeBashKillDeadlineMs, settingPath, "tools.native.grep"); err != nil {
+		return nil, err
+	}
+	if settings.DrainAfterExitMs, err = configuredInteger(fields, "drain_after_exit_ms", defaultNativeGrepDrainAfter, 1, maxNativeBashDrainAfterExitMs, settingPath, "tools.native.grep"); err != nil {
 		return nil, err
 	}
 

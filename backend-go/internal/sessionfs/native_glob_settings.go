@@ -12,6 +12,7 @@ const (
 	defaultNativeGlobMaxBytes      int64 = 64 * 1024
 	defaultNativeGlobMaxLineChars  int64 = 1000
 	defaultNativeGlobTimeoutMs     int64 = 10_000
+	defaultNativeGlobKillGraceMs   int64 = 2_000
 	maxNativeGlobMaxResults        int64 = 100_000
 	maxNativeGlobMaxLineChars      int64 = 8_000
 	maxNativeGlobTimeoutMs         int64 = 600_000
@@ -26,6 +27,11 @@ type NativeGlobSettings struct {
 	MaxBytes      int64
 	MaxLineChars  int64
 	TimeoutMs     int64
+	// KillGraceMs is the wait between SIGTERM and SIGKILL; KillDeadlineMs and DrainAfterExitMs
+	// are the bash runner's post-kill wait and post-exit pipe drain.
+	KillGraceMs      int64
+	KillDeadlineMs   int64
+	DrainAfterExitMs int64
 }
 
 func normalizeNativeGlobSettings(
@@ -58,7 +64,7 @@ func normalizeNativeGlobSettings(
 	}
 	for key := range fields {
 		switch key {
-		case "binary", "include_hidden", "max_results", "max_bytes", "max_line_chars", "timeout_ms", "paths":
+		case "binary", "include_hidden", "max_results", "max_bytes", "max_line_chars", "timeout_ms", "kill_grace_ms", "kill_deadline_ms", "drain_after_exit_ms", "paths":
 		default:
 			return nil, configError("%s: tools.native.glob.%s is not supported", settingPath, key)
 		}
@@ -88,6 +94,15 @@ func normalizeNativeGlobSettings(
 		return nil, err
 	}
 	if settings.TimeoutMs, err = configuredInteger(fields, "timeout_ms", defaultNativeGlobTimeoutMs, 1, maxNativeGlobTimeoutMs, settingPath, "tools.native.glob"); err != nil {
+		return nil, err
+	}
+	if settings.KillGraceMs, err = configuredInteger(fields, "kill_grace_ms", defaultNativeGlobKillGraceMs, 0, maxNativeBashKillGraceMs, settingPath, "tools.native.glob"); err != nil {
+		return nil, err
+	}
+	if settings.KillDeadlineMs, err = configuredInteger(fields, "kill_deadline_ms", defaultNativeBashKillDeadlineMs, 1, maxNativeBashKillDeadlineMs, settingPath, "tools.native.glob"); err != nil {
+		return nil, err
+	}
+	if settings.DrainAfterExitMs, err = configuredInteger(fields, "drain_after_exit_ms", defaultNativeBashDrainAfterExit, 1, maxNativeBashDrainAfterExitMs, settingPath, "tools.native.glob"); err != nil {
 		return nil, err
 	}
 

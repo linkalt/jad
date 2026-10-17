@@ -476,6 +476,31 @@ func isPublicFetchAddress(address net.IPAddr) bool {
 	if ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x0d && ip[3] == 0xb8 {
 		return false
 	}
+	// Site-local (deprecated, but still treated as internal by many networks).
+	if ip[0] == 0xfe && ip[1]&0xc0 == 0xc0 {
+		return false
+	}
+	// NAT64 (64:ff9b::/96) and 6to4 (2002::/16) carry an IPv4 address that the network maps
+	// back onto the IPv4 side, so it must be public as well.
+	if ip[0] == 0x00 && ip[1] == 0x64 && ip[2] == 0xff && ip[3] == 0x9b && allZero(ip[4:12]) {
+		return isPublicFetchAddress(net.IPAddr{IP: net.IP(append([]byte(nil), ip[12:16]...))})
+	}
+	if ip[0] == 0x20 && ip[1] == 0x02 {
+		return isPublicFetchAddress(net.IPAddr{IP: net.IP(append([]byte(nil), ip[2:6]...))})
+	}
+	// Local-use NAT64 prefix (RFC 8215): its embedded address is not reachable from outside.
+	if ip[0] == 0x00 && ip[1] == 0x64 && ip[2] == 0xff && ip[3] == 0x9b && ip[4] == 0x00 && ip[5] == 0x01 {
+		return false
+	}
+	return true
+}
+
+func allZero(data []byte) bool {
+	for _, value := range data {
+		if value != 0 {
+			return false
+		}
+	}
 	return true
 }
 

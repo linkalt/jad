@@ -1026,6 +1026,27 @@
                   "maximum": 600000,
                   "default": 10000,
                   "description": "Wall-clock budget for one search; the partial result is returned."
+                },
+                "kill_grace_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60000,
+                  "default": 250,
+                  "description": "Wait between SIGTERM and SIGKILL when a search is stopped."
+                },
+                "kill_deadline_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60000,
+                  "default": 1000,
+                  "description": "How long the call waits for ripgrep after SIGKILL or a stop request before it returns anyway."
+                },
+                "drain_after_exit_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60000,
+                  "default": 500,
+                  "description": "How long the output pipes may stay open after ripgrep exited, because a descendant still holds them, before the output is cut."
                 }
               },
               "unevaluatedProperties": false
@@ -1192,6 +1213,27 @@
                   "maximum": 600000,
                   "default": 10000,
                   "description": "Wall-clock budget for one listing."
+                },
+                "kill_grace_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 60000,
+                  "default": 2000,
+                  "description": "Wait between SIGTERM and SIGKILL when a listing is stopped. 0 sends SIGKILL at once."
+                },
+                "kill_deadline_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60000,
+                  "default": 2000,
+                  "description": "How long the call waits for ripgrep after SIGKILL or a stop request before it returns anyway."
+                },
+                "drain_after_exit_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60000,
+                  "default": 500,
+                  "description": "How long the output pipes may stay open after ripgrep exited, because a descendant still holds them, before the output is cut."
                 }
               },
               "unevaluatedProperties": false

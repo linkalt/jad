@@ -389,3 +389,36 @@ func BenchmarkExecuteNativeGlob(b *testing.B) {
 		}
 	}
 }
+
+// A descendant in its own session survives the group kill and holds the pipes; the settings'
+// kill deadline is how long the glob call waits for it.
+func TestExecuteNativeGlobKillDeadlineIsTheSettingsOwn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX executable")
+	}
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid is not installed")
+	}
+	workspace := t.TempDir()
+	binary := filepath.Join(workspace, "rg-stuck")
+	writeGlobFile(t, binary, "#!/bin/sh\nsetsid sleep 3 &\nsleep 10\n")
+	if err := os.Chmod(binary, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	run := func(deadlineMs int64) time.Duration {
+		settings := globSettingsForTest(binary, true)
+		settings.TimeoutMs = 50
+		settings.KillGraceMs = 50
+		settings.KillDeadlineMs = deadlineMs
+		settings.DrainAfterExitMs = 30_000
+		started := time.Now()
+		executeGlobForTest(t, workspace, settings, map[string]any{})
+		return time.Since(started)
+	}
+	if short := run(150); short >= 900*time.Millisecond {
+		t.Fatalf("kill deadline 150ms returned after %v, want well under 1s", short)
+	}
+	if long := run(1_500); long < 1_500*time.Millisecond {
+		t.Fatalf("kill deadline 1500ms returned after %v, want at least 1.5s", long)
+	}
+}
