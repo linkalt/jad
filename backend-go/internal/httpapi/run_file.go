@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"bytes"
-	"encoding/base64"
 	"fmt"
 	"path"
 	"strings"
@@ -18,22 +17,21 @@ const maxFilenameRunes = 255
 // pdfMagic starts every PDF file.
 var pdfMagic = []byte("%PDF-")
 
-// checkedFileData decodes one file of a run request to check it and returns it as the
-// base64 data URL a Responses input_file takes. Only PDF is accepted, judged by the first
-// bytes and never by the name or a declared type.
-func checkedFileData(label, data string, maxBytes int64) (string, error) {
+// checkedFile decodes one file of a run request to check it and returns its bytes. Only PDF
+// is accepted, judged by the first bytes and never by the name or a declared type.
+func checkedFile(label, data string, maxBytes int64) ([]byte, error) {
 	decoded, err := imagedata.Decode(data, maxBytes)
 	switch err {
 	case nil:
 	case imagedata.ErrTooLarge:
-		return "", &StatusError{Code: 413, Message: fmt.Sprintf("%s: the file is larger than %d bytes", label, maxBytes)}
+		return nil, &StatusError{Code: 413, Message: fmt.Sprintf("%s: the file is larger than %d bytes", label, maxBytes)}
 	default:
-		return "", badInput(label + ": " + err.Error())
+		return nil, badInput(label + ": " + err.Error())
 	}
 	if !bytes.HasPrefix(decoded, pdfMagic) {
-		return "", badInput(label + ": the file is not a PDF; only PDF files are supported")
+		return nil, badInput(label + ": the file is not a PDF; only PDF files are supported")
 	}
-	return "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(decoded), nil
+	return decoded, nil
 }
 
 // cleanFilename reduces a client-supplied name to something safe to store and show: the

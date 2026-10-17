@@ -474,8 +474,8 @@ test('a hidden tab waits for the page to be shown before reconnecting', async ()
     stalledStream([{event: 'run', data: runningRun}]),
     completedStream(),
   );
-  appConfig.run_stream_hidden_recheck_ms = 60000;
   const harness = hiddenTabHarness();
+  appConfig.run_stream_hidden_recheck_ms = 60000;
   try {
     const run = streamSessionRun('session-1', 'hello', {stallTimeoutMs: 5});
     await waitUntil(() => harness.listeners.size === 1);
@@ -518,8 +518,8 @@ test('aborting while the tab is hidden ends the wait and removes the listener', 
   responses.length = 0;
   const runningRun = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
   responses.push(stalledStream([{event: 'run', data: runningRun}]));
-  appConfig.run_stream_hidden_recheck_ms = 60000;
   const harness = hiddenTabHarness();
+  appConfig.run_stream_hidden_recheck_ms = 60000;
   const controller = new AbortController();
   try {
     const run = streamSessionRun('session-1', 'hello', {stallTimeoutMs: 5, signal: controller.signal});

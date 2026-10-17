@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -784,27 +785,63 @@ type runRequest struct {
 	SupportsInteraction bool            `json:"supports_interaction,omitempty"`
 }
 
+const (
+	bodyFirstChunk = 4 << 10
+	bodyMaxChunk   = 1 << 20
+)
+
+// readAllChunked reads r to the end into chunks that grow as bytes arrive, then joins them
+// once. A reader that doubles one buffer overshoots the body by up to 2x and copies it on
+// every doubling; sizing the buffer from Content-Length instead lets a client that declares
+// a large body and sends none pin that much memory.
+func readAllChunked(r io.Reader) ([]byte, error) {
+	var chunks [][]byte
+	total, size := 0, bodyFirstChunk
+	for {
+		chunk := make([]byte, size)
+		n, err := io.ReadFull(r, chunk)
+		if n > 0 {
+			chunks = append(chunks, chunk[:n])
+			total += n
+		}
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		size = min(size*2, bodyMaxChunk)
+	}
+	if len(chunks) == 1 {
+		return chunks[0], nil
+	}
+	joined := make([]byte, 0, total)
+	for _, chunk := range chunks {
+		joined = append(joined, chunk...)
+	}
+	return joined, nil
+}
+
 func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes, baseBytes int64, limits RunInputLimits) (runRequest, error) {
-	reader := http.MaxBytesReader(w, r.Body, maxBytes)
-	decoder := json.NewDecoder(reader)
-	var raw json.RawMessage
-	if err := decoder.Decode(&raw); err != nil {
+	raw, err := readAllChunked(http.MaxBytesReader(w, r.Body, maxBytes))
+	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			return runRequest{}, &StatusError{Code: http.StatusRequestEntityTooLarge, Message: "request body is too large"}
 		}
 		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "invalid JSON body"}
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			return runRequest{}, &StatusError{Code: http.StatusRequestEntityTooLarge, Message: "request body is too large"}
-		}
-		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "request body must contain one JSON object"}
-	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		// Unmarshal has already scanned the whole body; the checks below only pick the message.
+		if !json.Valid(raw) {
+			decoder := json.NewDecoder(bytes.NewReader(raw))
+			var first json.RawMessage
+			if decoder.Decode(&first) != nil {
+				return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "invalid JSON body"}
+			}
+			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "request body must contain one JSON object"}
+		}
 		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "input must be a non-empty string"}
 	}
 

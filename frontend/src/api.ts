@@ -1524,8 +1524,9 @@ function waitForBrowserOnline(recheckMs: number, signal?: AbortSignal): Promise<
   return waitWhileBlocked(globalThis as EventTarget, 'online', browserIsOffline, recheckMs, signal);
 }
 
-// A hidden tab keeps retrying, only less often: the run's completion still reaches the
-// notifications, and the tab catches up at once when it is shown again.
+// A hidden tab keeps retrying, only less often, and catches up at once when it is shown. A
+// browser may delay the recheck timer of a long-hidden tab past run_state_retention_ms; the
+// reconnect then finds the run gone and reports an unknown outcome, as it does for any gap.
 function waitForTabVisible(recheckMs: number, signal?: AbortSignal): Promise<void> {
   return waitWhileBlocked(
     typeof document === 'undefined' ? undefined : document,

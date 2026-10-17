@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"jad/backend-go/internal/catalog"
 )
@@ -297,7 +298,9 @@ func DeleteCatalogFile(layout Layout, roots []Root, kind CatalogKind, id, ifMatc
 		return err
 	}
 	// Removing a directory succeeds only when it is empty, so a file created meanwhile stays.
+	categoryDirectoryMu.Lock()
 	_ = os.Remove(filepath.Dir(path))
+	categoryDirectoryMu.Unlock()
 	return nil
 }
 
@@ -438,22 +441,40 @@ func profileUsers(layout Layout, roots []Root, id string) ([]string, error) {
 
 const createDirectoryAttempts = 32
 
+// categoryDirectoryMu orders a creator's MkdirAll+CreateTemp against a deleter's removal of the
+// then-empty category directory inside this process. Another process sharing the directory is
+// not covered by it; createTempInCategory's retry is what handles that case.
+var categoryDirectoryMu sync.Mutex
+
+// createTempInCategory makes the file's directory and a temporary file in it. Once the
+// temporary file exists the directory is not empty, so a delete cannot remove it. Another
+// process may still remove the directory in between; each such removal needs a file that
+// existed, so the retry makes progress, and the bound is a guard.
+func createTempInCategory(path string) (*os.File, error) {
+	for attempt := 1; ; attempt++ {
+		file, err := func() (*os.File, error) {
+			categoryDirectoryMu.Lock()
+			defer categoryDirectoryMu.Unlock()
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return nil, err
+			}
+			return os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-")
+		}()
+		if err == nil {
+			return file, nil
+		}
+		if attempt >= createDirectoryAttempts || !(errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrExist)) {
+			return nil, err
+		}
+	}
+}
+
 // createFileExclusive stores data at path only if nothing is there: the contents go to a
 // temporary file that is then hard-linked into place, so a concurrent creator loses.
 func createFileExclusive(path string, data []byte, syncWrite bool) error {
-	var file *os.File
-	// A delete may remove the then-empty category directory between MkdirAll and CreateTemp.
-	// Each such removal needs a file that existed, so the loop makes progress; the bound is a guard.
-	for attempt := 1; file == nil; attempt++ {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
-		}
-		created, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-")
-		if err == nil {
-			file = created
-		} else if attempt >= createDirectoryAttempts || !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
+	file, err := createTempInCategory(path)
+	if err != nil {
+		return err
 	}
 	temporaryPath := file.Name()
 	defer func() { _ = os.Remove(temporaryPath) }()

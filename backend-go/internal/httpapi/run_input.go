@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -34,17 +35,6 @@ type runInputPart struct {
 	Name *string `json:"name"`
 }
 
-// userMessageContent is one part of the stored user message.
-type userMessageContent struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	ImageURL string `json:"image_url,omitempty"`
-	Detail   string `json:"detail,omitempty"`
-	// Filename and FileData are an input_file part: a PDF as a base64 data URL.
-	Filename string `json:"filename,omitempty"`
-	FileData string `json:"file_data,omitempty"`
-}
-
 // parseRunInput turns the "input" of a run request into what the runner takes: a JSON
 // string for a text input (the shape it has always had, so the transcript is the same),
 // or one Responses user message for an array of parts. A bad request is a StatusError
@@ -74,7 +64,14 @@ func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMes
 	if json.Unmarshal(raw, &parts) != nil || len(parts) == 0 {
 		return nil, 0, badInput("input must be a non-empty string or a non-empty array of parts")
 	}
-	content := make([]userMessageContent, 0, len(parts))
+	// The message is encoded straight into one buffer, sized from the request's own data, so a
+	// large image or file is never held as a decoded copy, a data URL string and a marshalled copy.
+	size := 128
+	for _, rawPart := range parts {
+		size += len(rawPart) + 128
+	}
+	out := append(make([]byte, 0, size), `{"type":"message","role":"user","content":[`...)
+	written := 0
 	images, files, hasText := 0, 0, false
 	for index, rawPart := range parts {
 		label := fmt.Sprintf("input part %d", index+1)
@@ -94,7 +91,10 @@ func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMes
 				continue
 			}
 			hasText = true
-			content = append(content, userMessageContent{Type: "input_text", Text: *part.Text})
+			out = appendPartSeparator(out, &written)
+			out = append(out, `{"type":"input_text","text":`...)
+			out = appendJSONString(out, *part.Text)
+			out = append(out, '}')
 		case "image":
 			if err := onlyFields(label, fields, "type", "data"); err != nil {
 				return nil, 0, err
@@ -110,11 +110,16 @@ func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMes
 			if images > limits.MaxImages {
 				return nil, 0, badInput(fmt.Sprintf("input has more than %d images", limits.MaxImages))
 			}
-			url, err := checkedImageURL(label, *part.Data, limits.MaxImageBytes)
+			mime, decoded, err := checkedImage(label, *part.Data, limits.MaxImageBytes)
 			if err != nil {
 				return nil, 0, err
 			}
-			content = append(content, userMessageContent{Type: "input_image", ImageURL: url, Detail: "auto"})
+			out = appendPartSeparator(out, &written)
+			out = append(out, `{"type":"input_image","image_url":"data:`...)
+			out = append(out, mime...)
+			out = append(out, ";base64,"...)
+			out = base64.StdEncoding.AppendEncode(out, decoded)
+			out = append(out, `","detail":"auto"}`...)
 		case "file":
 			if err := onlyFields(label, fields, "type", "name", "data"); err != nil {
 				return nil, 0, err
@@ -137,11 +142,16 @@ func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMes
 			if err != nil {
 				return nil, 0, err
 			}
-			fileData, err := checkedFileData(label, *part.Data, limits.MaxFileBytes)
+			decoded, err := checkedFile(label, *part.Data, limits.MaxFileBytes)
 			if err != nil {
 				return nil, 0, err
 			}
-			content = append(content, userMessageContent{Type: "input_file", Filename: name, FileData: fileData})
+			out = appendPartSeparator(out, &written)
+			out = append(out, `{"type":"input_file","filename":`...)
+			out = appendJSONString(out, name)
+			out = append(out, `,"file_data":"data:application/pdf;base64,`...)
+			out = base64.StdEncoding.AppendEncode(out, decoded)
+			out = append(out, `"}`...)
 		default:
 			return nil, 0, badInput(label + " has an unknown type; use text, image or file")
 		}
@@ -149,30 +159,39 @@ func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMes
 	if !hasText && images == 0 && files == 0 {
 		return nil, 0, badInput("input must have some text, an image or a file")
 	}
-	encoded, err := json.Marshal(struct {
-		Type    string               `json:"type"`
-		Role    string               `json:"role"`
-		Content []userMessageContent `json:"content"`
-	}{Type: "message", Role: "user", Content: content})
-	return encoded, imageChars, err
+	return append(out, "]}"...), imageChars, nil
 }
 
-// checkedImageURL decodes one image to check it and returns it as a data URL of the type
-// its bytes show, whatever type the client declared.
-func checkedImageURL(label, data string, maxBytes int64) (string, error) {
+func appendPartSeparator(out []byte, written *int) []byte {
+	if *written > 0 {
+		out = append(out, ',')
+	}
+	*written++
+	return out
+}
+
+// appendJSONString appends text as encoding/json writes a string field (HTML characters escaped).
+func appendJSONString(out []byte, text string) []byte {
+	encoded, _ := json.Marshal(text)
+	return append(out, encoded...)
+}
+
+// checkedImage decodes one image to check it and returns the type its bytes show, whatever
+// type the client declared, and the decoded bytes.
+func checkedImage(label, data string, maxBytes int64) (string, []byte, error) {
 	decoded, err := imagedata.Decode(data, maxBytes)
 	switch err {
 	case nil:
 	case imagedata.ErrTooLarge:
-		return "", &StatusError{Code: 413, Message: fmt.Sprintf("%s: the image is larger than %d bytes", label, maxBytes)}
+		return "", nil, &StatusError{Code: 413, Message: fmt.Sprintf("%s: the image is larger than %d bytes", label, maxBytes)}
 	default:
-		return "", badInput(label + ": " + err.Error())
+		return "", nil, badInput(label + ": " + err.Error())
 	}
 	mime, err := imagedata.Sniff(decoded)
 	if err != nil {
-		return "", badInput(label + ": the image is " + mime + "; png, jpeg, webp and gif are supported")
+		return "", nil, badInput(label + ": the image is " + mime + "; png, jpeg, webp and gif are supported")
 	}
-	return imagedata.DataURL(mime, decoded), nil
+	return mime, decoded, nil
 }
 
 func onlyFields(label string, fields map[string]json.RawMessage, allowed ...string) error {
