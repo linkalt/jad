@@ -176,12 +176,13 @@ test('modelChoiceRows expanded lists every model, filtered by the query', () => 
   assert.deepEqual(modelChoiceRows(optionList, 'opus', 'high', 'zzz', true), []);
 });
 
-test('modelChoiceRows marks no effort on the selected row when no effort is set', () => {
+test('modelChoiceRows marks the model default effort on the selected row when no effort is set', () => {
+  const opusDefault = defaultEffortFor(optionList[0]);
   assert.deepEqual(modelChoiceRows(optionList, 'opus', undefined, '', false), [
-    {option: optionList[0], isSelected: true},
+    {option: optionList[0], isSelected: true, ...(opusDefault === undefined ? {} : {markedEffort: opusDefault})},
   ]);
   assert.deepEqual(modelChoiceRows(optionList, 'opus', undefined, '', true).map(row => row.markedEffort), [
-    undefined,
+    opusDefault,
     'low',
     undefined,
   ]);

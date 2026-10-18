@@ -77,13 +77,10 @@ export function modelChoiceRows(
     : options.filter(option => option.id === (selectedModelId ?? options[0]?.id));
   return visible.map(option => {
     const isSelected = option.id === selectedModelId;
-    const marked = !isSelected
-      ? defaultEffortFor(option)
-      : selectedEffort === undefined
-        ? undefined
-        : (option.efforts ?? []).includes(selectedEffort)
-          ? selectedEffort
-          : defaultEffortFor(option);
+    const marked =
+      isSelected && selectedEffort !== undefined && (option.efforts ?? []).includes(selectedEffort)
+        ? selectedEffort
+        : defaultEffortFor(option);
     return marked === undefined
       ? {option, isSelected}
       : {option, isSelected, markedEffort: marked};
