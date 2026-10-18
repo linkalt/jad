@@ -80,9 +80,13 @@ test('a row opens the list, picks in place, and the list stays open', () => {
   assert.match(drawer, /event\.key !== 'Enter' && event\.key !== ' '/, 'Enter and Space act like a click');
 });
 
-test('the open list tints the row under the pointer', () => {
-  assert.match(drawer, /const HOVERED_ROW = \{\s*backgroundColor: 'var\(--color-background-gray\)'/, 'the hover tint is a theme token strong enough to see (muted is ~5% opacity)');
-  assert.match(drawer, /style=\{isExpanded && !isDisabled && hoveredId === row\.option\.id \? HOVERED_ROW : undefined\}/, 'only the open list, only an enabled drawer, only the hovered row');
+test('the collapsed row is tinted always; the open list tints the row under the pointer', () => {
+  assert.match(drawer, /const ROW_TINT = \{\s*backgroundColor: 'var\(--color-background-gray\)'/, 'the hover tint is a theme token strong enough to see (muted is ~5% opacity)');
+  assert.match(
+    drawer,
+    /style=\{\s*!isExpanded \|\| \(!isDisabled && hoveredId === row\.option\.id\)\s*\? ROW_TINT\s*: undefined\s*\}/,
+    'the collapsed row is always tinted; in the open list only an enabled drawer tints the hovered row',
+  );
   assert.match(drawer, /onMouseEnter=\{\(\) => setHoveredId\(row\.option\.id\)\}/, 'entering a row marks it');
   assert.match(drawer, /onMouseLeave=\{\(\) => setHoveredId\(null\)\}/, 'leaving clears it');
 });

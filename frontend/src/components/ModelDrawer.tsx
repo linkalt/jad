@@ -35,8 +35,8 @@ const SELECTED_ID_BOX = {
   borderRadius: 'var(--radius-element)',
 };
 
-/** The tint under the row the pointer is on, in the open list only. */
-const HOVERED_ROW = {
+/** The tint under the collapsed row (always) and under the row the pointer is on in the open list. */
+const ROW_TINT = {
   backgroundColor: 'var(--color-background-gray)',
   borderRadius: 'var(--radius-element)',
 };
@@ -124,7 +124,11 @@ export function ModelDrawer({
                   data-model-row={row.isSelected ? 'selected' : 'choice'}
                   paddingInline={1}
                   paddingBlock={0.5}
-                  style={isExpanded && !isDisabled && hoveredId === row.option.id ? HOVERED_ROW : undefined}
+                  style={
+                    !isExpanded || (!isDisabled && hoveredId === row.option.id)
+                      ? ROW_TINT
+                      : undefined
+                  }
                   onMouseEnter={() => setHoveredId(row.option.id)}
                   onMouseLeave={() => setHoveredId(null)}
                   tabIndex={isDisabled ? -1 : 0}
