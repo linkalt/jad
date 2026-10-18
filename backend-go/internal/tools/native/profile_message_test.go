@@ -79,6 +79,7 @@ func TestProfileMessageSentinelErrorsAndFailure(t *testing.T) {
 		{ErrProfileBusy, "profile_busy"},
 		{ErrProfileCycle, "profile_cycle"},
 		{ErrProfileSameTranscript, "profile_same_transcript"},
+		{ErrProfileNoAnswer, "profile_no_answer"},
 		{errors.New("disk exploded"), "profile_failed"},
 	}
 	for _, c := range cases {
@@ -92,6 +93,9 @@ func TestProfileMessageSentinelErrorsAndFailure(t *testing.T) {
 		}
 		if c.code == "profile_same_transcript" && !strings.Contains(output, "shares this conversation and cannot be called") {
 			t.Errorf("same-transcript text missing: %s", output)
+		}
+		if c.code == "profile_no_answer" && (strings.Contains(output, `"status":"ok"`) || !strings.Contains(output, "Profile reviewer finished without an answer")) {
+			t.Errorf("no-answer result wrong: %s", output)
 		}
 	}
 }

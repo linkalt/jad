@@ -185,15 +185,48 @@ func boundRunnerOf(t *testing.T, f *layoutFixture, profile string) boundRunner {
 	return bound
 }
 
-func TestProfileMessageToATargetWhoseRunMutexIsHeldReportsSameTranscript(t *testing.T) {
+func TestSameTranscriptComparesTheSharedStoreNotTheRunMutex(t *testing.T) {
+	f := newLayoutFixture(t)
+	coder := boundRunnerOf(t, f, "dev/coder")
+	alias := boundRunnerOf(t, f, "dev/coder")
+	reviewer := boundRunnerOf(t, f, "review/reviewer")
+
+	if !sameTranscript(coder, alias) {
+		t.Fatal("two runners over one transcript store were not reported as the same transcript")
+	}
+	reviewer.shared.runMu.Lock()
+	defer reviewer.shared.runMu.Unlock()
+	if sameTranscript(coder, reviewer) {
+		t.Fatal("a profile with its own transcript, whose run mutex is held, was reported as the same transcript")
+	}
+}
+
+func TestProfileMessageToARunningTargetReportsBusyNotSameTranscript(t *testing.T) {
 	f := newLayoutFixture(t)
 	bound := boundRunnerOf(t, f, "review/reviewer")
 	bound.shared.runMu.Lock()
 	defer bound.shared.runMu.Unlock()
+	release, err := f.service.resolver.LockSession(context.Background(), "local:demo", "review/reviewer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	_, err = profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	if !errors.Is(err, native.ErrProfileBusy) {
+		t.Fatalf("error = %v, want ErrProfileBusy", err)
+	}
+}
+
+func TestProfileMessageWithoutAnswerTextReturnsErrProfileNoAnswer(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.script = func(string, string) string {
+		return `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"  "}]}`
+	}
 
 	_, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
-	if !errors.Is(err, native.ErrProfileSameTranscript) {
-		t.Fatalf("error = %v, want ErrProfileSameTranscript", err)
+	if !errors.Is(err, native.ErrProfileNoAnswer) {
+		t.Fatalf("error = %v, want ErrProfileNoAnswer", err)
 	}
 }
 

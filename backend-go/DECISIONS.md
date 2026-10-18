@@ -831,5 +831,6 @@ A run's context has no deadline and the provider stream had no guard, so a provi
 - **A target run that fails is recorded unless the caller cancelled.** A `timeout_ms` expiry still records the run-error entry; only `context.Canceled` skips it.
 - **`profile_failed` returns a generic line to the model,** without the error text.
 - **A caller stop returns a rendered `cancelled` error result,** not a bare context error.
-- **A target that shares the caller's transcript returns `profile_same_transcript`** (`native.ErrProfileSameTranscript`): "Profile X shares this conversation and cannot be called". It is not `profile_busy`, because retrying never helps.
+- **A target that shares the caller's transcript returns `profile_same_transcript`** (`native.ErrProfileSameTranscript`): "Profile X shares this conversation and cannot be called". It is not `profile_busy`, because retrying never helps. The test is identity of the shared store (the caller's and the target's resolved runner), not whether the run mutex is held: a target that is merely running is `profile_busy` (`TryLockSession` is the only busy test).
+- **A target whose run ends with no answer text returns `profile_no_answer`** (`native.ErrProfileNoAnswer`, a non-OK result "Profile X finished without an answer"), not an empty success.
 - **The target's transcript is the ordinary (session, profile) transcript,** so the target keeps its context across calls and the user sees the exchange as normal turns.

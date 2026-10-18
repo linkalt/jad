@@ -33,6 +33,10 @@ var ErrProfileBusy = errors.New("profile is busy")
 // shares the calling profile's transcript, so the call can never succeed.
 var ErrProfileSameTranscript = errors.New("profile shares the calling transcript")
 
+// ErrProfileNoAnswer is returned by a ProfileMessenger when the target run finished
+// without any answer text.
+var ErrProfileNoAnswer = errors.New("profile finished without an answer")
+
 // ErrProfileCycle is returned by a ProfileMessenger when the message would reach the
 // calling profile itself, close a cycle, or nest inside another profile message.
 var ErrProfileCycle = errors.New("profile message would form a cycle")
@@ -138,6 +142,9 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		case errors.Is(err, ErrProfileBusy):
 			return tools.ExecutionError(callID, tools.StatusError, "profile_busy",
 				fmt.Sprintf("Profile %s is running; try again later", profile)), nil
+		case errors.Is(err, ErrProfileNoAnswer):
+			return tools.ExecutionError(callID, tools.StatusError, "profile_no_answer",
+				fmt.Sprintf("Profile %s finished without an answer", profile)), nil
 		case errors.Is(err, ErrProfileCycle):
 			return tools.ExecutionError(callID, tools.StatusError, "profile_cycle",
 				fmt.Sprintf("Profile %s cannot be messaged from here: it would form a cycle", profile)), nil

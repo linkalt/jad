@@ -51,13 +51,15 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 	if canonical == caller {
 		return "", native.ErrProfileCycle
 	}
-	// The same transcript path under another profile name shares one store, whose
-	// run mutex the caller holds; waiting for it would never end.
-	if bound, ok := resolved.Runner.(boundRunner); ok {
-		if !bound.shared.runMu.TryLock() {
-			return "", native.ErrProfileSameTranscript
-		}
-		bound.shared.runMu.Unlock()
+	// Another profile name over the caller's transcript would wait for the run mutex
+	// the caller holds; it never ends, so refuse it. Running is not the same: that
+	// is what TryLockSession reports as busy.
+	callerSession, err := m.resolver.Resolve(ctx, reference, caller, "")
+	if err != nil {
+		return "", err
+	}
+	if sameTranscript(callerSession.Runner, resolved.Runner) {
+		return "", native.ErrProfileSameTranscript
 	}
 	release, err := m.resolver.TryLockSession(ctx, reference, canonical, "")
 	if err != nil {
@@ -96,7 +98,17 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		}
 		return "", err
 	}
-	return native.SubagentAnswerText(result.Event), nil
+	answer := native.SubagentAnswerText(result.Event)
+	if strings.TrimSpace(answer) == "" {
+		return "", native.ErrProfileNoAnswer
+	}
+	return answer, nil
+}
+
+func sameTranscript(a, b httpapi.RunSession) bool {
+	first, okFirst := a.(boundRunner)
+	second, okSecond := b.(boundRunner)
+	return okFirst && okSecond && first.shared == second.shared
 }
 
 func (r *Resolver) recordProfileRunFailure(runner httpapi.RunSession, accepted *session.PersistedInput, turnID string) {
