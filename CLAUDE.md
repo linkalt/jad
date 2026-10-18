@@ -66,7 +66,7 @@ Skills are in `.jad/prompts/skills/`. Keep must-not-break rules here; load a ski
 
 | Trigger | Skill / instruction |
 |---|---|
-| Work in `frontend_new/` | No `CLAUDE.md` there; `frontend/CLAUDE.md` still describes the shared Astryx conventions. Do not add work to `frontend/`. |
+| Work in `frontend_new/` | Read `frontend_new/CLAUDE.md` (git-ignored, machine-local). Do not add work to `frontend/`. |
 | Work in `backend-go/` | Read `backend-go/CLAUDE.md` (including cgo/build quirks). |
 | Add/change an agent-facing tool or schema | `agent-tool-design-guidelines` |
 | Change may affect `messages.jsonl` (persistence, serialization, tool results, streaming, sessions) | `messages-golden-diff` |
