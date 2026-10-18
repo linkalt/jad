@@ -45,11 +45,12 @@ func (m *runMutex) LockCtx(ctx context.Context) error {
 	}
 }
 
-// Unlock on an unlocked mutex does nothing.
+// Unlock on an unlocked mutex panics, like sync.Mutex.
 func (m *runMutex) Unlock() {
 	m.init()
 	select {
 	case <-m.slot:
 	default:
+		panic("app: unlock of unlocked runMutex")
 	}
 }

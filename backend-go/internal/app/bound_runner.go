@@ -32,6 +32,9 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		return session.RunResult{}, err
 	}
 	defer r.shared.runMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return session.RunResult{}, err
+	}
 	nextSessionTurn := func() (int64, error) {
 		index, err := scanTranscriptIndex(r.shared, r.config)
 		if err != nil {

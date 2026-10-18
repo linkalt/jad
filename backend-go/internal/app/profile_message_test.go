@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"jad/backend-go/internal/session"
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools/native"
 )
 
@@ -260,6 +262,76 @@ func TestBoundRunnerRunReturnsTheContextErrorWhileRunMutexIsHeld(t *testing.T) {
 	}
 	if got := countRecords(); got != recordsBefore {
 		t.Fatalf("transcript has %d records, want %d: a run that never got the lock stored input", got, recordsBefore)
+	}
+}
+
+// lateCancelContext reports no error on its first Err call and a closed Done channel from the start,
+// like a context cancelled after LockCtx's own check but before its select.
+type lateCancelContext struct {
+	context.Context
+	calls atomic.Int32
+}
+
+func (c *lateCancelContext) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
+func (c *lateCancelContext) Err() error {
+	if c.calls.Add(1) == 1 {
+		return nil
+	}
+	return context.Canceled
+}
+
+func TestBoundRunnerRunStoresNoInputWhenTheContextEndsAsTheFreeLockIsTaken(t *testing.T) {
+	f := newLayoutFixture(t)
+	bound := boundRunnerOf(t, f, "review/reviewer")
+	countRecords := func() int {
+		count := 0
+		if err := bound.shared.store.ReadRecords(func(int64, []byte) error { count++; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	recordsBefore := countRecords()
+	for i := 0; i < 50; i++ {
+		_, err := bound.Run(&lateCancelContext{Context: context.Background()}, json.RawMessage(`"hi"`), session.RunOptions{})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("iteration %d: error = %v, want context.Canceled", i, err)
+		}
+	}
+	if got := countRecords(); got != recordsBefore {
+		t.Fatalf("transcript has %d records, want %d: a cancelled run stored input", got, recordsBefore)
+	}
+	if !bound.shared.runMu.TryLock() {
+		t.Fatal("a cancelled run kept the run mutex")
+	}
+	bound.shared.runMu.Unlock()
+}
+
+func TestProfileMessageToADifferentProfileOverOneTranscriptReportsSameTranscript(t *testing.T) {
+	f := newLayoutFixture(t)
+	coder := boundRunnerOf(t, f, "dev/coder")
+	backdate(t, f.root)
+	location, err := sessionfs.Resolve(f.service.resolver.roots, "local:demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, stamp, err := sessionfs.LoadSessionSettingsStamped(location, "review/reviewer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.StoragePaths, config.MessagesPath, config.StagingDir = coder.config.StoragePaths, coder.config.MessagesPath, coder.config.StagingDir
+	f.service.resolver.lockedConfigs.put(
+		lockedConfigKey{file: location.File, profile: "review/reviewer"},
+		lockedConfig{config: config, stamp: stamp, loaded: time.Now()},
+	)
+
+	_, err = profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	if !errors.Is(err, native.ErrProfileSameTranscript) {
+		t.Fatalf("error = %v, want ErrProfileSameTranscript", err)
 	}
 }
 

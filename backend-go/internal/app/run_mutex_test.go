@@ -68,16 +68,13 @@ func TestRunMutexCancelledLockCtxDoesNotTakeTheLock(t *testing.T) {
 	mu.Unlock()
 }
 
-func TestRunMutexUnlockOnFreeMutexDoesNotBlock(t *testing.T) {
+func TestRunMutexUnlockOnFreeMutexPanics(t *testing.T) {
 	var mu runMutex
-	done := make(chan struct{})
-	go func() {
-		mu.Unlock()
-		close(done)
+	defer func() {
+		if got := recover(); got != "app: unlock of unlocked runMutex" {
+			t.Fatalf("panic = %v, want the unlock of unlocked runMutex panic", got)
+		}
 	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Unlock blocked on a free mutex")
-	}
+	mu.Unlock()
+	t.Fatal("Unlock on a free mutex did not panic")
 }
