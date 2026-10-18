@@ -1,0 +1,31 @@
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import './themes/neutral/theme.css';
+
+:root {
+  --stylex-injection: 0;
+}
+
+/*
+ * Firefox does not paint `code::highlight(...)` on text that sits in a child
+ * element of <code>, and Astryx's CodeBlock puts every line in its own
+ * <div data-line> inside <code>. Its own rules therefore colour nothing in
+ * Firefox (157 checked; Chrome is fine). The same colours, matched on the
+ * descendants, fix it without changing Chrome. Token names and colour tokens
+ * come from @astryxdesign/core CodeBlock/highlightStyles.
+ */
+.astryx-code-block code *::highlight(astryx-keyword) { color: var(--color-syntax-keyword); }
+.astryx-code-block code *::highlight(astryx-string) { color: var(--color-syntax-string); }
+.astryx-code-block code *::highlight(astryx-comment) { color: var(--color-syntax-comment); }
+.astryx-code-block code *::highlight(astryx-number) { color: var(--color-syntax-number); }
+.astryx-code-block code *::highlight(astryx-function) { color: var(--color-syntax-function); }
+.astryx-code-block code *::highlight(astryx-type) { color: var(--color-syntax-type); }
+.astryx-code-block code *::highlight(astryx-tag) { color: var(--color-syntax-tag); }
+.astryx-code-block code *::highlight(astryx-attribute) { color: var(--color-syntax-attribute); }
+.astryx-code-block code *::highlight(astryx-property) { color: var(--color-syntax-property); }
+.astryx-code-block code *::highlight(astryx-operator) { color: var(--color-syntax-operator); }
+.astryx-code-block code *::highlight(astryx-constant) { color: var(--color-syntax-constant); }
+.astryx-code-block code *::highlight(astryx-punctuation) { color: var(--color-syntax-punctuation); }
+.astryx-code-block code *::highlight(astryx-variable) { color: var(--color-syntax-variable); }
+
+[data-catalog-row='open'] { cursor: pointer; }

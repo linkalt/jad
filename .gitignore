@@ -21,6 +21,8 @@ backend-go/jad
 /sample/anthropic-adapter-oauth.json
 /backend-go/CLAUDE.md
 /frontend/CLAUDE.md
+/frontend_new/CLAUDE.md
+/frontend_new/dist/
 /backend-go/jad_ant
 /backend-go/openai-auth
 /backend-go/claude-auth
