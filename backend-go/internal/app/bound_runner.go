@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"jad/backend-go/internal/checkpoint"
 	"jad/backend-go/internal/session"
@@ -27,8 +29,31 @@ type boundRunner struct {
 	memoryStore    *native.MemoryStore
 }
 
+const runLockPollInterval = 10 * time.Millisecond
+
+// lockRun takes mu like Lock, but gives up with ctx's error once ctx is done.
+func lockRun(ctx context.Context, mu *sync.Mutex) error {
+	if mu.TryLock() {
+		return nil
+	}
+	ticker := time.NewTicker(runLockPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if mu.TryLock() {
+				return nil
+			}
+		}
+	}
+}
+
 func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options session.RunOptions) (session.RunResult, error) {
-	r.shared.runMu.Lock()
+	if err := lockRun(ctx, &r.shared.runMu); err != nil {
+		return session.RunResult{}, err
+	}
 	defer r.shared.runMu.Unlock()
 	nextSessionTurn := func() (int64, error) {
 		index, err := scanTranscriptIndex(r.shared, r.config)

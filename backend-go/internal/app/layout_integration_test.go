@@ -32,6 +32,8 @@ type layoutFixture struct {
 	// the client gives up, so a test can have a run in flight.
 	hold    bool
 	reached chan struct{}
+	// script, when set, returns the JSON output item a request is answered with; "" keeps the plain "ok" message.
+	script func(model, body string) string
 	// server is merged into the root setting's server object before the config is loaded.
 	server map[string]any
 }
@@ -56,16 +58,22 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 		if f.captureBodies {
 			f.bodies = append(f.bodies, string(raw))
 		}
-		hold, reached := f.hold, f.reached
+		hold, reached, script := f.hold, f.reached, f.script
 		f.mu.Unlock()
 		if hold {
 			reached <- struct{}{}
 			<-r.Context().Done()
 			return
 		}
+		item := `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}`
+		if script != nil {
+			if scripted := script(request.Model, string(raw)); scripted != "" {
+				item = scripted
+			}
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, event := range []string{
-			`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}`,
+			`{"type":"response.output_item.done","output_index":0,"item":` + item + `}`,
 			`{"type":"response.completed","response":{"id":"r","status":"completed","model":"` + request.Model + `","output":[]}}`,
 			"[DONE]",
 		} {
@@ -95,6 +103,15 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 		"session_roots":  []any{map[string]any{"id": "local", "path": "sessions"}},
 		"catalogs":       map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": filepath.Join(f.cwd, ".jad", "state")},
 	}
+	toolDefinitions := make([]string, 0, 2)
+	for _, name := range []string{"write", "profile_message"} {
+		definition, err := filepath.Abs(filepath.Join("..", "..", "..", "sample", "tools", "native", name+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		toolDefinitions = append(toolDefinitions, definition)
+	}
+	rootSetting["libraries"] = map[string]any{"tool_definition_paths": toolDefinitions}
 	if len(server) > 0 {
 		rootSetting["server"] = server
 	}

@@ -2,13 +2,16 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/tools/native"
 )
 
@@ -115,6 +118,119 @@ func TestRecordProfileRunFailureRecordsUnlessCancelled(t *testing.T) {
 			}
 		})
 	}
+}
+
+// scriptFunctionCall answers the first request of a run with a function call and every
+// later one (a request that already carries a function_call_output) with the plain reply.
+func scriptFunctionCall(name string, arguments map[string]any) func(model, body string) string {
+	encoded, _ := json.Marshal(arguments)
+	item, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "call-1", "name": name, "arguments": string(encoded)})
+	return func(_, body string) string {
+		if strings.Contains(body, "function_call_output") {
+			return ""
+		}
+		return string(item)
+	}
+}
+
+func TestProfileMessageRunCannotCallProfileMessageItself(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"profiles":["dev/coder"]}},"mcp":{}}`)
+	f.captureBodies = true
+	f.script = scriptFunctionCall("profile_message", map[string]any{"profile": "dev/coder", "message": "again"})
+
+	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(context.Background(), profileMessageOwner, "review/reviewer", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	last := f.bodies[len(f.bodies)-1]
+	f.mu.Unlock()
+	if !strings.Contains(last, "function_call_output") || !strings.Contains(last, "profile_cycle") {
+		t.Fatalf("the nested profile_message call did not report profile_cycle: %s", last)
+	}
+	reviewerMessages := filepath.Join(f.cwd, ".jad", "state", "demo", "review", "reviewer", "messages.jsonl")
+	if data, err := os.ReadFile(reviewerMessages); err != nil || !strings.Contains(string(data), "profile_cycle") {
+		t.Fatalf("transcript of review/reviewer: %v %s", err, data)
+	}
+	coderMessages := filepath.Join(f.cwd, ".jad", "state", "demo", "dev", "coder", "messages.jsonl")
+	if data, err := os.ReadFile(coderMessages); err == nil && strings.Contains(string(data), "again") {
+		t.Fatalf("the nested call reached the caller's transcript: %s", data)
+	}
+}
+
+func TestProfileMessageTargetToolWithApprovalAskRunsUnderAutoApprove(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"write":{"approval":"ask"}},"mcp":{}}`)
+	f.captureBodies = true
+	f.script = scriptFunctionCall("write", map[string]any{"path": "made.txt", "content": "by the target\n"})
+
+	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(context.Background(), profileMessageOwner, "review/reviewer", "write it"); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(f.cwd, "made.txt")); err != nil || string(data) != "by the target\n" {
+		t.Fatalf("made.txt: %v %q, want the file written without a user approval", err, data)
+	}
+}
+
+func boundRunnerOf(t *testing.T, f *layoutFixture, profile string) boundRunner {
+	t.Helper()
+	resolved, err := f.service.resolver.Resolve(context.Background(), "local:demo", profile, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, ok := resolved.Runner.(boundRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want boundRunner", resolved.Runner)
+	}
+	return bound
+}
+
+func TestProfileMessageToATargetWhoseRunMutexIsHeldReportsSameTranscript(t *testing.T) {
+	f := newLayoutFixture(t)
+	bound := boundRunnerOf(t, f, "review/reviewer")
+	bound.shared.runMu.Lock()
+	defer bound.shared.runMu.Unlock()
+
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	if !errors.Is(err, native.ErrProfileSameTranscript) {
+		t.Fatalf("error = %v, want ErrProfileSameTranscript", err)
+	}
+}
+
+func TestBoundRunnerRunReturnsTheContextErrorWhileRunMutexIsHeld(t *testing.T) {
+	f := newLayoutFixture(t)
+	bound := boundRunnerOf(t, f, "review/reviewer")
+	bound.shared.runMu.Lock()
+	defer bound.shared.runMu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	done := make(chan error, 1)
+	go func() {
+		_, err := bound.Run(ctx, json.RawMessage(`"hi"`), session.RunOptions{})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run kept waiting for the run mutex after its context was cancelled")
+	}
+}
+
+func TestLockRunWaitsForTheMutexWithALiveContext(t *testing.T) {
+	var mu sync.Mutex
+	mu.Lock()
+	time.AfterFunc(50*time.Millisecond, mu.Unlock)
+	if err := lockRun(context.Background(), &mu); err != nil {
+		t.Fatal(err)
+	}
+	if mu.TryLock() {
+		t.Fatal("lockRun returned without holding the mutex")
+	}
+	mu.Unlock()
 }
 
 func TestProfileMessageRefusesNestedCallsAndTheCallerItself(t *testing.T) {
