@@ -152,6 +152,8 @@ type NativeSubagentAgent struct {
 	Description string
 	// ModelPath is the absolute model file; empty means the calling session's model.
 	ModelPath string
+	// ReasoningEffort is the effort written after "@" in a model ID; empty keeps the model file's own.
+	ReasoningEffort string
 	// Model is the `model` value as written. A catalog-layout session reads a value that
 	// does not end in .json as a model ID and replaces ModelPath with that model's file
 	// (resolveSubagentModels); a legacy session only uses ModelPath.

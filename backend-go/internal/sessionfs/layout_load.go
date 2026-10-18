@@ -86,11 +86,19 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	config.Category = session.Category
 	config.Profiles = profiles.IDs()
 	config.ProfileNames = built.profileNames
-	name := requestedModel
-	if name == "" {
-		name = config.ModelDefault
+	name := config.ModelDefault
+	if requestedModel != "" {
+		if name, _, err = SplitModelEffort(requestedModel); err != nil {
+			return SessionConfig{}, err
+		}
 	}
 	config.ModelPath = modelPaths[name]
+	if config.ReasoningEffort != "" {
+		// Refuse an effort the model does not offer now, before a run stores the user message.
+		if _, err := config.WithModel(); err != nil {
+			return SessionConfig{}, err
+		}
+	}
 	if err := resolveSubagentModels(config.NativeSubagent, layout.Models, sessionPath, scans); err != nil {
 		return SessionConfig{}, err
 	}
@@ -156,8 +164,14 @@ func resolveSubagentModels(settings *NativeSubagentSettings, modelsDir, sessionP
 	var models *catalog.Catalog
 	for index := range settings.Agents {
 		agent := &settings.Agents[index]
-		if agent.Model == "" || strings.HasSuffix(agent.Model, ".json") {
+		if agent.Model == "" {
 			continue
+		}
+		if strings.HasSuffix(agent.Model, ".json") {
+			continue
+		}
+		if strings.Contains(agent.Model, ".json"+effortSeparator) {
+			return configError("%s: tools.native.subagent agent %s: model: a model file path cannot take %q<effort>; use a model ID", sessionPath, agent.Name, effortSeparator)
 		}
 		if models == nil {
 			var err error
@@ -165,11 +179,16 @@ func resolveSubagentModels(settings *NativeSubagentSettings, modelsDir, sessionP
 				return configError("%s: %v", sessionPath, err)
 			}
 		}
-		entry, err := models.Lookup(agent.Model)
+		modelID, effort, err := SplitModelEffort(agent.Model)
+		if err != nil {
+			return configError("%s: tools.native.subagent agent %s: model: %v", sessionPath, agent.Name, err)
+		}
+		entry, err := models.Lookup(modelID)
 		if err != nil {
 			return configError("%s: tools.native.subagent agent %s: model: %v", sessionPath, agent.Name, err)
 		}
 		agent.ModelPath = entry.Path
+		agent.ReasoningEffort = effort
 	}
 	return nil
 }

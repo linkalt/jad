@@ -86,6 +86,10 @@ type Model struct {
 	// OAuthAuthFile is the absolute credential file path; set only for openai_oauth.
 	OAuthAuthFile string
 	Request       json.RawMessage
+	// Efforts are the reasoning efforts a run may choose with "<model>@<effort>"; empty
+	// means the model has no choice. Effort is the one applied to Request, "" when none.
+	Efforts []string
+	Effort  string
 	// HostedTools are provider-side tool definitions (for example {"type":"web_search"})
 	// the request carries after the function tools. They have no tool code here: the
 	// provider runs them. Empty means none.
@@ -120,9 +124,12 @@ type SessionConfig struct {
 	// ProfileNames maps a profile ID to the display name its file sets; a profile without a name is absent.
 	ProfileNames map[string]string
 	ModelPath    string
-	ModelDefault string
-	Models       []string
-	SettingPath  string
+	// ReasoningEffort is the effort chosen with "@<effort>" on the requested model; WithModel
+	// applies it to the model's request.
+	ReasoningEffort string
+	ModelDefault    string
+	Models          []string
+	SettingPath     string
 	// StateDir is <state>/<session id>: the folder the session keeps its state in, and the
 	// "session directory" of relative image_store.dir and the {session_dir} spill placeholder.
 	StateDir           string
@@ -498,11 +505,18 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if hasModelDefault && hasAllowedModels && !containsString(allowedModels, modelPathValue) {
 		return SessionConfig{}, configError("%s: paths.profiles.%s.model_default must be included in models", settingPath, profile)
 	}
+	reasoningEffort := ""
 	if requestedModel != "" {
-		if !hasAllowedModels || !containsString(allowedModels, requestedModel) {
+		requestedID := requestedModel
+		if !containsString(allowedModels, requestedModel) {
+			if requestedID, reasoningEffort, err = SplitModelEffort(requestedModel); err != nil {
+				return SessionConfig{}, err
+			}
+		}
+		if !hasAllowedModels || !containsString(allowedModels, requestedID) {
 			return SessionConfig{}, &ClientError{Message: "model config path is not available in the active session path profile"}
 		}
-		modelPathValue = requestedModel
+		modelPathValue = requestedID
 	}
 	resolvedModelPath := resolveFrom(settingDir, expandHome(modelPathValue))
 	var models []string
@@ -520,6 +534,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		DefaultProfile:        defaultProfile,
 		Profiles:              pathProfiles,
 		ModelPath:             resolvedModelPath,
+		ReasoningEffort:       reasoningEffort,
 		ModelDefault:          modelDefault,
 		Models:                models,
 		SettingPath:           settingPath,
@@ -593,6 +608,9 @@ func LoadSessionConfig(location Location, requestedProfile, requestedModel strin
 func (c SessionConfig) WithModel() (SessionConfig, error) {
 	model, err := loadModel(c.ModelPath, c.Model.PromptRole, c.Model.PromptText)
 	if err != nil {
+		return SessionConfig{}, err
+	}
+	if model, err = model.withEffort(c.ReasoningEffort); err != nil {
 		return SessionConfig{}, err
 	}
 	c.Model = model
@@ -939,7 +957,12 @@ func modelFromFields(fields map[string]json.RawMessage, path, promptRole, prompt
 	if err != nil {
 		return Model{}, err
 	}
+	efforts, err := effortsField(fields, path)
+	if err != nil {
+		return Model{}, err
+	}
 	return Model{
+		Efforts:       efforts,
 		Provider:      provider,
 		Name:          modelName,
 		APIKeyEnv:     apiKeyEnv,
