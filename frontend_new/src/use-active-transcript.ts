@@ -7,7 +7,7 @@ import appConfig from './config.json';
 import {historyMessagesFor, type HistoryBlocks} from './history-blocks';
 import {recentUserTexts} from './input-history';
 import {placeRunFailures} from './run-failures';
-import {latestToolCallMessage, latestToolsMessage} from './transcript-facts';
+import {latestToolCallMessage} from './transcript-facts';
 
 type TranscriptMessage = Omit<WebUiMessage, 'parts'> & {
   parts?: WebUiPart[];
@@ -30,20 +30,16 @@ export function useActiveTranscript<Message extends TranscriptMessage>({
   viewKey,
   hasLiveAttachedRun,
   failures,
-  isLiveSession,
   isRunning,
   streamingMessage,
-  fallbackTools,
 }: {
   threads: Readonly<Record<string, Message[]>>;
   historyBlocks: HistoryBlocks<Message>;
   viewKey: string;
   hasLiveAttachedRun: boolean;
   failures: readonly SessionRunFailure[] | undefined;
-  isLiveSession: boolean;
   isRunning: boolean;
   streamingMessage: WebUiMessage | null;
-  fallbackTools: ChatToolCallItem[];
 }) {
   const threadMessages = threads[viewKey] ?? [];
   // The history block renders ahead of the transcript: it holds the turns a
@@ -71,26 +67,12 @@ export function useActiveTranscript<Message extends TranscriptMessage>({
     transcriptMessages.some(message => message.id === streamingMessage.id);
 
   const liveToolParts = useMemo(() => {
-    if (!isLiveSession || (isRunning && !streamingMessage)) {
+    if (isRunning && !streamingMessage) {
       return null;
     }
     const sourceMessage = streamingMessage ?? latestToolCallMessage(messages);
     return sourceMessage?.parts ?? null;
-  }, [isLiveSession, isRunning, messages, streamingMessage]);
-
-  const tools = useMemo(() => {
-    const sourceTools = latestToolsMessage(messages)?.tools ?? fallbackTools;
-    if (!isRunning || isLiveSession) {
-      return sourceTools;
-    }
-    return sourceTools.map(
-      (tool, index): ChatToolCallItem => ({
-        ...tool,
-        status: index === 0 ? 'running' : 'pending',
-        duration: undefined,
-      }),
-    );
-  }, [fallbackTools, isLiveSession, isRunning, messages]);
+  }, [isRunning, messages, streamingMessage]);
 
   const inputHistory = useMemo(
     () => recentUserTexts(messages, appConfig.composer_input_history_size),
@@ -105,6 +87,5 @@ export function useActiveTranscript<Message extends TranscriptMessage>({
     placedFailures,
     streamingMessageCommitted,
     liveToolParts,
-    tools,
   };
 }

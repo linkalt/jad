@@ -104,7 +104,6 @@
   "catalog_lint_delay_ms": 250,
   "catalog_problems_max_height_px": 120,
   "copy_feedback_duration_ms": 2000,
-  "mock_run_delay_ms": 1100,
   "session_refresh_interval_ms": 5000,
   "transcript_page_turns": 5,
   "session_refresh_interval_ms_streaming": 5000,
@@ -123,7 +122,7 @@
   "pane_keyboard_shortcuts_enabled": true,
   "pane_title_part_max_chars": 48,
   "session_groups_storage_key": "jad.session-groups",
-  "session_uncategorized_title": "Recent runs",
+  "session_uncategorized_title": "Others",
   "storage_key_migrations": [
     {"from": "agent-harness.api-token", "to": "jad.api-token", "area": "session"},
     {"from": "agent-harness.row-heights", "to": "jad.row-heights", "area": "local"},

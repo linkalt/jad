@@ -9,7 +9,6 @@ type RunSettingsPanelProps = {
   onClose: () => void;
   sessionTitle: string;
   sessionTurns: number;
-  isLiveSession: boolean;
 };
 
 /** Values are shown in the code face, so numbers and ids stay unambiguous. */
@@ -45,7 +44,6 @@ export function RunSettingsPanel({
   onClose,
   sessionTitle,
   sessionTurns,
-  isLiveSession,
 }: RunSettingsPanelProps) {
   return (
     <FloatingPanel
@@ -61,16 +59,8 @@ export function RunSettingsPanel({
           <ListItem label="Active session" endContent={<Value>{sessionTitle}</Value>} />
           <ListItem label="Turns" endContent={<Value>{sessionTurns}</Value>} />
           <ListItem
-            label="Transport"
-            endContent={<Value>{isLiveSession ? 'live stream' : 'mock'}</Value>}
-          />
-          <ListItem
             label="Refresh interval"
             endContent={<Value>{appConfig.session_refresh_interval_ms}ms</Value>}
-          />
-          <ListItem
-            label="Mock run delay"
-            endContent={<Value>{appConfig.mock_run_delay_ms}ms</Value>}
           />
         </List>
 

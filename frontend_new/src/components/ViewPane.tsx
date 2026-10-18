@@ -19,7 +19,7 @@ import {spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, useState, type ReactNode} from 'react';
 import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type WebUiMessage} from '../api';
-import {type MessageRecord, type ReasoningStep, type RunRetryState, type Session} from '../app-types';
+import {type MessageRecord, type RunRetryState, type Session} from '../app-types';
 import appConfig from '../config.json';
 import {type HistoryBlocks} from '../history-blocks';
 import {type AttachedFile, type AttachedImage} from '../image-attachments';
@@ -28,7 +28,6 @@ import {PANE_HEADER_Z_INDEX} from '../panel-layers';
 import {conversationPanelAfterToggle, type ConversationPanelId} from '../right-panel';
 import {type SlashCommand, type SlashCommandName} from '../slash-commands';
 import {deferredRowStyle, useRowHeightRef} from '../row-defer';
-import {defaultTools} from '../sample-data';
 import {useActiveTranscript} from '../use-active-transcript';
 import {useRowWidth} from '../use-row-width';
 import {AssistantIdentity} from './AssistantMessage';
@@ -42,7 +41,7 @@ import {RunFailureRow} from './RunFailureRow';
 import {RunInspector} from './RunInspector';
 import {RunReconnectNotice} from './RunReconnectNotice';
 import {StoredImageScopeProvider} from './StoredImages';
-import {ReasoningBlock, WebUiParts} from './TranscriptParts';
+import {WebUiParts} from './TranscriptParts';
 import {TranscriptRow} from './TranscriptRow';
 import {EarlierMessagesControl} from './TranscriptWindow';
 
@@ -155,8 +154,6 @@ export type ViewPaneProps = {
   model: string | undefined;
   /** The reasoning effort the next run uses, for the title strip. */
   effortLabel: string | undefined;
-  /** Progress steps for a session that does not stream (the sample sessions). */
-  reasoningSteps: ReasoningStep[];
   hasLiveAttachedRun: boolean;
   isFocused: boolean;
   isReadmeShown: boolean;
@@ -232,7 +229,6 @@ export function ViewPane({
   provider,
   model,
   effortLabel,
-  reasoningSteps,
   hasLiveAttachedRun,
   isFocused,
   isReadmeShown,
@@ -285,17 +281,14 @@ export function ViewPane({
     placedFailures,
     streamingMessageCommitted,
     liveToolParts,
-    tools,
   } = useActiveTranscript<MessageRecord>({
     threads,
     historyBlocks,
     viewKey,
     hasLiveAttachedRun,
     failures,
-    isLiveSession: isLive,
     isRunning,
     streamingMessage,
-    fallbackTools: defaultTools,
   });
   /**
    * This pane's own right-edge panel.
@@ -512,12 +505,6 @@ export function ViewPane({
                         </StoredImageScopeProvider>
                       ) : (
                         <VStack gap={3} width="100%">
-                          <ReasoningBlock
-                            steps={reasoningSteps}
-                            rowWidthPx={liveBubbleWidthPx}
-                            isFlush
-                            isStreaming={isStreaming}
-                          />
                           <MarkdownText
                             density="compact"
                             contentWidth="100%"
@@ -549,8 +536,6 @@ export function ViewPane({
       {panel === 'inspector' && session !== undefined && (
         <RunInspector
           activeSession={session}
-          steps={reasoningSteps}
-          tools={tools}
           liveToolParts={liveToolParts}
           inspector={panelRegion}
           isRunning={isRunning}

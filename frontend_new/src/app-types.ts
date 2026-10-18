@@ -39,7 +39,6 @@ export interface Session {
   turns: number;
   profileTurns?: Record<string, number>;
   state: SessionState;
-  source: 'live' | 'sample';
   sessionRef?: string;
   rootLabel?: string;
   /** Groups sessions in the list; absent when the session has none. */

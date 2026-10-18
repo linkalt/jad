@@ -3,13 +3,6 @@ import {type Session} from './app-types';
 import {oneLine} from './row-text';
 import {sessionUiStateForRun} from './session-run-status';
 
-export function sessionUiId(snapshot: SessionSnapshot, current: readonly Session[]): string {
-  const sampleCollision = current.some(
-    session => session.source === 'sample' && session.id === snapshot.id,
-  );
-  return sampleCollision ? `live:${snapshot.id}` : snapshot.id;
-}
-
 export function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
   const modelOptions = parseModelOptions(snapshot.model_options);
   return {
@@ -19,7 +12,6 @@ export function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Sess
     turns: snapshot.turns,
     ...(snapshot.profile_turns === undefined ? {} : {profileTurns: snapshot.profile_turns}),
     state: sessionUiStateForRun(snapshot.run?.status),
-    source: 'live',
     sessionRef: snapshot.id,
     ...(snapshot.runs_by_profile === undefined
       ? {}

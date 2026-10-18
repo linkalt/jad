@@ -435,8 +435,7 @@ export type CategorySection = {
  * Categories keep the order in which the list first meets them, so the list's own
  * order decides, and sessions inside a category keep their list order. Sessions
  * without a category form one section, after the named ones.
- */
-export function groupByCategory(groups: readonly SessionListGroup[]): CategorySection[] {
+ */export function groupByCategory(groups: readonly SessionListGroup[]): CategorySection[] {
   const named = new Map<string, SessionListGroup[]>();
   const unnamed: SessionListGroup[] = [];
   for (const group of groups) {
@@ -456,6 +455,14 @@ export function groupByCategory(groups: readonly SessionListGroup[]): CategorySe
     sections.push({groups: unnamed});
   }
   return sections;
+}
+
+/**
+ * The rail's heading for one section: the category's own name, or the configured
+ * name for the sessions that have none — "Others" unless the file says otherwise.
+ */
+export function categorySectionLabel(section: CategorySection, uncategorizedTitle: string): string {
+  return section.category ?? uncategorizedTitle;
 }
 
 /**

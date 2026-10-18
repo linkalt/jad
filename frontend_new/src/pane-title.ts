@@ -4,8 +4,7 @@
  * A pane is a tab: it names the conversation it shows, then the profile that
  * conversation is pinned to, then the provider, the model and the reasoning
  * effort the next run uses. Anything unknown is left out rather than shown as a
- * placeholder, so a sample session without a model still reads as one clean
- * title.
+ * placeholder, so a session without a model still reads as one clean title.
  */
 import appConfig from './config.json' with {type: 'json'};
 

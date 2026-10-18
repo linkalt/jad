@@ -54,9 +54,8 @@ import {paneTitleText} from './pane-title';
 import {useElementWidth} from './use-element-width';
 import {type ProviderRetryWait} from './provider-retry-view';
 import {type ConversationPanelId} from './right-panel';
-import {baseReasoning, defaultTools, getTraceForSteps, initialSessions, initialThreads} from './sample-data';
 import {selectionQuoteTarget} from './selection-target';
-import {sessionFromSnapshot, sessionUiId} from './session-mapping';
+import {sessionFromSnapshot} from './session-mapping';
 import {isSessionRunning, sessionUiStateForRun, snapshotEndsLocalRun, withSnapshotRun} from './session-run-status';
 import {type PinnedView, type SessionListRow, activeKeyAfterPrune, isPinnedViewKey, nextRecentViewKeys, profileLabel, profileOfViewKey, prunePinnedViews, restoreViews, retainedPinnedViewKeys, rowRunStatus, sessionListGroups, sessionRefOfViewKey, setGroupCollapsed, viewKey, viewLabel, withPaneViewKeys} from './session-views';
 import {SLASH_COMMANDS, type SlashCommandName} from './slash-commands';
@@ -205,7 +204,7 @@ function App({
   useEffect(() => {
     showToastRef.current = showToast;
   }, [showToast]);
-  const [sessions, setSessions] = useState<Session[]>(initialSessions);
+  const [sessions, setSessions] = useState<Session[]>([]);
   // The configured live session is a preference, not a row: the sidebar lists
   // whatever the backend reports, and this id is only used to choose which of
   // those live sessions to open on.
@@ -243,7 +242,6 @@ function App({
   const previousViewKeysRef = useRef<Set<string> | null>(null);
   if (previousViewKeysRef.current === null) {
     previousViewKeysRef.current = new Set([
-      ...initialSessions.map(session => session.id),
       ...INITIAL_VIEWS.views.map(view => viewKey(view.sessionRef, view.profile)),
       INITIAL_VIEWS.activeViewKey,
     ]);
@@ -255,11 +253,11 @@ function App({
   /**
    * Whether a session list has actually arrived from the server.
    *
-   * Until it has, the rows on screen are local placeholders: a tab that names a
-   * live session would look stale and be dropped — and that loss persisted.
+   * Until it has, there are no rows at all: judging a restored tab against an
+   * empty list would drop it — and that loss persisted.
    */
   const hasLoadedSessionsRef = useRef(false);
-  const [threads, setThreads] = useState<Record<string, MessageRecord[]>>(initialThreads);
+  const [threads, setThreads] = useState<Record<string, MessageRecord[]>>({});
 
   /**
    * Turns a compaction removed, folded from the backup. They are static between
@@ -450,10 +448,6 @@ function App({
       setActionsDrawers(current => openPaneDrawer(current, viewKey));
     }
   };
-  const [runProgressByView, setRunProgressByView] = useState<Record<string, number>>({});
-  const setRunProgressForView = useCallback((viewKey: string, progress: number) => {
-    setRunProgressByView(current => updateViewState(current, viewKey, () => progress));
-  }, []);
   const [streamingMessagesByView, setStreamingMessagesByView] =
     useState<Record<string, WebUiMessage>>({});
   const setStreamingMessageForView = useCallback((viewKey: string, message: WebUiMessage | null) => {
@@ -614,7 +608,6 @@ function App({
    */
   const answeredHereRefs = useRef(new Set<string>());
   const stoppedHereViewKeysRef = useRef(new Set<string>());
-  const runTimeoutRefs = useRef(new Map<string, number>());
   const activeRunViewKeysRef = useRef(new Set<string>());
   const attachedRunViewKeysRef = useRef(new Set<string>());
   const hydratedTranscriptSessionIdsRef = useRef(new Set<string>());
@@ -843,21 +836,19 @@ function App({
     Record<string, readonly SessionRunFailure[]>
   >({});
 
-  // Live sessions come from the backend, so the active id can outlive its row —
-  // on the first paint (before the first poll answers) and after a session is
-  // deleted server-side. Reconcile instead of rendering a phantom: the
-  // configured live session when the backend has it, otherwise the first live
-  // session, otherwise whatever the list starts with. A session the user picked
-  // is never taken away from them.
+  // Sessions come from the backend, so the active id can outlive its row: on the
+  // first paint (before the first poll answers) and after a session is deleted
+  // server-side. Reconcile instead of rendering a phantom: the configured live
+  // session when the backend has it, otherwise the first session it lists. A
+  // session the user picked is never taken away from them.
   useEffect(() => {
     if (sessions.length === 0 || !hasLoadedSessionsRef.current) {
-      // The rows of the first paint are placeholders: retargeting a tab against
-      // them would fold the views this page just restored.
+      // Nothing has arrived yet: retargeting a tab against an empty list would
+      // fold the views this page just restored.
       return;
     }
     const preferredLive =
-      sessions.find(session => session.id === LIVE_SESSION_ID) ??
-      sessions.find(session => session.source === 'live');
+      sessions.find(session => session.id === LIVE_SESSION_ID) ?? sessions[0];
     if (!sessions.some(session => session.id === activeSessionId)) {
       // The view on screen is gone: fall back to a session that exists.
       const fallback = (preferredLive ?? sessions[0]).id;
@@ -875,7 +866,9 @@ function App({
     }
   }, [activeSessionId, sessions]);
 
-  const activeSession =
+  // Undefined only before the first session list arrives, or when the backend
+  // has no sessions at all: the shell renders nothing until a row exists.
+  const activeSession: Session | undefined =
     sessions.find(session => session.id === activeSessionId) ?? sessions[0];
 
   const listGroups = useMemo(
@@ -953,25 +946,33 @@ function App({
     // reset epoch now prevents an evicted result from repopulating the cache.
   }, [updateHistoryBlocks]);
 
-  const activeRowSession: Session = !isPinnedView
+  const activeRowSession: Session | undefined = !isPinnedView
     ? activeSession
-    : rowSessions[activeViewKey] ?? {
+    : rowSessions[activeViewKey] ??
+      (activeSession === undefined
+        ? undefined
+        : {
         id: activeViewKey,
         sessionRef: activeSessionId,
         profile: activeProfile,
-        title: viewLabel(activeSession.title, activeProfile === undefined ? undefined : profileLabel(activeProfile, activeSession.profileNames)),
-        time: activeSession.time,
+        // A pinned view restored before the first session list has no master row
+        // yet: name it after the view rather than dereference nothing. The first
+        // poll replaces this record with the session's own.
+        title: viewLabel(
+          activeSession?.title ?? activeViewKey,
+          activeProfile === undefined ? undefined : profileLabel(activeProfile, activeSession?.profileNames),
+        ),
+        time: activeSession?.time ?? '',
         turns: 0,
         state: sessionUiStateForRun(rowRunStatus(activeRow, activeSession)?.status),
-        source: 'live',
         activeProfile,
-        ...(activeSession.profiles === undefined
+        ...(activeSession?.profiles === undefined
           ? {}
           : {profiles: activeSession.profiles}),
-        ...(activeSession.profileNames === undefined
+        ...(activeSession?.profileNames === undefined
           ? {}
           : {profileNames: activeSession.profileNames}),
-      };
+      });
 
   /** Apply a live result to the row that initiated it, not its master session. */
   const updateViewSessionRecord = useCallback(
@@ -1045,7 +1046,7 @@ function App({
     return turns;
   }, [rowSessions]);
 
-  const isLiveSession = activeSession?.source === 'live';
+  const hasLiveSession = activeSession !== undefined;
   const isRunning = isSessionRunning(
     runningViewKeys.has(activeViewKey),
     rowRunStatus(activeRow, activeSession)?.status,
@@ -1062,7 +1063,7 @@ function App({
       const page = sessionPages[uiId];
       if (
         !previousViewKeysRef.current?.has(uiId) ||
-        session?.source !== 'live' ||
+        session === undefined ||
         session.sessionRef === undefined ||
         page === undefined ||
         !page.has_more ||
@@ -1119,7 +1120,7 @@ function App({
   );
 
   const isCompactionInProgress = compactingSessionRef !== null;
-  const frontCompactionSettings = activeRowSession.frontCompaction ?? {
+  const frontCompactionSettings = activeRowSession?.frontCompaction ?? {
     enabled: true,
     delete_mode: 'permanent' as const,
   };
@@ -1127,7 +1128,7 @@ function App({
   const isFrontCompactionMode =
     frontCompactionModeViewKey === activeViewKey &&
     frontCompactionSettings.enabled &&
-    isLiveSession &&
+    hasLiveSession &&
     !isRunning &&
     !isCompactionInProgress &&
     !isModelDefaultUpdating &&
@@ -1139,7 +1140,7 @@ function App({
     if (
       !isFrontCompactionSelectionMode ||
       !frontCompactionSettings.enabled ||
-      !isLiveSession ||
+      !hasLiveSession ||
       isRunning ||
       isCompactionInProgress ||
       isModelDefaultUpdating ||
@@ -1158,7 +1159,7 @@ function App({
     frontCompactionSettings.enabled,
     isCompactionInProgress,
     isFrontCompactionSelectionMode,
-    isLiveSession,
+    hasLiveSession,
     isModelDefaultUpdating,
     isRunning,
     resettingViewKey,
@@ -1178,20 +1179,13 @@ function App({
     }
     attachedTurnRefs.current.delete(viewKey);
     attachedRunViewKeysRef.current.delete(viewKey);
-    const timeout = runTimeoutRefs.current.get(viewKey);
-    if (timeout !== undefined) {
-      window.clearTimeout(timeout);
-      runTimeoutRefs.current.delete(viewKey);
-    }
     setStreamingMessageForView(viewKey, null);
     clearRunInteraction(viewKey);
     clearInteractionUiForView(viewKey);
     setRunRunningForView(viewKey, false);
-    setRunProgressForView(viewKey, baseReasoning.length);
   }, [
     clearInteractionUiForView,
     clearRunInteraction,
-    setRunProgressForView,
     setRunRunningForView,
     setStreamingMessageForView,
   ]);
@@ -1203,7 +1197,7 @@ function App({
   const stopRun = useCallback((target: {viewKey: string; session: Session | undefined; title: string}) => {
     const targetViewKey = target.viewKey;
     const session = target.session;
-    if (session?.source !== 'live' || !session.sessionRef) {
+    if (session === undefined || !session.sessionRef) {
       detachRun(targetViewKey);
       return;
     }
@@ -1271,7 +1265,7 @@ function App({
     const session = target.session;
     const viewKey = target.viewKey;
     const profile = profileOfViewKey(viewKey);
-    if (session?.source !== 'live' || !session.sessionRef) {
+    if (session === undefined || !session.sessionRef) {
       return;
     }
     if (answeringInteractionRefs.current.has(viewKey)) {
@@ -1331,7 +1325,7 @@ function App({
     const session = target.session;
     const viewKey = target.viewKey;
     const profile = profileOfViewKey(viewKey);
-    if (session?.source !== 'live' || !session.sessionRef) {
+    if (session === undefined || !session.sessionRef) {
       return;
     }
     if (extendingInteractionRefs.current.has(viewKey)) {
@@ -1669,7 +1663,10 @@ function App({
         (!trimmedValue && images.length === 0 && files.length === 0) ||
         target.isRunning ||
         resettingViewKey === target.viewKey ||
-        frontCompactingViewKey === target.viewKey
+        frontCompactingViewKey === target.viewKey ||
+        // A row the server has not described yet has no transcript to run in:
+        // the composer keeps its draft instead of writing a message nowhere.
+        target.session?.sessionRef === undefined
       ) {
         return false;
       }
@@ -1678,7 +1675,6 @@ function App({
       // the session's default profile.
       const sessionId = target.viewKey;
       const sessionRef = target.session?.sessionRef;
-      const isLiveRun = target.session?.source === 'live' && typeof sessionRef === 'string';
       const userMessage: MessageRecord = {
         id: `${sessionId}-user-${Date.now()}`,
         sender: 'user',
@@ -1699,157 +1695,124 @@ function App({
       );
       attachedRunViewKeysRef.current.delete(sessionId);
       setRunRunningForView(sessionId, true);
-      setRunProgressForView(sessionId, isLiveRun ? 0 : 1);
       setStreamingMessageForView(sessionId, null);
       clearRunInteraction(sessionId);
       clearInteractionUiForView(sessionId);
 
-      if (isLiveRun && sessionRef) {
-        const controller = new AbortController();
-        runAbortRefs.current.set(sessionId, controller);
-        void streamSessionRun(sessionRef, buildRunInput(trimmedValue, images, files), {
-          signal: controller.signal,
-          ...(target.profile === undefined ? {} : {profile: target.profile}),
-          onRun: run => recordRunStarted(sessionId, run.turn_id),
-          onInteraction: (turnId, interaction) =>
-            recordRunInteraction(sessionId, turnId, interaction),
-          onInteractionEnd: (turnId, end) =>
-            recordInteractionEnd(sessionId, target.title, turnId, end),
-          onHookReport: (turnId, report) =>
-            recordHookReport(sessionId, target.title, turnId, report),
-          onProviderRetry: (turnId, wait) => recordRunRetry(sessionId, turnId, wait),
-          onReconnecting: state => recordRunReconnect(sessionId, controller, state),
-          onMessage: message => {
-            setStreamingMessageForView(sessionId, message);
-            setRunProgressForView(sessionId, 1);
-          },
-          onDelta: (messageId, index, append) =>
-            applyRunDelta(sessionId, messageId, index, append),
-          onPart: (messageId, index, part) =>
-            applyRunPart(sessionId, messageId, index, part),
-          onCompleted: message => {
-            setStreamingMessageForView(sessionId, message);
-            setRunProgressForView(sessionId, 2);
-          },
-          onUsage: usage => {
-            updateViewSessionRecord(
-              sessionId,
-              session => ({...session, usage}),
-              target.session,
+      const controller = new AbortController();
+      runAbortRefs.current.set(sessionId, controller);
+      void streamSessionRun(sessionRef, buildRunInput(trimmedValue, images, files), {
+        signal: controller.signal,
+        ...(target.profile === undefined ? {} : {profile: target.profile}),
+        onRun: run => recordRunStarted(sessionId, run.turn_id),
+        onInteraction: (turnId, interaction) =>
+          recordRunInteraction(sessionId, turnId, interaction),
+        onInteractionEnd: (turnId, end) =>
+          recordInteractionEnd(sessionId, target.title, turnId, end),
+        onHookReport: (turnId, report) =>
+          recordHookReport(sessionId, target.title, turnId, report),
+        onProviderRetry: (turnId, wait) => recordRunRetry(sessionId, turnId, wait),
+        onReconnecting: state => recordRunReconnect(sessionId, controller, state),
+        onMessage: message => {
+          setStreamingMessageForView(sessionId, message);
+        },
+        onDelta: (messageId, index, append) =>
+          applyRunDelta(sessionId, messageId, index, append),
+        onPart: (messageId, index, part) =>
+          applyRunPart(sessionId, messageId, index, part),
+        onCompleted: message => {
+          setStreamingMessageForView(sessionId, message);
+        },
+        onUsage: usage => {
+          updateViewSessionRecord(
+            sessionId,
+            session => ({...session, usage}),
+            target.session,
+          );
+        },
+      })
+        .then(result => {
+          if (controller.signal.aborted || runAbortRefs.current.get(sessionId) !== controller) {
+            return;
+          }
+          if (isRunOutcomeUnknown(result)) {
+            // The run's retained state expired during a reconnect. A failed run
+            // leaves no transcript record, so say the outcome is unknown instead
+            // of staying silent. The refresh in `finally` loads the transcript.
+            recordNotification(
+              runOutcomeUnknownNotification(sessionId, target.title),
             );
-          },
-        })
-          .then(result => {
-            if (controller.signal.aborted || runAbortRefs.current.get(sessionId) !== controller) {
-              return;
-            }
-            if (isRunOutcomeUnknown(result)) {
-              // The run's retained state expired during a reconnect. A failed run
-              // leaves no transcript record, so say the outcome is unknown instead
-              // of staying silent. The refresh in `finally` loads the transcript.
-              recordNotification(
-                runOutcomeUnknownNotification(sessionId, target.title),
-              );
-              updateViewSessionRecord(
-                sessionId,
-                session => ({...session, state: 'warning'}),
-                target.session,
-              );
-              return;
-            }
-            const assistantMessage: MessageRecord = result.message ?? {
-              id: `${sessionId}-assistant-${Date.now()}`,
-              sender: 'assistant',
-              text: 'The run completed without text output.',
-              timestamp: messageTime(),
-              parts: [],
-              status: 'complete',
-            };
-            setThreads(current => {
-              const existing = current[sessionId] ?? [];
-              const existingIndex = existing.findIndex(
-                message => message.id === assistantMessage.id,
-              );
-              if (existingIndex < 0) {
-                return {
-                  ...current,
-                  [sessionId]: [...existing, assistantMessage],
-                };
-              }
-              const next = [...existing];
-              next[existingIndex] = assistantMessage;
-              return {...current, [sessionId]: next};
-            });
-            updateViewSessionRecord(
-              sessionId,
-              session => ({...session, state: 'success'}),
-              target.session,
-            );
-          })
-          .catch(error => {
-            if (controller.signal.aborted || runAbortRefs.current.get(sessionId) !== controller) {
-              return;
-            }
-            const message = error instanceof Error ? error.message : String(error);
-            recordNotification({
-              sessionId,
-              sessionTitle: target.title,
-              kind: 'error',
-              title: 'Run failed',
-              message,
-            });
             updateViewSessionRecord(
               sessionId,
               session => ({...session, state: 'warning'}),
               target.session,
             );
-          })
-          .finally(() => {
-            if (runAbortRefs.current.get(sessionId) !== controller) {
-              return;
+            return;
+          }
+          const assistantMessage: MessageRecord = result.message ?? {
+            id: `${sessionId}-assistant-${Date.now()}`,
+            sender: 'assistant',
+            text: 'The run completed without text output.',
+            timestamp: messageTime(),
+            parts: [],
+            status: 'complete',
+          };
+          setThreads(current => {
+            const existing = current[sessionId] ?? [];
+            const existingIndex = existing.findIndex(
+              message => message.id === assistantMessage.id,
+            );
+            if (existingIndex < 0) {
+              return {
+                ...current,
+                [sessionId]: [...existing, assistantMessage],
+              };
             }
-            runAbortRefs.current.delete(sessionId);
-            attachedRunViewKeysRef.current.delete(sessionId);
-            clearRunInteraction(sessionId);
-            clearInteractionUiForView(sessionId);
-            setStreamingMessageForView(sessionId, null);
-            setRunProgressForView(sessionId, isLiveRun ? 0 : baseReasoning.length);
-            setRunRunningForView(sessionId, false);
-            // The committed transcript is authoritative now: refresh instead of
-            // waiting for the next poll, which this run had slowed to the
-            // streaming cadence.
-            refreshSessionsRef.current?.();
+            const next = [...existing];
+            next[existingIndex] = assistantMessage;
+            return {...current, [sessionId]: next};
           });
-        return true;
-      }
+          updateViewSessionRecord(
+            sessionId,
+            session => ({...session, state: 'success'}),
+            target.session,
+          );
+        })
+        .catch(error => {
+          if (controller.signal.aborted || runAbortRefs.current.get(sessionId) !== controller) {
+            return;
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          recordNotification({
+            sessionId,
+            sessionTitle: target.title,
+            kind: 'error',
+            title: 'Run failed',
+            message,
+          });
+          updateViewSessionRecord(
+            sessionId,
+            session => ({...session, state: 'warning'}),
+            target.session,
+          );
+        })
+        .finally(() => {
+          if (runAbortRefs.current.get(sessionId) !== controller) {
+            return;
+          }
+          runAbortRefs.current.delete(sessionId);
+          attachedRunViewKeysRef.current.delete(sessionId);
+          clearRunInteraction(sessionId);
+          clearInteractionUiForView(sessionId);
+          setStreamingMessageForView(sessionId, null);
+          setRunRunningForView(sessionId, false);
+          // The committed transcript is authoritative now: refresh instead of
+          // waiting for the next poll, which this run had slowed to the
+          // streaming cadence.
+          refreshSessionsRef.current?.();
+        });
+      return true;
 
-      const timeout = window.setTimeout(() => {
-        if (runTimeoutRefs.current.get(sessionId) !== timeout) return;
-        runTimeoutRefs.current.delete(sessionId);
-        const assistantMessage: MessageRecord = {
-          id: `${sessionId}-assistant-${Date.now()}`,
-          sender: 'assistant',
-          text: 'The mock run is complete. The response, reasoning trace, and tool events are ready for a real agent stream to replace.\n\n**Next step:** connect the stream lifecycle to these same UI regions.',
-          timestamp: messageTime(),
-          reasoning: baseReasoning.map(step => ({...step, status: 'complete'})),
-          tools: defaultTools,
-        };
-
-        setThreads(current => ({
-          ...current,
-          [sessionId]: [...(current[sessionId] ?? []), assistantMessage],
-        }));
-        updateViewSessionRecord(
-          sessionId,
-          session => ({...session, state: 'success'}),
-          target.session,
-        );
-        clearRunInteraction(sessionId);
-        clearInteractionUiForView(sessionId);
-        setRunProgressForView(sessionId, baseReasoning.length);
-        setRunRunningForView(sessionId, false);
-      }, appConfig.mock_run_delay_ms);
-      runTimeoutRefs.current.set(sessionId, timeout);
       return true;
     },
     [
@@ -1866,7 +1829,6 @@ function App({
       recordRunReconnect,
       clearRunInteraction,
       clearInteractionUiForView,
-      setRunProgressForView,
       setRunRunningForView,
       setStreamingMessageForView,
       updateViewSessionRecord,
@@ -1895,7 +1857,6 @@ function App({
       const controller = new AbortController();
       runAbortRefs.current.set(sessionId, controller);
       setRunRunningForView(sessionId, true);
-      setRunProgressForView(sessionId, 1);
       setStreamingMessageForView(sessionId, null);
       clearRunInteraction(sessionId);
       clearInteractionUiForView(sessionId);
@@ -1990,7 +1951,6 @@ function App({
           clearRunInteraction(sessionId);
           clearInteractionUiForView(sessionId);
           setStreamingMessageForView(sessionId, null);
-          setRunProgressForView(sessionId, baseReasoning.length);
           setRunRunningForView(sessionId, false);
           // The committed transcript is authoritative now: let the poll replace
           // the locally appended copy instead of waiting for the next tick.
@@ -2009,7 +1969,6 @@ function App({
       recordRunRetry,
       recordRunReconnect,
       recordRunStarted,
-      setRunProgressForView,
       setRunRunningForView,
       setStreamingMessageForView,
       updateViewSessionRecord,
@@ -2111,9 +2070,8 @@ function App({
   }, []);
 
   // A server-confirmed session list owns which view caches are still useful.
-  // Keep first-paint placeholders until that list arrives, then evict unpinned
-  // views and sessions that disappeared. Their next visit can hydrate from the
-  // authoritative transcript again.
+  // Wait for that list, then evict unpinned views and sessions that disappeared.
+  // Their next visit can hydrate from the authoritative transcript again.
   useEffect(() => {
     if (!hasLoadedSessionsRef.current) {
       return;
@@ -2453,10 +2411,7 @@ function App({
           hasLoadedSessionsRef.current = true;
           sessionsEtagRef.current = result.etag;
           const snapshots = result.value;
-          const liveItems = snapshots.map(snapshot => ({
-            snapshot,
-            id: sessionUiId(snapshot, initialSessions),
-          }));
+          const liveItems = snapshots.map(snapshot => ({snapshot, id: snapshot.id}));
           const activeRunViewKeys = new Set(activeRunViewKeysRef.current);
           const activeRunSessionRefs = new Set(
             [...activeRunViewKeys].map(sessionRefOfViewKey),
@@ -2487,7 +2442,6 @@ function App({
             return hasChange ? next : current;
           });
           setSessions(current => {
-            const liveIds = new Set(liveItems.map(item => item.id));
             const liveSessions = liveItems.map(item => {
               if (wasResetDuringRequest(item.id)) {
                 return current.find(session => session.id === item.id) ??
@@ -2503,10 +2457,7 @@ function App({
               }
               return sessionFromSnapshot(item.snapshot, item.id);
             });
-            const samples = current.filter(
-              session => session.source === 'sample' && !liveIds.has(session.id),
-            );
-            const nextSessions = [...liveSessions, ...samples];
+            const nextSessions = liveSessions;
             // Same reasoning as the threads above: the poll rebuilds every session
             // object, so keep the previous array when nothing actually changed.
             return deepEqual(current, nextSessions) ? current : nextSessions;
@@ -2553,7 +2504,7 @@ function App({
       }
       return;
     }
-    if (activeSession.source !== 'live' || activeSession.sessionRef === undefined) {
+    if (activeSession?.sessionRef === undefined) {
       return;
     }
     attachToRun(
@@ -2594,10 +2545,6 @@ function App({
         controller.abort();
       }
       runAbortRefs.current.clear();
-      for (const timeout of runTimeoutRefs.current.values()) {
-        window.clearTimeout(timeout);
-      }
-      runTimeoutRefs.current.clear();
     };
   }, []);
 
@@ -2642,9 +2589,6 @@ function App({
     [recordNotification],
   );
 
-  if (!activeSession) {
-    return null;
-  }
 
   /**
    * Both destructive conversation actions are refused while a run, a
@@ -3290,7 +3234,7 @@ function App({
     const record = rowSessions[key] ?? sessionRecord;
     const profile = profileOfViewKey(key);
     const runStatus = rowRunStatus(row, sessionRecord)?.status;
-    const isLive = record?.source === 'live';
+    const isLive = record !== undefined;
     const isRunning = isSessionRunning(runningViewKeys.has(key), runStatus);
     // The model the next run uses: the pane's title strip names its provider and
     // id, and the effort it will run at (the stored pick, else the option's own).
@@ -3298,8 +3242,6 @@ function App({
     const streamingMessage = streamingMessagesByView[key] ?? null;
     const interactionState = runInteractionStatesByView[key];
     const pending = interactionState?.received ? interactionState.pending : streamingMessage?.pending;
-    const progress = runProgressByView[key] ?? baseReasoning.length;
-    const steps = isLive ? [] : baseReasoning;
     const settings = record?.frontCompaction ?? {enabled: true, delete_mode: 'permanent' as const};
     const isFrontCompactionMode =
       frontCompactionModeViewKey === key &&
@@ -3331,7 +3273,6 @@ function App({
           ? undefined
           : modelChoice.effort ??
             (modelChoice.option === undefined ? undefined : defaultEffortFor(modelChoice.option)),
-      reasoningSteps: getTraceForSteps(steps, isRunning ? progress : steps.length),
       hasLiveAttachedRun:
         isLive && (runStatus === 'running' || attachedRunViewKeysRef.current.has(key)),
       streamingMessage,
@@ -3445,6 +3386,26 @@ function App({
     paneDragBaseRef.current = null;
     setPaneDragWidths(null);
   }, [panes.keys.length, paneGroupMeasuredPx]);
+
+  if (!activeSession || !activeRowSession) {
+    // No session list yet — the first poll has not answered, the server has no
+    // sessions, or it refused the request. There is no row to lay the shell out
+    // around, so say so rather than paint an empty page, and keep the token
+    // prompt reachable: it is the only way a refused tab can recover. This sits
+    // below every hook: an early return above one would change the hook order
+    // between renders.
+    return (
+      <VStack align="center" justify="center" gap={2} height="100vh" width="100%">
+        <Text type="label" weight="semibold">
+          No sessions
+        </Text>
+        <Text type="supporting" color="secondary">
+          The server has not listed a session yet. It appears here as soon as it answers.
+        </Text>
+        <TokenRequestDialog />
+      </VStack>
+    );
+  }
 
   return (
     <AppShell
@@ -3568,7 +3529,6 @@ function App({
                         provider={pane.provider}
                         model={pane.model}
                         effortLabel={pane.effortLabel}
-                        reasoningSteps={pane.reasoningSteps}
                         hasLiveAttachedRun={pane.hasLiveAttachedRun}
                         isFocused={isFocusedPane}
                         isReadmeShown={readmeInPane && isFocusedPane}
@@ -3720,7 +3680,6 @@ function App({
             onClose={closeLeftPanel}
             sessionTitle={activeRowSession.title}
             sessionTurns={activeRowSession.turns}
-            isLiveSession={isLiveSession}
           />
         )}
         {leftPanel === 'notifications' && (

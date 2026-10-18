@@ -9,7 +9,7 @@ import {type ColorScheme} from '../color-scheme';
 import appConfig from '../config.json';
 import {type LeftPanelId} from '../left-panel';
 import {paneCountLabel} from '../pane-count';
-import {type SessionListGroup, groupByCategory, groupHasRunningRun} from '../session-views';
+import {type SessionListGroup, categorySectionLabel, groupByCategory, groupHasRunningRun} from '../session-views';
 import {NotificationBellIcon} from './AppIcons';
 import {MoonIcon, SunIcon} from './ColorSchemeIcon';
 import {FolderIcon} from './FolderIcon';
@@ -277,7 +277,7 @@ export function SessionNavigation({
     >
       {categorySections.map(section => {
         const key = section.category ?? '';
-        const label = section.category ?? appConfig.session_uncategorized_title;
+        const label = categorySectionLabel(section, appConfig.session_uncategorized_title);
         const hasRunning = section.groups.some(group =>
           groupHasRunningRun(group, sessions.find(candidate => candidate.id === group.sessionRef), runningViewKeys),
         );
