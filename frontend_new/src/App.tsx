@@ -3420,7 +3420,7 @@ function App({
           rowTurns={rowTurns}
           sessions={sessions}
           runningViewKeys={runningViewKeys}
-          activeViewKey={isReadmeShown ? '' : activeViewKey}
+          activeViewKey={readmeInPane ? '' : activeViewKey}
           onSelect={activateView}
           onOpenPane={openViewInPane}
           canOpenPane={canOpenAnotherPane}

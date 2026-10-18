@@ -67,3 +67,16 @@ test('the composer header renders the slot in its right-aligned area, before the
     'the controls come before the run inspector toggle',
   );
 });
+
+// With several restored panes the README covers none of them, so the session
+// list must keep highlighting the focused row: the selection survives reload.
+test('the session navigation clears its selection only when the README fills the pane', () => {
+  assert.ok(
+    app.includes("activeViewKey={readmeInPane ? '' : activeViewKey}"),
+    'the navigation must blank activeViewKey on readmeInPane',
+  );
+  assert.ok(
+    !app.includes("activeViewKey={isReadmeShown ? ''"),
+    'the navigation must not blank activeViewKey on isReadmeShown',
+  );
+});
