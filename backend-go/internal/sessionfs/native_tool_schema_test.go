@@ -68,6 +68,14 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"decide paths", "decide", `{"paths":` + paths + `,"max_images":2}`, true},
 		{"decide unknown", "decide", `{"nope":1}`, false},
 		{"decide bad paths", "decide", `{"paths":3}`, false},
+		{"profile_message every key", "profile_message", `{"profiles":["a","exec/fast"],"timeout_ms":1000,"result_max_bytes":100,"approval":"ask"}`, true},
+		{"profile_message bad approval", "profile_message", `{"profiles":["a"],"approval":"on"}`, false},
+		{"profile_message unknown", "profile_message", `{"profiles":["a"],"nope":1}`, false},
+		{"profile_message empty list", "profile_message", `{"profiles":[]}`, false},
+		{"profile_message no profiles", "profile_message", `{}`, false},
+		{"profile_message duplicate", "profile_message", `{"profiles":["a","a"]}`, false},
+		{"profile_message bad id", "profile_message", `{"profiles":["a b"]}`, false},
+		{"profile_message zero timeout", "profile_message", `{"profiles":["a"],"timeout_ms":0}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -107,7 +115,7 @@ func TestExecAndReadImageSchemaKeysMatchTheLoader(t *testing.T) {
 		t.Error("toolset.schema.json native must reference setting.schema.json, not repeat the tool settings")
 	}
 
-	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys, "decide": nativeDecideKeys} {
+	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys, "decide": nativeDecideKeys, "profile_message": nativeProfileMessageKeys} {
 		got := flattenSchemaKeys(native[tool].(map[string]any), defs)
 		sort.Strings(got)
 		want = append([]string(nil), want...)

@@ -65,7 +65,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|task|memory|fetch|request_draft|skill|subagent|decide|mcp:[A-Za-z0-9_-]+:\\S+)$"
+            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|task|memory|fetch|request_draft|skill|subagent|decide|profile_message|mcp:[A-Za-z0-9_-]+:\\S+)$"
           },
           "uniqueItems": true
         },
@@ -73,7 +73,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|task|memory|fetch|request_draft|skill|subagent|decide|mcp:[A-Za-z0-9_-]+:\\S+)$"
+            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|task|memory|fetch|request_draft|skill|subagent|decide|profile_message|mcp:[A-Za-z0-9_-]+:\\S+)$"
           },
           "uniqueItems": true
         }

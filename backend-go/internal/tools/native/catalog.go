@@ -72,7 +72,13 @@ func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks,
 // the children of the subagent tool. A nil launcher still lists the tool, and a call
 // to it answers that sub-agent runs are unavailable; listing tools needs no launcher.
 func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.NativeDecide == nil && config.NativeSubagent == nil {
+	return BuildCatalogWithMessenger(config, locks, manager, taskStore, memoryStore, fetchStore, launcher, mcp, subagentManager, toolsets, nil)
+}
+
+// BuildCatalogWithMessenger is BuildCatalogWithSubagents plus the messenger behind the
+// profile_message tool. Without a messenger the tool is not offered.
+func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger) (*tools.Catalog, error) {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.NativeDecide == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -101,6 +107,18 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 		// The agent list is part of the description the model sees, so it is kept on top
 		// of the manifest's text and not replaced by it.
 		tool.Definition.Description = definition.Description + subagentListText(subagentSettings)
+		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
+	}
+	if config.NativeProfileMessage != nil && messenger != nil {
+		definition, err := requireNativeDefinition(config, definitions, "profile_message", profileMessageToolID, profileMessageInputSchema)
+		if err != nil {
+			return nil, err
+		}
+		tool, err := NewProfileMessageTool(*config.NativeProfileMessage, messenger)
+		if err != nil {
+			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		tool.Definition.Description = definition.Description + profileMessageListText(*config.NativeProfileMessage)
 		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
 	}
 	return tools.NewCatalog(loaded)
@@ -400,6 +418,8 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeDecide != nil
 	case "subagent":
 		return config.NativeSubagent != nil
+	case "profile_message":
+		return config.NativeProfileMessage != nil
 	default:
 		return false
 	}

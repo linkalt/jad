@@ -134,31 +134,32 @@ type SessionConfig struct {
 	SettingPath     string
 	// StateDir is <state>/<session id>: the folder the session keeps its state in, and the
 	// "session directory" of relative image_store.dir and the {session_dir} spill placeholder.
-	StateDir           string
-	MessagesPath       string
-	MessagesBackupPath string
-	UsageCachePath     string
-	StagingDir         string
-	StoragePaths       SessionStoragePaths
-	WorkingDir         string
-	SessionFiles       SessionFileListingSettings
-	NativeReadPolicy   NativePathPolicy
-	NativeRead         *NativeReadSettings
-	NativeGrep         *NativeGrepSettings
-	NativeWrite        *NativeWriteSettings
-	NativeEdit         *NativeEditSettings
-	NativeBash         *NativeBashSettings
-	NativeExec         *NativeExecSettings
-	NativeGlob         *NativeGlobSettings
-	NativeReadImage    *NativeReadImageSettings
-	NativeProcess      *NativeProcessSettings
-	NativeTask         *NativeTaskSettings
-	NativeMemory       *NativeMemorySettings
-	NativeFetch        *NativeFetchSettings
-	NativeRequestDraft *NativeRequestDraftSettings
-	NativeSkill        *NativeSkillSettings
-	NativeDecide       *NativeDecideSettings
-	NativeSubagent     *NativeSubagentSettings
+	StateDir             string
+	MessagesPath         string
+	MessagesBackupPath   string
+	UsageCachePath       string
+	StagingDir           string
+	StoragePaths         SessionStoragePaths
+	WorkingDir           string
+	SessionFiles         SessionFileListingSettings
+	NativeReadPolicy     NativePathPolicy
+	NativeRead           *NativeReadSettings
+	NativeGrep           *NativeGrepSettings
+	NativeWrite          *NativeWriteSettings
+	NativeEdit           *NativeEditSettings
+	NativeBash           *NativeBashSettings
+	NativeExec           *NativeExecSettings
+	NativeGlob           *NativeGlobSettings
+	NativeReadImage      *NativeReadImageSettings
+	NativeProcess        *NativeProcessSettings
+	NativeTask           *NativeTaskSettings
+	NativeMemory         *NativeMemorySettings
+	NativeFetch          *NativeFetchSettings
+	NativeRequestDraft   *NativeRequestDraftSettings
+	NativeSkill          *NativeSkillSettings
+	NativeDecide         *NativeDecideSettings
+	NativeSubagent       *NativeSubagentSettings
+	NativeProfileMessage *NativeProfileMessageSettings
 	// AgentToolsets holds, by key, the merged settings of the toolsets a sub-agent names
 	// in its toolset key. The key is the ids joined with "+" (one id: the id itself). Only the tool settings and MCP servers of an
 	// entry are used; it has no subagent tool.
@@ -448,6 +449,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	nativeProfileMessage, err := normalizeNativeProfileMessageSettings(setting, settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	nativeProcess, err := normalizeNativeProcessSettings(
 		setting,
 		location.Root.GlobalJadRoot,
@@ -460,7 +465,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	applyApprovalDefault(approval.Default, setting, nativeWrite, nativeEdit, nativeBash, nativeExec, nativeProcess, mcpServers)
+	applyApprovalDefault(approval.Default, setting, nativeWrite, nativeEdit, nativeBash, nativeExec, nativeProcess, nativeProfileMessage, mcpServers)
 	stateContext, err := normalizeStateContextSettings(setting, settingPath, cwd, nativeProcess, nativeTask, nativeMemory, nativeSubagent)
 	if err != nil {
 		return SessionConfig{}, err
@@ -574,6 +579,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeSkill:           nativeSkill,
 		NativeDecide:          nativeDecide,
 		NativeSubagent:        nativeSubagent,
+		NativeProfileMessage:  nativeProfileMessage,
 		GlobalJadRoot:         location.Root.GlobalJadRoot,
 		MCPServers:            mcpServers,
 		StateContext:          stateContext,

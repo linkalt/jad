@@ -8,6 +8,15 @@ import (
 	"jad/backend-go/internal/sessionfs"
 )
 
+func TestNativeToolConfiguredKnowsProfileMessage(t *testing.T) {
+	if !nativeToolConfigured(sessionfs.SessionConfig{NativeProfileMessage: &sessionfs.NativeProfileMessageSettings{}}, "profile_message") {
+		t.Fatal("profile_message is not seen as configured")
+	}
+	if nativeToolConfigured(sessionfs.SessionConfig{}, "profile_message") {
+		t.Fatal("profile_message is seen as configured on an empty config")
+	}
+}
+
 // Every name the loader accepts under tools.native has exactly one Native* settings
 // field in SessionConfig, and nativeToolConfigured sees that field.
 func TestNativeToolConfiguredCoversEveryRegisteredName(t *testing.T) {

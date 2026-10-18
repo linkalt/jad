@@ -98,3 +98,24 @@ func TestApprovalDefaultRefusesAnythingButOffAndAskNullIncluded(t *testing.T) {
 		}
 	}
 }
+
+func TestApprovalDefaultAskReachesProfileMessageUnlessItSetsItsOwn(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tool map[string]any
+		want string
+	}{
+		"absent":       {map[string]any{"profiles": []any{"a"}}, ApprovalAsk},
+		"explicit off": {map[string]any{"profiles": []any{"a"}, "approval": "off"}, ApprovalOff},
+	} {
+		config, err := loadApprovalSetting(t, map[string]any{
+			"approval": map[string]any{"default": "ask"},
+			"tools":    map[string]any{"native": map[string]any{"profile_message": tc.tool}},
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := config.NativeProfileMessage.Approval; got != tc.want {
+			t.Errorf("%s: profile_message approval = %q, want %q", name, got, tc.want)
+		}
+	}
+}

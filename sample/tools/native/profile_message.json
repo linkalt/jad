@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.profile_message",
+      "source": "native",
+      "name": "profile_message",
+      "description": "Send a message to another profile and get its final answer. That profile keeps its own conversation between calls, so a later call can build on an earlier one.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "profile": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Profile to message; one of the configured profiles."
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The message to send. The profile sees nothing of this conversation."
+          }
+        },
+        "required": ["profile", "message"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

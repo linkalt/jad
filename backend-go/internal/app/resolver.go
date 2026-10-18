@@ -473,7 +473,7 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	memoryStore := r.sharedMemoryStore(config)
 	fetchStore := r.sharedFetchStore(config)
 	subagentMCP := &native.SubagentMCP{}
-	nativeCatalog, err := native.BuildCatalogWithSubagents(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r)
+	nativeCatalog, err := native.BuildCatalogWithMessenger(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r})
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
