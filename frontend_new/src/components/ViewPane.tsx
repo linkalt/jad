@@ -113,6 +113,16 @@ const styles = stylex.create({
     // neither.
     position: 'relative',
   },
+  /**
+   * The focused pane's strip is tinted, because with several panes on screen the
+   * one that owns the composer and the keyboard was only marked by the colour of
+   * its label. A grey token rather than a fixed colour keeps it readable in every
+   * scheme: it is a shade away from the page in light mode and a shade towards
+   * light in dark mode, never a dark block over a light pane.
+   */
+  headerFocused: {
+    backgroundColor: 'var(--color-background-gray)',
+  },
   titleRow: {
     flex: '1 1 auto',
     minWidth: 0,
@@ -370,7 +380,7 @@ export function ViewPane({
           align="center"
           justify="between"
           gap={2}
-          xstyle={styles.header}
+          xstyle={[styles.header, isFocused ? styles.headerFocused : undefined]}
           style={{zIndex: PANE_HEADER_Z_INDEX}}
         >
           {/*
