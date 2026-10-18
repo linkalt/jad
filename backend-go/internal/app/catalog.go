@@ -53,6 +53,52 @@ func listingModelSummary(location sessionfs.Location, config sessionfs.SessionCo
 	return summary
 }
 
+type modelOption = httpapi.SessionModelOption
+
+// listingModelOptions describes every model the profile lists, in order, reading
+// each file raw like listingModelSummary: a missing or malformed file gives
+// provider "unknown" and no efforts, and never fails or hides a session.
+func listingModelOptions(config sessionfs.SessionConfig) []modelOption {
+	if config.Models == nil {
+		return nil
+	}
+	options := make([]modelOption, 0, len(config.Models))
+	for _, id := range config.Models {
+		option := modelOption{ID: id, Provider: "unknown"}
+		contents, err := os.ReadFile(config.ModelPaths[id])
+		var fields map[string]json.RawMessage
+		if err == nil && json.Unmarshal(contents, &fields) == nil {
+			var provider string
+			if json.Unmarshal(fields["provider"], &provider) == nil && strings.TrimSpace(provider) != "" {
+				option.Provider = strings.TrimSpace(provider)
+			}
+			var list []json.RawMessage
+			if json.Unmarshal(fields["efforts"], &list) == nil && list != nil {
+				efforts := make([]string, 0, len(list))
+				for _, item := range list {
+					var effort string
+					if json.Unmarshal(item, &effort) != nil {
+						efforts = nil
+						break
+					}
+					efforts = append(efforts, effort)
+				}
+				option.Efforts = efforts
+			}
+			var request, reasoning map[string]json.RawMessage
+			if json.Unmarshal(fields["request"], &request) == nil &&
+				json.Unmarshal(request["reasoning"], &reasoning) == nil {
+				var effort string
+				if json.Unmarshal(reasoning["effort"], &effort) == nil {
+					option.DefaultEffort = effort
+				}
+			}
+		}
+		options = append(options, option)
+	}
+	return options
+}
+
 type sessionListRecord struct {
 	ID              string                             `json:"id"`
 	SessionID       string                             `json:"session_id"`
@@ -68,6 +114,7 @@ type sessionListRecord struct {
 	ProfileNames    map[string]string                  `json:"profile_names,omitempty"`
 	ModelDefault    string                             `json:"model_default,omitempty"`
 	Models          *[]string                          `json:"models,omitempty"`
+	ModelOptions    []modelOption                      `json:"model_options,omitempty"`
 	FrontCompaction json.RawMessage                    `json:"front_compaction,omitempty"`
 	Usage           *webui.UsageSummary                `json:"usage,omitempty"`
 	Run             *httpapi.SessionRunState           `json:"run,omitempty"`
@@ -590,6 +637,7 @@ func makeSessionListRecord(location sessionfs.Location, config sessionfs.Session
 	if config.Models != nil {
 		models := append([]string{}, config.Models...)
 		item.Models = &models
+		item.ModelOptions = listingModelOptions(config)
 	}
 	usageCopy := usage
 	item.Usage = &usageCopy
@@ -678,6 +726,9 @@ func sessionVersion(config sessionfs.SessionConfig) string {
 		fmt.Sprint(config.BackupTurns),
 		fileStamp(config.SettingPath),
 		fileStamp(config.ModelPath),
+	}
+	for _, id := range config.Models {
+		parts = append(parts, fileStamp(config.ModelPaths[id]))
 	}
 	return makeETag(strings.Join(parts, "|"))
 }

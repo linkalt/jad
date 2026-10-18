@@ -52,7 +52,7 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 		Server: map[string]any{"max_body_bytes": 4096, "sse_max_buffered_bytes": 4096, "max_inline_part_bytes": 64},
 		Models: map[string]map[string]any{
 			"openai/model":     {"provider": "openai", "model": "gpt-main", "api_key_env": "FIXTURE_OPENAI_KEY"},
-			"openai/alternate": {"provider": "openai", "model": "gpt-alternate", "api_key_env": "FIXTURE_OPENAI_KEY"},
+			"openai/alternate": {"provider": "openai", "model": "gpt-alternate", "api_key_env": "FIXTURE_OPENAI_KEY", "efforts": []string{"low", "high"}, "request": map[string]any{"reasoning": map[string]any{"effort": "low"}}},
 		},
 		Profiles: map[string]map[string]any{"dev/green": green, "dev/blue": blue},
 		Native:   map[string]any{"read": map[string]any{"paths": []map[string]string{{"action": "deny", "path": filepath.Join(projectDir, "private")}}}},
@@ -107,10 +107,11 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 		t.Fatalf("model update status=%d err=%v body=%s", modelResponse.StatusCode, err, modelBody)
 	}
 	var modelUpdate struct {
-		ActiveProfile string   `json:"active_profile"`
-		Profiles      []string `json:"profiles"`
-		ModelDefault  string   `json:"model_default"`
-		Models        []string `json:"models"`
+		ActiveProfile string                       `json:"active_profile"`
+		Profiles      []string                     `json:"profiles"`
+		ModelDefault  string                       `json:"model_default"`
+		Models        []string                     `json:"models"`
+		ModelOptions  []httpapi.SessionModelOption `json:"model_options"`
 		Model         struct {
 			Provider string `json:"provider"`
 			Name     string `json:"model"`
@@ -122,6 +123,13 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 	}
 	if modelUpdate.ActiveProfile != "dev/green" || modelUpdate.ModelDefault != "openai/alternate" || modelUpdate.Model.Provider != "openai" || modelUpdate.Model.Name != "gpt-alternate" || !modelUpdate.Changed || !reflect.DeepEqual(modelUpdate.Models, []string{"openai/alternate", "openai/model"}) {
 		t.Fatalf("model update = %+v", modelUpdate)
+	}
+	wantOptions := []httpapi.SessionModelOption{
+		{ID: "openai/alternate", Provider: "openai", Efforts: []string{"low", "high"}, DefaultEffort: "low"},
+		{ID: "openai/model", Provider: "openai"},
+	}
+	if !reflect.DeepEqual(modelUpdate.ModelOptions, wantOptions) {
+		t.Fatalf("model_options = %+v, want %+v", modelUpdate.ModelOptions, wantOptions)
 	}
 
 	storedProfile, err := os.ReadFile(filepath.Join(fixture.Root, "profiles", "dev", "green.json"))

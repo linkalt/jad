@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -311,6 +312,127 @@ func TestSessionListNamesTheModelFileTheSettingsSelect(t *testing.T) {
 		if got[session] != expected {
 			t.Errorf("session %q model = %+v, want %+v", session, got[session], expected)
 		}
+	}
+}
+
+func TestSessionListAndSnapshotCarryModelOptions(t *testing.T) {
+	loaded, fixture := layoutConfig(t, layouttest.Spec{
+		SessionID: "options",
+		Models: map[string]map[string]any{
+			"m/a": {"provider": "alpha", "model": "alpha-model", "api_key_env": "FIXTURE_KEY", "efforts": []string{"low", "high"}, "request": map[string]any{"reasoning": map[string]any{"effort": "high"}}},
+			"m/b": {"provider": "beta", "model": "beta-model", "api_key_env": "FIXTURE_KEY"},
+			"m/c": {"provider": "gamma", "model": "gamma-model", "api_key_env": "FIXTURE_KEY"},
+		},
+		Profiles: map[string]map[string]any{"dev/options": {"models": []string{"m/a", "m/b", "m/c"}, "model_default": "m/a"}},
+		Session:  map[string]any{"scope": map[string]any{"profiles": []string{"dev/options"}}},
+	}, map[string]string{"FIXTURE_KEY": "key"})
+	modelFile := func(id string) string { return filepath.Join(fixture.Root, "models", filepath.FromSlash(id)+".json") }
+	if err := os.WriteFile(modelFile("m/c"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := NewResolver(loaded.Roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50, MaxInlinePartBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []modelOption{
+		{ID: "m/a", Provider: "alpha", Efforts: []string{"low", "high"}, DefaultEffort: "high"},
+		{ID: "m/b", Provider: "beta"},
+		{ID: "m/c", Provider: "unknown"},
+	}
+
+	list, err := resolver.ListSessions(context.Background(), "", nil)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	var listed struct {
+		Sessions []sessionListRecord `json:"sessions"`
+	}
+	if err := json.Unmarshal(list.Body, &listed); err != nil {
+		t.Fatalf("decode session list: %v", err)
+	}
+	if len(listed.Sessions) != 1 || !reflect.DeepEqual(listed.Sessions[0].ModelOptions, want) {
+		t.Fatalf("list model_options = %+v, want %+v", listed.Sessions, want)
+	}
+	if strings.Contains(string(list.Body), `"efforts":null`) || strings.Contains(string(list.Body), `"default_effort":""`) {
+		t.Fatalf("empty efforts or default_effort were not omitted: %s", list.Body)
+	}
+
+	snapshot, err := resolver.ReadSessionSnapshot(context.Background(), listed.Sessions[0].ID, "", httpapi.SnapshotOptions{}, "", nil)
+	if err != nil {
+		t.Fatalf("read session snapshot: %v", err)
+	}
+	var snapshotRecord sessionListRecord
+	if err := json.Unmarshal(snapshot.Body, &snapshotRecord); err != nil {
+		t.Fatalf("decode session snapshot: %v", err)
+	}
+	if !reflect.DeepEqual(snapshotRecord.ModelOptions, want) {
+		t.Fatalf("snapshot model_options = %+v, want %+v", snapshotRecord.ModelOptions, want)
+	}
+
+	// m/b is listed but not the active model: changing its file must still change the list ETag.
+	if err := os.WriteFile(modelFile("m/b"), []byte(`{"provider":"beta","model":"beta-model","api_key_env":"FIXTURE_KEY","efforts":["low"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := resolver.ListSessions(context.Background(), list.ETag, nil)
+	if err != nil {
+		t.Fatalf("revalidate session list: %v", err)
+	}
+	if changed.NotModified || changed.ETag == list.ETag {
+		t.Fatalf("a listed model file change did not invalidate the list ETag: %+v", changed)
+	}
+}
+
+func TestListingModelOptionsReadsEachFieldIndependently(t *testing.T) {
+	loaded, fixture := layoutConfig(t, layouttest.Spec{
+		SessionID: "lenient",
+		Models: map[string]map[string]any{
+			"m/gone":    {"provider": "alpha", "model": "alpha-model", "api_key_env": "FIXTURE_KEY"},
+			"m/request": {"provider": "beta", "model": "beta-model", "api_key_env": "FIXTURE_KEY"},
+			"m/efforts": {"provider": "gamma", "model": "gamma-model", "api_key_env": "FIXTURE_KEY"},
+			"m/plain":   {"provider": "delta", "model": "delta-model", "api_key_env": "FIXTURE_KEY"},
+		},
+		Profiles: map[string]map[string]any{"dev/lenient": {"models": []string{"m/gone", "m/request", "m/efforts", "m/plain"}, "model_default": "m/plain"}},
+		Session:  map[string]any{"scope": map[string]any{"profiles": []string{"dev/lenient"}}},
+	}, map[string]string{"FIXTURE_KEY": "key"})
+	modelFile := func(id string) string { return filepath.Join(fixture.Root, "models", filepath.FromSlash(id)+".json") }
+	if err := os.WriteFile(modelFile("m/gone"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(modelFile("m/request"), []byte(`{"provider":"beta","model":"beta-model","efforts":["low"],"request":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(modelFile("m/efforts"), []byte(`{"provider":"gamma","model":"gamma-model","efforts":"high","request":{"reasoning":{"effort":"low"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := NewResolver(loaded.Roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50, MaxInlinePartBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := resolver.ListSessions(context.Background(), "", nil)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	var listed struct {
+		Sessions []sessionListRecord `json:"sessions"`
+	}
+	if err := json.Unmarshal(list.Body, &listed); err != nil {
+		t.Fatalf("decode session list: %v", err)
+	}
+	want := []modelOption{
+		{ID: "m/efforts", Provider: "gamma", DefaultEffort: "low"},
+		{ID: "m/gone", Provider: "unknown"},
+		{ID: "m/plain", Provider: "delta"},
+		{ID: "m/request", Provider: "beta", Efforts: []string{"low"}},
+	}
+	if len(listed.Sessions) != 1 || !reflect.DeepEqual(listed.Sessions[0].ModelOptions, want) {
+		t.Fatalf("list model_options = %+v, want %+v", listed.Sessions, want)
+	}
+	ids := make([]string, 0, len(want))
+	for _, option := range listed.Sessions[0].ModelOptions {
+		ids = append(ids, option.ID)
+	}
+	if models := listed.Sessions[0].Models; models == nil || !reflect.DeepEqual(*models, ids) {
+		t.Fatalf("list models = %v, want the model_options order %v", models, ids)
 	}
 }
 

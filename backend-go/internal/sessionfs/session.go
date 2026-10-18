@@ -124,6 +124,8 @@ type SessionConfig struct {
 	// ProfileNames maps a profile ID to the display name its file sets; a profile without a name is absent.
 	ProfileNames map[string]string
 	ModelPath    string
+	// ModelPaths maps each model ID the profile may use to its file.
+	ModelPaths map[string]string
 	// ReasoningEffort is the effort chosen with "@<effort>" on the requested model; WithModel
 	// applies it to the model's request.
 	ReasoningEffort string

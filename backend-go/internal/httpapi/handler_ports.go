@@ -129,13 +129,21 @@ type SessionModelInfo struct {
 	Model    string `json:"model"`
 }
 
+type SessionModelOption struct {
+	ID            string   `json:"id"`
+	Provider      string   `json:"provider"`
+	Efforts       []string `json:"efforts,omitempty"`
+	DefaultEffort string   `json:"default_effort,omitempty"`
+}
+
 type SessionModelDefaultUpdate struct {
-	ActiveProfile string           `json:"active_profile"`
-	Profiles      []string         `json:"profiles"`
-	ModelDefault  string           `json:"model_default"`
-	Models        []string         `json:"models"`
-	Model         SessionModelInfo `json:"model"`
-	Changed       bool             `json:"changed"`
+	ActiveProfile string               `json:"active_profile"`
+	Profiles      []string             `json:"profiles"`
+	ModelDefault  string               `json:"model_default"`
+	Models        []string             `json:"models"`
+	ModelOptions  []SessionModelOption `json:"model_options,omitempty"`
+	Model         SessionModelInfo     `json:"model"`
+	Changed       bool                 `json:"changed"`
 }
 
 type SessionFileListing struct {

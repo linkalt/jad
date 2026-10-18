@@ -93,6 +93,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 		}
 	}
 	config.ModelPath = modelPaths[name]
+	config.ModelPaths = modelPaths
 	if config.ReasoningEffort != "" {
 		// Refuse an effort the model does not offer now, before a run stores the user message.
 		if _, err := config.WithModel(); err != nil {

@@ -57,6 +57,7 @@ func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedP
 		Profiles:      update.Profiles,
 		ModelDefault:  update.ModelDefault,
 		Models:        append([]string{}, models...),
+		ModelOptions:  listingModelOptions(settings),
 		Model: httpapi.SessionModelInfo{
 			Provider: selected.Model.Provider,
 			Model:    selected.Model.Name,
