@@ -1,5 +1,6 @@
 import appConfig from './config.json' with {type: 'json'};
 import {createAuthenticatedFetch} from './api-auth.ts';
+import type {ModelOption} from './app-types.ts';
 import {requestApiToken} from './token-request.ts';
 import {
   parseCheckpointList,
@@ -230,6 +231,7 @@ export interface SessionSnapshot {
   profile_names?: Record<string, string>;
   model_default?: string;
   models?: string[];
+  model_options?: unknown;
   front_compaction?: {enabled: boolean; delete_mode: 'permanent' | 'recoverable'};
   session_name: string;
   turns: number;
@@ -264,6 +266,7 @@ export interface SessionPathModelDefaultUpdate {
   profiles: string[];
   model_default: string;
   models: string[];
+  model_options?: ModelOption[];
   model: {provider: string; model: string};
   changed: boolean;
 }
@@ -428,7 +431,31 @@ export async function updateSessionProfileModelDefault(
   ) {
     throw new Error('the server returned invalid session model settings');
   }
-  return value as unknown as SessionPathModelDefaultUpdate;
+  const modelOptions = parseModelOptions(value.model_options);
+  const update = value as unknown as SessionPathModelDefaultUpdate;
+  return modelOptions === undefined ? update : {...update, model_options: modelOptions};
+}
+
+export function parseModelOptions(raw: unknown): ModelOption[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const options: ModelOption[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry) || typeof entry.id !== 'string' || entry.id.trim() === '') {
+      continue;
+    }
+    const efforts = Array.isArray(entry.efforts)
+      ? entry.efforts.filter((effort): effort is string => typeof effort === 'string')
+      : undefined;
+    options.push({
+      id: entry.id,
+      ...(typeof entry.provider === 'string' ? {provider: entry.provider} : {}),
+      ...(efforts === undefined ? {} : {efforts}),
+      ...(typeof entry.default_effort === 'string' ? {defaultEffort: entry.default_effort} : {}),
+    });
+  }
+  return options;
 }
 
 /**

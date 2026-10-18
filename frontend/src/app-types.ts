@@ -25,6 +25,13 @@ export interface InteractionUiState {
 
 export type TraceState = 'complete' | 'running' | 'pending';
 
+export interface ModelOption {
+  id: string;
+  provider?: string;
+  efforts?: string[];
+  defaultEffort?: string;
+}
+
 export interface Session {
   id: string;
   title: string;
@@ -42,6 +49,7 @@ export interface Session {
   profileNames?: Record<string, string>;
   modelDefault?: string;
   models?: string[];
+  modelOptions?: ModelOption[];
   frontCompaction?: SessionSnapshot['front_compaction'];
   model?: {
     provider?: string;

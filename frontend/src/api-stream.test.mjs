@@ -109,6 +109,18 @@ test('resumes an interrupted new run by attaching instead of posting again', asy
   assert.equal(result.attached, true);
 });
 
+test('the run request carries the per-run model only when one is given', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  responses.push(completedStream(), completedStream());
+
+  await streamSessionRun('session-1', 'hello', {model: 'x@high'});
+  await streamSessionRun('session-1', 'hello', {});
+
+  assert.equal(JSON.parse(requests[0].body).model, 'x@high');
+  assert.equal('model' in JSON.parse(requests[1].body), false);
+});
+
 test('reconnects an attached run after an incomplete stream and preserves its snapshot', async () => {
   requests.length = 0;
   responses.push(

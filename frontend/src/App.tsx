@@ -7,7 +7,7 @@ import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {type ActivityNotification, type NewActivityNotification, hasUnreadActivityError, isRunOutcomeUnknown, markActivityNotificationsRead, prependActivityNotification, runOutcomeUnknownNotification, unreadActivityNotificationCount} from './activity-notifications';
-import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, frontCompactSessionFromMessage, resetSession, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';
+import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, frontCompactSessionFromMessage, resetSession, stopSessionRun, streamSessionRun, writeSessionStateContext} from './api';
 import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
 import {interactionFailureTitle} from './approval-answer';
 import {createCoalescedRefresh} from './coalesced-refresh';
@@ -22,7 +22,7 @@ import {DraftRequestDrawer} from './components/DraftRequestDrawer';
 import {JadReadme} from './components/JadReadme';
 import {LazyLoadBoundary} from './components/LazyLoadBoundary';
 import {MarkdownText} from './components/MarkdownText';
-import {ModelPicker} from './components/ModelPicker';
+import {ModelDrawer} from './components/ModelDrawer';
 import {NotificationPanel} from './components/NotificationPanel';
 import {PromptLibraryPanel} from './components/PromptLibraryPanel';
 import {ProviderRetryNotice} from './components/ProviderRetryNotice';
@@ -49,7 +49,7 @@ import {type HookReport, hookReportNotification} from './hook-report-view';
 import {type AttachedFile, type AttachedImage, buildRunInput} from './image-attachments';
 import {type InteractionEnd, interactionEndNotice} from './interaction-end';
 import {applyPart, applyPartDelta} from './messagePatch';
-import {selectedModelForSession} from './model-selection';
+import {modelOptionsForSession, resolveRunModelChoice, resolveRunModelSelection, type RunModelChoice} from './model-selection';
 import {type ProviderRetryWait} from './provider-retry-view';
 import {type RightPanelId, selectionAfterPanelToggle} from './right-panel';
 import {deferredRowStyle, useRowHeightRef} from './row-defer';
@@ -171,8 +171,7 @@ function App({
       INITIAL_VIEWS.activeViewKey,
     ]);
   }
-  const [isModelDefaultUpdating, setIsModelDefaultUpdating] = useState(false);
-  const isModelDefaultUpdatingRef = useRef(false);
+  const [isModelDefaultUpdating] = useState(false);
   // A restored arrangement is the user's own: the "open the configured session"
   // preference only applies to a page that starts from nothing.
   const hasChosenSessionRef = useRef(INITIAL_VIEWS.restored);
@@ -302,6 +301,8 @@ function App({
     });
   }, [openNotifications]);
   const [isUsageDrawerCollapsed, setIsUsageDrawerCollapsed] = useState(true);
+  const [isModelDrawerOpen, setIsModelDrawerOpen] = useState(false);
+  const [runModelChoice, setRunModelChoice] = useState<RunModelChoice | null>(null);
   const [runProgressByView, setRunProgressByView] = useState<Record<string, number>>({});
   const runProgress = runProgressByView[activeViewKey] ?? baseReasoning.length;
   const setRunProgressForView = useCallback((viewKey: string, progress: number) => {
@@ -895,68 +896,6 @@ function App({
     return turns;
   }, [rowSessions]);
 
-  // A session of its own: the picker shows the model this row runs.
-  const selectedModel = selectedModelForSession(
-    activeRowSession.models,
-    activeRowSession.modelDefault,
-    activeRowSession.model?.model,
-  );
-  const selectSessionModel = useCallback(async (modelDefault: string) => {
-    const sessionRef = activeSession?.sessionRef;
-    const targetViewKey = activeViewKey;
-    const targetProfile = activeProfile;
-    const targetRowSession = activeRowSession;
-    if (
-      sessionRef === undefined ||
-      targetRowSession.modelDefault === modelDefault ||
-      resettingViewKey !== null ||
-      frontCompactingViewKey !== null ||
-      isModelDefaultUpdatingRef.current
-    ) {
-      return;
-    }
-    isModelDefaultUpdatingRef.current = true;
-    setIsModelDefaultUpdating(true);
-    try {
-      const result = await updateSessionProfileModelDefault(
-        sessionRef,
-        modelDefault,
-        targetProfile,
-      );
-      updateViewSessionRecord(targetViewKey, session => ({
-        ...session,
-        activeProfile: result.active_profile,
-        profiles: result.profiles,
-        modelDefault: result.model_default,
-        models: result.models,
-        model: result.model,
-      }), targetRowSession);
-      sessionsEtagRef.current = undefined;
-      snapshotEtagsRef.current.delete(targetViewKey);
-      refreshSessionsRef.current?.();
-    } catch (error) {
-      recordNotification({
-        sessionId: activeSessionId,
-        sessionTitle: targetRowSession.title,
-        kind: 'error',
-        title: 'Unable to change the profile model',
-        message: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      isModelDefaultUpdatingRef.current = false;
-      setIsModelDefaultUpdating(false);
-    }
-  }, [
-    activeSession,
-    activeSessionId,
-    activeViewKey,
-    activeProfile,
-    activeRowSession,
-    recordNotification,
-    resettingViewKey,
-    frontCompactingViewKey,
-    updateViewSessionRecord,
-  ]);
   const isLiveSession = activeSession?.source === 'live';
   const isRunning = isSessionRunning(
     runningViewKeys.has(activeViewKey),
@@ -1122,6 +1061,7 @@ function App({
       return;
     }
     setIsUsageDrawerCollapsed(true);
+    setIsModelDrawerOpen(false);
     setStateContextViewKey(null);
     setResetDrawerViewKey(null);
     setFrontCompactionInfoViewKey(null);
@@ -1696,8 +1636,10 @@ function App({
       if (isLiveRun && sessionRef) {
         const controller = new AbortController();
         runAbortRefs.current.set(sessionId, controller);
+        const runModel = resolveRunModelSelection(activeRowSession, runModelChoice);
         void streamSessionRun(sessionRef, buildRunInput(trimmedValue, images, files), {
           signal: controller.signal,
+          ...(runModel === undefined ? {} : {model: runModel}),
           ...(activeProfile === undefined ? {} : {profile: activeProfile}),
           onRun: run => recordRunStarted(sessionId, run.turn_id),
           onInteraction: (turnId, interaction) =>
@@ -1847,6 +1789,7 @@ function App({
       activeViewKey,
       activeProfile,
       activeRowSession,
+      runModelChoice,
       isRunning,
       recordNotification,
       resettingViewKey,
@@ -2094,6 +2037,7 @@ function App({
   }, [activeViewKey, pinnedViews]);
 
   useEffect(() => {
+    setIsModelDrawerOpen(false);
     setStateContextViewKey(null);
     setResetDrawerViewKey(null);
     setResetError(null);
@@ -2528,6 +2472,8 @@ function App({
     isModelDefaultUpdating ||
     resettingViewKey !== null ||
     frontCompactingViewKey !== null;
+  const isModelPickerDisabled = activeSession.sessionRef === undefined || isDestructiveActionDisabled;
+  const runModelChoiceView = resolveRunModelChoice(activeRowSession, runModelChoice);
 
   /** Runs a `/` command the way its toolbar button does; a busy session refuses it with a notice. */
   const runSlashCommand = (name: SlashCommandName) => {
@@ -2547,6 +2493,7 @@ function App({
     }
     setComposerActionsViewKey(null);
     setIsUsageDrawerCollapsed(true);
+    setIsModelDrawerOpen(false);
     setFrontCompactionInfoViewKey(null);
     setFrontCompactionTarget(null);
     setFrontCompactionModeViewKey(null);
@@ -2650,6 +2597,7 @@ function App({
                     onClick={() => {
                       setComposerActionsViewKey(null);
                       setStateContextViewKey(null);
+                      setIsModelDrawerOpen(false);
                       setFrontCompactionError(null);
                       setResetDrawerViewKey(null);
                       if (isFrontCompactionWorkflowOpen) {
@@ -2675,6 +2623,7 @@ function App({
                     setComposerActionsViewKey(null);
                     setStateContextViewKey(null);
                     setIsUsageDrawerCollapsed(true);
+                    setIsModelDrawerOpen(false);
                     setFrontCompactionInfoViewKey(null);
                     setFrontCompactionTarget(null);
                     setFrontCompactionModeViewKey(null);
@@ -2820,6 +2769,15 @@ function App({
               </HStack>
             </VStack>
           </ChatComposerDrawer>
+        ) : isModelDrawerOpen ? (
+          <ModelDrawer
+            sessionName={activeRowSession.title}
+            options={modelOptionsForSession(activeRowSession)}
+            selectedModelId={runModelChoiceView.option?.id}
+            selectedEffort={runModelChoiceView.effort}
+            isDisabled={isModelPickerDisabled}
+            onChange={choice => setRunModelChoice({sessionKey: activeRowSession.id, ...choice})}
+          />
         ) : isUsageDrawerCollapsed ? null : (
           <UsageDetailsDrawer
             sessionName={activeRowSession.title}
@@ -2866,6 +2824,7 @@ function App({
                 setFrontCompactionError(null);
                 setResetError(null);
                 setStateContextViewKey(null);
+                setIsModelDrawerOpen(false);
                 setComposerActionsViewKey(current =>
                   current === activeViewKey ? null : activeViewKey,
                 );
@@ -2876,19 +2835,28 @@ function App({
       }
       toolbarActions={isReadmeShown ? undefined : (
         <HStack align="center" gap={1}>
-          {activeRowSession.models && activeRowSession.models.length > 0 ? (
-            <ModelPicker
-              models={activeRowSession.models}
-              selectedModel={selectedModel}
-              isDisabled={
-                activeSession.sessionRef === undefined ||
-                isRunning ||
-                isCompactionInProgress ||
-                isModelDefaultUpdating ||
-                resettingViewKey !== null ||
-                frontCompactingViewKey !== null
+          {modelOptionsForSession(activeRowSession).length > 0 ? (
+            <IconButton
+              label="Model"
+              tooltip={
+                runModelChoiceView.option === undefined
+                  ? 'Select a model'
+                  : `Current model: ${runModelChoiceView.option.id}`
               }
-              onSelect={model => { void selectSessionModel(model); }}
+              icon={<Icon icon="app:model" size="sm" />}
+              variant={isModelDrawerOpen ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => {
+                setComposerActionsViewKey(null);
+                setStateContextViewKey(null);
+                setResetDrawerViewKey(null);
+                setFrontCompactionInfoViewKey(null);
+                setFrontCompactionTarget(null);
+                setFrontCompactionModeViewKey(null);
+                setFrontCompactionError(null);
+                setIsUsageDrawerCollapsed(true);
+                setIsModelDrawerOpen(open => !open);
+              }}
             />
           ) : null}
           <IconButton
@@ -2898,6 +2866,7 @@ function App({
             size="sm"
             onClick={() => {
               setStateContextViewKey(null);
+              setIsModelDrawerOpen(false);
               setIsUsageDrawerCollapsed(collapsed => !collapsed);
             }}
           />
@@ -2912,6 +2881,7 @@ function App({
               onClick={() => {
                 setComposerActionsViewKey(null);
                 setIsUsageDrawerCollapsed(true);
+                setIsModelDrawerOpen(false);
                 setResetDrawerViewKey(null);
                 setFrontCompactionInfoViewKey(null);
                 setFrontCompactionTarget(null);

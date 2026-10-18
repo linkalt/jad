@@ -1,4 +1,4 @@
-import {type SessionSnapshot} from './api';
+import {parseModelOptions, type SessionSnapshot} from './api';
 import {type Session} from './app-types';
 import {oneLine} from './row-text';
 import {sessionUiStateForRun} from './session-run-status';
@@ -11,6 +11,7 @@ export function sessionUiId(snapshot: SessionSnapshot, current: readonly Session
 }
 
 export function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Session {
+  const modelOptions = parseModelOptions(snapshot.model_options);
   return {
     id,
     title: oneLine(snapshot.session_name) || snapshot.session_id || snapshot.id,
@@ -30,6 +31,7 @@ export function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Sess
     ...(snapshot.profile_names === undefined ? {} : {profileNames: snapshot.profile_names}),
     ...(snapshot.model_default === undefined ? {} : {modelDefault: snapshot.model_default}),
     ...(snapshot.models === undefined ? {} : {models: snapshot.models}),
+    ...(modelOptions === undefined ? {} : {modelOptions}),
     ...(snapshot.front_compaction === undefined
       ? {}
       : {frontCompaction: snapshot.front_compaction}),
