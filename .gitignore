@@ -17,6 +17,7 @@ backend-go/jad
 .zvec-grep/
 /RESUME_STATE.json
 /missing.md
+/audit_*.md
 /sample/anthropic-adapter-oauth.json
 /backend-go/CLAUDE.md
 /frontend/CLAUDE.md
