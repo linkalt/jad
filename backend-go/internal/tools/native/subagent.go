@@ -300,14 +300,18 @@ func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
 // when there is no agent yet, how to create one.
 func subagentListText(settings sessionfs.NativeSubagentSettings) string {
 	if len(settings.Agents) == 0 {
-		return "\n" + noAgentsText(settings.ConfiguredAgentDirs)
+		return "\n" + noAgentsText(settings)
 	}
 	return subagentAgentList(settings.Agents, settings.ListMaxBytes)
 }
 
 // noAgentsText tells the model there is no agent and what to create. The folders are
 // read when a message starts a run, so a new agent is usable from the next message.
-func noAgentsText(dirs []string) string {
+func noAgentsText(settings sessionfs.NativeSubagentSettings) string {
+	if len(settings.DenyAgents) > 0 {
+		return "All agents are disabled by tools.native.subagent.deny_agents; none can be launched."
+	}
+	dirs := settings.ConfiguredAgentDirs
 	where := "define one in tools.native.subagent.agents"
 	if len(dirs) > 0 {
 		where = "create a folder named after the agent in " + strings.Join(dirs, " or ")
@@ -359,10 +363,10 @@ func changeMarker(agent sessionfs.NativeSubagentAgent) string {
 
 // renderSubagentList is the result of a call with no task: one line per agent, then
 // one per retained run, so a model that lost a run id can find it again.
-func renderSubagentList(callID string, agents []subagentAgent, runs []subagentRunView, maxBytes int64, dirs []string) (string, error) {
+func renderSubagentList(callID string, agents []subagentAgent, runs []subagentRunView, maxBytes int64, settings sessionfs.NativeSubagentSettings) (string, error) {
 	lines := make([]string, 0, len(agents)+len(runs)+2)
 	if len(agents) == 0 {
-		lines = append(lines, noAgentsText(dirs))
+		lines = append(lines, noAgentsText(settings))
 	}
 	for _, agent := range agents {
 		line := agent.config.Name + changeMarker(agent.config)
@@ -586,7 +590,7 @@ func (s *subagentTool) selectAgent(arguments map[string]any) (subagentAgent, str
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if len(s.agents) == 0 {
-		return subagentAgent{}, noAgentsText(s.settings.ConfiguredAgentDirs)
+		return subagentAgent{}, noAgentsText(s.settings)
 	}
 	name, named := arguments["agent"].(string)
 	if !named {

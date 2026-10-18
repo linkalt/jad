@@ -948,6 +948,27 @@ func TestSubagentCallWithoutATaskListsEveryAgentWithItsDescription(t *testing.T)
 	}
 }
 
+// When every agent is denied the tool says so instead of telling the model to create one.
+func TestSubagentWithAllAgentsDeniedSaysTheyAreDisabled(t *testing.T) {
+	launcher := &fakeLauncher{}
+	settings := subagentSettings()
+	settings.ConfiguredAgentDirs = []string{"/proj/.jad/subagents"}
+	settings.DenyAgents = []string{"secret"}
+	catalog, tool := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"))
+	for name, text := range map[string]string{
+		"description": tool.Definition.Description,
+		"list":        subagentCall(t, catalog, `{}`),
+		"task":        subagentCall(t, catalog, `{"task":"do it","agent":"secret"}`),
+	} {
+		if !strings.Contains(text, "tools.native.subagent.deny_agents") || strings.Contains(text, "create a folder") {
+			t.Errorf("%s:\n%s", name, text)
+		}
+	}
+	if len(launcher.requests) != 0 {
+		t.Fatalf("a denied agent started %d children", len(launcher.requests))
+	}
+}
+
 // With no agent the tool still loads. The list, the description and a task all say there
 // is none and where to create one, and nothing is started.
 func TestSubagentWithZeroAgentsExplainsHowToCreateOne(t *testing.T) {

@@ -48,7 +48,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "allow_detached_writers", "changed_files_max", "process_max_running", "storage_dir", "statecontext"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "deny_agents", "allow_detached_writers", "changed_files_max", "process_max_running", "storage_dir", "statecontext"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -107,6 +107,8 @@ type NativeSubagentSettings struct {
 	// with a run id when it gives wait_ms. Off by default: such an agent then waits for
 	// its end, whatever wait_ms says. The zero value is the default.
 	AllowDetachedWriters bool
+	// DenyAgents are agent names removed from Agents after loading; a name that matches no agent is ignored.
+	DenyAgents []string
 	// DenyTools is the selected profile's tools.deny, set when the catalog is built and
 	// not read from the subagent section: a tool it covers is in no child's catalog.
 	DenyTools []string
@@ -279,6 +281,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 	if settings.AllowDetachedWriters, err = bashBool(fields, "allow_detached_writers", false, settingPath+": "+section); err != nil {
 		return nil, err
 	}
+	if settings.DenyAgents, err = subagentDenyAgents(fields, settingPath, section); err != nil {
+		return nil, err
+	}
 	if settings.StorageDir, err = normalizeNativeSubagentStorageDir(fields, cwd, toolStorageDir, settingPath); err != nil {
 		return nil, err
 	}
@@ -335,6 +340,7 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		}
 		settings.Agents = withSubagentOverrides(settings.Agents, agents, inline)
 	}
+	settings.Agents = withoutDeniedSubagents(settings.Agents, settings.DenyAgents)
 	if !settings.AllowWrite {
 		for _, agent := range settings.Agents {
 			if names := agent.ChangeTools(); len(names) > 0 {
