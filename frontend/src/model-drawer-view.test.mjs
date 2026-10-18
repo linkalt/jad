@@ -11,7 +11,8 @@ import test from 'node:test';
 //  * the running model is marked by a box around its id alone — a background
 //    tint, not a text colour — and the tint comes from a token with a light-mode
 //    value, so the highlight does not vanish there.
-//  * the list stays open after a pick; the drawer is closed from its button.
+//  * clicking any row folds the open list back (another row is picked first);
+//    an effort drop-down changes in place and keeps it open.
 //  * no hover tooltip on the model id: it floated over the row above it.
 //
 // The rows themselves (collapsed = the running model alone, expanded = every
@@ -66,12 +67,28 @@ test('the search field belongs to the expanded list only', () => {
 });
 
 test('a row opens the list, picks in place, and the list stays open', () => {
-  assert.match(drawer, /onClick=\{rowAction\(row\.option, row\.markedEffort\)\}/, 'the row is the control');
-  assert.match(drawer, /if \(isExpanded\) choose\(option, effort\);\s*else setIsExpanded\(true\);/, 'a click opens the list when collapsed and picks when open');
+  assert.match(drawer, /onClick=\{rowAction\(row\.option, row\.markedEffort, row\.isSelected\)\}/, 'the row is the control');
   const rowAction = drawer.slice(drawer.indexOf('const rowAction ='), drawer.indexOf('return ('));
-  assert.ok(!rowAction.includes('setIsExpanded(false)'), 'a pick must not collapse the list');
+  assert.match(rowAction, /if \(!isExpanded\) \{\s*setIsExpanded\(true\);/, 'a click opens the list when collapsed');
+  assert.match(
+    rowAction,
+    /\} else \{\s*if \(!isRunning\) choose\(option, effort\);\s*setIsExpanded\(false\);\s*setQuery\(''\);/,
+    'any row folds the list and clears the search; another row is picked first',
+  );
+  assert.equal((rowAction.match(/setIsExpanded\(false\)/g) ?? []).length, 1, 'one fold path, shared by every row');
   assert.match(drawer, /tabIndex=\{isDisabled \? -1 : 0\}/, 'a row stays reachable from the keyboard');
   assert.match(drawer, /event\.key !== 'Enter' && event\.key !== ' '/, 'Enter and Space act like a click');
+});
+
+test('the open list tints the row under the pointer', () => {
+  assert.match(drawer, /const HOVERED_ROW = \{\s*backgroundColor: 'var\(--color-background-gray\)'/, 'the hover tint is a theme token strong enough to see (muted is ~5% opacity)');
+  assert.match(drawer, /style=\{isExpanded && !isDisabled && hoveredId === row\.option\.id \? HOVERED_ROW : undefined\}/, 'only the open list, only an enabled drawer, only the hovered row');
+  assert.match(drawer, /onMouseEnter=\{\(\) => setHoveredId\(row\.option\.id\)\}/, 'entering a row marks it');
+  assert.match(drawer, /onMouseLeave=\{\(\) => setHoveredId\(null\)\}/, 'leaving clears it');
+});
+
+test('the open list carries no arrow icon', () => {
+  assert.ok(!/arrowUp|chevronUp/.test(drawer), 'no up arrow is drawn on the running row');
 });
 
 test('the running model is marked by a box around its id alone', () => {
@@ -80,7 +97,7 @@ test('the running model is marked by a box around its id alone', () => {
   assert.equal(boxes.length, 1, 'the highlight box appears once, around the id');
   const rowStart = drawer.lastIndexOf('<HStack', drawer.indexOf('data-model-row'));
   const rowTag = drawer.slice(rowStart, drawer.indexOf('>', rowStart));
-  assert.ok(!rowTag.includes('style='), 'the row itself carries no highlight, only its id');
+  assert.ok(!rowTag.includes('SELECTED_ID_BOX'), 'the row itself carries no selection highlight, only its id');
   const box = drawer.slice(drawer.indexOf('const SELECTED_ID_BOX'), drawer.indexOf('export function ModelDrawer'));
   assert.match(box, /backgroundColor: 'var\(--color-background-blue\)'/, 'the box is a tinted background, not a text colour');
   assert.match(box, /borderRadius: 'var\(--radius-/, 'the box is rounded with a radius token');

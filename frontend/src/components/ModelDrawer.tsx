@@ -35,14 +35,21 @@ const SELECTED_ID_BOX = {
   borderRadius: 'var(--radius-element)',
 };
 
+/** The tint under the row the pointer is on, in the open list only. */
+const HOVERED_ROW = {
+  backgroundColor: 'var(--color-background-gray)',
+  borderRadius: 'var(--radius-element)',
+};
+
 /**
  * The composer's model drawer: a compact list of every model the session
  * offers — model-id, provider and a reasoning-effort drop-down per row.
  *
  * It opens on the running model's row alone, with the expand chevron at the end
  * of that row; clicking the row opens the whole list with a search field above
- * it and keeps it open, so a model and its effort can be changed in place. The
- * running model is the one whose id sits in a highlighted box.
+ * it; a row under the pointer is tinted. Clicking any row folds the list back
+ * (another row is picked first), while an effort drop-down changes in place.
+ * The running model is the one whose id sits in a highlighted box.
  *
  * Rows are stacks rather than an Astryx Table: a table draws a divider per row
  * and re-bases the theme's colour tokens inside every cell, which would flatten
@@ -58,6 +65,7 @@ export function ModelDrawer({
 }: ModelDrawerProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [query, setQuery] = useState('');
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   const rows = modelChoiceRows(options, selectedModelId, selectedEffort, query, isExpanded);
   const trimmedQuery = query.trim();
@@ -67,11 +75,16 @@ export function ModelDrawer({
     onChange(effort === undefined ? {modelId: option.id} : {modelId: option.id, effort});
   };
 
-  /** What a click on a row does: open the list, or pick that model in place. */
-  const rowAction = (option: ModelOption, effort?: string) => () => {
+  /** What a click on a row does: open the list, collapse it from the running row, or pick that model in place. */
+  const rowAction = (option: ModelOption, effort: string | undefined, isRunning: boolean) => () => {
     if (isDisabled) return;
-    if (isExpanded) choose(option, effort);
-    else setIsExpanded(true);
+    if (!isExpanded) {
+      setIsExpanded(true);
+    } else {
+      if (!isRunning) choose(option, effort);
+      setIsExpanded(false);
+      setQuery('');
+    }
   };
 
   return (
@@ -109,12 +122,17 @@ export function ModelDrawer({
                   align="center"
                   width="100%"
                   data-model-row={row.isSelected ? 'selected' : 'choice'}
+                  paddingInline={1}
+                  paddingBlock={0.5}
+                  style={isExpanded && !isDisabled && hoveredId === row.option.id ? HOVERED_ROW : undefined}
+                  onMouseEnter={() => setHoveredId(row.option.id)}
+                  onMouseLeave={() => setHoveredId(null)}
                   tabIndex={isDisabled ? -1 : 0}
-                  onClick={rowAction(row.option, row.markedEffort)}
+                  onClick={rowAction(row.option, row.markedEffort, row.isSelected)}
                   onKeyDown={event => {
                     if (event.key !== 'Enter' && event.key !== ' ') return;
                     event.preventDefault();
-                    rowAction(row.option, row.markedEffort)();
+                    rowAction(row.option, row.markedEffort, row.isSelected)();
                   }}
                 >
                   <HStack align="center" width={ID_COLUMN_WIDTH}>
