@@ -7,7 +7,7 @@
 export interface SchemaField {
   name: string;
   isRequired: boolean;
-  /** "string", "integer or null", `1` for a constant; empty when the schema gives none (a $ref or oneOf). */
+  /** "string", "integer or null", `1` for a constant, "string or array" from anyOf/oneOf branches; empty when the schema gives none (a $ref). */
   type: string;
   defaultValue?: string;
   description: string;
@@ -19,7 +19,14 @@ function typeLabel(property: Record<string, unknown>): string {
   if (Array.isArray(type)) return type.filter(item => typeof item === 'string').join(' or ');
   if ('const' in property) return JSON.stringify(property.const);
   if (Array.isArray(allowed)) return allowed.map(value => JSON.stringify(value)).join(' | ');
-  return '';
+  const branches = Array.isArray(property.anyOf) ? property.anyOf : Array.isArray(property.oneOf) ? property.oneOf : [];
+  const labels = branches.map(branchLabel).filter(label => label !== '');
+  return [...new Set(labels)].join(' or ');
+}
+
+function branchLabel(branch: unknown): string {
+  const type = typeof branch === 'object' && branch !== null ? (branch as {type?: unknown}).type : undefined;
+  return typeof type === 'string' ? type : '';
 }
 
 export function schemaFields(schema: unknown): SchemaField[] {

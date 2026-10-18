@@ -23,6 +23,22 @@ test('each property becomes a field with its type, default and description', () 
   ]);
 });
 
+test('a property with only anyOf or oneOf branches is labelled from their types', () => {
+  const fields = schemaFields({
+    properties: {
+      toolset: {anyOf: [{type: 'string'}, {type: 'array', items: {type: 'string'}}]},
+      pick: {oneOf: [{type: 'string'}, {type: 'string'}, {type: 'integer'}]},
+      refs: {oneOf: [{$ref: '#/$defs/a'}, {$ref: '#/$defs/b'}]},
+      mixed: {anyOf: [{$ref: '#/$defs/a'}, {type: 'null'}]},
+      typed: {type: 'string', anyOf: [{type: 'integer'}]},
+    },
+  });
+  assert.deepEqual(
+    fields.map(field => field.type),
+    ['string or array', 'string or integer', '', 'null', 'string'],
+  );
+});
+
 test('a schema with no properties, or something that is not a schema, has no fields', () => {
   assert.deepEqual(schemaFields({}), []);
   assert.deepEqual(schemaFields(null), []);
