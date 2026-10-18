@@ -5,8 +5,9 @@ export function selectedModelForSession(
   modelDefault: string | undefined,
   fallbackModel: string | undefined,
 ): string | undefined {
-  if (modelDefault !== undefined && (models === undefined || models.includes(modelDefault))) {
-    return modelDefault;
+  const modelId = modelDefault?.replace(/@[^@]*$/, '');
+  if (modelId !== undefined && (models === undefined || models.includes(modelId))) {
+    return modelId;
   }
   return models?.[0] ?? fallbackModel;
 }
@@ -26,7 +27,6 @@ export function filterModels(models: readonly string[], query: string): string[]
 }
 
 export interface RunModelChoice {
-  sessionKey: string;
   modelId: string;
   effort?: string;
 }
@@ -77,10 +77,13 @@ export function modelChoiceRows(
     : options.filter(option => option.id === (selectedModelId ?? options[0]?.id));
   return visible.map(option => {
     const isSelected = option.id === selectedModelId;
-    const marked =
-      isSelected && selectedEffort !== undefined && (option.efforts ?? []).includes(selectedEffort)
-        ? selectedEffort
-        : defaultEffortFor(option);
+    const marked = !isSelected
+      ? defaultEffortFor(option)
+      : selectedEffort === undefined
+        ? undefined
+        : (option.efforts ?? []).includes(selectedEffort)
+          ? selectedEffort
+          : defaultEffortFor(option);
     return marked === undefined
       ? {option, isSelected}
       : {option, isSelected, markedEffort: marked};
@@ -92,28 +95,25 @@ export function formatRunModel(id: string, effort?: string): string {
   return effort === undefined || effort === '' ? base : `${base}@${effort}`;
 }
 
-/** Display choice: the stored pick for this record's id, else the session default model. */
-export function resolveRunModelChoice(
-  record: ModelRecord,
-  stored: RunModelChoice | null | undefined,
-): {option?: ModelOption; effort?: string} {
-  const options = modelOptionsForSession(record);
-  const storedOption = stored?.sessionKey === record.id ? options.find(o => o.id === stored.modelId) : undefined;
-  if (stored !== null && stored !== undefined && storedOption !== undefined) {
-    const efforts = storedOption.efforts ?? [];
-    const effort =
-      stored.effort !== undefined && efforts.includes(stored.effort) ? stored.effort : defaultEffortFor(storedOption);
-    return {option: storedOption, effort};
-  }
-  const defaultId = record.modelDefault?.replace(/@[^@]*$/, '');
-  const option = options.find(o => o.id === defaultId) ?? options[0];
-  return option === undefined ? {} : {option, effort: defaultEffortFor(option)};
+export function splitModelDefault(modelDefault: string | undefined): {modelId?: string; effort?: string} {
+  if (modelDefault === undefined || modelDefault === '') return {};
+  const at = modelDefault.lastIndexOf('@');
+  if (at <= 0) return {modelId: modelDefault};
+  const effort = modelDefault.slice(at + 1);
+  const modelId = modelDefault.slice(0, at);
+  return effort === '' ? {modelId} : {modelId, effort};
 }
 
-export function resolveRunModelSelection(
-  record: ModelRecord,
-  stored: RunModelChoice | null | undefined,
-): string | undefined {
-  const {option, effort} = resolveRunModelChoice(record, stored);
-  return option === undefined ? undefined : formatRunModel(option.id, effort);
+/** Display choice: the profile's model_default (`id@effort`), else the first offered model. */
+export function resolveRunModelChoice(record: ModelRecord): {option?: ModelOption; effort?: string} {
+  const options = modelOptionsForSession(record);
+  const {modelId, effort: defaultEffort} = splitModelDefault(record.modelDefault);
+  const option = options.find(o => o.id === modelId) ?? options[0];
+  if (option === undefined) return {};
+  const efforts = option.efforts ?? [];
+  const effort =
+    option.id === modelId && defaultEffort !== undefined && efforts.includes(defaultEffort)
+      ? defaultEffort
+      : undefined;
+  return {option, effort};
 }

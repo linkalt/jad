@@ -7,7 +7,7 @@ import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {type ActivityNotification, type NewActivityNotification, hasUnreadActivityError, isRunOutcomeUnknown, markActivityNotificationsRead, prependActivityNotification, runOutcomeUnknownNotification, unreadActivityNotificationCount} from './activity-notifications';
-import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, frontCompactSessionFromMessage, resetSession, stopSessionRun, streamSessionRun, writeSessionStateContext} from './api';
+import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, frontCompactSessionFromMessage, resetSession, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';
 import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
 import {interactionFailureTitle} from './approval-answer';
 import {createCoalescedRefresh} from './coalesced-refresh';
@@ -49,7 +49,7 @@ import {type HookReport, hookReportNotification} from './hook-report-view';
 import {type AttachedFile, type AttachedImage, buildRunInput} from './image-attachments';
 import {type InteractionEnd, interactionEndNotice} from './interaction-end';
 import {applyPart, applyPartDelta} from './messagePatch';
-import {modelOptionsForSession, resolveRunModelChoice, resolveRunModelSelection, type RunModelChoice} from './model-selection';
+import {modelOptionsForSession, formatRunModel, resolveRunModelChoice, type RunModelChoice} from './model-selection';
 import {type ProviderRetryWait} from './provider-retry-view';
 import {type RightPanelId, selectionAfterPanelToggle} from './right-panel';
 import {deferredRowStyle, useRowHeightRef} from './row-defer';
@@ -171,7 +171,7 @@ function App({
       INITIAL_VIEWS.activeViewKey,
     ]);
   }
-  const [isModelDefaultUpdating] = useState(false);
+  const [isModelDefaultUpdating, setIsModelDefaultUpdating] = useState(false);
   // A restored arrangement is the user's own: the "open the configured session"
   // preference only applies to a page that starts from nothing.
   const hasChosenSessionRef = useRef(INITIAL_VIEWS.restored);
@@ -302,7 +302,6 @@ function App({
   }, [openNotifications]);
   const [isUsageDrawerCollapsed, setIsUsageDrawerCollapsed] = useState(true);
   const [isModelDrawerOpen, setIsModelDrawerOpen] = useState(false);
-  const [runModelChoice, setRunModelChoice] = useState<RunModelChoice | null>(null);
   const [runProgressByView, setRunProgressByView] = useState<Record<string, number>>({});
   const runProgress = runProgressByView[activeViewKey] ?? baseReasoning.length;
   const setRunProgressForView = useCallback((viewKey: string, progress: number) => {
@@ -1636,10 +1635,8 @@ function App({
       if (isLiveRun && sessionRef) {
         const controller = new AbortController();
         runAbortRefs.current.set(sessionId, controller);
-        const runModel = resolveRunModelSelection(activeRowSession, runModelChoice);
         void streamSessionRun(sessionRef, buildRunInput(trimmedValue, images, files), {
           signal: controller.signal,
-          ...(runModel === undefined ? {} : {model: runModel}),
           ...(activeProfile === undefined ? {} : {profile: activeProfile}),
           onRun: run => recordRunStarted(sessionId, run.turn_id),
           onInteraction: (turnId, interaction) =>
@@ -1789,7 +1786,6 @@ function App({
       activeViewKey,
       activeProfile,
       activeRowSession,
-      runModelChoice,
       isRunning,
       recordNotification,
       resettingViewKey,
@@ -2473,7 +2469,33 @@ function App({
     resettingViewKey !== null ||
     frontCompactingViewKey !== null;
   const isModelPickerDisabled = activeSession.sessionRef === undefined || isDestructiveActionDisabled;
-  const runModelChoiceView = resolveRunModelChoice(activeRowSession, runModelChoice);
+  const runModelChoiceView = resolveRunModelChoice(activeRowSession);
+
+  const saveModelDefault = async (choice: RunModelChoice) => {
+    const sessionRef = activeSession.sessionRef;
+    if (sessionRef === undefined || isModelDefaultUpdating) {
+      return;
+    }
+    setIsModelDefaultUpdating(true);
+    try {
+      await updateSessionProfileModelDefault(
+        sessionRef,
+        formatRunModel(choice.modelId, choice.effort),
+        activeProfile ?? undefined,
+      );
+      refreshSessionsRef.current?.();
+    } catch (error) {
+      recordNotification({
+        sessionId: activeSessionId,
+        sessionTitle: activeRowSession.title,
+        kind: 'error',
+        title: 'Model change failed',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsModelDefaultUpdating(false);
+    }
+  };
 
   /** Runs a `/` command the way its toolbar button does; a busy session refuses it with a notice. */
   const runSlashCommand = (name: SlashCommandName) => {
@@ -2776,7 +2798,7 @@ function App({
             selectedModelId={runModelChoiceView.option?.id}
             selectedEffort={runModelChoiceView.effort}
             isDisabled={isModelPickerDisabled}
-            onChange={choice => setRunModelChoice({sessionKey: activeRowSession.id, ...choice})}
+            onChange={choice => void saveModelDefault(choice)}
           />
         ) : isUsageDrawerCollapsed ? null : (
           <UsageDetailsDrawer

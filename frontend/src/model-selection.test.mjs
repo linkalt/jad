@@ -9,8 +9,8 @@ import {
   formatRunModel,
   modelOptionsForSession,
   resolveRunModelChoice,
-  resolveRunModelSelection,
   selectedModelForSession,
+  splitModelDefault,
 } from './model-selection.ts';
 
 test('prefers the active profile default when it is available', () => {
@@ -23,6 +23,17 @@ test('prefers the active profile default when it is available', () => {
 test('falls back to the first configured model when the default is unavailable', () => {
   assert.equal(
     selectedModelForSession(['model-a', 'model-b'], 'missing-model', 'fallback-model'),
+    'model-a',
+  );
+});
+
+test('strips the @effort suffix from the profile default before matching', () => {
+  assert.equal(
+    selectedModelForSession(['model-a', 'model-b'], 'model-b@high', 'fallback-model'),
+    'model-b',
+  );
+  assert.equal(
+    selectedModelForSession(['model-a', 'model-b'], 'missing-model@high', 'fallback-model'),
     'model-a',
   );
 });
@@ -95,24 +106,47 @@ test('formatRunModel appends the effort, strips an existing suffix, omits an emp
   assert.equal(formatRunModel('opus@low'), 'opus');
 });
 
-test('resolveRunModelSelection uses the stored pick of the same session', () => {
-  const record = {id: 's1', modelOptions: optionList, modelDefault: 'gpt-5'};
-  assert.equal(resolveRunModelSelection(record, {sessionKey: 's1', modelId: 'opus', effort: 'low'}), 'opus@low');
-  assert.equal(resolveRunModelSelection(record, {sessionKey: 's1', modelId: 'opus', effort: 'nope'}), 'opus@high');
+test('splitModelDefault splits at the last @ and tolerates a bare id', () => {
+  assert.deepEqual(splitModelDefault('opus@low'), {modelId: 'opus', effort: 'low'});
+  assert.deepEqual(splitModelDefault('a@b@high'), {modelId: 'a@b', effort: 'high'});
+  assert.deepEqual(splitModelDefault('gpt-5'), {modelId: 'gpt-5'});
+  assert.deepEqual(splitModelDefault('opus@'), {modelId: 'opus'});
+  assert.deepEqual(splitModelDefault(undefined), {});
+  assert.deepEqual(splitModelDefault(''), {});
 });
 
-test('resolveRunModelSelection ignores another session or unknown model and falls back to the default', () => {
-  const record = {id: 's1', modelOptions: optionList, modelDefault: 'gpt-5'};
-  assert.equal(resolveRunModelSelection(record, {sessionKey: 's2', modelId: 'opus', effort: 'low'}), 'gpt-5@low');
-  assert.equal(resolveRunModelSelection(record, {sessionKey: 's1', modelId: 'gone'}), 'gpt-5@low');
-  assert.equal(resolveRunModelSelection(record, null), 'gpt-5@low');
-  assert.equal(resolveRunModelSelection({id: 's1', modelOptions: optionList}, null), 'opus@high');
-  assert.equal(resolveRunModelSelection({id: 's1', modelOptions: optionList, modelDefault: 'plain'}, null), 'plain');
+test('resolveRunModelChoice takes model and effort from modelDefault', () => {
+  const choice = resolveRunModelChoice({id: 's1', modelOptions: optionList, modelDefault: 'opus@low'});
+  assert.equal(choice.option, optionList[0]);
+  assert.equal(choice.effort, 'low');
 });
 
-test('resolveRunModelSelection is undefined without options', () => {
-  assert.equal(resolveRunModelSelection({id: 's1'}, null), undefined);
-  assert.deepEqual(resolveRunModelChoice({id: 's1'}, null), {});
+test('resolveRunModelChoice leaves the effort unset for an unknown effort', () => {
+  const choice = resolveRunModelChoice({id: 's1', modelOptions: optionList, modelDefault: 'opus@bogus'});
+  assert.equal(choice.option, optionList[0]);
+  assert.equal(choice.effort, undefined);
+});
+
+test('resolveRunModelChoice leaves the effort unset for a bare model id', () => {
+  const choice = resolveRunModelChoice({id: 's1', modelOptions: optionList, modelDefault: 'gpt-5'});
+  assert.equal(choice.option, optionList[1]);
+  assert.equal(choice.effort, undefined);
+});
+
+test('resolveRunModelChoice uses the first option when the default model is gone', () => {
+  const choice = resolveRunModelChoice({id: 's1', modelOptions: optionList, modelDefault: 'gone@low'});
+  assert.equal(choice.option, optionList[0]);
+  assert.equal(choice.effort, undefined);
+});
+
+test('resolveRunModelChoice uses the first option without a modelDefault', () => {
+  const choice = resolveRunModelChoice({id: 's1', modelOptions: optionList});
+  assert.equal(choice.option, optionList[0]);
+  assert.equal(choice.effort, undefined);
+});
+
+test('resolveRunModelChoice is empty without options', () => {
+  assert.deepEqual(resolveRunModelChoice({id: 's1'}), {});
 });
 
 test('modelChoiceRows collapsed keeps the running model alone and marks its effort', () => {
@@ -140,6 +174,17 @@ test('modelChoiceRows expanded lists every model, filtered by the query', () => 
   ]);
   assert.deepEqual(modelChoiceRows(optionList, 'opus', 'high', 'OPENAI', true).map(row => row.option.id), ['gpt-5']);
   assert.deepEqual(modelChoiceRows(optionList, 'opus', 'high', 'zzz', true), []);
+});
+
+test('modelChoiceRows marks no effort on the selected row when no effort is set', () => {
+  assert.deepEqual(modelChoiceRows(optionList, 'opus', undefined, '', false), [
+    {option: optionList[0], isSelected: true},
+  ]);
+  assert.deepEqual(modelChoiceRows(optionList, 'opus', undefined, '', true).map(row => row.markedEffort), [
+    undefined,
+    'low',
+    undefined,
+  ]);
 });
 
 test('modelChoiceRows marks the default effort of a row that is not selected', () => {
