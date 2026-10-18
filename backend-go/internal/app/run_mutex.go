@@ -21,16 +21,6 @@ func (m *runMutex) Lock() {
 	m.slot <- struct{}{}
 }
 
-func (m *runMutex) TryLock() bool {
-	m.init()
-	select {
-	case m.slot <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
 // LockCtx takes the lock, or returns ctx's error without the lock once ctx is done.
 func (m *runMutex) LockCtx(ctx context.Context) error {
 	m.init()

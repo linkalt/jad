@@ -120,7 +120,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	options.StateContext = stateContext
 	r.fireRunHook(ctx, native.RunEvent{Event: native.HookEventRunStart, TurnID: options.TurnID}, options.OnHookReport)
 	finish := r.runEndHook(ctx, options.OnHookReport)
-	result, err := prepared.runner.Run(ctx, input, options)
+	result, err := prepared.runner.Run(context.WithValue(ctx, callerMessagesPathKey{}, r.config.MessagesPath), input, options)
 	finish(result.TurnID, err)
 	return result, err
 }

@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"jad/backend-go/internal/httpapi"
@@ -25,6 +27,10 @@ type profileMessenger struct {
 }
 
 type profileChainKey struct{}
+
+// callerMessagesPathKey carries the messages path of the transcript a run writes, so a
+// tool running inside it knows which transcript the caller holds.
+type callerMessagesPathKey struct{}
 
 // profileRunFailureText is what the run-error cache keeps, like the HTTP run's generic line.
 const profileRunFailureText = "The run failed. Response details were withheld; check server logs for diagnostics."
@@ -54,11 +60,8 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 	// Another profile name over the caller's transcript would wait for the run mutex
 	// the caller holds; it never ends, so refuse it. Running is not the same: that
 	// is what TryLockSession reports as busy.
-	callerSession, err := m.resolver.Resolve(ctx, reference, caller, "")
-	if err != nil {
-		return "", err
-	}
-	if sameTranscript(callerSession.Runner, resolved.Runner) {
+	callerMessagesPath, _ := ctx.Value(callerMessagesPathKey{}).(string)
+	if sameTranscript(callerMessagesPath, resolved.Runner) {
 		return "", native.ErrProfileSameTranscript
 	}
 	release, err := m.resolver.TryLockSession(ctx, reference, canonical, "")
@@ -82,10 +85,16 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		return "", err
 	}
 	var accepted *session.PersistedInput
+	var lastText atomic.Value
 	chainCtx := context.WithValue(ctx, profileChainKey{}, []string{caller, canonical})
 	result, err := resolved.Runner.Run(chainCtx, input, session.RunOptions{
 		TurnID:          turnID,
 		OnInputAccepted: func(input session.PersistedInput) { accepted = &input },
+		OnResponseCommitted: func(event json.RawMessage, _ transcript.CommitResult) {
+			if text := native.SubagentAnswerText(event); strings.TrimSpace(text) != "" {
+				lastText.Store(text)
+			}
+		},
 		ToolExecution: tools.ExecutionContext{
 			RequestApproval: func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
 				return tools.ApprovalVerdict{Allowed: true}
@@ -100,15 +109,19 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 	}
 	answer := native.SubagentAnswerText(result.Event)
 	if strings.TrimSpace(answer) == "" {
+		answer, _ = lastText.Load().(string)
+	}
+	if strings.TrimSpace(answer) == "" {
 		return "", native.ErrProfileNoAnswer
 	}
 	return answer, nil
 }
 
-func sameTranscript(a, b httpapi.RunSession) bool {
-	first, okFirst := a.(boundRunner)
-	second, okSecond := b.(boundRunner)
-	return okFirst && okSecond && first.shared == second.shared
+// sameTranscript reports whether target runs over the transcript at callerMessagesPath.
+// The store cache is keyed by the cleaned messages path, so equal paths are one store.
+func sameTranscript(callerMessagesPath string, target httpapi.RunSession) bool {
+	bound, ok := target.(boundRunner)
+	return ok && callerMessagesPath != "" && filepath.Clean(bound.config.MessagesPath) == filepath.Clean(callerMessagesPath)
 }
 
 func (r *Resolver) recordProfileRunFailure(runner httpapi.RunSession, accepted *session.PersistedInput, turnID string) {

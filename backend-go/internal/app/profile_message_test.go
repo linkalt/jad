@@ -192,12 +192,12 @@ func TestSameTranscriptComparesTheSharedStoreNotTheRunMutex(t *testing.T) {
 	alias := boundRunnerOf(t, f, "dev/coder")
 	reviewer := boundRunnerOf(t, f, "review/reviewer")
 
-	if !sameTranscript(coder, alias) {
+	if !sameTranscript(coder.config.MessagesPath, alias) {
 		t.Fatal("two runners over one transcript store were not reported as the same transcript")
 	}
 	reviewer.shared.runMu.Lock()
 	defer reviewer.shared.runMu.Unlock()
-	if sameTranscript(coder, reviewer) {
+	if sameTranscript(coder.config.MessagesPath, reviewer) {
 		t.Fatal("a profile with its own transcript, whose run mutex is held, was reported as the same transcript")
 	}
 }
@@ -223,6 +223,40 @@ func TestProfileMessageWithoutAnswerTextReturnsErrProfileNoAnswer(t *testing.T) 
 	f := newLayoutFixture(t)
 	f.script = func(string, string) string {
 		return `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"  "}]}`
+	}
+
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	if !errors.Is(err, native.ErrProfileNoAnswer) {
+		t.Fatalf("error = %v, want ErrProfileNoAnswer", err)
+	}
+}
+
+func TestProfileMessageUsesTheLastTextWhenTheFinalResponseHasNone(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.script = func(_, body string) string {
+		if strings.Contains(body, "function_call_output") {
+			return `{"type":"reasoning","summary":[]}`
+		}
+		return `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"earlier words"}]},` +
+			`{"type":"function_call","call_id":"call-1","name":"nothing_here","arguments":"{}"}]`
+	}
+
+	answer, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(answer, "earlier words") {
+		t.Fatalf("answer = %q, want the earlier response's text", answer)
+	}
+}
+
+func TestProfileMessageWithOnlyAToolCallReturnsErrProfileNoAnswer(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.script = func(_, body string) string {
+		if strings.Contains(body, "function_call_output") {
+			return `{"type":"reasoning","summary":[]}`
+		}
+		return `{"type":"function_call","call_id":"call-1","name":"nothing_here","arguments":"{}"}`
 	}
 
 	_, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
@@ -305,8 +339,10 @@ func TestBoundRunnerRunStoresNoInputWhenTheContextEndsAsTheFreeLockIsTaken(t *te
 	if got := countRecords(); got != recordsBefore {
 		t.Fatalf("transcript has %d records, want %d: a cancelled run stored input", got, recordsBefore)
 	}
-	if !bound.shared.runMu.TryLock() {
-		t.Fatal("a cancelled run kept the run mutex")
+	freeCtx, cancelFree := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelFree()
+	if err := bound.shared.runMu.LockCtx(freeCtx); err != nil {
+		t.Fatalf("a cancelled run kept the run mutex: %v", err)
 	}
 	bound.shared.runMu.Unlock()
 }
@@ -329,7 +365,8 @@ func TestProfileMessageToADifferentProfileOverOneTranscriptReportsSameTranscript
 		lockedConfig{config: config, stamp: stamp, loaded: time.Now()},
 	)
 
-	_, err = profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	callerCtx := context.WithValue(context.Background(), callerMessagesPathKey{}, coder.config.MessagesPath)
+	_, err = profileMessenger{resolver: f.service.resolver}.Message(callerCtx, profileMessageOwner, "review/reviewer", "hi")
 	if !errors.Is(err, native.ErrProfileSameTranscript) {
 		t.Fatalf("error = %v, want ErrProfileSameTranscript", err)
 	}

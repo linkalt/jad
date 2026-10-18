@@ -3,21 +3,31 @@ package app
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
 
+func runMutexHeld(mu *runMutex) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := mu.LockCtx(ctx); err != nil {
+		return true
+	}
+	mu.Unlock()
+	return false
+}
+
 func TestRunMutexZeroValueLocksAndUnlocks(t *testing.T) {
 	var mu runMutex
 	mu.Lock()
-	if mu.TryLock() {
-		t.Fatal("TryLock succeeded on a held mutex")
+	if !runMutexHeld(&mu) {
+		t.Fatal("a held mutex was taken")
 	}
 	mu.Unlock()
-	if !mu.TryLock() {
-		t.Fatal("TryLock failed on a free mutex")
+	if runMutexHeld(&mu) {
+		t.Fatal("a free mutex could not be taken")
 	}
-	mu.Unlock()
 }
 
 func TestRunMutexLockWaitsForUnlock(t *testing.T) {
@@ -27,7 +37,7 @@ func TestRunMutexLockWaitsForUnlock(t *testing.T) {
 	if err := mu.LockCtx(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if mu.TryLock() {
+	if !runMutexHeld(&mu) {
 		t.Fatal("LockCtx returned without holding the mutex")
 	}
 	mu.Unlock()
@@ -49,10 +59,9 @@ func TestRunMutexLockCtxReturnsContextErrorWhileHeld(t *testing.T) {
 		t.Fatal("LockCtx kept waiting after its context was cancelled")
 	}
 	mu.Unlock()
-	if !mu.TryLock() {
+	if runMutexHeld(&mu) {
 		t.Fatal("the mutex was not free after the holder unlocked")
 	}
-	mu.Unlock()
 }
 
 func TestRunMutexCancelledLockCtxDoesNotTakeTheLock(t *testing.T) {
@@ -62,10 +71,38 @@ func TestRunMutexCancelledLockCtxDoesNotTakeTheLock(t *testing.T) {
 	if err := mu.LockCtx(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
-	if !mu.TryLock() {
+	if runMutexHeld(&mu) {
 		t.Fatal("a cancelled LockCtx took the lock")
 	}
-	mu.Unlock()
+}
+
+func TestRunMutexExcludesConcurrentHolders(t *testing.T) {
+	var mu runMutex
+	const workers, rounds = 32, 200
+	counter := 0
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(useCtx bool) {
+			defer wg.Done()
+			for i := 0; i < rounds; i++ {
+				if useCtx {
+					if err := mu.LockCtx(context.Background()); err != nil {
+						t.Error(err)
+						return
+					}
+				} else {
+					mu.Lock()
+				}
+				counter++
+				mu.Unlock()
+			}
+		}(w%2 == 0)
+	}
+	wg.Wait()
+	if counter != workers*rounds {
+		t.Fatalf("counter = %d, want %d", counter, workers*rounds)
+	}
 }
 
 func TestRunMutexUnlockOnFreeMutexPanics(t *testing.T) {

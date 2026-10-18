@@ -71,9 +71,16 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 				item = scripted
 			}
 		}
+		items := []json.RawMessage{json.RawMessage(item)}
+		if strings.HasPrefix(item, "[") {
+			items = nil
+			_ = json.Unmarshal([]byte(item), &items)
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
+		for index, one := range items {
+			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.output_item.done\",\"output_index\":%d,\"item\":%s}\n\n", index, one)
+		}
 		for _, event := range []string{
-			`{"type":"response.output_item.done","output_index":0,"item":` + item + `}`,
 			`{"type":"response.completed","response":{"id":"r","status":"completed","model":"` + request.Model + `","output":[]}}`,
 			"[DONE]",
 		} {
