@@ -236,6 +236,32 @@ func TestSameTranscriptResolvesSymlinkedDirectoryAliases(t *testing.T) {
 	}
 }
 
+func TestSameTranscriptResolvesASymlinkedFileAndMissingParents(t *testing.T) {
+	f := newLayoutFixture(t)
+	coder := boundRunnerOf(t, f, "dev/coder")
+	realPath := coder.config.MessagesPath
+	if err := os.MkdirAll(filepath.Dir(realPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(realPath, nil, 0o644); err != nil && !os.IsExist(err) {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link.jsonl")
+	if err := os.Symlink(realPath, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if !sameTranscript(link, coder) {
+		t.Fatal("a symlink to the messages file was not the same transcript")
+	}
+	missing := filepath.Join(t.TempDir(), "no", "such", "dir", "messages.jsonl")
+	if sameTranscript(missing, coder) {
+		t.Fatal("a path under a missing directory was reported as the same transcript")
+	}
+	if got, want := canonicalPath(missing), filepath.Clean(missing); got != want {
+		t.Fatalf("canonicalPath(%q) = %q, want the cleaned path", missing, got)
+	}
+}
+
 func TestProfileMessageToARunningTargetReportsBusyNotSameTranscript(t *testing.T) {
 	f := newLayoutFixture(t)
 	bound := boundRunnerOf(t, f, "review/reviewer")
@@ -381,8 +407,9 @@ func TestBoundRunnerRunStoresNoInputWhenTheContextEndsAsTheFreeLockIsTaken(t *te
 	bound.shared.runMu.Unlock()
 }
 
-// shareCoderTranscript makes review/reviewer resolve to the transcript of dev/coder.
-func shareCoderTranscript(t *testing.T, f *layoutFixture) boundRunner {
+// shareCoderTranscript makes review/reviewer resolve to the transcript of dev/coder. The
+// returned park puts that config in place again, because a parked entry expires.
+func shareCoderTranscript(t *testing.T, f *layoutFixture) (boundRunner, func()) {
 	t.Helper()
 	coder := boundRunnerOf(t, f, "dev/coder")
 	backdate(t, f.root)
@@ -395,16 +422,19 @@ func shareCoderTranscript(t *testing.T, f *layoutFixture) boundRunner {
 		t.Fatal(err)
 	}
 	config.StoragePaths, config.MessagesPath, config.StagingDir = coder.config.StoragePaths, coder.config.MessagesPath, coder.config.StagingDir
-	f.service.resolver.lockedConfigs.put(
-		lockedConfigKey{file: location.File, profile: "review/reviewer"},
-		lockedConfig{config: config, stamp: stamp, loaded: time.Now()},
-	)
-	return coder
+	park := func() {
+		f.service.resolver.lockedConfigs.put(
+			lockedConfigKey{file: location.File, profile: "review/reviewer"},
+			lockedConfig{config: config, stamp: stamp, loaded: time.Now()},
+		)
+	}
+	park()
+	return coder, park
 }
 
 func TestProfileMessageToADifferentProfileOverOneTranscriptReportsSameTranscript(t *testing.T) {
 	f := newLayoutFixture(t)
-	coder := shareCoderTranscript(t, f)
+	coder, _ := shareCoderTranscript(t, f)
 
 	callerCtx := context.WithValue(context.Background(), callerMessagesPathKey{}, coder.config.MessagesPath)
 	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerCtx, profileMessageOwner, "review/reviewer", "hi")
@@ -417,8 +447,12 @@ func TestProfileMessageToolCallToAProfileOverTheCallersTranscriptReportsSameTran
 	f := newLayoutFixture(t)
 	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"profiles":["review/reviewer"]}},"mcp":{}}`)
 	f.captureBodies = true
-	f.script = scriptFunctionCall("profile_message", map[string]any{"profile": "review/reviewer", "message": "hi"})
-	coder := shareCoderTranscript(t, f)
+	coder, park := shareCoderTranscript(t, f)
+	call := scriptFunctionCall("profile_message", map[string]any{"profile": "review/reviewer", "message": "hi"})
+	f.script = func(model, body string) string {
+		park()
+		return call(model, body)
+	}
 
 	runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
