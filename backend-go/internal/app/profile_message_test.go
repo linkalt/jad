@@ -18,12 +18,17 @@ import (
 
 const profileMessageOwner = "local:demo\x00dev/coder"
 
+func callerContext(t *testing.T, f *layoutFixture, parent context.Context) context.Context {
+	t.Helper()
+	return context.WithValue(parent, callerMessagesPathKey{}, boundRunnerOf(t, f, "dev/coder").config.MessagesPath)
+}
+
 func TestProfileMessageDeliversToTheTargetTranscriptAndSecondCallSeesTheFirst(t *testing.T) {
 	f := newLayoutFixture(t)
 	f.captureBodies = true
 	messenger := profileMessenger{resolver: f.service.resolver}
 
-	answer, err := messenger.Message(context.Background(), profileMessageOwner, "review/reviewer", "first question")
+	answer, err := messenger.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "first question")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +45,7 @@ func TestProfileMessageDeliversToTheTargetTranscriptAndSecondCallSeesTheFirst(t 
 		t.Fatalf("the caller's transcript received the message: %s", data)
 	}
 
-	if _, err := messenger.Message(context.Background(), profileMessageOwner, "review/reviewer", "second question"); err != nil {
+	if _, err := messenger.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "second question"); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
@@ -59,9 +64,17 @@ func TestProfileMessageToABusyTargetFailsFast(t *testing.T) {
 	}
 	defer release()
 
-	_, err = profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	_, err = profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi")
 	if !errors.Is(err, native.ErrProfileBusy) {
 		t.Fatalf("error = %v, want ErrProfileBusy", err)
+	}
+}
+
+func TestProfileMessageWithoutTheCallerTranscriptPathFailsClosed(t *testing.T) {
+	f := newLayoutFixture(t)
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	if err == nil || errors.Is(err, native.ErrProfileCycle) || errors.Is(err, native.ErrProfileBusy) || errors.Is(err, native.ErrProfileSameTranscript) {
+		t.Fatalf("error = %v, want a plain error", err)
 	}
 }
 
@@ -94,6 +107,7 @@ func TestRecordProfileRunFailureRecordsUnlessCancelled(t *testing.T) {
 			f.mu.Unlock()
 			ctx, cancel := c.newContext()
 			defer cancel()
+			ctx = callerContext(t, f, ctx)
 			done := make(chan error, 1)
 			go func() {
 				_, err := profileMessenger{resolver: f.service.resolver}.Message(ctx, profileMessageOwner, "review/reviewer", "hi")
@@ -140,7 +154,7 @@ func TestProfileMessageRunCannotCallProfileMessageItself(t *testing.T) {
 	f.captureBodies = true
 	f.script = scriptFunctionCall("profile_message", map[string]any{"profile": "dev/coder", "message": "again"})
 
-	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(context.Background(), profileMessageOwner, "review/reviewer", "hi"); err != nil {
+	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi"); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
@@ -165,7 +179,7 @@ func TestProfileMessageTargetToolWithApprovalAskRunsUnderAutoApprove(t *testing.
 	f.captureBodies = true
 	f.script = scriptFunctionCall("write", map[string]any{"path": "made.txt", "content": "by the target\n"})
 
-	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(context.Background(), profileMessageOwner, "review/reviewer", "write it"); err != nil {
+	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "write it"); err != nil {
 		t.Fatal(err)
 	}
 	if data, err := os.ReadFile(filepath.Join(f.cwd, "made.txt")); err != nil || string(data) != "by the target\n" {
@@ -186,7 +200,7 @@ func boundRunnerOf(t *testing.T, f *layoutFixture, profile string) boundRunner {
 	return bound
 }
 
-func TestSameTranscriptComparesTheSharedStoreNotTheRunMutex(t *testing.T) {
+func TestSameTranscriptComparesTheMessagesPathNotTheRunMutex(t *testing.T) {
 	f := newLayoutFixture(t)
 	coder := boundRunnerOf(t, f, "dev/coder")
 	alias := boundRunnerOf(t, f, "dev/coder")
@@ -202,6 +216,26 @@ func TestSameTranscriptComparesTheSharedStoreNotTheRunMutex(t *testing.T) {
 	}
 }
 
+func TestSameTranscriptResolvesSymlinkedDirectoryAliases(t *testing.T) {
+	f := newLayoutFixture(t)
+	coder := boundRunnerOf(t, f, "dev/coder")
+	realDir := filepath.Dir(coder.config.MessagesPath)
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(realDir, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	aliasPath := filepath.Join(alias, filepath.Base(coder.config.MessagesPath))
+	if !sameTranscript(aliasPath, coder) {
+		t.Fatal("a symlinked directory alias of the messages path was not the same transcript")
+	}
+	if sameTranscript(aliasPath, boundRunnerOf(t, f, "review/reviewer")) {
+		t.Fatal("an alias of another profile's transcript was reported as the same transcript")
+	}
+}
+
 func TestProfileMessageToARunningTargetReportsBusyNotSameTranscript(t *testing.T) {
 	f := newLayoutFixture(t)
 	bound := boundRunnerOf(t, f, "review/reviewer")
@@ -213,7 +247,7 @@ func TestProfileMessageToARunningTargetReportsBusyNotSameTranscript(t *testing.T
 	}
 	defer release()
 
-	_, err = profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	_, err = profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi")
 	if !errors.Is(err, native.ErrProfileBusy) {
 		t.Fatalf("error = %v, want ErrProfileBusy", err)
 	}
@@ -225,7 +259,7 @@ func TestProfileMessageWithoutAnswerTextReturnsErrProfileNoAnswer(t *testing.T) 
 		return `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"  "}]}`
 	}
 
-	_, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi")
 	if !errors.Is(err, native.ErrProfileNoAnswer) {
 		t.Fatalf("error = %v, want ErrProfileNoAnswer", err)
 	}
@@ -241,7 +275,7 @@ func TestProfileMessageUsesTheLastTextWhenTheFinalResponseHasNone(t *testing.T) 
 			`{"type":"function_call","call_id":"call-1","name":"nothing_here","arguments":"{}"}]`
 	}
 
-	answer, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	answer, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +293,7 @@ func TestProfileMessageWithOnlyAToolCallReturnsErrProfileNoAnswer(t *testing.T) 
 		return `{"type":"function_call","call_id":"call-1","name":"nothing_here","arguments":"{}"}`
 	}
 
-	_, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi")
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi")
 	if !errors.Is(err, native.ErrProfileNoAnswer) {
 		t.Fatalf("error = %v, want ErrProfileNoAnswer", err)
 	}
@@ -347,8 +381,9 @@ func TestBoundRunnerRunStoresNoInputWhenTheContextEndsAsTheFreeLockIsTaken(t *te
 	bound.shared.runMu.Unlock()
 }
 
-func TestProfileMessageToADifferentProfileOverOneTranscriptReportsSameTranscript(t *testing.T) {
-	f := newLayoutFixture(t)
+// shareCoderTranscript makes review/reviewer resolve to the transcript of dev/coder.
+func shareCoderTranscript(t *testing.T, f *layoutFixture) boundRunner {
+	t.Helper()
 	coder := boundRunnerOf(t, f, "dev/coder")
 	backdate(t, f.root)
 	location, err := sessionfs.Resolve(f.service.resolver.roots, "local:demo")
@@ -364,11 +399,37 @@ func TestProfileMessageToADifferentProfileOverOneTranscriptReportsSameTranscript
 		lockedConfigKey{file: location.File, profile: "review/reviewer"},
 		lockedConfig{config: config, stamp: stamp, loaded: time.Now()},
 	)
+	return coder
+}
+
+func TestProfileMessageToADifferentProfileOverOneTranscriptReportsSameTranscript(t *testing.T) {
+	f := newLayoutFixture(t)
+	coder := shareCoderTranscript(t, f)
 
 	callerCtx := context.WithValue(context.Background(), callerMessagesPathKey{}, coder.config.MessagesPath)
-	_, err = profileMessenger{resolver: f.service.resolver}.Message(callerCtx, profileMessageOwner, "review/reviewer", "hi")
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerCtx, profileMessageOwner, "review/reviewer", "hi")
 	if !errors.Is(err, native.ErrProfileSameTranscript) {
 		t.Fatalf("error = %v, want ErrProfileSameTranscript", err)
+	}
+}
+
+func TestProfileMessageToolCallToAProfileOverTheCallersTranscriptReportsSameTranscript(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"profiles":["review/reviewer"]}},"mcp":{}}`)
+	f.captureBodies = true
+	f.script = scriptFunctionCall("profile_message", map[string]any{"profile": "review/reviewer", "message": "hi"})
+	coder := shareCoderTranscript(t, f)
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := coder.Run(runCtx, json.RawMessage(`"go"`), session.RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	last := f.bodies[len(f.bodies)-1]
+	f.mu.Unlock()
+	if !strings.Contains(last, "function_call_output") || !strings.Contains(last, "profile_same_transcript") {
+		t.Fatalf("the profile_message call did not report profile_same_transcript: %s", last)
 	}
 }
 

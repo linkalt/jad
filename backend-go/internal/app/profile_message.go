@@ -58,9 +58,12 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		return "", native.ErrProfileCycle
 	}
 	// Another profile name over the caller's transcript would wait for the run mutex
-	// the caller holds; it never ends, so refuse it. Running is not the same: that
-	// is what TryLockSession reports as busy.
+	// the caller holds, so a retry can never succeed; refuse it. A running target is
+	// different: TryLockSession reports it as busy.
 	callerMessagesPath, _ := ctx.Value(callerMessagesPathKey{}).(string)
+	if callerMessagesPath == "" {
+		return "", errors.New("profile message needs the calling transcript path")
+	}
 	if sameTranscript(callerMessagesPath, resolved.Runner) {
 		return "", native.ErrProfileSameTranscript
 	}
@@ -118,10 +121,21 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 }
 
 // sameTranscript reports whether target runs over the transcript at callerMessagesPath.
-// The store cache is keyed by the cleaned messages path, so equal paths are one store.
+// Paths are compared cleaned and symlink-resolved, so an alias of one directory is one store.
 func sameTranscript(callerMessagesPath string, target httpapi.RunSession) bool {
 	bound, ok := target.(boundRunner)
-	return ok && callerMessagesPath != "" && filepath.Clean(bound.config.MessagesPath) == filepath.Clean(callerMessagesPath)
+	return ok && callerMessagesPath != "" && canonicalPath(bound.config.MessagesPath) == canonicalPath(callerMessagesPath)
+}
+
+func canonicalPath(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	if parent, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		return filepath.Join(parent, filepath.Base(path))
+	}
+	return path
 }
 
 func (r *Resolver) recordProfileRunFailure(runner httpapi.RunSession, accepted *session.PersistedInput, turnID string) {
