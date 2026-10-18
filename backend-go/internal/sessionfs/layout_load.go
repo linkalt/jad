@@ -141,7 +141,9 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 		setting, _, err := c.compose(selected, agent.Toolset)
 		if err == nil {
 			var derived SessionConfig
-			if derived, err = loadSessionSettingsFrom(c.location, setting, c.sessionPath, c.location.Root.GlobalJadRoot, c.keys[selected.ID()], ""); err == nil {
+			if derived, err = loadSessionSettingsFrom(c.location, setting, c.sessionPath, c.location.Root.GlobalJadRoot, c.keys[selected.ID()], ""); err == nil && derived.NativeProfileMessage != nil {
+				err = configError("tools.native.profile_message is not allowed in a toolset used by an agent; a sub-agent cannot message a profile")
+			} else if err == nil {
 				derived.NativeSubagent = nil
 				if config.AgentToolsets == nil {
 					config.AgentToolsets = make(map[string]SessionConfig)

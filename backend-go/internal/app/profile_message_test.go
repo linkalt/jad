@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -235,6 +234,14 @@ func TestBoundRunnerRunReturnsTheContextErrorWhileRunMutexIsHeld(t *testing.T) {
 	bound := boundRunnerOf(t, f, "review/reviewer")
 	bound.shared.runMu.Lock()
 	defer bound.shared.runMu.Unlock()
+	countRecords := func() int {
+		count := 0
+		if err := bound.shared.store.ReadRecords(func(int64, []byte) error { count++; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	recordsBefore := countRecords()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, cancel)
@@ -251,19 +258,9 @@ func TestBoundRunnerRunReturnsTheContextErrorWhileRunMutexIsHeld(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run kept waiting for the run mutex after its context was cancelled")
 	}
-}
-
-func TestLockRunWaitsForTheMutexWithALiveContext(t *testing.T) {
-	var mu sync.Mutex
-	mu.Lock()
-	time.AfterFunc(50*time.Millisecond, mu.Unlock)
-	if err := lockRun(context.Background(), &mu); err != nil {
-		t.Fatal(err)
+	if got := countRecords(); got != recordsBefore {
+		t.Fatalf("transcript has %d records, want %d: a run that never got the lock stored input", got, recordsBefore)
 	}
-	if mu.TryLock() {
-		t.Fatal("lockRun returned without holding the mutex")
-	}
-	mu.Unlock()
 }
 
 func TestProfileMessageRefusesNestedCallsAndTheCallerItself(t *testing.T) {

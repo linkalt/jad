@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
-	"time"
 
 	"jad/backend-go/internal/checkpoint"
 	"jad/backend-go/internal/session"
@@ -29,29 +27,8 @@ type boundRunner struct {
 	memoryStore    *native.MemoryStore
 }
 
-const runLockPollInterval = 10 * time.Millisecond
-
-// lockRun takes mu like Lock, but gives up with ctx's error once ctx is done.
-func lockRun(ctx context.Context, mu *sync.Mutex) error {
-	if mu.TryLock() {
-		return nil
-	}
-	ticker := time.NewTicker(runLockPollInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if mu.TryLock() {
-				return nil
-			}
-		}
-	}
-}
-
 func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options session.RunOptions) (session.RunResult, error) {
-	if err := lockRun(ctx, &r.shared.runMu); err != nil {
+	if err := r.shared.runMu.LockCtx(ctx); err != nil {
 		return session.RunResult{}, err
 	}
 	defer r.shared.runMu.Unlock()
@@ -65,10 +42,10 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		}
 		return index.usage.TurnCount + 1, nil
 	}
-	// The user input is stored before anything that can still fail (an unreadable
-	// model file, an unreachable tool server, a missing credential), exactly as
-	// the TypeScript run does: the message is not lost, and the next run repairs
-	// and continues from it.
+	// Once the run lock is held, the user input is stored before anything that can
+	// still fail (an unreadable model file, an unreachable tool server, a missing
+	// credential): the message is not lost, and the next run repairs and continues
+	// from it. A run that gives up while waiting for the lock stores nothing.
 	persisted, err := session.PersistInputWithImages(r.shared.store, input, nextSessionTurn, newImageStore(r.config.ImageStore))
 	if err != nil {
 		return session.RunResult{}, err

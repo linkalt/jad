@@ -101,7 +101,7 @@ type sharedSession struct {
 	staging      string
 	durability   transcript.DurabilityMode
 	options      transcript.TurnStoreOptions
-	runMu        sync.Mutex
+	runMu        runMutex
 	turnStartsMu sync.Mutex
 	turnStarts   *turnStartsCache
 	runners      map[string]*session.Runner

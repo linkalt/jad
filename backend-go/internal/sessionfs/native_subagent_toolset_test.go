@@ -140,6 +140,11 @@ func TestSubagentToolsetErrors(t *testing.T) {
 			agent: map[string]any{"toolset": " "},
 			want:  "toolset must be a non-empty string",
 		},
+		"profile_message in the toolset": {
+			agent: map[string]any{"toolset": "extra/search"},
+			files: map[string]string{"extra/search": `{"native":{"grep":{},"profile_message":{"profiles":["review/reviewer"]}}}`},
+			want:  "agent finder uses toolset extra/search: tools.native.profile_message is not allowed in a toolset used by an agent; a sub-agent cannot message a profile",
+		},
 		"the toolset's own settings are checked": {
 			agent: map[string]any{"toolset": "extra/search"},
 			files: map[string]string{"extra/search": `{"native":{"grep":{"max_matchs":1}}}`},
