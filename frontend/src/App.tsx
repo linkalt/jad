@@ -3042,6 +3042,7 @@ function App({
                           <TranscriptRow
                             message={message}
                             model={activeRowSession.model}
+                            effort={runModelChoiceView.effort}
                             onLoadFull={loadFullMessage}
                             isFrontCompactionSelectable={isFrontCompactionSelectionMode}
                             isFrontCompactionSelected={
@@ -3076,6 +3077,7 @@ function App({
                             name={
                               <AssistantIdentity
                                 model={activeRowSession.model}
+                                effort={runModelChoiceView.effort}
                                 isRunning={pendingInteraction === undefined}
                               />
                             }

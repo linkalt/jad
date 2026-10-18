@@ -27,6 +27,7 @@ export const TranscriptRow = memo(
   function TranscriptRow({
     message,
     model,
+    effort,
     onLoadFull,
     isFrontCompactionSelectable = false,
     isFrontCompactionSelected = false,
@@ -34,6 +35,7 @@ export const TranscriptRow = memo(
   }: {
     message: MessageRecord;
     model: Session['model'] | undefined;
+    effort?: string;
     onLoadFull?: (message: MessageRecord) => void | Promise<void>;
     isFrontCompactionSelectable?: boolean;
     isFrontCompactionSelected?: boolean;
@@ -138,13 +140,14 @@ export const TranscriptRow = memo(
       );
     }
 
-    return <AssistantMessage message={message} model={model} onLoadFull={onLoadFull} />;
+    return <AssistantMessage message={message} model={model} effort={effort} onLoadFull={onLoadFull} />;
   },
   // The poll and the session list rebuild messages and models as fresh objects,
   // so fall back to a structural compare when identities differ.
   (previous, next) =>
     (previous.message === next.message || deepEqual(previous.message, next.message)) &&
     (previous.model === next.model || deepEqual(previous.model, next.model)) &&
+    previous.effort === next.effort &&
     previous.isFrontCompactionSelectable === next.isFrontCompactionSelectable &&
     previous.isFrontCompactionSelected === next.isFrontCompactionSelected &&
     previous.onSelectFrontCompaction === next.onSelectFrontCompaction,

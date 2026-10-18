@@ -62,9 +62,11 @@ function AgentAvatar({isRunning = false}: {isRunning?: boolean}) {
  */
 export function AssistantIdentity({
   model,
+  effort,
   isRunning = false,
 }: {
   model?: Session['model'];
+  effort?: string;
   isRunning?: boolean;
 }) {
   const providerName = model?.provider?.trim() || 'provider_name';
@@ -77,6 +79,7 @@ export function AssistantIdentity({
       <Text type="supporting" color="secondary" xstyle={styles.assistantModel}>
         {modelId}
       </Text>
+      {effort ? <Text type="supporting" color="secondary">{effort}</Text> : null}
     </HStack>
   );
 }
@@ -140,10 +143,12 @@ export function DeliveryStatus({status}: {status: 'read' | 'delivered'}) {
 export function AssistantMessage({
   message,
   model,
+  effort,
   onLoadFull,
 }: {
   message: MessageRecord;
   model?: Session['model'];
+  effort?: string;
   onLoadFull?: (message: MessageRecord) => void | Promise<void>;
 }) {
   const [rowRef, rowWidthPx] = useRowWidth();
@@ -161,7 +166,7 @@ export function AssistantMessage({
         variant="ghost"
         width="100%"
         xstyle={styles.assistantBubble}
-        name={<AssistantIdentity model={model} />}
+        name={<AssistantIdentity model={model} effort={effort} />}
         metadata={
           <ChatMessageMetadata
             footer={
