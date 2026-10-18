@@ -20,6 +20,7 @@ const headerActionsOpen = app.indexOf('const composerHeaderActions = (');
 test('every drawer is a set of the views showing it', () => {
   for (const [label, name] of [
     ['model', 'modelDrawers'],
+    ['profile', 'profileDrawers'],
     ['usage', 'usageDrawers'],
     ['state context', 'stateContextDrawers'],
     ['conversation actions', 'actionsDrawers'],
@@ -47,6 +48,7 @@ test('the info drawers are built from their own pane', () => {
   assert.ok(infoOpen > -1, 'App.tsx must build a per-pane info drawer');
   assert.ok(chromeOpen > infoOpen, 'the pane chrome follows the info drawer');
   const block = app.slice(infoOpen, chromeOpen);
+  assert.match(block, /hasPaneDrawer\(profileDrawers, pane\.viewKey\)/);
   assert.match(block, /hasPaneDrawer\(modelDrawers, pane\.viewKey\)/);
   assert.match(block, /hasPaneDrawer\(usageDrawers, pane\.viewKey\)/);
   assert.match(block, /selectedModelId=\{pane\.modelChoice\?\.option\?\.id\}/, 'its own stored pick');
@@ -111,6 +113,7 @@ test('a pane command carries the view it belongs to and runs at once', () => {
 
 test('the toolbar and the actions trigger reflect their own pane', () => {
   const toolbar = app.slice(toolbarOpen, app.indexOf('const composerFooter = ('));
+  assert.match(toolbar, /const isProfileOpenHere = hasPaneDrawer\(profileDrawers, pane\.viewKey\);/, 'its own drawer');
   assert.match(toolbar, /const isModelOpenHere = hasPaneDrawer\(modelDrawers, pane\.viewKey\);/, 'no focus gating');
   assert.match(toolbar, /const isUsageOpenHere = hasPaneDrawer\(usageDrawers, pane\.viewKey\);/);
   assert.match(toolbar, /const isStateContextOpenHere = hasPaneDrawer\(stateContextDrawers, pane\.viewKey\);/);

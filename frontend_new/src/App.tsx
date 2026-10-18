@@ -23,6 +23,7 @@ import {PaneColumn} from './components/PaneColumn';
 import {ModelDrawer} from './components/ModelDrawer';
 import {NotificationPanel} from './components/NotificationPanel';
 import {PanesPanel} from './components/PanesPanel';
+import {ProfileDrawer} from './components/ProfileDrawer';
 import {RunSettingsPanel} from './components/RunSettingsPanel';
 import {type QuoteAnchor, SelectionMenu} from './components/SelectionMenu';
 import {SessionNavigation} from './components/SessionNavigation';
@@ -44,7 +45,8 @@ import {type LeftPanelId, leftPanelAfterToggle} from './left-panel';
 import {applyPart, applyPartDelta} from './messagePatch';
 import {modelOptionsForSession, defaultEffortFor, formatRunModel, resolveRunModelChoice, type RunModelChoice} from './model-selection';
 import {NO_PANE_DRAWERS, closePaneDrawer, hasPaneDrawer, openPaneDrawer, paneDrawerPressOpens, togglePaneDrawer, type PaneDrawerSet} from './pane-drawers';
-import {canOpenPane, closePane, ensurePane, focusPane, paneCapacity, parsePaneState, prunePanes, replaceFocusedPane, type PaneState} from './pane-layout';
+import {canOpenPane, closePane, ensurePane, focusPane, paneCapacity, parsePaneState, prunePanes, replaceFocusedPane, replacePaneView, type PaneState} from './pane-layout';
+import {allProfileRows, hasProfileToSwitchTo, type ProfileSourceRow} from './profile-rows';
 import {paneAfterStep, paneShortcutFor} from './pane-shortcuts';
 import {fitPaneWidths} from './pane-fold';
 import {movePaneBoundary} from './pane-resize';
@@ -151,7 +153,13 @@ const CatalogEditorDialog = lazy(() =>
  * runs against it directly: a drawer never has to wait for that pane to hold
  * focus first.
  */
-type PaneCommandKind = 'model' | 'usage' | 'stateContext' | 'conversationActions' | 'compact';
+type PaneCommandKind =
+  | 'profile'
+  | 'model'
+  | 'usage'
+  | 'stateContext'
+  | 'conversationActions'
+  | 'compact';
 
 /**
  * What a destructive composer command needs to act on one pane: its own view,
@@ -375,6 +383,7 @@ function App({
   // focus moves.
   const [usageDrawers, setUsageDrawers] = useState<PaneDrawerSet>(NO_PANE_DRAWERS);
   const [modelDrawers, setModelDrawers] = useState<PaneDrawerSet>(NO_PANE_DRAWERS);
+  const [profileDrawers, setProfileDrawers] = useState<PaneDrawerSet>(NO_PANE_DRAWERS);
   const [stateContextDrawers, setStateContextDrawers] = useState<PaneDrawerSet>(NO_PANE_DRAWERS);
   const [actionsDrawers, setActionsDrawers] = useState<PaneDrawerSet>(NO_PANE_DRAWERS);
   const [resetDrawers, setResetDrawers] = useState<PaneDrawerSet>(NO_PANE_DRAWERS);
@@ -382,6 +391,7 @@ function App({
   const closePaneDrawersFor = useCallback((viewKey: string) => {
     setUsageDrawers(current => closePaneDrawer(current, viewKey));
     setModelDrawers(current => closePaneDrawer(current, viewKey));
+    setProfileDrawers(current => closePaneDrawer(current, viewKey));
     setStateContextDrawers(current => closePaneDrawer(current, viewKey));
     setActionsDrawers(current => closePaneDrawer(current, viewKey));
     setResetDrawers(current => closePaneDrawer(current, viewKey));
@@ -877,6 +887,7 @@ function App({
         ...(session.profiles === undefined ? {} : {profiles: session.profiles}),
         ...(session.profileNames === undefined ? {} : {profileNames: session.profileNames}),
         ...(session.activeProfile === undefined ? {} : {activeProfile: session.activeProfile}),
+        ...(session.defaultProfile === undefined ? {} : {defaultProfile: session.defaultProfile}),
       })),
     ),
     [sessions],
@@ -2982,14 +2993,69 @@ function App({
     );
   };
   /**
-   * The read-only drawers a pane's composer opens: the model picker and the
-   * usage details. Each is built from its own pane and gated on that pane's view
-   * key, so opening one in a pane leaves every other pane's drawer alone — and
-   * the drawer stays put when focus moves.
+   * Every profile of every session, as the session list already offers them.
+   *
+   * The rows are the list's own, so a profile picked here is a view the app can
+   * already open: a session's stored default profile is the session's own row
+   * and every other profile its own key. Building keys from the profile names
+   * instead would invent a view for the default profile — a second row for the
+   * same conversation, one the list does not have.
+   */
+  const profileDrawerRows = useMemo<ProfileSourceRow[]>(() => allProfileRows(listGroups), [listGroups]);
+  /** The views already on screen: their rows are marked and cannot be picked. */
+  const paneOpenViewKeys = useMemo(() => new Set(panes.keys), [panes.keys]);
+  /**
+   * Show another profile in one pane, in place.
+   *
+   * The profile may sit in this session or in any other: the pane keeps its slot
+   * and its width and only its conversation changes, so a profile is reachable
+   * without going back to the session list. The drawers that belonged to the old
+   * view close with it: they were built for a conversation the pane no longer
+   * shows.
+   *
+   * A view is on screen once. The drawer marks the rows that are already open
+   * and does not offer them, so this branch is only a guard for any other caller:
+   * a profile another pane already shows takes focus there instead of appearing
+   * twice.
+   */
+  const switchPaneProfile = (pane: ReturnType<typeof paneView>, targetKey: string): void => {
+    closePaneDrawersFor(pane.viewKey);
+    if (targetKey === pane.viewKey) {
+      return;
+    }
+    setPanes(current =>
+      current.keys.includes(targetKey)
+        ? focusPane(current, targetKey)
+        : replacePaneView(current, pane.viewKey, targetKey),
+    );
+  };
+  /**
+   * The read-only drawers a pane's composer opens: the profile list, the model
+   * picker and the usage details. Each is built from its own pane and gated on
+   * that pane's view key, so opening one in a pane leaves every other pane's
+   * drawer alone — and the drawer stays put when focus moves.
    */
   const paneInfoDrawer = (pane: ReturnType<typeof paneView>): ReactNode => {
     if (pane.session === undefined) {
       return undefined;
+    }
+    if (hasPaneDrawer(profileDrawers, pane.viewKey)) {
+      return (
+        <ProfileDrawer
+          rows={profileDrawerRows}
+          selectedKey={pane.viewKey}
+          openViewKeys={paneOpenViewKeys}
+          isDisabled={
+            pane.sessionRef === undefined ||
+            pane.isRunning ||
+            isCompactionInProgress ||
+            isModelDefaultUpdating ||
+            resettingViewKey !== null ||
+            frontCompactingViewKey !== null
+          }
+          onChange={targetKey => switchPaneProfile(pane, targetKey)}
+        />
+      );
     }
     if (hasPaneDrawer(modelDrawers, pane.viewKey)) {
       return (
@@ -3043,12 +3109,21 @@ function App({
    */
   const runPaneCommand = (kind: PaneCommandKind, viewKey: string): void => {
     switch (kind) {
+      case 'profile':
+        // The three info drawers share a pane's drawer slot: opening one closes
+        // that pane's other two, and only that pane's.
+        setModelDrawers(current => closePaneDrawer(current, viewKey));
+        setUsageDrawers(current => closePaneDrawer(current, viewKey));
+        setProfileDrawers(current => togglePaneDrawer(current, viewKey));
+        return;
       case 'model':
+        setProfileDrawers(current => closePaneDrawer(current, viewKey));
         setUsageDrawers(current => closePaneDrawer(current, viewKey));
         setModelDrawers(current => togglePaneDrawer(current, viewKey));
         return;
       case 'usage':
         setModelDrawers(current => closePaneDrawer(current, viewKey));
+        setProfileDrawers(current => closePaneDrawer(current, viewKey));
         setUsageDrawers(current => togglePaneDrawer(current, viewKey));
         return;
       case 'stateContext':
@@ -3134,11 +3209,26 @@ function App({
       resettingViewKey !== null ||
       frontCompactingViewKey !== null;
     // Each icon shows its own pane's drawer, whatever pane holds focus.
+    const isProfileOpenHere = hasPaneDrawer(profileDrawers, pane.viewKey);
     const isModelOpenHere = hasPaneDrawer(modelDrawers, pane.viewKey);
     const isUsageOpenHere = hasPaneDrawer(usageDrawers, pane.viewKey);
     const isStateContextOpenHere = hasPaneDrawer(stateContextDrawers, pane.viewKey);
     return (
         <HStack align="center" gap={1}>
+          {hasProfileToSwitchTo(profileDrawerRows, pane.viewKey) ? (
+            <IconButton
+              label="Profile"
+              tooltip={
+                pane.profile === undefined
+                  ? 'Switch this conversation to another profile'
+                  : `Current profile: ${pane.profile}`
+              }
+              icon={<Icon icon="app:profile" size="sm" />}
+              variant={isProfileOpenHere ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => requestPaneCommand(pane.viewKey, 'profile')}
+            />
+          ) : null}
           {options.length > 0 ? (
             <IconButton
               label="Model"

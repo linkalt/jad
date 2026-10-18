@@ -27,6 +27,7 @@ export function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Sess
     ...(snapshot.root_label ? {rootLabel: snapshot.root_label} : {}),
     ...(snapshot.category ? {category: snapshot.category} : {}),
     ...(snapshot.active_profile === undefined ? {} : {activeProfile: snapshot.active_profile}),
+    ...(snapshot.default_profile === undefined ? {} : {defaultProfile: snapshot.default_profile}),
     ...(snapshot.profiles === undefined ? {} : {profiles: snapshot.profiles}),
     ...(snapshot.profile_names === undefined ? {} : {profileNames: snapshot.profile_names}),
     ...(snapshot.model_default === undefined ? {} : {modelDefault: snapshot.model_default}),

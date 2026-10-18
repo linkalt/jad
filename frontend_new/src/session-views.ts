@@ -337,6 +337,11 @@ export type SessionListGroup = {
   /** The session's category; absent when it has none. */
   category?: string;
   /**
+   * The profile the session stores as its default, by id. The own row follows
+   * it, so this is the id that row actually shows: `Default · jad/default`.
+   */
+  defaultProfile?: string;
+  /**
    * One row per profile. Empty when the session has no path profiles: the group
    * is then a single selectable row, `ownRow`.
    */
@@ -362,14 +367,17 @@ export function sessionListGroups(
     profiles?: readonly string[];
     profileNames?: Readonly<Record<string, string>>;
     activeProfile?: string;
+    defaultProfile?: string;
   }[],
 ): SessionListGroup[] {
   return sessions.map(session => {
     const category = session.category === undefined || session.category === '' ? {} : {category: session.category};
+    const defaultProfile =
+      session.defaultProfile === undefined ? {} : {defaultProfile: session.defaultProfile};
     const ownRow: SessionListRow = {key: session.id, sessionRef: session.id, label: session.title};
     const profiles = [...new Set(session.profiles ?? [])];
     if (profiles.length === 0) {
-      return {sessionRef: session.id, title: session.title, ...category, children: [], ownRow};
+      return {sessionRef: session.id, title: session.title, ...category, ...defaultProfile, children: [], ownRow};
     }
     const labelOf = (profile: string) => profileLabel(profile, session.profileNames);
     const children: SessionListRow[] = [];
@@ -387,7 +395,7 @@ export function sessionListGroups(
           : {key: viewKey(session.id, name), sessionRef: session.id, profile: name, label: labelOf(name)},
       );
     }
-    return {sessionRef: session.id, title: session.title, ...category, children, ownRow};
+    return {sessionRef: session.id, title: session.title, ...category, ...defaultProfile, children, ownRow};
   });
 }
 

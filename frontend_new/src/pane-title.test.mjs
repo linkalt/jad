@@ -1,8 +1,27 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import test from 'node:test';
 
 import appConfig from './config.json' with {type: 'json'};
 import {paneTitleParts, paneTitleText, truncatePaneTitlePart} from './pane-title.ts';
+
+const pane = readFileSync(new URL('./components/ViewPane.tsx', import.meta.url), 'utf8');
+
+test('the strip names the conversation; profile, provider, model and effort are in its tooltip', () => {
+  assert.match(pane, /const sessionLabel = titleParts\[0\]\?\.label \?\? label;/, 'the strip takes the session part');
+  assert.match(pane, /\{sessionLabel\}/, 'and renders only that');
+  assert.equal(pane.includes('titleParts.map('), false, 'the parts are no longer laid out inline');
+  assert.match(
+    pane,
+    /const detailText = titleParts\.slice\(1\)\.map\(part => part\.label\)\.join\(' · '\);/,
+    'the tooltip holds exactly the parts the strip dropped',
+  );
+  assert.match(
+    pane,
+    /<Tooltip content=\{detailText\} placement="below" isEnabled=\{detailText !== ''\}>/,
+    'no bubble when there is no detail',
+  );
+});
 
 test('a pane title names the session, the profile, the provider, the model and the effort', () => {
   const parts = paneTitleParts({

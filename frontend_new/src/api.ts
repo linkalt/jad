@@ -226,6 +226,8 @@ export interface SessionSnapshot {
   /** The session's category (session.json); absent when it has none. */
   category?: string;
   active_profile?: string;
+  /** The session's stored default profile (the first by id); the own row follows it. */
+  default_profile?: string;
   profiles?: string[];
   /** Display name each profile file sets, by profile ID; a profile without one is absent. */
   profile_names?: Record<string, string>;

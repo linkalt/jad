@@ -12,6 +12,7 @@ import {
   parsePaneState,
   prunePanes,
   replaceFocusedPane,
+  replacePaneView,
   singlePane,
 } from './pane-layout.ts';
 
@@ -128,8 +129,23 @@ test('choosing a row replaces the focused pane and never duplicates a view', () 
   assert.equal(replaceFocusedPane(single, a), single);
 });
 
-test('a pane index locates the view on screen', () => {
-  assert.equal(paneIndex({keys: [a, b, c], focusedKey: a}, c), 2);
+test('switching a pane\'s profile keeps its slot and its neighbours', () => {
+  const state = {keys: [a, b, c], focusedKey: a};
+  // The pane that changes profile keeps its place: only its own key moves.
+  assert.deepEqual(replacePaneView(state, b, d), {keys: [a, d, c], focusedKey: a});
+  // A background pane switches without taking focus.
+  assert.deepEqual(replacePaneView({keys: [a, b], focusedKey: a}, b, d), {keys: [a, d], focusedKey: a});
+  // The focused pane follows its own view.
+  assert.deepEqual(replacePaneView({keys: [a, b], focusedKey: b}, b, d), {keys: [a, d], focusedKey: d});
+  // A view is on screen once: the key keeps the place it was first shown in.
+  assert.deepEqual(replacePaneView({keys: [a, b, c], focusedKey: a}, c, a), {keys: [a, b], focusedKey: a});
+  // Nothing to do: a pane that is not open, and its own view again.
+  const single = singlePane(a);
+  assert.equal(replacePaneView(single, d, b), single);
+  assert.equal(replacePaneView(single, a, a), single);
+});
+
+test('a pane index locates the view on screen', () => {  assert.equal(paneIndex({keys: [a, b, c], focusedKey: a}, c), 2);
   assert.equal(paneIndex(singlePane(a), b), -1);
 });
 

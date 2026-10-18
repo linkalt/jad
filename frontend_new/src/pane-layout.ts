@@ -137,6 +137,27 @@ export function replaceFocusedPane(state: PaneState, viewKey: string): PaneState
 }
 
 /**
+ * Show another view in one pane, in place.
+ *
+ * This is what picking a profile in a pane's own drawer does: the pane keeps its
+ * slot and the width the user gave it, and only its conversation changes — so a
+ * profile is reachable without going back to the session list. A view is on
+ * screen once, so the key keeps the place of the pane that showed it first.
+ */
+export function replacePaneView(state: PaneState, fromKey: string, toKey: string): PaneState {
+  const index = state.keys.indexOf(fromKey);
+  if (index < 0 || fromKey === toKey) {
+    return state;
+  }
+  const mapped = state.keys.map(key => (key === fromKey ? toKey : key));
+  const keys = mapped.filter((key, at) => mapped.indexOf(key) === at);
+  return {
+    keys,
+    focusedKey: state.focusedKey === fromKey ? toKey : state.focusedKey,
+  };
+}
+
+/**
  * Close one pane. The last pane stays: the shell always shows a conversation,
  * and the caller decides what that view is by activating another one.
  */

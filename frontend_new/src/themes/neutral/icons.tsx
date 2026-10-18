@@ -50,6 +50,7 @@ import {
   Wrench,
   Square,
   Mic,
+  Users,
 } from 'lucide-react';
 
 const iconProps = {
@@ -96,6 +97,8 @@ export const neutralIconRegistry: IconRegistry &
   // App vocabulary for the composer's model picker, which has no Astryx semantic
   // name: `app:model` is the model that answers a turn.
   'app:model': <Brain {...iconProps} />,
+  // The composer's profile picker: the profiles one conversation can be shown in.
+  'app:profile': <Users {...iconProps} />,
   // The Jad usage page.
   'app:readme': <BookOpen {...iconProps} />,
 };

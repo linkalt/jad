@@ -14,6 +14,7 @@
 import {ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList, Heading, HStack, Icon, IconButton, Spinner, Text, VStack, VisuallyHidden} from '@astryxdesign/core';
 import {useResizable} from '@astryxdesign/core/Resizable';
 import {pixel} from '@astryxdesign/core/Resizable/utils';
+import {Tooltip} from '@astryxdesign/core/Tooltip';
 import {spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, useState, type ReactNode} from 'react';
@@ -338,8 +339,8 @@ export function ViewPane({
   const storedImageScope = sessionRef === undefined ? undefined : {sessionRef, profile};
   const liveImageScope = storedImageScope === undefined ? undefined : {...storedImageScope, live: true};
   const hasOlderTurns = isLive && page?.has_more === true && page.next_before !== null;
-  // The tab title: what this pane shows, then the profile it is pinned to and
-  // the provider, model and effort its next run will use.
+  // The strip's own name, and the detail the tooltip holds: the profile the pane
+  // is pinned to and the provider, model and effort its next run uses.
   const titleParts = paneTitleParts({
     sessionTitle: session?.title ?? label,
     profile,
@@ -347,6 +348,8 @@ export function ViewPane({
     model,
     effort: effortLabel,
   });
+  const sessionLabel = titleParts[0]?.label ?? label;
+  const detailText = titleParts.slice(1).map(part => part.label).join(' · ');
 
   return (
     <VStack
@@ -370,30 +373,28 @@ export function ViewPane({
           xstyle={styles.header}
           style={{zIndex: PANE_HEADER_Z_INDEX}}
         >
-          <HStack align="center" gap={1} xstyle={styles.titleRow}>
-            {titleParts.map((part, index) => (
-              <Fragment key={part.key}>
-                {index === 0 ? null : (
-                  <Text type="supporting" color="secondary" aria-hidden>
-                    ·
-                  </Text>
-                )}
-                <Text
-                  type="supporting"
-                  color={part.key === 'session' && isFocused ? 'primary' : 'secondary'}
-                  maxLines={1}
-                  xstyle={styles.titlePart}
-                >
-                  {part.label}
-                </Text>
-              </Fragment>
-            ))}
-            {isReadmeShown ? null : (
-              <VisuallyHidden as="div">
-                <Heading level={1}>{session?.title ?? label}</Heading>
-              </VisuallyHidden>
-            )}
-          </HStack>
+          {/*
+            The strip names the conversation alone: the profile it is pinned to
+            and the provider, model and effort its next run uses sit in the
+            tooltip, so a narrow pane still shows its own name in full.
+          */}
+          <Tooltip content={detailText} placement="below" isEnabled={detailText !== ''}>
+            <HStack align="center" gap={1} xstyle={styles.titleRow} data-pane-title="">
+              <Text
+                type="supporting"
+                color={isFocused ? 'primary' : 'secondary'}
+                maxLines={1}
+                xstyle={styles.titlePart}
+              >
+                {sessionLabel}
+              </Text>
+              {isReadmeShown ? null : (
+                <VisuallyHidden as="div">
+                  <Heading level={1}>{session?.title ?? label}</Heading>
+                </VisuallyHidden>
+              )}
+            </HStack>
+          </Tooltip>
           <HStack align="center" gap={1}>
             {isRunning ? (
               <Spinner size="sm" aria-label={`${label} running`} />

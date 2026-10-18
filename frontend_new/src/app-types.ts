@@ -45,6 +45,8 @@ export interface Session {
   /** Groups sessions in the list; absent when the session has none. */
   category?: string;
   activeProfile?: string;
+  /** The session's stored default profile by id; absent when the server names none. */
+  defaultProfile?: string;
   profiles?: string[];
   profileNames?: Record<string, string>;
   modelDefault?: string;
