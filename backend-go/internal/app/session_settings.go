@@ -37,20 +37,25 @@ func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedP
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
-	if !containsSessionPath(settings.Models, modelDefault) {
+	modelDefault = strings.TrimSpace(modelDefault)
+	modelID, _, err := sessionfs.SplitModelEffort(modelDefault)
+	if err != nil {
+		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
+	}
+	if !containsSessionPath(settings.Models, modelID) {
 		return httpapi.SessionModelDefaultUpdate{}, &httpapi.StatusError{Code: http.StatusBadRequest, Message: "model config path is not available in the active session path profile"}
 	}
 	selected, err := sessionfs.LoadSessionConfig(location, profile, modelDefault)
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
-	update, err := sessionfs.SetLayoutModelDefault(location, profile, strings.TrimSpace(modelDefault), settings.Persistence.Durability)
+	update, err := sessionfs.SetLayoutModelDefault(location, profile, modelDefault, settings.Persistence.Durability)
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
 	models := settings.Models
 	if models == nil {
-		models = []string{update.ModelDefault}
+		models = []string{modelID}
 	}
 	return httpapi.SessionModelDefaultUpdate{
 		ActiveProfile: update.ActiveProfile,

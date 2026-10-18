@@ -69,7 +69,7 @@
     },
     "efforts": {
       "type": "array",
-      "description": "Reasoning efforts a run may choose by writing the model as \"<category>/<name>@<effort>\" (the run body and a subagent's model; a profile's models and model_default list plain IDs). The chosen value replaces request.reasoning.effort for that run; without @ the request is used as written. An effort not listed here is refused. Absent or empty: the model has no choice and \"@<effort>\" is refused.",
+      "description": "Reasoning efforts a run may choose by writing the model as \"<category>/<name>@<effort>\" (the run body, a subagent's model, or a profile's model_default; a profile's models list plain IDs). The chosen value replaces request.reasoning.effort for that run; without @ the request is used as written. An effort not listed here is refused. Absent or empty: the model has no choice and \"@<effort>\" is refused.",
       "default": [],
       "uniqueItems": true,
       "items": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" }

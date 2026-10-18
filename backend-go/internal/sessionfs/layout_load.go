@@ -88,9 +88,10 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	config.ProfileNames = built.profileNames
 	name := config.ModelDefault
 	if requestedModel != "" {
-		if name, _, err = SplitModelEffort(requestedModel); err != nil {
-			return SessionConfig{}, err
-		}
+		name = requestedModel
+	}
+	if name, _, err = SplitModelEffort(name); err != nil {
+		return SessionConfig{}, err
 	}
 	config.ModelPath = modelPaths[name]
 	config.ModelPaths = modelPaths

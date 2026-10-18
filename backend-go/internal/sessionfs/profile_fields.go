@@ -90,6 +90,11 @@ func validateProfileFields(name string, raw json.RawMessage, settingPath string)
 			}
 		}
 	}
+	if hasModelDefault {
+		if modelDefault, _, err = SplitModelEffort(modelDefault); err != nil {
+			return configError("%s: model_default: %v", profilePath, err)
+		}
+	}
 	if !hasModels && hasModelDefault {
 		models, hasModels = []string{modelDefault}, true
 	}

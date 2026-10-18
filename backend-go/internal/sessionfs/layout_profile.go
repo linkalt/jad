@@ -29,7 +29,15 @@ func checkProfile(path string, profile layoutProfileFile, allModels *catalog.Cat
 		return layoutProfileFile{}, nil, configError("%s: models: %v", path, err)
 	}
 	if profile.ModelDefault != "" {
-		if _, err := models.Lookup(profile.ModelDefault); err != nil {
+		id, effort, err := SplitModelEffort(profile.ModelDefault)
+		if err != nil {
+			return layoutProfileFile{}, nil, configError("%s: model_default: %v", path, err)
+		}
+		entry, err := models.Lookup(id)
+		if err != nil {
+			return layoutProfileFile{}, nil, configError("%s: model_default: %v", path, err)
+		}
+		if err := checkModelEffort(entry.Path, effort); err != nil {
 			return layoutProfileFile{}, nil, configError("%s: model_default: %v", path, err)
 		}
 	}

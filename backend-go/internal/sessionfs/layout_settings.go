@@ -67,6 +67,10 @@ func SetLayoutModelDefault(location Location, profile, model string, durability 
 	if model == "" {
 		return ModelDefaultUpdate{}, &ClientError{Message: "model_default must be a non-empty string"}
 	}
+	id, effort, err := SplitModelEffort(model)
+	if err != nil {
+		return ModelDefaultUpdate{}, err
+	}
 	session, err := readLayoutSession(location)
 	if err != nil {
 		return ModelDefaultUpdate{}, err
@@ -98,8 +102,12 @@ func SetLayoutModelDefault(location Location, profile, model string, durability 
 	if models, err = models.Narrow(file.Models); err != nil {
 		return ModelDefaultUpdate{}, configError("%s: models: %v", entry.Path, err)
 	}
-	if _, offered := models.Get(model); !offered {
-		return ModelDefaultUpdate{}, &ClientError{Message: fmt.Sprintf("model '%s' is not offered by profile '%s'", model, profile)}
+	modelEntry, offered := models.Get(id)
+	if !offered {
+		return ModelDefaultUpdate{}, &ClientError{Message: fmt.Sprintf("model '%s' is not offered by profile '%s'", id, profile)}
+	}
+	if err := checkModelEffort(modelEntry.Path, effort); err != nil {
+		return ModelDefaultUpdate{}, err
 	}
 	update := ModelDefaultUpdate{ActiveProfile: profile, Profiles: profiles.IDs(), ModelDefault: model, Changed: file.ModelDefault != model}
 	if !update.Changed {

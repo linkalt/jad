@@ -63,6 +63,20 @@ func effortsField(fields map[string]json.RawMessage, path string) ([]string, err
 	return efforts, nil
 }
 
+// checkModelEffort reads the model file and refuses an effort it does not list in efforts.
+// An empty effort is not checked.
+func checkModelEffort(modelPath, effort string) error {
+	if effort == "" {
+		return nil
+	}
+	model, err := loadModel(modelPath, "", "")
+	if err != nil {
+		return err
+	}
+	_, err = model.withEffort(effort)
+	return err
+}
+
 // withEffort returns the model with request.reasoning.effort set to the chosen effort. The
 // model file must list the effort in efforts.
 func (m Model) withEffort(effort string) (Model, error) {

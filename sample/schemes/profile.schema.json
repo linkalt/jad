@@ -47,8 +47,8 @@
     },
     "model_default": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
-      "description": "Model used when a request names none, written <category>/<name>, for example \"openai/gpt-deep\". Must be one of the profile's models. Without it, the first of them (by ID) is used."
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9_.-]+)?$",
+      "description": "Model used when a request names none, written <category>/<name> with an optional @<effort>, for example \"openai/gpt-deep\" or \"openai/gpt-deep@high\". The model must be one of the profile's models (which list plain IDs); the effort must be listed in the model file's efforts. The effort applies only while the run uses this model and no @effort of its own; it overrides the model file's default_effort. Without model_default, the first model (by ID) is used."
     },
     "toolset": {
       "type": "string",

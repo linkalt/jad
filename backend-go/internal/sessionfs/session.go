@@ -475,6 +475,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	modelDefault := ""
 	allowedModels, hasAllowedModels := []string(nil), false
 	hasModelDefault := false
+	defaultEffort := ""
 	if raw, ok := profileSettings["models"]; ok {
 		if err := json.Unmarshal(raw, &allowedModels); err != nil || allowedModels == nil {
 			return SessionConfig{}, configError("%s: paths.profiles.%s.models must be an array", settingPath, profile)
@@ -492,8 +493,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		if err := json.Unmarshal(raw, &configured); err != nil || strings.TrimSpace(configured) == "" {
 			return SessionConfig{}, configError("%s: paths.profiles.%s.model_default must be a non-empty string", settingPath, profile)
 		}
-		modelPathValue = strings.TrimSpace(configured)
-		modelDefault = modelPathValue
+		modelDefault = strings.TrimSpace(configured)
+		if modelPathValue, defaultEffort, err = SplitModelEffort(modelDefault); err != nil {
+			return SessionConfig{}, configError("%s: paths.profiles.%s.model_default: %v", settingPath, profile, err)
+		}
 		hasModelDefault = true
 		if !hasAllowedModels {
 			allowedModels = []string{modelPathValue}
@@ -507,16 +510,19 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if hasModelDefault && hasAllowedModels && !containsString(allowedModels, modelPathValue) {
 		return SessionConfig{}, configError("%s: paths.profiles.%s.model_default must be included in models", settingPath, profile)
 	}
-	reasoningEffort := ""
+	reasoningEffort := defaultEffort
 	if requestedModel != "" {
-		requestedID := requestedModel
+		requestedID, requestedEffort := requestedModel, ""
 		if !containsString(allowedModels, requestedModel) {
-			if requestedID, reasoningEffort, err = SplitModelEffort(requestedModel); err != nil {
+			if requestedID, requestedEffort, err = SplitModelEffort(requestedModel); err != nil {
 				return SessionConfig{}, err
 			}
 		}
 		if !hasAllowedModels || !containsString(allowedModels, requestedID) {
 			return SessionConfig{}, &ClientError{Message: "model config path is not available in the active session path profile"}
+		}
+		if requestedEffort != "" || requestedID != modelPathValue {
+			reasoningEffort = requestedEffort
 		}
 		modelPathValue = requestedID
 	}
