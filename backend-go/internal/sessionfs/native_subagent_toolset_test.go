@@ -61,7 +61,7 @@ func TestSubagentToolsetIsLoadedApartFromTheSessionToolset(t *testing.T) {
 		t.Errorf("session tools: grep %v read %v, want read only", config.NativeGrep != nil, config.NativeRead != nil)
 	}
 	agent, ok := config.NativeSubagent.Agent("finder")
-	if !ok || agent.Toolset != "extra/search" {
+	if !ok || agent.ToolsetKey() != "extra/search" {
 		t.Fatalf("agent = %+v, want toolset extra/search", agent)
 	}
 	derived, ok := config.AgentToolsets["extra/search"]

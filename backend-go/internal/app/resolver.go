@@ -211,6 +211,7 @@ func (r *Resolver) lockSession(ctx context.Context, reference, profile, modelPat
 	if err != nil {
 		return nil, mapSessionError(err)
 	}
+	r.logConfigWarnings(location.Reference, config)
 	loaded := time.Now()
 	transcriptLockPath, err := sessionlock.PathFor(config.MessagesPath)
 	if err != nil {
@@ -237,6 +238,15 @@ func (r *Resolver) lockSession(ctx context.Context, reference, profile, modelPat
 		r.lockedConfigs.drop(key)
 		_ = transcriptLock.Close()
 	}, nil
+}
+
+func (r *Resolver) logConfigWarnings(reference string, config sessionfs.SessionConfig) {
+	if r.logger == nil {
+		return
+	}
+	for _, warning := range config.Warnings {
+		r.logger.Warn(warning, "session", reference, "profile", config.Profile)
+	}
 }
 
 // LockSessionSettings serializes writes to setting.json across processes.
@@ -306,6 +316,7 @@ func (r *Resolver) Resolve(ctx context.Context, reference, profile, modelPath st
 		if err != nil {
 			return httpapi.ResolvedSession{}, mapSessionError(err)
 		}
+		r.logConfigWarnings(location.Reference, config)
 	}
 	shared, err := r.sharedStore(config)
 	if err != nil {

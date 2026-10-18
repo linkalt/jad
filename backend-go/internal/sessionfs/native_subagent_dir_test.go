@@ -380,20 +380,28 @@ func TestAgentSchemaValidatesAgentFilesTheLoaderAccepts(t *testing.T) {
 		`{"schema_version":1,"description":"d","model":"m.json","instructions":"i","prompt_documents":["a.md"],"tools":["read"],"max_tool_rounds":3,"max_run_tokens":100,"timeout_ms":1000}`,
 		`{"toolset":"extra/search"}`,
 		`{"toolset":"extra.v2/search-tools_1"}`,
+		`{"toolset":["extra/search","extra/more"]}`,
+		`{"toolset":["extra/search"]}`,
 	}
 	invalid := map[string]string{
-		"unknown key":    `{"tool":["read"]}`,
-		"rounds zero":    `{"max_tool_rounds":0}`,
-		"timeout small":  `{"timeout_ms":999}`,
-		"tools twice":    `{"tools":["read","read"]}`,
-		"documents once": `{"prompt_documents":["a.md","a.md"]}`,
-		"version":        `{"schema_version":2}`,
-		"description":    `{"description":"` + strings.Repeat("x", 501) + `"}`,
-		"instructions":   `{"instructions":""}`,
-		"toolset bare":   `{"toolset":"search"}`,
-		"toolset deep":   `{"toolset":"a/b/c"}`,
-		"toolset blank":  `{"toolset":""}`,
-		"toolset dash":   `{"toolset":"-a/b"}`,
+		"unknown key":            `{"tool":["read"]}`,
+		"rounds zero":            `{"max_tool_rounds":0}`,
+		"timeout small":          `{"timeout_ms":999}`,
+		"tools twice":            `{"tools":["read","read"]}`,
+		"documents once":         `{"prompt_documents":["a.md","a.md"]}`,
+		"version":                `{"schema_version":2}`,
+		"description":            `{"description":"` + strings.Repeat("x", 501) + `"}`,
+		"instructions":           `{"instructions":""}`,
+		"toolset bare":           `{"toolset":"search"}`,
+		"toolset deep":           `{"toolset":"a/b/c"}`,
+		"toolset blank":          `{"toolset":""}`,
+		"toolset dash":           `{"toolset":"-a/b"}`,
+		"toolset list empty":     `{"toolset":[]}`,
+		"toolset list bare":      `{"toolset":["extra/search","search"]}`,
+		"toolset list blank":     `{"toolset":["extra/search",""]}`,
+		"toolset list duplicate": `{"toolset":["extra/search","extra/search"]}`,
+		"toolset number":         `{"toolset":1}`,
+		"toolset list number":    `{"toolset":[1]}`,
 	}
 	check := func(text string) error {
 		var value any
@@ -410,6 +418,51 @@ func TestAgentSchemaValidatesAgentFilesTheLoaderAccepts(t *testing.T) {
 	for name, text := range invalid {
 		if err := check(text); err == nil {
 			t.Errorf("%s: schema accepts %s", name, text)
+		}
+	}
+}
+
+func TestInlineAgentSchemaChecksTheToolsetList(t *testing.T) {
+	file, err := os.Open(filepath.Join("..", "..", "..", "sample", "schemes", "setting.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	document, err := jsonschema.UnmarshalJSON(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := document
+	for _, key := range []string{"properties", "tools", "properties", "native", "properties", "subagent", "properties", "agents", "additionalProperties"} {
+		next, ok := node.(map[string]any)[key]
+		if !ok {
+			t.Fatalf("setting.schema.json has no %q on the way to the inline agent", key)
+		}
+		node = next
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("inline-agent.json", node); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile("inline-agent.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(text string) error {
+		value, err := jsonschema.UnmarshalJSON(strings.NewReader(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return schema.Validate(value)
+	}
+	for _, text := range []string{`{"toolset":"a/b"}`, `{"toolset":["a/b"]}`, `{"toolset":["a/b","c/d"]}`} {
+		if err := check(text); err != nil {
+			t.Errorf("schema rejects %s: %v", text, err)
+		}
+	}
+	for _, text := range []string{`{"toolset":[]}`, `{"toolset":["a/b","a/b"]}`, `{"toolset":["a/b","c"]}`, `{"toolset":[1]}`, `{"toolset":1}`} {
+		if err := check(text); err == nil {
+			t.Errorf("schema accepts %s", text)
 		}
 	}
 }

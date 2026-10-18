@@ -377,13 +377,15 @@ func validateProfileFile(layout Layout, path string, data []byte) error {
 	if err := checkUnselectedProfile(path, profile); err != nil {
 		return err
 	}
-	if profile.Toolset != "" {
+	if len(profile.Toolset) > 0 {
 		toolsets, err := catalog.Scan("toolset", layout.Tools)
 		if err != nil {
 			return configError("%s: %v", path, err)
 		}
-		if _, err := toolsets.Lookup(profile.Toolset); err != nil {
-			return configError("%s: toolset: %v", path, err)
+		for _, id := range profile.Toolset {
+			if _, err := toolsets.Lookup(id); err != nil {
+				return configError("%s: toolset: %v", path, err)
+			}
 		}
 	}
 	return nil

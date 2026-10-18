@@ -13,7 +13,7 @@ const searchToolset = "extra/search"
 
 func toolsetAgent(name string, names ...string) sessionfs.NativeSubagentAgent {
 	agent := agentNamed(name)
-	agent.Toolset = searchToolset
+	agent.Toolset = []string{searchToolset}
 	if len(names) > 0 {
 		agent.Tools, agent.HasTools = names, true
 	}
@@ -193,7 +193,7 @@ func TestSubagentToolsetProcessesAreStoppedInTheToolsetsManager(t *testing.T) {
 	sessionProcess := session.start(t, "", "sleep 30")
 
 	agent := writerAgent("runner", "process")
-	agent.Toolset = searchToolset
+	agent.Toolset = []string{searchToolset}
 	process := toolset.tool
 	process.ReadOnly = false
 	settings := writeSettings(agent)

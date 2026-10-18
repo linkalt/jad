@@ -30,6 +30,13 @@ test('a valid profile has no problems', () => {
   assert.deepEqual(validator.validate('profiles', pretty(goodProfile)), []);
 });
 
+test('a profile toolset may be a list of ids, never an empty one', () => {
+  const list = {...goodProfile, toolset: ['jad/default', 'jad/extra']};
+  assert.deepEqual(validator.validate('profiles', pretty(list)), []);
+  const empty = {...goodProfile, toolset: []};
+  assert.notDeepEqual(validator.validate('profiles', pretty(empty)), []);
+});
+
 test('every profile in the local layout passes the scheme', t => {
   const root = new URL('../../.jad/profiles/', import.meta.url);
   if (!existsSync(root)) {

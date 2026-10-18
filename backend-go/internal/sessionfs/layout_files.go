@@ -3,6 +3,7 @@ package sessionfs
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"sort"
 	"strings"
@@ -90,9 +91,56 @@ type layoutProfileFile struct {
 	Instructions json.RawMessage            `json:"instructions"`
 	Models       catalog.Selection          `json:"models"`
 	ModelDefault string                     `json:"model_default"`
-	Toolset      string                     `json:"toolset"`
+	Toolset      toolsetRefs                `json:"toolset"`
 	Tools        json.RawMessage            `json:"tools"`
 	Settings     map[string]json.RawMessage `json:"settings"`
+}
+
+// toolsetRefs is the toolset key of a profile: one "<category>/<name>" string or an
+// array of them. Their order is the order of precedence when two toolsets clash.
+type toolsetRefs []string
+
+func (r *toolsetRefs) UnmarshalJSON(data []byte) error {
+	if string(bytes.TrimSpace(data)) == `""` {
+		*r = nil
+		return nil
+	}
+	ids, problem := parseToolsetRefs(data, false)
+	if problem != "" {
+		return errors.New("toolset " + problem)
+	}
+	*r = ids
+	return nil
+}
+
+// parseToolsetRefs reads a string or an array of strings; null is none, problem follows "toolset ".
+func parseToolsetRefs(data []byte, trim bool) (ids []string, problem string) {
+	const shape = "must be a non-empty string or an array of distinct non-empty strings"
+	data = bytes.TrimSpace(data)
+	if string(data) == "null" {
+		return nil, ""
+	}
+	var single string
+	if json.Unmarshal(data, &single) == nil {
+		ids = []string{single}
+	} else if json.Unmarshal(data, &ids) != nil || len(ids) == 0 {
+		return nil, shape
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for index, id := range ids {
+		if trim {
+			id = strings.TrimSpace(id)
+			ids[index] = id
+		}
+		if strings.TrimSpace(id) == "" {
+			return nil, shape
+		}
+		if _, twice := seen[id]; twice {
+			return nil, "lists " + id + " twice"
+		}
+		seen[id] = struct{}{}
+	}
+	return ids, ""
 }
 
 // layoutToolsetFile is <tools>/<category>/<name>.json. MCP stays raw because the order

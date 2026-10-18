@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"jad/backend-go/internal/catalog"
@@ -69,7 +70,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 
 	built := &layoutCompose{layout: layout, location: location, sessionPath: sessionPath, session: session, profiles: profiles, keys: keys, scans: scans}
-	setting, modelPaths, err := built.compose(entry, "")
+	setting, modelPaths, err := built.compose(entry, nil)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -80,6 +81,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if err := built.loadAgentToolsets(&config, entry); err != nil {
 		return SessionConfig{}, err
 	}
+	config.Warnings = built.warnings
 	// The normalizers know a profile only by its storage key; callers get the ID.
 	config.Profile = entry.ID()
 	config.DefaultProfile = defaultProfile
@@ -118,10 +120,11 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 	}
 	var available *catalog.Catalog
 	for _, agent := range config.NativeSubagent.Agents {
-		if agent.Toolset == "" {
+		key := agent.ToolsetKey()
+		if key == "" {
 			continue
 		}
-		if _, done := config.AgentToolsets[agent.Toolset]; done {
+		if _, done := config.AgentToolsets[key]; done {
 			continue
 		}
 		if available == nil {
@@ -130,8 +133,10 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 				return configError("%s: %v", c.sessionPath, err)
 			}
 		}
-		if _, err := available.Lookup(agent.Toolset); err != nil {
-			return configError("%s: tools.native.subagent agent %s: toolset: %v", c.sessionPath, agent.Name, err)
+		for _, id := range agent.Toolset {
+			if _, err := available.Lookup(id); err != nil {
+				return configError("%s: tools.native.subagent agent %s: toolset: %v", c.sessionPath, agent.Name, err)
+			}
 		}
 		setting, _, err := c.compose(selected, agent.Toolset)
 		if err == nil {
@@ -141,13 +146,13 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 				if config.AgentToolsets == nil {
 					config.AgentToolsets = make(map[string]SessionConfig)
 				}
-				config.AgentToolsets[agent.Toolset] = derived
+				config.AgentToolsets[key] = derived
 				continue
 			}
 		}
 		var configProblem *ConfigError
 		if errors.As(err, &configProblem) {
-			return configError("agent %s uses toolset %s: %s", agent.Name, agent.Toolset, configProblem.Message)
+			return configError("agent %s uses toolset %s: %s", agent.Name, key, configProblem.Message)
 		}
 		return err
 	}
@@ -238,12 +243,21 @@ type layoutCompose struct {
 	// scans is the catalog scans one list call shares between its sessions; nil scans
 	// every catalog directory afresh.
 	scans *CatalogScans
+	// warnings are the notices of every compose of this load, without repeats.
+	warnings []string
+}
+
+func (c *layoutCompose) warn(format string, args ...any) {
+	message := fmt.Sprintf(format, args...)
+	if !slices.Contains(c.warnings, message) {
+		c.warnings = append(c.warnings, message)
+	}
 }
 
 // compose builds the legacy-shaped setting for the selected profile. The returned map
-// holds the file of each model ID the profile may use. A non-empty toolset replaces the
-// profile's own toolset, which is how the toolset an agent names is read.
-func (c *layoutCompose) compose(selected catalog.Entry, toolset string) (map[string]json.RawMessage, map[string]string, error) {
+// holds the file of each model ID the profile may use. Non-empty toolsets replace the
+// profile's own toolsets, which is how the toolsets an agent names are read.
+func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[string]json.RawMessage, map[string]string, error) {
 	allModels, err := c.scans.Scan("model", c.layout.Models)
 	if err != nil {
 		return nil, nil, configError("%s: %v", selected.Path, err)
@@ -285,15 +299,15 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolset string) (map[str
 	if len(c.layout.ToolDefinitionPaths) > 0 {
 		setting["tool_definition_paths"], _ = json.Marshal(c.layout.ToolDefinitionPaths)
 	}
-	if toolset == "" {
-		toolset = profile.Toolset
+	if len(toolsets) == 0 {
+		toolsets = profile.Toolset
 	} else {
 		// Only the tools of this toolset are used. The state-context providers read the
 		// session's own tools, which this toolset may not have.
 		delete(setting, "statecontext")
 	}
-	if toolset != "" {
-		if err := c.addToolset(setting, toolset, selected.Path, defaultEnvFile); err != nil {
+	if len(toolsets) > 0 {
+		if err := c.addToolsets(setting, toolsets, selected.Path, defaultEnvFile); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -414,44 +428,103 @@ func (c *layoutCompose) addProfileFields(entry map[string]any, profileID string,
 	}
 }
 
-// addToolset puts the toolset's native settings and MCP servers into the setting. The
-// toolset is "<category>/<name>" under tools/.
-func (c *layoutCompose) addToolset(setting map[string]json.RawMessage, id, profilePath string, defaultEnvFile json.RawMessage) error {
+// loadedToolset is one toolset file read for a compose: its ID, file and content.
+type loadedToolset struct {
+	id      string
+	path    string
+	toolset layoutToolsetFile
+}
+
+// addToolsets puts the native settings, MCP servers and hooks of the toolsets into the
+// setting. Each toolset is "<category>/<name>" under tools/; the first listed wins a clash.
+func (c *layoutCompose) addToolsets(setting map[string]json.RawMessage, ids []string, profilePath string, defaultEnvFile json.RawMessage) error {
 	toolsets, err := c.scans.Scan("toolset", c.layout.Tools)
 	if err != nil {
 		return configError("%s: %v", profilePath, err)
 	}
-	entry, err := toolsets.Lookup(id)
-	if err != nil {
-		return configError("%s: toolset: %v", profilePath, err)
+	loaded := make([]loadedToolset, 0, len(ids))
+	for _, id := range ids {
+		entry, err := toolsets.Lookup(id)
+		if err != nil {
+			return configError("%s: toolset: %v", profilePath, err)
+		}
+		var toolset layoutToolsetFile
+		c.scans.noteFile(entry.Path)
+		if err := readLayoutFile(entry.Path, &toolset); err != nil {
+			return err
+		}
+		loaded = append(loaded, loadedToolset{id: id, path: entry.Path, toolset: toolset})
 	}
-	var toolset layoutToolsetFile
-	c.scans.noteFile(entry.Path)
-	if err := readLayoutFile(entry.Path, &toolset); err != nil {
-		return err
-	}
-	return c.applyToolset(setting, toolset, entry.Path, defaultEnvFile)
+	return c.applyToolsets(setting, loaded, defaultEnvFile)
 }
 
 // applyToolset puts one decoded toolset into the setting; path names its file in errors.
 func (c *layoutCompose) applyToolset(setting map[string]json.RawMessage, toolset layoutToolsetFile, path string, defaultEnvFile json.RawMessage) error {
-	entry := catalog.Entry{Path: path}
-	if len(toolset.Native) > 0 {
-		native, err := withDefaultEnvFile(toolset.Native, defaultEnvFile, entry.Path)
+	return c.applyToolsets(setting, []loadedToolset{{id: path, path: path, toolset: toolset}}, defaultEnvFile)
+}
+
+// applyToolsets merges the toolsets in order. A native tool, an MCP server (by id) or the
+// hooks object that an earlier toolset already gave is kept and the later one is
+// ignored with a warning. Hooks in the settings and in a toolset stay an error.
+func (c *layoutCompose) applyToolsets(setting map[string]json.RawMessage, loaded []loadedToolset, defaultEnvFile json.RawMessage) error {
+	_, hooksInSettings := setting["hooks"]
+	native := map[string]json.RawMessage{}
+	nativeOwner := map[string]string{}
+	var servers []map[string]any
+	serverOwner := map[string]string{}
+	var hooks json.RawMessage
+	hooksOwner := ""
+	for _, item := range loaded {
+		if len(item.toolset.Native) > 0 {
+			withEnv, err := withDefaultEnvFile(item.toolset.Native, defaultEnvFile, item.path)
+			if err != nil {
+				return err
+			}
+			names := make([]string, 0, len(withEnv))
+			for name := range withEnv {
+				names = append(names, name)
+			}
+			slices.Sort(names)
+			for _, name := range names {
+				value := withEnv[name]
+				if owner, taken := nativeOwner[name]; taken {
+					c.warn("native tool %s is in toolsets %s and %s; using the one from %s", name, owner, item.id, owner)
+					continue
+				}
+				native[name] = value
+				nativeOwner[name] = item.id
+			}
+		}
+		if len(item.toolset.Hooks) > 0 {
+			if hooksInSettings {
+				return configError("%s: hooks is set here and in the settings (defaults, session or profile); keep it in one place", item.path)
+			}
+			if hooksOwner != "" {
+				c.warn("hooks are in toolsets %s and %s; using the hooks of %s and ignoring all hooks of %s", hooksOwner, item.id, hooksOwner, item.id)
+			} else {
+				hooks = item.toolset.Hooks
+				hooksOwner = item.id
+			}
+		}
+		own, err := c.mcpServers(item.toolset, item.path)
 		if err != nil {
 			return err
 		}
+		for _, server := range own {
+			serverID, _ := server["id"].(string)
+			if owner, taken := serverOwner[serverID]; taken {
+				c.warn("MCP server %s is in toolsets %s and %s; using the one from %s", serverID, owner, item.id, owner)
+				continue
+			}
+			serverOwner[serverID] = item.id
+			servers = append(servers, server)
+		}
+	}
+	if len(native) > 0 {
 		setting["tools"], _ = json.Marshal(map[string]any{"native": native})
 	}
-	if len(toolset.Hooks) > 0 {
-		if _, set := setting["hooks"]; set {
-			return configError("%s: hooks is set here and in the settings (defaults, session or profile); keep it in one place", entry.Path)
-		}
-		setting["hooks"] = toolset.Hooks
-	}
-	servers, err := c.mcpServers(toolset, entry.Path)
-	if err != nil {
-		return err
+	if hooks != nil {
+		setting["hooks"] = hooks
 	}
 	if len(servers) > 0 {
 		setting["mcp_servers"], _ = json.Marshal(servers)

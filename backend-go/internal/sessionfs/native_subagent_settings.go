@@ -174,9 +174,10 @@ type NativeSubagentAgent struct {
 	// when the key is absent, which means every read-only native tool.
 	Tools    []string
 	HasTools bool
-	// Toolset is the "<category>/<name>" of the toolset file this agent draws its tools
-	// from instead of the session's own toolset; empty means the session's.
-	Toolset       string
+	// Toolset lists the "<category>/<name>" of the toolset files this agent draws its tools
+	// from instead of the session's own toolset, first one winning a clash; empty means
+	// the session's.
+	Toolset       []string
 	MaxToolRounds int64
 	// MaxRunTokens is the most tokens the child may use; zero means no cap.
 	MaxRunTokens int64
@@ -483,7 +484,7 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 	if agent.Tools, agent.HasTools, err = optionalSubagentTools(fields, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
-	if agent.Toolset, err = optionalSubagentString(fields, "toolset", settingPath, section); err != nil {
+	if agent.Toolset, err = optionalSubagentToolsets(fields, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
 	if agent.Paths, err = optionalSubagentPaths(fields, settingPath, section); err != nil {
@@ -586,6 +587,19 @@ func optionalSubagentString(fields map[string]json.RawMessage, name, settingPath
 	return strings.TrimSpace(value), nil
 }
 
+// optionalSubagentToolsets reads the toolset key: a string or an array, trimmed; absent or null is none.
+func optionalSubagentToolsets(fields map[string]json.RawMessage, settingPath, section string) ([]string, error) {
+	raw, exists := fields["toolset"]
+	if !exists {
+		return nil, nil
+	}
+	ids, problem := parseToolsetRefs(raw, true)
+	if problem != "" {
+		return nil, configError("%s: %s.toolset %s", settingPath, section, problem)
+	}
+	return ids, nil
+}
+
 func optionalSubagentTools(fields map[string]json.RawMessage, settingPath, section string) ([]string, bool, error) {
 	raw, exists := fields["tools"]
 	if !exists || strings.TrimSpace(string(raw)) == "null" {
@@ -629,3 +643,13 @@ func (a NativeSubagentAgent) ChangeTools() []string {
 
 // ChangesFiles reports whether the agent lists a tool that can change files.
 func (a NativeSubagentAgent) ChangesFiles() bool { return len(a.ChangeTools()) > 0 }
+
+// ToolsetKeySeparator joins the toolset IDs of an agent into one key. An ID never holds
+// it, and the order of the IDs is their precedence, so [a, b] and [b, a] are two keys.
+const ToolsetKeySeparator = "+"
+
+// ToolsetKey is the key of the agent's toolsets in SessionConfig.AgentToolsets: the ID
+// itself for one toolset, the IDs joined for several, empty for none.
+func (a NativeSubagentAgent) ToolsetKey() string {
+	return strings.Join(a.Toolset, ToolsetKeySeparator)
+}

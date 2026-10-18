@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "profile.schema.json",
   "title": "Profile",
-  "description": "<.jad>/profiles/<category>/<name>.json. The profile name is the file name. A profile picks a prompt, the models it may use, one toolset and setting overrides.",
+  "description": "<.jad>/profiles/<category>/<name>.json. The profile name is the file name. A profile picks a prompt, the models it may use, one toolset or a list of toolsets and setting overrides.",
   "type": "object",
   "properties": {
     "schema_version": {
@@ -51,9 +51,11 @@
       "description": "Model used when a request names none, written <category>/<name> with an optional @<effort>, for example \"openai/gpt-deep\" or \"openai/gpt-deep@high\". The model must be one of the profile's models (which list plain IDs); the effort must be listed in the model file's efforts. The effort applies only while the run uses this model and no @effort of its own; it overrides the model file's default_effort. Without model_default, the first model (by ID) is used."
     },
     "toolset": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
-      "description": "The toolset this profile uses, written <category>/<name> under tools/, for example \"coding/full\". Any toolset may be used. Without it the profile has no native tool and no MCP tool."
+      "anyOf": [
+        {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"},
+        {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"}}
+      ],
+      "description": "The toolset this profile uses, or a list of them, each written <category>/<name> under tools/, for example \"coding/full\". Any toolset may be used. Given a list, the toolsets merge in order: when two name the same native tool or MCP server the first listed wins, with a warning, and only the first toolset with hooks supplies hooks (a later one's hooks are ignored with a warning). Without it the profile has no native tool and no MCP tool."
     },
     "tools": {
       "type": "object",

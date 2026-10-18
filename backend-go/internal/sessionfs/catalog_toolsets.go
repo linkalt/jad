@@ -3,6 +3,7 @@ package sessionfs
 import (
 	"encoding/json"
 	"os"
+	"slices"
 
 	"jad/backend-go/internal/catalog"
 )
@@ -54,7 +55,7 @@ func toolsetUsers(layout Layout, id string) ([]string, error) {
 		if err := readLayoutFile(entry.Path, &profile); err != nil {
 			continue
 		}
-		if profile.Toolset == id {
+		if slices.Contains(profile.Toolset, id) {
 			users = append(users, entry.ID())
 		}
 	}

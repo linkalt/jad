@@ -196,18 +196,19 @@ func newSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []to
 	for _, agent := range settings.Agents {
 		agent = withoutDeniedTools(agent, settings.DenyTools)
 		agentReadOnly, agentChangers, agentProcesses := readOnly, changers, processes
-		if agent.Toolset != "" {
-			toolset, built := toolsets[agent.Toolset]
+		toolsetKey := agent.ToolsetKey()
+		if toolsetKey != "" {
+			toolset, built := toolsets[toolsetKey]
 			if !built {
-				return tools.Tool{}, fmt.Errorf("tools.native.subagent.agents.%s.toolset %q was not loaded", agent.Name, agent.Toolset)
+				return tools.Tool{}, fmt.Errorf("tools.native.subagent.agents.%s.toolset %q was not loaded", agent.Name, toolsetKey)
 			}
 			agentReadOnly, agentChangers = childToolPools(settings, toolset.native)
 			agentProcesses = toolset.processes
 		}
 		childTools, mcpIDs, err := subagentChildTools(agent, agentReadOnly, agentChangers, settings.AllowWrite)
 		if err != nil {
-			if agent.Toolset != "" {
-				err = fmt.Errorf("%w (its tools come from toolset %s)", err, agent.Toolset)
+			if toolsetKey != "" {
+				err = fmt.Errorf("%w (its tools come from toolset %s)", err, toolsetKey)
 			}
 			if len(settings.DenyTools) > 0 {
 				err = fmt.Errorf("%w (the profile's tools.deny is in effect: %s)", err, strings.Join(settings.DenyTools, ", "))
@@ -463,13 +464,13 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]
 		}
 		byID, loadedText := session.byID, session.loadedText
 		where := ""
-		if agent.config.Toolset != "" {
-			pool := pools[agent.config.Toolset]
+		if toolsetKey := agent.config.ToolsetKey(); toolsetKey != "" {
+			pool := pools[toolsetKey]
 			byID, loadedText = pool.byID, pool.loadedText
 			if byID == nil {
 				byID, loadedText = map[string]tools.Tool{}, "none"
 			}
-			where = " of toolset " + agent.config.Toolset
+			where = " of toolset " + toolsetKey
 		}
 		childTools := append([]tools.Tool(nil), agent.nativeTools...)
 		added := make(map[string]struct{}, len(agent.mcpIDs))
