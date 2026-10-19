@@ -261,6 +261,40 @@ func TestPinnedFetchRequesterIsBuiltFromFetchSettings(t *testing.T) {
 	}
 }
 
+func TestPinnedFetchRequesterSendsConfiguredUserAgent(t *testing.T) {
+	var received atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		received.Store(request.Header.Get("User-Agent"))
+		writer.Header().Set("Content-Type", "text/plain")
+		_, _ = writer.Write([]byte("ok"))
+	}))
+	t.Cleanup(server.Close)
+	for _, userAgent := range []string{"jad-test-agent/9.9", "Mozilla/5.0 (compatible; jad-fetch/1.0)"} {
+		settings := fetchTestSettings(t.TempDir())
+		settings.UserAgent = userAgent
+		store := NewFetchStore(settings.StorageDir)
+		fetchOnce(t, newPinnedFetchRequester(settings, store), pinnedTarget(t, server, "agent.invalid"))
+		store.Close()
+		if got, _ := received.Load().(string); got != userAgent {
+			t.Fatalf("server received User-Agent %q, want %q", got, userAgent)
+		}
+	}
+}
+
+func TestPinnedFetchRequesterWithoutUserAgentLeavesGoDefault(t *testing.T) {
+	var received atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		received.Store(request.Header.Get("User-Agent"))
+		writer.Header().Set("Content-Type", "text/plain")
+		_, _ = writer.Write([]byte("ok"))
+	}))
+	t.Cleanup(server.Close)
+	fetchOnce(t, pinnedFetchRequester{}, pinnedTarget(t, server, "agent.invalid"))
+	if got, _ := received.Load().(string); !strings.HasPrefix(got, "Go-http-client/") {
+		t.Fatalf("zero-value requester sent User-Agent %q", got)
+	}
+}
+
 // rebindingFetchResolver answers each lookup with the next address, the way a
 // hostile DNS server does between two calls.
 type rebindingFetchResolver struct {

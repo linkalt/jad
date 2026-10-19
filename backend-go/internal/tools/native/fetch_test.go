@@ -1,6 +1,7 @@
 package native
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -13,8 +14,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	htmltomarkdown "github.com/xberg-io/html-to-markdown/packages/go/v3"
 
@@ -404,6 +407,276 @@ func TestFetchToolFallsBackFromCursorAndEnforcesRedirectLimit(t *testing.T) {
 	redirectResult := executeFetchTestTool(t, redirectTool, map[string]any{"url": "https://example.com/start"}, "redirect-limit")
 	if !strings.Contains(redirectResult, "too_many_redirects") || len(requester.targets) != 2 {
 		t.Fatalf("redirect limit result = %s, requests = %d", redirectResult, len(requester.targets))
+	}
+}
+
+func newFetchTestTool(t *testing.T, settings sessionfs.NativeFetchSettings, store *FetchStore, responses ...*http.Response) (tools.Tool, *queuedFetchRequester) {
+	t.Helper()
+	resolver := &staticFetchResolver{addresses: []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}}
+	requester := &queuedFetchRequester{responses: responses}
+	tool, err := newFetchTool(settings, store, resolver, requester)
+	if err != nil {
+		t.Fatalf("construct fetch tool: %v", err)
+	}
+	return tool, requester
+}
+
+func fetchStoredFileCount(t *testing.T, directory string) int {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
+}
+
+func gzipFetchResponse(t *testing.T, text string) *http.Response {
+	t.Helper()
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := io.WriteString(writer, text); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := fetchTestResponse(http.StatusOK, "text/plain", "")
+	response.Header.Set("Content-Encoding", "gzip")
+	response.Body = io.NopCloser(bytes.NewReader(compressed.Bytes()))
+	return response
+}
+
+func TestFetchToolRejectsOversizedBodyAfterReadingWithoutStoring(t *testing.T) {
+	lying := fetchTestResponse(http.StatusOK, "text/plain", "0123456789")
+	lying.Header.Set("Content-Length", "2")
+	for name, response := range map[string]*http.Response{
+		"no content length":    fetchTestResponse(http.StatusOK, "text/plain", "0123456789"),
+		"lying content length": lying,
+		"gzip decoded":         gzipFetchResponse(t, strings.Repeat("a", 10_000)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			settings := fetchTestSettings(t.TempDir())
+			settings.MaxResponseBytes = 5
+			if name == "gzip decoded" {
+				settings.MaxResponseBytes = 100
+				response.Header.Set("Content-Length", "50")
+			}
+			tool, _ := newFetchTestTool(t, settings, NewFetchStore(settings.StorageDir), response)
+			result := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/large"}, "large")
+			for _, want := range []string{"response_too_large", "limit of " + strconv.FormatInt(settings.MaxResponseBytes, 10) + " bytes", "narrower URL", "tools.native.fetch.max_response_bytes"} {
+				if !strings.Contains(result, want) {
+					t.Fatalf("result lacks %q: %s", want, result)
+				}
+			}
+			if count := fetchStoredFileCount(t, settings.StorageDir); count != 0 {
+				t.Fatalf("oversized response left %d stored files", count)
+			}
+		})
+	}
+}
+
+func TestFetchToolPrecheckMessageNamesLimitAndDeclaredLength(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	settings.MaxResponseBytes = 5
+	response := fetchTestResponse(http.StatusOK, "text/plain", "0123456789")
+	response.Header.Set("Content-Length", "10")
+	tool, _ := newFetchTestTool(t, settings, NewFetchStore(settings.StorageDir), response)
+	result := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/large"}, "precheck")
+	for _, want := range []string{"response_too_large", "limit of 5 bytes", "Content-Length is 10", "narrower URL", "tools.native.fetch.max_response_bytes", "tools.native.fetch.truncate_oversized_response"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("precheck result lacks %q: %s", want, result)
+		}
+	}
+}
+
+func TestFetchToolAcceptsBodyEqualToLimit(t *testing.T) {
+	for _, truncate := range []bool{false, true} {
+		settings := fetchTestSettings(t.TempDir())
+		settings.MaxResponseBytes = 5
+		settings.TruncateOversizedResponse = truncate
+		response := fetchTestResponse(http.StatusOK, "text/plain", "01234")
+		response.Header.Set("Content-Length", "5")
+		tool, _ := newFetchTestTool(t, settings, NewFetchStore(settings.StorageDir), response)
+		result := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/exact"}, "exact")
+		if fetchOutputContent(t, result) != "01234" || strings.Contains(result, "response_too_large") || strings.Contains(result, "truncated: true") {
+			t.Fatalf("truncate=%v body equal to limit result = %s", truncate, result)
+		}
+	}
+}
+
+func TestFetchToolTruncatesOversizedResponseWhenEnabled(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	settings.MaxResponseBytes = 5
+	settings.TruncateOversizedResponse = true
+	declared := fetchTestResponse(http.StatusOK, "text/plain", "0123456789")
+	declared.Header.Set("Content-Length", "10")
+	tool, _ := newFetchTestTool(t, settings, NewFetchStore(settings.StorageDir), declared, fetchTestResponse(http.StatusOK, "text/plain", "0123456789"))
+	for _, callID := range []string{"declared", "undeclared"} {
+		result := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/" + callID}, callID)
+		if fetchOutputContent(t, result) != "01234" || !strings.Contains(result, "truncated: true") || strings.Contains(result, "next_cursor: ") {
+			t.Fatalf("%s truncated result = %s", callID, result)
+		}
+	}
+}
+
+func TestFetchToolReportsTruncationOnEveryPage(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	settings.MaxResponseBytes = 8
+	settings.TruncateOversizedResponse = true
+	tool, requester := newFetchTestTool(t, settings, NewFetchStore(settings.StorageDir), fetchTestResponse(http.StatusOK, "text/plain", "01234567890"))
+	limit := json.Number("3")
+	first := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/pages", "limit": limit}, "p1")
+	second := executeFetchTestTool(t, tool, map[string]any{"cursor": fetchOutputCursor(t, first), "limit": limit}, "p2")
+	third := executeFetchTestTool(t, tool, map[string]any{"cursor": fetchOutputCursor(t, second), "limit": limit}, "p3")
+	for index, page := range []struct{ output, content string }{{first, "012"}, {second, "345"}, {third, "67"}} {
+		if fetchOutputContent(t, page.output) != page.content || !strings.Contains(page.output, "truncated: true") {
+			t.Fatalf("page %d = %s", index+1, page.output)
+		}
+	}
+	if strings.Contains(third, "next_cursor: ") || len(requester.targets) != 1 {
+		t.Fatalf("last page = %s, requests = %d", third, len(requester.targets))
+	}
+}
+
+func TestFetchToolTruncationDropsPartialRuneAndCutHTMLTag(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	settings.MaxResponseBytes = 3
+	settings.TruncateOversizedResponse = true
+	tool, _ := newFetchTestTool(t, settings, NewFetchStore(settings.StorageDir), fetchTestResponse(http.StatusOK, "text/plain", "abé"))
+	result := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/rune"}, "rune")
+	if got := fetchOutputContent(t, result); got != "ab" || strings.Contains(result, "\uFFFD") || !strings.Contains(result, "truncated: true") {
+		t.Fatalf("multibyte cut result = %q in %s", got, result)
+	}
+
+	html := `<html><head><title>Cut page</title></head><body><h1>Heading</h1><p>Hello <a href="https://example.com/long/path">link</a></p></body></html>`
+	settings = fetchTestSettings(t.TempDir())
+	settings.MaxResponseBytes = int64(strings.Index(html, `href="`) + len(`href="https://exa`))
+	settings.TruncateOversizedResponse = true
+	tool, _ = newFetchTestTool(t, settings, NewFetchStore(settings.StorageDir), fetchTestResponse(http.StatusOK, "text/html", html))
+	result = executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/html", "limit": json.Number("256")}, "html")
+	content := fetchOutputContent(t, result)
+	if !strings.Contains(result, "truncated: true") || !strings.Contains(content, "# Heading") || !strings.Contains(content, "Hello") || strings.Contains(content, "href") || strings.Contains(content, "\uFFFD") {
+		t.Fatalf("cut-mid-tag HTML result = %s", result)
+	}
+}
+
+func TestFetchToolCacheTTLControlsRepeatRequests(t *testing.T) {
+	for _, test := range []struct {
+		ttlMS    int64
+		requests int
+	}{{0, 2}, {60_000, 1}} {
+		settings := fetchTestSettings(t.TempDir())
+		settings.CacheTTLMS = test.ttlMS
+		tool, requester := newFetchTestTool(t, settings, NewFetchStore(settings.StorageDir),
+			fetchTestResponse(http.StatusOK, "text/plain", "cached body"), fetchTestResponse(http.StatusOK, "text/plain", "cached body"))
+		first := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/cache"}, "one")
+		second := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/cache"}, "two")
+		if len(requester.targets) != test.requests || fetchOutputContent(t, second) != fetchOutputContent(t, first) {
+			t.Fatalf("cache_ttl_ms=%d made %d requests, want %d; second = %s", test.ttlMS, len(requester.targets), test.requests, second)
+		}
+	}
+}
+
+func TestFetchToolCacheHitsOnRedirectFinalURLAndReportsRequestURL(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	settings.CacheTTLMS = 60_000
+	tool, requester := newFetchTestTool(t, settings, NewFetchStore(settings.StorageDir),
+		&http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{"/next"}}, Body: io.NopCloser(strings.NewReader(""))},
+		fetchTestResponse(http.StatusOK, "text/plain", "next page"))
+	executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/start"}, "start")
+	hit := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/next"}, "final")
+	if len(requester.targets) != 2 || fetchOutputContent(t, hit) != "next page" || !strings.Contains(hit, "\nurl: https://example.com/next") {
+		t.Fatalf("final_url cache hit = %s, requests = %d", hit, len(requester.targets))
+	}
+	again := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/start"}, "start-again")
+	if len(requester.targets) != 2 || !strings.Contains(again, "url: https://example.com/start") || !strings.Contains(again, "final_url: https://example.com/next") {
+		t.Fatalf("requested-URL cache hit = %s, requests = %d", again, len(requester.targets))
+	}
+}
+
+func TestFetchToolCacheExpiresByStoreClock(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	settings.CacheTTLMS = 1_000
+	store := NewFetchStore(settings.StorageDir)
+	current := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+	tool, requester := newFetchTestTool(t, settings, store,
+		fetchTestResponse(http.StatusOK, "text/plain", "old"), fetchTestResponse(http.StatusOK, "text/plain", "new"))
+	executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/expire"}, "one")
+	current = current.Add(999 * time.Millisecond)
+	if hit := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/expire"}, "within"); fetchOutputContent(t, hit) != "old" || len(requester.targets) != 1 {
+		t.Fatalf("hit inside ttl = %s, requests = %d", hit, len(requester.targets))
+	}
+	current = current.Add(time.Second)
+	expired := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/expire"}, "after")
+	if fetchOutputContent(t, expired) != "new" || len(requester.targets) != 2 {
+		t.Fatalf("expired entry result = %s, requests = %d", expired, len(requester.targets))
+	}
+}
+
+func TestFetchToolCacheHitRechecksHostPolicy(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	settings.CacheTTLMS = 60_000
+	store := NewFetchStore(settings.StorageDir)
+	tool, _ := newFetchTestTool(t, settings, store, fetchTestResponse(http.StatusOK, "text/plain", "public"))
+	executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/policy"}, "one")
+
+	denied := settings
+	denied.DeniedHosts = []string{"example.com"}
+	deniedTool, requester := newFetchTestTool(t, denied, store)
+	result := executeFetchTestTool(t, deniedTool, map[string]any{"url": "https://example.com/policy"}, "denied")
+	if !strings.Contains(result, "host_denied") || strings.Contains(result, "public") || len(requester.targets) != 0 {
+		t.Fatalf("cached URL on a denied host = %s", result)
+	}
+}
+
+func TestFetchToolCacheHitKeepsTruncatedFlag(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	settings.MaxResponseBytes = 5
+	settings.TruncateOversizedResponse = true
+	settings.CacheTTLMS = 60_000
+	tool, requester := newFetchTestTool(t, settings, NewFetchStore(settings.StorageDir), fetchTestResponse(http.StatusOK, "text/plain", "0123456789"))
+	first := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/cut"}, "one")
+	hit := executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/cut"}, "two")
+	if len(requester.targets) != 1 || fetchOutputContent(t, hit) != "01234" || !strings.Contains(first, "truncated: true") || !strings.Contains(hit, "truncated: true") {
+		t.Fatalf("cache hit = %s, requests = %d", hit, len(requester.targets))
+	}
+}
+
+func TestFetchToolCacheHitRechecksDeniedFinalURLHost(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	settings.CacheTTLMS = 60_000
+	store := NewFetchStore(settings.StorageDir)
+	tool, _ := newFetchTestTool(t, settings, store,
+		&http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{"https://b.example/next"}}, Body: io.NopCloser(strings.NewReader(""))},
+		fetchTestResponse(http.StatusOK, "text/plain", "on b"))
+	executeFetchTestTool(t, tool, map[string]any{"url": "https://a.example/start"}, "one")
+
+	denied := settings
+	denied.DeniedHosts = []string{"b.example"}
+	deniedTool, requester := newFetchTestTool(t, denied, store)
+	result := executeFetchTestTool(t, deniedTool, map[string]any{"url": "https://a.example/start"}, "denied")
+	if strings.Contains(result, "on b") || len(requester.targets) != 1 {
+		t.Fatalf("want refused hit and one fall-through download, got result = %s, requests = %d", result, len(requester.targets))
+	}
+}
+
+func TestFetchToolCacheHitWorksWhenStorageIsFull(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	settings.CacheTTLMS = 60_000
+	store := NewFetchStore(settings.StorageDir)
+	tool, _ := newFetchTestTool(t, settings, store, fetchTestResponse(http.StatusOK, "text/plain", "stored"))
+	executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/full"}, "one")
+
+	full := settings
+	full.MaxStorageBytes = 1
+	fullTool, requester := newFetchTestTool(t, full, store)
+	hit := executeFetchTestTool(t, fullTool, map[string]any{"url": "https://example.com/full"}, "full")
+	if fetchOutputContent(t, hit) != "stored" || len(requester.targets) != 0 {
+		t.Fatalf("cache hit with full storage = %s", hit)
 	}
 }
 

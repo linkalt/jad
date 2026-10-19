@@ -5,28 +5,38 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
-	defaultNativeFetchStorageDir            = ".fetch"
-	defaultNativeFetchIncludeMetadata       = false
-	defaultNativeFetchIncludeImages         = false
-	defaultNativeFetchLimit           int64 = 12_000
-	defaultNativeFetchMaxLimit        int64 = 50_000
-	defaultNativeFetchResponseBytes   int64 = 2_000_000
-	defaultNativeFetchDocumentChars   int64 = 1_000_000
-	defaultNativeFetchStorageBytes    int64 = 64 * 1024 * 1024
-	defaultNativeFetchTimeoutMS       int64 = 15_000
-	defaultNativeFetchMaxRedirects    int64 = 5
-	defaultNativeFetchKeepAliveMS     int64 = 30_000
-	defaultNativeFetchKeepAliveHosts  int64 = 8
-	maxNativeFetchTimeoutMS           int64 = 300_000
-	maxNativeFetchKeepAliveHosts      int64 = 64
-	maxNativeFetchRedirects           int64 = 20
+	defaultNativeFetchStorageDir              = ".fetch"
+	defaultNativeFetchIncludeMetadata         = false
+	defaultNativeFetchIncludeImages           = false
+	defaultNativeFetchUserAgent               = "Mozilla/5.0 (compatible; jad-fetch/1.0)"
+	defaultNativeFetchTruncateOversized       = false
+	defaultNativeFetchCacheTTLMS        int64 = 0
+	maxNativeFetchUserAgentChars              = 512
+	maxNativeFetchCacheTTLMS            int64 = 86_400_000
+	defaultNativeFetchLimit             int64 = 12_000
+	defaultNativeFetchMaxLimit          int64 = 50_000
+	defaultNativeFetchResponseBytes     int64 = 2_000_000
+	defaultNativeFetchDocumentChars     int64 = 1_000_000
+	defaultNativeFetchStorageBytes      int64 = 64 * 1024 * 1024
+	defaultNativeFetchTimeoutMS         int64 = 15_000
+	defaultNativeFetchMaxRedirects      int64 = 5
+	defaultNativeFetchKeepAliveMS       int64 = 30_000
+	defaultNativeFetchKeepAliveHosts    int64 = 8
+	maxNativeFetchTimeoutMS             int64 = 300_000
+	maxNativeFetchKeepAliveHosts        int64 = 64
+	maxNativeFetchRedirects             int64 = 20
 )
 
 var nativeFetchHostPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$`)
+
+var nativeFetchKeys = []string{"storage_dir", "default_limit", "max_limit", "max_response_bytes", "max_document_chars", "max_storage_bytes", "timeout_ms", "max_redirects", "keep_alive_ms", "max_keep_alive_hosts", "include_metadata", "include_images", "user_agent", "truncate_oversized_response", "cache_ttl_ms", "allowed_hosts", "denied_hosts"}
 
 // NativeFetchSettings contains normalized network, document, and storage limits
 // for native.fetch.
@@ -46,8 +56,14 @@ type NativeFetchSettings struct {
 	MaxKeepAliveHosts int64
 	IncludeMetadata   bool
 	IncludeImages     bool
-	AllowedHosts      []string
-	DeniedHosts       []string
+	UserAgent         string
+	// TruncateOversizedResponse stores the first MaxResponseBytes of a larger
+	// response instead of failing.
+	TruncateOversizedResponse bool
+	// CacheTTLMS is how long a fetched URL is served from its stored document; 0 disables.
+	CacheTTLMS   int64
+	AllowedHosts []string
+	DeniedHosts  []string
 }
 
 func normalizeNativeFetchSettings(setting map[string]json.RawMessage, settingPath, cwd, toolStorageDir string) (*NativeFetchSettings, error) {
@@ -76,9 +92,7 @@ func normalizeNativeFetchSettings(setting map[string]json.RawMessage, settingPat
 		return nil, err
 	}
 	for key := range fields {
-		switch key {
-		case "storage_dir", "default_limit", "max_limit", "max_response_bytes", "max_document_chars", "max_storage_bytes", "timeout_ms", "max_redirects", "keep_alive_ms", "max_keep_alive_hosts", "include_metadata", "include_images", "allowed_hosts", "denied_hosts":
-		default:
+		if !slices.Contains(nativeFetchKeys, key) {
 			return nil, configError("%s: tools.native.fetch.%s is not supported", settingPath, key)
 		}
 	}
@@ -117,6 +131,15 @@ func normalizeNativeFetchSettings(setting map[string]json.RawMessage, settingPat
 	if settings.IncludeImages, err = nativeFetchBoolean(fields, "include_images", defaultNativeFetchIncludeImages, settingPath); err != nil {
 		return nil, err
 	}
+	if settings.UserAgent, err = nativeFetchUserAgent(fields, settingPath); err != nil {
+		return nil, err
+	}
+	if settings.TruncateOversizedResponse, err = nativeFetchBoolean(fields, "truncate_oversized_response", defaultNativeFetchTruncateOversized, settingPath); err != nil {
+		return nil, err
+	}
+	if settings.CacheTTLMS, err = configuredInteger(fields, "cache_ttl_ms", defaultNativeFetchCacheTTLMS, 0, maxNativeFetchCacheTTLMS, settingPath, "tools.native.fetch"); err != nil {
+		return nil, err
+	}
 	if settings.AllowedHosts, err = nativeFetchHosts(fields, "allowed_hosts", settingPath); err != nil {
 		return nil, err
 	}
@@ -141,6 +164,23 @@ func nativeFetchBoolean(fields map[string]json.RawMessage, name string, fallback
 	var value bool
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return false, configError("%s: tools.native.fetch.%s must be a boolean", settingPath, name)
+	}
+	return value, nil
+}
+
+func nativeFetchUserAgent(fields map[string]json.RawMessage, settingPath string) (string, error) {
+	raw, exists := fields["user_agent"]
+	if !exists || strings.TrimSpace(string(raw)) == "null" {
+		return defaultNativeFetchUserAgent, nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", configError("%s: tools.native.fetch.user_agent must be a string of 1 to %d characters without control characters", settingPath, maxNativeFetchUserAgentChars)
+	}
+	value = strings.TrimSpace(value)
+	count := utf8.RuneCountInString(value)
+	if count < 1 || count > maxNativeFetchUserAgentChars || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return "", configError("%s: tools.native.fetch.user_agent must be a string of 1 to %d characters without control characters", settingPath, maxNativeFetchUserAgentChars)
 	}
 	return value, nil
 }

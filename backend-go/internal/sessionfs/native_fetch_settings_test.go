@@ -2,7 +2,10 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -66,6 +69,79 @@ func TestNormalizeNativeFetchSettingsKeepAlive(t *testing.T) {
 	}
 }
 
+func TestNormalizeNativeFetchSettingsUserAgentTruncateAndCache(t *testing.T) {
+	cwd := t.TempDir()
+	load := func(raw string) (*NativeFetchSettings, error) {
+		return normalizeNativeFetchSettings(map[string]json.RawMessage{
+			"tools": json.RawMessage(`{"native":{"fetch":` + raw + `}}`),
+		}, "/session/setting.json", cwd, "")
+	}
+	for _, raw := range []string{`{}`, `{"user_agent":null,"truncate_oversized_response":null,"cache_ttl_ms":null}`} {
+		defaults, err := load(raw)
+		if err != nil || defaults.UserAgent != "Mozilla/5.0 (compatible; jad-fetch/1.0)" || defaults.TruncateOversizedResponse || defaults.CacheTTLMS != 0 {
+			t.Fatalf("defaults for %s = %+v, %v", raw, defaults, err)
+		}
+	}
+	custom, err := load(`{"user_agent":"  my-bot/2.0  ","truncate_oversized_response":true,"cache_ttl_ms":86400000}`)
+	if err != nil || custom.UserAgent != "my-bot/2.0" || !custom.TruncateOversizedResponse || custom.CacheTTLMS != 86_400_000 {
+		t.Fatalf("overrides = %+v, %v", custom, err)
+	}
+	if long, err := load(`{"user_agent":"` + strings.Repeat("a", 512) + `"}`); err != nil || len(long.UserAgent) != 512 {
+		t.Fatalf("512-character user agent = %+v, %v", long, err)
+	}
+}
+
+// The schema in sample/schemes is the user-facing contract for tools.native.fetch.
+func TestFetchSchemaListsTheKeysTheLoaderAccepts(t *testing.T) {
+	data, err := os.ReadFile("../../../sample/schemes/setting.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Tools struct {
+				Properties struct {
+					Native struct {
+						Properties struct {
+							Fetch struct {
+								Properties map[string]struct {
+									Default any `json:"default"`
+								} `json:"properties"`
+							} `json:"fetch"`
+						} `json:"properties"`
+					} `json:"native"`
+				} `json:"properties"`
+			} `json:"tools"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	properties := schema.Properties.Tools.Properties.Native.Properties.Fetch.Properties
+	var got []string
+	for key := range properties {
+		got = append(got, key)
+	}
+	want := append([]string(nil), nativeFetchKeys...)
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("schema keys %v, loader accepts %v", got, want)
+	}
+	defaults := map[string]any{
+		"user_agent":                  defaultNativeFetchUserAgent,
+		"truncate_oversized_response": defaultNativeFetchTruncateOversized,
+		"cache_ttl_ms":                float64(defaultNativeFetchCacheTTLMS),
+		"include_metadata":            defaultNativeFetchIncludeMetadata,
+		"include_images":              defaultNativeFetchIncludeImages,
+	}
+	for key, value := range defaults {
+		if properties[key].Default != value {
+			t.Errorf("schema default of %s = %v, loader default %v", key, properties[key].Default, value)
+		}
+	}
+}
+
 func TestNormalizeNativeFetchSettingsRejectsInvalidSettings(t *testing.T) {
 	cwd := t.TempDir()
 	for _, raw := range []string{
@@ -75,6 +151,14 @@ func TestNormalizeNativeFetchSettingsRejectsInvalidSettings(t *testing.T) {
 		`{"timeout_ms":300001}`,
 		`{"include_metadata":"yes"}`,
 		`{"include_images":1}`,
+		`{"user_agent":""}`,
+		`{"user_agent":"   "}`,
+		`{"user_agent":"bad\nagent"}`,
+		`{"user_agent":"` + strings.Repeat("a", 513) + `"}`,
+		`{"user_agent":7}`,
+		`{"cache_ttl_ms":-1}`,
+		`{"cache_ttl_ms":86400001}`,
+		`{"truncate_oversized_response":"yes"}`,
 		`{"allowed_hosts":["*.example.com"]}`,
 		`{"denied_hosts":[" bad.example"]}`,
 		`{"storage_dir":"  "}`,

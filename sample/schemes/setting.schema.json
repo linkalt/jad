@@ -1498,6 +1498,11 @@
                 "max_redirects": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
                 "keep_alive_ms": {"type": "integer", "minimum": 0, "maximum": 300000, "default": 30000, "description": "How long an idle connection to a fetched host stays open so the next fetch from that host skips the TCP and TLS handshake. 0 opens a fresh connection for every request. A connection is reused only for the exact validated IP address."},
                 "max_keep_alive_hosts": {"type": "integer", "minimum": 1, "maximum": 64, "default": 8, "description": "How many hosts may keep an idle connection open at once; the least recently used host is closed first."},
+                "include_metadata": {"type": "boolean", "default": false, "description": "Include document metadata in the fetch result."},
+                "include_images": {"type": "boolean", "default": false, "description": "Include images in the converted Markdown."},
+                "user_agent": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$", "default": "Mozilla/5.0 (compatible; jad-fetch/1.0)", "description": "User-Agent header sent with every fetch request. Control characters are rejected."},
+                "truncate_oversized_response": {"type": "boolean", "default": false, "description": "When a response exceeds max_response_bytes, store the first max_response_bytes instead of failing; the stored document is marked truncated: true."},
+                "cache_ttl_ms": {"type": "integer", "minimum": 0, "maximum": 86400000, "default": 0, "description": "How long a repeated url call reuses the stored document instead of downloading again. 0 disables the cache."},
                 "allowed_hosts": {"type": "array", "items": {"type": "string"}, "default": []},
                 "denied_hosts": {"type": "array", "items": {"type": "string"}, "default": []}
               },

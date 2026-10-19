@@ -29,6 +29,7 @@ type FetchDocument struct {
 	Status      int
 	FetchedAt   string
 	Markdown    string
+	Truncated   bool
 }
 
 type storedFetchMetadata struct {
@@ -39,6 +40,7 @@ type storedFetchMetadata struct {
 	ContentType string `json:"contentType"`
 	Status      int    `json:"status"`
 	FetchedAt   string `json:"fetchedAt"`
+	Truncated   bool   `json:"truncated,omitempty"`
 }
 
 // FetchPage is one character-bounded page of a stored document.
@@ -66,6 +68,15 @@ type FetchStore struct {
 	// transports holds the keep-alive connections of native.fetch calls that share
 	// this store.
 	transports fetchTransportPool
+
+	cacheMu  sync.Mutex
+	urlIndex map[string]fetchURLEntry
+	now      func() time.Time
+}
+
+type fetchURLEntry struct {
+	documentID string
+	expiresAt  time.Time
 }
 
 func NewFetchStore(directory string) *FetchStore {
@@ -89,6 +100,7 @@ func (s *FetchStore) Create(document FetchDocument, policy sessionfs.NativeFetch
 	metadata := storedFetchMetadata{
 		ID: id, URL: document.URL, FinalURL: document.FinalURL, Title: document.Title,
 		ContentType: document.ContentType, Status: document.Status, FetchedAt: document.FetchedAt,
+		Truncated: document.Truncated,
 	}
 	metadataBytes, err := marshalFetchMetadata(metadata)
 	if err != nil {
@@ -152,7 +164,7 @@ func (s *FetchStore) Page(cursor string, limit int64) (FetchPage, error) {
 		Document: FetchDocument{
 			ID: metadata.ID, URL: metadata.URL, FinalURL: metadata.FinalURL, Title: metadata.Title,
 			ContentType: metadata.ContentType, Status: metadata.Status, FetchedAt: metadata.FetchedAt,
-			Markdown: markdown,
+			Markdown: markdown, Truncated: metadata.Truncated,
 		},
 		Content: content,
 	}
@@ -177,6 +189,58 @@ func (s *FetchStore) CreatePage(document FetchDocument, limit int64, policy sess
 		page.NextCursor = fetchCursor(stored.ID, consumed)
 	}
 	return page, nil
+}
+
+func (s *FetchStore) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+// rememberURLs indexes the document under each URL and sweeps expired entries.
+func (s *FetchStore) rememberURLs(urls []string, documentID string, ttl time.Duration) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	now := s.clock()
+	for key, entry := range s.urlIndex {
+		if !now.Before(entry.expiresAt) {
+			delete(s.urlIndex, key)
+		}
+	}
+	if s.urlIndex == nil {
+		s.urlIndex = map[string]fetchURLEntry{}
+	}
+	for _, url := range urls {
+		if url != "" {
+			s.urlIndex[url] = fetchURLEntry{documentID: documentID, expiresAt: now.Add(ttl)}
+		}
+	}
+}
+
+// cachedPage returns page one of the unexpired document indexed for url.
+func (s *FetchStore) cachedPage(url string, limit int64) (FetchPage, bool) {
+	s.cacheMu.Lock()
+	entry, ok := s.urlIndex[url]
+	if ok && !s.clock().Before(entry.expiresAt) {
+		delete(s.urlIndex, url)
+		ok = false
+	}
+	s.cacheMu.Unlock()
+	if !ok {
+		return FetchPage{}, false
+	}
+	page, err := s.Page(fetchCursor(entry.documentID, 0), limit)
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	if s.urlIndex[url] != entry {
+		return FetchPage{}, false
+	}
+	if err != nil {
+		delete(s.urlIndex, url)
+		return FetchPage{}, false
+	}
+	return page, true
 }
 
 func parseFetchCursor(cursor string) (string, int64, error) {

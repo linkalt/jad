@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	brotli "github.com/andybalholm/brotli"
 	htmltomarkdown "github.com/xberg-io/html-to-markdown/packages/go/v3"
@@ -89,6 +90,7 @@ type pinnedFetchRequester struct {
 	pool      *fetchTransportPool
 	keepAlive time.Duration
 	maxHosts  int
+	userAgent string
 }
 
 type fetchRequestError struct {
@@ -107,7 +109,7 @@ func NewFetchTool(settings sessionfs.NativeFetchSettings, store *FetchStore) (to
 }
 
 func newPinnedFetchRequester(settings sessionfs.NativeFetchSettings, store *FetchStore) pinnedFetchRequester {
-	return pinnedFetchRequester{pool: &store.transports, keepAlive: time.Duration(settings.KeepAliveMS) * time.Millisecond, maxHosts: int(settings.MaxKeepAliveHosts)}
+	return pinnedFetchRequester{pool: &store.transports, keepAlive: time.Duration(settings.KeepAliveMS) * time.Millisecond, maxHosts: int(settings.MaxKeepAliveHosts), userAgent: settings.UserAgent}
 }
 
 func newFetchTool(settings sessionfs.NativeFetchSettings, store *FetchStore, resolver fetchIPResolver, requester fetchRequester) (tools.Tool, error) {
@@ -204,6 +206,24 @@ func executeNativeFetch(ctx context.Context, arguments map[string]any, settings 
 		}
 	}
 
+	cacheTTL := time.Duration(settings.CacheTTLMS) * time.Millisecond
+	if cacheTTL > 0 && urlValue != "" {
+		lookupContext := ctx
+		if lookupContext == nil {
+			lookupContext = context.Background()
+		}
+		lookupContext, cancelLookup := context.WithTimeout(lookupContext, time.Duration(settings.TimeoutMS)*time.Millisecond)
+		defer cancelLookup()
+		if _, err := validateFetchURL(lookupContext, urlValue, settings, resolver); err == nil {
+			if cached, ok := store.cachedPage(urlValue, limit); ok {
+				if _, err := validateFetchURL(lookupContext, cached.Document.FinalURL, settings, resolver); err == nil {
+					cached.Document.URL = urlValue
+					return renderFetchPage(execution.CallID, cached)
+				}
+			}
+		}
+	}
+
 	document, err := retrieveFetchDocument(ctx, urlValue, settings, resolver, requester)
 	if err != nil {
 		var requestError *fetchRequestError
@@ -224,6 +244,9 @@ func executeNativeFetch(ctx context.Context, arguments map[string]any, settings 
 		}
 		return fetchExecutionError(execution.CallID, tools.StatusError, "fetch_failed", err.Error()), nil
 	}
+	if cacheTTL > 0 {
+		store.rememberURLs([]string{urlValue, page.Document.FinalURL}, page.Document.ID, cacheTTL)
+	}
 	return renderFetchPage(execution.CallID, page)
 }
 
@@ -237,12 +260,18 @@ func renderFetchPage(callID string, page FetchPage) (string, error) {
 	if page.Document.Title != "" {
 		information = append(information, tools.Information{Key: "title", Value: page.Document.Title})
 	}
+	if page.Document.Truncated {
+		information = append(information, tools.Information{Key: "truncated", Value: true})
+	}
 	if page.NextCursor != "" {
 		information = append(information, tools.Information{Key: "next_cursor", Value: page.NextCursor})
 	}
 	summary := "Document fetched"
 	if page.NextCursor != "" {
 		summary = "Document fetched; more content is available"
+	}
+	if page.Document.Truncated {
+		summary += "; the source was cut at the response byte limit"
 	}
 	return tools.RenderToolResult(tools.ResultOptions{
 		ID: callID, Status: tools.StatusOK, Summary: summary,
@@ -311,7 +340,7 @@ func retrieveFetchDocument(ctx context.Context, urlValue string, settings sessio
 			closeFetchResponse(response)
 			return FetchDocument{}, &fetchRequestError{Code: "unsupported_content_type", Message: "response content type is not a supported text format"}
 		}
-		body, err := readFetchResponse(response, settings.MaxResponseBytes)
+		body, truncated, err := readFetchResponseTruncating(response, settings.MaxResponseBytes, settings.TruncateOversizedResponse)
 		if err != nil {
 			if requestContext.Err() != nil {
 				return FetchDocument{}, fetchTimeoutError()
@@ -351,6 +380,7 @@ func retrieveFetchDocument(ctx context.Context, urlValue string, settings sessio
 		return FetchDocument{
 			URL: urlValue, FinalURL: target.URL.String(), Title: pageTitle,
 			ContentType: contentType, Status: response.StatusCode, Markdown: markdown,
+			Truncated: truncated,
 		}, nil
 	}
 }
@@ -544,6 +574,9 @@ func (r pinnedFetchRequester) Do(ctx context.Context, target validatedFetchURL) 
 	}
 	request.Header.Set("Accept", "text/*, application/*")
 	request.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	if r.userAgent != "" {
+		request.Header.Set("User-Agent", r.userAgent)
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		release()
@@ -566,18 +599,32 @@ func (b *fetchResponseBody) Close() error {
 	return err
 }
 
+func fetchTooLargeError(maximum, declared int64) error {
+	message := fmt.Sprintf("response exceeds the configured limit of %d bytes", maximum)
+	if declared > 0 {
+		message += fmt.Sprintf(" (Content-Length is %d)", declared)
+	}
+	message += ". Fetch a narrower URL (a single article, a raw, text or print version, or a filtered or paginated variant) or raise tools.native.fetch.max_response_bytes, or set tools.native.fetch.truncate_oversized_response to store the first part of the response."
+	return &fetchRequestError{Code: "response_too_large", Message: message}
+}
+
 func readFetchResponse(response *http.Response, maximum int64) ([]byte, error) {
+	contents, _, err := readFetchResponseTruncating(response, maximum, false)
+	return contents, err
+}
+
+func readFetchResponseTruncating(response *http.Response, maximum int64, truncate bool) ([]byte, bool, error) {
 	defer closeFetchResponse(response)
 	if response.Body == nil {
-		return []byte{}, nil
+		return []byte{}, false, nil
 	}
 	if maximum < 1 {
 		maximum = 1
 	}
 	encoding := strings.ToLower(strings.TrimSpace(response.Header.Get("Content-Encoding")))
-	if encoding == "" || encoding == "identity" {
+	if !truncate && (encoding == "" || encoding == "identity") {
 		if declared, err := strconv.ParseInt(response.Header.Get("Content-Length"), 10, 64); err == nil && declared > maximum {
-			return nil, &fetchRequestError{Code: "response_too_large", Message: "response exceeds configured byte limit"}
+			return nil, false, fetchTooLargeError(maximum, declared)
 		}
 	}
 	var body io.Reader = response.Body
@@ -587,19 +634,19 @@ func readFetchResponse(response *http.Response, maximum int64) ([]byte, error) {
 	case "gzip":
 		reader, err := gzip.NewReader(response.Body)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		body, decoder = reader, reader
 	case "deflate":
 		reader, err := zlib.NewReader(response.Body)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		body, decoder = reader, reader
 	case "br":
 		body = brotli.NewReader(response.Body)
 	default:
-		return nil, &fetchRequestError{Code: "unsupported_content_encoding", Message: "response content encoding is not supported"}
+		return nil, false, &fetchRequestError{Code: "unsupported_content_encoding", Message: "response content encoding is not supported"}
 	}
 	if decoder != nil {
 		defer decoder.Close()
@@ -607,12 +654,24 @@ func readFetchResponse(response *http.Response, maximum int64) ([]byte, error) {
 	limited := io.LimitReader(body, maximum+1)
 	contents, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if int64(len(contents)) > maximum {
-		return nil, &fetchRequestError{Code: "response_too_large", Message: "response exceeds configured byte limit"}
+		if !truncate {
+			return nil, false, fetchTooLargeError(maximum, 0)
+		}
+		contents = contents[:maximum]
+		for back := 1; back <= utf8.UTFMax && back <= len(contents); back++ {
+			if utf8.RuneStart(contents[len(contents)-back]) {
+				if !utf8.FullRune(contents[len(contents)-back:]) {
+					contents = contents[:len(contents)-back]
+				}
+				break
+			}
+		}
+		return contents, true, nil
 	}
-	return contents, nil
+	return contents, false, nil
 }
 
 func closeFetchResponse(response *http.Response) {
