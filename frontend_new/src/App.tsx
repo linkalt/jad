@@ -503,10 +503,24 @@ function App({
         : message,
     ));
   }, []);
+  // The lane renders inside the conversation frame, never wider than it, so the
+  // frame's measured width is the lane's real ceiling. Without it a saved width
+  // larger than the window stays in the region: the border is drawn clamped, a
+  // drag spends its first pixels shrinking the invisible excess, and the border
+  // does not move. Zero before the first measurement, which keeps the configured
+  // maximum until there is a real one.
+  const [conversationFrameRef, conversationFramePx] = useElementWidth();
+  const laneMaxPx =
+    conversationFramePx > 0
+      ? Math.max(
+          appConfig.conversation_lane_min_size,
+          conversationFramePx - 2 * appConfig.conversation_lane_grab_size,
+        )
+      : appConfig.conversation_lane_max_size;
   const conversation = useResizable({
     defaultSize: pixel(appConfig.conversation_lane_default_size),
     minSize: pixel(appConfig.conversation_lane_min_size),
-    maxSize: pixel(appConfig.conversation_lane_max_size),
+    maxSize: pixel(laneMaxPx),
     direction: 'horizontal',
     autoSaveId: 'jad-conversation-width',
   });
@@ -3475,12 +3489,24 @@ function App({
                 </VisuallyHidden>
               )}
               <HStack
+                ref={conversationFrameRef}
                 align="stretch"
                 justify="center"
                 gap={0}
                 width="100%"
                 height="100%"
                 xstyle={styles.conversationFrame}
+                // A single pane's two dividers sit just outside the lane, and each
+                // grab zone is wider than its line. Without room reserved for it a
+                // lane that reaches the frame edge puts both zones past the edge —
+                // outside the visible area, where nothing can be seen or clicked —
+                // so the frame keeps the grab width free on each side exactly when
+                // those dividers are shown.
+                style={
+                  shownPaneKeys.length === 1 && !isMobile
+                    ? {paddingInline: appConfig.conversation_lane_grab_size}
+                    : undefined
+                }
               >
                 {/* The handles size one lane. With several panes the panes share
                     the whole area, so a lane width would only fight them; a phone
@@ -3490,7 +3516,6 @@ function App({
                     direction="horizontal"
                     isReversed
                     hasDivider={false}
-                    isAlwaysVisible={false}
                     xstyle={styles.composerResizeHandle}
                     // The grab zone is wider than the divider line, and it has to
                     // sit on the far side of it: this handle's other side is the
@@ -3499,9 +3524,7 @@ function App({
                     pillPlacement="start"
                     label="Resize conversation width from left border"
                     resizable={conversation.props}
-                  >
-                    <VisuallyHidden>Resize conversation width from left border</VisuallyHidden>
-                  </ResizeHandle>
+                  />
                 )}
                 <HStack
                   ref={paneGroupRef}
@@ -3652,16 +3675,13 @@ function App({
                   <ResizeHandle
                     direction="horizontal"
                     hasDivider={false}
-                    isAlwaysVisible={false}
                     xstyle={styles.composerResizeHandle}
                     // Same reason as the left border: the zone sits outside the
                     // lane, so the transcript's scrollbar stays clickable.
                     pillPlacement="end"
                     label="Resize conversation width from right border"
                     resizable={conversation.props}
-                  >
-                    <VisuallyHidden>Resize conversation width from right border</VisuallyHidden>
-                  </ResizeHandle>
+                  />
                 )}
               </HStack>
             </LayoutContent>

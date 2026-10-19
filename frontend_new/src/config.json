@@ -30,6 +30,7 @@
   "conversation_lane_default_size": 1000,
   "conversation_lane_min_size": 520,
   "conversation_lane_max_size": 2400,
+  "conversation_lane_grab_size": 16,
   "inspector_default_size": 360,
   "inspector_min_size": 280,
   "inspector_max_size": 640,
