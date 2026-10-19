@@ -69,6 +69,7 @@ func TestSubagentDenyAgentsSchemaAgreesWithTheLoader(t *testing.T) {
 	for value, ok := range map[string]bool{
 		`["a","b-1"]`:   true,
 		`[]`:            true,
+		`null`:          true,
 		`"a"`:           false,
 		`[1]`:           false,
 		`["a","a"]`:     false,
@@ -92,12 +93,13 @@ func TestSubagentDenyAgentsHigherLayerReplacesClearsOrKeepsTheList(t *testing.T)
 		return map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"subagent":` + subagent + `}}`)}
 	}
 	for name, tc := range map[string]struct {
-		higher string
-		want   string
+		higher    string
+		want      string
+		aSurvives bool
 	}{
-		"replaced": {`{"deny_agents":["b"]}`, "b"},
-		"cleared":  {`{"deny_agents":[]}`, ""},
-		"kept":     {`{"agents":{"c":{}}}`, "a"},
+		"replaced": {`{"deny_agents":["b"]}`, "b", true},
+		"cleared":  {`{"deny_agents":[]}`, "", true},
+		"kept":     {`{"agents":{"c":{}}}`, "a", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			merged := mergeSettings(layer(`{"agents":{"a":{}},"deny_agents":["a"]}`), layer(tc.higher))
@@ -107,6 +109,9 @@ func TestSubagentDenyAgentsHigherLayerReplacesClearsOrKeepsTheList(t *testing.T)
 			}
 			if strings.Join(got.DenyAgents, ",") != tc.want {
 				t.Fatalf("deny_agents = %v; want %q", got.DenyAgents, tc.want)
+			}
+			if _, found := got.Agent("a"); found != tc.aSurvives {
+				t.Fatalf("agent a found = %v, want %v (agents %+v)", found, tc.aSurvives, got.Agents)
 			}
 		})
 	}

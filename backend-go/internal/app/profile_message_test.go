@@ -243,9 +243,11 @@ func TestSameTranscriptResolvesASymlinkedFileAndMissingParents(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(realPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(realPath, nil, 0o644); err != nil && !os.IsExist(err) {
+	file, err := os.OpenFile(realPath, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
+	_ = file.Close()
 	link := filepath.Join(t.TempDir(), "link.jsonl")
 	if err := os.Symlink(realPath, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
@@ -253,12 +255,21 @@ func TestSameTranscriptResolvesASymlinkedFileAndMissingParents(t *testing.T) {
 	if !sameTranscript(link, coder) {
 		t.Fatal("a symlink to the messages file was not the same transcript")
 	}
-	missing := filepath.Join(t.TempDir(), "no", "such", "dir", "messages.jsonl")
+	tempDir := t.TempDir()
+	resolvedTempDir, err := filepath.EvalSymlinks(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(tempDir, "no", "such", "dir", "messages.jsonl")
 	if sameTranscript(missing, coder) {
 		t.Fatal("a path under a missing directory was reported as the same transcript")
 	}
-	if got, want := canonicalPath(missing), filepath.Clean(missing); got != want {
-		t.Fatalf("canonicalPath(%q) = %q, want the cleaned path", missing, got)
+	if got, want := canonicalPath(missing), filepath.Join(resolvedTempDir, "no", "such", "dir", "messages.jsonl"); got != want && got != filepath.Clean(missing) {
+		t.Fatalf("canonicalPath(%q) = %q, want the path under the resolved temp dir", missing, got)
+	}
+	missingFile := filepath.Join(tempDir, "absent.jsonl")
+	if got, want := canonicalPath(missingFile), filepath.Join(resolvedTempDir, "absent.jsonl"); got != want {
+		t.Fatalf("canonicalPath(%q) = %q, want %q (resolved parent plus the missing file name)", missingFile, got, want)
 	}
 }
 
@@ -511,7 +522,7 @@ func targetRunErrorCache(f *layoutFixture) string {
 
 func TestProfileMessageTimeoutCutsTheTargetRunEndToEnd(t *testing.T) {
 	f := newLayoutFixture(t)
-	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"profiles":["review/reviewer"],"timeout_ms":200}},"mcp":{}}`)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"profiles":["review/reviewer"],"timeout_ms":1000}},"mcp":{}}`)
 	f.captureBodies = true
 	holdTheTargetRun(f)
 	coder := boundRunnerOf(t, f, "dev/coder")
@@ -536,6 +547,7 @@ func TestProfileMessageTimeoutCutsTheTargetRunEndToEnd(t *testing.T) {
 		t.Fatal("the caller run did not finish after the timeout")
 	}
 	awaitSignal(t, f.cancelled, "the held provider request to be cancelled")
+	awaitTargetSessionFree(t, f)
 
 	f.mu.Lock()
 	last := f.bodies[len(f.bodies)-1]
@@ -565,11 +577,33 @@ func TestProfileMessageCallerCancelReachesTheTargetProviderRequest(t *testing.T)
 	cancel()
 	awaitSignal(t, f.cancelled, "the held provider request to be cancelled")
 	select {
-	case <-done:
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("caller run error = %v, want context.Canceled", err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the caller run did not return after cancel")
 	}
+	awaitTargetSessionFree(t, f)
 	if cache := targetRunErrorCache(f); strings.Contains(cache, profileRunFailureText) {
 		t.Fatalf("a cancelled target run was recorded as an error; cache: %s", cache)
+	}
+}
+
+// awaitTargetSessionFree returns once the target's session lock is free, which is after Message
+// has finished recording (or not recording) the target run's failure.
+func awaitTargetSessionFree(t *testing.T, f *layoutFixture) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		release, err := f.service.resolver.TryLockSession(context.Background(), "local:demo", "review/reviewer", "")
+		if err == nil {
+			release()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the target session lock stayed held: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

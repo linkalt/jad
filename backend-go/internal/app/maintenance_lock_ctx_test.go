@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -32,6 +33,27 @@ func TestMaintenanceWaitsOnTheRunLockEndWithTheContextError(t *testing.T) {
 			_, err := mutation.RestoreCheckpoint(ctx, "c1", httpapi.CheckpointRestoreRequest{DryRun: true})
 			return err
 		}},
+	}
+	// Each method checks the context before it touches the lock, so a free lock with a done
+	// context only reaches that early check; the re-check after LockCtx is not reachable here.
+	for _, tc := range cases {
+		t.Run(tc.name+"WithAFreeLockAndACancelledContext", func(t *testing.T) {
+			before, _ := os.ReadFile(bound.config.MessagesPath)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			for i := 0; i < 50; i++ {
+				if err := tc.call(ctx); !errors.Is(err, context.Canceled) {
+					t.Fatalf("iteration %d: error = %v, want context.Canceled", i, err)
+				}
+			}
+			if after, _ := os.ReadFile(bound.config.MessagesPath); string(after) != string(before) {
+				t.Fatal("a call with a cancelled context changed the transcript")
+			}
+			if err := bound.shared.runMu.LockCtx(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			bound.shared.runMu.Unlock()
+		})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
