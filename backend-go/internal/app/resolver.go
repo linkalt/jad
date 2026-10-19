@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"jad/backend-go/internal/httpapi"
@@ -69,6 +70,9 @@ type Resolver struct {
 	fetchStores      map[string]*native.FetchStore
 	mutationLock     *native.PathLocks
 	closed           bool
+
+	// profileRuns registers profile_message runs in the HTTP run registry; nil means no tracking.
+	profileRuns atomic.Pointer[httpapi.ProfileRunTracker]
 
 	// subagentBuilds holds the managers being built, by storage directory. Building
 	// one reads, rewrites and may delete a lot of files, so it runs outside mu; a

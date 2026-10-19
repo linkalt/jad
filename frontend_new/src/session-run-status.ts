@@ -38,7 +38,9 @@ function sameRun(
     right !== undefined &&
     left.turn_id === right.turn_id &&
     left.status === right.status &&
-    left.started_at === right.started_at
+    left.started_at === right.started_at &&
+    left.source === right.source &&
+    left.caller === right.caller
   );
 }
 

@@ -77,6 +77,7 @@ func TestProfileMessageSentinelErrorsAndFailure(t *testing.T) {
 		code string
 	}{
 		{ErrProfileBusy, "profile_busy"},
+		{ErrProfileStopped, "profile_stopped"},
 		{ErrProfileCycle, "profile_cycle"},
 		{ErrProfileSameTranscript, "profile_same_transcript"},
 		{ErrProfileNoAnswer, "profile_no_answer"},
@@ -90,6 +91,9 @@ func TestProfileMessageSentinelErrorsAndFailure(t *testing.T) {
 		}
 		if c.code == "profile_failed" && strings.Contains(output, "disk exploded") {
 			t.Errorf("internal error text leaked: %s", output)
+		}
+		if c.code == "profile_stopped" && !strings.Contains(output, "Profile reviewer was stopped") {
+			t.Errorf("stopped text missing: %s", output)
 		}
 		if c.code == "profile_same_transcript" && !strings.Contains(output, "shares this conversation and cannot be called") {
 			t.Errorf("same-transcript text missing: %s", output)

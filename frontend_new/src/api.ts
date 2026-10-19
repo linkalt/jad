@@ -181,6 +181,10 @@ export interface SessionRunState {
   turn_id: string;
   started_at: string;
   status: SessionRunStatus;
+  /** Set when another profile's `profile_message` call, not a user turn, holds this profile. */
+  source?: 'profile_message';
+  /** The profile that made the `profile_message` call. */
+  caller?: string;
 }
 
 /**
@@ -1288,6 +1292,8 @@ function isSessionRunState(value: unknown): value is SessionRunState {
     isRecord(value) &&
     typeof value.turn_id === 'string' &&
     typeof value.started_at === 'string' &&
+    (value.source === undefined || typeof value.source === 'string') &&
+    (value.caller === undefined || typeof value.caller === 'string') &&
     (value.status === 'running' ||
       value.status === 'completed' ||
       value.status === 'failed' ||

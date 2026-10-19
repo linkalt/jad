@@ -40,6 +40,7 @@ func NewService(config Config) (*Service, error) {
 		resolver.Close()
 		return nil, err
 	}
+	resolver.SetProfileRuns(api.ProfileRuns())
 	service := &Service{Handler: api, api: api, resolver: resolver}
 	options := StorageRecoveryOptions{Processes: config.RecoverProcessesAtStart, SubagentRuns: config.RecoverSubagentRunsAtStart}
 	if options.Processes || options.SubagentRuns {

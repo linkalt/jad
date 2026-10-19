@@ -29,6 +29,10 @@ var profileMessageExample = json.RawMessage(`{"profile":"reviewer","message":"Ch
 // ErrProfileBusy is returned by a ProfileMessenger when the target profile is running.
 var ErrProfileBusy = errors.New("profile is busy")
 
+// ErrProfileStopped is returned by a ProfileMessenger when the target run was stopped
+// by the user while the caller was still waiting.
+var ErrProfileStopped = errors.New("profile run was stopped")
+
 // ErrProfileSameTranscript is returned by a ProfileMessenger when the target profile
 // shares the calling profile's transcript, so the call can never succeed.
 var ErrProfileSameTranscript = errors.New("profile shares the calling transcript")
@@ -142,6 +146,9 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		case errors.Is(err, ErrProfileBusy):
 			return tools.ExecutionError(callID, tools.StatusError, "profile_busy",
 				fmt.Sprintf("Profile %s is running; try again later", profile)), nil
+		case errors.Is(err, ErrProfileStopped):
+			return tools.ExecutionError(callID, tools.StatusError, "profile_stopped",
+				fmt.Sprintf("Profile %s was stopped", profile)), nil
 		case errors.Is(err, ErrProfileNoAnswer):
 			return tools.ExecutionError(callID, tools.StatusError, "profile_no_answer",
 				fmt.Sprintf("Profile %s finished without an answer", profile)), nil

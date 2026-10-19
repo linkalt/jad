@@ -85,6 +85,15 @@ type SessionRunState struct {
 	TurnID    string `json:"turn_id"`
 	StartedAt string `json:"started_at"`
 	Status    string `json:"status"`
+	Source    string `json:"source,omitempty"`
+	Caller    string `json:"caller,omitempty"`
+}
+
+// ProfileRunTracker registers a run that holds a profile's transcript outside the HTTP
+// run routes, so the profile shows as running and counts toward the run cap. finish ends
+// the run once; later calls do nothing. runCtx is cancelled when the run is stopped.
+type ProfileRunTracker interface {
+	BeginProfileRun(reference, profile, turnID, caller string) (runCtx context.Context, finish func(status string), err error)
 }
 
 // SessionRunSummaries carries the stored-default run and all per-profile runs.

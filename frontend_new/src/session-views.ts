@@ -270,6 +270,36 @@ export function rowHasRunningRun(
   return locallyRunningViewKeys.has(row.key) || rowRunStatus(row, session)?.status === "running";
 }
 
+/**
+ * The profile whose `profile_message` call holds a row's profile, while that run
+ * is running. A run this client owns locally takes precedence and yields none.
+ */
+export function rowProfileMessageCaller(
+  row: SessionListRow | undefined,
+  session: {
+    run?: {status?: string; source?: string; caller?: string};
+    runsByProfile?: Record<string, {status?: string; source?: string; caller?: string}>;
+  } | undefined,
+  locallyRunningViewKeys: ReadonlySet<string>,
+): string | undefined {
+  if (row === undefined || session === undefined || locallyRunningViewKeys.has(row.key)) {
+    return undefined;
+  }
+  const run = rowRunStatus(row, session);
+  if (run?.status !== "running" || run.source !== "profile_message") {
+    return undefined;
+  }
+  return run.caller;
+}
+
+export function profileMessageRunLabel(caller: string): string {
+  return `Running for ${caller} via profile_message`;
+}
+
+export function profileMessageBusyNote(caller: string): string {
+  return `Busy: ${caller} is using this profile`;
+}
+
 export type StoredViews = {
   views: PinnedView[];
   activeViewKey: string;

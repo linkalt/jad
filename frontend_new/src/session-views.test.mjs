@@ -18,8 +18,11 @@ import {
   nextRecentViewKeys,
   prunePinnedViews,
   retainedPinnedViewKeys,
+  profileMessageBusyNote,
+  profileMessageRunLabel,
   restoreViews,
   rowHasRunningRun,
+  rowProfileMessageCaller,
   rowRunStatus,
   rowTurnCount,
   sessionListRows,
@@ -185,6 +188,38 @@ test('a row shows the run of its own profile, not the session default', () => {
   assert.deepEqual(rowRunStatus(rows[1], session), run);
   assert.equal(rowRunStatus(undefined, session), undefined);
   assert.equal(rowRunStatus(rows[0], undefined), undefined);
+});
+
+test('a row names the profile_message caller only for its own running nested run', () => {
+  const rows = sessionListRows(
+    [{id: 'session1', title: 'One'}],
+    [{sessionRef: 'session1', profile: 'chatgpt'}],
+  );
+  const nested = {status: 'running', source: 'profile_message', caller: 'planner'};
+  const session = {
+    run: {status: 'completed'},
+    runsByProfile: {chatgpt: nested},
+  };
+
+  assert.equal(rowProfileMessageCaller(rows[1], session, new Set()), 'planner');
+  assert.equal(rowHasRunningRun(rows[1], session, new Set()), true);
+  assert.equal(rowProfileMessageCaller(rows[0], session, new Set()), undefined);
+  assert.equal(rowProfileMessageCaller(rows[1], session, new Set([rows[1].key])), undefined);
+  assert.equal(
+    rowProfileMessageCaller(rows[1], {...session, runsByProfile: {chatgpt: {...nested, status: 'completed'}}}, new Set()),
+    undefined,
+  );
+  assert.equal(
+    rowProfileMessageCaller(rows[1], {...session, runsByProfile: {chatgpt: {status: 'running'}}}, new Set()),
+    undefined,
+  );
+  assert.equal(rowProfileMessageCaller(undefined, session, new Set()), undefined);
+  assert.equal(rowProfileMessageCaller(rows[1], undefined, new Set()), undefined);
+});
+
+test('profile_message labels name the caller', () => {
+  assert.equal(profileMessageRunLabel('planner'), 'Running for planner via profile_message');
+  assert.equal(profileMessageBusyNote('planner'), 'Busy: planner is using this profile');
 });
 
 test('run markers stay profile-specific; only the group header aggregates', () => {

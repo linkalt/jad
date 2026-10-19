@@ -57,7 +57,7 @@ import {type ConversationPanelId} from './right-panel';
 import {selectionQuoteTarget} from './selection-target';
 import {sessionFromSnapshot} from './session-mapping';
 import {isSessionRunning, sessionUiStateForRun, snapshotEndsLocalRun, withSnapshotRun} from './session-run-status';
-import {type PinnedView, type SessionListRow, activeKeyAfterPrune, isPinnedViewKey, nextRecentViewKeys, profileLabel, profileOfViewKey, prunePinnedViews, restoreViews, retainedPinnedViewKeys, rowRunStatus, sessionListGroups, sessionRefOfViewKey, setGroupCollapsed, viewKey, viewLabel, withPaneViewKeys} from './session-views';
+import {type PinnedView, type SessionListRow, activeKeyAfterPrune, isPinnedViewKey, nextRecentViewKeys, profileLabel, profileOfViewKey, prunePinnedViews, restoreViews, retainedPinnedViewKeys, rowProfileMessageCaller, rowRunStatus, sessionListGroups, sessionRefOfViewKey, setGroupCollapsed, viewKey, viewLabel, withPaneViewKeys} from './session-views';
 import {SLASH_COMMANDS, type SlashCommandName} from './slash-commands';
 import {forgetSnapshotEtags, rememberSnapshotEtag} from './snapshot-etags';
 import {stopRunAfterConfirmation} from './stop-run';
@@ -2504,7 +2504,7 @@ function App({
       }
       return;
     }
-    if (activeSession?.sessionRef === undefined) {
+    if (run.source !== undefined || activeSession?.sessionRef === undefined) {
       return;
     }
     attachToRun(
@@ -3236,6 +3236,7 @@ function App({
     const runStatus = rowRunStatus(row, sessionRecord)?.status;
     const isLive = record !== undefined;
     const isRunning = isSessionRunning(runningViewKeys.has(key), runStatus);
+    const profileMessageCaller = rowProfileMessageCaller(row, sessionRecord, runningViewKeys);
     // The model the next run uses: the pane's title strip names its provider and
     // id, and the effort it will run at (the stored pick, else the option's own).
     const modelChoice = record === undefined ? undefined : resolveRunModelChoice(record);
@@ -3261,6 +3262,7 @@ function App({
       profile,
       isLive,
       isRunning,
+      profileMessageCaller,
       isCompacting: record?.sessionRef !== undefined && compactingSessionRef === record.sessionRef,
       modelChoice,
       isStreaming: isRunning && pending === undefined,
@@ -3274,7 +3276,9 @@ function App({
           : modelChoice.effort ??
             (modelChoice.option === undefined ? undefined : defaultEffortFor(modelChoice.option)),
       hasLiveAttachedRun:
-        isLive && (runStatus === 'running' || attachedRunViewKeysRef.current.has(key)),
+        isLive &&
+        profileMessageCaller === undefined &&
+        (runStatus === 'running' || attachedRunViewKeysRef.current.has(key)),
       streamingMessage,
       isFrontCompactionSelectionMode: isFrontCompactionMode && !isFrontCompactionConfirmationOpen,
       isFrontCompactionConfirmationOpen,
@@ -3523,6 +3527,7 @@ function App({
                         profile={pane.profile}
                         isLive={pane.isLive}
                         isRunning={pane.isRunning}
+                        profileMessageCaller={pane.profileMessageCaller}
                         isStreaming={pane.isStreaming}
                         pendingApproval={pane.pendingApproval}
                         effort={pane.effort}

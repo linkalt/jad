@@ -28,6 +28,7 @@ import {PANE_HEADER_Z_INDEX} from '../panel-layers';
 import {conversationPanelAfterToggle, type ConversationPanelId} from '../right-panel';
 import {type SlashCommand, type SlashCommandName} from '../slash-commands';
 import {deferredRowStyle, useRowHeightRef} from '../row-defer';
+import {profileMessageBusyNote, profileMessageRunLabel} from '../session-views';
 import {useActiveTranscript} from '../use-active-transcript';
 import {useRowWidth} from '../use-row-width';
 import {AssistantIdentity} from './AssistantMessage';
@@ -142,6 +143,8 @@ export type ViewPaneProps = {
   profile: string | undefined;
   isLive: boolean;
   isRunning: boolean;
+  /** The profile whose `profile_message` call holds this view's profile, when one does. */
+  profileMessageCaller?: string | undefined;
   /** Running without a pending interaction: deltas still arrive. */
   isStreaming: boolean;
   /** The run asked for an approval or a draft answer and waits for it. */
@@ -223,6 +226,7 @@ export function ViewPane({
   profile,
   isLive,
   isRunning,
+  profileMessageCaller,
   isStreaming,
   pendingApproval,
   effort,
@@ -321,6 +325,7 @@ export function ViewPane({
         onSubmit={onSubmitComposer}
         onStop={onStopComposer}
         isRunning={isRunning}
+        busyNote={profileMessageCaller === undefined ? undefined : profileMessageBusyNote(profileMessageCaller)}
         isDisabled={isComposerDisabled}
         placeholder={placeholder}
         showInspector={panel === 'inspector'}
@@ -400,7 +405,13 @@ export function ViewPane({
           </Tooltip>
           <HStack align="center" gap={1}>
             {isRunning ? (
-              <Spinner size="sm" aria-label={`${label} running`} />
+              profileMessageCaller === undefined ? (
+                <Spinner size="sm" aria-label={`${label} running`} />
+              ) : (
+                <Tooltip content={profileMessageRunLabel(profileMessageCaller)} placement="below">
+                  <Spinner size="sm" aria-label={`${label}: ${profileMessageRunLabel(profileMessageCaller)}`} />
+                </Tooltip>
+              )
             ) : null}
             {onClose === undefined ? null : (
               <IconButton

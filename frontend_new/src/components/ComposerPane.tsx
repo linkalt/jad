@@ -108,6 +108,8 @@ type ComposerPaneProps = {
   /** Informational text shown after the actions (shortcuts hint, compaction feedback). */
   footerNote?: ReactNode;
   status?: ComponentProps<typeof ChatComposer>['status'];
+  /** Set while another profile's `profile_message` call holds this profile; shown as a warning. */
+  busyNote?: string;
 };
 
 /**
@@ -463,6 +465,7 @@ export function ComposerPane({
   headerContextActions,
   footerNote,
   status,
+  busyNote,
 }: ComposerPaneProps) {
   const [drafts, setDrafts] = useState<Record<string, string>>(() => loadDrafts());
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -947,7 +950,7 @@ export function ComposerPane({
         </HStack>
       }
       footerActions={footerNote}
-      status={status}
+      status={status ?? (busyNote === undefined ? undefined : {type: 'warning', message: busyNote})}
       elevation="low"
     />
   );

@@ -516,7 +516,7 @@ func (h *Handler) handleRunStream(w http.ResponseWriter, r *http.Request, refere
 		return
 	}
 	run := h.runs.current(h.runKey(resolved))
-	if run == nil {
+	if run == nil || run.source != "" {
 		h.writeSSEHeaders(w)
 		idle, _ := makeSSEEvent("idle", struct{}{})
 		_, _ = w.Write(idle.frame)

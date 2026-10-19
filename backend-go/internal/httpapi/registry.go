@@ -176,6 +176,8 @@ type activeRun struct {
 	key                 string
 	turnID              string
 	startedAt           string
+	source              string
+	caller              string
 	cancel              context.CancelFunc
 	ctx                 context.Context
 	interactions        *interactionbroker.Broker
@@ -227,12 +229,16 @@ func newRunRegistry(retention time.Duration, maxBufferedBytes, maxRuns int) *run
 }
 
 func (r *runRegistry) begin(key, turnID string) (*activeRun, error) {
+	return r.beginFrom(key, turnID, "", "")
+}
+
+func (r *runRegistry) beginFrom(key, turnID, source, caller string) (*activeRun, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
 		return nil, errors.New("run registry is closed")
 	}
-	if r.maxRuns > 0 && r.running.Load() >= int64(r.maxRuns) {
+	if source == "" && r.maxRuns > 0 && r.running.Load() >= int64(r.maxRuns) {
 		return nil, &StatusError{
 			Code:              http.StatusTooManyRequests,
 			Message:           fmt.Sprintf("the server is already running %d runs (server.max_concurrent_runs); try again shortly", r.maxRuns),
@@ -244,6 +250,8 @@ func (r *runRegistry) begin(key, turnID string) (*activeRun, error) {
 		registry:    r,
 		key:         key,
 		turnID:      turnID,
+		source:      source,
+		caller:      caller,
 		startedAt:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		cancel:      cancel,
 		ctx:         ctx,
@@ -253,7 +261,9 @@ func (r *runRegistry) begin(key, turnID string) (*activeRun, error) {
 	}
 	run.interactions = interactionbroker.NewBroker(run.setPendingInteraction)
 	r.runs[key] = append(r.runs[key], run)
-	r.running.Add(1)
+	if source == "" {
+		r.running.Add(1)
+	}
 	return run, nil
 }
 
@@ -298,7 +308,7 @@ func (r *runRegistry) SessionRuns(reference, defaultProfile string) SessionRunSu
 	summaries := SessionRunSummaries{}
 	for profile, run := range selected {
 		runSummary := run.summary()
-		state := SessionRunState{TurnID: runSummary.TurnID, StartedAt: runSummary.StartedAt, Status: runSummary.Status}
+		state := runSummary
 		// The TypeScript registry reports a profile-less run only as the default
 		// run; runs_by_profile lists runs of named profiles.
 		if profile != "" {
@@ -383,7 +393,7 @@ func (r *activeRun) state() string {
 func (r *activeRun) summary() runSummary {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return runSummary{TurnID: r.turnID, StartedAt: r.startedAt, Status: r.status}
+	return runSummary{TurnID: r.turnID, StartedAt: r.startedAt, Status: r.status, Source: r.source, Caller: r.caller}
 }
 
 func (r *activeRun) subscribe() *eventQueue {
@@ -392,7 +402,7 @@ func (r *activeRun) subscribe() *eventQueue {
 	defer r.mu.Unlock()
 
 	r.subscribers[queue] = struct{}{}
-	summary, _ := makeSSEEvent("run", runSummary{TurnID: r.turnID, StartedAt: r.startedAt, Status: r.status})
+	summary, _ := makeSSEEvent("run", runSummary{TurnID: r.turnID, StartedAt: r.startedAt, Status: r.status, Source: r.source, Caller: r.caller})
 	queue.push(summary, false)
 	if r.status == "running" {
 		if r.latestMessage != nil {
@@ -639,7 +649,9 @@ func (r *activeRun) finish(status string, terminal []streamEvent) {
 		return
 	}
 	r.status = status
-	r.registry.running.Add(-1)
+	if r.source == "" {
+		r.registry.running.Add(-1)
+	}
 	r.providerRetry = nil
 	r.finishedAt = time.Now()
 	r.terminal = append([]streamEvent(nil), terminal...)
@@ -659,7 +671,7 @@ func (r *activeRun) finish(status string, terminal []streamEvent) {
 	close(r.done)
 	r.mu.Unlock()
 
-	if r.registry.retention <= 0 {
+	if r.registry.retention <= 0 || r.source != "" {
 		r.registry.retire(r)
 		return
 	}

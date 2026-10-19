@@ -1,11 +1,14 @@
 import {SideNavItem, Spinner, StatusDot, Text, VisuallyHidden} from '@astryxdesign/core';
+import {Tooltip} from '@astryxdesign/core/Tooltip';
 import type {RefObject} from 'react';
 import type {SessionRunStatus} from '../api';
 import {sessionUiStateForRun, type SessionUiState} from '../session-run-status';
 import {
   groupHasRunningRun,
   isGroupExpanded,
+  profileMessageRunLabel,
   rowHasRunningRun,
+  rowProfileMessageCaller,
   rowRunStatus,
   type SessionListGroup,
   type SessionListRow,
@@ -21,8 +24,8 @@ type SessionGroupSession = {
   profileTurns?: Readonly<Record<string, number>>;
   state: SessionUiState;
   activeProfile?: string;
-  run?: {status?: SessionRunStatus};
-  runsByProfile?: Record<string, {status?: SessionRunStatus}>;
+  run?: {status?: SessionRunStatus; source?: string; caller?: string};
+  runsByProfile?: Record<string, {status?: SessionRunStatus; source?: string; caller?: string}>;
 };
 
 export type SessionGroupListProps = {
@@ -97,6 +100,7 @@ export function SessionGroupList({
     // The visible label of a child is the profile; its accessible names carry the
     // session too, because the same profile name repeats in every group.
     const fullLabel = isChild ? viewLabel(session.title, row.label) : row.label;
+    const caller = rowProfileMessageCaller(row, session, runningViewKeys);
     return (
       <SideNavItem
         key={row.key}
@@ -123,7 +127,13 @@ export function SessionGroupList({
         }}
         icon={
           isRunning ? (
-            <Spinner size="sm" aria-label={`${fullLabel} running`} />
+            caller === undefined ? (
+              <Spinner size="sm" aria-label={`${fullLabel} running`} />
+            ) : (
+              <Tooltip content={profileMessageRunLabel(caller)} placement="end">
+                <Spinner size="sm" aria-label={`${fullLabel}: ${profileMessageRunLabel(caller)}`} />
+              </Tooltip>
+            )
           ) : (
             <StatusDot variant={state} label={`${fullLabel} ${state}`} />
           )

@@ -108,6 +108,26 @@ test('unchanged per-profile runs keep the session identity', () => {
   );
 });
 
+test('a snapshot that changes only source or caller refreshes the run', () => {
+  const run = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  const nested = {...run, source: 'profile_message', caller: 'planner'};
+  const session = {id: 'session-a', run, runsByProfile: {alternate: run}};
+
+  const merged = withSnapshotRun(session, {run, runs_by_profile: {alternate: nested}});
+  assert.notEqual(merged, session);
+  assert.deepEqual(merged.runsByProfile.alternate, nested);
+
+  const other = withSnapshotRun(
+    {id: 'session-a', run: nested},
+    {run: {...nested, caller: 'reviewer'}},
+  );
+  assert.equal(other.run.caller, 'reviewer');
+  assert.equal(
+    withSnapshotRun({id: 'session-a', run: nested}, {run: {...nested}}).run.caller,
+    'planner',
+  );
+});
+
 test('a snapshot without a run clears a stale one', () => {
   const session = {
     id: 'session-a',

@@ -194,7 +194,7 @@
           "minimum": 0,
           "maximum": 1024,
           "default": 0,
-          "description": "Go backend only. The most runs that may be running at the same time across all sessions. A run start beyond it is refused with HTTP 429 and a Retry-After of 5 seconds, and nothing is changed. 0 means no cap. Runs of sub-agents are not counted; they are part of their parent run."
+          "description": "Go backend only. The most runs that may be running at the same time across all sessions. A run start beyond it is refused with HTTP 429 and a Retry-After of 5 seconds, and nothing is changed. 0 means no cap. Runs of sub-agents are not counted; they are part of their parent run. Nested profile_message runs are not counted either."
         },
         "max_request_file_bytes": {
           "type": "integer",

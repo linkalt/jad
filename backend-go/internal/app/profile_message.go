@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -24,6 +25,23 @@ import (
 // profile of the same session, in that profile's own transcript.
 type profileMessenger struct {
 	resolver *Resolver
+}
+
+// SetProfileRuns sets the registry that profile_message runs are listed in. The HTTP
+// handler exists only after the resolver, so the service sets it once the handler is built.
+func (r *Resolver) SetProfileRuns(tracker httpapi.ProfileRunTracker) {
+	if tracker == nil {
+		r.profileRuns.Store(nil)
+		return
+	}
+	r.profileRuns.Store(&tracker)
+}
+
+func (r *Resolver) profileRunTracker() httpapi.ProfileRunTracker {
+	if tracker := r.profileRuns.Load(); tracker != nil {
+		return *tracker
+	}
+	return nil
 }
 
 type profileChainKey struct{}
@@ -87,9 +105,28 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 	if err != nil {
 		return "", err
 	}
+	runCtx := ctx
+	var stopCtx context.Context
+	status := "failed"
+	if tracker := m.resolver.profileRunTracker(); tracker != nil {
+		var finish func(string)
+		stopCtx, finish, err = tracker.BeginProfileRun(resolved.Reference, canonical, turnID, caller)
+		if err != nil {
+			var statusErr *httpapi.StatusError
+			if errors.As(err, &statusErr) && (statusErr.Code == http.StatusConflict || statusErr.Code == http.StatusTooManyRequests) {
+				return "", native.ErrProfileBusy
+			}
+			return "", err
+		}
+		defer func() { finish(status) }()
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		defer context.AfterFunc(stopCtx, cancel)()
+	}
 	var accepted *session.PersistedInput
 	var lastText atomic.Value
-	chainCtx := context.WithValue(ctx, profileChainKey{}, []string{caller, canonical})
+	chainCtx := context.WithValue(runCtx, profileChainKey{}, []string{caller, canonical})
 	result, err := resolved.Runner.Run(chainCtx, input, session.RunOptions{
 		TurnID:          turnID,
 		OnInputAccepted: func(input session.PersistedInput) { accepted = &input },
@@ -105,11 +142,19 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		},
 	})
 	if err != nil {
+		if stopCtx != nil && stopCtx.Err() != nil && ctx.Err() == nil {
+			status = "aborted"
+			return "", native.ErrProfileStopped
+		}
+		if ctx.Err() != nil {
+			status = "aborted"
+		}
 		if !errors.Is(ctx.Err(), context.Canceled) {
 			m.resolver.recordProfileRunFailure(resolved.Runner, accepted, turnID)
 		}
 		return "", err
 	}
+	status = "completed"
 	answer := native.SubagentAnswerText(result.Event)
 	if strings.TrimSpace(answer) == "" {
 		answer, _ = lastText.Load().(string)
