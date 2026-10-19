@@ -31,6 +31,7 @@
   "conversation_lane_min_size": 520,
   "conversation_lane_max_size": 2400,
   "conversation_lane_grab_size": 16,
+  "user_bubble_min_width": 360,
   "inspector_default_size": 360,
   "inspector_min_size": 280,
   "inspector_max_size": 640,

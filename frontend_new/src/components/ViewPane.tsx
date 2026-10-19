@@ -12,7 +12,7 @@
  */
 
 import {ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList, Heading, HStack, Icon, IconButton, Spinner, Text, VStack, VisuallyHidden} from '@astryxdesign/core';
-import {useResizable} from '@astryxdesign/core/Resizable';
+import {type ResizableRegion, ResizeHandle, useResizable} from '@astryxdesign/core/Resizable';
 import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {Tooltip} from '@astryxdesign/core/Tooltip';
 import {spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
@@ -61,6 +61,11 @@ const styles = stylex.create({
   },
   paneDivided: {
     borderInlineStartColor: 'var(--color-border-subtle)',
+  },
+  // A composer divider spans the composer row, not a one-pixel line.
+  composerResizeHandle: {
+    alignSelf: 'stretch',
+    height: 'auto',
   },
   /**
    * A pane that is mounted but not on screen. A phone shows one conversation at
@@ -191,6 +196,13 @@ export type ViewPaneProps = {
   onSlashError: (message: string) => void;
   /** The drawers and the handler toolbar: the focused pane's own. */
   composerChrome?: ReactNode;
+  /**
+   * Present only when this is the single pane on screen: then the composer is
+   * the thing that carries the width, centred in the full-width pane with a
+   * divider on each side — the transcript keeps the whole window, so its
+   * scrollbar reaches the outer edge instead of stopping at a lane.
+   */
+  composerLane?: {widthPx: number; resize: ResizableRegion['props']};
   composerToolbar?: ReactNode;
   composerHeaderActions?: ReactNode;
   composerFooter?: ReactNode;
@@ -254,6 +266,7 @@ export function ViewPane({
   onSlashCommand,
   onSlashError,
   composerChrome,
+  composerLane,
   composerToolbar,
   composerHeaderActions,
   composerFooter,
@@ -343,6 +356,39 @@ export function ViewPane({
       />
     </ComposerErrorBoundary>
   );
+  // One pane on screen: the composer is the resizable thing, centred in the
+  // pane with a divider on each side, and the transcript around it keeps the
+  // whole window. The lane used to carry the width, which put the transcript's
+  // scrollbar at the lane's edge instead of the window's.
+  const composerBlock =
+    composerLane === undefined ? (
+      composerNode
+    ) : (
+      <HStack align="stretch" justify="center" width="100%" gap={0}>
+        <ResizeHandle
+          direction="horizontal"
+          isReversed
+          hasDivider={false}
+          xstyle={styles.composerResizeHandle}
+          // The grab zone is wider than the line and sits on the far side of it,
+          // over the lane's edge and never over the composer's own controls.
+          pillPlacement="start"
+          label="Resize conversation width from left border"
+          resizable={composerLane.resize}
+        />
+        <VStack gap={0} width={composerLane.widthPx} maxWidth="100%" style={{minWidth: 0}}>
+          {composerNode}
+        </VStack>
+        <ResizeHandle
+          direction="horizontal"
+          hasDivider={false}
+          xstyle={styles.composerResizeHandle}
+          pillPlacement="end"
+          label="Resize conversation width from right border"
+          resizable={composerLane.resize}
+        />
+      </HStack>
+    );
   const sessionRef = session?.sessionRef;
   const storedImageScope = sessionRef === undefined ? undefined : {sessionRef, profile};
   const liveImageScope = storedImageScope === undefined ? undefined : {...storedImageScope, live: true};
@@ -427,7 +473,7 @@ export function ViewPane({
         </HStack>
       )}
       <VStack gap={0} width="100%" xstyle={styles.panelHost}>
-      <ChatLayout density="balanced" xstyle={styles.chat} composer={composerNode}>
+      <ChatLayout density="balanced" xstyle={styles.chat} composer={composerBlock}>
         <HStack
           align="stretch"
           justify="center"
@@ -436,7 +482,15 @@ export function ViewPane({
           height="100%"
           xstyle={styles.conversationFrame}
         >
-          <VStack width="100%" maxWidth="100%" height="100%" xstyle={styles.conversationLane}>
+          {/* The scroll area is the whole pane, so the scrollbar stays on the
+              window's edge; the column inside it is the composer's width, so the
+              conversation follows the divider instead of floating at 100%. */}
+          <VStack
+            width={composerLane === undefined ? '100%' : composerLane.widthPx}
+            maxWidth="100%"
+            height="100%"
+            xstyle={styles.conversationLane}
+          >
             {isReadmeShown ? (
               <JadReadme />
             ) : (

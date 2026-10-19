@@ -1,6 +1,7 @@
 import {Avatar, ChatMessage, ChatMessageBubble, ChatMessageMetadata, ChatSystemMessage, HStack, Icon, Text, VStack} from '@astryxdesign/core';
 import {type CSSProperties, memo} from 'react';
 import {type MessageRecord, type Session} from '../app-types';
+import appConfig from '../config.json';
 import {deepEqual} from '../deepEqual';
 import {userMessageImages} from '../image-attachments';
 import {deferredRowStyle, useRowHeightRef} from '../row-defer';
@@ -9,6 +10,22 @@ import {SentFiles} from './FileAttachments';
 import {SentImages} from './ImageAttachments';
 import {MarkdownText} from './MarkdownText';
 import {StoredImages} from './StoredImages';
+
+/**
+ * The width cap for a user bubble, in CSS terms.
+ *
+ * Astryx caps a bubble at 80% of the column it sits in. That leaves the bubble
+ * too narrow to read once the column itself is small — a phone pane — so below
+ * the configured minimum the cap becomes the whole column, which is how the
+ * assistant rows are drawn:
+ *
+ * - column wider than 1.25 × minimum → 80% of it, unchanged;
+ * - column between the minimum and 1.25 × it → exactly the minimum;
+ * - column no wider than the minimum → 100%, the full block.
+ */
+const userBubbleStyle: CSSProperties = {
+  maxWidth: `min(100%, max(80%, ${appConfig.user_bubble_min_width}px))`,
+};
 
 export function isActiveTranscriptUserMessage(message: MessageRecord): boolean {
   return message.sender === 'user' && /^session-user-o(0|[1-9][0-9]*)$/.test(message.id);
@@ -113,12 +130,17 @@ export const TranscriptRow = memo(
           } : undefined}
         >
           <HStack align="start" gap={1} justify="end" width="100%">
-            <VStack align="end" gap={0.5}>
+            {/* The bubble's cap is `max(80%, 280px)` of this column. A
+                shrink-to-fit column makes that a circular percentage: it settles
+                once and then never grows, so the bubble kept the width of the
+                pane it was first laid out in. A definite width gives the cap a
+                basis that follows the row. */}
+            <VStack align="end" gap={0.5} style={{flex: '1 1 0%', minWidth: 0}}>
               {userImages.sent.length > 0 && <SentImages sources={userImages.sent} />}
               {userImages.stored.length > 0 && <StoredImages names={userImages.stored} />}
               {userImages.files.length > 0 && <SentFiles names={userImages.files} />}
               {userImages.text !== '' && (
-                <ChatMessageBubble>
+                <ChatMessageBubble style={userBubbleStyle}>
                   <MarkdownText density="compact" contentWidth="100%">{userImages.text}</MarkdownText>
                 </ChatMessageBubble>
               )}

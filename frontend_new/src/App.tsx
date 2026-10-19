@@ -1,7 +1,7 @@
 import {AppShell, Button, HStack, Heading, Icon, IconButton, Layout, LayoutContent, Text, VStack, VisuallyHidden} from '@astryxdesign/core';
 import {useAppShellMobile} from '@astryxdesign/core/AppShell';
 import {ChatComposerDrawer} from '@astryxdesign/core/Chat';
-import {ResizeHandle, useResizable} from '@astryxdesign/core/Resizable';
+import {useResizable} from '@astryxdesign/core/Resizable';
 import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {useToast} from '@astryxdesign/core/Toast';
 import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
@@ -3319,9 +3319,10 @@ function App({
    * ready the moment its number is tapped.
    */
   const shownPaneKeys = isMobile && panes.keys.includes(activeViewKey) ? [activeViewKey] : panes.keys;
-  // One pane keeps the configured lane width; several panes share the whole area,
-  // because a pane narrower than the floor cannot show a conversation.
-  const paneGroupWidth = shownPaneKeys.length > 1 ? '100%' : conversation.size;
+  // One pane on screen still takes the whole area: the lane width is the
+  // composer's, not the transcript's, or the transcript's scrollbar would stop
+  // at the lane instead of reaching the window edge (`composerLane` in ViewPane).
+  const isSinglePane = shownPaneKeys.length === 1;
   // What the panes would each hold, and how much room the row actually has. The
   // fit rule turns those into the widths they render at: every pane keeps the
   // fold floor, as many as the room allows reach the usable minimum (largest
@@ -3496,42 +3497,13 @@ function App({
                 width="100%"
                 height="100%"
                 xstyle={styles.conversationFrame}
-                // A single pane's two dividers sit just outside the lane, and each
-                // grab zone is wider than its line. Without room reserved for it a
-                // lane that reaches the frame edge puts both zones past the edge —
-                // outside the visible area, where nothing can be seen or clicked —
-                // so the frame keeps the grab width free on each side exactly when
-                // those dividers are shown.
-                style={
-                  shownPaneKeys.length === 1 && !isMobile
-                    ? {paddingInline: appConfig.conversation_lane_grab_size}
-                    : undefined
-                }
               >
-                {/* The handles size one lane. With several panes the panes share
-                    the whole area, so a lane width would only fight them; a phone
-                    has no room to drag a lane, so they are desktop-only. */}
-                {shownPaneKeys.length === 1 && !isMobile && (
-                  <ResizeHandle
-                    direction="horizontal"
-                    isReversed
-                    hasDivider={false}
-                    xstyle={styles.composerResizeHandle}
-                    // The grab zone is wider than the divider line, and it has to
-                    // sit on the far side of it: this handle's other side is the
-                    // transcript, whose scrollbar is flush against the lane's right
-                    // edge and would lose its clicks to the handle's zone.
-                    pillPlacement="start"
-                    label="Resize conversation width from left border"
-                    resizable={conversation.props}
-                  />
-                )}
                 <HStack
                   ref={paneGroupRef}
                   align="stretch"
                   gap={0}
                   height="100%"
-                  width={paneGroupWidth}
+                  width="100%"
                   maxWidth="100%"
                   // When even the folded floor does not fit, the row scrolls
                   // instead of pushing a pane off the screen: every pane stays
@@ -3608,6 +3580,11 @@ function App({
                         onSlashCommand={name => runSlashCommand(paneViewKey, name)}
                         onSlashError={message => reportSlashError(paneViewKey, message)}
                         composerChrome={paneComposerChrome(pane)}
+                        // One pane on screen: the composer carries the lane width,
+                        // with its dividers, so the transcript keeps the window.
+                        composerLane={isSinglePane && !isMobile && index === 0
+                          ? {widthPx: conversation.size, resize: conversation.props}
+                          : undefined}
                         composerToolbar={composerToolbar(pane)}
                         composerHeaderActions={composerHeaderActions(pane)}
                         composerFooter={composerFooter}
@@ -3671,18 +3648,6 @@ function App({
                     );
                   })}
                 </HStack>
-                {shownPaneKeys.length === 1 && !isMobile && (
-                  <ResizeHandle
-                    direction="horizontal"
-                    hasDivider={false}
-                    xstyle={styles.composerResizeHandle}
-                    // Same reason as the left border: the zone sits outside the
-                    // lane, so the transcript's scrollbar stays clickable.
-                    pillPlacement="end"
-                    label="Resize conversation width from right border"
-                    resizable={conversation.props}
-                  />
-                )}
               </HStack>
             </LayoutContent>
           }
