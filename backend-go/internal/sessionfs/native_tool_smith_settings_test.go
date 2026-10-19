@@ -41,7 +41,7 @@ func TestNormalizeNativeToolSmithSettingsDefaults(t *testing.T) {
 	if got.FunctionsDir != ".jad/functions" || got.CodeMaxBytes != 262144 || got.ResultMaxBytes != 16384 || got.NestedResultMaxBytes != 16384 || got.NestedRequestMaxBytes != 65536 {
 		t.Fatalf("byte and dir defaults = %+v", got)
 	}
-	if got.MaxNestedCalls != 100 || got.MaxParallelCalls != 4 || got.ListMaxResults != 50 || got.ListMaxFiles != 200 || got.ListHeaderBytes != 2048 {
+	if got.MaxNestedCalls != 100 || got.MaxParallelCalls != 4 || got.ListMaxResults != 50 || got.ListMaxFiles != 200 || got.ListHeaderBytes != 2048 || got.FunctionMaxBytes != 65536 {
 		t.Fatalf("count defaults = %+v", got)
 	}
 	if !reflect.DeepEqual(got.Tools, []string{"read", "grep", "glob"}) {
@@ -87,11 +87,11 @@ func TestNormalizeNativeToolSmithSettingsInterpreter(t *testing.T) {
 }
 
 func TestNormalizeNativeToolSmithSettingsOverrides(t *testing.T) {
-	got, err := normalizeToolSmithForTest(t, `{"tool_smith":{"functions_dir":"lib/fn","code_max_bytes":10,"result_max_bytes":20,"nested_result_max_bytes":30,"nested_request_max_bytes":40,"timeout_ms":1000,"max_timeout_ms":2000,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":7,"list_max_files":8,"list_header_bytes":9,"tools":["write","read"],"approval":"ask"}}`)
+	got, err := normalizeToolSmithForTest(t, `{"tool_smith":{"functions_dir":"lib/fn","code_max_bytes":10,"result_max_bytes":20,"nested_result_max_bytes":30,"nested_request_max_bytes":40,"timeout_ms":1000,"max_timeout_ms":2000,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":7,"list_max_files":8,"list_header_bytes":9,"function_max_bytes":11,"tools":["write","read"],"approval":"ask"}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := NativeToolSmithSettings{FunctionsDir: "lib/fn", CodeMaxBytes: 10, ResultMaxBytes: 20, NestedResultMaxBytes: 30, NestedRequestMaxBytes: 40, MaxNestedCalls: 5, MaxParallelCalls: 2, ListMaxResults: 7, ListMaxFiles: 8, ListHeaderBytes: 9, Tools: []string{"write", "read"}, Interpreter: []string{"bun", "run", "{file}"}, Approval: ApprovalAsk}
+	want := NativeToolSmithSettings{FunctionsDir: "lib/fn", CodeMaxBytes: 10, ResultMaxBytes: 20, NestedResultMaxBytes: 30, NestedRequestMaxBytes: 40, MaxNestedCalls: 5, MaxParallelCalls: 2, ListMaxResults: 7, ListMaxFiles: 8, ListHeaderBytes: 9, FunctionMaxBytes: 11, Tools: []string{"write", "read"}, Interpreter: []string{"bun", "run", "{file}"}, Approval: ApprovalAsk}
 	if got.Child.TimeoutMs != 1000 || got.Child.MaxTimeoutMs != 2000 {
 		t.Fatalf("child timeouts = %d, %d", got.Child.TimeoutMs, got.Child.MaxTimeoutMs)
 	}
@@ -127,6 +127,8 @@ func TestNormalizeNativeToolSmithSettingsRejectsInvalidSettings(t *testing.T) {
 		"list files over":    {`{"tool_smith":{"list_max_files":10001}}`, "list_max_files must be a safe integer between 1 and 10000"},
 		"list header over":   {`{"tool_smith":{"list_header_bytes":65537}}`, "list_header_bytes must be a safe integer between 1 and 65536"},
 		"list header zero":   {`{"tool_smith":{"list_header_bytes":0}}`, "list_header_bytes must be a safe integer between 1 and 65536"},
+		"function max zero":  {`{"tool_smith":{"function_max_bytes":0}}`, "function_max_bytes must be a safe integer between 1 and 10485760"},
+		"function max over":  {`{"tool_smith":{"function_max_bytes":10485761}}`, "function_max_bytes must be a safe integer between 1 and 10485760"},
 		"timeout zero":       {`{"tool_smith":{"timeout_ms":0}}`, "timeout_ms must be a safe integer"},
 		"max below timeout":  {`{"tool_smith":{"timeout_ms":5000,"max_timeout_ms":1000}}`, "max_timeout_ms must be greater than or equal to tools.native.tool_smith.timeout_ms"},
 		"tools not array":    {`{"tool_smith":{"tools":"read"}}`, "tools must be an array of native tool names"},
@@ -142,7 +144,7 @@ func TestNormalizeNativeToolSmithSettingsRejectsInvalidSettings(t *testing.T) {
 		"tools duplicate":    {`{"tool_smith":{"tools":["read","read"]}}`, "tools[1] \"read\" is listed twice"},
 		"approval bad":       {`{"tool_smith":{"approval":"maybe"}}`, "tools.native.tool_smith.approval must be \"off\" or \"ask\""},
 		"approval null":      {`{"tool_smith":{"approval":null}}`, "approval must be \"off\" or \"ask\""},
-		"upper limits valid": {`{"tool_smith":{"code_max_bytes":10485760,"max_nested_calls":10000,"max_parallel_calls":64,"list_max_results":1000,"list_max_files":10000,"list_header_bytes":65536}}`, ""},
+		"upper limits valid": {`{"tool_smith":{"code_max_bytes":10485760,"max_nested_calls":10000,"max_parallel_calls":64,"list_max_results":1000,"list_max_files":10000,"list_header_bytes":65536,"function_max_bytes":10485760}}`, ""},
 		"approval off valid": {`{"tool_smith":{"approval":"off","tools":["read","write","edit","fetch"]}}`, ""},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -5,7 +5,7 @@
       "id": "native.tool_smith",
       "source": "native",
       "name": "tool_smith",
-      "description": "Run a TypeScript function body that calls native tools in code and returns one value, or list the saved functions of the library. Use run to do many tool calls and filtering in one step.",
+      "description": "Run a TypeScript function body in a child process and return one value, or list the saved functions of the library. Saved functions are reusable files called as fn.<name>(input) inside a run.",
       "inputSchema": {
         "type": "object",
         "properties": {

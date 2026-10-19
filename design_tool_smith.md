@@ -138,7 +138,7 @@ Bindings in the script:
 
 - `input`: the JSON object (empty object when omitted).
 - `tools.<name>(args)`: allowlisted native tools via the bridge (5.4). Returns `{ok, status, summary, content, info}` parsed from the native result envelope (`backend-go/internal/tools/output.go:20-60`); it does not throw for tool-level failures, so one failed call in a `Promise.all` does not abort the others.
-- `fn.<name>(input)` (DEFERRED, not in v1: agents `read` the file and paste its body into `run.function`; see `DECISIONS.md`): library functions, imported lazily from `functions_dir` on first use. The name is validated before the path is built.
+- `fn.<name>(input)`: library functions. Before the child starts, Go validates the library like `list` and copies the valid files into the run's private temp dir; the prelude imports a copy on the first call. A name that is not in the manifest never reaches a path. Saved functions may use the globals `tools` and `fn`. A malformed file (including one over `function_max_bytes`) throws `function X is malformed: <problem>`; an unknown name throws `no saved function X; available: ...`.
 
 The body can use normal control flow, `await`, `Promise.all` (limits in 5.4), filtering and shaping, and returns one value. Bodies are not saved automatically.
 
@@ -184,7 +184,7 @@ Skill content:
 
 ## 9. Freshness (replaces dynamic reload)
 
-Every `run` starts a new process, and `fn.<name>` imports the file at first use, so the latest file content is always what runs. No watching, hashing, cache invalidation or registry versions. A syntax or import error is the child's own error on stderr, returned to the agent. A script that edits a function file during the same run may see mixed versions; the skill tells agents not to.
+Every `run` starts a new process, and the library is copied at the start, so the file content at that moment is what runs. No watching, hashing, cache invalidation or registry versions. A syntax or import error is the child's own error on stderr, returned to the agent. A script that edits a function file during the same run does not change what `fn` calls in that run; the next run sees the edit.
 
 ## 10. Results, errors and audit
 
@@ -254,7 +254,7 @@ See `plan_tool_smith.md` (8 phases): the evidence spike (phase 1) is done and th
 | Oversized return value | cut at `result_max_bytes` with a visible truncated marker; no spill in v1 |
 | Frontend | no change (tool cards are generic, `frontend_new/src/components/TranscriptParts.tsx:386-440`) |
 
-Keys: `functions_dir`, `interpreter`, `code_max_bytes`, `result_max_bytes`, `list_max_results`, `list_max_files`, `list_header_bytes`, `tools`, `max_nested_calls`, `max_parallel_calls`, `nested_result_max_bytes`, `approval`, plus the bash-style `Child` keys (`timeout_ms`, `max_timeout_ms`, kill grace, stdout/stderr budgets, spill) shared with `exec` through `nativeBashStyleKeys` (`native_exec_settings.go:~40,~125`); the schema must list exactly the keys the loader accepts (`native_tool_schema_test.go:122`).
+Keys: `functions_dir`, `interpreter`, `code_max_bytes`, `result_max_bytes`, `list_max_results`, `list_max_files`, `list_header_bytes`, `function_max_bytes`, `tools`, `max_nested_calls`, `max_parallel_calls`, `nested_result_max_bytes`, `approval`, plus the bash-style `Child` keys (`timeout_ms`, `max_timeout_ms`, kill grace, stdout/stderr budgets, spill) shared with `exec` through `nativeBashStyleKeys` (`native_exec_settings.go:~40,~125`); the schema must list exactly the keys the loader accepts (`native_tool_schema_test.go:122`).
 
 Proposed defaults (from the spike; byte keys have minimum 1 and maximum `maxNativeToolBytes` = 10485760, `backend-go/internal/sessionfs/tool_settings.go:20`):
 
@@ -268,6 +268,7 @@ Proposed defaults (from the spike; byte keys have minimum 1 and maximum `maxNati
 | `max_nested_calls` | 100 | 1 | 10000 |
 | `max_parallel_calls` | 4 | 1 | 64 |
 | `list_header_bytes` | 2048 | 1 | 65536 |
+| `function_max_bytes` | 65536 | 1 | 10485760 |
 | `list_max_files` | 200 | 1 | 10000 |
 | `list_max_results` | 50 | 1 | 1000 |
 | `tools` | `["read","grep","glob"]` | unique native names | not in {bash, exec, process, subagent, tool_smith, task} |

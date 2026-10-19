@@ -49,7 +49,7 @@ var toolSmithInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-const toolSmithDescription = "Run a TypeScript function body that calls native tools in code and returns one value, or list the saved functions of the library. Use run to do many tool calls and filtering in one step."
+const toolSmithDescription = "Run a TypeScript function body in a child process and return one value, or list the saved functions of the library. Saved functions are reusable files called as fn.<name>(input) inside a run."
 
 // NewToolSmithTool creates the tool_smith tool. It is ReadOnly so several calls may
 // share a response, and a call with run says so through MayChangeFiles.
@@ -177,7 +177,7 @@ func executeToolSmith(
 	wrapperPath := filepath.Join(workDir, "wrapper.ts")
 	inputPath := filepath.Join(workDir, "input.json")
 	resultPath := filepath.Join(workDir, "result.txt")
-	wrapper := "import { deliver, tools } from \"./prelude.ts\";\nawait deliver(async (input) => {\n" + body + "\n});\n"
+	wrapper := "import { deliver, tools, fn } from \"./prelude.ts\";\nawait deliver(async (input) => {\n" + body + "\n});\n"
 	for path, content := range map[string]string{
 		wrapperPath:                          wrapper,
 		filepath.Join(workDir, "prelude.ts"): toolSmithPrelude,
@@ -189,11 +189,17 @@ func executeToolSmith(
 		}
 	}
 
+	if err := stageToolSmithFunctions(workDir, settings, execution.WorkspaceRoot); err != nil {
+		return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The saved functions could not be staged",
+			tools.Information{Key: "system_error", Value: err.Error()})
+	}
+
 	argv := make([]string, len(settings.Interpreter))
 	for index, item := range settings.Interpreter {
 		argv[index] = strings.ReplaceAll(item, "{file}", wrapperPath)
 	}
-	extraEnv := map[string]string{execResultEnv: resultPath, toolSmithInputEnv: inputPath}
+	extraEnv := map[string]string{execResultEnv: resultPath, toolSmithInputEnv: inputPath,
+		toolSmithFunctionsEnv: filepath.Join(workDir, "fn-manifest.json")}
 	var bridge *toolSmithBridge
 	if allowed := nested.allowed(settings); len(allowed) > 0 {
 		bridge, err = startToolSmithBridge(ctx, workDir, settings, allowed, execution)

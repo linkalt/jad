@@ -85,6 +85,42 @@ export const tools = new Proxy(
   },
 );
 
+const manifest = JSON.parse(readFileSync(process.env.TOOL_SMITH_FUNCTIONS, "utf8"));
+
+function unknownFunction(name) {
+  if (manifest.library_error) {
+    return "no saved function " + name + "; the function library is unavailable: " + manifest.library_error;
+  }
+  return (
+    "no saved function " + name + "; available: " + (manifest.available.join(", ") || "(none)") +
+    (manifest.more ? ", and " + manifest.more + " more" : "") +
+    (manifest.scan_cut ? " (only the first files were scanned; raise list_max_files)" : "")
+  );
+}
+
+export const fn = new Proxy(
+  {},
+  {
+    get(_target, name) {
+      if (typeof name !== "string" || name === "then" || name === "toJSON") return undefined;
+      return async (arg) => {
+        if (Object.hasOwn(manifest.malformed, name)) {
+          throw new Error("function " + name + " is malformed: " + manifest.malformed[name]);
+        }
+        if (!manifest.callable.includes(name)) throw new Error(unknownFunction(name));
+        const mod = await import("./fn/" + name + ".ts");
+        if (typeof mod[name] !== "function") {
+          throw new Error("function " + name + " is malformed: export async function " + name + " is missing");
+        }
+        return mod[name](arg);
+      };
+    },
+  },
+);
+
+globalThis.tools = tools;
+globalThis.fn = fn;
+
 export async function deliver(body) {
   try {
     const value = await body(input);

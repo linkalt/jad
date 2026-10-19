@@ -23,13 +23,14 @@ const defaultNativeToolSmithListMaxFiles int64 = 200
 const maxNativeToolSmithListMaxFiles int64 = 10000
 const defaultNativeToolSmithListHeaderBytes int64 = 2048
 const maxNativeToolSmithListHeaderBytes int64 = 65536
+const defaultNativeToolSmithFunctionMax int64 = 64 * 1024
 
 var (
 	// nativeToolSmithOwnKeys and the bash-style keys form the section; env_file and paths
 	// are left out on purpose, so tool_smith has no env file and no path policy of its own.
 	nativeToolSmithOwnKeys = []string{
 		"functions_dir", "code_max_bytes", "result_max_bytes", "nested_result_max_bytes",
-		"nested_request_max_bytes", "max_nested_calls", "max_parallel_calls", "list_max_results", "list_max_files", "list_header_bytes", "tools",
+		"nested_request_max_bytes", "max_nested_calls", "max_parallel_calls", "list_max_results", "list_max_files", "list_header_bytes", "function_max_bytes", "tools",
 		"interpreter",
 	}
 	nativeToolSmithKeys = append(nativeBashStyleKeysWithout("env_file", "paths"), nativeToolSmithOwnKeys...)
@@ -77,6 +78,8 @@ type NativeToolSmithSettings struct {
 	ListMaxResults        int64
 	ListMaxFiles          int64
 	ListHeaderBytes       int64
+	// FunctionMaxBytes is the largest saved function file fn copies; larger files count as malformed.
+	FunctionMaxBytes int64
 	// Tools are the native tools a script may call, in configured order.
 	Tools []string
 	// Interpreter is the argv that launches the script file; {file} stands for its path.
@@ -156,6 +159,9 @@ func normalizeNativeToolSmithSettings(
 		return nil, err
 	}
 	if settings.ListHeaderBytes, err = configuredInteger(fields, "list_header_bytes", defaultNativeToolSmithListHeaderBytes, 1, maxNativeToolSmithListHeaderBytes, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.FunctionMaxBytes, err = configuredInteger(fields, "function_max_bytes", defaultNativeToolSmithFunctionMax, 1, maxNativeToolBytes, settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.Tools, err = normalizeNativeToolSmithTools(fields, settingPath+": "+section+".tools"); err != nil {

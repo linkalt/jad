@@ -81,7 +81,7 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"profile_message deny bare id", "profile_message", `{"deny_profiles":["coder"]}`, false},
 		{"profile_message deny bad id", "profile_message", `{"deny_profiles":["a b"]}`, false},
 		{"profile_message zero timeout", "profile_message", `{"timeout_ms":0}`, false},
-		{"tool_smith every key", "tool_smith", `{"approval":"ask",` + toolSmithChild + `,` + run + `,"functions_dir":".jad/functions","code_max_bytes":10,"result_max_bytes":10,"nested_result_max_bytes":10,"nested_request_max_bytes":10,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":3,"list_max_files":4,"list_header_bytes":512,"tools":["read","write"],"interpreter":["node","{file}"]}`, true},
+		{"tool_smith every key", "tool_smith", `{"approval":"ask",` + toolSmithChild + `,` + run + `,"functions_dir":".jad/functions","code_max_bytes":10,"result_max_bytes":10,"nested_result_max_bytes":10,"nested_request_max_bytes":10,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":3,"list_max_files":4,"list_header_bytes":512,"function_max_bytes":10,"tools":["read","write"],"interpreter":["node","{file}"]}`, true},
 		{"tool_smith no keys", "tool_smith", `{}`, true},
 		{"tool_smith unknown", "tool_smith", `{"nope":1}`, false},
 		{"tool_smith has no env_file", "tool_smith", `{"env_file":".env"}`, false},
