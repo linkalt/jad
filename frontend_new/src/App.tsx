@@ -2992,6 +2992,14 @@ function App({
    * picker and the usage details. Each is built from its own pane and gated on
    * that pane's view key, so opening one in a pane leaves every other pane's
    * drawer alone — and the drawer stays put when focus moves.
+   *
+   * The profile list offers only what the pane knows: a pick is a change of the
+   * conversation this pane shows, never a request to the server, so neither a
+   * run in flight nor a rewrite of that session can make it wrong. It stays
+   * usable while its own conversation streams — the run keeps going, keyed by
+   * session, whether or not a pane is watching it — and a pick from it is the
+   * way to stop watching one conversation and follow another. The model picker
+   * and the rest keep their guards: those change a stored setting.
    */
   const paneInfoDrawer = (pane: ReturnType<typeof paneView>): ReactNode => {
     if (pane.session === undefined) {
@@ -3003,14 +3011,7 @@ function App({
           rows={profileDrawerRows}
           selectedKey={pane.viewKey}
           openViewKeys={paneOpenViewKeys}
-          isDisabled={
-            pane.sessionRef === undefined ||
-            pane.isRunning ||
-            isCompactionInProgress ||
-            isModelDefaultUpdating ||
-            resettingViewKey !== null ||
-            frontCompactingViewKey !== null
-          }
+          isDisabled={pane.sessionRef === undefined}
           onChange={targetKey => switchPaneProfile(pane, targetKey)}
         />
       );

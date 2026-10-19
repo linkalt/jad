@@ -85,14 +85,34 @@ test('the toolbar control opens it for its own pane', () => {  const toolbar = a
   assert.equal(control.includes('isDisabled'), false, 'the control opens the drawer even while its run is going');
   assert.match(
     app,
-    /<ProfileDrawer[\s\S]*?isDisabled=\{\s*pane\.sessionRef === undefined \|\|\s*pane\.isRunning \|\|/,
-    'the pick is what waits for the run: the drawer itself carries the guard',
+    /<ProfileDrawer[\s\S]*?isDisabled=\{pane\.sessionRef === undefined\}/,
+    'only a pane with no session refuses a pick',
   );
   assert.match(
     toolbar,
     /hasProfileToSwitchTo\(profileDrawerRows, pane\.viewKey\)/,
     'a list with nothing but this conversation offers no control',
   );
+});
+
+test('a run in flight leaves the profile list usable', () => {
+  // The reported bug: with a run going, the drawer's one row was inert, so the
+  // list could not be expanded at all, and once open every row ignored a press.
+  // A pick only changes which conversation this pane shows — the run keeps
+  // going, keyed by session, with or without a pane watching it.
+  const profileDrawer = app.slice(app.indexOf('<ProfileDrawer'), app.indexOf('hasPaneDrawer(modelDrawers'));
+  assert.notEqual(profileDrawer, '', 'the profile drawer block is found');
+  assert.equal(
+    /pane\.isRunning|isCompactionInProgress|isModelDefaultUpdating|resettingViewKey|frontCompactingViewKey/.test(profileDrawer),
+    false,
+    'nor a compaction, nor a pending setting write, closes the profile list',
+  );
+  assert.match(profileDrawer, /isDisabled=\{pane\.sessionRef === undefined\}/, 'the drawer carries only the missing-session guard');
+  // The model picker is the opposite case: it writes a stored setting, so its
+  // own run and the other in-flight writes still hold it closed.
+  const modelDrawer = app.slice(app.indexOf('<ModelDrawer'), app.indexOf('hasPaneDrawer(usageDrawers'));
+  assert.match(modelDrawer, /pane\.isRunning/, 'the model picker keeps its guards');
+  assert.match(modelDrawer, /isCompactionInProgress/);
 });
 
 test('the drawer follows the model drawer: one row closed, every row open', () => {
