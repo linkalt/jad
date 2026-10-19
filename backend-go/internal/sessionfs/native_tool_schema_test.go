@@ -68,7 +68,7 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"decide paths", "decide", `{"paths":` + paths + `,"max_images":2}`, true},
 		{"decide unknown", "decide", `{"nope":1}`, false},
 		{"decide bad paths", "decide", `{"paths":3}`, false},
-		{"profile_message every key", "profile_message", `{"deny_profiles":["a","exec/fast"],"timeout_ms":1000,"result_max_bytes":100,"approval":"ask"}`, true},
+		{"profile_message every key", "profile_message", `{"deny_profiles":["dev/a","exec/fast"],"timeout_ms":1000,"result_max_bytes":100,"approval":"ask"}`, true},
 		{"profile_message bad approval", "profile_message", `{"approval":"on"}`, false},
 		{"profile_message unknown", "profile_message", `{"nope":1}`, false},
 		{"profile_message old profiles key", "profile_message", `{"profiles":["a"]}`, false},
@@ -76,7 +76,8 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"profile_message null deny list", "profile_message", `{"deny_profiles":null}`, true},
 		{"profile_message no keys", "profile_message", `{}`, true},
 		{"profile_message deny not a list", "profile_message", `{"deny_profiles":"a"}`, false},
-		{"profile_message deny duplicate", "profile_message", `{"deny_profiles":["a","a"]}`, false},
+		{"profile_message deny duplicate", "profile_message", `{"deny_profiles":["dev/a","dev/a"]}`, false},
+		{"profile_message deny bare id", "profile_message", `{"deny_profiles":["coder"]}`, false},
 		{"profile_message deny bad id", "profile_message", `{"deny_profiles":["a b"]}`, false},
 		{"profile_message zero timeout", "profile_message", `{"timeout_ms":0}`, false},
 	}

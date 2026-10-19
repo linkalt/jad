@@ -15,7 +15,7 @@ const (
 var (
 	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "result_max_bytes", "approval"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
-	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$|^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
 
 // NativeProfileMessageSettings holds the settings of native.profile_message. A nil

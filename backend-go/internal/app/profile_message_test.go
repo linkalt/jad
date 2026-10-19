@@ -481,6 +481,61 @@ func TestProfileMessageToolCallToAProfileOverTheCallersTranscriptReportsSameTran
 	}
 }
 
+func TestProfileMessageTargetsFollowTheSessionScope(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{}},"mcp":{}}`)
+	if err := os.MkdirAll(filepath.Join(f.root, "profiles", "extra"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.overwrite(t, "profiles/extra/third.json", `{"models":["openai/large"],"toolset":"coding/none"}`)
+	f.captureBodies = true
+	f.script = scriptFunctionCall("profile_message", map[string]any{"profile": "extra/third", "message": "hi"})
+
+	status, body := f.do(t, http.MethodGet, "/api/sessions/local:demo/tools", "")
+	if status != http.StatusOK || !strings.Contains(body, "review/reviewer") || strings.Contains(body, "extra/third") {
+		t.Fatalf("tools: %d %s, want the in-scope profile offered and not extra/third", status, body)
+	}
+	if status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run", `{"input":"go"}`); status != http.StatusOK {
+		t.Fatalf("run: %d %s", status, body)
+	}
+	f.mu.Lock()
+	last := f.bodies[len(f.bodies)-1]
+	f.mu.Unlock()
+	if !strings.Contains(last, "function_call_output") || !strings.Contains(last, "unknown_profile") {
+		t.Fatalf("the call to a profile outside the scope did not report unknown_profile: %s", last)
+	}
+}
+
+func TestProfileMessageWithNoOtherProfileFailsWhenTheToolsAreBuilt(t *testing.T) {
+	cases := map[string]struct{ toolset, session string }{
+		"one profile in scope": {`{"native":{"profile_message":{}},"mcp":{}}`, `"scope":{"profiles":["dev"]}`},
+		"every other denied":   {`{"native":{"profile_message":{"deny_profiles":["review/reviewer"]}},"mcp":{}}`, `"scope":{"profiles":["dev","review"]}`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newLayoutFixture(t)
+			f.overwrite(t, "tools/coding/none.json", tc.toolset)
+			f.overwrite(t, "sessions/demo.json", `{"schema_version":1,"cwd":"`+f.cwd+`","category":"work",`+tc.session+`}`)
+
+			status, body := f.do(t, http.MethodGet, "/api/sessions/local:demo/tools?profile="+url.QueryEscape("dev/coder"), "")
+			text := errorText([]byte(body))
+			if status != http.StatusUnprocessableEntity || !strings.Contains(text, "no profile to message") || !strings.Contains(text, "dev/coder") {
+				t.Fatalf("tools: %d %s, want 422 naming the profile", status, body)
+			}
+			_, body = f.do(t, http.MethodPost, "/api/sessions/local:demo/run", `{"input":"go"}`)
+			if strings.Contains(body, "event: completed") {
+				t.Fatalf("the run completed: %s", body)
+			}
+			f.mu.Lock()
+			reached := len(f.models)
+			f.mu.Unlock()
+			if reached != 0 {
+				t.Fatalf("the provider got %d requests, want none", reached)
+			}
+		})
+	}
+}
+
 func TestProfileMessageRefusesNestedCallsAndTheCallerItself(t *testing.T) {
 	f := newLayoutFixture(t)
 	messenger := profileMessenger{resolver: f.service.resolver}
