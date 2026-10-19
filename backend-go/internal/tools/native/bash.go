@@ -169,6 +169,8 @@ type shellChildRun struct {
 type shellResultFile struct {
 	path     string
 	maxBytes int64
+	// cutMarker adds a visible line with the cut counts to an answer that was cut.
+	cutMarker bool
 }
 
 type shellProgram struct {
@@ -243,6 +245,10 @@ func runShellChild(
 	var answer *shellResult
 	if run.resultFile != nil {
 		answer = readShellResultFile(run.resultFile.path, run.resultFile.maxBytes)
+		if answer != nil && answer.cutBytes > 0 && run.resultFile.cutMarker {
+			answer.text += fmt.Sprintf("\n[result cut: %d bytes omitted after %d bytes]", answer.cutBytes, len(answer.text))
+			answer.marked = true
+		}
 	}
 	return renderBashExecutionResult(execution.CallID, resolved.displayPath, run.file, timeoutMs, child, spillDecision, answer, run.program, run.settingsSection())
 }
@@ -260,6 +266,8 @@ func sortedKeys(values map[string]string) []string {
 type shellResult struct {
 	text     string
 	cutBytes int64
+	// marked is set when the text carries a cut marker, so the result also says truncated.
+	marked bool
 }
 
 // readShellResultFile reads the answer, cut to maxBytes without splitting a character and
@@ -455,6 +463,11 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 	}
 	if answer != nil && answer.cutBytes > 0 {
 		measured = append(measured, tools.Information{Key: "result_truncated_bytes", Value: answer.cutBytes})
+	}
+	if answer != nil && answer.marked && !truncated {
+		measured = append(measured,
+			tools.Information{Key: "truncated", Value: true},
+			tools.Information{Key: "truncation_reason", Value: "max_bytes"})
 	}
 
 	render := func(status tools.Status, summary string, errorFields ...tools.Information) string {

@@ -160,6 +160,7 @@ type SessionConfig struct {
 	NativeDecide         *NativeDecideSettings
 	NativeSubagent       *NativeSubagentSettings
 	NativeProfileMessage *NativeProfileMessageSettings
+	NativeToolSmith      *NativeToolSmithSettings
 	// AgentToolsets holds, by key, the merged settings of the toolsets a sub-agent names
 	// in its toolset key. The key is the ids joined with "+" (one id: the id itself). Only the tool settings and MCP servers of an
 	// entry are used; it has no subagent tool.
@@ -453,6 +454,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	nativeToolSmith, err := normalizeNativeToolSmithSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, location.StateDir(), storagePaths.ToolStorage, envFileBase, nativeReadPolicy, grepPolicy)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	nativeProcess, err := normalizeNativeProcessSettings(
 		setting,
 		location.Root.GlobalJadRoot,
@@ -465,7 +470,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	applyApprovalDefault(approval.Default, setting, nativeWrite, nativeEdit, nativeBash, nativeExec, nativeProcess, nativeProfileMessage, mcpServers)
+	applyApprovalDefault(approval.Default, setting, nativeWrite, nativeEdit, nativeBash, nativeExec, nativeProcess, nativeProfileMessage, nativeToolSmith, mcpServers)
 	stateContext, err := normalizeStateContextSettings(setting, settingPath, cwd, nativeProcess, nativeTask, nativeMemory, nativeSubagent)
 	if err != nil {
 		return SessionConfig{}, err
@@ -580,6 +585,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeDecide:          nativeDecide,
 		NativeSubagent:        nativeSubagent,
 		NativeProfileMessage:  nativeProfileMessage,
+		NativeToolSmith:       nativeToolSmith,
 		GlobalJadRoot:         location.Root.GlobalJadRoot,
 		MCPServers:            mcpServers,
 		StateContext:          stateContext,

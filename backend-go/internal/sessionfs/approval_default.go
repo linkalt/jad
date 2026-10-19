@@ -49,6 +49,7 @@ func applyApprovalDefault(
 	exec *NativeExecSettings,
 	process *NativeProcessSettings,
 	profileMessage *NativeProfileMessageSettings,
+	toolSmith *NativeToolSmithSettings,
 	servers []MCPServerReference,
 ) {
 	if mode != ApprovalAsk {
@@ -71,6 +72,9 @@ func applyApprovalDefault(
 	}
 	if profileMessage != nil && !nativeToolHasApprovalKey(setting, "profile_message") {
 		profileMessage.Approval = mode
+	}
+	if toolSmith != nil && !nativeToolHasApprovalKey(setting, "tool_smith") {
+		toolSmith.Approval = mode
 	}
 	var entries []map[string]json.RawMessage
 	if json.Unmarshal(setting["mcp_servers"], &entries) != nil {

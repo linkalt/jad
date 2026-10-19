@@ -78,7 +78,7 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 // BuildCatalogWithMessenger is BuildCatalogWithSubagents plus the messenger behind the
 // profile_message tool. Without a messenger the tool is not offered.
 func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.NativeDecide == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.NativeDecide == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -188,6 +188,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		return nil, nil, nil, err
 	}
 	var loaded []tools.Tool
+	toolSmithNested := &ToolSmithNested{}
 	if config.NativeRead != nil {
 		definition, err := requireNativeDefinition(config, definitions, "read", readToolID, readInputSchema)
 		if err != nil {
@@ -363,6 +364,19 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
+	if config.NativeToolSmith != nil {
+		definition, err := requireNativeDefinition(config, definitions, "tool_smith", toolSmithToolID, toolSmithInputSchema)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		tool, err := NewToolSmithTool(*config.NativeToolSmith, config.Model.APIKeyEnv, toolSmithNested)
+		if err != nil {
+			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		tool.Definition = definition
+		tool.Approval = approvalMode(config.NativeToolSmith.Approval)
+		loaded = append(loaded, tool)
+	}
 	if config.NativeDecide != nil {
 		definition, err := requireNativeDefinition(config, definitions, "decide", decideToolID, decideInputSchema)
 		if err != nil {
@@ -376,7 +390,9 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
-	return WithToolEventHooksAll(loaded, config.Hooks, config.Model.APIKeyEnv), definitions, manager, nil
+	loaded = WithToolEventHooksAll(loaded, config.Hooks, config.Model.APIKeyEnv)
+	toolSmithNested.Bind(loaded, config.ProfileTools.Deny)
+	return loaded, definitions, manager, nil
 }
 
 // approvalMode maps a tool's normalized approval setting to the catalog's field:
@@ -424,6 +440,8 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeSubagent != nil
 	case "profile_message":
 		return config.NativeProfileMessage != nil
+	case "tool_smith":
+		return config.NativeToolSmith != nil
 	default:
 		return false
 	}

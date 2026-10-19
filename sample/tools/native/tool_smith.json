@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.tool_smith",
+      "source": "native",
+      "name": "tool_smith",
+      "description": "Run a TypeScript function body that calls native tools in code and returns one value, or list the saved functions of the library. Use run to do many tool calls and filtering in one step.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "list": {
+            "type": "object",
+            "properties": {
+              "filters": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Case-insensitive substrings matched on function name and description."
+              }
+            },
+            "additionalProperties": false
+          },
+          "run": {
+            "type": "object",
+            "properties": {
+              "function": {
+                "type": "string",
+                "description": "TypeScript async function body."
+              },
+              "input": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "JSON data bound to the input variable."
+              }
+            },
+            "required": ["function"],
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -17,6 +17,15 @@ func TestNativeToolConfiguredKnowsProfileMessage(t *testing.T) {
 	}
 }
 
+func TestNativeToolConfiguredKnowsToolSmith(t *testing.T) {
+	if !nativeToolConfigured(sessionfs.SessionConfig{NativeToolSmith: &sessionfs.NativeToolSmithSettings{}}, "tool_smith") {
+		t.Fatal("tool_smith is not seen as configured")
+	}
+	if nativeToolConfigured(sessionfs.SessionConfig{}, "tool_smith") {
+		t.Fatal("tool_smith is seen as configured on an empty config")
+	}
+}
+
 // Every name the loader accepts under tools.native has exactly one Native* settings
 // field in SessionConfig, and nativeToolConfigured sees that field.
 func TestNativeToolConfiguredCoversEveryRegisteredName(t *testing.T) {

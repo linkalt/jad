@@ -1166,6 +1166,126 @@
               },
               "unevaluatedProperties": false
             },
+            "tool_smith": {
+              "type": "object",
+              "description": "Go backend only. Runs a TypeScript function body in an external interpreter child and lists a library of saved functions. The body calls native tools through a Go-owned bridge (a Unix socket in a private per-run directory; its path and a per-run token reach the child as environment variables). It has its own child-process settings, read with bash's keys and defaults from tools.native.tool_smith; nothing is taken from tools.native.bash. env_file and paths are not keys here: the child has no env file and no path policy of its own. Off unless this key is present. Needs tool_smith in tool_definition_paths. A sub-agent never gets this tool.",
+              "properties": {
+                "shell": {"$ref": "#/$defs/child_process_style/properties/shell"},
+                "login_shell": {"$ref": "#/$defs/child_process_style/properties/login_shell"},
+                "kill_grace_ms": {"$ref": "#/$defs/child_process_style/properties/kill_grace_ms"},
+                "max_line_chars": {"$ref": "#/$defs/child_process_style/properties/max_line_chars"},
+                "stdin_max_bytes": {"$ref": "#/$defs/child_process_style/properties/stdin_max_bytes"},
+                "strip_ansi": {"$ref": "#/$defs/child_process_style/properties/strip_ansi"},
+                "env": {"$ref": "#/$defs/child_process_style/properties/env"},
+                "env_deny": {"$ref": "#/$defs/child_process_style/properties/env_deny"},
+                "timeout_ms": {"$ref": "#/$defs/bash_style/properties/timeout_ms"},
+                "max_timeout_ms": {"$ref": "#/$defs/bash_style/properties/max_timeout_ms"},
+                "kill_deadline_ms": {"$ref": "#/$defs/bash_style/properties/kill_deadline_ms"},
+                "drain_after_exit_ms": {"$ref": "#/$defs/bash_style/properties/drain_after_exit_ms"},
+                "kill_process_group": {"$ref": "#/$defs/bash_style/properties/kill_process_group"},
+                "max_bytes": {"$ref": "#/$defs/bash_style/properties/max_bytes"},
+                "stdout": {"$ref": "#/$defs/bash_style/properties/stdout"},
+                "stderr": {"$ref": "#/$defs/bash_style/properties/stderr"},
+                "spill": {"$ref": "#/$defs/bash_style/properties/spill"},
+                "approval": {
+                  "type": "string",
+                  "enum": ["off", "ask"],
+                  "description": "ask pauses every call until the user approves it; the question shows the code. When absent, approval.default applies (off unless set). Approval of a run never approves the writes its script makes: a nested call of a tool that has approval ask prompts on its own. Approval is a confirmation, not a sandbox."
+                },
+                "functions_dir": {
+                  "type": "string",
+                  "minLength": 1,
+                  "default": ".jad/functions",
+                  "description": "Library of saved functions, a relative directory inside the workspace. The model reads and edits the files with the ordinary tools. list checks workspace containment and symlinks, but not the read path rules."
+                },
+                "code_max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 262144,
+                  "description": "Largest script text one call may carry, in UTF-8 bytes. A larger text is refused, never cut."
+                },
+                "result_max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 16384,
+                  "description": "Largest value a run returns. A longer one is cut at a character and the result says so; it is not written to a spill file."
+                },
+                "nested_result_max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 16384,
+                  "description": "Largest result of one nested tool call handed to the script. A longer one is cut and its info says truncated."
+                },
+                "nested_request_max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 65536,
+                  "description": "Largest request a script may send to the tool bridge, in bytes. A longer one is refused with frame too large and that bridge connection is closed."
+                },
+                "max_nested_calls": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000,
+                  "default": 100,
+                  "description": "Most nested tool calls one run may make."
+                },
+                "max_parallel_calls": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 64,
+                  "default": 4,
+                  "description": "Most read-only nested calls that run at once. Calls that may change files run one at a time."
+                },
+                "list_max_results": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "default": 50,
+                  "description": "Most functions one list returns. A cut result says truncated."
+                },
+                "list_max_files": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000,
+                  "default": 200,
+                  "description": "Most files of functions_dir one list scans."
+                },
+                "list_header_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65536,
+                  "default": 2048,
+                  "description": "Bytes read from the start of each library file to find its description and signature."
+                },
+                "tools": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "default": ["read", "grep", "glob"],
+                  "description": "Native tools a script may call, in this order. bash, exec, process, subagent, tool_smith and task can never be called through the bridge. The script itself is unsandboxed (exec/bash trust) and may use raw fs, network and process APIs.",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "not": {"enum": ["bash", "exec", "process", "subagent", "tool_smith", "task"]}
+                  }
+                },
+                "interpreter": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "default": ["bun", "run", "{file}"],
+                  "description": "The interpreter and its fixed flags, run without a shell. One item contains {file}, replaced by the path of the script file Go writes.",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
             "glob": {
               "type": "object",
               "description": "File listing by name pattern. Read-only. The path rules for the searched directory are its own (read_style): without paths it reaches the workspace only, not what read allows.",

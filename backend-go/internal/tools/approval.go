@@ -166,6 +166,15 @@ func ApprovalPreview(call ApprovalCall, maxBytes int64) (Preview, error) {
 		fields = appendPresent(fields, call.Args, "cwd")
 		fields = appendPresent(fields, call.Args, "timeout_ms")
 		title = "Run code"
+	case call.Tool == "tool_smith":
+		// The function body is what runs; a call with only list shows just the tool.
+		switch run := call.Args["run"].(type) {
+		case map[string]any:
+			fields = appendString(fields, run, "function", maxBytes)
+		case string:
+			fields = appendText(fields, "function", run, maxBytes)
+		}
+		title = "Run script"
 	case call.Tool == "process":
 		fields = append(fields, previewField{"action", "start"})
 		fields = appendString(fields, call.Args, "command", maxBytes)

@@ -36,6 +36,7 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 	setting := compileSchema(t, "setting.schema.json")
 	paths := `{"allow":["a"],"deny":["b"]}`
 	child := `"shell":"/bin/sh","login_shell":true,"kill_grace_ms":5,"max_line_chars":100,"stdin_max_bytes":10,"strip_ansi":false,"env":{"A":"1"},"env_deny":["B"],"paths":` + paths
+	toolSmithChild := `"shell":"/bin/sh","login_shell":true,"kill_grace_ms":5,"kill_deadline_ms":5,"drain_after_exit_ms":5,"max_line_chars":100,"stdin_max_bytes":10,"strip_ansi":false,"env":{"A":"1"},"env_deny":["B"]`
 	run := `"timeout_ms":1000,"max_timeout_ms":2000,"kill_process_group":"always","max_bytes":65536,"stdout":{"head_bytes":1,"tail_bytes":1},"stderr":{"head_bytes":1,"tail_bytes":1},"spill":{"enabled":false}`
 	cases := []struct {
 		name   string
@@ -80,6 +81,20 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"profile_message deny bare id", "profile_message", `{"deny_profiles":["coder"]}`, false},
 		{"profile_message deny bad id", "profile_message", `{"deny_profiles":["a b"]}`, false},
 		{"profile_message zero timeout", "profile_message", `{"timeout_ms":0}`, false},
+		{"tool_smith every key", "tool_smith", `{"approval":"ask",` + toolSmithChild + `,` + run + `,"functions_dir":".jad/functions","code_max_bytes":10,"result_max_bytes":10,"nested_result_max_bytes":10,"nested_request_max_bytes":10,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":3,"list_max_files":4,"list_header_bytes":512,"tools":["read","write"],"interpreter":["node","{file}"]}`, true},
+		{"tool_smith no keys", "tool_smith", `{}`, true},
+		{"tool_smith unknown", "tool_smith", `{"nope":1}`, false},
+		{"tool_smith has no env_file", "tool_smith", `{"env_file":".env"}`, false},
+		{"tool_smith has no paths", "tool_smith", `{"paths":` + paths + `}`, false},
+		{"tool_smith bad approval", "tool_smith", `{"approval":"on"}`, false},
+		{"tool_smith zero code max", "tool_smith", `{"code_max_bytes":0}`, false},
+		{"tool_smith zero request max", "tool_smith", `{"nested_request_max_bytes":0}`, false},
+		{"tool_smith request max too high", "tool_smith", `{"nested_request_max_bytes":10485761}`, false},
+		{"tool_smith parallel too high", "tool_smith", `{"max_parallel_calls":65}`, false},
+		{"tool_smith excluded tool", "tool_smith", `{"tools":["bash"]}`, false},
+		{"tool_smith duplicate tool", "tool_smith", `{"tools":["read","read"]}`, false},
+		{"tool_smith empty interpreter", "tool_smith", `{"interpreter":[]}`, false},
+		{"tool_smith empty functions_dir", "tool_smith", `{"functions_dir":""}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -119,7 +134,7 @@ func TestExecAndReadImageSchemaKeysMatchTheLoader(t *testing.T) {
 		t.Error("toolset.schema.json native must reference setting.schema.json, not repeat the tool settings")
 	}
 
-	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys, "decide": nativeDecideKeys, "profile_message": nativeProfileMessageKeys} {
+	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys, "decide": nativeDecideKeys, "profile_message": nativeProfileMessageKeys, "tool_smith": nativeToolSmithKeys} {
 		got := flattenSchemaKeys(native[tool].(map[string]any), defs)
 		sort.Strings(got)
 		want = append([]string(nil), want...)
