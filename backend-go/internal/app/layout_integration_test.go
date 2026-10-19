@@ -32,6 +32,8 @@ type layoutFixture struct {
 	// the client gives up, so a test can have a run in flight.
 	hold    bool
 	reached chan struct{}
+	// cancelled, when set, receives one value each time a held request's context ends.
+	cancelled chan struct{}
 	// script, when set, returns the JSON output item a request is answered with; "" keeps the plain "ok" message.
 	script func(model, body string) string
 	// server is merged into the root setting's server object before the config is loaded.
@@ -58,11 +60,14 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 		if f.captureBodies {
 			f.bodies = append(f.bodies, string(raw))
 		}
-		hold, reached, script := f.hold, f.reached, f.script
+		hold, reached, cancelled, script := f.hold, f.reached, f.cancelled, f.script
 		f.mu.Unlock()
 		if hold {
 			reached <- struct{}{}
 			<-r.Context().Done()
+			if cancelled != nil {
+				cancelled <- struct{}{}
+			}
 			return
 		}
 		item := `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}`

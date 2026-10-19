@@ -479,3 +479,97 @@ func TestProfileMessageRefusesNestedCallsAndTheCallerItself(t *testing.T) {
 		t.Fatalf("self call error = %v, want ErrProfileCycle", err)
 	}
 }
+
+// holdTheTargetRun scripts the caller's first request to call review/reviewer and holds the target's
+// provider request (only that one) until its context ends.
+func holdTheTargetRun(f *layoutFixture) {
+	call := scriptFunctionCall("profile_message", map[string]any{"profile": "review/reviewer", "message": "hi"})
+	f.reached, f.cancelled = make(chan struct{}, 4), make(chan struct{}, 4)
+	f.script = func(model, body string) string {
+		if model == "model-small" && !strings.Contains(body, "function_call_output") {
+			f.mu.Lock()
+			f.hold = true
+			f.mu.Unlock()
+		}
+		return call(model, body)
+	}
+}
+
+func awaitSignal(t *testing.T, signal <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+func targetRunErrorCache(f *layoutFixture) string {
+	cache, _ := os.ReadFile(filepath.Join(f.cwd, ".jad", "state", "demo", "review", "reviewer", "staging", "run-error-cache.json"))
+	return string(cache)
+}
+
+func TestProfileMessageTimeoutCutsTheTargetRunEndToEnd(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"profiles":["review/reviewer"],"timeout_ms":200}},"mcp":{}}`)
+	f.captureBodies = true
+	holdTheTargetRun(f)
+	coder := boundRunnerOf(t, f, "dev/coder")
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := coder.Run(runCtx, json.RawMessage(`"go"`), session.RunOptions{})
+		done <- err
+	}()
+	awaitSignal(t, f.reached, "the target's provider request")
+	f.mu.Lock()
+	f.hold = false
+	f.mu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("caller run: %v, want success after the tool timed out", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the caller run did not finish after the timeout")
+	}
+	awaitSignal(t, f.cancelled, "the held provider request to be cancelled")
+
+	f.mu.Lock()
+	last := f.bodies[len(f.bodies)-1]
+	f.mu.Unlock()
+	if !strings.Contains(last, "function_call_output") || !strings.Contains(last, "profile_timeout") {
+		t.Fatalf("the caller's next request did not carry profile_timeout: %s", last)
+	}
+	if cache := targetRunErrorCache(f); !strings.Contains(cache, profileRunFailureText) {
+		t.Fatalf("target run error not recorded; cache: %s", cache)
+	}
+}
+
+func TestProfileMessageCallerCancelReachesTheTargetProviderRequest(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"profiles":["review/reviewer"],"timeout_ms":600000}},"mcp":{}}`)
+	holdTheTargetRun(f)
+	coder := boundRunnerOf(t, f, "dev/coder")
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := coder.Run(runCtx, json.RawMessage(`"go"`), session.RunOptions{})
+		done <- err
+	}()
+	awaitSignal(t, f.reached, "the target's provider request")
+	cancel()
+	awaitSignal(t, f.cancelled, "the held provider request to be cancelled")
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the caller run did not return after cancel")
+	}
+	if cache := targetRunErrorCache(f); strings.Contains(cache, profileRunFailureText) {
+		t.Fatalf("a cancelled target run was recorded as an error; cache: %s", cache)
+	}
+}
