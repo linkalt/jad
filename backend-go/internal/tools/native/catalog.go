@@ -114,7 +114,10 @@ func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks,
 		if err != nil {
 			return nil, err
 		}
-		targets := ProfileMessageTargets(config.Profiles, config.Profile, config.NativeProfileMessage.DenyProfiles)
+		targets := sessionfs.ProfileMessageTargets(config.Profiles, config.Profile, config.NativeProfileMessage.DenyProfiles)
+		if len(targets) == 0 {
+			return nil, sessionfs.ProfileMessageNoTargetsError(config.SettingPath, config.Profile)
+		}
 		tool, err := NewProfileMessageTool(*config.NativeProfileMessage, targets, messenger)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}

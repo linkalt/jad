@@ -60,18 +60,6 @@ type profileMessageTool struct {
 	messenger ProfileMessenger
 }
 
-// ProfileMessageTargets returns the session's profiles the caller may message: every
-// profile except the caller's own and the denied ones, in session order.
-func ProfileMessageTargets(sessionProfiles []string, caller string, denied []string) []string {
-	var targets []string
-	for _, id := range sessionProfiles {
-		if id != caller && !slices.Contains(denied, id) {
-			targets = append(targets, id)
-		}
-	}
-	return targets
-}
-
 // NewProfileMessageTool builds the profile_message tool over a messenger. targets are the
 // profiles the model may message.
 func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targets []string, messenger ProfileMessenger) (tools.Tool, error) {
@@ -79,7 +67,7 @@ func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targ
 		return tools.Tool{}, errors.New("tools.native.profile_message needs a messenger")
 	}
 	if len(targets) == 0 {
-		return tools.Tool{}, errors.New("profile_message has no profile to message: the session has no other profile, or every one is denied")
+		return tools.Tool{}, sessionfs.ErrProfileMessageNoTargets
 	}
 	if settings.TimeoutMs < 1 {
 		return tools.Tool{}, errors.New("tools.native.profile_message.timeout_ms must be at least 1")

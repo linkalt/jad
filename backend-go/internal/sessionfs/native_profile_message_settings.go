@@ -2,7 +2,9 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"errors"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -84,6 +86,27 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 		return nil, err
 	}
 	return &NativeProfileMessageSettings{DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), ResultMaxBytes: int(resultMaxBytes), Approval: approval}, nil
+}
+
+// ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.
+var ErrProfileMessageNoTargets = errors.New("profile_message has no profile to message: the session has no other profile, or every one is denied")
+
+// ProfileMessageTargets returns the session's profiles the caller may message: every
+// profile except the caller's own and the denied ones, in session order.
+func ProfileMessageTargets(sessionProfiles []string, caller string, denied []string) []string {
+	var targets []string
+	for _, id := range sessionProfiles {
+		if id != caller && !slices.Contains(denied, id) {
+			targets = append(targets, id)
+		}
+	}
+	return targets
+}
+
+// ProfileMessageNoTargetsError is the config error for a profile whose profile_message
+// has no target; the tool catalog and `jad check` both report it.
+func ProfileMessageNoTargetsError(settingPath, profile string) error {
+	return configError("%s (profile %s): %v", settingPath, profile, ErrProfileMessageNoTargets)
 }
 
 func normalizeProfileMessageDenyProfiles(raw json.RawMessage, settingPath, section string) ([]string, error) {

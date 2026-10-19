@@ -88,6 +88,15 @@ func (r *CheckReport) checkCatalog(layout Layout, roots []Root, kind CatalogKind
 	}
 }
 
+func (r *CheckReport) checkProfileMessage(id string, config SessionConfig) {
+	if config.NativeProfileMessage == nil {
+		return
+	}
+	if len(ProfileMessageTargets(config.Profiles, config.Profile, config.NativeProfileMessage.DenyProfiles)) == 0 {
+		r.add("session", id, ProfileMessageNoTargetsError(config.SettingPath, config.Profile))
+	}
+}
+
 func (r *CheckReport) checkSessions(roots []Root) {
 	files, err := listSessionFiles(roots, func(location Location, err error) {
 		r.Checked++
@@ -109,13 +118,17 @@ func (r *CheckReport) checkSessions(roots []Root) {
 			r.add("session", file.ID, err)
 			continue
 		}
+		r.checkProfileMessage(file.ID, config)
 		for _, profile := range config.Profiles {
 			if profile == config.Profile {
 				continue
 			}
-			if _, err := LoadLayoutSessionSettings(location, *location.Root.Layout, profile, ""); err != nil {
+			profileConfig, err := LoadLayoutSessionSettings(location, *location.Root.Layout, profile, "")
+			if err != nil {
 				r.add("session", fmt.Sprintf("%s (profile %s)", file.ID, profile), err)
+				continue
 			}
+			r.checkProfileMessage(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 		}
 	}
 }

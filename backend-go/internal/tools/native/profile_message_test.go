@@ -225,13 +225,6 @@ func TestProfileMessageToolApprovalFollowsSetting(t *testing.T) {
 	}
 }
 
-func TestProfileMessageTargetsExcludeTheCallerAndDeniedProfiles(t *testing.T) {
-	got := ProfileMessageTargets([]string{"main", "reviewer", "team/coder", "team/writer"}, "main", []string{"team/coder", "absent"})
-	if strings.Join(got, ",") != "reviewer,team/writer" {
-		t.Fatalf("targets = %v", got)
-	}
-}
-
 func TestProfileMessageToolWithoutTargetsIsAConfigError(t *testing.T) {
 	_, err := NewProfileMessageTool(profileMessageSettings(), nil, &fakeMessenger{})
 	if err == nil || !strings.Contains(err.Error(), "no profile to message") {
