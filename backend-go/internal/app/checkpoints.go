@@ -29,8 +29,13 @@ func (m boundMutation) RestoreCheckpoint(ctx context.Context, id string, request
 	if m.shared == nil {
 		return nil, errors.New("session transcript store is not initialized")
 	}
-	m.shared.runMu.Lock()
+	if err := m.shared.runMu.LockCtx(ctx); err != nil {
+		return nil, err
+	}
 	defer m.shared.runMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	result, err := checkpoint.ForSession(m.config, nil).Restore(id, checkpoint.RestoreOptions{DryRun: request.DryRun, Mode: request.Mode})
 	if err != nil {
 		var refusal *checkpoint.Error

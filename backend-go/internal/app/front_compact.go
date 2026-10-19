@@ -23,7 +23,9 @@ func (m boundMutation) FrontCompact(ctx context.Context, messageID string) (http
 	if m.shared == nil || m.shared.store == nil {
 		return result, errors.New("session transcript store is not initialized")
 	}
-	m.shared.runMu.Lock()
+	if err := m.shared.runMu.LockCtx(ctx); err != nil {
+		return result, err
+	}
 	defer m.shared.runMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return result, err

@@ -73,8 +73,13 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 	if m.shared == nil || m.shared.store == nil {
 		return result, errors.New("session transcript store is not initialized")
 	}
-	m.shared.runMu.Lock()
+	if err := m.shared.runMu.LockCtx(ctx); err != nil {
+		return result, err
+	}
 	defer m.shared.runMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	// TypeScript compact() loads the full configuration, so an unusable
 	// model.json fails the request with a 422 before the transcript is touched.
 	if _, err := m.config.WithModel(); err != nil {
@@ -131,7 +136,9 @@ func (m boundMutation) Reset(ctx context.Context) error {
 	if m.shared == nil || m.shared.store == nil {
 		return errors.New("session transcript store is not initialized")
 	}
-	m.shared.runMu.Lock()
+	if err := m.shared.runMu.LockCtx(ctx); err != nil {
+		return err
+	}
 	defer m.shared.runMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err

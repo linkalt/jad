@@ -32,8 +32,13 @@ func (m boundMutation) StateContext(ctx context.Context, prompt string, preview 
 	if m.shared == nil || m.shared.store == nil {
 		return result, errors.New("session transcript store is not initialized")
 	}
-	m.shared.runMu.Lock()
+	if err := m.shared.runMu.LockCtx(ctx); err != nil {
+		return result, err
+	}
 	defer m.shared.runMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	snapshot, include, err := collectStateContextSnapshotWithPrompt(m.config, stateContextSources{
 		process: m.processManager, task: m.taskStore, memory: m.memoryStore,
 		subagent: m.subagentManager, owner: m.owner,
