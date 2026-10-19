@@ -12,7 +12,7 @@
           "profile": {
             "type": "string",
             "minLength": 1,
-            "description": "Profile to message; one of the configured profiles."
+            "description": "Profile to message; one of the available profiles."
           },
           "message": {
             "type": "string",

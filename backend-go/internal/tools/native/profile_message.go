@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,7 +18,7 @@ const profileMessageToolID = "native.profile_message"
 var profileMessageInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "profile":{"type":"string","minLength":1,"description":"Profile to message; one of the configured profiles."},
+    "profile":{"type":"string","minLength":1,"description":"Profile to message; one of the available profiles."},
     "message":{"type":"string","minLength":1,"description":"The message to send. The profile sees nothing of this conversation."}
   },
   "required":["profile","message"],
@@ -55,16 +56,30 @@ type ProfileMessenger interface {
 
 type profileMessageTool struct {
 	settings  sessionfs.NativeProfileMessageSettings
+	targets   []string
 	messenger ProfileMessenger
 }
 
-// NewProfileMessageTool builds the profile_message tool over a messenger.
-func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, messenger ProfileMessenger) (tools.Tool, error) {
+// ProfileMessageTargets returns the session's profiles the caller may message: every
+// profile except the caller's own and the denied ones, in session order.
+func ProfileMessageTargets(sessionProfiles []string, caller string, denied []string) []string {
+	var targets []string
+	for _, id := range sessionProfiles {
+		if id != caller && !slices.Contains(denied, id) {
+			targets = append(targets, id)
+		}
+	}
+	return targets
+}
+
+// NewProfileMessageTool builds the profile_message tool over a messenger. targets are the
+// profiles the model may message.
+func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targets []string, messenger ProfileMessenger) (tools.Tool, error) {
 	if messenger == nil {
 		return tools.Tool{}, errors.New("tools.native.profile_message needs a messenger")
 	}
-	if len(settings.Profiles) == 0 {
-		return tools.Tool{}, errors.New("tools.native.profile_message.profiles must not be empty")
+	if len(targets) == 0 {
+		return tools.Tool{}, errors.New("profile_message has no profile to message: the session has no other profile, or every one is denied")
 	}
 	if settings.TimeoutMs < 1 {
 		return tools.Tool{}, errors.New("tools.native.profile_message.timeout_ms must be at least 1")
@@ -76,13 +91,13 @@ func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, mess
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native profile_message schema: %w", err)
 	}
-	runtime := &profileMessageTool{settings: settings, messenger: messenger}
+	runtime := &profileMessageTool{settings: settings, targets: targets, messenger: messenger}
 	return tools.Tool{
 		Definition: tools.Definition{
 			ID:          profileMessageToolID,
 			Source:      "native",
 			Name:        "profile_message",
-			Description: "Send a message to another profile and get its final answer." + profileMessageListText(settings),
+			Description: "Send a message to another profile and get its final answer." + profileMessageListText(targets),
 			InputSchema: append(json.RawMessage(nil), profileMessageInputSchema...),
 		},
 		Validator:          validator,
@@ -94,8 +109,8 @@ func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, mess
 	}, nil
 }
 
-func profileMessageListText(settings sessionfs.NativeProfileMessageSettings) string {
-	return " Profiles: " + strings.Join(settings.Profiles, ", ") + "."
+func profileMessageListText(targets []string) string {
+	return " Profiles: " + strings.Join(targets, ", ") + "."
 }
 
 // normalizeProfileMessageArguments treats a blank profile or message as absent, so the
@@ -119,17 +134,10 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	callID := execution.CallID
 	profile, _ := arguments["profile"].(string)
 	message, _ := arguments["message"].(string)
-	known := false
-	for _, candidate := range p.settings.Profiles {
-		if candidate == profile {
-			known = true
-			break
-		}
-	}
-	if !known {
+	if !slices.Contains(p.targets, profile) {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "unknown_profile",
-			fmt.Sprintf("Profile %s is not one of the configured profiles", profile),
-			tools.Information{Key: "available", Value: strings.Join(p.settings.Profiles, ", ")}), nil
+			fmt.Sprintf("Profile %s is not available to message", profile),
+			tools.Information{Key: "available", Value: strings.Join(p.targets, ", ")}), nil
 	}
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(p.settings.TimeoutMs)*time.Millisecond)
 	defer cancel()

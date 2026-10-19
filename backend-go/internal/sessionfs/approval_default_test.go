@@ -104,8 +104,8 @@ func TestApprovalDefaultAskReachesProfileMessageUnlessItSetsItsOwn(t *testing.T)
 		tool map[string]any
 		want string
 	}{
-		"absent":       {map[string]any{"profiles": []any{"a"}}, ApprovalAsk},
-		"explicit off": {map[string]any{"profiles": []any{"a"}, "approval": "off"}, ApprovalOff},
+		"absent":       {map[string]any{}, ApprovalAsk},
+		"explicit off": {map[string]any{"approval": "off"}, ApprovalOff},
 	} {
 		config, err := loadApprovalSetting(t, map[string]any{
 			"approval": map[string]any{"default": "ask"},

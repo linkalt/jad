@@ -142,12 +142,12 @@ func TestSubagentToolsetErrors(t *testing.T) {
 		},
 		"profile_message in the toolset": {
 			agent: map[string]any{"toolset": "extra/search"},
-			files: map[string]string{"extra/search": `{"native":{"grep":{},"profile_message":{"profiles":["review/reviewer"]}}}`},
+			files: map[string]string{"extra/search": `{"native":{"grep":{},"profile_message":{}}}`},
 			want:  "agent finder uses toolset extra/search: ",
 		},
 		"profile_message in the toolset names the session and the toolset": {
 			agent: map[string]any{"toolset": "extra/search"},
-			files: map[string]string{"extra/search": `{"native":{"grep":{},"profile_message":{"profiles":["review/reviewer"]}}}`},
+			files: map[string]string{"extra/search": `{"native":{"grep":{},"profile_message":{}}}`},
 			want:  ".json: tools.native.profile_message is not allowed in a toolset used by an agent (toolset extra/search); a sub-agent cannot message a profile",
 		},
 		"the toolset's own settings are checked": {

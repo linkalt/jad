@@ -153,7 +153,7 @@ func scriptFunctionCall(name string, arguments map[string]any) func(model, body 
 
 func TestProfileMessageRunCannotCallProfileMessageItself(t *testing.T) {
 	f := newLayoutFixture(t)
-	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"profiles":["dev/coder"]}},"mcp":{}}`)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{}},"mcp":{}}`)
 	f.captureBodies = true
 	f.script = scriptFunctionCall("profile_message", map[string]any{"profile": "dev/coder", "message": "again"})
 
@@ -459,7 +459,7 @@ func TestProfileMessageToADifferentProfileOverOneTranscriptReportsSameTranscript
 
 func TestProfileMessageToolCallToAProfileOverTheCallersTranscriptReportsSameTranscript(t *testing.T) {
 	f := newLayoutFixture(t)
-	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"profiles":["review/reviewer"]}},"mcp":{}}`)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{}},"mcp":{}}`)
 	f.captureBodies = true
 	coder, park := shareCoderTranscript(t, f)
 	call := scriptFunctionCall("profile_message", map[string]any{"profile": "review/reviewer", "message": "hi"})
@@ -525,7 +525,7 @@ func targetRunErrorCache(f *layoutFixture) string {
 
 func TestProfileMessageTimeoutCutsTheTargetRunEndToEnd(t *testing.T) {
 	f := newLayoutFixture(t)
-	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"profiles":["review/reviewer"],"timeout_ms":1000}},"mcp":{}}`)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"timeout_ms":1000}},"mcp":{}}`)
 	f.captureBodies = true
 	holdTheTargetRun(f)
 	coder := boundRunnerOf(t, f, "dev/coder")
@@ -565,7 +565,7 @@ func TestProfileMessageTimeoutCutsTheTargetRunEndToEnd(t *testing.T) {
 
 func TestProfileMessageCallerCancelReachesTheTargetProviderRequest(t *testing.T) {
 	f := newLayoutFixture(t)
-	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"profiles":["review/reviewer"],"timeout_ms":600000}},"mcp":{}}`)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"timeout_ms":600000}},"mcp":{}}`)
 	holdTheTargetRun(f)
 	coder := boundRunnerOf(t, f, "dev/coder")
 

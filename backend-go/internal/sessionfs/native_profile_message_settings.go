@@ -13,7 +13,7 @@ const (
 )
 
 var (
-	nativeProfileMessageKeys = []string{"profiles", "timeout_ms", "result_max_bytes", "approval"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "result_max_bytes", "approval"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$|^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -21,8 +21,9 @@ var (
 // NativeProfileMessageSettings holds the settings of native.profile_message. A nil
 // pointer in SessionConfig means the tool is not configured.
 type NativeProfileMessageSettings struct {
-	// Profiles are the profile ids the model may message, in configured order.
-	Profiles []string
+	// DenyProfiles are profile ids the model may not message, in configured order. The
+	// targets are the caller's session profiles minus these and the caller itself.
+	DenyProfiles []string
 	// TimeoutMs bounds the whole call.
 	TimeoutMs int
 	// ResultMaxBytes is the most reply text one call returns.
@@ -66,7 +67,7 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeProfileMessageKeys, "")
 		}
 	}
-	profiles, err := normalizeProfileMessageProfiles(fields["profiles"], settingPath, section)
+	denyProfiles, err := normalizeProfileMessageDenyProfiles(fields["deny_profiles"], settingPath, section)
 	if err != nil {
 		return nil, err
 	}
@@ -82,21 +83,24 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{Profiles: profiles, TimeoutMs: int(timeoutMS), ResultMaxBytes: int(resultMaxBytes), Approval: approval}, nil
+	return &NativeProfileMessageSettings{DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), ResultMaxBytes: int(resultMaxBytes), Approval: approval}, nil
 }
 
-func normalizeProfileMessageProfiles(raw json.RawMessage, settingPath, section string) ([]string, error) {
+func normalizeProfileMessageDenyProfiles(raw json.RawMessage, settingPath, section string) ([]string, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil, nil
+	}
 	var profiles []string
-	if len(raw) == 0 || json.Unmarshal(raw, &profiles) != nil || len(profiles) == 0 {
-		return nil, configError("%s: %s.profiles must be a non-empty array of profile ids", settingPath, section)
+	if json.Unmarshal(raw, &profiles) != nil {
+		return nil, configError("%s: %s.deny_profiles must be an array of profile ids", settingPath, section)
 	}
 	seen := map[string]struct{}{}
 	for _, id := range profiles {
 		if !profileMessageIDPattern.MatchString(id) {
-			return nil, configError("%s: %s.profiles entry %q is not a valid profile id", settingPath, section, id)
+			return nil, configError("%s: %s.deny_profiles entry %q is not a valid profile id", settingPath, section, id)
 		}
 		if _, dup := seen[id]; dup {
-			return nil, configError("%s: %s.profiles lists %q more than once", settingPath, section, id)
+			return nil, configError("%s: %s.deny_profiles lists %q more than once", settingPath, section, id)
 		}
 		seen[id] = struct{}{}
 	}
