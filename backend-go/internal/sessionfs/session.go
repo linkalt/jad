@@ -67,6 +67,8 @@ type Compaction struct {
 	KeepToolPairs   int
 	BackupMode      string
 	KeepBackupTurns int
+	// BackupMinTurns keeps a replace backup that holds at least this many user turns from being overwritten by a snapshot with fewer; 0 turns it off.
+	BackupMinTurns int
 }
 
 type FrontCompactionSettings struct {
@@ -815,6 +817,13 @@ func normalizeCompaction(raw json.RawMessage, path string) (Compaction, error) {
 				return Compaction{}, configError("%s: compaction.keepbackup.turns must be an integer between 0 and %d", path, maxKeepBackupTurns)
 			}
 			settings.KeepBackupTurns = int(configured)
+		}
+		if value, ok := keepbackup["min_turns"]; ok && string(value) != "null" {
+			configured, valid := configSafeInteger(value)
+			if !valid || configured < 0 || configured > int64(maxKeepBackupTurns) {
+				return Compaction{}, configError("%s: compaction.keepbackup.min_turns must be an integer between 0 and %d", path, maxKeepBackupTurns)
+			}
+			settings.BackupMinTurns = int(configured)
 		}
 	}
 	return settings, nil

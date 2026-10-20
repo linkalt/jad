@@ -127,12 +127,13 @@ func (l subagentLauncher) compactionFor(agent sessionfs.NativeSubagentAgent) *se
 		enabled = agent.AutoCompaction
 	}
 	return &session.AutomaticCompactionSettings{
-		Enabled:       enabled,
-		TriggerTokens: compaction.TriggerTokens,
-		TurnType:      compaction.TurnType,
-		KeepTurns:     compaction.KeepTurns,
-		KeepToolPairs: compaction.KeepToolPairs,
-		BackupMode:    compaction.BackupMode,
+		Enabled:        enabled,
+		TriggerTokens:  compaction.TriggerTokens,
+		TurnType:       compaction.TurnType,
+		KeepTurns:      compaction.KeepTurns,
+		KeepToolPairs:  compaction.KeepToolPairs,
+		BackupMode:     compaction.BackupMode,
+		BackupMinTurns: compaction.BackupMinTurns,
 	}
 }
 

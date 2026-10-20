@@ -88,10 +88,11 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 	m.shared.invalidateTurnStarts()
 	fireSessionHook(ctx, m.logger, m.reference, m.config, native.RunEvent{Event: native.HookEventPreCompact, Trigger: native.CompactTriggerManual}, nil)
 	compacted, err := m.shared.compactPreservingUsage(m.config, transcript.CompactionOptions{
-		TurnType:      m.config.Compaction.TurnType,
-		KeepTurns:     m.config.Compaction.KeepTurns,
-		KeepToolPairs: m.config.Compaction.KeepToolPairs,
-		BackupMode:    m.config.Compaction.BackupMode,
+		TurnType:       m.config.Compaction.TurnType,
+		KeepTurns:      m.config.Compaction.KeepTurns,
+		KeepToolPairs:  m.config.Compaction.KeepToolPairs,
+		BackupMode:     m.config.Compaction.BackupMode,
+		BackupMinTurns: m.config.Compaction.BackupMinTurns,
 	})
 	if err != nil {
 		return result, fmt.Errorf("compact session transcript: %w", err)

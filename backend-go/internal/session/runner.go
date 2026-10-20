@@ -68,12 +68,13 @@ type StateContextPrompt struct {
 
 // RunOptions provides per-run identifiers and an optional raw-event observer.
 type AutomaticCompactionSettings struct {
-	Enabled       bool
-	TriggerTokens int64
-	TurnType      string
-	KeepTurns     int
-	KeepToolPairs int
-	BackupMode    string
+	Enabled        bool
+	TriggerTokens  int64
+	TurnType       string
+	KeepTurns      int
+	KeepToolPairs  int
+	BackupMode     string
+	BackupMinTurns int
 }
 
 // HookReport is the report of one run_start, run_end or pre_compact command, for a caller
@@ -515,10 +516,11 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		refreshStateContext := false
 		if responseID, shouldCompact := automaticCompactionTrigger(result.Event, options.AutomaticCompaction); shouldCompact {
 			compactionOptions := transcript.CompactionOptions{
-				TurnType:      options.AutomaticCompaction.TurnType,
-				KeepTurns:     options.AutomaticCompaction.KeepTurns,
-				KeepToolPairs: options.AutomaticCompaction.KeepToolPairs,
-				BackupMode:    options.AutomaticCompaction.BackupMode,
+				TurnType:       options.AutomaticCompaction.TurnType,
+				KeepTurns:      options.AutomaticCompaction.KeepTurns,
+				KeepToolPairs:  options.AutomaticCompaction.KeepToolPairs,
+				BackupMode:     options.AutomaticCompaction.BackupMode,
+				BackupMinTurns: options.AutomaticCompaction.BackupMinTurns,
 			}
 			if len(calls) > 0 && responseID != "" {
 				compactionOptions.PreserveResponseID = responseID

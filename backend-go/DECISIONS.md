@@ -223,6 +223,15 @@ New session setting `max_run_tokens`, an integer from 1 to 1000000000000. **Ther
 - **Result of the fix on existing caches.** A cache written before the fix keeps its extra pairs until the next compaction rewrites it; nothing rewrites it at read time.
 - **Tests.** `TestKeepToolPairsCountsAcrossAllKeptTurns` (four cases, fails on the old code) and the differential scenario "compact with keepbatch.tools 1 over several turns" (session `keeptools`, three turns that each call `read`): TypeScript keeps one pair, the old Go kept all three and reported `compacted: false`.
 
+## Compaction: `compaction.keepbackup.min_turns` stops a thin snapshot from replacing a fuller backup (Go only, 2026-10-16)
+
+With `backup_mode: "replace"` every compaction copies the live `messages.jsonl` over the backup. After an earlier compaction, or a long single turn with many tool rounds, the live file holds little, so a later compaction could overwrite a fuller backup with one turn. `compaction.keepbackup.min_turns` (integer 0..1000, default 0 = always overwrite, as before) skips the overwrite when the existing backup holds **at least `min_turns` user turns and the new snapshot fewer than `min_turns`**. The backup is then left as it was; the compaction itself still runs.
+
+- **Turn rule.** Turns are the records with `role == "user"` in the file as written on disk, the rule `CompactHistory` uses to split turns. It differs from the web UI's `readBackupTail`, which merges records that share an input batch id into one turn, so a batch of several user messages counts once there and several times here.
+- **Scope.** `replace` only; `append` is unchanged. A missing or unreadable backup or snapshot never blocks the overwrite. The check does not touch `messages.jsonl`.
+- **Not chosen.** Prepending older turns to the new backup (mixes two snapshots); making `append` the default (unbounded growth).
+- **Tests.** `backup_min_turns_test.go` (guard cases and a `CompactHistory` run), `TestNormalizeCompactionBackupMinTurns`, `TestBackupMinTurnsSchemaMatchesTheLoader`.
+
 ## Bash `stdin`: text piped to a command (TypeScript and Go together)
 
 `bash` takes an optional `stdin` string that is written to the command's standard input, which is then closed, so `bash({command: "python3 -", stdin: code})` runs an inline script and `bash({command: "jq .x", stdin: json})` filters data. Without it the input stays closed from the start (`/dev/null`), exactly as before, so a command that reads stdin returns at once instead of waiting.

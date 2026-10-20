@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -27,6 +28,7 @@ type CompactionOptions struct {
 	KeepTurns          int
 	KeepToolPairs      int
 	BackupMode         string
+	BackupMinTurns     int
 	PreserveResponseID string
 }
 
@@ -140,7 +142,7 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 		return result, err
 	}
 	if s.options.MessagesBackupPath != "" {
-		if err := backupTranscript(s.journal.path, s.options.MessagesBackupPath, options.BackupMode, s.journal.durability); err != nil {
+		if err := backupTranscript(s.journal.path, s.options.MessagesBackupPath, options.BackupMode, options.BackupMinTurns, s.journal.durability); err != nil {
 			return result, fmt.Errorf("backup transcript before compaction: %w", err)
 		}
 	}
@@ -540,9 +542,61 @@ func compactedInputBytes(items [][]byte) int {
 	return total
 }
 
-func backupTranscript(source, destination, mode string, durability DurabilityMode) error {
+// countUserTurns counts the records of a transcript file that are user messages,
+// the same role == "user" rule CompactHistory uses to split turns. It reads the
+// file as it is on disk: no compaction overlay, and each record of an input
+// batch counts, where the web UI's backup reader merges a batch into one turn.
+func countUserTurns(path string) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	reader := bufio.NewReader(file)
+	turns := 0
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if line = bytes.TrimSpace(line); len(line) > 0 {
+			fields, err := objectFields(line)
+			if err != nil {
+				return 0, err
+			}
+			if roleRaw, ok := fieldValue(fields, "role"); ok {
+				if role, _ := stringValue(roleRaw); role == "user" {
+					turns++
+				}
+			}
+		}
+		if readErr == io.EOF {
+			return turns, nil
+		}
+		if readErr != nil {
+			return 0, readErr
+		}
+	}
+}
+
+// keepsFullerBackup reports whether a replace backup must stay as it is: the
+// existing one holds at least minTurns user turns and the new snapshot fewer.
+// A missing or unreadable file on either side never blocks the overwrite.
+func keepsFullerBackup(source, destination string, minTurns int) bool {
+	if minTurns <= 0 {
+		return false
+	}
+	existing, err := countUserTurns(destination)
+	if err != nil || existing < minTurns {
+		return false
+	}
+	snapshot, err := countUserTurns(source)
+	return err == nil && snapshot < minTurns
+}
+
+func backupTranscript(source, destination, mode string, minTurns int, durability DurabilityMode) error {
 	if source == "" || destination == "" {
 		return errors.New("transcript backup paths are required")
+	}
+	if mode == "replace" && keepsFullerBackup(source, destination, minTurns) {
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return err
