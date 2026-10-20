@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"jad/backend-go/internal/sessionfs"
@@ -164,7 +165,7 @@ func executeToolSmith(
 			tools.Information{Key: "suggestion", Value: "save the code as a library function and call it, or shorten the input"})
 	}
 
-	workDir, err := os.MkdirTemp("", "tool-smith-")
+	workDir, err := makeToolSmithWorkDir(os.TempDir(), toolSmithShortTempDir)
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
 			tools.Information{Key: "system_error", Value: err.Error()})
@@ -228,4 +229,31 @@ func executeToolSmith(
 		lines = append(lines, "ignored: list")
 	}
 	return appendToolSmithInformation(result, lines)
+}
+
+// toolSmithMaxSocketPath stays under sun_path (107 bytes on Linux, 103 on macOS).
+const toolSmithMaxSocketPath = 100
+
+const toolSmithShortTempDir = "/tmp"
+
+// makeToolSmithWorkDir creates the private work directory under base, or under
+// fallback when the bridge socket path inside it would be too long for a unix socket.
+func makeToolSmithWorkDir(base, fallback string) (string, error) {
+	dir, err := os.MkdirTemp(base, "tool-smith-")
+	if err != nil {
+		return "", err
+	}
+	if runtime.GOOS == "windows" || len(filepath.Join(dir, toolSmithSocketName)) <= toolSmithMaxSocketPath {
+		return dir, nil
+	}
+	os.RemoveAll(dir)
+	dir, err = os.MkdirTemp(fallback, "tool-smith-")
+	if err != nil {
+		return "", err
+	}
+	if length := len(filepath.Join(dir, toolSmithSocketName)); length > toolSmithMaxSocketPath {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("the bridge socket path would be %d bytes, over the unix socket limit of %d; use a shorter TMPDIR", length, toolSmithMaxSocketPath)
+	}
+	return dir, nil
 }

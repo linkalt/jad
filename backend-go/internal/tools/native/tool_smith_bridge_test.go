@@ -737,3 +737,50 @@ func TestToolSmithUnboundNestedGivesNoTools(t *testing.T) {
 		t.Fatalf("an unbound ToolSmithNested gave %v", poolNames(got))
 	}
 }
+
+func TestToolSmithWorkDirFallsBackWhenTheSocketPathIsTooLong(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix sockets only")
+	}
+	long := filepath.Join(t.TempDir(), strings.Repeat("d", 90))
+	if err := os.MkdirAll(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", long)
+	short, err := os.MkdirTemp("/tmp", "ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(short)
+	dir, err := makeToolSmithWorkDir(os.TempDir(), short)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	if strings.HasPrefix(dir, long) {
+		t.Fatalf("work dir %q was not moved out of the long TMPDIR", dir)
+	}
+	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("fallback dir not private: %v %v", info, err)
+	}
+	root := t.TempDir()
+	bridge, err := startToolSmithBridge(context.Background(), dir, bridgeSettings(t, root, "read"), []tools.Tool{bridgeTestTool(t, "read", true, func(map[string]any) string { return "r" })}, tools.ExecutionContext{CallID: "c", WorkspaceRoot: root})
+	if err != nil {
+		t.Fatalf("bridge did not start: %v", err)
+	}
+	bridge.Close()
+}
+
+func TestToolSmithWorkDirNamesTheLimitWhenNoPathFits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix sockets only")
+	}
+	long := filepath.Join(t.TempDir(), strings.Repeat("d", 90))
+	if err := os.MkdirAll(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := makeToolSmithWorkDir(long, long)
+	if err == nil || !strings.Contains(err.Error(), "unix socket limit") {
+		t.Fatalf("expected a clear limit error, got %v", err)
+	}
+}
