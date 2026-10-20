@@ -13,14 +13,29 @@ test('the focused pane tints its strip so the pane that owns the keyboard is vis
   );
   assert.match(
     pane,
-    /xstyle=\{\[styles\.header, isFocused \? styles\.headerFocused : undefined\]\}/,
-    'only the focused pane is tinted; the others keep the page colour',
+    /xstyle=\{\[\s*styles\.header,\s*isFocused \? styles\.headerFocused : undefined,\s*profileMessageCaller === undefined \? undefined : styles\.headerProfileBusy,\s*\]\}/,
+    'only the focused or busy pane is tinted; the others keep the page colour',
   );
   assert.equal(
     (pane.match(/backgroundColor: 'var\(--color-background-gray\)'/g) ?? []).length,
     1,
     'the tint is declared once',
   );
+});
+
+test('a busy pane tints its strip, and the busy tone wins over the focused one', () => {
+  assert.match(
+    pane,
+    /headerProfileBusy: \{\s*backgroundColor: colorVars\['--color-warning-muted'\],/,
+    'the busy strip wears the same warm wash the composer status used',
+  );
+  const flat = pane.replace(/\s+/g, ' ');
+  const focusedAt = flat.indexOf('isFocused ? styles.headerFocused : undefined');
+  const busyAt = flat.indexOf(
+    'profileMessageCaller === undefined ? undefined : styles.headerProfileBusy',
+  );
+  assert.ok(focusedAt >= 0 && busyAt >= 0, 'both tones ride on the same strip');
+  assert.ok(busyAt > focusedAt, 'busy comes last, so it wins over the focused grey');
 });
 
 test('the tinted token exists in the scheme, and is a light grey rather than a dark block', () => {

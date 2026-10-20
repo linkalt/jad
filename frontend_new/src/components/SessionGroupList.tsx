@@ -1,21 +1,38 @@
-import {SideNavItem, Spinner, StatusDot, Text, VisuallyHidden} from '@astryxdesign/core';
+import {HStack, Icon, SideNavItem, Spinner, StatusDot, Text, VisuallyHidden} from '@astryxdesign/core';
 import {Tooltip} from '@astryxdesign/core/Tooltip';
+import {colorVars} from '@astryxdesign/core/theme/tokens.stylex';
+import * as stylex from '@stylexjs/stylex';
 import type {RefObject} from 'react';
 import type {SessionRunStatus} from '../api';
-import {sessionUiStateForRun, type SessionUiState} from '../session-run-status';
+import type {SessionUiState} from '../session-run-status';
 import {
   groupHasRunningRun,
   isGroupExpanded,
+  profileMessageBusyNote,
   profileMessageRunLabel,
   rowHasRunningRun,
   rowProfileMessageCaller,
-  rowRunStatus,
+  rowUiState,
   type SessionListGroup,
   type SessionListRow,
   rowTurnCount,
   viewLabel,
 } from '../session-views';
 import {RowContextMenu, type RowMenuTarget} from './RowContextMenu';
+
+const styles = stylex.create({
+  /**
+   * A row whose profile another profile's `profile_message` call is holding.
+   *
+   * The same warm wash the conversation pane's header strip wears, so the row
+   * and the pane that belongs to it agree on which profile is busy.
+   * `rowProfileMessageCaller` decides it, so the tint, the spinner and the
+   * warning mark beside it can never disagree.
+   */
+  rowProfileBusy: {
+    backgroundColor: colorVars['--color-warning-muted'],
+  },
+});
 
 type SessionGroupSession = {
   id: string;
@@ -79,23 +96,13 @@ export function SessionGroupList({
   rowMenuAnchorRef,
   onRowMenuOpenChange,
 }: SessionGroupListProps) {
-  const rowState = (row: SessionListRow, session: SessionGroupSession, isRunning: boolean): SessionUiState => {
-    if (isRunning) {
-      return 'accent';
-    }
-    if (row.profile === undefined) {
-      return session.state;
-    }
-    return sessionUiStateForRun(rowRunStatus(row, session)?.status);
-  };
-
   const renderRow = (
     row: SessionListRow,
     session: SessionGroupSession,
     isChild: boolean,
     isRunning: boolean = rowHasRunningRun(row, session, runningViewKeys),
   ) => {
-    const state = rowState(row, session, isRunning);
+    const state = rowUiState(row, session, isRunning);
     const turns = rowTurnCount(row, session, rowTurns);
     // The visible label of a child is the profile; its accessible names carry the
     // session too, because the same profile name repeats in every group.
@@ -106,6 +113,7 @@ export function SessionGroupList({
         key={row.key}
         label={row.label}
         isSelected={row.key === activeViewKey}
+        xstyle={caller === undefined ? undefined : styles.rowProfileBusy}
         onClick={event => {
           // Choosing a row swaps it into the focused pane. A pane of its own is
           // always explicit: a modifier-click here, or the row's own menu.
@@ -139,11 +147,29 @@ export function SessionGroupList({
           )
         }
         endContent={
-          turns === undefined ? undefined : (
-            <Text type="supporting" hasTabularNumbers>
-              {turns}
-              <VisuallyHidden> turns</VisuallyHidden>
-            </Text>
+          caller === undefined ? (
+            turns === undefined ? undefined : (
+              <Text type="supporting" hasTabularNumbers>
+                {turns}
+                <VisuallyHidden> turns</VisuallyHidden>
+              </Text>
+            )
+          ) : (
+            /* The row's busy mark, matching the pane header's: same icon, same
+               colour, same tooltip text. A tooltip-wrapped icon stays passive
+               (Tooltip only attaches described-by and hover events; it adds no
+               focus stop), so it belongs in `endContent` rather than `actions`. */
+            <HStack align="center" gap={1}>
+              <Tooltip content={profileMessageBusyNote(caller)} placement="end">
+                <Icon icon="warning" color="warning" size="sm" label={profileMessageBusyNote(caller)} />
+              </Tooltip>
+              {turns === undefined ? null : (
+                <Text type="supporting" hasTabularNumbers>
+                  {turns}
+                  <VisuallyHidden> turns</VisuallyHidden>
+                </Text>
+              )}
+            </HStack>
           )
         }
       />

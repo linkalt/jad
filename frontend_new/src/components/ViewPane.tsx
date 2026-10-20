@@ -15,7 +15,7 @@ import {ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList, Heading, HS
 import {type ResizableRegion, ResizeHandle, useResizable} from '@astryxdesign/core/Resizable';
 import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {Tooltip} from '@astryxdesign/core/Tooltip';
-import {spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
+import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, useState, type ReactNode} from 'react';
 import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type WebUiMessage} from '../api';
@@ -127,6 +127,18 @@ const styles = stylex.create({
    */
   headerFocused: {
     backgroundColor: 'var(--color-background-gray)',
+  },
+  /**
+   * The strip while another profile's `profile_message` call holds this pane.
+   *
+   * The same warm colour the composer's busy status used, at surface strength:
+   * `--color-warning` paints the warning glyph at the strip's trailing edge, and
+   * `--color-warning-muted` is that colour as a wash, so the label on top stays
+   * readable in both schemes. It is applied after `headerFocused`, so a pane that
+   * is both focused and busy wears this tone only: one strip, never two tones.
+   */
+  headerProfileBusy: {
+    backgroundColor: colorVars['--color-warning-muted'],
   },
   titleRow: {
     flex: '1 1 auto',
@@ -338,7 +350,6 @@ export function ViewPane({
         onSubmit={onSubmitComposer}
         onStop={onStopComposer}
         isRunning={isRunning}
-        busyNote={profileMessageCaller === undefined ? undefined : profileMessageBusyNote(profileMessageCaller)}
         isDisabled={isComposerDisabled}
         placeholder={placeholder}
         showInspector={panel === 'inspector'}
@@ -419,12 +430,27 @@ export function ViewPane({
       data-pane-scope=""
       data-pane-key={viewKey}
     >
+      {/*
+        The composer used to say this in its text status line, which was a
+        `role="status"` live region. The header tint and the warning icon in it
+        are visual only, so the announcement moves here: it states the same
+        thing, unseen, and is announced when it appears.
+      */}
+      {profileMessageCaller === undefined ? null : (
+        <VisuallyHidden as="div" role="status">
+          {profileMessageBusyNote(profileMessageCaller)}
+        </VisuallyHidden>
+      )}
       {showHeader && (
         <HStack
           align="center"
           justify="between"
           gap={2}
-          xstyle={[styles.header, isFocused ? styles.headerFocused : undefined]}
+          xstyle={[
+            styles.header,
+            isFocused ? styles.headerFocused : undefined,
+            profileMessageCaller === undefined ? undefined : styles.headerProfileBusy,
+          ]}
           style={{zIndex: PANE_HEADER_Z_INDEX}}
         >
           {/*
@@ -450,6 +476,25 @@ export function ViewPane({
             </HStack>
           </Tooltip>
           <HStack align="center" gap={1}>
+            {/*
+              The busy mark leads the strip's trailing group, ahead of the
+              running spinner and the close button: hovering it states who holds
+              the profile. The strip's warm tint is the at-a-glance signal; this
+              says it in words for anyone who looks closer, and the
+              `role="status"` line above the header is what a screen reader
+              hears. `label` makes it a standalone status glyph rather than a
+              decorative icon, per the component's own docs.
+            */}
+            {profileMessageCaller === undefined ? null : (
+              <Tooltip content={profileMessageBusyNote(profileMessageCaller)} placement="below">
+                <Icon
+                  icon="warning"
+                  color="warning"
+                  size="sm"
+                  label={profileMessageBusyNote(profileMessageCaller)}
+                />
+              </Tooltip>
+            )}
             {isRunning ? (
               profileMessageCaller === undefined ? (
                 <Spinner size="sm" aria-label={`${label} running`} />

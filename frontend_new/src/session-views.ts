@@ -11,6 +11,9 @@
  * identity across reloads and two rows can never name the same view.
  */
 
+import type {SessionRunStatus} from './api';
+import {sessionUiStateForRun, type SessionUiState} from './session-run-status.ts';
+
 type ViewTarget = {
   sessionRef: string;
   /** A path profile of that session; absent means "follow the stored default". */
@@ -268,6 +271,31 @@ export function rowHasRunningRun(
     return false;
   }
   return locallyRunningViewKeys.has(row.key) || rowRunStatus(row, session)?.status === "running";
+}
+
+/**
+ * The state a row's dot shows.
+ *
+ * A row running now is `accent` whatever its stored run says. The session's own
+ * row follows the session's state; a profile row follows its own profile's run.
+ * The rail and the profile search both read this, so the two can never disagree.
+ */
+export function rowUiState(
+  row: SessionListRow,
+  session: {
+    state: SessionUiState;
+    run?: {status?: SessionRunStatus};
+    runsByProfile?: Record<string, {status?: SessionRunStatus}>;
+  },
+  isRunning: boolean,
+): SessionUiState {
+  if (isRunning) {
+    return 'accent';
+  }
+  if (row.profile === undefined) {
+    return session.state;
+  }
+  return sessionUiStateForRun(rowRunStatus(row, session)?.status);
 }
 
 /**
