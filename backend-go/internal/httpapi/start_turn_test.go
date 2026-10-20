@@ -230,7 +230,7 @@ func TestRunStartReleasesTheTranscriptWhenResolvePanics(t *testing.T) {
 				t.Fatal("the panic was swallowed")
 			}
 		}()
-		_, _, _ = handler.tryStartRun(context.Background(), "s", "dev", "")
+		_, _, _ = handler.tryStartRun(context.Background(), "s", "dev", "", "", "")
 	}()
 	if held := len(inner.transcript); held != 0 {
 		t.Fatalf("transcript lock still held after a panic (%d)", held)

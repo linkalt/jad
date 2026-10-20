@@ -72,7 +72,7 @@ type Resolver struct {
 	closed           bool
 
 	// profileRuns registers profile_message runs in the HTTP run registry; nil means no tracking.
-	profileRuns atomic.Pointer[httpapi.ProfileRunTracker]
+	profileRuns atomic.Pointer[httpapi.ProfileRunStarter]
 
 	// subagentBuilds holds the managers being built, by storage directory. Building
 	// one reads, rewrites and may delete a lot of files, so it runs outside mu; a

@@ -201,20 +201,19 @@ test('a row names the profile_message caller only for its own running nested run
     runsByProfile: {chatgpt: nested},
   };
 
-  assert.equal(rowProfileMessageCaller(rows[1], session, new Set()), 'planner');
+  assert.equal(rowProfileMessageCaller(rows[1], session), 'planner');
   assert.equal(rowHasRunningRun(rows[1], session, new Set()), true);
-  assert.equal(rowProfileMessageCaller(rows[0], session, new Set()), undefined);
-  assert.equal(rowProfileMessageCaller(rows[1], session, new Set([rows[1].key])), undefined);
+  assert.equal(rowProfileMessageCaller(rows[0], session), undefined);
   assert.equal(
-    rowProfileMessageCaller(rows[1], {...session, runsByProfile: {chatgpt: {...nested, status: 'completed'}}}, new Set()),
+    rowProfileMessageCaller(rows[1], {...session, runsByProfile: {chatgpt: {...nested, status: 'completed'}}}),
     undefined,
   );
   assert.equal(
-    rowProfileMessageCaller(rows[1], {...session, runsByProfile: {chatgpt: {status: 'running'}}}, new Set()),
+    rowProfileMessageCaller(rows[1], {...session, runsByProfile: {chatgpt: {status: 'running'}}}),
     undefined,
   );
-  assert.equal(rowProfileMessageCaller(undefined, session, new Set()), undefined);
-  assert.equal(rowProfileMessageCaller(rows[1], undefined, new Set()), undefined);
+  assert.equal(rowProfileMessageCaller(undefined, session), undefined);
+  assert.equal(rowProfileMessageCaller(rows[1], undefined), undefined);
 });
 
 test('profile_message labels name the caller', () => {

@@ -100,7 +100,7 @@ export function SessionGroupList({
     // The visible label of a child is the profile; its accessible names carry the
     // session too, because the same profile name repeats in every group.
     const fullLabel = isChild ? viewLabel(session.title, row.label) : row.label;
-    const caller = rowProfileMessageCaller(row, session, runningViewKeys);
+    const caller = rowProfileMessageCaller(row, session);
     return (
       <SideNavItem
         key={row.key}

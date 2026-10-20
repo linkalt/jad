@@ -2518,7 +2518,7 @@ function App({
       }
       return;
     }
-    if (run.source !== undefined || activeSession?.sessionRef === undefined) {
+    if (activeSession?.sessionRef === undefined) {
       return;
     }
     attachToRun(
@@ -3251,7 +3251,7 @@ function App({
     const runStatus = rowRunStatus(row, sessionRecord)?.status;
     const isLive = record !== undefined;
     const isRunning = isSessionRunning(runningViewKeys.has(key), runStatus);
-    const profileMessageCaller = rowProfileMessageCaller(row, sessionRecord, runningViewKeys);
+    const profileMessageCaller = rowProfileMessageCaller(row, sessionRecord);
     // The model the next run uses: the pane's title strip names its provider and
     // id, and the effort it will run at (the stored pick, else the option's own).
     const modelChoice = record === undefined ? undefined : resolveRunModelChoice(record);
@@ -3292,7 +3292,6 @@ function App({
             (modelChoice.option === undefined ? undefined : defaultEffortFor(modelChoice.option)),
       hasLiveAttachedRun:
         isLive &&
-        profileMessageCaller === undefined &&
         (runStatus === 'running' || attachedRunViewKeysRef.current.has(key)),
       streamingMessage,
       isFrontCompactionSelectionMode: isFrontCompactionMode && !isFrontCompactionConfirmationOpen,

@@ -272,7 +272,8 @@ export function rowHasRunningRun(
 
 /**
  * The profile whose `profile_message` call holds a row's profile, while that run
- * is running. A run this client owns locally takes precedence and yields none.
+ * is running. The server's run state decides, so the marker stays while this
+ * client streams the run too.
  */
 export function rowProfileMessageCaller(
   row: SessionListRow | undefined,
@@ -280,9 +281,8 @@ export function rowProfileMessageCaller(
     run?: {status?: string; source?: string; caller?: string};
     runsByProfile?: Record<string, {status?: string; source?: string; caller?: string}>;
   } | undefined,
-  locallyRunningViewKeys: ReadonlySet<string>,
 ): string | undefined {
-  if (row === undefined || session === undefined || locallyRunningViewKeys.has(row.key)) {
+  if (row === undefined || session === undefined) {
     return undefined;
   }
   const run = rowRunStatus(row, session);

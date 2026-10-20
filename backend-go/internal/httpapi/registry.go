@@ -182,6 +182,10 @@ type activeRun struct {
 	ctx                 context.Context
 	interactions        *interactionbroker.Broker
 	supportsInteraction bool
+	// onCommitted and onResult observe the run's committed responses and its final
+	// response. They are set before the run starts and called on the run's goroutine.
+	onCommitted func(event json.RawMessage)
+	onResult    func(event json.RawMessage)
 
 	mu                 sync.Mutex
 	status             string
@@ -671,7 +675,7 @@ func (r *activeRun) finish(status string, terminal []streamEvent) {
 	close(r.done)
 	r.mu.Unlock()
 
-	if r.registry.retention <= 0 || r.source != "" {
+	if r.registry.retention <= 0 {
 		r.registry.retire(r)
 		return
 	}

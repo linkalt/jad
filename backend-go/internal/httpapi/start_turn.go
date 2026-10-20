@@ -94,7 +94,7 @@ func (h *Handler) acquireRun(ctx context.Context, reference, profile, model stri
 	}
 	defer leave()
 	for {
-		started, busy, err := h.tryStartRun(ctx, reference, profile, model)
+		started, busy, err := h.tryStartRun(ctx, reference, profile, model, "", "")
 		if err != nil || !busy {
 			return started, err
 		}

@@ -1,10 +1,5 @@
 package httpapi
 
-import (
-	"context"
-	"sync"
-)
-
 func (h *Handler) beginMutation(key string) bool {
 	h.mutationMu.Lock()
 	defer h.mutationMu.Unlock()
@@ -65,28 +60,4 @@ func (h *Handler) beginRunFrom(key, turnID, source, caller string) (*activeRun, 
 		return nil, &StatusError{Code: 409, Message: "session profile or compaction is already changing"}
 	}
 	return h.runs.beginFrom(key, turnID, source, caller)
-}
-
-const profileMessageSource = "profile_message"
-
-type profileRunTracker struct{ handler *Handler }
-
-// ProfileRuns returns the port that registers profile_message runs in the run registry.
-func (h *Handler) ProfileRuns() ProfileRunTracker {
-	return profileRunTracker{handler: h}
-}
-
-func (t profileRunTracker) BeginProfileRun(reference, profile, turnID, caller string) (context.Context, func(string), error) {
-	run, err := t.handler.beginRunFrom(t.handler.runKey(ResolvedSession{Reference: reference, Profile: profile}), turnID, profileMessageSource, caller)
-	if err != nil {
-		return nil, nil, err
-	}
-	var once sync.Once
-	finish := func(status string) {
-		once.Do(func() {
-			run.finish(status, nil)
-			run.cancel()
-		})
-	}
-	return run.context(), finish, nil
 }

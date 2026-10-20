@@ -447,9 +447,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	run.mu.Lock()
 	run.supportsInteraction = body.SupportsInteraction
 	run.mu.Unlock()
-	contentCache := newRunContentCache(h.runContentMemoryBytes, h.runContentWriteBatchBytes, h.runContentFlushInterval)
-	contentCache.logger = h.logger.With(runLogAttrs(run)...)
-	run.setContentCache(contentCache)
+	h.attachContentCache(run)
 	queue := run.subscribe()
 	launched = true
 	go func() {
@@ -457,6 +455,12 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 		h.executeRun(run, resolved.Runner, body.Input)
 	}()
 	h.serveSSE(w, r, run, queue)
+}
+
+func (h *Handler) attachContentCache(run *activeRun) {
+	contentCache := newRunContentCache(h.runContentMemoryBytes, h.runContentWriteBatchBytes, h.runContentFlushInterval)
+	contentCache.logger = h.logger.With(runLogAttrs(run)...)
+	run.setContentCache(contentCache)
 }
 
 // startedRun is a run that holds the transcript lock and is registered.
@@ -469,7 +473,7 @@ type startedRun struct {
 // tryStartRun takes the session lock, tries the transcript lock, resolves the session and
 // registers the run, all inside one session-lock section. busy is true when another run
 // holds the transcript; nothing is held then.
-func (h *Handler) tryStartRun(ctx context.Context, reference, profile, model string) (started startedRun, busy bool, err error) {
+func (h *Handler) tryStartRun(ctx context.Context, reference, profile, model, source, caller string) (started startedRun, busy bool, err error) {
 	unlock := h.lockSession(reference)
 	defer unlock()
 	processUnlock, err := h.tryLockSessionProcess(ctx, reference, profile, model)
@@ -493,7 +497,7 @@ func (h *Handler) tryStartRun(ctx context.Context, reference, profile, model str
 	if err != nil {
 		return startedRun{}, false, &StatusError{Code: http.StatusInternalServerError, Message: "could not create run ID"}
 	}
-	run, err := h.beginRun(h.runKey(resolved), turnID)
+	run, err := h.beginRunFrom(h.runKey(resolved), turnID, source, caller)
 	if err != nil {
 		var statusErr *StatusError
 		if errors.As(err, &statusErr) {
@@ -516,7 +520,7 @@ func (h *Handler) handleRunStream(w http.ResponseWriter, r *http.Request, refere
 		return
 	}
 	run := h.runs.current(h.runKey(resolved))
-	if run == nil || run.source != "" {
+	if run == nil {
 		h.writeSSEHeaders(w)
 		idle, _ := makeSSEEvent("idle", struct{}{})
 		_, _ = w.Write(idle.frame)

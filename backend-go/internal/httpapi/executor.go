@@ -73,7 +73,10 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 		OnTurnStarted: func(partialContentPath string) {
 			run.setPartialContentPath(partialContentPath)
 		},
-		OnResponseCommitted: func(json.RawMessage, transcript.CommitResult) {
+		OnResponseCommitted: func(event json.RawMessage, _ transcript.CommitResult) {
+			if run.onCommitted != nil {
+				run.onCommitted(event)
+			}
 			if err := emitter.flush(); err != nil {
 				logger.Warn("failed to flush committed message", slog.Any("error", err))
 			}
@@ -126,6 +129,9 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 		recordFailure(failure)
 		run.finish("failed", failureEvents(failure))
 		return
+	}
+	if run.onResult != nil {
+		run.onResult(result.Event)
 	}
 	message := normalizedRun.Complete(result.Event)
 	terminal, err := encodeTerminalEvents(message)

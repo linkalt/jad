@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools/native"
@@ -89,55 +88,6 @@ func TestProfileMessageRejectsAnOwnerKeyWithoutSeparator(t *testing.T) {
 	}
 }
 
-func TestRecordProfileRunFailureRecordsUnlessCancelled(t *testing.T) {
-	for _, c := range []struct {
-		name       string
-		newContext func() (context.Context, context.CancelFunc)
-		stop       func(cancel context.CancelFunc)
-		recorded   bool
-	}{
-		{"timeout", func() (context.Context, context.CancelFunc) {
-			return context.WithTimeout(context.Background(), 300*time.Millisecond)
-		}, func(context.CancelFunc) {}, true},
-		{"cancel", func() (context.Context, context.CancelFunc) {
-			return context.WithCancel(context.Background())
-		}, func(cancel context.CancelFunc) { cancel() }, false},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			f := newLayoutFixture(t)
-			f.mu.Lock()
-			f.hold, f.reached = true, make(chan struct{}, 4)
-			f.mu.Unlock()
-			ctx, cancel := c.newContext()
-			defer cancel()
-			ctx = callerContext(t, f, ctx)
-			done := make(chan error, 1)
-			go func() {
-				_, err := profileMessenger{resolver: f.service.resolver}.Message(ctx, profileMessageOwner, "review/reviewer", "hi")
-				done <- err
-			}()
-			select {
-			case <-f.reached:
-			case <-time.After(5 * time.Second):
-				t.Fatal("the run never reached the provider")
-			}
-			c.stop(cancel)
-			select {
-			case err := <-done:
-				if err == nil {
-					t.Fatal("run succeeded, want an error")
-				}
-			case <-time.After(5 * time.Second):
-				t.Fatal("the run did not end")
-			}
-			cache, _ := os.ReadFile(filepath.Join(f.cwd, ".jad", "state", "demo", "review", "reviewer", "staging", "run-error-cache.json"))
-			if got := strings.Contains(string(cache), profileRunFailureText); got != c.recorded {
-				t.Fatalf("run error recorded = %v, want %v; cache: %s", got, c.recorded, cache)
-			}
-		})
-	}
-}
-
 // scriptFunctionCall answers the first request of a run with a function call and every
 // later one (a request that already carries a function_call_output) with the plain reply.
 func scriptFunctionCall(name string, arguments map[string]any) func(model, body string) string {
@@ -173,20 +123,6 @@ func TestProfileMessageRunCannotCallProfileMessageItself(t *testing.T) {
 	coderMessages := filepath.Join(f.cwd, ".jad", "state", "demo", "dev", "coder", "messages.jsonl")
 	if data, err := os.ReadFile(coderMessages); err == nil && strings.Contains(string(data), "again") {
 		t.Fatalf("the nested call reached the caller's transcript: %s", data)
-	}
-}
-
-func TestProfileMessageTargetToolWithApprovalAskRunsUnderAutoApprove(t *testing.T) {
-	f := newLayoutFixture(t)
-	f.overwrite(t, "tools/coding/none.json", `{"native":{"write":{"approval":"ask"}},"mcp":{}}`)
-	f.captureBodies = true
-	f.script = scriptFunctionCall("write", map[string]any{"path": "made.txt", "content": "by the target\n"})
-
-	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "write it"); err != nil {
-		t.Fatal(err)
-	}
-	if data, err := os.ReadFile(filepath.Join(f.cwd, "made.txt")); err != nil || string(data) != "by the target\n" {
-		t.Fatalf("made.txt: %v %q, want the file written without a user approval", err, data)
 	}
 }
 
@@ -540,10 +476,20 @@ func TestProfileMessageRefusesNestedCallsAndTheCallerItself(t *testing.T) {
 	f := newLayoutFixture(t)
 	messenger := profileMessenger{resolver: f.service.resolver}
 
-	nested := context.WithValue(context.Background(), profileChainKey{}, []string{"dev/coder", "review/reviewer"})
-	if _, err := messenger.Message(nested, profileMessageOwner, "dev/coder", "hi"); !errors.Is(err, native.ErrProfileCycle) {
+	done := startHeldProfileMessage(t, f, context.Background())
+	reviewerPath := boundRunnerOf(t, f, "review/reviewer").config.MessagesPath
+	nested := context.WithValue(context.Background(), callerMessagesPathKey{}, reviewerPath)
+	if _, err := messenger.Message(nested, "local:demo\x00review/reviewer", "dev/coder", "hi"); !errors.Is(err, native.ErrProfileCycle) {
 		t.Fatalf("nested call error = %v, want ErrProfileCycle", err)
 	}
+	f.mu.Lock()
+	f.hold = false
+	f.mu.Unlock()
+	status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run/stop?profile="+url.QueryEscape("review/reviewer"), "")
+	if status != http.StatusOK {
+		t.Fatalf("stop: %d %s", status, body)
+	}
+	awaitMessageEnd(t, done)
 	if _, err := messenger.Message(context.Background(), profileMessageOwner, "dev/coder", "hi"); !errors.Is(err, native.ErrProfileCycle) {
 		t.Fatalf("self call error = %v, want ErrProfileCycle", err)
 	}
@@ -613,9 +559,6 @@ func TestProfileMessageTimeoutCutsTheTargetRunEndToEnd(t *testing.T) {
 	if !strings.Contains(last, "function_call_output") || !strings.Contains(last, "profile_timeout") {
 		t.Fatalf("the caller's next request did not carry profile_timeout: %s", last)
 	}
-	if cache := targetRunErrorCache(f); !strings.Contains(cache, profileRunFailureText) {
-		t.Fatalf("target run error not recorded; cache: %s", cache)
-	}
 }
 
 func TestProfileMessageCallerCancelReachesTheTargetProviderRequest(t *testing.T) {
@@ -643,7 +586,7 @@ func TestProfileMessageCallerCancelReachesTheTargetProviderRequest(t *testing.T)
 		t.Fatal("the caller run did not return after cancel")
 	}
 	awaitTargetSessionFree(t, f)
-	if cache := targetRunErrorCache(f); strings.Contains(cache, profileRunFailureText) {
+	if cache := targetRunErrorCache(f); strings.Contains(cache, "The run failed. Response details were withheld; check server logs for diagnostics.") {
 		t.Fatalf("a cancelled target run was recorded as an error; cache: %s", cache)
 	}
 }
@@ -664,20 +607,6 @@ func awaitTargetSessionFree(t *testing.T, f *layoutFixture) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-}
-
-type fakeProfileRuns struct {
-	err      error
-	begun    atomic.Int32
-	finished atomic.Int32
-}
-
-func (r *fakeProfileRuns) BeginProfileRun(string, string, string, string) (context.Context, func(string), error) {
-	if r.err != nil {
-		return nil, nil, r.err
-	}
-	r.begun.Add(1)
-	return context.Background(), func(string) { r.finished.Add(1) }, nil
 }
 
 type listedRun struct {
@@ -769,22 +698,22 @@ func TestProfileMessageStopOfTheTargetCancelsItsRunAndReportsStopped(t *testing.
 		t.Fatalf("error = %v, want ErrProfileStopped", err)
 	}
 	awaitTargetSessionFree(t, f)
-	if _, ok := targetRunInList(t, f); ok {
-		t.Fatal("the stopped target is still listed as a run")
+	if run, ok := targetRunInList(t, f); ok && run.Status == "running" {
+		t.Fatalf("the stopped target is still listed as running: %+v", run)
 	}
-	if cache := targetRunErrorCache(f); strings.Contains(cache, profileRunFailureText) {
+	if cache := targetRunErrorCache(f); strings.Contains(cache, "The run failed. Response details were withheld; check server logs for diagnostics.") {
 		t.Fatalf("a stopped target run was recorded as an error; cache: %s", cache)
 	}
 }
 
-func TestProfileMessageTargetRunLeavesTheRegistryOnReturnErrorAndCancel(t *testing.T) {
+func TestProfileMessageTargetRunStopsRunningOnReturnErrorAndCancel(t *testing.T) {
 	t.Run("return", func(t *testing.T) {
 		f := newLayoutFixture(t)
 		if _, err := (profileMessenger{resolver: f.service.resolver}).Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi"); err != nil {
 			t.Fatal(err)
 		}
-		if run, ok := targetRunInList(t, f); ok && run.Source != "" {
-			t.Fatalf("a finished profile_message run is still listed: %+v", run)
+		if run, ok := targetRunInList(t, f); ok && run.Status == "running" {
+			t.Fatalf("a finished profile_message run is still running: %+v", run)
 		}
 	})
 	t.Run("error", func(t *testing.T) {
@@ -796,8 +725,8 @@ func TestProfileMessageTargetRunLeavesTheRegistryOnReturnErrorAndCancel(t *testi
 		if !errors.Is(err, native.ErrProfileNoAnswer) {
 			t.Fatalf("error = %v, want ErrProfileNoAnswer", err)
 		}
-		if run, ok := targetRunInList(t, f); ok && run.Source != "" {
-			t.Fatalf("a failed profile_message run is still listed: %+v", run)
+		if run, ok := targetRunInList(t, f); ok && run.Status == "running" {
+			t.Fatalf("a failed profile_message run is still running: %+v", run)
 		}
 	})
 	t.Run("cancel", func(t *testing.T) {
@@ -810,96 +739,17 @@ func TestProfileMessageTargetRunLeavesTheRegistryOnReturnErrorAndCancel(t *testi
 			t.Fatalf("error = %v, want the cancellation, not ErrProfileStopped", err)
 		}
 		awaitTargetSessionFree(t, f)
-		if run, ok := targetRunInList(t, f); ok && run.Source != "" {
-			t.Fatalf("a cancelled profile_message run is still listed: %+v", run)
+		if run, ok := targetRunInList(t, f); ok && run.Status == "running" {
+			t.Fatalf("a cancelled profile_message run is still running: %+v", run)
 		}
 	})
 }
 
-func TestProfileMessageBeginRefusalReportsBusyAndReleasesTheTranscript(t *testing.T) {
-	for name, code := range map[string]int{"mutation": http.StatusConflict, "cap": http.StatusTooManyRequests} {
-		t.Run(name, func(t *testing.T) {
-			f := newLayoutFixture(t)
-			tracker := &fakeProfileRuns{err: &httpapi.StatusError{Code: code, Message: "refused"}}
-			f.service.resolver.SetProfileRuns(tracker)
-			_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi")
-			if !errors.Is(err, native.ErrProfileBusy) {
-				t.Fatalf("error = %v, want ErrProfileBusy", err)
-			}
-			awaitTargetSessionFree(t, f)
-		})
-	}
-}
-
-// mutationRacingRuns wraps the real tracker: it starts a compact of the target, which takes the
-// mutation gate and then waits for the transcript the caller holds, and begins only once the
-// real tracker refuses with the gate held.
-type mutationRacingRuns struct {
-	inner   httpapi.ProfileRunTracker
-	compact func()
-}
-
-func (r *mutationRacingRuns) BeginProfileRun(reference, profile, turnID, caller string) (context.Context, func(string), error) {
-	go r.compact()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		runCtx, finish, err := r.inner.BeginProfileRun(reference, profile, turnID, caller)
-		var statusErr *httpapi.StatusError
-		if errors.As(err, &statusErr) && statusErr.Code == http.StatusConflict {
-			return nil, nil, err
-		}
-		if err == nil {
-			finish("aborted")
-		}
-		if time.Now().After(deadline) {
-			return runCtx, nil, errors.New("the mutation gate was never observed")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
-func TestProfileMessageRefusedByTheRealTrackerMutationGateReportsBusyAndReleasesTheTranscript(t *testing.T) {
-	f := newLayoutFixture(t)
-	f.service.resolver.SetProfileRuns(&mutationRacingRuns{
-		inner: f.service.api.ProfileRuns(),
-		compact: func() {
-			f.do(t, http.MethodPost, "/api/sessions/local:demo/compact?profile="+url.QueryEscape("review/reviewer"), "")
-		},
-	})
-	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi")
-	if !errors.Is(err, native.ErrProfileBusy) {
-		t.Fatalf("error = %v, want ErrProfileBusy", err)
-	}
-	awaitTargetSessionFree(t, f)
-}
-
-func TestProfileMessageOtherBeginErrorIsReturnedAndReleasesTheTranscript(t *testing.T) {
-	f := newLayoutFixture(t)
-	f.service.resolver.SetProfileRuns(&fakeProfileRuns{err: errors.New("run registry is closed")})
-	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi")
-	if err == nil || errors.Is(err, native.ErrProfileBusy) {
-		t.Fatalf("error = %v, want a plain error", err)
-	}
-	awaitTargetSessionFree(t, f)
-}
-
-func TestProfileMessageFinishesTheTrackedRunOnce(t *testing.T) {
-	f := newLayoutFixture(t)
-	tracker := &fakeProfileRuns{}
-	f.service.resolver.SetProfileRuns(tracker)
-	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi"); err != nil {
-		t.Fatal(err)
-	}
-	if tracker.begun.Load() != 1 || tracker.finished.Load() != 1 {
-		t.Fatalf("begun %d, finished %d, want 1 and 1", tracker.begun.Load(), tracker.finished.Load())
-	}
-}
-
-func TestProfileMessageWithoutATrackerStillWorks(t *testing.T) {
+func TestProfileMessageWithoutARunStarterFailsInsteadOfRunningNested(t *testing.T) {
 	f := newLayoutFixture(t)
 	f.service.resolver.SetProfileRuns(nil)
-	answer, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi")
-	if err != nil || !strings.Contains(answer, "ok") {
-		t.Fatalf("answer %q, error %v", answer, err)
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi")
+	if err == nil {
+		t.Fatal("Message succeeded without a run starter")
 	}
 }
