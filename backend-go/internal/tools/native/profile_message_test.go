@@ -295,7 +295,7 @@ func TestProfileMessagePassesTheBusyWaitAndNamesWhatHoldsTheTarget(t *testing.T)
 
 	settings.BusyWaitMs = 0
 	plain := callProfileMessage(t, settings, &fakeMessenger{reply: func(context.Context) (string, error) { return "", ErrProfileBusy }}, `{"profile":"reviewer","message":"hi"}`)
-	if !strings.Contains(plain, "or being changed by the user") || strings.Contains(plain, "waiting") {
+	if !strings.Contains(plain, "with a user run or a maintenance action") || strings.Contains(plain, "waiting") {
 		t.Errorf("plain busy text wrong: %s", plain)
 	}
 }

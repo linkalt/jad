@@ -180,12 +180,12 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 }
 
 func profileBusyText(profile string, err error, waitedMs int) string {
-	text := fmt.Sprintf("Profile %s is running", profile)
+	text := fmt.Sprintf("Profile %s is busy", profile)
 	var busy *ProfileBusyError
 	if errors.As(err, &busy) && busy.HeldBy != "" {
-		text += " a message from profile " + busy.HeldBy
+		text += " with a message from profile " + busy.HeldBy
 	} else {
-		text += " or being changed by the user"
+		text += " with a user run or a maintenance action"
 	}
 	if waitedMs > 0 {
 		text += fmt.Sprintf("; it was still busy after waiting %d ms", waitedMs)
