@@ -88,6 +88,7 @@ func TestProfileMessageSentinelErrorsAndFailure(t *testing.T) {
 		{ErrProfileSameTranscript, "profile_same_transcript"},
 		{ErrProfileNoAnswer, "profile_no_answer"},
 		{errors.New("disk exploded"), "profile_failed"},
+		{&ProfileFailedError{Message: "The provider request failed (HTTP 500)."}, "profile_failed"},
 	}
 	for _, c := range cases {
 		messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "", c.err }}
@@ -97,6 +98,9 @@ func TestProfileMessageSentinelErrorsAndFailure(t *testing.T) {
 		}
 		if c.code == "profile_failed" && strings.Contains(output, "disk exploded") {
 			t.Errorf("internal error text leaked: %s", output)
+		}
+		if failed, ok := c.err.(*ProfileFailedError); ok && !strings.Contains(output, "Profile reviewer failed: "+failed.Message) {
+			t.Errorf("failure message missing: %s", output)
 		}
 		if c.code == "profile_stopped" && !strings.Contains(output, "Profile reviewer was stopped") {
 			t.Errorf("stopped text missing: %s", output)

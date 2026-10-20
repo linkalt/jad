@@ -321,3 +321,19 @@ func TestStartProfileRunWithBusyWaitStopsWaitingWhenTheCallerEnds(t *testing.T) 
 	}
 	close(f.release)
 }
+
+func TestProfileRunFailureIsTheClientSafeMessage(t *testing.T) {
+	f := newProfileRunFixture(t, 0)
+	f.resolver.resolved.Runner = runnerFunc(func(context.Context, json.RawMessage, session.RunOptions) (session.RunResult, error) {
+		return session.RunResult{}, errors.New("secret /path detail")
+	})
+	run := f.start(t, context.Background())
+	awaitProfileRunDone(t, run)
+	if run.Status() != "failed" {
+		t.Fatalf("status = %s, want failed", run.Status())
+	}
+	failure := run.Failure()
+	if !strings.Contains(failure, "The run failed") || strings.Contains(failure, "secret") {
+		t.Fatalf("failure = %q", failure)
+	}
+}

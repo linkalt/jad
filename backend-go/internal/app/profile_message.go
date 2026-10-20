@@ -113,7 +113,7 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		}
 		return "", native.ErrProfileStopped
 	default:
-		return "", errors.New("profile run failed")
+		return "", &native.ProfileFailedError{Message: run.Failure()}
 	}
 	answer := native.SubagentAnswerText(run.Final())
 	if strings.TrimSpace(answer) == "" {

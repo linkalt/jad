@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -44,6 +45,26 @@ func (p *ProfileRun) Done() <-chan struct{}  { return p.run.done }
 func (p *ProfileRun) Status() string         { return p.run.state() }
 func (p *ProfileRun) Final() json.RawMessage { return p.final }
 func (p *ProfileRun) Stop()                  { p.run.stop() }
+
+// Failure is the client-safe message of a failed run, empty when there is none. Only
+// valid once Done is closed.
+func (p *ProfileRun) Failure() string {
+	p.run.mu.Lock()
+	defer p.run.mu.Unlock()
+	for _, event := range p.run.terminal {
+		if event.name != "error" {
+			continue
+		}
+		_, data, _ := bytes.Cut(event.frame, []byte("data: "))
+		var payload struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(bytes.TrimSpace(data), &payload) == nil {
+			return payload.Message
+		}
+	}
+	return ""
+}
 
 // ProfileRuns returns the port that starts tool-started runs.
 func (h *Handler) ProfileRuns() ProfileRunStarter { return profileRunStarter{handler: h} }

@@ -38,6 +38,12 @@ func (e *ProfileBusyError) Error() string { return ErrProfileBusy.Error() }
 
 func (e *ProfileBusyError) Is(target error) bool { return target == ErrProfileBusy }
 
+// ProfileFailedError is a failed target run with the client-safe message the run
+// reported (provider status, token limit); it is not an internal error text.
+type ProfileFailedError struct{ Message string }
+
+func (e *ProfileFailedError) Error() string { return "profile run failed" }
+
 // ErrProfileStopped is returned by a ProfileMessenger when the target run was stopped
 // by the user while the caller was still waiting.
 var ErrProfileStopped = errors.New("profile run was stopped")
@@ -162,8 +168,12 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 			return tools.ExecutionError(callID, tools.StatusError, "profile_timeout",
 				fmt.Sprintf("Profile %s did not answer within %d ms", profile, p.settings.TimeoutMs)), nil
 		}
-		return tools.ExecutionError(callID, tools.StatusError, "profile_failed",
-			fmt.Sprintf("Profile %s failed", profile)), nil
+		text := fmt.Sprintf("Profile %s failed", profile)
+		var failed *ProfileFailedError
+		if errors.As(err, &failed) && failed.Message != "" {
+			text += ": " + failed.Message
+		}
+		return tools.ExecutionError(callID, tools.StatusError, "profile_failed", text), nil
 	}
 	text, cut := cutUTF8(strings.TrimSpace(reply), int64(p.settings.ResultMaxBytes))
 	information := []tools.Information{{Key: "profile", Value: profile}}
