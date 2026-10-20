@@ -117,3 +117,17 @@ func TestToolSmithCatalogListFailsWithoutFunctionsDir(t *testing.T) {
 		t.Errorf("tool_smith list = %s", output)
 	}
 }
+
+func TestToolSmithDescriptionStatesTheScriptIsNotSandboxed(t *testing.T) {
+	const want = "full interpreter privileges"
+	catalog, err := BuildCatalog(toolSmithConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := catalog.Definitions()[0].Description; !strings.Contains(got, want) {
+		t.Errorf("manifest description = %q, want it to contain %q", got, want)
+	}
+	if !strings.Contains(toolSmithDescription, want) {
+		t.Errorf("toolSmithDescription = %q, want it to contain %q", toolSmithDescription, want)
+	}
+}

@@ -49,7 +49,7 @@ var toolSmithInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-const toolSmithDescription = "Run a TypeScript function body in a child process and return one value, or list the saved functions of the library. Saved functions are reusable files called as fn.<name>(input) inside a run."
+const toolSmithDescription = "Run a TypeScript function body in a child process and return one value, or list the saved functions of the library. Saved functions are reusable files called as fn.<name>(input) inside a run. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do."
 
 // NewToolSmithTool creates the tool_smith tool. It is ReadOnly so several calls may
 // share a response, and a call with run says so through MayChangeFiles.
