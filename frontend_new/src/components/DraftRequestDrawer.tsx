@@ -47,6 +47,7 @@ import {
   type DraftDecision,
   type DraftListItem,
 } from '../draft-answer';
+import appConfig from '../config.json';
 import {DraftFieldRows} from './DraftListField';
 
 export interface DraftRequestDrawerProps {
@@ -200,7 +201,18 @@ export function DraftRequestDrawer({
 
   return (
     <ChatComposerDrawer>
-      <VStack gap={2} width="100%">
+      {/*
+        A long draft — many fields, or a tall JSON box — used to grow this drawer
+        past the pane with no scrollbar. The body now caps and scrolls. `Stack`
+        has no `maxHeight` prop and StyleX takes literals only, so the configured
+        cap arrives inline, the way the pane header's z-index does.
+      */}
+      <VStack
+        gap={2}
+        width="100%"
+        isScrollable
+        style={{maxHeight: appConfig.composer_drawer_max_height_px}}
+      >
         <VStack gap={1} width="100%">
           <Text type="label">{pending.title ?? 'Confirm what the agent understood'}</Text>
           <Text type="supporting" color="secondary">

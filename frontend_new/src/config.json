@@ -66,6 +66,7 @@
   "scroll_unlock_attempts": 3,
   "composer_markdown_shortcuts": true,
   "composer_preview_enabled": true,
+  "composer_drawer_max_height_px": 360,
   "composer_draft_storage_key": "jad.composer-drafts",
   "composer_draft_save_delay_ms": 300,
   "composer_input_history_size": 50,

@@ -2,6 +2,7 @@ import {useState} from 'react';
 import {HStack, Text, TextInput, VStack} from '@astryxdesign/core';
 import {ChatComposerDrawer} from '@astryxdesign/core/Chat';
 import {Icon} from '@astryxdesign/core/Icon';
+import appConfig from '../config.json';
 import {
   profileChoiceRows,
   type ProfileSourceRow,
@@ -105,7 +106,20 @@ export function ProfileDrawer({
         The drawer body lays its children out in a row and leaves each at its
         content width, so the content claims the full width explicitly.
       */}
-      <VStack gap={2} width="100%" onClick={event => event.stopPropagation()}>
+      {/*
+        A long list — every profile of every session, or every model in this one —
+        used to grow this drawer past the pane with no scrollbar. The body now
+        caps and scrolls. `Stack` has no `maxHeight` prop and StyleX takes
+        literals only, so the configured cap arrives inline, the way the pane
+        header's z-index does.
+      */}
+      <VStack
+        gap={2}
+        width="100%"
+        onClick={event => event.stopPropagation()}
+        isScrollable
+        style={{maxHeight: appConfig.composer_drawer_max_height_px}}
+      >
         {isExpanded && (
           <TextInput
             label="Search profiles"
