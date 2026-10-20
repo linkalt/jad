@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"jad/backend-go/internal/sessionfs"
@@ -178,6 +179,8 @@ type toolSmithBridge struct {
 	conns  map[net.Conn]struct{}
 	closed bool
 
+	started atomic.Int64
+
 	statsMu sync.Mutex
 	stats   toolSmithBridgeStats
 
@@ -335,6 +338,13 @@ func (b *toolSmithBridge) serveConn(conn net.Conn) {
 			return
 		}
 		if len(bytes.TrimSpace(line)) == 0 {
+			if err != nil {
+				return
+			}
+			continue
+		}
+		if b.started.Add(1) > int64(b.settings.MaxNestedCalls) {
+			reply(bridgeFailure(requestID(line), "max_nested_calls of %d reached", b.settings.MaxNestedCalls))
 			if err != nil {
 				return
 			}

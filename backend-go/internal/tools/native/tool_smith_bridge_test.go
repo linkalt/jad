@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -234,6 +235,62 @@ func TestToolSmithBridgeRejectsAWrongTokenAndAMalformedFrame(t *testing.T) {
 	// The connection is still usable after the refusals.
 	if reply := exchange(`{"id":3,"token":"` + bridge.token + `","tool":"read","arguments":{}}`); reply["ok"] != true || reply["status"] != "ok" || reply["content"] != "ok" {
 		t.Fatalf("good frame reply = %v", reply)
+	}
+}
+
+func TestToolSmithBridgeStartsNoMoreHandlersThanMaxNestedCalls(t *testing.T) {
+	root := t.TempDir()
+	dir := shortTempDir(t)
+	release := make(chan struct{})
+	var ran atomic.Int64
+	slow := bridgeTestTool(t, "read", true, func(map[string]any) string { ran.Add(1); <-release; return "ok" })
+	settings := bridgeSettings(t, root, "read")
+	settings.MaxNestedCalls = 3
+	const maxCalls = 3
+	bridge, err := startToolSmithBridge(context.Background(), dir, settings, []tools.Tool{slow}, tools.ExecutionContext{CallID: "c", WorkspaceRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	conn, err := net.Dial("unix", bridge.socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	const frames = 50
+	before := runtime.NumGoroutine()
+	for id := 1; id <= frames; id++ {
+		frame := `{"id":` + strconv.Itoa(id) + `,"token":"` + bridge.token + `","tool":"read","arguments":{}}` + "\n"
+		if _, err := conn.Write([]byte(frame)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader := bufio.NewReader(conn)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	for i := 0; i < frames-maxCalls; i++ {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			t.Fatalf("reply %d: %v", i, err)
+		}
+		var reply map[string]any
+		if err := json.Unmarshal(line, &reply); err != nil {
+			t.Fatal(err)
+		}
+		if reply["bridge_error"] != "max_nested_calls of 3 reached" {
+			t.Fatalf("extra frame reply = %v", reply)
+		}
+	}
+	if grown := runtime.NumGoroutine() - before; grown > maxCalls+10 {
+		t.Fatalf("goroutines grew by %d for %d frames", grown, frames)
+	}
+	close(release)
+	for i := 0; i < maxCalls; i++ {
+		if _, err := reader.ReadBytes('\n'); err != nil {
+			t.Fatalf("handler reply %d: %v", i, err)
+		}
+	}
+	if ran.Load() > maxCalls {
+		t.Fatalf("%d handlers ran, max %d", ran.Load(), settings.MaxNestedCalls)
 	}
 }
 

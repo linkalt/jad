@@ -91,11 +91,9 @@ func normalizeToolSmithArguments(arguments map[string]any) map[string]any {
 	case string:
 		normalized["run"] = map[string]any{"function": run}
 	case map[string]any:
-		if _, has := run["function"]; has {
-			break
-		}
+		_, hasFunction := run["function"]
 		body, ok := firstString(run, "script", "code", "body")
-		if !ok {
+		if !hasFunction && !ok {
 			break
 		}
 		fixed := make(map[string]any, len(run))
@@ -104,7 +102,9 @@ func normalizeToolSmithArguments(arguments map[string]any) map[string]any {
 				fixed[key] = value
 			}
 		}
-		fixed["function"] = body
+		if !hasFunction {
+			fixed["function"] = body
+		}
 		normalized["run"] = fixed
 	}
 	return normalized

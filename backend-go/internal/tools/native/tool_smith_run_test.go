@@ -86,6 +86,22 @@ func TestToolSmithRunReturnsTheValueAndRemovesItsDirectory(t *testing.T) {
 	requireNoLeftovers(t, tmp)
 }
 
+func TestToolSmithRunDropsAliasKeysWhenFunctionIsGiven(t *testing.T) {
+	root := t.TempDir()
+	given := map[string]any{"run": map[string]any{"function": "return 'from function';", "script": "return 'from script';"}}
+	normalized := normalizeToolSmithArguments(given)
+	if _, has := normalized["run"].(map[string]any)["script"]; has {
+		t.Fatalf("alias key kept: %v", normalized)
+	}
+	if _, has := given["run"].(map[string]any)["script"]; !has {
+		t.Fatalf("input was mutated: %v", given)
+	}
+	result := runToolSmith(context.Background(), root, toolSmithTestSettings(t, root), given)
+	if !strings.Contains(result, `"status":"ok"`) || !strings.Contains(execContent(result), "from function") {
+		t.Fatalf("result:\n%s", result)
+	}
+}
+
 func TestToolSmithRunReturnsAStringRaw(t *testing.T) {
 	root := t.TempDir()
 	result := runToolSmith(context.Background(), root, toolSmithTestSettings(t, root), smithRun("return 'plain';", nil))
