@@ -30,6 +30,14 @@ var profileMessageExample = json.RawMessage(`{"profile":"reviewer","message":"Ch
 // ErrProfileBusy is returned by a ProfileMessenger when the target profile is running.
 var ErrProfileBusy = errors.New("profile is busy")
 
+// ProfileBusyError is the busy error with what holds the target. HeldBy is the profile
+// whose profile_message call runs on the target, empty when something else holds it.
+type ProfileBusyError struct{ HeldBy string }
+
+func (e *ProfileBusyError) Error() string { return ErrProfileBusy.Error() }
+
+func (e *ProfileBusyError) Is(target error) bool { return target == ErrProfileBusy }
+
 // ErrProfileStopped is returned by a ProfileMessenger when the target run was stopped
 // by the user while the caller was still waiting.
 var ErrProfileStopped = errors.New("profile run was stopped")
@@ -51,7 +59,7 @@ var ErrProfileCycle = errors.New("profile message would form a cycle")
 // calling session's ExecutionContext.SessionKey. ctx ends when the caller stops or the
 // tool's timeout passes; the messenger must stop promptly then.
 type ProfileMessenger interface {
-	Message(ctx context.Context, ownerKey string, target string, message string) (string, error)
+	Message(ctx context.Context, ownerKey string, target string, message string, busyWait time.Duration) (string, error)
 }
 
 type profileMessageTool struct {
@@ -129,7 +137,7 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	}
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(p.settings.TimeoutMs)*time.Millisecond)
 	defer cancel()
-	reply, err := p.messenger.Message(callCtx, execution.SessionKey, profile, message)
+	reply, err := p.messenger.Message(callCtx, execution.SessionKey, profile, message, time.Duration(p.settings.BusyWaitMs)*time.Millisecond)
 	if err != nil {
 		if ctx.Err() != nil {
 			return tools.ExecutionError(callID, tools.StatusError, "cancelled",
@@ -140,8 +148,7 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 			return tools.ExecutionError(callID, tools.StatusError, "profile_same_transcript",
 				fmt.Sprintf("Profile %s shares this conversation and cannot be called", profile)), nil
 		case errors.Is(err, ErrProfileBusy):
-			return tools.ExecutionError(callID, tools.StatusError, "profile_busy",
-				fmt.Sprintf("Profile %s is running; try again later", profile)), nil
+			return tools.ExecutionError(callID, tools.StatusError, "profile_busy", profileBusyText(profile, err, p.settings.BusyWaitMs)), nil
 		case errors.Is(err, ErrProfileStopped):
 			return tools.ExecutionError(callID, tools.StatusError, "profile_stopped",
 				fmt.Sprintf("Profile %s was stopped", profile)), nil
@@ -170,4 +177,18 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		Information: information,
 		Content:     &tools.Content{Encoding: "utf8", Text: text},
 	})
+}
+
+func profileBusyText(profile string, err error, waitedMs int) string {
+	text := fmt.Sprintf("Profile %s is running", profile)
+	var busy *ProfileBusyError
+	if errors.As(err, &busy) && busy.HeldBy != "" {
+		text += " a message from profile " + busy.HeldBy
+	} else {
+		text += " or being changed by the user"
+	}
+	if waitedMs > 0 {
+		text += fmt.Sprintf("; it was still busy after waiting %d ms", waitedMs)
+	}
+	return text + "; try again later"
 }

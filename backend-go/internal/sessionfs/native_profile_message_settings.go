@@ -15,7 +15,7 @@ const (
 )
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "result_max_bytes", "approval"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "approval"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -26,8 +26,11 @@ type NativeProfileMessageSettings struct {
 	// DenyProfiles are profile ids the model may not message, in configured order. The
 	// targets are the caller's session profiles minus these and the caller itself.
 	DenyProfiles []string
-	// TimeoutMs bounds the whole call.
+	// TimeoutMs bounds the whole call, the wait for a busy target included.
 	TimeoutMs int
+	// BusyWaitMs is how long a call queues behind a run that holds the target; 0 (default)
+	// fails at once with profile_busy.
+	BusyWaitMs int
 	// ResultMaxBytes is the most reply text one call returns.
 	ResultMaxBytes int
 	// Approval is "off" (default) or "ask"; ask holds every call until the user approves it.
@@ -77,6 +80,13 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
+	busyWaitMS, err := configuredInteger(fields, "busy_wait_ms", 0, 0, maxNativeProfileMessageTimeoutMS, settingPath, section)
+	if err != nil {
+		return nil, err
+	}
+	if busyWaitMS > timeoutMS {
+		return nil, configError("%s: %s.busy_wait_ms must not exceed timeout_ms", settingPath, section)
+	}
 	resultMaxBytes, err := configuredInteger(fields, "result_max_bytes", defaultNativeProfileMessageResultMaxBytes, 1, maxNativeToolBytes, settingPath, section)
 	if err != nil {
 		return nil, err
@@ -85,7 +95,7 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), ResultMaxBytes: int(resultMaxBytes), Approval: approval}, nil
+	return &NativeProfileMessageSettings{DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), ResultMaxBytes: int(resultMaxBytes), Approval: approval}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.

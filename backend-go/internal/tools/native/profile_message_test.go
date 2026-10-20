@@ -17,9 +17,13 @@ import (
 type fakeMessenger struct {
 	owner, target, message string
 	reply                  func(ctx context.Context) (string, error)
+	onCall                 func(busyWait time.Duration)
 }
 
-func (f *fakeMessenger) Message(ctx context.Context, owner, target, message string) (string, error) {
+func (f *fakeMessenger) Message(ctx context.Context, owner, target, message string, busyWait time.Duration) (string, error) {
+	if f.onCall != nil {
+		f.onCall(busyWait)
+	}
 	f.owner, f.target, f.message = owner, target, message
 	return f.reply(ctx)
 }
@@ -270,5 +274,28 @@ func TestProfileMessageCatalogAllowsSessionProfilesExceptDeniedAndCaller(t *test
 	config.Profiles = []string{"main", "team/coder"}
 	if _, err := BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, nil, nil, nil, nil, messenger); err == nil || !strings.Contains(err.Error(), "no profile to message") {
 		t.Fatalf("empty effective list error = %v", err)
+	}
+}
+
+func TestProfileMessagePassesTheBusyWaitAndNamesWhatHoldsTheTarget(t *testing.T) {
+	settings := profileMessageSettings()
+	settings.BusyWaitMs = 250
+	var waited time.Duration
+	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "", &ProfileBusyError{HeldBy: "team/coder"} }}
+	messenger.onCall = func(busyWait time.Duration) { waited = busyWait }
+	output := callProfileMessage(t, settings, messenger, `{"profile":"reviewer","message":"hi"}`)
+	if waited != 250*time.Millisecond {
+		t.Fatalf("busy wait = %v, want 250ms", waited)
+	}
+	for _, want := range []string{"error_code: profile_busy", "a message from profile team/coder", "still busy after waiting 250 ms"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output lacks %q: %s", want, output)
+		}
+	}
+
+	settings.BusyWaitMs = 0
+	plain := callProfileMessage(t, settings, &fakeMessenger{reply: func(context.Context) (string, error) { return "", ErrProfileBusy }}, `{"profile":"reviewer","message":"hi"}`)
+	if !strings.Contains(plain, "or being changed by the user") || strings.Contains(plain, "waiting") {
+		t.Errorf("plain busy text wrong: %s", plain)
 	}
 }

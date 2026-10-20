@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/tools/native"
@@ -44,7 +45,7 @@ type callerMessagesPathKey struct{}
 // target's own: the caller's transcript is held by the caller's running turn and is not
 // touched. The call ends when the target run ends, when ctx ends (the target is stopped
 // then), or at once when the target is busy.
-func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message string) (string, error) {
+func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message string, busyWait time.Duration) (string, error) {
 	reference, caller, found := strings.Cut(ownerKey, "\x00")
 	if !found {
 		return "", errors.New("profile message needs the calling session key")
@@ -84,6 +85,7 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		Profile:   canonical,
 		Caller:    caller,
 		Message:   message,
+		BusyWait:  busyWait,
 		OnCommitted: func(event json.RawMessage) {
 			if text := native.SubagentAnswerText(event); strings.TrimSpace(text) != "" {
 				lastText.Store(text)
@@ -92,7 +94,8 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 	})
 	if err != nil {
 		if errors.Is(err, httpapi.ErrSessionBusy) {
-			return "", native.ErrProfileBusy
+			heldBy, _ := starter.RunningProfileRunCaller(resolved.Reference, canonical)
+			return "", &native.ProfileBusyError{HeldBy: heldBy}
 		}
 		return "", err
 	}

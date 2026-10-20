@@ -431,7 +431,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	// the other profile's start are not blocked behind a queued start. Taking the lock and
 	// registering the run stay in one session-lock section: that is what lets reset, front
 	// compact, state context and checkpoint restore trust runIsActive.
-	started, err := h.acquireRun(r.Context(), reference, profile, body.Model)
+	started, err := h.acquireRun(r.Context(), reference, profile, body.Model, "", "")
 	if err != nil {
 		writeJSONError(w, err)
 		return

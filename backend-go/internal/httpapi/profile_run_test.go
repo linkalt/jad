@@ -245,3 +245,79 @@ func TestProfileRunStopFromTheCallerCancelsTheRun(t *testing.T) {
 		t.Fatalf("status = %q, want aborted", run.Status())
 	}
 }
+
+func TestStartProfileRunWithBusyWaitQueuesBehindTheHolderAndStarts(t *testing.T) {
+	f := newProfileRunFixture(t, 0)
+	first := f.start(t, context.Background())
+	<-f.started
+	type result struct {
+		run *ProfileRun
+		err error
+	}
+	second := make(chan result, 1)
+	go func() {
+		run, err := f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c2", Message: "queued", BusyWait: 5 * time.Second})
+		second <- result{run, err}
+	}()
+	select {
+	case <-f.resolver.waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the queued start never waited for the transcript")
+	}
+	close(f.release)
+	awaitProfileRunDone(t, first)
+	select {
+	case got := <-second:
+		if got.err != nil {
+			t.Fatalf("queued start: %v", got.err)
+		}
+		awaitProfileRunDone(t, got.run)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the queued start did not run after the holder ended")
+	}
+}
+
+func TestStartProfileRunWithBusyWaitReportsBusyWhenTheWaitEnds(t *testing.T) {
+	f := newProfileRunFixture(t, 0)
+	f.start(t, context.Background())
+	<-f.started
+	began := time.Now()
+	_, err := f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c2", Message: "queued", BusyWait: 100 * time.Millisecond})
+	if !errors.Is(err, ErrSessionBusy) {
+		t.Fatalf("error = %v, want ErrSessionBusy", err)
+	}
+	if elapsed := time.Since(began); elapsed < 90*time.Millisecond || elapsed > 3*time.Second {
+		t.Fatalf("waited %v, want about 100ms", elapsed)
+	}
+	if got := f.handler.startTurns.len(f.handler.turnKey("canonical", "dev")); got != 0 {
+		t.Fatalf("turn queue length = %d after the wait ended, want 0", got)
+	}
+	close(f.release)
+}
+
+func TestStartProfileRunWithBusyWaitStopsWaitingWhenTheCallerEnds(t *testing.T) {
+	f := newProfileRunFixture(t, 0)
+	f.start(t, context.Background())
+	<-f.started
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := make(chan error, 1)
+	go func() {
+		_, err := f.handler.ProfileRuns().StartProfileRun(ctx, ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c2", Message: "queued", BusyWait: time.Minute})
+		errs <- err
+	}()
+	select {
+	case <-f.resolver.waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the queued start never waited")
+	}
+	cancel()
+	select {
+	case err := <-errs:
+		if !errors.Is(err, context.Canceled) || errors.Is(err, ErrSessionBusy) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the queued start did not end when the caller ended")
+	}
+	close(f.release)
+}

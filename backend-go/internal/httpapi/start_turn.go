@@ -87,14 +87,14 @@ func (h *Handler) turnKey(reference, profile string) string {
 
 // acquireRun starts a run once the transcript is free. See tryStartRun for why the wait
 // for the transcript happens outside the session lock.
-func (h *Handler) acquireRun(ctx context.Context, reference, profile, model string) (startedRun, error) {
+func (h *Handler) acquireRun(ctx context.Context, reference, profile, model, source, caller string) (startedRun, error) {
 	leave, err := h.startTurns.enter(ctx, h.turnKey(reference, profile))
 	if err != nil {
 		return startedRun{}, err
 	}
 	defer leave()
 	for {
-		started, busy, err := h.tryStartRun(ctx, reference, profile, model, "", "")
+		started, busy, err := h.tryStartRun(ctx, reference, profile, model, source, caller)
 		if err != nil || !busy {
 			return started, err
 		}
