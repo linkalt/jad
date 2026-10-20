@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
 
@@ -105,4 +106,68 @@ func TestRunEndSweepAfterCancelledRun(t *testing.T) {
 	if !waitDead(pid) {
 		t.Fatal("leftover survived a cancelled run")
 	}
+}
+
+func leftoverPID(t *testing.T, output string) int {
+	t.Helper()
+	match := regexp.MustCompile("pid=([0-9]+)").FindStringSubmatch(output)
+	if match == nil {
+		t.Fatalf("no pid in %s", output)
+	}
+	pid, _ := strconv.Atoi(match[1])
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	return pid
+}
+
+func startExecLeftover(t *testing.T, ctx context.Context, root string, sweep bool) int {
+	t.Helper()
+	bash := bashTestSettings(t, root)
+	bash.KillProcessGroup = "timeout_only"
+	bash.KillChildrenOnRunEnd = sweep
+	output := runExecWith(ctx, root, execTestSettings(), bash, map[string]any{"lang": "bash", "code": "sleep 300 >/dev/null 2>&1 & echo pid=$!"})
+	return leftoverPID(t, output)
+}
+
+func startToolSmithLeftover(t *testing.T, ctx context.Context, root string, sweep bool) int {
+	t.Helper()
+	settings := toolSmithTestSettings(t, root)
+	settings.Child.KillProcessGroup = "timeout_only"
+	settings.Child.KillChildrenOnRunEnd = sweep
+	code := "const cp = await import('node:child_process'); const c = cp.spawn('sleep', ['300'], {stdio: 'ignore'}); c.unref(); return 'pid=' + c.pid;"
+	return leftoverPID(t, runToolSmith(ctx, root, settings, smithRun(code, nil)))
+}
+
+func TestRunEndSweepCoversExecAndToolSmith(t *testing.T) {
+	starters := map[string]func(*testing.T, context.Context, string, bool) int{
+		"exec": startExecLeftover, "tool_smith": startToolSmithLeftover,
+	}
+	for name, start := range starters {
+		t.Run(name, func(t *testing.T) {
+			ctx, sweep := WithChildGroups(context.Background())
+			pid := start(t, ctx, t.TempDir(), true)
+			if !alive(pid) {
+				t.Fatal("leftover died before the run ended")
+			}
+			sweep()
+			if !waitDead(pid) {
+				t.Fatal("leftover survived the run end")
+			}
+		})
+		t.Run(name+" off", func(t *testing.T) {
+			ctx, sweep := WithChildGroups(context.Background())
+			pid := start(t, ctx, t.TempDir(), false)
+			sweep()
+			time.Sleep(300 * time.Millisecond)
+			if !alive(pid) {
+				t.Fatal("kill_children_on_run_end off still stopped the child")
+			}
+		})
+	}
+}
+
+func runExecWith(ctx context.Context, root string, settings sessionfs.NativeExecSettings, bash sessionfs.NativeBashSettings, arguments map[string]any) string {
+	settings.Child = bash
+	return executeNativeExec(ctx, normalizeExecArguments(arguments, settings.DefaultLang), settings, "", tools.ExecutionContext{
+		CallID: "exec-call", WorkspaceRoot: root, SessionDir: root,
+	})
 }
