@@ -445,7 +445,7 @@
         "env_file": {
           "type": "string",
           "pattern": "\\S",
-          "description": "Dotenv file for the toolset's bash, process and exec when they name no env_file of their own. A relative path is relative to the folder of the root setting.json. Defaults, session and profile may all set it; the nearer level wins. A tool the toolset lacks is not added."
+          "description": "Dotenv file for the toolset's bash, process, exec and tool_smith when they name no env_file of their own. A relative path is relative to the folder of the root setting.json. Defaults, session and profile may all set it; the nearer level wins. A tool the toolset lacks is not added."
         },
         "tool_storage_dir": {
           "type": "string",
@@ -1168,7 +1168,7 @@
             },
             "tool_smith": {
               "type": "object",
-              "description": "Go backend only. Runs a TypeScript function body in an external interpreter child and lists a library of saved functions. The body calls native tools through a Go-owned bridge (a Unix socket in a private per-run directory; its path and a per-run token reach the child as environment variables). It has its own child-process settings, read with bash's keys and defaults from tools.native.tool_smith; nothing is taken from tools.native.bash. env_file and paths are not keys here: the child has no env file and no path policy of its own. Off unless this key is present. Needs tool_smith in tool_definition_paths. A sub-agent never gets this tool.",
+              "description": "Go backend only. Runs a TypeScript function body in an external interpreter child and lists a library of saved functions. The body calls native tools through a Go-owned bridge (a Unix socket in a private per-run directory; its path and a per-run token reach the child as environment variables). It has its own child-process settings, read with bash's keys and defaults from tools.native.tool_smith; nothing is taken from tools.native.bash. paths is not a key here: the child has no path policy of its own. Off unless this key is present. Needs tool_smith in tool_definition_paths. A sub-agent never gets this tool.",
               "properties": {
                 "shell": {"$ref": "#/$defs/child_process_style/properties/shell"},
                 "login_shell": {"$ref": "#/$defs/child_process_style/properties/login_shell"},
@@ -1176,6 +1176,7 @@
                 "max_line_chars": {"$ref": "#/$defs/child_process_style/properties/max_line_chars"},
                 "stdin_max_bytes": {"$ref": "#/$defs/child_process_style/properties/stdin_max_bytes"},
                 "strip_ansi": {"$ref": "#/$defs/child_process_style/properties/strip_ansi"},
+                "env_file": {"$ref": "#/$defs/child_process_style/properties/env_file"},
                 "env": {"$ref": "#/$defs/child_process_style/properties/env"},
                 "env_deny": {"$ref": "#/$defs/child_process_style/properties/env_deny"},
                 "timeout_ms": {"$ref": "#/$defs/bash_style/properties/timeout_ms"},

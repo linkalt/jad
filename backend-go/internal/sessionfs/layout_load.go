@@ -287,7 +287,7 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[
 		// Falling back to the root folder would run tools inside .jad/.
 		return nil, nil, configError("%s: cwd is required; set defaults.cwd in the root setting, cwd or settings.cwd in the session, or settings.cwd in the profile", c.sessionPath)
 	}
-	// env_file is a default for the toolset's bash, process and exec, not a setting of its own.
+	// env_file is a default for the toolset's bash, process, exec and tool_smith, not a setting of its own.
 	defaultEnvFile := setting["env_file"]
 	setting["schema_version"] = json.RawMessage("1")
 	if c.session.Name != "" {
@@ -585,9 +585,9 @@ func (c *layoutCompose) mcpServers(toolset layoutToolsetFile, toolsetPath string
 }
 
 // envFileTools are the native tools that read an env_file.
-var envFileTools = []string{"bash", "process", "exec"}
+var envFileTools = []string{"bash", "process", "exec", "tool_smith"}
 
-// withDefaultEnvFile gives each of bash, process and exec that the toolset has, and that
+// withDefaultEnvFile gives each of bash, process, exec and tool_smith that the toolset has, and that
 // names no env_file, the default env_file. It adds no tool and does not change the toolset's
 // own map.
 func withDefaultEnvFile(native map[string]json.RawMessage, envFile json.RawMessage, toolsetPath string) (map[string]json.RawMessage, error) {

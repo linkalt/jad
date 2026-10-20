@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -110,7 +111,8 @@ func TestNormalizeNativeToolSmithSettingsRejectsInvalidSettings(t *testing.T) {
 		"not object":         {`{"tool_smith":[]}`, "tools.native.tool_smith must be an object"},
 		"unknown key":        {`{"tool_smith":{"nope":1}}`, "tools.native.tool_smith.nope is not supported; supported keys are"},
 		"typo":               {`{"tool_smith":{"functions_dr":"x"}}`, "did you mean functions_dir?"},
-		"env_file":           {`{"tool_smith":{"env_file":"x.env"}}`, "tools.native.tool_smith.env_file is not supported"},
+		"env_file blank":     {`{"tool_smith":{"env_file":" "}}`, "env_file must be a non-empty string"},
+		"env_file missing":   {`{"tool_smith":{"env_file":"missing.env"}}`, "tools.native.tool_smith.env_file"},
 		"paths":              {`{"tool_smith":{"paths":{}}}`, "tools.native.tool_smith.paths is not supported"},
 		"empty dir":          {`{"tool_smith":{"functions_dir":" "}}`, "functions_dir must be a non-empty string"},
 		"dir type":           {`{"tool_smith":{"functions_dir":1}}`, "functions_dir must be a non-empty string"},
@@ -156,6 +158,22 @@ func TestNormalizeNativeToolSmithSettingsRejectsInvalidSettings(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeNativeToolSmithSettingsEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ts.env"), []byte("FROM_FILE=file\nOVERRIDDEN=file\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	native := `{"tool_smith":{"env_file":"ts.env","env":{"OVERRIDDEN":"inline"}}}`
+	got, err := normalizeNativeToolSmithSettings(toolSmithSettingsFor(native), dir, filepath.Join(dir, "setting.json"), dir, dir, "", dir, NativePathPolicy{}, NativePathPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := got.Child
+	if child.EnvFile != filepath.Join(dir, "ts.env") || child.Env["FROM_FILE"] != "file" || child.Env["OVERRIDDEN"] != "inline" || child.Env["NO_COLOR"] != "1" {
+		t.Fatalf("env file = %q env = %v", child.EnvFile, child.Env)
 	}
 }
 

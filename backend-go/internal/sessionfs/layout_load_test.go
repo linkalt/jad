@@ -967,7 +967,7 @@ func TestLayoutExecEnvFileIsRelativeToTheRootFolder(t *testing.T) {
 	}
 }
 
-// defaults.env_file is the env_file of bash, process and exec when the toolset names none; a
+// defaults.env_file is the env_file of bash, process, exec and tool_smith when the toolset names none; a
 // tool's own env_file wins, and a tool the toolset lacks is not added.
 func TestLayoutDefaultEnvFileFeedsBashProcessAndExec(t *testing.T) {
 	layout, location, root := sampleLayout(t)
@@ -983,6 +983,7 @@ func TestLayoutDefaultEnvFileFeedsBashProcessAndExec(t *testing.T) {
 		native["bash"] = map[string]any{}
 		native["process"] = map[string]any{"env_file": own}
 		native["exec"] = map[string]any{}
+		native["tool_smith"] = map[string]any{}
 	})
 	layout.Defaults = map[string]json.RawMessage{"env_file": json.RawMessage(`"env"`)}
 	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
@@ -998,6 +999,9 @@ func TestLayoutDefaultEnvFileFeedsBashProcessAndExec(t *testing.T) {
 	}
 	if config.NativeExec == nil || config.NativeExec.Child.EnvFile != want {
 		t.Fatalf("exec = %+v, want env file %s", config.NativeExec, want)
+	}
+	if config.NativeToolSmith == nil || config.NativeToolSmith.Child.EnvFile != want || config.NativeToolSmith.Child.Env["FROM_DEFAULT"] != "1" {
+		t.Fatalf("tool_smith = %+v, want env file %s", config.NativeToolSmith, want)
 	}
 }
 

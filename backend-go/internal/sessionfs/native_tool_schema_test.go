@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -36,7 +37,12 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 	setting := compileSchema(t, "setting.schema.json")
 	paths := `{"allow":["a"],"deny":["b"]}`
 	child := `"shell":"/bin/sh","login_shell":true,"kill_grace_ms":5,"max_line_chars":100,"stdin_max_bytes":10,"strip_ansi":false,"env":{"A":"1"},"env_deny":["B"],"paths":` + paths
-	toolSmithChild := `"shell":"/bin/sh","login_shell":true,"kill_grace_ms":5,"kill_deadline_ms":5,"drain_after_exit_ms":5,"max_line_chars":100,"stdin_max_bytes":10,"strip_ansi":false,"env":{"A":"1"},"env_deny":["B"]`
+	envFile := filepath.Join(t.TempDir(), "tool_smith.env")
+	if err := os.WriteFile(envFile, []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	envFileJSON, _ := json.Marshal(envFile)
+	toolSmithChild := `"shell":"/bin/sh","login_shell":true,"kill_grace_ms":5,"kill_deadline_ms":5,"drain_after_exit_ms":5,"max_line_chars":100,"stdin_max_bytes":10,"strip_ansi":false,"env_file":` + string(envFileJSON) + `,"env":{"A":"1"},"env_deny":["B"]`
 	run := `"timeout_ms":1000,"max_timeout_ms":2000,"kill_process_group":"always","max_bytes":65536,"stdout":{"head_bytes":1,"tail_bytes":1},"stderr":{"head_bytes":1,"tail_bytes":1},"spill":{"enabled":false}`
 	cases := []struct {
 		name   string
@@ -84,7 +90,8 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"tool_smith every key", "tool_smith", `{"approval":"ask",` + toolSmithChild + `,` + run + `,"functions_dir":".jad/functions","code_max_bytes":10,"result_max_bytes":10,"nested_result_max_bytes":10,"nested_request_max_bytes":10,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":3,"list_max_files":4,"list_header_bytes":512,"function_max_bytes":10,"tools":["read","write"],"interpreter":["node","{file}"]}`, true},
 		{"tool_smith no keys", "tool_smith", `{}`, true},
 		{"tool_smith unknown", "tool_smith", `{"nope":1}`, false},
-		{"tool_smith has no env_file", "tool_smith", `{"env_file":".env"}`, false},
+		{"tool_smith env_file", "tool_smith", `{"env_file":` + string(envFileJSON) + `}`, true},
+		{"tool_smith blank env_file", "tool_smith", `{"env_file":" "}`, false},
 		{"tool_smith has no paths", "tool_smith", `{"paths":` + paths + `}`, false},
 		{"tool_smith bad approval", "tool_smith", `{"approval":"on"}`, false},
 		{"tool_smith zero code max", "tool_smith", `{"code_max_bytes":0}`, false},

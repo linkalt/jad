@@ -26,14 +26,14 @@ const maxNativeToolSmithListHeaderBytes int64 = 65536
 const defaultNativeToolSmithFunctionMax int64 = 64 * 1024
 
 var (
-	// nativeToolSmithOwnKeys and the bash-style keys form the section; env_file and paths
-	// are left out on purpose, so tool_smith has no env file and no path policy of its own.
+	// nativeToolSmithOwnKeys and the bash-style keys form the section; paths is left out on
+	// purpose, so tool_smith has no path policy of its own.
 	nativeToolSmithOwnKeys = []string{
 		"functions_dir", "code_max_bytes", "result_max_bytes", "nested_result_max_bytes",
 		"nested_request_max_bytes", "max_nested_calls", "max_parallel_calls", "list_max_results", "list_max_files", "list_header_bytes", "function_max_bytes", "tools",
 		"interpreter",
 	}
-	nativeToolSmithKeys = append(nativeBashStyleKeysWithout("env_file", "paths"), nativeToolSmithOwnKeys...)
+	nativeToolSmithKeys = append(nativeBashStyleKeysWithout("paths"), nativeToolSmithOwnKeys...)
 
 	// defaultNativeToolSmithTools are the native tools a script may call without configuration.
 	defaultNativeToolSmithTools = []string{"read", "grep", "glob"}
