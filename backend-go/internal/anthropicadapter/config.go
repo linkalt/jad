@@ -86,8 +86,11 @@ type UpstreamConfig struct {
 	ExpiryMarginMS int `json:"expiry_margin_ms"`
 	// ExtraHeaders are added to every upstream request, for a gateway or an endpoint that
 	// wants more than the headers the adapter sets itself.
-	ExtraHeaders     map[string]string `json:"extra_headers"`
-	RequestTimeoutMS int               `json:"request_timeout_ms"`
+	ExtraHeaders map[string]string `json:"extra_headers"`
+	// ExtraBody holds top-level fields merged into every /v1/messages body, as raw JSON.
+	// It cannot set a field the adapter builds from the client request.
+	ExtraBody        map[string]json.RawMessage `json:"extra_body"`
+	RequestTimeoutMS int                        `json:"request_timeout_ms"`
 	// StreamRetry retries a streaming request whose upstream answered with an
 	// error event before any output was written.
 	StreamRetry StreamRetryConfig `json:"stream_retry"`
@@ -218,6 +221,9 @@ func (c *Config) finish() error {
 	if err := c.Upstream.validate(); err != nil {
 		return err
 	}
+	if _, ok := c.Upstream.ExtraBody["cache_control"]; ok && c.Cache.Automatic {
+		return errors.New("config: upstream.extra_body.cache_control conflicts with cache.automatic, which sets the same top-level field; use one of them")
+	}
 	if c.DefaultMaxTokens < 1 {
 		return fmt.Errorf("config: default_max_tokens must be at least 1, got %d", c.DefaultMaxTokens)
 	}
@@ -301,6 +307,11 @@ func (u *UpstreamConfig) validate() error {
 	if u.RequestTimeoutMS < 1 || u.RequestTimeoutMS > MaxRequestTimeoutMS {
 		return fmt.Errorf("config: upstream.request_timeout_ms must be 1..%d, got %d",
 			MaxRequestTimeoutMS, u.RequestTimeoutMS)
+	}
+	for name := range u.ExtraBody {
+		if slices.Contains(ownedRequestFields, name) {
+			return fmt.Errorf("config: upstream.extra_body.%s is built from the client request and cannot be set here", name)
+		}
 	}
 	return u.StreamRetry.validate()
 }

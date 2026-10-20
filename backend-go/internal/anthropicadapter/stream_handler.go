@@ -17,7 +17,7 @@ func (h *Handler) respondStream(w http.ResponseWriter, r *http.Request, apiKey s
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(h.config.Upstream.RequestTimeoutMS)*time.Millisecond)
 	defer cancel()
 	translated.Request.Stream = true
-	params, apiErr := sdkMessageParams(&translated.Request)
+	params, apiErr := sdkMessageParams(h.config, &translated.Request)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return

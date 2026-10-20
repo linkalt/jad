@@ -80,7 +80,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) respond(w http.ResponseWriter, r *http.Request, apiKey string, translated *translation) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(h.config.Upstream.RequestTimeoutMS)*time.Millisecond)
 	defer cancel()
-	params, apiErr := sdkMessageParams(&translated.Request)
+	params, apiErr := sdkMessageParams(h.config, &translated.Request)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return

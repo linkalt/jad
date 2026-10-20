@@ -52,6 +52,13 @@ var reservedUpstreamHeaders = []string{
 	"authorization", "x-api-key", "anthropic-version", "anthropic-beta", "content-type", "content-length", "host",
 }
 
+// ownedRequestFields are the body fields the adapter builds from the client request; upstream.extra_body
+// cannot set them. cache_control is not listed: it is allowed unless cache.automatic sets it too.
+var ownedRequestFields = []string{
+	"model", "max_tokens", "system", "messages", "tools", "tool_choice", "stream",
+	"temperature", "top_p", "thinking", "output_config",
+}
+
 const (
 	DefaultLogUpstreamErrors = true
 	DefaultLogBodyBytes      = 2048

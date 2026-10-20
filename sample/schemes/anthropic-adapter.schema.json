@@ -63,6 +63,12 @@
           "default": {},
           "description": "Headers added to every upstream request, for a gateway or endpoint that wants more than the adapter sets. authorization, x-api-key, anthropic-version, anthropic-beta, content-type, content-length and host cannot be set here: they come from auth_header, beta and anthropic_version."
         },
+        "extra_body": {
+          "type": "object",
+          "propertyNames": { "not": { "enum": ["model", "max_tokens", "system", "messages", "tools", "tool_choice", "stream", "temperature", "top_p", "thinking", "output_config"] } },
+          "default": {},
+          "description": "Top-level fields merged into every /v1/messages request body, each value sent as written (for example metadata, top_k, stop_sequences, service_tier, or cache_control {\"type\":\"ephemeral\",\"ttl\":\"1h\"}). Fields the adapter builds from the client request (model, max_tokens, system, messages, tools, tool_choice, stream, temperature, top_p, thinking, output_config) are refused. cache_control conflicts with cache.automatic and is refused when both are set."
+        },
         "request_timeout_ms": {
           "type": "integer",
           "minimum": 1,

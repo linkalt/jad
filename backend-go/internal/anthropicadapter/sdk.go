@@ -23,8 +23,8 @@ func newAnthropicClient(config *Config, httpClient *http.Client) anthropic.Clien
 	)
 }
 
-func sdkMessageParams(request *anthropicRequest) (anthropic.MessageNewParams, *apiError) {
-	payload, err := json.Marshal(request)
+func sdkMessageParams(config *Config, request *anthropicRequest) (anthropic.MessageNewParams, *apiError) {
+	payload, err := encodeRequestBody(config, request)
 	if err != nil {
 		return anthropic.MessageNewParams{}, &apiError{
 			Status: http.StatusInternalServerError, Type: "api_error", Code: "encode_failed", Message: err.Error(),
@@ -38,6 +38,23 @@ func sdkMessageParams(request *anthropicRequest) (anthropic.MessageNewParams, *a
 	params := anthropic.MessageNewParams{Model: request.Model, MaxTokens: int64(request.MaxTokens)}
 	param.SetJSON(payload, &params)
 	return params, nil
+}
+
+// encodeRequestBody marshals the request and merges upstream.extra_body into it. With no extra
+// body the bytes are exactly the marshalled request; raw values are kept as written.
+func encodeRequestBody(config *Config, request *anthropicRequest) ([]byte, error) {
+	payload, err := json.Marshal(request)
+	if err != nil || len(config.Upstream.ExtraBody) == 0 {
+		return payload, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		return nil, err
+	}
+	for name, value := range config.Upstream.ExtraBody {
+		fields[name] = value
+	}
+	return json.Marshal(fields)
 }
 
 func (h *Handler) sdkRequestOptions(apiKey string, response **http.Response) []option.RequestOption {

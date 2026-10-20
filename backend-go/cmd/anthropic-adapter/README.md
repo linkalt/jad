@@ -58,6 +58,7 @@ Schema: `sample/schemes/anthropic-adapter.schema.json`. A working example: `samp
 | `upstream.credential_file` | `""` | A `claude-auth` credential file (absolute or `~/…`). When set, its access token is sent upstream and the caller's credential is ignored. Empty forwards the caller's credential. |
 | `upstream.system_prefix` | `""` | Sent as the first system block of every request, as a block of its own, before the caller's instructions. Empty sends nothing extra. **Discouraged:** it makes the request claim to be Claude Code, and it does not avoid the third-party billing refusal described in the credentials section. |
 | `upstream.expiry_margin_ms` | `300000` | With `credential_file`: a token whose stored expiry is this close is refused with 401 before the request. |
+| `upstream.extra_body` | `{}` | Top-level fields merged into every `/v1/messages` body, values sent as written (`metadata`, `top_k`, `stop_sequences`, `service_tier`, `cache_control`). Fields built from the client request are refused; `cache_control` is refused together with `cache.automatic`. |
 | `upstream.extra_headers` | `{}` | Headers added to every upstream request. `authorization`, `x-api-key`, `anthropic-version`, `anthropic-beta`, `content-type`, `content-length` and `host` are refused here: they come from other keys. |
 | `upstream.request_timeout_ms` | `600000` | Deadline of one upstream request, the whole stream included. |
 | `upstream.stream_retry.max_retries` | `0` | Retries of a stream whose first event is an error. `0` is off. |
