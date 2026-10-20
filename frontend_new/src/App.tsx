@@ -1868,6 +1868,10 @@ function App({
       }
       attachedTurnRefs.current.set(sessionId, turnId);
       attachedRunViewKeysRef.current.add(sessionId);
+      // The pane was hydrated before this run began, so it lacks the run's user
+      // message, which the stream never carries: fetch one fresh snapshot.
+      hydratedTranscriptSessionIdsRef.current.delete(sessionId);
+      refreshSessionsRef.current?.();
       const controller = new AbortController();
       runAbortRefs.current.set(sessionId, controller);
       setRunRunningForView(sessionId, true);
