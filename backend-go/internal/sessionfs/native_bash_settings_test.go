@@ -22,7 +22,7 @@ func TestNormalizeNativeBashSettingsDefaultsAndIgnoresWritePolicy(t *testing.T) 
 	if settings == nil {
 		t.Fatal("normalizeNativeBashSettings() returned nil")
 	}
-	if settings.Shell != "/bin/bash" || settings.LoginShell || settings.TimeoutMs != 120_000 || settings.MaxTimeoutMs != 600_000 || settings.KillGraceMs != 2_000 || settings.KillDeadlineMs != 2_000 || settings.DrainAfterExitMs != 500 || settings.KillProcessGroup != "always" {
+	if settings.Shell != "/bin/bash" || settings.LoginShell || settings.TimeoutMs != 120_000 || settings.MaxTimeoutMs != 600_000 || settings.KillGraceMs != 2_000 || settings.KillDeadlineMs != 2_000 || settings.DrainAfterExitMs != 500 || settings.KillProcessGroup != "always" || !settings.KillChildrenOnRunEnd {
 		t.Fatalf("default bash execution settings = %+v", settings)
 	}
 	if settings.MaxBytes != 64*1024 || settings.Stdout != (NativeBashStreamBudget{HeadBytes: 16 * 1024, TailBytes: 32 * 1024}) || settings.Stderr != (NativeBashStreamBudget{HeadBytes: 4 * 1024, TailBytes: 12 * 1024}) {
@@ -55,13 +55,13 @@ func TestNormalizeNativeBashSettingsOverridesAndLoadsEnvFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	setting := map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"bash":{"shell":" /bin/sh ","login_shell":true,"timeout_ms":30000,"max_timeout_ms":45000,"kill_grace_ms":400,"kill_deadline_ms":900,"drain_after_exit_ms":70,"kill_process_group":"timeout_only","max_bytes":1024,"stdout":{"head_bytes":100,"tail_bytes":100},"stderr":{"head_bytes":50,"tail_bytes":50},"spill":{"enabled":false,"keep":"always","prune_interval_seconds":0,"storage_dir":"custom-spill"},"max_line_chars":200,"stdin_max_bytes":4096,"strip_ansi":false,"env_file":"command.env","env":{"OVERRIDDEN":"inline"},"env_deny":[" DENIED "],"paths":{"deny":["private"]}}}}`),
+		"tools": json.RawMessage(`{"native":{"bash":{"shell":" /bin/sh ","login_shell":true,"timeout_ms":30000,"max_timeout_ms":45000,"kill_grace_ms":400,"kill_deadline_ms":900,"drain_after_exit_ms":70,"kill_process_group":"timeout_only","kill_children_on_run_end":"off","max_bytes":1024,"stdout":{"head_bytes":100,"tail_bytes":100},"stderr":{"head_bytes":50,"tail_bytes":50},"spill":{"enabled":false,"keep":"always","prune_interval_seconds":0,"storage_dir":"custom-spill"},"max_line_chars":200,"stdin_max_bytes":4096,"strip_ansi":false,"env_file":"command.env","env":{"OVERRIDDEN":"inline"},"env_deny":[" DENIED "],"paths":{"deny":["private"]}}}}`),
 	}
 	settings, err := normalizeNativeBashSettings(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", sessionDir, NativePathPolicy{}, NativePathPolicy{})
 	if err != nil {
 		t.Fatalf("normalizeNativeBashSettings() error = %v", err)
 	}
-	if settings.Shell != "/bin/sh" || !settings.LoginShell || settings.TimeoutMs != 30_000 || settings.MaxTimeoutMs != 45_000 || settings.KillGraceMs != 400 || settings.KillDeadlineMs != 900 || settings.DrainAfterExitMs != 70 || settings.KillProcessGroup != "timeout_only" {
+	if settings.Shell != "/bin/sh" || !settings.LoginShell || settings.TimeoutMs != 30_000 || settings.MaxTimeoutMs != 45_000 || settings.KillGraceMs != 400 || settings.KillDeadlineMs != 900 || settings.DrainAfterExitMs != 70 || settings.KillProcessGroup != "timeout_only" || settings.KillChildrenOnRunEnd {
 		t.Fatalf("normalized execution settings = %+v", settings)
 	}
 	if settings.MaxBytes != 1024 || settings.Stdout != (NativeBashStreamBudget{HeadBytes: 100, TailBytes: 100}) || settings.Stderr != (NativeBashStreamBudget{HeadBytes: 50, TailBytes: 50}) || settings.MaxLineChars != 200 || settings.StripANSI {
@@ -104,6 +104,9 @@ func TestNormalizeNativeBashSettingsValidatesConfiguration(t *testing.T) {
 		`{"native":{"bash":{"drain_after_exit_ms":0}}}`,
 		`{"native":{"bash":{"drain_after_exit_ms":"soon"}}}`,
 		`{"native":{"bash":{"kill_process_group":"sometimes"}}}`,
+		`{"native":{"bash":{"kill_children_on_run_end":"maybe"}}}`,
+		`{"native":{"bash":{"kill_children_on_run_end":true}}}`,
+		`{"native":{"bash":{"kill_children_on_run_end":null}}}`,
 		`{"native":{"bash":{"max_bytes":0}}}`,
 		`{"native":{"bash":{"max_bytes":1024,"stdout":{"head_bytes":2048,"tail_bytes":2048}}}}`,
 		`{"native":{"bash":{"stdout":{"head_bytes":-1}}}}`,

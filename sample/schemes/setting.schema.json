@@ -239,6 +239,15 @@
           "default": "always",
           "description": "Signal leftover descendants when a command finishes, or only on timeout."
         },
+        "kill_children_on_run_end": {
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ],
+          "default": "on",
+          "description": "When the run ends (done, failed or stopped), stop the process groups of this tool's calls that are still alive: SIGTERM, then SIGKILL after kill_grace_ms. Processes started with the process tool are never touched. Windows stops only the direct process."
+        },
         "max_bytes": {
           "type": "integer",
           "minimum": 1,
@@ -1184,6 +1193,7 @@
                 "kill_deadline_ms": {"$ref": "#/$defs/bash_style/properties/kill_deadline_ms"},
                 "drain_after_exit_ms": {"$ref": "#/$defs/bash_style/properties/drain_after_exit_ms"},
                 "kill_process_group": {"$ref": "#/$defs/bash_style/properties/kill_process_group"},
+                "kill_children_on_run_end": {"$ref": "#/$defs/bash_style/properties/kill_children_on_run_end"},
                 "max_bytes": {"$ref": "#/$defs/bash_style/properties/max_bytes"},
                 "stdout": {"$ref": "#/$defs/bash_style/properties/stdout"},
                 "stderr": {"$ref": "#/$defs/bash_style/properties/stderr"},

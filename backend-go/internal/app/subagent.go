@@ -78,6 +78,8 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	if err != nil {
 		return native.SubagentResult{}, err
 	}
+	ctx, sweepChildren := native.WithChildGroups(ctx)
+	defer sweepChildren()
 	var rounds, tokens atomic.Int64
 	// lastText is the newest assistant text of any round. A child that is cut off has
 	// no final answer, but what it wrote last is the best partial work it has.

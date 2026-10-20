@@ -23,3 +23,15 @@ func signalProcessGroup(command *exec.Cmd, force bool) {
 		_ = command.Process.Signal(signal)
 	}
 }
+
+func signalProcessGroupID(pgid int, force bool) {
+	signal := syscall.SIGTERM
+	if force {
+		signal = syscall.SIGKILL
+	}
+	_ = syscall.Kill(-pgid, signal)
+}
+
+func processGroupAlive(pgid int) bool {
+	return pgid > 1 && syscall.Kill(-pgid, 0) == nil
+}

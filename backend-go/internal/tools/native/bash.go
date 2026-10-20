@@ -237,6 +237,7 @@ func runShellChild(
 		killDeadline:             time.Duration(settings.KillDeadlineMs) * time.Millisecond,
 		drainAfterExit:           time.Duration(settings.DrainAfterExitMs) * time.Millisecond,
 		killProcessGroupWhenDone: settings.KillProcessGroup == "always",
+		sweepAtRunEnd:            settings.KillChildrenOnRunEnd,
 		collector:                collector,
 		spill:                    spillWriters,
 		stdin:                    run.stdin,

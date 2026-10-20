@@ -870,7 +870,7 @@
     "unknown_key": 1
    }
   },
-  "error": "tools.native.exec.unknown_key is not supported; supported keys are approval, code_max_bytes, default_lang, drain_after_exit_ms, env, env_deny, env_file, kill_deadline_ms, kill_grace_ms, kill_process_group, langs, line_aware, login_shell, max_bytes, max_line_chars, max_timeout_ms, paths, result_max_bytes, shell, spill, stderr, stdin_max_bytes, stdout, strip_ansi, timeout_ms"
+  "error": "tools.native.exec.unknown_key is not supported; supported keys are approval, code_max_bytes, default_lang, drain_after_exit_ms, env, env_deny, env_file, kill_children_on_run_end, kill_deadline_ms, kill_grace_ms, kill_process_group, langs, line_aware, login_shell, max_bytes, max_line_chars, max_timeout_ms, paths, result_max_bytes, shell, spill, stderr, stdin_max_bytes, stdout, strip_ansi, timeout_ms"
  },
  {
   "name": "exec approval invalid",

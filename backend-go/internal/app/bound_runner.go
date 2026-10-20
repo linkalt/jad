@@ -122,7 +122,8 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	finish := r.runEndHook(ctx, options.OnHookReport)
 	callerRun := r.resolver.callerRunSeq.Add(1)
 	defer r.resolver.callerRuns.forget(callerRun)
-	runCtx := context.WithValue(context.WithValue(ctx, callerMessagesPathKey{}, r.config.MessagesPath), callerRunKey{}, callerRun)
+	runCtx, sweepChildren := native.WithChildGroups(context.WithValue(context.WithValue(ctx, callerMessagesPathKey{}, r.config.MessagesPath), callerRunKey{}, callerRun))
+	defer sweepChildren()
 	result, err := prepared.runner.Run(runCtx, input, options)
 	finish(result.TurnID, err)
 	return result, err

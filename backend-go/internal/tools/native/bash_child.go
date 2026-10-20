@@ -40,8 +40,10 @@ type bashChildRequest struct {
 	killDeadline             time.Duration
 	drainAfterExit           time.Duration
 	killProcessGroupWhenDone bool
-	collector                *bashOutputCollector
-	spill                    map[bashStream]bashSpillSink
+	// sweepAtRunEnd keeps the process group registered with the run (see ChildGroups) while it is alive.
+	sweepAtRunEnd bool
+	collector     *bashOutputCollector
+	spill         map[bashStream]bashSpillSink
 	// stdin is written to the child's standard input, which is then closed.
 	// Empty leaves the input closed from the start (/dev/null).
 	stdin string
@@ -158,6 +160,10 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 		readers.Wait()
 		close(readersDone)
 	}()
+	if groups := childGroupsFrom(ctx); groups != nil && request.sweepAtRunEnd {
+		pid := command.Process.Pid
+		defer groups.add(pid, request.killGrace)
+	}
 	waitResult := make(chan error, 1)
 	go func() { waitResult <- command.Wait() }()
 

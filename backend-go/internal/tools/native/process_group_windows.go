@@ -13,3 +13,8 @@ func signalProcessGroup(command *exec.Cmd, _ bool) {
 		_ = command.Process.Kill()
 	}
 }
+
+// Windows has no process group here: only the direct process is stopped, by the call itself.
+func signalProcessGroupID(int, bool) {}
+
+func processGroupAlive(int) bool { return false }

@@ -86,11 +86,13 @@ type NativeBashSettings struct {
 	KillDeadlineMs   int64
 	DrainAfterExitMs int64
 	KillProcessGroup string
-	MaxBytes         int64
-	Stdout           NativeBashStreamBudget
-	Stderr           NativeBashStreamBudget
-	Spill            NativeBashSpillSettings
-	MaxLineChars     int64
+	// KillChildrenOnRunEnd stops the process groups of this tool's calls that are still alive when the run ends.
+	KillChildrenOnRunEnd bool
+	MaxBytes             int64
+	Stdout               NativeBashStreamBudget
+	Stderr               NativeBashStreamBudget
+	Spill                NativeBashSpillSettings
+	MaxLineChars         int64
 	// StdinMaxBytes is the largest stdin text one call may pipe to its command.
 	StdinMaxBytes int64
 	StripANSI     bool
@@ -101,7 +103,7 @@ type NativeBashSettings struct {
 
 // nativeBashStyleKeys are the settings of a tool that runs a child process. native.bash and
 // native.exec each take them under their own name; neither reads the other's values.
-var nativeBashStyleKeys = []string{"shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_deadline_ms", "drain_after_exit_ms", "kill_process_group", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "paths", "approval"}
+var nativeBashStyleKeys = []string{"shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_deadline_ms", "drain_after_exit_ms", "kill_process_group", "kill_children_on_run_end", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "paths", "approval"}
 
 func normalizeNativeBashSettings(
 	setting map[string]json.RawMessage,
@@ -187,6 +189,9 @@ func normalizeBashStyleFields(
 	if settings.KillProcessGroup, err = normalizeKillProcessGroup(fields, section, settingPath); err != nil {
 		return nil, err
 	}
+	if settings.KillChildrenOnRunEnd, err = normalizeKillChildrenOnRunEnd(fields, section, settingPath); err != nil {
+		return nil, err
+	}
 	if settings.MaxBytes, err = configuredInteger(fields, "max_bytes", defaultNativeBashMaxBytes, 1, maxNativeToolBytes, settingPath, section); err != nil {
 		return nil, err
 	}
@@ -232,6 +237,18 @@ func normalizeBashStyleFields(
 		}
 	}
 	return settings, nil
+}
+
+// normalizeKillChildrenOnRunEnd reads kill_children_on_run_end (on or off, default on).
+func normalizeKillChildrenOnRunEnd(fields map[string]json.RawMessage, section, settingPath string) (bool, error) {
+	if value, ok := fields["kill_children_on_run_end"]; ok {
+		var text string
+		if err := json.Unmarshal(value, &text); err != nil || (text != "on" && text != "off") {
+			return false, configError("%s: %s.kill_children_on_run_end must be on or off", settingPath, section)
+		}
+		return text == "on", nil
+	}
+	return true, nil
 }
 
 // normalizeKillProcessGroup reads kill_process_group from the section's fields.
