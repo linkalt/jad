@@ -63,9 +63,10 @@ var ErrProfileCycle = errors.New("profile message would form a cycle")
 // ProfileMessenger delivers one message to another profile and returns its final
 // answer. The app package implements it, because it owns the sessions. ownerKey is the
 // calling session's ExecutionContext.SessionKey. ctx ends when the caller stops or the
-// tool's timeout passes; the messenger must stop promptly then.
+// tool's timeout passes; the messenger must stop promptly then. compact asks for the
+// target's transcript to be compacted before the run, once per caller run and target.
 type ProfileMessenger interface {
-	Message(ctx context.Context, ownerKey string, target string, message string, busyWait time.Duration) (string, error)
+	Message(ctx context.Context, ownerKey string, target string, message string, busyWait time.Duration, compact bool) (string, error)
 }
 
 type profileMessageTool struct {
@@ -143,7 +144,7 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	}
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(p.settings.TimeoutMs)*time.Millisecond)
 	defer cancel()
-	reply, err := p.messenger.Message(callCtx, execution.SessionKey, profile, message, time.Duration(p.settings.BusyWaitMs)*time.Millisecond)
+	reply, err := p.messenger.Message(callCtx, execution.SessionKey, profile, message, time.Duration(p.settings.BusyWaitMs)*time.Millisecond, p.settings.Compact == sessionfs.ProfileMessageCompactOn)
 	if err != nil {
 		if ctx.Err() != nil {
 			return tools.ExecutionError(callID, tools.StatusError, "cancelled",

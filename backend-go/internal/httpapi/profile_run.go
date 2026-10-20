@@ -23,6 +23,9 @@ type ProfileRunRequest struct {
 	BusyWait time.Duration
 	// OnCommitted sees every response the run commits, on the run's goroutine.
 	OnCommitted func(event json.RawMessage)
+	// BeforeRun, when set, runs once the transcript is held and the run is registered,
+	// before the target run begins, so nothing can take the transcript in between.
+	BeforeRun func(ctx context.Context)
 }
 
 // ProfileRunStarter starts a run of a profile for a tool, the way a user's message
@@ -99,6 +102,9 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 	run.mu.Lock()
 	run.supportsInteraction = true
 	run.mu.Unlock()
+	if request.BeforeRun != nil {
+		request.BeforeRun(ctx)
+	}
 	run.onCommitted = request.OnCommitted
 	run.onResult = func(event json.RawMessage) { handle.final = event }
 	h.attachContentCache(run)

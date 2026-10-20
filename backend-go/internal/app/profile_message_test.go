@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,7 +31,7 @@ func TestProfileMessageDeliversToTheTargetTranscriptAndSecondCallSeesTheFirst(t 
 	f.captureBodies = true
 	messenger := profileMessenger{resolver: f.service.resolver}
 
-	answer, err := messenger.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "first question", 0)
+	answer, err := messenger.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "first question", 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +48,7 @@ func TestProfileMessageDeliversToTheTargetTranscriptAndSecondCallSeesTheFirst(t 
 		t.Fatalf("the caller's transcript received the message: %s", data)
 	}
 
-	if _, err := messenger.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "second question", 0); err != nil {
+	if _, err := messenger.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "second question", 0, false); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
@@ -66,7 +67,7 @@ func TestProfileMessageToABusyTargetFailsFast(t *testing.T) {
 	}
 	defer release()
 
-	_, err = profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0)
+	_, err = profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0, false)
 	if !errors.Is(err, native.ErrProfileBusy) {
 		t.Fatalf("error = %v, want ErrProfileBusy", err)
 	}
@@ -74,7 +75,7 @@ func TestProfileMessageToABusyTargetFailsFast(t *testing.T) {
 
 func TestProfileMessageWithoutTheCallerTranscriptPathFailsClosed(t *testing.T) {
 	f := newLayoutFixture(t)
-	_, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi", 0)
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), profileMessageOwner, "review/reviewer", "hi", 0, false)
 	if err == nil || errors.Is(err, native.ErrProfileCycle) || errors.Is(err, native.ErrProfileBusy) || errors.Is(err, native.ErrProfileSameTranscript) {
 		t.Fatalf("error = %v, want a plain error", err)
 	}
@@ -82,7 +83,7 @@ func TestProfileMessageWithoutTheCallerTranscriptPathFailsClosed(t *testing.T) {
 
 func TestProfileMessageRejectsAnOwnerKeyWithoutSeparator(t *testing.T) {
 	f := newLayoutFixture(t)
-	_, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), "local:demo", "review/reviewer", "hi", 0)
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(context.Background(), "local:demo", "review/reviewer", "hi", 0, false)
 	if err == nil || errors.Is(err, native.ErrProfileCycle) || errors.Is(err, native.ErrProfileBusy) {
 		t.Fatalf("error = %v, want a plain error", err)
 	}
@@ -107,7 +108,7 @@ func TestProfileMessageRunCannotCallProfileMessageItself(t *testing.T) {
 	f.captureBodies = true
 	f.script = scriptFunctionCall("profile_message", map[string]any{"profile": "dev/coder", "message": "again"})
 
-	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0); err != nil {
+	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0, false); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
@@ -223,7 +224,7 @@ func TestProfileMessageToARunningTargetReportsBusyNotSameTranscript(t *testing.T
 	}
 	defer release()
 
-	_, err = profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0)
+	_, err = profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0, false)
 	if !errors.Is(err, native.ErrProfileBusy) {
 		t.Fatalf("error = %v, want ErrProfileBusy", err)
 	}
@@ -235,7 +236,7 @@ func TestProfileMessageWithoutAnswerTextReturnsErrProfileNoAnswer(t *testing.T) 
 		return `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"  "}]}`
 	}
 
-	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0)
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0, false)
 	if !errors.Is(err, native.ErrProfileNoAnswer) {
 		t.Fatalf("error = %v, want ErrProfileNoAnswer", err)
 	}
@@ -251,7 +252,7 @@ func TestProfileMessageUsesTheLastTextWhenTheFinalResponseHasNone(t *testing.T) 
 			`{"type":"function_call","call_id":"call-1","name":"nothing_here","arguments":"{}"}]`
 	}
 
-	answer, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0)
+	answer, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +270,7 @@ func TestProfileMessageWithOnlyAToolCallReturnsErrProfileNoAnswer(t *testing.T) 
 		return `{"type":"function_call","call_id":"call-1","name":"nothing_here","arguments":"{}"}`
 	}
 
-	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0)
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0, false)
 	if !errors.Is(err, native.ErrProfileNoAnswer) {
 		t.Fatalf("error = %v, want ErrProfileNoAnswer", err)
 	}
@@ -387,7 +388,7 @@ func TestProfileMessageToADifferentProfileOverOneTranscriptReportsSameTranscript
 	coder, _ := shareCoderTranscript(t, f)
 
 	callerCtx := context.WithValue(context.Background(), callerMessagesPathKey{}, coder.config.MessagesPath)
-	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerCtx, profileMessageOwner, "review/reviewer", "hi", 0)
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerCtx, profileMessageOwner, "review/reviewer", "hi", 0, false)
 	if !errors.Is(err, native.ErrProfileSameTranscript) {
 		t.Fatalf("error = %v, want ErrProfileSameTranscript", err)
 	}
@@ -479,7 +480,7 @@ func TestProfileMessageRefusesNestedCallsAndTheCallerItself(t *testing.T) {
 	done := startHeldProfileMessage(t, f, context.Background())
 	reviewerPath := boundRunnerOf(t, f, "review/reviewer").config.MessagesPath
 	nested := context.WithValue(context.Background(), callerMessagesPathKey{}, reviewerPath)
-	if _, err := messenger.Message(nested, "local:demo\x00review/reviewer", "dev/coder", "hi", 0); !errors.Is(err, native.ErrProfileCycle) {
+	if _, err := messenger.Message(nested, "local:demo\x00review/reviewer", "dev/coder", "hi", 0, false); !errors.Is(err, native.ErrProfileCycle) {
 		t.Fatalf("nested call error = %v, want ErrProfileCycle", err)
 	}
 	f.mu.Lock()
@@ -490,7 +491,7 @@ func TestProfileMessageRefusesNestedCallsAndTheCallerItself(t *testing.T) {
 		t.Fatalf("stop: %d %s", status, body)
 	}
 	awaitMessageEnd(t, done)
-	if _, err := messenger.Message(context.Background(), profileMessageOwner, "dev/coder", "hi", 0); !errors.Is(err, native.ErrProfileCycle) {
+	if _, err := messenger.Message(context.Background(), profileMessageOwner, "dev/coder", "hi", 0, false); !errors.Is(err, native.ErrProfileCycle) {
 		t.Fatalf("self call error = %v, want ErrProfileCycle", err)
 	}
 }
@@ -648,7 +649,7 @@ func startHeldProfileMessage(t *testing.T, f *layoutFixture, ctx context.Context
 	f.mu.Unlock()
 	done := make(chan error, 1)
 	go func() {
-		_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, ctx), profileMessageOwner, "review/reviewer", "hi", 0)
+		_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, ctx), profileMessageOwner, "review/reviewer", "hi", 0, false)
 		done <- err
 	}()
 	awaitSignal(t, f.reached, "the target's provider request")
@@ -709,7 +710,7 @@ func TestProfileMessageStopOfTheTargetCancelsItsRunAndReportsStopped(t *testing.
 func TestProfileMessageTargetRunStopsRunningOnReturnErrorAndCancel(t *testing.T) {
 	t.Run("return", func(t *testing.T) {
 		f := newLayoutFixture(t)
-		if _, err := (profileMessenger{resolver: f.service.resolver}).Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0); err != nil {
+		if _, err := (profileMessenger{resolver: f.service.resolver}).Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0, false); err != nil {
 			t.Fatal(err)
 		}
 		if run, ok := targetRunInList(t, f); ok && run.Status == "running" {
@@ -721,7 +722,7 @@ func TestProfileMessageTargetRunStopsRunningOnReturnErrorAndCancel(t *testing.T)
 		f.script = func(string, string) string {
 			return `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"  "}]}`
 		}
-		_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0)
+		_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0, false)
 		if !errors.Is(err, native.ErrProfileNoAnswer) {
 			t.Fatalf("error = %v, want ErrProfileNoAnswer", err)
 		}
@@ -748,7 +749,7 @@ func TestProfileMessageTargetRunStopsRunningOnReturnErrorAndCancel(t *testing.T)
 func TestProfileMessageWithoutARunStarterFailsInsteadOfRunningNested(t *testing.T) {
 	f := newLayoutFixture(t)
 	f.service.resolver.SetProfileRuns(nil)
-	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0)
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0, false)
 	if err == nil {
 		t.Fatal("Message succeeded without a run starter")
 	}
@@ -766,7 +767,7 @@ func TestProfileMessageBusyWaitStartsTheRunOnceTheHolderReleases(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		answer, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 10*time.Second)
+		answer, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 10*time.Second, false)
 		done <- result{answer, err}
 	}()
 	select {
@@ -792,7 +793,7 @@ func TestProfileMessageBusyWaitThatEndsReportsBusyAndWhatHoldsTheTarget(t *testi
 		t.Fatal(err)
 	}
 	defer release()
-	_, err = profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 200*time.Millisecond)
+	_, err = profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 200*time.Millisecond, false)
 	var busy *native.ProfileBusyError
 	if !errors.Is(err, native.ErrProfileBusy) || !errors.As(err, &busy) || busy.HeldBy != "" {
 		t.Fatalf("error = %#v, want a busy error held by a user", err)
@@ -802,7 +803,7 @@ func TestProfileMessageBusyWaitThatEndsReportsBusyAndWhatHoldsTheTarget(t *testi
 func TestProfileMessageBusyNamesTheProfileThatHoldsTheTarget(t *testing.T) {
 	f := newLayoutFixture(t)
 	done := startHeldProfileMessage(t, f, context.Background())
-	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "again", 0)
+	_, err := profileMessenger{resolver: f.service.resolver}.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "again", 0, false)
 	var busy *native.ProfileBusyError
 	if !errors.As(err, &busy) || busy.HeldBy != "dev/coder" {
 		t.Fatalf("error = %#v, want busy held by dev/coder", err)
@@ -815,4 +816,105 @@ func TestProfileMessageBusyNamesTheProfileThatHoldsTheTarget(t *testing.T) {
 		t.Fatalf("stop: %d %s", status, body)
 	}
 	awaitMessageEnd(t, done)
+}
+
+// Run ids start high so they never equal the ids boundRunner.Run hands the target runs.
+func callerRunContext(t *testing.T, f *layoutFixture, run uint64) context.Context {
+	return context.WithValue(callerContext(t, f, context.Background()), callerRunKey{}, run+1000)
+}
+
+func countCompactions(f *layoutFixture) *[]string {
+	var mu sync.Mutex
+	calls := &[]string{}
+	f.service.resolver.compactProfile = func(_ context.Context, _, profile string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		*calls = append(*calls, profile)
+		return nil
+	}
+	return calls
+}
+
+func TestProfileMessageCompactsOncePerCallerRunAndTarget(t *testing.T) {
+	f := newLayoutFixture(t)
+	calls := countCompactions(f)
+	messenger := profileMessenger{resolver: f.service.resolver}
+	send := func(run uint64, target string, compact bool) {
+		t.Helper()
+		if _, err := messenger.Message(callerRunContext(t, f, run), profileMessageOwner, target, "hi", 0, compact); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(1, "review/reviewer", true)
+	send(1, "review/reviewer", true)
+	if len(*calls) != 1 {
+		t.Fatalf("compactions after two calls in one run = %v, want 1", *calls)
+	}
+	send(2, "review/reviewer", true)
+	if len(*calls) != 2 {
+		t.Fatalf("compactions after a new caller run = %v, want 2", *calls)
+	}
+	send(3, "review/reviewer", false)
+	if len(*calls) != 2 {
+		t.Fatalf("compact=false compacted: %v", *calls)
+	}
+}
+
+func TestProfileMessageCompactsEachTargetOnce(t *testing.T) {
+	f := newLayoutFixture(t)
+	calls := countCompactions(f)
+	messenger := profileMessenger{resolver: f.service.resolver}
+	reviewerCaller := context.WithValue(context.Background(), callerMessagesPathKey{}, boundRunnerOf(t, f, "review/reviewer").config.MessagesPath)
+	reviewerCaller = context.WithValue(reviewerCaller, callerRunKey{}, uint64(1001))
+	for range 2 {
+		if _, err := messenger.Message(callerRunContext(t, f, 1), profileMessageOwner, "review/reviewer", "hi", 0, true); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := messenger.Message(reviewerCaller, "local:demo\x00review/reviewer", "dev/coder", "hi", 0, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(*calls) != 2 || (*calls)[0] == (*calls)[1] {
+		t.Fatalf("compactions = %v, want one per target", *calls)
+	}
+}
+
+func TestProfileMessageCompactionFailureStillSendsTheMessage(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.service.resolver.compactProfile = func(context.Context, string, string) error { return errors.New("boom") }
+	answer, err := profileMessenger{resolver: f.service.resolver}.Message(callerRunContext(t, f, 1), profileMessageOwner, "review/reviewer", "hi", 0, true)
+	if err != nil || !strings.Contains(answer, "ok") {
+		t.Fatalf("answer %q, error %v; want the message sent despite the failure", answer, err)
+	}
+}
+
+func TestCallerRunTargetsForgetDropsTheEntry(t *testing.T) {
+	var c callerRunTargets
+	if !c.claim(1, "a") || c.claim(1, "a") || !c.claim(1, "b") {
+		t.Fatal("claim must be true once per target")
+	}
+	c.forget(1)
+	if len(c.runs) != 0 || !c.claim(1, "a") {
+		t.Fatalf("entry survived forget: %v", c.runs)
+	}
+}
+
+func TestProfileMessageRealCompactionRunsBeforeTheTargetRun(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.captureBodies = true
+	messenger := profileMessenger{resolver: f.service.resolver}
+	for _, text := range []string{"alpha question", "beta question"} {
+		if _, err := messenger.Message(callerRunContext(t, f, 1), profileMessageOwner, "review/reviewer", text, 0, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := messenger.Message(callerRunContext(t, f, 2), profileMessageOwner, "review/reviewer", "gamma question", 0, true); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	last := f.bodies[len(f.bodies)-1]
+	f.mu.Unlock()
+	if strings.Contains(last, "alpha question") || !strings.Contains(last, "gamma question") {
+		t.Fatalf("request after compaction: %s", last)
+	}
 }

@@ -14,8 +14,15 @@ const (
 	defaultNativeProfileMessageResultMaxBytes int64 = 16 * 1024
 )
 
+const (
+	// ProfileMessageCompactOff leaves the target's transcript as it is; On compacts it
+	// before the first message to that target in the caller's run.
+	ProfileMessageCompactOff = "off"
+	ProfileMessageCompactOn  = "on"
+)
+
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "approval"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "approval", "compact"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -35,6 +42,9 @@ type NativeProfileMessageSettings struct {
 	ResultMaxBytes int
 	// Approval is "off" (default) or "ask"; ask holds every call until the user approves it.
 	Approval string
+	// Compact is "off" (default) or "on"; on compacts the target's transcript before the
+	// first message to it in each run of the caller.
+	Compact string
 }
 
 func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, settingPath string) (*NativeProfileMessageSettings, error) {
@@ -95,7 +105,13 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), ResultMaxBytes: int(resultMaxBytes), Approval: approval}, nil
+	compact := ProfileMessageCompactOff
+	if raw, exists := fields["compact"]; exists {
+		if strings.TrimSpace(string(raw)) == "null" || json.Unmarshal(raw, &compact) != nil || (compact != ProfileMessageCompactOff && compact != ProfileMessageCompactOn) {
+			return nil, configError("%s: %s.compact must be \"off\" or \"on\"", settingPath, section)
+		}
+	}
+	return &NativeProfileMessageSettings{DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), ResultMaxBytes: int(resultMaxBytes), Approval: approval, Compact: compact}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.

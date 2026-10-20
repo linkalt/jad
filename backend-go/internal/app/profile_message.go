@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -45,7 +46,7 @@ type callerMessagesPathKey struct{}
 // target's own: the caller's transcript is held by the caller's running turn and is not
 // touched. The call ends when the target run ends, when ctx ends (the target is stopped
 // then), or at once when the target is busy.
-func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message string, busyWait time.Duration) (string, error) {
+func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message string, busyWait time.Duration, compact bool) (string, error) {
 	reference, caller, found := strings.Cut(ownerKey, "\x00")
 	if !found {
 		return "", errors.New("profile message needs the calling session key")
@@ -79,6 +80,22 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 	if sameTranscript(callerMessagesPath, resolved.Runner) {
 		return "", native.ErrProfileSameTranscript
 	}
+	var beforeRun func(context.Context)
+	if compact {
+		runID, _ := ctx.Value(callerRunKey{}).(uint64)
+		beforeRun = func(ctx context.Context) {
+			if runID != 0 && !m.resolver.callerRuns.claim(runID, resolved.Reference+"\x00"+canonical) {
+				return
+			}
+			compactTarget := m.resolver.compactProfile
+			if compactTarget == nil {
+				compactTarget = m.resolver.compactTarget
+			}
+			if err := compactTarget(ctx, resolved.Reference, canonical); err != nil {
+				m.resolver.logger.Warn("profile_message compaction failed; sending the message anyway", "session", resolved.Reference, "profile", canonical, "error", err)
+			}
+		}
+	}
 	var lastText atomic.Value
 	run, err := starter.StartProfileRun(ctx, httpapi.ProfileRunRequest{
 		Reference: resolved.Reference,
@@ -86,6 +103,7 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		Caller:    caller,
 		Message:   message,
 		BusyWait:  busyWait,
+		BeforeRun: beforeRun,
 		OnCommitted: func(event json.RawMessage) {
 			if text := native.SubagentAnswerText(event); strings.TrimSpace(text) != "" {
 				lastText.Store(text)
@@ -123,6 +141,54 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		return "", native.ErrProfileNoAnswer
 	}
 	return answer, nil
+}
+
+// compactTarget compacts the target's transcript with the target's own compaction
+// settings. The caller holds the target's transcript, so no run or mutation can interleave.
+func (r *Resolver) compactTarget(ctx context.Context, reference, profile string) error {
+	resolved, err := r.ResolveMaintenance(ctx, reference, profile)
+	if err != nil {
+		return err
+	}
+	if resolved.Session == nil {
+		return errors.New("session maintenance provider is not initialized")
+	}
+	_, err = resolved.Session.Compact(ctx)
+	return err
+}
+
+// callerRunKey carries the id of the caller's run (one boundRunner.Run), so the
+// messenger knows which targets that run already compacted.
+type callerRunKey struct{}
+
+// callerRunTargets remembers, per caller run, the targets profile_message already
+// compacted. A run's entry is dropped when the run ends.
+type callerRunTargets struct {
+	mu   sync.Mutex
+	runs map[uint64]map[string]struct{}
+}
+
+// claim reports whether target is not yet compacted in run, and marks it.
+func (c *callerRunTargets) claim(run uint64, target string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, done := c.runs[run][target]; done {
+		return false
+	}
+	if c.runs == nil {
+		c.runs = map[uint64]map[string]struct{}{}
+	}
+	if c.runs[run] == nil {
+		c.runs[run] = map[string]struct{}{}
+	}
+	c.runs[run][target] = struct{}{}
+	return true
+}
+
+func (c *callerRunTargets) forget(run uint64) {
+	c.mu.Lock()
+	delete(c.runs, run)
+	c.mu.Unlock()
 }
 
 // sameTranscript reports whether target runs over the transcript at callerMessagesPath.

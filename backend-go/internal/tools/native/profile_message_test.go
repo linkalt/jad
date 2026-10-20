@@ -18,9 +18,11 @@ type fakeMessenger struct {
 	owner, target, message string
 	reply                  func(ctx context.Context) (string, error)
 	onCall                 func(busyWait time.Duration)
+	compact                bool
 }
 
-func (f *fakeMessenger) Message(ctx context.Context, owner, target, message string, busyWait time.Duration) (string, error) {
+func (f *fakeMessenger) Message(ctx context.Context, owner, target, message string, busyWait time.Duration, compact bool) (string, error) {
+	f.compact = compact
 	if f.onCall != nil {
 		f.onCall(busyWait)
 	}
@@ -301,5 +303,17 @@ func TestProfileMessagePassesTheBusyWaitAndNamesWhatHoldsTheTarget(t *testing.T)
 	plain := callProfileMessage(t, settings, &fakeMessenger{reply: func(context.Context) (string, error) { return "", ErrProfileBusy }}, `{"profile":"reviewer","message":"hi"}`)
 	if !strings.Contains(plain, "with a user run or a maintenance action") || strings.Contains(plain, "waiting") {
 		t.Errorf("plain busy text wrong: %s", plain)
+	}
+}
+
+func TestProfileMessagePassesTheCompactSettingToTheMessenger(t *testing.T) {
+	for compact, want := range map[string]bool{"": false, sessionfs.ProfileMessageCompactOff: false, sessionfs.ProfileMessageCompactOn: true} {
+		settings := profileMessageSettings()
+		settings.Compact = compact
+		messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
+		callProfileMessage(t, settings, messenger, `{"profile":"reviewer","message":"hi"}`)
+		if messenger.compact != want {
+			t.Fatalf("compact %q: messenger got %v, want %v", compact, messenger.compact, want)
+		}
 	}
 }

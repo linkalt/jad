@@ -46,11 +46,17 @@ type profileTurnsEntry struct {
 }
 
 type Resolver struct {
-	logger      *slog.Logger
-	skipped     skippedSessions
-	roots       []sessionfs.Root
-	environment map[string]string
-	catalog     CatalogConfig
+	// callerRuns tracks the targets each running caller run has compacted; callerRunSeq
+	// hands out the run ids.
+	callerRuns   callerRunTargets
+	callerRunSeq atomic.Uint64
+	// compactProfile replaces compactTarget in tests.
+	compactProfile func(ctx context.Context, reference, profile string) error
+	logger         *slog.Logger
+	skipped        skippedSessions
+	roots          []sessionfs.Root
+	environment    map[string]string
+	catalog        CatalogConfig
 
 	mu                sync.Mutex
 	settingsMu        sync.Mutex
