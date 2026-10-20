@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -472,6 +473,8 @@ func (c *layoutCompose) applyToolsets(setting map[string]json.RawMessage, loaded
 	_, hooksInSettings := setting["hooks"]
 	native := map[string]json.RawMessage{}
 	nativeOwner := map[string]string{}
+	extension := map[string]json.RawMessage{}
+	extensionOwner := map[string]string{}
 	var servers []map[string]any
 	serverOwner := map[string]string{}
 	var hooks json.RawMessage
@@ -496,6 +499,14 @@ func (c *layoutCompose) applyToolsets(setting map[string]json.RawMessage, loaded
 				native[name] = value
 				nativeOwner[name] = item.id
 			}
+		}
+		for _, name := range slices.Sorted(maps.Keys(item.toolset.Extension)) {
+			if owner, taken := extensionOwner[name]; taken {
+				c.warn("extension tool %s is in toolsets %s and %s; using the one from %s", name, owner, item.id, owner)
+				continue
+			}
+			extension[name] = item.toolset.Extension[name]
+			extensionOwner[name] = item.id
 		}
 		if len(item.toolset.Hooks) > 0 {
 			if hooksInSettings {
@@ -522,8 +533,15 @@ func (c *layoutCompose) applyToolsets(setting map[string]json.RawMessage, loaded
 			servers = append(servers, server)
 		}
 	}
-	if len(native) > 0 {
-		setting["tools"], _ = json.Marshal(map[string]any{"native": native})
+	if len(native) > 0 || len(extension) > 0 {
+		tools := map[string]any{}
+		if len(native) > 0 {
+			tools["native"] = native
+		}
+		if len(extension) > 0 {
+			tools["extension"] = extension
+		}
+		setting["tools"], _ = json.Marshal(tools)
 	}
 	if hooks != nil {
 		setting["hooks"] = hooks

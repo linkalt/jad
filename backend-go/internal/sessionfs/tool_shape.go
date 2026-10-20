@@ -8,15 +8,22 @@ import (
 )
 
 var (
-	toolNodeNames   = []string{"native", "mcp"}
+	toolNodeNames   = []string{"native", "extension", "mcp"}
 	nativeToolNames = []string{
-		"read", "write", "edit", "grep", "glob", "read_image", "bash", "exec", "process", "task", "memory", "fetch", "request_draft", "skill", "subagent", "decide", "profile_message", "tool_smith",
+		"read", "write", "edit", "grep", "glob", "read_image", "bash", "exec", "process", "task", "memory", "fetch", "request_draft", "skill", "subagent", "profile_message", "tool_smith",
 	}
+	// extensionToolNames are the tools under tools.extension: tools that call a provider API.
+	extensionToolNames = []string{"decide"}
 )
 
 // NativeToolNames lists the names tools.native accepts, in registration order.
 func NativeToolNames() []string {
 	return append([]string(nil), nativeToolNames...)
+}
+
+// ExtensionToolNames lists the names tools.extension accepts.
+func ExtensionToolNames() []string {
+	return append([]string(nil), extensionToolNames...)
 }
 
 // validateToolSettingsShape mirrors the TypeScript loader's namespace checks.
@@ -60,6 +67,21 @@ func validateToolSettingsShape(setting map[string]json.RawMessage, settingPath s
 		for _, key := range nativeKeys {
 			if !containsString(nativeToolNames, key) {
 				return unsupportedToolKey(settingPath+": tools.native", key, nativeToolNames, "MCP servers are configured under tools.mcp")
+			}
+		}
+	}
+
+	if extensionRaw, exists := tools["extension"]; exists && strings.TrimSpace(string(extensionRaw)) != "null" {
+		if _, err := decodeConfigObject(extensionRaw, settingPath+": tools.extension"); err != nil {
+			return configError("%s: tools.extension must be an object", settingPath)
+		}
+		extensionKeys, err := orderedObjectKeys(extensionRaw)
+		if err != nil {
+			return configError("%s: tools.extension must be an object", settingPath)
+		}
+		for _, key := range extensionKeys {
+			if !containsString(extensionToolNames, key) {
+				return unsupportedToolKey(settingPath+": tools.extension", key, extensionToolNames, "")
 			}
 		}
 	}

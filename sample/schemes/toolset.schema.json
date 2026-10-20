@@ -20,6 +20,10 @@
       "$ref": "setting.schema.json#/properties/tools/properties/native",
       "description": "Native tool settings, key by key as tools.native in setting.schema.json. A tool listed here is enabled; a tool not listed is not."
     },
+    "extension": {
+      "$ref": "setting.schema.json#/properties/tools/properties/extension",
+      "description": "Extension tool settings (tools that call a provider API), key by key as tools.extension in setting.schema.json. A tool listed here is enabled; a tool not listed is not."
+    },
     "hooks": {
       "$ref": "setting.schema.json#/properties/hooks",
       "description": "Commands around tool calls (post_edit, pre_tool, post_tool), key by key as hooks in setting.schema.json. Set hooks here or in the settings, not both: a toolset that sets hooks while the defaults, session or profile settings also set it is a config error. A sub-agent that names this toolset runs these hooks."

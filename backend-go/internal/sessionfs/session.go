@@ -157,7 +157,7 @@ type SessionConfig struct {
 	NativeFetch          *NativeFetchSettings
 	NativeRequestDraft   *NativeRequestDraftSettings
 	NativeSkill          *NativeSkillSettings
-	NativeDecide         *NativeDecideSettings
+	ExtensionDecide      *ExtensionDecideSettings
 	NativeSubagent       *NativeSubagentSettings
 	NativeProfileMessage *NativeProfileMessageSettings
 	NativeToolSmith      *NativeToolSmithSettings
@@ -442,7 +442,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeDecide, err := normalizeNativeDecideSettings(setting, location.Root.GlobalJadRoot, settingPath)
+	extensionDecide, err := normalizeExtensionDecideSettings(setting, location.Root.GlobalJadRoot, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -582,7 +582,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeFetch:           nativeFetch,
 		NativeRequestDraft:    nativeRequestDraft,
 		NativeSkill:           nativeSkill,
-		NativeDecide:          nativeDecide,
+		ExtensionDecide:       extensionDecide,
 		NativeSubagent:        nativeSubagent,
 		NativeProfileMessage:  nativeProfileMessage,
 		NativeToolSmith:       nativeToolSmith,

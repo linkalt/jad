@@ -1,4 +1,4 @@
-package native
+package extension
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ import (
 // the provider received.
 type decideRig struct {
 	catalog  *tools.Catalog
-	settings sessionfs.NativeDecideSettings
+	settings sessionfs.ExtensionDecideSettings
 	requests []decideRecorded
 	server   *httptest.Server
 }
@@ -31,7 +32,7 @@ type decideRecorded struct {
 	Body                        map[string]any
 }
 
-func newDecideRig(t *testing.T, backend string, status int, reply string, adjust func(*sessionfs.NativeDecideSettings)) *decideRig {
+func newDecideRig(t *testing.T, backend string, status int, reply string, adjust func(*sessionfs.ExtensionDecideSettings)) *decideRig {
 	t.Helper()
 	rig := &decideRig{}
 	rig.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +45,7 @@ func newDecideRig(t *testing.T, backend string, status int, reply string, adjust
 		_, _ = io.WriteString(w, reply)
 	}))
 	t.Cleanup(rig.server.Close)
-	rig.settings = sessionfs.NativeDecideSettings{Backend: backend, BaseURL: rig.server.URL, APIKeyEnv: "DECIDE_KEY", Model: "m-1", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 1000, MaxResponseBytes: 4096}
+	rig.settings = sessionfs.ExtensionDecideSettings{Backend: backend, BaseURL: rig.server.URL, APIKeyEnv: "DECIDE_KEY", Model: "m-1", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 1000, MaxResponseBytes: 4096}
 	if adjust != nil {
 		adjust(&rig.settings)
 	}
@@ -346,7 +347,7 @@ func TestDecideRefusesAnOversizedResponse(t *testing.T) {
 }
 
 func TestDecideMissingKeyDoesNotCallTheProvider(t *testing.T) {
-	rig := newDecideRig(t, "openai", 200, openAIReply, func(s *sessionfs.NativeDecideSettings) { s.APIKeyEnv = "UNSET_KEY" })
+	rig := newDecideRig(t, "openai", 200, openAIReply, func(s *sessionfs.ExtensionDecideSettings) { s.APIKeyEnv = "UNSET_KEY" })
 	output := rig.call(t, `{"input":"x","questions":[{"instructions":"?"}]}`)
 	if !strings.Contains(output, "error_code: api_key_missing") || !strings.Contains(output, "UNSET_KEY") || len(rig.requests) != 0 {
 		t.Fatalf("requests %d:\n%s", len(rig.requests), output)
@@ -358,7 +359,7 @@ func TestDecideTimeoutStopsASlowProvider(t *testing.T) {
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
 	t.Cleanup(slow.Close)
 	t.Cleanup(func() { close(release) })
-	settings := sessionfs.NativeDecideSettings{Backend: "openai", BaseURL: slow.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 100, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
+	settings := sessionfs.ExtensionDecideSettings{Backend: "openai", BaseURL: slow.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 100, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
 	tool, err := newDecideTool(settings, DecideImages{}, func(string) string { return "k" }, slow.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -385,7 +386,7 @@ func TestDecideDoesNotFollowARedirectWithTheKey(t *testing.T) {
 		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 	}))
 	t.Cleanup(redirector.Close)
-	settings := sessionfs.NativeDecideSettings{Backend: "openai", BaseURL: redirector.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
+	settings := sessionfs.ExtensionDecideSettings{Backend: "openai", BaseURL: redirector.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
 	// The client the tool builds for itself, with only the key injected.
 	tool, err := newDecideTool(settings, DecideImages{}, func(string) string { return "k" }, newDecideHTTPClient())
 	if err != nil {
@@ -412,14 +413,14 @@ func TestDecideCancelledCall(t *testing.T) {
 }
 
 func TestDecideIsReadOnlyAndShippedDefinitionMatches(t *testing.T) {
-	tool, err := NewDecideTool(sessionfs.NativeDecideSettings{}, DecideImages{})
+	tool, err := NewDecideTool(sessionfs.ExtensionDecideSettings{}, DecideImages{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !tool.ReadOnly || tool.Approval != "" || tool.Definition.ID != decideToolID || tool.Definition.Name != "decide" {
+	if !tool.ReadOnly || tool.Approval != "" || tool.Definition.ID != DecideToolID || tool.Definition.Name != "decide" {
 		t.Fatalf("tool = %+v", tool)
 	}
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "decide.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "extension", "decide.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,64 +430,12 @@ func TestDecideIsReadOnlyAndShippedDefinitionMatches(t *testing.T) {
 	if err := json.Unmarshal(data, &document); err != nil || len(document.Tools) != 1 {
 		t.Fatalf("manifest: %v, %d tools", err, len(document.Tools))
 	}
-	same, err := sameJSON(document.Tools[0].InputSchema, decideInputSchema)
+	same, err := sameJSONText(document.Tools[0].InputSchema, DecideInputSchema)
 	if err != nil || !same {
-		t.Fatalf("sample/tools/native/decide.json inputSchema differs from the in-code schema (err %v)", err)
+		t.Fatalf("sample/tools/extension/decide.json inputSchema differs from the in-code schema (err %v)", err)
 	}
-	if document.Tools[0].ID != decideToolID || document.Tools[0].Name != "decide" || document.Tools[0].Description != decideDescription {
+	if document.Tools[0].ID != DecideToolID || document.Tools[0].Name != "decide" || document.Tools[0].Description != decideDescription {
 		t.Fatalf("manifest definition = %+v", document.Tools[0])
-	}
-}
-
-func TestBuildCatalogLoadsConfiguredDecideAndRequiresItsManifest(t *testing.T) {
-	directory := t.TempDir()
-	settings := &sessionfs.NativeDecideSettings{Backend: "openai", BaseURL: "http://127.0.0.1:1", APIKeyEnv: "K", Model: "m", TimeoutMS: 1000, MaxQuestions: 1, MaxInputBytes: 10, MaxResponseBytes: 10}
-	_, err := BuildCatalog(sessionfs.SessionConfig{SettingPath: filepath.Join(directory, "setting.json"), NativeDecide: settings})
-	if err == nil || !strings.Contains(err.Error(), "tools.native.decide is configured but native.decide is missing from tool_definition_paths") {
-		t.Fatalf("missing manifest error = %v", err)
-	}
-	manifest, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "decide.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(directory, "decide.json")
-	if err := os.WriteFile(path, manifest, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := BuildCatalog(sessionfs.SessionConfig{SettingPath: filepath.Join(directory, "setting.json"), ToolDefinitionPaths: []string{path}, NativeDecide: settings})
-	if err != nil {
-		t.Fatalf("BuildCatalog: %v", err)
-	}
-	definitions := catalog.Definitions()
-	if len(definitions) != 1 || definitions[0].ID != decideToolID {
-		t.Fatalf("definitions = %#v", definitions)
-	}
-	tampered := strings.Replace(string(manifest), `"minItems": 1`, `"minItems": 2`, 1)
-	if tampered == string(manifest) {
-		t.Fatal("the tamper edit did not change the manifest")
-	}
-	if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err = BuildCatalog(sessionfs.SessionConfig{SettingPath: filepath.Join(directory, "setting.json"), ToolDefinitionPaths: []string{path}, NativeDecide: settings})
-	if err == nil || !strings.Contains(err.Error(), "inputSchema must exactly match") {
-		t.Fatalf("tampered manifest error = %v", err)
-	}
-	empty, err := BuildCatalog(sessionfs.SessionConfig{SettingPath: "setting.json"})
-	if err != nil || len(empty.Definitions()) != 0 {
-		t.Fatalf("decide appeared without being configured: %v", err)
-	}
-}
-
-func TestSubagentCanListDecideBecauseItIsReadOnly(t *testing.T) {
-	tool, err := NewDecideTool(sessionfs.NativeDecideSettings{}, DecideImages{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	agent := sessionfs.NativeSubagentAgent{Name: "triager", HasTools: true, Tools: []string{"decide"}}
-	chosen, _, err := subagentChildTools(agent, []tools.Tool{tool}, nil, false)
-	if err != nil || len(chosen) != 1 || chosen[0].Definition.Name != "decide" {
-		t.Fatalf("chosen = %v, err %v", chosen, err)
 	}
 }
 
@@ -744,7 +693,7 @@ func TestDecideInputAcceptsABareStringOrOnePartButTheSchemaStaysAnArray(t *testi
 			} `json:"input"`
 		} `json:"properties"`
 	}
-	if err := json.Unmarshal(decideInputSchema, &schema); err != nil || schema.Properties.Input.Type != "array" || schema.Properties.Input.MinItems != 1 {
+	if err := json.Unmarshal(DecideInputSchema, &schema); err != nil || schema.Properties.Input.Type != "array" || schema.Properties.Input.MinItems != 1 {
 		t.Fatalf("the model-facing input schema must be an array of at least one part: %+v, %v", schema, err)
 	}
 }
@@ -789,7 +738,7 @@ func TestDecideAcceptsEveryKindOfJSONValue(t *testing.T) {
 }
 
 func TestDecideInputLimitCountsAllPartsAndTheJSONAsSent(t *testing.T) {
-	rig := newDecideRig(t, "openrouter", 200, decideOKReply("openrouter"), func(s *sessionfs.NativeDecideSettings) { s.MaxInputBytes = 20 })
+	rig := newDecideRig(t, "openrouter", 200, decideOKReply("openrouter"), func(s *sessionfs.ExtensionDecideSettings) { s.MaxInputBytes = 20 })
 	// 10 text bytes + 10 bytes of compact JSON ({"a":"xxxx"} is 12) stay near the limit.
 	if output := rig.call(t, `{"input":["0123456789",{"type":"json","value":{"a":"xx"}}],`+predicateQuestion+`}`); !strings.Contains(output, `"status":"ok"`) {
 		t.Fatalf("20 bytes refused:\n%s", output)
@@ -806,4 +755,31 @@ func TestDecideInputLimitCountsAllPartsAndTheJSONAsSent(t *testing.T) {
 	if !strings.Contains(output, `"status":"ok"`) {
 		t.Fatalf("got:\n%s", output)
 	}
+}
+
+func sameJSONText(left, right json.RawMessage) (bool, error) {
+	var l, r any
+	if err := json.Unmarshal(left, &l); err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(right, &r); err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(l, r), nil
+}
+
+func executeCatalogCall(t *testing.T, catalog *tools.Catalog, name, arguments string) string {
+	t.Helper()
+	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "call_1", "name": name, "arguments": arguments})
+	raw, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var item struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		t.Fatal(err)
+	}
+	return item.Output
 }

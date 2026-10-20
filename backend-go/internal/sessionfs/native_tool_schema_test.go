@@ -109,14 +109,22 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.config), &config); err != nil {
 				t.Fatal(err)
 			}
-			text := `{"native":{"` + tc.tool + `":` + tc.config + `}}`
+			node := "native"
+			if tc.tool == "decide" {
+				node = "extension"
+			}
+			text := `{"` + node + `":{"` + tc.tool + `":` + tc.config + `}}`
 			if got := schemaAccepts(t, toolset, `{"schema_version":1,`+text[1:]); got != tc.ok {
 				t.Errorf("toolset.schema.json accepts = %v, want %v", got, tc.ok)
 			}
 			if got := schemaAccepts(t, setting, `{"tools":`+text+`}`); got != tc.ok {
 				t.Errorf("setting.schema.json accepts = %v, want %v", got, tc.ok)
 			}
-			_, err := loadApprovalSetting(t, nativeTools(map[string]any{tc.tool: config}))
+			settings := nativeTools(map[string]any{tc.tool: config})
+			if node == "extension" {
+				settings = map[string]any{"tools": map[string]any{"native": map[string]any{}, "extension": map[string]any{tc.tool: config}}}
+			}
+			_, err := loadApprovalSetting(t, settings)
 			if (err == nil) != tc.ok {
 				t.Errorf("loader accepts = %v, want %v (err: %v)", err == nil, tc.ok, err)
 			}
@@ -141,7 +149,15 @@ func TestExecAndReadImageSchemaKeysMatchTheLoader(t *testing.T) {
 		t.Error("toolset.schema.json native must reference setting.schema.json, not repeat the tool settings")
 	}
 
-	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys, "decide": nativeDecideKeys, "profile_message": nativeProfileMessageKeys, "tool_smith": nativeToolSmithKeys} {
+	extensionBlock := setting["properties"].(map[string]any)["tools"].(map[string]any)["properties"].(map[string]any)["extension"].(map[string]any)["properties"].(map[string]any)
+	decideKeys := flattenSchemaKeys(extensionBlock["decide"].(map[string]any), defs)
+	sort.Strings(decideKeys)
+	wantDecide := append([]string(nil), extensionDecideKeys...)
+	sort.Strings(wantDecide)
+	if strings.Join(decideKeys, ",") != strings.Join(wantDecide, ",") {
+		t.Errorf("decide schema keys\n  %v\nloader accepts\n  %v", decideKeys, wantDecide)
+	}
+	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys, "profile_message": nativeProfileMessageKeys, "tool_smith": nativeToolSmithKeys} {
 		got := flattenSchemaKeys(native[tool].(map[string]any), defs)
 		sort.Strings(got)
 		want = append([]string(nil), want...)

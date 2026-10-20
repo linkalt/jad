@@ -18,6 +18,9 @@ func loadApprovalSetting(t *testing.T, extra map[string]any) (SessionConfig, err
 		switch key {
 		case "tools":
 			spec.Native = value.(map[string]any)["native"].(map[string]any)
+			if extension, ok := value.(map[string]any)["extension"].(map[string]any); ok {
+				spec.Extension = extension
+			}
 		case "mcp_servers":
 			spec.MCP = map[string]map[string]any{}
 			for _, entry := range value.([]any) {

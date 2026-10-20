@@ -10,7 +10,7 @@ const mcpEntryPrefix = "mcp:"
 // "docs" does not cover "docsx".
 func EntryMatches(entry string, definition Definition) bool {
 	if !strings.HasPrefix(entry, mcpEntryPrefix) {
-		return definition.Source == "native" && definition.Name == entry
+		return (definition.Source == "native" || definition.Source == "extension") && definition.Name == entry
 	}
 	if definition.Source != "mcp" {
 		return false

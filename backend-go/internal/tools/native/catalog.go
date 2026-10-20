@@ -15,6 +15,7 @@ import (
 	"jad/backend-go/internal/imagestore"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/tools/extension"
 )
 
 var definitionDocumentSchema = json.RawMessage(`{
@@ -30,7 +31,7 @@ var definitionDocumentSchema = json.RawMessage(`{
         "required":["id","source","name","description","inputSchema"],
         "properties":{
           "id":{"type":"string","minLength":1},
-          "source":{"type":"string","enum":["native","mcp"]},
+          "source":{"type":"string","enum":["native","extension","mcp"]},
           "server":{"type":"string","minLength":1},
           "name":{"type":"string","minLength":1},
           "description":{"type":"string"},
@@ -78,7 +79,7 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 // BuildCatalogWithMessenger is BuildCatalogWithSubagents plus the messenger behind the
 // profile_message tool. Without a messenger the tool is not offered.
 func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.NativeDecide == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecide == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -181,6 +182,9 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			if nativeToolConfigured(config, name) {
 				return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s is configured but native.%s is missing from tool_definition_paths", config.SettingPath, name, name)}
 			}
+		}
+		if config.ExtensionDecide != nil {
+			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.extension.decide is configured but extension.decide is missing from tool_definition_paths", config.SettingPath)}
 		}
 	}
 	definitions, err := loadDefinitions(config.ToolDefinitionPaths)
@@ -377,13 +381,13 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool.Approval = approvalMode(config.NativeToolSmith.Approval)
 		loaded = append(loaded, tool)
 	}
-	if config.NativeDecide != nil {
-		definition, err := requireNativeDefinition(config, definitions, "decide", decideToolID, decideInputSchema)
+	if config.ExtensionDecide != nil {
+		definition, err := requireDefinition(config, definitions, "extension", "decide", extension.DecideToolID, extension.DecideInputSchema)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		images := DecideImages{Store: imagestore.FromSettings(config.ImageStore), Resizer: imageresize.FromSettings(config.ImageResize)}
-		tool, err := NewDecideTool(*config.NativeDecide, images)
+		images := extension.DecideImages{Store: imagestore.FromSettings(config.ImageStore), Resizer: imageresize.FromSettings(config.ImageResize), ReadFile: readImageFile}
+		tool, err := extension.NewDecideTool(*config.ExtensionDecide, images)
 		if err != nil {
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -434,8 +438,6 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeRequestDraft != nil
 	case "skill":
 		return config.NativeSkill != nil
-	case "decide":
-		return config.NativeDecide != nil
 	case "subagent":
 		return config.NativeSubagent != nil
 	case "profile_message":
@@ -448,19 +450,25 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 }
 
 func requireNativeDefinition(config sessionfs.SessionConfig, definitions map[string]tools.Definition, name, id string, schema json.RawMessage) (tools.Definition, error) {
+	return requireDefinition(config, definitions, "native", name, id, schema)
+}
+
+// requireDefinition checks that the tool definition files define tool name with this id,
+// source and input schema. source is also the settings node the tool is configured under.
+func requireDefinition(config sessionfs.SessionConfig, definitions map[string]tools.Definition, source, name, id string, schema json.RawMessage) (tools.Definition, error) {
 	definition, exists := definitions[id]
 	if !exists {
-		return tools.Definition{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s is configured but %s is missing from tool_definition_paths", config.SettingPath, name, id)}
+		return tools.Definition{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.%s.%s is configured but %s is missing from tool_definition_paths", config.SettingPath, source, name, id)}
 	}
-	if definition.Name != name || definition.Source != "native" {
-		return tools.Definition{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %s must define the native %s tool", config.SettingPath, id, name)}
+	if definition.Name != name || definition.Source != source {
+		return tools.Definition{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %s must define the %s %s tool", config.SettingPath, id, source, name)}
 	}
 	matches, err := sameJSON(definition.InputSchema, schema)
 	if err != nil {
-		return tools.Definition{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: invalid native %s inputSchema: %v", config.SettingPath, name, err)}
+		return tools.Definition{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: invalid %s %s inputSchema: %v", config.SettingPath, source, name, err)}
 	}
 	if !matches {
-		return tools.Definition{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %s inputSchema must exactly match the native tool schema", config.SettingPath, id)}
+		return tools.Definition{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %s inputSchema must exactly match the %s tool schema", config.SettingPath, id, source)}
 	}
 	return definition, nil
 }

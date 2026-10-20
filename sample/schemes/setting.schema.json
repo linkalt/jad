@@ -510,7 +510,7 @@
     "tool_call_scheduling": {
       "type": "string",
       "enum": ["ordered", "concurrent"],
-      "description": "How the calls of one provider response are scheduled. ordered runs them one at a time in the order the model wrote them whenever one of them can change state (every tool except read, grep, glob, fetch, skill and decide, and every MCP tool), so a later call sees what an earlier one did; a response made only of those read-only tools still runs up to max_parallel_tool_calls at once. concurrent always runs them together, with no ordering guarantee between calls. Defaults to ordered.",
+      "description": "How the calls of one provider response are scheduled. ordered runs them one at a time in the order the model wrote them whenever one of them can change state (every tool except read, grep, glob, fetch, skill and decide (decide is an extension tool), and every MCP tool), so a later call sees what an earlier one did; a response made only of those read-only tools still runs up to max_parallel_tool_calls at once. concurrent always runs them together, with no ordering guarantee between calls. Defaults to ordered.",
       "default": "ordered"
     },
     "provider_retry": {
@@ -1790,31 +1790,9 @@
               },
               "additionalProperties": false
             },
-            "decide": {
-              "type": "object",
-              "description": "Go backend only. Asks a hosted classifier typed questions (predicate probability, choice, score) about a text and returns the answers; no tools, no free text. Read-only, so a sub-agent can list it in its tools. Off unless this key is present. Needs a key in the environment variable named by api_key_env, read on each call; the model file's key is not used. An image given by path follows decide's own path rules (read_style): without paths it reaches the workspace only, not what read allows. Needs decide in tool_definition_paths.",
-              "allOf": [
-                {
-                  "$ref": "#/$defs/read_style"
-                }
-              ],
-              "properties": {
-                "backend": {"type": "string", "enum": ["openrouter", "openai"], "default": "openrouter", "description": "openrouter uses OpenRouter's alpha Decisions endpoint; openai uses POST /v1/decisions. The two have different request shapes; the tool translates."},
-                "base_url": {"type": "string", "minLength": 1, "description": "The tool appends /decisions. Default https://openrouter.ai/api/alpha for openrouter and https://api.openai.com/v1 for openai."},
-                "api_key_env": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Environment variable holding the key. Default OPENROUTER_API_KEY or OPENAI_API_KEY by backend."},
-                "model": {"type": "string", "minLength": 1, "description": "Default openai/gpt-6-luna-decisions for openrouter and gpt-6-luna for openai."},
-                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000, "default": 30000, "description": "Whole-request time limit."},
-                "max_questions": {"type": "integer", "minimum": 1, "maximum": 128, "default": 16, "description": "Most questions one call may carry."},
-                "max_input_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 200000, "description": "Most bytes of input text one call may carry."},
-                "max_response_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Most response bytes read from the provider."},
-                "max_images": {"type": "integer", "minimum": 1, "maximum": 64, "default": 8, "description": "Most image parts one call may carry."},
-                "max_image_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 5242880, "description": "Largest image, as a file or as decoded base64, read for one call. It limits what is read, before image_resize runs."}
-              },
-              "unevaluatedProperties": false
-            },
             "subagent": {
               "type": "object",
-              "description": "Go backend only. Lets the model hand a task to a separate read-only agent that runs with a fresh context and returns only its final answer. May start with no agent, which is the case for a new project whose model creates its own; it then needs agents or agents_dir to be present, even if empty, and the tool definition sample/tools/native/subagent.json. A child can use only the enabled read-only native tools (read, grep, glob, fetch, skill, decide) unless allow_write lets an agent list write, edit, bash, exec or process, and never the subagent tool, so the depth is one.",
+              "description": "Go backend only. Lets the model hand a task to a separate read-only agent that runs with a fresh context and returns only its final answer. May start with no agent, which is the case for a new project whose model creates its own; it then needs agents or agents_dir to be present, even if empty, and the tool definition sample/tools/native/subagent.json. A child can use only the enabled read-only tools (read, grep, glob, fetch, skill, decide) unless allow_write lets an agent list write, edit, bash, exec or process, and never the subagent tool, so the depth is one.",
               "anyOf": [{"required": ["agents"]}, {"required": ["agents_dir"]}],
               "properties": {
                 "agents_dir_missing_ok": {
@@ -1841,7 +1819,7 @@
                       "model": {"type": "string", "minLength": 1, "description": "Model for this agent. In a catalog-layout session a value that does not end in .json is a model ID '<category>/<name>' of the models catalog; the agent may name any model of it, not only those its caller's profile lists. A value ending in .json is a model file, relative to the agent's folder or absolute. A legacy session reads every value as a file path (relative to the session directory for an inline agent). Absent means the calling session's model."},
                       "instructions": {"type": "string", "minLength": 1, "description": "System prompt of the agent. The calling session's prompt is not used."},
                       "prompt_documents": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Files appended to the agent's prompt after instructions (and after prompt.md for a folder agent), each separated by a blank line. A relative path is taken from the session's cwd, or from the agent's folder for a folder agent; ~ is expanded. The files are read when the session loads, and a missing file is a configuration error. The calling session's own prompt_documents are not used."},
-                      "tools": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Tools the agent may use: enabled read-only native tools by name (read, grep, glob, fetch, skill, decide), and with allow_write also write, edit, bash, exec and process (listing one without allow_write is a configuration error; a child that lists process sees and stops only the processes it started, and they are stopped when its run ends), and MCP tools by ID, written mcp:<server>:<tool> (the server id from mcp_servers and the tool name the server reports). Absent means every enabled read-only native tool and no MCP tool. An MCP tool is never added because its server calls it read-only: you name each one, so you vouch that it cannot change anything you care about. mcp:<server>:* gives the agent every loaded tool of that server (each once, even if also named exactly); a tool of a server whose approval is ask is skipped by the wildcard, and a wildcard left with no tool is a configuration error naming the server. A tool of a server whose approval is ask that is named exactly is refused, because a sub-agent has no way to ask the user. An agent that lists write, edit, bash or exec asks the user for those tools the same way the session does (their own approval setting applies), takes the checkpoint like a write, and runs to its end instead of being handed off. A name that is not loaded is a configuration error that lists the loaded ones; it is checked when the session loads."},
+                      "tools": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Tools the agent may use: enabled read-only tools by name (read, grep, glob, fetch, skill, decide), and with allow_write also write, edit, bash, exec and process (listing one without allow_write is a configuration error; a child that lists process sees and stops only the processes it started, and they are stopped when its run ends), and MCP tools by ID, written mcp:<server>:<tool> (the server id from mcp_servers and the tool name the server reports). Absent means every enabled read-only native or extension tool and no MCP tool. An MCP tool is never added because its server calls it read-only: you name each one, so you vouch that it cannot change anything you care about. mcp:<server>:* gives the agent every loaded tool of that server (each once, even if also named exactly); a tool of a server whose approval is ask is skipped by the wildcard, and a wildcard left with no tool is a configuration error naming the server. A tool of a server whose approval is ask that is named exactly is refused, because a sub-agent has no way to ask the user. An agent that lists write, edit, bash or exec asks the user for those tools the same way the session does (their own approval setting applies), takes the checkpoint like a write, and runs to its end instead of being handed off. A name that is not loaded is a configuration error that lists the loaded ones; it is checked when the session loads."},
                       "toolset": {"anyOf": [{"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"}, {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"}}], "description": "One toolset file or a list of them, each '<category>/<name>' under the tools catalog (catalog-layout session only). The agent takes its tools, with their settings, and its MCP servers from it (or them) instead of the session's own toolset, so the profile does not have to register them and the parent never sees them. 'tools' still narrows within it and its mcp:<server>:<tool> entries are resolved against this file's servers only. The profile's tools.deny, allow_write and each tool's own paths and approval still apply. The toolset's subagent entry is ignored (a child cannot start a child). A sub-agent's toolset must not set tools.native.profile_message. An unknown toolset is a configuration error that lists the available ones. Given a list, the toolsets merge in order: when two name the same native tool or MCP server the first listed wins, with a warning, and only the first toolset with hooks supplies hooks (a later one's hooks are ignored with a warning). Absent means the session's toolset."},
                       "max_tool_rounds": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 30, "description": "Most tool rounds of one run."},
                       "max_run_tokens": {"type": "integer", "minimum": 1, "maximum": 1000000000000, "description": "Most tokens one run may use before it starts another provider round. Absent means no cap."},
@@ -1904,6 +1882,35 @@
                 "compact": {"type": "string", "enum": ["off", "on"], "default": "off", "description": "on compacts the target profile's transcript (with the target's own compaction settings) before the first profile_message call to that target in each run of the calling profile; later calls to it in the same run skip this. A failed compaction is logged and the message is sent anyway. off leaves the transcript as it is."}
               },
               "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "extension": {
+          "type": "object",
+          "description": "Settings of the extension tools, which call a provider API (decide now; web search, fetch API, image API and sound API later). A tool listed here is enabled; a tool not listed is not. Each needs its definition file under extension/ in tool_definition_paths.",
+          "properties": {
+            "decide": {
+              "type": "object",
+              "description": "Go backend only. Asks a hosted classifier typed questions (predicate probability, choice, score) about a text and returns the answers; no tools, no free text. Read-only, so a sub-agent can list it in its tools. Off unless this key is present. Needs a key in the environment variable named by api_key_env, read on each call; the model file's key is not used. An image given by path follows decide's own path rules (read_style): without paths it reaches the workspace only, not what read allows. Needs extension.decide in tool_definition_paths (sample/tools/extension/decide.json).",
+              "allOf": [
+                {
+                  "$ref": "#/$defs/read_style"
+                }
+              ],
+              "properties": {
+                "backend": {"type": "string", "enum": ["openrouter", "openai"], "default": "openrouter", "description": "openrouter uses OpenRouter's alpha Decisions endpoint; openai uses POST /v1/decisions. The two have different request shapes; the tool translates."},
+                "base_url": {"type": "string", "minLength": 1, "description": "The tool appends /decisions. Default https://openrouter.ai/api/alpha for openrouter and https://api.openai.com/v1 for openai."},
+                "api_key_env": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Environment variable holding the key. Default OPENROUTER_API_KEY or OPENAI_API_KEY by backend."},
+                "model": {"type": "string", "minLength": 1, "description": "Default openai/gpt-6-luna-decisions for openrouter and gpt-6-luna for openai."},
+                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000, "default": 30000, "description": "Whole-request time limit."},
+                "max_questions": {"type": "integer", "minimum": 1, "maximum": 128, "default": 16, "description": "Most questions one call may carry."},
+                "max_input_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 200000, "description": "Most bytes of input text one call may carry."},
+                "max_response_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Most response bytes read from the provider."},
+                "max_images": {"type": "integer", "minimum": 1, "maximum": 64, "default": 8, "description": "Most image parts one call may carry."},
+                "max_image_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 5242880, "description": "Largest image, as a file or as decoded base64, read for one call. It limits what is read, before image_resize runs."}
+              },
+              "unevaluatedProperties": false
             }
           },
           "additionalProperties": false

@@ -42,6 +42,8 @@ type Spec struct {
 	Profiles map[string]map[string]any
 	// Native is the toolset's `native` object. With MCP, it makes the toolset "coding/default".
 	Native map[string]any
+	// Extension is the toolset's `extension` object; like Native it makes the toolset "coding/default".
+	Extension map[string]any
 	// MCP maps "<category>/<name>" to the toolset's use of that server; the server file is
 	// written with a placeholder connection.
 	MCP map[string]map[string]any
@@ -171,9 +173,12 @@ func Write(t *testing.T, spec Spec) Fixture {
 		if err := os.WriteFile(path, []byte(spec.ToolsetRaw), 0o600); err != nil {
 			t.Fatal(err)
 		}
-	} else if len(spec.Native) > 0 || len(spec.MCP) > 0 {
+	} else if len(spec.Native) > 0 || len(spec.Extension) > 0 || len(spec.MCP) > 0 {
 		toolset = "coding/default"
 		file := map[string]any{"native": orEmpty(spec.Native)}
+		if len(spec.Extension) > 0 {
+			file["extension"] = spec.Extension
+		}
 		use := map[string]any{}
 		for id, fields := range spec.MCP {
 			server := map[string]any{"schema_version": 1, "transport": map[string]any{"type": "streamable_http", "url": "http://127.0.0.1:1/mcp"}}

@@ -1,4 +1,4 @@
-package native
+package extension
 
 import (
 	"bytes"
@@ -14,11 +14,11 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-const decideToolID = "native.decide"
+const DecideToolID = "extension.decide"
 
 const decideDescription = "Ask a fast classifier typed questions about some text or JSON. predicate: probability 0-1 that a condition holds. choice: the best of your choices, with confidence. score: a rating against ordered levels, lowest first. Use it for yes/no checks, routing and severity, not for open-ended answers."
 
-var decideInputSchema = json.RawMessage(`{
+var DecideInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "input":{
@@ -93,8 +93,8 @@ func (p decideInputPart) size() int {
 // started is used and none is kept in the tool.
 type decideEnvironment func(name string) string
 
-// NewDecideTool creates native.decide from its normalized settings.
-func NewDecideTool(settings sessionfs.NativeDecideSettings, images DecideImages) (tools.Tool, error) {
+// NewDecideTool creates extension.decide from its normalized settings.
+func NewDecideTool(settings sessionfs.ExtensionDecideSettings, images DecideImages) (tools.Tool, error) {
 	return newDecideTool(settings, images, os.Getenv, newDecideHTTPClient())
 }
 
@@ -104,25 +104,25 @@ func newDecideHTTPClient() *http.Client {
 	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func newDecideTool(settings sessionfs.NativeDecideSettings, images DecideImages, environment decideEnvironment, client *http.Client) (tools.Tool, error) {
-	validator, err := tools.CompileSchema(decideInputSchema)
+func newDecideTool(settings sessionfs.ExtensionDecideSettings, images DecideImages, environment decideEnvironment, client *http.Client) (tools.Tool, error) {
+	validator, err := tools.CompileSchema(DecideInputSchema)
 	if err != nil {
-		return tools.Tool{}, fmt.Errorf("compile native decide schema: %w", err)
+		return tools.Tool{}, fmt.Errorf("compile decide schema: %w", err)
 	}
 	return tools.Tool{
 		Definition: tools.Definition{
-			ID:          decideToolID,
-			Source:      "native",
+			ID:          DecideToolID,
+			Source:      "extension",
 			Name:        "decide",
 			Description: decideDescription,
-			InputSchema: append(json.RawMessage(nil), decideInputSchema...),
+			InputSchema: append(json.RawMessage(nil), DecideInputSchema...),
 		},
 		Validator:          validator,
 		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(`{"input":["I was charged twice."],"questions":[{"name":"billing","instructions":"Is this a billing problem?"}]}`),
 		NormalizeArguments: normalizeDecideArguments,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-			return executeNativeDecide(ctx, arguments, settings, images, environment, client, execution), nil
+			return executeDecide(ctx, arguments, settings, images, environment, client, execution), nil
 		},
 	}, nil
 }
@@ -210,7 +210,7 @@ func normalizeDecideInput(input any) any {
 	return fixed
 }
 
-func executeNativeDecide(ctx context.Context, arguments map[string]any, settings sessionfs.NativeDecideSettings, images DecideImages, environment decideEnvironment, client *http.Client, execution tools.ExecutionContext) string {
+func executeDecide(ctx context.Context, arguments map[string]any, settings sessionfs.ExtensionDecideSettings, images DecideImages, environment decideEnvironment, client *http.Client, execution tools.ExecutionContext) string {
 	callID := execution.CallID
 	input, err := parseDecideInput(arguments["input"])
 	if err != nil {

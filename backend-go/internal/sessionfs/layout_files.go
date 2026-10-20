@@ -151,7 +151,9 @@ type layoutToolsetFile struct {
 	// Name is the display name shown beside the ID in the catalog editor; it changes no behavior.
 	Name   string                     `json:"name"`
 	Native map[string]json.RawMessage `json:"native"`
-	MCP    json.RawMessage            `json:"mcp"`
+	// Extension is the toolset's tools.extension block, merged the same way as Native.
+	Extension map[string]json.RawMessage `json:"extension"`
+	MCP       json.RawMessage            `json:"mcp"`
 	// Hooks has the shape of the settings key; kept raw so null is refused by the normalizer.
 	Hooks json.RawMessage `json:"hooks"`
 }

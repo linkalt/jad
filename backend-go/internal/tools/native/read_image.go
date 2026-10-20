@@ -73,7 +73,7 @@ func executeNativeReadImage(arguments map[string]any, settings sessionfs.NativeR
 	}
 	mime, err := imagedata.Sniff(data)
 	if err != nil {
-		return json.Marshal(decideError(execution.CallID, tools.StatusInvalidInput, "unsupported_image", "The file is "+mime+"; png, jpeg, webp and gif are supported", tools.Information{Key: "path", Value: path}))
+		return json.Marshal(tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "unsupported_image", "The file is "+mime+"; png, jpeg, webp and gif are supported", tools.Information{Key: "path", Value: path}))
 	}
 	return json.Marshal([]readImageResultPart{{Type: "input_image", ImageURL: imagedata.DataURL(mime, data), Detail: "auto"}})
 }

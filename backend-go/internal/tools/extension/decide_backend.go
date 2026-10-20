@@ -1,4 +1,4 @@
-package native
+package extension
 
 import (
 	"bytes"
@@ -72,7 +72,7 @@ type decideResponseError struct{ Message string }
 func (e *decideResponseError) Error() string { return e.Message }
 
 // requestDecisions sends one request and returns the answers by question name.
-func requestDecisions(ctx context.Context, client *http.Client, settings sessionfs.NativeDecideSettings, key string, input []decideInputPart, questions []decideQuestion) (map[string]decideAnswer, error) {
+func requestDecisions(ctx context.Context, client *http.Client, settings sessionfs.ExtensionDecideSettings, key string, input []decideInputPart, questions []decideQuestion) (map[string]decideAnswer, error) {
 	var body any
 	if settings.Backend == "openai" {
 		body = openAIDecisionsRequest(settings.Model, input, questions)

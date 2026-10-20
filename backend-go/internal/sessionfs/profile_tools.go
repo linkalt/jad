@@ -98,10 +98,10 @@ func checkProfileToolEntry(entry string) error {
 		return fmt.Errorf("%q must not contain whitespace", entry)
 	}
 	if !strings.HasPrefix(entry, ProfileToolMCPPrefix) {
-		if containsString(nativeToolNames, entry) {
+		if containsString(nativeToolNames, entry) || containsString(extensionToolNames, entry) {
 			return nil
 		}
-		names := append([]string(nil), nativeToolNames...)
+		names := append(append([]string(nil), nativeToolNames...), extensionToolNames...)
 		sort.Strings(names)
 		return fmt.Errorf("%q is not a native tool; use one of %s, or mcp:<server>:<tool>", entry, strings.Join(names, ", "))
 	}

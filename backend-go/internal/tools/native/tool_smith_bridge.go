@@ -67,7 +67,7 @@ func (n *ToolSmithNested) allowed(settings sessionfs.NativeToolSmithSettings) []
 			continue
 		}
 		for _, tool := range n.available {
-			if tool.Definition.Source == "native" && tool.Definition.Name == name && !tools.AnyEntryMatches(n.deny, tool.Definition) {
+			if (tool.Definition.Source == "native" || tool.Definition.Source == "extension") && tool.Definition.Name == name && !tools.AnyEntryMatches(n.deny, tool.Definition) {
 				picked = append(picked, tool)
 				break
 			}

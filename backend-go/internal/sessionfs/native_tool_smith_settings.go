@@ -220,7 +220,7 @@ func normalizeNativeToolSmithTools(fields map[string]json.RawMessage, path strin
 		if containsString(nativeToolSmithExcludedTools, name) {
 			return nil, configError("%s[%d] \"%s\" cannot be called from a script", path, index, name)
 		}
-		if !containsString(nativeToolNames, name) {
+		if !containsString(nativeToolNames, name) && !containsString(extensionToolNames, name) {
 			return nil, configError("%s[%d] \"%s\" is not a native tool", path, index, name)
 		}
 		if containsString(tools, name) {

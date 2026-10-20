@@ -161,7 +161,7 @@ type subagentToolset struct {
 // tools.deny covers. Only native tools are taken.
 func childToolPools(settings sessionfs.NativeSubagentSettings, available []tools.Tool) (readOnly, changers []tools.Tool) {
 	for _, tool := range available {
-		if tool.Definition.Source != "native" || tool.Definition.ID == subagentToolID || tool.Definition.ID == toolSmithToolID || tools.AnyEntryMatches(settings.DenyTools, tool.Definition) {
+		if (tool.Definition.Source != "native" && tool.Definition.Source != "extension") || tool.Definition.ID == subagentToolID || tool.Definition.ID == toolSmithToolID || tools.AnyEntryMatches(settings.DenyTools, tool.Definition) {
 			continue
 		}
 		switch {
