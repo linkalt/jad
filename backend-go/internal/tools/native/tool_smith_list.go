@@ -193,9 +193,9 @@ func readToolSmithListEntry(dir, realRoot, file string, headerBytes int64) (tool
 	if err != nil || !info.Mode().IsRegular() {
 		return toolSmithListEntry{}, "is not a regular file"
 	}
-	handle, err := os.Open(real)
-	if err != nil {
-		return toolSmithListEntry{}, "cannot be read: " + err.Error()
+	handle, _, problem := openToolSmithFile(real, info)
+	if problem != "" {
+		return toolSmithListEntry{}, problem
 	}
 	defer handle.Close()
 	head, err := io.ReadAll(io.LimitReader(handle, headerBytes))

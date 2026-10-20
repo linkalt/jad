@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -334,8 +335,8 @@ func (b *toolSmithBridge) serveConn(conn net.Conn) {
 	for {
 		line, err := readBridgeFrame(reader, b.settings.NestedRequestMaxBytes)
 		if errors.Is(err, errBridgeFrameTooLarge) {
-			reply(bridgeFailure(nil, "frame too large"))
-			return
+			reply(bridgeFailure(oversizeFrameID(line), "frame too large"))
+			continue
 		}
 		if len(bytes.TrimSpace(line)) == 0 {
 			if err != nil {
@@ -368,14 +369,36 @@ func (b *toolSmithBridge) serveConn(conn net.Conn) {
 
 var errBridgeFrameTooLarge = errors.New("bridge frame too large")
 
-// readBridgeFrame reads one newline-terminated frame and stops with errBridgeFrameTooLarge
-// as soon as it is longer than limit bytes, so a script cannot make the server buffer more.
+const bridgeOversizePrefixBytes = 4096
+
+var bridgeNumericID = regexp.MustCompile(`"id"\s*:\s*(-?[0-9]+)`)
+
+// oversizeFrameID finds a numeric "id" in the first bytes of a frame that was too large.
+func oversizeFrameID(prefix []byte) json.RawMessage {
+	match := bridgeNumericID.FindSubmatch(prefix)
+	if match == nil {
+		return nil
+	}
+	return json.RawMessage(match[1])
+}
+
+// readBridgeFrame reads one newline-terminated frame. When it is longer than limit bytes it
+// discards the rest of the line without buffering it and returns the first bytes read with
+// errBridgeFrameTooLarge, so a script cannot make the server buffer more.
 func readBridgeFrame(reader *bufio.Reader, limit int64) ([]byte, error) {
 	var frame []byte
 	for {
 		chunk, err := reader.ReadSlice('\n')
 		if int64(len(frame))+int64(len(chunk)) > limit+1 {
-			return nil, errBridgeFrameTooLarge
+			prefix := append(frame, chunk...)
+			if len(prefix) > bridgeOversizePrefixBytes {
+				prefix = prefix[:bridgeOversizePrefixBytes]
+			}
+			prefix = append([]byte(nil), prefix...)
+			for err == bufio.ErrBufferFull {
+				_, err = reader.ReadSlice('\n')
+			}
+			return prefix, errBridgeFrameTooLarge
 		}
 		frame = append(frame, chunk...)
 		if err != bufio.ErrBufferFull {

@@ -526,7 +526,7 @@ func TestToolSmithBridgeSocketAndDirectoryArePrivate(t *testing.T) {
 	}
 }
 
-func TestToolSmithBridgeRefusesAFrameOverTheLimitAndClosesThatConnection(t *testing.T) {
+func TestToolSmithBridgeRefusesAFrameOverTheLimitAndKeepsThatConnection(t *testing.T) {
 	root := t.TempDir()
 	dir := shortTempDir(t)
 	settings := bridgeSettings(t, root, "read")
@@ -541,28 +541,35 @@ func TestToolSmithBridgeRefusesAFrameOverTheLimitAndClosesThatConnection(t *test
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	go conn.Write([]byte(strings.Repeat("x", 100_000) + "\n"))
+	small := `{"id":1,"token":"` + bridge.token + `","tool":"read","arguments":{}}`
+	withID := `{"id":7,"pad":"` + strings.Repeat("x", 100_000) + `"}`
+	withoutID := strings.Repeat("x", 100_000)
+	go conn.Write([]byte(withID + "\n" + withoutID + "\n" + small + "\n"))
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	reader := bufio.NewReader(conn)
 	line, err := reader.ReadBytes('\n')
-	if err != nil || !strings.Contains(string(line), `"bridge_error":"frame too large"`) {
+	if err != nil || !strings.Contains(string(line), `"id":7`) || !strings.Contains(string(line), `"bridge_error":"frame too large"`) {
 		t.Fatalf("reply %q: %v", line, err)
 	}
-	if _, err := reader.ReadBytes('\n'); err == nil {
-		t.Fatal("the connection stayed open after a frame that was too large")
+	line, err = reader.ReadBytes('\n')
+	if err != nil || strings.Contains(string(line), `"id":7`) || !strings.Contains(string(line), `"bridge_error":"frame too large"`) {
+		t.Fatalf("reply %q: %v", line, err)
 	}
-	// Another connection still works, and a frame at the limit is served.
+	answer, err := reader.ReadBytes('\n')
+	if err != nil || !strings.Contains(string(answer), `"id":1`) || !strings.Contains(string(answer), `"ok":true`) {
+		t.Fatalf("reply %q: %v", answer, err)
+	}
+	// Another connection still works too.
 	other, err := net.Dial("unix", bridge.socketPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	frame := `{"id":1,"token":"` + bridge.token + `","tool":"read","arguments":{}}`
-	if _, err := other.Write([]byte(frame + "\n")); err != nil {
+	if _, err := other.Write([]byte(small + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	other.SetReadDeadline(time.Now().Add(5 * time.Second))
-	answer, err := bufio.NewReader(other).ReadBytes('\n')
+	answer, err = bufio.NewReader(other).ReadBytes('\n')
 	if err != nil || !strings.Contains(string(answer), `"ok":true`) {
 		t.Fatalf("reply %q: %v", answer, err)
 	}

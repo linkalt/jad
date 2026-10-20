@@ -87,21 +87,15 @@ func copyToolSmithFunction(workDir, dir, realRoot, file, name string, maxBytes i
 	if !toolSmithInside(dir, real) || !toolSmithInside(realRoot, real) {
 		return "symlink leaves the functions directory", nil
 	}
-	if pathInfo, pathErr := os.Stat(real); pathErr != nil || !pathInfo.Mode().IsRegular() {
+	pathInfo, pathErr := os.Stat(real)
+	if pathErr != nil || !pathInfo.Mode().IsRegular() {
 		return "is not a regular file", nil
 	}
-	handle, openErr := os.Open(real)
-	if openErr != nil {
-		return "cannot be read: " + openErr.Error(), nil
+	handle, info, openProblem := openToolSmithFile(real, pathInfo)
+	if openProblem != "" {
+		return openProblem, nil
 	}
 	defer handle.Close()
-	info, statErr := handle.Stat()
-	if statErr != nil {
-		return "cannot be read: " + statErr.Error(), nil
-	}
-	if !info.Mode().IsRegular() {
-		return "is not a regular file", nil
-	}
 	if info.Size() > maxBytes {
 		return tooBig(fmt.Sprint(info.Size())), nil
 	}
