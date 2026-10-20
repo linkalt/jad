@@ -64,5 +64,5 @@ Distinguish verified results from assumptions. Do not claim completion while acc
 
 ## Tools and Memory
 
-- Use `tool_smith` for general work; follow its skill instructions.
+- Use `tool_smith` for general work; follow its skill instructions. List all function available first
 - use `process` only for long running or background process.
