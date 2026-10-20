@@ -16,6 +16,8 @@ type apiError struct {
 	Message string
 	// RetryAfter is copied from the upstream Retry-After header when set.
 	RetryAfter string
+	// RequestID is the upstream request id, sent back in the request-id header.
+	RequestID string
 }
 
 func (e *apiError) Error() string { return e.Message }
@@ -73,6 +75,9 @@ func writeError(w http.ResponseWriter, e *apiError) {
 	if e.RetryAfter != "" {
 		w.Header().Set("Retry-After", e.RetryAfter)
 	}
+	if e.RequestID != "" {
+		w.Header().Set("request-id", e.RequestID)
+	}
 	w.WriteHeader(e.Status)
 	_ = json.NewEncoder(w).Encode(e.envelope())
 }
@@ -85,6 +90,15 @@ type anthropicErrorBody struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+	RequestID string `json:"request_id"`
+}
+
+// withRequestID appends the Anthropic request id, which support asks for.
+func withRequestID(message, requestID string) string {
+	if requestID == "" {
+		return message
+	}
+	return message + " (request_id: " + requestID + ")"
 }
 
 // upstreamError converts a non-2xx Anthropic response. The status is kept so
@@ -103,8 +117,12 @@ func upstreamError(status int, body []byte, header http.Header) *apiError {
 			message = fmt.Sprintf("upstream returned HTTP %d", status)
 		}
 	}
+	requestID := header.Get("request-id")
+	if parsed.RequestID != "" {
+		requestID = parsed.RequestID
+	}
 	return &apiError{
-		Status: status, Type: kind, Code: kind, Message: message,
-		RetryAfter: header.Get("Retry-After"),
+		Status: status, Type: kind, Code: kind, Message: withRequestID(message, parsed.RequestID),
+		RetryAfter: header.Get("Retry-After"), RequestID: requestID,
 	}
 }

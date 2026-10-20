@@ -2,12 +2,6 @@
   "schema_version": 1,
   "listen": "127.0.0.1:8788",
   "upstream": {
-    "extra_body": {
-      "cache_control": {
-        "type": "ephemeral",
-        "ttl": "1h"
-      }
-    },
     "base_url": "https://api.anthropic.com",
     "anthropic_version": "2023-06-01",
     "beta": [],
@@ -27,36 +21,87 @@
     "history": true
   },
   "default_profile": {
-    "thinking": "none"
+    "thinking": "none",
+    "extra_body": {
+      "cache_control": {
+        "type": "ephemeral",
+        "ttl": "1h"
+      }
+    }
   },
   "models": [
     {
       "match": "^claude-sonnet-5$",
       "thinking": "adaptive",
       "display": "summarized",
-      "mid_conversation_system": false
+      "fixed_sampling": true,
+      "mid_conversation_system": false,
+      "extra_body": {
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
     },
     {
       "match": "^claude-(fable|mythos|opus|sonnet|haiku)-5",
       "thinking": "adaptive",
       "display": "summarized",
-      "mid_conversation_system": true
+      "fixed_sampling": true,
+      "mid_conversation_system": true,
+      "extra_body": {
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
     },
     {
       "match": "^claude-opus-4-8",
       "thinking": "adaptive",
       "display": "summarized",
-      "mid_conversation_system": true
+      "fixed_sampling": true,
+      "mid_conversation_system": true,
+      "extra_body": {
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
     },
     {
-      "match": "^claude-(opus|sonnet)-4-[67]",
+      "match": "^claude-opus-4-7",
       "thinking": "adaptive",
-      "display": "summarized"
+      "display": "summarized",
+      "fixed_sampling": true,
+      "extra_body": {
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
+    },
+    {
+      "match": "^claude-(opus-4-6|sonnet-4-[67])",
+      "thinking": "adaptive",
+      "display": "summarized",
+      "extra_body": {
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
     },
     {
       "match": "^claude-(opus|sonnet|haiku)-4-5",
       "thinking": "budget",
-      "display": "summarized"
+      "display": "summarized",
+      "extra_body": {
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
     }
   ]
 }

@@ -55,6 +55,13 @@ func translateRequest(config *Config, body []byte) (*translation, *apiError) {
 	out.Temperature = request.Temperature
 	out.TopP = request.TopP
 	out.Stream = request.Stream
+	if request.User != "" {
+		if len(request.User) > MaxMetadataUserIDBytes {
+			result.Ignored = append(result.Ignored, "user")
+		} else {
+			out.Metadata = &anthropicMetadata{UserID: request.User}
+		}
+	}
 
 	system, messages, apiErr := translateInput(config, profile, request.Instructions, request.Input)
 	if apiErr != nil {
@@ -76,7 +83,8 @@ func translateRequest(config *Config, body []byte) (*translation, *apiError) {
 		return nil, apiErr
 	}
 	out.ToolChoice = choice
-	applyThinking(out, profile, request.Reasoning)
+	dropFixedSampling(out, profile, &result.Ignored)
+	applyThinking(out, profile, request.Reasoning, &result.Ignored)
 	applyCache(out, &config.Cache)
 	sort.Strings(result.Ignored)
 	return result, nil
@@ -94,6 +102,7 @@ type responsesRequest struct {
 	Temperature       *float64        `json:"temperature"`
 	TopP              *float64        `json:"top_p"`
 	Stream            bool            `json:"stream"`
+	User              string          `json:"user"`
 	Reasoning         *struct {
 		Effort  string          `json:"effort"`
 		Summary json.RawMessage `json:"summary"`

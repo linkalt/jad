@@ -16,7 +16,12 @@ type anthropicRequest struct {
 	Thinking     *anthropicThinking     `json:"thinking,omitempty"`
 	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
 	// CacheControl at the top level turns on automatic prompt caching.
-	CacheControl *cacheControl `json:"cache_control,omitempty"`
+	CacheControl *cacheControl      `json:"cache_control,omitempty"`
+	Metadata     *anthropicMetadata `json:"metadata,omitempty"`
+}
+
+type anthropicMetadata struct {
+	UserID string `json:"user_id"`
 }
 
 // cacheControl marks a prompt-caching breakpoint.
@@ -66,6 +71,7 @@ type anthropicTool struct {
 	Name         string          `json:"name"`
 	Description  string          `json:"description,omitempty"`
 	InputSchema  json.RawMessage `json:"input_schema"`
+	Strict       *bool           `json:"strict,omitempty"`
 	CacheControl *cacheControl   `json:"cache_control,omitempty"`
 }
 
@@ -97,8 +103,15 @@ type anthropicResponse struct {
 }
 
 type anthropicUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	InputTokens              int                 `json:"input_tokens"`
+	OutputTokens             int                 `json:"output_tokens"`
+	CacheCreationInputTokens int                 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int                 `json:"cache_read_input_tokens"`
+	CacheCreation            *cacheCreationUsage `json:"cache_creation"`
+}
+
+// cacheCreationUsage splits cache writes by lifetime.
+type cacheCreationUsage struct {
+	Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens"`
+	Ephemeral1hInputTokens int `json:"ephemeral_1h_input_tokens"`
 }

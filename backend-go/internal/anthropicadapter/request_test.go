@@ -199,7 +199,7 @@ func TestToolsAndChoice(t *testing.T) {
 	config := mustConfig(t, `{}`)
 	base := `{"model":"m","input":"x","tools":[{"type":"function","name":"f","description":"d","parameters":{"type":"object","properties":{"a":{"type":"string"}}},"strict":true}]`
 	request := translateOK(t, config, base+`,"tool_choice":"required","parallel_tool_calls":false}`)
-	if asJSON(t, request.Tools) != `[{"name":"f","description":"d","input_schema":{"type":"object","properties":{"a":{"type":"string"}}}}]` {
+	if asJSON(t, request.Tools) != `[{"name":"f","description":"d","input_schema":{"type":"object","properties":{"a":{"type":"string"}}},"strict":true}]` {
 		t.Fatalf("tools = %s", asJSON(t, request.Tools))
 	}
 	if asJSON(t, request.ToolChoice) != `{"type":"any","disable_parallel_tool_use":true}` {
@@ -295,6 +295,128 @@ func TestBadRequests(t *testing.T) {
 	} {
 		if apiErr := translateFail(t, config, body); apiErr.Status != 400 && apiErr.Status != 501 {
 			t.Errorf("%s: status %d", name, apiErr.Status)
+		}
+	}
+}
+
+func TestThinkingDropsSamplingTheUpstreamRejects(t *testing.T) {
+	config := mustConfig(t, `{"models":[
+	  {"match":"^adaptive","thinking":"adaptive"},
+	  {"match":"^budget","thinking":"budget"}]}`)
+	for _, model := range []string{"adaptive-1", "budget-1"} {
+		body := `{"model":"` + model + `","input":"x","temperature":0.5,"top_p":0.5,"reasoning":{"effort":"high"}}`
+		result, apiErr := translateRequest(config, []byte(body))
+		if apiErr != nil {
+			t.Fatal(apiErr)
+		}
+		if result.Request.Thinking == nil || result.Request.Temperature != nil || result.Request.TopP != nil {
+			t.Fatalf("%s: thinking=%v temperature=%v top_p=%v", model, result.Request.Thinking, result.Request.Temperature, result.Request.TopP)
+		}
+		if got := strings.Join(result.Ignored, ","); got != "temperature,top_p" {
+			t.Fatalf("%s: ignored = %q", model, got)
+		}
+	}
+	allowed := translateOK(t, config, `{"model":"budget-1","input":"x","top_p":0.97,"reasoning":{"effort":"high"}}`)
+	if allowed.TopP == nil || *allowed.TopP != 0.97 {
+		t.Fatal("top_p within 0.95..1 must be kept")
+	}
+	plain := translateOK(t, config, `{"model":"budget-1","input":"x","temperature":0.5,"top_p":0.5}`)
+	if plain.Temperature == nil || plain.TopP == nil {
+		t.Fatal("sampling must be kept when thinking is off")
+	}
+}
+
+func TestBudgetThinkingSkippedWhenToolTurnHasNoThinkingBlock(t *testing.T) {
+	config := mustConfig(t, `{"models":[
+	  {"match":"^adaptive","thinking":"adaptive"},
+	  {"match":"^budget","thinking":"budget"}]}`)
+	loop := func(model, extra string) string {
+		return `{"model":"` + model + `","reasoning":{"effort":"high"},"input":[
+		  {"type":"message","role":"user","content":"go"},` + extra + `
+		  {"type":"function_call","call_id":"c1","name":"f","arguments":"{}"},
+		  {"type":"function_call_output","call_id":"c1","output":"ok"}]}`
+	}
+	result, apiErr := translateRequest(config, []byte(loop("budget-1", "")))
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if result.Request.Thinking != nil || strings.Join(result.Ignored, ",") != "reasoning" {
+		t.Fatalf("thinking=%v ignored=%v", result.Request.Thinking, result.Ignored)
+	}
+	if adaptive := translateOK(t, config, loop("adaptive-1", "")); adaptive.Thinking == nil {
+		t.Fatal("adaptive thinking has no leading-block requirement")
+	}
+	quoted, _ := json.Marshal(encodeThinkingBlocks([]anthropicBlock{{Type: "redacted_thinking", Data: "opaque"}}))
+	replayed := translateOK(t, config, loop("budget-1", `{"type":"reasoning","summary":[],"encrypted_content":`+string(quoted)+`},`))
+	if replayed.Thinking == nil {
+		t.Fatal("a replayed thinking block must keep thinking on")
+	}
+	if noTools := translateOK(t, config, `{"model":"budget-1","input":"hi","reasoning":{"effort":"high"}}`); noTools.Thinking == nil {
+		t.Fatal("a request without a tool turn must keep thinking")
+	}
+}
+
+func TestFixedSamplingProfileDropsTemperatureAndTopP(t *testing.T) {
+	config := mustConfig(t, `{"models":[{"match":"^fixed","thinking":"none","fixed_sampling":true}]}`)
+	result, apiErr := translateRequest(config, []byte(`{"model":"fixed-1","input":"x","temperature":1,"top_p":0.99}`))
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if result.Request.Temperature != nil || result.Request.TopP != nil || strings.Join(result.Ignored, ",") != "temperature,top_p" {
+		t.Fatalf("temperature=%v top_p=%v ignored=%v", result.Request.Temperature, result.Request.TopP, result.Ignored)
+	}
+	other := translateOK(t, config, `{"model":"other","input":"x","temperature":0.3,"top_p":0.5}`)
+	if other.Temperature == nil || other.TopP == nil {
+		t.Fatal("a profile without fixed_sampling must keep the values")
+	}
+}
+
+func TestToolStrictIsPassedThrough(t *testing.T) {
+	config := mustConfig(t, `{}`)
+	body := func(strict string) string {
+		return `{"model":"m","input":"x","tools":[{"type":"function","name":"f","parameters":{"type":"object"}` + strict + `}]}`
+	}
+	if got := asJSON(t, translateOK(t, config, body(`,"strict":true`)).Tools); !strings.Contains(got, `"strict":true`) {
+		t.Fatalf("strict true lost: %s", got)
+	}
+	if got := asJSON(t, translateOK(t, config, body(`,"strict":false`)).Tools); !strings.Contains(got, `"strict":false`) {
+		t.Fatalf("strict false lost: %s", got)
+	}
+	if got := asJSON(t, translateOK(t, config, body("")).Tools); strings.Contains(got, "strict") {
+		t.Fatalf("strict must be absent when the tool has none: %s", got)
+	}
+}
+
+func TestUserBecomesMetadataUserID(t *testing.T) {
+	config := mustConfig(t, `{}`)
+	got := asJSON(t, translateOK(t, config, `{"model":"m","input":"x","user":"u-123"}`).Metadata)
+	if got != `{"user_id":"u-123"}` {
+		t.Fatalf("metadata = %s", got)
+	}
+	if translateOK(t, config, `{"model":"m","input":"x"}`).Metadata != nil {
+		t.Fatal("no user, no metadata")
+	}
+	long := strings.Repeat("a", MaxMetadataUserIDBytes+1)
+	result, apiErr := translateRequest(config, []byte(`{"model":"m","input":"x","user":"`+long+`"}`))
+	if apiErr != nil || result.Request.Metadata != nil || strings.Join(result.Ignored, ",") != "user" {
+		t.Fatalf("an over-long user must be dropped and reported: %v %v", apiErr, result)
+	}
+}
+
+func TestExtraBodyMetadataWinsOverUser(t *testing.T) {
+	config := mustConfig(t, `{"default_profile":{"extra_body":{"metadata":{"user_id":"fixed"}}}}`)
+	request := translateOK(t, config, `{"model":"m","input":"x","user":"from-client"}`)
+	body, err := encodeRequestBody(config, &request)
+	if err != nil || !strings.Contains(string(body), `"metadata":{"user_id":"fixed"}`) || strings.Contains(string(body), "from-client") {
+		t.Fatalf("extra_body.metadata must win: %s %v", body, err)
+	}
+}
+
+func TestServerToolRejectionNamesTheType(t *testing.T) {
+	apiErr := translateFail(t, mustConfig(t, `{}`), `{"model":"m","input":"x","tools":[{"type":"web_search"}]}`)
+	for _, want := range []string{"web_search", "server tools", "only function tools"} {
+		if !strings.Contains(apiErr.Message, want) {
+			t.Fatalf("message %q lacks %q", apiErr.Message, want)
 		}
 	}
 }

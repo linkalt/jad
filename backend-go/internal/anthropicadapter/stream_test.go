@@ -243,9 +243,10 @@ func TestStreamedItemsMatchNonStreamingShape(t *testing.T) {
 
 func TestStreamStopReasons(t *testing.T) {
 	cases := map[string]struct{ event, reason string }{
-		"end_turn":   {"response.completed", ""},
-		"max_tokens": {"response.incomplete", "max_output_tokens"},
-		"refusal":    {"response.incomplete", "content_filter"},
+		"end_turn":                      {"response.completed", ""},
+		"max_tokens":                    {"response.incomplete", "max_output_tokens"},
+		"refusal":                       {"response.incomplete", "content_filter"},
+		"model_context_window_exceeded": {"response.incomplete", "model_context_window_exceeded"},
 	}
 	for stop, want := range cases {
 		upstream, _ := scriptedUpstream(t, sse(startEvent,
@@ -532,4 +533,55 @@ func DefaultConfigPointer() *Config {
 		panic(err)
 	}
 	return &config
+}
+
+func TestStreamCacheCreationSplit(t *testing.T) {
+	start := `message_start|{"type":"message_start","message":{"id":"msg_s1","model":"claude-x","usage":{"input_tokens":3,"output_tokens":1,"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":4,"ephemeral_1h_input_tokens":6}}}}`
+	upstream, _ := scriptedUpstream(t, sse(start,
+		`message_delta|{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+		`message_stop|{"type":"message_stop"}`))
+	adapter := adapterFor(t, upstream.URL, "")
+	_, events, _ := postStream(t, adapter.URL, `{"model":"claude-x","input":"hi","stream":true}`)
+	last := events[len(events)-1]
+	for key, want := range map[string]float64{"cache_creation_tokens": 10, "cache_creation_5m_tokens": 4, "cache_creation_1h_tokens": 6} {
+		if got := last.get("response", "usage", "input_tokens_details", key); got != want {
+			t.Fatalf("%s = %v, want %v (%v)", key, got, want, last.Body)
+		}
+	}
+	// a message_delta that carries the split replaces the start values
+	later := `message_delta|{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2,"cache_creation":{"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":9}}}`
+	upstream2, _ := scriptedUpstream(t, sse(start, later, `message_stop|{"type":"message_stop"}`))
+	adapter2 := adapterFor(t, upstream2.URL, "")
+	_, events2, _ := postStream(t, adapter2.URL, `{"model":"claude-x","input":"hi","stream":true}`)
+	if got := events2[len(events2)-1].get("response", "usage", "input_tokens_details", "cache_creation_1h_tokens"); got != float64(9) {
+		t.Fatalf("delta split ignored: %v", got)
+	}
+}
+
+func TestStreamErrorEventCarriesRequestID(t *testing.T) {
+	upstream, _ := scriptedUpstream(t, sse(startEvent,
+		`content_block_start|{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`error|{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_STREAMERR"}`))
+	_, events, _ := postStream(t, adapterFor(t, upstream.URL, "").URL, `{"model":"m","input":"x","stream":true}`)
+	last := events[len(events)-1]
+	if message, _ := last.get("response", "error", "message").(string); !strings.Contains(message, "req_STREAMERR") {
+		t.Fatalf("request id missing from %v", last.Body)
+	}
+}
+
+func scriptedUpstreamWithHeader(t *testing.T, extra http.Header, body string) (*httptest.Server, *int32) {
+	t.Helper()
+	var count int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&count, 1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		for key, values := range extra {
+			w.Header()[key] = values
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(server.Close)
+	return server, &count
 }

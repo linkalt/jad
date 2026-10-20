@@ -86,11 +86,8 @@ type UpstreamConfig struct {
 	ExpiryMarginMS int `json:"expiry_margin_ms"`
 	// ExtraHeaders are added to every upstream request, for a gateway or an endpoint that
 	// wants more than the headers the adapter sets itself.
-	ExtraHeaders map[string]string `json:"extra_headers"`
-	// ExtraBody holds top-level fields merged into every /v1/messages body, as raw JSON.
-	// It cannot set a field the adapter builds from the client request.
-	ExtraBody        map[string]json.RawMessage `json:"extra_body"`
-	RequestTimeoutMS int                        `json:"request_timeout_ms"`
+	ExtraHeaders     map[string]string `json:"extra_headers"`
+	RequestTimeoutMS int               `json:"request_timeout_ms"`
 	// StreamRetry retries a streaming request whose upstream answered with an
 	// error event before any output was written.
 	StreamRetry StreamRetryConfig `json:"stream_retry"`
@@ -126,6 +123,12 @@ type ModelProfile struct {
 	// MidConversationSystem sends later system/developer messages as
 	// role=system instead of folding them into a user message.
 	MidConversationSystem bool `json:"mid_conversation_system"`
+	// FixedSampling marks models that reject non-default temperature and top_p
+	// (and any top_p together with temperature) on every request, thinking or not.
+	FixedSampling bool `json:"fixed_sampling"`
+	// ExtraBody holds top-level fields merged last into the /v1/messages body of requests
+	// this profile serves, as raw JSON. It cannot set a field the adapter builds from the client.
+	ExtraBody map[string]json.RawMessage `json:"extra_body"`
 
 	pattern *regexp.Regexp
 }
@@ -221,9 +224,6 @@ func (c *Config) finish() error {
 	if err := c.Upstream.validate(); err != nil {
 		return err
 	}
-	if _, ok := c.Upstream.ExtraBody["cache_control"]; ok && c.Cache.Automatic {
-		return errors.New("config: upstream.extra_body.cache_control conflicts with cache.automatic, which sets the same top-level field; use one of them")
-	}
 	if c.DefaultMaxTokens < 1 {
 		return fmt.Errorf("config: default_max_tokens must be at least 1, got %d", c.DefaultMaxTokens)
 	}
@@ -256,11 +256,11 @@ func (c *Config) finish() error {
 	if c.Cache.TTL != CacheTTLDefault && c.Cache.TTL != CacheTTLOneHour {
 		return fmt.Errorf("config: cache.ttl must be empty or %q, got %q", CacheTTLOneHour, c.Cache.TTL)
 	}
-	if err := c.DefaultProfile.finish("default_profile", false); err != nil {
+	if err := c.DefaultProfile.finish("default_profile", false, c.Cache.Automatic); err != nil {
 		return err
 	}
 	for index := range c.Models {
-		if err := c.Models[index].finish(fmt.Sprintf("models[%d]", index), true); err != nil {
+		if err := c.Models[index].finish(fmt.Sprintf("models[%d]", index), true, c.Cache.Automatic); err != nil {
 			return err
 		}
 	}
@@ -308,11 +308,6 @@ func (u *UpstreamConfig) validate() error {
 		return fmt.Errorf("config: upstream.request_timeout_ms must be 1..%d, got %d",
 			MaxRequestTimeoutMS, u.RequestTimeoutMS)
 	}
-	for name := range u.ExtraBody {
-		if slices.Contains(ownedRequestFields, name) {
-			return fmt.Errorf("config: upstream.extra_body.%s is built from the client request and cannot be set here", name)
-		}
-	}
 	return u.StreamRetry.validate()
 }
 
@@ -331,7 +326,15 @@ func (r *StreamRetryConfig) validate() error {
 	return nil
 }
 
-func (p *ModelProfile) finish(path string, needsMatch bool) error {
+func (p *ModelProfile) finish(path string, needsMatch, cacheAutomatic bool) error {
+	for name := range p.ExtraBody {
+		if slices.Contains(ownedRequestFields, name) {
+			return fmt.Errorf("config: %s.extra_body.%s is built from the client request and cannot be set here", path, name)
+		}
+	}
+	if _, ok := p.ExtraBody["cache_control"]; ok && cacheAutomatic {
+		return fmt.Errorf("config: %s.extra_body.cache_control conflicts with cache.automatic, which sets the same top-level field; use one of them", path)
+	}
 	if p.Thinking == "" {
 		p.Thinking = ThinkingNone
 	}

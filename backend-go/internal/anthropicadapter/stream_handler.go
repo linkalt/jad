@@ -55,6 +55,9 @@ func (h *Handler) respondStream(w http.ResponseWriter, r *http.Request, apiKey s
 		}
 		// Keep the adapter's parser on the raw body: it preserves ping events,
 		// unknown future events, and the configured retry handling for error events.
+		if id := upstream.Header.Get("request-id"); id != "" {
+			w.Header().Set("request-id", id)
+		}
 		translator := newStreamTranslator(sink, h.config, translated.Request.Model, h.now)
 		translator.allowRetry = attempt < retry.MaxRetries
 		outcome := translator.run(upstream.Body)

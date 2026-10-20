@@ -203,12 +203,13 @@ func TestUnverifiableReasoningIsDropped(t *testing.T) {
 
 func TestStopReasons(t *testing.T) {
 	cases := map[string]struct{ status, reason string }{
-		"end_turn":      {"completed", ""},
-		"tool_use":      {"completed", ""},
-		"stop_sequence": {"completed", ""},
-		"max_tokens":    {"incomplete", "max_output_tokens"},
-		"refusal":       {"incomplete", "content_filter"},
-		"pause_turn":    {"incomplete", "pause_turn"},
+		"end_turn":                      {"completed", ""},
+		"tool_use":                      {"completed", ""},
+		"stop_sequence":                 {"completed", ""},
+		"max_tokens":                    {"incomplete", "max_output_tokens"},
+		"refusal":                       {"incomplete", "content_filter"},
+		"pause_turn":                    {"incomplete", "pause_turn"},
+		"model_context_window_exceeded": {"incomplete", "model_context_window_exceeded"},
 	}
 	for stop, want := range cases {
 		status, details := statusFor(stop)
@@ -365,5 +366,36 @@ func TestRequestSizeLimitAndUnreachableUpstream(t *testing.T) {
 	adapter = adapterFor(t, url, "")
 	if status, _, raw := post(t, adapter.URL+"/v1/responses", `{"model":"m","input":"x"}`, map[string]string{"x-api-key": "k"}); status != 502 || !strings.Contains(raw, "upstream_unreachable") {
 		t.Fatalf("unreachable upstream: %d %s", status, raw)
+	}
+}
+
+func TestRequestIDIsForwardedOnErrorsAndSuccess(t *testing.T) {
+	headers := map[string]string{"x-api-key": "k"}
+	errUpstream, _ := fakeAnthropic(t, 529, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_BODY"}`,
+		http.Header{"Request-Id": {"req_HEADER"}})
+	status, header, raw := post(t, adapterFor(t, errUpstream.URL, "").URL+"/v1/responses", `{"model":"m","input":"x"}`, headers)
+	if status != 529 || header.Get("request-id") != "req_BODY" || !strings.Contains(raw, "Overloaded (request_id: req_BODY)") {
+		t.Fatalf("error: %d %q %s", status, header.Get("request-id"), raw)
+	}
+	headerOnly, _ := fakeAnthropic(t, 500, `{"type":"error","error":{"type":"api_error","message":"boom"}}`, http.Header{"Request-Id": {"req_HEADER"}})
+	status, header, raw = post(t, adapterFor(t, headerOnly.URL, "").URL+"/v1/responses", `{"model":"m","input":"x"}`, headers)
+	if status != 500 || header.Get("request-id") != "req_HEADER" || strings.Contains(raw, "request_id") {
+		t.Fatalf("header only: %d %q %s", status, header.Get("request-id"), raw)
+	}
+	ok, _ := fakeAnthropic(t, 200, messageBody, http.Header{"Request-Id": {"req_OK"}})
+	status, header, _ = post(t, adapterFor(t, ok.URL, "").URL+"/v1/responses", `{"model":"m","input":"x"}`, headers)
+	if status != 200 || header.Get("request-id") != "req_OK" {
+		t.Fatalf("success: %d %q", status, header.Get("request-id"))
+	}
+	stream, _ := scriptedUpstreamWithHeader(t, http.Header{"Request-Id": {"req_STREAM"}}, okStream())
+	request, _ := http.NewRequest(http.MethodPost, adapterFor(t, stream.URL, "").URL+"/v1/responses", strings.NewReader(`{"model":"m","input":"x","stream":true}`))
+	request.Header.Set("x-api-key", "k")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.Header.Get("request-id") != "req_STREAM" {
+		t.Fatalf("stream request-id = %q", response.Header.Get("request-id"))
 	}
 }

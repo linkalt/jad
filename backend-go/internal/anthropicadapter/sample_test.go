@@ -1,6 +1,8 @@
 package anthropicadapter
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -162,5 +164,46 @@ func TestSampleConfigRequests(t *testing.T) {
 	cached := translateOK(t, config, cacheBody)
 	if got := strings.Join(markedPaths(t, cached), ","); got != "system1,msg2.0" {
 		t.Fatalf("the sample's cache settings placed %q", got)
+	}
+}
+
+// fixed_sampling is set exactly on the profiles whose models the thinking page lists as
+// rejecting non-default sampling parameters (Opus 4.8, Sonnet 5 and the 5.x families).
+func TestSampleConfigFixedSamplingProfiles(t *testing.T) {
+	config, err := LoadConfig(samplePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for model, want := range map[string]bool{
+		"claude-sonnet-5": true, "claude-opus-5-5": true, "claude-haiku-5-5": true, "claude-opus-4-8": true,
+		"claude-opus-4-7": true, "claude-opus-4-6": false, "claude-sonnet-4-6": false, "claude-sonnet-4-7": false, "claude-haiku-4-5": false, "gpt-5": false,
+	} {
+		if got := config.ProfileFor(model).FixedSampling; got != want {
+			t.Errorf("%s: fixed_sampling = %v, want %v", model, got, want)
+		}
+	}
+}
+
+// Every Claude profile of the samples carries the 1h cache_control, and the profile split keeps
+// each model on the profile it had before Opus 4.7 got its own.
+func TestSampleProfilesCarryOneHourCacheControl(t *testing.T) {
+	config, err := LoadConfig(samplePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for model, thinking := range map[string]string{
+		"claude-sonnet-5": ThinkingAdaptive, "claude-opus-5": ThinkingAdaptive, "claude-opus-4-8": ThinkingAdaptive,
+		"claude-opus-4-7": ThinkingAdaptive, "claude-opus-4-6": ThinkingAdaptive, "claude-sonnet-4-6": ThinkingAdaptive,
+		"claude-opus-4-5": ThinkingBudget, "claude-haiku-4-5": ThinkingBudget, "unknown": ThinkingNone,
+	} {
+		profile := config.ProfileFor(model)
+		if profile.Thinking != thinking {
+			t.Errorf("%s: thinking %s, want %s", model, profile.Thinking, thinking)
+		}
+		var got bytes.Buffer
+		_ = json.Compact(&got, profile.ExtraBody["cache_control"])
+		if got.String() != `{"type":"ephemeral","ttl":"1h"}` {
+			t.Errorf("%s: cache_control = %s", model, got.String())
+		}
 	}
 }

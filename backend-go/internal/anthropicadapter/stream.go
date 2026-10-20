@@ -80,6 +80,7 @@ type anthropicStreamEvent struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+	RequestID string `json:"request_id"`
 }
 
 // run reads the upstream stream until it ends or a terminal event is written.
@@ -118,7 +119,7 @@ func (t *streamTranslator) run(body io.Reader) streamOutcome {
 				outcome.Retry = true
 				return false
 			}
-			t.fail(errorCode(event.Error.Type), event.Error.Message)
+			t.fail(errorCode(event.Error.Type), withRequestID(event.Error.Message, event.RequestID))
 		}
 		outcome.Finished = t.done
 		return !t.done
@@ -275,10 +276,11 @@ func (t *streamTranslator) onMessageDelta(event *anthropicStreamEvent) {
 	}
 	// Usage in message_delta is cumulative; a field it omits keeps its value.
 	var usage struct {
-		InputTokens              *int `json:"input_tokens"`
-		OutputTokens             *int `json:"output_tokens"`
-		CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
-		CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
+		InputTokens              *int                `json:"input_tokens"`
+		OutputTokens             *int                `json:"output_tokens"`
+		CacheCreationInputTokens *int                `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     *int                `json:"cache_read_input_tokens"`
+		CacheCreation            *cacheCreationUsage `json:"cache_creation"`
 	}
 	if json.Unmarshal(event.Usage, &usage) != nil {
 		return
@@ -292,6 +294,9 @@ func (t *streamTranslator) onMessageDelta(event *anthropicStreamEvent) {
 	set(&t.usage.OutputTokens, usage.OutputTokens)
 	set(&t.usage.CacheCreationInputTokens, usage.CacheCreationInputTokens)
 	set(&t.usage.CacheReadInputTokens, usage.CacheReadInputTokens)
+	if usage.CacheCreation != nil {
+		t.usage.CacheCreation = usage.CacheCreation
+	}
 }
 
 // complete writes the terminal event for a finished message.

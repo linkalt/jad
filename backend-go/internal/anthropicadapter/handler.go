@@ -130,6 +130,11 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, apiKey string,
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if upstream != nil {
+		if id := upstream.Header.Get("request-id"); id != "" {
+			w.Header().Set("request-id", id)
+		}
+	}
 	_ = json.NewEncoder(w).Encode(translateResponse(&response, h.now()))
 }
 

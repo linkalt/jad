@@ -54,11 +54,10 @@ Schema: `sample/schemes/anthropic-adapter.schema.json`. A working example: `samp
 | `upstream.base_url` | `https://api.anthropic.com` | `/v1/messages` is appended. |
 | `upstream.anthropic_version` | `2023-06-01` | `anthropic-version` header. |
 | `upstream.auth_header` | `bearer` | `bearer` sends `Authorization: Bearer <token>`; `x-api-key` sends the legacy header. |
-| `upstream.beta` | `[]` | Joined into `anthropic-beta`. |
+| `upstream.beta` | `[]` | Joined into `anthropic-beta`. For a `budget` profile with tool loops that should think between calls (Opus 4.5, Sonnet 4.5 and earlier Claude 4 models), add `interleaved-thinking-2025-05-14`; Haiku 4.5 ignores it, and Opus 4.6 has no interleaving in manual mode (use `adaptive`). |
 | `upstream.credential_file` | `""` | A `claude-auth` credential file (absolute or `~/…`). When set, its access token is sent upstream and the caller's credential is ignored. Empty forwards the caller's credential. |
 | `upstream.system_prefix` | `""` | Sent as the first system block of every request, as a block of its own, before the caller's instructions. Empty sends nothing extra. **Discouraged:** it makes the request claim to be Claude Code, and it does not avoid the third-party billing refusal described in the credentials section. |
 | `upstream.expiry_margin_ms` | `300000` | With `credential_file`: a token whose stored expiry is this close is refused with 401 before the request. |
-| `upstream.extra_body` | `{}` | Top-level fields merged into every `/v1/messages` body, values sent as written (`metadata`, `top_k`, `stop_sequences`, `service_tier`, `cache_control`). Fields built from the client request are refused; `cache_control` is refused together with `cache.automatic`. |
 | `upstream.extra_headers` | `{}` | Headers added to every upstream request. `authorization`, `x-api-key`, `anthropic-version`, `anthropic-beta`, `content-type`, `content-length` and `host` are refused here: they come from other keys. |
 | `upstream.request_timeout_ms` | `600000` | Deadline of one upstream request, the whole stream included. |
 | `upstream.stream_retry.max_retries` | `0` | Retries of a stream whose first event is an error. `0` is off. |
@@ -88,6 +87,8 @@ Which thinking parameters a Claude model accepts differs per model, and changes 
 | `effort_map` | Responses effort to `output_config.effort`. Missing keys use the defaults. |
 | `effort_budget` | Responses effort to `budget_tokens` in `budget` mode. Missing keys use the defaults. |
 | `mid_conversation_system` | Send later system and developer messages as `role: system` instead of folding them into a user message. |
+| `fixed_sampling` | The model rejects non-default `temperature`, `top_p` and `top_k` on every request, thinking or not (and `temperature` together with `top_p`). When `true`, `temperature` and `top_p` are omitted and listed in `X-Adapter-Ignored-Fields`. Default `false`. The sample sets it for Sonnet 5, the 5.x families and Opus 4.8. Opus 4.7 is on the documentation's list too, but the sample has no separate profile for it (it shares the 4.6 one), so set it there yourself if you use it. |
+| `extra_body` | Top-level fields merged last into the `/v1/messages` body of requests this profile serves (`models[]` entry or `default_profile`; no global one, since models differ in what they accept). Values are sent as written: `metadata`, `top_k`, `stop_sequences`, `service_tier`, `cache_control` `{"type":"ephemeral","ttl":"1h"}`. Fields the adapter builds from the client request are refused at load, and so is `cache_control` when `cache.automatic` is on. Default `{}`. |
 
 `sample/anthropic-adapter.json` encodes the per-model table as read from the Anthropic documentation on the day it was written. A test checks that it loads, validates against the schema, and gives each family the profile it names, but **the table itself has not been checked against the live API**. Check it against the current documentation before relying on it.
 
@@ -115,10 +116,11 @@ All off by default. A cache write costs 1.25x (5 minutes) or 2x (1 hour) the inp
 | --- | --- |
 | `previous_response_id`, `conversation`, `background: true` | 501. The adapter keeps no state; send the full `input`. |
 | `GET /v1/responses/{id}` and other stored-response routes | 501. |
-| Hosted tools (`file_search`, `web_search`, `code_interpreter`, `computer`, ...) | 400. They have no equivalent. |
+| Hosted tools (`file_search`, `web_search`, `code_interpreter`, `computer`, ...) | 400, and the message names the tool type and says server tools are unsupported. Only `function` tools are translated; a function tool's `strict` is passed through. |
 | `file_id` images or files | 400. Send `image_url`, `file_data` or `file_url`. |
 | Other content (audio, files of other types) | 400. |
 | `text.format` other than text (structured output), `top_logprobs`, `logprobs`, ... | Dropped and reported in `X-Adapter-Ignored-Fields`, or 400 with `unsupported_fields: reject`. |
+| `user` | Sent as `metadata.user_id` (an opaque id, at most 512 bytes; a longer one is dropped and listed in `X-Adapter-Ignored-Fields`). the matched profile's `extra_body.metadata` replaces it when both are set. |
 | `store`, `include`, `metadata`, `service_tier`, `prompt_cache_key`, `truncation`, ... | Dropped silently; they do not change the generated text. |
 
 `pause_turn` (a server-tool loop that hit its limit) maps to `incomplete` and is **not** continued. It cannot occur here today, because the adapter forwards only client `function` tools and Anthropic returns `pause_turn` only for server tools.

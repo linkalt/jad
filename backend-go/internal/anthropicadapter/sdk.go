@@ -40,18 +40,19 @@ func sdkMessageParams(config *Config, request *anthropicRequest) (anthropic.Mess
 	return params, nil
 }
 
-// encodeRequestBody marshals the request and merges upstream.extra_body into it. With no extra
+// encodeRequestBody marshals the request and merges the matched profile's extra_body into it. With no extra
 // body the bytes are exactly the marshalled request; raw values are kept as written.
 func encodeRequestBody(config *Config, request *anthropicRequest) ([]byte, error) {
 	payload, err := json.Marshal(request)
-	if err != nil || len(config.Upstream.ExtraBody) == 0 {
+	extra := config.ProfileFor(request.Model).ExtraBody
+	if err != nil || len(extra) == 0 {
 		return payload, err
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &fields); err != nil {
 		return nil, err
 	}
-	for name, value := range config.Upstream.ExtraBody {
+	for name, value := range extra {
 		fields[name] = value
 	}
 	return json.Marshal(fields)

@@ -63,8 +63,10 @@ func responseID(messageID string) string {
 // which both agent backends already treat as a normal end with a notice.
 func statusFor(stopReason string) (string, *incompleteDetails) {
 	switch stopReason {
-	case "max_tokens", "model_context_window_exceeded":
+	case "max_tokens":
 		return "incomplete", &incompleteDetails{Reason: "max_output_tokens"}
+	case "model_context_window_exceeded":
+		return "incomplete", &incompleteDetails{Reason: "model_context_window_exceeded"}
 	case "refusal":
 		return "incomplete", &incompleteDetails{Reason: "content_filter"}
 	case "pause_turn":
@@ -77,11 +79,17 @@ func statusFor(stopReason string) (string, *incompleteDetails) {
 // input_tokens; Responses counts them inside input_tokens.
 func translateUsage(usage *anthropicUsage) responsesUsage {
 	input := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
+	var split cacheCreationUsage
+	if usage.CacheCreation != nil {
+		split = *usage.CacheCreation
+	}
 	return responsesUsage{
 		InputTokens: input,
 		InputTokensDetails: map[string]int{
-			"cached_tokens":         usage.CacheReadInputTokens,
-			"cache_creation_tokens": usage.CacheCreationInputTokens,
+			"cached_tokens":            usage.CacheReadInputTokens,
+			"cache_creation_tokens":    usage.CacheCreationInputTokens,
+			"cache_creation_5m_tokens": split.Ephemeral5mInputTokens,
+			"cache_creation_1h_tokens": split.Ephemeral1hInputTokens,
 		},
 		OutputTokens:        usage.OutputTokens,
 		OutputTokensDetails: map[string]int{"reasoning_tokens": 0},

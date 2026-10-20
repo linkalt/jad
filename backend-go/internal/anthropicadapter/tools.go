@@ -22,7 +22,7 @@ func translateTools(config *Config, tools []rawObject, ignored *[]string) ([]ant
 	for index, tool := range tools {
 		kind := stringOf(tool["type"])
 		if kind != "function" {
-			return nil, unsupported("tools", "tools[%d]: type %q is not supported, only function tools can be translated", index, kind)
+			return nil, unsupported("tools", "tools[%d]: type %q is not supported: hosted and Anthropic server tools (web_search, code_execution, file_search, computer, ...) cannot be translated, only function tools can", index, kind)
 		}
 		name := stringOf(tool["name"])
 		if name == "" {
@@ -37,11 +37,16 @@ func translateTools(config *Config, tools []rawObject, ignored *[]string) ([]ant
 				*ignored = append(*ignored, "tools."+name+"."+keyword)
 			}
 		}
-		out = append(out, anthropicTool{
+		built := anthropicTool{
 			Name:        name,
 			Description: stringOf(tool["description"]),
 			InputSchema: schema,
-		})
+		}
+		var strict bool
+		if raw, ok := tool["strict"]; ok && json.Unmarshal(raw, &strict) == nil {
+			built.Strict = &strict
+		}
+		out = append(out, built)
 	}
 	return out, nil
 }
