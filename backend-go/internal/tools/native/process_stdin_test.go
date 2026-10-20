@@ -217,3 +217,28 @@ func TestNativeProcessKeepsTheConfiguredShellNameAsArgvZero(t *testing.T) {
 		t.Fatalf("the process saw its resolved path instead of the configured name: %s", waited)
 	}
 }
+
+func TestNativeProcessWaitReturnsWhenTheRunIsStopped(t *testing.T) {
+	runner := newProcessStdinRunner(t, 1024)
+	started := runner.run(map[string]any{"command": "sleep 30"})
+	id := processIDOf(t, started)
+	runner.settings.MaxWaitTimeoutMs = 60000
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := executeNativeProcess(ctx, map[string]any{"action": "wait", "id": id, "timeout_ms": json.Number("60000")}, tools.ExecutionContext{
+			CallID: "call-wait", WorkspaceRoot: runner.workspace, SessionDir: runner.workspace,
+		}, runner.settings, runner.manager, "")
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("wait error = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait kept blocking after the run was stopped")
+	}
+}

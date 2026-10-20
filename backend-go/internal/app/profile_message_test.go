@@ -918,3 +918,69 @@ func TestProfileMessageRealCompactionRunsBeforeTheTargetRun(t *testing.T) {
 		t.Fatalf("request after compaction: %s", last)
 	}
 }
+
+func TestProfileMessageCompactionHoldsTheTargetAgainstAUserSend(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.captureBodies = true
+	entered, release := make(chan struct{}), make(chan struct{})
+	var compactions atomic.Int32
+	f.service.resolver.compactProfile = func(context.Context, string, string) error {
+		compactions.Add(1)
+		close(entered)
+		<-release
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := profileMessenger{resolver: f.service.resolver}.Message(callerRunContext(t, f, 1), profileMessageOwner, "review/reviewer", "hi", 0, true)
+		done <- err
+	}()
+	awaitSignal(t, entered, "the compaction to start")
+
+	type sent struct {
+		status int
+		body   string
+	}
+	userSend := make(chan sent, 1)
+	go func() {
+		status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run?profile="+url.QueryEscape("review/reviewer"), `{"input":"user slipped in"}`)
+		userSend <- sent{status, body}
+	}()
+	select {
+	case got := <-userSend:
+		t.Fatalf("user send finished during the compaction: %d %s", got.status, got.body)
+	case err := <-done:
+		t.Fatalf("Message returned before the compaction finished: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	f.mu.Lock()
+	during := len(f.bodies)
+	f.mu.Unlock()
+	if during != 0 {
+		t.Fatalf("%d provider request(s) reached the target during the compaction", during)
+	}
+
+	close(release)
+	if err := awaitMessageEnd(t, done); err != nil {
+		t.Fatalf("Message after compaction: %v", err)
+	}
+	select {
+	case got := <-userSend:
+		if got.status != http.StatusOK || strings.Contains(got.body, "profile_busy") {
+			t.Fatalf("queued user send: %d %s", got.status, got.body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the queued user send never ran after the message run")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if compactions.Load() != 1 || len(f.bodies) != 2 {
+		t.Fatalf("compactions = %d, provider requests = %d, want 1 and 2", compactions.Load(), len(f.bodies))
+	}
+	if strings.Contains(f.bodies[0], "user slipped in") || !strings.Contains(f.bodies[0], "hi") {
+		t.Fatalf("message run request: %s", f.bodies[0])
+	}
+	if !strings.Contains(f.bodies[1], "user slipped in") || !strings.Contains(f.bodies[1], "hi") {
+		t.Fatalf("user send did not run after the message run: %s", f.bodies[1])
+	}
+}

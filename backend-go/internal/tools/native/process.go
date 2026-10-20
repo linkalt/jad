@@ -124,7 +124,6 @@ func executeNativeProcess(
 	manager ProcessManager,
 	apiKeyEnv string,
 ) (string, error) {
-	_ = ctx
 	if manager == nil {
 		return tools.ExecutionError(execution.CallID, tools.StatusError, "process_manager_unavailable", "The process manager is not available"), nil
 	}
@@ -211,7 +210,15 @@ func executeNativeProcess(
 			requested = timeout
 		}
 		timeoutMS := min(max(requested, 1), settings.MaxWaitTimeoutMs)
-		waited := manager.Wait(id, timeoutMS)
+		// Wait only returns on exit or its timeout, so a stopped run would sit in it.
+		result := make(chan ProcessWaitResult, 1)
+		go func() { result <- manager.Wait(id, timeoutMS) }()
+		var waited ProcessWaitResult
+		select {
+		case waited = <-result:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 		snapshot, found := manager.SnapshotWithLogs(id, stdoutLimits, stderrLimits, int(settings.MaxLineChars), settings.StripANSI)
 		if !found || snapshot == nil {
 			return processNotFound(execution.CallID, id, manager), nil
