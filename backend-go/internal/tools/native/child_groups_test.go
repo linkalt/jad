@@ -171,3 +171,46 @@ func runExecWith(ctx context.Context, root string, settings sessionfs.NativeExec
 		CallID: "exec-call", WorkspaceRoot: root, SessionDir: root,
 	})
 }
+
+// Mirrors the spawn in .jad/functions/exec.ts background mode (shell, ignored stdio, unref, not detached); that file is gitignored.
+func TestRunEndSweepCoversToolSmithBackgroundJob(t *testing.T) {
+	spawn := func(detached bool) string {
+		return "const cp = await import('node:child_process'); const c = cp.spawn('sleep 300', [], {shell: true, detached: " + strconv.FormatBool(detached) + ", stdio: ['ignore', 'ignore', 'ignore']}); c.unref(); return 'pid=' + c.pid;"
+	}
+	start := func(t *testing.T, ctx context.Context, detached, sweep bool) int {
+		root := t.TempDir()
+		settings := toolSmithTestSettings(t, root)
+		settings.Child.KillProcessGroup = "timeout_only"
+		settings.Child.KillChildrenOnRunEnd = sweep
+		return leftoverPID(t, runToolSmith(ctx, root, settings, smithRun(spawn(detached), nil)))
+	}
+	t.Run("survives the call, dead after the sweep", func(t *testing.T) {
+		ctx, sweep := WithChildGroups(context.Background())
+		pid := start(t, ctx, false, true)
+		if !alive(pid) {
+			t.Fatal("background job died with the call")
+		}
+		sweep()
+		if !waitDead(pid) {
+			t.Fatal("background job survived the run end")
+		}
+	})
+	t.Run("off keeps it", func(t *testing.T) {
+		ctx, sweep := WithChildGroups(context.Background())
+		pid := start(t, ctx, false, false)
+		sweep()
+		time.Sleep(300 * time.Millisecond)
+		if !alive(pid) {
+			t.Fatal("kill_children_on_run_end off still stopped the job")
+		}
+	})
+	t.Run("detached control escapes the sweep", func(t *testing.T) {
+		ctx, sweep := WithChildGroups(context.Background())
+		pid := start(t, ctx, true, true)
+		sweep()
+		time.Sleep(300 * time.Millisecond)
+		if !alive(pid) {
+			t.Fatal("detached job was swept; the control no longer shows why detached was removed")
+		}
+	})
+}
