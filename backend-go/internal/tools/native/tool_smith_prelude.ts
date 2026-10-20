@@ -67,12 +67,16 @@ function call(tool, args) {
       info: {},
     });
   }
-  return new Promise((resolve, reject) => {
-    const id = nextId++;
-    pending.set(id, { resolve, reject });
+  const id = nextId++;
+  const entry = {};
+  entry.promise = new Promise((resolve, reject) => {
+    entry.resolve = resolve;
+    entry.reject = reject;
+    pending.set(id, entry);
     const frame = { id, token: process.env.TOOL_SMITH_TOKEN, tool, arguments: args === undefined ? {} : args };
     connect().write(JSON.stringify(frame) + "\n");
   });
+  return entry.promise;
 }
 
 export const tools = new Proxy(
@@ -131,6 +135,7 @@ export async function deliver(body) {
     console.error(error && error.stack ? error.stack : String(error));
     process.exitCode = 1;
   } finally {
+    await Promise.allSettled([...pending.values()].map((entry) => entry.promise));
     if (socket) socket.destroy();
   }
 }

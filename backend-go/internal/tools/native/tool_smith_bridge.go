@@ -443,9 +443,6 @@ func (b *toolSmithBridge) handleFrame(line []byte) bridgeResponse {
 	b.stats.calls++
 	sequence := b.stats.calls
 	b.stats.perTool[request.Tool]++
-	if writes {
-		b.stats.writes++
-	}
 	b.statsMu.Unlock()
 
 	started := time.Now()
@@ -467,6 +464,9 @@ func (b *toolSmithBridge) handleFrame(line []byte) bridgeResponse {
 		response = b.nestedResponse(id, output)
 	}
 	b.statsMu.Lock()
+	if writes && err == nil && response.Status != string(tools.StatusBlocked) && response.Status != string(tools.StatusInvalidInput) {
+		b.stats.writes++
+	}
 	b.stats.bytes += int64(len(response.Content))
 	b.stats.duration += time.Since(started)
 	b.statsMu.Unlock()

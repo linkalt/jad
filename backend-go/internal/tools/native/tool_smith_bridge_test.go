@@ -321,6 +321,47 @@ return r.status + ':' + r.ok + ':' + r.info.error_code;`)
 	}
 }
 
+func TestToolSmithBridgeCountsOnlyExecutedWrites(t *testing.T) {
+	denied := func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
+		return tools.ApprovalVerdict{Code: tools.ApprovalDenied, Reason: "declined"}
+	}
+	allowed := func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
+		return tools.ApprovalVerdict{Allowed: true}
+	}
+	for name, tc := range map[string]struct {
+		approve func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict
+		writes  string
+	}{"denied": {denied, "0"}, "allowed": {allowed, "1"}} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			write := bridgeTestTool(t, "write", false, func(map[string]any) string { return "w" })
+			write.Approval = tools.ApprovalAsk
+			execution := tools.ExecutionContext{RequestApproval: tc.approve}
+			result := runWithBridge(context.Background(), root, bridgeSettings(t, root, "write"), bridgeNested(write), execution, `
+return (await tools.write({ path: 'f', content: 'x' })).status;`)
+			if execField(result, "nested_calls") != "1" || execField(result, "nested_writes") != tc.writes {
+				t.Fatalf("result:\n%s", result)
+			}
+		})
+	}
+}
+
+func TestToolSmithBridgeWaitsForUnawaitedNestedWrites(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "late.txt")
+	write := bridgeTestTool(t, "write", false, func(map[string]any) string {
+		time.Sleep(200 * time.Millisecond)
+		_ = os.WriteFile(target, []byte("x"), 0o600)
+		return "w"
+	})
+	result := runWithBridge(context.Background(), root, bridgeSettings(t, root, "write"), bridgeNested(write), tools.ExecutionContext{}, `
+tools.write({});
+return 1;`)
+	if _, err := os.Stat(target); err != nil || execField(result, "nested_writes") != "1" {
+		t.Fatalf("stat err=%v result:\n%s", err, result)
+	}
+}
+
 func TestToolSmithBridgeNilApprovalBlocksANestedAskCall(t *testing.T) {
 	root := t.TempDir()
 	write := bridgeTestTool(t, "write", false, func(map[string]any) string { return "w" })
