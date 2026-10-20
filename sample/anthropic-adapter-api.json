@@ -13,6 +13,12 @@
         "overloaded_error",
         "api_error"
       ]
+    },
+    "extra_body": {
+      "cache_control": {
+        "type": "ephemeral",
+        "ttl": "1h"
+      }
     }
   },
   "default_max_tokens": 384000,
