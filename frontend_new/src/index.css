@@ -29,3 +29,10 @@
 .astryx-code-block code *::highlight(astryx-variable) { color: var(--color-syntax-variable); }
 
 [data-catalog-row='open'] { cursor: pointer; }
+
+/*
+ * SideNavItem pads its children by --spacing-6 and has no prop for it. A
+ * profile row under a session takes the --spacing-2 step that a session takes
+ * under its category (SessionNavigation's VStack paddingInlineStart={2}).
+ */
+[role='group'][id$='-children'] > div { padding-inline-start: var(--spacing-2); }
