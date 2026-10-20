@@ -19,7 +19,7 @@ Pick a session in the left panel to start chatting. This page is shown only at s
 - **Checkpoints** in the side navigation lists what a run changed and lets you restore it.
 - **Notifications** collects activity from sessions you are not looking at.
 - **Prompt library** holds prompts, templates and skills you can insert into the box.
-- **Search sessions** opens a search over your sessions.
+- **Search profiles** opens a search over your profile rows, and opens the one you pick.
 
 ## Changing the setup
 

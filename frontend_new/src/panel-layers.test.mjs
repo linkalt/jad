@@ -49,7 +49,7 @@ test('the panels inside a pane opt into the pane layer, the app window does not'
     const source = readFileSync(new URL(`./components/${name}.tsx`, import.meta.url), 'utf8');
     assert.match(source, /<FloatingPanel\s*side="end"\s*layer="pane"/, `${name} floats inside its pane`);
   }
-  for (const name of ['NotificationPanel', 'CheckpointPanel', 'SessionSearchPanel', 'RunSettingsPanel', 'PanesPanel']) {
+  for (const name of ['NotificationPanel', 'CheckpointPanel', 'ProfileSearchPanel', 'RunSettingsPanel', 'PanesPanel']) {
     const source = readFileSync(new URL(`./components/${name}.tsx`, import.meta.url), 'utf8');
     assert.equal(source.includes('layer="pane"'), false, `${name} is part of the app's left window`);
   }

@@ -27,7 +27,7 @@ import {ProfileDrawer} from './components/ProfileDrawer';
 import {RunSettingsPanel} from './components/RunSettingsPanel';
 import {type QuoteAnchor, SelectionMenu} from './components/SelectionMenu';
 import {SessionNavigation} from './components/SessionNavigation';
-import {SessionSearchPanel} from './components/SessionSearchPanel';
+import {ProfileSearchPanel} from './components/ProfileSearchPanel';
 import {StateContextDrawer} from './components/StateContextDrawer';
 import {TokenRequestDialog} from './components/TokenRequestDialog';
 import {isActiveTranscriptUserMessage} from './components/TranscriptRow';
@@ -3657,12 +3657,15 @@ function App({
           }
         />
         {leftPanel === 'search' && (
-          <SessionSearchPanel
+          <ProfileSearchPanel
             region={leftPanelRegion}
+            groups={listGroups}
             sessions={sessions}
-            activeSessionId={activeSessionId}
-            onSelectSession={sessionId => {
-              selectSession(sessionId);
+            rowTurns={rowTurns}
+            runningViewKeys={runningViewKeys}
+            activeViewKey={readmeInPane ? '' : activeViewKey}
+            onSelectView={nextViewKey => {
+              activateView(nextViewKey);
               closeLeftPanel();
             }}
             onClose={closeLeftPanel}

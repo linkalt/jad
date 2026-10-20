@@ -153,10 +153,10 @@ export function SessionNavigation({
       }
       footerIcons={
         <FooterStack align="center" justify="between" gap={isCollapsed ? 1 : 0} width="100%">
-          <Tooltip content="Search sessions" placement={footerTooltipPlacement}>
+          <Tooltip content="Search profiles" placement={footerTooltipPlacement}>
             <IconButton
               data-panel-toggle=""
-              label="Search sessions"
+              label="Search profiles"
               icon={<Icon icon="search" size="sm" />}
               variant={openLeftPanel === 'search' ? 'secondary' : 'ghost'}
               size="sm"

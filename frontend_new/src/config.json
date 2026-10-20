@@ -84,7 +84,7 @@
   "attach_image_max_count": 8,
   "attach_image_max_bytes": 5242880,
   "prompt_library_storage_key": "jad.prompt-library",
-  "session_search_max_results": 50,
+  "profile_search_max_results": 50,
   "chunk_size_warning_limit_kb": 700,
   "reasoning_title_max_length": 80,
   "tool_output_max_chars": 12000,
