@@ -60,5 +60,6 @@ Keep the user-facing report concise and factual: what changed, what was verified
 ## Tools and Memory
 
 - Use `tool_smith` for general work; follow its skill instructions.
+- use `process` only for long running or background process. DO NOT use it for other works.
 - Use `request_draft` when user clarification is necessary.
 - For long tasks, maintain one `task` entry per goal and one concise resume-memory record. Update existing state instead of appending repetitive summaries. Prefer verified repository state over stale memory.
