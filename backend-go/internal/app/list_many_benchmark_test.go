@@ -4,13 +4,31 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"jad/backend-go/internal/sessionfs"
 )
+
+func backdateTree(t testing.TB, roots ...string) {
+	t.Helper()
+	old := time.Now().Add(-time.Hour)
+	for _, root := range roots {
+		err := filepath.WalkDir(root, func(path string, _ fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			return os.Chtimes(path, old, old)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 // newManySessionsResolver is a catalog-layout root with sessionCount sessions that all
 // use the same profile, model and toolset files, each with turnsPerSession turns.
@@ -56,6 +74,9 @@ func newManySessionsResolver(b testing.TB, sessionCount, turnsPerSession int) *R
 			b.Fatal(err)
 		}
 	}
+	// A settings stamp never trusts a file changed within the last two seconds, so the
+	// fixture is dated like a store that has been there for a while.
+	backdateTree(b, root)
 	config, err := LoadConfig(sessionfs.LoadOptions{
 		WorkingDir: root, RootSettingPath: filepath.Join(root, "setting.json"),
 		Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_KEY": "k"},

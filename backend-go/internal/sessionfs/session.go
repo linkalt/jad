@@ -211,6 +211,8 @@ type SessionConfig struct {
 	FrontCompaction       json.RawMessage
 	FrontCompactionConfig FrontCompactionSettings
 	Model                 Model
+	// PromptDocuments are the absolute paths of the files read into Model.PromptText.
+	PromptDocuments []string
 }
 
 // LoadSessionSettings reads and validates a catalog-layout session (session.json plus the
@@ -481,7 +483,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	promptRole, promptText, err := loadPrompt(setting, profileSettings, cwd, settingPath)
+	promptRole, promptText, promptDocuments, err := loadPrompt(setting, profileSettings, cwd, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -614,7 +616,8 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		// The model file is read by WithModel, so a settings-only caller is not
 		// affected by a missing or malformed model.json. Only the prompt, which
 		// comes from the settings, is filled in here.
-		Model: Model{PromptRole: promptRole, PromptText: promptText},
+		Model:           Model{PromptRole: promptRole, PromptText: promptText},
+		PromptDocuments: promptDocuments,
 	}, nil
 }
 
@@ -1042,23 +1045,23 @@ func oauthAuthFilePath(fields map[string]json.RawMessage, path string) (string, 
 	return filepath.Clean(expanded), nil
 }
 
-func loadPrompt(setting, profile map[string]json.RawMessage, cwd, path string) (string, string, error) {
+func loadPrompt(setting, profile map[string]json.RawMessage, cwd, path string) (string, string, []string, error) {
 	role := "system"
 	if raw, ok := setting["prompt_role"]; ok {
 		if err := json.Unmarshal(raw, &role); err != nil || (role != "system" && role != "developer") {
-			return "", "", configError("%s: prompt_role must be system or developer", path)
+			return "", "", nil, configError("%s: prompt_role must be system or developer", path)
 		}
 	}
 	var documents []string
 	if raw, ok := setting["prompt_documents"]; ok {
 		if err := json.Unmarshal(raw, &documents); err != nil || documents == nil {
-			return "", "", configError("%s: prompt_documents must be an array", path)
+			return "", "", nil, configError("%s: prompt_documents must be an array", path)
 		}
 	}
 	if raw, ok := profile["prompt_documents"]; ok {
 		var profileDocuments []string
 		if err := json.Unmarshal(raw, &profileDocuments); err != nil || profileDocuments == nil {
-			return "", "", configError("%s: paths.profiles prompt_documents must be an array", path)
+			return "", "", nil, configError("%s: paths.profiles prompt_documents must be an array", path)
 		}
 		documents = append(documents, profileDocuments...)
 	}
@@ -1066,35 +1069,38 @@ func loadPrompt(setting, profile map[string]json.RawMessage, cwd, path string) (
 	if raw, ok := profile["instructions"]; ok {
 		text, valid := nonEmptyJSONString(raw)
 		if !valid {
-			return "", "", configError("%s: paths.profiles instructions must be a non-empty string", path)
+			return "", "", nil, configError("%s: paths.profiles instructions must be a non-empty string", path)
 		}
 		texts = append(texts, text)
 	}
+	var paths []string
 	for index, document := range documents {
-		contents, err := readPromptDocument(document, index, "prompt_documents", cwd, path)
+		contents, resolved, err := readPromptDocument(document, index, "prompt_documents", cwd, path)
 		if err != nil {
-			return "", "", err
+			return "", "", nil, err
 		}
 		texts = append(texts, contents)
+		paths = append(paths, resolved)
 	}
-	return role, strings.Join(texts, "\n\n"), nil
+	return role, strings.Join(texts, "\n\n"), paths, nil
 }
 
 // readPromptDocument reads one prompt document: ~ is expanded and a relative path
 // resolves from cwd. field names the setting in errors.
-func readPromptDocument(document string, index int, field, cwd, path string) (string, error) {
+func readPromptDocument(document string, index int, field, cwd, path string) (contents, resolvedPath string, err error) {
 	if strings.TrimSpace(document) == "" {
-		return "", configError("%s: %s[%d] must be a non-empty string", path, field, index)
+		return "", "", configError("%s: %s[%d] must be a non-empty string", path, field, index)
 	}
 	resolved := expandHome(document)
 	if !filepath.IsAbs(resolved) {
 		resolved = filepath.Join(cwd, resolved)
 	}
-	contents, err := os.ReadFile(filepath.Clean(resolved))
+	resolved = filepath.Clean(resolved)
+	data, err := os.ReadFile(resolved)
 	if err != nil {
-		return "", configError("%s: %s[%d] could not be read: %s", path, field, index, resolved)
+		return "", "", configError("%s: %s[%d] could not be read: %s", path, field, index, resolved)
 	}
-	return string(contents), nil
+	return string(data), resolved, nil
 }
 
 func sessionCWD(setting map[string]json.RawMessage, fallback, path string) (string, error) {

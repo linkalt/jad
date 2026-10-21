@@ -34,6 +34,8 @@ type StateContextTrigger struct {
 	// MaxPromptBytes caps the text a user types when firing the user trigger; it is
 	// zero for every other trigger.
 	MaxPromptBytes int64
+	// PromptDocuments are the absolute paths of the files read into Prompt.
+	PromptDocuments []string
 }
 
 // StateContextSettings controls optional context snapshots derived at a trigger.
@@ -187,7 +189,7 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 	if int64(len(header)) > trigger.MaxBytes {
 		return StateContextTrigger{}, configError("%s: statecontext.header is larger than %s.max_bytes", settingPath, section)
 	}
-	if trigger.Prompt, err = stateContextTriggerPrompt(fields, section, settingPath, cwd); err != nil {
+	if trigger.Prompt, trigger.PromptDocuments, err = stateContextTriggerPrompt(fields, section, settingPath, cwd); err != nil {
 		return StateContextTrigger{}, err
 	}
 	if name == StateContextTriggerUser {
@@ -206,29 +208,30 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 
 // stateContextTriggerPrompt joins the inline prompt and the prompt documents of one
 // trigger. The documents are read now, so an edit applies from the next settings load.
-func stateContextTriggerPrompt(fields map[string]json.RawMessage, section, settingPath, cwd string) (string, error) {
-	var texts []string
+func stateContextTriggerPrompt(fields map[string]json.RawMessage, section, settingPath, cwd string) (string, []string, error) {
+	var texts, paths []string
 	if value, exists := fields["prompt"]; exists && strings.TrimSpace(string(value)) != "null" {
 		var prompt string
 		if err := json.Unmarshal(value, &prompt); err != nil || strings.TrimSpace(prompt) == "" {
-			return "", configError("%s: %s.prompt must be a non-empty string", settingPath, section)
+			return "", nil, configError("%s: %s.prompt must be a non-empty string", settingPath, section)
 		}
 		texts = append(texts, prompt)
 	}
 	if value, exists := fields["prompt_documents"]; exists && strings.TrimSpace(string(value)) != "null" {
 		var documents []string
 		if err := json.Unmarshal(value, &documents); err != nil || documents == nil {
-			return "", configError("%s: %s.prompt_documents must be an array of paths", settingPath, section)
+			return "", nil, configError("%s: %s.prompt_documents must be an array of paths", settingPath, section)
 		}
 		for index, document := range documents {
-			contents, err := readPromptDocument(document, index, section+".prompt_documents", cwd, settingPath)
+			contents, resolved, err := readPromptDocument(document, index, section+".prompt_documents", cwd, settingPath)
 			if err != nil {
-				return "", err
+				return "", nil, err
 			}
 			texts = append(texts, contents)
+			paths = append(paths, resolved)
 		}
 	}
-	return strings.Join(texts, "\n\n"), nil
+	return strings.Join(texts, "\n\n"), paths, nil
 }
 
 func checkStateContextProviders(

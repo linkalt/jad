@@ -61,6 +61,7 @@ type Resolver struct {
 	mu                sync.Mutex
 	settingsMu        sync.Mutex
 	lockedConfigs     lockedConfigs
+	listSettingsCache listSettingsCache
 	stores            map[string]*storeEntry
 	profileTurnsMu    sync.Mutex
 	profileTurnCounts map[string]profileTurnsEntry

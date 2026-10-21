@@ -158,6 +158,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 	}
 	candidates := make([]candidate, 0)
 	versions := make([]string, 0)
+	listed := make(map[string]struct{})
 	// The sessions of one list share their catalogs: each directory is scanned once.
 	scans := sessionfs.NewCatalogScans()
 	for _, root := range r.roots {
@@ -193,7 +194,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			}
 			// The list needs only the settings: a session whose model.json is
 			// missing or malformed is still listed, like in the TypeScript backend.
-			config, err := sessionfs.LoadSessionSettingsScoped(location, "", "", scans)
+			config, err := r.listSettings(location, scans)
 			if err != nil {
 				var configErr *sessionfs.ConfigError
 				if errors.As(err, &configErr) {
@@ -203,6 +204,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 				return httpapi.CatalogResponse{}, mapSessionError(err)
 			}
 			r.skipped.resolved(location.Reference)
+			listed[location.File] = struct{}{}
 			sessionRuns := httpapi.SessionRunSummaries{}
 			if runStates != nil {
 				sessionRuns = runStates.SessionRuns(location.Reference, config.Profile)
@@ -211,6 +213,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			versions = append(versions, location.Reference+":"+sessionVersionForCatalog(location, config, r.catalog.MaxInlinePartBytes, sessionRuns)+profileTranscriptStamps(location, config))
 		}
 	}
+	r.listSettingsCache.keepOnly(listed)
 	sort.Strings(versions)
 	etag := makeETag(strings.Join(versions, "|"))
 	if httpapi.ETagMatches(ifNoneMatch, etag) {

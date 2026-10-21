@@ -75,6 +75,9 @@ func (r *Resolver) DeleteSessionConfig(ctx context.Context, reference, ifMatch s
 	if stateDir != "" {
 		r.forgetStores(stateDir)
 	}
+	if locateErr == nil {
+		r.listSettingsCache.drop(location.File)
+	}
 	if locateErr == nil && (err == nil || sessionFileGone(location.File)) {
 		r.releaseSessionChildren(location.File)
 	}
