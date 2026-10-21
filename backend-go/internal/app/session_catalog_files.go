@@ -92,7 +92,9 @@ func sessionFileGone(file string) bool {
 }
 
 // releaseSessionChildren stops the MCP server processes and the managed processes that
-// belong to the deleted session file. Without it they would run until the server stops,
+// belong to the deleted session file, and drops the task, memory and fetch stores no other
+// session uses. A store held by a run that outlives the delete keeps working; a later
+// access builds a new one over the same files. Without it they would run until the server stops,
 // with no session left to reach them. A session created again under the same name gets
 // new managers.
 func (r *Resolver) releaseSessionChildren(settingPath string) {
@@ -118,7 +120,31 @@ func (r *Resolver) releaseSessionChildren(settingPath string) {
 			delete(r.processSessions, key)
 		}
 	}
+	var fetchStores []*native.FetchStore
+	for key, sessions := range r.storeSessions {
+		if _, used := sessions[settingPath]; !used {
+			continue
+		}
+		delete(sessions, settingPath)
+		if len(sessions) > 0 {
+			continue
+		}
+		delete(r.storeSessions, key)
+		kind, storageKey, _ := strings.Cut(key, "\x00")
+		switch kind {
+		case "task":
+			delete(r.taskStores, storageKey)
+		case "memory":
+			delete(r.memoryStores, storageKey)
+		case "fetch":
+			fetchStores = append(fetchStores, r.fetchStores[storageKey])
+			delete(r.fetchStores, storageKey)
+		}
+	}
 	r.mu.Unlock()
+	for _, store := range fetchStores {
+		store.Close()
+	}
 	for _, manager := range mcpManagers {
 		_ = manager.Close()
 	}

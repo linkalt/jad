@@ -75,8 +75,11 @@ type Resolver struct {
 	taskStores       map[string]*native.TaskStore
 	memoryStores     map[string]*native.MemoryStore
 	fetchStores      map[string]*native.FetchStore
-	mutationLock     *native.PathLocks
-	closed           bool
+	// storeSessions lists the session files that use each task, memory and fetch store,
+	// keyed by kind and storage key, so deleting the last of them can release the store.
+	storeSessions map[string]map[string]struct{}
+	mutationLock  *native.PathLocks
+	closed        bool
 
 	// profileRuns registers profile_message runs in the HTTP run registry; nil means no tracking.
 	profileRuns atomic.Pointer[httpapi.ProfileRunStarter]
@@ -180,6 +183,7 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		taskStores:        make(map[string]*native.TaskStore),
 		memoryStores:      make(map[string]*native.MemoryStore),
 		fetchStores:       make(map[string]*native.FetchStore),
+		storeSessions:     make(map[string]map[string]struct{}),
 		mutationLock:      native.NewPathLocks(),
 		openStore:         openSharedSession,
 
@@ -615,11 +619,13 @@ func (r *Resolver) sharedTaskStore(config sessionfs.SessionConfig) *native.TaskS
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if store := r.taskStores[storageKey]; store != nil {
+		r.noteStoreSession("task", storageKey, config.SettingPath)
 		return store
 	}
 	if r.closed {
 		return nil
 	}
+	r.noteStoreSession("task", storageKey, config.SettingPath)
 	store := native.NewTaskStore(storageKey)
 	r.taskStores[storageKey] = store
 	return store
@@ -633,11 +639,13 @@ func (r *Resolver) sharedMemoryStore(config sessionfs.SessionConfig) *native.Mem
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if store := r.memoryStores[storageKey]; store != nil {
+		r.noteStoreSession("memory", storageKey, config.SettingPath)
 		return store
 	}
 	if r.closed {
 		return nil
 	}
+	r.noteStoreSession("memory", storageKey, config.SettingPath)
 	store := native.NewMemoryStore(storageKey, r.mutationLock)
 	r.memoryStores[storageKey] = store
 	return store
@@ -651,14 +659,28 @@ func (r *Resolver) sharedFetchStore(config sessionfs.SessionConfig) *native.Fetc
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if store := r.fetchStores[storageKey]; store != nil {
+		r.noteStoreSession("fetch", storageKey, config.SettingPath)
 		return store
 	}
 	if r.closed {
 		return nil
 	}
+	r.noteStoreSession("fetch", storageKey, config.SettingPath)
 	store := native.NewFetchStore(storageKey)
 	r.fetchStores[storageKey] = store
 	return store
+}
+
+// noteStoreSession records that a session file uses a task, memory or fetch store. The
+// caller holds r.mu.
+func (r *Resolver) noteStoreSession(kind, storageKey, settingPath string) {
+	key := kind + "\x00" + storageKey
+	sessions := r.storeSessions[key]
+	if sessions == nil {
+		sessions = make(map[string]struct{})
+		r.storeSessions[key] = sessions
+	}
+	sessions[filepath.Clean(settingPath)] = struct{}{}
 }
 
 // sharedMCPManager returns the MCP manager of one session and profile. A manager closes
