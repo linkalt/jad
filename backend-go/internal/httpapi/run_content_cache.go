@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"jad/backend-go/internal/logging"
@@ -44,6 +45,15 @@ type runContentCache struct {
 	fallback        bool
 	closed          bool
 	warned          bool
+	// total is the bytes appended so far. It is written under mu after the bytes are
+	// stored, so a reader that loads it knows that many bytes can be read back.
+	total atomic.Int64
+	// pins counts snapshot readers that need the data after Close; Close then only
+	// marks the cache closed and the last unpin finishes it. closeRemove and
+	// closeDeferred are guarded by mu.
+	pins          atomic.Int32
+	closeDeferred bool
+	closeRemove   bool
 	// logger receives the one-time degradation warning; nil discards it.
 	logger *slog.Logger
 }
@@ -81,6 +91,7 @@ func (c *runContentCache) Append(delta string) {
 	if c.closed {
 		return
 	}
+	defer c.total.Add(int64(len(delta)))
 	if c.fallback {
 		c.memory = append(c.memory, delta...)
 		return
@@ -120,12 +131,80 @@ func (c *runContentCache) Snapshot() string {
 	return string(content)
 }
 
+// Length is the bytes appended so far; SnapshotPrefix(Length()) reads them back.
+func (c *runContentCache) Length() int {
+	if c == nil {
+		return 0
+	}
+	return int(c.total.Load())
+}
+
+// Pin keeps the content readable by SnapshotPrefix until Unpin: a Close in between is
+// finished by the last Unpin. Pin must be called while the cache cannot yet have been
+// closed (the caller holds the lock that orders it before Close).
+func (c *runContentCache) Pin() {
+	if c != nil {
+		c.pins.Add(1)
+	}
+}
+
+func (c *runContentCache) Unpin() {
+	if c == nil || c.pins.Add(-1) != 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closeDeferred && c.pins.Load() == 0 {
+		c.closeDeferred = false
+		c.finishCloseLocked(c.closeRemove)
+	}
+}
+
+// SnapshotPrefix returns the first n bytes appended, the content as it was when
+// Length returned n. The cache must be pinned.
+func (c *runContentCache) SnapshotPrefix(n int) string {
+	if c == nil || n <= 0 {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
+	if !c.fallback && c.file != nil && c.flushPendingLocked() {
+		if int64(n) > c.fileBytes {
+			n = int(c.fileBytes)
+		}
+		content := make([]byte, n)
+		read, err := c.file.ReadAt(content, 0)
+		if err == nil || read == n {
+			return string(content)
+		}
+		c.switchToFallbackLocked(nil, err)
+	}
+	if n > len(c.memory) {
+		n = len(c.memory)
+	}
+	return string(c.memory[:n])
+}
+
 func (c *runContentCache) Close(removePartial bool) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.pins.Load() > 0 {
+		c.closed = true
+		c.closeDeferred = true
+		c.closeRemove = c.closeRemove || removePartial
+		return
+	}
+	c.finishCloseLocked(removePartial)
+}
+
+func (c *runContentCache) finishCloseLocked(removePartial bool) {
 	if c.timer != nil {
 		c.timer.Stop()
 		c.timer = nil

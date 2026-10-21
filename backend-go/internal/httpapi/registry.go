@@ -34,6 +34,21 @@ type eventQueue struct {
 	// leaves the budget when the client has read it (see next).
 	oversizedSnapshot bool
 	wake              chan struct{}
+
+	// While holding, push parks events in held instead of queueing them: a late
+	// subscriber is registered before its snapshot is built, and release puts the
+	// snapshot first and then replays held in arrival order. holdSuperseded means a
+	// full-state frame outgrew the hold budget and replaced what was held, so the
+	// snapshot being built is older than a frame that follows it and is dropped.
+	holding        bool
+	held           []heldEvent
+	heldBytes      int
+	holdSuperseded bool
+}
+
+type heldEvent struct {
+	event    streamEvent
+	snapshot bool
 }
 
 func newEventQueue(maxBytes int) *eventQueue {
@@ -50,8 +65,67 @@ func terminalEvent(name string) bool {
 func (q *eventQueue) push(event streamEvent, snapshot bool) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	return q.pushLocked(event, snapshot)
+}
+
+// startHold makes push park events until release. It is called before the queue is
+// registered with a run, so no event can arrive earlier.
+func (q *eventQueue) startHold() {
+	q.mu.Lock()
+	q.holding = true
+	q.mu.Unlock()
+}
+
+// release ends the hold: lead is queued first (the snapshot, dropped when a newer
+// full-state frame superseded it, then the small state frames of the same instant),
+// then every held event in the order it arrived. Both happen in one critical section,
+// so a concurrent push lands either in held or after the replay, never between.
+func (q *eventQueue) release(snapshot *streamEvent, state []streamEvent) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	held := q.held
+	superseded := q.holdSuperseded
+	q.held, q.heldBytes, q.holding, q.holdSuperseded = nil, 0, false, false
+	if q.closed {
+		return
+	}
+	if snapshot != nil && !superseded {
+		q.pushLocked(*snapshot, true)
+	}
+	for _, event := range state {
+		q.pushLocked(event, false)
+	}
+	for _, parked := range held {
+		if !q.pushLocked(parked.event, parked.snapshot) {
+			return
+		}
+	}
+}
+
+func (q *eventQueue) holdLocked(event streamEvent, snapshot bool) bool {
+	size := len(event.frame)
+	if size > q.maxBytes && snapshot {
+		q.held, q.heldBytes, q.holdSuperseded = []heldEvent{{event, true}}, 0, true
+		return true
+	}
+	if q.heldBytes+size > q.maxBytes && !(terminalEvent(event.name) && !snapshot) {
+		if !snapshot {
+			q.closeLocked()
+			return false
+		}
+		q.held, q.heldBytes, q.holdSuperseded = nil, 0, true
+	}
+	q.held = append(q.held, heldEvent{event, snapshot})
+	q.heldBytes += size
+	return true
+}
+
+func (q *eventQueue) pushLocked(event streamEvent, snapshot bool) bool {
 	if q.closed {
 		return false
+	}
+	if q.holding {
+		return q.holdLocked(event, snapshot)
 	}
 	if terminalEvent(event.name) {
 		// A terminal snapshot replaces what is still queued only when it does not
@@ -154,6 +228,7 @@ func (q *eventQueue) closeLocked() {
 	q.closed = true
 	q.queue = nil
 	q.bytes = 0
+	q.held, q.heldBytes = nil, 0
 	q.signalLocked()
 }
 
@@ -400,53 +475,107 @@ func (r *activeRun) summary() runSummary {
 	return runSummary{TurnID: r.turnID, StartedAt: r.startedAt, Status: r.status, Source: r.source, Caller: r.caller}
 }
 
+// subscribe attaches a client to the run's event stream.
+//
+// Invariant: the queue sees one gap-free, duplicate-free stream, in the order the run
+// published it. For a running run the queue is registered, and the point P of the
+// stream its snapshot describes is captured (latest message, content length, interaction,
+// retry and usage state), in one critical section of r.mu. Every event published after P
+// reaches the queue while it is holding, so it is parked in order; every event before P is
+// part of the captured state. The snapshot (content read, marshal) is then built without
+// r.mu, and release queues it first, then the small state frames, then the parked events,
+// all under the queue's own lock.
 func (r *activeRun) subscribe() *eventQueue {
+	pending := r.beginSubscribe()
+	pending.finish()
+	return pending.queue
+}
+
+// pendingSubscribe is a subscriber registered at a point P whose snapshot is not built yet.
+type pendingSubscribe struct {
+	run      *activeRun
+	queue    *eventQueue
+	running  bool
+	message  *webUIMessage
+	fallback *streamEvent
+	cache    *runContentCache
+	length   int
+	state    []streamEvent
+}
+
+func (r *activeRun) beginSubscribe() *pendingSubscribe {
 	queue := newEventQueue(r.registry.maxQueue)
+	pending := &pendingSubscribe{run: r, queue: queue}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.subscribers[queue] = struct{}{}
 	summary, _ := makeSSEEvent("run", runSummary{TurnID: r.turnID, StartedAt: r.startedAt, Status: r.status, Source: r.source, Caller: r.caller})
 	queue.push(summary, false)
-	if r.status == "running" {
-		if r.latestMessage != nil {
-			message := r.snapshotMessageLocked()
-			if event, err := makeSSEEvent("ui.message", map[string]any{"message": message}); err == nil {
-				queue.push(event, true)
-			} else if r.latest != nil {
-				queue.push(*r.latest, true)
-			}
-		} else if r.latest != nil {
-			queue.push(*r.latest, true)
-		}
-		if r.interactionKnown {
-			var pending any
-			if r.pendingInteraction != nil {
-				copy := r.pendingInteraction.Clone()
-				pending = &copy
-			}
-			if event, err := makeSSEEvent("interaction", map[string]any{"turn_id": r.turnID, "pending": pending}); err == nil {
-				queue.push(event, false)
-			}
-		}
-		if r.providerRetry != nil {
-			if event, err := makeSSEEvent("provider_retry", map[string]any{"turn_id": r.turnID, "waiting": r.providerRetry}); err == nil {
-				queue.push(event, false)
-			}
-		}
-		if r.latestUsage != nil {
-			queue.push(*r.latestUsage, false)
-		}
-	} else {
+	if r.status != "running" {
 		if r.latestUsage != nil {
 			queue.push(*r.latestUsage, false)
 		}
 		for _, event := range r.terminal {
 			queue.push(event, event.name == "ui.message" || event.name == "completed")
 		}
-		delete(r.subscribers, queue)
+		return pending
 	}
-	return queue
+
+	pending.running = true
+	queue.startHold()
+	r.subscribers[queue] = struct{}{}
+	if r.latestMessage != nil {
+		message := *r.latestMessage
+		message.Parts = append([]webui.Part(nil), message.Parts...)
+		pending.message = &message
+		if !r.contentFinal && r.content != nil && message.Text == "" {
+			pending.cache = r.content
+			pending.cache.Pin()
+			pending.length = pending.cache.Length()
+		}
+	}
+	pending.fallback = r.latest
+	if r.interactionKnown {
+		var interaction any
+		if r.pendingInteraction != nil {
+			copy := r.pendingInteraction.Clone()
+			interaction = &copy
+		}
+		if event, err := makeSSEEvent("interaction", map[string]any{"turn_id": r.turnID, "pending": interaction}); err == nil {
+			pending.state = append(pending.state, event)
+		}
+	}
+	if r.providerRetry != nil {
+		if event, err := makeSSEEvent("provider_retry", map[string]any{"turn_id": r.turnID, "waiting": r.providerRetry}); err == nil {
+			pending.state = append(pending.state, event)
+		}
+	}
+	if r.latestUsage != nil {
+		pending.state = append(pending.state, *r.latestUsage)
+	}
+	return pending
+}
+
+// finish builds the snapshot outside r.mu and releases the held events behind it.
+func (p *pendingSubscribe) finish() {
+	if !p.running {
+		return
+	}
+	defer p.cache.Unpin()
+	var snapshot *streamEvent
+	if p.message != nil {
+		message := *p.message
+		if p.cache != nil {
+			injectContent(&message, p.cache.SnapshotPrefix(p.length))
+		}
+		if event, err := makeSSEEvent("ui.message", map[string]any{"message": message}); err == nil {
+			snapshot = &event
+		}
+	}
+	if snapshot == nil {
+		snapshot = p.fallback
+	}
+	p.queue.release(snapshot, p.state)
 }
 
 func (r *activeRun) detach(queue *eventQueue) {
@@ -555,24 +684,29 @@ func (r *activeRun) snapshotMessageLocked() webUIMessage {
 	message := *r.latestMessage
 	message.Parts = append([]webui.Part(nil), message.Parts...)
 	if !r.contentFinal && r.content != nil && message.Text == "" {
-		text := r.content.Snapshot()
-		message.Text = text
-		if text != "" {
-			textPart := -1
-			for index := range message.Parts {
-				if message.Parts[index].Type == "text" {
-					textPart = index
-					break
-				}
-			}
-			if textPart < 0 {
-				message.Parts = append(message.Parts, webui.Part{Type: "text"})
-				textPart = len(message.Parts) - 1
-			}
-			message.Parts[textPart].Text = text
-		}
+		injectContent(&message, r.content.Snapshot())
 	}
 	return message
+}
+
+// injectContent puts the run's streamed text into message (whose Parts it owns).
+func injectContent(message *webUIMessage, text string) {
+	message.Text = text
+	if text == "" {
+		return
+	}
+	textPart := -1
+	for index := range message.Parts {
+		if message.Parts[index].Type == "text" {
+			textPart = index
+			break
+		}
+	}
+	if textPart < 0 {
+		message.Parts = append(message.Parts, webui.Part{Type: "text"})
+		textPart = len(message.Parts) - 1
+	}
+	message.Parts[textPart].Text = text
 }
 
 func (r *activeRun) setCommittedMessage(message webUIMessage) {
