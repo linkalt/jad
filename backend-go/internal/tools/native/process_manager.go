@@ -298,6 +298,9 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 		command.Stdin = reader
 		stdinReader, stdinWriter = reader, writer
 	}
+	// Wait returns this long after the shell exits even if a descendant still holds
+	// stdout or stderr; output captured so far is kept.
+	command.WaitDelay = bashDrainAfterExit
 	configureProcessGroup(command)
 	if err := command.Start(); err != nil {
 		if stdinReader != nil {
@@ -517,6 +520,10 @@ func (manager *ManagedProcessManager) Snapshot(id string) (*ProcessSnapshot, boo
 
 func (manager *ManagedProcessManager) waitForProcess(command *exec.Cmd, entry *managedProcess) {
 	waitErr := command.Wait()
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		// The command itself exited 0; only a descendant kept the pipes open.
+		waitErr = nil
+	}
 	entry.mu.Lock()
 	stdinWriter := entry.stdinWriter
 	entry.mu.Unlock()

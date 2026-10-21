@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -119,6 +120,27 @@ func TestManagedProcessStartStopCyclesLeaveNoGoroutines(t *testing.T) {
 		cycle()
 	}
 	requireNoGrowth(t, before, "30 managed process start/stop cycles")
+}
+
+// A shell that exits while a background child holds its pipes: the waiter and the
+// output copiers must be gone after the delay, not when the child ends.
+func TestManagedProcessWithDescendantLeavesNoGoroutines(t *testing.T) {
+	manager := NewProcessManager(t.TempDir())
+	defer manager.Close()
+	cycle := func() {
+		started, err := manager.Start(processTestRequest(t.TempDir(), "sleep 30 &", 1<<20))
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager.Wait(started.ID, 5000)
+		_ = syscall.Kill(-started.PID, syscall.SIGKILL)
+	}
+	cycle()
+	before := baselineCount()
+	for index := 0; index < 10; index++ {
+		cycle()
+	}
+	requireNoGrowth(t, before, "10 managed processes with a pipe-holding descendant")
 }
 
 // The wait action runs manager.Wait on its own goroutine so a stopped run is not held by
