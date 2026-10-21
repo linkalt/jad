@@ -186,6 +186,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 	var waitErr error
 	cleanupStarted := false
 	forcedFinish := false
+	var cleanupKillTimer *time.Timer
 
 	startDrain := func() {
 		if !readersFinished && drainTimer == nil {
@@ -211,7 +212,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 		cleanupStarted = true
 		if request.killProcessGroupWhenDone && !result.timedOut && !result.aborted {
 			signalProcessGroup(command, false)
-			time.AfterFunc(request.killGrace, func() { signalProcessGroup(command, true) })
+			cleanupKillTimer = killGroupAfter(command, request.killGrace)
 		}
 		startDrain()
 	}
@@ -266,6 +267,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 	if drainTimer != nil {
 		drainTimer.Stop()
 	}
+	cancelKillIfGroupGone(cleanupKillTimer, command)
 	if forcedFinish {
 		_ = stdoutReader.Close()
 		_ = stderrReader.Close()

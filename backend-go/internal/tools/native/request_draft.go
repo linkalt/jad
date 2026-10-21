@@ -222,18 +222,6 @@ func marshalRequestDraftJSON(value any) string {
 	return strings.TrimSuffix(buffer.String(), "\n")
 }
 
-func requestDraftChangedPaths(beforeRaw, afterRaw json.RawMessage) ([]string, error) {
-	before, err := decodeOrderedRequestDraft(beforeRaw)
-	if err != nil {
-		return nil, err
-	}
-	after, err := decodeOrderedRequestDraft(afterRaw)
-	if err != nil {
-		return nil, err
-	}
-	return changedRequestDraftPaths(before, after, ""), nil
-}
-
 type requestDraftJSONMember struct {
 	key   string
 	value *requestDraftJSONNode

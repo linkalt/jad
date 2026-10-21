@@ -867,33 +867,6 @@ func normalizeFrontCompaction(raw json.RawMessage, exists bool, path string) (js
 	return encoded, settings, nil
 }
 
-func keepBackupTurns(raw json.RawMessage, path string) (int, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return defaultKeepBackupTurns, nil
-	}
-	var compaction map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &compaction); err != nil || compaction == nil {
-		return 0, configError("%s: compaction must be an object", path)
-	}
-	keepbackupRaw, exists := compaction["keepbackup"]
-	if !exists || string(keepbackupRaw) == "null" {
-		return defaultKeepBackupTurns, nil
-	}
-	var keepbackup map[string]json.RawMessage
-	if err := json.Unmarshal(keepbackupRaw, &keepbackup); err != nil || keepbackup == nil {
-		return 0, configError("%s: compaction.keepbackup must be an object", path)
-	}
-	turnsRaw, exists := keepbackup["turns"]
-	if !exists || string(turnsRaw) == "null" {
-		return defaultKeepBackupTurns, nil
-	}
-	var turns int
-	if err := json.Unmarshal(turnsRaw, &turns); err != nil || turns < 0 || turns > maxKeepBackupTurns {
-		return 0, configError("%s: compaction.keepbackup.turns must be an integer between 0 and %d", path, maxKeepBackupTurns)
-	}
-	return turns, nil
-}
-
 func loadModel(path, promptRole, promptText string) (Model, error) {
 	fields, err := readSessionObject(path)
 	if err != nil {

@@ -318,10 +318,4 @@ func readBackupTail(ctx context.Context, path string, limit int) ([]webui.Transc
 	return tail, nil
 }
 
-func stringFieldRaw(raw json.RawMessage) string {
-	var value string
-	_ = json.Unmarshal(raw, &value)
-	return value
-}
-
 var _ = transcript.TurnStore{}

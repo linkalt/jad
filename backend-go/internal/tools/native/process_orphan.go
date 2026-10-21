@@ -2,6 +2,7 @@ package native
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -60,7 +61,9 @@ func (manager *ManagedProcessManager) writeOwnerRecord(id string, pid int) {
 	if writeErr != nil || closeErr != nil {
 		return
 	}
-	_ = os.Rename(temporaryPath, filepath.Join(directory, processOwnerFile))
+	if err := os.Rename(temporaryPath, filepath.Join(directory, processOwnerFile)); err != nil {
+		slog.Warn("process owner record not saved; a crash will only mark the process lost", "process", id, "error", err)
+	}
 }
 
 func (manager *ManagedProcessManager) readOwnerRecord(id string) (processOwnerRecord, bool) {

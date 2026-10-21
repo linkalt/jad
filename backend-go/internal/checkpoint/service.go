@@ -341,6 +341,7 @@ func writeFileAtomic(path string, data []byte, durability string) error {
 		return err
 	}
 	if durability == "strict" {
+		// Best effort: the file is already renamed into place; some filesystems cannot sync a directory.
 		if directory, err := os.Open(filepath.Dir(path)); err == nil {
 			_ = directory.Sync()
 			_ = directory.Close()

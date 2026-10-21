@@ -271,8 +271,7 @@ func (t *ResponseTurn) StageOutputItem(event []byte) error {
 	}
 	indexLine := makeIndexRecord(outputIndex, itemOffset, int64(len(itemLine)))
 	if _, err := appendStagingLine(t.indexPath, indexLine, t.store.journal.durability == DurabilityStrict); err != nil {
-		_ = truncateFile(t.itemsPath, itemOffset)
-		return fmt.Errorf("stage output index: %w", err)
+		return fmt.Errorf("stage output index: %w", joinTruncateError(err, truncateFile(t.itemsPath, itemOffset)))
 	}
 
 	t.itemIndex[outputIndex] = itemIndexEntry{
@@ -564,18 +563,26 @@ func appendStagingLine(path string, line []byte, sync bool) (int64, error) {
 	if writeErr == nil && sync {
 		writeErr = file.Sync()
 	}
+	var truncateErr error
 	if writeErr != nil {
-		_ = file.Truncate(offset)
+		truncateErr = file.Truncate(offset)
 	}
 	closeErr := file.Close()
 	if writeErr != nil {
-		return offset, writeErr
+		return offset, joinTruncateError(writeErr, truncateErr)
 	}
 	if closeErr != nil {
-		_ = truncateFile(path, offset)
-		return offset, closeErr
+		return offset, joinTruncateError(closeErr, truncateFile(path, offset))
 	}
 	return offset, nil
+}
+
+// joinTruncateError keeps a failed rollback visible: the staging file may then end in a partial line.
+func joinTruncateError(cause, truncateErr error) error {
+	if truncateErr == nil {
+		return cause
+	}
+	return errors.Join(cause, fmt.Errorf("truncate staging file: %w", truncateErr))
 }
 
 func truncateFile(path string, offset int64) error {

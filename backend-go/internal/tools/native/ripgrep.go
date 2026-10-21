@@ -185,6 +185,7 @@ func runRipgrep(
 	}
 	cleanupStarted := false
 	forceFinish := false
+	var cleanupKillTimer *time.Timer
 	startCleanup := func(reason string) {
 		if reason != "" {
 			setTruncated(reason)
@@ -194,7 +195,7 @@ func runRipgrep(
 		}
 		cleanupStarted = true
 		signalProcessGroup(command, false)
-		time.AfterFunc(killGrace, func() { signalProcessGroup(command, true) })
+		cleanupKillTimer = killGroupAfter(command, killGrace)
 		deadline := drainDeadline
 		if reason != "" {
 			deadline = killDeadline
@@ -233,6 +234,7 @@ func runRipgrep(
 	if deadlineTimer != nil {
 		deadlineTimer.Stop()
 	}
+	cancelKillIfGroupGone(cleanupKillTimer, command)
 	_ = stdoutReader.Close()
 	_ = stderrReader.Close()
 	<-stdoutDone

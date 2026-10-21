@@ -3,7 +3,6 @@ package anthropicadapter
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"sort"
 )
 
@@ -179,5 +178,3 @@ func compactJSON(raw []byte) json.RawMessage {
 	}
 	return buffer.Bytes()
 }
-
-func describe(format string, args ...any) string { return fmt.Sprintf(format, args...) }

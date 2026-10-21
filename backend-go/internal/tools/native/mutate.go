@@ -369,6 +369,7 @@ func writeAtomically(targetPath string, data []byte, mode os.FileMode, shouldSyn
 		return err
 	}
 	if shouldSync && parent != nil && parent.handle != nil {
+		// Best effort: the rename already happened; some filesystems cannot sync a directory.
 		_ = parent.handle.Sync()
 	}
 	return nil
