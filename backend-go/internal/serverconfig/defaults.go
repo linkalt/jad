@@ -7,6 +7,8 @@ const (
 	MaxToolStreamIntervalMS              = 60 * 1000
 	DefaultSSEHeartbeatIntervalMS        = 5_000
 	MaxSSEHeartbeatIntervalMS            = 5 * 60 * 1000
+	DefaultSSEWriteTimeoutMS             = 30_000
+	MaxSSEWriteTimeoutMS                 = 5 * 60 * 1000
 	DefaultReadHeaderTimeoutMS           = 60_000
 	MaxReadHeaderTimeoutMS               = 5 * 60 * 1000
 	DefaultIdleTimeoutMS                 = 5_000
@@ -19,9 +21,16 @@ const (
 	DefaultRunContentMaxIndexSegments    = 1024
 	DefaultProviderMemoryTraceIntervalMS = 250
 
-	MaxRunContentMemoryBytes     = 16 * 1024 * 1024
-	MaxRunContentFlushIntervalMS = 60 * 1000
-	MaxRunContentIndexSegments   = 65_536
+	MaxRunContentMemoryBytes = 16 * 1024 * 1024
+
+	// The in-memory fallback of the run content cache (server.run_content_fallback_max_bytes):
+	// once the partial file cannot be used, the streamed text is kept in memory up to this
+	// many bytes and the late-subscriber snapshot is cut there.
+	DefaultRunContentFallbackMaxBytes = 64 * 1024 * 1024
+	MinRunContentFallbackMaxBytes     = 1024
+	MaxRunContentFallbackMaxBytes     = 1024 * 1024 * 1024
+	MaxRunContentFlushIntervalMS      = 60 * 1000
+	MaxRunContentIndexSegments        = 65_536
 )
 
 // Images in a run request (server.max_request_images, server.max_request_image_bytes).

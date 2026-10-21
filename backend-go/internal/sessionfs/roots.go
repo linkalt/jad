@@ -51,6 +51,9 @@ type ServerSettings struct {
 	// SSEHeartbeatInterval is the gap between keep-alive frames on a quiet run
 	// stream; zero disables them.
 	SSEHeartbeatInterval time.Duration
+	// SSEWriteTimeout is how long one write to a run stream may take before the
+	// subscriber is dropped; zero disables the limit.
+	SSEWriteTimeout time.Duration
 	// ReadHeaderTimeout is how long a client has to send complete request
 	// headers; zero disables the limit.
 	ReadHeaderTimeout time.Duration
@@ -88,8 +91,10 @@ type ServerSettings struct {
 	MaxRequestFileBytes int64
 	// MaxConcurrentRuns is the most runs that may be running at once across all
 	// sessions; 0 means no cap.
-	MaxConcurrentRuns          int
-	RunContentMemoryBytes      int
+	MaxConcurrentRuns     int
+	RunContentMemoryBytes int
+	// RunContentFallbackMaxBytes caps the in-memory fallback of the run content cache.
+	RunContentFallbackMaxBytes int
 	RunContentWriteBatchBytes  int
 	RunContentFlushInterval    time.Duration
 	RunContentMaxIndexSegments int
@@ -163,6 +168,7 @@ func Defaults() ServerSettings {
 		ToolStreamInterval:         time.Duration(serverconfig.DefaultToolStreamIntervalMS) * time.Millisecond,
 		SSEMaxBufferedBytes:        1 << 20,
 		SSEHeartbeatInterval:       time.Duration(serverconfig.DefaultSSEHeartbeatIntervalMS) * time.Millisecond,
+		SSEWriteTimeout:            time.Duration(serverconfig.DefaultSSEWriteTimeoutMS) * time.Millisecond,
 		ReadHeaderTimeout:          time.Duration(serverconfig.DefaultReadHeaderTimeoutMS) * time.Millisecond,
 		IdleTimeout:                time.Duration(serverconfig.DefaultIdleTimeoutMS) * time.Millisecond,
 		ShutdownTimeout:            time.Duration(serverconfig.DefaultShutdownTimeoutMS) * time.Millisecond,
@@ -181,6 +187,7 @@ func Defaults() ServerSettings {
 		MaxConcurrentRuns:          serverconfig.DefaultMaxConcurrentRuns,
 		MaxRequestFileBytes:        serverconfig.DefaultMaxRequestFileBytes,
 		RunContentMemoryBytes:      serverconfig.DefaultRunContentMemoryBytes,
+		RunContentFallbackMaxBytes: serverconfig.DefaultRunContentFallbackMaxBytes,
 		RunContentWriteBatchBytes:  serverconfig.DefaultRunContentWriteBatchBytes,
 		RunContentFlushInterval:    time.Duration(serverconfig.DefaultRunContentFlushIntervalMS) * time.Millisecond,
 		RunContentMaxIndexSegments: serverconfig.DefaultRunContentMaxIndexSegments,
@@ -566,6 +573,11 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		return ServerSettings{}, err
 	}
 	settings.SSEHeartbeatInterval = time.Duration(heartbeat) * time.Millisecond
+	writeTimeout := int64(settings.SSEWriteTimeout / time.Millisecond)
+	if err := readInt("sse_write_timeout_ms", &writeTimeout, 0, serverconfig.MaxSSEWriteTimeoutMS); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.SSEWriteTimeout = time.Duration(writeTimeout) * time.Millisecond
 	readHeaderTimeout := int64(settings.ReadHeaderTimeout / time.Millisecond)
 	if err := readInt("read_header_timeout_ms", &readHeaderTimeout, 0, serverconfig.MaxReadHeaderTimeoutMS); err != nil {
 		return ServerSettings{}, err
@@ -649,6 +661,11 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		return ServerSettings{}, err
 	}
 	settings.RunContentMemoryBytes = int(runContentMemoryBytes)
+	runContentFallbackMaxBytes := int64(settings.RunContentFallbackMaxBytes)
+	if err := readInt("run_content_fallback_max_bytes", &runContentFallbackMaxBytes, serverconfig.MinRunContentFallbackMaxBytes, serverconfig.MaxRunContentFallbackMaxBytes); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.RunContentFallbackMaxBytes = int(runContentFallbackMaxBytes)
 	runContentWriteBatchBytes := int64(settings.RunContentWriteBatchBytes)
 	if err := readIntAs("run_content_write_batch_bytes", &runContentWriteBatchBytes, 2, serverconfig.MaxRunContentMemoryBytes, "an even safe integer", true); err != nil {
 		return ServerSettings{}, err

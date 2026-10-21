@@ -52,6 +52,13 @@
           "default": 102400,
           "description": "Maximum in-memory UTF-8 bytes retained for the active output item's content before concatenated content spills to one responses.partial file in the response-turn staging directory. 0 spills any non-empty content immediately."
         },
+        "run_content_fallback_max_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 1073741824,
+          "default": 67108864,
+          "description": "Go backend only. Cap on the in-memory copy of the streamed answer text that the run keeps when its responses.partial file cannot be created or written (disk full, read-only state directory). Past the cap the copy stops growing: a client that attaches late sees the first bytes followed by a truncation marker, and the server logs a warning. Clients already attached and the committed transcript are not affected."
+        },
         "run_content_write_batch_bytes": {
           "type": "integer",
           "minimum": 2,
@@ -87,6 +94,13 @@
           "maximum": 300000,
           "default": 5000,
           "description": "Gap between keep-alive frames on a run stream that has nothing else to send, such as during a long tool call. Keeps the browser from treating a quiet connection as dead. Keep it well below the browser's stall timeout. 0 disables the frames."
+        },
+        "sse_write_timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300000,
+          "default": 30000,
+          "description": "Go backend only. How long one write to a run stream (an event or a keep-alive frame) may take. A client that does not read for this long is disconnected and its queue released; it can reattach to a current snapshot. The deadline is renewed before every write, so a healthy long stream is not cut. 0 disables the limit."
         },
         "read_header_timeout_ms": {
           "type": "integer",

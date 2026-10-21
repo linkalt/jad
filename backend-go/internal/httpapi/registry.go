@@ -716,7 +716,9 @@ func (r *activeRun) setCommittedMessage(message webUIMessage) {
 		return
 	}
 	message.Parts = append([]webui.Part(nil), message.Parts...)
-	if message.Text == "" && r.content != nil {
+	// A truncated cache holds only the start of the text plus a marker; the committed
+	// message must never take that in place of the real text.
+	if message.Text == "" && r.content != nil && !r.content.Truncated() {
 		if text := r.content.Snapshot(); text != "" {
 			message.Text = text
 			if len(message.Parts) == 0 {

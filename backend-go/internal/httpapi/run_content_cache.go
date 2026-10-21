@@ -11,9 +11,15 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"jad/backend-go/internal/logging"
+	"jad/backend-go/internal/serverconfig"
 )
+
+// runContentTruncationMarker ends the text a late subscriber is given when the in-memory
+// fallback hit its cap, so the cut is visible. The committed message is not affected.
+const runContentTruncationMarker = "\n\n[... output truncated: the server could not keep the full streamed text; it is complete once the run finishes ...]"
 
 const runPartialOwnerSuffix = ".owner"
 
@@ -29,8 +35,12 @@ type partialOwner struct {
 // ephemeral partial file. The file is not transcript data and is removed at
 // run retirement; no per-item range index is needed for this single-part path.
 type runContentCache struct {
-	mu              sync.Mutex
-	memoryLimit     int
+	mu          sync.Mutex
+	memoryLimit int
+	// fallbackMax caps memory once fallback is set: past it new text is dropped from the
+	// cache (the live stream and the transcript still get it) and truncated is set.
+	fallbackMax     int
+	truncated       bool
 	writeBatchBytes int
 	flushInterval   time.Duration
 	partialPath     string
@@ -61,6 +71,7 @@ type runContentCache struct {
 func newRunContentCache(memoryLimit, writeBatchBytes int, flushInterval time.Duration) *runContentCache {
 	return &runContentCache{
 		memoryLimit:     memoryLimit,
+		fallbackMax:     serverconfig.DefaultRunContentFallbackMaxBytes,
 		writeBatchBytes: writeBatchBytes,
 		flushInterval:   flushInterval,
 	}
@@ -91,9 +102,9 @@ func (c *runContentCache) Append(delta string) {
 	if c.closed {
 		return
 	}
-	defer c.total.Add(int64(len(delta)))
+	defer c.recordAppendLocked(len(delta))
 	if c.fallback {
-		c.memory = append(c.memory, delta...)
+		c.appendMemoryLocked(delta)
 		return
 	}
 	if c.file == nil {
@@ -118,17 +129,80 @@ func (c *runContentCache) Snapshot() string {
 		c.timer = nil
 	}
 	if c.fallback || c.file == nil {
-		return string(c.memory)
+		return c.memoryTextLocked(len(c.memory))
 	}
 	if !c.flushPendingLocked() {
-		return string(c.memory)
+		return c.memoryTextLocked(len(c.memory))
 	}
 	content, err := c.readStableLocked()
 	if err != nil {
 		c.switchToFallbackLocked(nil, err)
-		return string(c.memory)
+		return c.memoryTextLocked(len(c.memory))
 	}
 	return string(content)
+}
+
+// memoryTextLocked is the first n bytes of memory, followed by the truncation marker
+// when n reaches the end of a truncated cache.
+func (c *runContentCache) memoryTextLocked(n int) string {
+	atEnd := n >= len(c.memory)
+	if atEnd {
+		n = len(c.memory)
+	}
+	if atEnd && c.truncated {
+		return string(c.memory[:n]) + runContentTruncationMarker
+	}
+	return string(c.memory[:n])
+}
+
+// recordAppendLocked keeps total equal to the bytes the cache can read back: in fallback
+// that is what memory holds, which the cap may have cut below what was appended.
+func (c *runContentCache) recordAppendLocked(appended int) {
+	if c.fallback {
+		c.total.Store(int64(len(c.memory)))
+		return
+	}
+	c.total.Add(int64(appended))
+}
+
+// appendMemoryLocked adds text to the fallback copy up to fallbackMax, cutting at a UTF-8
+// boundary. The first cut is logged; text after it is dropped.
+func (c *runContentCache) appendMemoryLocked(text string) {
+	if c.truncated {
+		return
+	}
+	room := c.fallbackMax - len(c.memory)
+	if len(text) <= room {
+		c.memory = append(c.memory, text...)
+		return
+	}
+	if room < 0 {
+		room = 0
+	}
+	for room > 0 && !utf8.RuneStart(text[room]) {
+		room--
+	}
+	c.memory = append(c.memory, text[:room]...)
+	c.markTruncatedLocked()
+}
+
+func (c *runContentCache) markTruncatedLocked() {
+	if c.truncated {
+		return
+	}
+	c.truncated = true
+	logging.Or(c.logger).Warn("run content cache truncated; late subscribers see a shortened text until the run finishes",
+		slog.Int("limit_bytes", c.fallbackMax))
+}
+
+// Truncated reports whether the fallback cap cut the text this cache can return.
+func (c *runContentCache) Truncated() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.truncated
 }
 
 // Length is the bytes appended so far; SnapshotPrefix(Length()) reads them back.
@@ -183,10 +257,7 @@ func (c *runContentCache) SnapshotPrefix(n int) string {
 		}
 		c.switchToFallbackLocked(nil, err)
 	}
-	if n > len(c.memory) {
-		n = len(c.memory)
-	}
-	return string(c.memory[:n])
+	return c.memoryTextLocked(n)
 }
 
 func (c *runContentCache) Close(removePartial bool) {
@@ -288,7 +359,7 @@ func (c *runContentCache) appendSpilledLocked(text string) {
 		room := c.writeBatchBytes - len(c.pending)
 		if room <= 0 {
 			if !c.flushPendingLocked() {
-				c.memory = append(c.memory, text...)
+				c.appendMemoryLocked(text)
 				return
 			}
 			room = c.writeBatchBytes
@@ -301,7 +372,7 @@ func (c *runContentCache) appendSpilledLocked(text string) {
 		text = text[n:]
 		if len(c.pending) >= c.writeBatchBytes || c.flushInterval <= 0 {
 			if !c.flushPendingLocked() {
-				c.memory = append(c.memory, text...)
+				c.appendMemoryLocked(text)
 				return
 			}
 		} else {
@@ -392,9 +463,12 @@ func (c *runContentCache) switchToFallbackLocked(extra []byte, cause error) {
 		c.warnLocked("read partial content for fallback: %v", readErr)
 		base = nil
 	}
-	c.memory = append(base, extra...)
+	c.memory = nil
 	c.pending = nil
 	c.fallback = true
+	c.appendMemoryLocked(string(base))
+	c.appendMemoryLocked(string(extra))
+	c.total.Store(int64(len(c.memory)))
 	c.closeFileLocked()
 	c.removePartialLocked()
 	c.warnLocked("partial content cache disabled; using memory fallback: %v", cause)

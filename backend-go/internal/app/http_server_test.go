@@ -138,3 +138,26 @@ func TestLoadConfigCarriesTimeoutsFromRootSettings(t *testing.T) {
 		t.Errorf("config timeouts = %v / %v", config.ReadHeaderTimeout, config.IdleTimeout)
 	}
 }
+
+func TestLoadConfigCarriesTheSSEWriteTimeoutAndFallbackCap(t *testing.T) {
+	load := func(server string) Config {
+		cwd := t.TempDir()
+		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return config
+	}
+	defaults := load(`{}`).HTTP
+	if defaults.SSEWriteTimeout != 30*time.Second || defaults.RunContentFallbackMaxBytes != 64<<20 {
+		t.Errorf("defaults = %v / %d, want 30s / 64 MiB", defaults.SSEWriteTimeout, defaults.RunContentFallbackMaxBytes)
+	}
+	set := load(`{"sse_write_timeout_ms":1500,"run_content_fallback_max_bytes":4096}`).HTTP
+	if set.SSEWriteTimeout != 1500*time.Millisecond || set.RunContentFallbackMaxBytes != 4096 {
+		t.Errorf("configured = %v / %d, want 1.5s / 4096", set.SSEWriteTimeout, set.RunContentFallbackMaxBytes)
+	}
+}

@@ -51,6 +51,9 @@ type Config struct {
 	// SSEHeartbeatInterval is the gap between keep-alive comment frames on a
 	// run stream with nothing else to send. Zero disables them.
 	SSEHeartbeatInterval time.Duration
+	// SSEWriteTimeout is how long one write to a run stream may take before the
+	// subscriber is dropped (server.sse_write_timeout_ms). Zero disables the limit.
+	SSEWriteTimeout time.Duration
 	// SessionDeleteStopWait is how long a session delete waits for the session's stopped runs.
 	SessionDeleteStopWait      time.Duration
 	RunStateRetention          time.Duration
@@ -72,10 +75,13 @@ type Config struct {
 	MaxRequestFileBytes int64
 	// MaxConcurrentRuns is the most runs running at once (server.max_concurrent_runs);
 	// a start beyond it is refused with 429. Zero means no cap.
-	MaxConcurrentRuns         int
-	RunContentMemoryBytes     int
-	RunContentWriteBatchBytes int
-	RunContentFlushInterval   time.Duration
+	MaxConcurrentRuns     int
+	RunContentMemoryBytes int
+	// RunContentFallbackMaxBytes caps the in-memory copy of the streamed text kept when the
+	// partial file is unusable. Zero means serverconfig.DefaultRunContentFallbackMaxBytes.
+	RunContentFallbackMaxBytes int
+	RunContentWriteBatchBytes  int
+	RunContentFlushInterval    time.Duration
 	// MaxIndexSegments is accepted for root-config parity; the current Go
 	// output_text cache merges into one part and does not need a range index.
 	RunContentMaxIndexSegments int
@@ -119,6 +125,8 @@ type Handler struct {
 	maxInlinePartBytes        int
 	memoryTrace               *memorytrace.Trace
 	runContentMemoryBytes     int
+	runContentFallbackMax     int
+	sseWriteTimeout           time.Duration
 	runContentWriteBatchBytes int
 	runContentFlushInterval   time.Duration
 	runs                      *runRegistry
@@ -193,6 +201,15 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	if config.RunContentMemoryBytes < 0 || config.RunContentMemoryBytes > serverconfig.MaxRunContentMemoryBytes {
 		return nil, errors.New("run content memory bytes must be between 0 and 16777216")
 	}
+	if config.RunContentFallbackMaxBytes == 0 {
+		config.RunContentFallbackMaxBytes = serverconfig.DefaultRunContentFallbackMaxBytes
+	}
+	if config.RunContentFallbackMaxBytes < serverconfig.MinRunContentFallbackMaxBytes || config.RunContentFallbackMaxBytes > serverconfig.MaxRunContentFallbackMaxBytes {
+		return nil, fmt.Errorf("run content fallback max bytes must be between %d and %d", serverconfig.MinRunContentFallbackMaxBytes, serverconfig.MaxRunContentFallbackMaxBytes)
+	}
+	if config.SSEWriteTimeout < 0 || config.SSEWriteTimeout > time.Duration(serverconfig.MaxSSEWriteTimeoutMS)*time.Millisecond {
+		return nil, fmt.Errorf("SSE write timeout must be between 0 and %d milliseconds", serverconfig.MaxSSEWriteTimeoutMS)
+	}
 	if config.RunContentWriteBatchBytes == 0 {
 		config.RunContentWriteBatchBytes = serverconfig.DefaultRunContentWriteBatchBytes
 	}
@@ -253,6 +270,8 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		maxInlinePartBytes:        config.MaxInlinePartBytes,
 		memoryTrace:               trace,
 		runContentMemoryBytes:     config.RunContentMemoryBytes,
+		runContentFallbackMax:     config.RunContentFallbackMaxBytes,
+		sseWriteTimeout:           config.SSEWriteTimeout,
 		runContentWriteBatchBytes: config.RunContentWriteBatchBytes,
 		runContentFlushInterval:   config.RunContentFlushInterval,
 		runs:                      newRunRegistry(config.RunStateRetention, config.SSEMaxBufferedBytes, config.MaxConcurrentRuns),
@@ -459,6 +478,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 
 func (h *Handler) attachContentCache(run *activeRun) {
 	contentCache := newRunContentCache(h.runContentMemoryBytes, h.runContentWriteBatchBytes, h.runContentFlushInterval)
+	contentCache.fallbackMax = h.runContentFallbackMax
 	contentCache.logger = h.logger.With(runLogAttrs(run)...)
 	run.setContentCache(contentCache)
 }
@@ -730,6 +750,32 @@ func (h *Handler) resolve(ctx context.Context, reference, profile, modelPath str
 func (h *Handler) serveSSE(w http.ResponseWriter, r *http.Request, run *activeRun, queue *eventQueue) {
 	defer run.detach(queue)
 	flusher := w.(http.Flusher)
+	// Each write gets its own deadline, so a peer that stops reading is dropped after
+	// sseWriteTimeout while a healthy stream of any length is not cut. The deadline is
+	// cleared on return because the connection may serve another request.
+	controller := http.NewResponseController(w)
+	armWriteDeadline := func() {}
+	chunk := 0
+	if h.sseWriteTimeout > 0 {
+		armWriteDeadline = func() { _ = controller.SetWriteDeadline(time.Now().Add(h.sseWriteTimeout)) }
+		chunk = sseWriteChunkBytes
+		defer func() { _ = controller.SetWriteDeadline(time.Time{}) }()
+	}
+	// writeFrame sends a frame in chunks with the deadline renewed before each, so it
+	// measures a reader making no progress, not the time a large frame takes to drain.
+	writeFrame := func(frame []byte) error {
+		for chunk > 0 && len(frame) > chunk {
+			armWriteDeadline()
+			if _, err := w.Write(frame[:chunk]); err != nil {
+				return err
+			}
+			frame = frame[chunk:]
+		}
+		armWriteDeadline()
+		_, err := w.Write(frame)
+		return err
+	}
+	armWriteDeadline()
 	h.writeSSEHeaders(w)
 	flusher.Flush()
 	for {
@@ -737,7 +783,7 @@ func (h *Handler) serveSSE(w http.ResponseWriter, r *http.Request, run *activeRu
 		if quiet {
 			// A comment frame carries no event, so a client parser ignores it; it
 			// only proves the connection is alive during a long silent tool call.
-			if _, err := w.Write(sseKeepAliveFrame); err != nil {
+			if err := writeFrame(sseKeepAliveFrame); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -746,7 +792,7 @@ func (h *Handler) serveSSE(w http.ResponseWriter, r *http.Request, run *activeRu
 		if !ok {
 			return
 		}
-		if _, err := w.Write(event.frame); err != nil {
+		if err := writeFrame(event.frame); err != nil {
 			return
 		}
 		flusher.Flush()
@@ -755,6 +801,9 @@ func (h *Handler) serveSSE(w http.ResponseWriter, r *http.Request, run *activeRu
 		}
 	}
 }
+
+// sseWriteChunkBytes is the most bytes written under one write deadline.
+const sseWriteChunkBytes = 64 << 10
 
 // sseKeepAliveFrame is the SSE comment sent on a quiet run stream.
 var sseKeepAliveFrame = []byte(": keep-alive\n\n")

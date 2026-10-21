@@ -132,6 +132,11 @@ func TestServerNumberRangeErrorsUseTheTypeScriptWording(t *testing.T) {
 		{"run_content_flush_interval_ms", "-1", "server.run_content_flush_interval_ms must be a safe integer between 0 and 60000"},
 		{"run_content_max_index_segments", "0", "server.run_content_max_index_segments must be a safe integer between 1 and 65536"},
 		{"sse_max_buffered_bytes", "1", "server.sse_max_buffered_bytes must be a safe integer between 1024 and 67108864"},
+		{"sse_write_timeout_ms", "-1", "server.sse_write_timeout_ms must be a safe integer between 0 and 300000"},
+		{"sse_write_timeout_ms", "300001", "server.sse_write_timeout_ms must be a safe integer between 0 and 300000"},
+		{"run_content_fallback_max_bytes", "1023", "server.run_content_fallback_max_bytes must be a safe integer between 1024 and 1073741824"},
+		{"run_content_fallback_max_bytes", "1073741825", "server.run_content_fallback_max_bytes must be a safe integer between 1024 and 1073741824"},
+		{"run_content_fallback_max_bytes", "0", "server.run_content_fallback_max_bytes must be a safe integer between 1024 and 1073741824"},
 		{"sse_heartbeat_interval_ms", "-1", "server.sse_heartbeat_interval_ms must be a safe integer between 0 and 300000"},
 		{"read_header_timeout_ms", "-1", "server.read_header_timeout_ms must be a safe integer between 0 and 300000"},
 		{"idle_timeout_ms", "-1", "server.idle_timeout_ms must be a safe integer between 0 and 3600000"},
@@ -704,6 +709,50 @@ func TestSessionDeleteStopWaitSettingDefaultsAndValidation(t *testing.T) {
 		_, err := load(`{"session_delete_stop_wait_ms":` + rejected + `}`)
 		if err == nil || !strings.Contains(err.Error(), "session_delete_stop_wait_ms") {
 			t.Errorf("Load(session_delete_stop_wait_ms=%s) error = %v, want a message naming the field", rejected, err)
+		}
+	}
+}
+
+func TestSSEWriteTimeoutAndFallbackCapDefaultsAndBounds(t *testing.T) {
+	defaults := Defaults()
+	if defaults.SSEWriteTimeout != 30*time.Second || defaults.RunContentFallbackMaxBytes != 64<<20 {
+		t.Fatalf("defaults: write timeout %v, fallback cap %d; want 30s and 64 MiB", defaults.SSEWriteTimeout, defaults.RunContentFallbackMaxBytes)
+	}
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	load := func(server string) (Config, error) {
+		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+	}
+	for _, accepted := range []struct {
+		server  string
+		timeout time.Duration
+		cap     int
+	}{
+		{`{}`, 30 * time.Second, 64 << 20},
+		{`{"sse_write_timeout_ms":null,"run_content_fallback_max_bytes":null}`, 30 * time.Second, 64 << 20},
+		{`{"sse_write_timeout_ms":0}`, 0, 64 << 20},
+		{`{"sse_write_timeout_ms":250}`, 250 * time.Millisecond, 64 << 20},
+		{`{"sse_write_timeout_ms":300000}`, 5 * time.Minute, 64 << 20},
+		{`{"run_content_fallback_max_bytes":1024}`, 30 * time.Second, 1024},
+		{`{"run_content_fallback_max_bytes":1073741824}`, 30 * time.Second, 1 << 30},
+	} {
+		config, err := load(accepted.server)
+		if err != nil {
+			t.Fatalf("Load(%s) error = %v", accepted.server, err)
+		}
+		if config.Server.SSEWriteTimeout != accepted.timeout || config.Server.RunContentFallbackMaxBytes != accepted.cap {
+			t.Errorf("Load(%s) = %v / %d, want %v / %d", accepted.server, config.Server.SSEWriteTimeout, config.Server.RunContentFallbackMaxBytes, accepted.timeout, accepted.cap)
+		}
+	}
+	for _, rejected := range []string{`{"sse_write_timeout_ms":1.5}`, `{"sse_write_timeout_ms":"30"}`, `{"run_content_fallback_max_bytes":"64"}`, `{"run_content_fallback_max_bytes":1.5}`} {
+		if _, err := load(rejected); err == nil {
+			t.Errorf("Load(%s) was accepted", rejected)
 		}
 	}
 }
