@@ -81,6 +81,7 @@ type Manager struct {
 	environment map[string]string
 	connections map[string]*connection
 	serverLocks map[string]*sync.Mutex
+	schemas     *schemaCache
 	closed      bool
 }
 
@@ -91,6 +92,7 @@ func NewManager(environment map[string]string) *Manager {
 		environment: cloneStringMap(environment),
 		connections: make(map[string]*connection),
 		serverLocks: make(map[string]*sync.Mutex),
+		schemas:     newSchemaCache(defaultSchemaCacheEntries),
 	}
 }
 
@@ -234,7 +236,7 @@ func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *co
 		if err != nil || !objectInputSchema(schema) {
 			return nil, configError(server.ConfigPath, "MCP tool %s/%s must provide an object inputSchema", server.ID, remote.Name)
 		}
-		validator, err := tools.CompileSchema(schema)
+		validator, err := m.schemas.get(schema)
 		if err != nil {
 			return nil, configError(server.ConfigPath, "invalid inputSchema for %s/%s: %v", server.ID, remote.Name, err)
 		}
