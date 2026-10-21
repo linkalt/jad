@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -68,78 +69,147 @@ func (c *connection) close() error {
 	return c.session.Close()
 }
 
+// maxConcurrentServerLoads bounds how many MCP servers one LoadTools call connects to and
+// lists at the same time.
+const maxConcurrentServerLoads = 8
+
 // Manager owns MCP client connections for one session and exposes their tools
-// through the common tool catalog contract.
+// through the common tool catalog contract. mu guards only the maps and the closed
+// flag; connecting and listing happen outside it.
 type Manager struct {
 	mu          sync.Mutex
 	environment map[string]string
 	connections map[string]*connection
+	serverLocks map[string]*sync.Mutex
 	closed      bool
 }
 
 // NewManager creates a session-scoped MCP manager using the provided process
 // environment for env_from and headers_from references.
 func NewManager(environment map[string]string) *Manager {
-	return &Manager{environment: cloneStringMap(environment), connections: make(map[string]*connection)}
+	return &Manager{
+		environment: cloneStringMap(environment),
+		connections: make(map[string]*connection),
+		serverLocks: make(map[string]*sync.Mutex),
+	}
 }
 
-// LoadTools refreshes the enabled MCP servers and returns their validated tools.
+type serverLoad struct {
+	tools []tools.Tool
+	err   error
+	done  bool
+}
+
+// LoadTools refreshes the enabled MCP servers and returns their validated tools in the
+// configured server order. Servers load concurrently; the error returned is the one the
+// first failing server in configured order produced.
 func (m *Manager) LoadTools(ctx context.Context, servers []sessionfs.MCPServerReference, cwd string) ([]tools.Tool, error) {
 	if ctx == nil {
 		return nil, errors.New("MCP tool loading context is required")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return nil, errors.New("MCP manager is closed")
-	}
-
 	enabledIDs := make(map[string]struct{}, len(servers))
+	enabled := make([]sessionfs.MCPServerReference, 0, len(servers))
 	for _, server := range servers {
 		if server.Enabled {
 			enabledIDs[server.ID] = struct{}{}
+			enabled = append(enabled, server)
 		}
 	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil, errors.New("MCP manager is closed")
+	}
+	var stale []*connection
 	for id, existing := range m.connections {
-		if _, enabled := enabledIDs[id]; enabled {
+		if _, ok := enabledIDs[id]; ok {
 			continue
 		}
 		delete(m.connections, id)
+		stale = append(stale, existing)
+	}
+	m.mu.Unlock()
+	for _, existing := range stale {
 		_ = existing.close()
 	}
 
+	results := make([]serverLoad, len(enabled))
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		resultsMu sync.Mutex
+		resolved  int
+		next      atomic.Int64
+		wg        sync.WaitGroup
+	)
+	finish := func(index int, serverTools []tools.Tool, err error) {
+		resultsMu.Lock()
+		defer resultsMu.Unlock()
+		results[index] = serverLoad{tools: serverTools, err: err, done: true}
+		for resolved < len(results) && results[resolved].done && results[resolved].err == nil {
+			resolved++
+		}
+		if resolved < len(results) && results[resolved].done {
+			cancel()
+		}
+	}
+	workers := min(len(enabled), maxConcurrentServerLoads)
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				index := int(next.Add(1) - 1)
+				if index >= len(enabled) {
+					return
+				}
+				if err := runCtx.Err(); err != nil {
+					finish(index, nil, err)
+					continue
+				}
+				serverTools, err := m.loadServer(runCtx, ctx, enabled[index], cwd)
+				finish(index, serverTools, err)
+			}
+		}()
+	}
+	wg.Wait()
+
 	loaded := make([]tools.Tool, 0)
-	for _, server := range servers {
-		if !server.Enabled {
-			continue
+	for _, result := range results {
+		if result.err != nil {
+			return nil, result.err
 		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		current, err := m.getConnection(ctx, server, cwd)
-		if err != nil {
-			return nil, err
-		}
-		listCtx, cancel := context.WithTimeout(ctx, current.timeout)
-		listed, err := current.listTools(listCtx)
-		cancel()
-		if err != nil {
+		loaded = append(loaded, result.tools...)
+	}
+	return loaded, nil
+}
+
+// loadServer connects to one server, lists its tools and validates them. A list failure
+// that only follows the cancellation of runCtx by an earlier server's failure leaves the
+// healthy connection in place.
+func (m *Manager) loadServer(runCtx, callerCtx context.Context, server sessionfs.MCPServerReference, cwd string) ([]tools.Tool, error) {
+	current, err := m.getConnection(runCtx, server, cwd)
+	if err != nil {
+		return nil, err
+	}
+	listCtx, cancel := context.WithTimeout(runCtx, current.timeout)
+	listed, err := current.listTools(listCtx)
+	cancel()
+	if err != nil {
+		if callerCtx.Err() != nil || runCtx.Err() == nil {
+			m.mu.Lock()
 			if m.connections[server.ID] == current {
 				delete(m.connections, server.ID)
 			}
+			m.mu.Unlock()
 			_ = current.close()
-			return nil, configError(server.ConfigPath, "failed to list tools from MCP server %s (%s)", server.ID, safeErrorType(err))
 		}
-		if listed == nil {
-			return nil, configError(server.ConfigPath, "MCP server %s returned an invalid tools/list result", server.ID)
-		}
-		serverTools, err := m.toolsFromList(server, current, listed.Tools)
-		if err != nil {
-			return nil, err
-		}
-		loaded = append(loaded, serverTools...)
+		return nil, configError(server.ConfigPath, "failed to list tools from MCP server %s (%s)", server.ID, safeErrorType(err))
 	}
-	return loaded, nil
+	if listed == nil {
+		return nil, configError(server.ConfigPath, "MCP server %s returned an invalid tools/list result", server.ID)
+	}
+	return m.toolsFromList(server, current, listed.Tools)
 }
 
 func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *connection, remoteTools []*mcpSDK.Tool) ([]tools.Tool, error) {
@@ -199,6 +269,10 @@ func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *co
 }
 
 func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerReference, cwd string) (*connection, error) {
+	serverLock := m.serverLock(server.ID)
+	serverLock.Lock()
+	defer serverLock.Unlock()
+
 	contents, err := os.ReadFile(server.ConfigPath)
 	if err != nil {
 		return nil, configError(server.ConfigPath, "could not read MCP server config: %v", err)
@@ -207,12 +281,22 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 	if err != nil {
 		return nil, err
 	}
-	if current := m.connections[server.ID]; current != nil && current.fingerprint == config.fingerprint {
-		return current, nil
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil, errors.New("MCP manager is closed")
 	}
-	if current := m.connections[server.ID]; current != nil {
+	existing := m.connections[server.ID]
+	if existing != nil && existing.fingerprint == config.fingerprint {
+		m.mu.Unlock()
+		return existing, nil
+	}
+	if existing != nil {
 		delete(m.connections, server.ID)
-		_ = current.close()
+	}
+	m.mu.Unlock()
+	if existing != nil {
+		_ = existing.close()
 	}
 
 	var transport mcpSDK.Transport
@@ -253,8 +337,26 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 		maxResultBytes:           config.maxResultBytes,
 		structuredContentCapture: structuredCapture,
 	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		_ = current.close()
+		return nil, errors.New("MCP manager is closed")
+	}
 	m.connections[server.ID] = current
+	m.mu.Unlock()
 	return current, nil
+}
+
+func (m *Manager) serverLock(id string) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lock := m.serverLocks[id]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		m.serverLocks[id] = lock
+	}
+	return lock
 }
 
 // Close shuts down all owned MCP sessions. It is safe to call more than once.
