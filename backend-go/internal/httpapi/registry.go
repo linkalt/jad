@@ -467,7 +467,7 @@ func (r *activeRun) publishMessage(message webUIMessage) error {
 	}
 	previous := r.latestMessage
 	r.mu.Unlock()
-	frames, latest, err := messageFrames(previous, message)
+	frames, err := messageFrames(previous, message)
 	if err != nil {
 		return err
 	}
@@ -478,13 +478,12 @@ func (r *activeRun) publishMessage(message webUIMessage) error {
 		return errors.New("run is not active")
 	}
 	if r.latestMessage != previous {
-		if frames, latest, err = messageFrames(r.latestMessage, message); err != nil {
+		if frames, err = messageFrames(r.latestMessage, message); err != nil {
 			return err
 		}
 	}
 	latestMessage := message
 	r.latestMessage = &latestMessage
-	r.latest = &latest
 	for _, event := range frames {
 		for queue := range r.subscribers {
 			if !queue.push(event, event.name == "ui.message") {
@@ -496,9 +495,8 @@ func (r *activeRun) publishMessage(message webUIMessage) error {
 }
 
 // messageFrames returns the SSE frames that take a client from previous to message
-// (the whole message when there is no previous one) and the frame a late subscriber
-// receives.
-func messageFrames(previous *webUIMessage, message webUIMessage) ([]streamEvent, streamEvent, error) {
+// (the whole message when there is no previous one).
+func messageFrames(previous *webUIMessage, message webUIMessage) ([]streamEvent, error) {
 	var updates []webui.StreamEvent
 	if previous == nil {
 		updates = []webui.StreamEvent{{Name: "ui.message", Data: map[string]any{"message": message}}}
@@ -509,15 +507,11 @@ func messageFrames(previous *webUIMessage, message webUIMessage) ([]streamEvent,
 	for _, update := range updates {
 		event, err := makeSSEEvent(update.Name, update.Data)
 		if err != nil {
-			return nil, streamEvent{}, err
+			return nil, err
 		}
 		frames = append(frames, event)
 	}
-	latest, err := makeSSEEvent("ui.message", map[string]any{"message": message})
-	if err != nil {
-		return nil, streamEvent{}, err
-	}
-	return frames, latest, nil
+	return frames, nil
 }
 
 func (r *activeRun) setContentCache(cache *runContentCache) {
@@ -600,10 +594,6 @@ func (r *activeRun) setCommittedMessage(message webUIMessage) {
 	}
 	r.latestMessage = &message
 	r.contentFinal = true
-	event, err := makeSSEEvent("ui.message", map[string]any{"message": message})
-	if err == nil {
-		r.latest = &event
-	}
 	cache := r.content
 	r.mu.Unlock()
 	if cache != nil {
