@@ -36,6 +36,8 @@ type layoutFixture struct {
 	cancelled chan struct{}
 	// script, when set, returns the JSON output item a request is answered with; "" keeps the plain "ok" message.
 	script func(model, body string) string
+	// usage, when set, is the JSON usage object every completed response carries.
+	usage string
 	// server is merged into the root setting's server object before the config is loaded.
 	server map[string]any
 }
@@ -60,7 +62,7 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 		if f.captureBodies {
 			f.bodies = append(f.bodies, string(raw))
 		}
-		hold, reached, cancelled, script := f.hold, f.reached, f.cancelled, f.script
+		hold, reached, cancelled, script, usage := f.hold, f.reached, f.cancelled, f.script, f.usage
 		f.mu.Unlock()
 		if hold {
 			reached <- struct{}{}
@@ -86,7 +88,7 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.output_item.done\",\"output_index\":%d,\"item\":%s}\n\n", index, one)
 		}
 		for _, event := range []string{
-			`{"type":"response.completed","response":{"id":"r","status":"completed","model":"` + request.Model + `","output":[]}}`,
+			`{"type":"response.completed","response":{"id":"r` + fmt.Sprint(len(f.models)) + `","status":"completed","model":"` + request.Model + `",` + usage + `"output":[]}}`,
 			"[DONE]",
 		} {
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
