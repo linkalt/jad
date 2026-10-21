@@ -12,13 +12,17 @@ import {
   profileMessageRunLabel,
   rowHasRunningRun,
   rowProfileMessageCaller,
+  rowDot,
   rowUiState,
+  sessionLevelDot,
+  type DotMark,
   type SessionListGroup,
   type SessionListRow,
   rowTurnCount,
   viewLabel,
 } from '../session-views';
 import {RowContextMenu, type RowMenuTarget} from './RowContextMenu';
+import {sessionDotXstyle} from './session-dot';
 
 const styles = stylex.create({
   /**
@@ -103,6 +107,10 @@ export function SessionGroupList({
     isRunning: boolean = rowHasRunningRun(row, session, runningViewKeys),
   ) => {
     const state = rowUiState(row, session, isRunning);
+    // A session with no profile rows draws this same row as its own label, and a
+    // session label wears the session fill: its dot says "session", not a run
+    // state its rows already report.
+    const dot: DotMark = isChild ? rowDot(state) : sessionLevelDot(state);
     const turns = rowTurnCount(row, session, rowTurns);
     // The visible label of a child is the profile; its accessible names carry the
     // session too, because the same profile name repeats in every group.
@@ -143,7 +151,11 @@ export function SessionGroupList({
               </Tooltip>
             )
           ) : (
-            <StatusDot variant={state} label={`${fullLabel} ${state}`} />
+            <StatusDot
+              variant={dot.variant}
+              label={`${fullLabel} ${dot.word}`}
+              xstyle={sessionDotXstyle(dot)}
+            />
           )
         }
         endContent={
@@ -188,6 +200,7 @@ export function SessionGroupList({
         }
         const hasRunning = groupHasRunningRun(group, session, runningViewKeys);
         const state: SessionUiState = hasRunning ? 'accent' : session.state;
+        const dot = sessionLevelDot(state);
         // A profile row's menu is rendered inside this group, next to the rows
         // it acts on: in the collapsed rail those rows live in the hover flyout,
         // so a menu mounted outside it would sit in a second layer, take the
@@ -208,7 +221,11 @@ export function SessionGroupList({
               hasRunning ? (
                 <Spinner size="sm" aria-label={`${group.title} running`} />
               ) : (
-                <StatusDot variant={state} label={`${group.title} ${state}`} />
+                <StatusDot
+                  variant={dot.variant}
+                  label={`${group.title} ${dot.word}`}
+                  xstyle={sessionDotXstyle(dot)}
+                />
               )
             }
             onContextMenu={event => {

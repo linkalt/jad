@@ -16,10 +16,13 @@
 import type {SessionRunStatus} from './api';
 import type {SessionUiState} from './session-run-status';
 import {
+  rowDot,
   rowHasRunningRun,
   rowTurnCount,
   rowUiState,
+  sessionLevelDot,
   viewLabel,
+  type DotMark,
   type SessionListGroup,
   type SessionListRow,
 } from './session-views.ts';
@@ -47,8 +50,10 @@ export type ProfileSearchRow = {
   sessionTitle: string;
   /** The count the rail's row shows, or undefined when it shows none. */
   turns: number | undefined;
-  /** The state the rail's dot shows. */
+  /** The run state the row reports, which its description prints. */
   state: SessionUiState;
+  /** The dot the rail draws for this row: a session label wears the session fill. */
+  dot: DotMark;
 };
 
 /**
@@ -64,14 +69,24 @@ export function profileSearchRows(
   rowTurns: Readonly<Record<string, number>>,
   runningViewKeys: ReadonlySet<string>,
 ): ProfileSearchRow[] {
-  const entry = (row: SessionListRow, session: ProfileSearchSession): ProfileSearchRow => ({
-    key: row.key,
-    label: row.label,
-    fullLabel: row.profile === undefined ? row.label : viewLabel(session.title, row.label),
-    sessionTitle: session.title,
-    turns: rowTurnCount(row, session, rowTurns),
-    state: rowUiState(row, session, rowHasRunningRun(row, session, runningViewKeys)),
-  });
+  const entry = (
+    row: SessionListRow,
+    session: ProfileSearchSession,
+    isSessionLabel: boolean,
+  ): ProfileSearchRow => {
+    const state = rowUiState(row, session, rowHasRunningRun(row, session, runningViewKeys));
+    return {
+      key: row.key,
+      label: row.label,
+      fullLabel: row.profile === undefined ? row.label : viewLabel(session.title, row.label),
+      sessionTitle: session.title,
+      turns: rowTurnCount(row, session, rowTurns),
+      state,
+      // From the rail's own level rule: a session with no profile rows is a session
+      // label, so its dot wears the session fill rather than a run state’s colour.
+      dot: isSessionLabel ? sessionLevelDot(state) : rowDot(state),
+    };
+  };
   const rows: ProfileSearchRow[] = [];
   for (const group of groups) {
     const session = sessions.find(candidate => candidate.id === group.sessionRef);
@@ -79,11 +94,11 @@ export function profileSearchRows(
       continue;
     }
     if (group.children.length === 0) {
-      rows.push(entry(group.ownRow, session));
+      rows.push(entry(group.ownRow, session, true));
       continue;
     }
     for (const child of group.children) {
-      rows.push(entry(child, session));
+      rows.push(entry(child, session, false));
     }
   }
   return rows;

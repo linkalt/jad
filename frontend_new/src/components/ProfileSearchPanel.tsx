@@ -10,6 +10,7 @@ import {
 } from '../profile-search';
 import type {SessionListGroup} from '../session-views';
 import {FloatingPanel} from './FloatingPanel';
+import {sessionDotXstyle} from './session-dot';
 
 type ProfileSearchPanelProps = {
   region: ResizableRegion;
@@ -97,7 +98,11 @@ export function ProfileSearchPanel({
               label={row.label}
               description={profileSearchDescription(row)}
               startContent={
-                <StatusDot variant={row.state} label={`${row.fullLabel} ${row.state}`} />
+                <StatusDot
+                  variant={row.dot.variant}
+                  label={`${row.fullLabel} ${row.dot.word}`}
+                  xstyle={sessionDotXstyle(row.dot)}
+                />
               }
               endContent={row.key === activeViewKey ? <Token label="open" size="sm" /> : undefined}
               onClick={() => onSelectView(row.key)}

@@ -3,7 +3,7 @@ import {existsSync, readFileSync} from 'node:fs';
 import test from 'node:test';
 
 import {matchProfileSearchRows, profileSearchDescription, profileSearchRows} from './profile-search.ts';
-import {sessionListGroups, viewKey} from './session-views.ts';
+import {rowDot, sessionLevelDot, sessionListGroups, viewKey} from './session-views.ts';
 
 // The panel used to search sessions. The rows a user scrolls and clicks are
 // profiles, whose names appear in no session title, so typing one found nothing:
@@ -202,4 +202,82 @@ test('the reported defect: the rail names are findable', () => {
   const reviewer = liveRows.find(row => row.label === 'Reviewer1');
   assert.equal(reviewer.key, viewKey('proj', 'Reviewer1'), 'any other profile is its own view');
   assert.equal(profileSearchDescription(reviewer), 'Jad Harness Project · 43 turns · success');
+});
+
+test('the panel dot is the rail dot: run state for a row, session fill for a session label', () => {
+  // Profile rows keep the colour their own run gives them — including the stored
+  // default profile, whose row is the session's own view (`key` = the id).
+  assert.deepEqual(find(rows, BACKEND1).dot, {variant: 'success', word: 'success', fill: 'variant'});
+  assert.deepEqual(
+    find(rows, 'proj/alpha').dot,
+    {variant: 'success', word: 'success', fill: 'variant'},
+    'the stored default profile row is a row, not a session label',
+  );
+  // A session with no profile rows is a session label, so it wears the session fill.
+  assert.deepEqual(find(rows, 'proj/solo').dot, {variant: 'warning', word: 'warning', fill: 'variant'});
+  const idle = [{id: 'proj/idle', title: 'Idle Session', turns: 2, state: 'success'}];
+  const [idleRow] = profileSearchRows(sessionListGroups(idle), idle, {}, new Set());
+  assert.deepEqual(
+    idleRow.dot,
+    {variant: 'neutral', word: 'idle', fill: 'session'},
+    'a finished session wears the session fill, not the rows\' green',
+  );
+  assert.equal(idleRow.state, 'success', 'the row still reports its run state');
+  assert.equal(profileSearchDescription(idleRow), '2 turns · success', 'which the description keeps printing');
+  const failed = [{id: 'proj/bad', title: 'Bad Session', turns: 1, state: 'warning'}];
+  assert.equal(
+    profileSearchRows(sessionListGroups(failed), failed, {}, new Set())[0].dot.variant,
+    'warning',
+    'a failed session still shows amber at the session level',
+  );
+});
+
+test('one level mapping, used at all three session labels', () => {
+  const views = read('./session-views.ts');
+  const rail = read('./components/SessionGroupList.tsx');
+  const search = read('./profile-search.ts');
+  assert.equal(views.match(/export function sessionLevelDot\(/g).length, 1, 'one exported mapping');
+  assert.equal(rail.match(/sessionLevelDot\(state\)/g).length, 2, 'the group header and the session own row');
+  assert.equal(search.match(/sessionLevelDot\(state\)/g).length, 1, 'and the search row a session label becomes');
+  assert.ok(panel.includes('row.dot.variant'), 'the panel paints the row dot');
+  assert.equal(/variant=\{row\.state\}/.test(panel), false, 'not the raw run state');
+  assert.ok(panel.includes('description={profileSearchDescription(row)}'), 'the description keeps the real state');
+});
+
+test('the session fill is defined once, and it is the blue token', () => {
+  const dot = read('./components/session-dot.ts');
+  const rail = read('./components/SessionGroupList.tsx');
+  const views = read('./session-views.ts');
+  const search = read('./profile-search.ts');
+  // One place names the colour; the components and the pure models only say
+  // 'session' and ask for the paint, so the two cannot drift apart. Counted in
+  // code only, because the doc comment names the pale blues to say why they are
+  // not used.
+  const token = name => "colorVars['" + name + "']";
+  const uses = (source, name) => source.split(token(name)).length - 1;
+  assert.equal(uses(dot, '--color-icon-blue'), 1, 'the blue is named once, as a theme token');
+  assert.equal(uses(dot, '--color-background-blue'), 0, 'not the pale background blue');
+  assert.equal(uses(dot, '--color-border-blue'), 0, 'nor the pale border blue');
+  assert.ok(dot.includes('stylex.create('), 'it is a StyleX style, not an inline colour');
+  for (const [name, source] of [['rail', rail], ['panel', panel], ['search model', search], ['mark model', views]]) {
+    assert.equal(source.includes('--color-icon-blue'), false, name + ' names no colour of its own');
+  }
+  // One function chooses it, so neither component can hand-roll its own paint;
+  // and both draw it where a session label is drawn.
+  assert.ok(dot.includes('export function sessionDotXstyle('), 'one function chooses the paint');
+  assert.ok(
+    dot.includes("return mark.fill === 'session' ? styles.levelFill : undefined;"),
+    'and it hands the session fill to the session tone only',
+  );
+  const calls = source => source.split('sessionDotXstyle(').length - 1;
+  assert.equal(calls(rail), 2, 'the header and the childless own row');
+  assert.equal(calls(panel), 1, 'and the search panel');
+  // Runtime: both call sites resolve the same fill, because both read the mark's
+  // own tone rather than keeping their own copy of the rule.
+  const idle = [{id: 'proj/idle', title: 'Idle Session', turns: 2, state: 'success'}];
+  const [idleRow] = profileSearchRows(sessionListGroups(idle), idle, {}, new Set());
+  assert.equal(idleRow.dot.fill, 'session', 'the panel row asks for the session fill');
+  assert.equal(idleRow.dot.fill, sessionLevelDot('success').fill, 'which is what the rail label asks for');
+  assert.equal(rowDot('success').fill, 'variant', 'a profile row asks for its own variant colour');
+  assert.equal(find(rows, BACKEND1).dot.fill, 'variant', 'so the two levels never share a paint');
 });

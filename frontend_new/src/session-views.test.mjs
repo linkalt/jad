@@ -24,7 +24,10 @@ import {
   rowHasRunningRun,
   rowProfileMessageCaller,
   rowRunStatus,
+  rowDot,
   rowTurnCount,
+  rowUiState,
+  sessionLevelDot,
   sessionListRows,
   sessionRefOfViewKey,
   viewKey,
@@ -453,4 +456,31 @@ test('a group without listed profiles still aggregates a running non-default pro
   assert.equal(groupHasRunningRun(group, idle, new Set()), false);
   assert.equal(groupHasRunningRun(group, {...idle, runsByProfile: {...idle.runsByProfile, p2: {status: 'running'}}}, new Set()), true);
   assert.equal(groupHasRunningRun(group, idle, new Set([viewKey('a', 'p2')])), true);
+});
+
+test('a session label wears the session fill, and a failure still shows', () => {
+  // The rail draws two levels: profile rows, whose dot reports that profile's own
+  // run, and the session label above them. Both used to be painted from the same
+  // state, so a finished group and every row beneath it were one green.
+  assert.deepEqual(sessionLevelDot('success'), {variant: 'neutral', word: 'idle', fill: 'session'});
+  assert.deepEqual(sessionLevelDot('warning'), {variant: 'warning', word: 'warning', fill: 'variant'});
+  assert.deepEqual(sessionLevelDot('accent'), {variant: 'accent', word: 'accent', fill: 'variant'});
+  // The word has to agree with the colour: the level dot must not be announced as
+  // a state it is no longer showing.
+  assert.notEqual(sessionLevelDot('success').word, 'success', 'the level dot does not claim the hidden state');
+  // The tone is stated, not read off the variant name: the base variant is still
+  // `neutral` (grey), and what it paints is the session fill.
+  assert.equal(sessionLevelDot('success').variant, 'neutral', 'the base variant is the grey one');
+  assert.notDeepEqual(sessionLevelDot('success'), rowDot('success'), 'and it is not the row mark');
+  // A profile row keeps its run state, which is the whole point: the two levels
+  // must no longer agree in the normal, all-finished case.
+  const [group] = sessionListGroups([grouped('a', 'a', ['p1'], 'p1')]);
+  const finished = {activeProfile: 'p1', state: 'success', run: {status: 'completed'}};
+  assert.equal(rowUiState(group.children[0], finished, false), 'success');
+  assert.deepEqual(rowDot(rowUiState(group.children[0], finished, false)), {
+    variant: 'success',
+    word: 'success',
+    fill: 'variant',
+});
+  assert.notEqual(sessionLevelDot('success').fill, rowDot('success').fill, 'the two levels wear different paints');
 });

@@ -299,6 +299,54 @@ export function rowUiState(
 }
 
 /**
+ * The colour a rail dot can wear: the three run states, plus the base `neutral`
+ * variant, which a session's own label keeps while `fill` repaints it.
+ */
+export type DotVariant = SessionUiState | 'neutral';
+
+/**
+ * Which paint a dot wears: its variant’s own colour, or the session level’s
+ * fill. Explicit, so no call site has to read the tone off the variant name —
+ * the session level’s base variant is `neutral` (grey) while what it paints is
+ * not grey.
+ */
+export type DotFill = 'variant' | 'session';
+
+/** A dot’s colour, the word its label uses, and which paint it wears. */
+export type DotMark = {variant: DotVariant; word: SessionUiState | 'idle'; fill: DotFill};
+
+/** The mark a profile row shows: its own run state, in that state’s colour. */
+export function rowDot(state: SessionUiState): DotMark {
+  return {variant: state, word: state, fill: 'variant'};
+}
+
+/**
+ * The mark a session’s own label shows.
+ *
+ * The rail draws two levels: the rows are profiles, whose dot answers "what did
+ * this profile’s last run do", and the label above them answers only "this is
+ * the session". Painting both from the same state made a finished group and every
+ * row beneath it one green, so a session label wears the level fill instead —
+ * blue in the components, which paint `fill: 'session'` over the base variant.
+ * A failure keeps its warning there: a collapsed group must not lose the
+ * signal that something went wrong.
+ *
+ * Use this only where the label really is a session — a profile row, including
+ * the stored default profile whose row is the session’s own view, keeps
+ * `rowUiState` as it is.
+ */
+export function sessionLevelDot(state: SessionUiState): DotMark {
+  // `success` is the one state a session label does not report: nothing failed
+  // and nothing is running, which the rows say better than a second green. The
+  // word follows the colour, so the label never announces a state the dot is not
+  // showing. The base variant stays `neutral`; `fill: 'session'` is what paints
+  // it blue, so the tone is stated rather than inferred from the variant.
+  return state === 'success'
+    ? {variant: 'neutral', word: 'idle', fill: 'session'}
+    : rowDot(state);
+}
+
+/**
  * The profile whose `profile_message` call holds a row's profile, while that run
  * is running. The server's run state decides, so the marker stays while this
  * client streams the run too.
