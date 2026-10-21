@@ -142,7 +142,23 @@ type Service struct {
 	git          *shadowGit
 	logger       *slog.Logger
 	mu           *sync.Mutex
+	size         *repoSize
 }
+
+// repoSize is the last measured size of one private repository, shared by the
+// services of a staging directory and only touched under their mutex. A capture
+// gates on it instead of running count-objects again; the measurement after each
+// snapshot refreshes it, so between measurements the gate lags the repository by
+// at most commitObjectAllowance per commit written.
+type repoSize struct {
+	bytes int64
+	known bool
+}
+
+// commitObjectAllowance is added to the cached size per commit written (one loose object's disk block).
+const commitObjectAllowance = 4096
+
+var repoSizes sync.Map
 
 // locks serialize services that share one staging directory, so a run's
 // snapshots and a restore never interleave their git commands.
@@ -151,6 +167,7 @@ var locks sync.Map
 // NewService builds the service for the given options.
 func NewService(options Options) *Service {
 	mutex, _ := locks.LoadOrStore(filepath.Clean(options.StagingDir), &sync.Mutex{})
+	size, _ := repoSizes.LoadOrStore(filepath.Clean(options.StagingDir), &repoSize{})
 	return &Service{
 		options:      options,
 		metadataPath: filepath.Join(options.StagingDir, MetadataFile),
@@ -163,6 +180,7 @@ func NewService(options Options) *Service {
 		},
 		logger: logging.Or(options.Logger),
 		mu:     mutex.(*sync.Mutex),
+		size:   size.(*repoSize),
 	}
 }
 
@@ -405,16 +423,25 @@ func (s *Service) capture() (capture, error) {
 	if err := s.assertWorkspaceAllowed(); err != nil {
 		return capture{}, err
 	}
+	if _, err := os.Stat(filepath.Join(s.git.gitDir, "HEAD")); err != nil {
+		s.size.known = false
+	}
 	if err := s.git.prepare(ExclusionPatterns(s.options.Workspace, s.options.HarnessPaths)); err != nil {
 		return capture{}, err
 	}
-	before, err := s.git.repositoryBytes()
-	if err != nil {
-		return capture{}, err
+	if !s.size.known {
+		measured, err := s.git.repositoryBytes()
+		if err != nil {
+			return capture{}, err
+		}
+		s.size.bytes, s.size.known = measured, true
 	}
+	before := s.size.bytes
 	if before > s.options.Settings.MaxTotalBytes {
 		return capture{}, &skipped{fmt.Sprintf("the checkpoint repository holds %d bytes, over checkpoint.max_total_bytes (%d)", before, s.options.Settings.MaxTotalBytes)}
 	}
+	// The snapshot writes objects, so the cached size is stale until re-measured below.
+	s.size.known = false
 	tree, fileCount, err := s.git.snapshot()
 	if err != nil {
 		return capture{}, err
@@ -426,6 +453,7 @@ func (s *Service) capture() (capture, error) {
 	if err != nil {
 		return capture{}, err
 	}
+	s.size.bytes, s.size.known = size, true
 	return capture{tree: tree, fileCount: fileCount, bytes: size}, nil
 }
 
@@ -433,6 +461,9 @@ func (s *Service) keep(id, suffix, tree, message string) error {
 	commit, err := s.git.commit(tree, message)
 	if err != nil {
 		return err
+	}
+	if s.size.known {
+		s.size.bytes += commitObjectAllowance
 	}
 	return s.git.setRef(refPrefix+id+"-"+suffix, commit)
 }
@@ -598,6 +629,7 @@ func (s *Service) Restore(id string, options RestoreOptions) (RestoreResult, err
 }
 
 func (s *Service) restore(record Record, mode string, dryRun bool) (RestoreResult, error) {
+	s.size.known = false
 	if err := s.git.prepare(ExclusionPatterns(s.options.Workspace, s.options.HarnessPaths)); err != nil {
 		return RestoreResult{}, err
 	}
