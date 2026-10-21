@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
-	"time"
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/transcript"
@@ -61,17 +59,16 @@ func readUsageCacheState(config sessionfs.SessionConfig) (usageCacheFile, bool) 
 	if err != nil || len(digest) != sha256.Size {
 		return usageCacheFile{}, false
 	}
-	info, err := os.Stat(config.MessagesPath)
-	if err != nil || info.Size() < checkpoint.Offset {
+	stat, err := statFile(config.MessagesPath)
+	if err != nil || stat.Size < checkpoint.Offset {
 		return usageCacheFile{}, false
 	}
-	device, inode, ok := statIdentity(info)
-	if !ok || device != checkpoint.Device || inode != checkpoint.Inode {
+	if !stat.HasIdentity || stat.Dev != checkpoint.Device || stat.Ino != checkpoint.Inode {
 		return usageCacheFile{}, false
 	}
-	if info.Size() == checkpoint.Offset {
-		changedAtMS, hasChangedAt := statChangeTimeMS(info)
-		if !hasChangedAt || modTimeMS(info) != checkpoint.ModifiedAtMS || changedAtMS != checkpoint.ChangedAtMS {
+	if stat.Size == checkpoint.Offset {
+		changedAtMS, hasChangedAt := stat.changeMS()
+		if !hasChangedAt || stat.modMS() != checkpoint.ModifiedAtMS || changedAtMS != checkpoint.ChangedAtMS {
 			return usageCacheFile{}, false
 		}
 		return cache, true
@@ -110,70 +107,6 @@ func validUsageCount(value int64) bool {
 	return value >= 0 && value <= maxSafeUsageInteger
 }
 
-func statIdentity(info os.FileInfo) (uint64, uint64, bool) {
-	stat := reflect.ValueOf(info.Sys())
-	if stat.Kind() == reflect.Pointer {
-		if stat.IsNil() {
-			return 0, 0, false
-		}
-		stat = stat.Elem()
-	}
-	device, deviceOK := unsignedStatField(stat, "Dev")
-	inode, inodeOK := unsignedStatField(stat, "Ino")
-	return device, inode, deviceOK && inodeOK
-}
-
-// modTimeMS returns the modification time as whole milliseconds, truncated
-// toward zero. The TypeScript backend stores Math.trunc(mtimeMs) and rejects a
-// usage cache whose timestamps are not safe integers, so both backends must
-// write and compare whole milliseconds.
-func modTimeMS(info os.FileInfo) int64 {
-	return info.ModTime().UnixNano() / int64(time.Millisecond)
-}
-
-// statChangeTimeMS returns the inode change time as whole milliseconds,
-// truncated toward zero like Math.trunc(ctimeMs) in the TypeScript backend.
-func statChangeTimeMS(info os.FileInfo) (int64, bool) {
-	stat := reflect.ValueOf(info.Sys())
-	if stat.Kind() == reflect.Pointer {
-		if stat.IsNil() {
-			return 0, false
-		}
-		stat = stat.Elem()
-	}
-	if stat.Kind() != reflect.Struct {
-		return 0, false
-	}
-	for _, name := range []string{"Ctim", "Ctimespec"} {
-		field := stat.FieldByName(name)
-		if !field.IsValid() || field.Kind() != reflect.Struct {
-			continue
-		}
-		seconds, secondsOK := signedOrUnsignedInt(field.FieldByName("Sec"))
-		nanoseconds, nanosOK := signedOrUnsignedInt(field.FieldByName("Nsec"))
-		if secondsOK && nanosOK {
-			return seconds*1000 + nanoseconds/int64(time.Millisecond), true
-		}
-	}
-	return 0, false
-}
-
-func signedOrUnsignedInt(value reflect.Value) (int64, bool) {
-	if !value.IsValid() {
-		return 0, false
-	}
-	switch value.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return value.Int(), true
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		unsigned := value.Uint()
-		if unsigned <= uint64(maxSafeUsageInteger) {
-			return int64(unsigned), true
-		}
-	}
-	return 0, false
-}
-
 func usageCacheResponseKey(raw json.RawMessage, response map[string]json.RawMessage) string {
 	if response == nil {
 		return ""
@@ -198,15 +131,15 @@ func writeUsageCacheCheckpoint(config sessionfs.SessionConfig, summary webui.Usa
 	if path == "" {
 		return nil
 	}
-	info, err := os.Stat(config.MessagesPath)
+	stat, err := statFile(config.MessagesPath)
 	if err != nil {
 		return fmt.Errorf("stat transcript for usage cache: %w", err)
 	}
-	if offset < 0 || offset > info.Size() {
+	if offset < 0 || offset > stat.Size {
 		return nil
 	}
-	device, inode, identityValid := statIdentity(info)
-	changedAtMS, changedAtValid := statChangeTimeMS(info)
+	device, inode, identityValid := stat.Dev, stat.Ino, stat.HasIdentity
+	changedAtMS, changedAtValid := stat.changeMS()
 	if !identityValid || !changedAtValid {
 		return nil
 	}
@@ -224,7 +157,7 @@ func writeUsageCacheCheckpoint(config sessionfs.SessionConfig, summary webui.Usa
 			Device:          device,
 			Inode:           inode,
 			Offset:          offset,
-			ModifiedAtMS:    modTimeMS(info),
+			ModifiedAtMS:    stat.modMS(),
 			ChangedAtMS:     changedAtMS,
 			CheckpointStart: checkpointStart,
 			CheckpointSHA:   checkpointHash,

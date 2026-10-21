@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -138,6 +137,9 @@ type transcriptIndex struct {
 	// lastResponseKey identifies the newest response already counted in usage,
 	// so a rewritten usage checkpoint keeps deduplicating it.
 	lastResponseKey string
+	// wroteUsageCache is set when the scan replaced the usage cache file, which
+	// changes the session version.
+	wroteUsageCache bool
 }
 
 // ListSessions implements httpapi.SessionCatalog. This bounded catalog uses
@@ -155,6 +157,8 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 		location sessionfs.Location
 		config   sessionfs.SessionConfig
 		runs     httpapi.SessionRunSummaries
+		version  string
+		scanned  bool
 	}
 	candidates := make([]candidate, 0)
 	versions := make([]string, 0)
@@ -209,8 +213,9 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			if runStates != nil {
 				sessionRuns = runStates.SessionRuns(location.Reference, config.Profile)
 			}
-			candidates = append(candidates, candidate{location: location, config: config, runs: sessionRuns})
-			versions = append(versions, location.Reference+":"+sessionVersionForCatalog(location, config, r.catalog.MaxInlinePartBytes, sessionRuns)+profileTranscriptStamps(location, config))
+			version := location.Reference + ":" + sessionVersionForCatalog(location, config, r.catalog.MaxInlinePartBytes, sessionRuns) + profileTranscriptStamps(location, config)
+			candidates = append(candidates, candidate{location: location, config: config, runs: sessionRuns, version: version})
+			versions = append(versions, version)
 		}
 	}
 	r.listSettingsCache.keepOnly(listed)
@@ -221,7 +226,8 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 	}
 
 	sessions := make([]sessionListRecord, 0, len(candidates))
-	for _, candidate := range candidates {
+	for i := range candidates {
+		candidate := &candidates[i]
 		if err := ctx.Err(); err != nil {
 			return httpapi.CatalogResponse{}, err
 		}
@@ -233,6 +239,7 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 		if err != nil {
 			return httpapi.CatalogResponse{}, fmt.Errorf("read session transcript %q: %w", candidate.location.Reference, err)
 		}
+		candidate.scanned = index.wroteUsageCache
 		record := makeSessionListRecord(candidate.location, candidate.config, index.turns, index.usage, candidate.runs)
 		record.ProfileTurns = r.profileTurns(candidate.location, candidate.config, index.turns)
 		record.Model = listingModelSummary(candidate.location, candidate.config)
@@ -245,7 +252,11 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 	}
 	finalVersions := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
-		finalVersions = append(finalVersions, candidate.location.Reference+":"+sessionVersionForCatalog(candidate.location, candidate.config, r.catalog.MaxInlinePartBytes, candidate.runs)+profileTranscriptStamps(candidate.location, candidate.config))
+		// Only a scan that rewrote the usage cache changes what the first pass stamped.
+		if candidate.scanned {
+			candidate.version = candidate.location.Reference + ":" + sessionVersionForCatalog(candidate.location, candidate.config, r.catalog.MaxInlinePartBytes, candidate.runs) + profileTranscriptStamps(candidate.location, candidate.config)
+		}
+		finalVersions = append(finalVersions, candidate.version)
 	}
 	sort.Strings(finalVersions)
 	etag = makeETag(strings.Join(finalVersions, "|"))
@@ -495,13 +506,11 @@ func scanTranscriptIndex(shared *sharedSession, config sessionfs.SessionConfig) 
 		return transcriptIndex{}, errors.New("shared transcript store is not initialized")
 	}
 	store := shared.store
-	info, err := os.Stat(config.MessagesPath)
 	generation := "0:0:0"
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if stat, err := statFile(config.MessagesPath); err == nil {
+		generation = stat.generation()
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return transcriptIndex{}, fmt.Errorf("stat transcript: %w", err)
-	}
-	if err == nil {
-		generation = transcriptGeneration(config.MessagesPath, info)
 	}
 	starts, err := shared.readTurnStarts(generation)
 	if err != nil {
@@ -600,19 +609,20 @@ func scanTranscriptIndex(shared *sharedSession, config sessionfs.SessionConfig) 
 			index.usage.HistoryPartial = true
 		}
 	}
-	info, err = os.Stat(config.MessagesPath)
+	stat, err := statFile(config.MessagesPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return index, nil
 		}
 		return transcriptIndex{}, fmt.Errorf("stat transcript: %w", err)
 	}
-	index.size = info.Size()
-	index.generation = transcriptGeneration(config.MessagesPath, info)
+	index.size = stat.Size
+	index.generation = stat.generation()
 	if (!cacheValid || scanThrough > usageOffset) && scanThrough <= index.size {
 		if err := writeUsageCacheCheckpoint(config, index.usage, scanThrough, lastResponseKey); err != nil {
 			return transcriptIndex{}, fmt.Errorf("write session usage cache: %w", err)
 		}
+		index.wroteUsageCache = true
 	}
 	return index, nil
 }
@@ -744,74 +754,6 @@ func profileNamesVersion(names map[string]string) string {
 		parts = append(parts, id, names[id])
 	}
 	return strings.Join(parts, "\x00")
-}
-
-func fileStamp(path string) string {
-	info, err := os.Stat(path)
-	if err != nil {
-		return "-"
-	}
-	return fmt.Sprintf("%s:%d:%d:%s", transcriptGeneration(path, info), info.Size(), info.ModTime().UnixNano(), statChangeTime(info))
-}
-
-func statChangeTime(info os.FileInfo) string {
-	stat := reflect.ValueOf(info.Sys())
-	if stat.Kind() == reflect.Pointer {
-		if stat.IsNil() {
-			return "-"
-		}
-		stat = stat.Elem()
-	}
-	if stat.Kind() != reflect.Struct {
-		return "-"
-	}
-	for _, name := range []string{"Ctim", "Ctimespec"} {
-		field := stat.FieldByName(name)
-		if field.IsValid() && field.CanInterface() {
-			return fmt.Sprintf("%#v", field.Interface())
-		}
-	}
-	return "-"
-}
-
-// transcriptGeneration identifies one incarnation of a file as
-// "device:inode:birth-ms", like the TypeScript store: a replaced file changes it
-// even when the filesystem reuses its inode. path supplies the birth time,
-// which os.FileInfo does not expose.
-func transcriptGeneration(path string, info os.FileInfo) string {
-	if info == nil {
-		return "0:0:0"
-	}
-	stat := reflect.ValueOf(info.Sys())
-	if stat.Kind() == reflect.Pointer && !stat.IsNil() {
-		stat = stat.Elem()
-	}
-	dev, okDev := unsignedStatField(stat, "Dev")
-	ino, okIno := unsignedStatField(stat, "Ino")
-	if !okDev || !okIno {
-		return "0:0:0"
-	}
-	return fmt.Sprintf("%d:%d:%d", dev, ino, fileBirthMillis(path))
-}
-
-func unsignedStatField(stat reflect.Value, name string) (uint64, bool) {
-	if stat.Kind() != reflect.Struct {
-		return 0, false
-	}
-	field := stat.FieldByName(name)
-	if !field.IsValid() {
-		return 0, false
-	}
-	switch field.Kind() {
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return field.Uint(), true
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		value := field.Int()
-		if value >= 0 {
-			return uint64(value), true
-		}
-	}
-	return 0, false
 }
 
 func makeETag(value string) string {

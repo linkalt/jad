@@ -91,7 +91,11 @@ func TestUsageCacheWithTypeScriptStyleTimestampsIsAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	changedAt, ok := statChangeTimeMS(info)
+	stat, err := statFile(fixture.config.MessagesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedAt, ok := stat.changeMS()
 	if !ok {
 		t.Skip("platform does not report a change time")
 	}

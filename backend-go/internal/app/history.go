@@ -228,13 +228,11 @@ func (r *Resolver) readHistoryBlock(ctx context.Context, config sessionfs.Sessio
 	if err != nil {
 		return historyBlock{}, err
 	}
-	transcriptInfo, err := os.Stat(config.MessagesPath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return historyBlock{}, fmt.Errorf("stat session transcript %q: %w", config.MessagesPath, err)
-	}
 	generation := "0:0:0"
-	if err == nil {
-		generation = transcriptGeneration(config.MessagesPath, transcriptInfo)
+	if stat, err := statFile(config.MessagesPath); err == nil {
+		generation = stat.generation()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return historyBlock{}, fmt.Errorf("stat session transcript %q: %w", config.MessagesPath, err)
 	}
 	key := fmt.Sprintf("%s|%s|%d", fileStamp(config.MessagesBackupPath), generation, config.BackupTurns)
 	etag := strings.Trim(makeETag(key), `"`)
