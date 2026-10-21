@@ -102,6 +102,10 @@ type ResponseTurn struct {
 	// stageDirty records that a failed staging append was rolled back with a
 	// truncate, which no file sync has covered yet.
 	stageDirty bool
+	// stagingSynced and entriesSynced record that the staging directory entry
+	// and the items/index entries are already durable.
+	stagingSynced bool
+	entriesSynced bool
 }
 
 // NewTurnStore configures staged response persistence for one messages.jsonl
@@ -182,6 +186,11 @@ func (s *TurnStore) BeginTurn(turnID string) (*ResponseTurn, error) {
 	}
 	if err := turn.persistManifest(); err != nil {
 		return nil, err
+	}
+	if s.journal.durability == DurabilityStrict {
+		if err := turn.syncTurnEntries(); err != nil {
+			return nil, err
+		}
 	}
 	turn.registered = true
 	s.activeTurns[turn] = struct{}{}
@@ -275,9 +284,17 @@ func (t *ResponseTurn) StageOutputItem(event []byte) error {
 		return fmt.Errorf("stage output item: %w", err)
 	}
 	indexLine := makeIndexRecord(outputIndex, itemOffset, int64(len(itemLine)))
-	if _, err := appendStagingLine(t.indexPath, indexLine, strict); err != nil {
+	indexOffset, err := appendStagingLine(t.indexPath, indexLine, strict)
+	if err != nil {
 		t.stageDirty = true
 		return fmt.Errorf("stage output index: %w", joinTruncateError(err, truncateFile(t.itemsPath, itemOffset)))
+	}
+	if strict && !t.entriesSynced {
+		if err := t.store.journal.syncDirectory(t.turnDir); err != nil {
+			t.stageDirty = true
+			return fmt.Errorf("sync staging directory: %w", errors.Join(err, truncateFile(t.indexPath, indexOffset), truncateFile(t.itemsPath, itemOffset)))
+		}
+		t.entriesSynced = true
 	}
 
 	t.itemIndex[outputIndex] = itemIndexEntry{
@@ -363,6 +380,14 @@ func (t *ResponseTurn) CommitWithObserver(event []byte, observer func(CommitResu
 	if err != nil {
 		return CommitResult{}, fmt.Errorf("render canonical response line: %w", err)
 	}
+	if t.store.journal.durability != DurabilityProcess {
+		if err := t.store.journal.syncDirectory(t.turnDir); err != nil {
+			return CommitResult{}, fmt.Errorf("sync staged response directory: %w", err)
+		}
+		if err := t.syncStagingEntry(); err != nil {
+			return CommitResult{}, err
+		}
+	}
 	t.manifest.CanonicalLineSHA256 = hash
 	if err := t.persistManifest(); err != nil {
 		return CommitResult{}, fmt.Errorf("persist canonical line hash: %w", err)
@@ -437,6 +462,25 @@ func (t *ResponseTurn) persistManifest() error {
 	}
 	data = append(data, '\n')
 	return writeJSONAtomic(t.manifestPath, data, t.store.journal.durability == DurabilityStrict)
+}
+
+// syncTurnEntries makes the turn directory and its manifest entry durable.
+func (t *ResponseTurn) syncTurnEntries() error {
+	if err := t.store.journal.syncDirectory(t.turnDir); err != nil {
+		return fmt.Errorf("sync turn directory: %w", err)
+	}
+	return t.syncStagingEntry()
+}
+
+func (t *ResponseTurn) syncStagingEntry() error {
+	if t.stagingSynced {
+		return nil
+	}
+	if err := t.store.journal.syncDirectory(t.store.stagingDir); err != nil {
+		return fmt.Errorf("sync staging directory: %w", err)
+	}
+	t.stagingSynced = true
+	return nil
 }
 
 func (t *ResponseTurn) syncStageFiles() error {

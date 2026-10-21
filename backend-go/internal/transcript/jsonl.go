@@ -40,6 +40,28 @@ type Journal struct {
 	// index remembers the line hashes of the transcript for idempotent appends;
 	// guarded by mu.
 	index *lineIndex
+	// dirSyncHook replaces syncDirectory in tests.
+	dirSyncHook func(path string) error
+}
+
+func (j *Journal) syncDirectory(path string) error {
+	if j.dirSyncHook != nil {
+		return j.dirSyncHook(path)
+	}
+	return syncDirectory(path)
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil {
+		return syncErr
+	}
+	return closeErr
 }
 
 // NewJournal constructs a JSONL writer for path using the requested durability.
@@ -166,6 +188,7 @@ func (j *Journal) AppendAt(records ...[]byte) (offsets []int64, result error) {
 		return nil, fmt.Errorf("stat transcript: %w", err)
 	}
 	offset := info.Size()
+	created := offset == 0
 	offsets = make([]int64, len(lines))
 	for index, line := range lines {
 		offsets[index] = offset
@@ -177,6 +200,11 @@ func (j *Journal) AppendAt(records ...[]byte) (offsets []int64, result error) {
 	if j.durability != DurabilityProcess {
 		if err := file.Sync(); err != nil {
 			return nil, fmt.Errorf("sync transcript: %w", err)
+		}
+		if created {
+			if err := j.syncDirectory(filepath.Dir(j.path)); err != nil {
+				return nil, fmt.Errorf("sync transcript directory: %w", err)
+			}
 		}
 	}
 	return offsets, nil
@@ -467,6 +495,14 @@ func (j *Journal) appendFileIfAbsent(sourcePath string) (inserted bool, result e
 	if present {
 		return false, nil
 	}
+	created := false
+	if j.durability != DurabilityProcess {
+		transcriptInfo, err := transcript.Stat()
+		if err != nil {
+			return false, fmt.Errorf("stat transcript: %w", err)
+		}
+		created = transcriptInfo.Size() == 0
+	}
 	buffer := make([]byte, 64*1024)
 	for {
 		readCount, readErr := source.Read(buffer)
@@ -485,6 +521,11 @@ func (j *Journal) appendFileIfAbsent(sourcePath string) (inserted bool, result e
 	if j.durability != DurabilityProcess {
 		if err := transcript.Sync(); err != nil {
 			return false, fmt.Errorf("sync transcript: %w", err)
+		}
+		if created {
+			if err := j.syncDirectory(filepath.Dir(j.path)); err != nil {
+				return false, fmt.Errorf("sync transcript directory: %w", err)
+			}
 		}
 	}
 	return true, nil
