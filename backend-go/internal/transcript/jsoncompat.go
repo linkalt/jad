@@ -381,6 +381,16 @@ func encodeJSONObject(fields []jsonField) []byte {
 }
 
 func orderJavaScriptKeys(fields []jsonField) []jsonField {
+	hasIndex := false
+	for _, field := range fields {
+		if _, isIndex := javascriptArrayIndex(field.key); isIndex {
+			hasIndex = true
+			break
+		}
+	}
+	if !hasIndex {
+		return fields
+	}
 	indices := make([]jsonField, 0)
 	stringsInOrder := make([]jsonField, 0, len(fields))
 	for _, field := range fields {
@@ -399,7 +409,7 @@ func orderJavaScriptKeys(fields []jsonField) []jsonField {
 }
 
 func javascriptArrayIndex(key string) (uint64, bool) {
-	if key == "" || (len(key) > 1 && key[0] == '0') {
+	if key == "" || key[0] < '0' || key[0] > '9' || (len(key) > 1 && key[0] == '0') {
 		return 0, false
 	}
 	value, err := strconv.ParseUint(key, 10, 32)

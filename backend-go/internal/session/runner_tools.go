@@ -20,9 +20,18 @@ func repairPendingToolCalls(store *transcript.TurnStore, reader *transcript.Inpu
 	if err != nil {
 		return fmt.Errorf("read session history before repairing pending tool calls: %w", err)
 	}
-	pending := make(map[string]json.RawMessage)
+	calls := pendingToolCalls(history)
+	if len(calls) == 0 {
+		return nil
+	}
+	_, err = appendToolOutputs(store, calls, nil, "tool_result_missing", "A previous tool call has no persisted result and was not rerun automatically.")
+	return err
+}
+
+func pendingToolCalls(history [][]byte) []json.RawMessage {
+	pending := make(map[string]int)
 	order := make([]string, 0)
-	for _, item := range history {
+	for position, item := range history {
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(item, &fields) != nil {
 			continue
@@ -33,16 +42,16 @@ func repairPendingToolCalls(store *transcript.TurnStore, reader *transcript.Inpu
 		}
 		switch itemType {
 		case "function_call":
-			callID := functionCallID(item)
+			callID := callIDField(fields)
 			if callID == "" {
 				continue
 			}
 			if _, exists := pending[callID]; !exists {
 				order = append(order, callID)
 			}
-			pending[callID] = cloneRaw(item)
+			pending[callID] = position
 		case "function_call_output":
-			callID := functionCallID(item)
+			callID := callIDField(fields)
 			if callID != "" {
 				delete(pending, callID)
 			}
@@ -53,12 +62,11 @@ func repairPendingToolCalls(store *transcript.TurnStore, reader *transcript.Inpu
 	}
 	calls := make([]json.RawMessage, 0, len(pending))
 	for _, callID := range order {
-		if call, exists := pending[callID]; exists {
-			calls = append(calls, call)
+		if position, exists := pending[callID]; exists {
+			calls = append(calls, cloneRaw(json.RawMessage(history[position])))
 		}
 	}
-	_, err = appendToolOutputs(store, calls, nil, "tool_result_missing", "A previous tool call has no persisted result and was not rerun automatically.")
-	return err
+	return calls
 }
 
 func responseFunctionCalls(event json.RawMessage) ([]json.RawMessage, error) {
@@ -90,6 +98,10 @@ func functionCallID(item json.RawMessage) string {
 	if json.Unmarshal(item, &fields) != nil {
 		return ""
 	}
+	return callIDField(fields)
+}
+
+func callIDField(fields map[string]json.RawMessage) string {
 	var callID string
 	if json.Unmarshal(fields["call_id"], &callID) != nil {
 		return ""
