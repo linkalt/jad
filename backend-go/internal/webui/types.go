@@ -4,7 +4,6 @@ package webui
 
 import (
 	"encoding/json"
-	"reflect"
 	"strings"
 	"unicode/utf8"
 )
@@ -235,11 +234,11 @@ func FieldsFromParts(parts []Part) (text, reasoningContent string) {
 // Increments compares two streaming snapshots and returns the smallest
 // frontend-compatible updates, falling back to a complete ui.message event.
 func Increments(previous, next Message) []StreamEvent {
-	if previous.ID != next.ID || previous.Status != next.Status || !reflect.DeepEqual(previous.Steps, next.Steps) || len(next.Parts) < len(previous.Parts) {
+	if previous.ID != next.ID || previous.Status != next.Status || !stepsEqual(previous.Steps, next.Steps) || len(next.Parts) < len(previous.Parts) {
 		return []StreamEvent{{Name: "ui.message", Data: map[string]any{"message": next}}}
 	}
 	changed := 0
-	for changed < len(previous.Parts) && reflect.DeepEqual(previous.Parts[changed], next.Parts[changed]) {
+	for changed < len(previous.Parts) && partsEqual(previous.Parts[changed], next.Parts[changed]) {
 		changed++
 	}
 	if changed == len(previous.Parts) && changed == len(next.Parts) {
@@ -261,8 +260,57 @@ func Increments(previous, next Message) []StreamEvent {
 	return events
 }
 
+// partsEqual matches reflect.DeepEqual on Part without boxing it: a nil slice differs
+// from an empty one, and pointers compare by what they point to. Every field of Part
+// must be compared here; TestPartsEqualCoversEveryPartField fails when one is added.
+func partsEqual(a, b Part) bool {
+	return a.Type == b.Type && a.Text == b.Text && a.CallID == b.CallID && a.Name == b.Name &&
+		(a.Arguments == b.Arguments || a.Arguments != nil && b.Arguments != nil && *a.Arguments == *b.Arguments) &&
+		a.Output == b.Output && a.Status == b.Status && a.Target == b.Target && a.Raw == b.Raw &&
+		citationsEqual(a.Citations, b.Citations) &&
+		stringsEqual(a.Images, b.Images) && a.InlineImages == b.InlineImages && stringsEqual(a.Files, b.Files) &&
+		a.Partial == b.Partial &&
+		(a.Truncated == b.Truncated || a.Truncated != nil && b.Truncated != nil && *a.Truncated == *b.Truncated)
+}
+
+func citationsEqual(a, b []Citation) bool {
+	if (a == nil) != (b == nil) || len(a) != len(b) {
+		return false
+	}
+	for index := range a {
+		if a[index] != b[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func stringsEqual(a, b []string) bool {
+	if (a == nil) != (b == nil) || len(a) != len(b) {
+		return false
+	}
+	for index := range a {
+		if a[index] != b[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func stepsEqual(a, b []Step) bool {
+	if (a == nil) != (b == nil) || len(a) != len(b) {
+		return false
+	}
+	for index := range a {
+		if a[index] != b[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func appendedText(previous, next Part) (string, bool) {
-	if previous.Type != next.Type || previous.Truncated != nil || next.Truncated != nil || !reflect.DeepEqual(previous.Citations, next.Citations) {
+	if previous.Type != next.Type || previous.Truncated != nil || next.Truncated != nil || !citationsEqual(previous.Citations, next.Citations) {
 		return "", false
 	}
 	var before, after string

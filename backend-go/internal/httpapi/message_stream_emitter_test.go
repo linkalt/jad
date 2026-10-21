@@ -61,15 +61,15 @@ func TestMessageStreamEmitterCoalescesToolArguments(t *testing.T) {
 	if err := emitter.push(initial); err != nil {
 		t.Fatalf("push(initial) error = %v", err)
 	}
-	argument = `{"query"`
+	secondArgument := `{"query"`
 	second := cloneStreamMessage(initial)
-	second.Parts[0].Arguments = &argument
+	second.Parts[0].Arguments = &secondArgument
 	if err := emitter.push(second); err != nil {
 		t.Fatalf("push(second) error = %v", err)
 	}
-	argument = `{"query":"x"}`
+	thirdArgument := `{"query":"x"}`
 	third := cloneStreamMessage(initial)
-	third.Parts[0].Arguments = &argument
+	third.Parts[0].Arguments = &thirdArgument
 	if err := emitter.push(third); err != nil {
 		t.Fatalf("push(third) error = %v", err)
 	}

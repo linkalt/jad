@@ -30,6 +30,8 @@ func newMessageStreamEmitter(interval time.Duration, publish func(webui.Message)
 	return &messageStreamEmitter{interval: interval, publish: publish}
 }
 
+// push takes ownership of message: the caller must not change it afterwards. A snapshot
+// held back for coalescing is kept as is, and emitLocked copies it before publishing.
 func (e *messageStreamEmitter) push(message webui.Message) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -60,8 +62,7 @@ func (e *messageStreamEmitter) push(message webui.Message) error {
 			}
 			return e.emitLocked(message)
 		}
-		latest := cloneStreamMessage(message)
-		e.pending = &latest
+		e.pending = &message
 		e.scheduleLocked()
 		return nil
 	}
@@ -69,8 +70,7 @@ func (e *messageStreamEmitter) push(message webui.Message) error {
 	if e.timer == nil && (e.lastEmitAt.IsZero() || time.Since(e.lastEmitAt) >= e.interval) {
 		return e.emitLocked(message)
 	}
-	latest := cloneStreamMessage(message)
-	e.pending = &latest
+	e.pending = &message
 	e.pendingIndex = partIndex
 	e.scheduleLocked()
 	return nil
