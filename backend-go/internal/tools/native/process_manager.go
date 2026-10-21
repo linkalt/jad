@@ -532,6 +532,7 @@ func (manager *ManagedProcessManager) waitForProcess(command *exec.Cmd, entry *m
 		_ = stdinWriter.Close()
 	}
 	exitCode, hasExitCode, signal := bashExitStatus(waitErr)
+	endProcessGroup(command, entry.killGrace)
 	extra := ProcessManifest{Signal: json.RawMessage("null")}
 	state := ProcessExited
 	if hasExitCode {
@@ -552,6 +553,30 @@ func (manager *ManagedProcessManager) waitForProcess(command *exec.Cmd, entry *m
 	}
 	entry.mu.Unlock()
 	_ = manager.finish(entry, state, extra)
+}
+
+// endProcessGroup runs once the command was reaped and Wait returned (output already
+// drained, or cut at WaitDelay): a descendant still in the group is a leak, since the
+// process tool is itself the background. It gets SIGTERM, then SIGKILL after grace. The
+// group is polled, not timed, so a group id the system handed out again is never hit by
+// the hard kill.
+func endProcessGroup(command *exec.Cmd, grace time.Duration) {
+	if command == nil || command.Process == nil {
+		return
+	}
+	pgid := command.Process.Pid
+	if !processGroupAlive(pgid) {
+		return
+	}
+	signalProcessGroup(command, false)
+	deadline := time.Now().Add(grace)
+	for processGroupAlive(pgid) {
+		if !time.Now().Before(deadline) {
+			signalProcessGroup(command, true)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (manager *ManagedProcessManager) finish(entry *managedProcess, state ProcessState, extra ProcessManifest) error {

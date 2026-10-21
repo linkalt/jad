@@ -1,6 +1,7 @@
 package native
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -49,6 +50,58 @@ func TestManagedProcessExitsWhileDescendantHoldsPipes(t *testing.T) {
 	}
 	if elapsed := time.Since(begun); elapsed > 3*time.Second {
 		t.Fatalf("exit recorded after %v, want about the %v delay", elapsed, bashDrainAfterExit)
+	}
+}
+
+// pidGone reports whether the process is gone; a zombie counts as alive to kill -0, so
+// /proc is read for it.
+func pidGone(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return true
+	}
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	return err == nil && strings.Contains(string(data), ") Z ")
+}
+
+func TestManagedProcessKillsDescendantAfterExit(t *testing.T) {
+	manager, id, started := startDescendantTest(t, "sleep 300 & echo $!")
+	t.Cleanup(func() { killGroupOf(t, started.PID) })
+	result := waitProcessExited(t, manager, id, 5*time.Second)
+	if !result.Waited || result.Snapshot.State != ProcessExited {
+		t.Fatalf("Wait() = waited %v snapshot %+v, want exited", result.Waited, result.Snapshot)
+	}
+	logs, _ := manager.SnapshotWithLogs(id, ProcessStreamLimits{}, ProcessStreamLimits{}, 0, false)
+	pid, err := strconv.Atoi(strings.TrimSpace(logs.Output.text))
+	if err != nil {
+		t.Fatalf("descendant pid not in output %q: %v", logs.Output.text, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !pidGone(pid) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !pidGone(pid) {
+		t.Fatalf("descendant %d still alive after the exit was recorded", pid)
+	}
+}
+
+func TestManagedProcessKillsTermIgnoringDescendantWithKill(t *testing.T) {
+	manager, id, started := startDescendantTest(t, "(trap '' TERM; exec sleep 300) & echo $!")
+	t.Cleanup(func() { killGroupOf(t, started.PID) })
+	result := waitProcessExited(t, manager, id, 5*time.Second)
+	if !result.Waited || result.Snapshot.State != ProcessExited {
+		t.Fatalf("Wait() = waited %v state %v, want exited", result.Waited, result.Snapshot.State)
+	}
+	logs, _ := manager.SnapshotWithLogs(id, ProcessStreamLimits{}, ProcessStreamLimits{}, 0, false)
+	pid, err := strconv.Atoi(strings.TrimSpace(logs.Output.text))
+	if err != nil {
+		t.Fatalf("descendant pid not in output %q: %v", logs.Output.text, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !pidGone(pid) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !pidGone(pid) {
+		t.Fatalf("TERM-ignoring descendant %d survived the grace and SIGKILL", pid)
 	}
 }
 
