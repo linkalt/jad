@@ -884,26 +884,24 @@ func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes, baseBytes int
 		}
 		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "invalid JSON body"}
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
-		// Unmarshal has already scanned the whole body; the checks below only pick the message.
-		if !json.Valid(raw) {
-			decoder := json.NewDecoder(bytes.NewReader(raw))
-			var first json.RawMessage
-			if decoder.Decode(&first) != nil {
-				return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "invalid JSON body"}
-			}
-			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "request body must contain one JSON object"}
+	if !json.Valid(raw) {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		var first json.RawMessage
+		if decoder.Decode(&first) != nil {
+			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "invalid JSON body"}
 		}
+		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "request body must contain one JSON object"}
+	}
+	if firstJSONByte(raw) != '{' {
 		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "input must be a non-empty string"}
 	}
-
-	inputRaw, exists := fields["input"]
+	// The members are located in raw itself; json.Valid has accepted it, so nothing is copied.
+	inputRaw, modelRaw, supportsRaw, hasInput, hasModel, hasSupports := scanRunBodyObject(raw)
 	var body runRequest
-	if !exists {
+	if !hasInput {
 		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "input must be a non-empty string"}
 	}
-	input, imageChars, err := parseRunInputSized(inputRaw, limits)
+	input, imageChars, err := parseValidRunInput(inputRaw, limits)
 	if err != nil {
 		return runRequest{}, err
 	}
@@ -913,12 +911,12 @@ func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes, baseBytes int
 		return runRequest{}, &StatusError{Code: http.StatusRequestEntityTooLarge, Message: "request body is too large"}
 	}
 	body.Input = input
-	if modelRaw, exists := fields["model"]; exists {
+	if hasModel {
 		if json.Unmarshal(modelRaw, &body.Model) != nil || strings.TrimSpace(body.Model) == "" {
 			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "model must be a non-empty string"}
 		}
 	}
-	if supportsRaw, exists := fields["supports_interaction"]; exists {
+	if hasSupports {
 		_ = json.Unmarshal(supportsRaw, &body.SupportsInteraction)
 	}
 	body.Model = strings.TrimSpace(body.Model)

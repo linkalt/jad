@@ -51,8 +51,20 @@ func parseRunInput(raw json.RawMessage, limits RunInputLimits) (json.RawMessage,
 // the rest of the body against server.max_body_bytes, and only that data against the
 // image and file allowance.
 func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMessage, int64, error) {
+	if !json.Valid(raw) {
+		if bytes.HasPrefix(bytes.TrimSpace(raw), []byte("[")) {
+			return nil, 0, badInput("input must be a non-empty string or a non-empty array of parts")
+		}
+		return nil, 0, badInput("input must be a non-empty string")
+	}
+	return parseValidRunInput(raw, limits)
+}
+
+// parseValidRunInput is parseRunInputSized for raw that json.Valid has accepted. It reads the
+// parts in place, so the request is not copied into a RawMessage and two maps per part.
+func parseValidRunInput(raw []byte, limits RunInputLimits) (json.RawMessage, int64, error) {
 	imageChars := int64(0)
-	if !bytes.HasPrefix(bytes.TrimSpace(raw), []byte("[")) {
+	if firstJSONByte(raw) != '[' {
 		var text string
 		if json.Unmarshal(raw, &text) != nil || strings.TrimSpace(text) == "" {
 			return nil, 0, badInput("input must be a non-empty string")
@@ -60,8 +72,8 @@ func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMes
 		encoded, err := json.Marshal(text)
 		return encoded, 0, err
 	}
-	var parts []json.RawMessage
-	if json.Unmarshal(raw, &parts) != nil || len(parts) == 0 {
+	parts := jsonArrayElements(raw)
+	if len(parts) == 0 {
 		return nil, 0, badInput("input must be a non-empty string or a non-empty array of parts")
 	}
 	// The message is encoded straight into one buffer, sized from the request's own data, so a
@@ -75,8 +87,8 @@ func parseRunInputSized(raw json.RawMessage, limits RunInputLimits) (json.RawMes
 	images, files, hasText := 0, 0, false
 	for index, rawPart := range parts {
 		label := fmt.Sprintf("input part %d", index+1)
-		fields, part := map[string]json.RawMessage{}, runInputPart{}
-		if json.Unmarshal(rawPart, &fields) != nil || json.Unmarshal(rawPart, &part) != nil {
+		part, fields, ok := decodeRunInputPart(rawPart)
+		if !ok {
 			return nil, 0, badInput(label + " must be an object")
 		}
 		switch part.Type {
@@ -194,8 +206,8 @@ func checkedImage(label, data string, maxBytes int64) (string, []byte, error) {
 	return mime, decoded, nil
 }
 
-func onlyFields(label string, fields map[string]json.RawMessage, allowed ...string) error {
-	for name := range fields {
+func onlyFields(label string, fields []string, allowed ...string) error {
+	for _, name := range fields {
 		known := false
 		for _, candidate := range allowed {
 			known = known || name == candidate
