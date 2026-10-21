@@ -134,7 +134,9 @@ func TestTurnStagesOutputByIndexAndCommitsCanonicalLineIdempotently(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(manifest), `{"schema_version":1,"turn_id":"turn-out-of-order","status":"streaming","item_count":2,"next_sequence":2}`+"\n"; got != want {
+	// Strict mode skips the per-item manifest write: the counters stay at their
+	// Begin values until the ready manifest, and recovery ignores them.
+	if got, want := string(manifest), `{"schema_version":1,"turn_id":"turn-out-of-order","status":"streaming","item_count":0,"next_sequence":0}`+"\n"; got != want {
 		t.Fatalf("manifest = %s, want %s", got, want)
 	}
 

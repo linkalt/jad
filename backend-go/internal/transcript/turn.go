@@ -99,6 +99,9 @@ type ResponseTurn struct {
 	mu           sync.Mutex
 	closed       bool
 	registered   bool
+	// stageDirty records that a failed staging append was rolled back with a
+	// truncate, which no file sync has covered yet.
+	stageDirty bool
 }
 
 // NewTurnStore configures staged response persistence for one messages.jsonl
@@ -265,12 +268,15 @@ func (t *ResponseTurn) StageOutputItem(event []byte) error {
 	}
 
 	itemLine := makeItemRecord(outputIndex, item)
-	itemOffset, err := appendStagingLine(t.itemsPath, itemLine, t.store.journal.durability == DurabilityStrict)
+	strict := t.store.journal.durability == DurabilityStrict
+	itemOffset, err := appendStagingLine(t.itemsPath, itemLine, strict)
 	if err != nil {
+		t.stageDirty = true
 		return fmt.Errorf("stage output item: %w", err)
 	}
 	indexLine := makeIndexRecord(outputIndex, itemOffset, int64(len(itemLine)))
-	if _, err := appendStagingLine(t.indexPath, indexLine, t.store.journal.durability == DurabilityStrict); err != nil {
+	if _, err := appendStagingLine(t.indexPath, indexLine, strict); err != nil {
+		t.stageDirty = true
 		return fmt.Errorf("stage output index: %w", joinTruncateError(err, truncateFile(t.itemsPath, itemOffset)))
 	}
 
@@ -282,6 +288,11 @@ func (t *ResponseTurn) StageOutputItem(event []byte) error {
 	t.manifest.ItemCount = len(t.itemIndex)
 	if outputIndex >= t.manifest.NextSequence {
 		t.manifest.NextSequence = outputIndex + 1
+	}
+	if strict {
+		// Recovery ignores item_count and next_sequence, and the ready manifest
+		// carries the final values, so strict mode does not pay a manifest fsync per item.
+		return nil
 	}
 	if err := t.persistManifest(); err != nil {
 		return fmt.Errorf("persist turn manifest: %w", err)
@@ -429,36 +440,56 @@ func (t *ResponseTurn) persistManifest() error {
 }
 
 func (t *ResponseTurn) syncStageFiles() error {
-	if t.store.journal.durability == DurabilityProcess {
+	switch t.store.journal.durability {
+	case DurabilityProcess:
 		return nil
-	}
-	for _, path := range []string{t.itemsPath, t.indexPath} {
-		file, err := os.OpenFile(path, os.O_RDWR, 0)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		syncErr := file.Sync()
-		closeErr := file.Close()
-		if syncErr != nil {
-			return syncErr
-		}
-		if closeErr != nil {
-			return closeErr
+	case DurabilityStrict:
+		// Every strict append was already fsynced; only a rolled-back append is not.
+		if !t.stageDirty {
+			return nil
 		}
 	}
-	return nil
+	paths := [2]string{t.itemsPath, t.indexPath}
+	var errs [2]error
+	var wg sync.WaitGroup
+	for index, path := range paths {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[index] = syncExistingFile(path)
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs[:]...)
 }
 
-func (t *ResponseTurn) writeFinalLine(path string, plan completionPlan) (string, int64, error) {
+func syncExistingFile(path string) error {
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if syncErr != nil {
+		return syncErr
+	}
+	return closeErr
+}
+
+func (t *ResponseTurn) writeFinalLine(path string, plan completionPlan) (hashText string, byteCount64 int64, result error) {
 	file, err := os.CreateTemp(t.turnDir, finalFilename+".tmp-")
 	if err != nil {
 		return "", 0, err
 	}
 	temporaryPath := file.Name()
-	defer os.Remove(temporaryPath)
+	defer func() {
+		if result != nil {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
 
 	digest := sha256.New()
 	var byteCount int64
@@ -627,7 +658,9 @@ func writeJSONAtomic(path string, data []byte, sync bool) (result error) {
 	}
 	temporaryPath := file.Name()
 	defer func() {
-		_ = os.Remove(temporaryPath)
+		if result != nil {
+			_ = os.Remove(temporaryPath)
+		}
 	}()
 	if err := writeAll(file, data); err != nil {
 		_ = file.Close()

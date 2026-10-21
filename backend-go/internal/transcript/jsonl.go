@@ -169,11 +169,8 @@ func (j *Journal) AppendAt(records ...[]byte) (offsets []int64, result error) {
 	offsets = make([]int64, len(lines))
 	for index, line := range lines {
 		offsets[index] = offset
-		if err := writeAll(file, line); err != nil {
+		if err := writeAll(file, append(line, '\n')); err != nil {
 			return nil, fmt.Errorf("append transcript record: %w", err)
-		}
-		if err := writeAll(file, []byte{'\n'}); err != nil {
-			return nil, fmt.Errorf("terminate transcript record: %w", err)
 		}
 		offset += int64(len(line)) + 1
 	}
