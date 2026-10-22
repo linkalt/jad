@@ -63,7 +63,7 @@ func TestBuildCatalogRequiresTheToolSmithManifest(t *testing.T) {
 }
 
 func TestToolSmithIsNeverInASubagentPool(t *testing.T) {
-	smith, err := NewToolSmithTool(sessionfs.NativeToolSmithSettings{}, "", nil)
+	smith, err := NewToolSmithTool(sessionfs.NativeToolSmithSettings{}, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,9 +94,9 @@ func TestToolSmithChangesStateOnlyForARun(t *testing.T) {
 		"run string":          {`{"run":"return 1;"}`, true},
 		"run with alias code": {`{"run":{"code":"return 1;"}}`, true},
 		"run with alias body": {`{"run":{"body":"return 1;"}}`, true},
-		"run wins over list":  {`{"list":{},"run":"return 1;"}`, true},
-		"list":                {`{"list":{"filters":["a"]}}`, false},
-		"empty list":          {`{"list":{}}`, false},
+		"run with filters":    {`{"filters":["a"],"run":"return 1;"}`, true},
+		"list with filters":   {`{"filters":["a"]}`, false},
+		"list wildcard":       {`{"filters":["read*"]}`, false},
 		"nothing":             {`{}`, false},
 	} {
 		inner, _ := json.Marshal(tc.arguments)
@@ -112,7 +112,7 @@ func TestToolSmithCatalogListFailsWithoutFunctionsDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := executeCatalogCall(t, catalog, "tool_smith", `{"list":{}}`)
+	output := executeCatalogCall(t, catalog, "tool_smith", `{}`)
 	if !strings.Contains(output, "error_code: list_failed") {
 		t.Errorf("tool_smith list = %s", output)
 	}

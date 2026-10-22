@@ -67,17 +67,15 @@ func toolSmithInside(root, path string) bool {
 
 func executeToolSmithList(arguments map[string]any, settings sessionfs.NativeToolSmithSettings, execution tools.ExecutionContext) string {
 	callID := execution.CallID
-	var filters []string
-	if list, ok := arguments["list"].(map[string]any); ok {
-		given, _ := list["filters"].([]any)
-		for _, item := range given {
-			text, ok := item.(string)
-			if !ok {
-				return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "list.filters must be strings")
-			}
-			if text = strings.ToLower(strings.TrimSpace(text)); text != "" {
-				filters = append(filters, text)
-			}
+	var filters []toolSmithFilter
+	given, _ := arguments["filters"].([]any)
+	for _, item := range given {
+		text, ok := item.(string)
+		if !ok {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "filters must be strings")
+		}
+		if text = strings.ToLower(strings.TrimSpace(text)); text != "" {
+			filters = append(filters, newToolSmithFilter(text))
 		}
 	}
 
@@ -145,7 +143,7 @@ func executeToolSmithList(arguments map[string]any, settings sessionfs.NativeToo
 		if len(scanned) < len(files) {
 			cut += fmt.Sprintf("; scanned %d of %d files", len(scanned), len(files))
 		}
-		suggestion := "add list.filters (substrings of name or description) to narrow the result"
+		suggestion := "add filters (read*, *file*, or a plain substring of the name or description) to narrow the result"
 		if len(scanned) < len(files) {
 			suggestion = "the library has more files than list_max_files; raise list_max_files or reduce the library (filters only apply to the scanned files)"
 		}
@@ -165,10 +163,54 @@ func executeToolSmithList(arguments map[string]any, settings sessionfs.NativeToo
 	return result
 }
 
-func toolSmithMatchesFilters(entry toolSmithListEntry, filters []string) bool {
+// toolSmithFilter is one lower-cased filter: a wildcard pattern when it has * or ?, else a substring.
+type toolSmithFilter struct {
+	text     string
+	wildcard bool
+}
+
+func newToolSmithFilter(text string) toolSmithFilter {
+	return toolSmithFilter{text: text, wildcard: strings.ContainsAny(text, "*?")}
+}
+
+// matches reports whether the whole of value matches a wildcard filter (* any run, ? one
+// character), or whether a plain filter is contained in value.
+func (f toolSmithFilter) matches(value string) bool {
+	if !f.wildcard {
+		return strings.Contains(value, f.text)
+	}
+	return wildcardMatch([]rune(f.text), []rune(value))
+}
+
+// wildcardMatch matches pattern against all of value with * and ?, in linear time.
+func wildcardMatch(pattern, value []rune) bool {
+	p, v, star, mark := 0, 0, -1, 0
+	for v < len(value) {
+		switch {
+		case p < len(pattern) && (pattern[p] == '?' || pattern[p] == value[v]) && pattern[p] != '*':
+			p++
+			v++
+		case p < len(pattern) && pattern[p] == '*':
+			star, mark = p, v
+			p++
+		case star >= 0:
+			mark++
+			p, v = star+1, mark
+		default:
+			return false
+		}
+	}
+	for p < len(pattern) && pattern[p] == '*' {
+		p++
+	}
+	return p == len(pattern)
+}
+
+// toolSmithMatchesFilters is true when every filter matches the name or the description.
+func toolSmithMatchesFilters(entry toolSmithListEntry, filters []toolSmithFilter) bool {
 	name, description := strings.ToLower(entry.name), strings.ToLower(entry.description)
 	for _, filter := range filters {
-		if !strings.Contains(name, filter) && !strings.Contains(description, filter) {
+		if !filter.matches(name) && !filter.matches(description) {
 			return false
 		}
 	}

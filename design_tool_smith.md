@@ -1,4 +1,4 @@
-> **Note (design_async_manager.md):** a `tool_smith` call is planned to become an async tool in phase 2 (`block_ms` start, collected with the `async` tool). That is not implemented; this document describes the current blocking tool.
+> **Note (design_async_manager.md WP7, 2026-10-22):** `tool_smith` is now an async tool and the `list` object is gone: a call with no `run` lists the saved functions, `filters` is top-level and accepts `*`/`?` wildcards, and `run` takes `block_ms` (the script becomes an `async` handle when it outlasts it). Sections 4, 5.1 and 15 below still describe the earlier `list:{filters}` shape; `backend-go/DECISIONS.md` ("`tool_smith` is an async tool") is authoritative.
 
 # Tool Smith — Design and Workflow
 
@@ -73,16 +73,13 @@ Types are not checked at run time (bun and node only strip them); validate JSON 
     {
       "type": "object",
       "properties": {
-        "list": {
-          "type": "object",
-          "properties": { "filters": { "type": "array", "items": { "type": "string" } } },
-          "additionalProperties": false
-        },
+        "filters": { "type": "array", "items": { "type": "string" } },
         "run": {
           "type": "object",
           "properties": {
             "function": { "type": "string", "description": "TypeScript async function body." },
-            "input": { "type": "object", "additionalProperties": true }
+            "input": { "type": "object", "additionalProperties": true },
+            "block_ms": { "type": "integer", "minimum": 0 }
           },
           "required": ["function"],
           "additionalProperties": false
@@ -94,14 +91,15 @@ Types are not checked at run time (bun and node only strip them); validate JSON 
 No `required` at the top level and no `action` enum. Validation is forgiving, because a refused call costs a model round (the `exec` trial: 3 of 25 calls refused over a missing `lang`, `backend-go/DECISIONS.md:265`):
 
 - `NormalizeArguments` accepts `run` as a plain string (the body), and the aliases `script`/`code`/`body` for `function`.
-- If both `list` and `run` are given, `run` wins and the result notes the ignored key. If neither is given, the result is `invalid_input` with a one-line example.
+- If both `filters` and `run` are given, `run` wins and the result notes `ignored: filters`. A call with neither lists the library.
 - Provider schema dialects: adapt only if a provider rejects the schema.
 
 ### 4.2 Parameter summary
 
 | Parameter | Purpose |
 |---|---|
-| `list.filters[]` | Case-insensitive substrings matched on function name and description. |
+| `filters[]` | Case-insensitive; `*`/`?` make a wildcard pattern, else a substring; matched on function name and description. |
+| `run.block_ms` | Most time to block for the result; a longer script continues as an `async` handle. |
 | `run.function` | Async TypeScript function body. |
 | `run.input{}` | JSON data bound to the `input` variable. |
 
@@ -238,8 +236,8 @@ See `plan_tool_smith.md` (8 phases): the evidence spike (phase 1) is done and th
 | Area | Decision |
 |---|---|
 | Public tool | `tool_smith` |
-| Operations | `list`, `run` (no `get`, no `action` enum) |
-| Discovery | `list.filters[]`, plain-text compact output |
+| Operations | no parameters/`filters` = list, `run` (no `get`, no `action` enum) |
+| Discovery | `filters[]` (wildcards), plain-text compact output |
 | Source inspection | existing `read` on `functions_dir/<name>.ts` |
 | Execution code | `run.function` (+ aliases, string form) |
 | Dynamic data | `run.input{}`, delivered as a JSON file |

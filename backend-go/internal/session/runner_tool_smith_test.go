@@ -165,11 +165,11 @@ func TestRunnerToolSmithListPersistsOneFunctionCallOutput(t *testing.T) {
 	}
 	tool, err := native.NewToolSmithTool(sessionfs.NativeToolSmithSettings{
 		FunctionsDir: ".jad/functions", ListMaxResults: 50, ListMaxFiles: 200, ListHeaderBytes: 2048,
-	}, "", nil)
+	}, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, _ := runToolSmithThroughRunner(t, tool, workspace, `{"list":{}}`)
+	output, _ := runToolSmithThroughRunner(t, tool, workspace, `{}`)
 	if !strings.Contains(output, "alpha_fn") || !strings.Contains(output, "beta_fn") {
 		t.Fatalf("list output lacks the two functions:\n%s", output)
 	}
@@ -198,7 +198,7 @@ func TestRunnerToolSmithRunWithNestedReadPersistsOneFunctionCallOutput(t *testin
 		MaxNestedCalls: 100, MaxParallelCalls: 4,
 		Tools:       []string{"read"},
 		Interpreter: interpreter,
-	}, "", nested)
+	}, "", nested, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

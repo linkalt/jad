@@ -198,16 +198,34 @@ func runShellChild(
 	apiKeyEnv string,
 	execution tools.ExecutionContext,
 ) string {
+	return runShellChildDetailed(ctx, run, settings, apiKeyEnv, execution).text
+}
+
+// shellRunResult is a rendered shell child result with what it was made from. child and
+// answer are nil when the run failed before the child started.
+type shellRunResult struct {
+	text   string
+	child  *bashChildResult
+	answer *shellResult
+}
+
+func runShellChildDetailed(
+	ctx context.Context,
+	run shellChildRun,
+	settings sessionfs.NativeBashSettings,
+	apiKeyEnv string,
+	execution tools.ExecutionContext,
+) shellRunResult {
 	resolved, pathError := resolveExistingTarget(run.cwd, execution.WorkspaceRoot, settings.Policy, execution.CallID)
 	if pathError != "" {
-		return pathError
+		return shellRunResult{text: pathError}
 	}
 	info, err := os.Stat(resolved.realPath)
 	if err != nil {
-		return tools.ExecutionError(execution.CallID, tools.StatusError, "cwd_unavailable", "The working directory is not readable", tools.Information{Key: "path", Value: resolved.displayPath})
+		return shellRunResult{text: tools.ExecutionError(execution.CallID, tools.StatusError, "cwd_unavailable", "The working directory is not readable", tools.Information{Key: "path", Value: resolved.displayPath})}
 	}
 	if !info.IsDir() {
-		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "not_a_directory", "The working directory is not a directory", tools.Information{Key: "path", Value: resolved.displayPath})
+		return shellRunResult{text: tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "not_a_directory", "The working directory is not a directory", tools.Information{Key: "path", Value: resolved.displayPath})}
 	}
 
 	timeoutMs := effectiveBashTimeoutMs(run.timeoutMs, settings)
@@ -251,7 +269,8 @@ func runShellChild(
 			answer.marked = true
 		}
 	}
-	return renderBashExecutionResult(execution.CallID, resolved.displayPath, run.file, timeoutMs, child, spillDecision, answer, run.program, run.settingsSection())
+	text := renderBashExecutionResult(execution.CallID, resolved.displayPath, run.file, timeoutMs, child, spillDecision, answer, run.program, run.settingsSection())
+	return shellRunResult{text: text, child: &child, answer: answer}
 }
 
 func sortedKeys(values map[string]string) []string {

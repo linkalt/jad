@@ -98,10 +98,11 @@ func TestNativeAsyncSSEMaxIDsDefaultsToTenAndAllowsZero(t *testing.T) {
 	}
 }
 
-func TestProcessAndSubagentNeedTheAsyncTool(t *testing.T) {
+func TestProcessSubagentAndToolSmithNeedTheAsyncTool(t *testing.T) {
 	cases := map[string]string{
-		"process":  `"process":{}`,
-		"subagent": `"subagent":{"agents":{"a":{"description":"d","instructions":"p","model":"openai/default"}}}`,
+		"process":    `"process":{}`,
+		"tool_smith": `"tool_smith":{}`,
+		"subagent":   `"subagent":{"agents":{"a":{"description":"d","instructions":"p","model":"openai/default"}}}`,
 	}
 	for tool, entry := range cases {
 		_, err := loadLayoutSpec(t, layouttest.Spec{ToolsetRaw: `{"native":{"read":{},` + entry + `}}`})

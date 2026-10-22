@@ -26,22 +26,17 @@ var toolSmithPrelude string
 var toolSmithInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "list":{
-      "type":"object",
-      "properties":{
-        "filters":{
-          "type":"array",
-          "items":{"type":"string"},
-          "description":"Case-insensitive substrings matched on function name and description."
-        }
-      },
-      "additionalProperties":false
+    "filters":{
+      "type":"array",
+      "items":{"type":"string"},
+      "description":"With no run: only list functions whose name or description matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (read*, *file*); any other is a substring."
     },
     "run":{
       "type":"object",
       "properties":{
         "function":{"type":"string","description":"TypeScript async function body."},
-        "input":{"type":"object","additionalProperties":true,"description":"JSON data bound to the input variable."}
+        "input":{"type":"object","additionalProperties":true,"description":"JSON data bound to the input variable."},
+        "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the result. If the script is still running an id is returned; collect it with the async tool."}
       },
       "required":["function"],
       "additionalProperties":false
@@ -50,14 +45,18 @@ var toolSmithInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-const toolSmithDescription = "Run a TypeScript function body in a child process and return one value, or list the saved functions of the library. Saved functions are reusable files called as fn.<name>(input) inside a run. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do."
+const toolSmithDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved functions of the library. Give run to execute a TypeScript function body in a child process and return one value, waiting up to block_ms; if it is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it. Saved functions are reusable files called as fn.<name>(input) inside a run. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do."
 
 // NewToolSmithTool creates the tool_smith tool. It is ReadOnly so several calls may
 // share a response, and a call with run says so through MayChangeFiles.
-func NewToolSmithTool(settings sessionfs.NativeToolSmithSettings, apiKeyEnv string, nested *ToolSmithNested) (tools.Tool, error) {
+// A non-nil host lets a run that outlasts block_ms continue as a handle of the async tool.
+func NewToolSmithTool(settings sessionfs.NativeToolSmithSettings, apiKeyEnv string, nested *ToolSmithNested, host *AsyncHost) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(toolSmithInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native tool_smith schema: %w", err)
+	}
+	if host != nil {
+		host.attachToolSmith()
 	}
 	return tools.Tool{
 		Definition: tools.Definition{
@@ -76,7 +75,7 @@ func NewToolSmithTool(settings sessionfs.NativeToolSmithSettings, apiKeyEnv stri
 			return hasRun
 		},
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-			return executeToolSmith(ctx, arguments, settings, apiKeyEnv, nested, execution), nil
+			return executeToolSmith(ctx, arguments, settings, apiKeyEnv, nested, execution, host)
 		},
 	}, nil
 }
@@ -108,6 +107,16 @@ func normalizeToolSmithArguments(arguments map[string]any) map[string]any {
 		}
 		normalized["run"] = fixed
 	}
+	if run, ok := normalized["run"].(map[string]any); ok {
+		if block, ok := safeInteger(run["block_ms"]); ok {
+			fixed := make(map[string]any, len(run))
+			for key, value := range run {
+				fixed[key] = value
+			}
+			fixed["block_ms"] = json.Number(fmt.Sprint(max(block, 0)))
+			normalized["run"] = fixed
+		}
+	}
 	return normalized
 }
 
@@ -130,69 +139,93 @@ func executeToolSmith(
 	apiKeyEnv string,
 	nested *ToolSmithNested,
 	execution tools.ExecutionContext,
-) string {
+	host *AsyncHost,
+) (string, error) {
 	callID := execution.CallID
-	_, hasList := arguments["list"]
 	if _, hasRun := arguments["run"]; !hasRun {
-		if hasList {
-			return executeToolSmithList(arguments, settings, execution)
-		}
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "Give run or list",
-			tools.Information{Key: "suggestion", Value: "example: " + toolSmithRunExample})
+		return executeToolSmithList(arguments, settings, execution), nil
 	}
 	run, _ := arguments["run"].(map[string]any)
 	body, _ := run["function"].(string)
 	if strings.TrimSpace(body) == "" {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "run.function is empty",
-			tools.Information{Key: "suggestion", Value: "example: " + toolSmithRunExample})
+			tools.Information{Key: "suggestion", Value: "example: " + toolSmithRunExample}), nil
 	}
 	input := map[string]any{}
 	if given, present := run["input"]; present && given != nil {
 		object, ok := given.(map[string]any)
 		if !ok {
-			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "run.input must be an object")
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "run.input must be an object"), nil
 		}
 		input = object
 	}
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "run.input is not valid JSON data",
-			tools.Information{Key: "system_error", Value: err.Error()})
+			tools.Information{Key: "system_error", Value: err.Error()}), nil
 	}
 	if size := int64(len(body) + len(inputJSON)); size > settings.CodeMaxBytes {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input",
 			fmt.Sprintf("function and input are %d bytes, over the limit of %d", size, settings.CodeMaxBytes),
-			tools.Information{Key: "suggestion", Value: "save the code as a library function and call it, or shorten the input"})
+			tools.Information{Key: "suggestion", Value: "save the code as a library function and call it, or shorten the input"}), nil
 	}
+	script := toolSmithScript{body: body, inputJSON: inputJSON, settings: settings, apiKeyEnv: apiKeyEnv, nested: nested, execution: execution}
+	if _, hasFilters := arguments["filters"]; hasFilters {
+		script.notes = []string{"ignored: filters"}
+	}
+	if host == nil || execution.SessionKey == "" {
+		return runToolSmithScript(ctx, script).text, nil
+	}
+	var blockMs *int64
+	if value, ok := safeInteger(run["block_ms"]); ok {
+		blockMs = &value
+	}
+	return startToolSmithAsync(ctx, host, script, blockMs)
+}
 
+// toolSmithScript is one validated run: what to execute and under which settings.
+type toolSmithScript struct {
+	body      string
+	inputJSON []byte
+	settings  sessionfs.NativeToolSmithSettings
+	apiKeyEnv string
+	nested    *ToolSmithNested
+	execution tools.ExecutionContext
+	// notes are information lines added to the result.
+	notes []string
+}
+
+// runToolSmithScript runs the script to its end in a private work directory and renders the result.
+func runToolSmithScript(ctx context.Context, script toolSmithScript) shellRunResult {
+	settings, execution, callID := script.settings, script.execution, script.execution.CallID
 	workDir, err := makeToolSmithWorkDir(os.TempDir(), toolSmithShortTempDir)
 	if err != nil {
-		return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
-			tools.Information{Key: "system_error", Value: err.Error()})
+		return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
+			tools.Information{Key: "system_error", Value: err.Error()})}
 	}
 	defer os.RemoveAll(workDir)
 	if err := requirePrivateDirectory(workDir); err != nil {
-		return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working directory is not private",
-			tools.Information{Key: "system_error", Value: err.Error()})
+		return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working directory is not private",
+			tools.Information{Key: "system_error", Value: err.Error()})}
 	}
 	wrapperPath := filepath.Join(workDir, "wrapper.ts")
 	inputPath := filepath.Join(workDir, "input.json")
 	resultPath := filepath.Join(workDir, "result.txt")
-	wrapper := "import { deliver, tools, fn } from \"./prelude.ts\";\nawait deliver(async (input) => {\n" + body + "\n});\n"
+	wrapper := "import { deliver, tools, fn } from \"./prelude.ts\";\nawait deliver(async (input) => {\n" + script.body + "\n});\n"
 	for path, content := range map[string]string{
 		wrapperPath:                          wrapper,
 		filepath.Join(workDir, "prelude.ts"): toolSmithPrelude,
-		inputPath:                            string(inputJSON),
+		inputPath:                            string(script.inputJSON),
 	} {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The script files could not be written",
-				tools.Information{Key: "system_error", Value: err.Error()})
+			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The script files could not be written",
+				tools.Information{Key: "system_error", Value: err.Error()})}
 		}
 	}
 
 	if err := stageToolSmithFunctions(workDir, settings, execution.WorkspaceRoot); err != nil {
-		return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The saved functions could not be staged",
-			tools.Information{Key: "system_error", Value: err.Error()})
+		return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The saved functions could not be staged",
+			tools.Information{Key: "system_error", Value: err.Error()})}
 	}
 
 	argv := make([]string, len(settings.Interpreter))
@@ -202,17 +235,17 @@ func executeToolSmith(
 	extraEnv := map[string]string{execResultEnv: resultPath, toolSmithInputEnv: inputPath,
 		toolSmithFunctionsEnv: filepath.Join(workDir, "fn-manifest.json")}
 	var bridge *toolSmithBridge
-	if allowed := nested.allowed(settings); len(allowed) > 0 {
+	if allowed := script.nested.allowed(settings); len(allowed) > 0 {
 		bridge, err = startToolSmithBridge(ctx, workDir, settings, allowed, execution)
 		if err != nil {
-			return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The tool bridge could not be started",
-				tools.Information{Key: "system_error", Value: err.Error()})
+			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The tool bridge could not be started",
+				tools.Information{Key: "system_error", Value: err.Error()})}
 		}
 		defer bridge.Close()
 		extraEnv[toolSmithSocketEnv] = bridge.socketPath
 		extraEnv[toolSmithTokenEnv] = bridge.token
 	}
-	result := runShellChild(ctx, shellChildRun{
+	result := runShellChildDetailed(ctx, shellChildRun{
 		file:       argv[0],
 		argv:       argv[1:],
 		cwd:        ".",
@@ -220,15 +253,14 @@ func executeToolSmith(
 		extraEnv:   extraEnv,
 		resultFile: &shellResultFile{path: resultPath, maxBytes: settings.ResultMaxBytes, cutMarker: true},
 		program:    &shellProgram{name: filepath.Base(argv[0]), setting: "tools.native.tool_smith.interpreter"},
-	}, settings.Child, apiKeyEnv, execution)
+	}, settings.Child, script.apiKeyEnv, execution)
 	var lines []string
 	if bridge != nil {
 		lines = bridge.Close().informationLines()
 	}
-	if hasList {
-		lines = append(lines, "ignored: list")
-	}
-	return appendToolSmithInformation(result, lines)
+	lines = append(lines, script.notes...)
+	result.text = appendToolSmithInformation(result.text, lines)
+	return result
 }
 
 // toolSmithMaxSocketPath stays under sun_path (107 bytes on Linux, 103 on macOS).

@@ -405,7 +405,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		tool, err := NewToolSmithTool(*config.NativeToolSmith, config.Model.APIKeyEnv, toolSmithNested)
+		tool, err := NewToolSmithTool(*config.NativeToolSmith, config.Model.APIKeyEnv, toolSmithNested, asyncHost)
 		if err != nil {
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}

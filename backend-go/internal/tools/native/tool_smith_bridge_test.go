@@ -76,7 +76,8 @@ func bridgeNested(list ...tools.Tool) *ToolSmithNested {
 
 func runWithBridge(ctx context.Context, root string, settings sessionfs.NativeToolSmithSettings, nested *ToolSmithNested, execution tools.ExecutionContext, function string) string {
 	execution.CallID, execution.WorkspaceRoot, execution.SessionDir = "smith-call", root, root
-	return executeToolSmith(ctx, normalizeToolSmithArguments(smithRun(function, nil)), settings, "", nested, execution)
+	result, _ := executeToolSmith(ctx, normalizeToolSmithArguments(smithRun(function, nil)), settings, "", nested, execution, nil)
+	return result
 }
 
 func requireGoroutinesSettle(t *testing.T, before int) {

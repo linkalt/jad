@@ -18,12 +18,16 @@ const asyncDirName = ".async"
 // the session key of the call that started it.
 type AsyncHost struct {
 	manager *asyncmgr.Manager
+	dir     string
 
-	mu           sync.Mutex
-	processes    []processStopper
-	processAdded bool
-	subagents    []*SubagentManager
-	subagentSeen bool
+	mu             sync.Mutex
+	toolSmithSeen  bool
+	toolSmithRuns  map[string]*toolSmithRun
+	toolSmithSwept time.Time
+	processes      []processStopper
+	processAdded   bool
+	subagents      []*SubagentManager
+	subagentSeen   bool
 }
 
 // AsyncResources is implemented by the application resolver: it hands out the host shared
@@ -58,7 +62,7 @@ func NewAsyncHost(dir string, cfg asyncmgr.Config, logger *slog.Logger) (*AsyncH
 	if err != nil {
 		return nil, err
 	}
-	return &AsyncHost{manager: manager}, nil
+	return &AsyncHost{manager: manager, dir: dir}, nil
 }
 
 // Manager is the async manager of the host.

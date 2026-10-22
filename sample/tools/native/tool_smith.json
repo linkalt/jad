@@ -5,20 +5,16 @@
       "id": "native.tool_smith",
       "source": "native",
       "name": "tool_smith",
-      "description": "Run a TypeScript function body in a child process and return one value, or list the saved functions of the library. Saved functions are reusable files called as fn.<name>(input) inside a run. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do.",
+      "description": "Call with no parameters (or only filters, e.g. read*) to list the saved functions of the library. Give run to execute a TypeScript function body in a child process and return one value, waiting up to block_ms; if it is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it. Saved functions are reusable files called as fn.<name>(input) inside a run. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "list": {
-            "type": "object",
-            "properties": {
-              "filters": {
-                "type": "array",
-                "items": { "type": "string" },
-                "description": "Case-insensitive substrings matched on function name and description."
-              }
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "string"
             },
-            "additionalProperties": false
+            "description": "With no run: only list functions whose name or description matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (read*, *file*); any other is a substring."
           },
           "run": {
             "type": "object",
@@ -31,9 +27,16 @@
                 "type": "object",
                 "additionalProperties": true,
                 "description": "JSON data bound to the input variable."
+              },
+              "block_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Most time to block for the result. If the script is still running an id is returned; collect it with the async tool."
               }
             },
-            "required": ["function"],
+            "required": [
+              "function"
+            ],
             "additionalProperties": false
           }
         },

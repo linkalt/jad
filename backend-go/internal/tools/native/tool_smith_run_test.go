@@ -47,9 +47,10 @@ func toolSmithTestSettings(t *testing.T, root string) sessionfs.NativeToolSmithS
 }
 
 func runToolSmith(ctx context.Context, root string, settings sessionfs.NativeToolSmithSettings, arguments map[string]any) string {
-	return executeToolSmith(ctx, normalizeToolSmithArguments(arguments), settings, "", nil, tools.ExecutionContext{
+	result, _ := executeToolSmith(ctx, normalizeToolSmithArguments(arguments), settings, "", nil, tools.ExecutionContext{
 		CallID: "smith-call", WorkspaceRoot: root, SessionDir: root,
-	})
+	}, nil)
+	return result
 }
 
 func smithRun(function string, input map[string]any) map[string]any {
@@ -229,7 +230,6 @@ func TestToolSmithRunRefusesBadParameters(t *testing.T) {
 	for name, arguments := range map[string]map[string]any{
 		"missing function": {"run": map[string]any{"input": map[string]any{}}},
 		"blank function":   {"run": "  \n"},
-		"neither":          {},
 		"too large":        smithRun(strings.Repeat("x", int(settings.CodeMaxBytes)), nil),
 		"input too large":  smithRun("return 1;", map[string]any{"big": strings.Repeat("x", int(settings.CodeMaxBytes))}),
 	} {
@@ -242,6 +242,16 @@ func TestToolSmithRunRefusesBadParameters(t *testing.T) {
 		}
 	}
 	requireNoLeftovers(t, tmp)
+}
+
+// A call with neither run nor filters is a list, so it is not an input error; it fails only
+// when the library cannot be read.
+func TestToolSmithCallWithNeitherRunNorFiltersListsInsteadOfRefusing(t *testing.T) {
+	root := t.TempDir()
+	settings := toolSmithTestSettings(t, root)
+	if result := runToolSmith(context.Background(), root, settings, map[string]any{}); strings.Contains(result, `"status":"invalid_input"`) {
+		t.Fatalf("neither is a list now:\n%s", result)
+	}
 }
 
 func TestToolSmithRunAcceptsTheStringFormAndAliases(t *testing.T) {
@@ -270,12 +280,12 @@ func TestToolSmithRunRejectsANonObjectInput(t *testing.T) {
 	}
 }
 
-func TestToolSmithRunWinsOverListAndSaysSo(t *testing.T) {
+func TestToolSmithRunWinsOverFiltersAndSaysSo(t *testing.T) {
 	root := t.TempDir()
 	arguments := smithRun("return 5;", nil)
-	arguments["list"] = map[string]any{}
+	arguments["filters"] = []any{"read*"}
 	result := runToolSmith(context.Background(), root, toolSmithTestSettings(t, root), arguments)
-	if !strings.Contains(execContent(result), "5") || !strings.Contains(result, "ignored: list") {
+	if !strings.Contains(execContent(result), "5") || !strings.Contains(result, "ignored: filters") {
 		t.Fatalf("result:\n%s", result)
 	}
 }

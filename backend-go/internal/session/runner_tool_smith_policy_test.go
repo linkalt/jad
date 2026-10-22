@@ -33,7 +33,7 @@ func TestToolSmithRunIsSerializedAndCheckpointedWhileListIsNot(t *testing.T) {
 		t.Fatal("no checkpoint run")
 	}
 	runCall := call("tool_smith", `{"run":{"function":"return 1"}}`)
-	listCall := call("tool_smith", `{"list":{}}`)
+	listCall := call("tool_smith", `{}`)
 	for name, tc := range map[string]struct {
 		call  json.RawMessage
 		state bool
@@ -84,7 +84,7 @@ func TestToolSmithListPromptsUnderAskToday(t *testing.T) {
 		prompts++
 		return tools.ApprovalVerdict{Code: tools.ApprovalDenied, Reason: "no"}
 	}}
-	if _, err := catalog.ExecuteFunctionCall(context.Background(), call("tool_smith", `{"list":{}}`), execution); err != nil {
+	if _, err := catalog.ExecuteFunctionCall(context.Background(), call("tool_smith", `{}`), execution); err != nil {
 		t.Fatal(err)
 	}
 	if prompts != 1 {

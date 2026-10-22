@@ -35,7 +35,7 @@ func runToolSmithList(root string, settings sessionfs.NativeToolSmithSettings, f
 	for index, filter := range filters {
 		items[index] = filter
 	}
-	return executeToolSmithList(map[string]any{"list": map[string]any{"filters": items}}, settings, tools.ExecutionContext{CallID: "list-call", WorkspaceRoot: root})
+	return executeToolSmithList(map[string]any{"filters": items}, settings, tools.ExecutionContext{CallID: "list-call", WorkspaceRoot: root})
 }
 
 func TestToolSmithListParsesHeaderAndSignature(t *testing.T) {
@@ -90,7 +90,7 @@ func TestToolSmithListCapsResultsAndFiles(t *testing.T) {
 	if got, shown := execField(result, "truncated"), execField(result, "shown"); got != "true" || shown != "3 of 3; scanned 3 of 4 files" {
 		t.Fatalf("truncated = %q, shown = %q\n%s", got, shown, result)
 	}
-	if suggestion := execField(result, "suggestion"); !strings.Contains(suggestion, "list_max_files") || strings.Contains(suggestion, "add list.filters") {
+	if suggestion := execField(result, "suggestion"); !strings.Contains(suggestion, "list_max_files") || strings.Contains(suggestion, "add filters") {
 		t.Fatalf("suggestion = %q", suggestion)
 	}
 	if strings.Contains(execContent(result), "d(") {
@@ -191,8 +191,8 @@ func TestToolSmithListDoesNotFollowFileSymlinksOutOfTheLibrary(t *testing.T) {
 func TestToolSmithListRejectsNonStringFilters(t *testing.T) {
 	root := t.TempDir()
 	listTestWrite(t, root, "fn/a.ts", listTestFunction("a", "A"))
-	result := executeToolSmithList(map[string]any{"list": map[string]any{"filters": []any{"a", 123.0}}}, listTestSettings("fn"), tools.ExecutionContext{CallID: "list-call", WorkspaceRoot: root})
-	if execField(result, "error_code") != "invalid_input" || !strings.Contains(result, "list.filters must be strings") {
+	result := executeToolSmithList(map[string]any{"filters": []any{"a", 123.0}}, listTestSettings("fn"), tools.ExecutionContext{CallID: "list-call", WorkspaceRoot: root})
+	if execField(result, "error_code") != "invalid_input" || !strings.Contains(result, "filters must be strings") {
 		t.Fatalf("result:\n%s", result)
 	}
 }

@@ -480,7 +480,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	if nativeAsync == nil {
-		for name, enabled := range map[string]bool{"process": nativeProcess != nil, "subagent": nativeSubagent != nil} {
+		for name, enabled := range map[string]bool{"process": nativeProcess != nil, "subagent": nativeSubagent != nil, "tool_smith": nativeToolSmith != nil} {
 			if enabled {
 				return SessionConfig{}, configError("%s: tools.native.%s needs tools.native.async to collect, list and stop its handles", settingPath, name)
 			}
