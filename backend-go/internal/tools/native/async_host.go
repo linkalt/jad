@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"jad/backend-go/internal/asyncmgr"
@@ -17,6 +18,10 @@ const asyncDirName = ".async"
 // the session key of the call that started it.
 type AsyncHost struct {
 	manager *asyncmgr.Manager
+
+	mu           sync.Mutex
+	processes    []processStopper
+	processAdded bool
 }
 
 // AsyncResources is implemented by the application resolver: it hands out the host shared
@@ -78,4 +83,27 @@ func asyncHostFor(config asyncHostSource, resources AsyncResources) (*AsyncHost,
 type asyncHostSource struct {
 	dir string
 	cfg asyncmgr.Config
+}
+
+// attachProcess lets the process driver reach a process manager. The first call registers
+// the driver; attaching the same manager again is a no-op.
+func (h *AsyncHost) attachProcess(stopper processStopper) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, attached := range h.processes {
+		if attached == stopper {
+			return
+		}
+	}
+	h.processes = append(h.processes, stopper)
+	if !h.processAdded {
+		h.processAdded = true
+		_ = h.manager.AddDriver(&processDriver{host: h})
+	}
+}
+
+func (h *AsyncHost) processManagers() []processStopper {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]processStopper(nil), h.processes...)
 }

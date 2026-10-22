@@ -91,6 +91,18 @@ type ProcessStartRequest struct {
 	// OwnerLimit, with Owner, refuses a start while Owner already has that many
 	// processes running; zero is no limit. The count and the start happen under one lock.
 	OwnerLimit int
+	// Async, when set, is told about the process as a handle of the async manager: Begin
+	// before the process exists (an error refuses the start), End once it has ended.
+	Async ProcessAsync
+}
+
+// ProcessAsync is how a process reports itself to the async manager. End runs before the
+// done channel closes, so a caller that saw the process end knows the signal is queued.
+type ProcessAsync interface {
+	Begin(id string) error
+	End(ProcessSnapshot)
+	// Abort ends a handle whose process never started; the start call reports the error.
+	Abort(id string, cause error)
 }
 
 type ProcessWaitResult struct {
@@ -146,6 +158,7 @@ type managedProcess struct {
 	maxCompleted  int64
 	retentionDays int64
 	owner         string // see ProcessStartRequest.Owner; never changes after the start
+	async         ProcessAsync
 }
 
 type processStreamWriter struct {
@@ -159,6 +172,9 @@ func NewConfiguredProcessManager(settings sessionfs.NativeProcessSettings) *Mana
 	manager.SetOrphanPolicy(settings.StopOrphans, time.Duration(settings.KillGraceMs)*time.Millisecond)
 	return manager
 }
+
+// Directory is the folder that holds one subfolder per process (manifest and logs).
+func (manager *ManagedProcessManager) Directory() string { return manager.directory }
 
 func NewProcessManager(directory string) *ManagedProcessManager {
 	return &ManagedProcessManager{
@@ -247,12 +263,21 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 		maxCompleted:  request.Policy.MaxCompleted,
 		retentionDays: request.Policy.RetentionDays,
 		owner:         request.Owner,
+		async:         request.Async,
 	}
 	manager.entries[id] = entry
 	manager.manifests[id] = manifest
 	manager.starting.Add(1)
 	manager.mu.Unlock()
 	defer manager.starting.Done()
+
+	if request.Async != nil {
+		if err := request.Async.Begin(id); err != nil {
+			manager.removeEntry(id)
+			_ = os.RemoveAll(processDir)
+			return ProcessSnapshot{}, err
+		}
+	}
 
 	// Name this server before the manifest says running, so another server scanning
 	// the directory never sees a running process without an owner. The process's own
@@ -261,7 +286,11 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	if err := manager.persistManifest(manifest); err != nil {
 		manager.removeEntry(id)
 		_ = os.RemoveAll(processDir)
-		return ProcessSnapshot{}, fmt.Errorf("persist process manifest: %w", err)
+		cause := fmt.Errorf("persist process manifest: %w", err)
+		if request.Async != nil {
+			request.Async.Abort(id, cause)
+		}
+		return ProcessSnapshot{}, cause
 	}
 	environment := buildNativeProcessEnvironment(request.Environment, request.Policy.Env, request.APIKeyEnv, request.Policy.EnvDeny)
 	resolvedShell, err := resolveBashExecutable(request.Policy.Shell, environment, request.CWD)
@@ -612,6 +641,11 @@ func (manager *ManagedProcessManager) finish(entry *managedProcess, state Proces
 		manager.mu.Unlock()
 		if err := manager.persistManifest(manifest); err != nil {
 			entry.finalizeErr = fmt.Errorf("persist process manifest: %w", err)
+		}
+		// The signal is queued before done closes, so a caller released by done that
+		// marks the result read cannot race the completion.
+		if entry.async != nil {
+			entry.async.End(manager.snapshotEntry(entry))
 		}
 		// done closes before the prune: a Wait on this process must not also wait for
 		// the removal of other, older processes' directories.

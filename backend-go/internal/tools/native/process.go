@@ -3,10 +3,12 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
+	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
@@ -44,12 +46,24 @@ var processInputSchema = json.RawMessage(`{
 
 // NewProcessTool binds normalized process policy to a shared process manager.
 func NewProcessTool(settings sessionfs.NativeProcessSettings, manager ProcessManager, apiKeyEnv string) (tools.Tool, error) {
+	return NewProcessToolWithAsync(settings, manager, apiKeyEnv, nil)
+}
+
+// NewProcessToolWithAsync is NewProcessTool plus the async host that tracks every process
+// the tool starts as a handle owned by the calling session. A nil host starts untracked
+// processes.
+func NewProcessToolWithAsync(settings sessionfs.NativeProcessSettings, manager ProcessManager, apiKeyEnv string, host *AsyncHost) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(processInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native process schema: %w", err)
 	}
 	if manager == nil {
 		manager = NewConfiguredProcessManager(settings)
+	}
+	if host != nil {
+		if stopper, ok := manager.(processStopper); ok {
+			host.attachProcess(stopper)
+		}
 	}
 	return tools.Tool{
 		Definition: tools.Definition{
@@ -63,7 +77,7 @@ func NewProcessTool(settings sessionfs.NativeProcessSettings, manager ProcessMan
 		ExampleOperation:   json.RawMessage(`{"command":"npm run dev"}`),
 		NormalizeArguments: normalizeProcessArguments,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-			return executeNativeProcess(ctx, arguments, execution, settings, manager, apiKeyEnv)
+			return executeNativeProcessAsync(ctx, arguments, execution, settings, manager, apiKeyEnv, host)
 		},
 	}, nil
 }
@@ -124,6 +138,18 @@ func executeNativeProcess(
 	manager ProcessManager,
 	apiKeyEnv string,
 ) (string, error) {
+	return executeNativeProcessAsync(ctx, arguments, execution, settings, manager, apiKeyEnv, nil)
+}
+
+func executeNativeProcessAsync(
+	ctx context.Context,
+	arguments map[string]any,
+	execution tools.ExecutionContext,
+	settings sessionfs.NativeProcessSettings,
+	manager ProcessManager,
+	apiKeyEnv string,
+	host *AsyncHost,
+) (string, error) {
 	if manager == nil {
 		return tools.ExecutionError(execution.CallID, tools.StatusError, "process_manager_unavailable", "The process manager is not available"), nil
 	}
@@ -171,6 +197,12 @@ func executeNativeProcess(
 		if err != nil || !info.IsDir() {
 			return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "not_a_directory", "The working directory is not a directory", tools.Information{Key: "path", Value: resolved.displayPath}), nil
 		}
+		// A child's processes (ProcessOwner) belong to its run and are stopped when it ends;
+		// only the session's own are handles of the async manager.
+		var tracked ProcessAsync
+		if host != nil && execution.ProcessOwner == "" && execution.SessionKey != "" {
+			tracked = newProcessAsyncHandle(host, execution.SessionKey, command, settings.StorageDir)
+		}
 		snapshot, err := manager.Start(ProcessStartRequest{
 			CWD:         resolved.realPath,
 			DisplayCWD:  resolved.displayPath,
@@ -180,7 +212,11 @@ func executeNativeProcess(
 			Environment: os.Environ(),
 			APIKeyEnv:   apiKeyEnv,
 			OwnerLimit:  int(execution.ProcessOwnerLimit),
+			Async:       tracked,
 		})
+		if errors.Is(err, asyncmgr.ErrCapacity) {
+			return tools.ExecutionError(execution.CallID, tools.StatusError, "async_capacity_reached", err.Error()), nil
+		}
 		if err != nil {
 			return tools.ExecutionError(execution.CallID, tools.StatusError, "process_start_failed", err.Error()), nil
 		}
@@ -223,6 +259,7 @@ func executeNativeProcess(
 		if !found || snapshot == nil {
 			return processNotFound(execution.CallID, id, manager), nil
 		}
+		markProcessRead(host, execution, snapshot)
 		return renderProcessSnapshot(execution.CallID, action, *snapshot, []tools.Information{{Key: "waited", Value: waited.Waited}})
 	}
 	if existing.State == ProcessLost {
@@ -236,7 +273,16 @@ func executeNativeProcess(
 	if !found || stopped == nil {
 		return processNotFound(execution.CallID, id, manager), nil
 	}
+	markProcessRead(host, execution, stopped)
 	return renderProcessSnapshot(execution.CallID, action, *stopped, nil)
+}
+
+// markProcessRead consumes the async signal of a process whose end the call just reported,
+// so a later async wait does not deliver it a second time.
+func markProcessRead(host *AsyncHost, execution tools.ExecutionContext, snapshot *ProcessSnapshot) {
+	if host != nil && execution.SessionKey != "" && processTerminal(snapshot.State) {
+		host.Manager().MarkRead(execution.SessionKey, snapshot.ID)
+	}
 }
 
 func processActionFor(arguments map[string]any) processAction {

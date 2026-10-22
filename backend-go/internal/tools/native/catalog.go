@@ -303,12 +303,19 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
+	var asyncHost *AsyncHost
+	if config.NativeAsync != nil {
+		asyncHost, err = asyncHostFor(asyncHostSource{dir: config.StoragePaths.ToolStorage, cfg: config.NativeAsync.Config}, asyncResources)
+		if err != nil {
+			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.async: %v", config.SettingPath, err)}
+		}
+	}
 	if config.NativeProcess != nil {
 		definition, err := requireNativeDefinition(config, definitions, "process", processToolID, processInputSchema)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		tool, err := NewProcessTool(*config.NativeProcess, manager, config.Model.APIKeyEnv)
+		tool, err := NewProcessToolWithAsync(*config.NativeProcess, manager, config.Model.APIKeyEnv, asyncHost)
 		if err != nil {
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -321,11 +328,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		host, err := asyncHostFor(asyncHostSource{dir: config.StoragePaths.ToolStorage, cfg: config.NativeAsync.Config}, asyncResources)
-		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.async: %v", config.SettingPath, err)}
-		}
-		tool, err := NewAsyncTool(host)
+		tool, err := NewAsyncTool(asyncHost)
 		if err != nil {
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
