@@ -28,6 +28,9 @@ type Config struct {
 	// ones (0 = never).
 	UnreadMax     int64 `json:"unread_max"`
 	UnreadTTLDays int64 `json:"unread_ttl_days"`
+	// StopWaitMs is how long a stop, and a shutdown, waits for a driver to report the
+	// end of the handles it was told to stop (0 = do not wait).
+	StopWaitMs int64 `json:"stop_wait_ms"`
 }
 
 // EntryOverheadBytes is the room one entry needs beside its summary: the fixed fields, a
@@ -43,6 +46,7 @@ func DefaultConfig() Config {
 		WaitMaxSignals: 10, ListDefaultLimit: 10, ListMaxLimit: 50,
 		SummaryMaxBytes: 512, StatusSummaryBytes: 4096, ResponseMaxBytes: 8192,
 		KeepFinished: 200, RetentionDays: 14, UnreadMax: 100, UnreadTTLDays: 7,
+		StopWaitMs: 2_000,
 	}
 }
 
@@ -65,8 +69,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("%s must be at least 1", field.name)
 		}
 	}
-	if c.RetentionDays < 0 || c.UnreadTTLDays < 0 {
-		return fmt.Errorf("retention_days and unread_ttl_days must not be negative")
+	if c.RetentionDays < 0 || c.UnreadTTLDays < 0 || c.StopWaitMs < 0 {
+		return fmt.Errorf("retention_days, unread_ttl_days and stop_wait_ms must not be negative")
 	}
 	if c.MaxBlockMs < c.DefaultBlockMs {
 		return fmt.Errorf("max_block_ms must be greater than or equal to default_block_ms")

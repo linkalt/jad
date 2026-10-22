@@ -128,7 +128,7 @@ func (m *Manager) List(q ListQuery) (ListResult, error) {
 	return result, nil
 }
 
-// Status returns the entry of one handle without consuming its signal. A live handle's
+// Status returns the entry of one handle without consuming its signal. A driver's
 // summary comes from its driver (Detailer) when it has one. The summary is cut to
 // status_summary_max_bytes and to the response budget.
 func (m *Manager) Status(owner, id string) (Entry, error) {
@@ -144,7 +144,6 @@ func (m *Manager) Status(owner, id string) (Entry, error) {
 		rec = *r.rec
 	}
 	driver := m.drivers[r.kind]
-	live := !r.state.Terminal()
 	state, changed := r.state, r.changed
 	m.mu.Unlock()
 
@@ -156,12 +155,12 @@ func (m *Manager) Status(owner, id string) (Entry, error) {
 		}
 	}
 	limit := int(m.cfg.StatusSummaryBytes)
-	if live {
-		if detailer, ok := driver.(Detailer); ok {
-			rec.Summary = detailer.Detail(id, limit)
+	if detailer, ok := driver.(Detailer); ok {
+		if text := detailer.Detail(id, limit); text != "" {
+			rec.Summary = text
 		}
 	}
-	rec.Cut = false
+	rec.Cut = rec.SrcCut
 	entry := entryOf(rec, limit)
 	return fitEntry(entry, int(m.cfg.ResponseMaxBytes)-envelopeBytes), nil
 }
@@ -217,6 +216,19 @@ func (m *Manager) awaitTerminal(ctx context.Context, id string) {
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+// MarkRead consumes the unread signal of a handle whose result the caller already
+// returned to the model (a start tool that finished within block_ms), so a later wait
+// does not deliver it again. An unknown id, another owner's handle or a read one is a no-op.
+func (m *Manager) MarkRead(owner, id string) {
+	m.mu.Lock()
+	r := m.rows[id]
+	mine := r != nil && r.owner == owner
+	m.mu.Unlock()
+	if mine {
+		m.consume(id)
 	}
 }
 

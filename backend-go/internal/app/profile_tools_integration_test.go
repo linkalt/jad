@@ -109,7 +109,7 @@ func TestProfileToolsEntryThatIsNotRegisteredIsAConfigError(t *testing.T) {
 		entry, want string
 		atLoad      bool
 	}{
-		"misspelled":            {"raed", `allow[0] "raed" is not a native tool; use one of bash, decide`, true},
+		"misspelled":            {"raed", `allow[0] "raed" is not a native tool; use one of async, bash, decide`, true},
 		"not enabled":           {"bash", `lists "bash", which is not a registered tool (registered: read, subagent)`, false},
 		"mcp not loaded":        {"mcp:ghost:lookup", `lists "mcp:ghost:lookup", which is not a registered tool`, false},
 		"mcp server not listed": {"mcp:ghost:*", `lists "mcp:ghost:*", which is not a registered tool`, false},

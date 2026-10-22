@@ -120,17 +120,19 @@ type Counts struct {
 // Record is the small per-handle file <dir>/<id>.json. The full result stays in the
 // driver's own files, named by Ref.
 type Record struct {
-	Version   int       `json:"version"`
-	ID        string    `json:"id"`
-	Kind      Kind      `json:"kind"`
-	Owner     string    `json:"owner"`
-	State     State     `json:"state"`
-	OK        bool      `json:"ok,omitempty"`
-	Code      string    `json:"code,omitempty"`
-	Reason    string    `json:"reason,omitempty"`
-	Label     string    `json:"label,omitempty"`
-	Summary   string    `json:"summary,omitempty"`
-	Cut       bool      `json:"cut,omitempty"`
+	Version int    `json:"version"`
+	ID      string `json:"id"`
+	Kind    Kind   `json:"kind"`
+	Owner   string `json:"owner"`
+	State   State  `json:"state"`
+	OK      bool   `json:"ok,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Label   string `json:"label,omitempty"`
+	Summary string `json:"summary,omitempty"`
+	Cut     bool   `json:"cut,omitempty"`
+	// SrcCut: the driver had already shortened Summary, so every view shows it as cut.
+	SrcCut    bool      `json:"src_cut,omitempty"`
 	Bytes     int64     `json:"bytes,omitempty"`
 	Ref       string    `json:"ref,omitempty"`
 	StartedAt time.Time `json:"started_at"`
@@ -177,8 +179,10 @@ type Result struct {
 	Code    string
 	Reason  string
 	Summary string
-	Bytes   int64
-	Ref     string
+	// Cut says the driver already shortened Summary (for example to its tail).
+	Cut   bool
+	Bytes int64
+	Ref   string
 }
 
 func cutUTF8(s string, limit int) (string, bool) {

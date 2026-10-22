@@ -38,7 +38,7 @@ var (
 	// defaultNativeToolSmithTools are the native tools a script may call without configuration.
 	defaultNativeToolSmithTools = []string{"read", "grep", "glob"}
 	// nativeToolSmithExcludedTools can never be called from a script.
-	nativeToolSmithExcludedTools = []string{"bash", "exec", "process", "subagent", "tool_smith", "task"}
+	nativeToolSmithExcludedTools = []string{"bash", "exec", "process", "async", "subagent", "tool_smith", "task"}
 )
 
 // NativeToolSmithExcludedTools returns the native tools a script can never call.

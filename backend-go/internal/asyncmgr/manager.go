@@ -275,6 +275,8 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	rec.Reason, _ = cutUTF8(res.Reason, reasonMaxBytes)
 	rec.Ref, _ = cutUTF8(res.Ref, refMaxBytes)
 	rec.Summary, rec.Cut = cutUTF8(res.Summary, int(m.cfg.SummaryMaxBytes))
+	rec.SrcCut = res.Cut
+	rec.Cut = rec.Cut || res.Cut
 	rec.Bytes = res.Bytes
 	rec.EndedAt = now
 	rec.Unread = true

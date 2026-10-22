@@ -36,13 +36,13 @@ func TestNativeAsyncSettingsEmptyObjectUsesDefaults(t *testing.T) {
 }
 
 func TestNativeAsyncSettingsEveryKeyOverridesAndNullKeepsDefault(t *testing.T) {
-	settings, err := normalizeAsync(t, `{"native":{"async":{"max_handles":3,"max_handles_total":9,"default_block_ms":5,"max_block_ms":50,"default_wait_ms":6,"max_wait_ms":60,"wait_max_signals":4,"list_default_limit":5,"list_max_limit":25,"summary_max_bytes":100,"status_summary_max_bytes":200,"response_max_bytes":4000,"keep_finished":7,"retention_days":0,"unread_max":8,"unread_ttl_days":0}}}`)
+	settings, err := normalizeAsync(t, `{"native":{"async":{"max_handles":3,"max_handles_total":9,"default_block_ms":5,"max_block_ms":50,"default_wait_ms":6,"max_wait_ms":60,"wait_max_signals":4,"list_default_limit":5,"list_max_limit":25,"summary_max_bytes":100,"status_summary_max_bytes":200,"response_max_bytes":4000,"keep_finished":7,"retention_days":0,"unread_max":8,"unread_ttl_days":0,"stop_wait_ms":0}}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := asyncmgr.Config{MaxHandles: 3, MaxHandlesTotal: 9, DefaultBlockMs: 5, MaxBlockMs: 50, DefaultWaitMs: 6, MaxWaitMs: 60,
 		WaitMaxSignals: 4, ListDefaultLimit: 5, ListMaxLimit: 25, SummaryMaxBytes: 100, StatusSummaryBytes: 200, ResponseMaxBytes: 4000,
-		KeepFinished: 7, RetentionDays: 0, UnreadMax: 8, UnreadTTLDays: 0}
+		KeepFinished: 7, RetentionDays: 0, UnreadMax: 8, UnreadTTLDays: 0, StopWaitMs: 0}
 	if settings.Config != want {
 		t.Fatalf("config = %+v, want %+v", settings.Config, want)
 	}
@@ -76,10 +76,8 @@ func TestNativeAsyncSettingsRejectsBadInput(t *testing.T) {
 	}
 }
 
-func TestNativeAsyncIsNotAnAllowListableTool(t *testing.T) {
-	for _, name := range NativeToolNames() {
-		if name == "async" {
-			t.Fatal("async must not be a tool name until the tool is wired")
-		}
+func TestNativeAsyncIsAnAllowListableTool(t *testing.T) {
+	if !containsString(NativeToolNames(), "async") {
+		t.Fatal("async missing from NativeToolNames")
 	}
 }

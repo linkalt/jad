@@ -71,10 +71,12 @@ type Resolver struct {
 	// tools.native.process.storage_dir may be shared by several sessions.
 	processSessions  map[string]map[string]struct{}
 	subagentManagers map[string]*native.SubagentManager
-	mcpManagers      map[string]*mcpclient.Manager
-	taskStores       map[string]*native.TaskStore
-	memoryStores     map[string]*native.MemoryStore
-	fetchStores      map[string]*native.FetchStore
+	// asyncHosts holds one async manager per tool storage folder (its .async folder).
+	asyncHosts   map[string]*native.AsyncHost
+	mcpManagers  map[string]*mcpclient.Manager
+	taskStores   map[string]*native.TaskStore
+	memoryStores map[string]*native.MemoryStore
+	fetchStores  map[string]*native.FetchStore
 	// storeSessions lists the session files that use each task, memory and fetch store,
 	// keyed by kind and storage key, so deleting the last of them can release the store.
 	storeSessions map[string]map[string]struct{}
@@ -179,6 +181,7 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		processManagers:   make(map[string]*native.ManagedProcessManager),
 		processSessions:   make(map[string]map[string]struct{}),
 		subagentManagers:  make(map[string]*native.SubagentManager),
+		asyncHosts:        make(map[string]*native.AsyncHost),
 		mcpManagers:       make(map[string]*mcpclient.Manager),
 		taskStores:        make(map[string]*native.TaskStore),
 		memoryStores:      make(map[string]*native.MemoryStore),
@@ -488,7 +491,7 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	memoryStore := r.sharedMemoryStore(config)
 	fetchStore := r.sharedFetchStore(config)
 	subagentMCP := &native.SubagentMCP{}
-	nativeCatalog, err := native.BuildCatalogWithMessenger(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r})
+	nativeCatalog, err := native.BuildCatalogWithAsync(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r}, r)
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
@@ -518,6 +521,26 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
 	return registered, processManager, taskStore, memoryStore, nil
+}
+
+// AsyncHost implements native.AsyncResources: one async manager per tool storage folder,
+// shared by every session that uses it.
+func (r *Resolver) AsyncHost(config native.AsyncHostConfig) (*native.AsyncHost, error) {
+	key := filepath.Clean(config.Dir)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if host := r.asyncHosts[key]; host != nil {
+		return host, nil
+	}
+	if r.closed {
+		return nil, errors.New("resolver is closed")
+	}
+	host, err := native.NewAsyncHost(key, config.Config, r.logger)
+	if err != nil {
+		return nil, err
+	}
+	r.asyncHosts[key] = host
+	return host, nil
 }
 
 func (r *Resolver) sharedProcessManager(config sessionfs.SessionConfig) native.ProcessManager {
@@ -844,6 +867,10 @@ func (r *Resolver) Close() {
 	for _, manager := range r.subagentManagers {
 		subagentManagers = append(subagentManagers, manager)
 	}
+	asyncHosts := make([]*native.AsyncHost, 0, len(r.asyncHosts))
+	for _, host := range r.asyncHosts {
+		asyncHosts = append(asyncHosts, host)
+	}
 	fetchStores := make([]*native.FetchStore, 0, len(r.fetchStores))
 	for _, store := range r.fetchStores {
 		fetchStores = append(fetchStores, store)
@@ -865,6 +892,10 @@ func (r *Resolver) Close() {
 	}
 	for _, manager := range managers {
 		_ = manager.Close()
+	}
+	// Sub-agents and processes first: they report their end to the async manager.
+	for _, host := range asyncHosts {
+		host.Close()
 	}
 	for _, manager := range mcpManagers {
 		_ = manager.Close()

@@ -79,13 +79,19 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 // BuildCatalogWithMessenger is BuildCatalogWithSubagents plus the messenger behind the
 // profile_message tool. Without a messenger the tool is not offered.
 func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecide == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil {
+	return BuildCatalogWithAsync(config, locks, manager, taskStore, memoryStore, fetchStore, launcher, mcp, subagentManager, toolsets, messenger, nil)
+}
+
+// BuildCatalogWithAsync is BuildCatalogWithMessenger plus the resolver that shares one
+// async host per tool storage folder. Without it the async tool opens a host of its own.
+func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources) (*tools.Catalog, error) {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecide == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeAsync == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
 		locks = NewPathLocks()
 	}
-	loaded, definitions, manager, err := buildNativeTools(config, locks, manager, taskStore, memoryStore, fetchStore)
+	loaded, definitions, manager, err := buildNativeTools(config, locks, manager, taskStore, memoryStore, fetchStore, asyncResources)
 	if err != nil {
 		return nil, err
 	}
@@ -149,6 +155,8 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 		// bash, exec and process hide the running model's key from a child's environment
 		// the way the session's do.
 		derived.Model = config.Model
+		// A child never gets the async tool, so a toolset opens no async host.
+		derived.NativeAsync = nil
 		var manager ProcessManager
 		var taskStore *TaskStore
 		var memoryStore *MemoryStore
@@ -156,7 +164,7 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 		if resources != nil {
 			manager, taskStore, memoryStore, fetchStore = resources.Resources(derived)
 		}
-		loaded, _, manager, err := buildNativeTools(derived, locks, manager, taskStore, memoryStore, fetchStore)
+		loaded, _, manager, err := buildNativeTools(derived, locks, manager, taskStore, memoryStore, fetchStore, nil)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("toolset %s: %v", id, err)}
 		}
@@ -167,7 +175,7 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 
 // buildNativeTools builds every native tool the settings enable except the subagent
 // tool, with the definitions it read and the process manager it used.
-func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore) ([]tools.Tool, map[string]tools.Definition, ProcessManager, error) {
+func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, asyncResources AsyncResources) ([]tools.Tool, map[string]tools.Definition, ProcessManager, error) {
 	if config.NativeProcess != nil && manager == nil {
 		manager = NewConfiguredProcessManager(*config.NativeProcess)
 	}
@@ -308,6 +316,22 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool.Approval = approvalMode(config.NativeProcess.Approval)
 		loaded = append(loaded, tool)
 	}
+	if config.NativeAsync != nil {
+		definition, err := requireNativeDefinition(config, definitions, "async", asyncToolID, asyncInputSchema)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		host, err := asyncHostFor(asyncHostSource{dir: config.StoragePaths.ToolStorage, cfg: config.NativeAsync.Config}, asyncResources)
+		if err != nil {
+			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.async: %v", config.SettingPath, err)}
+		}
+		tool, err := NewAsyncTool(host)
+		if err != nil {
+			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		tool.Definition = definition
+		loaded = append(loaded, tool)
+	}
 	if config.NativeTask != nil {
 		definition, err := requireNativeDefinition(config, definitions, "task", taskToolID, taskInputSchema)
 		if err != nil {
@@ -428,6 +452,8 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeReadImage != nil
 	case "process":
 		return config.NativeProcess != nil
+	case "async":
+		return config.NativeAsync != nil
 	case "task":
 		return config.NativeTask != nil
 	case "memory":

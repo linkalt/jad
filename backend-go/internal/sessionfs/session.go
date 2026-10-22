@@ -136,26 +136,25 @@ type SessionConfig struct {
 	SettingPath     string
 	// StateDir is <state>/<session id>: the folder the session keeps its state in, and the
 	// "session directory" of relative image_store.dir and the {session_dir} spill placeholder.
-	StateDir           string
-	MessagesPath       string
-	MessagesBackupPath string
-	UsageCachePath     string
-	StagingDir         string
-	StoragePaths       SessionStoragePaths
-	WorkingDir         string
-	SessionFiles       SessionFileListingSettings
-	NativeReadPolicy   NativePathPolicy
-	NativeRead         *NativeReadSettings
-	NativeGrep         *NativeGrepSettings
-	NativeWrite        *NativeWriteSettings
-	NativeEdit         *NativeEditSettings
-	NativeBash         *NativeBashSettings
-	NativeExec         *NativeExecSettings
-	NativeGlob         *NativeGlobSettings
-	NativeReadImage    *NativeReadImageSettings
-	NativeProcess      *NativeProcessSettings
-	// AsyncManager holds the async manager bounds. It is not a tool, so it is not a Native* field.
-	AsyncManager         *NativeAsyncSettings
+	StateDir             string
+	MessagesPath         string
+	MessagesBackupPath   string
+	UsageCachePath       string
+	StagingDir           string
+	StoragePaths         SessionStoragePaths
+	WorkingDir           string
+	SessionFiles         SessionFileListingSettings
+	NativeReadPolicy     NativePathPolicy
+	NativeRead           *NativeReadSettings
+	NativeGrep           *NativeGrepSettings
+	NativeWrite          *NativeWriteSettings
+	NativeEdit           *NativeEditSettings
+	NativeBash           *NativeBashSettings
+	NativeExec           *NativeExecSettings
+	NativeGlob           *NativeGlobSettings
+	NativeReadImage      *NativeReadImageSettings
+	NativeProcess        *NativeProcessSettings
+	NativeAsync          *NativeAsyncSettings
 	NativeTask           *NativeTaskSettings
 	NativeMemory         *NativeMemorySettings
 	NativeFetch          *NativeFetchSettings
@@ -587,7 +586,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeGlob:            nativeGlob,
 		NativeReadImage:       nativeReadImage,
 		NativeProcess:         nativeProcess,
-		AsyncManager:          nativeAsync,
+		NativeAsync:           nativeAsync,
 		NativeTask:            nativeTask,
 		NativeMemory:          nativeMemory,
 		NativeFetch:           nativeFetch,

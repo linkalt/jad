@@ -1284,11 +1284,11 @@
                   "type": "array",
                   "uniqueItems": true,
                   "default": ["read", "grep", "glob"],
-                  "description": "Native tools a script may call, in this order. bash, exec, process, subagent, tool_smith and task can never be called through the bridge. The script itself is unsandboxed (exec/bash trust) and may use raw fs, network and process APIs.",
+                  "description": "Native tools a script may call, in this order. bash, exec, process, async, subagent, tool_smith and task can never be called through the bridge. The script itself is unsandboxed (exec/bash trust) and may use raw fs, network and process APIs.",
                   "items": {
                     "type": "string",
                     "minLength": 1,
-                    "not": {"enum": ["bash", "exec", "process", "subagent", "tool_smith", "task"]}
+                    "not": {"enum": ["bash", "exec", "process", "async", "subagent", "tool_smith", "task"]}
                   }
                 },
                 "interpreter": {
@@ -1886,7 +1886,7 @@
             },
             "async": {
               "type": "object",
-              "description": "Go backend only. Bounds of the async manager that owns the handles of the async tools (process, sub-agent runs; later tool_smith and profile_message): the live-handle caps, the block and wait times, the size of one response, and how long finished handles and undelivered signals are kept. Not a tool the model can call or allow-list; the async tool itself is configured by its tool definition. Every key has a default, so {} is valid.",
+              "description": "Go backend only. Enables the async tool (wait, list, status, stop) and sets the bounds of the async manager that owns the handles of the async tools (process; later sub-agent runs, tool_smith and profile_message): the live-handle caps, the block and wait times, the size of one response, and how long finished handles and undelivered signals are kept. The tool definition native/async.json must be in tool_definition_paths. Every key has a default, so {} is valid.",
               "properties": {
                 "max_handles": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 16, "description": "Most live (queued or running) async handles one session may hold. A start at the cap is refused with async_capacity_reached."},
                 "max_handles_total": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 64, "description": "Most live async handles on the whole server."},
@@ -1903,6 +1903,7 @@
                 "keep_finished": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 200, "description": "Terminal handle records kept; the oldest read ones beyond this are deleted with their result files."},
                 "retention_days": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 14, "description": "Terminal handle records older than this many days are deleted. 0 turns age pruning off."},
                 "unread_max": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 100, "description": "Most undelivered completion signals kept per session; older ones are marked read and counted as dropped. Not below wait_max_signals."},
+                "stop_wait_ms": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 2000, "description": "How long an async stop and a shutdown wait for the work to report that it ended. 0 does not wait."},
                 "unread_ttl_days": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 7, "description": "Undelivered signals older than this many days expire. 0 keeps them until the record is pruned."}
               },
               "additionalProperties": false

@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.async",
+      "source": "native",
+      "name": "async",
+      "description": "Manage background work started by other tools. wait: block until at least one handle finishes and return every finished one. list: your handles, active by default. status: one handle. stop: end one handle. A start that returned a handle id is still running; collect it with wait in a later call.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "wait",
+              "list",
+              "status",
+              "stop"
+            ]
+          },
+          "wait_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "wait: most time to block; 0 polls."
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "description": "wait: only these handles. Default: all yours."
+          },
+          "id": {
+            "type": "string",
+            "description": "status, stop: handle id."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "done",
+              "failed",
+              "stopped",
+              "timed_out",
+              "lost",
+              "all"
+            ],
+            "description": "list: default active."
+          },
+          "kind": {
+            "type": "string",
+            "description": "list: process, subagent, ..."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "list: page size."
+          },
+          "cursor": {
+            "type": "string",
+            "description": "list: from the previous page."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
