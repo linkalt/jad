@@ -423,6 +423,9 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 				continue
 			}
 			if _, exists := byName[name]; !exists {
+				if name == "async" || name == "subagent" || name == "tool_smith" {
+					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which a sub-agent never gets, whatever the session enables: remove it from the list (the parent session collects handles with its own async tool; a child's process handles end with the child)", agent.Name, name)
+				}
 				return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not an enabled %s (enabled: %s); an MCP tool is written mcp:<server>:<tool>", agent.Name, name, kind, strings.Join(available, ", "))
 			}
 			wanted[name] = struct{}{}
