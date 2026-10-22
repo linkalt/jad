@@ -22,7 +22,7 @@ import (
 func TestHTTPRunAutomaticallyCompactsAndPersistsStateContext(t *testing.T) {
 	workspace := t.TempDir()
 	processStorage := filepath.Join(workspace, "processes")
-	processTool, err := native.NewProcessTool(sessionfs.NativeProcessSettings{StorageDir: processStorage, Shell: "/bin/sh"}, nil, "UNSET_PROVIDER_KEY")
+	processTool, err := native.NewProcessToolWithAsync(sessionfs.NativeProcessSettings{StorageDir: processStorage, Shell: "/bin/sh"}, nil, "UNSET_PROVIDER_KEY", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

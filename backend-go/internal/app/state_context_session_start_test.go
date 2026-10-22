@@ -57,7 +57,7 @@ func newStateContextFixtureWith(t *testing.T, seedProcess bool, triggers, extraS
 	workspace := t.TempDir()
 	processStorage := filepath.Join(workspace, "processes")
 	fixture.processStorage = processStorage
-	processTool, err := native.NewProcessTool(sessionfs.NativeProcessSettings{StorageDir: processStorage, Shell: "/bin/sh"}, nil, "UNSET_PROVIDER_KEY")
+	processTool, err := native.NewProcessToolWithAsync(sessionfs.NativeProcessSettings{StorageDir: processStorage, Shell: "/bin/sh"}, nil, "UNSET_PROVIDER_KEY", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

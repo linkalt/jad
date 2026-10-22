@@ -15,7 +15,6 @@ type noopDriver struct{}
 
 func (noopDriver) Kind() asyncmgr.Kind { return "process" }
 func (noopDriver) Stop(string, string) {}
-func (noopDriver) Forget(string)       {}
 
 func asyncStateContextConfig(maxBytes int64) sessionfs.SessionConfig {
 	return sessionfs.SessionConfig{

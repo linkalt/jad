@@ -156,12 +156,6 @@ type Detailer interface {
 	Detail(id string, maxBytes int) string
 }
 
-// Forgetter is optional: called after a terminal record is pruned so the driver can
-// remove the per-kind result files that belong to it.
-type Forgetter interface {
-	Forget(id string)
-}
-
 // Registration starts tracking one handle.
 type Registration struct {
 	ID    string

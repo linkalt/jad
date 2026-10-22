@@ -663,17 +663,6 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	close(run.done)
 }
 
-// get returns the run with the given id, or nil. A run of another session is nil too,
-// so one session cannot read or stop the runs of another that shares the directory.
-func (m *SubagentManager) get(id, owner string) *subagentRun {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if run := m.runs[id]; run != nil && run.owner == owner {
-		return run
-	}
-	return nil
-}
-
 // byID returns the run with the given id whatever its owner. The async driver uses it:
 // the async manager has already checked the owner.
 func (m *SubagentManager) byID(id string) *subagentRun {

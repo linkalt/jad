@@ -11,15 +11,10 @@ type flip struct {
 	overflow bool
 }
 
-type removal struct {
-	id   string
-	kind Kind
-}
-
 // pruneWork is file work decided under the manager lock and done after releasing it.
 type pruneWork struct {
 	flips   []flip
-	removes []removal
+	removes []string // handle ids whose record file is removed
 }
 
 func (w *pruneWork) merge(o pruneWork) {
@@ -40,14 +35,8 @@ func (m *Manager) applyWork(w pruneWork, index bool) {
 			}
 		})
 	}
-	for _, r := range w.removes {
-		m.removeRecord(r.id)
-		m.mu.Lock()
-		driver := m.drivers[r.kind]
-		m.mu.Unlock()
-		if forgetter, ok := driver.(Forgetter); ok {
-			forgetter.Forget(r.id)
-		}
+	for _, id := range w.removes {
+		m.removeRecord(id)
 	}
 	if index || !w.empty() {
 		m.writeIndex()
@@ -128,7 +117,7 @@ func (m *Manager) pruneLocked(now time.Time) pruneWork {
 		}
 	}
 	for _, r := range finished[:drop] {
-		w.removes = append(w.removes, removal{id: r.id, kind: r.kind})
+		w.removes = append(w.removes, r.id)
 		m.forgetLocked(r)
 	}
 	return w

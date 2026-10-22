@@ -33,9 +33,8 @@ type fakeDriver struct {
 	// autoComplete makes Stop report StateStopped at once, like a driver that ends fast.
 	autoComplete bool
 
-	mu        sync.Mutex
-	stops     []string
-	forgotten []string
+	mu    sync.Mutex
+	stops []string
 }
 
 func (d *fakeDriver) Kind() Kind { return d.kind }
@@ -49,22 +48,10 @@ func (d *fakeDriver) Stop(id, reason string) {
 	}
 }
 
-func (d *fakeDriver) Forget(id string) {
-	d.mu.Lock()
-	d.forgotten = append(d.forgotten, id)
-	d.mu.Unlock()
-}
-
 func (d *fakeDriver) stopped() []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return append([]string(nil), d.stops...)
-}
-
-func (d *fakeDriver) forgottenIDs() []string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return append([]string(nil), d.forgotten...)
 }
 
 type fixture struct {

@@ -63,13 +63,13 @@ func TestNativeProcessOutputMatchesNodeMessagesJSONLGolden(t *testing.T) {
 		},
 		StdoutStoredBytes: 3,
 	}}
-	tool, err := NewProcessTool(sessionfs.NativeProcessSettings{
+	tool, err := NewProcessToolWithAsync(sessionfs.NativeProcessSettings{
 		Stdout:       sessionfs.NativeBashStreamBudget{HeadBytes: 32, TailBytes: 32},
 		Stderr:       sessionfs.NativeBashStreamBudget{HeadBytes: 32, TailBytes: 32},
 		MaxLineChars: 200,
 		StripANSI:    true,
 		StorageDir:   t.TempDir(),
-	}, manager, "PROCESS_TOOL_TEST_SECRET")
+	}, manager, "PROCESS_TOOL_TEST_SECRET", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

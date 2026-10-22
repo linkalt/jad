@@ -359,7 +359,7 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	}
 	var work pruneWork
 	if after == endRemove {
-		work.removes = append(work.removes, removal{id: r.id, kind: r.kind})
+		work.removes = append(work.removes, r.id)
 		m.forgetLocked(r)
 	}
 	work.merge(m.enforceUnreadLocked(r.owner))
@@ -393,8 +393,8 @@ func (m *Manager) ResetOwner(owner, reason string) int {
 }
 
 // DeleteOwnersWithPrefix is the delete of a session (every profile): live handles are asked
-// to stop and are removed when they end, and the finished ones are removed now. The result
-// files of the drivers are left to their Forget. It does not wait.
+// to stop and are removed when they end, and the finished ones are removed now. Only the
+// manager's records go; a driver's own result files follow its own retention. It does not wait.
 func (m *Manager) DeleteOwnersWithPrefix(prefix, reason string) int {
 	match := func(r *row) bool { return strings.HasPrefix(r.owner, prefix) }
 	n := m.cancel(match, reason, endRemove)
@@ -402,7 +402,7 @@ func (m *Manager) DeleteOwnersWithPrefix(prefix, reason string) int {
 	m.mu.Lock()
 	for _, r := range sortedRows(m.rows) {
 		if r.state.Terminal() && !r.finishing && match(r) {
-			work.removes = append(work.removes, removal{id: r.id, kind: r.kind})
+			work.removes = append(work.removes, r.id)
 			m.forgetLocked(r)
 		}
 	}

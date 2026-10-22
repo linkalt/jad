@@ -121,9 +121,6 @@ func TestListPaginationAndRetentionAt1kHandles(t *testing.T) {
 	if records != 200 {
 		t.Fatalf("%d record files on disk, want 200", records)
 	}
-	if forgotten := len(f.driver.forgottenIDs()); forgotten != total-200 {
-		t.Fatalf("driver forgot %d handles, want %d", forgotten, total-200)
-	}
 
 	var seen []string
 	cursor := ""

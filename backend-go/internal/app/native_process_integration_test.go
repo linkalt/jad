@@ -25,7 +25,7 @@ func TestHTTPRunExecutesNativeProcessStartThatFinishesWithinBlockMs(t *testing.T
 	}
 	workspace := t.TempDir()
 	processStorage := filepath.Join(workspace, "processes")
-	processTool, err := native.NewProcessTool(sessionfs.NativeProcessSettings{
+	processTool, err := native.NewProcessToolWithAsync(sessionfs.NativeProcessSettings{
 		Policy:       sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}},
 		Shell:        "/bin/sh",
 		MaxRunning:   2,
@@ -37,7 +37,7 @@ func TestHTTPRunExecutesNativeProcessStartThatFinishesWithinBlockMs(t *testing.T
 		StorageDir:   processStorage,
 		Env:          map[string]string{},
 		EnvDeny:      []string{},
-	}, nil, "FIXTURE_OPENAI_KEY")
+	}, nil, "FIXTURE_OPENAI_KEY", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

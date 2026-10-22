@@ -30,7 +30,7 @@ func newProcessFixture(t *testing.T) processFixture {
 	t.Cleanup(func() { _ = manager.Close() })
 	settings := processTestRequest(dir, "", 1024).Policy
 	settings.StorageDir = dir + "/processes"
-	tool, err := NewProcessTool(settings, manager, "KEY")
+	tool, err := NewProcessToolWithAsync(settings, manager, "KEY", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

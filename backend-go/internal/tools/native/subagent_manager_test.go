@@ -13,6 +13,14 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
+// get returns the run with the given id, or nil when it is unknown or another session's.
+func (m *SubagentManager) get(id, owner string) *subagentRun {
+	if run := m.byID(id); run != nil && run.owner == owner {
+		return run
+	}
+	return nil
+}
+
 var subagentRunIDPattern = regexp.MustCompile(`sub_[0-9a-f]{8}`)
 
 // blockedLauncher holds each child until release closes or its context ends, and

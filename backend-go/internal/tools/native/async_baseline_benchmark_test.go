@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/tools"
 )
 
@@ -129,25 +131,55 @@ func BenchmarkSubagentInlineRun(b *testing.B) {
 	}
 }
 
-// BenchmarkSubagentDetachedWake measures hand-off plus the follow-up that collects the
-// answer once the child is done: the wake-up path a signal manager would replace.
+// BenchmarkSubagentDetachedWake measures hand-off plus the async wait that collects the
+// answer once the child is done: the wake-up path of the async manager.
 func BenchmarkSubagentDetachedWake(b *testing.B) {
 	manager := NewSubagentManager()
 	defer manager.Close()
+	host, err := NewAsyncHost(filepath.Join(b.TempDir(), ".async"), asyncmgr.DefaultConfig(), nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer host.Close()
 	launcher := &fakeLauncher{run: func(ctx context.Context, _ SubagentRequest) (SubagentResult, error) {
 		return SubagentResult{Text: "done", Rounds: 1}, nil
 	}}
-	catalog := benchSubagentCatalog(b, manager, launcher)
+	parent := []tools.Tool{{
+		Definition: tools.Definition{ID: "native:read", Source: "native", Name: "read", Description: "read"},
+		ReadOnly:   true, Validator: mustBenchSchema(b),
+		Execute: func(context.Context, map[string]any, tools.ExecutionContext) (string, error) { return "ok", nil },
+	}}
+	tool, err := newSubagentToolAsync(subagentSettings(agentNamed("explore")), parent, nil, launcher, nil, manager, nil, host)
+	if err != nil {
+		b.Fatal(err)
+	}
+	asyncTool, err := NewAsyncTool(host)
+	if err != nil {
+		b.Fatal(err)
+	}
+	exec := tools.ExecutionContext{CallID: "bench", WorkspaceRoot: "/work", SessionDir: "/sess", SessionKey: "s1"}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		out := benchSubagentCall(b, catalog, `{"task":"x","wait_ms":0}`)
-		id := subagentRunIDPattern.FindString(out)
-		if id == "" {
-			b.Fatalf("no run id in %s", out)
+		arguments := tool.NormalizeArguments(map[string]any{"task": "x", "block_ms": int64(0)})
+		out, err := tool.Execute(context.Background(), arguments, exec)
+		if err != nil || subagentRunIDPattern.FindString(out) == "" {
+			b.Fatalf("no run id in %s (err %v)", out, err)
 		}
-		benchSubagentCall(b, catalog, `{"id":"`+id+`","wait_ms":5000}`)
+		waited, err := asyncTool.Execute(context.Background(), map[string]any{"action": "wait", "wait_ms": int64(5000)}, exec)
+		if err != nil || !strings.Contains(waited, "done") {
+			b.Fatalf("wait = %s (err %v)", waited, err)
+		}
 	}
+}
+
+func mustBenchSchema(b *testing.B) *tools.SchemaValidator {
+	b.Helper()
+	validator, err := tools.CompileSchema(json.RawMessage(`{"type":"object"}`))
+	if err != nil {
+		b.Fatal(err)
+	}
+	return validator
 }
 
 func benchSubagentCatalog(b *testing.B, manager *SubagentManager, launcher SubagentLauncher) *tools.Catalog {

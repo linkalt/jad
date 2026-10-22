@@ -27,14 +27,10 @@ var processInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-// NewProcessTool binds normalized process policy to a shared process manager.
-func NewProcessTool(settings sessionfs.NativeProcessSettings, manager ProcessManager, apiKeyEnv string) (tools.Tool, error) {
-	return NewProcessToolWithAsync(settings, manager, apiKeyEnv, nil)
-}
-
-// NewProcessToolWithAsync is NewProcessTool plus the async host that tracks every process
-// the session starts as a handle (waited for, listed, inspected and stopped with the async
-// tool). A nil host starts untracked processes and uses the default block times.
+// NewProcessToolWithAsync binds normalized process policy to a shared process manager and
+// the async host that tracks every process the session starts as a handle (waited for,
+// listed, inspected and stopped with the async tool). A nil host starts untracked processes
+// and uses the default block times.
 func NewProcessToolWithAsync(settings sessionfs.NativeProcessSettings, manager ProcessManager, apiKeyEnv string, host *AsyncHost) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(processInputSchema)
 	if err != nil {
@@ -88,17 +84,6 @@ func normalizeProcessArguments(arguments map[string]any) map[string]any {
 	}
 	delete(normalized, "input")
 	return normalized
-}
-
-func executeNativeProcess(
-	ctx context.Context,
-	arguments map[string]any,
-	execution tools.ExecutionContext,
-	settings sessionfs.NativeProcessSettings,
-	manager ProcessManager,
-	apiKeyEnv string,
-) (string, error) {
-	return executeNativeProcessAsync(ctx, arguments, execution, settings, manager, apiKeyEnv, nil)
 }
 
 func executeNativeProcessAsync(

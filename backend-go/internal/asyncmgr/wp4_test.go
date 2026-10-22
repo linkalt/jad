@@ -59,9 +59,6 @@ func TestDeleteOwnersWithPrefixStopsLiveRemovesFinishedAndSparesOthers(t *testin
 	if _, err := f.m.Status("sess|a", "fin"); err == nil {
 		t.Fatal("finished handle of the deleted session still known")
 	}
-	if got := f.driver.forgottenIDs(); !reflect.DeepEqual(got, []string{"fin"}) {
-		t.Fatalf("forgotten = %v", got)
-	}
 	f.finish(t, "live1", Result{State: StateStopped, Reason: "session_delete"})
 	f.finish(t, "live2", Result{State: StateStopped, Reason: "session_delete"})
 	for _, id := range []string{"fin", "live1", "live2"} {
@@ -71,9 +68,6 @@ func TestDeleteOwnersWithPrefixStopsLiveRemovesFinishedAndSparesOthers(t *testin
 	}
 	if c := f.m.Counts("sess|a"); c.Total != 0 || c.Unread != 0 {
 		t.Fatalf("counts of the deleted session = %+v", c)
-	}
-	if got := f.driver.forgottenIDs(); len(got) != 3 {
-		t.Fatalf("forgotten = %v, want all three", got)
 	}
 	if e, err := f.m.Status("other|a", "keep"); err != nil || e.State.Terminal() {
 		t.Fatalf("another session's handle = %+v, %v", e, err)
