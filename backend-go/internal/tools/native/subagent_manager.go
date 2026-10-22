@@ -381,6 +381,11 @@ type subagentStart struct {
 	resultMax  int64
 	// async, when set, makes the run a handle of the async manager owned by owner.
 	async *subagentAsyncHandle
+	// asyncHost, when set, is where the child's own handles (owner = the run id) live; the
+	// run's end stops and removes them. It is set for writers too, which are no handles.
+	asyncHost *AsyncHost
+	// childAsync is set when the child has the async tool, so its processes are handles.
+	childAsync bool
 }
 
 // undoReservationLocked gives back the slot or queue place start took for a run that was
@@ -460,6 +465,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	// its own and the run's end can stop them.
 	spec.request.Execution.ProcessOwner = id
 	spec.request.Execution.ProcessOwnerLimit = int64(spec.processMax)
+	spec.request.Execution.ProcessAsync = spec.asyncHost != nil && spec.childAsync
 	if spec.changes && spec.changedMax > 0 {
 		run.tracked = true
 		changedMax := spec.changedMax
@@ -494,7 +500,13 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 	result, err := m.runLauncher(childContext, spec)
 	// The child is over, so nothing it started should go on: stop its processes before
 	// the run is reported ended, and say how many there were.
-	run.setProcessesStopped(stopRunProcesses(spec.processes, run.id))
+	// The child's own async handles go first, so their records are removed with them; the
+	// process stop below catches any process that had no handle.
+	stoppedHandles := 0
+	if spec.asyncHost != nil {
+		stoppedHandles = spec.asyncHost.Manager().DeleteOwnersWithPrefix(run.id, "subagent_run_ended")
+	}
+	run.setProcessesStopped(max(stoppedHandles, stopRunProcesses(spec.processes, run.id)))
 	switch {
 	case err == nil:
 		m.finish(run, subagentRunDone, result, "", spec)

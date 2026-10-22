@@ -234,6 +234,7 @@ func startToolSmithBridge(ctx context.Context, dir string, settings sessionfs.Na
 			OnFileChange:          execution.OnFileChange,
 			ProcessOwner:          execution.ProcessOwner,
 			ProcessOwnerLimit:     execution.ProcessOwnerLimit,
+			ProcessAsync:          execution.ProcessAsync,
 		},
 		baseCallID: baseCallID,
 		listener:   listener,

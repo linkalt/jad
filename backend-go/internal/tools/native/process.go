@@ -147,15 +147,21 @@ func executeNativeProcessAsync(
 	if err != nil || !info.IsDir() {
 		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "not_a_directory", "The working directory is not a directory", tools.Information{Key: "path", Value: resolved.displayPath}), nil
 	}
-	// A child's processes (ProcessOwner) belong to its run and are stopped when it ends;
-	// only the session's own are handles of the async manager.
+	// A child's processes (ProcessOwner) are handles owned by its run when it has the async tool
+	// (ProcessAsync): only that tool sees them, and they are stopped when the run ends.
 	var tracked ProcessAsync
 	owner := ""
 	config := asyncmgr.DefaultConfig()
 	if host != nil {
 		config = host.Config()
-		if execution.ProcessOwner == "" && execution.SessionKey != "" {
-			owner = execution.SessionKey
+		owner = execution.SessionKey
+		if execution.ProcessOwner != "" {
+			owner = ""
+			if execution.ProcessAsync {
+				owner = execution.ProcessOwner
+			}
+		}
+		if owner != "" {
 			tracked = newProcessAsyncHandle(host, owner, command, settings.StorageDir)
 		}
 	}

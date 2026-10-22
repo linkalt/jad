@@ -117,16 +117,20 @@ func TestAsyncToolChangesStateOnlyForStop(t *testing.T) {
 	}
 }
 
-func TestAsyncToolIsNeverInASubagentPoolOrAScript(t *testing.T) {
+// Decided 2026-10-22: a sub-agent may use async (scoped to its own run), but only when its
+// tools list names it; a child with no list never gets it, and scripts never call it.
+func TestAsyncToolIsOptInForASubagentAndNeverInAScript(t *testing.T) {
 	tool, _, _ := newAsyncToolFixture(t)
 	if !tool.ReadOnly {
-		t.Fatal("async must be ReadOnly for the exclusion to matter")
+		t.Fatal("async must be ReadOnly to be in the read-only pool")
 	}
-	readOnly, changers := childToolPools(sessionfs.NativeSubagentSettings{AllowWrite: true}, []tools.Tool{readOnlyTool("read"), tool})
-	for _, pooled := range append(readOnly, changers...) {
-		if pooled.Definition.ID == asyncToolID {
-			t.Fatalf("a sub-agent pool contains async: %v", poolNames(readOnly))
-		}
+	readOnly, _ := childToolPools(sessionfs.NativeSubagentSettings{AllowWrite: true}, []tools.Tool{readOnlyTool("read"), tool})
+	if !containsName(poolNames(readOnly), "async") {
+		t.Fatalf("async must be available to an agent that lists it: %v", poolNames(readOnly))
+	}
+	chosen, _, err := subagentChildTools(agentNamed("plain"), readOnly, nil, false)
+	if err != nil || containsName(poolNames(chosen), "async") {
+		t.Fatalf("a child without a tools list got async: %v %v", poolNames(chosen), err)
 	}
 	if !containsName(sessionfs.NativeToolSmithExcludedTools(), "async") {
 		t.Fatal("tool_smith scripts may call async")

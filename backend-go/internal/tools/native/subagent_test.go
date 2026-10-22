@@ -231,7 +231,7 @@ func TestSubagentToolsListNarrowsAndRejectsAnUnavailableName(t *testing.T) {
 		"unknown tool": {[]string{"nope"}, `lists "nope"`},
 		"mcp tool":     {[]string{"lookup"}, `lists "lookup"`},
 		"subagent":     {[]string{"subagent"}, `lists "subagent", which a sub-agent never gets`},
-		"async":        {[]string{"read", "async"}, `lists "async", which a sub-agent never gets, whatever the session enables`},
+		"async":        {[]string{"read", "async"}, `lists "async", but the session does not enable tools.native.async`},
 		"tool_smith":   {[]string{"tool_smith"}, `lists "tool_smith", which a sub-agent never gets`},
 	} {
 		t.Run(name, func(t *testing.T) {

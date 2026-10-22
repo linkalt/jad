@@ -58,6 +58,9 @@ type ExecutionContext struct {
 	// ProcessOwnerLimit is the most processes ProcessOwner may have running at once;
 	// zero means no limit beyond the session's own. It only counts with ProcessOwner.
 	ProcessOwnerLimit int64
+	// ProcessAsync, with ProcessOwner, makes the child's processes handles of the async
+	// manager owned by ProcessOwner. It is set only for a child that has the async tool.
+	ProcessAsync bool
 	// AgentName is the sub-agent the call runs for; empty in the session's own run.
 	AgentName string
 }

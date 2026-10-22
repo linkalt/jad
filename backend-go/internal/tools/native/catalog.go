@@ -111,7 +111,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		}
 		subagentSettings := *config.NativeSubagent
 		subagentSettings.DenyTools = config.ProfileTools.Deny
-		agentToolsets, err := buildAgentToolsets(config, locks, toolsets)
+		agentToolsets, err := buildAgentToolsets(config, locks, toolsets, asyncHost)
 		if err != nil {
 			return nil, err
 		}
@@ -152,7 +152,7 @@ type ToolsetResources interface {
 
 // buildAgentToolsets builds the native tools of every toolset a sub-agent names. The
 // tools are not part of the catalog the parent's model sees.
-func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resources ToolsetResources) (map[string]subagentToolset, error) {
+func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resources ToolsetResources, asyncHost *AsyncHost) (map[string]subagentToolset, error) {
 	if len(config.AgentToolsets) == 0 {
 		return nil, nil
 	}
@@ -163,8 +163,10 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 		// bash, exec and process hide the running model's key from a child's environment
 		// the way the session's do.
 		derived.Model = config.Model
-		// A child never gets the async tool, so a toolset opens no async host.
-		derived.NativeAsync = nil
+		// A toolset shares the session's async host; without one it has no async tool.
+		if asyncHost == nil {
+			derived.NativeAsync = nil
+		}
 		var manager ProcessManager
 		var taskStore *TaskStore
 		var memoryStore *MemoryStore
@@ -172,7 +174,7 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 		if resources != nil {
 			manager, taskStore, memoryStore, fetchStore = resources.Resources(derived)
 		}
-		loaded, _, manager, err := buildNativeTools(derived, locks, manager, taskStore, memoryStore, fetchStore, nil)
+		loaded, _, manager, err := buildNativeTools(derived, locks, manager, taskStore, memoryStore, fetchStore, asyncHost)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("toolset %s: %v", id, err)}
 		}

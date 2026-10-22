@@ -150,7 +150,11 @@ func executeAsync(ctx context.Context, host *AsyncHost, arguments map[string]any
 	}
 	manager := host.Manager()
 	cfg := host.Config()
+	// A sub-agent's async tool sees only the handles its own run owns.
 	owner := execution.SessionKey
+	if execution.ProcessOwner != "" {
+		owner = execution.ProcessOwner
+	}
 	switch action {
 	case asyncActionWait:
 		var ids []string

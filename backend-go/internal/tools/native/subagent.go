@@ -64,6 +64,15 @@ type SubagentLauncher interface {
 	Run(ctx context.Context, request SubagentRequest) (SubagentResult, error)
 }
 
+func (a subagentAgent) hasNativeTool(id string) bool {
+	for _, tool := range a.nativeTools {
+		if tool.Definition.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 type subagentAgent struct {
 	config sessionfs.NativeSubagentAgent
 	// catalog is what the child may call. It is nil for an agent that lists MCP tools
@@ -166,7 +175,7 @@ type subagentToolset struct {
 // tools.deny covers. Only native tools are taken.
 func childToolPools(settings sessionfs.NativeSubagentSettings, available []tools.Tool) (readOnly, changers []tools.Tool) {
 	for _, tool := range available {
-		if (tool.Definition.Source != "native" && tool.Definition.Source != "extension") || tool.Definition.ID == subagentToolID || tool.Definition.ID == toolSmithToolID || tool.Definition.ID == asyncToolID || tools.AnyEntryMatches(settings.DenyTools, tool.Definition) {
+		if (tool.Definition.Source != "native" && tool.Definition.Source != "extension") || tool.Definition.ID == subagentToolID || tool.Definition.ID == toolSmithToolID || tools.AnyEntryMatches(settings.DenyTools, tool.Definition) {
 			continue
 		}
 		switch {
@@ -413,7 +422,13 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 	if allowWrite {
 		kind = "native tool"
 	}
-	chosen := readOnly
+	// async is opt-in: a child gets it only when its tools list names it.
+	chosen := make([]tools.Tool, 0, len(readOnly))
+	for _, tool := range readOnly {
+		if tool.Definition.ID != asyncToolID {
+			chosen = append(chosen, tool)
+		}
+	}
 	var mcpIDs []string
 	if agent.HasTools {
 		wanted := make(map[string]struct{}, len(agent.Tools))
@@ -423,8 +438,11 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 				continue
 			}
 			if _, exists := byName[name]; !exists {
-				if name == "async" || name == "subagent" || name == "tool_smith" {
-					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which a sub-agent never gets, whatever the session enables: remove it from the list (the parent session collects handles with its own async tool; a child's process handles end with the child)", agent.Name, name)
+				switch name {
+				case "subagent", "tool_smith":
+					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which a sub-agent never gets, whatever the session enables: remove it from the list", agent.Name, name)
+				case "async":
+					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"async\", but the session does not enable tools.native.async: add \"async\": {} under tools.native, or remove it from the list", agent.Name)
 				}
 				return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not an enabled %s (enabled: %s); an MCP tool is written mcp:<server>:<tool>", agent.Name, name, kind, strings.Join(available, ", "))
 			}

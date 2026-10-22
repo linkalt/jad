@@ -64,10 +64,12 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		handle = newSubagentAsyncHandle(s.async, execution.SessionKey, agent.config.Name, subagentTaskPreview(task))
 	}
 	run, err := s.manager.start(subagentStart{
-		async:    handle,
-		launcher: s.launcher,
-		owner:    execution.SessionKey,
-		changes:  changes,
+		async:      handle,
+		asyncHost:  s.async,
+		childAsync: agent.hasNativeTool(asyncToolID),
+		launcher:   s.launcher,
+		owner:      execution.SessionKey,
+		changes:    changes,
 		request: SubagentRequest{
 			Agent:     agent.config,
 			Task:      task,
