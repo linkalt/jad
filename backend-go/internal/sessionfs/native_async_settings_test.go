@@ -37,7 +37,7 @@ func TestNativeAsyncSettingsEmptyObjectUsesDefaults(t *testing.T) {
 }
 
 func TestNativeAsyncSettingsEveryKeyOverridesAndNullKeepsDefault(t *testing.T) {
-	settings, err := normalizeAsync(t, `{"native":{"async":{"max_handles":3,"max_handles_total":9,"default_block_ms":5,"max_block_ms":50,"default_wait_ms":6,"max_wait_ms":60,"wait_max_signals":4,"list_default_limit":5,"list_max_limit":25,"summary_max_bytes":100,"status_summary_max_bytes":200,"response_max_bytes":4000,"keep_finished":7,"retention_days":0,"unread_max":8,"unread_ttl_days":0,"stop_wait_ms":0,"sse_max_ids":4}}}`)
+	settings, err := normalizeAsync(t, `{"native":{"async":{"max_handles":3,"max_handles_total":9,"default_block_ms":5,"max_block_ms":50,"default_wait_ms":6,"max_wait_ms":60,"wait_max_signals":4,"list_default_limit":5,"list_max_limit":25,"summary_max_bytes":100,"status_summary_max_bytes":200,"response_max_bytes":4000,"keep_finished":7,"retention_days":0,"unread_max":8,"unread_ttl_days":0,"stop_wait_ms":0,"sse_max_ids":4,"index_flush_ms":0}}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +65,8 @@ func TestNativeAsyncSettingsRejectsBadInput(t *testing.T) {
 		"block order":        `{"native":{"async":{"default_block_ms":500,"max_block_ms":100}}}`,
 		"budget too small":   `{"native":{"async":{"response_max_bytes":600}}}`,
 		"unread below wait":  `{"native":{"async":{"unread_max":2}}}`,
+		"flush negative":     `{"native":{"async":{"index_flush_ms":-1}}}`,
+		"flush too long":     `{"native":{"async":{"index_flush_ms":60001}}}`,
 		"sse ids negative":   `{"native":{"async":{"sse_max_ids":-1}}}`,
 		"sse ids too many":   `{"native":{"async":{"sse_max_ids":101}}}`,
 	}

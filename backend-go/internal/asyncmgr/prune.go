@@ -87,6 +87,10 @@ func (m *Manager) enforceUnreadLocked(owner string) pruneWork {
 // than the TTL are never touched by the count rule.
 func (m *Manager) pruneLocked(now time.Time) pruneWork {
 	var w pruneWork
+	if m.finished <= int(m.cfg.KeepFinished) && (m.nextExpiry.IsZero() || now.Before(m.nextExpiry)) {
+		return w
+	}
+	defer m.recomputeExpiryLocked()
 	if m.cfg.UnreadTTLDays > 0 {
 		cutoff := now.Add(-time.Duration(m.cfg.UnreadTTLDays) * 24 * time.Hour)
 		for _, s := range m.owners {
@@ -128,6 +132,32 @@ func (m *Manager) pruneLocked(now time.Time) pruneWork {
 		m.forgetLocked(r)
 	}
 	return w
+}
+
+// noteExpiryLocked lowers nextExpiry to the moment r may expire.
+func (m *Manager) noteExpiryLocked(r *row) {
+	var days int64
+	switch {
+	case r.unread:
+		days = m.cfg.UnreadTTLDays
+	case r.state.Terminal():
+		days = m.cfg.RetentionDays
+	}
+	if days <= 0 {
+		return
+	}
+	at := r.changed.Add(time.Duration(days) * 24 * time.Hour)
+	if m.nextExpiry.IsZero() || at.Before(m.nextExpiry) {
+		m.nextExpiry = at
+	}
+}
+
+// recomputeExpiryLocked sets nextExpiry exactly from the rows left after a scan.
+func (m *Manager) recomputeExpiryLocked() {
+	m.nextExpiry = time.Time{}
+	for _, r := range m.rows {
+		m.noteExpiryLocked(r)
+	}
 }
 
 // Prune applies the retention rules now.

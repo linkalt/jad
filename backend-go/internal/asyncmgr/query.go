@@ -92,11 +92,24 @@ func (m *Manager) List(q ListQuery) (ListResult, error) {
 
 	m.mu.Lock()
 	var matched []*row
-	for _, r := range m.rows {
-		if r.owner != q.Owner || (q.Kind != "" && r.kind != q.Kind) || !stateMatches(r, q.State) {
-			continue
+	collect := func(r *row) {
+		if r.owner == q.Owner && (q.Kind == "" || r.kind == q.Kind) && stateMatches(r, q.State) {
+			matched = append(matched, r)
 		}
-		matched = append(matched, r)
+	}
+	if q.State == "" || q.State == "active" {
+		if s := m.owners[q.Owner]; s != nil {
+			for _, r := range s.live {
+				collect(r)
+			}
+			for _, r := range s.unread {
+				collect(r)
+			}
+		}
+	} else {
+		for _, r := range m.rows {
+			collect(r)
+		}
 	}
 	sort.Slice(matched, func(i, j int) bool {
 		if !matched[i].changed.Equal(matched[j].changed) {

@@ -12,7 +12,7 @@ const maxNativeAsyncValue int64 = 10_000_000
 var nativeAsyncKeys = []string{
 	"max_handles", "max_handles_total", "default_block_ms", "max_block_ms", "default_wait_ms", "max_wait_ms",
 	"wait_max_signals", "list_default_limit", "list_max_limit", "summary_max_bytes", "status_summary_max_bytes",
-	"response_max_bytes", "keep_finished", "retention_days", "unread_max", "unread_ttl_days", "stop_wait_ms", "sse_max_ids",
+	"response_max_bytes", "keep_finished", "retention_days", "unread_max", "unread_ttl_days", "stop_wait_ms", "sse_max_ids", "index_flush_ms",
 }
 
 // NativeAsyncSettings holds the normalized tools.native.async settings: the bounds of the
@@ -68,11 +68,12 @@ func normalizeNativeAsyncSettings(setting map[string]json.RawMessage, settingPat
 		"keep_finished": &config.KeepFinished, "retention_days": &config.RetentionDays,
 		"unread_max": &config.UnreadMax, "unread_ttl_days": &config.UnreadTTLDays,
 		"stop_wait_ms": &config.StopWaitMs, "sse_max_ids": &config.SSEMaxIDs,
+		"index_flush_ms": &config.IndexFlushMs,
 	}
 	for _, key := range nativeAsyncKeys {
 		target := targets[key]
 		minimum := int64(1)
-		if key == "retention_days" || key == "unread_ttl_days" || key == "stop_wait_ms" || key == "sse_max_ids" {
+		if key == "retention_days" || key == "unread_ttl_days" || key == "stop_wait_ms" || key == "sse_max_ids" || key == "index_flush_ms" {
 			minimum = 0
 		}
 		if *target, err = configuredInteger(fields, key, *target, minimum, maxNativeAsyncValue, settingPath, section); err != nil {

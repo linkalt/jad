@@ -122,10 +122,32 @@ func rowIndex(r *row) indexRow {
 		Started: r.started, Changed: r.changed, Unread: r.unread, Overflow: r.overflow}
 }
 
-// writeIndex rewrites index.json from the current rows. Concurrent calls coalesce: while
+// writeIndex schedules a rewrite of index.json: after index_flush_ms (one write for a
+// burst of changes), or at once when the delay is 0 or the manager is closed.
+func (m *Manager) writeIndex() {
+	if m.cfg.IndexFlushMs <= 0 || m.indexClosed.Load() {
+		m.flushIndexNow()
+		return
+	}
+	m.flushMu.Lock()
+	defer m.flushMu.Unlock()
+	if m.flushTimer != nil {
+		return
+	}
+	m.flushTimer = time.AfterFunc(time.Duration(m.cfg.IndexFlushMs)*time.Millisecond, func() {
+		m.flushMu.Lock()
+		m.flushTimer = nil
+		m.flushMu.Unlock()
+		if !m.indexClosed.Load() {
+			m.flushIndexNow()
+		}
+	})
+}
+
+// flushIndexNow rewrites index.json from the current rows. Concurrent calls coalesce: while
 // one goroutine writes, others only mark the index dirty and return, and the writer
 // loops until no request is left. The file is a cache; a failed write is logged only.
-func (m *Manager) writeIndex() {
+func (m *Manager) flushIndexNow() {
 	for {
 		m.indexDirty.Store(true)
 		if !m.indexMu.TryLock() {

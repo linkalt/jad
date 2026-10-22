@@ -73,7 +73,8 @@ func (m *Manager) recover() error {
 		work.merge(m.enforceUnreadLocked(owner))
 	}
 	work.merge(m.pruneLocked(now))
-	m.applyWork(work, true)
+	m.applyWork(work, false)
+	m.flushIndexNow()
 	return nil
 }
 

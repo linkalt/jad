@@ -37,7 +37,13 @@ type Config struct {
 	// SSEMaxIDs bounds the active handle ids a run stream's async_state event carries
 	// (0 = counts only).
 	SSEMaxIDs int64 `json:"sse_max_ids"`
+	// IndexFlushMs delays index.json rewrites so a burst of state changes costs one
+	// write (0 = write at every change). Record files are always written at once.
+	IndexFlushMs int64 `json:"index_flush_ms"`
 }
+
+// MaxIndexFlushMs is the largest index_flush_ms.
+const MaxIndexFlushMs = 60_000
 
 // EntryOverheadBytes is the room one entry needs beside its summary: the fixed fields, a
 // label, a reference and the JSON syntax. ResponseMaxBytes must hold one full entry.
@@ -52,7 +58,7 @@ func DefaultConfig() Config {
 		WaitMaxSignals: 10, ListDefaultLimit: 10, ListMaxLimit: 50,
 		SummaryMaxBytes: 512, StatusSummaryBytes: 4096, ResponseMaxBytes: 8192,
 		KeepFinished: 200, RetentionDays: 14, UnreadMax: 100, UnreadTTLDays: 7,
-		StopWaitMs: 2_000, SSEMaxIDs: 10,
+		StopWaitMs: 2_000, SSEMaxIDs: 10, IndexFlushMs: 150,
 	}
 }
 
@@ -77,6 +83,9 @@ func (c Config) Validate() error {
 	}
 	if c.RetentionDays < 0 || c.UnreadTTLDays < 0 || c.StopWaitMs < 0 {
 		return fmt.Errorf("retention_days, unread_ttl_days and stop_wait_ms must not be negative")
+	}
+	if c.IndexFlushMs < 0 || c.IndexFlushMs > MaxIndexFlushMs {
+		return fmt.Errorf("index_flush_ms must be between 0 and %d", MaxIndexFlushMs)
 	}
 	if c.SSEMaxIDs < 0 || c.SSEMaxIDs > MaxSSEIDs {
 		return fmt.Errorf("sse_max_ids must be between 0 and %d", MaxSSEIDs)

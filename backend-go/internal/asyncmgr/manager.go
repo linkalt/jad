@@ -74,16 +74,25 @@ type Manager struct {
 	// indexMu and indexDirty coalesce index.json rewrites (see writeIndex).
 	indexMu    sync.Mutex
 	indexDirty atomic.Bool
+	// flushMu guards flushTimer, the pending delayed index write (nil when none).
+	// indexClosed turns the delay off once Close has written the final index.
+	flushMu     sync.Mutex
+	flushTimer  *time.Timer
+	indexClosed atomic.Bool
 
 	mu        sync.Mutex
 	rows      map[string]*row
 	owners    map[string]*ownerStats
 	liveTotal int
-	drivers   map[Kind]Driver
-	changed   chan struct{}
-	closed    bool
-	watchers  map[int]watcher
-	watchSeq  int
+	// finished counts terminal, read rows; nextExpiry is a lower bound of when an
+	// unread signal or a finished row may expire (zero = none), so prune can skip its scan.
+	finished   int
+	nextExpiry time.Time
+	drivers    map[Kind]Driver
+	changed    chan struct{}
+	closed     bool
+	watchers   map[int]watcher
+	watchSeq   int
 }
 
 // Open creates or recovers the manager in opts.Dir. Handles recorded as running by an
@@ -179,6 +188,10 @@ func (m *Manager) track(r *row) {
 	if r.unread {
 		s.unread[r.id] = r
 	}
+	if r.state.Terminal() && !r.unread {
+		m.finished++
+	}
+	m.noteExpiryLocked(r)
 }
 
 func (m *Manager) untrack(r *row) {
@@ -193,6 +206,9 @@ func (m *Manager) untrack(r *row) {
 		m.liveTotal--
 	}
 	delete(s.unread, r.id)
+	if r.state.Terminal() && !r.unread {
+		m.finished--
+	}
 }
 
 // mutateLocked changes a row while keeping the per-owner counters exact.
@@ -513,7 +529,14 @@ func (m *Manager) Close() {
 			break
 		}
 	}
-	m.writeIndex()
+	m.indexClosed.Store(true)
+	m.flushMu.Lock()
+	if m.flushTimer != nil {
+		m.flushTimer.Stop()
+		m.flushTimer = nil
+	}
+	m.flushMu.Unlock()
+	m.flushIndexNow()
 	// A concurrent writer may own the coalesced write; wait so nothing touches the folder after Close.
 	m.indexMu.Lock()
 	m.indexMu.Unlock()
