@@ -102,6 +102,9 @@ func TestBackgroundWriterIsHandedOffAndCollectedThroughAsync(t *testing.T) {
 	if got := manager.BackgroundWriters(testSessionKey); got != 1 {
 		t.Errorf("background writers = %d, want 1", got)
 	}
+	eventually(t, "the child to record its change", func() bool {
+		return strings.Contains(asyncCall(t, catalog, `{"action":"status","id":"`+id+`"}`), "a.go (created)")
+	})
 	if status := asyncCall(t, catalog, `{"action":"status","id":"`+id+`"}`); !strings.Contains(status, "a.go (created)") {
 		t.Errorf("status of the running writer does not list its changed file:\n%s", status)
 	}
@@ -291,4 +294,58 @@ func TestBackgroundWriterDoesNotChangeTheListMarkerOfOtherAgents(t *testing.T) {
 	if out := subagentCall(t, catalog, `{}`); !strings.Contains(out, "fixer [can change files; may run in the background]") {
 		t.Errorf("the agent list call does not mark a background writer:\n%s", out)
 	}
+}
+
+func TestLostBackgroundWriterKeepsItsRecordedFiles(t *testing.T) {
+	root := t.TempDir()
+	release := make(chan struct{})
+	defer close(release)
+	first := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
+	t.Cleanup(func() { _ = first.Close() })
+	host := newTestAsyncHost(t)
+	settings := backgroundWriterSettings(1, writerAgent("fixer", "read", "write"))
+	settings.StorageDir = root
+	parent := withExecutors(t, readOnlyTool("read"), writeTool("write"))
+	tool, err := newSubagentToolAsync(settings, parent, nil, writingLauncher(release, nil), nil, first, nil, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := catalogWithAsync(t, host, parent, tool)
+	id := runIDOf(t, subagentCall(t, catalog, `{"task":"fix","block_ms":0}`))
+	eventually(t, "the changed file to reach the manifest", func() bool {
+		return len(manifestOf(t, root, id).Files) == 1
+	})
+
+	// The server dies here and restarts over the same directory.
+	restarted := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
+	t.Cleanup(func() { _ = restarted.Close() })
+	run := restarted.get(id, testSessionKey)
+	if run == nil {
+		t.Fatal("the restarted manager lost the run")
+	}
+	view := run.view()
+	if view.state != subagentRunLost || !view.changes || !view.tracked || len(view.files) != 1 || view.files[0].Path != "a.go" {
+		t.Fatalf("restored writer = state %s changes %v tracked %v files %v", view.state, view.changes, view.tracked, view.files)
+	}
+	out := restoredOutput(t, restarted, testSessionKey, id)
+	for _, want := range []string{"subagent_lost", "written_files: a.go (created)", "some changes may already be made"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lost writer result lacks %q:\n%s", want, out)
+		}
+	}
+	driverText := (&subagentDriver{host: hostWith(t, restarted)}).Detail(id, 4096)
+	if !strings.Contains(driverText, "changed files: a.go (created)") {
+		t.Errorf("the async status of the lost writer lacks its files:\n%s", driverText)
+	}
+	if got := restarted.BackgroundWriters(testSessionKey); got != 0 {
+		t.Errorf("a lost run holds %d background writer places after the restart", got)
+	}
+}
+
+// hostWith is a host that knows only manager, so a driver can look runs up in it.
+func hostWith(t *testing.T, manager *SubagentManager) *AsyncHost {
+	t.Helper()
+	host := newTestAsyncHost(t)
+	host.attachSubagent(manager)
+	return host
 }

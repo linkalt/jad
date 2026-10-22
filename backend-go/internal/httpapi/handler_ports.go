@@ -69,6 +69,13 @@ type SessionChildren interface {
 	ResetSessionChildren(reference, profile string) int
 }
 
+// SessionWriters is an optional adapter that counts the sub-agent runs of a session that can
+// change files and are going as handles, which outlive the run that started them. A
+// checkpoint restore is refused while there is one, because it would rewrite files under it.
+type SessionWriters interface {
+	BackgroundWriters(reference, profile string) int
+}
+
 // SnapshotOptions selects one page of transcript-backed session messages.
 type SnapshotOptions struct {
 	Before           *int64

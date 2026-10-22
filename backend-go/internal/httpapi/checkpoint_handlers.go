@@ -103,6 +103,12 @@ func (h *Handler) handleCheckpointRestore(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot restore a checkpoint while a run is active"})
 		return
 	}
+	// A sub-agent that changes files and was handed off outlives the run, so the run check
+	// above does not see it. A dry run changes nothing and is allowed.
+	if writers, ok := h.resolver.(SessionWriters); ok && !request.DryRun && writers.BackgroundWriters(resolved.Reference, resolved.Profile) > 0 {
+		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot restore a checkpoint while a background sub-agent that can change files is running: stop it with the async tool first"})
+		return
+	}
 	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
 	if err != nil {
 		writeJSONError(w, err)

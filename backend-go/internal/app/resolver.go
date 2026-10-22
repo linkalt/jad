@@ -182,6 +182,17 @@ func (r *Resolver) ResetSessionChildren(reference, profile string) int {
 	return max(cancelled, r.cancelSubagentOwner(owner))
 }
 
+// BackgroundWriters implements httpapi.SessionWriters: how many sub-agent runs of the session
+// can change files and are going as handles, in every sub-agent manager of the resolver.
+func (r *Resolver) BackgroundWriters(reference, profile string) int {
+	owner := sessionKey(reference, profile)
+	count := 0
+	for _, manager := range r.subagentManagerList() {
+		count += manager.BackgroundWriters(owner)
+	}
+	return count
+}
+
 // cancelSubagentOwner reaches sub-agent runs of a storage that has no async host (a session
 // without the async tool); for the others the async manager has already asked them to stop.
 func (r *Resolver) cancelSubagentOwner(owner string) int {
