@@ -281,3 +281,55 @@ func TestSessionAsyncStateContextListsPendingHandlesAndCountsTheRest(t *testing.
 		t.Fatal("a missing manager must be an error, not an empty notice")
 	}
 }
+
+// Several storages feed one run stream: the id list is newest first across managers and the
+// cap is the smallest sse_max_ids, whatever order the managers are visited in.
+func TestWatchSessionAsyncMergesManagersNewestFirstWithTheSmallestCap(t *testing.T) {
+	f := newLayoutFixture(t)
+	small := asyncmgr.DefaultConfig()
+	small.SSEMaxIDs = 3
+	// The first fixture creates its host with the default config; the second is created
+	// directly with the small cap, so the two managers disagree.
+	a := newProcessHandleFixture(t, f, "merge-a")
+	dirB := filepath.Join(f.cwd, "merge-b")
+	hostB, err := f.service.resolver.AsyncHost(native.AsyncHostConfig{Dir: native.AsyncDir(dirB), Config: small})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := sessionfs.NativeProcessSettings{StorageDir: dirB, KillGraceMs: 250, Shell: "/bin/sh", MaxRunning: 8, MaxCompleted: 10,
+		LogCapBytes: 1 << 16, MaxLineChars: 1000, StdinMaxBytes: 1024, Env: map[string]string{}, EnvDeny: []string{}}
+	managerB := f.service.resolver.sharedProcessManager(sessionfs.SessionConfig{SettingPath: demoSettingPath(t, f), NativeProcess: &settings}).(*native.ManagedProcessManager)
+	toolB, err := native.NewProcessToolWithAsync(settings, managerB, "KEY", hostB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := processHandleFixture{f: f, manager: managerB, host: hostB, process: toolB, storage: dirB}
+
+	owner := a.key(t)
+	reference, profile, _ := strings.Cut(owner, "\x00")
+	read, stop := f.service.resolver.WatchSessionAsync(reference, profile, func() {})
+	if read == nil {
+		t.Fatal("no watcher")
+	}
+	defer stop()
+
+	var started []string
+	for i, p := range []processHandleFixture{a, b, a, b, a} {
+		id := p.start(t, owner, "sleep 60")
+		defer p.manager.Stop(id, "test_cleanup")
+		started = append(started, id)
+		_ = i
+		time.Sleep(2 * time.Millisecond)
+	}
+	for i := 0; i < 20; i++ {
+		state := read()
+		if state.Active != 5 || len(state.IDs) != 3 {
+			t.Fatalf("state = %+v, want 5 active and the 3 newest ids", state)
+		}
+		for j, want := range []string{started[4], started[3], started[2]} {
+			if state.IDs[j] != want {
+				t.Fatalf("ids = %v, want newest first %v", state.IDs, []string{started[4], started[3], started[2]})
+			}
+		}
+	}
+}

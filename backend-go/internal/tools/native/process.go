@@ -188,12 +188,9 @@ func executeNativeProcessAsync(
 	}
 	// The block ends the wait, never the process: a cancelled call leaves it running.
 	if blockFor := config.BlockDuration(blockMs); blockFor > 0 && snapshot.State == ProcessRunning {
-		result := make(chan ProcessWaitResult, 1)
-		go func() { result <- manager.Wait(snapshot.ID, max(blockFor.Milliseconds(), 1)) }()
-		select {
-		case <-result:
-		case <-ctx.Done():
-			return "", ctx.Err()
+		waitProcess(ctx, manager, snapshot.ID, max(blockFor.Milliseconds(), 1))
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
 	}
 	stdoutLimits := ProcessStreamLimits{HeadBytes: int(settings.Stdout.HeadBytes), TailBytes: int(settings.Stdout.TailBytes)}

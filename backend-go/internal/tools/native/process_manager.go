@@ -1,6 +1,7 @@
 package native
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -109,6 +110,19 @@ type ProcessWaitResult struct {
 	Snapshot *ProcessSnapshot
 	Found    bool
 	Waited   bool
+}
+
+type contextWaiter interface {
+	WaitContext(ctx context.Context, id string, timeoutMs int64) ProcessWaitResult
+}
+
+// waitProcess waits through WaitContext when the manager has it, so a cancelled call does
+// not leave a waiter behind; otherwise it falls back to Wait.
+func waitProcess(ctx context.Context, manager ProcessManager, id string, timeoutMs int64) ProcessWaitResult {
+	if waiter, ok := manager.(contextWaiter); ok {
+		return waiter.WaitContext(ctx, id, timeoutMs)
+	}
+	return manager.Wait(id, timeoutMs)
 }
 
 // ProcessManager is the managed long-running process boundary injected into
@@ -436,6 +450,11 @@ func (manager *ManagedProcessManager) List(filter string) []ProcessSnapshot {
 }
 
 func (manager *ManagedProcessManager) Wait(id string, timeoutMs int64) ProcessWaitResult {
+	return manager.WaitContext(context.Background(), id, timeoutMs)
+}
+
+// WaitContext is Wait that also returns when ctx ends (the process keeps running).
+func (manager *ManagedProcessManager) WaitContext(ctx context.Context, id string, timeoutMs int64) ProcessWaitResult {
 	manager.mu.Lock()
 	entry := manager.entries[id]
 	_, exists := manager.manifests[id]
@@ -454,6 +473,7 @@ func (manager *ManagedProcessManager) Wait(id string, timeoutMs int64) ProcessWa
 	case <-entry.done:
 		waited = true
 	case <-timer.C:
+	case <-ctx.Done():
 	}
 	snapshot, found := manager.SnapshotWithLogs(id, ProcessStreamLimits{}, ProcessStreamLimits{}, 0, false)
 	return ProcessWaitResult{Snapshot: snapshot, Found: found, Waited: waited}

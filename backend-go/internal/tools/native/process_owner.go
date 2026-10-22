@@ -1,6 +1,10 @@
 package native
 
-import "jad/backend-go/internal/tools"
+import (
+	"context"
+
+	"jad/backend-go/internal/tools"
+)
 
 // processOwnership is what a process manager must offer to be shared with sub-agents:
 // who started a process, and a way to stop everything one owner started.
@@ -113,10 +117,14 @@ func (m *ownedProcessManager) List(filter string) []ProcessSnapshot {
 }
 
 func (m *ownedProcessManager) Wait(id string, timeoutMs int64) ProcessWaitResult {
+	return m.WaitContext(context.Background(), id, timeoutMs)
+}
+
+func (m *ownedProcessManager) WaitContext(ctx context.Context, id string, timeoutMs int64) ProcessWaitResult {
 	if !m.owns(id) {
 		return ProcessWaitResult{}
 	}
-	return m.inner.Wait(id, timeoutMs)
+	return waitProcess(ctx, m.inner, id, timeoutMs)
 }
 
 func (m *ownedProcessManager) Stop(id, reason string) (*ProcessSnapshot, bool) {

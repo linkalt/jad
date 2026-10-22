@@ -137,6 +137,24 @@ func TestSubagentAsyncStopIsNonBlockingAndEndsAsStopped(t *testing.T) {
 	}
 }
 
+func TestSubagentStopCountsAnAsyncRunOnce(t *testing.T) {
+	var cancelled atomic.Int64
+	f := newSubagentAsyncFixture(t, asyncmgr.DefaultConfig(), subagentSettings(agentNamed("explore")), blockedLauncher(make(chan struct{}), &cancelled))
+	id := runIDOf(t, f.start(t, "s1", map[string]any{"task": "x", "block_ms": int64(0)}))
+	if n := f.manager.CancelUnmanagedOwner("s1"); n != 0 {
+		t.Fatalf("sub-agent manager counted a handle the async manager stops: %d", n)
+	}
+	if n := f.manager.CancelUnmanagedOwnersWithPrefix("s1"); n != 0 {
+		t.Fatalf("CancelUnmanagedOwnersWithPrefix counted a handle: %d", n)
+	}
+	if n := f.host.Manager().CancelOwner("s1", "user_stop"); n != 1 {
+		t.Fatalf("async CancelOwner = %d, want 1", n)
+	}
+	if out := callAsync(t, f.async, "s1", map[string]any{"action": "wait", "wait_ms": int64(5000)}); !strings.Contains(out, id) {
+		t.Fatalf("stop signal:\n%s", out)
+	}
+}
+
 func TestSubagentStartOverTheAsyncCapCreatesNoRun(t *testing.T) {
 	config := asyncmgr.DefaultConfig()
 	config.MaxHandles = 1

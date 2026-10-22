@@ -178,9 +178,9 @@ func (r *Resolver) CancelAllSessionChildren(reference string) int {
 	}
 	subagents := 0
 	for _, manager := range r.subagentManagerList() {
-		subagents += manager.CancelOwnersWithPrefix(prefix)
+		subagents += manager.CancelUnmanagedOwnersWithPrefix(prefix)
 	}
-	return max(cancelled, subagents)
+	return cancelled + subagents
 }
 
 // CanonicalSessionReference implements httpapi.SessionReferences. It does not need the

@@ -168,7 +168,7 @@ func (r *Resolver) CancelSessionChildren(reference, profile string) int {
 	for _, manager := range r.asyncManagers() {
 		cancelled += manager.CancelOwner(owner, reasonUserStop)
 	}
-	return max(cancelled, r.cancelSubagentOwner(owner))
+	return cancelled + r.cancelSubagentOwner(owner)
 }
 
 // ResetSessionChildren is CancelSessionChildren for a reset: the session's unread
@@ -179,7 +179,7 @@ func (r *Resolver) ResetSessionChildren(reference, profile string) int {
 	for _, manager := range r.asyncManagers() {
 		cancelled += manager.ResetOwner(owner, reasonSessionReset)
 	}
-	return max(cancelled, r.cancelSubagentOwner(owner))
+	return cancelled + r.cancelSubagentOwner(owner)
 }
 
 // BackgroundWriters implements httpapi.SessionWriters: how many sub-agent runs of the session
@@ -193,12 +193,13 @@ func (r *Resolver) BackgroundWriters(reference, profile string) int {
 	return count
 }
 
-// cancelSubagentOwner reaches sub-agent runs of a storage that has no async host (a session
-// without the async tool); for the others the async manager has already asked them to stop.
+// cancelSubagentOwner reaches the sub-agent runs that are not async handles (a session
+// without the async tool, or a run that blocks its call); a handle was already asked to stop
+// and counted by its async manager.
 func (r *Resolver) cancelSubagentOwner(owner string) int {
 	cancelled := 0
 	for _, manager := range r.subagentManagerList() {
-		cancelled += manager.CancelOwner(owner)
+		cancelled += manager.CancelUnmanagedOwner(owner)
 	}
 	return cancelled
 }
@@ -1042,16 +1043,27 @@ func (r *Resolver) WatchSessionAsync(reference, profile string, notify func()) (
 	for _, manager := range managers {
 		cancels = append(cancels, manager.Watch(owner, notify))
 	}
+	limit := int(managers[0].Config().SSEMaxIDs)
+	for _, manager := range managers {
+		limit = min(limit, int(manager.Config().SSEMaxIDs))
+	}
 	read := func() httpapi.AsyncState {
 		state := httpapi.AsyncState{}
+		var live []asyncmgr.LiveID
 		for _, manager := range managers {
-			counts, ids := manager.Snapshot(owner)
+			counts, ids := manager.SnapshotLive(owner)
 			state.Active += counts.Active
 			state.Unread += counts.Unread
-			state.IDs = append(state.IDs, ids...)
+			live = append(live, ids...)
 		}
-		if limit := int(managers[0].Config().SSEMaxIDs); len(state.IDs) > limit {
-			state.IDs = state.IDs[:limit]
+		slices.SortFunc(live, func(a, b asyncmgr.LiveID) int {
+			if c := b.Changed.Compare(a.Changed); c != 0 {
+				return c
+			}
+			return strings.Compare(b.ID, a.ID)
+		})
+		for i := 0; i < len(live) && i < limit; i++ {
+			state.IDs = append(state.IDs, live[i].ID)
 		}
 		return state
 	}

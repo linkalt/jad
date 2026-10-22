@@ -718,6 +718,46 @@ func (m *SubagentManager) CancelOwner(owner string) int {
 	return cancelled
 }
 
+// CancelUnmanagedOwner is CancelOwner for the runs that are not async handles. A handle is
+// stopped and counted by the async manager, so a host that sums both counts each run once.
+func (m *SubagentManager) CancelUnmanagedOwner(owner string) int {
+	if m == nil {
+		return 0
+	}
+	cancelled := 0
+	for _, run := range m.ownedRuns(owner) {
+		if run.async == nil && run.active() {
+			run.cancel()
+			cancelled++
+		}
+	}
+	return cancelled
+}
+
+// CancelUnmanagedOwnersWithPrefix is CancelUnmanagedOwner for every session key that starts
+// with prefix.
+func (m *SubagentManager) CancelUnmanagedOwnersWithPrefix(prefix string) int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	var runs []*subagentRun
+	for _, run := range m.runs {
+		if run.async == nil && strings.HasPrefix(run.owner, prefix) {
+			runs = append(runs, run)
+		}
+	}
+	m.mu.Unlock()
+	cancelled := 0
+	for _, run := range runs {
+		if run.active() {
+			run.cancel()
+			cancelled++
+		}
+	}
+	return cancelled
+}
+
 // CancelOwnersWithPrefix is CancelOwner for every session key that starts with prefix, so a
 // session is cancelled whatever profile started the run.
 func (m *SubagentManager) CancelOwnersWithPrefix(prefix string) int {

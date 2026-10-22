@@ -178,7 +178,6 @@ func (m *Manager) changedLocked(owner string) {
 }
 
 func (m *Manager) track(r *row) {
-	defer m.changedLocked(r.owner)
 	s := m.stats(r.owner)
 	s.total++
 	if !r.state.Terminal() {
@@ -195,7 +194,6 @@ func (m *Manager) track(r *row) {
 }
 
 func (m *Manager) untrack(r *row) {
-	defer m.changedLocked(r.owner)
 	s := m.owners[r.owner]
 	if s == nil {
 		return
@@ -216,15 +214,18 @@ func (m *Manager) mutateLocked(r *row, change func(*row)) {
 	m.untrack(r)
 	change(r)
 	m.track(r)
+	m.changedLocked(r.owner)
 }
 
 func (m *Manager) addRowLocked(r *row) {
 	m.rows[r.id] = r
 	m.track(r)
+	m.changedLocked(r.owner)
 }
 
 func (m *Manager) forgetLocked(r *row) {
 	m.untrack(r)
+	m.changedLocked(r.owner)
 	delete(m.rows, r.id)
 	if s := m.owners[r.owner]; s != nil && s.total == 0 && s.dropped == 0 {
 		delete(m.owners, r.owner)
@@ -461,6 +462,26 @@ func (m *Manager) Counts(owner string) Counts {
 // Snapshot returns the owner's counts and the ids of its newest live handles, at most
 // sse_max_ids of them.
 func (m *Manager) Snapshot(owner string) (Counts, []string) {
+	counts, live := m.SnapshotLive(owner)
+	if live == nil {
+		return counts, nil
+	}
+	ids := make([]string, len(live))
+	for i, l := range live {
+		ids[i] = l.ID
+	}
+	return counts, ids
+}
+
+// LiveID is a live handle id with the time it last changed, so ids of several managers can
+// be merged newest first.
+type LiveID struct {
+	ID      string
+	Changed time.Time
+}
+
+// SnapshotLive is Snapshot with the change time of each id.
+func (m *Manager) SnapshotLive(owner string) (Counts, []LiveID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	counts := m.countsLocked(owner)
@@ -469,11 +490,11 @@ func (m *Manager) Snapshot(owner string) (Counts, []string) {
 		return counts, nil
 	}
 	rows := sortedRows(s.live)
-	ids := make([]string, 0, min(len(rows), int(m.cfg.SSEMaxIDs)))
-	for i := len(rows) - 1; i >= 0 && int64(len(ids)) < m.cfg.SSEMaxIDs; i-- {
-		ids = append(ids, rows[i].id)
+	live := make([]LiveID, 0, min(len(rows), int(m.cfg.SSEMaxIDs)))
+	for i := len(rows) - 1; i >= 0 && int64(len(live)) < m.cfg.SSEMaxIDs; i-- {
+		live = append(live, LiveID{ID: rows[i].id, Changed: rows[i].changed})
 	}
-	return counts, ids
+	return counts, live
 }
 
 func (m *Manager) countsLocked(owner string) Counts {
