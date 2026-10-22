@@ -113,7 +113,7 @@ func TestSubagentStateContextSummaryCountsEveryStateAndListsOnlyDetailStates(t *
 	first, _, manager := sharedManagerCatalogs(t, blockedLauncher(release, nil))
 	var ids []string
 	for _, task := range []string{"one", "two", "three"} {
-		ids = append(ids, runIDOf(t, subagentCallAs(t, first, "alpha", `{"task":"`+task+`","wait_ms":2}`)))
+		ids = append(ids, runIDOf(t, subagentCallAs(t, first, "alpha", `{"task":"`+task+`","block_ms":2}`)))
 		time.Sleep(3 * time.Millisecond)
 	}
 	settings := sessionfs.NativeSubagentStateContextSettings{
@@ -159,7 +159,7 @@ func TestSummaryStateContextCountsAloneAreData(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	first, _, manager := sharedManagerCatalogs(t, blockedLauncher(release, nil))
-	subagentCallAs(t, first, "alpha", `{"task":"one","wait_ms":2}`)
+	subagentCallAs(t, first, "alpha", `{"task":"one","block_ms":2}`)
 	subagent, err := CollectSubagentStateContext(manager, "alpha", sessionfs.NativeSubagentStateContextSettings{
 		States: []string{"running"}, Limit: 5, Mode: sessionfs.NativeStateContextModeSummary, DetailStates: nil,
 	})

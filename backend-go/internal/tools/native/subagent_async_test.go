@@ -59,7 +59,7 @@ func (f subagentAsyncFixture) start(t *testing.T, owner string, arguments map[st
 func TestSubagentRunIsAnAsyncHandleOwnedByTheSession(t *testing.T) {
 	release := make(chan struct{})
 	f := newSubagentAsyncFixture(t, asyncmgr.DefaultConfig(), subagentSettings(agentNamed("explore")), blockedLauncher(release, nil))
-	id := runIDOf(t, f.start(t, "s1", map[string]any{"task": "find the retry delay", "wait_ms": int64(5)}))
+	id := runIDOf(t, f.start(t, "s1", map[string]any{"task": "find the retry delay", "block_ms": int64(5)}))
 	entry, err := f.host.Manager().Status("s1", id)
 	if err != nil || entry.Kind != "subagent" || entry.State != asyncmgr.StateRunning || !strings.Contains(entry.Label, "explore") {
 		t.Fatalf("entry = %+v, err = %v", entry, err)
@@ -93,8 +93,8 @@ func TestSubagentAsyncStatesKeepTheirNameAndAreNotOK(t *testing.T) {
 	settings := subagentSettings(agentNamed("explore"))
 	settings.Agents[0].TimeoutMS = 100
 	f := newSubagentAsyncFixture(t, asyncmgr.DefaultConfig(), settings, launcher)
-	failed := runIDOf(t, f.start(t, "s1", map[string]any{"task": "boom", "wait_ms": int64(0)}))
-	timedOut := runIDOf(t, f.start(t, "s1", map[string]any{"task": "slow", "wait_ms": int64(0)}))
+	failed := runIDOf(t, f.start(t, "s1", map[string]any{"task": "boom", "block_ms": int64(0)}))
+	timedOut := runIDOf(t, f.start(t, "s1", map[string]any{"task": "slow", "block_ms": int64(0)}))
 	got := map[string]string{}
 	for len(got) < 2 {
 		out := callAsync(t, f.async, "s1", map[string]any{"action": "wait", "wait_ms": int64(5000)})
@@ -120,7 +120,7 @@ func TestSubagentAsyncStatesKeepTheirNameAndAreNotOK(t *testing.T) {
 func TestSubagentAsyncStopIsNonBlockingAndEndsAsStopped(t *testing.T) {
 	var cancelled atomic.Int64
 	f := newSubagentAsyncFixture(t, asyncmgr.DefaultConfig(), subagentSettings(agentNamed("explore")), blockedLauncher(make(chan struct{}), &cancelled))
-	id := runIDOf(t, f.start(t, "s1", map[string]any{"task": "x", "wait_ms": int64(0)}))
+	id := runIDOf(t, f.start(t, "s1", map[string]any{"task": "x", "block_ms": int64(0)}))
 	started := time.Now()
 	if n := f.host.Manager().CancelOwner("s1", "user_stop"); n != 1 {
 		t.Fatalf("CancelOwner = %d", n)
@@ -143,8 +143,8 @@ func TestSubagentStartOverTheAsyncCapCreatesNoRun(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	f := newSubagentAsyncFixture(t, config, subagentSettings(agentNamed("explore")), blockedLauncher(release, nil))
-	f.start(t, "s1", map[string]any{"task": "first", "wait_ms": int64(0)})
-	out := f.start(t, "s1", map[string]any{"task": "second", "wait_ms": int64(0)})
+	f.start(t, "s1", map[string]any{"task": "first", "block_ms": int64(0)})
+	out := f.start(t, "s1", map[string]any{"task": "second", "block_ms": int64(0)})
 	if !strings.Contains(out, "async_capacity_reached") {
 		t.Fatalf("want a capacity error:\n%s", out)
 	}
@@ -183,7 +183,7 @@ func TestSubagentWriterIsNeverAHandle(t *testing.T) {
 
 func TestSubagentReportedInTheCallConsumesItsSignal(t *testing.T) {
 	f := newSubagentAsyncFixture(t, asyncmgr.DefaultConfig(), subagentSettings(agentNamed("explore")), &fakeLauncher{})
-	out := f.start(t, "s1", map[string]any{"task": "quick", "wait_ms": int64(5000)})
+	out := f.start(t, "s1", map[string]any{"task": "quick", "block_ms": int64(5000)})
 	if !strings.Contains(out, "found it") {
 		t.Fatalf("out = %s", out)
 	}

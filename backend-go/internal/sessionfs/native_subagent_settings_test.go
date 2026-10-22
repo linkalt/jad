@@ -36,8 +36,8 @@ func TestNormalizeNativeSubagentSettingsDefaultsAndOverrides(t *testing.T) {
 	if got.ListMaxBytes != defaultNativeSubagentListMaxBytes || defaultNativeSubagentListMaxBytes != 4096 {
 		t.Fatalf("list_max_bytes default = %d", got.ListMaxBytes)
 	}
-	if got.WaitMS != 120_000 || got.MaxWaitMS != 600_000 || got.KeepFinished != 50 || got.MaxQueued != 32 {
-		t.Fatalf("wait defaults = %d %d %d %d", got.WaitMS, got.MaxWaitMS, got.KeepFinished, got.MaxQueued)
+	if got.KeepFinished != 50 || got.MaxQueued != 32 {
+		t.Fatalf("defaults = %d %d", got.KeepFinished, got.MaxQueued)
 	}
 	if got.ResultMaxBytes != defaultNativeSubagentResultMaxBytes || got.MaxConcurrent != defaultNativeSubagentMaxConcurrent || got.StorageDir != "/w/.subagents" {
 		t.Fatalf("defaults = %+v", got)
@@ -50,7 +50,7 @@ func TestNormalizeNativeSubagentSettingsDefaultsAndOverrides(t *testing.T) {
 
 	custom, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{
 		"result_max_bytes": 100, "max_concurrent": 2, "list_max_bytes": 0, "storage_dir": "kids",
-		"wait_ms": 0, "max_wait_ms": 5000, "keep_finished": 7, "max_queued": 0,
+		"keep_finished": 7, "max_queued": 0,
 		"agents": {
 			"b": {"description": "second", "model": "model-b.json", "instructions": "Be brief.", "tools": ["read","grep"],
 			      "max_tool_rounds": 5, "max_run_tokens": 9000, "timeout_ms": 2000},
@@ -59,7 +59,7 @@ func TestNormalizeNativeSubagentSettingsDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if custom.ResultMaxBytes != 100 || custom.MaxConcurrent != 2 || custom.ListMaxBytes != 0 || custom.WaitMS != 0 || custom.MaxWaitMS != 5000 || custom.KeepFinished != 7 || custom.MaxQueued != 0 || custom.StorageDir != "/w/.jad/tools/kids" {
+	if custom.ResultMaxBytes != 100 || custom.MaxConcurrent != 2 || custom.ListMaxBytes != 0 || custom.KeepFinished != 7 || custom.MaxQueued != 0 || custom.StorageDir != "/w/.jad/tools/kids" {
 		t.Fatalf("custom = %+v", custom)
 	}
 	if custom.Agents[0].Name != "b" || custom.Agents[1].Name != "a" {
@@ -185,9 +185,9 @@ func TestNormalizeNativeSubagentSettingsRejectsInvalidSettings(t *testing.T) {
 		"result zero":        {`{"agents":{"a":{}},"result_max_bytes":0}`, "tools.native.subagent.result_max_bytes must be a safe integer between 1 and 10485760"},
 		"concurrent zero":    {`{"agents":{"a":{}},"max_concurrent":0}`, "tools.native.subagent.max_concurrent must be a safe integer between 1 and 32"},
 		"concurrent over":    {`{"agents":{"a":{}},"max_concurrent":33}`, "tools.native.subagent.max_concurrent must be a safe integer between 1 and 32"},
-		"wait negative":      {`{"agents":{"a":{}},"wait_ms":-1}`, "tools.native.subagent.wait_ms must be a safe integer between 0 and 3600000"},
-		"wait too large":     {`{"agents":{"a":{}},"wait_ms":3600001}`, "tools.native.subagent.wait_ms must be a safe integer between 0 and 3600000"},
-		"max wait zero":      {`{"agents":{"a":{}},"max_wait_ms":0}`, "tools.native.subagent.max_wait_ms must be a safe integer between 1 and 3600000"},
+		"removed wait_ms":    {`{"agents":{"a":{}},"wait_ms":0}`, "wait_ms"},
+		"removed max wait":   {`{"agents":{"a":{}},"max_wait_ms":5000}`, "max_wait_ms"},
+		"removed detached":   {`{"agents":{"a":{}},"allow_detached_writers":true}`, "allow_detached_writers"},
 		"keep zero":          {`{"agents":{"a":{}},"keep_finished":0}`, "tools.native.subagent.keep_finished must be a safe integer between 1 and 1000"},
 		"keep too large":     {`{"agents":{"a":{}},"keep_finished":1001}`, "tools.native.subagent.keep_finished must be a safe integer between 1 and 1000"},
 		"queued negative":    {`{"agents":{"a":{}},"max_queued":-1}`, "tools.native.subagent.max_queued must be a safe integer between 0 and 1024"},
@@ -212,7 +212,7 @@ func TestNormalizeNativeSubagentSettingsRejectsInvalidSettings(t *testing.T) {
 		"mcp bad server":     {`{"agents":{"a":{"tools":["mcp:do.cs:*"]}}}`, `agents.a.tools[0] "mcp:do.cs:*" must be mcp:<server>:<tool>`},
 		"mcp colon wildcard": {`{"agents":{"a":{"tools":["mcp:docs:foo:*"]}}}`, `agents.a.tools[0] "mcp:docs:foo:*" must be mcp:<server>:<tool>`},
 		"mcp whitespace":     {`{"agents":{"a":{"tools":["mcp:docs:a b"]}}}`, `must not contain whitespace`},
-		"upper limit ok":     {`{"agents":{"a":{"timeout_ms":3600000}},"max_concurrent":32,"result_max_bytes":10485760,"list_max_bytes":1048576,"wait_ms":0,"max_wait_ms":3600000,"keep_finished":1000,"max_queued":0}`, ""},
+		"upper limit ok":     {`{"agents":{"a":{"timeout_ms":3600000}},"max_concurrent":32,"result_max_bytes":10485760,"list_max_bytes":1048576,"keep_finished":1000,"max_queued":0}`, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := normalizeNativeSubagentSettings(subagentSettingsFor(tc.setting), "setting.json", "/w", "")

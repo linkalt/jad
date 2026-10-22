@@ -20,15 +20,9 @@ const (
 	defaultNativeSubagentMaxToolRounds int64 = 30
 	defaultNativeSubagentTimeoutMS     int64 = 600_000
 	maxNativeSubagentTimeoutMS         int64 = 3_600_000
-	// A call waits wait_ms for the child's answer and then returns the run's id with the
-	// child still going, so a slow child is not thrown away; timeout_ms stays the hard
-	// limit on the child's whole life. max_wait_ms caps any wait the model asks for.
-	defaultNativeSubagentWaitMS    int64 = 120_000
-	defaultNativeSubagentMaxWaitMS int64 = 600_000
-	maxNativeSubagentWaitMS        int64 = 3_600_000
-	defaultNativeSubagentKeepDone  int64 = 50
-	maxNativeSubagentKeepDone      int64 = 1000
-	defaultNativeSubagentMaxQueued int64 = 32
+	defaultNativeSubagentKeepDone      int64 = 50
+	maxNativeSubagentKeepDone          int64 = 1000
+	defaultNativeSubagentMaxQueued     int64 = 32
 	// defaultNativeSubagentChangedFilesMax is how many changed files a run lists in its
 	// result; a child that changes more says how many it left out.
 	defaultNativeSubagentChangedFilesMax int64 = 100
@@ -48,7 +42,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "wait_ms", "max_wait_ms", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "deny_agents", "allow_detached_writers", "changed_files_max", "process_max_running", "storage_dir", "statecontext"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "deny_agents", "changed_files_max", "process_max_running", "storage_dir", "statecontext"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -67,14 +61,6 @@ type NativeSubagentSettings struct {
 	// the limit counts every child of the same storage directory, across runs; the
 	// session that first uses the directory sets it.
 	MaxConcurrent int64
-	// WaitMS is how long a call waits for the child's answer before it returns the
-	// run's id and leaves the child running. Zero returns at once, so every call
-	// detaches. The zero value of this struct therefore means "detach", not "default";
-	// the loader always sets it.
-	WaitMS int64
-	// MaxWaitMS caps a wait the model asks for with wait_ms. The tool refuses a value
-	// below one, because a zero cap would turn every wait into zero.
-	MaxWaitMS int64
 	// KeepFinished is how many finished runs stay readable by id; the oldest go first.
 	// Runs still going are never dropped.
 	KeepFinished int64
@@ -103,10 +89,6 @@ type NativeSubagentSettings struct {
 	// configuration error, and every child stays read-only. The zero value is the
 	// default.
 	AllowWrite bool
-	// AllowDetachedWriters lets a call to an agent that can change files return at once
-	// with a run id when it gives wait_ms. Off by default: such an agent then waits for
-	// its end, whatever wait_ms says. The zero value is the default.
-	AllowDetachedWriters bool
 	// DenyAgents are agent names removed from Agents after loading; a name that matches no agent is ignored.
 	DenyAgents []string
 	// DenyTools is the selected profile's tools.deny, set when the catalog is built and
@@ -252,12 +234,6 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 	if settings.ListMaxBytes, err = configuredInteger(fields, "list_max_bytes", defaultNativeSubagentListMaxBytes, 0, maxNativeSubagentListMaxBytes, settingPath, section); err != nil {
 		return nil, err
 	}
-	if settings.WaitMS, err = configuredInteger(fields, "wait_ms", defaultNativeSubagentWaitMS, 0, maxNativeSubagentWaitMS, settingPath, section); err != nil {
-		return nil, err
-	}
-	if settings.MaxWaitMS, err = configuredInteger(fields, "max_wait_ms", defaultNativeSubagentMaxWaitMS, 1, maxNativeSubagentWaitMS, settingPath, section); err != nil {
-		return nil, err
-	}
 	if settings.KeepFinished, err = configuredInteger(fields, "keep_finished", defaultNativeSubagentKeepDone, 1, maxNativeSubagentKeepDone, settingPath, section); err != nil {
 		return nil, err
 	}
@@ -277,9 +253,6 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.AllowWrite, err = bashBool(fields, "allow_write", false, settingPath+": "+section); err != nil {
-		return nil, err
-	}
-	if settings.AllowDetachedWriters, err = bashBool(fields, "allow_detached_writers", false, settingPath+": "+section); err != nil {
 		return nil, err
 	}
 	if settings.DenyAgents, err = subagentDenyAgents(fields, settingPath, section); err != nil {

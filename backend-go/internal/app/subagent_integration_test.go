@@ -56,11 +56,11 @@ type subagentProvider struct {
 	childRounds      int
 	childInputTokens int
 	childRequests    int
-	// detach scripts the parent to start the child with wait_ms 0, so the call returns
+	// detach scripts the parent to start the child with block_ms 0, so the call returns
 	// a run id at once, and then to collect the answer with that id. childHold keeps
 	// the child's first request waiting until the parent has seen the handoff.
 	detach bool
-	// handoffOnly scripts the parent to start the child with wait_ms 0 and then end its
+	// handoffOnly scripts the parent to start the child with block_ms 0 and then end its
 	// run with a final answer, leaving the child going.
 	handoffOnly  bool
 	childHold    chan struct{}
@@ -174,17 +174,16 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 			if strings.Contains(after, "function_call_output") {
 				events = messageEvents("parent saw: "+lastOutput(after), 31)
 			} else {
-				events = functionCallEvents("call-collect", "subagent", fmt.Sprintf(`{"id":%q,"wait_ms":100}`, p.collectID))
+				events = functionCallEvents("call-collect", "async", fmt.Sprintf(`{"action":"status","id":%q}`, p.collectID))
 			}
 		case body.Model == "parent-model" && p.handoffOnly && !strings.Contains(record.Text, "function_call_output"):
-			events = functionCallEvents("call-sub", "subagent", `{"task":"find the answer","wait_ms":0}`)
+			events = functionCallEvents("call-sub", "subagent", `{"task":"find the answer","block_ms":0}`)
 		case body.Model == "parent-model" && p.detach && !strings.Contains(record.Text, "function_call_output"):
-			events = functionCallEvents("call-sub", "subagent", `{"task":"find the answer","wait_ms":0}`)
+			events = functionCallEvents("call-sub", "subagent", `{"task":"find the answer","block_ms":0}`)
 		case body.Model == "parent-model" && p.detach && !strings.Contains(record.Text, "the answer is 42"):
 			// The handoff came back. Let the child go, then collect with the id from it.
-			id := regexp.MustCompile(`sub_[0-9a-f]{8}`).FindString(lastOutput(record.Text))
 			p.holdReleased.Do(func() { close(p.childHold) })
-			events = functionCallEvents("call-collect", "subagent", fmt.Sprintf(`{"id":%q,"wait_ms":10000}`, id))
+			events = functionCallEvents("call-collect", "async", `{"action":"wait","wait_ms":10000}`)
 		case body.Model == "parent-model" && p.parentFirstCall[0] != "" && !strings.Contains(record.Text, "function_call_output"):
 			events = functionCallEvents("call-parent-first", p.parentFirstCall[0], p.parentFirstCall[1])
 		case body.Model == "parent-model" && !strings.Contains(record.Text, "function_call_output") && p.parentCalls > 1:
@@ -373,7 +372,7 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		}
 		return path
 	}
-	definitions := []string{sampleTool("read.json"), sampleTool("subagent.json")}
+	definitions := []string{sampleTool("read.json"), sampleTool("subagent.json"), sampleTool("async.json")}
 	writeSettings, withWrite := agentSetting["__write"].(map[string]any)
 	if withWrite {
 		definitions = append(definitions, sampleTool("write.json"))
@@ -463,6 +462,7 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	spec.Native = map[string]any{
 		"read":     map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}},
 		"subagent": subagent,
+		"async":    map[string]any{},
 	}
 	if withWrite {
 		writeTool := map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}}
@@ -631,7 +631,7 @@ func TestHTTPRunHandsATaskToASubagentWithItsOwnModelAndContext(t *testing.T) {
 	}
 
 	// The parent sees the subagent tool, with the agent list in its description.
-	if strings.Join(parent[0].Tools, ",") != "read,subagent" {
+	if strings.Join(parent[0].Tools, ",") != "read,async,subagent" {
 		t.Fatalf("parent tools = %v", parent[0].Tools)
 	}
 	// The child sees read and nothing else: no subagent, so it cannot start another child.
@@ -1100,7 +1100,7 @@ func TestHTTPRunSlowSubagentHandsBackAnIdAndTheLaterCallCollectsTheAnswer(t *tes
 	if strings.Contains(parent[1].Text, "error_code") {
 		t.Errorf("the handoff was reported as an error:\n%s", parent[1].Text)
 	}
-	if !strings.Contains(parent[2].Text, "Agent explore finished") || !strings.Contains(parent[2].Text, "the answer is 42") {
+	if collected := unescapedText(parent[2].Text); !strings.Contains(collected, `"state":"done"`) || !strings.Contains(collected, "the answer is 42") {
 		t.Errorf("the collected answer did not reach the parent:\n%s", parent[2].Text)
 	}
 	// The collect call used the first child; it did not start another one.
@@ -1317,9 +1317,9 @@ func TestSubagentRunFinishedBeforeARestartCanBeCollectedAfterIt(t *testing.T) {
 		t.Fatalf("the run after the restart did not complete:\n%s", body)
 	}
 	parent := f.provider.forModel("parent-model")
-	last := parent[len(parent)-1].Text
-	if !strings.Contains(last, "Agent explore finished") || !strings.Contains(last, "the answer is 42") {
-		t.Errorf("the answer did not survive the restart:\n%s", last)
+	last := unescapedText(parent[len(parent)-1].Text)
+	if !strings.Contains(last, `"state":"done"`) || !strings.Contains(last, `"ok":true`) || !strings.Contains(last, "messages.jsonl") {
+		t.Errorf("the finished run did not survive the restart as done with its transcript:\n%s", last)
 	}
 	if child := f.provider.forModel("child-model"); len(child) != 2 {
 		t.Errorf("child requests = %d, want 2: collecting must not start another child", len(child))
@@ -1331,25 +1331,31 @@ func TestSubagentRunStillGoingAtACrashIsReportedLostWithItsTranscript(t *testing
 	f.provider.childPartial = true
 	id := handoffAndLeaveRunning(t, f)
 	manifestPath := filepath.Join(f.toolDir, ".subagents", ".runs", id+".json")
+	recordPath := filepath.Join(f.toolDir, ".async", id+".json")
 
-	// A crash leaves the manifest as the last write made it: running. A graceful close
-	// would have ended the run first, so the test puts the crash state back by hand.
+	// A crash leaves the records as the last write made them: running. A graceful close
+	// would have ended the run first, so the test puts the crash state back by hand in
+	// the run manifest and in the async record, and drops the async index.
 	f.apiURL = f.restart(t, func() {
-		data, err := os.ReadFile(manifestPath)
-		if err != nil {
-			t.Fatal(err)
+		for _, path := range []string{manifestPath, recordPath} {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			crashed := regexp.MustCompile(`"state":\s*"stopped"`).ReplaceAllString(string(data), `"state":"running"`)
+			if crashed == string(data) && !strings.Contains(crashed, `"state":"running"`) {
+				t.Fatalf("%s after the close holds neither state:\n%s", path, data)
+			}
+			crashed = regexp.MustCompile(`"unread":\s*true,?`).ReplaceAllString(crashed, "")
+			writeFile(t, path, []byte(crashed))
 		}
-		crashed := strings.Replace(string(data), `"state":"stopped"`, `"state":"running"`, 1)
-		if crashed == string(data) && !strings.Contains(crashed, `"state":"running"`) {
-			t.Fatalf("manifest after the close holds neither state:\n%s", data)
-		}
-		writeFile(t, manifestPath, []byte(crashed))
+		_ = os.Remove(filepath.Join(f.toolDir, ".async", "index.json"))
 	})
 	f.provider.collectMarker, f.provider.collectID = "collect it now", id
 	f.runInput(t, "collect it now")
 	parent := f.provider.forModel("parent-model")
-	last := parent[len(parent)-1].Text
-	for _, want := range []string{"subagent_lost", "run: " + id, "transcript: "} {
+	last := unescapedText(parent[len(parent)-1].Text)
+	for _, want := range []string{`"state":"lost"`, id, "messages.jsonl"} {
 		if !strings.Contains(last, want) {
 			t.Errorf("the lost run result lacks %q:\n%s", want, last)
 		}
@@ -1367,11 +1373,14 @@ func TestSubagentRunStillGoingAtAGracefulRestartIsReportedStopped(t *testing.T) 
 	f.provider.collectMarker, f.provider.collectID = "collect it now", id
 	f.runInput(t, "collect it now")
 	parent := f.provider.forModel("parent-model")
-	last := parent[len(parent)-1].Text
-	if !strings.Contains(last, "was stopped") || strings.Contains(last, "subagent_lost") {
+	last := unescapedText(parent[len(parent)-1].Text)
+	if !strings.Contains(last, `"state":"stopped"`) || strings.Contains(last, `"state":"lost"`) {
 		t.Errorf("a child cancelled by a graceful shutdown must read as stopped:\n%s", last)
 	}
 }
+
+// unescapedText undoes the JSON string escaping of a tool output inside a recorded request.
+func unescapedText(text string) string { return strings.ReplaceAll(text, `\"`, `"`) }
 
 func countChildFolders(t *testing.T, f subagentFixture) int {
 	t.Helper()
@@ -1426,7 +1435,7 @@ func TestSubagentSendsTheHostedToolsOfItsOwnModelFileAndTheParentDoesNot(t *test
 	if len(parent) == 0 || len(child) == 0 {
 		t.Fatalf("provider requests: parent %d, child %d", len(parent), len(child))
 	}
-	if got := strings.Join(parent[0].ToolTypes, ","); got != "function,function" {
+	if got := strings.Join(parent[0].ToolTypes, ","); got != "function,function,function" {
 		t.Fatalf("parent tool types = %s, want its two function tools and no hosted tool", got)
 	}
 	if got := strings.Join(child[0].ToolTypes, ","); got != "function,web_search" {

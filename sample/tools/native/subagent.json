@@ -5,7 +5,7 @@
       "id": "native.subagent",
       "source": "native",
       "name": "subagent",
-      "description": "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again, call with that id. A marked agent is never handed off: the call runs to its end.",
+      "description": "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. A marked agent is never handed off: the call runs to its end.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -18,19 +18,10 @@
             "type": "string",
             "description": "Agent name. Optional when only one is configured."
           },
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Run id from a call that returned still running. Use it instead of task."
-          },
-          "wait_ms": {
+          "block_ms": {
             "type": "integer",
             "minimum": 0,
-            "description": "Most time to wait for the answer; 0 returns at once with a run id. Clamped to session policy. An agent that can change files ignores it unless the session allows detached writers."
-          },
-          "stop": {
-            "type": "boolean",
-            "description": "With id: cancel that run."
+            "description": "Most time this call blocks for the answer; 0 returns a run id at once. Clamped to the async policy. An agent that can change files ignores it and runs to its end."
           }
         },
         "additionalProperties": false

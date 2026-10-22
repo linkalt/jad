@@ -24,8 +24,8 @@ func TestSubagentToolsetGivesTheChildAToolTheSessionDoesNotRegister(t *testing.T
 	if len(parent) == 0 || len(child) < 2 {
 		t.Fatalf("requests: parent %d, child %d", len(parent), len(child))
 	}
-	if got := strings.Join(parent[0].Tools, ","); got != "subagent" {
-		t.Errorf("parent tools = %q, want only subagent", got)
+	if got := strings.Join(parent[0].Tools, ","); got != "async,subagent" {
+		t.Errorf("parent tools = %q, want only async and subagent", got)
 	}
 	if got := strings.Join(child[0].Tools, ","); got != "read" {
 		t.Errorf("child tools = %q, want read from its toolset", got)

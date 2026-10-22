@@ -176,8 +176,8 @@ func TestSubagentChangedFilesSurviveARestart(t *testing.T) {
 
 	// The process dies here: the first manager is not closed, so the manifest still
 	// says running. A new manager over the same directory is the restart.
-	second, _ := persistedWriterCatalog(t, dir, &fakeLauncher{})
-	out := subagentCallAs(t, second, "owner", `{"id":"`+id+`"}`)
+	_, second := persistedWriterCatalog(t, dir, &fakeLauncher{})
+	out := restoredOutput(t, second, "owner", id)
 	if !strings.Contains(out, "subagent_lost") || !strings.Contains(out, "written_files: src/kept.go (edited), src/more.go (created)") {
 		t.Fatalf("a lost writer must still say which files it had changed:\n%s", out)
 	}

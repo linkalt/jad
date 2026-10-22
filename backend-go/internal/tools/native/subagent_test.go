@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
@@ -50,7 +51,7 @@ func mcpReadOnlyTool(name string) tools.Tool {
 }
 
 func subagentSettings(agents ...sessionfs.NativeSubagentAgent) sessionfs.NativeSubagentSettings {
-	return sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, WaitMS: 5000, MaxWaitMS: 10000, KeepFinished: 10, MaxQueued: 4, StorageDir: "/tmp/unused", Agents: agents}
+	return sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: "/tmp/unused", Agents: agents}
 }
 
 func agentNamed(name string) sessionfs.NativeSubagentAgent {
@@ -77,15 +78,70 @@ func withExecutors(t *testing.T, list ...tools.Tool) []tools.Tool {
 func buildSubagentCatalog(t *testing.T, settings sessionfs.NativeSubagentSettings, launcher SubagentLauncher, parent ...tools.Tool) (*tools.Catalog, tools.Tool) {
 	t.Helper()
 	parentTools := withExecutors(t, parent...)
-	tool, err := NewSubagentTool(settings, parentTools, launcher)
+	host := newTestAsyncHost(t)
+	manager := NewSubagentManager()
+	t.Cleanup(func() { _ = manager.Close() })
+	tool, err := newSubagentToolAsync(settings, parentTools, nil, launcher, nil, manager, nil, host)
 	if err != nil {
-		t.Fatalf("NewSubagentTool: %v", err)
+		t.Fatalf("newSubagentToolAsync: %v", err)
 	}
-	catalog, err := tools.NewCatalog(append(parentTools, tool))
+	return catalogWithAsync(t, host, parentTools, tool), tool
+}
+
+// testSessionKey is the session the test helpers call as unless a test names another.
+const testSessionKey = "test"
+
+func newTestAsyncHost(t *testing.T) *AsyncHost {
+	t.Helper()
+	host, err := NewAsyncHost(filepath.Join(t.TempDir(), ".async"), asyncmgr.DefaultConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return catalog, tool
+	t.Cleanup(host.Close)
+	return host
+}
+
+// catalogWithAsync returns a catalog of the parent tools, the subagent tool and the async
+// tool over host, the way a session with tools.native.async has it.
+func catalogWithAsync(t *testing.T, host *AsyncHost, parent []tools.Tool, subagent tools.Tool) *tools.Catalog {
+	t.Helper()
+	asyncTool, err := NewAsyncTool(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := tools.NewCatalog(append(append([]tools.Tool(nil), parent...), subagent, asyncTool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
+// asyncCall calls the async tool of catalog as the default test session.
+func asyncCall(t *testing.T, catalog *tools.Catalog, arguments string) string {
+	t.Helper()
+	return asyncCallAs(t, catalog, testSessionKey, arguments)
+}
+
+func asyncCallAs(t *testing.T, catalog *tools.Catalog, sessionKey, arguments string) string {
+	t.Helper()
+	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "call_a", "name": "async", "arguments": arguments})
+	raw, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess", SessionKey: sessionKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var item struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		t.Fatal(err)
+	}
+	return item.Output
+}
+
+// asyncWait waits for the next completion signal of the default test session.
+func asyncWait(t *testing.T, catalog *tools.Catalog) string {
+	t.Helper()
+	return asyncCall(t, catalog, `{"action":"wait","wait_ms":3000}`)
 }
 
 func subagentCall(t *testing.T, catalog *tools.Catalog, arguments string) string {
@@ -96,7 +152,7 @@ func subagentCall(t *testing.T, catalog *tools.Catalog, arguments string) string
 func subagentCallWith(t *testing.T, ctx context.Context, catalog *tools.Catalog, arguments string) string {
 	t.Helper()
 	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "call_9", "name": "subagent", "arguments": arguments})
-	raw, err := catalog.ExecuteFunctionCall(ctx, call, tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess"})
+	raw, err := catalog.ExecuteFunctionCall(ctx, call, tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess", SessionKey: testSessionKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +208,7 @@ func TestSubagentChildGetsOnlyReadOnlyNativeToolsAndNeverItself(t *testing.T) {
 	if strings.Join(got, ",") != "read,grep" {
 		t.Fatalf("child tools = %v, want read and grep only (no write, bash, MCP tool or subagent)", got)
 	}
-	if strings.Join(toolNames(catalog), ",") != "read,write,bash,lookup,grep,subagent" {
+	if strings.Join(toolNames(catalog), ",") != "read,write,bash,lookup,grep,subagent,async" {
 		t.Fatalf("parent catalog changed: %v", toolNames(catalog))
 	}
 }

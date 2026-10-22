@@ -127,7 +127,7 @@ func TestSubagentReaderRunTakesNoCheckpointEvenWithWriterSupportOn(t *testing.T)
 
 func TestSubagentWriterNeverHandsOffEvenWhenAskedTo(t *testing.T) {
 	f := writerFixture(t, false)
-	f.provider.handoffOnly = true // the parent asks for wait_ms 0
+	f.provider.handoffOnly = true // the parent asks for block_ms 0
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}

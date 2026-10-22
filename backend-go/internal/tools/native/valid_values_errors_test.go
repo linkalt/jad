@@ -109,20 +109,19 @@ func TestTaskNotFoundListsTheTaskIDs(t *testing.T) {
 	}
 }
 
-func TestSubagentUnknownRunListsTheRunIDs(t *testing.T) {
+func TestAsyncUnknownHandleListsOnlyTheSessionsHandles(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	var cancelled atomic.Int64
 	first, second, _ := sharedManagerCatalogs(t, blockedLauncher(release, &cancelled))
-	if out := subagentCallAs(t, first, "alpha", `{"id":"sub_00000000"}`); !strings.Contains(out, "unknown_run") || strings.Contains(out, "available_ids") {
-		t.Errorf("a session with no runs must get no ids:\n%s", out)
+	if out := asyncCallAs(t, first, "alpha", `{"action":"status","id":"sub_00000000"}`); !strings.Contains(out, "unknown_handle") {
+		t.Errorf("an unknown id:\n%s", out)
 	}
-	id := runIDOf(t, subagentCallAs(t, first, "alpha", `{"task":"x","wait_ms":5}`))
-	out := subagentCallAs(t, first, "alpha", `{"id":"sub_00000000"}`)
-	if !strings.Contains(out, "error_code: unknown_run") || !strings.Contains(out, "available_ids: "+id) {
-		t.Errorf("unknown run did not list %s:\n%s", id, out)
-	}
-	if other := subagentCallAs(t, second, "beta", `{"id":"sub_00000000"}`); strings.Contains(other, id) {
+	id := runIDOf(t, subagentCallAs(t, first, "alpha", `{"task":"x","block_ms":5}`))
+	if other := asyncCallAs(t, second, "beta", `{"action":"list"}`); strings.Contains(other, id) {
 		t.Errorf("another session was offered the run id:\n%s", other)
+	}
+	if mine := asyncCallAs(t, first, "alpha", `{"action":"list"}`); !strings.Contains(mine, id) {
+		t.Errorf("the owner's list lacks %s:\n%s", id, mine)
 	}
 }

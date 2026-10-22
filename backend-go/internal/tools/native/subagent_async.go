@@ -68,8 +68,15 @@ func subagentAsyncResult(run subagentRunView) asyncmgr.Result {
 	return result
 }
 
-// subagentRunRef is the run record that holds the run's transcript path.
+// subagentRunRef is where the full work of a run is: its transcript once the child has
+// one, else the run record. The model reads it with the normal read tool.
 func subagentRunRef(run *subagentRun) string {
+	run.mu.Lock()
+	dir := run.dir
+	run.mu.Unlock()
+	if dir != "" {
+		return filepath.Join(dir, "messages.jsonl")
+	}
 	if run.store == nil {
 		return ""
 	}

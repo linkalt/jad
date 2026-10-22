@@ -34,6 +34,22 @@ func persistedCatalog(t *testing.T, dir string, launcher SubagentLauncher, keep 
 	return catalog, manager
 }
 
+// restoredOutput renders the run a restarted manager holds under id, the way a start call
+// would, or reports it unknown to the owner.
+func restoredOutput(t *testing.T, manager *SubagentManager, owner, id string) string {
+	t.Helper()
+	run := manager.get(id, owner)
+	if run == nil {
+		return "error_code: unknown_run"
+	}
+	run.loadText(1024)
+	out, err := (&subagentTool{}).renderRun("c", run.view())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
 // startedRunID runs one task to its end and returns the id of the run it made. A call
 // that finishes inline does not print its id, so the id is read from the manager: the
 // newest run of the owner.
@@ -97,11 +113,11 @@ func TestSubagentFinishedRunSurvivesARestartAndItsAnswerIsReadFromTheTranscript(
 	_ = manager.Close()
 
 	// The server restarts: a new manager over the same directory, and no launcher call.
-	second, _ := persistedCatalog(t, root, &fakeLauncher{run: func(context.Context, SubagentRequest) (SubagentResult, error) {
+	_, secondManager := persistedCatalog(t, root, &fakeLauncher{run: func(context.Context, SubagentRequest) (SubagentResult, error) {
 		t.Error("a restored run must not start a child")
 		return SubagentResult{}, nil
 	}}, 10)
-	output := subagentCallAs(t, second, "", `{"id":"`+id+`"}`)
+	output := restoredOutput(t, secondManager, "", id)
 	for _, want := range []string{"Agent explore finished", "the answer is 42", "rounds: 2", "tokens: 321"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("restored run lacks %q:\n%s", want, output)
@@ -124,8 +140,18 @@ func TestSubagentRunThatWasGoingAtARestartIsLostWithItsPartialWork(t *testing.T)
 		}
 		return SubagentResult{}, ctx.Err()
 	}}
-	first, _ := persistedCatalog(t, root, launcher, 10)
-	id := runIDOf(t, subagentCall(t, first, `{"task":"slow","wait_ms":5}`))
+	firstManager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
+	t.Cleanup(func() { _ = firstManager.Close() })
+	host := newTestAsyncHost(t)
+	settings := subagentSettings(agentNamed("explore"))
+	settings.StorageDir = root
+	parent := withExecutors(t, readOnlyTool("read"))
+	firstTool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, firstManager, nil, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := catalogWithAsync(t, host, parent, firstTool)
+	id := runIDOf(t, subagentCall(t, first, `{"task":"slow","block_ms":5}`))
 	// The process dies here: nothing closes the first manager, so the manifest still
 	// says running. The test reads it as the restart would.
 	if got := manifestOf(t, root, id); got.State != subagentRunRunning || got.Dir != transcript {
@@ -133,8 +159,8 @@ func TestSubagentRunThatWasGoingAtARestartIsLostWithItsPartialWork(t *testing.T)
 	}
 	defer close(release)
 
-	second, restarted := persistedCatalog(t, root, &fakeLauncher{}, 10)
-	output := subagentCallAs(t, second, "", `{"id":"`+id+`"}`)
+	_, restarted := persistedCatalog(t, root, &fakeLauncher{}, 10)
+	output := restoredOutput(t, restarted, testSessionKey, id)
 	for _, want := range []string{"error_code: subagent_lost", "run: " + id, "partial: true", "found the writer in journal.go", "transcript: " + filepath.Join(transcript, "messages.jsonl")} {
 		if !strings.Contains(output, want) {
 			t.Errorf("lost run lacks %q:\n%s", want, output)
@@ -154,11 +180,11 @@ func TestSubagentRestoredRunsKeepTheirOwner(t *testing.T) {
 	first, firstManager := persistedCatalog(t, root, launcher, 10)
 	id := startedRunID(t, first, firstManager, "alpha", `{"task":"x"}`)
 
-	second, _ := persistedCatalog(t, root, launcher, 10)
-	if out := subagentCallAs(t, second, "beta", `{"id":"`+id+`"}`); !strings.Contains(out, "unknown_run") {
+	_, second := persistedCatalog(t, root, launcher, 10)
+	if out := restoredOutput(t, second, "beta", id); !strings.Contains(out, "unknown_run") {
 		t.Errorf("another session read a restored run:\n%s", out)
 	}
-	if out := subagentCallAs(t, second, "alpha", `{"id":"`+id+`"}`); strings.Contains(out, "unknown_run") {
+	if out := restoredOutput(t, second, "alpha", id); strings.Contains(out, "unknown_run") {
 		t.Errorf("the owner lost its restored run:\n%s", out)
 	}
 }
@@ -254,8 +280,8 @@ func TestSubagentManifestCannotPointTheReaderOutsideTheStorageDirectory(t *testi
 	if err := os.WriteFile(filepath.Join(root, subagentManifestDir, "sub_0000abcd.json"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	catalog, _ := persistedCatalog(t, root, &fakeLauncher{}, 10)
-	output := subagentCallAs(t, catalog, "", `{"id":"sub_0000abcd"}`)
+	_, manager := persistedCatalog(t, root, &fakeLauncher{}, 10)
+	output := restoredOutput(t, manager, "", "sub_0000abcd")
 	if strings.Contains(output, "do not read me") || strings.Contains(output, outside) {
 		t.Errorf("a manifest led the reader outside the storage directory:\n%s", output)
 	}
@@ -273,8 +299,8 @@ func TestSubagentRestoredRunWithAMissingTranscriptStillAnswers(t *testing.T) {
 	if err := os.RemoveAll(transcript); err != nil {
 		t.Fatal(err)
 	}
-	second, _ := persistedCatalog(t, root, &fakeLauncher{}, 10)
-	output := subagentCallAs(t, second, "", `{"id":"`+id+`"}`)
+	_, second := persistedCatalog(t, root, &fakeLauncher{}, 10)
+	output := restoredOutput(t, second, "", id)
 	if !strings.Contains(output, "finished without an answer") {
 		t.Errorf("a run whose transcript is gone must say it has no answer:\n%s", output)
 	}

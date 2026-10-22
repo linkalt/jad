@@ -19,31 +19,33 @@ func cutOffLauncher(text, dir string) *fakeLauncher {
 	}}
 }
 
-func TestSubagentTimeoutReturnsThePartialTextAndTheTranscript(t *testing.T) {
+func TestSubagentTimeoutSignalCarriesThePartialTextAndTheTranscript(t *testing.T) {
 	agent := agentNamed("slow")
 	agent.TimeoutMS = 60
 	catalog, _ := buildSubagentCatalog(t, subagentSettings(agent), cutOffLauncher("found two files so far", "/tmp/kids/call-1"), readOnlyTool("read"))
-	id := runIDOf(t, subagentCall(t, catalog, `{"task":"x","wait_ms":5}`))
+	id := runIDOf(t, subagentCall(t, catalog, `{"task":"x","block_ms":5}`))
 
-	output := subagentCall(t, catalog, `{"id":"`+id+`","wait_ms":2000}`)
-	for _, want := range []string{
-		`"status":"error"`, "error_code: subagent_timeout", "run: " + id, "rounds: 3", "tokens: 700",
-		"partial: true", "transcript: /tmp/kids/call-1/messages.jsonl", "found two files so far",
-	} {
-		if !strings.Contains(output, want) {
-			t.Errorf("timeout result lacks %q:\n%s", want, output)
+	output := asyncWait(t, catalog)
+	for _, want := range []string{id, "timed_out", `"cut":false`, "/tmp/kids/call-1/messages.jsonl", "found two files so far"} {
+		if want == `"cut":false` {
+			continue
 		}
+		if !strings.Contains(output, want) {
+			t.Errorf("timeout signal lacks %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, `"ok":true`) {
+		t.Errorf("a timed out run is ok:\n%s", output)
 	}
 }
 
-func TestSubagentStopReturnsThePartialTextAndTheTranscript(t *testing.T) {
+func TestSubagentStopSignalCarriesThePartialTextAndTheTranscript(t *testing.T) {
 	catalog, _ := buildSubagentCatalog(t, subagentSettings(agentNamed("explore")), cutOffLauncher("half a list", "/tmp/kids/call-2"), readOnlyTool("read"))
-	id := runIDOf(t, subagentCall(t, catalog, `{"task":"x","wait_ms":5}`))
-
-	output := subagentCall(t, catalog, `{"id":"`+id+`","stop":true,"wait_ms":2000}`)
-	for _, want := range []string{"was stopped", "partial: true", "transcript: /tmp/kids/call-2/messages.jsonl", "half a list"} {
+	id := runIDOf(t, subagentCall(t, catalog, `{"task":"x","block_ms":5}`))
+	output := asyncCall(t, catalog, `{"action":"stop","id":"`+id+`"}`)
+	for _, want := range []string{id, "stopped", "/tmp/kids/call-2/messages.jsonl", "half a list"} {
 		if !strings.Contains(output, want) {
-			t.Errorf("stop result lacks %q:\n%s", want, output)
+			t.Errorf("stop signal lacks %q:\n%s", want, output)
 		}
 	}
 }
@@ -52,27 +54,27 @@ func TestSubagentCutOffWithoutTextStillNamesTheTranscript(t *testing.T) {
 	agent := agentNamed("slow")
 	agent.TimeoutMS = 60
 	catalog, _ := buildSubagentCatalog(t, subagentSettings(agent), cutOffLauncher("", "/tmp/kids/call-3"), readOnlyTool("read"))
-	id := runIDOf(t, subagentCall(t, catalog, `{"task":"x","wait_ms":5}`))
+	runIDOf(t, subagentCall(t, catalog, `{"task":"x","block_ms":5}`))
 
-	output := subagentCall(t, catalog, `{"id":"`+id+`","wait_ms":2000}`)
-	if !strings.Contains(output, "transcript: /tmp/kids/call-3/messages.jsonl") {
+	output := asyncWait(t, catalog)
+	if !strings.Contains(output, "/tmp/kids/call-3/messages.jsonl") || !strings.Contains(output, "timed_out") {
 		t.Errorf("no transcript path:\n%s", output)
 	}
-	if strings.Contains(output, "partial:") || strings.Contains(output, "--- CONTENT") {
-		t.Errorf("a run with no text must not claim partial work:\n%s", output)
+	if strings.Contains(output, `"label":"slow: x","summary"`) {
+		t.Errorf("a run with no text must not carry a summary:\n%s", output)
 	}
 }
 
-func TestSubagentPartialTextIsCutToTheResultLimit(t *testing.T) {
+func TestSubagentPartialTextIsCutToTheSummaryLimit(t *testing.T) {
 	agent := agentNamed("slow")
 	agent.TimeoutMS = 60
 	settings := subagentSettings(agent)
 	settings.ResultMaxBytes = 10
 	catalog, _ := buildSubagentCatalog(t, settings, cutOffLauncher(strings.Repeat("x", 100), "/tmp/kids/call-4"), readOnlyTool("read"))
-	id := runIDOf(t, subagentCall(t, catalog, `{"task":"x","wait_ms":5}`))
+	runIDOf(t, subagentCall(t, catalog, `{"task":"x","block_ms":5}`))
 
-	output := subagentCall(t, catalog, `{"id":"`+id+`","wait_ms":2000}`)
-	if !strings.Contains(output, "truncated: true") || strings.Contains(output, strings.Repeat("x", 11)) {
+	output := asyncWait(t, catalog)
+	if !strings.Contains(output, `"cut":true`) || strings.Contains(output, strings.Repeat("x", 11)) {
 		t.Errorf("partial text was not cut to 10 bytes:\n%s", output)
 	}
 }

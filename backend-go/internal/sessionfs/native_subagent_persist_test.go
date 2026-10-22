@@ -127,24 +127,3 @@ func TestSubagentChangeToolsOfAnAgentFolderAreCheckedToo(t *testing.T) {
 		t.Fatalf("folder agent with allow_write: %v, %v", got, err)
 	}
 }
-
-func TestSubagentAllowDetachedWritersDefaultsToOffAndNeedsABoolean(t *testing.T) {
-	off, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"a":{}}}`), "/s/setting.json", "/w", "")
-	if err != nil || off.AllowDetachedWriters {
-		t.Fatalf("default allow_detached_writers = %v, %v; want false", off != nil && off.AllowDetachedWriters, err)
-	}
-	null, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"allow_detached_writers":null,"agents":{"a":{}}}`), "/s/setting.json", "/w", "")
-	if err != nil || null.AllowDetachedWriters {
-		t.Fatalf("allow_detached_writers null = %v, %v; want false", null != nil && null.AllowDetachedWriters, err)
-	}
-	on, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"allow_detached_writers":true,"agents":{"a":{}}}`), "/s/setting.json", "/w", "")
-	if err != nil || !on.AllowDetachedWriters {
-		t.Fatalf("allow_detached_writers true = %v, %v", on != nil && on.AllowDetachedWriters, err)
-	}
-	for _, value := range []string{`"yes"`, `1`, `{}`} {
-		_, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"allow_detached_writers":`+value+`,"agents":{"a":{}}}`), "/s/setting.json", "/w", "")
-		if err == nil || !strings.Contains(err.Error(), "tools.native.subagent.allow_detached_writers must be a boolean") {
-			t.Errorf("allow_detached_writers %s: err = %v", value, err)
-		}
-	}
-}

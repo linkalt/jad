@@ -20,14 +20,12 @@ var subagentInputSchema = json.RawMessage(`{
   "properties":{
     "task":{"type":"string","minLength":1,"description":"Self-contained instructions. The agent sees nothing of this conversation. Omit to list the agents."},
     "agent":{"type":"string","description":"Agent name. Optional when only one is configured."},
-    "id":{"type":"string","minLength":1,"description":"Run id from a call that returned still running. Use it instead of task."},
-    "wait_ms":{"type":"integer","minimum":0,"description":"Most time to wait for the answer; 0 returns at once with a run id. Clamped to session policy. An agent that can change files ignores it unless the session allows detached writers."},
-    "stop":{"type":"boolean","description":"With id: cancel that run."}
+    "block_ms":{"type":"integer","minimum":0,"description":"Most time this call blocks for the answer; 0 returns a run id at once. Clamped to the async policy. An agent that can change files ignores it and runs to its end."}
   },
   "additionalProperties":false
 }`)
 
-const subagentDescription = "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again, call with that id. A marked agent is never handed off: the call runs to its end."
+const subagentDescription = "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. A marked agent is never handed off: the call runs to its end."
 
 // subagentExample is shown to the model when its arguments are rejected.
 var subagentExample = json.RawMessage(`{"task":"Find where the retry delay is computed and report the file paths and line numbers."}`)
@@ -191,9 +189,6 @@ func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools
 	if settings.MaxConcurrent < 1 {
 		return tools.Tool{}, errors.New("tools.native.subagent.max_concurrent must be at least 1")
 	}
-	if settings.MaxWaitMS < 1 {
-		return tools.Tool{}, errors.New("tools.native.subagent.max_wait_ms must be at least 1")
-	}
 	if settings.KeepFinished < 1 {
 		return tools.Tool{}, errors.New("tools.native.subagent.keep_finished must be at least 1")
 	}
@@ -298,9 +293,6 @@ func containsName(names []string, name string) bool {
 // can when the agent the call picks lists a tool that changes files. A call that picks
 // no agent, or only checks a run, cannot.
 func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
-	if id, _ := arguments["id"].(string); id != "" {
-		return false
-	}
 	task, _ := arguments["task"].(string)
 	if strings.TrimSpace(task) == "" {
 		return false
@@ -374,10 +366,10 @@ func changeMarker(agent sessionfs.NativeSubagentAgent) string {
 	return ""
 }
 
-// renderSubagentList is the result of a call with no task: one line per agent, then
-// one per retained run, so a model that lost a run id can find it again.
-func renderSubagentList(callID string, agents []subagentAgent, runs []subagentRunView, maxBytes int64, settings sessionfs.NativeSubagentSettings) (string, error) {
-	lines := make([]string, 0, len(agents)+len(runs)+2)
+// renderSubagentList is the result of a call with no task: one line per agent. The runs
+// are listed by the async tool.
+func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64, settings sessionfs.NativeSubagentSettings) (string, error) {
+	lines := make([]string, 0, len(agents)+1)
 	if len(agents) == 0 {
 		lines = append(lines, noAgentsText(settings))
 	}
@@ -388,17 +380,8 @@ func renderSubagentList(callID string, agents []subagentAgent, runs []subagentRu
 		}
 		lines = append(lines, line)
 	}
-	if len(runs) > 0 {
-		lines = append(lines, "", "Runs:")
-		for _, run := range runs {
-			lines = append(lines, fmt.Sprintf("%s %s %s %ds: %s", run.id, run.agent, run.state, int64(run.elapsed.Seconds()), run.task))
-		}
-	}
 	text, cut := cutUTF8(strings.Join(lines, "\n"), maxBytes)
 	information := []tools.Information{{Key: "agents", Value: len(agents)}}
-	if len(runs) > 0 {
-		information = append(information, tools.Information{Key: "runs", Value: len(runs)})
-	}
 	if cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
 	}
@@ -580,9 +563,9 @@ func expandMCPWildcard(agent, entry, serverPrefix string, byID map[string]tools.
 
 // normalizeSubagentArguments treats a blank agent, id or task as absent, so a model
 // that sends an empty string for "the default" is not rejected, and a blank task as a
-// request for the agent list. A negative wait is no wait.
+// request for the agent list. A negative block is no block.
 func normalizeSubagentArguments(arguments map[string]any) map[string]any {
-	for _, key := range []string{"task", "agent", "id"} {
+	for _, key := range []string{"task", "agent"} {
 		value, ok := arguments[key].(string)
 		if !ok {
 			continue
@@ -593,8 +576,8 @@ func normalizeSubagentArguments(arguments map[string]any) map[string]any {
 			arguments[key] = trimmed
 		}
 	}
-	if wait, ok := safeInteger(arguments["wait_ms"]); ok && wait < 0 {
-		arguments["wait_ms"] = json.Number("0")
+	if block, ok := safeInteger(arguments["block_ms"]); ok && block < 0 {
+		arguments["block_ms"] = json.Number("0")
 	}
 	return arguments
 }
