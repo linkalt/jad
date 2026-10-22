@@ -1,0 +1,211 @@
+package asyncmgr
+
+import (
+	"encoding/json"
+	"errors"
+	"hash/crc32"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	indexName    = "index"
+	indexFile    = "index.json"
+	indexVersion = 1
+	tempPrefix   = ".tmp-"
+)
+
+// indexRow is the compact form of a handle kept in index.json: enough for list and for
+// startup to decide what to open. Detail lives in the record file.
+type indexRow struct {
+	ID       string    `json:"id"`
+	Owner    string    `json:"owner"`
+	Kind     Kind      `json:"kind"`
+	State    State     `json:"state"`
+	OK       bool      `json:"ok,omitempty"`
+	Label    string    `json:"label,omitempty"`
+	Started  time.Time `json:"started"`
+	Changed  time.Time `json:"changed"`
+	Unread   bool      `json:"unread,omitempty"`
+	Overflow bool      `json:"overflow,omitempty"`
+}
+
+type indexFileBody struct {
+	Version int             `json:"version"`
+	Sum     string          `json:"sum"`
+	Rows    json.RawMessage `json:"rows"`
+}
+
+func (m *Manager) recordPath(id string) string { return filepath.Join(m.dir, id+".json") }
+
+// writeFileAtomic writes through a temp file in the same folder, then renames it over
+// the target, as the process and sub-agent records do.
+func writeFileAtomic(path string, data []byte) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), tempPrefix+"*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	_, writeErr := temp.Write(data)
+	closeErr := temp.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(tempPath, path)
+}
+
+func (m *Manager) writeRecord(rec Record) error {
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	m.ioMu.Lock()
+	defer m.ioMu.Unlock()
+	return writeFileAtomic(m.recordPath(rec.ID), append(data, '\n'))
+}
+
+func (m *Manager) readRecord(id string) (Record, error) {
+	data, err := os.ReadFile(m.recordPath(id))
+	if err != nil {
+		return Record{}, err
+	}
+	var rec Record
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return Record{}, err
+	}
+	if rec.Version != recordVersion || rec.ID != id || rec.Owner == "" || rec.Kind == "" {
+		return Record{}, errors.New("unrecognized async record")
+	}
+	return rec, nil
+}
+
+// updateRecord rewrites one record in place; a missing or unreadable file is skipped
+// (the in-memory row stays authoritative until the next start).
+func (m *Manager) updateRecord(id string, change func(*Record)) {
+	m.ioMu.Lock()
+	defer m.ioMu.Unlock()
+	data, err := os.ReadFile(m.recordPath(id))
+	if err != nil {
+		return
+	}
+	var rec Record
+	if json.Unmarshal(data, &rec) != nil || rec.ID != id {
+		return
+	}
+	change(&rec)
+	out, err := json.Marshal(rec)
+	if err != nil {
+		return
+	}
+	if err := writeFileAtomic(m.recordPath(id), append(out, '\n')); err != nil {
+		m.opts.Logger.Warn("async record not updated", "handle", id, "error", err)
+	}
+}
+
+func (m *Manager) removeRecord(id string) {
+	m.ioMu.Lock()
+	defer m.ioMu.Unlock()
+	if err := os.Remove(m.recordPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		m.opts.Logger.Warn("async record not removed", "handle", id, "error", err)
+	}
+}
+
+func rowIndex(r *row) indexRow {
+	return indexRow{ID: r.id, Owner: r.owner, Kind: r.kind, State: r.state, OK: r.ok, Label: r.label,
+		Started: r.started, Changed: r.changed, Unread: r.unread, Overflow: r.overflow}
+}
+
+// writeIndex rewrites index.json from the current rows. Concurrent calls coalesce: while
+// one goroutine writes, others only mark the index dirty and return, and the writer
+// loops until no request is left. The file is a cache; a failed write is logged only.
+func (m *Manager) writeIndex() {
+	for {
+		m.indexDirty.Store(true)
+		if !m.indexMu.TryLock() {
+			return
+		}
+		for m.indexDirty.Swap(false) {
+			m.flushIndex()
+		}
+		m.indexMu.Unlock()
+		if !m.indexDirty.Load() {
+			return
+		}
+	}
+}
+
+func (m *Manager) flushIndex() {
+	m.mu.Lock()
+	rows := make([]indexRow, 0, len(m.rows))
+	for _, r := range m.rows {
+		rows = append(rows, rowIndex(r))
+	}
+	m.mu.Unlock()
+	sortIndexRows(rows)
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		return
+	}
+	body, err := json.Marshal(indexFileBody{Version: indexVersion, Sum: checksum(raw), Rows: raw})
+	if err != nil {
+		return
+	}
+	m.ioMu.Lock()
+	err = writeFileAtomic(filepath.Join(m.dir, indexFile), append(body, '\n'))
+	m.ioMu.Unlock()
+	if err != nil {
+		m.opts.Logger.Warn("async index not saved; it is rebuilt at the next start", "error", err)
+	}
+}
+
+func checksum(raw []byte) string {
+	return strconv.FormatUint(uint64(crc32.ChecksumIEEE(raw)), 16)
+}
+
+// readIndex returns the rows of index.json, or ok=false when it is missing, unreadable
+// or fails its checksum.
+func (m *Manager) readIndex() ([]indexRow, bool) {
+	data, err := os.ReadFile(filepath.Join(m.dir, indexFile))
+	if err != nil {
+		return nil, false
+	}
+	var body indexFileBody
+	if json.Unmarshal(data, &body) != nil || body.Version != indexVersion || body.Sum != checksum(body.Rows) {
+		return nil, false
+	}
+	var rows []indexRow
+	if json.Unmarshal(body.Rows, &rows) != nil {
+		return nil, false
+	}
+	return rows, true
+}
+
+// recordNames lists the ids that have a record file (names only, no file is opened) and
+// removes temp files an earlier crash left behind.
+func (m *Manager) recordNames() []string {
+	entries, err := os.ReadDir(m.dir)
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	for _, entry := range entries {
+		name := entry.Name()
+		switch {
+		case strings.HasPrefix(name, tempPrefix):
+			_ = os.Remove(filepath.Join(m.dir, name))
+		case name == indexFile || entry.IsDir() || !strings.HasSuffix(name, ".json"):
+		default:
+			if id := strings.TrimSuffix(name, ".json"); idPattern.MatchString(id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}

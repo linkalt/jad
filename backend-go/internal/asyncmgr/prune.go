@@ -1,0 +1,139 @@
+package asyncmgr
+
+import (
+	"sort"
+	"time"
+)
+
+// flip is a record whose unread flag must be cleared on disk.
+type flip struct {
+	id       string
+	overflow bool
+}
+
+type removal struct {
+	id   string
+	kind Kind
+}
+
+// pruneWork is file work decided under the manager lock and done after releasing it.
+type pruneWork struct {
+	flips   []flip
+	removes []removal
+}
+
+func (w *pruneWork) merge(o pruneWork) {
+	w.flips = append(w.flips, o.flips...)
+	w.removes = append(w.removes, o.removes...)
+}
+
+func (w pruneWork) empty() bool { return len(w.flips) == 0 && len(w.removes) == 0 }
+
+// applyWork does the file work and, when anything changed or index is true, rewrites the
+// index. It must be called without m.mu held.
+func (m *Manager) applyWork(w pruneWork, index bool) {
+	for _, f := range w.flips {
+		m.updateRecord(f.id, func(rec *Record) {
+			rec.Unread = false
+			if f.overflow {
+				rec.Overflow = true
+			}
+		})
+	}
+	for _, r := range w.removes {
+		m.removeRecord(r.id)
+		m.mu.Lock()
+		driver := m.drivers[r.kind]
+		m.mu.Unlock()
+		if forgetter, ok := driver.(Forgetter); ok {
+			forgetter.Forget(r.id)
+		}
+	}
+	if index || !w.empty() {
+		m.writeIndex()
+	}
+}
+
+// markReadLocked clears the unread flag of r and drops its in-memory record.
+func (m *Manager) markReadLocked(r *row, overflow bool) flip {
+	m.mutateLocked(r, func(r *row) {
+		r.unread = false
+		if overflow {
+			r.overflow = true
+		}
+	})
+	r.rec = nil
+	return flip{id: r.id, overflow: overflow}
+}
+
+// enforceUnreadLocked keeps at most unread_max unread signals for owner: the oldest ones
+// are marked read-by-overflow and counted in dropped.
+func (m *Manager) enforceUnreadLocked(owner string) pruneWork {
+	var w pruneWork
+	s := m.owners[owner]
+	if s == nil || int64(len(s.unread)) <= m.cfg.UnreadMax {
+		return w
+	}
+	rows := sortedRows(s.unread)
+	for _, r := range rows[:int64(len(rows))-m.cfg.UnreadMax] {
+		w.flips = append(w.flips, m.markReadLocked(r, true))
+		s.dropped++
+	}
+	return w
+}
+
+// pruneLocked expires old unread signals and removes terminal, read records beyond
+// keep_finished or older than retention_days. Live handles and unread signals younger
+// than the TTL are never touched by the count rule.
+func (m *Manager) pruneLocked(now time.Time) pruneWork {
+	var w pruneWork
+	if m.cfg.UnreadTTLDays > 0 {
+		cutoff := now.Add(-time.Duration(m.cfg.UnreadTTLDays) * 24 * time.Hour)
+		for _, s := range m.owners {
+			for _, r := range sortedRows(s.unread) {
+				if r.changed.Before(cutoff) {
+					w.flips = append(w.flips, m.markReadLocked(r, true))
+					s.dropped++
+				}
+			}
+		}
+	}
+	var finished []*row
+	for _, r := range m.rows {
+		if r.state.Terminal() && !r.unread && !r.finishing {
+			finished = append(finished, r)
+		}
+	}
+	if len(finished) == 0 {
+		return w
+	}
+	sort.Slice(finished, func(i, j int) bool {
+		if !finished[i].changed.Equal(finished[j].changed) {
+			return finished[i].changed.Before(finished[j].changed)
+		}
+		return finished[i].id < finished[j].id
+	})
+	drop := 0
+	if excess := int64(len(finished)) - m.cfg.KeepFinished; excess > 0 {
+		drop = int(excess)
+	}
+	if m.cfg.RetentionDays > 0 {
+		cutoff := now.Add(-time.Duration(m.cfg.RetentionDays) * 24 * time.Hour)
+		for drop < len(finished) && finished[drop].changed.Before(cutoff) {
+			drop++
+		}
+	}
+	for _, r := range finished[:drop] {
+		w.removes = append(w.removes, removal{id: r.id, kind: r.kind})
+		m.forgetLocked(r)
+	}
+	return w
+}
+
+// Prune applies the retention rules now.
+func (m *Manager) Prune() {
+	m.mu.Lock()
+	work := m.pruneLocked(m.opts.Now())
+	m.mu.Unlock()
+	m.applyWork(work, false)
+}

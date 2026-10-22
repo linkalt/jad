@@ -1883,6 +1883,29 @@
                 "compact": {"type": "string", "enum": ["off", "on"], "default": "off", "description": "on compacts the target profile's transcript (with the target's own compaction settings) before the first profile_message call to that target in each run of the calling profile; later calls to it in the same run skip this. A failed compaction is logged and the message is sent anyway. off leaves the transcript as it is."}
               },
               "additionalProperties": false
+            },
+            "async": {
+              "type": "object",
+              "description": "Go backend only. Bounds of the async manager that owns the handles of the async tools (process, sub-agent runs; later tool_smith and profile_message): the live-handle caps, the block and wait times, the size of one response, and how long finished handles and undelivered signals are kept. Not a tool the model can call or allow-list; the async tool itself is configured by its tool definition. Every key has a default, so {} is valid.",
+              "properties": {
+                "max_handles": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 16, "description": "Most live (queued or running) async handles one session may hold. A start at the cap is refused with async_capacity_reached."},
+                "max_handles_total": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 64, "description": "Most live async handles on the whole server."},
+                "default_block_ms": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 10000, "description": "How long a start tool blocks for its result when block_ms is omitted, before it returns a handle."},
+                "max_block_ms": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 120000, "description": "Largest block_ms a start tool accepts; greater values are clamped. Not below default_block_ms."},
+                "default_wait_ms": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 10000, "description": "How long the async wait action blocks when wait_ms is omitted."},
+                "max_wait_ms": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 120000, "description": "Largest wait_ms; greater values are clamped. Not below default_wait_ms."},
+                "wait_max_signals": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 10, "description": "Most signals one wait returns; the rest stay queued and the response says more."},
+                "list_default_limit": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 10, "description": "Page size of the async list action when limit is omitted."},
+                "list_max_limit": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 50, "description": "Largest list page; greater limits are clamped. Not below list_default_limit."},
+                "summary_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 512, "description": "Most bytes of the summary text in one signal or list entry."},
+                "status_summary_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 4096, "description": "Most bytes of the summary text the status action returns. Not below summary_max_bytes."},
+                "response_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 8192, "description": "Byte budget of one async response; entries that do not fit stay queued or on the next page. At least summary_max_bytes + 1024."},
+                "keep_finished": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 200, "description": "Terminal handle records kept; the oldest read ones beyond this are deleted with their result files."},
+                "retention_days": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 14, "description": "Terminal handle records older than this many days are deleted. 0 turns age pruning off."},
+                "unread_max": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 100, "description": "Most undelivered completion signals kept per session; older ones are marked read and counted as dropped. Not below wait_max_signals."},
+                "unread_ttl_days": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 7, "description": "Undelivered signals older than this many days expire. 0 keeps them until the record is pruned."}
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false

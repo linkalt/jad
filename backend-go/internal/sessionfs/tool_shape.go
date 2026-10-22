@@ -65,7 +65,8 @@ func validateToolSettingsShape(setting map[string]json.RawMessage, settingPath s
 			return configError("%s: tools.native must be an object", settingPath)
 		}
 		for _, key := range nativeKeys {
-			if !containsString(nativeToolNames, key) {
+			// async holds the manager bounds, not a tool the model can allow-list.
+			if key != "async" && !containsString(nativeToolNames, key) {
 				return unsupportedToolKey(settingPath+": tools.native", key, nativeToolNames, "MCP servers are configured under tools.mcp")
 			}
 		}

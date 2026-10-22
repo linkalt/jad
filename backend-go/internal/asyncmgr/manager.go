@@ -1,0 +1,444 @@
+package asyncmgr
+
+import (
+	"fmt"
+	"log/slog"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// Options configures Open.
+type Options struct {
+	// Dir is the .async folder: <id>.json records and index.json.
+	Dir    string
+	Config Config
+	// Server identifies this process in the records it writes.
+	Server ServerID
+	// ServerAlive reports whether another server that wrote a record is still running,
+	// which makes its handles not ours to mark lost. It must return false for this
+	// process. Nil means no other server is ever alive.
+	ServerAlive func(ServerID) bool
+	// StopWait is how long Stop, Close and callers of Await-after-stop wait for a
+	// driver to report the end of a handle it was told to stop. Zero does not wait.
+	StopWait time.Duration
+	Now      func() time.Time
+	Logger   *slog.Logger
+}
+
+// row is the in-memory index entry of one handle. rec holds the full record only while
+// the handle is live or its signal is unread; a read terminal handle is a compact row and
+// its detail is read from its file on demand.
+type row struct {
+	id, owner        string
+	kind             Kind
+	state            State
+	ok               bool
+	label            string
+	started, changed time.Time
+	unread, overflow bool
+	finishing        bool
+	rec              *Record
+}
+
+type ownerStats struct {
+	live    map[string]*row
+	total   int
+	unread  map[string]*row
+	dropped int
+}
+
+// Manager owns every async handle of one storage root. It starts no goroutine: all work
+// happens in the callers' goroutines, so it needs no lifecycle beyond Close.
+type Manager struct {
+	opts Options
+	cfg  Config
+	dir  string
+
+	// ioMu serializes file writes. Lock order: ioMu, then mu. Nothing takes ioMu while
+	// holding mu.
+	ioMu sync.Mutex
+	// indexMu and indexDirty coalesce index.json rewrites (see writeIndex).
+	indexMu    sync.Mutex
+	indexDirty atomic.Bool
+
+	mu        sync.Mutex
+	rows      map[string]*row
+	owners    map[string]*ownerStats
+	liveTotal int
+	drivers   map[Kind]Driver
+	changed   chan struct{}
+	closed    bool
+}
+
+// Open creates or recovers the manager in opts.Dir. Handles recorded as running by an
+// earlier server become lost and queue a signal; only the index and those records are
+// read, not the terminal history.
+func Open(opts Options) (*Manager, error) {
+	if err := opts.Config.Validate(); err != nil {
+		return nil, fmt.Errorf("async config: %w", err)
+	}
+	if strings.TrimSpace(opts.Dir) == "" {
+		return nil, fmt.Errorf("async manager needs a directory")
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	if opts.Logger == nil {
+		opts.Logger = slog.New(slog.DiscardHandler)
+	}
+	m := &Manager{
+		opts: opts, cfg: opts.Config, dir: opts.Dir,
+		rows: map[string]*row{}, owners: map[string]*ownerStats{},
+		drivers: map[Kind]Driver{}, changed: make(chan struct{}),
+	}
+	if err := m.recover(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// Config returns the validated configuration.
+func (m *Manager) Config() Config { return m.cfg }
+
+// AddDriver registers the driver of a kind. Register and Stop need it.
+func (m *Manager) AddDriver(d Driver) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.drivers[d.Kind()]; exists {
+		return fmt.Errorf("driver for kind %q already registered", d.Kind())
+	}
+	m.drivers[d.Kind()] = d
+	return nil
+}
+
+func (m *Manager) stats(owner string) *ownerStats {
+	s := m.owners[owner]
+	if s == nil {
+		s = &ownerStats{live: map[string]*row{}, unread: map[string]*row{}}
+		m.owners[owner] = s
+	}
+	return s
+}
+
+func (m *Manager) track(r *row) {
+	s := m.stats(r.owner)
+	s.total++
+	if !r.state.Terminal() {
+		s.live[r.id] = r
+		m.liveTotal++
+	}
+	if r.unread {
+		s.unread[r.id] = r
+	}
+}
+
+func (m *Manager) untrack(r *row) {
+	s := m.owners[r.owner]
+	if s == nil {
+		return
+	}
+	s.total--
+	if _, ok := s.live[r.id]; ok {
+		delete(s.live, r.id)
+		m.liveTotal--
+	}
+	delete(s.unread, r.id)
+}
+
+// mutateLocked changes a row while keeping the per-owner counters exact.
+func (m *Manager) mutateLocked(r *row, change func(*row)) {
+	m.untrack(r)
+	change(r)
+	m.track(r)
+}
+
+func (m *Manager) addRowLocked(r *row) {
+	m.rows[r.id] = r
+	m.track(r)
+}
+
+func (m *Manager) forgetLocked(r *row) {
+	m.untrack(r)
+	delete(m.rows, r.id)
+	if s := m.owners[r.owner]; s != nil && s.total == 0 && s.dropped == 0 {
+		delete(m.owners, r.owner)
+	}
+}
+
+func (m *Manager) notifyLocked() {
+	close(m.changed)
+	m.changed = make(chan struct{})
+}
+
+// Register starts tracking a handle. It fails with a *CapacityError (errors.Is
+// ErrCapacity) when the owner or the server is at its live-handle cap; terminal and unread
+// handles never count.
+func (m *Manager) Register(reg Registration) error {
+	if !idPattern.MatchString(reg.ID) || reg.ID == indexName {
+		return fmt.Errorf("%w: %q", ErrInvalidID, reg.ID)
+	}
+	if reg.Owner == "" || reg.Kind == "" {
+		return fmt.Errorf("async handle needs an owner and a kind")
+	}
+	now := m.opts.Now()
+	state := StateRunning
+	if reg.Queued {
+		state = StateQueued
+	}
+	label, _ := cutUTF8(reg.Label, labelMaxBytes)
+	rec := Record{Version: recordVersion, ID: reg.ID, Kind: reg.Kind, Owner: reg.Owner, State: state, Label: label, StartedAt: now}
+	if m.opts.Server.PID > 0 {
+		server := m.opts.Server
+		rec.Server = &server
+	}
+
+	m.mu.Lock()
+	switch {
+	case m.closed:
+		m.mu.Unlock()
+		return ErrClosed
+	case m.drivers[reg.Kind] == nil:
+		m.mu.Unlock()
+		return fmt.Errorf("%w %q", ErrNoDriver, reg.Kind)
+	case m.rows[reg.ID] != nil:
+		m.mu.Unlock()
+		return fmt.Errorf("%w: %q", ErrDuplicate, reg.ID)
+	}
+	if s := m.owners[reg.Owner]; s != nil && int64(len(s.live)) >= m.cfg.MaxHandles {
+		live := len(s.live)
+		m.mu.Unlock()
+		return &CapacityError{Scope: "owner", Limit: m.cfg.MaxHandles, Live: int64(live)}
+	}
+	if int64(m.liveTotal) >= m.cfg.MaxHandlesTotal {
+		live := m.liveTotal
+		m.mu.Unlock()
+		return &CapacityError{Scope: "total", Limit: m.cfg.MaxHandlesTotal, Live: int64(live)}
+	}
+	r := &row{id: reg.ID, owner: reg.Owner, kind: reg.Kind, state: state, label: label, started: now, changed: now, rec: &rec}
+	m.addRowLocked(r)
+	m.mu.Unlock()
+
+	if err := m.writeRecord(rec); err != nil {
+		m.mu.Lock()
+		m.forgetLocked(r)
+		m.mu.Unlock()
+		return fmt.Errorf("save async record: %w", err)
+	}
+	m.writeIndex()
+	return nil
+}
+
+// MarkRunning moves a queued handle to running. Any other state is left alone.
+func (m *Manager) MarkRunning(id string) {
+	m.mu.Lock()
+	r := m.rows[id]
+	if r == nil || r.state != StateQueued || r.finishing {
+		m.mu.Unlock()
+		return
+	}
+	m.mutateLocked(r, func(r *row) { r.state = StateRunning })
+	if r.rec != nil {
+		r.rec.State = StateRunning
+	}
+	rec := *r.rec
+	m.mu.Unlock()
+	_ = m.writeRecord(rec)
+}
+
+// Complete reports the end of a handle. The first call per handle wins and returns true;
+// later ones return false. The result file is written before the signal is queued.
+func (m *Manager) Complete(id string, res Result) (bool, error) {
+	if !res.State.Terminal() {
+		return false, ErrInvalidResult
+	}
+	now := m.opts.Now()
+	m.mu.Lock()
+	r := m.rows[id]
+	if r == nil {
+		m.mu.Unlock()
+		return false, ErrUnknownHandle
+	}
+	if r.state.Terminal() || r.finishing {
+		m.mu.Unlock()
+		return false, nil
+	}
+	r.finishing = true
+	rec := *r.rec
+	m.mu.Unlock()
+
+	rec.State = res.State
+	rec.OK = res.OK && res.State == StateDone
+	rec.Code, _ = cutUTF8(res.Code, codeMaxBytes)
+	rec.Reason, _ = cutUTF8(res.Reason, reasonMaxBytes)
+	rec.Ref, _ = cutUTF8(res.Ref, refMaxBytes)
+	rec.Summary, rec.Cut = cutUTF8(res.Summary, int(m.cfg.SummaryMaxBytes))
+	rec.Bytes = res.Bytes
+	rec.EndedAt = now
+	rec.Unread = true
+	if err := m.writeRecord(rec); err != nil {
+		m.opts.Logger.Warn("async result record not saved; the signal is kept in memory only", "handle", id, "error", err)
+	}
+
+	m.mu.Lock()
+	m.mutateLocked(r, func(r *row) {
+		r.state, r.ok, r.changed, r.unread, r.finishing = rec.State, rec.OK, now, true, false
+	})
+	r.rec = &rec
+	work := m.enforceUnreadLocked(r.owner)
+	work.merge(m.pruneLocked(now))
+	m.notifyLocked()
+	m.mu.Unlock()
+
+	m.applyWork(work, true)
+	return true, nil
+}
+
+// CancelOwner asks every live handle of owner to stop and returns how many it asked.
+// It does not wait: drivers report the end through Complete.
+func (m *Manager) CancelOwner(owner, reason string) int {
+	return m.cancel(func(r *row) bool { return r.owner == owner }, reason)
+}
+
+// CancelOwnersWithPrefix is CancelOwner for every owner that starts with prefix (all the
+// profiles of one session).
+func (m *Manager) CancelOwnersWithPrefix(prefix, reason string) int {
+	return m.cancel(func(r *row) bool { return strings.HasPrefix(r.owner, prefix) }, reason)
+}
+
+func (m *Manager) cancel(match func(*row) bool, reason string) int {
+	type target struct {
+		driver Driver
+		id     string
+	}
+	var targets []target
+	m.mu.Lock()
+	for _, r := range m.rows {
+		if !r.state.Terminal() && !r.finishing && match(r) {
+			if d := m.drivers[r.kind]; d != nil {
+				targets = append(targets, target{d, r.id})
+			}
+		}
+	}
+	m.mu.Unlock()
+	sort.Slice(targets, func(i, j int) bool { return targets[i].id < targets[j].id })
+	for _, t := range targets {
+		t.driver.Stop(t.id, reason)
+	}
+	return len(targets)
+}
+
+// DropUnread marks every unread signal of owner as read (a user reset: the history that
+// gave them meaning is gone). The results stay readable until pruned.
+func (m *Manager) DropUnread(owner string) int {
+	var work pruneWork
+	m.mu.Lock()
+	if s := m.owners[owner]; s != nil {
+		for _, r := range sortedRows(s.unread) {
+			m.mutateLocked(r, func(r *row) { r.unread = false })
+			r.rec = nil
+			work.flips = append(work.flips, flip{id: r.id})
+		}
+		s.dropped = 0
+	}
+	m.mu.Unlock()
+	m.applyWork(work, false)
+	return len(work.flips)
+}
+
+// Counts returns the cheap header numbers of one owner.
+func (m *Manager) Counts(owner string) Counts {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.countsLocked(owner)
+}
+
+func (m *Manager) countsLocked(owner string) Counts {
+	if s := m.owners[owner]; s != nil {
+		return Counts{Active: len(s.live), Unread: len(s.unread), Total: s.total}
+	}
+	return Counts{}
+}
+
+// Close asks every live handle to stop (reason ReasonShutdown), waits up to StopWait for
+// the drivers to report, wakes waiters with ErrClosed and writes the index. Handles that
+// have not reported by then stay running in their record and are lost at the next start.
+func (m *Manager) Close() {
+	type target struct {
+		driver Driver
+		id     string
+	}
+	var targets []target
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.closed = true
+	for _, r := range m.rows {
+		if !r.state.Terminal() && !r.finishing {
+			if d := m.drivers[r.kind]; d != nil {
+				targets = append(targets, target{d, r.id})
+			}
+		}
+	}
+	m.notifyLocked()
+	m.mu.Unlock()
+	sort.Slice(targets, func(i, j int) bool { return targets[i].id < targets[j].id })
+	for _, t := range targets {
+		t.driver.Stop(t.id, ReasonShutdown)
+	}
+	if m.opts.StopWait > 0 && len(targets) > 0 {
+		timer := time.NewTimer(m.opts.StopWait)
+		defer timer.Stop()
+		for {
+			m.mu.Lock()
+			live, ch := m.liveTotal, m.changed
+			m.mu.Unlock()
+			if live == 0 {
+				break
+			}
+			select {
+			case <-ch:
+				continue
+			case <-timer.C:
+			}
+			break
+		}
+	}
+	m.writeIndex()
+}
+
+func sortedRows(set map[string]*row) []*row {
+	rows := make([]*row, 0, len(set))
+	for _, r := range set {
+		rows = append(rows, r)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if !rows[i].changed.Equal(rows[j].changed) {
+			return rows[i].changed.Before(rows[j].changed)
+		}
+		return rows[i].id < rows[j].id
+	})
+	return rows
+}
+
+// BlockDuration clamps a start tool's block_ms: nil means default_block_ms.
+func (c Config) BlockDuration(ms *int64) time.Duration {
+	value := c.DefaultBlockMs
+	if ms != nil {
+		value = min(max(*ms, 0), c.MaxBlockMs)
+	}
+	return time.Duration(value) * time.Millisecond
+}
+
+// WaitDuration clamps the async tool's wait_ms: nil means default_wait_ms.
+func (c Config) WaitDuration(ms *int64) time.Duration {
+	value := c.DefaultWaitMs
+	if ms != nil {
+		value = min(max(*ms, 0), c.MaxWaitMs)
+	}
+	return time.Duration(value) * time.Millisecond
+}
