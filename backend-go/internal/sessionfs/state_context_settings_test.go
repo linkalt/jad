@@ -22,7 +22,7 @@ func normalizeStateContextRawIn(t *testing.T, cwd, raw string, process *NativePr
 	if raw != "" {
 		setting["statecontext"] = json.RawMessage(raw)
 	}
-	return normalizeStateContextSettings(setting, stateContextSettingPath, cwd, process, task, memory, subagent)
+	return normalizeStateContextSettings(setting, stateContextSettingPath, cwd, process, task, memory, subagent, nil)
 }
 
 func TestNormalizeStateContextSettingsDefaultsAndProcessProvider(t *testing.T) {

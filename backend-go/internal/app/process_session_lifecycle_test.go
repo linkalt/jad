@@ -183,3 +183,101 @@ func TestEndingARunLeavesProcessHandlesRunning(t *testing.T) {
 	}
 	p.requireStillRunning(t, id, "a run that ended normally")
 }
+
+// The run stream's async_state reads the same manager: counts and the newest live ids of
+// one session, bounded by sse_max_ids, never another session's handles.
+func TestWatchSessionAsyncReportsCountsAndBoundedIDsOfOneSession(t *testing.T) {
+	f := newLayoutFixture(t)
+	p := newProcessHandleFixture(t, f, "watch-processes")
+	owner := p.key(t)
+	reference, profile, _ := strings.Cut(owner, "\x00")
+
+	changed := make(chan struct{}, 64)
+	read, stop := f.service.resolver.WatchSessionAsync(reference, profile, func() {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	})
+	if read == nil {
+		t.Fatal("no watcher for a resolver with an async host")
+	}
+	defer stop()
+	if state := read(); state.Active != 0 || state.Unread != 0 || len(state.IDs) != 0 {
+		t.Fatalf("initial state = %+v", state)
+	}
+
+	var mine []string
+	for i := 0; i < 3; i++ {
+		mine = append(mine, p.start(t, owner, "sleep 60"))
+	}
+	other := p.start(t, "another|session", "sleep 60")
+	defer p.manager.Stop(other, "test_cleanup")
+	select {
+	case <-changed:
+	case <-time.After(time.Second):
+		t.Fatal("starting handles did not notify the watcher")
+	}
+	state := read()
+	if state.Active != 3 || len(state.IDs) != 3 {
+		t.Fatalf("state = %+v, want 3 active and their ids", state)
+	}
+	for _, id := range state.IDs {
+		if id == other {
+			t.Fatal("another session's handle id reached this session's state")
+		}
+	}
+
+	if status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run/stop", ""); status != http.StatusOK {
+		t.Fatalf("stop: %d %s", status, body)
+	}
+	p.requireState(t, mine[0], native.ProcessStopped, "a user stop")
+	deadline := time.Now().Add(5 * time.Second)
+	for read().Active != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if state := read(); state.Active != 0 || state.Unread == 0 || len(state.IDs) != 0 {
+		t.Fatalf("after the stop: %+v, want no live ids and the stopped handles unread", state)
+	}
+}
+
+func TestSessionAsyncStateContextListsPendingHandlesAndCountsTheRest(t *testing.T) {
+	f := newLayoutFixture(t)
+	p := newProcessHandleFixture(t, f, "notice-processes")
+	owner := p.key(t)
+	for i := 0; i < 3; i++ {
+		p.start(t, owner, "sleep 60")
+	}
+	other := p.start(t, "another|session", "sleep 60")
+	defer p.manager.Stop(other, "test_cleanup")
+
+	section, err := native.CollectAsyncStateContext(p.host.Manager(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if section.Active != 3 || len(section.Items) != 3 || section.HasMore {
+		t.Fatalf("section = %+v", section)
+	}
+	for _, item := range section.Items {
+		if item.Kind != "process" || item.State == "" || item.ID == other {
+			t.Fatalf("item = %+v", item)
+		}
+	}
+	encoded, _ := json.Marshal(section)
+	if strings.Contains(string(encoded), "summary") || strings.Contains(string(encoded), "exit_code") {
+		t.Fatalf("the notice carries a summary or a result: %s", encoded)
+	}
+
+	for section.StateContextItemCount() > 0 {
+		before := section.StateContextItemCount()
+		if !section.TrimStateContextItem() || section.StateContextItemCount() != before-1 {
+			t.Fatal("trimming does not drop one item at a time")
+		}
+	}
+	if section.OmittedBySnapshot != 3 || section.TrimStateContextItem() {
+		t.Fatalf("after trimming: %+v", section)
+	}
+	if _, err := native.CollectAsyncStateContext(nil, owner); err == nil {
+		t.Fatal("a missing manager must be an error, not an empty notice")
+	}
+}

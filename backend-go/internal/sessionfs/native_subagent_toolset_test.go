@@ -52,7 +52,7 @@ func loadToolsetSession(t *testing.T, spec layouttest.Spec, extra map[string]str
 // not gain them, and the toolset's settings never carry a subagent tool.
 func TestSubagentToolsetIsLoadedApartFromTheSessionToolset(t *testing.T) {
 	config, err := loadToolsetSession(t, toolsetSpec(map[string]any{"toolset": "extra/search"}), map[string]string{
-		"extra/search": `{"native":{"grep":{},"glob":{},"subagent":{"agents":{"nested":{}}}}}`,
+		"extra/search": `{"native":{"grep":{},"glob":{},"async":{},"subagent":{"agents":{"nested":{}}}}}`,
 	})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)

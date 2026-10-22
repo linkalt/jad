@@ -102,6 +102,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 		snapshot, include, err := collectStateContextSnapshot(r.config, stateContextSources{
 			process: r.processManager, task: r.taskStore, memory: r.memoryStore,
 			subagent: r.resolver.sharedSubagentManager(r.config), owner: sessionKey(r.reference, r.config.Profile),
+			async: r.resolver.sessionAsyncManager(r.config),
 		}, "compaction")
 		if err != nil {
 			return nil, fmt.Errorf("collect state context after automatic compaction: %w", err)
@@ -146,6 +147,7 @@ func (r boundRunner) currentStateContext() ([]session.StateContextPrompt, error)
 	sources := stateContextSources{
 		process: r.processManager, task: r.taskStore, memory: r.memoryStore,
 		subagent: r.resolver.sharedSubagentManager(r.config), owner: sessionKey(r.reference, r.config.Profile),
+		async: r.resolver.sessionAsyncManager(r.config),
 	}
 	changed := false
 	if _, configured := settings.Triggers[sessionfs.StateContextTriggerSessionStart]; configured && len(entries) == 0 {

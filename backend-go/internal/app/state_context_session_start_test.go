@@ -147,9 +147,10 @@ func newStateContextFixtureWith(t *testing.T, seedProcess bool, triggers, extraS
 	config, _ := layoutConfig(t, layouttest.Spec{
 		SessionID:           "one",
 		CWD:                 workspace,
-		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json")},
+		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json"), asyncSampleToolPath(t)},
 		Settings:            settings,
 		Native: map[string]any{
+			"async":   map[string]any{},
 			"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "statecontext": map[string]any{"states": []string{"exited"}, "limit": 5}},
 			"task":    map[string]any{"storage_dir": taskStorage, "max_tasks": 10, "statecontext": map[string]any{"statuses": []string{"in-progress"}, "limit": 5}},
 		},

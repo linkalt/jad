@@ -32,6 +32,8 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	// run, and only this run should show the wait.
 	ctx := responses.WithRetryNotifier(run.context(), run.setProviderRetry)
 	logger := logging.Or(h.logger).With(runLogAttrs(run)...)
+	reference, profile, _ := strings.Cut(run.key, "\x00")
+	defer h.watchAsyncState(run, reference, profile)()
 	started := time.Now()
 	logger.Info("run started")
 	// The turn and message the run's user input was saved as, once it is saved.

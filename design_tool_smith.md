@@ -1,3 +1,5 @@
+> **Note (design_async_manager.md):** a `tool_smith` call is planned to become an async tool in phase 2 (`block_ms` start, collected with the `async` tool). That is not implemented; this document describes the current blocking tool.
+
 # Tool Smith — Design and Workflow
 
 Target: jad (Go backend in `backend-go/`). Companion: `plan_tool_smith.md`. Phase-1 spike answers (`.jad/subagents/.shared/docs/T-002/code-explorer_spike.md`) and spawn measurements (`tester_spawn.md`) are folded in below. Items marked *(unverified)* were not run or read.

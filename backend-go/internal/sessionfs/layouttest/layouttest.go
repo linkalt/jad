@@ -175,7 +175,7 @@ func Write(t *testing.T, spec Spec) Fixture {
 		}
 	} else if len(spec.Native) > 0 || len(spec.Extension) > 0 || len(spec.MCP) > 0 {
 		toolset = "coding/default"
-		file := map[string]any{"native": orEmpty(spec.Native)}
+		file := map[string]any{"native": withAsync(orEmpty(spec.Native))}
 		if len(spec.Extension) > 0 {
 			file["extension"] = spec.Extension
 		}
@@ -283,7 +283,7 @@ func (f Fixture) AddSession(t *testing.T, id, cwd string, native map[string]any,
 	profile := "dev/coder"
 	if len(native) > 0 {
 		toolset := "coding/" + id
-		put(filepath.Join(f.Root, "tools", toolset+".json"), map[string]any{"native": native, "mcp": map[string]any{}})
+		put(filepath.Join(f.Root, "tools", toolset+".json"), map[string]any{"native": withAsync(native), "mcp": map[string]any{}})
 		profile = "dev/" + id
 		put(filepath.Join(f.Root, "profiles", profile+".json"), map[string]any{"models": []string{"openai/default"}, "model_default": "openai/default", "toolset": toolset})
 	}
@@ -334,4 +334,21 @@ func (f Fixture) AddSessionInRoot(t *testing.T, rootID, id, cwd, profile string,
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// withAsync adds the async tool to a native block that enables process or subagent, as the
+// loader requires; a block that already names async is returned as is.
+func withAsync(native map[string]any) map[string]any {
+	_, hasAsync := native["async"]
+	_, hasProcess := native["process"]
+	_, hasSubagent := native["subagent"]
+	if hasAsync || (!hasProcess && !hasSubagent) {
+		return native
+	}
+	out := make(map[string]any, len(native)+1)
+	for key, value := range native {
+		out[key] = value
+	}
+	out["async"] = map[string]any{}
+	return out
 }

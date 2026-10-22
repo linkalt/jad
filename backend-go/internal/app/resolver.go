@@ -1018,3 +1018,49 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 	hash := sha256.Sum256(encoded)
 	return hex.EncodeToString(hash[:])
 }
+
+// WatchSessionAsync implements httpapi.AsyncStateSource: it follows the session's handles in
+// every async manager of the resolver and reads their summed counts and newest live ids.
+func (r *Resolver) WatchSessionAsync(reference, profile string, notify func()) (func() httpapi.AsyncState, func()) {
+	owner := sessionKey(reference, profile)
+	managers := r.asyncManagers()
+	if len(managers) == 0 {
+		return nil, func() {}
+	}
+	cancels := make([]func(), 0, len(managers))
+	for _, manager := range managers {
+		cancels = append(cancels, manager.Watch(owner, notify))
+	}
+	read := func() httpapi.AsyncState {
+		state := httpapi.AsyncState{}
+		for _, manager := range managers {
+			counts, ids := manager.Snapshot(owner)
+			state.Active += counts.Active
+			state.Unread += counts.Unread
+			state.IDs = append(state.IDs, ids...)
+		}
+		if limit := int(managers[0].Config().SSEMaxIDs); len(state.IDs) > limit {
+			state.IDs = state.IDs[:limit]
+		}
+		return state
+	}
+	return read, func() {
+		for _, cancel := range cancels {
+			cancel()
+		}
+	}
+}
+
+// sessionAsyncManager is the async manager of the session's tool storage, or nil when the
+// session has no async tool or its host is not open yet.
+func (r *Resolver) sessionAsyncManager(config sessionfs.SessionConfig) *asyncmgr.Manager {
+	if config.NativeAsync == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if host := r.asyncHosts[filepath.Clean(native.AsyncDir(config.StoragePaths.ToolStorage))]; host != nil {
+		return host.Manager()
+	}
+	return nil
+}

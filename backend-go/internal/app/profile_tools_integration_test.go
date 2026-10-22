@@ -22,7 +22,7 @@ func profileSession(tools map[string]any) map[string]any {
 // A profile that shows its model only the subagent tool: the child still reads a file,
 // although `read` is not among the tools the parent was sent.
 func TestProfileToolsHideAToolFromTheParentButNotFromAChild(t *testing.T) {
-	f := newSubagentFixtureWithoutAsync(t, map[string]any{
+	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "description": "Reads files.",
 		"__session": profileSession(map[string]any{"allow": []string{"subagent"}}),
 	})
@@ -45,20 +45,20 @@ func TestProfileToolsHideAToolFromTheParentButNotFromAChild(t *testing.T) {
 
 // Without a tools block the parent sees every registered tool, as before.
 func TestProfileWithoutToolsBlockShowsEveryRegisteredTool(t *testing.T) {
-	f := newSubagentFixtureWithoutAsync(t, map[string]any{"model": "child.json", "description": "Reads files."})
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Reads files."})
 	f.run(t)
 	parent := f.provider.forModel("parent-model")
 	if len(parent) == 0 {
 		t.Fatal("the parent made no request")
 	}
-	if got := strings.Join(parent[0].Tools, ","); got != "read,subagent" {
-		t.Errorf("parent tools = %q, want read,subagent", got)
+	if got := strings.Join(parent[0].Tools, ","); got != "read,async,subagent" {
+		t.Errorf("parent tools = %q, want read,async,subagent", got)
 	}
 }
 
 // An empty allow list hides every tool: the parent is sent none.
 func TestProfileToolsEmptyAllowSendsNoTools(t *testing.T) {
-	f := newSubagentFixtureWithoutAsync(t, map[string]any{
+	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "description": "Reads files.",
 		"__session": profileSession(map[string]any{"allow": []string{}}),
 	})
@@ -110,12 +110,12 @@ func TestProfileToolsEntryThatIsNotRegisteredIsAConfigError(t *testing.T) {
 		atLoad      bool
 	}{
 		"misspelled":            {"raed", `allow[0] "raed" is not a native tool; use one of async, bash, decide`, true},
-		"not enabled":           {"bash", `lists "bash", which is not a registered tool (registered: read, subagent)`, false},
+		"not enabled":           {"bash", `lists "bash", which is not a registered tool (registered: async, read, subagent)`, false},
 		"mcp not loaded":        {"mcp:ghost:lookup", `lists "mcp:ghost:lookup", which is not a registered tool`, false},
 		"mcp server not listed": {"mcp:ghost:*", `lists "mcp:ghost:*", which is not a registered tool`, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := newSubagentFixtureWithoutAsync(t, map[string]any{
+			f := newSubagentFixture(t, map[string]any{
 				"model": "child.json", "description": "Reads files.",
 				"__session": profileSession(map[string]any{"allow": []string{tc.entry}}),
 			})
@@ -141,7 +141,7 @@ func TestProfileToolsEntryThatIsNotRegisteredIsAConfigError(t *testing.T) {
 
 // The tools route lists what the profile shows and, apart, what it hides.
 func TestToolsRouteListsHiddenToolsApart(t *testing.T) {
-	f := newSubagentFixtureWithoutAsync(t, map[string]any{
+	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "description": "Reads files.",
 		"__session": profileSession(map[string]any{"allow": []string{"subagent"}}),
 	})
@@ -156,10 +156,10 @@ func TestToolsRouteListsHiddenToolsApart(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Tools) != 1 || body.Tools[0].Name != "subagent" || len(body.Hidden) != 1 || body.Hidden[0].Name != "read" {
+	if len(body.Tools) != 1 || body.Tools[0].Name != "subagent" || len(body.Hidden) != 2 || body.Hidden[0].Name != "read" {
 		t.Fatalf("tools route = %+v", body)
 	}
-	plain := newSubagentFixtureWithoutAsync(t, map[string]any{"model": "child.json", "description": "Reads files."})
+	plain := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Reads files."})
 	var all map[string]any
 	status, raw = plain.sessionTools(t)
 	if status != http.StatusOK {
@@ -187,10 +187,10 @@ func TestProfileToolsAllowAnMCPToolByIdOrByServer(t *testing.T) {
 	for name, entry := range map[string]string{"exact": "mcp:fixture:lookup", "whole server": "mcp:fixture:*"} {
 		t.Run(name, func(t *testing.T) {
 			calls := &atomic.Int32{}
-			f := buildSubagentFixtureWithMCP(t, withoutAsyncTool(map[string]any{
+			f := buildSubagentFixtureWithMCP(t, map[string]any{
 				"model": "child.json", "description": "Reads files.",
 				"__session": profileSession(map[string]any{"allow": []string{entry}}),
-			}), false, nil, &mcpFixture{calls: calls})
+			}, false, nil, &mcpFixture{calls: calls})
 			status, raw := f.sessionTools(t)
 			if status != http.StatusOK {
 				t.Fatalf("tools route status %d: %s", status, raw)
@@ -205,7 +205,7 @@ func TestProfileToolsAllowAnMCPToolByIdOrByServer(t *testing.T) {
 			if got := mcpNames(body.Tools); got != "mcp:mcp:fixture:lookup" {
 				t.Errorf("shown = %q, want only the MCP tool", got)
 			}
-			if got := mcpNames(body.Hidden); got != "native:native.read,native:native.subagent" {
+			if got := mcpNames(body.Hidden); got != "native:native.read,native:native.async,native:native.subagent" {
 				t.Errorf("hidden = %q, want read and subagent", got)
 			}
 		})
@@ -244,10 +244,10 @@ func TestProfileToolMatching(t *testing.T) {
 // parent cannot see, and the call reaches the server and returns.
 func TestProfileToolsHideAnMCPToolFromTheParentButNotFromAChild(t *testing.T) {
 	calls := &atomic.Int32{}
-	f := buildSubagentFixtureWithMCP(t, withoutAsyncTool(map[string]any{
+	f := buildSubagentFixtureWithMCP(t, map[string]any{
 		"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"},
 		"__session": profileSession(map[string]any{"allow": []string{"subagent"}}),
-	}), false, nil, &mcpFixture{calls: calls})
+	}, false, nil, &mcpFixture{calls: calls})
 	f.provider.childFirstCall = [2]string{mcpToolNameFor("fixture", "lookup"), `{"word":"answer"}`}
 
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
@@ -301,20 +301,20 @@ func TestProfileToolsDenySubtractsAndWinsOverAllow(t *testing.T) {
 		tools        map[string]any
 		shown, hides string
 	}{
-		"deny alone":            {map[string]any{"deny": []string{"mcp:fixture:lookup"}}, "native:native.read,native:native.subagent", "mcp:mcp:fixture:lookup"},
-		"deny a native tool":    {map[string]any{"deny": []string{"subagent"}}, "mcp:mcp:fixture:lookup,native:native.read", "native:native.subagent"},
-		"deny a whole server":   {map[string]any{"deny": []string{"mcp:fixture:*"}}, "native:native.read,native:native.subagent", "mcp:mcp:fixture:lookup"},
-		"empty deny":            {map[string]any{"deny": []string{}}, "mcp:mcp:fixture:lookup,native:native.read,native:native.subagent", ""},
-		"deny beats exact":      {map[string]any{"allow": []string{"read", "mcp:fixture:lookup"}, "deny": []string{"mcp:fixture:lookup"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.subagent"},
-		"deny beats wildcard":   {map[string]any{"allow": []string{"read", "mcp:fixture:*"}, "deny": []string{"mcp:fixture:lookup"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.subagent"},
-		"deny beats own allow":  {map[string]any{"allow": []string{"read", "subagent"}, "deny": []string{"subagent"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.subagent"},
-		"allow only, no change": {map[string]any{"allow": []string{"read"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.subagent"},
+		"deny alone":            {map[string]any{"deny": []string{"mcp:fixture:lookup"}}, "native:native.async,native:native.read,native:native.subagent", "mcp:mcp:fixture:lookup"},
+		"deny a native tool":    {map[string]any{"deny": []string{"subagent"}}, "mcp:mcp:fixture:lookup,native:native.async,native:native.read", "native:native.subagent"},
+		"deny a whole server":   {map[string]any{"deny": []string{"mcp:fixture:*"}}, "native:native.async,native:native.read,native:native.subagent", "mcp:mcp:fixture:lookup"},
+		"empty deny":            {map[string]any{"deny": []string{}}, "mcp:mcp:fixture:lookup,native:native.async,native:native.read,native:native.subagent", ""},
+		"deny beats exact":      {map[string]any{"allow": []string{"read", "mcp:fixture:lookup"}, "deny": []string{"mcp:fixture:lookup"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
+		"deny beats wildcard":   {map[string]any{"allow": []string{"read", "mcp:fixture:*"}, "deny": []string{"mcp:fixture:lookup"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
+		"deny beats own allow":  {map[string]any{"allow": []string{"read", "subagent"}, "deny": []string{"subagent"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
+		"allow only, no change": {map[string]any{"allow": []string{"read"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := buildSubagentFixtureWithMCP(t, withoutAsyncTool(map[string]any{
+			f := buildSubagentFixtureWithMCP(t, map[string]any{
 				"model": "child.json", "description": "Reads files.",
 				"__session": profileSession(tc.tools),
-			}), false, nil, &mcpFixture{calls: &atomic.Int32{}})
+			}, false, nil, &mcpFixture{calls: &atomic.Int32{}})
 			shown, hidden := f.shownAndHidden(t)
 			if got := strings.Join(shown, ","); got != tc.shown {
 				t.Errorf("shown = %q, want %q", got, tc.shown)
@@ -330,10 +330,10 @@ func TestProfileToolsDenySubtractsAndWinsOverAllow(t *testing.T) {
 // lists it: deny reaches the sub-agent, which allow alone does not.
 func TestProfileToolsDenyAlsoLimitsTheChild(t *testing.T) {
 	calls := &atomic.Int32{}
-	f := buildSubagentFixtureWithMCP(t, withoutAsyncTool(map[string]any{
+	f := buildSubagentFixtureWithMCP(t, map[string]any{
 		"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"},
 		"__session": profileSession(map[string]any{"deny": []string{"mcp:fixture:lookup"}}),
-	}), false, nil, &mcpFixture{calls: calls})
+	}, false, nil, &mcpFixture{calls: calls})
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
@@ -342,8 +342,8 @@ func TestProfileToolsDenyAlsoLimitsTheChild(t *testing.T) {
 	if len(parent) == 0 || len(child) == 0 {
 		t.Fatalf("requests: parent %d, child %d", len(parent), len(child))
 	}
-	if got := strings.Join(parent[0].Tools, ","); got != "read,subagent" {
-		t.Errorf("parent tools = %q, want read,subagent", got)
+	if got := strings.Join(parent[0].Tools, ","); got != "read,async,subagent" {
+		t.Errorf("parent tools = %q, want read,async,subagent", got)
 	}
 	if got := strings.Join(child[0].Tools, ","); got != "read" {
 		t.Errorf("child tools = %q, want only read: the denied MCP tool must not reach the child", got)
@@ -361,11 +361,11 @@ func TestProfileToolsDenyEntryThatIsNotRegisteredIsAConfigError(t *testing.T) {
 		atLoad      bool
 	}{
 		"misspelled":     {"raed", `deny[0] "raed" is not a native tool`, true},
-		"not enabled":    {"bash", `tools.deny lists "bash", which is not a registered tool (registered: read, subagent)`, false},
+		"not enabled":    {"bash", `tools.deny lists "bash", which is not a registered tool (registered: async, read, subagent)`, false},
 		"mcp not loaded": {"mcp:ghost:lookup", `tools.deny lists "mcp:ghost:lookup", which is not a registered tool`, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := newSubagentFixtureWithoutAsync(t, map[string]any{
+			f := newSubagentFixture(t, map[string]any{
 				"model": "child.json", "description": "Reads files.",
 				"__session": profileSession(map[string]any{"deny": []string{tc.entry}}),
 			})
@@ -384,7 +384,7 @@ func TestProfileToolsDenyEntryThatIsNotRegisteredIsAConfigError(t *testing.T) {
 // Denying the only tool an agent can use fails the load of the whole session with a
 // message that names the deny list, not a silent agent that cannot do anything.
 func TestProfileToolsDenyThatEmptiesAnAgentFailsTheLoad(t *testing.T) {
-	f := newSubagentFixtureWithoutAsync(t, map[string]any{
+	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "description": "Reads files.",
 		"__session": profileSession(map[string]any{"deny": []string{"read"}}),
 	})
@@ -393,19 +393,4 @@ func TestProfileToolsDenyThatEmptiesAnAgentFailsTheLoad(t *testing.T) {
 	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "agents.explore has no tool to use") || !strings.Contains(body, "the profile's tools.deny is in effect: read") {
 		t.Fatalf("tools route: status %d, body %s", status, body)
 	}
-}
-
-// newSubagentFixtureWithoutAsync builds the subagent fixture for a session that does not
-// enable the async tool, so the profile tool filters are tested over read and subagent.
-func newSubagentFixtureWithoutAsync(t *testing.T, agentSetting map[string]any) subagentFixture {
-	t.Helper()
-	agentSetting["__session_without"] = []string{"async"}
-	return newSubagentFixture(t, agentSetting)
-}
-
-// withoutAsyncTool removes the async tool from a subagent fixture's session, so the profile
-// tool filters are tested over read and subagent alone.
-func withoutAsyncTool(agentSetting map[string]any) map[string]any {
-	agentSetting["__session_without"] = []string{"async"}
-	return agentSetting
 }

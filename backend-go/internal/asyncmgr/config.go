@@ -6,6 +6,9 @@ package asyncmgr
 
 import "fmt"
 
+// MaxSSEIDs is the largest sse_max_ids: the event is a hint, not a listing.
+const MaxSSEIDs = 100
+
 // Config is every number the manager uses. Each field is a tools.native.async key.
 type Config struct {
 	MaxHandles         int64 `json:"max_handles"`
@@ -31,6 +34,9 @@ type Config struct {
 	// StopWaitMs is how long a stop, and a shutdown, waits for a driver to report the
 	// end of the handles it was told to stop (0 = do not wait).
 	StopWaitMs int64 `json:"stop_wait_ms"`
+	// SSEMaxIDs bounds the active handle ids a run stream's async_state event carries
+	// (0 = counts only).
+	SSEMaxIDs int64 `json:"sse_max_ids"`
 }
 
 // EntryOverheadBytes is the room one entry needs beside its summary: the fixed fields, a
@@ -46,7 +52,7 @@ func DefaultConfig() Config {
 		WaitMaxSignals: 10, ListDefaultLimit: 10, ListMaxLimit: 50,
 		SummaryMaxBytes: 512, StatusSummaryBytes: 4096, ResponseMaxBytes: 8192,
 		KeepFinished: 200, RetentionDays: 14, UnreadMax: 100, UnreadTTLDays: 7,
-		StopWaitMs: 2_000,
+		StopWaitMs: 2_000, SSEMaxIDs: 10,
 	}
 }
 
@@ -71,6 +77,9 @@ func (c Config) Validate() error {
 	}
 	if c.RetentionDays < 0 || c.UnreadTTLDays < 0 || c.StopWaitMs < 0 {
 		return fmt.Errorf("retention_days, unread_ttl_days and stop_wait_ms must not be negative")
+	}
+	if c.SSEMaxIDs < 0 || c.SSEMaxIDs > MaxSSEIDs {
+		return fmt.Errorf("sse_max_ids must be between 0 and %d", MaxSSEIDs)
 	}
 	if c.MaxBlockMs < c.DefaultBlockMs {
 		return fmt.Errorf("max_block_ms must be greater than or equal to default_block_ms")

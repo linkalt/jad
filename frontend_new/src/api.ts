@@ -1184,6 +1184,12 @@ function isWebUiMessage(value: unknown): value is WebUiMessage {
   );
 }
 
+/** The counts of the `async_state` run-stream event. */
+export interface AsyncStateCounts {
+  active: number;
+  unread: number;
+}
+
 function isNonnegativeSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
@@ -1251,6 +1257,12 @@ export interface StreamSessionRunOptions {
    * notice (the wait ended, or the event was malformed, so a bad one never sticks).
    */
   onProviderRetry?: (turnId: string, wait: ProviderRetryWait | undefined) => void;
+  /**
+   * How many async handles (background processes, sub-agent runs) the session has: `active`
+   * still running, `unread` finished and not yet collected. Counts only; a malformed event
+   * is ignored.
+   */
+  onAsyncState?: (turnId: string, state: AsyncStateCounts) => void;
   onHookReport?: (turnId: string, report: HookReport) => void;
   onIdle?: () => void;
   /**
@@ -1371,6 +1383,17 @@ async function consumeRunStream(
       if (message.event === 'provider_retry') {
         if (isRecord(message.data) && typeof message.data.turn_id === 'string') {
           options.onProviderRetry?.(message.data.turn_id, parseProviderRetryWait(message.data.waiting));
+        }
+        continue;
+      }
+      if (message.event === 'async_state') {
+        if (
+          isRecord(message.data) &&
+          typeof message.data.turn_id === 'string' &&
+          isNonnegativeSafeInteger(message.data.active) &&
+          isNonnegativeSafeInteger(message.data.unread)
+        ) {
+          options.onAsyncState?.(message.data.turn_id, {active: message.data.active, unread: message.data.unread});
         }
         continue;
       }

@@ -280,6 +280,10 @@ type activeRun struct {
 	// that attaches mid-wait. nil when the run is not waiting. Guarded by mu.
 	providerRetry *providerRetryWait
 
+	// asyncState is the last async_state published, replayed to a client that attaches
+	// later. nil until the session has handles to report. Guarded by mu.
+	asyncState *AsyncState
+
 	// liveImages holds the decoded inline images of the run's tool results by call id,
 	// served by the live image route. Guarded by mu.
 	liveImages map[string][]SessionImage
@@ -547,6 +551,11 @@ func (r *activeRun) beginSubscribe() *pendingSubscribe {
 	}
 	if r.providerRetry != nil {
 		if event, err := makeSSEEvent("provider_retry", map[string]any{"turn_id": r.turnID, "waiting": r.providerRetry}); err == nil {
+			pending.state = append(pending.state, event)
+		}
+	}
+	if r.asyncState != nil {
+		if event, err := makeSSEEvent("async_state", asyncStatePayload(r.turnID, *r.asyncState)); err == nil {
 			pending.state = append(pending.state, event)
 		}
 	}

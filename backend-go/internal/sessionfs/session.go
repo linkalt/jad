@@ -479,8 +479,15 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	if nativeAsync == nil {
+		for name, enabled := range map[string]bool{"process": nativeProcess != nil, "subagent": nativeSubagent != nil} {
+			if enabled {
+				return SessionConfig{}, configError("%s: tools.native.%s needs tools.native.async to collect, list and stop its handles", settingPath, name)
+			}
+		}
+	}
 	applyApprovalDefault(approval.Default, setting, nativeWrite, nativeEdit, nativeBash, nativeExec, nativeProcess, nativeProfileMessage, nativeToolSmith, mcpServers)
-	stateContext, err := normalizeStateContextSettings(setting, settingPath, cwd, nativeProcess, nativeTask, nativeMemory, nativeSubagent)
+	stateContext, err := normalizeStateContextSettings(setting, settingPath, cwd, nativeProcess, nativeTask, nativeMemory, nativeSubagent, nativeAsync)
 	if err != nil {
 		return SessionConfig{}, err
 	}

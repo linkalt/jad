@@ -146,13 +146,13 @@ func TestCheckFilesFindsBrokenSubagentReferences(t *testing.T) {
 		want string
 	}{
 		{"agents_dir that does not exist", func(dir string) string {
-			return `{"native":{"subagent":{"agents_dir":["` + dir + `/missing"]}}}`
+			return `{"native":{"async":{},"subagent":{"agents_dir":["` + dir + `/missing"]}}}`
 		}, "agents_dir"},
 		{"agent that names a missing toolset", func(string) string {
-			return `{"native":{"subagent":{"agents":{"helper":{"description":"d","instructions":"p","model":"openai/small","toolset":"coding/missing"}}}}}`
+			return `{"native":{"async":{},"subagent":{"agents":{"helper":{"description":"d","instructions":"p","model":"openai/small","toolset":"coding/missing"}}}}}`
 		}, "coding/missing"},
 		{"agent that names a missing model", func(string) string {
-			return `{"native":{"subagent":{"agents":{"helper":{"description":"d","instructions":"p","model":"openai/missing"}}}}}`
+			return `{"native":{"async":{},"subagent":{"agents":{"helper":{"description":"d","instructions":"p","model":"openai/missing"}}}}}`
 		}, "openai/missing"},
 	}
 	for _, tc := range cases {
@@ -172,7 +172,7 @@ func TestCheckFilesReportsTwoSessionsThatFailWithTheSameMessage(t *testing.T) {
 	// Both sessions fail in the sub-agent's toolset, whose message names the agent and the
 	// toolset but not the session, so the two lines are told apart only by the session.
 	f.overwrite(t, "tools/coding/hooked.json", `{"hooks":{"enabled":true,"timeout_ms":5000,"post_tool":[{"name":"audit","argv":["true"]}]}}`)
-	f.overwrite(t, "tools/coding/none.json", `{"native":{"subagent":{"agents":{"helper":{"description":"d","instructions":"p","model":"openai/small","toolset":"coding/hooked"}}}}}`)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"async":{},"subagent":{"agents":{"helper":{"description":"d","instructions":"p","model":"openai/small","toolset":"coding/hooked"}}}}}`)
 	body := `{"schema_version":1,"cwd":"` + f.cwd + `","scope":{"profiles":["dev"]},"settings":{"hooks":{"enabled":false}}}`
 	f.overwrite(t, "sessions/demo.json", body)
 	f.overwrite(t, "sessions/second.json", body)

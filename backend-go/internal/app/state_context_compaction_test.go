@@ -118,13 +118,14 @@ func TestHTTPCompactPersistsProcessAndTaskStateContextAndInjectsItIntoNextReques
 	config, fixture := layoutConfig(t, layouttest.Spec{
 		SessionID:           "one",
 		CWD:                 workspace,
-		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json")},
+		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json"), asyncSampleToolPath(t)},
 		Settings: map[string]any{
 			"max_tool_rounds": 2,
 			"compaction":      map[string]any{"keepbatch": map[string]any{"turn": map[string]any{"type": "assistant_final", "keep": 1}}},
 			"statecontext":    map[string]any{"enabled": true, "role": "developer", "triggers": map[string]any{"compaction": map[string]any{"tools": []string{"process", "task"}, "max_bytes": 4096}}},
 		},
 		Native: map[string]any{
+			"async":   map[string]any{},
 			"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "statecontext": map[string]any{"states": []string{"exited"}, "limit": 5}},
 			"task":    map[string]any{"storage_dir": taskStorage, "statecontext": map[string]any{"statuses": []string{"in-progress"}, "limit": 5}},
 		},

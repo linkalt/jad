@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools/native"
@@ -43,7 +44,7 @@ func (r *Resolver) ResolveMaintenance(ctx context.Context, reference, profile st
 		Profile:   config.Profile,
 		Session: boundMutation{
 			shared: shared, config: config, processManager: processManager, taskStore: taskStore, memoryStore: memoryStore,
-			subagentManager: r.sharedSubagentManager(config), owner: sessionKey(location.Reference, config.Profile),
+			asyncManager: r.sessionAsyncManager(config), subagentManager: r.sharedSubagentManager(config), owner: sessionKey(location.Reference, config.Profile),
 			reference: location.Reference, logger: r.logger,
 		},
 	}, nil
@@ -56,6 +57,7 @@ type boundMutation struct {
 	taskStore       *native.TaskStore
 	memoryStore     *native.MemoryStore
 	subagentManager *native.SubagentManager
+	asyncManager    *asyncmgr.Manager
 	// owner is the session key of the sub-agent runs this session started.
 	owner     string
 	reference string
@@ -100,7 +102,7 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 	if compacted.Compacted {
 		snapshot, include, err := collectStateContextSnapshot(m.config, stateContextSources{
 			process: m.processManager, task: m.taskStore, memory: m.memoryStore,
-			subagent: m.subagentManager, owner: m.owner,
+			subagent: m.subagentManager, owner: m.owner, async: m.asyncManager,
 		}, "compaction")
 		if err != nil {
 			return result, fmt.Errorf("collect state context after compaction: %w", err)

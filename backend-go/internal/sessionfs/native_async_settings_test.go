@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"jad/backend-go/internal/asyncmgr"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 func normalizeAsync(t *testing.T, tools string) (*NativeAsyncSettings, error) {
@@ -36,13 +37,13 @@ func TestNativeAsyncSettingsEmptyObjectUsesDefaults(t *testing.T) {
 }
 
 func TestNativeAsyncSettingsEveryKeyOverridesAndNullKeepsDefault(t *testing.T) {
-	settings, err := normalizeAsync(t, `{"native":{"async":{"max_handles":3,"max_handles_total":9,"default_block_ms":5,"max_block_ms":50,"default_wait_ms":6,"max_wait_ms":60,"wait_max_signals":4,"list_default_limit":5,"list_max_limit":25,"summary_max_bytes":100,"status_summary_max_bytes":200,"response_max_bytes":4000,"keep_finished":7,"retention_days":0,"unread_max":8,"unread_ttl_days":0,"stop_wait_ms":0}}}`)
+	settings, err := normalizeAsync(t, `{"native":{"async":{"max_handles":3,"max_handles_total":9,"default_block_ms":5,"max_block_ms":50,"default_wait_ms":6,"max_wait_ms":60,"wait_max_signals":4,"list_default_limit":5,"list_max_limit":25,"summary_max_bytes":100,"status_summary_max_bytes":200,"response_max_bytes":4000,"keep_finished":7,"retention_days":0,"unread_max":8,"unread_ttl_days":0,"stop_wait_ms":0,"sse_max_ids":4}}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := asyncmgr.Config{MaxHandles: 3, MaxHandlesTotal: 9, DefaultBlockMs: 5, MaxBlockMs: 50, DefaultWaitMs: 6, MaxWaitMs: 60,
 		WaitMaxSignals: 4, ListDefaultLimit: 5, ListMaxLimit: 25, SummaryMaxBytes: 100, StatusSummaryBytes: 200, ResponseMaxBytes: 4000,
-		KeepFinished: 7, RetentionDays: 0, UnreadMax: 8, UnreadTTLDays: 0, StopWaitMs: 0}
+		KeepFinished: 7, RetentionDays: 0, UnreadMax: 8, UnreadTTLDays: 0, StopWaitMs: 0, SSEMaxIDs: 4}
 	if settings.Config != want {
 		t.Fatalf("config = %+v, want %+v", settings.Config, want)
 	}
@@ -64,6 +65,8 @@ func TestNativeAsyncSettingsRejectsBadInput(t *testing.T) {
 		"block order":        `{"native":{"async":{"default_block_ms":500,"max_block_ms":100}}}`,
 		"budget too small":   `{"native":{"async":{"response_max_bytes":600}}}`,
 		"unread below wait":  `{"native":{"async":{"unread_max":2}}}`,
+		"sse ids negative":   `{"native":{"async":{"sse_max_ids":-1}}}`,
+		"sse ids too many":   `{"native":{"async":{"sse_max_ids":101}}}`,
 	}
 	for name, tools := range cases {
 		if _, err := normalizeAsync(t, tools); err == nil {
@@ -79,5 +82,47 @@ func TestNativeAsyncSettingsRejectsBadInput(t *testing.T) {
 func TestNativeAsyncIsAnAllowListableTool(t *testing.T) {
 	if !containsString(NativeToolNames(), "async") {
 		t.Fatal("async missing from NativeToolNames")
+	}
+}
+
+func TestNativeAsyncSSEMaxIDsDefaultsToTenAndAllowsZero(t *testing.T) {
+	settings, err := normalizeAsync(t, `{"native":{"async":{}}}`)
+	if err != nil || settings.Config.SSEMaxIDs != 10 {
+		t.Fatalf("default = %+v, %v", settings, err)
+	}
+	settings, err = normalizeAsync(t, `{"native":{"async":{"sse_max_ids":0}}}`)
+	if err != nil || settings.Config.SSEMaxIDs != 0 {
+		t.Fatalf("zero = %+v, %v", settings, err)
+	}
+}
+
+func TestProcessAndSubagentNeedTheAsyncTool(t *testing.T) {
+	cases := map[string]string{
+		"process":  `"process":{}`,
+		"subagent": `"subagent":{"agents":{"a":{"description":"d","instructions":"p","model":"openai/default"}}}`,
+	}
+	for tool, entry := range cases {
+		_, err := loadLayoutSpec(t, layouttest.Spec{ToolsetRaw: `{"native":{"read":{},` + entry + `}}`})
+		if err == nil || !strings.Contains(err.Error(), "tools.native."+tool+" needs tools.native.async") {
+			t.Fatalf("%s without async: error = %v, want the async requirement", tool, err)
+		}
+		if _, err := loadLayoutSpec(t, layouttest.Spec{ToolsetRaw: `{"native":{"read":{},"async":{},` + entry + `}}`}); err != nil {
+			t.Fatalf("%s with async: %v", tool, err)
+		}
+	}
+	if _, err := loadLayoutSpec(t, layouttest.Spec{ToolsetRaw: `{"native":{"read":{}}}`}); err != nil {
+		t.Fatalf("a session with neither tool: %v", err)
+	}
+}
+
+func TestStateContextAsyncProviderNeedsTheAsyncTool(t *testing.T) {
+	const settingPath = "/session/setting.json"
+	enabled := map[string]json.RawMessage{"statecontext": json.RawMessage(`{"enabled":true,"triggers":{"compaction":{"tools":["async"]}}}`)}
+	if _, err := normalizeStateContextSettings(enabled, settingPath, "", nil, nil, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "requires tools.native.async") {
+		t.Fatalf("missing async provider error = %v", err)
+	}
+	configured, err := normalizeStateContextSettings(enabled, settingPath, "", nil, nil, nil, nil, &NativeAsyncSettings{})
+	if err != nil || len(configured.Triggers["compaction"].Tools) != 1 || configured.Triggers["compaction"].Tools[0] != "async" {
+		t.Fatalf("configured async provider = %+v, error = %v", configured, err)
 	}
 }

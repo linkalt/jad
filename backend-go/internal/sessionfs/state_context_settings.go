@@ -59,6 +59,7 @@ func normalizeStateContextSettings(
 	task *NativeTaskSettings,
 	memory *NativeMemorySettings,
 	subagent *NativeSubagentSettings,
+	async *NativeAsyncSettings,
 ) (StateContextSettings, error) {
 	settings := StateContextSettings{
 		Header:   DefaultStateContextHeader,
@@ -131,7 +132,7 @@ func normalizeStateContextSettings(
 			if !configured {
 				continue
 			}
-			if err := checkStateContextProviders(name, trigger.Tools, settingPath, process, task, memory, subagent); err != nil {
+			if err := checkStateContextProviders(name, trigger.Tools, settingPath, process, task, memory, subagent, async); err != nil {
 				return StateContextSettings{}, err
 			}
 		}
@@ -166,17 +167,17 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 	trigger := StateContextTrigger{Tools: []string{}}
 	value, exists := fields["tools"]
 	if !exists || strings.TrimSpace(string(value)) == "null" {
-		return StateContextTrigger{}, configError("%s: %s.tools must be a non-empty list of task, memory, process, or subagent", settingPath, section)
+		return StateContextTrigger{}, configError("%s: %s.tools must be a non-empty list of task, memory, process, subagent, or async", settingPath, section)
 	}
 	var rawTools []json.RawMessage
 	if err := json.Unmarshal(value, &rawTools); err != nil || len(rawTools) == 0 {
-		return StateContextTrigger{}, configError("%s: %s.tools must be a non-empty list of task, memory, process, or subagent", settingPath, section)
+		return StateContextTrigger{}, configError("%s: %s.tools must be a non-empty list of task, memory, process, subagent, or async", settingPath, section)
 	}
 	seen := make(map[string]struct{}, len(rawTools))
 	for _, rawTool := range rawTools {
 		var tool string
-		if err := json.Unmarshal(rawTool, &tool); err != nil || (tool != "task" && tool != "memory" && tool != "process" && tool != "subagent") {
-			return StateContextTrigger{}, configError("%s: %s.tools must contain only task, memory, process, or subagent", settingPath, section)
+		if err := json.Unmarshal(rawTool, &tool); err != nil || (tool != "task" && tool != "memory" && tool != "process" && tool != "subagent" && tool != "async") {
+			return StateContextTrigger{}, configError("%s: %s.tools must contain only task, memory, process, subagent, or async", settingPath, section)
 		}
 		if _, duplicate := seen[tool]; !duplicate {
 			trigger.Tools = append(trigger.Tools, tool)
@@ -242,9 +243,14 @@ func checkStateContextProviders(
 	task *NativeTaskSettings,
 	memory *NativeMemorySettings,
 	subagent *NativeSubagentSettings,
+	async *NativeAsyncSettings,
 ) error {
 	for _, name := range tools {
 		switch name {
+		case "async":
+			if async == nil {
+				return configError("%s: statecontext provider async (trigger %s) requires tools.native.async", settingPath, trigger)
+			}
 		case "process":
 			if process == nil {
 				return configError("%s: statecontext provider process (trigger %s) requires tools.native.process", settingPath, trigger)

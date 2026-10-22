@@ -87,7 +87,7 @@ func TestProcessStartIsAnAsyncHandleOwnedByTheSession(t *testing.T) {
 
 func TestProcessExitQueuesASignalWithTheExitCodeAndARef(t *testing.T) {
 	f := newProcessAsyncFixture(t)
-	id := f.start(t, "s1", "echo out-text; echo err-text >&2; exit 3")
+	id := f.start(t, "s1", "sleep 0.2; echo out-text; echo err-text >&2; exit 3")
 	out := f.wait(t, "s1", 5000)
 	for _, want := range []string{id, "done", "err-text", "pending: 0", filepath.Join(f.dir, "processes", id)} {
 		if !strings.Contains(out, want) {
@@ -97,7 +97,7 @@ func TestProcessExitQueuesASignalWithTheExitCodeAndARef(t *testing.T) {
 	if !strings.Contains(out, "\"code\":\"3\"") || strings.Contains(out, "\"ok\":true") {
 		t.Errorf("want code 3 and ok:false:\n%s", out)
 	}
-	ok := f.start(t, "s1", "echo fine")
+	ok := f.start(t, "s1", "sleep 0.2; echo fine")
 	out = f.wait(t, "s1", 5000)
 	if !strings.Contains(out, ok) || !strings.Contains(out, "\"ok\":true") || !strings.Contains(out, "fine") {
 		t.Errorf("exit 0 signal:\n%s", out)

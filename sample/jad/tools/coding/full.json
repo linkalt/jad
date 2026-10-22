@@ -8,6 +8,7 @@
     "grep": {},
     "glob": {},
     "bash": {},
+    "async": {},
     "subagent": {
       "agents_dir": [
         ".jad/subagents"

@@ -943,3 +943,42 @@ test('accepts a hosted_tool part and cited text, and drops a message whose hoste
   assert.deepEqual(seen, ['good']);
   assert.deepEqual(parts, ['good:0:ws_2']);
 });
+
+test('an async_state event reaches the caller as counts, and a malformed one or an unknown event is ignored', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  responses.push(streamResponse([
+    {event: 'run', data: {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'}},
+    {event: 'async_state', data: {turn_id: 'turn-1', active: 2, unread: 1, ids: ['a', 'b']}},
+    {event: 'async_state', data: {turn_id: 'turn-1', active: -1, unread: 0, ids: []}},
+    {event: 'async_state', data: {turn_id: 'turn-1', active: 'two', unread: 0}},
+    {event: 'async_state', data: {active: 1, unread: 0}},
+    {event: 'async_state', data: null},
+    {event: 'a_future_event', data: {anything: true}},
+    {event: 'async_state', data: {turn_id: 'turn-1', active: 0, unread: 3, ids: []}},
+    {event: 'completed', data: {message: message('complete', 'fine'), committed: true}},
+    {event: 'done', data: {}},
+  ]));
+  const seen = [];
+  const result = await streamSessionRun('session-1', 'hello', {
+    onAsyncState: (turnId, state) => seen.push({turnId, ...state}),
+  });
+  assert.deepEqual(seen, [
+    {turnId: 'turn-1', active: 2, unread: 1},
+    {turnId: 'turn-1', active: 0, unread: 3},
+  ]);
+  assert.equal(result.message?.text, 'fine');
+});
+
+test('a caller that does not listen is unaffected by async_state', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  responses.push(streamResponse([
+    {event: 'run', data: {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'}},
+    {event: 'async_state', data: {turn_id: 'turn-1', active: 1, unread: 0, ids: ['a']}},
+    {event: 'completed', data: {message: message('complete', 'fine'), committed: true}},
+    {event: 'done', data: {}},
+  ]));
+  const result = await streamSessionRun('session-1', 'hello', {});
+  assert.equal(result.message?.text, 'fine');
+});

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools/native"
 	"jad/backend-go/internal/transcript"
@@ -80,6 +81,8 @@ type stateContextSources struct {
 	// subagent holds the child runs; owner is the session key whose runs are listed.
 	subagent *native.SubagentManager
 	owner    string
+	// async is the manager of the session's async handles; nil without the async tool.
+	async *asyncmgr.Manager
 }
 
 func collectStateContextSnapshot(
@@ -167,6 +170,11 @@ func buildStateContextSnapshot(
 	if config.NativeSubagent != nil {
 		collectors["subagent"] = func() (any, error) {
 			return native.CollectSubagentStateContext(sources.subagent, sources.owner, config.NativeSubagent.StateContext)
+		}
+	}
+	if config.NativeAsync != nil {
+		collectors["async"] = func() (any, error) {
+			return native.CollectAsyncStateContext(sources.async, sources.owner)
 		}
 	}
 	providers := make(orderedStateContextProviders, 0, len(triggerSettings.Tools))

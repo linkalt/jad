@@ -76,7 +76,7 @@ func TestHTTPRunExecutesNativeProcessStartThatFinishesWithinBlockMs(t *testing.T
 		var events []string
 		switch call {
 		case 1:
-			if len(request.Tools) != 1 || !strings.Contains(string(request.Tools[0]), `"name":"process"`) {
+			if len(request.Tools) != 2 || !strings.Contains(string(request.Tools[0]), `"name":"process"`) || !strings.Contains(string(request.Tools[1]), `"name":"async"`) {
 				http.Error(w, "native process definition missing", http.StatusBadRequest)
 				return
 			}
@@ -112,9 +112,9 @@ func TestHTTPRunExecutesNativeProcessStartThatFinishesWithinBlockMs(t *testing.T
 
 	config, fixture := layoutConfig(t, layouttest.Spec{
 		CWD:                 workspace,
-		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json")},
+		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json"), asyncSampleToolPath(t)},
 		Settings:            map[string]any{"max_tool_rounds": 3},
-		Native:              map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "max_running": 2, "stdout": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "stderr": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "log_cap_bytes": 4096, "max_line_chars": 1000, "strip_ansi": false}},
+		Native:              map[string]any{"async": map[string]any{}, "process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "max_running": 2, "stdout": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "stderr": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "log_cap_bytes": 4096, "max_line_chars": 1000, "strip_ansi": false}},
 		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)

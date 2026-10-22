@@ -8,7 +8,7 @@
     "statecontextTrigger": {
       "type": "object",
       "properties": {
-        "tools": {"type": "array", "items": {"type": "string", "enum": ["task", "memory", "process", "subagent"]}, "uniqueItems": true, "minItems": 1, "description": "Providers copied into the snapshot. Each needs its tools.native entry. subagent is Go backend only."},
+        "tools": {"type": "array", "items": {"type": "string", "enum": ["task", "memory", "process", "subagent", "async"]}, "uniqueItems": true, "minItems": 1, "description": "Providers copied into the snapshot. Each needs its tools.native entry. subagent and async are Go backend only; async lists the pending (live or unread) async handles."},
         "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 10485760, "default": 65536},
         "prompt": {"type": "string", "pattern": "\\S", "description": "Trusted instruction text placed after the header and before the data. It is read from the setting, not from the data."},
         "prompt_documents": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Files whose text follows prompt, in order. Relative paths resolve from cwd; ~ is expanded. A file that cannot be read is a config error. The files are read when settings load, so an edit applies to the next snapshot written."},
@@ -551,7 +551,7 @@
       "type": "object",
       "description": "Wait and preview values for tools whose approval is ask, and the default for tools that do not set their own. Nothing is asked while every tool's approval is off, which is the default. Approval is per tool: a tool whose approval is off is never asked about, so a model refused on one tool can reach the same effect through another unless that one asks too. Set default to ask to cover every tool that can ask. Approval is a confirmation, not a sandbox.",
       "properties": {
-        "default": {"type": "string", "enum": ["off", "ask"], "default": "off", "description": "The approval of every tool that can ask (write, edit, bash, process and each MCP server) whose own approval key is absent. An explicit approval on a tool, off or ask, always wins. It does not add a tool the session does not configure, and it never applies to read, grep, glob, fetch, skill, decide, task, memory or request_draft. A process status, wait, list or stop never asks."},
+        "default": {"type": "string", "enum": ["off", "ask"], "default": "off", "description": "The approval of every tool that can ask (write, edit, bash, process and each MCP server) whose own approval key is absent. An explicit approval on a tool, off or ask, always wins. It does not add a tool the session does not configure, and it never applies to read, grep, glob, fetch, skill, decide, task, memory or request_draft. Collecting or stopping a handle with the async tool never asks."},
         "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 300000, "description": "How long a run waits for the user before the call is blocked as approval_timeout. Must not exceed max_timeout_ms."},
         "extend_ms": {"type": "integer", "minimum": 1000, "maximum": 1800000, "default": 300000, "description": "How much one extension adds to the deadline."},
         "max_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 1800000, "description": "Ceiling for the whole wait, extensions included."},
@@ -1411,7 +1411,7 @@
                     "off",
                     "ask"
                   ],
-                  "description": "ask pauses every process start until the user approves it; status, wait, list and stop never ask. When absent, approval.default applies (off unless set). See the top-level approval block."
+                  "description": "ask pauses every process start until the user approves it; the async tool (wait, list, status, stop) never asks. When absent, approval.default applies (off unless set). See the top-level approval block."
                 },
                 "statecontext": {
                   "type": "object",
@@ -1482,7 +1482,7 @@
                 },
                 "stdout": {
                   "type": "object",
-                  "description": "Bounded stdout excerpt for status, wait, and stop.",
+                  "description": "Bounded stdout excerpt for the result of a process that ended within block_ms, and for async status and wait.",
                   "properties": {
                     "head_bytes": {
                       "type": "integer",
@@ -1501,7 +1501,7 @@
                 },
                 "stderr": {
                   "type": "object",
-                  "description": "Bounded stderr excerpt for status, wait, and stop.",
+                  "description": "Bounded stderr excerpt for the result of a process that ended within block_ms, and for async status and wait.",
                   "properties": {
                     "head_bytes": {
                       "type": "integer",
@@ -1835,7 +1835,7 @@
                 "max_concurrent": {"type": "integer", "minimum": 1, "maximum": 32, "default": 3, "description": "Most children running at once. Children outlive a call, so this counts every child of the same storage_dir across runs; the session that first uses the directory sets it."},
                 "keep_finished": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50, "description": "Finished runs kept readable by id; the oldest are dropped first. Runs still going are never dropped."},
                 "persist_runs": {"type": "boolean", "default": true, "description": "Write a small manifest per run into a .runs folder of storage_dir, so run ids and finished results survive a server restart. A run that was going at the restart is reported as lost; its child died with the server, and only the transcript it wrote remains. false keeps runs in memory only."},
-                "allow_write": {"type": "boolean", "default": false, "description": "Let an agent list write, edit, bash, exec or process in its tools, so a child can change files and run code. Those tools must be enabled in the session, and their own paths and approval settings apply to the child, narrowed to nothing it could not do itself. A call to such an agent is a change: it takes the checkpoint, runs in order with the other calls, asks the user for approval with the agent named in the question, and is never handed off (wait_ms is ignored; timeout_ms still bounds it). false keeps every child read-only and rejects an agent that lists one of these tools."},
+                "allow_write": {"type": "boolean", "default": false, "description": "Let an agent list write, edit, bash, exec or process in its tools, so a child can change files and run code. Those tools must be enabled in the session, and their own paths and approval settings apply to the child, narrowed to nothing it could not do itself. A call to such an agent is a change: it takes the checkpoint, runs in order with the other calls, asks the user for approval with the agent named in the question, and is never handed off (block_ms is ignored; timeout_ms still bounds it). false keeps every child read-only and rejects an agent that lists one of these tools."},
                 "deny_agents": {"type": ["array", "null"], "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"}, "uniqueItems": true, "default": [], "description": "Names of agents (inline or from agents_dir) removed from the subagent tool: not listed and not launchable. A name that matches no agent is ignored."},
                 "delete_transcripts": {"type": "boolean", "default": false, "description": "Delete a child's transcript folder from storage_dir when keep_finished drops its run (also at startup), so the folders stop growing. Only a folder directly under storage_dir is deleted. false keeps every transcript. A deleted transcript can no longer give the answer or partial work of its run, but the run was already dropped by then."},
                 "process_max_running": {"type": "integer", "minimum": 1, "maximum": 1024, "default": 4, "description": "Most background processes one child run may have running at once (an agent that lists process in its tools). A start beyond it is refused with a message naming the limit. The session's tools.native.process.max_running still caps all processes together, so a child can never take the whole capacity unless this is raised."},
@@ -1844,7 +1844,7 @@
                 "storage_dir": {"type": "string", "minLength": 1, "default": ".subagents", "description": "Directory holding one transcript folder per child run. Relative paths resolve against the profile's tool storage, or the working directory without profiles."},
                 "statecontext": {
                   "type": "object",
-                  "description": "Which of the session's sub-agent runs a statecontext snapshot lists (when statecontext.tools includes subagent), so the model still has its run ids after a compaction. Each item carries the id, agent, state, a short task preview, times, rounds and tokens; never the answer.",
+                  "description": "Which of the session's sub-agent runs a statecontext snapshot lists (when statecontext.tools includes subagent), so the model still has its run ids after a compaction (the async provider lists the pending handles of every kind). Each item carries the id, agent, state, a short task preview, times, rounds and tokens; never the answer.",
                   "properties": {
                     "states": {"type": "array", "items": {"type": "string", "enum": ["queued", "running", "done", "failed", "timed_out", "stopped", "lost"]}, "uniqueItems": true, "default": ["queued", "running"], "description": "Run states to list."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 20, "description": "Most runs listed, newest first."},
@@ -1871,7 +1871,7 @@
             },
             "async": {
               "type": "object",
-              "description": "Go backend only. Enables the async tool (wait, list, status, stop) and sets the bounds of the async manager that owns the handles of the async tools (process; later sub-agent runs, tool_smith and profile_message): the live-handle caps, the block and wait times, the size of one response, and how long finished handles and undelivered signals are kept. The tool definition native/async.json must be in tool_definition_paths. Every key has a default, so {} is valid.",
+              "description": "Go backend only. Enables the async tool (wait, list, status, stop) and the block_ms start argument of process and subagent. process and subagent need this entry: a config that enables either without async is rejected and sets the bounds of the async manager that owns the handles of the async tools (process and subagent; later tool_smith and profile_message): the live-handle caps, the block and wait times, the size of one response, and how long finished handles and undelivered signals are kept. The tool definition native/async.json must be in tool_definition_paths. Every key has a default, so {} is valid.",
               "properties": {
                 "max_handles": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 16, "description": "Most live (queued or running) async handles one session may hold. A start at the cap is refused with async_capacity_reached."},
                 "max_handles_total": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 64, "description": "Most live async handles on the whole server."},
@@ -1888,6 +1888,7 @@
                 "keep_finished": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 200, "description": "Terminal handle records kept; the oldest read ones beyond this are deleted with their result files."},
                 "retention_days": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 14, "description": "Terminal handle records older than this many days are deleted. 0 turns age pruning off."},
                 "unread_max": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 100, "description": "Most undelivered completion signals kept per session; older ones are marked read and counted as dropped. Not below wait_max_signals."},
+                "sse_max_ids": {"type": "integer", "minimum": 0, "maximum": 100, "default": 10, "description": "Most live handle ids the run stream's async_state event carries next to the counts. 0 sends counts only."},
                 "stop_wait_ms": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 2000, "description": "How long an async stop and a shutdown wait for the work to report that it ended. 0 does not wait."},
                 "unread_ttl_days": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 7, "description": "Undelivered signals older than this many days expire. 0 keeps them until the record is pruned."}
               },
