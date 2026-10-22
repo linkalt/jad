@@ -166,21 +166,21 @@ func (r *Resolver) forgetStores(dir string) {
 	}
 }
 
-// CancelAllSessionChildren asks the sub-agent runs of every profile of a session to stop and
-// reports how many were still going. It does not wait.
+// CancelAllSessionChildren stops the handles of every profile of a session (processes and
+// sub-agent runs, also on a storage other sessions share) and removes their records from
+// the async manager, and reports how many were still going. It does not wait. The other
+// sessions' handles are left alone.
 func (r *Resolver) CancelAllSessionChildren(reference string) int {
-	r.mu.Lock()
-	managers := make([]interface{ CancelOwnersWithPrefix(string) int }, 0, len(r.subagentManagers))
-	for _, manager := range r.subagentManagers {
-		managers = append(managers, manager)
-	}
-	r.mu.Unlock()
 	prefix := sessionKey(reference, "")
 	cancelled := 0
-	for _, manager := range managers {
-		cancelled += manager.CancelOwnersWithPrefix(prefix)
+	for _, manager := range r.asyncManagers() {
+		cancelled += manager.DeleteOwnersWithPrefix(prefix, reasonSessionDelete)
 	}
-	return cancelled
+	subagents := 0
+	for _, manager := range r.subagentManagerList() {
+		subagents += manager.CancelOwnersWithPrefix(prefix)
+	}
+	return max(cancelled, subagents)
 }
 
 // CanonicalSessionReference implements httpapi.SessionReferences. It does not need the

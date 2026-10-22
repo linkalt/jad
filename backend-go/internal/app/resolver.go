@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/httpdebug"
 	"jad/backend-go/internal/logging"
@@ -130,20 +131,62 @@ func sessionKey(reference, profile string) string {
 	return reference + "\x00" + profile
 }
 
-// CancelSessionChildren asks every sub-agent run a session started to stop, and
-// reports how many were still going. The HTTP layer calls it when the user stops or
-// resets the session: a child handed off earlier would otherwise keep spending after
-// the user asked for everything to end. It does not wait for the children.
-func (r *Resolver) CancelSessionChildren(reference, profile string) int {
+// Reasons recorded on handles ended by the user's own actions.
+const (
+	reasonUserStop      = "user_stop"
+	reasonSessionReset  = "session_reset"
+	reasonSessionDelete = "session_delete"
+)
+
+func (r *Resolver) asyncManagers() []*asyncmgr.Manager {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	managers := make([]*asyncmgr.Manager, 0, len(r.asyncHosts))
+	for _, host := range r.asyncHosts {
+		managers = append(managers, host.Manager())
+	}
+	return managers
+}
+
+func (r *Resolver) subagentManagerList() []*native.SubagentManager {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	managers := make([]*native.SubagentManager, 0, len(r.subagentManagers))
 	for _, manager := range r.subagentManagers {
 		managers = append(managers, manager)
 	}
-	r.mu.Unlock()
+	return managers
+}
+
+// CancelSessionChildren asks everything a session started that outlives its runs (the
+// session's handles of every kind: processes and sub-agent runs) to stop, and reports how
+// many were still going. The HTTP layer calls it when the user stops the session. It does
+// not wait. A normal end of a run or a compaction never comes here.
+func (r *Resolver) CancelSessionChildren(reference, profile string) int {
 	owner := sessionKey(reference, profile)
 	cancelled := 0
-	for _, manager := range managers {
+	for _, manager := range r.asyncManagers() {
+		cancelled += manager.CancelOwner(owner, reasonUserStop)
+	}
+	return max(cancelled, r.cancelSubagentOwner(owner))
+}
+
+// ResetSessionChildren is CancelSessionChildren for a reset: the session's unread
+// completion signals are dropped too, because the history that gave them meaning is gone.
+func (r *Resolver) ResetSessionChildren(reference, profile string) int {
+	owner := sessionKey(reference, profile)
+	cancelled := 0
+	for _, manager := range r.asyncManagers() {
+		cancelled += manager.ResetOwner(owner, reasonSessionReset)
+	}
+	return max(cancelled, r.cancelSubagentOwner(owner))
+}
+
+// cancelSubagentOwner reaches sub-agent runs of a storage that has no async host (a session
+// without the async tool); for the others the async manager has already asked them to stop.
+func (r *Resolver) cancelSubagentOwner(owner string) int {
+	cancelled := 0
+	for _, manager := range r.subagentManagerList() {
 		cancelled += manager.CancelOwner(owner)
 	}
 	return cancelled

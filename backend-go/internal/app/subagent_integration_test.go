@@ -1476,3 +1476,59 @@ func TestSubagentWithoutAModelOfItsOwnSendsTheParentsModelFileHostedTools(t *tes
 		t.Fatalf("expected the parent's two rounds and the child's round on the parent model, saw %d", seen)
 	}
 }
+
+func (f subagentFixture) expectChildKeepsRunning(t *testing.T, what string) {
+	t.Helper()
+	select {
+	case <-f.provider.childCancelled:
+		t.Fatalf("the handed-off child was cancelled by %s", what)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+func TestCompactingTheSessionLeavesAChildHandedOffInAnEarlierRunRunning(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	handoffAndLeaveRunning(t, f)
+	f.expectChildKeepsRunning(t, "the end of the run")
+
+	request, err := http.NewRequest(http.MethodPost, f.apiURL+"/api/sessions/local:demo/compact", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+integrationAPIToken)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	f.expectChildKeepsRunning(t, "a compaction")
+}
+
+func TestDeletingTheSessionCancelsAChildHandedOffInAnEarlierRun(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	handoffAndLeaveRunning(t, f)
+
+	url := f.apiURL + "/api/catalog/sessions/demo"
+	get, _ := http.NewRequest(http.MethodGet, url, nil)
+	get.Header.Set("Authorization", "Bearer "+integrationAPIToken)
+	current, err := http.DefaultClient.Do(get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, current.Body)
+	current.Body.Close()
+	del, _ := http.NewRequest(http.MethodDelete, url, nil)
+	del.Header.Set("Authorization", "Bearer "+integrationAPIToken)
+	del.Header.Set("If-Match", current.Header.Get("ETag"))
+	response, err := http.DefaultClient.Do(del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", response.StatusCode, body)
+	}
+	f.expectChildCancelled(t, "the session was deleted")
+}

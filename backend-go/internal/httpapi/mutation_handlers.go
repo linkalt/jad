@@ -97,9 +97,11 @@ func (h *Handler) handleSessionReset(w http.ResponseWriter, r *http.Request, ref
 		writeJSONError(w, err)
 		return
 	}
-	// The history the children were started from is gone, so their answers have no
-	// use and would only keep costing.
-	h.cancelSessionChildren(resolved.Reference, resolved.Profile)
+	// The history the handles were started from is gone, so their results have no use
+	// and would only keep costing.
+	if children, ok := h.resolver.(SessionChildren); ok {
+		children.ResetSessionChildren(resolved.Reference, resolved.Profile)
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"reset": true})
 }
 

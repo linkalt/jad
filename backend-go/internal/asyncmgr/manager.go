@@ -40,8 +40,19 @@ type row struct {
 	started, changed time.Time
 	unread, overflow bool
 	finishing        bool
+	after            endAction
 	rec              *Record
 }
+
+// endAction says what happens to a handle's signal when its end arrives after a user
+// reset or delete already stopped it.
+type endAction int
+
+const (
+	endKeep   endAction = iota // queue the signal as usual
+	endRead                    // the signal is born read (reset: the history is gone)
+	endRemove                  // the row and its record are removed (the session is gone)
+)
 
 type ownerStats struct {
 	live    map[string]*row
@@ -267,6 +278,7 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	}
 	r.finishing = true
 	rec := *r.rec
+	after := r.after
 	m.mu.Unlock()
 
 	rec.State = res.State
@@ -279,17 +291,25 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	rec.Cut = rec.Cut || res.Cut
 	rec.Bytes = res.Bytes
 	rec.EndedAt = now
-	rec.Unread = true
+	rec.Unread = after == endKeep
 	if err := m.writeRecord(rec); err != nil {
 		m.opts.Logger.Warn("async result record not saved; the signal is kept in memory only", "handle", id, "error", err)
 	}
 
 	m.mu.Lock()
 	m.mutateLocked(r, func(r *row) {
-		r.state, r.ok, r.changed, r.unread, r.finishing = rec.State, rec.OK, now, true, false
+		r.state, r.ok, r.changed, r.unread, r.finishing = rec.State, rec.OK, now, after == endKeep, false
 	})
 	r.rec = &rec
-	work := m.enforceUnreadLocked(r.owner)
+	if after != endKeep {
+		r.rec = nil
+	}
+	var work pruneWork
+	if after == endRemove {
+		work.removes = append(work.removes, removal{id: r.id, kind: r.kind})
+		m.forgetLocked(r)
+	}
+	work.merge(m.enforceUnreadLocked(r.owner))
 	work.merge(m.pruneLocked(now))
 	m.notifyLocked()
 	m.mu.Unlock()
@@ -301,16 +321,44 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 // CancelOwner asks every live handle of owner to stop and returns how many it asked.
 // It does not wait: drivers report the end through Complete.
 func (m *Manager) CancelOwner(owner, reason string) int {
-	return m.cancel(func(r *row) bool { return r.owner == owner }, reason)
+	return m.cancel(func(r *row) bool { return r.owner == owner }, reason, endKeep)
 }
 
 // CancelOwnersWithPrefix is CancelOwner for every owner that starts with prefix (all the
 // profiles of one session).
 func (m *Manager) CancelOwnersWithPrefix(prefix, reason string) int {
-	return m.cancel(func(r *row) bool { return strings.HasPrefix(r.owner, prefix) }, reason)
+	return m.cancel(func(r *row) bool { return strings.HasPrefix(r.owner, prefix) }, reason, endKeep)
 }
 
-func (m *Manager) cancel(match func(*row) bool, reason string) int {
+// ResetOwner is the user reset of one session: every live handle of owner is asked to stop
+// and its end is recorded as already read, and the unread signals queued so far are
+// dropped, because the history that gave them meaning is gone. It does not wait.
+func (m *Manager) ResetOwner(owner, reason string) int {
+	n := m.cancel(func(r *row) bool { return r.owner == owner }, reason, endRead)
+	m.DropUnread(owner)
+	return n
+}
+
+// DeleteOwnersWithPrefix is the delete of a session (every profile): live handles are asked
+// to stop and are removed when they end, and the finished ones are removed now. The result
+// files of the drivers are left to their Forget. It does not wait.
+func (m *Manager) DeleteOwnersWithPrefix(prefix, reason string) int {
+	match := func(r *row) bool { return strings.HasPrefix(r.owner, prefix) }
+	n := m.cancel(match, reason, endRemove)
+	var work pruneWork
+	m.mu.Lock()
+	for _, r := range sortedRows(m.rows) {
+		if r.state.Terminal() && !r.finishing && match(r) {
+			work.removes = append(work.removes, removal{id: r.id, kind: r.kind})
+			m.forgetLocked(r)
+		}
+	}
+	m.mu.Unlock()
+	m.applyWork(work, false)
+	return n
+}
+
+func (m *Manager) cancel(match func(*row) bool, reason string, after endAction) int {
 	type target struct {
 		driver Driver
 		id     string
@@ -320,6 +368,7 @@ func (m *Manager) cancel(match func(*row) bool, reason string) int {
 	for _, r := range m.rows {
 		if !r.state.Terminal() && !r.finishing && match(r) {
 			if d := m.drivers[r.kind]; d != nil {
+				r.after = after
 				targets = append(targets, target{d, r.id})
 			}
 		}

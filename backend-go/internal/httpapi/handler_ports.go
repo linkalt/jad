@@ -60,10 +60,13 @@ type SessionProfiles interface {
 }
 
 // SessionChildren is an optional adapter for work a session started that outlives
-// the run, such as sub-agent runs handed off with a run id. CancelSessionChildren asks
-// all of it to stop and reports how many were still going; it must not block.
+// the run: the session's async handles (processes and sub-agent runs). CancelSessionChildren
+// asks all of it to stop and reports how many were still going; it must not block.
 type SessionChildren interface {
 	CancelSessionChildren(reference, profile string) int
+	// ResetSessionChildren does the same for a reset and drops the session's unread
+	// completion signals.
+	ResetSessionChildren(reference, profile string) int
 }
 
 // SnapshotOptions selects one page of transcript-backed session messages.
