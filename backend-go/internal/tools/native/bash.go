@@ -178,6 +178,8 @@ type shellProgram struct {
 	setting string
 	// failureSuggestion is advice added to a non-zero exit, when the caller knows a likely cause.
 	failureSuggestion string
+	// subject names what ran in summaries ("Command" when empty).
+	subject string
 }
 
 // settingsSection is the block advice points the user at; a run that names none is bash's.
@@ -490,6 +492,10 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 			tools.Information{Key: "truncation_reason", Value: "max_bytes"})
 	}
 
+	subject := "Command"
+	if program != nil && program.subject != "" {
+		subject = program.subject
+	}
 	render := func(status tools.Status, summary string, errorFields ...tools.Information) string {
 		items := append([]tools.Information(nil), errorFields...)
 		items = append(items, information...)
@@ -530,7 +536,7 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 		)
 	}
 	if result.timedOut {
-		summary := fmt.Sprintf("Command timed out after %d ms", timeoutMs)
+		summary := fmt.Sprintf("%s timed out after %d ms", subject, timeoutMs)
 		if result.leftRunning {
 			summary += " and survived SIGKILL"
 		}
@@ -546,7 +552,7 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 		)
 	}
 	if result.signal != "" {
-		return render(tools.StatusError, "Command was killed by "+result.signal,
+		return render(tools.StatusError, subject+" was killed by "+result.signal,
 			tools.Information{Key: "error_type", Value: "execution"},
 			tools.Information{Key: "error_code", Value: "signaled"},
 		)
@@ -566,7 +572,7 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 		if program != nil && program.failureSuggestion != "" {
 			fields = append(fields, tools.Information{Key: "suggestion", Value: program.failureSuggestion})
 		}
-		return render(tools.StatusError, "Command exited with "+exitCode, fields...)
+		return render(tools.StatusError, subject+" exited with "+exitCode, fields...)
 	}
-	return render(tools.StatusOK, fmt.Sprintf("Command completed in %d ms", result.durationMs))
+	return render(tools.StatusOK, fmt.Sprintf("%s completed in %d ms", subject, result.durationMs))
 }

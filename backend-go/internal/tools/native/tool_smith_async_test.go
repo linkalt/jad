@@ -278,3 +278,25 @@ func TestToolSmithRunWithAskingNestedToolRunsToItsEnd(t *testing.T) {
 	}
 	_ = host
 }
+
+func TestToolSmithSummariesSayScriptAndNoReturnMeansNoResultBlock(t *testing.T) {
+	f := newToolSmithAsyncFixture(t, `echo printed`)
+	out := f.run(t, "s1", `{"run":{"function":"console.log(1);","block_ms":5000}}`)
+	if !strings.Contains(out, `"summary":"Script completed in `) || strings.Contains(out, "Command") {
+		t.Fatalf("summary wording:\n%s", out)
+	}
+	if strings.Contains(execContent(out), "[result]") || !strings.Contains(execContent(out), "printed") {
+		t.Fatalf("a body without a return value must show only its output:\n%s", out)
+	}
+	failing := newToolSmithAsyncFixture(t, `exit 3`)
+	out = failing.run(t, "s1", `{"run":{"function":"return 1;","block_ms":5000}}`)
+	if !strings.Contains(out, `"summary":"Script exited with 3"`) {
+		t.Fatalf("failure wording:\n%s", out)
+	}
+}
+
+func TestToolSmithDescriptionStatesThatNoReturnGivesNoResultBlock(t *testing.T) {
+	if !strings.Contains(toolSmithDescription, "without return") {
+		t.Fatal("the description must say what a body without return gives")
+	}
+}

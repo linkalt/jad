@@ -45,7 +45,7 @@ var toolSmithInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-const toolSmithDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved functions of the library. Give run to execute a TypeScript function body in a child process and return one value, waiting up to block_ms; if it is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it. Saved functions are reusable files called as fn.<name>(input) inside a run. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do."
+const toolSmithDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved functions of the library. Give run to execute a TypeScript function body in a child process and return one value (a body without return gives no [result] block, only its output), waiting up to block_ms; if it is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it. Saved functions are reusable files called as fn.<name>(input) inside a run. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do."
 
 // NewToolSmithTool creates the tool_smith tool. It is ReadOnly so several calls may
 // share a response, and a call with run says so through MayChangeFiles.
@@ -252,7 +252,7 @@ func runToolSmithScript(ctx context.Context, script toolSmithScript) shellRunRes
 		section:    "tools.native.tool_smith",
 		extraEnv:   extraEnv,
 		resultFile: &shellResultFile{path: resultPath, maxBytes: settings.ResultMaxBytes, cutMarker: true},
-		program:    &shellProgram{name: filepath.Base(argv[0]), setting: "tools.native.tool_smith.interpreter"},
+		program:    &shellProgram{name: filepath.Base(argv[0]), setting: "tools.native.tool_smith.interpreter", subject: "Script"},
 	}, settings.Child, script.apiKeyEnv, execution)
 	var lines []string
 	if bridge != nil {
