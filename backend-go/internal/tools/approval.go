@@ -112,15 +112,11 @@ func NewApprovalRequester(options ApprovalOptions, ask InteractionHandler) Appro
 }
 
 // CallNeedsApproval reports whether approval applies to a call of toolName.
-// For process only a start launches anything; status, wait, list and stop act
-// on what the user already approved. `action` is inferred from `command` like
-// the tool does.
+// For process only a call with a command launches anything; waiting for, inspecting and
+// stopping what the user already approved is the async tool's, which is never asked.
 func CallNeedsApproval(toolName string, args map[string]any) bool {
 	if toolName != "process" {
 		return true
-	}
-	if action, _ := args["action"].(string); strings.TrimSpace(action) != "" {
-		return strings.TrimSpace(action) == "start"
 	}
 	command, _ := args["command"].(string)
 	return strings.TrimSpace(command) != ""

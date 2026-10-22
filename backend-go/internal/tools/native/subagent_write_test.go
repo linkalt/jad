@@ -434,7 +434,7 @@ func TestSubagentDetachedWriterThatNeedsApprovalIsStoppedWithAMessage(t *testing
 			return SubagentResult{}, ctx.Err()
 		}
 		needs := request.Execution.RequestApproval(ctx, tools.ApprovalCall{CallID: "w1", ModelToolName: "write", Tool: "write", Args: map[string]any{"path": "a.txt"}})
-		free := request.Execution.RequestApproval(ctx, tools.ApprovalCall{CallID: "p1", ModelToolName: "process", Tool: "process", Args: map[string]any{"action": "status"}})
+		free := request.Execution.RequestApproval(ctx, tools.ApprovalCall{CallID: "p1", ModelToolName: "process", Tool: "process", Args: map[string]any{}})
 		verdicts <- [2]tools.ApprovalVerdict{needs, free}
 		<-ctx.Done()
 		return SubagentResult{Text: "was cut"}, ctx.Err()

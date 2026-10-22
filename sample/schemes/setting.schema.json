@@ -1451,18 +1451,6 @@
                   "maximum": 1024,
                   "default": 8
                 },
-                "wait_timeout_ms": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 3600000,
-                  "default": 10000
-                },
-                "max_wait_timeout_ms": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 3600000,
-                  "default": 120000
-                },
                 "status_log_bytes": {
                   "type": "integer",
                   "minimum": 1,

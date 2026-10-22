@@ -109,28 +109,6 @@ func TestTaskNotFoundListsTheTaskIDs(t *testing.T) {
 	}
 }
 
-func TestProcessNotFoundListsTheProcessIDs(t *testing.T) {
-	f := newProcessFixture(t)
-	if out := f.call(t, "", map[string]any{"action": "status", "id": "proc_missing"}); !strings.Contains(out, "process_not_found") || strings.Contains(out, "available_ids") {
-		t.Errorf("an empty manager must not offer ids:\n%s", out)
-	}
-	id := f.start(t, "", "sleep 30")
-	out := f.call(t, "", map[string]any{"action": "status", "id": "proc_missing"})
-	if !strings.Contains(out, "available_ids: "+id) {
-		t.Errorf("not-found answer did not list %s:\n%s", id, out)
-	}
-}
-
-func TestProcessNotFoundOffersOnlyTheCallersOwnIDs(t *testing.T) {
-	f := newProcessFixture(t)
-	parent := f.start(t, "", "sleep 30")
-	child := f.start(t, "sub_one", "sleep 30")
-	out := f.call(t, "sub_one", map[string]any{"action": "status", "id": "proc_missing"})
-	if !strings.Contains(out, "available_ids: "+child) || strings.Contains(out, parent) {
-		t.Errorf("a child must see its own id and not the parent's %s:\n%s", parent, out)
-	}
-}
-
 func TestSubagentUnknownRunListsTheRunIDs(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)

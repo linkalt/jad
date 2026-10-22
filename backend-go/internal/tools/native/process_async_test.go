@@ -27,13 +27,13 @@ func newProcessAsyncFixture(t *testing.T) processAsyncFixture {
 		t.Skip("managed process groups require a POSIX platform")
 	}
 	dir := t.TempDir()
-	manager := NewProcessManager(filepath.Join(dir, "processes"))
-	t.Cleanup(func() { _ = manager.Close() })
 	host, err := NewAsyncHost(filepath.Join(dir, ".async"), asyncmgr.DefaultConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(host.Close)
+	manager := NewProcessManager(filepath.Join(dir, "processes"))
+	t.Cleanup(func() { _ = manager.Close() })
 	settings := processTestRequest(dir, "", 1<<20).Policy
 	settings.StorageDir = filepath.Join(dir, "processes")
 	settings.Shell = "/bin/sh"
@@ -50,7 +50,7 @@ func newProcessAsyncFixture(t *testing.T) processAsyncFixture {
 
 func (f processAsyncFixture) start(t *testing.T, owner, command string) string {
 	t.Helper()
-	out, err := f.process.Execute(context.Background(), map[string]any{"command": command}, tools.ExecutionContext{CallID: "p1", WorkspaceRoot: f.dir, SessionKey: owner})
+	out, err := f.process.Execute(context.Background(), map[string]any{"command": command, "block_ms": json.Number("0")}, tools.ExecutionContext{CallID: "p1", WorkspaceRoot: f.dir, SessionKey: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestProcessCapacityRefusalIsReportedAndLeavesNoHandle(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := func() string {
-		out, _ := tool.Execute(context.Background(), map[string]any{"command": "sleep 30"}, tools.ExecutionContext{CallID: "c", WorkspaceRoot: f.dir, SessionKey: "s1"})
+		out, _ := tool.Execute(context.Background(), map[string]any{"command": "sleep 30", "block_ms": json.Number("0")}, tools.ExecutionContext{CallID: "c", WorkspaceRoot: f.dir, SessionKey: "s1"})
 		return out
 	}
 	first := run()
@@ -196,14 +196,50 @@ func TestChildProcessesAreNotAsyncHandles(t *testing.T) {
 	f.manager.stopOwned("run_1", "test")
 }
 
-func TestOldProcessWaitConsumesTheSignalItReturned(t *testing.T) {
+func TestStartThatFinishesWithinBlockMsReturnsTheResultAndConsumesTheSignal(t *testing.T) {
 	f := newProcessAsyncFixture(t)
-	id := f.start(t, "s1", "echo quick")
-	out, err := f.process.Execute(context.Background(), map[string]any{"action": "wait", "id": id, "timeout_ms": json.Number("5000")}, tools.ExecutionContext{CallID: "w", WorkspaceRoot: f.dir, SessionKey: "s1"})
-	if err != nil || !strings.Contains(out, "quick") {
-		t.Fatalf("wait = %s, err = %v", out, err)
+	out, err := f.process.Execute(context.Background(), map[string]any{"command": "echo quick", "block_ms": json.Number("5000")}, tools.ExecutionContext{CallID: "w", WorkspaceRoot: f.dir, SessionKey: "s1"})
+	if err != nil || !strings.Contains(out, "quick") || !strings.Contains(out, "exit_code: 0") {
+		t.Fatalf("start = %s, err = %v", out, err)
 	}
-	if later := f.wait(t, "s1", 0); strings.Contains(later, id) {
+	if later := f.wait(t, "s1", 0); strings.Contains(later, processIDOf(t, out)) {
 		t.Fatalf("the signal was delivered twice:\n%s", later)
+	}
+}
+
+func TestEndToEndBlockMsHandleWaitStopSurvivesRunEndAndNoGoroutineLeak(t *testing.T) {
+	f := newProcessAsyncFixture(t)
+	baseline := runtime.NumGoroutine()
+	run := func(args map[string]any) string {
+		out, err := f.process.Execute(context.Background(), args, tools.ExecutionContext{CallID: "e", WorkspaceRoot: f.dir, SessionKey: "s1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	started := run(map[string]any{"command": "sleep 1; exit 7", "block_ms": json.Number("50")})
+	id := processIDOf(t, started)
+	if !strings.Contains(started, "state: running") || !strings.Contains(started, "async tool") {
+		t.Fatalf("expected a running handle:\n%s", started)
+	}
+	// The run ended: nothing but the manager knows the handle, and it is still there.
+	if entry, err := f.host.Manager().Status("s1", id); err != nil || entry.State != asyncmgr.StateRunning {
+		t.Fatalf("handle after run end: %+v %v", entry, err)
+	}
+	out := f.wait(t, "s1", 10000)
+	if !strings.Contains(out, id) || !strings.Contains(out, "\"code\":\"7\"") || strings.Contains(out, "\"ok\":true") {
+		t.Fatalf("wait lacks the completion with exit code 7:\n%s", out)
+	}
+	second := processIDOf(t, run(map[string]any{"command": "sleep 30", "block_ms": json.Number("0")}))
+	stop := callAsync(t, f.async, "s1", map[string]any{"action": "stop", "id": second})
+	if !strings.Contains(stop, "stopped") {
+		t.Fatalf("stop = %s", stop)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > baseline+2 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > baseline+2 {
+		t.Fatalf("goroutines %d, baseline %d", got, baseline)
 	}
 }

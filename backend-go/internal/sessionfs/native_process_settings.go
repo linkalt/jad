@@ -10,8 +10,6 @@ import (
 const (
 	defaultNativeProcessStorageDir         = ".processes"
 	defaultNativeProcessMaxRunning   int64 = 8
-	defaultNativeProcessWaitTimeout  int64 = 10_000
-	defaultNativeProcessMaxWait      int64 = 120_000
 	defaultNativeProcessLogCap       int64 = 64 * 1024 * 1024
 	defaultNativeProcessStdinMax     int64 = 256 * 1024
 	defaultNativeProcessMaxCompleted int64 = 100
@@ -45,19 +43,17 @@ type NativeProcessStateContextSettings struct {
 type NativeProcessSettings struct {
 	Policy NativePathPolicy
 	// Approval is "off" (default) or "ask"; only a start asks.
-	Approval         string
-	Shell            string
-	LoginShell       bool
-	KillGraceMs      int64
-	MaxRunning       int64
-	MaxCompleted     int64
-	RetentionDays    int64
-	WaitTimeoutMs    int64
-	MaxWaitTimeoutMs int64
-	Stdout           NativeBashStreamBudget
-	Stderr           NativeBashStreamBudget
-	LogCapBytes      int64
-	MaxLineChars     int64
+	Approval      string
+	Shell         string
+	LoginShell    bool
+	KillGraceMs   int64
+	MaxRunning    int64
+	MaxCompleted  int64
+	RetentionDays int64
+	Stdout        NativeBashStreamBudget
+	Stderr        NativeBashStreamBudget
+	LogCapBytes   int64
+	MaxLineChars  int64
 	// StdinMaxBytes is the largest stdin text one start may write to its process.
 	StdinMaxBytes int64
 	StripANSI     bool
@@ -102,7 +98,7 @@ func normalizeNativeProcessSettings(
 	}
 	for key := range fields {
 		switch key {
-		case "shell", "login_shell", "kill_grace_ms", "max_running", "max_completed", "retention_days", "wait_timeout_ms", "max_wait_timeout_ms", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "stdin_max_bytes", "strip_ansi", "stop_orphans", "env_file", "env", "env_deny", "storage_dir", "paths", "statecontext", "approval":
+		case "shell", "login_shell", "kill_grace_ms", "max_running", "max_completed", "retention_days", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "stdin_max_bytes", "strip_ansi", "stop_orphans", "env_file", "env", "env_deny", "storage_dir", "paths", "statecontext", "approval":
 		default:
 			return nil, configError("%s: tools.native.process.%s is not supported", settingPath, key)
 		}
@@ -149,15 +145,6 @@ func normalizeNativeProcessSettings(
 	}
 	if settings.RetentionDays, err = configuredInteger(fields, "retention_days", defaultNativeBashRetention, 0, maxNativeBashRetention, settingPath, "tools.native.process"); err != nil {
 		return nil, err
-	}
-	if settings.WaitTimeoutMs, err = configuredInteger(fields, "wait_timeout_ms", defaultNativeProcessWaitTimeout, 1, maxNativeBashTimeoutMs, settingPath, "tools.native.process"); err != nil {
-		return nil, err
-	}
-	if settings.MaxWaitTimeoutMs, err = configuredInteger(fields, "max_wait_timeout_ms", defaultNativeProcessMaxWait, 1, maxNativeBashTimeoutMs, settingPath, "tools.native.process"); err != nil {
-		return nil, err
-	}
-	if settings.MaxWaitTimeoutMs < settings.WaitTimeoutMs {
-		return nil, configError("%s: tools.native.process.max_wait_timeout_ms must be greater than or equal to wait_timeout_ms", settingPath)
 	}
 
 	stdoutFallback := NativeBashStreamBudget{HeadBytes: defaultNativeBashStdoutHead, TailBytes: defaultNativeBashStdoutTail}

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,7 +19,7 @@ type processGoldenManager struct {
 func (manager *processGoldenManager) Recover() error { return nil }
 
 func (manager *processGoldenManager) Start(ProcessStartRequest) (ProcessSnapshot, error) {
-	return ProcessSnapshot{}, errors.New("unexpected start")
+	return manager.snapshot, nil
 }
 
 func (manager *processGoldenManager) SnapshotWithLogs(id string, _, _ ProcessStreamLimits, _ int, _ bool) (*ProcessSnapshot, bool) {
@@ -74,7 +73,7 @@ func TestNativeProcessOutputMatchesNodeMessagesJSONLGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := tool.Execute(context.Background(), map[string]any{"action": "status", "id": "proc_fixed"}, tools.ExecutionContext{
+	output, err := tool.Execute(context.Background(), map[string]any{"command": "true", "block_ms": json.Number("0")}, tools.ExecutionContext{
 		CallID:        "call-process-status",
 		WorkspaceRoot: t.TempDir(),
 	})

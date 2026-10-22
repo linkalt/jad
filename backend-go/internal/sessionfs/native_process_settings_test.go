@@ -28,7 +28,7 @@ func TestNormalizeNativeProcessSettingsDefaultsAndIgnoresBash(t *testing.T) {
 	if settings == nil {
 		t.Fatal("normalizeNativeProcessSettings() returned nil")
 	}
-	if settings.Shell != defaultNativeBashShell || settings.LoginShell || settings.KillGraceMs != 2_000 || settings.MaxRunning != 8 || settings.MaxCompleted != 100 || settings.RetentionDays != 14 || settings.WaitTimeoutMs != 10_000 || settings.MaxWaitTimeoutMs != 120_000 {
+	if settings.Shell != defaultNativeBashShell || settings.LoginShell || settings.KillGraceMs != 2_000 || settings.MaxRunning != 8 || settings.MaxCompleted != 100 || settings.RetentionDays != 14 {
 		t.Fatalf("normalized process defaults = %+v", settings)
 	}
 	wantStdout := NativeBashStreamBudget{HeadBytes: defaultNativeBashStdoutHead, TailBytes: defaultNativeBashStdoutTail}
@@ -62,7 +62,7 @@ func TestNormalizeNativeProcessSettingsOverridesAndStorage(t *testing.T) {
 	toolStorage := filepath.Join(cwd, "profile-tools")
 	settingPath := filepath.Join(globalRoot, "session", "setting.json")
 	setting := map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"process":{"shell":" /bin/zsh ","login_shell":true,"kill_grace_ms":0,"max_running":4,"max_completed":8,"retention_days":0,"wait_timeout_ms":1200,"max_wait_timeout_ms":3000,"stdout":{"head_bytes":11,"tail_bytes":13},"stderr":{"head_bytes":17,"tail_bytes":19},"log_cap_bytes":512,"max_line_chars":80,"stdin_max_bytes":4096,"strip_ansi":false,"env":{"PROCESS_TEST":"enabled"},"env_deny":["PROCESS_SECRET"],"storage_dir":"runtime","paths":{"allow":["shared"],"deny":["private"]},"statecontext":{"states":["exited","running","exited"],"limit":7}}}}`),
+		"tools": json.RawMessage(`{"native":{"process":{"shell":" /bin/zsh ","login_shell":true,"kill_grace_ms":0,"max_running":4,"max_completed":8,"retention_days":0,"stdout":{"head_bytes":11,"tail_bytes":13},"stderr":{"head_bytes":17,"tail_bytes":19},"log_cap_bytes":512,"max_line_chars":80,"stdin_max_bytes":4096,"strip_ansi":false,"env":{"PROCESS_TEST":"enabled"},"env_deny":["PROCESS_SECRET"],"storage_dir":"runtime","paths":{"allow":["shared"],"deny":["private"]},"statecontext":{"states":["exited","running","exited"],"limit":7}}}}`),
 	}
 	settings, err := normalizeNativeProcessSettings(
 		setting,
@@ -76,7 +76,7 @@ func TestNormalizeNativeProcessSettingsOverridesAndStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeNativeProcessSettings(overrides) error = %v", err)
 	}
-	if settings.Shell != "/bin/zsh" || !settings.LoginShell || settings.KillGraceMs != 0 || settings.MaxRunning != 4 || settings.MaxCompleted != 8 || settings.RetentionDays != 0 || settings.WaitTimeoutMs != 1200 || settings.MaxWaitTimeoutMs != 3000 {
+	if settings.Shell != "/bin/zsh" || !settings.LoginShell || settings.KillGraceMs != 0 || settings.MaxRunning != 4 || settings.MaxCompleted != 8 || settings.RetentionDays != 0 {
 		t.Fatalf("normalized process overrides = %+v", settings)
 	}
 	if settings.Stdout != (NativeBashStreamBudget{HeadBytes: 11, TailBytes: 13}) || settings.Stderr != (NativeBashStreamBudget{HeadBytes: 17, TailBytes: 19}) {
@@ -122,8 +122,8 @@ func TestNormalizeNativeProcessSettingsValidatesUnsupportedValues(t *testing.T) 
 		`{"max_running":0}`,
 		`{"max_completed":0}`,
 		`{"retention_days":-1}`,
-		`{"wait_timeout_ms":0}`,
-		`{"wait_timeout_ms":1000,"max_wait_timeout_ms":999}`,
+		`{"wait_timeout_ms":1000}`,
+		`{"max_wait_timeout_ms":999}`,
 		`{"stdout":null}`,
 		`{"stderr":null}`,
 		`{"status_log_bytes":10,"stdout":{"head_bytes":1,"tail_bytes":1}}`,

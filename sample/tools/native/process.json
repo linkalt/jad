@@ -5,24 +5,34 @@
       "id": "native.process",
       "source": "native",
       "name": "process",
-      "description": "Start, inspect, wait for, or stop a managed long-running process. The command already runs in the background: do not use &, nohup, disown or daemonizing. Background children are killed when the command exits.",
+      "description": "Start a long-running shell command in the background and wait up to block_ms for it. If it finishes in time you get its exit code and output; otherwise you get an id and it keeps running: use the async tool to wait for, list, inspect or stop it. The command already runs in the background: do not use &, nohup, disown or daemonizing. Background children are killed when the command exits.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "action": {"type": "string", "enum": ["start", "status", "list", "wait", "stop"], "description": "Usually inferred from command or id."},
-          "command": {"type": "string", "minLength": 1, "description": "Shell command to start. It already runs in the background; do not add &, nohup or disown."},
-          "stdin": {"type": "string", "description": "Text written once to the started command's standard input, e.g. a script for `python3 -` or `node -`; the input is then closed."},
-          "cwd": {"type": "string", "minLength": 1, "description": "Working directory for start. Defaults to the workspace."},
-          "id": {"type": "string", "minLength": 1, "description": "Id returned by a prior start."},
-          "filter": {"type": "string", "enum": ["running", "exited", "stopped", "failed", "lost"], "description": "State filter for list."},
-          "timeout_ms": {"type": "integer", "minimum": 1, "description": "Maximum time wait blocks; clamped to session policy."}
+          "command": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Shell command. It already runs in the background; do not add &, nohup or disown."
+          },
+          "stdin": {
+            "type": "string",
+            "description": "Text written once to the command's standard input, e.g. a script for `python3 -` or `node -`; the input is then closed."
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Working directory. Defaults to the workspace."
+          },
+          "block_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Most time to block for the exit. If it is still running an id is returned; collect it with the async tool."
+          }
         },
-        "required": [],
-        "additionalProperties": false,
-        "allOf": [
-          {"if": {"properties": {"action": {"const": "start"}}, "required": ["action"]}, "then": {"properties": {"command": {}}, "required": ["command"]}},
-          {"if": {"properties": {"action": {"enum": ["status", "wait", "stop"]}}, "required": ["action"]}, "then": {"properties": {"id": {}}, "required": ["id"]}}
-        ]
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
       }
     }
   ]

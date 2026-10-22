@@ -15,33 +15,16 @@ import (
 
 const processToolID = "native.process"
 
-type processAction string
-
-const (
-	processActionStart  processAction = "start"
-	processActionStatus processAction = "status"
-	processActionList   processAction = "list"
-	processActionWait   processAction = "wait"
-	processActionStop   processAction = "stop"
-)
-
 var processInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "action":{"type":"string","enum":["start","status","list","wait","stop"],"description":"Usually inferred from command or id."},
-    "command":{"type":"string","minLength":1,"description":"Shell command to start. It already runs in the background; do not add &, nohup or disown."},
-    "stdin":{"type":"string","description":"Text written once to the started command's standard input, e.g. a script for ` + "`python3 -` or `node -`" + `; the input is then closed."},
-    "cwd":{"type":"string","minLength":1,"description":"Working directory for start. Defaults to the workspace."},
-    "id":{"type":"string","minLength":1,"description":"Id returned by a prior start."},
-    "filter":{"type":"string","enum":["running","exited","stopped","failed","lost"],"description":"State filter for list."},
-    "timeout_ms":{"type":"integer","minimum":1,"description":"Maximum time wait blocks; clamped to session policy."}
+    "command":{"type":"string","minLength":1,"description":"Shell command. It already runs in the background; do not add &, nohup or disown."},
+    "stdin":{"type":"string","description":"Text written once to the command's standard input, e.g. a script for ` + "`python3 -` or `node -`" + `; the input is then closed."},
+    "cwd":{"type":"string","minLength":1,"description":"Working directory. Defaults to the workspace."},
+    "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the exit. If it is still running an id is returned; collect it with the async tool."}
   },
-  "required":[],
-  "additionalProperties":false,
-  "allOf":[
-    {"if":{"properties":{"action":{"const":"start"}},"required":["action"]},"then":{"properties":{"command":{}},"required":["command"]}},
-    {"if":{"properties":{"action":{"enum":["status","wait","stop"]}},"required":["action"]},"then":{"properties":{"id":{}},"required":["id"]}}
-  ]
+  "required":["command"],
+  "additionalProperties":false
 }`)
 
 // NewProcessTool binds normalized process policy to a shared process manager.
@@ -50,8 +33,8 @@ func NewProcessTool(settings sessionfs.NativeProcessSettings, manager ProcessMan
 }
 
 // NewProcessToolWithAsync is NewProcessTool plus the async host that tracks every process
-// the tool starts as a handle owned by the calling session. A nil host starts untracked
-// processes.
+// the session starts as a handle (waited for, listed, inspected and stopped with the async
+// tool). A nil host starts untracked processes and uses the default block times.
 func NewProcessToolWithAsync(settings sessionfs.NativeProcessSettings, manager ProcessManager, apiKeyEnv string, host *AsyncHost) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(processInputSchema)
 	if err != nil {
@@ -70,11 +53,11 @@ func NewProcessToolWithAsync(settings sessionfs.NativeProcessSettings, manager P
 			ID:          processToolID,
 			Source:      "native",
 			Name:        "process",
-			Description: "Start, inspect, wait for, or stop a managed long-running process. The command already runs in the background: do not use &, nohup, disown or daemonizing. Background children are killed when the command exits.",
+			Description: processDescription,
 			InputSchema: append(json.RawMessage(nil), processInputSchema...),
 		},
 		Validator:          validator,
-		ExampleOperation:   json.RawMessage(`{"command":"npm run dev"}`),
+		ExampleOperation:   json.RawMessage(`{"command":"npm run dev","block_ms":5000}`),
 		NormalizeArguments: normalizeProcessArguments,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return executeNativeProcessAsync(ctx, arguments, execution, settings, manager, apiKeyEnv, host)
@@ -82,40 +65,20 @@ func NewProcessToolWithAsync(settings sessionfs.NativeProcessSettings, manager P
 	}, nil
 }
 
+const processDescription = "Start a long-running shell command in the background and wait up to block_ms for it. If it finishes in time you get its exit code and output; otherwise you get an id and it keeps running: use the async tool to wait for, list, inspect or stop it. The command already runs in the background: do not use &, nohup, disown or daemonizing. Background children are killed when the command exits."
+
 func normalizeProcessArguments(arguments map[string]any) map[string]any {
 	normalized := make(map[string]any, len(arguments))
 	for key, value := range arguments {
 		normalized[key] = value
 	}
-	_, suppliedFilter := arguments["filter"].(string)
-	for _, key := range []string{"command", "cwd", "id", "filter"} {
+	for _, key := range []string{"command", "cwd"} {
 		if value, ok := normalized[key].(string); ok {
 			normalized[key] = strings.TrimSpace(value)
 		}
 	}
-	aliases := map[string]string{
-		"run": "start", "launch": "start", "state": "status", "info": "status", "kill": "stop", "terminate": "stop",
-	}
-	if action, ok := normalized["action"].(string); ok {
-		action = strings.ToLower(strings.TrimSpace(action))
-		if alias, exists := aliases[action]; exists {
-			action = alias
-		}
-		normalized["action"] = action
-	}
-	if filter, ok := normalized["filter"].(string); ok {
-		filter = strings.ToLower(strings.TrimSpace(filter))
-		if filter == "all" || filter == "" {
-			delete(normalized, "filter")
-		} else {
-			normalized["filter"] = filter
-		}
-	}
-	if timeout, ok := safeInteger(normalized["timeout_ms"]); ok {
-		if timeout < 1 {
-			timeout = 1
-		}
-		normalized["timeout_ms"] = json.Number(fmt.Sprint(timeout))
+	if block, ok := safeInteger(normalized["block_ms"]); ok {
+		normalized["block_ms"] = json.Number(fmt.Sprint(max(block, 0)))
 	}
 	// `input` is the other common name for text piped to a command; the named field wins.
 	if _, hasStdin := normalized["stdin"]; !hasStdin {
@@ -124,9 +87,6 @@ func normalizeProcessArguments(arguments map[string]any) map[string]any {
 		}
 	}
 	delete(normalized, "input")
-	if _, hasAction := normalized["action"]; !hasAction && suppliedFilter {
-		normalized["action"] = string(processActionList)
-	}
 	return normalized
 }
 
@@ -163,148 +123,89 @@ func executeNativeProcessAsync(
 	if err := manager.Recover(); err != nil {
 		return tools.ExecutionError(execution.CallID, tools.StatusError, "process_recovery_failed", "Could not recover managed processes"), nil
 	}
-	action := processActionFor(arguments)
 	command := processText(arguments["command"])
-	id := processText(arguments["id"])
-	filter := processText(arguments["filter"])
-	if !validProcessAction(action) {
-		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "invalid_action", "Process action is invalid"), nil
+	if command == "" {
+		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "invalid_start", "Start requires a command"), nil
 	}
 	// Unlike the other text fields this one is not trimmed: leading and trailing
 	// whitespace can be part of a script. An empty text is the same as none.
 	stdin, _ := arguments["stdin"].(string)
-	if stdin != "" && action != processActionStart {
-		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "invalid_stdin", "stdin is only accepted when starting a process"), nil
+	if stdinBytes := int64(len(stdin)); stdinBytes > settings.StdinMaxBytes {
+		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "stdin_too_large",
+			fmt.Sprintf("stdin is %d bytes, over the limit of %d", stdinBytes, settings.StdinMaxBytes),
+			tools.Information{Key: "suggestion", Value: "write the text to a file and run it from there"}), nil
 	}
-	if action == processActionStart {
-		if command == "" || id != "" {
-			return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "invalid_start", "Start requires command and no process id"), nil
-		}
-		if stdinBytes := int64(len(stdin)); stdinBytes > settings.StdinMaxBytes {
-			return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "stdin_too_large",
-				fmt.Sprintf("stdin is %d bytes, over the limit of %d", stdinBytes, settings.StdinMaxBytes),
-				tools.Information{Key: "suggestion", Value: "write the text to a file and run it from there"}), nil
-		}
-		requestedCWD := processText(arguments["cwd"])
-		if requestedCWD == "" {
-			requestedCWD = "."
-		}
-		resolved, pathError := resolveExistingTarget(requestedCWD, execution.WorkspaceRoot, settings.Policy, execution.CallID)
-		if pathError != "" {
-			return pathError, nil
-		}
-		info, err := os.Stat(resolved.realPath)
-		if err != nil || !info.IsDir() {
-			return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "not_a_directory", "The working directory is not a directory", tools.Information{Key: "path", Value: resolved.displayPath}), nil
-		}
-		// A child's processes (ProcessOwner) belong to its run and are stopped when it ends;
-		// only the session's own are handles of the async manager.
-		var tracked ProcessAsync
-		if host != nil && execution.ProcessOwner == "" && execution.SessionKey != "" {
-			tracked = newProcessAsyncHandle(host, execution.SessionKey, command, settings.StorageDir)
-		}
-		snapshot, err := manager.Start(ProcessStartRequest{
-			CWD:         resolved.realPath,
-			DisplayCWD:  resolved.displayPath,
-			Command:     command,
-			Stdin:       stdin,
-			Policy:      settings,
-			Environment: os.Environ(),
-			APIKeyEnv:   apiKeyEnv,
-			OwnerLimit:  int(execution.ProcessOwnerLimit),
-			Async:       tracked,
-		})
-		if errors.Is(err, asyncmgr.ErrCapacity) {
-			return tools.ExecutionError(execution.CallID, tools.StatusError, "async_capacity_reached", err.Error()), nil
-		}
-		if err != nil {
-			return tools.ExecutionError(execution.CallID, tools.StatusError, "process_start_failed", err.Error()), nil
-		}
-		return renderProcessSnapshot(execution.CallID, action, snapshot, nil)
+	requestedCWD := processText(arguments["cwd"])
+	if requestedCWD == "" {
+		requestedCWD = "."
 	}
-	if action == processActionList {
-		if command != "" || id != "" {
-			return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "invalid_list", "List accepts no command or process id"), nil
+	resolved, pathError := resolveExistingTarget(requestedCWD, execution.WorkspaceRoot, settings.Policy, execution.CallID)
+	if pathError != "" {
+		return pathError, nil
+	}
+	info, err := os.Stat(resolved.realPath)
+	if err != nil || !info.IsDir() {
+		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "not_a_directory", "The working directory is not a directory", tools.Information{Key: "path", Value: resolved.displayPath}), nil
+	}
+	// A child's processes (ProcessOwner) belong to its run and are stopped when it ends;
+	// only the session's own are handles of the async manager.
+	var tracked ProcessAsync
+	owner := ""
+	config := asyncmgr.DefaultConfig()
+	if host != nil {
+		config = host.Config()
+		if execution.ProcessOwner == "" && execution.SessionKey != "" {
+			owner = execution.SessionKey
+			tracked = newProcessAsyncHandle(host, owner, command, settings.StorageDir)
 		}
-		return renderProcessList(execution.CallID, manager.List(filter))
 	}
-	if id == "" || command != "" || filter != "" {
-		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "invalid_target", fmt.Sprintf("%s requires a process id and no incompatible fields", action)), nil
+	var blockMs *int64
+	if value, ok := safeInteger(arguments["block_ms"]); ok {
+		blockMs = &value
 	}
-	stdoutLimits := ProcessStreamLimits{HeadBytes: int(settings.Stdout.HeadBytes), TailBytes: int(settings.Stdout.TailBytes)}
-	stderrLimits := ProcessStreamLimits{HeadBytes: int(settings.Stderr.HeadBytes), TailBytes: int(settings.Stderr.TailBytes)}
-	existing, found := manager.SnapshotWithLogs(id, stdoutLimits, stderrLimits, int(settings.MaxLineChars), settings.StripANSI)
-	if !found || existing == nil {
-		return processNotFound(execution.CallID, id, manager), nil
+	snapshot, err := manager.Start(ProcessStartRequest{
+		CWD:         resolved.realPath,
+		DisplayCWD:  resolved.displayPath,
+		Command:     command,
+		Stdin:       stdin,
+		Policy:      settings,
+		Environment: os.Environ(),
+		APIKeyEnv:   apiKeyEnv,
+		OwnerLimit:  int(execution.ProcessOwnerLimit),
+		Async:       tracked,
+	})
+	if errors.Is(err, asyncmgr.ErrCapacity) {
+		return tools.ExecutionError(execution.CallID, tools.StatusError, "async_capacity_reached", err.Error()), nil
 	}
-	if action == processActionStatus {
-		return renderProcessSnapshot(execution.CallID, action, *existing, nil)
+	if err != nil {
+		return tools.ExecutionError(execution.CallID, tools.StatusError, "process_start_failed", err.Error()), nil
 	}
-	if action == processActionWait {
-		requested := settings.WaitTimeoutMs
-		if timeout, ok := safeInteger(arguments["timeout_ms"]); ok {
-			requested = timeout
-		}
-		timeoutMS := min(max(requested, 1), settings.MaxWaitTimeoutMs)
-		// Wait only returns on exit or its timeout, so a stopped run would sit in it.
+	// The block ends the wait, never the process: a cancelled call leaves it running.
+	if blockFor := config.BlockDuration(blockMs); blockFor > 0 && snapshot.State == ProcessRunning {
 		result := make(chan ProcessWaitResult, 1)
-		go func() { result <- manager.Wait(id, timeoutMS) }()
-		var waited ProcessWaitResult
+		go func() { result <- manager.Wait(snapshot.ID, max(blockFor.Milliseconds(), 1)) }()
 		select {
-		case waited = <-result:
+		case <-result:
 		case <-ctx.Done():
 			return "", ctx.Err()
 		}
-		snapshot, found := manager.SnapshotWithLogs(id, stdoutLimits, stderrLimits, int(settings.MaxLineChars), settings.StripANSI)
-		if !found || snapshot == nil {
-			return processNotFound(execution.CallID, id, manager), nil
+	}
+	stdoutLimits := ProcessStreamLimits{HeadBytes: int(settings.Stdout.HeadBytes), TailBytes: int(settings.Stdout.TailBytes)}
+	stderrLimits := ProcessStreamLimits{HeadBytes: int(settings.Stderr.HeadBytes), TailBytes: int(settings.Stderr.TailBytes)}
+	current, found := manager.SnapshotWithLogs(snapshot.ID, stdoutLimits, stderrLimits, int(settings.MaxLineChars), settings.StripANSI)
+	if !found || current == nil {
+		current = &snapshot
+	}
+	var extra []tools.Information
+	if processTerminal(current.State) {
+		// The result is in this response, so the signal must not be delivered again.
+		if tracked != nil {
+			host.Manager().MarkRead(owner, current.ID)
 		}
-		markProcessRead(host, execution, snapshot)
-		return renderProcessSnapshot(execution.CallID, action, *snapshot, []tools.Information{{Key: "waited", Value: waited.Waited}})
+	} else if tracked != nil {
+		extra = append(extra, tools.Information{Key: "hint", Value: "still running; wait for it with the async tool in a later call, or stop it there"})
 	}
-	if existing.State == ProcessLost {
-		return tools.ExecutionError(execution.CallID, tools.StatusBlocked, "process_lost", "The process belongs to a previous backend instance and cannot be safely signaled", tools.Information{Key: "process_id", Value: id}), nil
-	}
-	_, found = manager.Stop(id, "stopped_by_agent")
-	if !found {
-		return processNotFound(execution.CallID, id, manager), nil
-	}
-	stopped, found := manager.SnapshotWithLogs(id, stdoutLimits, stderrLimits, int(settings.MaxLineChars), settings.StripANSI)
-	if !found || stopped == nil {
-		return processNotFound(execution.CallID, id, manager), nil
-	}
-	markProcessRead(host, execution, stopped)
-	return renderProcessSnapshot(execution.CallID, action, *stopped, nil)
-}
-
-// markProcessRead consumes the async signal of a process whose end the call just reported,
-// so a later async wait does not deliver it a second time.
-func markProcessRead(host *AsyncHost, execution tools.ExecutionContext, snapshot *ProcessSnapshot) {
-	if host != nil && execution.SessionKey != "" && processTerminal(snapshot.State) {
-		host.Manager().MarkRead(execution.SessionKey, snapshot.ID)
-	}
-}
-
-func processActionFor(arguments map[string]any) processAction {
-	if action := processText(arguments["action"]); action != "" {
-		return processAction(action)
-	}
-	if processText(arguments["command"]) != "" {
-		return processActionStart
-	}
-	if processText(arguments["id"]) != "" {
-		return processActionStatus
-	}
-	return processActionList
-}
-
-func validProcessAction(action processAction) bool {
-	switch action {
-	case processActionStart, processActionStatus, processActionList, processActionWait, processActionStop:
-		return true
-	default:
-		return false
-	}
+	return renderProcessSnapshot(execution.CallID, "start", *current, extra)
 }
 
 func processText(value any) string {
@@ -315,38 +216,9 @@ func processText(value any) string {
 	return strings.TrimSpace(text)
 }
 
-// processNotFound lists the ids the manager knows, so the agent can pick one.
-func processNotFound(callID, id string, manager ProcessManager) string {
-	information := []tools.Information{{Key: "process_id", Value: id}}
-	if known := manager.List(""); len(known) > 0 {
-		ids := make([]string, 0, len(known))
-		for _, process := range known {
-			ids = append(ids, process.ID)
-		}
-		information = append(information, tools.Information{Key: "available_ids", Value: strings.Join(ids, ", ")})
-	}
-	return tools.ExecutionError(callID, tools.StatusNotFound, "process_not_found", "No managed process has that id", information...)
-}
-
-func renderProcessList(callID string, processes []ProcessSnapshot) (string, error) {
-	result, err := tools.RenderToolResult(tools.ResultOptions{
-		ID:      callID,
-		Status:  tools.StatusOK,
-		Summary: "Listed managed processes",
-		Information: []tools.Information{
-			{Key: "action", Value: string(processActionList)},
-			{Key: "processes", Value: processes},
-		},
-	})
-	if err != nil {
-		return tools.ExecutionError(callID, tools.StatusError, "tool_output_failed", "The process list could not be rendered"), nil
-	}
-	return result, nil
-}
-
-func renderProcessSnapshot(callID string, action processAction, snapshot ProcessSnapshot, extra []tools.Information) (string, error) {
+func renderProcessSnapshot(callID, action string, snapshot ProcessSnapshot, extra []tools.Information) (string, error) {
 	information := []tools.Information{
-		{Key: "action", Value: string(action)},
+		{Key: "action", Value: action},
 		{Key: "process_id", Value: snapshot.ID},
 		{Key: "state", Value: string(snapshot.State)},
 		{Key: "cwd", Value: snapshot.CWD},

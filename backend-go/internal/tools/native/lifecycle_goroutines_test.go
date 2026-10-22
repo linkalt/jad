@@ -112,7 +112,7 @@ func TestManagedProcessStartStopCyclesLeaveNoGoroutines(t *testing.T) {
 	cycle := func() {
 		started := runner.run(map[string]any{"command": "sleep 30"})
 		id := processIDOf(t, started)
-		runner.run(map[string]any{"action": "stop", "id": id})
+		runner.manager.Stop(id, "stopped_by_agent")
 	}
 	cycle()
 	before := baselineCount()
@@ -143,13 +143,11 @@ func TestManagedProcessWithDescendantLeavesNoGoroutines(t *testing.T) {
 	requireNoGrowth(t, before, "10 managed processes with a pipe-holding descendant")
 }
 
-// The wait action runs manager.Wait on its own goroutine so a stopped run is not held by
-// it; after the call is cancelled that goroutine lives until the wait timeout. This test
-// bounds it: it must be gone by timeout_ms plus a margin, and the time is logged.
-func TestCancelledProcessWaitGoroutineEndsAtItsTimeout(t *testing.T) {
+// A start that blocks runs manager.Wait on its own goroutine so a stopped run is not held by
+// it; after the call is cancelled that goroutine lives until block_ms. This test bounds it: it
+// must be gone by block_ms plus a margin, and the time is logged.
+func TestCancelledProcessBlockGoroutineEndsAtItsTimeout(t *testing.T) {
 	runner := newProcessStdinRunner(t, 1024)
-	started := runner.run(map[string]any{"command": "sleep 30"})
-	id := processIDOf(t, started)
 	before := baselineCount()
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -157,15 +155,23 @@ func TestCancelledProcessWaitGoroutineEndsAtItsTimeout(t *testing.T) {
 		cancel()
 	}()
 	begun := time.Now()
-	_, err := executeNativeProcess(ctx, map[string]any{"action": "wait", "id": id, "timeout_ms": json.Number("4000")}, tools.ExecutionContext{
-		CallID: "call-wait", WorkspaceRoot: runner.workspace, SessionDir: runner.workspace,
+	_, err := executeNativeProcess(ctx, map[string]any{"command": "sleep 30", "block_ms": json.Number("4000")}, tools.ExecutionContext{
+		CallID: "call-block", WorkspaceRoot: runner.workspace, SessionDir: runner.workspace,
 	}, runner.settings, runner.manager, "")
 	if err == nil {
-		t.Fatal("the cancelled wait returned no error")
+		t.Fatal("the cancelled start returned no error")
 	}
 	returned := time.Since(begun)
-	afterCancel := runtime.NumGoroutine()
-	requireNoGrowth(t, before, "a cancelled process wait")
-	t.Logf("call returned after %v; goroutines right after return %d (before %d); all gone after %v", returned.Round(time.Millisecond), afterCancel, before, time.Since(begun).Round(time.Millisecond))
-	runner.run(map[string]any{"action": "stop", "id": id})
+	runner.manager.Stop(processIDOf(t, mustListed(t, runner)), "stopped_by_agent")
+	requireNoGrowth(t, before, "a cancelled process start that was blocking")
+	t.Logf("call returned after %v; all gone after %v", returned.Round(time.Millisecond), time.Since(begun).Round(time.Millisecond))
+}
+
+func mustListed(t *testing.T, runner *processStdinRunner) string {
+	t.Helper()
+	listed := runner.manager.List("running")
+	if len(listed) != 1 {
+		t.Fatalf("running processes = %d", len(listed))
+	}
+	return "process_id: " + listed[0].ID
 }

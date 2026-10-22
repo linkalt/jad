@@ -19,26 +19,24 @@ import (
 	"jad/backend-go/internal/tools/native"
 )
 
-func TestHTTPRunExecutesNativeProcessStartAndWaitAcrossProviderRounds(t *testing.T) {
+func TestHTTPRunExecutesNativeProcessStartThatFinishesWithinBlockMs(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("managed process groups require a POSIX platform")
 	}
 	workspace := t.TempDir()
 	processStorage := filepath.Join(workspace, "processes")
 	processTool, err := native.NewProcessTool(sessionfs.NativeProcessSettings{
-		Policy:           sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}},
-		Shell:            "/bin/sh",
-		MaxRunning:       2,
-		MaxCompleted:     10,
-		WaitTimeoutMs:    1000,
-		MaxWaitTimeoutMs: 2500,
-		Stdout:           sessionfs.NativeBashStreamBudget{HeadBytes: 128, TailBytes: 128},
-		Stderr:           sessionfs.NativeBashStreamBudget{HeadBytes: 128, TailBytes: 128},
-		LogCapBytes:      4096,
-		MaxLineChars:     1000,
-		StorageDir:       processStorage,
-		Env:              map[string]string{},
-		EnvDeny:          []string{},
+		Policy:       sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}},
+		Shell:        "/bin/sh",
+		MaxRunning:   2,
+		MaxCompleted: 10,
+		Stdout:       sessionfs.NativeBashStreamBudget{HeadBytes: 128, TailBytes: 128},
+		Stderr:       sessionfs.NativeBashStreamBudget{HeadBytes: 128, TailBytes: 128},
+		LogCapBytes:  4096,
+		MaxLineChars: 1000,
+		StorageDir:   processStorage,
+		Env:          map[string]string{},
+		EnvDeny:      []string{},
 	}, nil, "FIXTURE_OPENAI_KEY")
 	if err != nil {
 		t.Fatal(err)
@@ -82,52 +80,18 @@ func TestHTTPRunExecutesNativeProcessStartAndWaitAcrossProviderRounds(t *testing
 				http.Error(w, "native process definition missing", http.StatusBadRequest)
 				return
 			}
-			item := `{"type":"function_call","call_id":"call-process-start","name":"process","arguments":"{\"action\":\"start\",\"command\":\"printf 'process-output'; sleep 0.15\"}"}`
+			item := `{"type":"function_call","call_id":"call-process-start","name":"process","arguments":"{\"command\":\"printf 'process-output'; sleep 0.15\",\"block_ms\":3000}"}`
 			events = []string{
 				`{"type":"response.output_item.done","output_index":0,"item":` + item + `}`,
 				`{"type":"response.completed","response":{"id":"resp-process-start","status":"completed","model":"gpt-test","output":[]}}`,
 			}
 		case 2:
 			startOutput, found := findFunctionOutput(request.Input, "call-process-start")
-			if !found {
-				http.Error(w, "start tool output missing from second request", http.StatusBadRequest)
-				return
-			}
-			processID := processIDFromToolOutput(startOutput)
-			if processID == "" {
-				http.Error(w, "process id missing from start tool output", http.StatusBadRequest)
+			if !found || !strings.Contains(startOutput, "process-output") || !strings.Contains(startOutput, "exit_code: 0") {
+				http.Error(w, "start output with the finished process is missing from the second request", http.StatusBadRequest)
 				return
 			}
 			secondRequestHadStartResult.Store(true)
-			arguments, err := json.Marshal(struct {
-				Action    string `json:"action"`
-				ID        string `json:"id"`
-				TimeoutMS int    `json:"timeout_ms"`
-			}{Action: "wait", ID: processID, TimeoutMS: 2000})
-			if err != nil {
-				http.Error(w, "could not encode wait arguments", http.StatusInternalServerError)
-				return
-			}
-			item, err := json.Marshal(struct {
-				Type      string `json:"type"`
-				CallID    string `json:"call_id"`
-				Name      string `json:"name"`
-				Arguments string `json:"arguments"`
-			}{Type: "function_call", CallID: "call-process-wait", Name: "process", Arguments: string(arguments)})
-			if err != nil {
-				http.Error(w, "could not encode wait call", http.StatusInternalServerError)
-				return
-			}
-			events = []string{
-				`{"type":"response.output_item.done","output_index":0,"item":` + string(item) + `}`,
-				`{"type":"response.completed","response":{"id":"resp-process-wait","status":"completed","model":"gpt-test","output":[]}}`,
-			}
-		case 3:
-			waitOutput, found := findFunctionOutput(request.Input, "call-process-wait")
-			if !found || !strings.Contains(waitOutput, "process-output") {
-				http.Error(w, "wait output missing from third request", http.StatusBadRequest)
-				return
-			}
 			thirdRequestHadWaitOutput.Store(true)
 			events = []string{
 				`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"finished"}]}}`,
@@ -150,7 +114,7 @@ func TestHTTPRunExecutesNativeProcessStartAndWaitAcrossProviderRounds(t *testing
 		CWD:                 workspace,
 		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json")},
 		Settings:            map[string]any{"max_tool_rounds": 3},
-		Native:              map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "max_running": 2, "wait_timeout_ms": 1000, "max_wait_timeout_ms": 2500, "stdout": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "stderr": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "log_cap_bytes": 4096, "max_line_chars": 1000, "strip_ansi": false}},
+		Native:              map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "max_running": 2, "stdout": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "stderr": map[string]any{"head_bytes": 128, "tail_bytes": 128}, "log_cap_bytes": 4096, "max_line_chars": 1000, "strip_ansi": false}},
 		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)
@@ -184,8 +148,8 @@ func TestHTTPRunExecutesNativeProcessStartAndWaitAcrossProviderRounds(t *testing
 	if !strings.Contains(string(body), "event: completed") || !strings.Contains(string(body), "finished") {
 		t.Fatalf("run stream did not complete with final provider response: %s", body)
 	}
-	if calls := providerCalls.Load(); calls != 3 {
-		t.Fatalf("provider requests = %d, want 3", calls)
+	if calls := providerCalls.Load(); calls != 2 {
+		t.Fatalf("provider requests = %d, want 2", calls)
 	}
 	if !secondRequestHadStartResult.Load() || !thirdRequestHadWaitOutput.Load() {
 		t.Fatalf("provider inputs missing process tool output: start=%t wait=%t", secondRequestHadStartResult.Load(), thirdRequestHadWaitOutput.Load())
@@ -203,8 +167,8 @@ func TestHTTPRunExecutesNativeProcessStartAndWaitAcrossProviderRounds(t *testing
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if len(lines) != 6 || !strings.Contains(lines[2], `"call_id":"call-process-start"`) || !strings.Contains(lines[4], `"call_id":"call-process-wait"`) || !strings.Contains(lines[4], "process-output") {
-		t.Fatalf("messages.jsonl records = %q, want persisted start/wait outputs", lines)
+	if len(lines) != 4 || !strings.Contains(lines[2], `"call_id":"call-process-start"`) || !strings.Contains(lines[2], "process-output") {
+		t.Fatalf("messages.jsonl records = %q, want the persisted start output", lines)
 	}
 }
 

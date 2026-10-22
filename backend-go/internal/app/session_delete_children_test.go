@@ -35,7 +35,7 @@ func startSleeper(t *testing.T, manager *native.ManagedProcessManager, workspace
 	snapshot, err := manager.Start(native.ProcessStartRequest{
 		CWD: workspace, DisplayCWD: workspace, Command: "sleep 60", Environment: os.Environ(),
 		Policy: sessionfs.NativeProcessSettings{
-			Shell: "/bin/sh", KillGraceMs: 250, MaxRunning: 4, MaxCompleted: 10, WaitTimeoutMs: 50, MaxWaitTimeoutMs: 1000,
+			Shell: "/bin/sh", KillGraceMs: 250, MaxRunning: 4, MaxCompleted: 10,
 			LogCapBytes: 1024, MaxLineChars: 100, StdinMaxBytes: 1024, Env: map[string]string{}, EnvDeny: []string{},
 		},
 	})

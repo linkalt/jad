@@ -40,6 +40,9 @@ func newProcessFixture(t *testing.T) processFixture {
 // call runs the process tool as the given owner ("" is the session itself).
 func (f processFixture) call(t *testing.T, owner string, arguments map[string]any) string {
 	t.Helper()
+	if _, set := arguments["block_ms"]; !set {
+		arguments["block_ms"] = json.Number("0")
+	}
 	out, err := f.tool.Execute(context.Background(), arguments, tools.ExecutionContext{CallID: "c1", WorkspaceRoot: f.dir, ProcessOwner: owner})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +52,7 @@ func (f processFixture) call(t *testing.T, owner string, arguments map[string]an
 
 func (f processFixture) start(t *testing.T, owner, command string) string {
 	t.Helper()
-	out := f.call(t, owner, map[string]any{"action": "start", "command": command})
+	out := f.call(t, owner, map[string]any{"command": command})
 	for _, line := range strings.Split(out, "\n") {
 		if id, ok := strings.CutPrefix(strings.TrimSpace(line), "process_id: "); ok {
 			return id
@@ -68,57 +71,52 @@ func (f processFixture) state(t *testing.T, id string) ProcessState {
 	return snapshot.State
 }
 
-func TestProcessToolOwnerSeesOnlyItsOwnProcesses(t *testing.T) {
+// A child's process manager is scoped to its run: it lists, reads and stops only what the
+// run started. This is what keeps a child away from the session's processes now that the
+// tool itself only starts.
+func TestProcessOwnerSeesOnlyItsOwnProcesses(t *testing.T) {
 	f := newProcessFixture(t)
 	parent := f.start(t, "", "sleep 30")
 	child := f.start(t, "sub_one", "sleep 30")
 
-	list := f.call(t, "sub_one", map[string]any{"action": "list"})
-	if !strings.Contains(list, child) || strings.Contains(list, parent) {
-		t.Errorf("the child's list must hold its process and not the parent's:\n%s", list)
+	scoped, ok := scopeProcessManager(f.manager, "sub_one")
+	if !ok {
+		t.Fatal("a real process manager must be scopable")
 	}
-	whole := f.call(t, "", map[string]any{"action": "list"})
-	if !strings.Contains(whole, child) || !strings.Contains(whole, parent) {
-		t.Errorf("the session's own list is not limited:\n%s", whole)
+	listed := scoped.List("")
+	if len(listed) != 1 || listed[0].ID != child {
+		t.Errorf("the child's list must hold its process only: %v", listed)
 	}
-	for _, action := range []string{"status", "wait", "stop"} {
-		out := f.call(t, "sub_one", map[string]any{"action": action, "id": parent, "timeout_ms": 1})
-		if !strings.Contains(out, "process_not_found") {
-			t.Errorf("%s of the parent's process by a child = %s", action, out)
-		}
+	if whole := f.manager.List(""); len(whole) != 2 {
+		t.Errorf("the session's own list is not limited: %d processes", len(whole))
+	}
+	if snapshot, found := scoped.Stop(parent, "test"); found || snapshot != nil {
+		t.Errorf("a child stopped the parent's process: %v %v", snapshot, found)
 	}
 	if got := f.state(t, parent); got != ProcessRunning {
 		t.Errorf("the parent's process is %s after the child tried to stop it", got)
 	}
 }
 
-func TestProcessToolOwnerCannotSeeAnotherChildsProcess(t *testing.T) {
+func TestProcessOwnerCannotSeeAnotherChildsProcess(t *testing.T) {
 	f := newProcessFixture(t)
 	first := f.start(t, "sub_one", "sleep 30")
-	out := f.call(t, "sub_two", map[string]any{"action": "stop", "id": first})
-	if !strings.Contains(out, "process_not_found") {
-		t.Errorf("a second child stopped the first one's process:\n%s", out)
+	scoped, _ := scopeProcessManager(f.manager, "sub_two")
+	if snapshot, found := scoped.Stop(first, "test"); found || snapshot != nil {
+		t.Errorf("a second child stopped the first one's process")
 	}
 	if got := f.state(t, first); got != ProcessRunning {
 		t.Errorf("process is %s", got)
 	}
 }
 
-func TestProcessToolOwnerCanStopItsOwnProcess(t *testing.T) {
+func TestProcessOwnerCanStopItsOwnProcess(t *testing.T) {
 	f := newProcessFixture(t)
 	id := f.start(t, "sub_one", "sleep 30")
-	f.call(t, "sub_one", map[string]any{"action": "stop", "id": id})
+	scoped, _ := scopeProcessManager(f.manager, "sub_one")
+	scoped.Stop(id, "test")
 	if got := f.state(t, id); got != ProcessStopped {
 		t.Errorf("the child's own stop left the process %s", got)
-	}
-}
-
-func TestProcessToolWithoutAnOwnerStaysUnlimited(t *testing.T) {
-	f := newProcessFixture(t)
-	child := f.start(t, "sub_one", "sleep 30")
-	out := f.call(t, "", map[string]any{"action": "status", "id": child})
-	if strings.Contains(out, "process_not_found") {
-		t.Errorf("the session cannot see a child's process:\n%s", out)
 	}
 }
 
@@ -144,7 +142,7 @@ func TestStopOwnedStopsOnlyThatOwnersRunningProcesses(t *testing.T) {
 func TestProcessOwnerIsNotInTheManifestTheModelSees(t *testing.T) {
 	f := newProcessFixture(t)
 	id := f.start(t, "sub_secret_owner", "sleep 30")
-	status := f.call(t, "sub_secret_owner", map[string]any{"action": "status", "id": id})
+	status := f.call(t, "sub_secret_owner", map[string]any{"command": "true", "block_ms": json.Number("2000")})
 	if strings.Contains(status, "sub_secret_owner") {
 		t.Errorf("the owner leaked into the result:\n%s", status)
 	}

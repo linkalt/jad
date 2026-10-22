@@ -129,16 +129,10 @@ func TestCallNeedsApprovalProcessOnlyOnStart(t *testing.T) {
 	}{
 		{"bash always", "bash", map[string]any{"command": "ls"}, true},
 		{"write always", "write", map[string]any{}, true},
-		{"explicit start", "process", map[string]any{"action": "start", "command": "sleep 1"}, true},
-		{"start with spaces", "process", map[string]any{"action": " start "}, true},
-		{"status", "process", map[string]any{"action": "status", "id": "p1"}, false},
-		{"wait", "process", map[string]any{"action": "wait"}, false},
-		{"list", "process", map[string]any{"action": "list"}, false},
-		{"stop", "process", map[string]any{"action": "stop", "id": "p1"}, false},
+		{"start", "process", map[string]any{"command": "sleep 1", "block_ms": 5.0}, true},
 		{"start inferred from command", "process", map[string]any{"command": "sleep 1"}, true},
 		{"blank command is not a start", "process", map[string]any{"command": "  "}, false},
 		{"nothing", "process", map[string]any{}, false},
-		{"action wins over command", "process", map[string]any{"action": "stop", "command": "x"}, false},
 	}
 	for _, tc := range cases {
 		if got := CallNeedsApproval(tc.tool, tc.args); got != tc.want {
@@ -286,12 +280,12 @@ func TestRequesterNeverAsksForANonStartProcessCall(t *testing.T) {
 		asked = true
 		return InteractionAnswer{}, nil
 	})
-	verdict := request(context.Background(), ApprovalCall{CallID: "c1", ModelToolName: "process", Tool: "process", Args: map[string]any{"action": "status"}})
+	verdict := request(context.Background(), ApprovalCall{CallID: "c1", ModelToolName: "process", Tool: "process", Args: map[string]any{"id": "p1"}})
 	if !verdict.Allowed || asked {
 		t.Fatalf("status call: verdict %+v, asked %v", verdict, asked)
 	}
 	// With nobody to ask, a non-start call is still not held back by headless deny.
-	if verdict := NewApprovalRequester(approvalOptions(), nil)(context.Background(), ApprovalCall{Tool: "process", Args: map[string]any{"action": "stop"}}); !verdict.Allowed {
+	if verdict := NewApprovalRequester(approvalOptions(), nil)(context.Background(), ApprovalCall{Tool: "process", Args: map[string]any{}}); !verdict.Allowed {
 		t.Fatalf("headless status = %+v", verdict)
 	}
 }

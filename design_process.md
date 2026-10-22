@@ -1,3 +1,5 @@
+> **Superseded in part by design_async_manager.md:** the process tool now has only `command`, `stdin`, `cwd` and `block_ms`; wait, status, list and stop moved to the `async` tool, and `wait_timeout_ms`/`max_wait_timeout_ms` were removed in favour of the async manager's `default_block_ms`/`max_block_ms`.
+
 # Native `process` Tool Design
 
 **Status:** Implemented

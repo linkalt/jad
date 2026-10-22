@@ -411,6 +411,9 @@ func (m *Manager) Close() {
 		}
 	}
 	m.writeIndex()
+	// A concurrent writer may own the coalesced write; wait so nothing touches the folder after Close.
+	m.indexMu.Lock()
+	m.indexMu.Unlock()
 }
 
 func sortedRows(set map[string]*row) []*row {

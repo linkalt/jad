@@ -43,11 +43,32 @@ func newProcessStdinRunner(t *testing.T, stdinMax int64) *processStdinRunner {
 func (runner *processStdinRunner) run(arguments map[string]any) string {
 	runner.t.Helper()
 	runner.calls++
+	if _, set := arguments["block_ms"]; !set {
+		arguments["block_ms"] = json.Number("0")
+	}
 	output, err := executeNativeProcess(context.Background(), arguments, tools.ExecutionContext{
 		CallID: "call-" + string(rune('a'+runner.calls)), WorkspaceRoot: runner.workspace, SessionDir: runner.workspace,
 	}, runner.settings, runner.manager, "")
 	if err != nil {
 		runner.t.Fatalf("executeNativeProcess() error = %v", err)
+	}
+	return output
+}
+
+// waited blocks until the process ends and renders its final snapshot as a finished start does.
+func (runner *processStdinRunner) waited(id string) string {
+	runner.t.Helper()
+	runner.manager.Wait(id, 5000)
+	snapshot, found := runner.manager.SnapshotWithLogs(id,
+		ProcessStreamLimits{HeadBytes: int(runner.settings.Stdout.HeadBytes), TailBytes: int(runner.settings.Stdout.TailBytes)},
+		ProcessStreamLimits{HeadBytes: int(runner.settings.Stderr.HeadBytes), TailBytes: int(runner.settings.Stderr.TailBytes)},
+		int(runner.settings.MaxLineChars), runner.settings.StripANSI)
+	if !found {
+		runner.t.Fatalf("process %s is unknown", id)
+	}
+	output, err := renderProcessSnapshot("call-waited", "start", *snapshot, nil)
+	if err != nil {
+		runner.t.Fatal(err)
 	}
 	return output
 }
@@ -71,14 +92,14 @@ func TestNativeProcessStartWritesStdinThenClosesIt(t *testing.T) {
 	if !strings.Contains(started, `"status":"ok"`) {
 		t.Fatalf("start = %s", started)
 	}
-	waited := runner.run(map[string]any{"action": "wait", "id": processIDOf(t, started), "timeout_ms": json.Number("2000")})
+	waited := runner.waited(processIDOf(t, started))
 	// `cat` only exits when its input is closed, so reaching `exited` proves EOF.
 	if !strings.Contains(waited, "state: exited") || !strings.Contains(waited, "piped-text\nsecond line") {
 		t.Fatalf("wait = %s", waited)
 	}
 	// Multi-byte text arrives intact and leading whitespace is kept.
 	wide := runner.run(map[string]any{"command": "cat", "stdin": "  héllo ✓"})
-	wideDone := runner.run(map[string]any{"action": "wait", "id": processIDOf(t, wide), "timeout_ms": json.Number("2000")})
+	wideDone := runner.waited(processIDOf(t, wide))
 	if !strings.Contains(wideDone, "state: exited") || !strings.Contains(wideDone, "  héllo ✓") {
 		t.Fatalf("multi-byte wait = %s", wideDone)
 	}
@@ -87,12 +108,12 @@ func TestNativeProcessStartWritesStdinThenClosesIt(t *testing.T) {
 func TestNativeProcessWithoutStdinSeesAClosedInput(t *testing.T) {
 	runner := newProcessStdinRunner(t, 1024)
 	started := runner.run(map[string]any{"command": "cat; echo no-input-done"})
-	waited := runner.run(map[string]any{"action": "wait", "id": processIDOf(t, started), "timeout_ms": json.Number("2000")})
+	waited := runner.waited(processIDOf(t, started))
 	if !strings.Contains(waited, "state: exited") || !strings.Contains(waited, "no-input-done") {
 		t.Fatalf("wait without stdin = %s", waited)
 	}
 	empty := runner.run(map[string]any{"command": "cat; echo empty-done", "stdin": ""})
-	emptyDone := runner.run(map[string]any{"action": "wait", "id": processIDOf(t, empty), "timeout_ms": json.Number("2000")})
+	emptyDone := runner.waited(processIDOf(t, empty))
 	if !strings.Contains(emptyDone, "empty-done") {
 		t.Fatalf("wait with empty stdin = %s", emptyDone)
 	}
@@ -105,7 +126,7 @@ func TestNativeProcessThatNeverReadsItsStdinIsNotAnError(t *testing.T) {
 	if !strings.Contains(started, `"status":"ok"`) {
 		t.Fatalf("start = %s", started)
 	}
-	waited := runner.run(map[string]any{"action": "wait", "id": processIDOf(t, started), "timeout_ms": json.Number("2000")})
+	waited := runner.waited(processIDOf(t, started))
 	if !strings.Contains(waited, "state: exited") || !strings.Contains(waited, "ignored-input") {
 		t.Fatalf("wait = %s", waited)
 	}
@@ -119,7 +140,7 @@ func TestNativeProcessStdinWriterIsReleasedWhenTheProcessEnds(t *testing.T) {
 	before := goroutineCount()
 	// 512 KiB is far more than a pipe holds (64 KiB), so the write cannot complete.
 	started := runner.run(map[string]any{"command": "setsid sleep 4 <&0 >/dev/null 2>&1 &", "stdin": strings.Repeat("y", 512*1024)})
-	waited := runner.run(map[string]any{"action": "wait", "id": processIDOf(t, started), "timeout_ms": json.Number("2000")})
+	waited := runner.waited(processIDOf(t, started))
 	if !strings.Contains(waited, "state: exited") {
 		t.Fatalf("the shell should have exited: %s", waited)
 	}
@@ -158,22 +179,12 @@ func TestNativeProcessStdinOverTheLimitIsRefusedBeforeAnythingStarts(t *testing.
 	}
 }
 
-func TestNativeProcessStdinIsOnlyAcceptedOnStartAndIsNotStored(t *testing.T) {
+func TestNativeProcessStdinIsNotStored(t *testing.T) {
 	runner := newProcessStdinRunner(t, 1024)
 	const secret = "SECRET-STDIN-TEXT"
 	started := runner.run(map[string]any{"command": "cat", "stdin": secret})
 	id := processIDOf(t, started)
-	runner.run(map[string]any{"action": "wait", "id": id, "timeout_ms": json.Number("2000")})
-	for _, arguments := range []map[string]any{
-		{"action": "status", "id": id, "stdin": "x"},
-		{"action": "wait", "id": id, "stdin": "x"},
-		{"action": "stop", "id": id, "stdin": "x"},
-		{"action": "list", "stdin": "x"},
-	} {
-		if refused := runner.run(arguments); !strings.Contains(refused, "error_code: invalid_stdin") {
-			t.Errorf("%v = %s", arguments, refused)
-		}
-	}
+	runner.waited(id)
 	manifest, err := os.ReadFile(filepath.Join(runner.workspace, "processes", id, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -212,33 +223,36 @@ func TestNativeProcessKeepsTheConfiguredShellNameAsArgvZero(t *testing.T) {
 	runner.settings.Shell = "argv0-shell"
 	runner.settings.Env = map[string]string{"PATH": binaryDir}
 	started := runner.run(map[string]any{"command": `printf 'name=%s\n' "$0"`})
-	waited := runner.run(map[string]any{"action": "wait", "id": processIDOf(t, started), "timeout_ms": json.Number("2000")})
+	waited := runner.waited(processIDOf(t, started))
 	if !strings.Contains(waited, "name=argv0-shell\n") || strings.Contains(waited, binaryDir) {
 		t.Fatalf("the process saw its resolved path instead of the configured name: %s", waited)
 	}
 }
 
-func TestNativeProcessWaitReturnsWhenTheRunIsStopped(t *testing.T) {
+// The block ends the wait, never the process: a call cancelled while it blocks returns at
+// once and the process keeps running.
+func TestNativeProcessBlockReturnsWhenTheRunIsStoppedAndLeavesTheProcess(t *testing.T) {
 	runner := newProcessStdinRunner(t, 1024)
-	started := runner.run(map[string]any{"command": "sleep 30"})
-	id := processIDOf(t, started)
-	runner.settings.MaxWaitTimeoutMs = 60000
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := executeNativeProcess(ctx, map[string]any{"action": "wait", "id": id, "timeout_ms": json.Number("60000")}, tools.ExecutionContext{
-			CallID: "call-wait", WorkspaceRoot: runner.workspace, SessionDir: runner.workspace,
+		_, err := executeNativeProcess(ctx, map[string]any{"command": "sleep 30", "block_ms": json.Number("60000")}, tools.ExecutionContext{
+			CallID: "call-block", WorkspaceRoot: runner.workspace, SessionDir: runner.workspace,
 		}, runner.settings, runner.manager, "")
 		done <- err
 	}()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	cancel()
 	select {
 	case err := <-done:
 		if err != context.Canceled {
-			t.Fatalf("wait error = %v, want context.Canceled", err)
+			t.Fatalf("start error = %v, want context.Canceled", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("wait kept blocking after the run was stopped")
+		t.Fatal("the start kept blocking after the run was stopped")
+	}
+	running := runner.manager.List("running")
+	if len(running) != 1 {
+		t.Fatalf("running processes after the cancelled block = %d, want 1", len(running))
 	}
 }

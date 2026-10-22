@@ -400,7 +400,7 @@ func TestSubagentProcessCapReachesTheChildsProcessTool(t *testing.T) {
 		execution := request.Execution
 		execution.WorkspaceRoot = f.dir
 		for i := 0; i < 3; i++ {
-			out, err := f.tool.Execute(ctx, map[string]any{"action": "start", "command": "sleep 30"}, execution)
+			out, err := f.tool.Execute(ctx, map[string]any{"command": "sleep 30", "block_ms": json.Number("0")}, execution)
 			if err != nil {
 				return SubagentResult{}, err
 			}
