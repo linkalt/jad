@@ -159,3 +159,40 @@ func TestSubagentProcessMaxRunningSetting(t *testing.T) {
 		}
 	}
 }
+
+func TestSubagentBackgroundWritersSettings(t *testing.T) {
+	read := func(setting string) (*NativeSubagentSettings, error) {
+		return normalizeNativeSubagentSettings(subagentSettingsFor(setting), "/s/setting.json", "/w", "")
+	}
+	got, err := read(`{"agents":{"a":{}}}`)
+	if err != nil || got.BackgroundWriters || got.MaxBackgroundWriters != 1 {
+		t.Fatalf("defaults = %+v, %v; want off and a cap of 1", got, err)
+	}
+	got, err = read(`{"background_writers":true,"max_background_writers":3,"agents":{"a":{}}}`)
+	if err != nil || !got.BackgroundWriters || got.MaxBackgroundWriters != 3 {
+		t.Fatalf("explicit = %+v, %v", got, err)
+	}
+	for name, setting := range map[string]string{
+		"flag text":    `{"background_writers":"yes","agents":{"a":{}}}`,
+		"cap zero":     `{"max_background_writers":0,"agents":{"a":{}}}`,
+		"cap negative": `{"max_background_writers":-1,"agents":{"a":{}}}`,
+		"cap too big":  `{"max_background_writers":33,"agents":{"a":{}}}`,
+		"cap text":     `{"max_background_writers":"one","agents":{"a":{}}}`,
+	} {
+		if _, err := read(setting); err == nil || !strings.Contains(err.Error(), "background_writers") {
+			t.Errorf("%s: error = %v, want one naming the key", name, err)
+		}
+	}
+}
+
+func TestSubagentBackgroundWritersKeysAreInTheSettingSchema(t *testing.T) {
+	data, err := os.ReadFile("../../../sample/schemes/setting.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"background_writers": {"type": "boolean", "default": false`, `"max_background_writers": {"type": "integer", "minimum": 1, "maximum": 32, "default": 1`} {
+		if !strings.Contains(string(data), key) {
+			t.Errorf("setting.schema.json lacks %s", key)
+		}
+	}
+}

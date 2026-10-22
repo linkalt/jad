@@ -32,6 +32,9 @@ const (
 	defaultNativeSubagentProcessMaxRunning int64 = 4
 	maxNativeSubagentProcessMaxRunning     int64 = 1024
 	maxNativeSubagentMaxQueued             int64 = 1024
+	// defaultNativeSubagentMaxBackgroundWriters is how many writer runs one session may
+	// have going as handles at once; a start beyond it waits for its end instead.
+	defaultNativeSubagentMaxBackgroundWriters int64 = 1
 	// The state-context section lists the session's runs after a compaction, so the
 	// model still knows the ids it was given.
 	defaultNativeSubagentStateLimit int64 = 20
@@ -42,7 +45,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "deny_agents", "changed_files_max", "process_max_running", "storage_dir", "statecontext"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "storage_dir", "statecontext"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -75,6 +78,14 @@ type NativeSubagentSettings struct {
 	// applies to all processes together. Zero, only possible in a hand-built struct,
 	// means no per-child limit.
 	ProcessMaxRunning int64
+	// BackgroundWriters lets an agent that can change files run as an async handle (it
+	// honours block_ms) when none of its tools asks for approval. Off by default: a writer
+	// then runs to its end, as before.
+	BackgroundWriters bool
+	// MaxBackgroundWriters is the most writer runs one session may have going as handles
+	// at once; a writer started beyond it runs to its end instead. Zero, only possible in
+	// a hand-built struct, means no limit.
+	MaxBackgroundWriters int64
 	// PersistRuns writes a small manifest per run, so run ids and finished results
 	// survive a server restart. A run that was going at the restart is reported as
 	// lost. The zero value of this struct means "memory only"; the loader sets true.
@@ -244,6 +255,12 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.ProcessMaxRunning, err = configuredInteger(fields, "process_max_running", defaultNativeSubagentProcessMaxRunning, 1, maxNativeSubagentProcessMaxRunning, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.BackgroundWriters, err = bashBool(fields, "background_writers", false, settingPath+": "+section); err != nil {
+		return nil, err
+	}
+	if settings.MaxBackgroundWriters, err = configuredInteger(fields, "max_background_writers", defaultNativeSubagentMaxBackgroundWriters, 1, maxNativeSubagentConcurrent, settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.PersistRuns, err = bashBool(fields, "persist_runs", true, settingPath+": "+section); err != nil {
