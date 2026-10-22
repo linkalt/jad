@@ -178,6 +178,17 @@ func executeNativeProcessAsync(
 			return "", err
 		}
 	}
+	if tracked != nil && ctx.Err() == nil {
+		// A process whose manifest is final may not have queued its signal yet (done closes
+		// right after it does). Marking the result read before that would be a no-op and
+		// leave the same result to be delivered again.
+		if now, found := manager.SnapshotWithLogs(snapshot.ID, ProcessStreamLimits{}, ProcessStreamLimits{}, 0, false); found && now != nil && processTerminal(now.State) {
+			waitProcess(ctx, manager, snapshot.ID, max(config.MaxBlockMs, 1))
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+		}
+	}
 	stdoutLimits := ProcessStreamLimits{HeadBytes: int(settings.Stdout.HeadBytes), TailBytes: int(settings.Stdout.TailBytes)}
 	stderrLimits := ProcessStreamLimits{HeadBytes: int(settings.Stderr.HeadBytes), TailBytes: int(settings.Stderr.TailBytes)}
 	current, found := manager.SnapshotWithLogs(snapshot.ID, stdoutLimits, stderrLimits, int(settings.MaxLineChars), settings.StripANSI)
