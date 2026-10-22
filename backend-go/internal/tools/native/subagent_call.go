@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/tools"
 )
 
@@ -72,7 +74,13 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		// the parent, with its own name on the question. A read-only child asks nobody.
 		childExecution.RequestApproval = childApproval(execution.RequestApproval, agent.config.Name, callID, gate)
 	}
+	// A writer never becomes a handle: its approvals and checkpoint belong to this call.
+	var handle *subagentAsyncHandle
+	if s.async != nil && !changes && execution.SessionKey != "" {
+		handle = newSubagentAsyncHandle(s.async, execution.SessionKey, agent.config.Name, subagentTaskPreview(task))
+	}
 	run, err := s.manager.start(subagentStart{
+		async:    handle,
 		launcher: s.launcher,
 		owner:    execution.SessionKey,
 		changes:  changes,
@@ -95,6 +103,9 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		code := "subagent_unavailable"
 		if err == errSubagentQueueFull {
 			code = "subagent_busy"
+		}
+		if errors.Is(err, asyncmgr.ErrCapacity) {
+			code = "async_capacity_reached"
 		}
 		return tools.ExecutionError(callID, tools.StatusError, code, err.Error()), nil
 	}
@@ -271,7 +282,11 @@ func (s *subagentTool) await(ctx context.Context, callID string, run *subagentRu
 	case <-ctx.Done():
 		return cancelled()
 	}
-	return s.renderRun(callID, run.view())
+	view := run.view()
+	if run.async != nil && view.state != subagentRunQueued && view.state != subagentRunRunning {
+		run.async.markRead(run.id)
+	}
+	return s.renderRun(callID, view)
 }
 
 // partialInformation adds what a cut-off run left behind to a result: a flag that the

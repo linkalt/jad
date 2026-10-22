@@ -118,6 +118,9 @@ type subagentTool struct {
 	launcher SubagentLauncher
 	// manager owns the runs, so a run outlives the call that started it.
 	manager *SubagentManager
+	// async makes read-only runs handles of the async manager; nil when the session has no
+	// async tool.
+	async *AsyncHost
 }
 
 // NewSubagentTool builds the subagent tool over the already built tools of the same
@@ -149,6 +152,10 @@ func NewSubagentToolWithProcesses(settings sessionfs.NativeSubagentSettings, par
 	return newSubagentTool(settings, parentTools, nil, launcher, mcp, manager, processes)
 }
 
+func newSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, processes ProcessManager) (tools.Tool, error) {
+	return newSubagentToolAsync(settings, parentTools, toolsets, launcher, mcp, manager, processes, nil)
+}
+
 // subagentToolset is the native tools built from one toolset file an agent names, and the
 // process manager they use. The parent's model never sees them.
 type subagentToolset struct {
@@ -174,7 +181,9 @@ func childToolPools(settings sessionfs.NativeSubagentSettings, available []tools
 	return readOnly, changers
 }
 
-func newSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, processes ProcessManager) (tools.Tool, error) {
+// newSubagentToolAsync is newSubagentTool plus the async host that tracks every read-only run
+// the tool starts as a handle owned by the calling session. A nil host starts no handles.
+func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, processes ProcessManager, host *AsyncHost) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(subagentInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native subagent schema: %w", err)
@@ -192,7 +201,10 @@ func newSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []to
 		manager = NewSubagentManager()
 	}
 	readOnly, changers := childToolPools(settings, parentTools)
-	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager}
+	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager, async: host}
+	if host != nil {
+		host.attachSubagent(manager)
+	}
 	for _, agent := range settings.Agents {
 		agent = withoutDeniedTools(agent, settings.DenyTools)
 		agentReadOnly, agentChangers, agentProcesses := readOnly, changers, processes

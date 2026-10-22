@@ -91,7 +91,15 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 	if locks == nil {
 		locks = NewPathLocks()
 	}
-	loaded, definitions, manager, err := buildNativeTools(config, locks, manager, taskStore, memoryStore, fetchStore, asyncResources)
+	var asyncHost *AsyncHost
+	if config.NativeAsync != nil {
+		var err error
+		asyncHost, err = asyncHostFor(asyncHostSource{dir: config.StoragePaths.ToolStorage, cfg: config.NativeAsync.Config}, asyncResources)
+		if err != nil {
+			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.async: %v", config.SettingPath, err)}
+		}
+	}
+	loaded, definitions, manager, err := buildNativeTools(config, locks, manager, taskStore, memoryStore, fetchStore, asyncHost)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +115,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		if err != nil {
 			return nil, err
 		}
-		tool, err := newSubagentTool(subagentSettings, loaded, agentToolsets, launcher, mcp, subagentManager, manager)
+		tool, err := newSubagentToolAsync(subagentSettings, loaded, agentToolsets, launcher, mcp, subagentManager, manager, asyncHost)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -175,7 +183,7 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 
 // buildNativeTools builds every native tool the settings enable except the subagent
 // tool, with the definitions it read and the process manager it used.
-func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, asyncResources AsyncResources) ([]tools.Tool, map[string]tools.Definition, ProcessManager, error) {
+func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, asyncHost *AsyncHost) ([]tools.Tool, map[string]tools.Definition, ProcessManager, error) {
 	if config.NativeProcess != nil && manager == nil {
 		manager = NewConfiguredProcessManager(*config.NativeProcess)
 	}
@@ -302,13 +310,6 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
-	}
-	var asyncHost *AsyncHost
-	if config.NativeAsync != nil {
-		asyncHost, err = asyncHostFor(asyncHostSource{dir: config.StoragePaths.ToolStorage, cfg: config.NativeAsync.Config}, asyncResources)
-		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.async: %v", config.SettingPath, err)}
-		}
 	}
 	if config.NativeProcess != nil {
 		definition, err := requireNativeDefinition(config, definitions, "process", processToolID, processInputSchema)

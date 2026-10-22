@@ -22,6 +22,8 @@ type AsyncHost struct {
 	mu           sync.Mutex
 	processes    []processStopper
 	processAdded bool
+	subagents    []*SubagentManager
+	subagentSeen bool
 }
 
 // AsyncResources is implemented by the application resolver: it hands out the host shared
@@ -106,4 +108,27 @@ func (h *AsyncHost) processManagers() []processStopper {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]processStopper(nil), h.processes...)
+}
+
+// attachSubagent lets the sub-agent driver reach a sub-agent manager. The first call
+// registers the driver; attaching the same manager again is a no-op.
+func (h *AsyncHost) attachSubagent(manager *SubagentManager) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, attached := range h.subagents {
+		if attached == manager {
+			return
+		}
+	}
+	h.subagents = append(h.subagents, manager)
+	if !h.subagentSeen {
+		h.subagentSeen = true
+		_ = h.manager.AddDriver(&subagentDriver{host: h})
+	}
+}
+
+func (h *AsyncHost) subagentManagers() []*SubagentManager {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]*SubagentManager(nil), h.subagents...)
 }

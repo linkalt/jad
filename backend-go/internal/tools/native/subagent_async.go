@@ -1,0 +1,112 @@
+package native
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	"jad/backend-go/internal/asyncmgr"
+)
+
+const asyncKindSubagent asyncmgr.Kind = "subagent"
+
+// subagentAsyncHandle reports one read-only sub-agent run to the async manager as a handle
+// owned by the session that started it.
+type subagentAsyncHandle struct {
+	host  *AsyncHost
+	owner string
+	label string
+}
+
+func newSubagentAsyncHandle(host *AsyncHost, owner, agent, task string) *subagentAsyncHandle {
+	return &subagentAsyncHandle{host: host, owner: owner, label: agent + ": " + task}
+}
+
+func (h *subagentAsyncHandle) begin(id string, queued bool) error {
+	return h.host.Manager().Register(asyncmgr.Registration{ID: id, Owner: h.owner, Kind: asyncKindSubagent, Label: h.label, Queued: queued})
+}
+
+func (h *subagentAsyncHandle) markRunning(id string) { h.host.Manager().MarkRunning(id) }
+
+// abort ends a handle whose run never started; nobody is told about it.
+func (h *subagentAsyncHandle) abort(id string, cause error) {
+	manager := h.host.Manager()
+	_, _ = manager.Complete(id, asyncmgr.Result{State: asyncmgr.StateFailed, Reason: cause.Error()})
+	manager.MarkRead(h.owner, id)
+}
+
+// end reports the final state of the run. It is called before the run's done channel
+// closes, so a caller released by done finds the signal queued.
+func (h *subagentAsyncHandle) end(run subagentRunView, ref string) {
+	result := subagentAsyncResult(run)
+	result.Ref = ref
+	_, _ = h.host.Manager().Complete(run.id, result)
+}
+
+// markRead consumes the signal of a run whose end the call just reported.
+func (h *subagentAsyncHandle) markRead(id string) { h.host.Manager().MarkRead(h.owner, id) }
+
+// subagentAsyncResult maps a run's final state to the unified one. ok means the run is
+// done; every other state keeps its own name with ok false. The summary is the answer,
+// or the partial text a cut-off child left, or the failure reason.
+func subagentAsyncResult(run subagentRunView) asyncmgr.Result {
+	text := strings.TrimSpace(run.result.Text)
+	result := asyncmgr.Result{Reason: run.reason, Summary: text, Bytes: int64(len(text)), Cut: run.cut}
+	switch run.state {
+	case subagentRunDone:
+		result.State, result.OK = asyncmgr.StateDone, true
+	case subagentRunStopped:
+		result.State = asyncmgr.StateStopped
+	case subagentRunTimedOut:
+		result.State = asyncmgr.StateTimedOut
+	case subagentRunLost:
+		result.State = asyncmgr.StateLost
+	default:
+		result.State = asyncmgr.StateFailed
+		result.Summary = boundedReason(run.reason)
+	}
+	return result
+}
+
+// subagentRunRef is the run record that holds the run's transcript path.
+func subagentRunRef(run *subagentRun) string {
+	if run.store == nil {
+		return ""
+	}
+	return filepath.Join(run.store.dir, run.id+".json")
+}
+
+// subagentDriver is the async driver of kind subagent: it finds the sub-agent manager that
+// owns a run and asks it to stop. The run reports its own end.
+type subagentDriver struct{ host *AsyncHost }
+
+func (d *subagentDriver) Kind() asyncmgr.Kind { return asyncKindSubagent }
+
+func (d *subagentDriver) Stop(id, reason string) {
+	if run := d.find(id); run != nil {
+		run.stopWith(reason)
+	}
+}
+
+func (d *subagentDriver) Detail(id string, maxBytes int) string {
+	run := d.find(id)
+	if run == nil {
+		return ""
+	}
+	view := run.view()
+	if view.state == subagentRunQueued || view.state == subagentRunRunning {
+		return fmt.Sprintf("agent %s is %s: %ds of %d ms used\n%s", view.agent, view.state, int64(view.elapsed.Seconds()), view.timeoutMS, view.task)
+	}
+	run.loadText(int64(maxBytes))
+	text, _ := cutUTF8(strings.TrimSpace(run.view().result.Text), int64(maxBytes))
+	return text
+}
+
+func (d *subagentDriver) find(id string) *subagentRun {
+	for _, manager := range d.host.subagentManagers() {
+		if run := manager.byID(id); run != nil {
+			return run
+		}
+	}
+	return nil
+}

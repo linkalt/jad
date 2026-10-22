@@ -222,6 +222,9 @@ type subagentRun struct {
 	// tracked is set when the run lists its changed files (changes and a non-zero
 	// changed_files_max); without it the result says nothing about files.
 	tracked bool
+	// async reports the run to the async manager as a handle; nil for a run that is not one
+	// (a writer, or a session without the async tool).
+	async *subagentAsyncHandle
 
 	store *subagentStore // nil when runs are not persisted
 	// restored marks a run loaded from disk. Its text is not in memory: it is read
@@ -376,6 +379,20 @@ type subagentStart struct {
 	processMax int
 	keep       int
 	resultMax  int64
+	// async, when set, makes the run a handle of the async manager owned by owner.
+	async *subagentAsyncHandle
+}
+
+// undoReservationLocked gives back the slot or queue place start took for a run that was
+// not created.
+func (m *SubagentManager) undoReservationLocked(holdsSlot bool) {
+	if holdsSlot {
+		m.running--
+		close(m.freed)
+		m.freed = make(chan struct{})
+		return
+	}
+	m.queued--
 }
 
 // start registers a run and launches its goroutine. It fails when the manager is
@@ -403,7 +420,26 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		return nil, errSubagentQueueFull
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
+	if spec.async != nil {
+		m.mu.Unlock()
+		if err := spec.async.begin(id, !holdsSlot); err != nil {
+			cancel()
+			m.mu.Lock()
+			m.undoReservationLocked(holdsSlot)
+			m.mu.Unlock()
+			return nil, err
+		}
+		m.mu.Lock()
+		if m.closed {
+			cancel()
+			m.undoReservationLocked(holdsSlot)
+			m.mu.Unlock()
+			spec.async.abort(id, errSubagentManagerClosed)
+			return nil, errSubagentManagerClosed
+		}
+	}
 	run := &subagentRun{
+		async:     spec.async,
 		store:     m.store,
 		id:        id,
 		owner:     spec.owner,
@@ -446,6 +482,9 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 			return
 		}
 		run.setState(subagentRunRunning)
+		if run.async != nil {
+			run.async.markRunning(run.id)
+		}
 	}
 	defer m.release()
 
@@ -549,6 +588,11 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	}
 	m.mu.Unlock()
 	m.removeTranscripts(dropped)
+	// The async signal is queued before the waiters wake, so a caller released by done
+	// finds it.
+	if run.async != nil {
+		run.async.end(run.view(), subagentRunRef(run))
+	}
 	// Waiters wake last, so a wait that returns sees the disk already settled.
 	close(run.done)
 }
@@ -562,6 +606,14 @@ func (m *SubagentManager) get(id, owner string) *subagentRun {
 		return run
 	}
 	return nil
+}
+
+// byID returns the run with the given id whatever its owner. The async driver uses it:
+// the async manager has already checked the owner.
+func (m *SubagentManager) byID(id string) *subagentRun {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.runs[id]
 }
 
 // stop asks a run to end. It does not wait; the caller waits on run.done.
