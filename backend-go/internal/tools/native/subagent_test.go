@@ -927,21 +927,21 @@ func TestSubagentAgentListShrinksWithItsBudgetAtTheByteBoundaries(t *testing.T) 
 		"large budget":          {1 << 20, full},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := subagentAgentList(agents, tc.budget); got != tc.want {
+			if got := subagentAgentList(agents, tc.budget, nil); got != tc.want {
 				t.Fatalf("budget %d:\n got %q\nwant %q", tc.budget, got, tc.want)
 			}
 		})
 	}
-	if got := subagentAgentList(agents[:1], 0); got != "\n1 agent configured. Call without a task to list them with descriptions." {
+	if got := subagentAgentList(agents[:1], 0, nil); got != "\n1 agent configured. Call without a task to list them with descriptions." {
 		t.Fatalf("one agent, no budget = %q", got)
 	}
-	if got := subagentAgentList(agents[:1], 4096); got != "\nAgents:\n- alpha: "+long {
+	if got := subagentAgentList(agents[:1], 4096, nil); got != "\nAgents:\n- alpha: "+long {
 		t.Fatalf("one agent = %q", got)
 	}
 	// With short descriptions the full text is shorter than the names text, so the
 	// full text is kept whenever it fits; the names tier is never larger than needed.
 	short := []sessionfs.NativeSubagentAgent{describedAgent("a", "x"), describedAgent("b", "y")}
-	if got := subagentAgentList(short, 4096); got != "\nAgents:\n- a: x\n- b: y" {
+	if got := subagentAgentList(short, 4096, nil); got != "\nAgents:\n- a: x\n- b: y" {
 		t.Fatalf("short list = %q", got)
 	}
 }

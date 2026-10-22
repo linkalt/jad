@@ -20,12 +20,12 @@ var subagentInputSchema = json.RawMessage(`{
   "properties":{
     "task":{"type":"string","minLength":1,"description":"Self-contained instructions. The agent sees nothing of this conversation. Omit to list the agents."},
     "agent":{"type":"string","description":"Agent name. Optional when only one is configured."},
-    "block_ms":{"type":"integer","minimum":0,"description":"Most time this call blocks for the answer; 0 returns a run id at once. Clamped to the async policy. An agent that can change files ignores it and runs to its end."}
+    "block_ms":{"type":"integer","minimum":0,"description":"Most time this call blocks for the answer; 0 returns a run id at once. Clamped to the async policy. An agent marked [can change files; runs to its end] ignores it and runs to its end."}
   },
   "additionalProperties":false
 }`)
 
-const subagentDescription = "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. A marked agent is never handed off: the call runs to its end."
+const subagentDescription = "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends."
 
 // subagentExample is shown to the model when its arguments are rejected.
 var subagentExample = json.RawMessage(`{"task":"Find where the retry delay is computed and report the file paths and line numbers."}`)
@@ -86,6 +86,25 @@ type subagentAgent struct {
 	// in, under its run id; the run's end stops them. It is the session's, or the one of
 	// the toolset the agent names, and nil when that source has no process tool.
 	processes ProcessManager
+	// background is set when a call to this agent may run as an async handle although
+	// the agent can change files; see backgroundSafe.
+	background bool
+}
+
+// backgroundSafe reports whether a writer agent may run as a handle: the session turned
+// background_writers on, the async tool is there to collect the run, and no native tool
+// of the agent asks for approval, so nothing it does needs a user who may be gone. An
+// MCP tool of an ask server cannot be listed by an agent at all (see bindMCP).
+func backgroundSafe(settings sessionfs.NativeSubagentSettings, agent subagentAgent, host *AsyncHost) bool {
+	if !settings.BackgroundWriters || host == nil || !agent.config.ChangesFiles() {
+		return false
+	}
+	for _, tool := range agent.nativeTools {
+		if tool.Approval == tools.ApprovalAsk {
+			return false
+		}
+	}
+	return true
 }
 
 // mcpToolIDPrefix starts the name an agent's tools list uses for an MCP tool:
@@ -239,6 +258,7 @@ func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools
 			}
 			entry.catalog = catalog
 		}
+		entry.background = backgroundSafe(settings, entry, host)
 		runtime.agents = append(runtime.agents, entry)
 	}
 	if mcp != nil {
@@ -249,7 +269,7 @@ func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools
 			ID:          subagentToolID,
 			Source:      "native",
 			Name:        "subagent",
-			Description: subagentDescription + subagentListText(settings),
+			Description: subagentDescription + subagentListText(settings, runtime.backgroundNames()),
 			InputSchema: append(json.RawMessage(nil), subagentInputSchema...),
 		},
 		Validator:        validator,
@@ -312,11 +332,22 @@ func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
 
 // subagentListText is the text appended to the manifest description: the agent list, or,
 // when there is no agent yet, how to create one.
-func subagentListText(settings sessionfs.NativeSubagentSettings) string {
+func subagentListText(settings sessionfs.NativeSubagentSettings, background map[string]bool) string {
 	if len(settings.Agents) == 0 {
 		return "\n" + noAgentsText(settings)
 	}
-	return subagentAgentList(settings.Agents, settings.ListMaxBytes)
+	return subagentAgentList(settings.Agents, settings.ListMaxBytes, background)
+}
+
+// backgroundNames are the agents whose calls may be handed off although they can change files.
+func (s *subagentTool) backgroundNames() map[string]bool {
+	names := make(map[string]bool)
+	for _, agent := range s.agents {
+		if agent.background {
+			names[agent.config.Name] = true
+		}
+	}
+	return names
 }
 
 // noAgentsText tells the model there is no agent and what to create. The folders are
@@ -338,14 +369,14 @@ func noAgentsText(settings sessionfs.NativeSubagentSettings) string {
 // descriptions while they fit in maxBytes, else names alone, else a count; the last
 // two say how to get the rest. The count line is always sent, whatever the budget, so
 // the model always knows the tool lists agents when asked.
-func subagentAgentList(agents []sessionfs.NativeSubagentAgent, maxBytes int64) string {
+func subagentAgentList(agents []sessionfs.NativeSubagentAgent, maxBytes int64, background map[string]bool) string {
 	var full strings.Builder
 	full.WriteString("\nAgents:")
 	names := make([]string, 0, len(agents))
 	for _, agent := range agents {
 		full.WriteString("\n- ")
 		full.WriteString(agent.Name)
-		full.WriteString(changeMarker(agent))
+		full.WriteString(changeMarker(agent, background[agent.Name]))
 		if agent.Description != "" {
 			full.WriteString(": ")
 			full.WriteString(agent.Description)
@@ -366,13 +397,16 @@ func subagentAgentList(agents []sessionfs.NativeSubagentAgent, maxBytes int64) s
 	return fmt.Sprintf("\n%d %s configured.%s", len(agents), noun, askForList)
 }
 
-// changeMarker tells the model that a call to this agent can change files, so it runs
-// to its end instead of handing back a run id.
-func changeMarker(agent sessionfs.NativeSubagentAgent) string {
-	if agent.ChangesFiles() {
-		return " [can change files; runs to its end]"
+// changeMarker tells the model that a call to this agent can change files, and whether it
+// runs to its end or may be handed off like any other run.
+func changeMarker(agent sessionfs.NativeSubagentAgent, background bool) string {
+	switch {
+	case !agent.ChangesFiles():
+		return ""
+	case background:
+		return " [can change files; may run in the background]"
 	}
-	return ""
+	return " [can change files; runs to its end]"
 }
 
 // renderSubagentList is the result of a call with no task: one line per agent. The runs
@@ -383,7 +417,7 @@ func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64, s
 		lines = append(lines, noAgentsText(settings))
 	}
 	for _, agent := range agents {
-		line := agent.config.Name + changeMarker(agent.config)
+		line := agent.config.Name + changeMarker(agent.config, agent.background)
 		if agent.config.Description != "" {
 			line += ": " + oneLine(agent.config.Description)
 		}

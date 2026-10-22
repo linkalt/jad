@@ -105,7 +105,7 @@ func TestSubagentCallMayChangeFilesOnlyForAnAgentThatCan(t *testing.T) {
 
 func TestSubagentListMarksTheAgentsThatCanChangeFiles(t *testing.T) {
 	agents := []sessionfs.NativeSubagentAgent{agentNamed("reader"), writerAgent("fixer", "read", "write")}
-	list := subagentAgentList(agents, 4096)
+	list := subagentAgentList(agents, 4096, nil)
 	if !strings.Contains(list, "- fixer [can change files; runs to its end]") || strings.Contains(list, "reader [can") {
 		t.Fatalf("agent list:\n%s", list)
 	}

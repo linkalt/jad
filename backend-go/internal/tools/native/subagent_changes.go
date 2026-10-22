@@ -39,6 +39,9 @@ func (r *subagentRun) recordChange(path, action string, max int) {
 // none it says so, because "none" is also an answer.
 func changedInformation(run subagentRunView) []tools.Information {
 	information := changedFilesInformation(run)
+	if run.note != "" {
+		information = append(information, tools.Information{Key: "background_note", Value: run.note})
+	}
 	if run.processesStopped > 0 {
 		information = append(information, tools.Information{Key: "stopped_processes", Value: run.processesStopped})
 	}
@@ -61,4 +64,24 @@ func changedFilesInformation(run subagentRunView) []tools.Information {
 		information = append(information, tools.Information{Key: "written_files_omitted", Value: run.filesOmitted})
 	}
 	return information
+}
+
+// changedFilesText is the changed-file list of a run as one line, for the async handle's
+// summary and status. It is empty for a run that does not list files.
+func changedFilesText(run subagentRunView) string {
+	if !run.tracked {
+		return ""
+	}
+	if len(run.files) == 0 && run.filesOmitted == 0 {
+		return "changed files: none (changes made by bash, exec or process are not listed)"
+	}
+	parts := make([]string, 0, len(run.files))
+	for _, file := range run.files {
+		parts = append(parts, fmt.Sprintf("%s (%s)", file.Path, file.Action))
+	}
+	text := "changed files: " + strings.Join(parts, ", ")
+	if run.filesOmitted > 0 {
+		text += fmt.Sprintf(", and %d more", run.filesOmitted)
+	}
+	return text
 }

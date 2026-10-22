@@ -10,6 +10,9 @@ import (
 
 const asyncKindSubagent asyncmgr.Kind = "subagent"
 
+// subagentAsyncFilesBytes bounds the changed-file line at the head of a handle's summary.
+const subagentAsyncFilesBytes = 200
+
 // subagentAsyncHandle reports one read-only sub-agent run to the async manager as a handle
 // owned by the session that started it.
 type subagentAsyncHandle struct {
@@ -50,6 +53,15 @@ func (h *subagentAsyncHandle) markRead(id string) { h.host.Manager().MarkRead(h.
 // done; every other state keeps its own name with ok false. The summary is the answer,
 // or the partial text a cut-off child left, or the failure reason.
 func subagentAsyncResult(run subagentRunView) asyncmgr.Result {
+	result := subagentAsyncOutcome(run)
+	// The files a writer changed come first, so the summary's cut keeps them.
+	if files, _ := cutUTF8(changedFilesText(run), subagentAsyncFilesBytes); files != "" {
+		result.Summary = strings.TrimSpace(files + "\n" + result.Summary)
+	}
+	return result
+}
+
+func subagentAsyncOutcome(run subagentRunView) asyncmgr.Result {
 	text := strings.TrimSpace(run.result.Text)
 	result := asyncmgr.Result{Reason: run.reason, Summary: text, Bytes: int64(len(text)), Cut: run.cut}
 	switch run.state {
@@ -102,10 +114,19 @@ func (d *subagentDriver) Detail(id string, maxBytes int) string {
 	}
 	view := run.view()
 	if view.state == subagentRunQueued || view.state == subagentRunRunning {
-		return fmt.Sprintf("agent %s is %s: %ds of %d ms used\n%s", view.agent, view.state, int64(view.elapsed.Seconds()), view.timeoutMS, view.task)
+		text := fmt.Sprintf("agent %s is %s: %ds of %d ms used\n%s", view.agent, view.state, int64(view.elapsed.Seconds()), view.timeoutMS, view.task)
+		if files := changedFilesText(view); files != "" {
+			text += "\n" + files
+		}
+		return text
 	}
 	run.loadText(int64(maxBytes))
-	text, _ := cutUTF8(strings.TrimSpace(run.view().result.Text), int64(maxBytes))
+	view = run.view()
+	text := strings.TrimSpace(view.result.Text)
+	if files := changedFilesText(view); files != "" {
+		text = strings.TrimSpace(files + "\n" + text)
+	}
+	text, _ = cutUTF8(text, int64(maxBytes))
 	return text
 }
 

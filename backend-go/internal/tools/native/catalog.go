@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
@@ -120,8 +121,9 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		// The agent list is part of the description the model sees, so it is kept on top
-		// of the manifest's text and not replaced by it.
-		tool.Definition.Description = definition.Description + subagentListText(subagentSettings)
+		// of the manifest's text and not replaced by it. The tool's own description is the code's
+		// text plus the list, whose markers depend on which agents may run in the background.
+		tool.Definition.Description = definition.Description + strings.TrimPrefix(tool.Definition.Description, subagentDescription)
 		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
 	}
 	if config.NativeProfileMessage != nil && messenger != nil {

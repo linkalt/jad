@@ -53,23 +53,36 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 			Deny:  append([]string(nil), agent.config.Paths.Deny...),
 		}
 	}
-	if changes {
+	// A writer becomes a handle only when it is allowed to (background_writers, no tool of
+	// its own asks for approval) and its session has a place left; otherwise it runs to its
+	// end inside this call, where its approvals and the checkpoint belong.
+	background, note := false, ""
+	if changes && agent.background && s.async != nil && execution.SessionKey != "" {
+		if background = s.manager.reserveWriter(execution.SessionKey, int(s.settings.MaxBackgroundWriters)); !background {
+			note = fmt.Sprintf("Not handed off: the session already has %d background writer(s) going (tools.native.subagent.max_background_writers), so this call ran to its end", s.settings.MaxBackgroundWriters)
+		}
+	}
+	switch {
+	case background:
+		childExecution.RequestApproval = backgroundApproval
+	case changes:
 		// A child that can change files asks the same user through the same queue as
 		// the parent, with its own name on the question. A read-only child asks nobody.
 		childExecution.RequestApproval = childApproval(execution.RequestApproval, agent.config.Name, callID)
 	}
-	// A writer never becomes a handle: its approvals and checkpoint belong to this call.
 	var handle *subagentAsyncHandle
-	if s.async != nil && !changes && execution.SessionKey != "" {
+	if s.async != nil && (!changes || background) && execution.SessionKey != "" {
 		handle = newSubagentAsyncHandle(s.async, execution.SessionKey, agent.config.Name, subagentTaskPreview(task))
 	}
 	run, err := s.manager.start(subagentStart{
-		async:      handle,
-		asyncHost:  s.async,
-		childAsync: agent.hasNativeTool(asyncToolID),
-		launcher:   s.launcher,
-		owner:      execution.SessionKey,
-		changes:    changes,
+		async:          handle,
+		asyncHost:      s.async,
+		childAsync:     agent.hasNativeTool(asyncToolID),
+		launcher:       s.launcher,
+		owner:          execution.SessionKey,
+		changes:        changes,
+		note:           note,
+		writerReserved: background,
 		request: SubagentRequest{
 			Agent:     agent.config,
 			Task:      task,
@@ -86,6 +99,9 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		resultMax:  s.settings.ResultMaxBytes,
 	})
 	if err != nil {
+		if background {
+			s.manager.releaseWriter(execution.SessionKey)
+		}
 		code := "subagent_unavailable"
 		if err == errSubagentQueueFull {
 			code = "subagent_busy"
@@ -114,6 +130,13 @@ func (s *subagentTool) blockFor(arguments map[string]any) time.Duration {
 		asked = &value
 	}
 	return s.async.Config().BlockDuration(asked)
+}
+
+// backgroundApproval answers for a writer that runs as a handle: its turn may be over by
+// the time a call needs the user, so nobody can be asked. It is only reached by a call to
+// a tool that asks, which the static check at the start keeps out of such an agent.
+func backgroundApproval(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
+	return tools.ApprovalVerdict{Code: tools.ApprovalUnavailable, Reason: "a background sub-agent cannot ask the user"}
 }
 
 // childApproval wraps the parent's approval requester for a writer's calls: the question
@@ -197,6 +220,15 @@ func changesNote(run subagentRunView) string {
 	return ". It can change files, so some changes may already be made: check them before starting it again"
 }
 
+// backgroundWriterNote is added to the running result of a writer: it keeps changing files
+// after the turn ends, and the checkpoint of this turn does not cover that.
+func backgroundWriterNote(run subagentRunView) string {
+	if !run.changes {
+		return ""
+	}
+	return ". It can change files and goes on after this turn ends: do not edit the paths it works on until it ends, and what it changes after this turn is not in this turn's checkpoint"
+}
+
 func stopReasonNote(run subagentRunView) string {
 	if run.reason == "" {
 		return ""
@@ -210,8 +242,8 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 		return tools.RenderToolResult(tools.ResultOptions{
 			ID:     callID,
 			Status: tools.StatusOK,
-			Summary: fmt.Sprintf("Agent %s is still %s (run %s). Do not start the task again: use the async tool with id %s to wait for the answer (action wait), look at it (status) or cancel it (stop)",
-				run.agent, run.state, run.id, run.id),
+			Summary: fmt.Sprintf("Agent %s is still %s (run %s). Do not start the task again: use the async tool with id %s to wait for the answer (action wait), look at it (status) or cancel it (stop)%s",
+				run.agent, run.state, run.id, run.id, backgroundWriterNote(run)),
 			Information: []tools.Information{
 				{Key: "run", Value: run.id},
 				{Key: "state", Value: run.state},

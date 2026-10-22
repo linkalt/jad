@@ -52,8 +52,11 @@ type SubagentManager struct {
 	runs     map[string]*subagentRun
 	finished []string // ids of ended runs, oldest first
 	running  int      // slots held
-	queued   int      // runs waiting for a slot
-	freed    chan struct{}
+	// writers counts the runs of each owner that can change files and run as handles,
+	// from reservation to end; see reserveWriter.
+	writers map[string]int
+	queued  int // runs waiting for a slot
+	freed   chan struct{}
 	// store keeps a manifest per run so ids survive a restart; nil keeps runs in
 	// memory only.
 	store *subagentStore
@@ -65,7 +68,7 @@ type SubagentManager struct {
 // NewSubagentManager returns an empty manager that keeps its runs in memory only.
 func NewSubagentManager() *SubagentManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &SubagentManager{ctx: ctx, cancel: cancel, runs: make(map[string]*subagentRun), freed: make(chan struct{})}
+	return &SubagentManager{ctx: ctx, cancel: cancel, runs: make(map[string]*subagentRun), writers: make(map[string]int), freed: make(chan struct{})}
 }
 
 // SubagentManagerOptions configures a manager that keeps run manifests on disk.
@@ -219,6 +222,11 @@ type subagentRun struct {
 	// processesStopped is how many background processes the child left running that
 	// the run's end stopped. Kept in memory only.
 	processesStopped int
+	// countedWriter is set when the run holds one of its owner's background writer places,
+	// which finish gives back.
+	countedWriter bool
+	// note says why a writer that could have been handed off was not; it rides on the result.
+	note string
 	// tracked is set when the run lists its changed files (changes and a non-zero
 	// changed_files_max); without it the result says nothing about files.
 	tracked bool
@@ -242,6 +250,7 @@ type subagentRunView struct {
 	files                          []subagentFileChange
 	filesOmitted                   int
 	tracked                        bool
+	note                           string
 	processesStopped               int
 	dir                            string
 	timeoutMS                      int64
@@ -256,7 +265,7 @@ func (r *subagentRun) view() subagentRunView {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, note: r.note, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
 }
 
 // stopWith cancels the run and keeps why, so the stopped result can say it. A run that
@@ -386,6 +395,46 @@ type subagentStart struct {
 	asyncHost *AsyncHost
 	// childAsync is set when the child has the async tool, so its processes are handles.
 	childAsync bool
+	// writerReserved is set when the caller took one of the owner's background writer
+	// places with reserveWriter; the run gives it back when it ends.
+	writerReserved bool
+	// note is carried on the run's result; see subagentRun.note.
+	note string
+}
+
+// reserveWriter takes one of owner's background writer places and reports whether there
+// was one: a limit of zero or less means no limit. The caller that gets true passes
+// writerReserved to start, or gives the place back with releaseWriter when start fails.
+// A closed manager reserves, so start reports the closure itself.
+func (m *SubagentManager) reserveWriter(owner string, limit int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.closed && limit > 0 && m.writers[owner] >= limit {
+		return false
+	}
+	m.writers[owner]++
+	return true
+}
+
+func (m *SubagentManager) releaseWriter(owner string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.writers[owner] > 1 {
+		m.writers[owner]--
+		return
+	}
+	delete(m.writers, owner)
+}
+
+// BackgroundWriters is how many runs of owner can change files and are going as handles,
+// queued ones included. A checkpoint restore of the session is refused while it is not 0.
+func (m *SubagentManager) BackgroundWriters(owner string) int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.writers[owner]
 }
 
 // undoReservationLocked gives back the slot or queue place start took for a run that was
@@ -444,19 +493,21 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		}
 	}
 	run := &subagentRun{
-		async:     spec.async,
-		store:     m.store,
-		id:        id,
-		owner:     spec.owner,
-		agent:     spec.request.Agent.Name,
-		task:      subagentTaskPreview(spec.request.Task),
-		timeoutMS: spec.request.Agent.TimeoutMS,
-		changes:   spec.changes,
-		startedAt: time.Now(),
-		cancel:    cancel,
-		ctx:       ctx,
-		done:      make(chan struct{}),
-		state:     subagentRunQueued,
+		async:         spec.async,
+		store:         m.store,
+		id:            id,
+		owner:         spec.owner,
+		agent:         spec.request.Agent.Name,
+		task:          subagentTaskPreview(spec.request.Task),
+		timeoutMS:     spec.request.Agent.TimeoutMS,
+		changes:       spec.changes,
+		note:          spec.note,
+		startedAt:     time.Now(),
+		countedWriter: spec.writerReserved,
+		cancel:        cancel,
+		ctx:           ctx,
+		done:          make(chan struct{}),
+		state:         subagentRunQueued,
 	}
 	if holdsSlot {
 		run.state = subagentRunRunning
@@ -600,6 +651,9 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	}
 	m.mu.Unlock()
 	m.removeTranscripts(dropped)
+	if run.countedWriter {
+		m.releaseWriter(run.owner)
+	}
 	// The async signal is queued before the waiters wake, so a caller released by done
 	// finds it.
 	if run.async != nil {
