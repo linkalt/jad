@@ -36,7 +36,7 @@ type SubagentRequest struct {
 	Task  string
 	// CallID is the parent's tool call, used to name the child's transcript.
 	CallID string
-	// Tools is the child's catalog: read-only native tools only, never the subagent tool.
+	// Tools is the child's catalog: read-only native tools, plus subagent or tool_smith when the agent lists them.
 	Tools *tools.Catalog
 	// Execution carries the workspace roots the child's tools resolve paths against.
 	Execution tools.ExecutionContext
@@ -152,8 +152,9 @@ type subagentTool struct {
 }
 
 // NewSubagentTool builds the subagent tool over the already built tools of the same
-// catalog. A child may use only the read-only ones, optionally narrowed by its
-// agent's tools list, and never the subagent tool itself, so the depth is one.
+// catalog. A child may use the read-only ones, optionally narrowed by its agent's tools
+// list; subagent and tool_smith are there only for an agent that lists them, and the
+// depth is bounded by max_depth.
 func NewSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher) (tools.Tool, error) {
 	return NewSubagentToolWithMCP(settings, parentTools, launcher, nil)
 }

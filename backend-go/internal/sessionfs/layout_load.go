@@ -114,7 +114,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 // with that toolset in place of the profile's own, so its tools get the same normalizers,
 // defaults and env_file as the profile's toolset, and the result is kept in
 // config.AgentToolsets for the app to build the tools and connect the servers. The
-// derived settings never carry a subagent tool: a child cannot start a child.
+// derived settings never carry a subagent tool, so an agent that names a toolset cannot list subagent.
 func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalog.Entry) error {
 	if config.NativeSubagent == nil {
 		return nil

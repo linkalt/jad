@@ -72,7 +72,7 @@ func TestSubagentToolsetIsLoadedApartFromTheSessionToolset(t *testing.T) {
 		t.Errorf("toolset tools: grep %v glob %v read %v, want grep and glob only", derived.NativeGrep != nil, derived.NativeGlob != nil, derived.NativeRead != nil)
 	}
 	if derived.NativeSubagent != nil {
-		t.Error("the toolset's own subagent entry was kept; a child cannot start a child")
+		t.Error("the toolset's own subagent entry was kept; a toolset-based agent gets no subagent tool")
 	}
 	if derived.StoragePaths.ToolStorage != config.StoragePaths.ToolStorage {
 		t.Errorf("toolset storage %q differs from the session's %q", derived.StoragePaths.ToolStorage, config.StoragePaths.ToolStorage)

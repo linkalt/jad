@@ -64,3 +64,50 @@ func withinAny(roots []string, target string) bool {
 	}
 	return false
 }
+
+// narrowScope is the scope of a child: its agent's own paths cut down to what the
+// parent's scope reaches, so a child never reaches more than the run that started it.
+// Allow is the intersection of both Allow lists (an empty list reaches everything), Deny
+// is both Deny lists together. An intersection with nothing in it denies every path.
+func narrowScope(workspaceRoot string, parent *tools.PathScope, own *tools.PathScope) *tools.PathScope {
+	if parent == nil && own == nil {
+		return nil
+	}
+	if parent == nil {
+		return &tools.PathScope{Allow: append([]string(nil), own.Allow...), Deny: append([]string(nil), own.Deny...)}
+	}
+	if own == nil {
+		own = &tools.PathScope{}
+	}
+	narrowed := &tools.PathScope{}
+	for _, entry := range append(append([]string(nil), parent.Deny...), own.Deny...) {
+		narrowed.Deny = append(narrowed.Deny, scopeRoot(workspaceRoot, entry))
+	}
+	switch {
+	case len(parent.Allow) == 0:
+		for _, entry := range own.Allow {
+			narrowed.Allow = append(narrowed.Allow, scopeRoot(workspaceRoot, entry))
+		}
+	case len(own.Allow) == 0:
+		for _, entry := range parent.Allow {
+			narrowed.Allow = append(narrowed.Allow, scopeRoot(workspaceRoot, entry))
+		}
+	default:
+		for _, a := range parent.Allow {
+			a = scopeRoot(workspaceRoot, a)
+			for _, b := range own.Allow {
+				b = scopeRoot(workspaceRoot, b)
+				switch {
+				case sessionfs.PathWithin(a, b):
+					narrowed.Allow = append(narrowed.Allow, b)
+				case sessionfs.PathWithin(b, a):
+					narrowed.Allow = append(narrowed.Allow, a)
+				}
+			}
+		}
+		if len(narrowed.Allow) == 0 {
+			narrowed.Deny = append(narrowed.Deny, string(filepath.Separator))
+		}
+	}
+	return narrowed
+}

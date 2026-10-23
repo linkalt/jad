@@ -53,12 +53,11 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		SessionKey:    execution.SessionKey,
 		AgentName:     agent.config.Name,
 	}
+	var ownScope *tools.PathScope
 	if agent.config.Paths.Set() {
-		childExecution.PathScope = &tools.PathScope{
-			Allow: append([]string(nil), agent.config.Paths.Allow...),
-			Deny:  append([]string(nil), agent.config.Paths.Deny...),
-		}
+		ownScope = &tools.PathScope{Allow: agent.config.Paths.Allow, Deny: agent.config.Paths.Deny}
 	}
+	childExecution.PathScope = narrowScope(execution.WorkspaceRoot, execution.PathScope, ownScope)
 	// A writer becomes a handle only when it is allowed to (background_writers, no tool of
 	// its own asks for approval) and its session has a place left; otherwise it runs to its
 	// end inside this call, where its approvals and the checkpoint belong.
