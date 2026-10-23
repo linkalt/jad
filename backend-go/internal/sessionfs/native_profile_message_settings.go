@@ -12,7 +12,12 @@ const (
 	defaultNativeProfileMessageTimeoutMS      int64 = 600_000
 	maxNativeProfileMessageTimeoutMS          int64 = 3_600_000
 	defaultNativeProfileMessageResultMaxBytes int64 = 16 * 1024
+	maxNativeProfileMessageMaxChain           int64 = 8
 )
+
+// DefaultProfileMessageMaxChain is the longest chain of profiles a message may travel
+// through when max_chain is not set: the caller and one profile it reaches.
+const DefaultProfileMessageMaxChain = 2
 
 const (
 	// ProfileMessageCompactOff leaves the target's transcript as it is; On compacts it
@@ -22,7 +27,7 @@ const (
 )
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "approval", "compact"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "approval", "compact", "max_chain"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -40,6 +45,9 @@ type NativeProfileMessageSettings struct {
 	BusyWaitMs int
 	// ResultMaxBytes is the most reply text one call returns.
 	ResultMaxBytes int
+	// MaxChain is the most profiles one message chain may hold, the first caller included.
+	// 2 lets a profile message another but that one message no further.
+	MaxChain int
 	// Approval is "off" (default) or "ask"; ask holds every call until the user approves it.
 	Approval string
 	// Compact is "off" (default) or "on"; on compacts the target's transcript before the
@@ -101,6 +109,10 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
+	maxChain, err := configuredInteger(fields, "max_chain", int64(DefaultProfileMessageMaxChain), 2, maxNativeProfileMessageMaxChain, settingPath, section)
+	if err != nil {
+		return nil, err
+	}
 	approval, err := normalizeApprovalMode(fields, section, settingPath)
 	if err != nil {
 		return nil, err
@@ -111,7 +123,7 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 			return nil, configError("%s: %s.compact must be \"off\" or \"on\"", settingPath, section)
 		}
 	}
-	return &NativeProfileMessageSettings{DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), ResultMaxBytes: int(resultMaxBytes), Approval: approval, Compact: compact}, nil
+	return &NativeProfileMessageSettings{DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Approval: approval, Compact: compact}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.

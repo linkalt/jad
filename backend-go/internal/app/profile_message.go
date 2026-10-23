@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools/native"
 )
 
@@ -55,6 +57,17 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		return "", native.ErrProfileCycle
 	}
 	callerMessagesPath, _ := ctx.Value(callerMessagesPathKey{}).(string)
+	if callerMessagesPath == "" && native.IsChildCall(ctx) {
+		// A sub-agent runs on a context the manager owns, so it carries no transcript path.
+		// Its caller is the session's profile, whose transcript the root run holds.
+		callerRunner, err := m.resolver.Resolve(ctx, reference, caller, "")
+		if err != nil {
+			return "", err
+		}
+		if bound, ok := callerRunner.Runner.(boundRunner); ok {
+			callerMessagesPath = bound.config.MessagesPath
+		}
+	}
 	if callerMessagesPath == "" {
 		return "", errors.New("profile message needs the calling transcript path")
 	}
@@ -70,9 +83,23 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 	if canonical == caller {
 		return "", native.ErrProfileCycle
 	}
-	// A run started by profile_message may not message further: the chain has depth one.
-	if _, nested := starter.RunningProfileRunCaller(resolved.Reference, caller); nested {
+	// The caller's chain is the one its running run recorded when profile_message started
+	// it, or just the caller when a user started it. The target may not be in it, and the
+	// chain with the target added may not pass max_chain.
+	callerChain := []string{caller}
+	if recorded, nested := starter.RunningProfileRunChain(resolved.Reference, caller); nested && len(recorded) > 0 {
+		callerChain = recorded
+	}
+	if slices.Contains(callerChain, canonical) {
 		return "", native.ErrProfileCycle
+	}
+	maxChain := native.ProfileChainMax(ctx)
+	if maxChain < 1 {
+		maxChain = sessionfs.DefaultProfileMessageMaxChain
+	}
+	chain := append(append([]string(nil), callerChain...), canonical)
+	if len(chain) > maxChain {
+		return "", native.ErrProfileChainTooLong
 	}
 	// Another profile name over the caller's transcript would wait for the transcript
 	// the caller holds, so a retry can never succeed; refuse it. A running target is
@@ -101,6 +128,7 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		Reference: resolved.Reference,
 		Profile:   canonical,
 		Caller:    caller,
+		Chain:     chain,
 		Message:   message,
 		BusyWait:  busyWait,
 		BeforeRun: beforeRun,

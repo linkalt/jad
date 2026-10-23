@@ -104,28 +104,9 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 	if err != nil {
 		return nil, err
 	}
-	// Last, because a child gets the read-only tools that are already enabled here.
-	if config.NativeSubagent != nil {
-		definition, err := requireNativeDefinition(config, definitions, "subagent", subagentToolID, subagentInputSchema)
-		if err != nil {
-			return nil, err
-		}
-		subagentSettings := *config.NativeSubagent
-		subagentSettings.DenyTools = config.ProfileTools.Deny
-		agentToolsets, err := buildAgentToolsets(config, locks, toolsets, asyncHost)
-		if err != nil {
-			return nil, err
-		}
-		tool, err := newSubagentToolAsync(subagentSettings, loaded, agentToolsets, launcher, mcp, subagentManager, manager, asyncHost)
-		if err != nil {
-			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
-		}
-		// The agent list is part of the description the model sees, so it is kept on top
-		// of the manifest's text and not replaced by it. The tool's own description is the code's
-		// text plus the list, whose markers depend on which agents may run in the background.
-		tool.Definition.Description = definition.Description + strings.TrimPrefix(tool.Definition.Description, subagentDescription)
-		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
-	}
+	// profile_message is built before the subagent tool so an agent can list it, but it is
+	// added to the catalog after the subagent tool, where it always was.
+	var profileMessageTool *tools.Tool
 	if config.NativeProfileMessage != nil && messenger != nil {
 		definition, err := requireNativeDefinition(config, definitions, "profile_message", profileMessageToolID, profileMessageInputSchema)
 		if err != nil {
@@ -140,7 +121,37 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
 		tool.Definition.Description = definition.Description + profileMessageListText(targets)
+		wrapped := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
+		profileMessageTool = &wrapped
+	}
+	// Last, because a child gets the read-only tools that are already enabled here.
+	if config.NativeSubagent != nil {
+		definition, err := requireNativeDefinition(config, definitions, "subagent", subagentToolID, subagentInputSchema)
+		if err != nil {
+			return nil, err
+		}
+		subagentSettings := *config.NativeSubagent
+		subagentSettings.DenyTools = config.ProfileTools.Deny
+		agentToolsets, err := buildAgentToolsets(config, locks, toolsets, asyncHost)
+		if err != nil {
+			return nil, err
+		}
+		childPool := loaded
+		if profileMessageTool != nil {
+			childPool = append(append([]tools.Tool(nil), loaded...), *profileMessageTool)
+		}
+		tool, err := newSubagentToolAsync(subagentSettings, childPool, agentToolsets, launcher, mcp, subagentManager, manager, asyncHost)
+		if err != nil {
+			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		// The agent list is part of the description the model sees, so it is kept on top
+		// of the manifest's text and not replaced by it. The tool's own description is the code's
+		// text plus the list, whose markers depend on which agents may run in the background.
+		tool.Definition.Description = definition.Description + strings.TrimPrefix(tool.Definition.Description, subagentDescription)
 		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
+	}
+	if profileMessageTool != nil {
+		loaded = append(loaded, *profileMessageTool)
 	}
 	return tools.NewCatalog(loaded)
 }

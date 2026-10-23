@@ -16,7 +16,10 @@ type ProfileRunRequest struct {
 	Reference string
 	Profile   string
 	// Caller is the profile that sends the message; the run is listed with it.
-	Caller  string
+	Caller string
+	// Chain is the profile names the message travelled through, the caller first and the
+	// target last; the run keeps it so a message sent from inside it can be checked.
+	Chain   []string
 	Message string
 	// BusyWait is how long to queue behind the run that holds the transcript, in the
 	// order user messages queue; 0 fails at once with ErrSessionBusy.
@@ -36,6 +39,8 @@ type ProfileRunStarter interface {
 	// RunningProfileRunCaller reports the caller of the profile's running tool-started
 	// run, if there is one.
 	RunningProfileRunCaller(reference, profile string) (caller string, ok bool)
+	// RunningProfileRunChain reports the chain of the profile's running tool-started run.
+	RunningProfileRunChain(reference, profile string) (chain []string, ok bool)
 }
 
 // ProfileRun is a started run. Final is only valid once Done is closed.
@@ -101,6 +106,7 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 	handle := &ProfileRun{run: run}
 	run.mu.Lock()
 	run.supportsInteraction = true
+	run.chain = append([]string(nil), request.Chain...)
 	run.mu.Unlock()
 	if request.BeforeRun != nil {
 		request.BeforeRun(ctx)
@@ -121,6 +127,16 @@ func (s profileRunStarter) RunningProfileRunCaller(reference, profile string) (s
 		return "", false
 	}
 	return run.caller, true
+}
+
+func (s profileRunStarter) RunningProfileRunChain(reference, profile string) ([]string, bool) {
+	run := s.handler.runs.current(s.handler.runKey(ResolvedSession{Reference: reference, Profile: profile}))
+	if run == nil || run.source != profileMessageSource || run.state() != "running" {
+		return nil, false
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return append([]string(nil), run.chain...), true
 }
 
 // acquireProfileRun queues for the transcript like a user message for at most BusyWait.

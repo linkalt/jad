@@ -247,12 +247,15 @@ type stopRunResult struct {
 }
 
 type activeRun struct {
-	registry            *runRegistry
-	key                 string
-	turnID              string
-	startedAt           string
-	source              string
-	caller              string
+	registry  *runRegistry
+	key       string
+	turnID    string
+	startedAt string
+	source    string
+	caller    string
+	// chain is the profiles a tool-started run descends through, ending with its own; set
+	// under mu before the run starts, empty for a user run.
+	chain               []string
 	cancel              context.CancelFunc
 	ctx                 context.Context
 	interactions        *interactionbroker.Broker

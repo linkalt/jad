@@ -36,7 +36,7 @@ type SubagentRequest struct {
 	Task  string
 	// CallID is the parent's tool call, used to name the child's transcript.
 	CallID string
-	// Tools is the child's catalog: read-only native tools, plus subagent or tool_smith when the agent lists them.
+	// Tools is the child's catalog: read-only native tools, plus subagent, tool_smith or profile_message when the agent lists them.
 	Tools *tools.Catalog
 	// Execution carries the workspace roots the child's tools resolve paths against.
 	Execution tools.ExecutionContext
@@ -153,7 +153,7 @@ type subagentTool struct {
 
 // NewSubagentTool builds the subagent tool over the already built tools of the same
 // catalog. A child may use the read-only ones, optionally narrowed by its agent's tools
-// list; subagent and tool_smith are there only for an agent that lists them, and the
+// list; subagent, tool_smith and profile_message are there only for an agent that lists them, and the
 // depth is bounded by max_depth.
 func NewSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher) (tools.Tool, error) {
 	return NewSubagentToolWithMCP(settings, parentTools, launcher, nil)
@@ -200,6 +200,9 @@ func childToolPools(settings sessionfs.NativeSubagentSettings, available []tools
 			continue
 		}
 		switch {
+		case tool.Definition.ID == profileMessageToolID:
+			// Listed by name like async: the agent's tools list alone decides.
+			readOnly = append(readOnly, tool)
 		case tool.ReadOnly:
 			readOnly = append(readOnly, tool)
 		case settings.AllowWrite && containsName(sessionfs.SubagentChangeTools, tool.Definition.Name):
@@ -489,10 +492,10 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 	if allowWrite {
 		kind = "native tool"
 	}
-	// async, tool_smith and subagent are opt-in: a child gets them only when its tools list names them.
+	// async, tool_smith, subagent and profile_message are opt-in: a child gets them only when its tools list names them.
 	chosen := make([]tools.Tool, 0, len(readOnly))
 	for _, tool := range readOnly {
-		if tool.Definition.ID != asyncToolID && tool.Definition.ID != toolSmithToolID && tool.Definition.ID != subagentToolID {
+		if tool.Definition.ID != asyncToolID && tool.Definition.ID != toolSmithToolID && tool.Definition.ID != subagentToolID && tool.Definition.ID != profileMessageToolID {
 			chosen = append(chosen, tool)
 		}
 	}
@@ -512,6 +515,8 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 				switch name {
 				case "tool_smith":
 					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"tool_smith\", but the session does not enable tools.native.tool_smith: add it under tools.native, or remove it from the list", agent.Name)
+				case "profile_message":
+					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"profile_message\", but the session does not enable tools.native.profile_message (or has no other profile to message): add it under tools.native, or remove it from the list", agent.Name)
 				case "async":
 					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"async\", but the session does not enable tools.native.async: add \"async\": {} under tools.native, or remove it from the list", agent.Name)
 				}

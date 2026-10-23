@@ -56,9 +56,41 @@ var ErrProfileSameTranscript = errors.New("profile shares the calling transcript
 // without any answer text.
 var ErrProfileNoAnswer = errors.New("profile finished without an answer")
 
-// ErrProfileCycle is returned by a ProfileMessenger when the message would reach the
-// calling profile itself, close a cycle, or nest inside another profile message.
+// ErrProfileCycle is returned by a ProfileMessenger when the message would reach a profile
+// already in the chain of messages that led to the caller, or the caller itself.
 var ErrProfileCycle = errors.New("profile message would form a cycle")
+
+// ErrProfileChainTooLong is returned by a ProfileMessenger when the message would make the
+// chain of profiles longer than tools.native.profile_message.max_chain.
+var ErrProfileChainTooLong = errors.New("profile message chain is too long")
+
+type profileChainMaxKey struct{}
+
+type childCallKey struct{}
+
+// IsChildCall reports whether the profile_message call in ctx comes from a sub-agent run.
+// Such a call has no transcript of its own: the messenger takes the calling profile's.
+func IsChildCall(ctx context.Context) bool {
+	child, _ := ctx.Value(childCallKey{}).(bool)
+	return child
+}
+
+// WithProfileChainMax sets the longest chain the call in ctx may build.
+func WithProfileChainMax(ctx context.Context, limit int) context.Context {
+	return context.WithValue(ctx, profileChainMaxKey{}, limit)
+}
+
+// WithChildCall marks ctx as the context of a call made by a sub-agent run.
+func WithChildCall(ctx context.Context) context.Context {
+	return context.WithValue(ctx, childCallKey{}, true)
+}
+
+// ProfileChainMax is the longest chain the call in ctx may build; zero when the caller did
+// not say, and the messenger then uses the default.
+func ProfileChainMax(ctx context.Context) int {
+	limit, _ := ctx.Value(profileChainMaxKey{}).(int)
+	return limit
+}
 
 // ProfileMessenger delivers one message to another profile and returns its final
 // answer. The app package implements it, because it owns the sessions. ownerKey is the
@@ -144,6 +176,10 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	}
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(p.settings.TimeoutMs)*time.Millisecond)
 	defer cancel()
+	callCtx = WithProfileChainMax(callCtx, p.settings.MaxChain)
+	if execution.AgentDepth > 0 {
+		callCtx = WithChildCall(callCtx)
+	}
 	reply, err := p.messenger.Message(callCtx, execution.SessionKey, profile, message, time.Duration(p.settings.BusyWaitMs)*time.Millisecond, p.settings.Compact == sessionfs.ProfileMessageCompactOn)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -162,6 +198,9 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		case errors.Is(err, ErrProfileNoAnswer):
 			return tools.ExecutionError(callID, tools.StatusError, "profile_no_answer",
 				fmt.Sprintf("Profile %s finished without an answer", profile)), nil
+		case errors.Is(err, ErrProfileChainTooLong):
+			return tools.ExecutionError(callID, tools.StatusError, "profile_chain_too_long",
+				fmt.Sprintf("Profile %s cannot be messaged from here: the chain of profile messages would pass tools.native.profile_message.max_chain (%d)", profile, p.settings.MaxChain)), nil
 		case errors.Is(err, ErrProfileCycle):
 			return tools.ExecutionError(callID, tools.StatusError, "profile_cycle",
 				fmt.Sprintf("Profile %s cannot be messaged from here: it would form a cycle", profile)), nil
