@@ -132,9 +132,15 @@ type Record struct {
 	Summary string `json:"summary,omitempty"`
 	Cut     bool   `json:"cut,omitempty"`
 	// SrcCut: the driver had already shortened Summary, so every view shows it as cut.
-	SrcCut    bool      `json:"src_cut,omitempty"`
-	Bytes     int64     `json:"bytes,omitempty"`
-	Ref       string    `json:"ref,omitempty"`
+	SrcCut bool   `json:"src_cut,omitempty"`
+	Bytes  int64  `json:"bytes,omitempty"`
+	Ref    string `json:"ref,omitempty"`
+	// Detail is the longer result text a driver keeps in the record itself (up to
+	// status_summary_max_bytes), shown by status when the driver has no live detail.
+	Detail    string `json:"detail,omitempty"`
+	DetailCut bool   `json:"detail_cut,omitempty"`
+	// Trace points at where the work can be inspected later. It is never put in an Entry.
+	Trace     string    `json:"trace,omitempty"`
 	StartedAt time.Time `json:"started_at"`
 	EndedAt   time.Time `json:"ended_at,omitzero"`
 	Unread    bool      `json:"unread,omitempty"`
@@ -177,6 +183,10 @@ type Result struct {
 	Cut   bool
 	Bytes int64
 	Ref   string
+	// Detail is the full result text kept in the record, cut to status_summary_max_bytes.
+	Detail string
+	// Trace is a driver reference for later inspection; it stays out of every entry.
+	Trace string
 }
 
 func cutUTF8(s string, limit int) (string, bool) {

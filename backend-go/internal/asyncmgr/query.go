@@ -168,10 +168,15 @@ func (m *Manager) Status(owner, id string) (Entry, error) {
 		}
 	}
 	limit := int(m.cfg.StatusSummaryBytes)
+	detailed := false
 	if detailer, ok := driver.(Detailer); ok {
 		if text := detailer.Detail(id, limit); text != "" {
-			rec.Summary = text
+			rec.Summary, detailed = text, true
 		}
+	}
+	if !detailed && rec.Detail != "" {
+		rec.Summary = rec.Detail
+		rec.SrcCut = rec.SrcCut || rec.DetailCut
 	}
 	rec.Cut = rec.SrcCut
 	entry := entryOf(rec, limit)
