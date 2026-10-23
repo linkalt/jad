@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
 
-// A run that asks for an approval or a draft answer waits for it, so the drawer
+// A run that asks for a draft answer waits for it, so the drawer
 // belongs to the pane whose run is waiting: answering it from the focused pane
 // would have written to whatever view happened to be active. These anchors keep
 // the drawer built per view, and keep the two answer paths reading their target
@@ -22,8 +22,6 @@ test('the drawer is built from the target view, not the active one', () => {
   assert.match(block, /runInteractionStatesByView\[target\.viewKey\]/);
   assert.match(block, /streamingMessagesByView\[target\.viewKey\]\?\.pending/);
   assert.match(block, /interactionUiByView\[target\.viewKey\]/);
-  assert.match(block, /kind === 'approval'/, 'approval and draft answers are both covered');
-  assert.match(block, /<ApprovalDrawer/);
   assert.match(block, /<DraftRequestDrawer/);
   assert.match(block, /answerInteraction\(target, interaction, body\)/);
   assert.match(block, /extendInteraction\(target, interaction\)/);

@@ -3,20 +3,18 @@ import test from 'node:test';
 
 import {interactionEndNotice, parseInteractionEnd} from './interaction-end.ts';
 
-const wire = {interaction_id: 'i1', kind: 'approval', tool: 'bash', outcome: 'answered', decision: 'accept'};
+const wire = {interaction_id: 'i1', tool: 'request_draft', outcome: 'answered', decision: 'accept'};
 const elsewhere = {answeredHere: false, stoppedHere: false};
 
 test('reads the wire form of an end', () => {
   assert.deepEqual(parseInteractionEnd(wire), {
     interactionId: 'i1',
-    kind: 'approval',
-    tool: 'bash',
+    tool: 'request_draft',
     outcome: 'answered',
     decision: 'accept',
   });
-  assert.deepEqual(parseInteractionEnd({interaction_id: 'i1', kind: 'draft', tool: 'request_draft', outcome: 'timed_out'}), {
+  assert.deepEqual(parseInteractionEnd({interaction_id: 'i1', tool: 'request_draft', outcome: 'timed_out'}), {
     interactionId: 'i1',
-    kind: 'draft',
     tool: 'request_draft',
     outcome: 'timed_out',
   });
@@ -30,32 +28,27 @@ test('a missing or malformed end reads as nothing, so it can never become a wron
     [],
     {...wire, interaction_id: ''},
     {...wire, interaction_id: 4},
-    {...wire, kind: 'other'},
     {...wire, tool: 4},
     {...wire, outcome: 'done'},
     {...wire, decision: 'maybe'},
     {...wire, decision: undefined},
-    {interaction_id: 'i1', kind: 'approval', tool: 'bash', outcome: 'timed_out', decision: 'accept'},
+    {interaction_id: 'i1', tool: 'request_draft', outcome: 'timed_out', decision: 'accept'},
   ]) {
     assert.equal(parseInteractionEnd(bad), undefined, JSON.stringify(bad));
   }
 });
 
 test('the tab that answered stays quiet, any other tab is told who decided', () => {
-  const allowed = parseInteractionEnd(wire);
-  assert.equal(interactionEndNotice(allowed, {answeredHere: true, stoppedHere: false}), undefined);
-  assert.deepEqual(interactionEndNotice(allowed, elsewhere), {
+  const accepted = parseInteractionEnd(wire);
+  assert.equal(interactionEndNotice(accepted, {answeredHere: true, stoppedHere: false}), undefined);
+  assert.deepEqual(interactionEndNotice(accepted, elsewhere), {
     title: 'Answered in another window',
-    message: 'Another window allowed bash.',
-  });
-  assert.deepEqual(interactionEndNotice(parseInteractionEnd({...wire, decision: 'decline'}), elsewhere), {
-    title: 'Answered in another window',
-    message: 'Another window denied bash, so it did not run.',
+    message: 'Another window accepted the draft for request_draft.',
   });
 });
 
 test('a draft is worded as a draft, with accept, edit and decline told apart', () => {
-  const draft = {interaction_id: 'i2', kind: 'draft', tool: 'request_draft', outcome: 'answered'};
+  const draft = {interaction_id: 'i2', tool: 'request_draft', outcome: 'answered'};
   assert.equal(
     interactionEndNotice(parseInteractionEnd({...draft, decision: 'accept'}), elsewhere).message,
     'Another window accepted the draft for request_draft.',
@@ -70,22 +63,18 @@ test('a draft is worded as a draft, with accept, edit and decline told apart', (
   );
 });
 
-test('a timeout is told to every tab, and says the call did not run', () => {
-  const approval = parseInteractionEnd({interaction_id: 'i1', kind: 'approval', tool: 'bash', outcome: 'timed_out'});
-  const expected = {title: 'The approval timed out', message: 'Nobody answered in time, so bash did not run.'};
-  assert.deepEqual(interactionEndNotice(approval, elsewhere), expected);
-  assert.deepEqual(interactionEndNotice(approval, {answeredHere: true, stoppedHere: true}), expected);
-  assert.deepEqual(
-    interactionEndNotice(parseInteractionEnd({interaction_id: 'i2', kind: 'draft', tool: 'request_draft', outcome: 'timed_out'}), elsewhere),
-    {title: 'The draft timed out', message: 'Nobody answered in time; the draft for request_draft was not confirmed.'},
-  );
+test('a timeout is told to every tab', () => {
+  const timedOut = parseInteractionEnd({interaction_id: 'i2', tool: 'request_draft', outcome: 'timed_out'});
+  const expected = {title: 'The draft timed out', message: 'Nobody answered in time; the draft for request_draft was not confirmed.'};
+  assert.deepEqual(interactionEndNotice(timedOut, elsewhere), expected);
+  assert.deepEqual(interactionEndNotice(timedOut, {answeredHere: true, stoppedHere: true}), expected);
 });
 
 test('a stop is told to a tab that did not ask for it, and not to the one that did', () => {
-  const stopped = parseInteractionEnd({interaction_id: 'i1', kind: 'approval', tool: 'bash', outcome: 'cancelled'});
+  const stopped = parseInteractionEnd({interaction_id: 'i1', tool: 'request_draft', outcome: 'cancelled'});
   assert.deepEqual(interactionEndNotice(stopped, elsewhere), {
     title: 'The run stopped',
-    message: 'The run stopped before the approval for bash was answered.',
+    message: 'The run stopped before the draft for request_draft was answered.',
   });
   assert.equal(interactionEndNotice(stopped, {answeredHere: false, stoppedHere: true}), undefined);
 });

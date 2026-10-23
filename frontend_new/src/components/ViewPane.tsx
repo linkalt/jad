@@ -7,7 +7,7 @@
  * derived from that view key alone: the transcript window, the row width, the
  * live run's retry and reconnect notices, and the failures that belong to it.
  * The composer arrives as a node because the destructive conversation actions,
- * the model drawer and the approval drawer belong to the focused pane only —
+ * the model drawer and the draft drawer belong to the focused pane only —
  * `App` renders exactly one of them.
  */
 
@@ -164,8 +164,8 @@ export type ViewPaneProps = {
   profileMessageCaller?: string | undefined;
   /** Running without a pending interaction: deltas still arrive. */
   isStreaming: boolean;
-  /** The run asked for an approval or a draft answer and waits for it. */
-  pendingApproval: boolean;
+  /** The run asked for a draft answer and waits for it. */
+  pendingDraft: boolean;
   /** The reasoning effort the run uses, as the model drawer shows it. */
   effort: string | undefined;
   /** The provider the next run's model comes from, for the title strip. */
@@ -252,7 +252,7 @@ export function ViewPane({
   isRunning,
   profileMessageCaller,
   isStreaming,
-  pendingApproval,
+  pendingDraft,
   effort,
   provider,
   model,
@@ -621,8 +621,8 @@ export function ViewPane({
                             isStreaming={isStreaming}
                             headingLevelStart={3}
                           >
-                            {pendingApproval
-                              ? 'Astra is waiting for your approval…'
+                            {pendingDraft
+                              ? 'Astra is waiting for your answer…'
                               : 'Astra is working through the request…'}
                           </MarkdownText>
                         </VStack>

@@ -99,8 +99,6 @@ export type WebUiPart =
 
 export type WebUiInteractionDecision = 'accept' | 'update' | 'decline';
 
-export type WebUiInteractionKind = 'draft' | 'approval';
-
 /** A tool call waiting on the user's decision, published as first-class run state. */
 export interface WebUiInteraction {
   id: string;
@@ -109,12 +107,6 @@ export interface WebUiInteraction {
   tool_call_id: string;
   /** The tool's proposal; any JSON object the tool defines. */
   draft: Record<string, unknown>;
-  /**
-   * What kind of question this is. Absent means a draft, so a backend that never
-   * sends it keeps working. An `approval` is a fixed call to allow or deny, with
-   * `draft` holding its preview; it cannot be edited.
-   */
-  kind?: WebUiInteractionKind;
   title?: string;
   created_at: string;
   /** When the run stops waiting and reports the question as unanswered. */
@@ -1160,7 +1152,6 @@ function isWebUiInteraction(value: unknown): value is WebUiInteraction {
     typeof value.tool === 'string' &&
     typeof value.tool_call_id === 'string' &&
     isRecord(value.draft) &&
-    (value.kind === undefined || value.kind === 'draft' || value.kind === 'approval') &&
     (value.title === undefined || typeof value.title === 'string') &&
     typeof value.created_at === 'string' &&
     typeof value.expires_at === 'string' &&

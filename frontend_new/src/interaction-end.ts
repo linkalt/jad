@@ -12,13 +12,11 @@
  * that nothing is pending: the reason is not replayed.
  */
 
-export type InteractionEndKind = 'draft' | 'approval';
 export type InteractionEndOutcome = 'answered' | 'timed_out' | 'cancelled';
 export type InteractionEndDecision = 'accept' | 'update' | 'decline';
 
 export interface InteractionEnd {
   interactionId: string;
-  kind: InteractionEndKind;
   tool: string;
   outcome: InteractionEndOutcome;
   /** Present only for an answer; a timeout or a stop is not a decision anybody made. */
@@ -41,17 +39,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function parseInteractionEnd(value: unknown): InteractionEnd | undefined {
   if (!isRecord(value)) return undefined;
-  const {interaction_id: interactionId, kind, tool, outcome, decision} = value;
+  const {interaction_id: interactionId, tool, outcome, decision} = value;
   if (typeof interactionId !== 'string' || interactionId === '') return undefined;
-  if (kind !== 'draft' && kind !== 'approval') return undefined;
   if (typeof tool !== 'string') return undefined;
   if (outcome !== 'answered' && outcome !== 'timed_out' && outcome !== 'cancelled') return undefined;
   if (outcome === 'answered') {
     if (decision !== 'accept' && decision !== 'update' && decision !== 'decline') return undefined;
-    return {interactionId, kind, tool, outcome, decision};
+    return {interactionId, tool, outcome, decision};
   }
   if (decision !== undefined) return undefined;
-  return {interactionId, kind, tool, outcome};
+  return {interactionId, tool, outcome};
 }
 
 /**
@@ -62,18 +59,9 @@ export function interactionEndNotice(
   end: InteractionEnd,
   context: {answeredHere: boolean; stoppedHere: boolean},
 ): InteractionEndNotice | undefined {
-  const approval = end.kind === 'approval';
   if (end.outcome === 'answered') {
     if (context.answeredHere) return undefined;
     const title = 'Answered in another window';
-    if (approval) {
-      return {
-        title,
-        message: end.decision === 'decline'
-          ? `Another window denied ${end.tool}, so it did not run.`
-          : `Another window allowed ${end.tool}.`,
-      };
-    }
     if (end.decision === 'decline') {
       return {title, message: `Another window declined the draft for ${end.tool}.`};
     }
@@ -85,13 +73,11 @@ export function interactionEndNotice(
     };
   }
   if (end.outcome === 'timed_out') {
-    return approval
-      ? {title: 'The approval timed out', message: `Nobody answered in time, so ${end.tool} did not run.`}
-      : {title: 'The draft timed out', message: `Nobody answered in time; the draft for ${end.tool} was not confirmed.`};
+    return {title: 'The draft timed out', message: `Nobody answered in time; the draft for ${end.tool} was not confirmed.`};
   }
   if (context.stoppedHere) return undefined;
   return {
     title: 'The run stopped',
-    message: `The run stopped before ${approval ? 'the approval for' : 'the draft for'} ${end.tool} was answered.`,
+    message: `The run stopped before the draft for ${end.tool} was answered.`,
   };
 }

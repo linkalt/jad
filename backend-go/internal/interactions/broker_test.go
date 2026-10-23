@@ -178,7 +178,7 @@ func TestBrokerTellsTheRunWhyAQuestionEnded(t *testing.T) {
 			awaitAnswer(t, result)
 			<-log.pending
 			ended := <-log.ended
-			want := tools.InteractionEnd{InteractionID: pending.ID, Kind: "draft", Tool: "bash", Outcome: tools.InteractionAnswered, Decision: decision}
+			want := tools.InteractionEnd{InteractionID: pending.ID, Tool: "bash", Outcome: tools.InteractionAnswered, Decision: decision}
 			if ended == nil || *ended != want {
 				t.Fatalf("answered %q: ended = %+v, want %+v", decision, ended, want)
 			}
@@ -194,7 +194,7 @@ func TestBrokerTellsTheRunWhyAQuestionEnded(t *testing.T) {
 		awaitAnswer(t, result)
 		<-log.pending
 		ended := <-log.ended
-		want := tools.InteractionEnd{InteractionID: pending.ID, Kind: "draft", Tool: "bash", Outcome: tools.InteractionCancelled}
+		want := tools.InteractionEnd{InteractionID: pending.ID, Tool: "bash", Outcome: tools.InteractionCancelled}
 		if ended == nil || *ended != want {
 			t.Fatalf("stopped: ended = %+v, want %+v", ended, want)
 		}
@@ -242,14 +242,14 @@ func TestBrokerTellsTheRunWhyAQuestionEnded(t *testing.T) {
 		broker.Reply(pending.ID, tools.InteractionReply{Decision: tools.InteractionUpdate, Draft: json.RawMessage(`{"goal":"x"}`)})
 		awaitAnswer(t, result)
 		<-log.pending
-		if ended := <-log.ended; ended == nil || ended.Kind != "draft" || ended.Decision != tools.InteractionUpdate {
+		if ended := <-log.ended; ended == nil || ended.Decision != tools.InteractionUpdate {
 			t.Fatalf("draft: ended = %+v", ended)
 		}
 	})
 }
 
 func TestInteractionEndOmitsADecisionWhenNobodyDecided(t *testing.T) {
-	raw, _ := json.Marshal(tools.InteractionEnd{InteractionID: "a", Kind: "draft", Tool: "bash", Outcome: tools.InteractionTimedOut})
+	raw, _ := json.Marshal(tools.InteractionEnd{InteractionID: "a", Tool: "bash", Outcome: tools.InteractionTimedOut})
 	if strings.Contains(string(raw), "decision") {
 		t.Fatalf("a timeout carries a decision: %s", raw)
 	}

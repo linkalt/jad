@@ -80,7 +80,6 @@ func (pending PendingInteraction) Clone() PendingInteraction {
 // for an answer: a timeout or a stop is not a decision anybody made.
 type InteractionEnd struct {
 	InteractionID string              `json:"interaction_id"`
-	Kind          string              `json:"kind"`
 	Tool          string              `json:"tool"`
 	Outcome       InteractionOutcome  `json:"outcome"`
 	Decision      InteractionDecision `json:"decision,omitempty"`

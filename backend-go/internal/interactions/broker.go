@@ -253,7 +253,6 @@ func (b *Broker) settleLocked(entry *pendingEntry, answer tools.InteractionAnswe
 func interactionEnd(pending tools.PendingInteraction, answer tools.InteractionAnswer) *tools.InteractionEnd {
 	ended := &tools.InteractionEnd{
 		InteractionID: pending.ID,
-		Kind:          "draft",
 		Tool:          pending.Tool,
 		Outcome:       answer.Outcome,
 	}

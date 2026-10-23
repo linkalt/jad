@@ -202,7 +202,7 @@ test('delivers a pending interaction before any message snapshot', async () => {
     max_expires_at: '2026-01-01T00:02:00.000Z',
     extend_ms: 30000,
   };
-  const finalMessage = message('complete', 'The run continued after approval');
+  const finalMessage = message('complete', 'The run continued after the answer');
   responses.push(streamResponse([
     {event: 'run', data: {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'}},
     {event: 'interaction', data: {turn_id: 'turn-1', pending}},
@@ -219,20 +219,20 @@ test('delivers a pending interaction before any message snapshot', async () => {
 
   assert.deepEqual(interactions, [{turnId: 'turn-1', id: 'interaction-2'}]);
   assert.deepEqual(messages, []);
-  assert.equal(result.message?.text, 'The run continued after approval');
+  assert.equal(result.message?.text, 'The run continued after the answer');
 });
 
 test('an interaction event that clears a question reports why it ended, and only when it says', async () => {
   requests.length = 0;
   responses.length = 0;
   const finalMessage = message('complete', 'all done');
-  const ended = {interaction_id: 'i1', kind: 'approval', tool: 'bash', outcome: 'answered', decision: 'decline'};
+  const ended = {interaction_id: 'i1', tool: 'request_draft', outcome: 'answered', decision: 'decline'};
   responses.push(streamResponse([
     {event: 'run', data: {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'}},
     {event: 'interaction', data: {turn_id: 'turn-1', pending: null, ended}},
     {event: 'interaction', data: {turn_id: 'turn-1', pending: null}},
     {event: 'interaction', data: {turn_id: 'turn-1', pending: null, ended: {...ended, outcome: 'nonsense'}}},
-    {event: 'interaction', data: {turn_id: 'turn-1', pending: null, ended: {interaction_id: 'i2', kind: 'draft', tool: 'request_draft', outcome: 'timed_out'}}},
+    {event: 'interaction', data: {turn_id: 'turn-1', pending: null, ended: {interaction_id: 'i2', tool: 'request_draft', outcome: 'timed_out'}}},
     {event: 'completed', data: {message: finalMessage, committed: true}},
     {event: 'done', data: {}},
   ]));

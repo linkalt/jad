@@ -26,13 +26,13 @@ func TestTheClearingEventSaysWhyADraftEnded(t *testing.T) {
 	}{
 		{"allowed", func(post func(string, string) int, id string) int {
 			return post("/run/interaction", `{"interaction_id":"`+id+`","decision":"accept"}`)
-		}, map[string]any{"kind": "draft", "tool": "bash", "outcome": "answered", "decision": "accept"}},
+		}, map[string]any{"tool": "bash", "outcome": "answered", "decision": "accept"}},
 		{"denied", func(post func(string, string) int, id string) int {
 			return post("/run/interaction", `{"interaction_id":"`+id+`","decision":"decline","reason":"no"}`)
-		}, map[string]any{"kind": "draft", "tool": "bash", "outcome": "answered", "decision": "decline"}},
+		}, map[string]any{"tool": "bash", "outcome": "answered", "decision": "decline"}},
 		{"stopped", func(post func(string, string) int, id string) int {
 			return post("/run/stop", `{}`)
-		}, map[string]any{"kind": "draft", "tool": "bash", "outcome": "cancelled"}},
+		}, map[string]any{"tool": "bash", "outcome": "cancelled"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

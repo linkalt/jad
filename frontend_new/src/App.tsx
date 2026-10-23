@@ -9,11 +9,9 @@ import * as stylex from '@stylexjs/stylex';
 import {Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {type ActivityNotification, type NewActivityNotification, hasUnreadActivityError, isRunOutcomeUnknown, markActivityNotificationsRead, prependActivityNotification, runOutcomeUnknownNotification, unreadActivityNotificationCount} from './activity-notifications';
 import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, frontCompactSessionFromMessage, resetSession, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
-import {interactionFailureTitle} from './approval-answer';
 import {createCoalescedRefresh} from './coalesced-refresh';
 import {type ColorScheme} from './color-scheme';
 import {FrontCompactionIcon, ResetChatIcon, StateContextIcon} from './components/AppIcons';
-import {ApprovalDrawer} from './components/ApprovalDrawer';
 import {CheckpointPanel} from './components/CheckpointPanel';
 import {type ComposerInsertActions} from './components/ComposerPane';
 import {DraftRequestDrawer} from './components/DraftRequestDrawer';
@@ -1307,7 +1305,7 @@ function App({
         sessionId: session.id,
         sessionTitle: target.title,
         kind: 'error',
-        title: interactionFailureTitle(interaction.kind, 'answer'),
+        title: 'Unable to answer the draft',
         message,
       });
       console.warn('Unable to answer the interaction:', error);
@@ -1364,7 +1362,7 @@ function App({
         sessionId: session.id,
         sessionTitle: target.title,
         kind: 'error',
-        title: interactionFailureTitle(interaction.kind, 'extend'),
+        title: 'Unable to extend the draft',
         message,
       });
       console.warn('Unable to extend the interaction:', error);
@@ -2704,7 +2702,7 @@ function App({
   /**
    * The question a view's own run is waiting on.
    *
-   * Each pane answers its own: a background run that asks for approval must be
+   * Each pane answers its own: a background run that asks for a draft answer must be
    * answerable where it is, not only once its pane is focused. The state of
    * answering — submitting, extending, error — is per view for the same reason.
    */
@@ -2728,9 +2726,7 @@ function App({
         answerInteraction(target, interaction, body),
       onExtend: () => extendInteraction(target, interaction),
     };
-    return interaction.kind === 'approval'
-      ? <ApprovalDrawer {...shared} previewMaxHeightPx={appConfig.approval_preview_max_height_px} />
-      : <DraftRequestDrawer {...shared} />;
+    return <DraftRequestDrawer {...shared} />;
   };
   /**
    * The drawers a pane's destructive controls open: state context, the two
@@ -3285,7 +3281,7 @@ function App({
       isCompacting: record?.sessionRef !== undefined && compactingSessionRef === record.sessionRef,
       modelChoice,
       isStreaming: isRunning && pending === undefined,
-      pendingApproval: isRunning && pending !== undefined,
+      pendingDraft: isRunning && pending !== undefined,
       effort: modelChoice?.effort,
       provider: modelChoice?.option?.provider,
       model: modelChoice?.option?.id,
@@ -3528,7 +3524,7 @@ function App({
                         isRunning={pane.isRunning}
                         profileMessageCaller={pane.profileMessageCaller}
                         isStreaming={pane.isStreaming}
-                        pendingApproval={pane.pendingApproval}
+                        pendingDraft={pane.pendingDraft}
                         effort={pane.effort}
                         provider={pane.provider}
                         model={pane.model}
