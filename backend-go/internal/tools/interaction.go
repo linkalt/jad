@@ -38,17 +38,7 @@ type InteractionLimits struct {
 	MaxDraftDepth int64 `json:"max_draft_depth"`
 }
 
-// InteractionKind says what a question is for. Only a draft exists: a proposal the
-// user may accept, edit or decline.
-type InteractionKind string
-
-const (
-	// InteractionKindDraft is the zero value, so a question that sets no kind is a draft.
-	InteractionKindDraft InteractionKind = ""
-)
-
 type InteractionQuestion struct {
-	Kind         InteractionKind   `json:"kind,omitempty"`
 	Draft        json.RawMessage   `json:"draft"`
 	Title        string            `json:"title,omitempty"`
 	TimeoutMS    int64             `json:"timeout_ms"`
@@ -67,7 +57,6 @@ type InteractionAnswer struct {
 
 type PendingInteraction struct {
 	ID           string          `json:"id"`
-	Kind         InteractionKind `json:"kind,omitempty"`
 	Tool         string          `json:"tool"`
 	ToolCallID   string          `json:"tool_call_id"`
 	Draft        json.RawMessage `json:"draft"`

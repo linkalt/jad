@@ -138,13 +138,6 @@ func awaitAnswer(t *testing.T, answers <-chan tools.InteractionAnswer) tools.Int
 
 func ptr(value string) *string { return &value }
 
-func TestPendingInteractionOmitsTheKindForADraft(t *testing.T) {
-	draft, _ := json.Marshal(tools.PendingInteraction{ID: "a"})
-	if strings.Contains(string(draft), `"kind"`) {
-		t.Fatalf("a draft question carries a kind, so older clients see a new field: %s", draft)
-	}
-}
-
 // ended records what the broker told the run about each clearing notification.
 type endedLog struct {
 	pending chan *tools.PendingInteraction

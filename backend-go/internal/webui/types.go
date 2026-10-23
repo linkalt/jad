@@ -63,9 +63,7 @@ type Step struct {
 
 // Message is the frontend's normalized transcript message shape.
 type Interaction struct {
-	ID string `json:"id"`
-	// Kind is empty for a draft, the only kind of question.
-	Kind         string          `json:"kind,omitempty"`
+	ID           string          `json:"id"`
 	Tool         string          `json:"tool"`
 	ToolCallID   string          `json:"tool_call_id"`
 	Draft        json.RawMessage `json:"draft"`

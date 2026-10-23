@@ -91,7 +91,6 @@ func (b *Broker) Request(ctx context.Context, identity tools.InteractionIdentity
 	maxExpiresAt := createdAt.Add(time.Duration(maxTimeoutMS) * time.Millisecond)
 	pending := tools.PendingInteraction{
 		ID:           id,
-		Kind:         question.Kind,
 		Tool:         identity.Tool,
 		ToolCallID:   identity.ToolCallID,
 		Draft:        append([]byte(nil), question.Draft...),
@@ -252,13 +251,9 @@ func (b *Broker) settleLocked(entry *pendingEntry, answer tools.InteractionAnswe
 }
 
 func interactionEnd(pending tools.PendingInteraction, answer tools.InteractionAnswer) *tools.InteractionEnd {
-	kind := string(pending.Kind)
-	if kind == "" {
-		kind = "draft"
-	}
 	ended := &tools.InteractionEnd{
 		InteractionID: pending.ID,
-		Kind:          kind,
+		Kind:          "draft",
 		Tool:          pending.Tool,
 		Outcome:       answer.Outcome,
 	}

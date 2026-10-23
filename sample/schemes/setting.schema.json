@@ -1688,7 +1688,7 @@
             },
             "request_draft": {
               "type": "object",
-              "description": "User approval timeout and draft-size policy for request_draft.",
+              "description": "User response timeout and draft-size policy for request_draft.",
               "properties": {
                 "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 300000},
                 "headless_auto_accept_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 600000},
