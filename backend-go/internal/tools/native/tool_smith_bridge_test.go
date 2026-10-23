@@ -295,58 +295,6 @@ func TestToolSmithBridgeStartsNoMoreHandlersThanMaxNestedCalls(t *testing.T) {
 	}
 }
 
-func TestToolSmithBridgeApprovalDenialGivesBlockedToTheScript(t *testing.T) {
-	root := t.TempDir()
-	var wrote atomic.Int64
-	write := bridgeTestTool(t, "write", false, func(map[string]any) string { wrote.Add(1); return "w" })
-	write.Approval = tools.ApprovalAsk
-	var mu sync.Mutex
-	var asked []tools.ApprovalCall
-	execution := tools.ExecutionContext{RequestApproval: func(_ context.Context, call tools.ApprovalCall) tools.ApprovalVerdict {
-		mu.Lock()
-		asked = append(asked, call)
-		mu.Unlock()
-		return tools.ApprovalVerdict{Code: tools.ApprovalDenied, Reason: "declined"}
-	}}
-	settings := bridgeSettings(t, root, "write")
-	result := runWithBridge(context.Background(), root, settings, bridgeNested(write), execution, `
-const r = await tools.write({ path: 'f', content: 'x' });
-return r.status + ':' + r.ok + ':' + r.info.error_code;`)
-	if !strings.Contains(execContent(result), "blocked:false:approval_denied") || wrote.Load() != 0 {
-		t.Fatalf("wrote=%d result:\n%s", wrote.Load(), result)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(asked) != 1 || asked[0].Tool != "write" || asked[0].Agent != "tool_smith" || !strings.HasPrefix(asked[0].CallID, "smith-call.") {
-		t.Fatalf("approval questions = %+v", asked)
-	}
-}
-
-func TestToolSmithBridgeCountsOnlyExecutedWrites(t *testing.T) {
-	denied := func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
-		return tools.ApprovalVerdict{Code: tools.ApprovalDenied, Reason: "declined"}
-	}
-	allowed := func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
-		return tools.ApprovalVerdict{Allowed: true}
-	}
-	for name, tc := range map[string]struct {
-		approve func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict
-		writes  string
-	}{"denied": {denied, "0"}, "allowed": {allowed, "1"}} {
-		t.Run(name, func(t *testing.T) {
-			root := t.TempDir()
-			write := bridgeTestTool(t, "write", false, func(map[string]any) string { return "w" })
-			write.Approval = tools.ApprovalAsk
-			execution := tools.ExecutionContext{RequestApproval: tc.approve}
-			result := runWithBridge(context.Background(), root, bridgeSettings(t, root, "write"), bridgeNested(write), execution, `
-return (await tools.write({ path: 'f', content: 'x' })).status;`)
-			if execField(result, "nested_calls") != "1" || execField(result, "nested_writes") != tc.writes {
-				t.Fatalf("result:\n%s", result)
-			}
-		})
-	}
-}
-
 func TestToolSmithBridgeWaitsForUnawaitedNestedWrites(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "late.txt")
@@ -360,17 +308,6 @@ tools.write({});
 return 1;`)
 	if _, err := os.Stat(target); err != nil || execField(result, "nested_writes") != "1" {
 		t.Fatalf("stat err=%v result:\n%s", err, result)
-	}
-}
-
-func TestToolSmithBridgeNilApprovalBlocksANestedAskCall(t *testing.T) {
-	root := t.TempDir()
-	write := bridgeTestTool(t, "write", false, func(map[string]any) string { return "w" })
-	write.Approval = tools.ApprovalAsk
-	result := runWithBridge(context.Background(), root, bridgeSettings(t, root, "write"), bridgeNested(write), tools.ExecutionContext{}, `
-return (await tools.write({})).status;`)
-	if !strings.Contains(execContent(result), "blocked") {
-		t.Fatalf("result:\n%s", result)
 	}
 }
 

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // writerFixture is the subagent fixture with a write tool, a checkpoint and one agent
@@ -141,105 +139,6 @@ func TestSubagentWriterNeverHandsOffEvenWhenAskedTo(t *testing.T) {
 	}
 }
 
-// pendingApproval starts a run with interaction support and returns the stream, the
-// question's id, and its tool, title and draft.
-func (f subagentFixture) startAndWaitForQuestion(t *testing.T) (*bufio.Reader, io.Closer, map[string]any) {
-	t.Helper()
-	request, _ := http.NewRequest(http.MethodPost, f.apiURL+"/api/sessions/local:demo/run", strings.NewReader(`{"input":"ask the explorer","supports_interaction":true}`))
-	request.Header.Set("Authorization", "Bearer "+integrationAPIToken)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader := bufio.NewReader(response.Body)
-	deadline := time.Now().Add(10 * time.Second)
-	var event string
-	for time.Now().Before(deadline) {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			response.Body.Close()
-			t.Fatalf("stream ended before the approval question: %v", err)
-		}
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "event:") {
-			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		} else if strings.HasPrefix(line, "data:") && event == "interaction" {
-			var data struct {
-				Pending map[string]any `json:"pending"`
-			}
-			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &data) == nil && data.Pending != nil {
-				return reader, response.Body, data.Pending
-			}
-		}
-	}
-	response.Body.Close()
-	t.Fatal("no approval question arrived")
-	return nil, nil, nil
-}
-
-func (f subagentFixture) answer(t *testing.T, id, decision string) {
-	t.Helper()
-	body := fmt.Sprintf(`{"interaction_id":%q,"decision":%q,"reason":"not now"}`, id, decision)
-	request, _ := http.NewRequest(http.MethodPost, f.apiURL+"/api/sessions/local:demo/run/interaction", strings.NewReader(body))
-	request.Header.Set("Authorization", "Bearer "+integrationAPIToken)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(response.Body)
-		t.Fatalf("answer status = %d, body = %s", response.StatusCode, data)
-	}
-}
-
-func TestSubagentWriterAsksTheUserAndTheQuestionNamesTheAgent(t *testing.T) {
-	f := writerFixture(t, true)
-	reader, closer, pending := f.startAndWaitForQuestion(t)
-	defer closer.Close()
-	if pending["tool"] != "write" || !strings.Contains(fmt.Sprint(pending["title"]), "(agent explore)") || !strings.Contains(fmt.Sprint(pending["tool_call_id"]), "/") {
-		t.Fatalf("question = %v; want the write tool, the agent's name in the title and a child call id", pending)
-	}
-	if !strings.Contains(string(mustJSON(t, pending["draft"])), `"agent":"explore"`) {
-		t.Fatalf("the draft does not name the agent: %v", pending["draft"])
-	}
-	// The run is parked on the question: the child's write has not happened, and the
-	// checkpoint was already taken before the child started.
-	if _, err := os.Stat(filepath.Join(f.workspace, "made.txt")); err == nil {
-		t.Fatal("the child wrote before the user answered")
-	}
-	if records := f.checkpointRecords(t); len(records) != 1 || records[0]["state"] != "open" {
-		t.Fatalf("checkpoints while parked = %v, want one open", records)
-	}
-	f.answer(t, fmt.Sprint(pending["id"]), "accept")
-	if _, err := io.Copy(io.Discard, reader); err != nil {
-		t.Fatal(err)
-	}
-	if data, err := os.ReadFile(filepath.Join(f.workspace, "made.txt")); err != nil || string(data) != "by the child" {
-		t.Fatalf("made.txt = %q, %v after the user accepted", data, err)
-	}
-}
-
-func TestSubagentWriterDeniedByTheUserDoesNotWrite(t *testing.T) {
-	f := writerFixture(t, true)
-	reader, closer, pending := f.startAndWaitForQuestion(t)
-	defer closer.Close()
-	f.answer(t, fmt.Sprint(pending["id"]), "decline")
-	if _, err := io.Copy(io.Discard, reader); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(f.workspace, "made.txt")); err == nil {
-		t.Fatal("the child wrote after the user declined")
-	}
-	// The child saw the refusal as an ordinary blocked result and the run went on.
-	child := f.provider.forModel("child-model")
-	if len(child) < 2 || !strings.Contains(child[len(child)-1].Text, "approval_denied") {
-		t.Fatalf("the child never saw the refusal: %d requests", len(child))
-	}
-}
-
 func TestSubagentWriterWithNobodyToAskIsBlockedLikeTheParent(t *testing.T) {
 	f := writerFixture(t, true)
 	// The run does not support interaction, so there is nobody to ask.
@@ -335,117 +234,6 @@ func TestSubagentWriterCreatedFileIsRemovedByTheRestore(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.workspace, "made.txt")); !os.IsNotExist(err) {
 		t.Fatalf("the file the child created is still there after the restore (err %v)", err)
-	}
-}
-
-// answerEveryQuestion streams a run and answers each approval question as it arrives,
-// and returns the questions in the order they were asked. It fails if two questions are
-// ever open at once: the broker holds one, so a second would be refused.
-func (f subagentFixture) answerEveryQuestion(t *testing.T, decision string) []map[string]any {
-	t.Helper()
-	request, _ := http.NewRequest(http.MethodPost, f.apiURL+"/api/sessions/local:demo/run", strings.NewReader(`{"input":"ask the explorer","supports_interaction":true}`))
-	request.Header.Set("Authorization", "Bearer "+integrationAPIToken)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	reader := bufio.NewReader(response.Body)
-	var asked []map[string]any
-	var event string
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return asked
-		}
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "event:") {
-			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			continue
-		}
-		if !strings.HasPrefix(line, "data:") || event != "interaction" {
-			continue
-		}
-		var data struct {
-			Pending map[string]any `json:"pending"`
-		}
-		if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &data) != nil || data.Pending == nil {
-			continue
-		}
-		asked = append(asked, data.Pending)
-		f.answer(t, fmt.Sprint(data.Pending["id"]), decision)
-	}
-	t.Fatal("the run did not finish in time")
-	return asked
-}
-
-func TestSubagentTwoWritersAskingAtOnceAreAskedOneAtATime(t *testing.T) {
-	for _, scheduling := range []string{"ordered", "concurrent"} {
-		t.Run(scheduling, func(t *testing.T) {
-			f := writerFixtureWith(t, true, nil, map[string]any{"tool_call_scheduling": scheduling, "max_parallel_tool_calls": 4})
-			f.provider.parentCalls = 2
-			f.provider.childWritesByTask = true
-			asked := f.answerEveryQuestion(t, "accept")
-			if len(asked) != 2 {
-				t.Fatalf("questions asked = %d, want 2 (one per writer)", len(asked))
-			}
-			calls := map[string]bool{}
-			for _, question := range asked {
-				if question["tool"] != "write" || !strings.Contains(fmt.Sprint(question["title"]), "(agent explore)") {
-					t.Errorf("question = %v", question)
-				}
-				calls[fmt.Sprint(question["tool_call_id"])] = true
-			}
-			if len(calls) != 2 {
-				t.Errorf("the two questions share a call id: %v", calls)
-			}
-			// Both writes happened: a second question refused for being a second would
-			// have blocked its child's write.
-			for _, name := range []string{"w0.txt", "w1.txt"} {
-				if got := f.read(name); !strings.HasPrefix(got, "child ") {
-					t.Errorf("%s = %q; the write was blocked", name, got)
-				}
-			}
-			if records := f.checkpointRecords(t); len(records) != 1 {
-				t.Errorf("checkpoints = %d, want one for the whole run", len(records))
-			}
-		})
-	}
-}
-
-func TestSubagentWriterParkedOnAQuestionEndsCleanlyWhenTheRunIsStopped(t *testing.T) {
-	f := writerFixture(t, true)
-	reader, closer, pending := f.startAndWaitForQuestion(t)
-	defer closer.Close()
-	if status, body := f.postBody(t, "/run/stop", ``); status != http.StatusOK {
-		t.Fatalf("stop status = %d, body = %s", status, body)
-	}
-	done := make(chan struct{})
-	go func() { _, _ = io.Copy(io.Discard, reader); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatalf("the stream did not end after the stop; the question %v is still holding the run", pending["id"])
-	}
-	if _, err := os.Stat(filepath.Join(f.workspace, "made.txt")); err == nil {
-		t.Fatal("the child wrote after the run was stopped")
-	}
-	// The stopped run closes its checkpoint and the child's run is not left going.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		records := f.checkpointRecords(t)
-		if len(records) == 1 && records[0]["state"] == "complete" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("checkpoints after the stop = %v, want one complete", records)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if status, body := f.get(t, "/run"); status == http.StatusOK && strings.Contains(body, `"status":"running"`) {
-		t.Fatalf("the run is still going: %s", body)
 	}
 }
 

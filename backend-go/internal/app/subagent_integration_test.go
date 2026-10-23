@@ -833,15 +833,11 @@ func (f subagentFixture) sessionTools(t *testing.T) (int, string) {
 	return response.StatusCode, string(body)
 }
 
-func TestSubagentMCPToolFromAServerThatAsksIsRefusedWhenTheSessionLoads(t *testing.T) {
+func TestSubagentMCPToolFromAServerMarkedAskLoadsLikeAnyOther(t *testing.T) {
 	calls := &atomic.Int32{}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"mcp:fixture:lookup"}}, false, nil, &mcpFixture{approval: "ask", calls: calls})
-	status, body := f.sessionTools(t)
-	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "whose server asks for approval") {
-		t.Fatalf("status %d, body %s; want 422 naming the approval problem", status, body)
-	}
-	if calls.Load() != 0 || len(f.provider.requests) != 0 {
-		t.Fatalf("a refused session still ran: %d MCP calls, %d provider requests", calls.Load(), len(f.provider.requests))
+	if status, body := f.sessionTools(t); status != http.StatusOK {
+		t.Fatalf("status %d, body %s; want the session to load", status, body)
 	}
 }
 

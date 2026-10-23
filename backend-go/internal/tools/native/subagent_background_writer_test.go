@@ -2,7 +2,6 @@ package native
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -132,16 +131,16 @@ func TestBackgroundWriterOffByDefaultStillRunsToItsEnd(t *testing.T) {
 	}
 }
 
-func TestBackgroundWriterWithAnAskToolStillRunsToItsEnd(t *testing.T) {
+func TestBackgroundWriterWithAnAskSettingToolIsStillHandedOff(t *testing.T) {
 	release := make(chan struct{})
 	catalog, _, _ := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "write")), writingLauncher(release, nil), readOnlyTool("read"), askingWriteTool("write"))
 	defer close(release)
-	if out, returned := callReturnsWithin(t, catalog, `{"task":"fix","block_ms":0}`, 200*time.Millisecond); returned {
-		t.Fatalf("a writer whose write tool asks for approval was handed off:\n%s", out)
+	if out, returned := callReturnsWithin(t, catalog, `{"task":"fix","block_ms":0}`, 2*time.Second); !returned || !strings.Contains(out, "still running") {
+		t.Fatalf("a writer was not handed off though no approval gates it:\n%s", out)
 	}
 }
 
-func TestBackgroundSafeNeedsTheSettingTheAsyncHostAndNoAskTool(t *testing.T) {
+func TestBackgroundSafeNeedsTheSettingTheAsyncHostAndAWriter(t *testing.T) {
 	host := newTestAsyncHost(t)
 	plain := subagentAgent{config: writerAgent("w", "read", "write"), nativeTools: withExecutors(t, readOnlyTool("read"), writeTool("write"))}
 	asking := subagentAgent{config: plain.config, nativeTools: withExecutors(t, readOnlyTool("read"), askingWriteTool("write"))}
@@ -158,7 +157,7 @@ func TestBackgroundSafeNeedsTheSettingTheAsyncHostAndNoAskTool(t *testing.T) {
 		"all auto":        {on, plain, host, true},
 		"setting off":     {off, plain, host, false},
 		"no async host":   {on, plain, nil, false},
-		"one ask tool":    {on, asking, host, false},
+		"ask-marked tool": {on, asking, host, true},
 		"read-only agent": {on, reader, host, false},
 	} {
 		if got := backgroundSafe(tc.settings, tc.agent, tc.host); got != tc.want {
@@ -213,40 +212,6 @@ func TestBackgroundWriterCapIsPerSession(t *testing.T) {
 		if got := manager.BackgroundWriters(session); got != 1 {
 			t.Errorf("session %s holds %d places, want 1", session, got)
 		}
-	}
-}
-
-func TestBackgroundWriterCannotAskTheUser(t *testing.T) {
-	verdicts := make(chan tools.ApprovalVerdict, 1)
-	var asked atomic.Bool
-	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
-		if request.Execution.RequestApproval == nil {
-			verdicts <- tools.ApprovalVerdict{Code: "no_requester"}
-			return SubagentResult{Text: "x"}, nil
-		}
-		verdicts <- request.Execution.RequestApproval(ctx, tools.ApprovalCall{Tool: "write"})
-		return SubagentResult{Text: "x"}, nil
-	}}
-	catalog, _, _ := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "write")), launcher, readOnlyTool("read"), writeTool("write"))
-	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "call_9", "name": "subagent", "arguments": `{"task":"fix","block_ms":0}`})
-	execution := tools.ExecutionContext{WorkspaceRoot: "/work", SessionKey: testSessionKey, RequestApproval: func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
-		asked.Store(true)
-		return tools.ApprovalVerdict{Allowed: true}
-	}}
-	if _, err := catalog.ExecuteFunctionCall(context.Background(), call, execution); err != nil {
-		t.Fatal(err)
-	}
-	var verdict tools.ApprovalVerdict
-	select {
-	case verdict = <-verdicts:
-	case <-time.After(3 * time.Second):
-		t.Fatal("the child never asked")
-	}
-	if verdict.Allowed || verdict.Code != tools.ApprovalUnavailable || !strings.Contains(verdict.Reason, "a background sub-agent cannot ask the user") {
-		t.Errorf("verdict = %+v", verdict)
-	}
-	if asked.Load() {
-		t.Error("the parent's requester was called for a background writer")
 	}
 }
 

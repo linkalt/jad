@@ -264,26 +264,6 @@ func TestToolSmithRunIDsAreNotAcceptedAsPathsForDetail(t *testing.T) {
 	}
 }
 
-func TestToolSmithRunWithAskingNestedToolRunsToItsEnd(t *testing.T) {
-	root := t.TempDir()
-	host := newTestAsyncHost(t)
-	asking := writeTool("write")
-	asking.Approval = tools.ApprovalAsk
-	nested := &ToolSmithNested{}
-	nested.Bind([]tools.Tool{asking}, nil)
-	settings := fakeToolSmithSettings(t, root, `echo inline > "$EXEC_RESULT"`)
-	settings.Tools = []string{"write"}
-	script := toolSmithScript{settings: settings, nested: nested}
-	if !toolSmithNeedsApproval(script) {
-		t.Fatal("a nested tool that asks must keep the call blocking")
-	}
-	nested.Bind([]tools.Tool{writeTool("write")}, nil)
-	if toolSmithNeedsApproval(script) {
-		t.Fatal("a nested tool that does not ask must not")
-	}
-	_ = host
-}
-
 func TestToolSmithSummariesSayScriptAndNoReturnMeansNoResultBlock(t *testing.T) {
 	f := newToolSmithAsyncFixture(t, `echo printed`)
 	out := f.run(t, "s1", `{"function":"console.log(1);","block_ms":5000}`)

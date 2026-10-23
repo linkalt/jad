@@ -123,26 +123,11 @@ func (h *AsyncHost) sweepToolSmithResults() {
 	}
 }
 
-// toolSmithNeedsApproval says whether a nested call of the script could ask the user, which
-// nobody can answer once the call has returned.
-func toolSmithNeedsApproval(script toolSmithScript) bool {
-	for _, tool := range script.nested.allowed(script.settings) {
-		if tool.Approval == tools.ApprovalAsk {
-			return true
-		}
-	}
-	return false
-}
-
 // startToolSmithAsync runs the script as a handle of the async manager and blocks up to
-// blockMs for it. A script whose nested tools could ask for approval runs to its end inside
-// the call instead, where the question has somebody to go to.
+// blockMs for it.
 func startToolSmithAsync(ctx context.Context, host *AsyncHost, script toolSmithScript, blockMs *int64) (string, error) {
 	callID := script.execution.CallID
 	owner, _ := handleOwner(script.execution)
-	if toolSmithNeedsApproval(script) {
-		return runToolSmithScript(ctx, script).text, nil
-	}
 	random := make([]byte, 4)
 	if _, err := rand.Read(random); err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The run id could not be created",
@@ -160,11 +145,10 @@ func startToolSmithAsync(ctx context.Context, host *AsyncHost, script toolSmithS
 	host.sweepToolSmithResults()
 
 	// The script outlives the call: only a stop, the script's own timeout or the end of the
-	// server ends it. Nested calls cannot ask anybody once the call has returned.
+	// server ends it.
 	runCtx, cancel := context.WithCancel(context.Background())
 	run := &toolSmithRun{id: id, cancel: cancel, done: make(chan struct{}), start: time.Now(), label: label}
 	host.setToolSmithRun(run)
-	script.execution.RequestApproval = backgroundApproval
 	script.execution.RequestInteraction = nil
 	script.execution.OnInteractionResolved = nil
 	go func() {

@@ -93,16 +93,10 @@ type subagentAgent struct {
 
 // backgroundSafe reports whether a writer agent may run as a handle: the session turned
 // background_writers on, the async tool is there to collect the run, and no native tool
-// of the agent asks for approval, so nothing it does needs a user who may be gone. An
-// MCP tool of an ask server cannot be listed by an agent at all (see bindMCP).
+// of the agent is limited.
 func backgroundSafe(settings sessionfs.NativeSubagentSettings, agent subagentAgent, host *AsyncHost) bool {
 	if !settings.BackgroundWriters || host == nil || !agent.config.ChangesFiles() {
 		return false
-	}
-	for _, tool := range agent.nativeTools {
-		if tool.Approval == tools.ApprovalAsk {
-			return false
-		}
 	}
 	return true
 }
@@ -120,8 +114,7 @@ type SubagentMCP struct {
 }
 
 // Bind gives each agent that lists MCP tools its catalog. It fails when a listed tool
-// is not among the loaded ones or belongs to a server that asks for approval, because
-// a child has no way to ask. It does nothing when the session has no subagent tool.
+// is not among the loaded ones. It does nothing when the session has no subagent tool.
 func (m *SubagentMCP) Bind(mcpTools []tools.Tool) error {
 	return m.BindToolsets(mcpTools, nil)
 }
@@ -590,9 +583,6 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]
 			if !exists {
 				return fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not a loaded MCP tool%s (loaded: %s)", agent.config.Name, id, where, loadedText)
 			}
-			if tool.Approval == tools.ApprovalAsk {
-				return fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, whose server asks for approval; a sub-agent has no way to ask the user, so the call would always be blocked", agent.config.Name, id)
-			}
 			add(tool)
 		}
 		catalog, err := tools.NewCatalog(childTools)
@@ -632,26 +622,17 @@ func newMCPPool(mcpTools []tools.Tool) mcpPool {
 
 // expandMCPWildcard returns the loaded tools of one server, by ID order, for an entry
 // written mcp:<server>:*. The server prefix is the profile's matching rule. A tool whose
-// server asks for approval is skipped, since the child cannot ask; a wildcard that is
-// left with no tool is an error that names the server.
+// a wildcard that matches no tool is an error that names the server.
 func expandMCPWildcard(agent, entry, serverPrefix string, byID map[string]tools.Tool) ([]tools.Tool, error) {
 	var matched []tools.Tool
-	skipped := 0
 	for id, tool := range byID {
 		if !strings.HasPrefix(id, serverPrefix+":") {
-			continue
-		}
-		if tool.Approval == tools.ApprovalAsk {
-			skipped++
 			continue
 		}
 		matched = append(matched, tool)
 	}
 	server := strings.TrimPrefix(serverPrefix, mcpToolIDPrefix)
 	if len(matched) == 0 {
-		if skipped > 0 {
-			return nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, but server %q asks for approval; a sub-agent has no way to ask the user, so none of its tools can be used", agent, entry, server)
-		}
 		return nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, but server %q has no loaded tool (is it enabled in mcp_servers and running?)", agent, entry, server)
 	}
 	sort.Slice(matched, func(i, j int) bool { return matched[i].Definition.ID < matched[j].Definition.ID })

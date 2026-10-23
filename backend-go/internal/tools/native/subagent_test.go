@@ -643,12 +643,11 @@ func TestSubagentChildGetsOnlyTheMCPToolsItsListNames(t *testing.T) {
 	}
 }
 
-func TestSubagentBindRefusesAnMCPToolThatIsNotLoadedOrNeedsApproval(t *testing.T) {
+func TestSubagentBindRefusesAnMCPToolThatIsNotLoaded(t *testing.T) {
 	loaded := []tools.Tool{mcpStub(t, "zvec", "search", ""), mcpStub(t, "gated", "lookup", tools.ApprovalAsk)}
 	for name, tc := range map[string]struct{ tool, want string }{
 		"unknown tool":   {"mcp:zvec:nope", `lists "mcp:zvec:nope", which is not a loaded MCP tool (loaded: mcp:gated:lookup, mcp:zvec:search)`},
 		"unknown server": {"mcp:other:search", `lists "mcp:other:search", which is not a loaded MCP tool`},
-		"needs approval": {"mcp:gated:lookup", `lists "mcp:gated:lookup", whose server asks for approval`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "read", tc.tool)), &fakeLauncher{}, loaded, readOnlyTool("read"))
@@ -656,6 +655,10 @@ func TestSubagentBindRefusesAnMCPToolThatIsNotLoadedOrNeedsApproval(t *testing.T
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+	// A server that asks for approval no longer matters: the tool binds like any other.
+	if _, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "read", "mcp:gated:lookup")), &fakeLauncher{}, loaded, readOnlyTool("read")); err != nil {
+		t.Fatalf("a tool marked ask must bind: %v", err)
 	}
 	// With no MCP tool loaded at all the message says so.
 	_, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "mcp:zvec:search")), &fakeLauncher{}, nil, readOnlyTool("read"))
@@ -701,7 +704,7 @@ func TestSubagentWildcardGivesTheChildEveryToolOfThatServerOnce(t *testing.T) {
 	}
 }
 
-func TestSubagentWildcardSkipsToolsOfAServerThatAsksButExactStillFails(t *testing.T) {
+func TestSubagentWildcardNamesAnEmptyServerAndIgnoresApprovalMarks(t *testing.T) {
 	loaded := []tools.Tool{
 		mcpStub(t, "mixed", "open", ""),
 		mcpStub(t, "mixed", "gated", tools.ApprovalAsk),
@@ -713,13 +716,11 @@ func TestSubagentWildcardSkipsToolsOfAServerThatAsksButExactStillFails(t *testin
 		t.Fatal(err)
 	}
 	subagentCall(t, catalog, `{"task":"x"}`)
-	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "mcp_mixed_open_0123456789" {
-		t.Errorf("child tools = %q, want only the tool that needs no approval", got)
+	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "mcp_mixed_gated_0123456789,mcp_mixed_open_0123456789" {
+		t.Errorf("child tools = %q, want every tool of the server", got)
 	}
 	for name, tc := range map[string]struct{ entry, want string }{
-		"every tool asks": {"mcp:gated:*", `"mcp:gated:*", but server "gated" asks for approval`},
-		"no tool loaded":  {"mcp:ghost:*", `"mcp:ghost:*", but server "ghost" has no loaded tool`},
-		"exact asks":      {"mcp:mixed:gated", `lists "mcp:mixed:gated", whose server asks for approval`},
+		"no tool loaded": {"mcp:ghost:*", `"mcp:ghost:*", but server "ghost" has no loaded tool`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := buildWithMCP(t, subagentSettings(agentWithTools("a", tc.entry)), &fakeLauncher{}, loaded, readOnlyTool("read"))

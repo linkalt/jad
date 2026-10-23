@@ -58,22 +58,14 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		ownScope = &tools.PathScope{Allow: agent.config.Paths.Allow, Deny: agent.config.Paths.Deny}
 	}
 	childExecution.PathScope = narrowScope(execution.WorkspaceRoot, execution.PathScope, ownScope)
-	// A writer becomes a handle only when it is allowed to (background_writers, no tool of
-	// its own asks for approval) and its session has a place left; otherwise it runs to its
-	// end inside this call, where its approvals and the checkpoint belong.
+	// A writer becomes a handle only when it is allowed to (background_writers) and its
+	// session has a place left; otherwise it runs to its end inside this call, where the
+	// checkpoint belongs.
 	background, note := false, ""
 	if changes && agent.background && s.async != nil && execution.SessionKey != "" && depth == 0 {
 		if background = s.manager.reserveWriter(execution.SessionKey, int(s.settings.MaxBackgroundWriters)); !background {
 			note = fmt.Sprintf("Not handed off: the session already has %d background writer(s) going (tools.native.subagent.max_background_writers), so this call ran to its end", s.settings.MaxBackgroundWriters)
 		}
-	}
-	switch {
-	case background:
-		childExecution.RequestApproval = backgroundApproval
-	case changes:
-		// A child that can change files asks the same user through the same queue as
-		// the parent, with its own name on the question. A read-only child asks nobody.
-		childExecution.RequestApproval = childApproval(execution.RequestApproval, agent.config.Name, callID)
 	}
 	// A run started inside a child belongs to that child's run: its handle is the child's
 	// own, and exists only when the child has the async tool to collect it.
@@ -132,7 +124,7 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		return tools.ExecutionError(callID, tools.StatusError, code, err.Error()), nil
 	}
 	// A run without a handle (a writer, or a session without the async tool) has nobody to
-	// collect it later: its approvals and the checkpoint belong to this call, which waits
+	// collect it later: the checkpoint belongs to this call, which waits
 	// for its end whatever block_ms says, and cancelling the call cancels the run. The
 	// agent's timeout_ms still bounds it. A handle outlives the call: the call's end stops
 	// the wait, never the run.
@@ -160,28 +152,6 @@ func (s *subagentTool) blockFor(arguments map[string]any) time.Duration {
 		asked = &value
 	}
 	return s.async.Config().BlockDuration(asked)
-}
-
-// backgroundApproval answers for a writer that runs as a handle: its turn may be over by
-// the time a call needs the user, so nobody can be asked. It is only reached by a call to
-// a tool that asks, which the static check at the start keeps out of such an agent.
-func backgroundApproval(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
-	return tools.ApprovalVerdict{Code: tools.ApprovalUnavailable, Reason: "a background sub-agent cannot ask the user"}
-}
-
-// childApproval wraps the parent's approval requester for a writer's calls: the question
-// names the agent, and the call id carries the parent's call id so it cannot be taken for
-// one of the parent's own. A nil parent stays nil, so a run nobody can ask blocks the
-// child's calls exactly as it blocks the parent's.
-func childApproval(parent tools.ApprovalRequester, agent, parentCallID string) tools.ApprovalRequester {
-	if parent == nil {
-		return nil
-	}
-	return func(ctx context.Context, call tools.ApprovalCall) tools.ApprovalVerdict {
-		call.Agent = agent
-		call.CallID = parentCallID + "/" + call.CallID
-		return parent(ctx, call)
-	}
 }
 
 // await waits for a run to end, for at most wait (a negative wait has no limit), and

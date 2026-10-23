@@ -28,7 +28,7 @@ const (
 	toolSmithSocketEnv  = "TOOL_SMITH_SOCKET"
 	toolSmithTokenEnv   = "TOOL_SMITH_TOKEN"
 	toolSmithSocketName = "b.sock"
-	// toolSmithNestedAgent labels the approval question of a nested call.
+	// toolSmithNestedAgent is the call id prefix of a nested call whose script has no call id.
 	toolSmithNestedAgent = "tool_smith"
 )
 
@@ -222,12 +222,11 @@ func startToolSmithBridge(ctx context.Context, dir string, settings sessionfs.Na
 		catalog:  catalog,
 		byName:   make(map[string]tools.Tool, len(nested)),
 		execution: tools.ExecutionContext{
-			WorkspaceRoot:   execution.WorkspaceRoot,
-			SessionDir:      execution.SessionDir,
-			SessionKey:      execution.SessionKey,
-			AgentName:       execution.AgentName,
-			PathScope:       execution.PathScope,
-			RequestApproval: nestedApproval(execution.RequestApproval),
+			WorkspaceRoot: execution.WorkspaceRoot,
+			SessionDir:    execution.SessionDir,
+			SessionKey:    execution.SessionKey,
+			AgentName:     execution.AgentName,
+			PathScope:     execution.PathScope,
 
 			RequestInteraction:    execution.RequestInteraction,
 			OnInteractionResolved: execution.OnInteractionResolved,
@@ -254,19 +253,6 @@ func startToolSmithBridge(ctx context.Context, dir string, settings sessionfs.Na
 	bridge.wg.Add(1)
 	go bridge.accept()
 	return bridge, nil
-}
-
-// nestedApproval wraps the outer requester so a nested call is asked about on its own,
-// under its own call id (which carries the outer one): approving the tool_smith call
-// approves none of them. A nil requester stays nil, so a run nobody can ask blocks the nested call.
-func nestedApproval(parent tools.ApprovalRequester) tools.ApprovalRequester {
-	if parent == nil {
-		return nil
-	}
-	return func(ctx context.Context, call tools.ApprovalCall) tools.ApprovalVerdict {
-		call.Agent = toolSmithNestedAgent
-		return parent(ctx, call)
-	}
 }
 
 // Close stops the listener, drops the connections, cancels calls still running and waits

@@ -234,85 +234,6 @@ type errTest string
 
 func (e errTest) Error() string { return string(e) }
 
-func TestSubagentWriterGetsTheParentsApprovalWithItsNameOnTheQuestion(t *testing.T) {
-	var asked []tools.ApprovalCall
-	parent := func(_ context.Context, call tools.ApprovalCall) tools.ApprovalVerdict {
-		asked = append(asked, call)
-		return tools.ApprovalVerdict{Allowed: true}
-	}
-	var verdict tools.ApprovalVerdict
-	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
-		if request.Execution.RequestApproval == nil {
-			t.Error("a writer got no approval requester")
-			return SubagentResult{}, nil
-		}
-		verdict = request.Execution.RequestApproval(ctx, tools.ApprovalCall{CallID: "inner-1", ModelToolName: "write", Tool: "write", Args: map[string]any{"path": "a.txt"}})
-		return SubagentResult{Text: "done"}, nil
-	}}
-	catalog, _ := buildSubagentCatalog(t, writeSettings(writerAgent("fixer", "read", "write")), launcher, readOnlyTool("read"), writeTool("write"))
-	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "parent-call", "name": "subagent", "arguments": `{"task":"fix"}`})
-	if _, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess", RequestApproval: parent}); err != nil {
-		t.Fatal(err)
-	}
-	if !verdict.Allowed || len(asked) != 1 {
-		t.Fatalf("verdict = %+v, parent asked %d times", verdict, len(asked))
-	}
-	if asked[0].Agent != "fixer" || asked[0].CallID != "parent-call/inner-1" || asked[0].Tool != "write" {
-		t.Fatalf("the parent saw %+v; want agent fixer, call id parent-call/inner-1", asked[0])
-	}
-}
-
-// A read-only child must get no requester even when the parent has one: it cannot ask
-// the user anything, so a requester would only be a way to bypass the read-only rule.
-func TestSubagentReaderGetsNoApprovalRequesterEvenWhenTheParentHasOne(t *testing.T) {
-	var readerGot, writerGot bool
-	launcher := &fakeLauncher{run: func(_ context.Context, request SubagentRequest) (SubagentResult, error) {
-		if request.Agent.Name == "fixer" {
-			writerGot = request.Execution.RequestApproval != nil
-		} else {
-			readerGot = request.Execution.RequestApproval != nil
-		}
-		return SubagentResult{Text: "ok"}, nil
-	}}
-	catalog, _ := buildSubagentCatalog(t, writeSettings(agentNamed("reader"), writerAgent("fixer", "read", "write")), launcher, readOnlyTool("read"), writeTool("write"))
-	parent := func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
-		return tools.ApprovalVerdict{Allowed: true}
-	}
-	for _, agent := range []string{"fixer", "reader"} {
-		call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "p-" + agent, "name": "subagent", "arguments": `{"agent":"` + agent + `","task":"x"}`})
-		if _, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess", RequestApproval: parent}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !writerGot {
-		t.Error("the writer got no approval requester though the parent has one")
-	}
-	if readerGot {
-		t.Error("a read-only child got the parent's approval requester")
-	}
-}
-
-func TestSubagentWriterWithNoWayToAskStaysBlockedAndReadersAskNobody(t *testing.T) {
-	var sawWriter, sawReader bool
-	launcher := &fakeLauncher{run: func(_ context.Context, request SubagentRequest) (SubagentResult, error) {
-		if request.Agent.Name == "fixer" {
-			sawWriter = request.Execution.RequestApproval == nil
-		} else {
-			sawReader = request.Execution.RequestApproval == nil
-		}
-		return SubagentResult{Text: "ok"}, nil
-	}}
-	catalog, _ := buildSubagentCatalog(t, writeSettings(agentNamed("reader"), writerAgent("fixer", "read", "write")), launcher, readOnlyTool("read"), writeTool("write"))
-	subagentCall(t, catalog, `{"agent":"fixer","task":"fix"}`)
-	subagentCall(t, catalog, `{"agent":"reader","task":"look"}`)
-	if !sawWriter {
-		t.Error("with no parent requester the writer must get none, so its calls block exactly as the parent's do")
-	}
-	if !sawReader {
-		t.Error("a read-only child must never receive an approval requester")
-	}
-}
-
 func TestSubagentApprovalPreviewNamesTheAgent(t *testing.T) {
 	preview, err := tools.ApprovalPreview(tools.ApprovalCall{CallID: "c", ModelToolName: "write", Tool: "write", Agent: "fixer", Args: map[string]any{"path": "a.txt", "content": "hi"}}, 100)
 	if err != nil {
@@ -380,26 +301,5 @@ func TestSubagentPassesTheAgentsPathsToTheChild(t *testing.T) {
 	got.Allow[0] = "changed"
 	if scoped.Paths.Allow[0] != "src" {
 		t.Fatal("the child's scope shares memory with the agent's settings")
-	}
-}
-
-func TestSubagentWriterApprovalReachesTheParent(t *testing.T) {
-	var asked atomic.Int64
-	parent := func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
-		asked.Add(1)
-		return tools.ApprovalVerdict{Allowed: true}
-	}
-	var verdict tools.ApprovalVerdict
-	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
-		verdict = request.Execution.RequestApproval(ctx, tools.ApprovalCall{CallID: "w1", ModelToolName: "write", Tool: "write", Args: map[string]any{"path": "a.txt"}})
-		return SubagentResult{Text: "done"}, nil
-	}}
-	catalog, _ := buildSubagentCatalog(t, writeSettings(writerAgent("fixer", "read", "write")), launcher, readOnlyTool("read"), writeTool("write"))
-	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "parent-call", "name": "subagent", "arguments": `{"task":"fix","block_ms":5000}`})
-	if _, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess", RequestApproval: parent}); err != nil {
-		t.Fatal(err)
-	}
-	if !verdict.Allowed || asked.Load() != 1 {
-		t.Fatalf("verdict %+v, parent asked %d times; want allowed and 1", verdict, asked.Load())
 	}
 }
