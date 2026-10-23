@@ -441,6 +441,7 @@ func TestCallChangesWorkspace(t *testing.T) {
 		{"exec runs a program that can change files", call("exec", map[string]any{"lang": "bash", "code": "x"}), "native", true, true},
 		{"process start", call("process", map[string]any{"command": "x"}), "native", true, true},
 		{"process without a command", call("process", map[string]any{"block_ms": 1}), "native", true, false},
+		{"process with a blank command starts nothing", call("process", map[string]any{"command": "  "}), "native", true, false},
 		{"read", call("read", map[string]any{}), "native", true, false},
 		{"grep", call("grep", map[string]any{}), "native", true, false},
 		{"mcp counted", call("srv_tool", map[string]any{}), "mcp", true, true},

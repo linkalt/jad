@@ -2,13 +2,13 @@ package checkpoint
 
 import (
 	"encoding/json"
-
-	"jad/backend-go/internal/tools"
+	"strings"
 )
 
 // CallChangesWorkspace reports whether a call can change files or start something
 // that can; reads never take a checkpoint. source is the tool's source ("native"
-// or "mcp"; empty for an unknown name).
+// or "mcp"; empty for an unknown name). A process call changes things only when
+// it carries a command; waiting for or stopping an earlier one starts nothing.
 func CallChangesWorkspace(call json.RawMessage, source string, includeMCPTools bool) bool {
 	if source == "mcp" {
 		return includeMCPTools
@@ -32,7 +32,8 @@ func CallChangesWorkspace(call json.RawMessage, source string, includeMCPTools b
 		if json.Unmarshal([]byte(text), &args) != nil || args == nil {
 			return false
 		}
-		return tools.CallNeedsApproval("process", args)
+		command, _ := args["command"].(string)
+		return strings.TrimSpace(command) != ""
 	}
 	return false
 }
