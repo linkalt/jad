@@ -8,13 +8,9 @@ import (
 	"testing"
 )
 
-func pathsAgent(t *testing.T, agent string, allowWrite bool) (NativeSubagentAgent, error) {
+func pathsAgent(t *testing.T, agent string) (NativeSubagentAgent, error) {
 	t.Helper()
-	flag := ""
-	if allowWrite {
-		flag = `"allow_write":true,`
-	}
-	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{`+flag+`"agents":{"fixer":`+agent+`}}`), "/s/setting.json", "/w", "")
+	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"fixer":`+agent+`}}`), "/s/setting.json", "/w", "")
 	if err != nil {
 		return NativeSubagentAgent{}, err
 	}
@@ -22,7 +18,7 @@ func pathsAgent(t *testing.T, agent string, allowWrite bool) (NativeSubagentAgen
 }
 
 func TestSubagentPathsAreParsed(t *testing.T) {
-	agent, err := pathsAgent(t, `{"tools":["read","write","edit"],"paths":{"allow":["src"," docs/api "],"deny":["src/secret"]}}`, true)
+	agent, err := pathsAgent(t, `{"tools":["read","write","edit"],"paths":{"allow":["src"," docs/api "],"deny":["src/secret"]}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,12 +29,12 @@ func TestSubagentPathsAreParsed(t *testing.T) {
 		t.Errorf("deny = %q", got)
 	}
 	for _, same := range []string{`{"tools":["write"]}`, `{"tools":["write"],"paths":null}`} {
-		a, err := pathsAgent(t, same, true)
+		a, err := pathsAgent(t, same)
 		if err != nil || a.Paths.Set() {
 			t.Errorf("%s: paths = %+v, err = %v; want none", same, a.Paths, err)
 		}
 	}
-	denyOnly, err := pathsAgent(t, `{"tools":["edit"],"paths":{"deny":["x"]}}`, true)
+	denyOnly, err := pathsAgent(t, `{"tools":["edit"],"paths":{"deny":["x"]}}`)
 	if err != nil || !denyOnly.Paths.Set() || len(denyOnly.Paths.Allow) != 0 {
 		t.Errorf("deny only: %+v, %v", denyOnly.Paths, err)
 	}
@@ -60,7 +56,7 @@ func TestSubagentPathsAreRefusedWhenTheyCannotHold(t *testing.T) {
 		"duplicate entry":    {`{"tools":["write"],"paths":{"deny":["a","a"]}}`, "lists a twice"},
 		"non-string entry":   {`{"tools":["write"],"paths":{"allow":[1]}}`, "must be an array of path strings"},
 	} {
-		if _, err := pathsAgent(t, tc.agent, true); err == nil || !strings.Contains(err.Error(), tc.want) {
+		if _, err := pathsAgent(t, tc.agent); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: error = %v, want it to contain %q", name, err, tc.want)
 		}
 	}
@@ -75,7 +71,7 @@ func TestSubagentPathsInAnAgentFolder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(folder, "agent.json"), []byte(`{"tools":["write"],"paths":{"allow":["src"]}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"allow_write":true,"agents_dir":[`+strconv.Quote(dir)+`]}`), "/s/setting.json", "/w", "")
+	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents_dir":[`+strconv.Quote(dir)+`]}`), "/s/setting.json", "/w", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +81,7 @@ func TestSubagentPathsInAnAgentFolder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(folder, "agent.json"), []byte(`{"tools":["write","bash"],"paths":{"allow":["src"]}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"allow_write":true,"agents_dir":[`+strconv.Quote(dir)+`]}`), "/s/setting.json", "/w", ""); err == nil || !strings.Contains(err.Error(), "a shell can change any path") {
+	if _, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents_dir":[`+strconv.Quote(dir)+`]}`), "/s/setting.json", "/w", ""); err == nil || !strings.Contains(err.Error(), "a shell can change any path") {
 		t.Fatalf("folder agent with bash and paths: %v", err)
 	}
 }

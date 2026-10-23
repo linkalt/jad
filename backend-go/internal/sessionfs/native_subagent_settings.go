@@ -52,7 +52,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -111,11 +111,6 @@ type NativeSubagentSettings struct {
 	// the transcript is the record of what a child did, and nothing deletes it unless
 	// asked. The zero value is the default.
 	DeleteTranscripts bool
-	// AllowWrite lets an agent list write, edit, bash, exec or process in its tools, so a child
-	// can change files and run code. Off by default: without it such a name is a
-	// configuration error, and every child stays read-only. The zero value is the
-	// default.
-	AllowWrite bool
 	// DenyAgents are agent names removed from Agents after loading; a name that matches no agent is ignored.
 	DenyAgents []string
 	// DenyTools is the selected profile's tools.deny, set when the catalog is built and
@@ -153,8 +148,8 @@ type NativeSubagentStateContextSettings struct {
 }
 
 // SubagentChangeTools are the native tools that let a child change files or run code.
-// An agent may list them only when tools.native.subagent.allow_write is on, and a call
-// to an agent that lists one is a change the checkpoint and the scheduler must know of.
+// An agent may list them when the session enables them, and a call to an agent that
+// lists one is a change the checkpoint and the scheduler must know of.
 var SubagentChangeTools = []string{"write", "edit", "bash", "exec", "process"}
 
 // NativeSubagentAgent is one configured child agent.
@@ -247,6 +242,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, configError("%s: %s must be an object", settingPath, section)
 	}
 	for _, key := range keys {
+		if key == "allow_write" {
+			return nil, configError("%s: %s.allow_write was removed; %s", settingPath, section, removedAllowWriteHint)
+		}
 		if !containsString(nativeSubagentKeys, key) {
 			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeSubagentKeys, "")
 		}
@@ -292,9 +290,6 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.DeleteTranscripts, err = bashBool(fields, "delete_transcripts", false, settingPath+": "+section); err != nil {
-		return nil, err
-	}
-	if settings.AllowWrite, err = bashBool(fields, "allow_write", false, settingPath+": "+section); err != nil {
 		return nil, err
 	}
 	if settings.DenyAgents, err = subagentDenyAgents(fields, settingPath, section); err != nil {
@@ -357,13 +352,6 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		settings.Agents = withSubagentOverrides(settings.Agents, agents, inline)
 	}
 	settings.Agents = withoutDeniedSubagents(settings.Agents, settings.DenyAgents)
-	if !settings.AllowWrite {
-		for _, agent := range settings.Agents {
-			if names := agent.ChangeTools(); len(names) > 0 {
-				return nil, configError("%s: agent %s lists %s in tools, which can change files; set %s.allow_write to true to allow it", settingPath, agent.Name, strings.Join(names, ", "), section)
-			}
-		}
-	}
 	return settings, nil
 }
 

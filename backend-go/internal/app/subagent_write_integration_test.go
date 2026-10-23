@@ -36,7 +36,6 @@ func writerFixtureWithPaths(t *testing.T, files map[string]string, session, path
 	setting := map[string]any{
 		"model": "child.json", "tools": []string{"read", "write"},
 		"__write": write, "__checkpoint": `{"enabled":true}`,
-		"__subagent_settings": map[string]any{"allow_write": true},
 	}
 	if session != nil {
 		setting["__session"] = session
@@ -110,7 +109,6 @@ func TestSubagentReaderRunTakesNoCheckpointEvenWithWriterSupportOn(t *testing.T)
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "tools": []string{"read"},
 		"__write": map[string]any{"max_bytes": 4096}, "__checkpoint": `{"enabled":true}`,
-		"__subagent_settings": map[string]any{"allow_write": true},
 	})
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)

@@ -82,7 +82,7 @@ func TestSubagentToolsetToolsListNarrowsWithinTheToolset(t *testing.T) {
 	}
 	_, err = buildWithToolset(t, subagentSettings(toolsetAgent("finder", "read")), &fakeLauncher{},
 		[]tools.Tool{readOnlyTool("grep")}, readOnlyTool("read"))
-	if err == nil || !strings.Contains(err.Error(), `lists "read", which is not an enabled read-only native tool (enabled: grep)`) || !strings.Contains(err.Error(), "its tools come from toolset "+searchToolset) {
+	if err == nil || !strings.Contains(err.Error(), `lists "read", which is not an enabled native tool (enabled: grep)`) || !strings.Contains(err.Error(), "its tools come from toolset "+searchToolset) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -113,17 +113,12 @@ func TestSubagentToolsetIsStillSubjectToProfileDeny(t *testing.T) {
 	}
 }
 
-// A change tool in a toolset is still gated by allow_write, and counts as a file changer
-// once allowed.
-func TestSubagentToolsetChangeToolNeedsAllowWrite(t *testing.T) {
+// A change tool in a toolset is given by the agent's tools list alone, and counts as a file
+// changer.
+func TestSubagentToolsetChangeToolFollowsTheToolsList(t *testing.T) {
 	toolset := []tools.Tool{readOnlyTool("grep"), writeTool("write")}
-	_, err := buildWithToolset(t, subagentSettings(toolsetAgent("fixer", "grep", "write")), &fakeLauncher{}, toolset, readOnlyTool("read"))
-	if err == nil || !strings.Contains(err.Error(), `lists "write", which is not an enabled read-only native tool (enabled: grep)`) {
-		t.Fatalf("without allow_write: error = %v", err)
-	}
-	// With no tools list the change tool is never given, even with allow_write.
+	// With no tools list the change tool is never given.
 	allowed := subagentSettings(toolsetAgent("fixer", "grep", "write"))
-	allowed.AllowWrite = true
 	launcher := &fakeLauncher{}
 	catalog, err := buildWithToolset(t, allowed, launcher, toolset, readOnlyTool("read"))
 	if err != nil {
@@ -134,7 +129,6 @@ func TestSubagentToolsetChangeToolNeedsAllowWrite(t *testing.T) {
 		t.Errorf("fixer tools = %q, want grep,write", got)
 	}
 	open := subagentSettings(toolsetAgent("viewer"))
-	open.AllowWrite = true
 	launcher = &fakeLauncher{}
 	if catalog, err = buildWithToolset(t, open, launcher, toolset, readOnlyTool("read")); err != nil {
 		t.Fatal(err)
@@ -149,7 +143,6 @@ func TestSubagentToolsetChangeToolNeedsAllowWrite(t *testing.T) {
 // takes the checkpoint and runs in order; a read-only toolset agent does not.
 func TestSubagentToolsetChangeToolCountsAsAFileChange(t *testing.T) {
 	settings := subagentSettings(toolsetAgent("fixer", "write"), toolsetAgent("viewer", "grep"))
-	settings.AllowWrite = true
 	_, tool := buildSubagentCatalogWithToolset(t, settings, []tools.Tool{readOnlyTool("grep"), writeTool("write")})
 	if !tool.MayChangeFiles(map[string]any{"task": "x", "agent": "fixer"}) {
 		t.Error("an agent whose write comes from a toolset must count as a file changer")

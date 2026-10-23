@@ -14,3 +14,6 @@ func rejectRemovedApproval(fields map[string]json.RawMessage, fieldPath, setting
 	}
 	return nil
 }
+
+// removedAllowWriteHint: allow_write only existed to gate children behind approvals.
+const removedAllowWriteHint = "an agent's tools list alone decides whether a child can write, edit or run commands; delete the key"

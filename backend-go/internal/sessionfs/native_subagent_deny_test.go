@@ -128,7 +128,7 @@ func TestSubagentDeniedFolderWithMalformedAgentJSONStillFailsTheLoad(t *testing.
 	}
 }
 
-func TestSubagentDenyAgentsRemovesDeniedChangeAgentBeforeAllowWriteCheck(t *testing.T) {
+func TestSubagentDenyAgentsRemovesADeniedChangeAgent(t *testing.T) {
 	setting := `{"deny_agents":["writer"],"agents":{"writer":{"tools":["bash"]},"reader":{}}}`
 	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(setting), "/s/setting.json", "/w", "")
 	if err != nil {

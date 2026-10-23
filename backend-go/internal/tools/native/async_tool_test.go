@@ -124,11 +124,11 @@ func TestAsyncToolIsOptInForASubagentAndNeverInAScript(t *testing.T) {
 	if !tool.ReadOnly {
 		t.Fatal("async must be ReadOnly to be in the read-only pool")
 	}
-	readOnly, _ := childToolPools(sessionfs.NativeSubagentSettings{AllowWrite: true}, []tools.Tool{readOnlyTool("read"), tool})
+	readOnly, _ := childToolPools(sessionfs.NativeSubagentSettings{}, []tools.Tool{readOnlyTool("read"), tool})
 	if !containsName(poolNames(readOnly), "async") {
 		t.Fatalf("async must be available to an agent that lists it: %v", poolNames(readOnly))
 	}
-	chosen, _, err := subagentChildTools(agentNamed("plain"), readOnly, nil, false)
+	chosen, _, err := subagentChildTools(agentNamed("plain"), readOnly, nil)
 	if err != nil || containsName(poolNames(chosen), "async") {
 		t.Fatalf("a child without a tools list got async: %v %v", poolNames(chosen), err)
 	}

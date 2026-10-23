@@ -18,8 +18,7 @@ func TestSubagentBashRunsInTheSessionCwdNotTheServers(t *testing.T) {
 	}
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "tools": []string{"bash"},
-		"__subagent_settings": map[string]any{"allow_write": true},
-		"__bash":              map[string]any{"shell": shell, "spill": map[string]any{"enabled": false}},
+		"__bash": map[string]any{"shell": shell, "spill": map[string]any{"enabled": false}},
 	})
 	f.provider.childFirstCall = [2]string{"bash", `{"command":"pwd; cat notes.txt; echo from-child > made-by-child.txt"}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {

@@ -20,12 +20,10 @@ func writerAgent(name string, names ...string) sessionfs.NativeSubagentAgent {
 }
 
 func writeSettings(agents ...sessionfs.NativeSubagentAgent) sessionfs.NativeSubagentSettings {
-	settings := subagentSettings(agents...)
-	settings.AllowWrite = true
-	return settings
+	return subagentSettings(agents...)
 }
 
-func TestSubagentChildGetsTheChangeToolsItListsOnlyWithAllowWrite(t *testing.T) {
+func TestSubagentChildGetsExactlyTheChangeToolsItLists(t *testing.T) {
 	launcher := &fakeLauncher{}
 	catalog, _ := buildSubagentCatalog(t, writeSettings(writerAgent("fixer", "read", "write", "bash")), launcher,
 		readOnlyTool("read"), writeTool("write"), writeTool("edit"), writeTool("bash"), writeTool("exec"))
@@ -34,12 +32,10 @@ func TestSubagentChildGetsTheChangeToolsItListsOnlyWithAllowWrite(t *testing.T) 
 		t.Fatalf("child tools = %q, want exactly the listed read, write and bash", got)
 	}
 
-	// Without allow_write the same list is refused at startup, naming the way out.
-	settings := writeSettings(writerAgent("fixer", "read", "write"))
-	settings.AllowWrite = false
-	_, err := NewSubagentTool(settings, withExecutors(t, readOnlyTool("read"), writeTool("write")), nil)
-	if err == nil || !strings.Contains(err.Error(), `lists "write", which is not an enabled read-only native tool`) {
-		t.Fatalf("error without allow_write = %v", err)
+	// The session must still enable a change tool the list names.
+	_, err := NewSubagentTool(subagentSettings(writerAgent("fixer", "read", "write")), withExecutors(t, readOnlyTool("read")), nil)
+	if err == nil || !strings.Contains(err.Error(), `lists "write", which is not an enabled native tool`) {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -53,7 +49,7 @@ func TestSubagentAgentWithoutAToolsListNeverGetsChangeTools(t *testing.T) {
 	}
 }
 
-func TestSubagentAllowWriteDoesNotLetAnythingElseThrough(t *testing.T) {
+func TestSubagentChangeToolListDoesNotLetAnythingElseThrough(t *testing.T) {
 	// A mutating tool that is not one of write, edit, bash, exec and process is not a
 	// change tool.
 	_, err := NewSubagentTool(writeSettings(writerAgent("fixer", "read", "task")),

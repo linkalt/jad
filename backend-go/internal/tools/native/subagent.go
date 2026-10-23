@@ -185,8 +185,8 @@ type subagentToolset struct {
 	processes ProcessManager
 }
 
-// childToolPools splits tools into the read-only ones and, when allow_write is on, the
-// ones that change files, leaving out what the profile's tools.deny covers. Only native tools are taken.
+// childToolPools splits tools into the read-only ones and the ones that change files,
+// leaving out what the profile's tools.deny covers. Only native tools are taken.
 func childToolPools(settings sessionfs.NativeSubagentSettings, available []tools.Tool) (readOnly, changers []tools.Tool) {
 	for _, tool := range available {
 		if (tool.Definition.Source != "native" && tool.Definition.Source != "extension") || tools.AnyEntryMatches(settings.DenyTools, tool.Definition) {
@@ -198,7 +198,7 @@ func childToolPools(settings sessionfs.NativeSubagentSettings, available []tools
 			readOnly = append(readOnly, tool)
 		case tool.ReadOnly:
 			readOnly = append(readOnly, tool)
-		case settings.AllowWrite && containsName(sessionfs.SubagentChangeTools, tool.Definition.Name):
+		case containsName(sessionfs.SubagentChangeTools, tool.Definition.Name):
 			changers = append(changers, tool)
 		}
 	}
@@ -238,7 +238,7 @@ func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools
 			agentReadOnly, agentChangers = childToolPools(settings, toolset.native)
 			agentProcesses = toolset.processes
 		}
-		childTools, mcpIDs, err := subagentChildTools(agent, agentReadOnly, agentChangers, settings.AllowWrite)
+		childTools, mcpIDs, err := subagentChildTools(agent, agentReadOnly, agentChangers)
 		if err != nil {
 			if toolsetKey != "" {
 				err = fmt.Errorf("%w (its tools come from toolset %s)", err, toolsetKey)
@@ -472,7 +472,7 @@ func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64, s
 // subagentChildTools picks the native tools one agent may use from the enabled
 // read-only ones, and returns separately the MCP tool IDs its list names. An agent
 // without a tools list gets every native read-only tool and no MCP tool.
-func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers []tools.Tool, allowWrite bool) ([]tools.Tool, []string, error) {
+func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers []tools.Tool) ([]tools.Tool, []string, error) {
 
 	available := make([]string, 0, len(readOnly)+len(changers))
 	byName := make(map[string]tools.Tool, len(readOnly)+len(changers))
@@ -481,10 +481,7 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 		byName[tool.Definition.Name] = tool
 	}
 	sort.Strings(available)
-	kind := "read-only native tool"
-	if allowWrite {
-		kind = "native tool"
-	}
+	const kind = "native tool"
 	// async, tool_smith, subagent and profile_message are opt-in: a child gets them only when its tools list names them.
 	chosen := make([]tools.Tool, 0, len(readOnly))
 	for _, tool := range readOnly {

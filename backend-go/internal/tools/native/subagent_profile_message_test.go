@@ -78,16 +78,15 @@ func TestAChildListingProfileMessageGetsItAndOthersDoNot(t *testing.T) {
 	}
 }
 
-func TestProfileMessageIsNotGatedOnAllowWriteOrTheChangeToolList(t *testing.T) {
+func TestProfileMessageIsGovernedByTheToolsListAlone(t *testing.T) {
 	settings := subagentSettings(nestingAgent("asker", "profile_message"))
-	settings.AllowWrite = false
 	var got []string
 	catalog := profileMessageChild(t, settings, &childMessenger{}, func(_ context.Context, request SubagentRequest) (SubagentResult, error) {
 		got = toolNames(request.Tools)
 		return SubagentResult{Text: "done"}, nil
 	})
 	if out := subagentCall(t, catalog, `{"task":"x"}`); !strings.Contains(out, "finished") {
-		t.Fatalf("agent with only profile_message and allow_write off: %s", out)
+		t.Fatalf("agent with only profile_message: %s", out)
 	}
 	if len(got) != 1 || got[0] != "profile_message" {
 		t.Errorf("tools = %v, want profile_message only", got)

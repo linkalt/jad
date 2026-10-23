@@ -22,10 +22,9 @@ func hooksFixture(t *testing.T, hooks any) subagentFixture {
 	}
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "tools": []string{"read", "write"},
-		"__write":             map[string]any{"max_bytes": 4096},
-		"__bash":              map[string]any{"shell": shell, "spill": map[string]any{"enabled": false}},
-		"__session":           session,
-		"__subagent_settings": map[string]any{"allow_write": true},
+		"__write":   map[string]any{"max_bytes": 4096},
+		"__bash":    map[string]any{"shell": shell, "spill": map[string]any{"enabled": false}},
+		"__session": session,
 	})
 	f.provider.childFirstCall = [2]string{"write", `{"path":"made.txt","content":"by the child"}`}
 	return f

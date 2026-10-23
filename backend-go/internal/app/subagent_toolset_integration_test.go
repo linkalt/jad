@@ -122,9 +122,8 @@ func TestSubagentToolsetBashHidesTheModelsAPIKeyFromTheChild(t *testing.T) {
 	}
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "toolset": "extra/shell", "tools": []string{"bash"},
-		"__subagent_settings": map[string]any{"allow_write": true},
-		"__bash":              map[string]any{},
-		"__session_without":   []string{"bash"},
+		"__bash":            map[string]any{},
+		"__session_without": []string{"bash"},
 		"__toolsets": map[string]any{"extra/shell": map[string]any{"native": map[string]any{
 			"bash": map[string]any{"shell": shell, "spill": map[string]any{"enabled": false}, "env": map[string]any{"FIXTURE_OPENAI_KEY": "secret-provider-value"}},
 		}}},

@@ -63,7 +63,7 @@ func TestSubagentCanListDecideBecauseItIsReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent := sessionfs.NativeSubagentAgent{Name: "triager", HasTools: true, Tools: []string{"decide"}}
-	chosen, _, err := subagentChildTools(agent, []tools.Tool{tool}, nil, false)
+	chosen, _, err := subagentChildTools(agent, []tools.Tool{tool}, nil)
 	if err != nil || len(chosen) != 1 || chosen[0].Definition.Name != "decide" {
 		t.Fatalf("chosen = %v, err %v", chosen, err)
 	}

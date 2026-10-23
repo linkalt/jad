@@ -227,7 +227,6 @@ func TestSubagentToolsListNarrowsAndRejectsAnUnavailableName(t *testing.T) {
 		tools []string
 		want  string
 	}{
-		"write tool":   {[]string{"write"}, `lists "write", which is not an enabled read-only native tool (enabled: grep, read)`},
 		"unknown tool": {[]string{"nope"}, `lists "nope"`},
 		"mcp tool":     {[]string{"lookup"}, `lists "lookup"`},
 		"subagent":     {[]string{"subagent"}, `lists "subagent", but tools.native.subagent.max_depth is 1`},
@@ -242,6 +241,23 @@ func TestSubagentToolsListNarrowsAndRejectsAnUnavailableName(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// Flipped on purpose (allow_write removed, B-4b): "write" in a child's tools list is no
+// longer refused; the list alone grants it, as long as the session enables write.
+func TestSubagentToolsListMayNameAChangeToolTheSessionEnables(t *testing.T) {
+	agent := agentNamed("writer")
+	agent.Tools, agent.HasTools = []string{"write"}, true
+	launcher := &fakeLauncher{}
+	catalog, _ := buildSubagentCatalog(t, subagentSettings(agent), launcher, readOnlyTool("read"), writeTool("write"))
+	subagentCall(t, catalog, `{"task":"x"}`)
+	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "write" {
+		t.Fatalf("child tools = %q, want write", got)
+	}
+	_, err := NewSubagentTool(subagentSettings(agent), withExecutors(t, readOnlyTool("read")), nil)
+	if err == nil || !strings.Contains(err.Error(), `lists "write", which is not an enabled native tool (enabled: read)`) {
+		t.Fatalf("a change tool the session does not enable: error = %v", err)
 	}
 }
 
@@ -824,10 +840,9 @@ func TestSubagentProfileDenyThatEmptiesAnAgentIsAnError(t *testing.T) {
 	}
 }
 
-// With allow_write on, a denied change tool is not available to a child either.
+// A denied change tool is not available to a child either.
 func TestSubagentProfileDenyAlsoRemovesAChangeTool(t *testing.T) {
 	settings := withDeny(subagentSettings(agentWithTools("a", "read", "write")), "write")
-	settings.AllowWrite = true
 	parentTools := withExecutors(t, readOnlyTool("read"), writeTool("write"))
 	_, err := NewSubagentTool(settings, parentTools, &fakeLauncher{})
 	if err != nil {

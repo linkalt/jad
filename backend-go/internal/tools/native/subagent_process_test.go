@@ -265,11 +265,8 @@ func TestSubagentAgentListingProcessCanChangeFiles(t *testing.T) {
 	if !agent.ChangesFiles() {
 		t.Fatal("an agent that lists process must count as one that changes files: it runs to its end and takes the checkpoint")
 	}
-	settings := writeSettings(agent)
-	settings.AllowWrite = false
-	_, err := NewSubagentTool(settings, withExecutors(t, readOnlyTool("read"), writeTool("process")), nil)
-	if err == nil {
-		t.Fatal("process was accepted for a child without allow_write")
+	if _, err := NewSubagentTool(writeSettings(agent), withExecutors(t, readOnlyTool("read"), writeTool("process")), nil); err != nil {
+		t.Fatalf("process listed by the agent must load with no flag: %v", err)
 	}
 }
 

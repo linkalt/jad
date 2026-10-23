@@ -72,17 +72,17 @@ func TestToolSmithIsInTheSubagentPoolButOnlyAnAgentThatListsItGetsIt(t *testing.
 	if !smith.ReadOnly {
 		t.Fatal("tool_smith must be ReadOnly to be in the read-only pool")
 	}
-	readOnly, _ := childToolPools(sessionfs.NativeSubagentSettings{AllowWrite: true}, []tools.Tool{readOnlyTool("read"), smith})
+	readOnly, _ := childToolPools(sessionfs.NativeSubagentSettings{}, []tools.Tool{readOnlyTool("read"), smith})
 	if !containsName(poolNames(readOnly), "tool_smith") {
 		t.Fatalf("read-only pool = %v, want tool_smith in it", poolNames(readOnly))
 	}
-	plain, _, err := subagentChildTools(agentNamed("plain"), readOnly, nil, false)
+	plain, _, err := subagentChildTools(agentNamed("plain"), readOnly, nil)
 	if err != nil || containsName(poolNames(plain), "tool_smith") {
 		t.Fatalf("a child without a tools list got tool_smith: %v %v", poolNames(plain), err)
 	}
 	listed := agentNamed("scripter")
 	listed.Tools, listed.HasTools = []string{"read", "tool_smith"}, true
-	chosen, _, err := subagentChildTools(listed, readOnly, nil, false)
+	chosen, _, err := subagentChildTools(listed, readOnly, nil)
 	if err != nil || !containsName(poolNames(chosen), "tool_smith") {
 		t.Fatalf("a child that lists tool_smith got %v, %v", poolNames(chosen), err)
 	}
