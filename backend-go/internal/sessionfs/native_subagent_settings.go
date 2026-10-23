@@ -19,7 +19,7 @@ const (
 	defaultNativeSubagentStorageDir          = ".subagents"
 	defaultNativeSubagentMaxToolRounds int64 = 30
 	defaultNativeSubagentTimeoutMS     int64 = 600_000
-	maxNativeSubagentTimeoutMS         int64 = 3_600_000
+	maxNativeSubagentTimeoutMS         int64 = maxToolTimeoutMs
 	defaultNativeSubagentKeepDone      int64 = 50
 	maxNativeSubagentKeepDone          int64 = 1000
 	defaultNativeSubagentMaxQueued     int64 = 32

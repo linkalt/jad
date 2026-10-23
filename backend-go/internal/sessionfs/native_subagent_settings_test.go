@@ -198,7 +198,7 @@ func TestNormalizeNativeSubagentSettingsRejectsInvalidSettings(t *testing.T) {
 		"storage blank":      {`{"agents":{"a":{}},"storage_dir":" "}`, "tools.native.subagent.storage_dir must be a non-empty string"},
 		"rounds zero":        {`{"agents":{"a":{"max_tool_rounds":0}}}`, "agents.a.max_tool_rounds must be a safe integer between 1 and 50000"},
 		"tokens zero":        {`{"agents":{"a":{"max_run_tokens":0}}}`, "agents.a.max_run_tokens must be a safe integer between 1 and 1000000000000"},
-		"timeout too small":  {`{"agents":{"a":{"timeout_ms":999}}}`, "agents.a.timeout_ms must be a safe integer between 1000 and 3600000"},
+		"timeout too small":  {`{"agents":{"a":{"timeout_ms":999}}}`, "agents.a.timeout_ms must be a safe integer between 1000 and 21600000"},
 		"timeout fraction":   {`{"agents":{"a":{"timeout_ms":1500.5}}}`, "agents.a.timeout_ms must be a safe integer"},
 		"timeout string":     {`{"agents":{"a":{"timeout_ms":"2000"}}}`, "agents.a.timeout_ms must be a safe integer"},
 		"model blank":        {`{"agents":{"a":{"model":" "}}}`, "agents.a.model must be a non-empty string"},
@@ -212,7 +212,7 @@ func TestNormalizeNativeSubagentSettingsRejectsInvalidSettings(t *testing.T) {
 		"mcp bad server":     {`{"agents":{"a":{"tools":["mcp:do.cs:*"]}}}`, `agents.a.tools[0] "mcp:do.cs:*" must be mcp:<server>:<tool>`},
 		"mcp colon wildcard": {`{"agents":{"a":{"tools":["mcp:docs:foo:*"]}}}`, `agents.a.tools[0] "mcp:docs:foo:*" must be mcp:<server>:<tool>`},
 		"mcp whitespace":     {`{"agents":{"a":{"tools":["mcp:docs:a b"]}}}`, `must not contain whitespace`},
-		"upper limit ok":     {`{"agents":{"a":{"timeout_ms":3600000}},"max_concurrent":32,"result_max_bytes":10485760,"list_max_bytes":1048576,"keep_finished":1000,"max_queued":0}`, ""},
+		"upper limit ok":     {`{"agents":{"a":{"timeout_ms":21600000}},"max_concurrent":32,"result_max_bytes":10485760,"list_max_bytes":1048576,"keep_finished":1000,"max_queued":0}`, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := normalizeNativeSubagentSettings(subagentSettingsFor(tc.setting), "setting.json", "/w", "")

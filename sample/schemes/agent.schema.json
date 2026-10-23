@@ -82,7 +82,7 @@
     "timeout_ms": {
       "type": "integer",
       "minimum": 1000,
-      "maximum": 3600000,
+      "maximum": 21600000,
       "default": 600000,
       "description": "Wall-clock limit of one run, including provider waits."
     },

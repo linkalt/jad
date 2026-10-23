@@ -9,6 +9,8 @@ import (
 )
 
 const (
+	// maxToolTimeoutMs is the ceiling of every tool timeout, block and wait setting: 6 hours.
+	maxToolTimeoutMs        int64 = 21_600_000
 	defaultMaxToolRounds    int64 = 8
 	maxConfiguredToolRounds int64 = 50_000
 	// defaultMaxParallelToolCalls and maxConfiguredParallelToolCalls mirror the

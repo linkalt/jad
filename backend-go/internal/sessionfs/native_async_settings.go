@@ -76,7 +76,11 @@ func normalizeNativeAsyncSettings(setting map[string]json.RawMessage, settingPat
 		if key == "retention_days" || key == "unread_ttl_days" || key == "stop_wait_ms" || key == "sse_max_ids" || key == "index_flush_ms" {
 			minimum = 0
 		}
-		if *target, err = configuredInteger(fields, key, *target, minimum, maxNativeAsyncValue, settingPath, section); err != nil {
+		maximum := maxNativeAsyncValue
+		if strings.HasSuffix(key, "_ms") && key != "index_flush_ms" {
+			maximum = maxToolTimeoutMs
+		}
+		if *target, err = configuredInteger(fields, key, *target, minimum, maximum, settingPath, section); err != nil {
 			return nil, err
 		}
 	}

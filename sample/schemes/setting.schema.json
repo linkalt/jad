@@ -205,14 +205,14 @@
         "timeout_ms": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 3600000,
+          "maximum": 21600000,
           "default": 120000,
           "description": "Wall-clock budget for one command."
         },
         "max_timeout_ms": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 3600000,
+          "maximum": 21600000,
           "default": 600000,
           "description": "Upper clamp for the per-call timeout_ms argument."
         },
@@ -1815,7 +1815,7 @@
                       "auto_compaction": {"type": "boolean", "description": "Whether this agent's child compacts its own transcript when it grows. Absent follows the session's compaction.auto_enabled, or is on when compaction_trigger_tokens is set."},
                       "compaction_trigger_tokens": {"type": "integer", "minimum": 1, "maximum": 10000000, "description": "Input size, in tokens, at which this agent's child compacts. Absent uses the session's compaction.trigger_tokens, which is sized for the master's model, so set it for a model with a different context window or price. Not allowed with auto_compaction false."},
                       "state_context": {"type": "boolean", "default": false, "description": "Send the newest state-context block stored for the session to this agent's child, in every request. A child collects none of its own. Nothing is sent when the session's statecontext is off or has no block yet."},
-                      "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 600000, "description": "Wall-clock limit of one run, including provider waits."},
+                      "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 21600000, "default": 600000, "description": "Wall-clock limit of one run, including provider waits."},
                       "paths": {
                         "type": "object",
                         "additionalProperties": false,
@@ -1866,8 +1866,8 @@
               "description": "Go backend only. Lets the model send a message to another profile of the same session and get its final answer; that profile keeps its own conversation between calls. The targets are every profile of the caller's session except the caller's own and those in deny_profiles. Needs the tool definition sample/tools/native/profile_message.json. A sub-agent's toolset must not set tools.native.profile_message.",
               "properties": {
                 "deny_profiles": {"type": ["array", "null"], "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"}, "description": "Profile ids (category/name) of the session the model may not message. Ids that are not in the session are ignored. When no other profile remains, the tool cannot be built, so a run or the tools listing of that profile fails with 422; jad check reports it."},
-                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 3600000, "default": 600000, "description": "Time limit of one call, including the wait for a busy target."},
-                "busy_wait_ms": {"type": "integer", "minimum": 0, "maximum": 3600000, "default": 0, "description": "How long a call waits for a target that is running, in the order user messages wait, before it returns profile_busy. 0 returns profile_busy at once. Must not exceed timeout_ms. While it waits the calling run is held."},
+                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 21600000, "default": 600000, "description": "Time limit of one call, including the wait for a busy target."},
+                "busy_wait_ms": {"type": "integer", "minimum": 0, "maximum": 21600000, "default": 0, "description": "How long a call waits for a target that is running, in the order user messages wait, before it returns profile_busy. 0 returns profile_busy at once. Must not exceed timeout_ms. While it waits the calling run is held."},
                 "result_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 16384, "description": "Most bytes of the target's answer one call returns."},
                 "approval": {"type": "string", "enum": ["off", "ask"], "description": "ask holds every call until the user approves it (see the top-level approval block); off runs it at once. When absent, approval.default applies (off unless set). The target profile's own tools follow its own approval settings."},
                 "max_chain": {"type": "integer", "minimum": 2, "maximum": 8, "default": 2, "description": "Longest chain of profiles one message may travel through, the first caller included. 2 lets a profile (or a sub-agent that lists profile_message) message another profile, and that profile's run message no further. A message to a profile already in the chain is refused as a cycle. Config only: the model never sees it."},
@@ -1881,10 +1881,10 @@
               "properties": {
                 "max_handles": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 16, "description": "Most live (queued or running) async handles one session may hold. A start at the cap is refused with async_capacity_reached."},
                 "max_handles_total": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 64, "description": "Most live async handles on the whole server."},
-                "default_block_ms": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 10000, "description": "How long a start tool blocks for its result when block_ms is omitted, before it returns a handle."},
-                "max_block_ms": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 120000, "description": "Largest block_ms a start tool accepts; greater values are clamped. Not below default_block_ms."},
-                "default_wait_ms": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 10000, "description": "How long the async wait action blocks when wait_ms is omitted."},
-                "max_wait_ms": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 120000, "description": "Largest wait_ms; greater values are clamped. Not below default_wait_ms."},
+                "default_block_ms": {"type": "integer", "minimum": 1, "maximum": 21600000, "default": 10000, "description": "How long a start tool blocks for its result when block_ms is omitted, before it returns a handle."},
+                "max_block_ms": {"type": "integer", "minimum": 1, "maximum": 21600000, "default": 120000, "description": "Largest block_ms a start tool accepts; greater values are clamped. Not below default_block_ms."},
+                "default_wait_ms": {"type": "integer", "minimum": 1, "maximum": 21600000, "default": 10000, "description": "How long the async wait action blocks when wait_ms is omitted."},
+                "max_wait_ms": {"type": "integer", "minimum": 1, "maximum": 21600000, "default": 120000, "description": "Largest wait_ms; greater values are clamped. Not below default_wait_ms."},
                 "wait_max_signals": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 10, "description": "Most signals one wait returns; the rest stay queued and the response says more."},
                 "list_default_limit": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 10, "description": "Page size of the async list action when limit is omitted."},
                 "list_max_limit": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 50, "description": "Largest list page; greater limits are clamped. Not below list_default_limit."},
@@ -1896,7 +1896,7 @@
                 "unread_max": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 100, "description": "Most undelivered completion signals kept per session; older ones are marked read and counted as dropped. Not below wait_max_signals."},
                 "index_flush_ms": {"type": "integer", "minimum": 0, "maximum": 60000, "default": 150, "description": "Delay before the async handle index file is rewritten after a change, so a burst of changes costs one write. The index is only a cache rebuilt from the handle records; 0 writes it at every change."},
                 "sse_max_ids": {"type": "integer", "minimum": 0, "maximum": 100, "default": 10, "description": "Most live handle ids the run stream's async_state event carries next to the counts. 0 sends counts only."},
-                "stop_wait_ms": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 2000, "description": "How long an async stop and a shutdown wait for the work to report that it ended. 0 does not wait."},
+                "stop_wait_ms": {"type": "integer", "minimum": 0, "maximum": 21600000, "default": 2000, "description": "How long an async stop and a shutdown wait for the work to report that it ended. 0 does not wait."},
                 "unread_ttl_days": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 7, "description": "Undelivered signals older than this many days expire. 0 keeps them until the record is pruned."}
               },
               "additionalProperties": false

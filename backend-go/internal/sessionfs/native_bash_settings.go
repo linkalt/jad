@@ -39,7 +39,7 @@ const (
 	defaultNativeExecSpillPath             = "{cwd}/.exec-output/exec-{call_id}.{stream}.log"
 	defaultNativeBashKillPolicy            = "always"
 	defaultNativeBashSpillKeep             = "truncated_only"
-	maxNativeBashTimeoutMs           int64 = 3_600_000
+	maxNativeBashTimeoutMs           int64 = maxToolTimeoutMs
 	NativeBashMinCallTimeoutMs       int64 = 1_000
 )
 

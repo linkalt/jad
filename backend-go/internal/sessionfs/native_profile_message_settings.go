@@ -10,7 +10,7 @@ import (
 
 const (
 	defaultNativeProfileMessageTimeoutMS      int64 = 600_000
-	maxNativeProfileMessageTimeoutMS          int64 = 3_600_000
+	maxNativeProfileMessageTimeoutMS          int64 = maxToolTimeoutMs
 	defaultNativeProfileMessageResultMaxBytes int64 = 16 * 1024
 	maxNativeProfileMessageMaxChain           int64 = 8
 )

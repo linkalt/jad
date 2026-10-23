@@ -225,7 +225,7 @@ func TestSubagentAgentsDirRejectsInvalidSettings(t *testing.T) {
 		"unknown key":      {`{"agents_dir":["typo"]}`, "agent.tool is not supported; did you mean tools?"},
 		"schema version":   {`{"agents_dir":["version"]}`, "unsupported schema_version 2"},
 		"blank instr":      {`{"agents_dir":["blankinstr"]}`, "agent.instructions must be a non-empty string"},
-		"timeout":          {`{"agents_dir":["timeout"]}`, "agent.timeout_ms must be a safe integer between 1000 and 3600000"},
+		"timeout":          {`{"agents_dir":["timeout"]}`, "agent.timeout_ms must be a safe integer between 1000 and 21600000"},
 		"missing doc":      {`{"agents_dir":["missingdoc"]}`, "prompt_documents[0] could not be read: " + missingDoc},
 		"empty agent.json": {`{"agents_dir":["emptyfile"]}`, "file is empty"},
 		"not an object":    {`{"agents_dir":["notobject"]}`, "expected a JSON object"},
