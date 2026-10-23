@@ -13,6 +13,8 @@ const (
 	maxNativeProfileMessageTimeoutMS          int64 = maxToolTimeoutMs
 	defaultNativeProfileMessageResultMaxBytes int64 = 16 * 1024
 	maxNativeProfileMessageMaxChain           int64 = 8
+	defaultNativeProfileMessageMaxQueued      int64 = 4
+	maxNativeProfileMessageMaxQueued          int64 = 256
 )
 
 // DefaultProfileMessageMaxChain is the longest chain of profiles a message may travel
@@ -27,7 +29,7 @@ const (
 )
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "max_chain"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "max_chain", "max_queued_per_profile"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -38,11 +40,14 @@ type NativeProfileMessageSettings struct {
 	// DenyProfiles are profile ids the model may not message, in configured order. The
 	// targets are the caller's session profiles minus these and the caller itself.
 	DenyProfiles []string
-	// TimeoutMs bounds the whole call, the wait for a busy target included.
+	// TimeoutMs bounds the whole call, the time queued behind a busy target included.
 	TimeoutMs int
-	// BusyWaitMs is how long a call queues behind a run that holds the target; 0 (default)
-	// fails at once with profile_busy.
+	// BusyWaitMs is the longest a call may stay queued behind a busy target before it fails
+	// with profile_busy; 0 (default) sets no limit of its own, so TimeoutMs bounds the wait.
 	BusyWaitMs int
+	// MaxQueued is the most calls that may wait for one target profile at once; a call
+	// over it fails at once with profile_busy. 0 queues nobody: a busy target fails at once.
+	MaxQueued int
 	// ResultMaxBytes is the most reply text one call returns.
 	ResultMaxBytes int
 	// MaxChain is the most profiles one message chain may hold, the first caller included.
@@ -114,13 +119,17 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
+	maxQueued, err := configuredInteger(fields, "max_queued_per_profile", defaultNativeProfileMessageMaxQueued, 0, maxNativeProfileMessageMaxQueued, settingPath, section)
+	if err != nil {
+		return nil, err
+	}
 	compact := ProfileMessageCompactOff
 	if raw, exists := fields["compact"]; exists {
 		if strings.TrimSpace(string(raw)) == "null" || json.Unmarshal(raw, &compact) != nil || (compact != ProfileMessageCompactOff && compact != ProfileMessageCompactOn) {
 			return nil, configError("%s: %s.compact must be \"off\" or \"on\"", settingPath, section)
 		}
 	}
-	return &NativeProfileMessageSettings{DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact}, nil
+	return &NativeProfileMessageSettings{DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.
