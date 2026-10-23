@@ -123,6 +123,9 @@ func TestStartProfileRunRunsTheTargetLikeAUserMessage(t *testing.T) {
 	if listed.Source != "profile_message" || listed.Caller != "caller-1" || listed.Status != "running" {
 		t.Fatalf("listed run = %+v", listed)
 	}
+	if run.TurnID() == "" {
+		t.Fatal("the started run has no turn id")
+	}
 	if caller, ok := f.handler.ProfileRuns().RunningProfileRunCaller("canonical", "dev"); !ok || caller != "caller-1" {
 		t.Fatalf("RunningProfileRunCaller = %q, %v", caller, ok)
 	}
@@ -256,7 +259,7 @@ func TestStartProfileRunWithBusyWaitQueuesBehindTheHolderAndStarts(t *testing.T)
 	}
 	second := make(chan result, 1)
 	go func() {
-		run, err := f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c2", Message: "queued", BusyWait: 5 * time.Second})
+		run, err := f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c2", Message: "queued", Wait: true, WaitLimit: 5 * time.Second})
 		second <- result{run, err}
 	}()
 	select {
@@ -282,7 +285,7 @@ func TestStartProfileRunWithBusyWaitReportsBusyWhenTheWaitEnds(t *testing.T) {
 	f.start(t, context.Background())
 	<-f.started
 	began := time.Now()
-	_, err := f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c2", Message: "queued", BusyWait: 100 * time.Millisecond})
+	_, err := f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c2", Message: "queued", Wait: true, WaitLimit: 100 * time.Millisecond})
 	if !errors.Is(err, ErrSessionBusy) {
 		t.Fatalf("error = %v, want ErrSessionBusy", err)
 	}
@@ -302,7 +305,7 @@ func TestStartProfileRunWithBusyWaitStopsWaitingWhenTheCallerEnds(t *testing.T) 
 	ctx, cancel := context.WithCancel(context.Background())
 	errs := make(chan error, 1)
 	go func() {
-		_, err := f.handler.ProfileRuns().StartProfileRun(ctx, ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c2", Message: "queued", BusyWait: time.Minute})
+		_, err := f.handler.ProfileRuns().StartProfileRun(ctx, ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c2", Message: "queued", Wait: true})
 		errs <- err
 	}()
 	select {

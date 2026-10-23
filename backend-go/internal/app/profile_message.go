@@ -130,7 +130,8 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		Caller:    caller,
 		Chain:     chain,
 		Message:   message,
-		BusyWait:  busyWait,
+		Wait:      busyWait > 0,
+		WaitLimit: busyWait,
 		BeforeRun: beforeRun,
 		OnCommitted: func(event json.RawMessage) {
 			if text := native.SubagentAnswerText(event); strings.TrimSpace(text) != "" {

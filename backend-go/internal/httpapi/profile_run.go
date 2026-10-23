@@ -21,9 +21,11 @@ type ProfileRunRequest struct {
 	// target last; the run keeps it so a message sent from inside it can be checked.
 	Chain   []string
 	Message string
-	// BusyWait is how long to queue behind the run that holds the transcript, in the
-	// order user messages queue; 0 fails at once with ErrSessionBusy.
-	BusyWait time.Duration
+	// Wait queues behind the run that holds the transcript, in the order user messages
+	// queue, instead of failing at once with ErrSessionBusy. WaitLimit bounds that wait;
+	// zero waits until ctx ends. The limit ending while ctx lives is ErrSessionBusy.
+	Wait      bool
+	WaitLimit time.Duration
 	// OnCommitted sees every response the run commits, on the run's goroutine.
 	OnCommitted func(event json.RawMessage)
 	// BeforeRun, when set, runs once the transcript is held and the run is registered,
@@ -53,6 +55,9 @@ func (p *ProfileRun) Done() <-chan struct{}  { return p.run.done }
 func (p *ProfileRun) Status() string         { return p.run.state() }
 func (p *ProfileRun) Final() json.RawMessage { return p.final }
 func (p *ProfileRun) Stop()                  { p.run.stop() }
+
+// TurnID is the id of the run's turn in the target's transcript.
+func (p *ProfileRun) TurnID() string { return p.run.turnID }
 
 // Failure is the client-safe message of a failed run, empty when there is none. Only
 // valid once Done is closed.
@@ -87,7 +92,7 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 	}
 	var started startedRun
 	var busy bool
-	if request.BusyWait > 0 {
+	if request.Wait {
 		started, err = h.acquireProfileRun(ctx, request)
 	} else {
 		started, busy, err = h.tryStartRun(ctx, request.Reference, request.Profile, "", profileMessageSource, request.Caller)
@@ -139,11 +144,14 @@ func (s profileRunStarter) RunningProfileRunChain(reference, profile string) ([]
 	return append([]string(nil), run.chain...), true
 }
 
-// acquireProfileRun queues for the transcript like a user message for at most BusyWait.
-// The wait ending, while ctx is still alive, is ErrSessionBusy. The deadline only bounds
-// the wait: the started run does not depend on it.
+// acquireProfileRun queues for the transcript like a user message, for at most WaitLimit
+// when it is set. The limit ending, while ctx is still alive, is ErrSessionBusy. The
+// deadline only bounds the wait: the started run does not depend on it.
 func (h *Handler) acquireProfileRun(ctx context.Context, request ProfileRunRequest) (startedRun, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, request.BusyWait)
+	waitCtx, cancel := ctx, context.CancelFunc(func() {})
+	if request.WaitLimit > 0 {
+		waitCtx, cancel = context.WithTimeout(ctx, request.WaitLimit)
+	}
 	defer cancel()
 	started, err := h.acquireRun(waitCtx, request.Reference, request.Profile, "", profileMessageSource, request.Caller)
 	if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
