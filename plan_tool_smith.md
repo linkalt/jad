@@ -1,5 +1,8 @@
 # Tool Smith — Implementation Plan for jad (revised)
 
+> **Note (2026-10-23, user decision):** the approval system was removed. Nothing asks the user before a tool call, and `approval` and `allow_write` keys are refused by name. This text describes the removed design and is kept as history; the current rules are in `backend-go/DECISIONS.md` ("The approval system is removed").
+
+
 Companion to `design_tool_smith.md` (revised; see its "Revision notes"). Sources (T-002): `.jad/subagents/.shared/docs/T-002/planner_plan.md` and `code-explorer_explore.md`, `issue-researcher_findings.md`. Documentation only: this file changes no code or config. The task named no separate report file, so this plan and the design's Revision notes are the deliverable. Items marked *(unverified)* were not read in code.
 
 ## Decisions fixed by the user
@@ -52,9 +55,9 @@ Report: `.jad/subagents/.shared/docs/T-002/code-explorer_spike.md`. Findings:
 All paths under `backend-go/` unless noted. Keys and defaults: design section 15 (own bash-style `Child` keys via `nativeBashStyleKeys`; no dependency on `tools.native.bash`). Test commands run from `backend-go/`.
 
 ### 3a — Settings normalizer, SessionConfig, name list, tests
-- **Files:** `internal/sessionfs/native_tool_smith_settings.go` (new; models `native_exec_settings.go`, `native_skill_settings.go`; exports `nativeToolSmithKeys`); `internal/sessionfs/tool_shape.go:12-14` (`nativeToolNames` add `tool_smith`); `internal/sessionfs/session.go` (`NativeToolSmith` field near :159, `normalizeNativeToolSmithSettings` near :440, struct literal near :579, `applyApprovalDefault` call :468 plus `approval_default.go:66-72`). If `env_file`/paths are accepted, also `native_subagent_paths.go:88` and `layout_load.go:588` (otherwise do not accept them).
+- **Files:** `internal/sessionfs/native_tool_smith_settings.go` (new; models `native_exec_settings.go`, `native_skill_settings.go`; exports `nativeToolSmithKeys`); `internal/sessionfs/tool_shape.go:12-14` (`nativeToolNames` add `tool_smith`); `internal/sessionfs/session.go` (`NativeToolSmith` field near :159, `normalizeNativeToolSmithSettings` near :440, struct literal near :579). If `env_file`/paths are accepted, also `native_subagent_paths.go:88` and `layout_load.go:588` (otherwise do not accept them).
 - **Rules:** no hard-coded limit; `tools` list rejects bash, exec, process, subagent, tool_smith, task and non-native names; byte keys max `maxNativeToolBytes` (`tool_settings.go:20`).
-- **Tests:** new `native_tool_smith_settings_test.go` (pattern `native_skill_settings_test.go`): defaults, unknown key, invalid values and ranges, excluded tool names, approval; update `layout_settings_cases_test.go:23` `goOnlyNativeTools` so the supported-keys error text in `testdata/layout-settings.cases.json:176` still matches; `profile_tools_test.go:249` stays red until 3b adds the pattern (expected).
+- **Tests:** new `native_tool_smith_settings_test.go` (pattern `native_skill_settings_test.go`): defaults, unknown key, invalid values and ranges, excluded tool names; update `layout_settings_cases_test.go:23` `goOnlyNativeTools` so the supported-keys error text in `testdata/layout-settings.cases.json:176` still matches; `profile_tools_test.go:249` stays red until 3b adds the pattern (expected).
 - **Command:** `go test ./internal/sessionfs/...`
 - **Exit:** sessionfs tests green except the profile-pattern test, which 3b fixes (or run 3a+3b tests together); unconfigured sessions unchanged.
 
@@ -64,8 +67,8 @@ All paths under `backend-go/` unless noted. Keys and defaults: design section 15
 - **Command:** `go test ./internal/sessionfs/... ./internal/tools/... ./internal/app/...`
 - **Exit:** schema keys equal loader keys; profile pattern test green; `git diff --check` clean.
 
-### 3c — Catalog registration, sub-agent exclusion, configured check, approval preview
-- **Files:** `internal/tools/native/catalog.go` (`:81` short-circuit chain add `config.NativeToolSmith == nil`; `buildNativeTools` block near the skill block ~:354-366 using `requireNativeDefinition` with `ReadOnly: true` and `MayChangeFiles` true only for calls containing `run`, as a stub tool returning a not-implemented result until phase 4; `nativeToolConfigured` switch :391-430 add `case "tool_smith"`); `internal/tools/native/subagent.go:162-170` (`childToolPools`: skip the `tool_smith` tool ID like `subagentToolID`); `internal/tools/approval.go:150-175` (preview branch for `tool_smith`, showing the `run` body cut; read the default branch first).
+### 3c — Catalog registration, sub-agent exclusion, configured check
+- **Files:** `internal/tools/native/catalog.go` (`:81` short-circuit chain add `config.NativeToolSmith == nil`; `buildNativeTools` block near the skill block ~:354-366 using `requireNativeDefinition` with `ReadOnly: true` and `MayChangeFiles` true only for calls containing `run`, as a stub tool returning a not-implemented result until phase 4; `nativeToolConfigured` switch :391-430 add `case "tool_smith"`); `internal/tools/native/subagent.go:162-170` (`childToolPools`: skip the `tool_smith` tool ID like `subagentToolID`).
 - **Tests:** `internal/tools/native/catalog_names_test.go:12-16` (new case); new catalog test (pattern `catalog_skill_test.go`): registered when configured, absent otherwise; sub-agent read-only pool never contains `tool_smith`; `ChangesState` true for `run` and false for `list`; golden `internal/session/runner_native_tools_golden_test.go` unchanged.
 - **Command:** `go test ./internal/tools/... ./internal/session/... ./internal/sessionfs/...`; then `go vet ./internal/... ./cmd/...` and `gofmt -l internal cmd`.
 - **Exit:** configured sessions list the tool; unconfigured sessions byte-identical; no sub-agent exposure.
@@ -86,10 +89,10 @@ All paths under `backend-go/` unless noted. Keys and defaults: design section 15
 - **Goal:** scripts call allowlisted native tools via `tools.<name>(args)`.
 - **Worker:** executor, after phase 4.
 - **Files:** `tool_smith.go` plus a bridge file in the same package if needed; nested catalog in the `childToolPools` style (`internal/tools/native/subagent.go:150-166`); dispatch through `Catalog.ExecuteFunctionCall` (`internal/tools/catalog.go:318-404`).
-- **Behaviour:** one multiplexed per-run Unix socket in the private temp dir (path and token via env, ndjson frames with ids); allowlist default `read`, `grep`, `glob` minus the always-excluded set; mutex for non-read-only nested calls, semaphore `max_parallel_calls` for reads, `max_nested_calls`; envelope parsed (`internal/tools/output.go:20-60`) to `{ok, status, summary, content, info}`, no throw on tool failure; `nested_result_max_bytes`; nested approval via wrapped `RequestApproval` (`subagent_call.go:58-73,191`); counters (calls, per-tool, nested writes, bytes, duration) in `Information`; `fn.<name>` lazy import with name validation.
-- **Tests:** allowlist, excluded tools refused, no recursion, approval deny returns `blocked` to the script, concurrent writes serialized, read cap, call cap, wrong token rejected, malformed frame, socket and dir removed on success/timeout/cancel, no goroutine leak; `go test -race ./internal/tools/...` if available.
+- **Behaviour:** one multiplexed per-run Unix socket in the private temp dir (path and token via env, ndjson frames with ids); allowlist default `read`, `grep`, `glob` minus the always-excluded set; mutex for non-read-only nested calls, semaphore `max_parallel_calls` for reads, `max_nested_calls`; envelope parsed (`internal/tools/output.go:20-60`) to `{ok, status, summary, content, info}`, no throw on tool failure; `nested_result_max_bytes`; counters (calls, per-tool, nested writes, bytes, duration) in `Information`; `fn.<name>` lazy import with name validation.
+- **Tests:** allowlist, excluded tools refused, no recursion, concurrent writes serialized, read cap, call cap, wrong token rejected, malformed frame, socket and dir removed on success/timeout/cancel, no goroutine leak; `go test -race ./internal/tools/...` if available.
 - **Exit criteria:** tests pass; no nested items in `messages.jsonl`; checkpoint covers nested writes (spike (b)).
-- **Risks:** deadlock between mutex and approval waits; goroutines blocked after child exit; approval floods (capped by `max_nested_calls`); bridge is policy, not exclusive (documented).
+- **Risks:** goroutines blocked after child exit; bridge is policy, not exclusive (documented).
 
 ## Phase 6 — `list`
 
@@ -109,7 +112,7 @@ All paths under `backend-go/` unless noted. Keys and defaults: design section 15
 
 ## Phase 8 — Skill, review, live trial
 
-- **Workers:** executor (final `SKILL.md`; tool description about 5 static lines); reviewer (design versus code, trust statement, approvals, goroutines, config completeness); tester (real-model trial as in `DECISIONS.md:265`: the same tasks and prompts as phase 2, rounds and tokens versus the baseline, including `duplicate_calls` if counted, large-result behaviour and `list` cost versus `glob`/`grep` discovery).
+- **Workers:** executor (final `SKILL.md`; tool description about 5 static lines); reviewer (design versus code, trust statement, goroutines, config completeness); tester (real-model trial as in `DECISIONS.md:265`: the same tasks and prompts as phase 2, rounds and tokens versus the baseline, including `duplicate_calls` if counted, large-result behaviour and `list` cost versus `glob`/`grep` discovery).
 - **Exit criteria:** findings resolved or recorded; numbers compared with the phase 2 baseline; `DECISIONS.md` records decisions and deferrals (within-run memo, spill, persistent runtime, hard sandbox).
 - **Risks:** no measured gain over the baseline (report it; tuning, not removal of the bridge); prompt-cache impact (keep the definition static).
 
@@ -123,5 +126,5 @@ All three earlier questions are decided (decisions 10, 12 and bun as default `ts
 
 ## Unchecked
 
-- Whether bun accepts `--preload` in an `interpreter` argv (not run); rest of `AppendInputItemsAt` and `validateInputFields` (size checks); default branch of `tools/approval.go` preview; env_file/paths wiring for a new bash-style tool; whether `httpapi` special-cases tool names; behaviour of `decide_image_test.go:391` with an extra sample file.
+- Whether bun accepts `--preload` in an `interpreter` argv (not run); rest of `AppendInputItemsAt` and `validateInputFields` (size checks); env_file/paths wiring for a new bash-style tool; whether `httpapi` special-cases tool names; behaviour of `decide_image_test.go:391` with an extra sample file.
 - Token baseline (phase 2 pending part).

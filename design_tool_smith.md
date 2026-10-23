@@ -4,6 +4,8 @@
 
 # Tool Smith — Design and Workflow
 
+> **Note (2026-10-23, user decision):** the approval system was removed. Nothing asks the user before a tool call, and `approval` and `allow_write` keys are refused by name. This text describes the removed design and is kept as history; the current rules are in `backend-go/DECISIONS.md` ("The approval system is removed").
+
 Target: jad (Go backend in `backend-go/`). Companion: `plan_tool_smith.md`. Phase-1 spike answers (`.jad/subagents/.shared/docs/T-002/code-explorer_spike.md`) and spawn measurements (`tester_spawn.md`) are folded in below. Items marked *(unverified)* were not run or read.
 
 ## 1. Overview
@@ -14,7 +16,7 @@ Reusable functions are plain TypeScript files that agents create and change with
 
 The core principle is a small, stable model-facing API while the function library evolves.
 
-**The native-tool bridge is a core requirement (user decision).** `tool_smith` is a dynamic, optimized codemode-style tool: scripts call jad's own tools as `tools.<name>(args)` with parsed results, under Go-enforced policy, approvals and limits. A skill plus `exec` cannot provide that, so the bridge is not optional and not gated on a prototype.
+**The native-tool bridge is a core requirement (user decision).** `tool_smith` is a dynamic, optimized codemode-style tool: scripts call jad's own tools as `tools.<name>(args)` with parsed results, under Go-enforced policy and limits. A skill plus `exec` cannot provide that, so the bridge is not optional and not gated on a prototype.
 
 ### Goals
 
@@ -41,7 +43,7 @@ Editable `.ts` files in a workspace directory (default `.jad/functions`, key `fu
 
 ### 2.4 Execution runtime
 
-An external interpreter (default bun, run through the `interpreter` argv with a `{file}` placeholder; node 22+ with type stripping also works). Go owns everything that must be enforced: process start, timeout, output limits, the nested-call bridge, approvals, cancellation and cleanup. There is no embedded JS engine and no persistent runtime process: each `run` starts a fresh child, so there is no module cache to invalidate. Measured warm spawn of a trivial `.ts` file: bun 1.4.3 about 4 ms, node v26.12.0 about 54 ms; deno is not installed. There is no built-in `ts` lang today (defaults are python, node, bash, sh, ruby, perl: `backend-go/internal/sessionfs/native_exec_settings.go:75-83`); `lang` entries are argv lists, so `bun --preload <prelude> {file}` is accepted by the parser (`native_exec_settings.go:~225-245`; that bun accepts the flag was not run *(unverified)*).
+An external interpreter (default bun, run through the `interpreter` argv with a `{file}` placeholder; node 22+ with type stripping also works). Go owns everything that must be enforced: process start, timeout, output limits, the nested-call bridge, cancellation and cleanup. There is no embedded JS engine and no persistent runtime process: each `run` starts a fresh child, so there is no module cache to invalidate. Measured warm spawn of a trivial `.ts` file: bun 1.4.3 about 4 ms, node v26.12.0 about 54 ms; deno is not installed. There is no built-in `ts` lang today (defaults are python, node, bash, sh, ruby, perl: `backend-go/internal/sessionfs/native_exec_settings.go:75-83`); `lang` entries are argv lists, so `bun --preload <prelude> {file}` is accepted by the parser (`native_exec_settings.go:~225-245`; that bun accepts the flag was not run *(unverified)*).
 
 ## 3. Layout and conventions
 
@@ -139,12 +141,12 @@ The body can use normal control flow, `await`, `Promise.all` (limits in 5.4), fi
 
 ### 5.4 Bridge to native tools (required)
 
-The child talks to Go over one multiplexed per-run channel (a Unix socket in the private per-run temp directory made by `os.MkdirTemp`, mode 0700; newline-delimited JSON frames with ids). The socket path and a per-run random token reach the child as environment variables through `shellChildRun.extraEnv` (`backend-go/internal/tools/native/bash.go:158-159`, as exec does for `EXEC_RESULT`), so there is no extra fd and `runShellChild` needs no change (`bashChildRequest` has no ExtraFiles, `bash_child.go:31-48`). Loopback HTTP is not used. Go dispatches each frame through `Catalog.ExecuteFunctionCall` on a filtered nested catalog (`backend-go/internal/tools/catalog.go:318-404`), so schema validation, normalization, approval and panic recovery apply. The nested catalog is built from the hook-wrapped native tools in the style of `childToolPools` (`backend-go/internal/tools/native/subagent.go:150-166`).
+The child talks to Go over one multiplexed per-run channel (a Unix socket in the private per-run temp directory made by `os.MkdirTemp`, mode 0700; newline-delimited JSON frames with ids). The socket path and a per-run random token reach the child as environment variables through `shellChildRun.extraEnv` (`backend-go/internal/tools/native/bash.go:158-159`, as exec does for `EXEC_RESULT`), so there is no extra fd and `runShellChild` needs no change (`bashChildRequest` has no ExtraFiles, `bash_child.go:31-48`). Loopback HTTP is not used. Go dispatches each frame through `Catalog.ExecuteFunctionCall` on a filtered nested catalog (`backend-go/internal/tools/catalog.go:318-404`), so schema validation, normalization and panic recovery apply. The nested catalog is built from the hook-wrapped native tools in the style of `childToolPools` (`backend-go/internal/tools/native/subagent.go:150-166`).
 
 - Allowlist: `tools.native.tool_smith.tools`, default the read-only tools (`read`, `grep`, `glob`). Writers only if listed. `bash`, `exec`, `process`, `subagent`, `tool_smith` and `task` are always excluded, so recursion is impossible by construction.
 - Sub-agents never get `tool_smith`: it is `ReadOnly: true` (section 15), and `childToolPools` puts every `ReadOnly` native tool except the subagent into a sub-agent's read-only pool, so `childToolPools` (`backend-go/internal/tools/native/subagent.go:162-170`) gets an explicit exclusion of the `tool_smith` tool ID next to the `subagentToolID` skip. The nested catalog uses the same exclusion.
 - Concurrency: non-read-only nested calls run one at a time (mutex); read-only ones run in parallel up to `max_parallel_calls`. `max_nested_calls` caps the total.
-- Approval: a nested call with `approval: ask` prompts through a wrapped `RequestApproval`, as the subagent child does (`backend-go/internal/tools/native/subagent_call.go:58-73`). Approval of the outer `run` never approves nested writes.
+- Approval: none. Nested calls run at once (the approval system was removed 2026-10-23).
 - Each nested result is cut at `nested_result_max_bytes` (UTF-8 safe, `truncated` in `info`).
 - Nested calls are not written to `messages.jsonl` (section 10).
 
@@ -186,7 +188,7 @@ Every `run` starts a new process, and the library is copied at the start, so the
 `run` returns the standard native envelope (`RenderToolResult`), not a second `{ok, error}` shape:
 
 - Success: content is the return value (strings raw, other values as compact JSON), cut at `result_max_bytes` with `truncated` and a visible marker that states how many bytes were cut. v1 does not spill: exec's spill covers the stdout/stderr streams only (`planBashSpill`, `backend-go/internal/tools/native/bash.go:212`), and the return channel is cut by `readShellResultFile` (`bash.go:~237-262`). Script stdout/stderr follow `exec`'s rule (`[result]` then `[output]`; `backend-go/DECISIONS.md:261`).
-- Failures map onto existing statuses and fields: `invalid_input` (bad parameters, oversized code), `blocked` (approval denied), `error` (script exception, bridge failure), `exit_code`, `timed_out`, `truncated`, and `interpreter_unavailable` when bun is missing (`DECISIONS.md:263`).
+- Failures map onto existing statuses and fields: `invalid_input` (bad parameters, oversized code), `blocked` (a hook or the tool refused), `error` (script exception, bridge failure), `exit_code`, `timed_out`, `truncated`, and `interpreter_unavailable` when bun is missing (`DECISIONS.md:263`).
 - Audit: counters only, as `Information` lines: nested `calls`, per-tool counts, nested write count, bytes returned, duration. A nested write count makes partial completion visible. No nested-call log.
 - Nested calls and the bridge produce no transcript items. Only the outer `function_call`/`function_call_output` reach `messages.jsonl`, as for any tool. Sessions without `tool_smith` are byte-identical.
 
@@ -195,7 +197,6 @@ Every `run` starts a new process, and the library is copied at the start, so the
 The interpreter is a child process, **not a sandbox**. A script can use raw `fs`, `fetch` or `child_process` and bypass tool policy, hooks, path policy and checkpoints of the nested calls. `run` therefore has the trust level of `exec`/`bash`:
 
 - `tool_smith` has its own bash-style `Child` settings block, as `exec` does (`backend-go/internal/sessionfs/native_exec_settings.go:~62-65,~125`, parsed with `normalizeBashStyleFields`): environment allowlist, kill grace, stdout/stderr budgets and spill keys are its own, with the same defaults. It does not depend on `tools.native.bash` being configured.
-- `approval` (`off`/`ask`) gates the whole `run`. Approving it does not approve nested writes.
 - The bridge is a policy-enforced path, not an exclusive one. A hard boundary needs a different interpreter (for example deno with `--allow-*` flags through the `interpreter` key; not installed here) and is out of scope.
 - Enforced by Go: timeouts (`timeout_ms` clamped by `max_timeout_ms`), output and nested-result limits, call counts, process kill and temp/socket cleanup on success, timeout and cancel.
 - Idempotence: scripts may have side effects before failing; the counters show how many nested writes happened.
@@ -249,7 +250,7 @@ See `plan_tool_smith.md` (8 phases): the evidence spike (phase 1) is done and th
 | Oversized return value | cut at `result_max_bytes` with a visible truncated marker; no spill in v1 |
 | Frontend | no change (tool cards are generic, `frontend_new/src/components/TranscriptParts.tsx:386-440`) |
 
-Keys: `functions_dir`, `interpreter`, `code_max_bytes`, `result_max_bytes`, `list_max_results`, `list_max_files`, `list_header_bytes`, `function_max_bytes`, `tools`, `max_nested_calls`, `max_parallel_calls`, `nested_result_max_bytes`, `approval`, plus the bash-style `Child` keys (`timeout_ms`, `max_timeout_ms`, kill grace, stdout/stderr budgets, spill) shared with `exec` through `nativeBashStyleKeys` (`native_exec_settings.go:~40,~125`); the schema must list exactly the keys the loader accepts (`native_tool_schema_test.go:122`).
+Keys: `functions_dir`, `interpreter`, `code_max_bytes`, `result_max_bytes`, `list_max_results`, `list_max_files`, `list_header_bytes`, `function_max_bytes`, `tools`, `max_nested_calls`, `max_parallel_calls`, `nested_result_max_bytes`, plus the bash-style `Child` keys (`timeout_ms`, `max_timeout_ms`, kill grace, stdout/stderr budgets, spill) shared with `exec` through `nativeBashStyleKeys` (`native_exec_settings.go:~40,~125`); the schema must list exactly the keys the loader accepts (`native_tool_schema_test.go:122`).
 
 Proposed defaults (from the spike; byte keys have minimum 1 and maximum `maxNativeToolBytes` = 10485760, `backend-go/internal/sessionfs/tool_settings.go:20`):
 
@@ -267,7 +268,6 @@ Proposed defaults (from the spike; byte keys have minimum 1 and maximum `maxNati
 | `list_max_files` | 200 | 1 | 10000 |
 | `list_max_results` | 50 | 1 | 1000 |
 | `tools` | `["read","grep","glob"]` | unique native names | not in {bash, exec, process, subagent, tool_smith, task} |
-| `approval` | `off` | `off`/`ask` | |
 
 ## 16. Lessons taken from harness2
 
@@ -286,7 +286,7 @@ Changes from the rewritten (efficiency) draft:
 - Removed: `get`, `docs/*.md`, the runtime TypeScript tree (registry/loader/executor/permissions), dynamic reload (old section 9, now section 9 "Freshness"), persistent runtime, phase-4 metrics, "runtime reuse" and "registry version" language, the `{ok, error:{code}}` result shape, and filesystem/network "restrictions" a child process cannot enforce.
 - Kept: no create/edit/delete operations, top-level operation names instead of an `action` enum, `run.function` plus dynamic `run.input`, composition rules, workflow-evolution cycle, non-goals, "TypeScript is not a sandbox".
 - Changed (this revision): the bridge is a core requirement by user decision; the plan's phase 1 is no longer a go/no-go gate but a baseline measurement; harness2 lessons added (section 16).
-- Changed: native tools are bridge calls (`tools.<name>`), not library files; allowlist, always-excluded set, approval, serialization and audit counters are specified; errors reuse the native envelope; config keys listed.
+- Changed: native tools are bridge calls (`tools.<name>`), not library files; allowlist, always-excluded set, serialization and audit counters are specified; errors reuse the native envelope; config keys listed.
 
 jad-specific optimizations proposed (to be confirmed by measurement):
 
@@ -300,4 +300,4 @@ jad-specific optimizations proposed (to be confirmed by measurement):
 - **Persistence (confirmed):** `function_call_output` is appended through `appendToolOutputs` (`runner_tools.go:~100-135`, `transcript/input_history.go:22,39`); no byte cap found, so the only cap is per tool.
 - **Native bridge and settings (decided):** own `Child` block, not a bash dependency; Unix socket plus env var.
 - **Dropped from the earlier plan:** the mtime cache for `list` (replaced by a bounded header read); a `get` of any kind.
-- **Bridge (decided):** required. At exec trust a script can already use raw `fs`, but the bridge adds policy (path rules, approvals, hooks, native truncation behavior), parsed results and counters, which skill plus `exec` cannot give. Its cost is measured in phase 8, not used to decide whether to build it.
+- **Bridge (decided):** required. At exec trust a script can already use raw `fs`, but the bridge adds policy (path rules, hooks, native truncation behavior), parsed results and counters, which skill plus `exec` cannot give. Its cost is measured in phase 8, not used to decide whether to build it.

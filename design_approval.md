@@ -1,4 +1,7 @@
-# Tool Approval Design
+# Tool Approval Design (removed)
+
+> **Note (2026-10-23, user decision):** the approval system was removed. Nothing asks the user before a tool call, and `approval` and `allow_write` keys are refused by name. This text describes the removed design and is kept as history; the current rules are in `backend-go/DECISIONS.md` ("The approval system is removed").
+
 
 **Status:** Proposed. Nothing is implemented. Facts below are marked **read** (seen in code) or **untested**.
 
