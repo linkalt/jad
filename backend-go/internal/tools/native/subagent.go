@@ -137,6 +137,8 @@ func (m *SubagentMCP) BindToolsets(mcpTools []tools.Tool, toolsetTools map[strin
 }
 
 type subagentTool struct {
+	// self is the tool as a nesting child gets it.
+	self     tools.Tool
 	settings sessionfs.NativeSubagentSettings
 	// mu guards the agents' catalogs, which Bind fills in after the tool is built.
 	mu       sync.RWMutex
@@ -190,11 +192,10 @@ type subagentToolset struct {
 }
 
 // childToolPools splits tools into the read-only ones and, when allow_write is on, the
-// ones that change files, leaving out the subagent tool and what the profile's
-// tools.deny covers. Only native tools are taken.
+// ones that change files, leaving out what the profile's tools.deny covers. Only native tools are taken.
 func childToolPools(settings sessionfs.NativeSubagentSettings, available []tools.Tool) (readOnly, changers []tools.Tool) {
 	for _, tool := range available {
-		if (tool.Definition.Source != "native" && tool.Definition.Source != "extension") || tool.Definition.ID == subagentToolID || tool.Definition.ID == toolSmithToolID || tools.AnyEntryMatches(settings.DenyTools, tool.Definition) {
+		if (tool.Definition.Source != "native" && tool.Definition.Source != "extension") || tools.AnyEntryMatches(settings.DenyTools, tool.Definition) {
 			continue
 		}
 		switch {
@@ -264,7 +265,7 @@ func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools
 	if mcp != nil {
 		mcp.tool = runtime
 	}
-	return tools.Tool{
+	self := tools.Tool{
 		Definition: tools.Definition{
 			ID:          subagentToolID,
 			Source:      "native",
@@ -284,7 +285,37 @@ func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return runtime.execute(ctx, arguments, execution)
 		},
-	}, nil
+	}
+	runtime.self = self
+	if err := runtime.addSelfToNestingAgents(); err != nil {
+		return tools.Tool{}, err
+	}
+	return self, nil
+}
+
+// addSelfToNestingAgents gives the subagent tool to the agents whose tools list names it,
+// so such a child can start children of its own (bounded by max_depth and the run caps).
+// An agent that lists MCP tools gets it when its catalog is built in bindMCP.
+func (s *subagentTool) addSelfToNestingAgents() error {
+	for index := range s.agents {
+		agent := &s.agents[index]
+		if !containsName(agent.config.Tools, "subagent") {
+			continue
+		}
+		if s.settings.MaxDepth < 2 {
+			return fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"subagent\", but tools.native.subagent.max_depth is %d: raise it to 2 or more, or remove it from the list", agent.config.Name, max(s.settings.MaxDepth, 1))
+		}
+		agent.nativeTools = append(agent.nativeTools, s.self)
+		if len(agent.mcpIDs) > 0 {
+			continue
+		}
+		catalog, err := tools.NewCatalog(agent.nativeTools)
+		if err != nil {
+			return fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.config.Name, err)
+		}
+		agent.catalog = catalog
+	}
+	return nil
 }
 
 // withoutDeniedTools drops from an agent's tools list every entry the profile's
@@ -445,6 +476,7 @@ func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64, s
 // read-only ones, and returns separately the MCP tool IDs its list names. An agent
 // without a tools list gets every native read-only tool and no MCP tool.
 func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers []tools.Tool, allowWrite bool) ([]tools.Tool, []string, error) {
+
 	available := make([]string, 0, len(readOnly)+len(changers))
 	byName := make(map[string]tools.Tool, len(readOnly)+len(changers))
 	for _, tool := range append(append([]tools.Tool(nil), readOnly...), changers...) {
@@ -456,10 +488,10 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 	if allowWrite {
 		kind = "native tool"
 	}
-	// async is opt-in: a child gets it only when its tools list names it.
+	// async, tool_smith and subagent are opt-in: a child gets them only when its tools list names them.
 	chosen := make([]tools.Tool, 0, len(readOnly))
 	for _, tool := range readOnly {
-		if tool.Definition.ID != asyncToolID {
+		if tool.Definition.ID != asyncToolID && tool.Definition.ID != toolSmithToolID && tool.Definition.ID != subagentToolID {
 			chosen = append(chosen, tool)
 		}
 	}
@@ -471,10 +503,14 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 				mcpIDs = append(mcpIDs, name)
 				continue
 			}
+			if name == "subagent" {
+				// The tool being built; the caller adds it to this agent's catalog.
+				continue
+			}
 			if _, exists := byName[name]; !exists {
 				switch name {
-				case "subagent", "tool_smith":
-					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which a sub-agent never gets, whatever the session enables: remove it from the list", agent.Name, name)
+				case "tool_smith":
+					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"tool_smith\", but the session does not enable tools.native.tool_smith: add it under tools.native, or remove it from the list", agent.Name)
 				case "async":
 					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"async\", but the session does not enable tools.native.async: add \"async\": {} under tools.native, or remove it from the list", agent.Name)
 				}
@@ -489,7 +525,7 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 			}
 		}
 	}
-	if len(chosen) == 0 && len(mcpIDs) == 0 {
+	if len(chosen) == 0 && len(mcpIDs) == 0 && !containsName(agent.Tools, "subagent") {
 		return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s has no tool to use: enable at least one read-only native tool (read, grep, glob, fetch, skill or decide)", agent.Name)
 	}
 	return chosen, mcpIDs, nil

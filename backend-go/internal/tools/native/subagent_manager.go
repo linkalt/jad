@@ -33,8 +33,13 @@ const (
 )
 
 var (
+	errSubagentDepth         = errors.New("sub-agent nesting is as deep as tools.native.subagent.max_depth allows")
 	errSubagentManagerClosed = errors.New("sub-agent runs are shutting down")
 	errSubagentQueueFull     = errors.New("too many sub-agent runs are going or waiting")
+	// A nested start (a child starting a child) is never queued: a parent that holds a slot
+	// and waits for a queued child of its own could never be freed.
+	errSubagentNoSlot   = errors.New("no free sub-agent slot: a run started from inside a sub-agent is not queued; try again later or do the work yourself")
+	errSubagentRunLimit = errors.New("this sub-agent tree or session already has the most runs it may have going")
 )
 
 // SubagentManager owns the child runs of one storage directory. A run belongs to the
@@ -55,8 +60,12 @@ type SubagentManager struct {
 	// writers counts the runs of each owner that can change files and run as handles,
 	// from reservation to end; see reserveWriter.
 	writers map[string]int
-	queued  int // runs waiting for a slot
-	freed   chan struct{}
+	// byRoot and bySession count the runs going (queued or running) per top-level run and
+	// per session, for the nested-start limits.
+	byRoot    map[string]int
+	bySession map[string]int
+	queued    int // runs waiting for a slot
+	freed     chan struct{}
 	// store keeps a manifest per run so ids survive a restart; nil keeps runs in
 	// memory only.
 	store *subagentStore
@@ -68,7 +77,7 @@ type SubagentManager struct {
 // NewSubagentManager returns an empty manager that keeps its runs in memory only.
 func NewSubagentManager() *SubagentManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &SubagentManager{ctx: ctx, cancel: cancel, runs: make(map[string]*subagentRun), writers: make(map[string]int), freed: make(chan struct{})}
+	return &SubagentManager{ctx: ctx, cancel: cancel, runs: make(map[string]*subagentRun), writers: make(map[string]int), byRoot: make(map[string]int), bySession: make(map[string]int), freed: make(chan struct{})}
 }
 
 // SubagentManagerOptions configures a manager that keeps run manifests on disk.
@@ -193,7 +202,11 @@ type subagentRun struct {
 	id string
 	// owner is the session key of the call that started the run. Only calls of the
 	// same session can see it, and a stop or reset of that session cancels it.
-	owner     string
+	owner string
+	// session is the session of the whole run tree and root the top-level run (its own id
+	// for one); they key the nested-start limits.
+	session   string
+	root      string
 	agent     string
 	task      string
 	timeoutMS int64
@@ -373,6 +386,18 @@ type subagentStart struct {
 	request  SubagentRequest
 	// owner is the session key of the starting call; see subagentRun.owner.
 	owner string
+	// session is the session the whole tree belongs to. depth is the AgentDepth of the
+	// starting call (0 for the session's own call), rootRun the top-level run it runs
+	// under and parentID the run it runs in; the last two are empty at depth 0.
+	session  string
+	depth    int
+	rootRun  string
+	parentID string
+	// maxDepth, maxPerRoot and maxPerSession bound nested starts; zero means 1 level
+	// deep and no count limit.
+	maxDepth      int
+	maxPerRoot    int
+	maxPerSession int
 	// changes is set when the agent can change files; see subagentRun.changes.
 	changes bool
 	// limit, maxQueued, keep and resultMax are the starting session's settings.
@@ -439,7 +464,9 @@ func (m *SubagentManager) BackgroundWriters(owner string) int {
 
 // undoReservationLocked gives back the slot or queue place start took for a run that was
 // not created.
-func (m *SubagentManager) undoReservationLocked(holdsSlot bool) {
+func (m *SubagentManager) undoReservationLocked(holdsSlot bool, root, session string) {
+	countDown(m.byRoot, root)
+	countDown(m.bySession, session)
 	if holdsSlot {
 		m.running--
 		close(m.freed)
@@ -461,32 +488,57 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		m.mu.Unlock()
 		return nil, errSubagentManagerClosed
 	}
+	root := spec.rootRun
+	if root == "" {
+		root = id
+	}
+	nested := spec.depth > 0
+	if nested {
+		if spec.depth+1 > max(spec.maxDepth, 1) {
+			m.mu.Unlock()
+			return nil, errSubagentDepth
+		}
+		if (spec.maxPerRoot > 0 && m.byRoot[root]-1 >= spec.maxPerRoot) || (spec.maxPerSession > 0 && m.bySession[spec.session] >= spec.maxPerSession) {
+			m.mu.Unlock()
+			return nil, errSubagentRunLimit
+		}
+	}
 	// The slot is taken here, not in the goroutine, so a free slot is never refused
 	// because runs that were just started have not reached it yet.
 	holdsSlot := m.running < spec.limit
 	switch {
 	case holdsSlot:
 		m.running++
+	case nested:
+		m.mu.Unlock()
+		return nil, errSubagentNoSlot
 	case m.queued < spec.maxQueued:
 		m.queued++
 	default:
 		m.mu.Unlock()
 		return nil, errSubagentQueueFull
 	}
-	ctx, cancel := context.WithCancel(m.ctx)
+	m.byRoot[root]++
+	m.bySession[spec.session]++
+	// A nested run ends with the run it belongs to: its context hangs off the parent's.
+	parentContext := m.ctx
+	if parent := m.runs[spec.parentID]; nested && parent != nil {
+		parentContext = parent.ctx
+	}
+	ctx, cancel := context.WithCancel(parentContext)
 	if spec.async != nil {
 		m.mu.Unlock()
 		if err := spec.async.begin(id, !holdsSlot); err != nil {
 			cancel()
 			m.mu.Lock()
-			m.undoReservationLocked(holdsSlot)
+			m.undoReservationLocked(holdsSlot, root, spec.session)
 			m.mu.Unlock()
 			return nil, err
 		}
 		m.mu.Lock()
 		if m.closed {
 			cancel()
-			m.undoReservationLocked(holdsSlot)
+			m.undoReservationLocked(holdsSlot, root, spec.session)
 			m.mu.Unlock()
 			spec.async.abort(id, errSubagentManagerClosed)
 			return nil, errSubagentManagerClosed
@@ -497,6 +549,8 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		store:         m.store,
 		id:            id,
 		owner:         spec.owner,
+		session:       spec.session,
+		root:          root,
 		agent:         spec.request.Agent.Name,
 		task:          subagentTaskPreview(spec.request.Task),
 		timeoutMS:     spec.request.Agent.TimeoutMS,
@@ -515,6 +569,8 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	// The run id is the owner of every process the child starts, so the child sees only
 	// its own and the run's end can stop them.
 	spec.request.Execution.ProcessOwner = id
+	spec.request.Execution.AgentDepth = spec.depth + 1
+	spec.request.Execution.RootRun = root
 	spec.request.Execution.ProcessOwnerLimit = int64(spec.processMax)
 	spec.request.Execution.ProcessAsync = spec.asyncHost != nil && spec.childAsync
 	if spec.changes && spec.changedMax > 0 {
@@ -643,6 +699,8 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 
 	var dropped []string
 	m.mu.Lock()
+	countDown(m.byRoot, run.root)
+	countDown(m.bySession, run.session)
 	m.finished = append(m.finished, run.id)
 	for len(m.finished) > spec.keep {
 		if dir := m.dropOldestLocked(); dir != "" {
@@ -661,6 +719,14 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	}
 	// Waiters wake last, so a wait that returns sees the disk already settled.
 	close(run.done)
+}
+
+func countDown(counts map[string]int, key string) {
+	if counts[key] > 1 {
+		counts[key]--
+		return
+	}
+	delete(counts, key)
 }
 
 // byID returns the run with the given id whatever its owner. The async driver uses it:

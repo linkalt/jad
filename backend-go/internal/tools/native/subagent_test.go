@@ -230,9 +230,9 @@ func TestSubagentToolsListNarrowsAndRejectsAnUnavailableName(t *testing.T) {
 		"write tool":   {[]string{"write"}, `lists "write", which is not an enabled read-only native tool (enabled: grep, read)`},
 		"unknown tool": {[]string{"nope"}, `lists "nope"`},
 		"mcp tool":     {[]string{"lookup"}, `lists "lookup"`},
-		"subagent":     {[]string{"subagent"}, `lists "subagent", which a sub-agent never gets`},
+		"subagent":     {[]string{"subagent"}, `lists "subagent", but tools.native.subagent.max_depth is 1`},
 		"async":        {[]string{"read", "async"}, `lists "async", but the session does not enable tools.native.async`},
-		"tool_smith":   {[]string{"tool_smith"}, `lists "tool_smith", which a sub-agent never gets`},
+		"tool_smith":   {[]string{"tool_smith"}, `lists "tool_smith", but the session does not enable tools.native.tool_smith`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := agentNamed("bad")

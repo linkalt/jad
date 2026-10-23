@@ -196,3 +196,30 @@ func TestSubagentBackgroundWritersKeysAreInTheSettingSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestSubagentNestingLimitsSettings(t *testing.T) {
+	read := func(setting string) (*NativeSubagentSettings, error) {
+		return normalizeNativeSubagentSettings(subagentSettingsFor(setting), "/s/setting.json", "/w", "")
+	}
+	got, err := read(`{"agents":{"a":{}}}`)
+	if err != nil || got.MaxDepth != 2 || got.MaxRunsPerRoot != 16 || got.MaxRunsPerSession != 32 {
+		t.Fatalf("defaults = %+v, %v; want depth 2, 16 per root, 32 per session", got, err)
+	}
+	got, err = read(`{"max_depth":4,"max_runs_per_root":3,"max_runs_per_session":5,"agents":{"a":{}}}`)
+	if err != nil || got.MaxDepth != 4 || got.MaxRunsPerRoot != 3 || got.MaxRunsPerSession != 5 {
+		t.Fatalf("explicit = %+v, %v", got, err)
+	}
+	for name, setting := range map[string]string{
+		"depth zero":    `{"max_depth":0,"agents":{"a":{}}}`,
+		"depth too big": `{"max_depth":9,"agents":{"a":{}}}`,
+		"depth text":    `{"max_depth":"two","agents":{"a":{}}}`,
+		"root zero":     `{"max_runs_per_root":0,"agents":{"a":{}}}`,
+		"root too big":  `{"max_runs_per_root":1025,"agents":{"a":{}}}`,
+		"session zero":  `{"max_runs_per_session":0,"agents":{"a":{}}}`,
+		"session text":  `{"max_runs_per_session":"many","agents":{"a":{}}}`,
+	} {
+		if _, err := read(setting); err == nil || !strings.Contains(err.Error(), "max_") {
+			t.Errorf("%s: error = %v, want one naming the key", name, err)
+		}
+	}
+}

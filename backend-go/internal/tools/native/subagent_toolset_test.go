@@ -159,7 +159,8 @@ func TestSubagentToolsetChangeToolCountsAsAFileChange(t *testing.T) {
 	}
 }
 
-// A toolset that lists the subagent tool does not give it to a child: the depth stays one.
+// A toolset that lists the subagent tool does not give it to a child by itself: like async and
+// tool_smith it is opt-in through the agent's own tools list.
 func TestSubagentToolsetNeverGivesTheChildTheSubagentTool(t *testing.T) {
 	launcher := &fakeLauncher{}
 	nested := tools.Tool{Definition: tools.Definition{ID: subagentToolID, Source: "native", Name: "subagent", Description: "x"}, ReadOnly: true}

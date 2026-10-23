@@ -63,6 +63,11 @@ type ExecutionContext struct {
 	ProcessAsync bool
 	// AgentName is the sub-agent the call runs for; empty in the session's own run.
 	AgentName string
+	// AgentDepth is how deep the call runs: 0 in the session's own run, 1 in a child, 2 in
+	// the child of a child. RootRun is the id of the top-level run the call belongs to;
+	// empty at depth 0.
+	AgentDepth int
+	RootRun    string
 }
 
 // PathScope is a per-call narrowing of a tool's path policy. Allow, when not empty,

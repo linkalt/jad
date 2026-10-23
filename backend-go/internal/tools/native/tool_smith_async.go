@@ -138,7 +138,8 @@ func toolSmithNeedsApproval(script toolSmithScript) bool {
 // blockMs for it. A script whose nested tools could ask for approval runs to its end inside
 // the call instead, where the question has somebody to go to.
 func startToolSmithAsync(ctx context.Context, host *AsyncHost, script toolSmithScript, blockMs *int64) (string, error) {
-	callID, owner := script.execution.CallID, script.execution.SessionKey
+	callID := script.execution.CallID
+	owner, _ := handleOwner(script.execution)
 	if toolSmithNeedsApproval(script) {
 		return runToolSmithScript(ctx, script).text, nil
 	}

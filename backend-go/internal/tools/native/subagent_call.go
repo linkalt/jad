@@ -42,9 +42,15 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 			fmt.Sprintf("The MCP tools of agent %s were not loaded", agent.config.Name)), nil
 	}
 	changes := agent.config.ChangesFiles()
+	depth := execution.AgentDepth
+	if depth+1 > max(int(s.settings.MaxDepth), 1) {
+		return tools.ExecutionError(callID, tools.StatusError, "subagent_depth_exceeded",
+			"A sub-agent cannot start another one from this depth (tools.native.subagent.max_depth)"), nil
+	}
 	childExecution := tools.ExecutionContext{
 		WorkspaceRoot: execution.WorkspaceRoot,
 		SessionDir:    execution.SessionDir,
+		SessionKey:    execution.SessionKey,
 		AgentName:     agent.config.Name,
 	}
 	if agent.config.Paths.Set() {
@@ -57,7 +63,7 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 	// its own asks for approval) and its session has a place left; otherwise it runs to its
 	// end inside this call, where its approvals and the checkpoint belong.
 	background, note := false, ""
-	if changes && agent.background && s.async != nil && execution.SessionKey != "" {
+	if changes && agent.background && s.async != nil && execution.SessionKey != "" && depth == 0 {
 		if background = s.manager.reserveWriter(execution.SessionKey, int(s.settings.MaxBackgroundWriters)); !background {
 			note = fmt.Sprintf("Not handed off: the session already has %d background writer(s) going (tools.native.subagent.max_background_writers), so this call ran to its end", s.settings.MaxBackgroundWriters)
 		}
@@ -70,16 +76,26 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		// the parent, with its own name on the question. A read-only child asks nobody.
 		childExecution.RequestApproval = childApproval(execution.RequestApproval, agent.config.Name, callID)
 	}
+	// A run started inside a child belongs to that child's run: its handle is the child's
+	// own, and exists only when the child has the async tool to collect it.
+	owner, canHandle := handleOwner(execution)
 	var handle *subagentAsyncHandle
-	if s.async != nil && (!changes || background) && execution.SessionKey != "" {
-		handle = newSubagentAsyncHandle(s.async, execution.SessionKey, agent.config.Name, subagentTaskPreview(task))
+	if s.async != nil && (!changes || background) && canHandle {
+		handle = newSubagentAsyncHandle(s.async, owner, agent.config.Name, subagentTaskPreview(task))
 	}
 	run, err := s.manager.start(subagentStart{
 		async:          handle,
 		asyncHost:      s.async,
 		childAsync:     agent.hasNativeTool(asyncToolID),
 		launcher:       s.launcher,
-		owner:          execution.SessionKey,
+		owner:          owner,
+		session:        execution.SessionKey,
+		depth:          depth,
+		rootRun:        execution.RootRun,
+		parentID:       execution.ProcessOwner,
+		maxDepth:       int(s.settings.MaxDepth),
+		maxPerRoot:     int(s.settings.MaxRunsPerRoot),
+		maxPerSession:  int(s.settings.MaxRunsPerSession),
 		changes:        changes,
 		note:           note,
 		writerReserved: background,
@@ -103,8 +119,13 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 			s.manager.releaseWriter(execution.SessionKey)
 		}
 		code := "subagent_unavailable"
-		if err == errSubagentQueueFull {
+		switch {
+		case errors.Is(err, errSubagentQueueFull), errors.Is(err, errSubagentNoSlot):
 			code = "subagent_busy"
+		case errors.Is(err, errSubagentDepth):
+			code = "subagent_depth_exceeded"
+		case errors.Is(err, errSubagentRunLimit):
+			code = "subagent_limit_reached"
 		}
 		if errors.Is(err, asyncmgr.ErrCapacity) {
 			code = "async_capacity_reached"
@@ -121,6 +142,16 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		wait = s.blockFor(arguments)
 	}
 	return s.await(ctx, callID, run, wait, handle == nil)
+}
+
+// handleOwner is the owner under which a call registers a handle of the async manager and
+// whether it may: the session in the session's own run, the run's id inside a child, and
+// there only when the child has the async tool (ProcessAsync).
+func handleOwner(execution tools.ExecutionContext) (string, bool) {
+	if execution.ProcessOwner != "" {
+		return execution.ProcessOwner, execution.ProcessAsync
+	}
+	return execution.SessionKey, execution.SessionKey != ""
 }
 
 // blockFor is the block the call asked for, or the default, within the async policy cap.

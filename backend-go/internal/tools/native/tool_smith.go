@@ -173,7 +173,7 @@ func executeToolSmith(
 	if _, hasFilters := arguments["filters"]; hasFilters {
 		script.notes = []string{"ignored: filters"}
 	}
-	if host == nil || execution.SessionKey == "" {
+	if _, canHandle := handleOwner(execution); host == nil || !canHandle {
 		return runToolSmithScript(ctx, script).text, nil
 	}
 	var blockMs *int64

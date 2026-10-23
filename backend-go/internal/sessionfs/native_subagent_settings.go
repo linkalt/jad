@@ -35,6 +35,13 @@ const (
 	// defaultNativeSubagentMaxBackgroundWriters is how many writer runs one session may
 	// have going as handles at once; a start beyond it waits for its end instead.
 	defaultNativeSubagentMaxBackgroundWriters int64 = 1
+	// Nesting: how deep a child may start children (1 = never), and how many runs one
+	// top-level run and one session may have going at once through such starts.
+	defaultNativeSubagentMaxDepth          int64 = 2
+	maxNativeSubagentMaxDepth              int64 = 8
+	defaultNativeSubagentMaxRunsPerRoot    int64 = 16
+	defaultNativeSubagentMaxRunsPerSession int64 = 32
+	maxNativeSubagentMaxRuns               int64 = 1024
 	// The state-context section lists the session's runs after a compaction, so the
 	// model still knows the ids it was given.
 	defaultNativeSubagentStateLimit int64 = 20
@@ -45,7 +52,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "storage_dir", "statecontext"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "allow_write", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -86,6 +93,16 @@ type NativeSubagentSettings struct {
 	// at once; a writer started beyond it runs to its end instead. Zero, only possible in
 	// a hand-built struct, means no limit.
 	MaxBackgroundWriters int64
+	// MaxDepth is how many levels of runs may exist below the session: 1 lets only the
+	// session start children, 2 lets a child start a child of its own. Zero, only possible
+	// in a hand-built struct, means 1.
+	MaxDepth int64
+	// MaxRunsPerRoot is the most runs below one top-level run that may be going at once,
+	// and MaxRunsPerSession the most runs of one session (any depth) that a nested start
+	// may find going. Zero, only possible in a hand-built struct, means no limit. Neither
+	// is visible to the model.
+	MaxRunsPerRoot    int64
+	MaxRunsPerSession int64
 	// PersistRuns writes a small manifest per run, so run ids and finished results
 	// survive a server restart. A run that was going at the restart is reported as
 	// lost. The zero value of this struct means "memory only"; the loader sets true.
@@ -261,6 +278,15 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.MaxBackgroundWriters, err = configuredInteger(fields, "max_background_writers", defaultNativeSubagentMaxBackgroundWriters, 1, maxNativeSubagentConcurrent, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.MaxDepth, err = configuredInteger(fields, "max_depth", defaultNativeSubagentMaxDepth, 1, maxNativeSubagentMaxDepth, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.MaxRunsPerRoot, err = configuredInteger(fields, "max_runs_per_root", defaultNativeSubagentMaxRunsPerRoot, 1, maxNativeSubagentMaxRuns, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.MaxRunsPerSession, err = configuredInteger(fields, "max_runs_per_session", defaultNativeSubagentMaxRunsPerSession, 1, maxNativeSubagentMaxRuns, settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.PersistRuns, err = bashBool(fields, "persist_runs", true, settingPath+": "+section); err != nil {
