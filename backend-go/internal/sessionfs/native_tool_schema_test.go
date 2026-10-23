@@ -62,11 +62,15 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"write unknown", "write", `{"nope":1}`, false},
 		{"edit backups", "edit", `{"backup_max_count":2,"backup_max_total_bytes":3,"fsync":false,"backup_dir":"b","paths":` + paths + `,"max_bytes":9}`, true},
 		{"edit unknown", "edit", `{"nope":1}`, false},
-		{"bash every key", "bash", `{"approval":"ask",` + child + `,` + run + `}`, true},
+		{"bash every key", "bash", `{` + child + `,` + run + `}`, true},
 		{"bash unknown", "bash", `{"nope":1}`, false},
-		{"exec every bash key", "exec", `{"approval":"ask",` + child + `,` + run + `,"line_aware":false,"default_lang":"bash","code_max_bytes":10,"result_max_bytes":10}`, true},
+		{"bash removed approval", "bash", `{"approval":"ask"}`, false},
+		{"write removed approval", "write", `{"approval":"ask"}`, false},
+		{"exec removed approval", "exec", `{"approval":"ask"}`, false},
+		{"process removed approval", "process", `{"approval":"ask"}`, false},
+		{"exec every bash key", "exec", `{` + child + `,` + run + `,"line_aware":false,"default_lang":"bash","code_max_bytes":10,"result_max_bytes":10}`, true},
 		{"exec unknown", "exec", `{"nope":1}`, false},
-		{"process child keys", "process", `{"approval":"ask",` + child + `,"stdout":{"head_bytes":1,"tail_bytes":1},"max_running":2}`, true},
+		{"process child keys", "process", `{` + child + `,"stdout":{"head_bytes":1,"tail_bytes":1},"max_running":2}`, true},
 		{"process unknown", "process", `{"nope":1}`, false},
 		{"process has no run keys", "process", `{"timeout_ms":1000}`, false},
 		{"bash bad type", "bash", `{"timeout_ms":"slow"}`, false},
@@ -75,8 +79,8 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"decide paths", "decide", `{"paths":` + paths + `,"max_images":2}`, true},
 		{"decide unknown", "decide", `{"nope":1}`, false},
 		{"decide bad paths", "decide", `{"paths":3}`, false},
-		{"profile_message every key", "profile_message", `{"deny_profiles":["dev/a","exec/fast"],"timeout_ms":1000,"result_max_bytes":100,"approval":"ask"}`, true},
-		{"profile_message bad approval", "profile_message", `{"approval":"on"}`, false},
+		{"profile_message every key", "profile_message", `{"deny_profiles":["dev/a","exec/fast"],"timeout_ms":1000,"result_max_bytes":100}`, true},
+		{"profile_message removed approval", "profile_message", `{"approval":"ask"}`, false},
 		{"profile_message unknown", "profile_message", `{"nope":1}`, false},
 		{"profile_message old profiles key", "profile_message", `{"profiles":["a"]}`, false},
 		{"profile_message empty deny list", "profile_message", `{"deny_profiles":[]}`, true},
@@ -87,13 +91,13 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"profile_message deny bare id", "profile_message", `{"deny_profiles":["coder"]}`, false},
 		{"profile_message deny bad id", "profile_message", `{"deny_profiles":["a b"]}`, false},
 		{"profile_message zero timeout", "profile_message", `{"timeout_ms":0}`, false},
-		{"tool_smith every key", "tool_smith", `{"approval":"ask",` + toolSmithChild + `,` + run + `,"functions_dir":".jad/functions","code_max_bytes":10,"result_max_bytes":10,"nested_result_max_bytes":10,"nested_request_max_bytes":10,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":3,"list_max_files":4,"list_header_bytes":512,"function_max_bytes":10,"tools":["read","write"],"interpreter":["node","{file}"]}`, true},
+		{"tool_smith every key", "tool_smith", `{` + toolSmithChild + `,` + run + `,"functions_dir":".jad/functions","code_max_bytes":10,"result_max_bytes":10,"nested_result_max_bytes":10,"nested_request_max_bytes":10,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":3,"list_max_files":4,"list_header_bytes":512,"function_max_bytes":10,"tools":["read","write"],"interpreter":["node","{file}"]}`, true},
 		{"tool_smith no keys", "tool_smith", `{}`, true},
 		{"tool_smith unknown", "tool_smith", `{"nope":1}`, false},
 		{"tool_smith env_file", "tool_smith", `{"env_file":` + string(envFileJSON) + `}`, true},
 		{"tool_smith blank env_file", "tool_smith", `{"env_file":" "}`, false},
 		{"tool_smith has no paths", "tool_smith", `{"paths":` + paths + `}`, false},
-		{"tool_smith bad approval", "tool_smith", `{"approval":"on"}`, false},
+		{"tool_smith removed approval", "tool_smith", `{"approval":"ask"}`, false},
 		{"tool_smith zero code max", "tool_smith", `{"code_max_bytes":0}`, false},
 		{"tool_smith zero request max", "tool_smith", `{"nested_request_max_bytes":0}`, false},
 		{"tool_smith request max too high", "tool_smith", `{"nested_request_max_bytes":10485761}`, false},
@@ -124,7 +128,7 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 			if node == "extension" {
 				settings = map[string]any{"tools": map[string]any{"native": map[string]any{}, "extension": map[string]any{tc.tool: config}}}
 			}
-			_, err := loadApprovalSetting(t, settings)
+			_, err := loadSetting(t, settings)
 			if (err == nil) != tc.ok {
 				t.Errorf("loader accepts = %v, want %v (err: %v)", err == nil, tc.ok, err)
 			}

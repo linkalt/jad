@@ -41,9 +41,7 @@ type NativeProcessStateContextSettings struct {
 // NativeProcessSettings contains process lifecycle, output, environment, and
 // storage policy for native.process.
 type NativeProcessSettings struct {
-	Policy NativePathPolicy
-	// Approval is "off" (default) or "ask"; only a start asks.
-	Approval      string
+	Policy        NativePathPolicy
 	Shell         string
 	LoginShell    bool
 	KillGraceMs   int64
@@ -96,9 +94,12 @@ func normalizeNativeProcessSettings(
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectRemovedApproval(fields, "tools.native.process", settingPath); err != nil {
+		return nil, err
+	}
 	for key := range fields {
 		switch key {
-		case "shell", "login_shell", "kill_grace_ms", "max_running", "max_completed", "retention_days", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "stdin_max_bytes", "strip_ansi", "stop_orphans", "env_file", "env", "env_deny", "storage_dir", "paths", "statecontext", "approval":
+		case "shell", "login_shell", "kill_grace_ms", "max_running", "max_completed", "retention_days", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "stdin_max_bytes", "strip_ansi", "stop_orphans", "env_file", "env", "env_deny", "storage_dir", "paths", "statecontext":
 		default:
 			return nil, configError("%s: tools.native.process.%s is not supported", settingPath, key)
 		}
@@ -112,12 +113,7 @@ func normalizeNativeProcessSettings(
 		}
 	}
 
-	approval, err := normalizeApprovalMode(fields, "tools.native.process", settingPath)
-	if err != nil {
-		return nil, err
-	}
 	settings := &NativeProcessSettings{
-		Approval:   approval,
 		Shell:      defaultNativeBashShell,
 		LoginShell: false,
 		Env:        map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"},

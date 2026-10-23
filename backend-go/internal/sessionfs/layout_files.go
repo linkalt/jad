@@ -28,7 +28,7 @@ type Layout struct {
 // root `defaults` may carry. Everything else has its own file or field in the new layout.
 var layoutSettingKeys = map[string]struct{}{
 	"statecontext": {}, "max_tool_rounds": {}, "max_parallel_tool_calls": {}, "tool_call_scheduling": {},
-	"provider_retry": {}, "provider_stream": {}, "openai_oauth": {}, "max_run_tokens": {}, "approval": {}, "checkpoint": {},
+	"provider_retry": {}, "provider_stream": {}, "openai_oauth": {}, "max_run_tokens": {}, "checkpoint": {},
 	"hooks": {}, "image_resize": {}, "image_store": {}, "persistence": {}, "front_compaction": {},
 	"compaction": {}, "http_debug": {}, "cwd": {}, "env_file": {}, "tool_storage_dir": {},
 	"session_files": {},
@@ -160,9 +160,9 @@ type layoutToolsetFile struct {
 
 // layoutToolsetMCP is one server entry of a toolset.
 type layoutToolsetMCP struct {
-	Enabled   *bool    `json:"enabled"`
-	DenyTools []string `json:"deny_tools"`
-	Approval  *string  `json:"approval"`
+	Enabled   *bool           `json:"enabled"`
+	DenyTools []string        `json:"deny_tools"`
+	Approval  json.RawMessage `json:"approval"`
 }
 
 // readLayoutFile decodes one catalog file strictly: an unknown key is an error that
@@ -193,6 +193,9 @@ func parseLayoutFile(path string, contents []byte, into any) error {
 
 // checkLayoutSettings refuses a settings object with a key outside layoutSettingKeys.
 func checkLayoutSettings(settings map[string]json.RawMessage, where string) error {
+	if err := rejectRemovedApproval(settings, "settings", where); err != nil {
+		return err
+	}
 	var unknown []string
 	for key := range settings {
 		if _, ok := layoutSettingKeys[key]; !ok {

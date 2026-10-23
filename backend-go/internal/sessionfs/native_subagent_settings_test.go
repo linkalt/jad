@@ -249,7 +249,7 @@ func TestLoadSessionConfigAcceptsTheSubagentToolAndNeverListsItForTypeScript(t *
 }
 
 func TestApprovalKeyIsRefusedOnTheSubagentTool(t *testing.T) {
-	_, err := loadApprovalSetting(t, nativeTools(map[string]any{"subagent": map[string]any{"agents": map[string]any{"a": map[string]any{}}, "approval": "ask"}}))
+	_, err := loadSetting(t, nativeTools(map[string]any{"subagent": map[string]any{"agents": map[string]any{"a": map[string]any{}}, "approval": "ask"}}))
 	if err == nil || !strings.Contains(err.Error(), "tools.native.subagent.approval is not supported") {
 		t.Fatalf("subagent accepted an approval key: %v", err)
 	}

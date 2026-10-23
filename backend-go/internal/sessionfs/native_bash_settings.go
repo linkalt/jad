@@ -72,9 +72,7 @@ type NativeBashSpillSettings struct {
 // NativeBashSettings contains normalized shell, path, output, and environment
 // policy for native.bash.
 type NativeBashSettings struct {
-	Policy NativePathPolicy
-	// Approval is "off" (default) or "ask".
-	Approval     string
+	Policy       NativePathPolicy
 	Shell        string
 	LoginShell   bool
 	TimeoutMs    int64
@@ -103,7 +101,7 @@ type NativeBashSettings struct {
 
 // nativeBashStyleKeys are the settings of a tool that runs a child process. native.bash and
 // native.exec each take them under their own name; neither reads the other's values.
-var nativeBashStyleKeys = []string{"shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_deadline_ms", "drain_after_exit_ms", "kill_process_group", "kill_children_on_run_end", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "paths", "approval"}
+var nativeBashStyleKeys = []string{"shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_deadline_ms", "drain_after_exit_ms", "kill_process_group", "kill_children_on_run_end", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "paths"}
 
 func normalizeNativeBashSettings(
 	setting map[string]json.RawMessage,
@@ -135,6 +133,9 @@ func normalizeNativeBashSettings(
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectRemovedApproval(fields, section, settingPath); err != nil {
+		return nil, err
+	}
 	for key := range fields {
 		if !containsString(nativeBashStyleKeys, key) && key != "capture_bytes" && key != "head_ratio" {
 			return nil, configError("%s: %s.%s is not supported", settingPath, section, key)
@@ -159,9 +160,6 @@ func normalizeBashStyleFields(
 ) (*NativeBashSettings, error) {
 	var err error
 	settings := &NativeBashSettings{}
-	if settings.Approval, err = normalizeApprovalMode(fields, section, settingPath); err != nil {
-		return nil, err
-	}
 	if settings.Shell, err = bashString(fields, "shell", defaultNativeBashShell, settingPath+": "+section, false); err != nil {
 		return nil, err
 	}

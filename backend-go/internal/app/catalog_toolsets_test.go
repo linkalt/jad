@@ -69,7 +69,7 @@ func TestCatalogToolsetWriteIsCheckedByTheLoader(t *testing.T) {
 		"hooks of a wrong type":  {`{"hooks":5}`, "hooks"},
 		"unknown mcp server":     {`{"mcp":{"ext/missing":{}}}`, "ext/missing"},
 		"unknown mcp use key":    {`{"mcp":{"ext/one":{"bogus":true}}}`, "bogus"},
-		"bad mcp approval":       {`{"mcp":{"ext/one":{"approval":"maybe"}}}`, "approval"},
+		"removed mcp approval":   {`{"mcp":{"ext/one":{"approval":"ask"}}}`, "approval was removed"},
 		"same server file name":  {`{"mcp":{"ext/one":{},"more/one":{}}}`, "same file name"},
 		"mcp that is not object": {`{"mcp":[]}`, "mcp must be an object"},
 	}
@@ -92,7 +92,7 @@ func TestCatalogToolsetWriteIsCheckedByTheLoader(t *testing.T) {
 			t.Fatalf("temporary file left behind: %s", entry.Name())
 		}
 	}
-	good := `{"native":{"read":{}},"mcp":{"ext/one":{"approval":"ask","deny_tools":["x"]}}}`
+	good := `{"native":{"read":{}},"mcp":{"ext/one":{"deny_tools":["x"]}}}`
 	if reply := f.catalogCall(t, "PUT", path, good, map[string]string{"If-Match": before.etag}); reply.status != http.StatusOK {
 		t.Fatalf("a valid toolset naming an MCP server = %d %s", reply.status, reply.body)
 	}

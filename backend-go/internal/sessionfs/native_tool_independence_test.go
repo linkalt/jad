@@ -20,7 +20,7 @@ func TestToolsDoNotTakeEachOthersPathRules(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.source+" to "+tc.dependent, func(t *testing.T) {
-			config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+			config, err := loadSetting(t, nativeTools(map[string]any{
 				tc.source:    map[string]any{"paths": rules},
 				tc.dependent: map[string]any{},
 			}))
@@ -40,7 +40,7 @@ func TestToolsDoNotTakeEachOthersPathRules(t *testing.T) {
 func TestEveryPathToolTakesItsOwnPathRules(t *testing.T) {
 	for _, tool := range []string{"read", "write", "edit", "grep", "glob", "read_image", "bash", "process", "exec"} {
 		t.Run(tool, func(t *testing.T) {
-			config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+			config, err := loadSetting(t, nativeTools(map[string]any{
 				tool: map[string]any{"paths": map[string]any{"allow": []any{"mine"}}},
 			}))
 			if err != nil {
@@ -79,7 +79,7 @@ func toolPolicy(config SessionConfig, tool string) NativePathPolicy {
 }
 
 func TestEditDoesNotTakeWritesBackupSettings(t *testing.T) {
-	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{
 		"write": map[string]any{"backup_max_count": 9, "backup_max_total_bytes": 1, "fsync": false, "backup_dir": "write-backups"},
 		"edit":  map[string]any{},
 	}))
@@ -97,7 +97,7 @@ func TestEditDoesNotTakeWritesBackupSettings(t *testing.T) {
 
 func TestProcessAndExecDoNotTakeBashsOutputBudgets(t *testing.T) {
 	bashBudget := map[string]any{"head_bytes": 11, "tail_bytes": 22}
-	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{
 		"bash":    map[string]any{"stdout": bashBudget, "stderr": bashBudget, "timeout_ms": 5000, "max_timeout_ms": 6000, "max_line_chars": 77, "strip_ansi": false},
 		"process": map[string]any{},
 		"exec":    map[string]any{},
@@ -119,13 +119,13 @@ func TestProcessAndExecDoNotTakeBashsOutputBudgets(t *testing.T) {
 // exec accepts the same child-process keys as bash, under its own name and with its own
 // values, and its errors name tools.native.exec.
 func TestExecOwnsItsChildProcessSettings(t *testing.T) {
-	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{
 		"exec": map[string]any{
 			"shell": "/bin/sh", "login_shell": true, "timeout_ms": 3000, "max_timeout_ms": 4000, "kill_grace_ms": 10,
 			"kill_process_group": "timeout_only", "max_bytes": 4096, "stdout": map[string]any{"head_bytes": 100, "tail_bytes": 200},
 			"stderr": map[string]any{"head_bytes": 10, "tail_bytes": 20}, "max_line_chars": 90, "stdin_max_bytes": 1000, "strip_ansi": false,
 			"env": map[string]any{"EXEC_ENV": "1"}, "env_deny": []any{"SECRET"}, "spill": map[string]any{"enabled": false},
-			"approval": "ask", "line_aware": false,
+			"line_aware": false,
 		},
 	}))
 	if err != nil {
@@ -146,8 +146,8 @@ func TestExecOwnsItsChildProcessSettings(t *testing.T) {
 	if child.Env["EXEC_ENV"] != "1" || !reflect.DeepEqual(child.EnvDeny, []string{"SECRET"}) || child.Spill.Enabled {
 		t.Fatalf("exec env %v deny %v spill %+v", child.Env, child.EnvDeny, child.Spill)
 	}
-	if exec.Approval != "ask" || child.Approval != "ask" || exec.LineAware {
-		t.Fatalf("exec approval %q/%q line_aware %v", exec.Approval, child.Approval, exec.LineAware)
+	if exec.LineAware {
+		t.Fatalf("exec line_aware %v", exec.LineAware)
 	}
 }
 
@@ -166,7 +166,7 @@ func TestExecChildSettingErrorsNameTheExecKey(t *testing.T) {
 		"paths type": {map[string]any{"paths": 3}, "tools.native.exec.paths"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := loadApprovalSetting(t, nativeTools(map[string]any{"exec": tc.exec}))
+			_, err := loadSetting(t, nativeTools(map[string]any{"exec": tc.exec}))
 			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "tools.native.bash") {
 				t.Fatalf("error = %v, want %q and no mention of bash", err, tc.want)
 			}

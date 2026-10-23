@@ -20,7 +20,7 @@ func TestSingleStringToolsetKeepsItsMergedOutput(t *testing.T) {
 		},
 		MCP: map[string]map[string]any{
 			"srv/zulu":  {"deny_tools": []string{"rm"}},
-			"srv/alpha": {"approval": "ask"},
+			"srv/alpha": {},
 		},
 	}, nil)
 	if err != nil {
@@ -32,7 +32,7 @@ func TestSingleStringToolsetKeepsItsMergedOutput(t *testing.T) {
 
 	const wantGrep = `{"Policy":{"Paths":[],"UnrestrictedPaths":false,"Within":null},"Binary":"rg","MaxResults":11,"MaxMatchesPerFile":20,"MaxBytes":65536,"MaxLineChars":240,"MaxFileBytes":8388608,"TimeoutMs":10000,"KillGraceMs":250,"KillDeadlineMs":1000,"DrainAfterExitMs":500}`
 	const wantGlob = `{"Policy":{"Paths":[],"UnrestrictedPaths":false,"Within":null},"Binary":"rg","IncludeHidden":true,"MaxResults":22,"MaxBytes":65536,"MaxLineChars":1000,"TimeoutMs":10000,"KillGraceMs":2000,"KillDeadlineMs":2000,"DrainAfterExitMs":500}`
-	const wantServers = `[{"ID":"alpha","ConfigPath":"","Enabled":true,"DenyTools":[],"Approval":"ask"},{"ID":"zulu","ConfigPath":"","Enabled":true,"DenyTools":["rm"],"Approval":"off"}]`
+	const wantServers = `[{"ID":"alpha","ConfigPath":"","Enabled":true,"DenyTools":[]},{"ID":"zulu","ConfigPath":"","Enabled":true,"DenyTools":["rm"]}]`
 
 	assertJSON(t, "NativeGrep", config.NativeGrep, wantGrep)
 	assertJSON(t, "NativeGlob", config.NativeGlob, wantGlob)

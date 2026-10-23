@@ -22,16 +22,14 @@ func TestNormalizeNativeProfileMessageSettings(t *testing.T) {
 		native string
 		want   NativeProfileMessageSettings
 	}{
-		"defaults":                 {`{"profile_message":{}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Approval: ApprovalOff, Compact: ProfileMessageCompactOff}},
-		"nulls default":            {`{"profile_message":{"deny_profiles":null,"timeout_ms":null,"busy_wait_ms":null,"result_max_bytes":null}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Approval: ApprovalOff, Compact: ProfileMessageCompactOff}},
-		"every key":                {`{"profile_message":{"deny_profiles":["a_b-1/x","exec/fast.v2"],"timeout_ms":50,"busy_wait_ms":5,"result_max_bytes":7}}`, NativeProfileMessageSettings{DenyProfiles: []string{"a_b-1/x", "exec/fast.v2"}, TimeoutMs: 50, BusyWaitMs: 5, ResultMaxBytes: 7, MaxChain: 2, Approval: ApprovalOff, Compact: ProfileMessageCompactOff}},
-		"busy wait equals timeout": {`{"profile_message":{"timeout_ms":9,"busy_wait_ms":9}}`, NativeProfileMessageSettings{TimeoutMs: 9, BusyWaitMs: 9, ResultMaxBytes: 16384, MaxChain: 2, Approval: ApprovalOff, Compact: ProfileMessageCompactOff}},
-		"empty deny":               {`{"profile_message":{"deny_profiles":[]}}`, NativeProfileMessageSettings{DenyProfiles: []string{}, TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Approval: ApprovalOff, Compact: ProfileMessageCompactOff}},
-		"approval ask":             {`{"profile_message":{"approval":"ask"}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Approval: ApprovalAsk, Compact: ProfileMessageCompactOff}},
-		"compact on":               {`{"profile_message":{"compact":"on"}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Approval: ApprovalOff, Compact: ProfileMessageCompactOn}},
-		"compact off":              {`{"profile_message":{"compact":"off"}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Approval: ApprovalOff, Compact: ProfileMessageCompactOff}},
-		"max chain set":            {`{"profile_message":{"max_chain":4}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 4, Approval: ApprovalOff, Compact: ProfileMessageCompactOff}},
-		"approval off":             {`{"profile_message":{"approval":"off"}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Approval: ApprovalOff, Compact: ProfileMessageCompactOff}},
+		"defaults":                 {`{"profile_message":{}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Compact: ProfileMessageCompactOff}},
+		"nulls default":            {`{"profile_message":{"deny_profiles":null,"timeout_ms":null,"busy_wait_ms":null,"result_max_bytes":null}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Compact: ProfileMessageCompactOff}},
+		"every key":                {`{"profile_message":{"deny_profiles":["a_b-1/x","exec/fast.v2"],"timeout_ms":50,"busy_wait_ms":5,"result_max_bytes":7}}`, NativeProfileMessageSettings{DenyProfiles: []string{"a_b-1/x", "exec/fast.v2"}, TimeoutMs: 50, BusyWaitMs: 5, ResultMaxBytes: 7, MaxChain: 2, Compact: ProfileMessageCompactOff}},
+		"busy wait equals timeout": {`{"profile_message":{"timeout_ms":9,"busy_wait_ms":9}}`, NativeProfileMessageSettings{TimeoutMs: 9, BusyWaitMs: 9, ResultMaxBytes: 16384, MaxChain: 2, Compact: ProfileMessageCompactOff}},
+		"empty deny":               {`{"profile_message":{"deny_profiles":[]}}`, NativeProfileMessageSettings{DenyProfiles: []string{}, TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Compact: ProfileMessageCompactOff}},
+		"compact on":               {`{"profile_message":{"compact":"on"}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Compact: ProfileMessageCompactOn}},
+		"compact off":              {`{"profile_message":{"compact":"off"}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, Compact: ProfileMessageCompactOff}},
+		"max chain set":            {`{"profile_message":{"max_chain":4}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 4, Compact: ProfileMessageCompactOff}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := normalizeNativeProfileMessageSettings(decideSettingsFor(tc.native), "setting.json")
@@ -64,9 +62,7 @@ func TestNormalizeNativeProfileMessageSettingsRejectsInvalidSettings(t *testing.
 		"timeout negative":       {`{"profile_message":{"timeout_ms":-1}}`, "timeout_ms"},
 		"timeout text":           {`{"profile_message":{"timeout_ms":"slow"}}`, "timeout_ms"},
 		"timeout huge":           {`{"profile_message":{"timeout_ms":99999999999}}`, "timeout_ms"},
-		"approval null":          {`{"profile_message":{"approval":null}}`, `approval must be "off" or "ask"`},
-		"approval on":            {`{"profile_message":{"approval":"on"}}`, `approval must be "off" or "ask"`},
-		"approval bool":          {`{"profile_message":{"approval":true}}`, `approval must be "off" or "ask"`},
+		"approval removed":       {`{"profile_message":{"approval":"ask"}}`, "tools.native.profile_message.approval was removed"},
 		"compact null":           {`{"profile_message":{"compact":null}}`, `compact must be "off" or "on"`},
 		"compact ask":            {`{"profile_message":{"compact":"ask"}}`, `compact must be "off" or "on"`},
 		"compact bool":           {`{"profile_message":{"compact":true}}`, `compact must be "off" or "on"`},
@@ -96,7 +92,7 @@ func TestLoadSessionConfigProfileMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSessionConfig() error = %v", err)
 	}
-	want := &NativeProfileMessageSettings{DenyProfiles: []string{"exec/fast"}, TimeoutMs: 1000, ResultMaxBytes: 16384, MaxChain: 2, Approval: ApprovalOff, Compact: ProfileMessageCompactOff}
+	want := &NativeProfileMessageSettings{DenyProfiles: []string{"exec/fast"}, TimeoutMs: 1000, ResultMaxBytes: 16384, MaxChain: 2, Compact: ProfileMessageCompactOff}
 	if !reflect.DeepEqual(config.NativeProfileMessage, want) {
 		t.Fatalf("native.profile_message = %+v, want %+v", config.NativeProfileMessage, want)
 	}

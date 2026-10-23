@@ -6,7 +6,7 @@ import (
 )
 
 func TestCheckpointDefaultsAreOffAndMatchTypeScript(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{})
+	config, err := loadSetting(t, map[string]any{})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestCheckpointDefaultsAreOffAndMatchTypeScript(t *testing.T) {
 }
 
 func TestCheckpointAcceptsEveryKey(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"checkpoint": map[string]any{
+	config, err := loadSetting(t, map[string]any{"checkpoint": map[string]any{
 		"enabled": true, "git_binary": " /usr/bin/git ", "max_checkpoints": 3, "max_files": 50, "max_total_bytes": 1024,
 		"timeout_ms": 2000, "include_mcp_tools": false, "snapshot_on": "run_start", "safe_restore": false,
 	}})
@@ -61,7 +61,7 @@ func TestCheckpointRejectsBadValuesAndUnknownKeys(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := loadApprovalSetting(t, map[string]any{"checkpoint": tc.checkpoint})
+			_, err := loadSetting(t, map[string]any{"checkpoint": tc.checkpoint})
 			if err == nil || !strings.Contains(err.Error(), tc.message) {
 				t.Fatalf("error = %v, want one containing %q", err, tc.message)
 			}

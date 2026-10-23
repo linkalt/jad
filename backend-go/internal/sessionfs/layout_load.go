@@ -18,7 +18,7 @@ const sessionFileSuffix = ".json"
 // LoadLayoutSessionSettings is LoadSessionSettings for the catalog layout. It reads
 // <id>.json, narrows the profile catalog by the session scope, takes the
 // profile (requested, else the first in scope) and composes the setting-shaped map the
-// existing normalizers read, so a normalizer or applyApprovalDefault needs no second copy.
+// existing normalizers read, so a normalizer needs no second copy.
 //
 // Every file is named "<category>/<name>", on the wire and in the files: the profile, the
 // run's model, SessionConfig.Models and ModelDefault. ModelPath is the absolute file.
@@ -595,7 +595,7 @@ func (c *layoutCompose) mcpServers(toolset layoutToolsetFile, toolsetPath string
 			item["deny_tools"] = use.DenyTools
 		}
 		if use.Approval != nil {
-			item["approval"] = *use.Approval
+			return nil, configError("%s: mcp %q: approval was removed; %s", toolsetPath, key, removedApprovalHint)
 		}
 		servers = append(servers, item)
 	}

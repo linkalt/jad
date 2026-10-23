@@ -432,94 +432,6 @@
   "error": "tool_call_scheduling must be \"ordered\" or \"concurrent\""
  },
  {
-  "name": "approval default off",
-  "settings": {
-   "approval": {
-    "default": "off"
-   }
-  },
-  "ok": true
- },
- {
-  "name": "approval default null",
-  "settings": {
-   "approval": {
-    "default": null
-   }
-  },
-  "error": "approval.default must be \"off\" or \"ask\""
- },
- {
-  "name": "approval default on",
-  "settings": {
-   "approval": {
-    "default": "on"
-   }
-  },
-  "error": "approval.default must be \"off\" or \"ask\""
- },
- {
-  "name": "approval default wrong case",
-  "settings": {
-   "approval": {
-    "default": "Ask"
-   }
-  },
-  "error": "approval.default must be \"off\" or \"ask\""
- },
- {
-  "name": "approval default empty string",
-  "settings": {
-   "approval": {
-    "default": ""
-   }
-  },
-  "error": "approval.default must be \"off\" or \"ask\""
- },
- {
-  "name": "approval default boolean",
-  "settings": {
-   "approval": {
-    "default": true
-   }
-  },
-  "error": "approval.default must be \"off\" or \"ask\""
- },
- {
-  "name": "approval default number",
-  "settings": {
-   "approval": {
-    "default": 1
-   }
-  },
-  "error": "approval.default must be \"off\" or \"ask\""
- },
- {
-  "name": "approval default array",
-  "settings": {
-   "approval": {
-    "default": [
-     "ask"
-    ]
-   }
-  },
-  "error": "approval.default must be \"off\" or \"ask\""
- },
- {
-  "name": "approval default does not excuse a bad per-tool value",
-  "native": {
-   "bash": {
-    "approval": "on"
-   }
-  },
-  "settings": {
-   "approval": {
-    "default": "ask"
-   }
-  },
-  "error": "tools.native.bash.approval must be \"off\" or \"ask\""
- },
- {
   "name": "provider retry empty object",
   "settings": {
    "provider_retry": {}
@@ -870,37 +782,7 @@
     "unknown_key": 1
    }
   },
-  "error": "tools.native.exec.unknown_key is not supported; supported keys are approval, code_max_bytes, default_lang, drain_after_exit_ms, env, env_deny, env_file, kill_children_on_run_end, kill_deadline_ms, kill_grace_ms, kill_process_group, langs, line_aware, login_shell, max_bytes, max_line_chars, max_timeout_ms, paths, result_max_bytes, shell, spill, stderr, stdin_max_bytes, stdout, strip_ansi, timeout_ms"
- },
- {
-  "name": "exec approval invalid",
-  "native": {
-   "bash": {},
-   "exec": {
-    "approval": "maybe"
-   }
-  },
-  "error": "tools.native.exec.approval must be \"off\" or \"ask\""
- },
- {
-  "name": "exec approval null",
-  "native": {
-   "bash": {},
-   "exec": {
-    "approval": null
-   }
-  },
-  "error": "tools.native.exec.approval must be \"off\" or \"ask\""
- },
- {
-  "name": "exec approval ask",
-  "native": {
-   "bash": {},
-   "exec": {
-    "approval": "ask"
-   }
-  },
-  "ok": true
+  "error": "tools.native.exec.unknown_key is not supported; supported keys are code_max_bytes, default_lang, drain_after_exit_ms, env, env_deny, env_file, kill_children_on_run_end, kill_deadline_ms, kill_grace_ms, kill_process_group, langs, line_aware, login_shell, max_bytes, max_line_chars, max_timeout_ms, paths, result_max_bytes, shell, spill, stderr, stdin_max_bytes, stdout, strip_ansi, timeout_ms"
  },
  {
   "name": "exec code_max_bytes zero",
@@ -1439,19 +1321,6 @@
       "ext": ".sh"
      }
     }
-   }
-  },
-  "ok": true
- },
- {
-  "name": "exec approval default",
-  "native": {
-   "bash": {},
-   "exec": {}
-  },
-  "settings": {
-   "approval": {
-    "default": "ask"
    }
   },
   "ok": true

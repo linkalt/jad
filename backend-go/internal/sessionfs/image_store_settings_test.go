@@ -11,7 +11,7 @@ import (
 )
 
 func TestImageStoreDefaultsToOff(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{})
+	config, err := loadSetting(t, map[string]any{})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestImageStoreDefaultsToOff(t *testing.T) {
 }
 
 func TestImageStoreRelativeDirIsResolvedAgainstTheSessionDirectory(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"image_store": map[string]any{"dir": "pics/../images"}})
+	config, err := loadSetting(t, map[string]any{"image_store": map[string]any{"dir": "pics/../images"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestImageStoreRelativeDirIsResolvedAgainstTheSessionDirectory(t *testing.T)
 
 func TestImageStoreAbsoluteDirAndEveryLimit(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "x")
-	config, err := loadApprovalSetting(t, map[string]any{"image_store": map[string]any{"dir": dir, "min_bytes": 100, "max_file_bytes": 5000, "max_total_bytes": 9000}})
+	config, err := loadSetting(t, map[string]any{"image_store": map[string]any{"dir": dir, "min_bytes": 100, "max_file_bytes": 5000, "max_total_bytes": 9000}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestImageStoreRejectsBadValues(t *testing.T) {
 		{"file above total", map[string]any{"min_bytes": 100, "max_file_bytes": 5000, "max_total_bytes": 4000}, "max_file_bytes (5000) must not be above max_total_bytes (4000)"},
 		{"default file above small total", map[string]any{"max_total_bytes": 4000}, "max_file_bytes (20971520) must not be above max_total_bytes (4000)"},
 	} {
-		_, err := loadApprovalSetting(t, map[string]any{"image_store": test.value})
+		_, err := loadSetting(t, map[string]any{"image_store": test.value})
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: err = %v, want it to contain %q", test.name, err, test.want)
 		}

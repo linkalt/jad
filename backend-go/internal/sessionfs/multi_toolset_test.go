@@ -74,7 +74,7 @@ func TestProfileToolsetsSameMCPServerKeepsTheFirst(t *testing.T) {
 	spec.MCP = map[string]map[string]any{"srv/files": {}}
 	config, err := loadToolsetSession(t, spec, map[string]string{
 		"a/one": `{"mcp":{"srv/files":{"deny_tools":["rm"]}}}`,
-		"b/two": `{"native":{"glob":{}},"mcp":{"srv/files":{"approval":"ask"}}}`,
+		"b/two": `{"native":{"glob":{}},"mcp":{"srv/files":{}}}`,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestProfileToolsetsSameMCPServerKeepsTheFirst(t *testing.T) {
 		t.Fatalf("MCPServers = %+v, want one", config.MCPServers)
 	}
 	server := config.MCPServers[0]
-	if server.ID != "files" || !reflect.DeepEqual(server.DenyTools, []string{"rm"}) || server.Approval != ApprovalOff {
+	if server.ID != "files" || !reflect.DeepEqual(server.DenyTools, []string{"rm"}) {
 		t.Errorf("server = %+v, want the first toolset's use", server)
 	}
 	if len(config.Warnings) != 1 || !strings.Contains(config.Warnings[0], "files") || !strings.Contains(config.Warnings[0], "a/one") || !strings.Contains(config.Warnings[0], "b/two") {

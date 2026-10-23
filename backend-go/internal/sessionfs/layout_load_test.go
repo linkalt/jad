@@ -224,58 +224,9 @@ func TestLayoutMCPUseSettingsComeFromTheToolset(t *testing.T) {
 	if got := by["codebase-memory-mcp"].DenyTools; strings.Join(got, ",") != "ingest_traces,delete_project" {
 		t.Fatalf("deny_tools = %v", got)
 	}
-	if by["betterwright"].Approval != ApprovalAsk {
-		t.Fatalf("betterwright approval = %q", by["betterwright"].Approval)
-	}
 	for id, server := range by {
 		if !server.Enabled {
 			t.Fatalf("%s should be enabled by default", id)
-		}
-	}
-}
-
-// approval.default is the safety net: a tool that does not set its own approval must
-// still ask. It runs on the composed setting, so a layout session keeps it.
-func TestLayoutKeepsTheApprovalDefault(t *testing.T) {
-	layout, location, _ := sampleLayout(t)
-	layout.Defaults = map[string]json.RawMessage{"approval": json.RawMessage(`{"default":"ask"}`)}
-	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if config.NativeBash == nil || config.NativeBash.Approval != ApprovalAsk {
-		t.Fatalf("bash approval = %+v", config.NativeBash)
-	}
-	if config.NativeWrite == nil || config.NativeWrite.Approval != ApprovalAsk {
-		t.Fatalf("write approval = %+v", config.NativeWrite)
-	}
-	for _, server := range config.MCPServers {
-		if server.Approval != ApprovalAsk {
-			t.Fatalf("mcp %s approval = %q, want ask", server.ID, server.Approval)
-		}
-	}
-}
-
-func TestLayoutExplicitApprovalOffBeatsTheDefault(t *testing.T) {
-	layout, location, root := sampleLayout(t)
-	layout.Defaults = map[string]json.RawMessage{"approval": json.RawMessage(`{"default":"ask"}`)}
-	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
-		m["native"].(map[string]any)["bash"] = map[string]any{"approval": "off"}
-		m["mcp"].(map[string]any)["code/zvec-grep"] = map[string]any{"approval": "off"}
-	})
-	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if config.NativeBash.Approval != ApprovalOff {
-		t.Fatalf("explicit bash off lost: %q", config.NativeBash.Approval)
-	}
-	for _, server := range config.MCPServers {
-		if server.ID == "zvec-grep" && server.Approval != ApprovalOff {
-			t.Fatalf("explicit mcp off lost: %q", server.Approval)
-		}
-		if server.ID == "codebase-memory-mcp" && server.Approval != ApprovalAsk {
-			t.Fatalf("codebase-memory approval = %q, want ask", server.Approval)
 		}
 	}
 }
@@ -1402,4 +1353,35 @@ func TestLayoutProfileNameMustBeAString(t *testing.T) {
 	if _, err := LoadLayoutSessionConfig(location, layout, "dev/coder", ""); err == nil || !strings.Contains(err.Error(), "name") {
 		t.Fatalf("a numeric profile name must be refused naming the key: %v", err)
 	}
+}
+
+func TestLayoutRefusesTheRemovedApprovalKeysByName(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		layout, location, _ := sampleLayout(t)
+		layout.Defaults = map[string]json.RawMessage{"approval": json.RawMessage(`{"default":"ask"}`)}
+		_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+		if err == nil || !strings.Contains(err.Error(), "settings.approval was removed") {
+			t.Fatalf("err = %v, want a named removed-key error", err)
+		}
+	})
+	t.Run("toolset native tool", func(t *testing.T) {
+		layout, location, root := sampleLayout(t)
+		editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
+			m["native"].(map[string]any)["bash"] = map[string]any{"approval": "off"}
+		})
+		_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+		if err == nil || !strings.Contains(err.Error(), "tools.native.bash.approval was removed") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("toolset mcp server", func(t *testing.T) {
+		layout, location, root := sampleLayout(t)
+		editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
+			m["mcp"].(map[string]any)["code/zvec-grep"] = map[string]any{"approval": "off"}
+		})
+		_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+		if err == nil || !strings.Contains(err.Error(), "approval was removed") {
+			t.Fatalf("err = %v", err)
+		}
+	})
 }

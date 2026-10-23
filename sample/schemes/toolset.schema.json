@@ -49,12 +49,6 @@
             },
             "uniqueItems": true,
             "default": []
-          },
-          "approval": {
-            "enum": [
-              "off",
-              "ask"
-            ]
           }
         },
         "additionalProperties": false

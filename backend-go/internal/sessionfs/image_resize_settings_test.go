@@ -10,7 +10,7 @@ import (
 )
 
 func TestImageResizeDefaultsToOff(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{})
+	config, err := loadSetting(t, map[string]any{})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestImageResizeDefaultsToOff(t *testing.T) {
 }
 
 func TestImageResizeEnabledAloneKeepsEveryDefault(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"image_resize": map[string]any{"enabled": true}})
+	config, err := loadSetting(t, map[string]any{"image_resize": map[string]any{"enabled": true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestImageResizeEnabledAloneKeepsEveryDefault(t *testing.T) {
 }
 
 func TestImageResizeAcceptsEveryKey(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"image_resize": map[string]any{
+	config, err := loadSetting(t, map[string]any{"image_resize": map[string]any{
 		"enabled": true, "applies_to": []any{"user", "mcp", "native"}, "max_edge_px": 1024, "max_bytes": 204800,
 		"max_pixels": 1000000, "jpeg_quality": 70, "cache_entries": 8,
 	}})
@@ -45,7 +45,7 @@ func TestImageResizeAcceptsEveryKey(t *testing.T) {
 }
 
 func TestImageResizeEmptySourceListIsAllowedAndInactive(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"image_resize": map[string]any{"enabled": true, "applies_to": []any{}}})
+	config, err := loadSetting(t, map[string]any{"image_resize": map[string]any{"enabled": true, "applies_to": []any{}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestImageResizeRejectsBadValues(t *testing.T) {
 		{"duplicate source", map[string]any{"applies_to": []any{"mcp", "mcp"}}, `image_resize.applies_to entry "mcp" must be one of mcp, native, user, each once`},
 		{"source number", map[string]any{"applies_to": []any{1}}, "image_resize.applies_to must be a list of mcp, native, user"},
 	} {
-		_, err := loadApprovalSetting(t, map[string]any{"image_resize": test.imageResize})
+		_, err := loadSetting(t, map[string]any{"image_resize": test.imageResize})
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: err = %v, want it to contain %q", test.name, err, test.want)
 		}

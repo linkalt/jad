@@ -21,7 +21,7 @@ func defaultHooksWant() HooksSettings {
 }
 
 func TestHooksTakeTheirOwnChildProcessKeys(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{
 		"enabled": true, "kill_grace_ms": 500, "kill_deadline_ms": 900, "drain_after_exit_ms": 70, "kill_process_group": "timeout_only", "max_line_chars": 120, "strip_ansi": false,
 		"env": map[string]any{"CHECK_MODE": "strict", "NO_COLOR": "0"}, "env_deny": []any{"SECRET_A"},
 	}})
@@ -38,7 +38,7 @@ func TestHooksTakeTheirOwnChildProcessKeys(t *testing.T) {
 }
 
 func TestHooksReadNothingFromTheBashTool(t *testing.T) {
-	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{
 		"bash": map[string]any{"kill_grace_ms": 7000, "max_line_chars": 77, "strip_ansi": false, "env": map[string]any{"FROM_BASH": "1"}, "env_deny": []any{"X"}},
 	}))
 	if err != nil {
@@ -54,21 +54,21 @@ func TestHooksEnvFileResolvesAndLoads(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "hooks.env"), []byte("FROM_FILE=yes\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{"env_file": filepath.Join(dir, "hooks.env"), "env": map[string]any{"INLINE": "1"}}})
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{"env_file": filepath.Join(dir, "hooks.env"), "env": map[string]any{"INLINE": "1"}}})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
 	if config.Hooks.Env["FROM_FILE"] != "yes" || config.Hooks.Env["INLINE"] != "1" || config.Hooks.EnvFile == "" {
 		t.Fatalf("env file not applied: %+v", config.Hooks)
 	}
-	_, err = loadApprovalSetting(t, map[string]any{"hooks": map[string]any{"env_file": filepath.Join(dir, "missing.env")}})
+	_, err = loadSetting(t, map[string]any{"hooks": map[string]any{"env_file": filepath.Join(dir, "missing.env")}})
 	if err == nil || !strings.Contains(err.Error(), "hooks.env_file") {
 		t.Fatalf("error = %v, want one naming hooks.env_file", err)
 	}
 }
 
 func TestHooksDefaultToOffWithNothingToRun(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{})
+	config, err := loadSetting(t, map[string]any{})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestHooksDefaultToOffWithNothingToRun(t *testing.T) {
 }
 
 func TestHooksAcceptEveryKey(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{
 		"enabled": true, "timeout_ms": 5000, "max_output_bytes": 1024,
 		"post_edit": []any{
 			map[string]any{"name": "go-vet", "ext": []any{".go"}, "argv": []any{"go", "vet", "./{reldir}"}, "cwd": "nearest:go.mod", "on_failure_only": true},
@@ -101,7 +101,7 @@ func TestHooksAcceptEveryKey(t *testing.T) {
 }
 
 func TestHooksToolEventsLoadWithDefaults(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{
 		"enabled":           true,
 		"max_payload_bytes": 2048,
 		"pre_tool":          []any{map[string]any{"name": "gate", "argv": []any{"./gate.sh", "--strict"}}},
@@ -126,7 +126,7 @@ func TestHooksToolEventsLoadWithDefaults(t *testing.T) {
 }
 
 func TestHooksEnabledWithoutChecksIsInactive(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{"enabled": true}})
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{"enabled": true}})
 	if err != nil || config.Hooks.Active() {
 		t.Fatalf("err=%v active=%v", err, config.Hooks.Active())
 	}
@@ -213,7 +213,7 @@ func TestHooksRejectBadValuesWithTheKeyInTheMessage(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := loadApprovalSetting(t, map[string]any{"hooks": test.hooks})
+			_, err := loadSetting(t, map[string]any{"hooks": test.hooks})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want one containing %q", err, test.want)
 			}
@@ -222,7 +222,7 @@ func TestHooksRejectBadValuesWithTheKeyInTheMessage(t *testing.T) {
 }
 
 func TestHooksAllowMoreThanOneCheckForTheSameExtension(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{"enabled": true, "post_edit": []any{
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{"enabled": true, "post_edit": []any{
 		map[string]any{"name": "a", "ext": []any{".go"}, "argv": []any{"gofmt", "-l", "{file}"}},
 		map[string]any{"name": "b", "ext": []any{".go"}, "argv": []any{"go", "vet"}},
 	}}})
@@ -242,7 +242,7 @@ func TestHooksSampleFileLoadsAndMatchesTheSchema(t *testing.T) {
 	if err := json.Unmarshal(data, &sample); err != nil {
 		t.Fatal(err)
 	}
-	config, err := loadApprovalSetting(t, sample)
+	config, err := loadSetting(t, sample)
 	if err != nil {
 		t.Fatalf("the sample does not load: %v", err)
 	}

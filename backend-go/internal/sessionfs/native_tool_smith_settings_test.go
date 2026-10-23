@@ -48,8 +48,8 @@ func TestNormalizeNativeToolSmithSettingsDefaults(t *testing.T) {
 	if !reflect.DeepEqual(got.Tools, []string{"read", "grep", "glob"}) {
 		t.Fatalf("tools = %v, want read, grep, glob", got.Tools)
 	}
-	if got.Approval != ApprovalOff || got.Child.TimeoutMs != 120000 || got.Child.MaxTimeoutMs != 600000 {
-		t.Fatalf("child defaults = approval %q, %+v", got.Approval, got.Child)
+	if got.Child.TimeoutMs != 120000 || got.Child.MaxTimeoutMs != 600000 {
+		t.Fatalf("child defaults = %+v", got.Child)
 	}
 	if !reflect.DeepEqual(got.Interpreter, []string{"bun", "run", "{file}"}) {
 		t.Fatalf("interpreter = %v, want bun run {file}", got.Interpreter)
@@ -88,11 +88,11 @@ func TestNormalizeNativeToolSmithSettingsInterpreter(t *testing.T) {
 }
 
 func TestNormalizeNativeToolSmithSettingsOverrides(t *testing.T) {
-	got, err := normalizeToolSmithForTest(t, `{"tool_smith":{"functions_dir":"lib/fn","code_max_bytes":10,"result_max_bytes":20,"nested_result_max_bytes":30,"nested_request_max_bytes":40,"timeout_ms":1000,"max_timeout_ms":2000,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":7,"list_max_files":8,"list_header_bytes":9,"function_max_bytes":11,"tools":["write","read"],"approval":"ask"}}`)
+	got, err := normalizeToolSmithForTest(t, `{"tool_smith":{"functions_dir":"lib/fn","code_max_bytes":10,"result_max_bytes":20,"nested_result_max_bytes":30,"nested_request_max_bytes":40,"timeout_ms":1000,"max_timeout_ms":2000,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":7,"list_max_files":8,"list_header_bytes":9,"function_max_bytes":11,"tools":["write","read"]}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := NativeToolSmithSettings{FunctionsDir: "lib/fn", CodeMaxBytes: 10, ResultMaxBytes: 20, NestedResultMaxBytes: 30, NestedRequestMaxBytes: 40, MaxNestedCalls: 5, MaxParallelCalls: 2, ListMaxResults: 7, ListMaxFiles: 8, ListHeaderBytes: 9, FunctionMaxBytes: 11, Tools: []string{"write", "read"}, Interpreter: []string{"bun", "run", "{file}"}, Approval: ApprovalAsk}
+	want := NativeToolSmithSettings{FunctionsDir: "lib/fn", CodeMaxBytes: 10, ResultMaxBytes: 20, NestedResultMaxBytes: 30, NestedRequestMaxBytes: 40, MaxNestedCalls: 5, MaxParallelCalls: 2, ListMaxResults: 7, ListMaxFiles: 8, ListHeaderBytes: 9, FunctionMaxBytes: 11, Tools: []string{"write", "read"}, Interpreter: []string{"bun", "run", "{file}"}}
 	if got.Child.TimeoutMs != 1000 || got.Child.MaxTimeoutMs != 2000 {
 		t.Fatalf("child timeouts = %d, %d", got.Child.TimeoutMs, got.Child.MaxTimeoutMs)
 	}
@@ -144,10 +144,8 @@ func TestNormalizeNativeToolSmithSettingsRejectsInvalidSettings(t *testing.T) {
 		"tools task":         {`{"tool_smith":{"tools":["task"]}}`, "\"task\" cannot be called from a script"},
 		"tools non native":   {`{"tool_smith":{"tools":["mcp:x"]}}`, "\"mcp:x\" is not a native tool"},
 		"tools duplicate":    {`{"tool_smith":{"tools":["read","read"]}}`, "tools[1] \"read\" is listed twice"},
-		"approval bad":       {`{"tool_smith":{"approval":"maybe"}}`, "tools.native.tool_smith.approval must be \"off\" or \"ask\""},
-		"approval null":      {`{"tool_smith":{"approval":null}}`, "approval must be \"off\" or \"ask\""},
+		"approval removed":   {`{"tool_smith":{"approval":"off"}}`, "tools.native.tool_smith.approval was removed"},
 		"upper limits valid": {`{"tool_smith":{"code_max_bytes":10485760,"max_nested_calls":10000,"max_parallel_calls":64,"list_max_results":1000,"list_max_files":10000,"list_header_bytes":65536,"function_max_bytes":10485760}}`, ""},
-		"approval off valid": {`{"tool_smith":{"approval":"off","tools":["read","write","edit","fetch"]}}`, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := normalizeToolSmithForTest(t, tc.native)
@@ -239,28 +237,6 @@ func TestNormalizeNativeToolSmithSettingsRejectsOutOfRangeLimits(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
-	}
-}
-
-func TestNativeToolSmithApprovalDefault(t *testing.T) {
-	setting := toolSmithSettingsFor(`{"tool_smith":{}}`)
-	got, err := normalizeToolSmithForTest(t, `{"tool_smith":{}}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	applyApprovalDefault(ApprovalAsk, setting, nil, nil, nil, nil, nil, nil, got, nil)
-	if got.Approval != ApprovalAsk {
-		t.Fatalf("approval = %q, want ask from approval.default", got.Approval)
-	}
-
-	setting = toolSmithSettingsFor(`{"tool_smith":{"approval":"off"}}`)
-	got, err = normalizeToolSmithForTest(t, `{"tool_smith":{"approval":"off"}}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	applyApprovalDefault(ApprovalAsk, setting, nil, nil, nil, nil, nil, nil, got, nil)
-	if got.Approval != ApprovalOff {
-		t.Fatalf("approval = %q, want the explicit off to win", got.Approval)
 	}
 }
 

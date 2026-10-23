@@ -345,7 +345,6 @@ func newSplitSubagentFixture(t *testing.T, agentSetting map[string]any) subagent
 
 // mcpFixture adds one in-process MCP server with a "lookup" tool to the session.
 type mcpFixture struct {
-	approval string
 	// onlyFile writes the server file but does not attach it to the session's toolset;
 	// a test attaches it through the toolset of an agent (__toolsets).
 	onlyFile bool
@@ -428,9 +427,6 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		mcpHTTP := httptest.NewServer(mcpSDK.NewStreamableHTTPHandler(func(*http.Request) *mcpSDK.Server { return mcpServer }, nil))
 		t.Cleanup(mcpHTTP.Close)
 		use := map[string]any{"deny_tools": []string{}}
-		if mcp.approval != "" {
-			use["approval"] = mcp.approval
-		}
 		serverFile := map[string]any{
 			"schema_version": 1,
 			"transport":      map[string]any{"type": "streamable_http", "url": mcpHTTP.URL}, "timeout_ms": 10_000, "max_result_bytes": 4096 + 8*len(mcp.image),
@@ -831,14 +827,6 @@ func (f subagentFixture) sessionTools(t *testing.T) (int, string) {
 	body, _ := io.ReadAll(response.Body)
 	response.Body.Close()
 	return response.StatusCode, string(body)
-}
-
-func TestSubagentMCPToolFromAServerMarkedAskLoadsLikeAnyOther(t *testing.T) {
-	calls := &atomic.Int32{}
-	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"mcp:fixture:lookup"}}, false, nil, &mcpFixture{approval: "ask", calls: calls})
-	if status, body := f.sessionTools(t); status != http.StatusOK {
-		t.Fatalf("status %d, body %s; want the session to load", status, body)
-	}
 }
 
 func TestSubagentNamingAnMCPToolThatDoesNotExistFailsTheSessionWithTheLoadedList(t *testing.T) {

@@ -61,8 +61,6 @@ func nativeBashStyleKeysWithout(excluded ...string) []string {
 // native.bash; tool_smith never reads bash.
 type NativeToolSmithSettings struct {
 	Child NativeBashSettings
-	// Approval is "off" (default) or "ask".
-	Approval string
 	// FunctionsDir is the function library directory as configured (relative to the working directory).
 	FunctionsDir string
 	// CodeMaxBytes is the largest script a call may carry; more is refused, never cut.
@@ -120,6 +118,9 @@ func normalizeNativeToolSmithSettings(
 	if err != nil {
 		return nil, configError("%s: %s must be an object", settingPath, section)
 	}
+	if err := rejectRemovedApproval(fields, section, settingPath); err != nil {
+		return nil, err
+	}
 	for _, key := range keys {
 		if !containsString(nativeToolSmithKeys, key) {
 			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeToolSmithKeys, "")
@@ -130,7 +131,7 @@ func normalizeNativeToolSmithSettings(
 	if err != nil {
 		return nil, err
 	}
-	settings := &NativeToolSmithSettings{Child: *child, Approval: child.Approval}
+	settings := &NativeToolSmithSettings{Child: *child}
 	if settings.FunctionsDir, err = bashString(fields, "functions_dir", defaultNativeToolSmithFunctionsDir, settingPath+": "+section, false); err != nil {
 		return nil, err
 	}

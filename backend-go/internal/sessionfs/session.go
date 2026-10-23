@@ -194,8 +194,6 @@ type SessionConfig struct {
 	// MaxRunTokens is the most tokens one run may use before it starts another
 	// provider round; zero means no cap (the key is absent).
 	MaxRunTokens int64
-	// Approval holds the wait and preview values for tools whose approval is "ask".
-	Approval ApprovalSettings
 	// Checkpoint controls run checkpoints and undo; it is off by default.
 	Checkpoint CheckpointSettings
 	// ProfileTools is the selected profile's optional tool allow-list; without it the
@@ -332,8 +330,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	approval, err := normalizeApprovalSettings(setting["approval"], settingPath)
-	if err != nil {
+	if err := rejectRemovedApproval(setting, "setting", settingPath); err != nil {
 		return SessionConfig{}, err
 	}
 	checkpoint, err := normalizeCheckpointSettings(setting["checkpoint"], settingPath)
@@ -486,7 +483,6 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 			}
 		}
 	}
-	applyApprovalDefault(approval.Default, setting, nativeWrite, nativeEdit, nativeBash, nativeExec, nativeProcess, nativeProfileMessage, nativeToolSmith, mcpServers)
 	stateContext, err := normalizeStateContextSettings(setting, settingPath, cwd, nativeProcess, nativeTask, nativeMemory, nativeSubagent, nativeAsync)
 	if err != nil {
 		return SessionConfig{}, err
@@ -615,7 +611,6 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		ProviderStream:        providerStream,
 		OpenAIOAuth:           openAIOAuth,
 		MaxRunTokens:          maxRunTokens,
-		Approval:              approval,
 		Checkpoint:            checkpoint,
 		Hooks:                 hooks,
 		ProfileTools:          profileTools,

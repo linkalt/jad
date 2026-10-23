@@ -51,8 +51,6 @@ type NativeExecLang struct {
 // tools.native.exec with the same keys and defaults as native.bash; exec never reads bash.
 type NativeExecSettings struct {
 	Child NativeBashSettings
-	// Approval is "off" (default) or "ask".
-	Approval string
 	// LangNames lists Langs in the order they are shown to the model.
 	LangNames []string
 	Langs     map[string]NativeExecLang
@@ -114,6 +112,9 @@ func normalizeNativeExecSettings(
 	if err != nil {
 		return nil, configError("%s: %s must be an object", settingPath, section)
 	}
+	if err := rejectRemovedApproval(fields, section, settingPath); err != nil {
+		return nil, err
+	}
 	for _, key := range keys {
 		if !containsString(nativeExecKeys, key) {
 			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeExecKeys, "")
@@ -128,7 +129,6 @@ func normalizeNativeExecSettings(
 	if settings.LineAware, err = bashBool(fields, "line_aware", defaultNativeExecLineAware, settingPath+": "+section); err != nil {
 		return nil, err
 	}
-	settings.Approval = child.Approval
 	if settings.LangNames, settings.Langs, err = normalizeNativeExecLangs(fields["langs"], settingPath+": "+section+".langs"); err != nil {
 		return nil, err
 	}

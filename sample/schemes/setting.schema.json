@@ -376,7 +376,6 @@
           "provider_stream",
           "openai_oauth",
           "max_run_tokens",
-          "approval",
           "checkpoint",
           "hooks",
           "image_resize",
@@ -415,9 +414,6 @@
         },
         "max_run_tokens": {
           "$ref": "#/properties/max_run_tokens"
-        },
-        "approval": {
-          "$ref": "#/properties/approval"
         },
         "checkpoint": {
           "$ref": "#/properties/checkpoint"
@@ -547,20 +543,6 @@
       "maximum": 1000000000000,
       "description": "Most tokens one run may use before it stops. Absent means no cap, which is the default. After each provider response the harness adds the tokens the provider reported (total_tokens, or input plus output) to the run's count; when the count has reached this value and the model asked for tool calls, those calls get a run_token_limit result, no further round starts, and the run fails with a message naming the count and the limit. A response in flight is never cut, so a run can end above the cap by up to one response. A response with no usage counts as 0. A final answer with no tool calls always completes."
     },
-    "approval": {
-      "type": "object",
-      "description": "Wait and preview values for tools whose approval is ask, and the default for tools that do not set their own. Nothing is asked while every tool's approval is off, which is the default. Approval is per tool: a tool whose approval is off is never asked about, so a model refused on one tool can reach the same effect through another unless that one asks too. Set default to ask to cover every tool that can ask. Approval is a confirmation, not a sandbox.",
-      "properties": {
-        "default": {"type": "string", "enum": ["off", "ask"], "default": "off", "description": "The approval of every tool that can ask (write, edit, bash, process and each MCP server) whose own approval key is absent. An explicit approval on a tool, off or ask, always wins. It does not add a tool the session does not configure, and it never applies to read, grep, glob, fetch, skill, decide, task, memory or request_draft. Collecting or stopping a handle with the async tool never asks."},
-        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 300000, "description": "How long a run waits for the user before the call is blocked as approval_timeout. Must not exceed max_timeout_ms."},
-        "extend_ms": {"type": "integer", "minimum": 1000, "maximum": 1800000, "default": 300000, "description": "How much one extension adds to the deadline."},
-        "max_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "default": 1800000, "description": "Ceiling for the whole wait, extensions included."},
-        "headless": {"type": "string", "enum": ["deny", "allow"], "default": "deny", "description": "What a run does with a call that needs approval when no client can answer: deny blocks it as approval_unavailable, allow runs it. Unlike request_draft, an unanswered approval is never accepted by default."},
-        "preview_bytes": {"type": "integer", "minimum": 64, "maximum": 65536, "default": 4096, "description": "Bytes of each text field shown in the approval question; longer text is cut and its real size is reported."}
-      },
-      "additionalProperties": false,
-      "default": {}
-    },
     "checkpoint": {
       "type": "object",
       "description": "Run checkpoints: before a run changes the workspace the harness snapshots it in a private git directory under the session staging path, and again when the run ends, so a run can be undone through the checkpoints API. Off by default; while disabled nothing is snapshotted and behaviour is unchanged. Covers files in the workspace (cwd) that are not git-ignored; it does not cover files outside cwd, ignored files, git history, or anything a background process changes later. A snapshot that fails or is skipped never blocks a tool call.",
@@ -580,7 +562,7 @@
     },
     "hooks": {
       "type": "object",
-      "description": "Optional commands around tool calls. post_edit runs checks after the native write and edit tools change a file, for example a type check; pre_tool and post_tool run a command before and after any tool call, with the event as JSON on stdin; run_start and run_end run a command at the start and the end of each run of the session. Go backend only; the TypeScript backend does not read this key. Off by default: with enabled false (or the key absent) no command is started and no tool result changes. A check never fails the write or edit; its outcome is appended to the tool result as text. The checks have their own child-process keys (kill_grace_ms, kill_process_group, max_line_chars, strip_ansi, env_file, env, env_deny, with the same meaning and defaults as in tools.native.bash); nothing is read from tools.native.bash, and hooks need no other tool. A check runs without asking for approval, because its command is part of this file; it also runs for write-capable sub-agents, on the files their paths allow.",
+      "description": "Optional commands around tool calls. post_edit runs checks after the native write and edit tools change a file, for example a type check; pre_tool and post_tool run a command before and after any tool call, with the event as JSON on stdin; run_start and run_end run a command at the start and the end of each run of the session. Go backend only; the TypeScript backend does not read this key. Off by default: with enabled false (or the key absent) no command is started and no tool result changes. A check never fails the write or edit; its outcome is appended to the tool result as text. The checks have their own child-process keys (kill_grace_ms, kill_process_group, max_line_chars, strip_ansi, env_file, env, env_deny, with the same meaning and defaults as in tools.native.bash); nothing is read from tools.native.bash, and hooks need no other tool. A check runs because its command is part of this file; it also runs for write-capable sub-agents, on the files their paths allow.",
       "properties": {
         "enabled": {"type": "boolean", "default": false, "description": "Run the commands in post_edit, pre_tool, post_tool, run_start, run_end and pre_compact."},
         "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000, "default": 60000, "description": "Longest one check may run. A check that is still running is stopped and reported as timed out."},
@@ -599,7 +581,7 @@
           "type": "array",
           "maxItems": 32,
           "default": [],
-          "description": "Commands run before a tool call, in the order listed. Each one reads the event as JSON on stdin (event, tool, tool_id, call_id, agent, workspace_root, arguments) and runs in the workspace root. Unless an entry sets blocking, a command never blocks or fails the call; its outcome is appended to the call's own result. A blocking entry that does not exit 0 (a non-zero exit, a signal, a timeout or a command that could not start) stops the call: the tool does not run, the later pre_tool commands do not start, no post_tool command runs, and the model gets a result with status blocked and error_code blocked_by_hook that names the hook and carries the report. It is checked after the approval step, so an approved call can still be blocked. Applies to native and MCP tools, and to sub-agents (the agent field names them).",
+          "description": "Commands run before a tool call, in the order listed. Each one reads the event as JSON on stdin (event, tool, tool_id, call_id, agent, workspace_root, arguments) and runs in the workspace root. Unless an entry sets blocking, a command never blocks or fails the call; its outcome is appended to the call's own result. A blocking entry that does not exit 0 (a non-zero exit, a signal, a timeout or a command that could not start) stops the call: the tool does not run, the later pre_tool commands do not start, no post_tool command runs, and the model gets a result with status blocked and error_code blocked_by_hook that names the hook and carries the report. It runs just before the call itself. Applies to native and MCP tools, and to sub-agents (the agent field names them).",
           "items": {
             "type": "object",
             "required": ["name", "argv"],
@@ -936,14 +918,6 @@
                 }
               ],
               "properties": {
-                "approval": {
-                  "type": "string",
-                  "enum": [
-                    "off",
-                    "ask"
-                  ],
-                  "description": "ask pauses every write until the user approves it (see the top-level approval block); off runs it at once. When absent, approval.default applies (off unless set)."
-                },
                 "max_bytes": {
                   "type": "integer",
                   "minimum": 1,
@@ -962,14 +936,6 @@
                 }
               ],
               "properties": {
-                "approval": {
-                  "type": "string",
-                  "enum": [
-                    "off",
-                    "ask"
-                  ],
-                  "description": "ask pauses every edit until the user approves it (see the top-level approval block); off runs it at once. When absent, approval.default applies (off unless set). This key is separate from write's."
-                },
                 "max_bytes": {
                   "type": "integer",
                   "minimum": 1,
@@ -1069,16 +1035,6 @@
                   "$ref": "#/$defs/bash_style"
                 }
               ],
-              "properties": {
-                "approval": {
-                  "type": "string",
-                  "enum": [
-                    "off",
-                    "ask"
-                  ],
-                  "description": "ask pauses every command until the user approves it (see the top-level approval block); off runs it at once. When absent, approval.default applies (off unless set). Approval is a confirmation, not a sandbox: an approved command runs with the backend user's rights."
-                }
-              },
               "unevaluatedProperties": false
             },
             "exec": {
@@ -1090,19 +1046,11 @@
                 }
               ],
               "properties": {
-                "approval": {
-                  "type": "string",
-                  "enum": [
-                    "off",
-                    "ask"
-                  ],
-                  "description": "ask pauses every call until the user approves it; the question shows the language and the code. When absent, approval.default applies (off unless set). Approval is a confirmation, not a sandbox."
-                },
                 "default_lang": {
                   "type": "string",
                   "minLength": 1,
                   "default": "bash",
-                  "description": "The interpreter a call without lang runs. A name or alias from langs (built-in or configured); an unknown name is a configuration error when the session loads. The language is filled in before approval, so the question shows what will run."
+                  "description": "The interpreter a call without lang runs. A name or alias from langs (built-in or configured); an unknown name is a configuration error when the session loads. The language is filled in before the call runs."
                 },
                 "langs": {
                   "type": "object",
@@ -1178,7 +1126,7 @@
             },
             "tool_smith": {
               "type": "object",
-              "description": "Go backend only. Runs a TypeScript function body in an external interpreter child and lists a library of saved functions (a call with no function lists them; filters narrow the list and accept * and ? wildcards). A call takes flat top-level parameters: function (the code), input and block_ms; a run key is refused. It waits up to block_ms (default and cap from tools.native.async) and, if the script is still going, returns an async handle collected with the async tool; needs tools.native.async. A script whose nested tools could ask for approval, or a session without the async tool, runs to its end inside the call. The body calls native tools through a Go-owned bridge (a Unix socket in a private per-run directory; its path and a per-run token reach the child as environment variables). It has its own child-process settings, read with bash's keys and defaults from tools.native.tool_smith; nothing is taken from tools.native.bash. paths is not a key here: the child has no path policy of its own. Off unless this key is present. Needs tool_smith in tool_definition_paths. A sub-agent never gets this tool.",
+              "description": "Go backend only. Runs a TypeScript function body in an external interpreter child and lists a library of saved functions (a call with no function lists them; filters narrow the list and accept * and ? wildcards). A call takes flat top-level parameters: function (the code), input and block_ms; a run key is refused. It waits up to block_ms (default and cap from tools.native.async) and, if the script is still going, returns an async handle collected with the async tool; needs tools.native.async. A session without the async tool runs the script to its end inside the call. The body calls native tools through a Go-owned bridge (a Unix socket in a private per-run directory; its path and a per-run token reach the child as environment variables). It has its own child-process settings, read with bash's keys and defaults from tools.native.tool_smith; nothing is taken from tools.native.bash. paths is not a key here: the child has no path policy of its own. Off unless this key is present. Needs tool_smith in tool_definition_paths. A sub-agent never gets this tool.",
               "properties": {
                 "shell": {"$ref": "#/$defs/child_process_style/properties/shell"},
                 "login_shell": {"$ref": "#/$defs/child_process_style/properties/login_shell"},
@@ -1199,11 +1147,6 @@
                 "stdout": {"$ref": "#/$defs/bash_style/properties/stdout"},
                 "stderr": {"$ref": "#/$defs/bash_style/properties/stderr"},
                 "spill": {"$ref": "#/$defs/bash_style/properties/spill"},
-                "approval": {
-                  "type": "string",
-                  "enum": ["off", "ask"],
-                  "description": "ask pauses every call until the user approves it; the question shows the code. When absent, approval.default applies (off unless set). Approval of a run never approves the writes its script makes: a nested call of a tool that has approval ask prompts on its own. Approval is a confirmation, not a sandbox."
-                },
                 "functions_dir": {
                   "type": "string",
                   "minLength": 1,
@@ -1405,14 +1348,6 @@
                 }
               ],
               "properties": {
-                "approval": {
-                  "type": "string",
-                  "enum": [
-                    "off",
-                    "ask"
-                  ],
-                  "description": "ask pauses every process start until the user approves it; the async tool (wait, list, status, stop) never asks. When absent, approval.default applies (off unless set). See the top-level approval block."
-                },
                 "statecontext": {
                   "type": "object",
                   "description": "Process state included in statecontext snapshots.",
@@ -1808,8 +1743,8 @@
                       "model": {"type": "string", "minLength": 1, "description": "Model for this agent. In a catalog-layout session a value that does not end in .json is a model ID '<category>/<name>' of the models catalog; the agent may name any model of it, not only those its caller's profile lists. A value ending in .json is a model file, relative to the agent's folder or absolute. A legacy session reads every value as a file path (relative to the session directory for an inline agent). Absent means the calling session's model."},
                       "instructions": {"type": "string", "minLength": 1, "description": "System prompt of the agent. The calling session's prompt is not used."},
                       "prompt_documents": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Files appended to the agent's prompt after instructions (and after prompt.md for a folder agent), each separated by a blank line. A relative path is taken from the session's cwd, or from the agent's folder for a folder agent; ~ is expanded. The files are read when the session loads, and a missing file is a configuration error. The calling session's own prompt_documents are not used."},
-                      "tools": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Tools the agent may use: enabled read-only tools by name (read, grep, glob, fetch, skill, decide), and with allow_write also write, edit, bash, exec and process (listing one without allow_write is a configuration error; a child that lists process sees and stops only the processes it started, and they are stopped when its run ends), and, by name only, subagent, tool_smith and profile_message when the session enables them (profile_message also needs another profile to message; not allowed with a toolset), and MCP tools by ID, written mcp:<server>:<tool> (the server id from mcp_servers and the tool name the server reports). Absent means every enabled read-only native or extension tool and no MCP tool. An MCP tool is never added because its server calls it read-only: you name each one, so you vouch that it cannot change anything you care about. mcp:<server>:* gives the agent every loaded tool of that server (each once, even if also named exactly); a tool of a server whose approval is ask is skipped by the wildcard, and a wildcard left with no tool is a configuration error naming the server. A tool of a server whose approval is ask that is named exactly is refused, because a sub-agent has no way to ask the user. An agent that lists write, edit, bash or exec asks the user for those tools the same way the session does (their own approval setting applies), takes the checkpoint like a write, and runs to its end instead of being handed off unless tools.native.subagent.background_writers is on and none of its tools asks for approval. A name that is not loaded is a configuration error that lists the loaded ones; it is checked when the session loads."},
-                      "toolset": {"anyOf": [{"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"}, {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"}}], "description": "One toolset file or a list of them, each '<category>/<name>' under the tools catalog (catalog-layout session only). The agent takes its tools, with their settings, and its MCP servers from it (or them) instead of the session's own toolset, so the profile does not have to register them and the parent never sees them. 'tools' still narrows within it and its mcp:<server>:<tool> entries are resolved against this file's servers only. The profile's tools.deny, allow_write and each tool's own paths and approval still apply. The toolset's subagent entry is ignored, so an agent that names a toolset cannot list subagent. A sub-agent's toolset must not set tools.native.profile_message. An unknown toolset is a configuration error that lists the available ones. Given a list, the toolsets merge in order: when two name the same native tool or MCP server the first listed wins, with a warning, and only the first toolset with hooks supplies hooks (a later one's hooks are ignored with a warning). Absent means the session's toolset."},
+                      "tools": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "Tools the agent may use: enabled read-only tools by name (read, grep, glob, fetch, skill, decide), and with allow_write also write, edit, bash, exec and process (listing one without allow_write is a configuration error; a child that lists process sees and stops only the processes it started, and they are stopped when its run ends), and, by name only, subagent, tool_smith and profile_message when the session enables them (profile_message also needs another profile to message; not allowed with a toolset), and MCP tools by ID, written mcp:<server>:<tool> (the server id from mcp_servers and the tool name the server reports). Absent means every enabled read-only native or extension tool and no MCP tool. An MCP tool is never added because its server calls it read-only: you name each one, so you vouch that it cannot change anything you care about. mcp:<server>:* gives the agent every loaded tool of that server (each once, even if also named exactly); a wildcard that matches no tool is a configuration error naming the server. An agent that lists write, edit, bash or exec runs them at once like the session does, takes the checkpoint like a write, and runs to its end instead of being handed off unless tools.native.subagent.background_writers is on. A name that is not loaded is a configuration error that lists the loaded ones; it is checked when the session loads."},
+                      "toolset": {"anyOf": [{"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"}, {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"}}], "description": "One toolset file or a list of them, each '<category>/<name>' under the tools catalog (catalog-layout session only). The agent takes its tools, with their settings, and its MCP servers from it (or them) instead of the session's own toolset, so the profile does not have to register them and the parent never sees them. 'tools' still narrows within it and its mcp:<server>:<tool> entries are resolved against this file's servers only. The profile's tools.deny, allow_write and each tool's own paths still apply. The toolset's subagent entry is ignored, so an agent that names a toolset cannot list subagent. A sub-agent's toolset must not set tools.native.profile_message. An unknown toolset is a configuration error that lists the available ones. Given a list, the toolsets merge in order: when two name the same native tool or MCP server the first listed wins, with a warning, and only the first toolset with hooks supplies hooks (a later one's hooks are ignored with a warning). Absent means the session's toolset."},
                       "max_tool_rounds": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 30, "description": "Most tool rounds of one run."},
                       "max_run_tokens": {"type": "integer", "minimum": 1, "maximum": 1000000000000, "description": "Most tokens one run may use before it starts another provider round. Absent means no cap."},
                       "auto_compaction": {"type": "boolean", "description": "Whether this agent's child compacts its own transcript when it grows. Absent follows the session's compaction.auto_enabled, or is on when compaction_trigger_tokens is set."},
@@ -1835,11 +1770,11 @@
                 "max_concurrent": {"type": "integer", "minimum": 1, "maximum": 32, "default": 3, "description": "Most children running at once. Children outlive a call, so this counts every child of the same storage_dir across runs; the session that first uses the directory sets it."},
                 "keep_finished": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50, "description": "Finished runs kept readable by id; the oldest are dropped first. Runs still going are never dropped."},
                 "persist_runs": {"type": "boolean", "default": true, "description": "Write a small manifest per run into a .runs folder of storage_dir, so run ids and finished results survive a server restart. A run that was going at the restart is reported as lost; its child died with the server, and only the transcript it wrote remains. false keeps runs in memory only."},
-                "allow_write": {"type": "boolean", "default": false, "description": "Let an agent list write, edit, bash, exec or process in its tools, so a child can change files and run code. Those tools must be enabled in the session, and their own paths and approval settings apply to the child, narrowed to nothing it could not do itself. A call to such an agent is a change: it takes the checkpoint, runs in order with the other calls, asks the user for approval with the agent named in the question, and is not handed off (block_ms is ignored; timeout_ms still bounds it) unless background_writers is on and none of the agent's tools asks for approval. false keeps every child read-only and rejects an agent that lists one of these tools."},
+                "allow_write": {"type": "boolean", "default": false, "description": "Let an agent list write, edit, bash, exec or process in its tools, so a child can change files and run code. Those tools must be enabled in the session, and their own paths apply to the child, narrowed to nothing it could not do itself. A call to such an agent is a change: it takes the checkpoint, runs in order with the other calls, and is not handed off (block_ms is ignored; timeout_ms still bounds it) unless background_writers is on. false keeps every child read-only and rejects an agent that lists one of these tools."},
                 "deny_agents": {"type": ["array", "null"], "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"}, "uniqueItems": true, "default": [], "description": "Names of agents (inline or from agents_dir) removed from the subagent tool: not listed and not launchable. A name that matches no agent is ignored."},
                 "delete_transcripts": {"type": "boolean", "default": false, "description": "Delete a child's transcript folder from storage_dir when keep_finished drops its run (also at startup), so the folders stop growing. Only a folder directly under storage_dir is deleted. false keeps every transcript. A deleted transcript can no longer give the answer or partial work of its run, but the run was already dropped by then."},
                 "process_max_running": {"type": "integer", "minimum": 1, "maximum": 1024, "default": 4, "description": "Most background processes one child run may have running at once (an agent that lists process in its tools). A start beyond it is refused with a message naming the limit. The session's tools.native.process.max_running still caps all processes together, so a child can never take the whole capacity unless this is raised."},
-                "background_writers": {"type": "boolean", "default": false, "description": "Let an agent that can change files (it lists write, edit, bash, exec or process; needs allow_write) run as an async handle: the call honours block_ms and returns a run id, and the run is collected with the async tool like any other. Only an agent none of whose tools has approval ask is handed off, and its calls can never ask the user: a call that would need approval is refused with 'a background sub-agent cannot ask the user'. Other writers keep running to their end. A handed-off writer keeps changing files after the starting turn ends, so those changes are not in that turn's checkpoint, and a checkpoint restore is refused (409) while one runs. false keeps every writer running to its end."},
+                "background_writers": {"type": "boolean", "default": false, "description": "Let an agent that can change files (it lists write, edit, bash, exec or process; needs allow_write) run as an async handle: the call honours block_ms and returns a run id, and the run is collected with the async tool like any other. An agent that can change files is handed off only when background_writers is on. Other writers keep running to their end. A handed-off writer keeps changing files after the starting turn ends, so those changes are not in that turn's checkpoint, and a checkpoint restore is refused (409) while one runs. false keeps every writer running to its end."},
                 "max_background_writers": {"type": "integer", "minimum": 1, "maximum": 32, "default": 1, "description": "Most writer runs one session may have going as handles at once (queued ones count). A writer started beyond it is not handed off: the call runs to its end and its result carries a note saying why. Only used with background_writers."},
                 "max_depth": {"type": "integer", "minimum": 1, "maximum": 8, "default": 2, "description": "How many levels of runs may exist below the session. 1 lets only the session start children (an agent that lists subagent in its tools is then a configuration error); 2 lets such a child start a child of its own. A start from too deep is refused with subagent_depth_exceeded. Not visible to the model."},
                 "max_runs_per_root": {"type": "integer", "minimum": 1, "maximum": 1024, "default": 16, "description": "Most runs below one top-level run that may be going at once (queued or running) when children start children. A start beyond it is refused with subagent_limit_reached. Not visible to the model."},
@@ -1869,7 +1804,6 @@
                 "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 21600000, "default": 600000, "description": "Time limit of one call, including the wait for a busy target."},
                 "busy_wait_ms": {"type": "integer", "minimum": 0, "maximum": 21600000, "default": 0, "description": "How long a call waits for a target that is running, in the order user messages wait, before it returns profile_busy. 0 returns profile_busy at once. Must not exceed timeout_ms. While it waits the calling run is held."},
                 "result_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 16384, "description": "Most bytes of the target's answer one call returns."},
-                "approval": {"type": "string", "enum": ["off", "ask"], "description": "ask holds every call until the user approves it (see the top-level approval block); off runs it at once. When absent, approval.default applies (off unless set). The target profile's own tools follow its own approval settings."},
                 "max_chain": {"type": "integer", "minimum": 2, "maximum": 8, "default": 2, "description": "Longest chain of profiles one message may travel through, the first caller included. 2 lets a profile (or a sub-agent that lists profile_message) message another profile, and that profile's run message no further. A message to a profile already in the chain is refused as a cycle. Config only: the model never sees it."},
                 "compact": {"type": "string", "enum": ["off", "on"], "default": "off", "description": "on compacts the target profile's transcript (with the target's own compaction settings) before the first profile_message call to that target in each run of the calling profile; later calls to it in the same run skip this. A failed compaction is logged and the message is sent anyway. off leaves the transcript as it is."}
               },

@@ -202,18 +202,18 @@ func TestShippedTriagerSampleLoadsAsAnAgent(t *testing.T) {
 }
 
 func TestDecideLivesUnderToolsExtensionOnly(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"tools": map[string]any{"native": map[string]any{}, "extension": map[string]any{"decide": map[string]any{"backend": "openai"}}}})
+	config, err := loadSetting(t, map[string]any{"tools": map[string]any{"native": map[string]any{}, "extension": map[string]any{"decide": map[string]any{"backend": "openai"}}}})
 	if err != nil {
 		t.Fatalf("tools.extension.decide was rejected: %v", err)
 	}
 	if config.ExtensionDecide == nil || config.ExtensionDecide.Backend != "openai" {
 		t.Fatalf("ExtensionDecide = %+v", config.ExtensionDecide)
 	}
-	_, err = loadApprovalSetting(t, nativeTools(map[string]any{"decide": map[string]any{}}))
+	_, err = loadSetting(t, nativeTools(map[string]any{"decide": map[string]any{}}))
 	if err == nil || !strings.Contains(err.Error(), "tools.native.decide is not supported") {
 		t.Fatalf("tools.native.decide error = %v, want it rejected as an unsupported key", err)
 	}
-	_, err = loadApprovalSetting(t, map[string]any{"tools": map[string]any{"native": map[string]any{}, "extension": map[string]any{"nope": map[string]any{}}}})
+	_, err = loadSetting(t, map[string]any{"tools": map[string]any{"native": map[string]any{}, "extension": map[string]any{"nope": map[string]any{}}}})
 	if err == nil || !strings.Contains(err.Error(), "tools.extension.nope is not supported; did you mean") && !strings.Contains(err.Error(), "tools.extension.nope is not supported") {
 		t.Fatalf("unknown extension tool error = %v", err)
 	}

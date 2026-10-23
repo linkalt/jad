@@ -23,8 +23,6 @@
       ]
     },
     "code/zvec-grep": {},
-    "browser-headed/betterwright": {
-      "approval": "ask"
-    }
+    "browser-headed/betterwright": {}
   }
 }

@@ -86,8 +86,7 @@ type NativeSubagentSettings struct {
 	// means no per-child limit.
 	ProcessMaxRunning int64
 	// BackgroundWriters lets an agent that can change files run as an async handle (it
-	// honours block_ms) when none of its tools asks for approval. Off by default: a writer
-	// then runs to its end, as before.
+	// honours block_ms). Off by default: a writer then runs to its end, as before.
 	BackgroundWriters bool
 	// MaxBackgroundWriters is the most writer runs one session may have going as handles
 	// at once; a writer started beyond it runs to its end instead. Zero, only possible in

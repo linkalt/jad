@@ -23,7 +23,7 @@ func TestExecDefaultLangResolvesToTheTableNameAndDefaultsToBash(t *testing.T) {
 		{"a replaced built-in keeps its name", map[string]any{"langs": map[string]any{"bash": map[string]any{"argv": []any{"bash", "-s"}}}}, "bash"},
 	}
 	for _, tc := range cases {
-		config, err := loadApprovalSetting(t, map[string]any{
+		config, err := loadSetting(t, map[string]any{
 			"tools": map[string]any{"native": map[string]any{"bash": map[string]any{}, "exec": tc.exec}},
 		})
 		if err != nil {
@@ -37,7 +37,7 @@ func TestExecDefaultLangResolvesToTheTableNameAndDefaultsToBash(t *testing.T) {
 
 func TestExecDefaultLangRefusesWhatIsNotInTheTable(t *testing.T) {
 	for name, value := range map[string]any{"unknown": "cobol", "empty": "", "a number": float64(3)} {
-		_, err := loadApprovalSetting(t, map[string]any{
+		_, err := loadSetting(t, map[string]any{
 			"tools": map[string]any{"native": map[string]any{"bash": map[string]any{}, "exec": map[string]any{"default_lang": value}}},
 		})
 		if err == nil {
@@ -60,7 +60,7 @@ func writeExecEnvFile(t *testing.T, content string) string {
 func TestExecEnvironmentIsItsOwnAndNeverBashs(t *testing.T) {
 	bashFile := writeExecEnvFile(t, "BASH_ONLY=1\nSHARED=bash\nWIN=bash-file\n")
 	execFile := writeExecEnvFile(t, "EXEC_ONLY=1\nSHARED=exec\nWIN=exec-file\n")
-	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{
 		"bash": map[string]any{"env_file": bashFile, "env": map[string]any{"WIN": "bash-inline", "BASH_INLINE": "1"}},
 		"exec": map[string]any{"env_file": execFile, "env": map[string]any{"WIN": "exec-inline"}},
 	}))
@@ -94,7 +94,7 @@ func TestExecEnvironmentIsItsOwnAndNeverBashs(t *testing.T) {
 // Without its own env_file, exec runs with the built-in environment, not bash's file.
 func TestExecWithoutEnvFileDoesNotTakeBashsEnvironment(t *testing.T) {
 	bashFile := writeExecEnvFile(t, "BASH_ONLY=1\n")
-	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{
 		"bash": map[string]any{"env_file": bashFile},
 		"exec": map[string]any{},
 	}))
@@ -109,7 +109,7 @@ func TestExecWithoutEnvFileDoesNotTakeBashsEnvironment(t *testing.T) {
 
 func TestExecEnvFileErrorsNameTheExecKey(t *testing.T) {
 	for name, value := range map[string]any{"missing file": filepath.Join(t.TempDir(), "none.env"), "empty": " ", "null": nil, "number": 3} {
-		_, err := loadApprovalSetting(t, nativeTools(map[string]any{
+		_, err := loadSetting(t, nativeTools(map[string]any{
 			"bash": map[string]any{},
 			"exec": map[string]any{"env_file": value},
 		}))
@@ -120,7 +120,7 @@ func TestExecEnvFileErrorsNameTheExecKey(t *testing.T) {
 }
 
 func TestExecSpillDefaultsToItsOwnDirectoryNotBashs(t *testing.T) {
-	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{
 		"bash": map[string]any{},
 		"exec": map[string]any{},
 	}))
@@ -134,7 +134,7 @@ func TestExecSpillDefaultsToItsOwnDirectoryNotBashs(t *testing.T) {
 }
 
 func TestExecSpillFilesAreNamedForTheTool(t *testing.T) {
-	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{
 		"bash": map[string]any{},
 		"exec": map[string]any{},
 	}))
@@ -147,7 +147,7 @@ func TestExecSpillFilesAreNamedForTheTool(t *testing.T) {
 	if got := config.NativeExec.Child.Spill.FilePrefix; got != "exec" {
 		t.Fatalf("exec spill file prefix = %q, want exec", got)
 	}
-	legacy, err := loadApprovalSetting(t, nativeTools(map[string]any{
+	legacy, err := loadSetting(t, nativeTools(map[string]any{
 		"exec": map[string]any{"spill": map[string]any{"stdout_full": "{cwd}/.exec-output/{call_id}.{stream}"}},
 	}))
 	if err != nil {
@@ -156,7 +156,7 @@ func TestExecSpillFilesAreNamedForTheTool(t *testing.T) {
 	if got := legacy.NativeExec.Child.Spill.FilePrefix; got != "exec" {
 		t.Fatalf("exec spill file prefix with a legacy template = %q, want exec", got)
 	}
-	defaultTemplate, err := loadApprovalSetting(t, nativeTools(map[string]any{
+	defaultTemplate, err := loadSetting(t, nativeTools(map[string]any{
 		"exec": map[string]any{"spill": map[string]any{"stdout_full": "{cwd}/x/{call_id}.out"}},
 	}))
 	if err != nil {
@@ -168,7 +168,7 @@ func TestExecSpillFilesAreNamedForTheTool(t *testing.T) {
 }
 
 func TestExecSpillStorageDirAndLegacyTemplatesStayConfigurable(t *testing.T) {
-	config, err := loadApprovalSetting(t, nativeTools(map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{
 		"exec": map[string]any{"spill": map[string]any{"storage_dir": "custom-out"}},
 	}))
 	if err != nil {
@@ -177,7 +177,7 @@ func TestExecSpillStorageDirAndLegacyTemplatesStayConfigurable(t *testing.T) {
 	if got := filepath.Base(config.NativeExec.Child.Spill.StorageDir); got != "custom-out" {
 		t.Fatalf("exec storage_dir = %q, want custom-out", got)
 	}
-	config, err = loadApprovalSetting(t, nativeTools(map[string]any{
+	config, err = loadSetting(t, nativeTools(map[string]any{
 		"exec": map[string]any{"spill": map[string]any{"storage_dir": ".exec-output", "stdout_full": "{cwd}/x/{call_id}.out", "stderr_full": "{cwd}/x/{call_id}.err"}},
 	}))
 	if err != nil {
@@ -186,7 +186,7 @@ func TestExecSpillStorageDirAndLegacyTemplatesStayConfigurable(t *testing.T) {
 	if config.NativeExec.Child.Spill.StdoutFull == "" {
 		t.Fatal("legacy stdout_full was not kept")
 	}
-	_, err = loadApprovalSetting(t, nativeTools(map[string]any{
+	_, err = loadSetting(t, nativeTools(map[string]any{
 		"exec": map[string]any{"spill": map[string]any{"storage_dir": ".bash-output", "stdout_full": "{cwd}/x/{call_id}.out"}},
 	}))
 	if err == nil || !strings.Contains(err.Error(), "tools.native.exec.spill.storage_dir cannot be combined") {

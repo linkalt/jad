@@ -11,12 +11,12 @@ import (
 	"jad/backend-go/internal/tools/native"
 )
 
-func toolSmithPolicyCatalog(t *testing.T, approval string) *tools.Catalog {
+func toolSmithPolicyCatalog(t *testing.T) *tools.Catalog {
 	t.Helper()
 	catalog, err := native.BuildCatalog(sessionfs.SessionConfig{
 		SettingPath:         filepath.Join(t.TempDir(), "setting.json"),
 		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "sample", "tools", "native", "tool_smith.json")},
-		NativeToolSmith:     &sessionfs.NativeToolSmithSettings{Approval: approval},
+		NativeToolSmith:     &sessionfs.NativeToolSmithSettings{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ func toolSmithPolicyCatalog(t *testing.T, approval string) *tools.Catalog {
 }
 
 func TestToolSmithRunIsSerializedAndCheckpointedWhileListIsNot(t *testing.T) {
-	catalog := toolSmithPolicyCatalog(t, "")
+	catalog := toolSmithPolicyCatalog(t)
 	run := checkpoint.NewRun(checkpoint.NewService(checkpoint.Options{Settings: sessionfs.CheckpointSettings{Enabled: true, SnapshotOn: "first_mutation"}}), "turn", 1)
 	if run == nil {
 		t.Fatal("no checkpoint run")

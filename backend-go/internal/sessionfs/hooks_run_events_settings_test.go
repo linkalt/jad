@@ -7,7 +7,7 @@ import (
 )
 
 func TestHooksRunEventsLoadWithDefaults(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{
 		"enabled": true,
 		"run_start": []any{
 			map[string]any{"name": "prepare", "argv": []any{"./prepare.sh", "--fast"}},
@@ -34,7 +34,7 @@ func TestHooksRunEventsLoadWithDefaults(t *testing.T) {
 }
 
 func TestHooksRunEventsAreInactiveWhenDisabled(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{
 		"run_start": []any{map[string]any{"name": "a", "argv": []any{"a"}}},
 	}})
 	if err != nil || config.Hooks.RunEventsActive() || config.Hooks.Active() {
@@ -71,7 +71,7 @@ func TestHooksRunEventsRejectBadValuesWithTheKeyInTheMessage(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := loadApprovalSetting(t, map[string]any{"hooks": test.hooks})
+			_, err := loadSetting(t, map[string]any{"hooks": test.hooks})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want one containing %q", err, test.want)
 			}
@@ -80,7 +80,7 @@ func TestHooksRunEventsRejectBadValuesWithTheKeyInTheMessage(t *testing.T) {
 }
 
 func TestHooksPreCompactLoadsWithDefaults(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{
 		"enabled":     true,
 		"pre_compact": []any{map[string]any{"name": "snapshot", "argv": []any{"./snap.sh"}, "on_failure_only": true}},
 	}})
@@ -118,7 +118,7 @@ func TestHooksPreCompactRejectsBadValues(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := loadApprovalSetting(t, map[string]any{"hooks": test.hooks})
+			_, err := loadSetting(t, map[string]any{"hooks": test.hooks})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want one containing %q", err, test.want)
 			}
@@ -127,7 +127,7 @@ func TestHooksPreCompactRejectsBadValues(t *testing.T) {
 }
 
 func TestHooksPreToolBlockingLoads(t *testing.T) {
-	config, err := loadApprovalSetting(t, map[string]any{"hooks": map[string]any{
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{
 		"enabled": true,
 		"pre_tool": []any{
 			map[string]any{"name": "gate", "match": "write", "argv": []any{"gate"}, "blocking": true},
@@ -142,11 +142,11 @@ func TestHooksPreToolBlockingLoads(t *testing.T) {
 	if len(got) != 3 || !got[0].Blocking || got[1].Blocking || got[2].Blocking {
 		t.Fatalf("pre_tool = %+v; only the first entry blocks", got)
 	}
-	_, err = loadApprovalSetting(t, map[string]any{"hooks": map[string]any{"pre_tool": []any{map[string]any{"name": "a", "argv": []any{"a"}, "blocking": "yes"}}}})
+	_, err = loadSetting(t, map[string]any{"hooks": map[string]any{"pre_tool": []any{map[string]any{"name": "a", "argv": []any{"a"}, "blocking": "yes"}}}})
 	if err == nil || !strings.Contains(err.Error(), "hooks.pre_tool[0].blocking must be a boolean") {
 		t.Fatalf("error = %v", err)
 	}
-	_, err = loadApprovalSetting(t, map[string]any{"hooks": map[string]any{"pre_tool": []any{map[string]any{"name": "a", "argv": []any{"a"}, "blocking": nil}}}})
+	_, err = loadSetting(t, map[string]any{"hooks": map[string]any{"pre_tool": []any{map[string]any{"name": "a", "argv": []any{"a"}, "blocking": nil}}}})
 	if err == nil || !strings.Contains(err.Error(), "hooks.pre_tool[0].blocking must be a boolean") {
 		t.Fatalf("null blocking: error = %v", err)
 	}
