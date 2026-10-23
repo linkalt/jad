@@ -202,7 +202,7 @@ func TestRunnerToolSmithRunWithNestedReadPersistsOneFunctionCallOutput(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	arguments := `{"run":{"function":"const r = await tools.read({ path: 'data.txt' });\nreturn { ok: r.ok, has: r.content.includes('needle-123') };"}}`
+	arguments := `{"function":"const r = await tools.read({ path: 'data.txt' });\nreturn { ok: r.ok, has: r.content.includes('needle-123') };"}`
 	output, _ := runToolSmithThroughRunner(t, tool, workspace, arguments)
 	if !strings.Contains(output, `"has":true`) || !strings.Contains(output, "nested_calls: 1") {
 		t.Fatalf("run output:\n%s", output)

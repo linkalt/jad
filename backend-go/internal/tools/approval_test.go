@@ -188,11 +188,11 @@ func TestApprovalPreviewShowsOnlyWhatWillHappen(t *testing.T) {
 			"Write file", `{"tool":"write","path":"a.bin","contentEncoding":"base64","content_bytes":4}`},
 		{"edit", ApprovalCall{Tool: "edit", Args: map[string]any{"path": "a", "oldText": "o", "newText": "n", "replaceAll": true}},
 			"Edit file", `{"tool":"edit","path":"a","oldText":"o","newText":"n","replaceAll":true}`},
-		{"tool_smith run", ApprovalCall{Tool: "tool_smith", Args: map[string]any{"run": map[string]any{"function": "return 1;", "input": map[string]any{"a": 1.0}}}},
+		{"tool_smith function", ApprovalCall{Tool: "tool_smith", Args: map[string]any{"function": "return 1;", "input": map[string]any{"a": 1.0}}},
 			"Run script", `{"tool":"tool_smith","function":"return 1;"}`},
-		{"tool_smith run string", ApprovalCall{Tool: "tool_smith", Args: map[string]any{"run": "return 2;"}},
+		{"tool_smith function only", ApprovalCall{Tool: "tool_smith", Args: map[string]any{"function": "return 2;"}},
 			"Run script", `{"tool":"tool_smith","function":"return 2;"}`},
-		{"tool_smith run cut", ApprovalCall{Tool: "tool_smith", Args: map[string]any{"run": map[string]any{"function": long}}},
+		{"tool_smith function cut", ApprovalCall{Tool: "tool_smith", Args: map[string]any{"function": long}},
 			"Run script", `{"tool":"tool_smith","function":"` + long[:16] + `","function_truncated_bytes":200}`},
 		{"mcp keeps the model's key order", ApprovalCall{Tool: "do", Server: "fx", Args: map[string]any{"b": 1.0, "a": 2.0}, RawArguments: json.RawMessage(`{ "b": 1, "a": 2 }`)},
 			"Run fx tool do", `{"tool":"do","server":"fx","arguments":"{\"b\":1,\"a\":2}"}`},
@@ -202,7 +202,7 @@ func TestApprovalPreviewShowsOnlyWhatWillHappen(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			preview, err := ApprovalPreview(tc.call, 16)
-			if tc.name != "bash cut" && tc.name != "bash stdin cut" && tc.name != "tool_smith run cut" {
+			if tc.name != "bash cut" && tc.name != "bash stdin cut" && tc.name != "tool_smith function cut" {
 				preview, err = ApprovalPreview(tc.call, 4096)
 			}
 			if err != nil {

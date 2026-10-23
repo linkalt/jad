@@ -164,12 +164,7 @@ func ApprovalPreview(call ApprovalCall, maxBytes int64) (Preview, error) {
 		title = "Run code"
 	case call.Tool == "tool_smith":
 		// The function body is what runs; a call with only list shows just the tool.
-		switch run := call.Args["run"].(type) {
-		case map[string]any:
-			fields = appendString(fields, run, "function", maxBytes)
-		case string:
-			fields = appendText(fields, "function", run, maxBytes)
-		}
+		fields = appendString(fields, call.Args, "function", maxBytes)
 		title = "Run script"
 	case call.Tool == "process":
 		fields = append(fields, previewField{"action", "start"})

@@ -100,6 +100,9 @@ type Tool struct {
 	// Approval "ask" holds each call until the user approves it; empty or "off" runs it.
 	Approval           string
 	NormalizeArguments func(map[string]any) map[string]any
+	// RejectedProperties maps an argument name the schema no longer has to the message
+	// shown instead of "must NOT have additional properties".
+	RejectedProperties map[string]string
 	Execute            func(context.Context, map[string]any, ExecutionContext) (string, error)
 	// ExecuteOutput is for tools whose provider-facing output is a JSON value
 	// other than a string, such as MCP's multimodal content array.
@@ -371,6 +374,13 @@ func (c *Catalog) ExecuteFunctionCall(ctx context.Context, call json.RawMessage,
 		return nil, fmt.Errorf("validate arguments for tool %s: %w", name, err)
 	}
 	if len(issues) > 0 {
+		for index, issue := range issues {
+			if property, _ := issue.Params["additionalProperty"].(string); property != "" {
+				if hint, ok := tool.RejectedProperties[property]; ok {
+					issues[index].Message = hint
+				}
+			}
+		}
 		return encodeFunctionCallOutput(callID, SchemaError(callID, "Invalid arguments for "+name, issues, tool.ExampleOperation))
 	}
 	if !isObject {

@@ -5,7 +5,7 @@
       "id": "native.tool_smith",
       "source": "native",
       "name": "tool_smith",
-      "description": "Call with no parameters (or only filters, e.g. read*) to list the saved functions of the library. Give run to execute a TypeScript function body in a child process and return one value, waiting up to block_ms; if it is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it. Saved functions are reusable files called as fn.<name>(input) inside a run. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do.",
+      "description": "Call with no parameters (or only filters, e.g. read*) to list the saved functions of the library. Give function to execute a TypeScript function body in a child process and return one value (a body without return gives no [result] block, only its output), waiting up to block_ms; input is bound to the input variable. If the script is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it. Saved functions are reusable files called as fn.<name>(input) inside a function body. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -14,30 +14,21 @@
             "items": {
               "type": "string"
             },
-            "description": "With no run: only list functions whose name or description matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (read*, *file*); any other is a substring."
+            "description": "Only with no function: list the saved functions whose name or description matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (read*, *file*); any other is a substring."
           },
-          "run": {
+          "function": {
+            "type": "string",
+            "description": "TypeScript async function body to run."
+          },
+          "input": {
             "type": "object",
-            "properties": {
-              "function": {
-                "type": "string",
-                "description": "TypeScript async function body."
-              },
-              "input": {
-                "type": "object",
-                "additionalProperties": true,
-                "description": "JSON data bound to the input variable."
-              },
-              "block_ms": {
-                "type": "integer",
-                "minimum": 0,
-                "description": "Most time to block for the result. If the script is still running an id is returned; collect it with the async tool."
-              }
-            },
-            "required": [
-              "function"
-            ],
-            "additionalProperties": false
+            "additionalProperties": true,
+            "description": "JSON data bound to the input variable of the function body."
+          },
+          "block_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Most time to block for the result. If the script is still running an id is returned; collect it with the async tool."
           }
         },
         "additionalProperties": false

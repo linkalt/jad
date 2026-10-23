@@ -54,11 +54,11 @@ func runToolSmith(ctx context.Context, root string, settings sessionfs.NativeToo
 }
 
 func smithRun(function string, input map[string]any) map[string]any {
-	run := map[string]any{"function": function}
+	arguments := map[string]any{"function": function}
 	if input != nil {
-		run["input"] = input
+		arguments["input"] = input
 	}
-	return map[string]any{"run": run}
+	return arguments
 }
 
 // useOwnTempDir points os.TempDir at an empty directory and returns it.
@@ -87,19 +87,25 @@ func TestToolSmithRunReturnsTheValueAndRemovesItsDirectory(t *testing.T) {
 	requireNoLeftovers(t, tmp)
 }
 
-func TestToolSmithRunDropsAliasKeysWhenFunctionIsGiven(t *testing.T) {
-	root := t.TempDir()
-	given := map[string]any{"run": map[string]any{"function": "return 'from function';", "script": "return 'from script';"}}
-	normalized := normalizeToolSmithArguments(given)
-	if _, has := normalized["run"].(map[string]any)["script"]; has {
-		t.Fatalf("alias key kept: %v", normalized)
+func TestToolSmithRejectsTheRunKeyAndNamesFunction(t *testing.T) {
+	catalog, err := BuildCatalog(toolSmithConfig(t))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, has := given["run"].(map[string]any)["script"]; !has {
-		t.Fatalf("input was mutated: %v", given)
+	for _, arguments := range []string{
+		`{"run":{"function":"return 1;"}}`,
+		`{"run":"return 1;"}`,
+		`{"function":"return 1;","run":{"function":"return 2;"}}`,
+		`{"script":"return 1;"}`,
+	} {
+		output := executeCatalogCall(t, catalog, "tool_smith", arguments)
+		if !strings.Contains(output, `"status":"invalid_input"`) {
+			t.Errorf("arguments %s were accepted:\n%s", arguments, output)
+		}
 	}
-	result := runToolSmith(context.Background(), root, toolSmithTestSettings(t, root), given)
-	if !strings.Contains(result, `"status":"ok"`) || !strings.Contains(execContent(result), "from function") {
-		t.Fatalf("result:\n%s", result)
+	output := executeCatalogCall(t, catalog, "tool_smith", `{"run":{"function":"return 1;"}}`)
+	if !strings.Contains(output, "top-level function string") || !strings.Contains(output, `{"function":"return 1;"}`) {
+		t.Errorf("the error does not name function:\n%s", output)
 	}
 }
 
@@ -154,8 +160,7 @@ func TestToolSmithCatalogRejectsATimeoutArgument(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, arguments := range []string{
-		`{"run":{"function":"return 1;","timeout_ms":60000}}`,
-		`{"run":{"function":"return 1;"},"timeout_ms":60000}`,
+		`{"function":"return 1;","timeout_ms":60000}`,
 	} {
 		output := executeCatalogCall(t, catalog, "tool_smith", arguments)
 		if !strings.Contains(output, `"status":"invalid_input"`) {
@@ -228,16 +233,16 @@ func TestToolSmithRunRefusesBadParameters(t *testing.T) {
 	root, tmp := t.TempDir(), useOwnTempDir(t)
 	settings := toolSmithTestSettings(t, root)
 	for name, arguments := range map[string]map[string]any{
-		"missing function": {"run": map[string]any{"input": map[string]any{}}},
-		"blank function":   {"run": "  \n"},
-		"too large":        smithRun(strings.Repeat("x", int(settings.CodeMaxBytes)), nil),
-		"input too large":  smithRun("return 1;", map[string]any{"big": strings.Repeat("x", int(settings.CodeMaxBytes))}),
+		"empty function":  {"function": ""},
+		"blank function":  {"function": "  \n"},
+		"too large":       smithRun(strings.Repeat("x", int(settings.CodeMaxBytes)), nil),
+		"input too large": smithRun("return 1;", map[string]any{"big": strings.Repeat("x", int(settings.CodeMaxBytes))}),
 	} {
 		result := runToolSmith(context.Background(), root, settings, arguments)
 		if !strings.Contains(result, `"status":"invalid_input"`) {
 			t.Fatalf("%s:\n%s", name, result)
 		}
-		if name != "too large" && name != "input too large" && !strings.Contains(result, `{"run":{"function":"return 1;"}}`) {
+		if name != "too large" && name != "input too large" && !strings.Contains(result, `{"function":"return 1;"}`) {
 			t.Fatalf("%s has no example:\n%s", name, result)
 		}
 	}
@@ -254,27 +259,11 @@ func TestToolSmithCallWithNeitherRunNorFiltersListsInsteadOfRefusing(t *testing.
 	}
 }
 
-func TestToolSmithRunAcceptsTheStringFormAndAliases(t *testing.T) {
-	root := t.TempDir()
-	settings := toolSmithTestSettings(t, root)
-	for name, arguments := range map[string]map[string]any{
-		"string": {"run": "return 'ok-' + 1;"},
-		"script": {"run": map[string]any{"script": "return 'ok-' + 1;"}},
-		"code":   {"run": map[string]any{"code": "return 'ok-' + 1;"}},
-		"body":   {"run": map[string]any{"body": "return 'ok-' + 1;"}},
-	} {
-		result := runToolSmith(context.Background(), root, settings, arguments)
-		if !strings.Contains(execContent(result), "ok-1") {
-			t.Fatalf("%s:\n%s", name, result)
-		}
-	}
-}
-
 func TestToolSmithRunRejectsANonObjectInput(t *testing.T) {
 	root := t.TempDir()
 	for name, input := range map[string]any{"string": "x", "array": []any{1.0}} {
-		result := runToolSmith(context.Background(), root, toolSmithTestSettings(t, root), map[string]any{"run": map[string]any{"function": "return 1;", "input": input}})
-		if execField(result, "error_code") != "invalid_input" || !strings.Contains(result, "run.input must be an object") {
+		result := runToolSmith(context.Background(), root, toolSmithTestSettings(t, root), map[string]any{"function": "return 1;", "input": input})
+		if execField(result, "error_code") != "invalid_input" || !strings.Contains(result, "input must be an object") {
 			t.Errorf("%s:\n%s", name, result)
 		}
 	}

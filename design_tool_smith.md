@@ -1,3 +1,5 @@
+> **Note (2026-10-23, user decision):** the `run` object is gone. The code is the top-level string `function`, with `input` and `block_ms` beside it, all flat; a call with no `function` lists the saved functions (`filters` still works) and a `run` key is refused with an error that names `function`. The aliases (`script`, `code`, `body`) and the plain-string `run` form are removed. Where this file says `run` for the parameter, read `function`; `backend-go/DECISIONS.md` ("tool_smith input is flat") is authoritative.
+
 > **Note (design_async_manager.md WP7, 2026-10-22):** `tool_smith` is now an async tool and the `list` object is gone: a call with no `run` lists the saved functions, `filters` is top-level and accepts `*`/`?` wildcards, and `run` takes `block_ms` (the script becomes an `async` handle when it outlasts it). Sections 4, 5.1 and 15 below still describe the earlier `list:{filters}` shape; `backend-go/DECISIONS.md` ("`tool_smith` is an async tool") is authoritative.
 
 # Tool Smith — Design and Workflow
@@ -31,7 +33,7 @@ The agent reasons, discovers functions, composes scripts and decides what become
 
 ### 2.2 Tool Smith API
 
-One native tool, `tool_smith`, with two top-level parameters: `list` and `run` (section 4).
+One native tool, `tool_smith`, with flat top-level parameters `filters`, `function`, `input` and `block_ms` (section 4).
 
 ### 2.3 Function library
 
@@ -74,24 +76,17 @@ Types are not checked at run time (bun and node only strip them); validate JSON 
       "type": "object",
       "properties": {
         "filters": { "type": "array", "items": { "type": "string" } },
-        "run": {
-          "type": "object",
-          "properties": {
-            "function": { "type": "string", "description": "TypeScript async function body." },
-            "input": { "type": "object", "additionalProperties": true },
-            "block_ms": { "type": "integer", "minimum": 0 }
-          },
-          "required": ["function"],
-          "additionalProperties": false
-        }
+        "function": { "type": "string", "description": "TypeScript async function body to run." },
+        "input": { "type": "object", "additionalProperties": true },
+        "block_ms": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     }
 
 No `required` at the top level and no `action` enum. Validation is forgiving, because a refused call costs a model round (the `exec` trial: 3 of 25 calls refused over a missing `lang`, `backend-go/DECISIONS.md:265`):
 
-- `NormalizeArguments` accepts `run` as a plain string (the body), and the aliases `script`/`code`/`body` for `function`.
-- If both `filters` and `run` are given, `run` wins and the result notes `ignored: filters`. A call with neither lists the library.
+- `NormalizeArguments` only turns a negative or fractional `block_ms` into a valid one. A `run` key (or any other unknown key) fails schema validation, and the error for `run` names the top-level `function` string.
+- If both `filters` and `function` are given, `function` wins and the result notes `ignored: filters`. A call with neither lists the library.
 - Provider schema dialects: adapt only if a provider rejects the schema.
 
 ### 4.2 Parameter summary
@@ -99,9 +94,9 @@ No `required` at the top level and no `action` enum. Validation is forgiving, be
 | Parameter | Purpose |
 |---|---|
 | `filters[]` | Case-insensitive; `*`/`?` make a wildcard pattern, else a substring; matched on function name and description. |
-| `run.block_ms` | Most time to block for the result; a longer script continues as an `async` handle. |
-| `run.function` | Async TypeScript function body. |
-| `run.input{}` | JSON data bound to the `input` variable. |
+| `block_ms` | Most time to block for the result; a longer script continues as an `async` handle. |
+| `function` | Async TypeScript function body. |
+| `input{}` | JSON data bound to the `input` variable. |
 
 ## 5. Operation behavior
 
@@ -129,8 +124,8 @@ There is no `get`. The agent reads `functions_dir/<name>.ts` with `read` (the wo
 
 Execute a TypeScript function body with optional `input`.
 
-    { "run": { "function": "const r = await tools.grep({pattern: input.query}); return r.content.slice(0, 2000);",
-               "input": { "query": "TargetFunction" } } }
+    { "function": "const r = await tools.grep({pattern: input.query}); return r.content.slice(0, 2000);",
+      "input": { "query": "TargetFunction" } }
 
 Go writes a wrapper into a private per-run directory (mode 0700): it loads the prelude, binds `input`, runs the body as an `async (input) => { ... }` and delivers the return value through a result channel in the style of `$EXEC_RESULT` (`backend-go/DECISIONS.md:261`). `input` is delivered as a JSON file, so data never needs escaping inside code. Body plus input are bounded by `code_max_bytes`.
 
@@ -165,7 +160,7 @@ Composition is the main value. Rules for scripts:
 
 ## 7. Persistent workflow evolution
 
-- Ad hoc: `run.function` for one-offs and experiments.
+- Ad hoc: `function` for one-offs and experiments.
 - Persistent: when a workflow proves reusable, the agent writes `functions_dir/<name>.ts` with `write`, tests it with `run`, and finds it later with `list`.
 
 Cycle: discover, identify a gap, choose (reuse / compose / persist), implement, test, reuse, improve on evidence. Do not persist every temporary script.
@@ -239,8 +234,8 @@ See `plan_tool_smith.md` (8 phases): the evidence spike (phase 1) is done and th
 | Operations | no parameters/`filters` = list, `run` (no `get`, no `action` enum) |
 | Discovery | `filters[]` (wildcards), plain-text compact output |
 | Source inspection | existing `read` on `functions_dir/<name>.ts` |
-| Execution code | `run.function` (+ aliases, string form) |
-| Dynamic data | `run.input{}`, delivered as a JSON file |
+| Execution code | top-level `function` (no aliases, no `run` object) |
+| Dynamic data | top-level `input{}`, delivered as a JSON file |
 | Runtime | external bun (or node) child process per run, via the `interpreter` argv |
 | Native tools | `tools.<name>` over a Go-owned bridge; **required**; read-only allowlist by default |
 | Library | `.jad/functions` in the workspace, edited with existing tools |

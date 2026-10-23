@@ -97,14 +97,12 @@ func TestToolSmithChangesStateOnlyForARun(t *testing.T) {
 		arguments string
 		want      bool
 	}{
-		"run object":          {`{"run":{"function":"return 1;"}}`, true},
-		"run string":          {`{"run":"return 1;"}`, true},
-		"run with alias code": {`{"run":{"code":"return 1;"}}`, true},
-		"run with alias body": {`{"run":{"body":"return 1;"}}`, true},
-		"run with filters":    {`{"filters":["a"],"run":"return 1;"}`, true},
-		"list with filters":   {`{"filters":["a"]}`, false},
-		"list wildcard":       {`{"filters":["read*"]}`, false},
-		"nothing":             {`{}`, false},
+		"function":              {`{"function":"return 1;"}`, true},
+		"function with input":   {`{"function":"return 1;","input":{"a":1}}`, true},
+		"function with filters": {`{"filters":["a"],"function":"return 1;"}`, true},
+		"list with filters":     {`{"filters":["a"]}`, false},
+		"list wildcard":         {`{"filters":["read*"]}`, false},
+		"nothing":               {`{}`, false},
 	} {
 		inner, _ := json.Marshal(tc.arguments)
 		call := json.RawMessage(`{"type":"function_call","call_id":"c","name":"tool_smith","arguments":` + string(inner) + `}`)

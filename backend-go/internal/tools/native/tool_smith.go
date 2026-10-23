@@ -17,7 +17,7 @@ import (
 const (
 	toolSmithToolID     = "native.tool_smith"
 	toolSmithInputEnv   = "TOOL_SMITH_INPUT"
-	toolSmithRunExample = `{"run":{"function":"return 1;"}}`
+	toolSmithRunExample = `{"function":"return 1;"}`
 )
 
 //go:embed tool_smith_prelude.ts
@@ -29,26 +29,19 @@ var toolSmithInputSchema = json.RawMessage(`{
     "filters":{
       "type":"array",
       "items":{"type":"string"},
-      "description":"With no run: only list functions whose name or description matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (read*, *file*); any other is a substring."
+      "description":"Only with no function: list the saved functions whose name or description matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (read*, *file*); any other is a substring."
     },
-    "run":{
-      "type":"object",
-      "properties":{
-        "function":{"type":"string","description":"TypeScript async function body."},
-        "input":{"type":"object","additionalProperties":true,"description":"JSON data bound to the input variable."},
-        "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the result. If the script is still running an id is returned; collect it with the async tool."}
-      },
-      "required":["function"],
-      "additionalProperties":false
-    }
+    "function":{"type":"string","description":"TypeScript async function body to run."},
+    "input":{"type":"object","additionalProperties":true,"description":"JSON data bound to the input variable of the function body."},
+    "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the result. If the script is still running an id is returned; collect it with the async tool."}
   },
   "additionalProperties":false
 }`)
 
-const toolSmithDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved functions of the library. Give run to execute a TypeScript function body in a child process and return one value (a body without return gives no [result] block, only its output), waiting up to block_ms; if it is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it. Saved functions are reusable files called as fn.<name>(input) inside a run. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do."
+const toolSmithDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved functions of the library. Give function to execute a TypeScript function body in a child process and return one value (a body without return gives no [result] block, only its output), waiting up to block_ms; input is bound to the input variable. If the script is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it. Saved functions are reusable files called as fn.<name>(input) inside a function body. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do."
 
 // NewToolSmithTool creates the tool_smith tool. It is ReadOnly so several calls may
-// share a response, and a call with run says so through MayChangeFiles.
+// share a response, and a call with function says so through MayChangeFiles.
 // A non-nil host lets a run that outlasts block_ms continue as a handle of the async tool.
 func NewToolSmithTool(settings sessionfs.NativeToolSmithSettings, apiKeyEnv string, nested *ToolSmithNested, host *AsyncHost) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(toolSmithInputSchema)
@@ -70,9 +63,10 @@ func NewToolSmithTool(settings sessionfs.NativeToolSmithSettings, apiKeyEnv stri
 		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(toolSmithRunExample),
 		NormalizeArguments: normalizeToolSmithArguments,
+		RejectedProperties: map[string]string{"run": "run is not a parameter: pass the code as the top-level function string, with input and block_ms beside it, for example " + toolSmithRunExample},
 		MayChangeFiles: func(arguments map[string]any) bool {
-			_, hasRun := arguments["run"]
-			return hasRun
+			_, hasFunction := arguments["function"]
+			return hasFunction
 		},
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return executeToolSmith(ctx, arguments, settings, apiKeyEnv, nested, execution, host)
@@ -80,43 +74,17 @@ func NewToolSmithTool(settings sessionfs.NativeToolSmithSettings, apiKeyEnv stri
 	}, nil
 }
 
-// normalizeToolSmithArguments accepts run as the function body itself and the names
-// script, code and body for function.
+// normalizeToolSmithArguments turns a negative or fractional block_ms into a valid one.
 func normalizeToolSmithArguments(arguments map[string]any) map[string]any {
+	block, ok := safeInteger(arguments["block_ms"])
+	if !ok {
+		return arguments
+	}
 	normalized := make(map[string]any, len(arguments))
 	for key, value := range arguments {
 		normalized[key] = value
 	}
-	switch run := arguments["run"].(type) {
-	case string:
-		normalized["run"] = map[string]any{"function": run}
-	case map[string]any:
-		_, hasFunction := run["function"]
-		body, ok := firstString(run, "script", "code", "body")
-		if !hasFunction && !ok {
-			break
-		}
-		fixed := make(map[string]any, len(run))
-		for key, value := range run {
-			if key != "script" && key != "code" && key != "body" {
-				fixed[key] = value
-			}
-		}
-		if !hasFunction {
-			fixed["function"] = body
-		}
-		normalized["run"] = fixed
-	}
-	if run, ok := normalized["run"].(map[string]any); ok {
-		if block, ok := safeInteger(run["block_ms"]); ok {
-			fixed := make(map[string]any, len(run))
-			for key, value := range run {
-				fixed[key] = value
-			}
-			fixed["block_ms"] = json.Number(fmt.Sprint(max(block, 0)))
-			normalized["run"] = fixed
-		}
-	}
+	normalized["block_ms"] = json.Number(fmt.Sprint(max(block, 0)))
 	return normalized
 }
 
@@ -142,26 +110,25 @@ func executeToolSmith(
 	host *AsyncHost,
 ) (string, error) {
 	callID := execution.CallID
-	if _, hasRun := arguments["run"]; !hasRun {
+	if _, hasFunction := arguments["function"]; !hasFunction {
 		return executeToolSmithList(arguments, settings, execution), nil
 	}
-	run, _ := arguments["run"].(map[string]any)
-	body, _ := run["function"].(string)
+	body, _ := arguments["function"].(string)
 	if strings.TrimSpace(body) == "" {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "run.function is empty",
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "function is empty",
 			tools.Information{Key: "suggestion", Value: "example: " + toolSmithRunExample}), nil
 	}
 	input := map[string]any{}
-	if given, present := run["input"]; present && given != nil {
+	if given, present := arguments["input"]; present && given != nil {
 		object, ok := given.(map[string]any)
 		if !ok {
-			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "run.input must be an object"), nil
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "input must be an object"), nil
 		}
 		input = object
 	}
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "run.input is not valid JSON data",
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "input is not valid JSON data",
 			tools.Information{Key: "system_error", Value: err.Error()}), nil
 	}
 	if size := int64(len(body) + len(inputJSON)); size > settings.CodeMaxBytes {
@@ -177,7 +144,7 @@ func executeToolSmith(
 		return runToolSmithScript(ctx, script).text, nil
 	}
 	var blockMs *int64
-	if value, ok := safeInteger(run["block_ms"]); ok {
+	if value, ok := safeInteger(arguments["block_ms"]); ok {
 		blockMs = &value
 	}
 	return startToolSmithAsync(ctx, host, script, blockMs)
