@@ -38,15 +38,13 @@ type InteractionLimits struct {
 	MaxDraftDepth int64 `json:"max_draft_depth"`
 }
 
-// InteractionKind says what a question is for. A draft is a proposal the user
-// may edit; an approval is a yes or no on running one call and cannot be edited.
+// InteractionKind says what a question is for. Only a draft exists: a proposal the
+// user may accept, edit or decline.
 type InteractionKind string
 
 const (
-	// InteractionKindDraft is the zero value, so a question that sets no kind is
-	// a draft and clients that predate approvals keep working.
-	InteractionKindDraft    InteractionKind = ""
-	InteractionKindApproval InteractionKind = "approval"
+	// InteractionKindDraft is the zero value, so a question that sets no kind is a draft.
+	InteractionKindDraft InteractionKind = ""
 )
 
 type InteractionQuestion struct {

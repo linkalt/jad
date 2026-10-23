@@ -48,20 +48,6 @@ func (b *Broker) Pending() *tools.PendingInteraction {
 	return &pending
 }
 
-// Kind reports what the pending question is for, so a reply is checked against
-// the question that is actually waiting. It is the draft kind when none waits.
-func (b *Broker) Kind() tools.InteractionKind {
-	if b == nil {
-		return tools.InteractionKindDraft
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.entry == nil {
-		return tools.InteractionKindDraft
-	}
-	return b.entry.pending.Kind
-}
-
 func (b *Broker) Limits() *tools.InteractionLimits {
 	if b == nil {
 		return nil

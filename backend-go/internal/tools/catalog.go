@@ -34,10 +34,6 @@ type ExecutionContext struct {
 	SessionKey            string
 	RequestInteraction    InteractionHandler
 	OnInteractionResolved InteractionResolvedHandler
-	// RequestApproval decides whether a call to a tool whose Approval is "ask"
-	// may run. When the host supplies none such a call is blocked, so a missing
-	// wire cannot run it.
-	RequestApproval ApprovalRequester
 	// RawArguments retains the provider's original JSON text for tools whose
 	// persisted format depends on object insertion order.
 	RawArguments json.RawMessage
@@ -96,9 +92,7 @@ type Tool struct {
 	// tool, whose agent may or may not be allowed to write). A true answer makes the
 	// call take the checkpoint and run in order, like a write. Nil means the
 	// ReadOnly flag alone decides.
-	MayChangeFiles func(arguments map[string]any) bool
-	// Approval "ask" holds each call until the user approves it; empty or "off" runs it.
-	Approval           string
+	MayChangeFiles     func(arguments map[string]any) bool
 	NormalizeArguments func(map[string]any) map[string]any
 	// RejectedProperties maps an argument name the schema no longer has to the message
 	// shown instead of "must NOT have additional properties".
@@ -107,22 +101,6 @@ type Tool struct {
 	// ExecuteOutput is for tools whose provider-facing output is a JSON value
 	// other than a string, such as MCP's multimodal content array.
 	ExecuteOutput func(context.Context, map[string]any, ExecutionContext) (json.RawMessage, error)
-}
-
-// ApprovalAsk is the Tool.Approval value that makes every call wait for the user.
-const ApprovalAsk = "ask"
-
-// approvalCall describes a validated call to the approval requester. For an MCP
-// tool the tool name is the remote name, as the server knows it.
-func (t Tool) approvalCall(callID, name string, args map[string]any, raw json.RawMessage) ApprovalCall {
-	call := ApprovalCall{CallID: callID, ModelToolName: name, Tool: name, Args: args, RawArguments: raw}
-	if t.Definition.Source == "mcp" {
-		call.Server = t.Definition.Server
-		if parts := strings.SplitN(t.Definition.ID, ":", 3); len(parts) == 3 {
-			call.Tool = parts[2]
-		}
-	}
-	return call
 }
 
 // Catalog validates and dispatches function calls by their exposed provider
@@ -388,16 +366,6 @@ func (c *Catalog) ExecuteFunctionCall(ctx context.Context, call json.RawMessage,
 			"keyword": "type",
 			"message": "arguments must be a JSON object",
 		}}, tool.ExampleOperation))
-	}
-
-	if tool.Approval == ApprovalAsk {
-		verdict := ApprovalVerdict{Code: ApprovalUnavailable, Reason: "This call needs the user's approval and the run has no way to ask."}
-		if execution.RequestApproval != nil {
-			verdict = execution.RequestApproval(ctx, tool.approvalCall(callID, name, object, execution.RawArguments))
-		}
-		if !verdict.Allowed {
-			return encodeFunctionCallOutput(callID, ExecutionError(callID, StatusBlocked, verdict.Code, "Not run: "+verdict.Reason, Information{Key: "tool", Value: name}))
-		}
 	}
 
 	var output json.RawMessage

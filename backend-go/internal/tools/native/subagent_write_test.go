@@ -234,23 +234,6 @@ type errTest string
 
 func (e errTest) Error() string { return string(e) }
 
-func TestSubagentApprovalPreviewNamesTheAgent(t *testing.T) {
-	preview, err := tools.ApprovalPreview(tools.ApprovalCall{CallID: "c", ModelToolName: "write", Tool: "write", Agent: "fixer", Args: map[string]any{"path": "a.txt", "content": "hi"}}, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if preview.Title != "Write file (agent fixer)" || !strings.Contains(string(preview.Draft), `"agent":"fixer"`) {
-		t.Fatalf("preview = %q %s", preview.Title, preview.Draft)
-	}
-	plain, err := tools.ApprovalPreview(tools.ApprovalCall{CallID: "c", ModelToolName: "write", Tool: "write", Args: map[string]any{"path": "a.txt", "content": "hi"}}, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plain.Title != "Write file" || strings.Contains(string(plain.Draft), "agent") {
-		t.Fatalf("a parent's own call changed: %q %s", plain.Title, plain.Draft)
-	}
-}
-
 func TestSubagentWriterRunSurvivesManifestRoundTripWithItsChangesFlag(t *testing.T) {
 	root := t.TempDir()
 	boom := &fakeLauncher{run: func(context.Context, SubagentRequest) (SubagentResult, error) {

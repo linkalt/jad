@@ -136,7 +136,6 @@ func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targ
 			InputSchema: append(json.RawMessage(nil), profileMessageInputSchema...),
 		},
 		Validator:          validator,
-		Approval:           approvalMode(settings.Approval),
 		ExampleOperation:   profileMessageExample,
 		MayChangeFiles:     func(map[string]any) bool { return true },
 		NormalizeArguments: normalizeProfileMessageArguments,

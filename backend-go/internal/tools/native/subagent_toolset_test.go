@@ -233,8 +233,8 @@ func TestSubagentToolsetProcessesAreStoppedInTheToolsetsManager(t *testing.T) {
 
 // An agent with a toolset resolves its mcp: entries against that toolset's servers only.
 func TestSubagentToolsetResolvesMCPEntriesAgainstItsOwnServers(t *testing.T) {
-	sessionMCP := []tools.Tool{mcpStub(t, "browser", "click", "")}
-	toolsetMCP := map[string][]tools.Tool{searchToolset: {mcpStub(t, "zvec", "search", "")}}
+	sessionMCP := []tools.Tool{mcpStub(t, "browser", "click")}
+	toolsetMCP := map[string][]tools.Tool{searchToolset: {mcpStub(t, "zvec", "search")}}
 	build := func(settings sessionfs.NativeSubagentSettings, launcher SubagentLauncher) (*tools.Catalog, error) {
 		hook := &SubagentMCP{}
 		parentTools := withExecutors(t, readOnlyTool("read"))
@@ -287,7 +287,7 @@ func TestSubagentToolsetWithNoLoadedMCPToolsNamesNone(t *testing.T) {
 		map[string]subagentToolset{searchToolset: {native: withExecutors(t, readOnlyTool("grep"))}}, &fakeLauncher{}, hook, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	err := hook.BindToolsets([]tools.Tool{mcpStub(t, "zvec", "search", "")}, nil)
+	err := hook.BindToolsets([]tools.Tool{mcpStub(t, "zvec", "search")}, nil)
 	if err == nil || !strings.Contains(err.Error(), "not a loaded MCP tool of toolset extra/search (loaded: none)") {
 		t.Fatalf("error = %v", err)
 	}

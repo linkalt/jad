@@ -138,47 +138,10 @@ func awaitAnswer(t *testing.T, answers <-chan tools.InteractionAnswer) tools.Int
 
 func ptr(value string) *string { return &value }
 
-func TestBrokerReportsTheKindOfTheWaitingQuestion(t *testing.T) {
-	changes := make(chan *tools.PendingInteraction, 4)
-	broker := NewBroker(func(pending *tools.PendingInteraction, _ *tools.InteractionEnd) { changes <- pending })
-	if broker.Kind() != tools.InteractionKindDraft {
-		t.Fatalf("kind with nothing waiting = %q, want the draft kind", broker.Kind())
-	}
-	var nilBroker *Broker
-	if nilBroker.Kind() != tools.InteractionKindDraft {
-		t.Fatal("a nil broker must report the draft kind")
-	}
-	for _, kind := range []tools.InteractionKind{tools.InteractionKindApproval, tools.InteractionKindDraft} {
-		result := make(chan tools.InteractionAnswer, 1)
-		go func() {
-			answer, _ := broker.Request(context.Background(), tools.InteractionIdentity{Tool: "bash", ToolCallID: "call-1"}, tools.InteractionQuestion{
-				Kind: kind, Draft: json.RawMessage(`{"command":"ls"}`), TimeoutMS: 60_000, ExtendMS: 1_000, MaxTimeoutMS: 61_000,
-			})
-			result <- answer
-		}()
-		pending := awaitPending(t, changes)
-		if pending.Kind != kind || broker.Kind() != kind {
-			t.Fatalf("kind %q: pending %q, broker %q", kind, pending.Kind, broker.Kind())
-		}
-		if status := broker.Reply(pending.ID, tools.InteractionReply{Decision: tools.InteractionAccept}); status != tools.InteractionStatusAnswered {
-			t.Fatalf("reply status = %q", status)
-		}
-		awaitAnswer(t, result)
-		<-changes
-		if broker.Kind() != tools.InteractionKindDraft {
-			t.Fatalf("kind after the answer = %q, want the draft kind", broker.Kind())
-		}
-	}
-}
-
 func TestPendingInteractionOmitsTheKindForADraft(t *testing.T) {
 	draft, _ := json.Marshal(tools.PendingInteraction{ID: "a"})
 	if strings.Contains(string(draft), `"kind"`) {
 		t.Fatalf("a draft question carries a kind, so older clients see a new field: %s", draft)
-	}
-	approval, _ := json.Marshal(tools.PendingInteraction{ID: "a", Kind: tools.InteractionKindApproval})
-	if !strings.Contains(string(approval), `"kind":"approval"`) {
-		t.Fatalf("an approval question does not say so: %s", approval)
 	}
 }
 
@@ -197,11 +160,11 @@ func newEndedLog() (*Broker, *endedLog) {
 	return broker, log
 }
 
-func askApproval(broker *Broker, ctx context.Context) <-chan tools.InteractionAnswer {
+func askDraft(broker *Broker, ctx context.Context) <-chan tools.InteractionAnswer {
 	result := make(chan tools.InteractionAnswer, 1)
 	go func() {
 		answer, _ := broker.Request(ctx, tools.InteractionIdentity{Tool: "bash", ToolCallID: "call-1"}, tools.InteractionQuestion{
-			Kind: tools.InteractionKindApproval, Draft: json.RawMessage(`{"command":"ls"}`), TimeoutMS: 60_000, MaxTimeoutMS: 60_000,
+			Draft: json.RawMessage(`{"command":"ls"}`), TimeoutMS: 60_000, MaxTimeoutMS: 60_000,
 		})
 		result <- answer
 	}()
@@ -212,7 +175,7 @@ func TestBrokerTellsTheRunWhyAQuestionEnded(t *testing.T) {
 	t.Run("answered carries the decision", func(t *testing.T) {
 		for _, decision := range []tools.InteractionDecision{tools.InteractionAccept, tools.InteractionDecline} {
 			broker, log := newEndedLog()
-			result := askApproval(broker, context.Background())
+			result := askDraft(broker, context.Background())
 			pending := awaitPending(t, log.pending)
 			if opened := <-log.ended; opened != nil {
 				t.Fatalf("a question being opened carries an end: %+v", opened)
@@ -222,7 +185,7 @@ func TestBrokerTellsTheRunWhyAQuestionEnded(t *testing.T) {
 			awaitAnswer(t, result)
 			<-log.pending
 			ended := <-log.ended
-			want := tools.InteractionEnd{InteractionID: pending.ID, Kind: "approval", Tool: "bash", Outcome: tools.InteractionAnswered, Decision: decision}
+			want := tools.InteractionEnd{InteractionID: pending.ID, Kind: "draft", Tool: "bash", Outcome: tools.InteractionAnswered, Decision: decision}
 			if ended == nil || *ended != want {
 				t.Fatalf("answered %q: ended = %+v, want %+v", decision, ended, want)
 			}
@@ -231,21 +194,21 @@ func TestBrokerTellsTheRunWhyAQuestionEnded(t *testing.T) {
 	t.Run("a stop carries no decision", func(t *testing.T) {
 		broker, log := newEndedLog()
 		ctx, cancel := context.WithCancel(context.Background())
-		result := askApproval(broker, ctx)
+		result := askDraft(broker, ctx)
 		pending := awaitPending(t, log.pending)
 		<-log.ended
 		cancel()
 		awaitAnswer(t, result)
 		<-log.pending
 		ended := <-log.ended
-		want := tools.InteractionEnd{InteractionID: pending.ID, Kind: "approval", Tool: "bash", Outcome: tools.InteractionCancelled}
+		want := tools.InteractionEnd{InteractionID: pending.ID, Kind: "draft", Tool: "bash", Outcome: tools.InteractionCancelled}
 		if ended == nil || *ended != want {
 			t.Fatalf("stopped: ended = %+v, want %+v", ended, want)
 		}
 	})
 	t.Run("a run that ends cancels the question", func(t *testing.T) {
 		broker, log := newEndedLog()
-		result := askApproval(broker, context.Background())
+		result := askDraft(broker, context.Background())
 		awaitPending(t, log.pending)
 		<-log.ended
 		broker.Cancel("run over")
@@ -259,7 +222,7 @@ func TestBrokerTellsTheRunWhyAQuestionEnded(t *testing.T) {
 		broker, log := newEndedLog()
 		clock := time.Now().UTC()
 		broker.now = func() time.Time { return clock }
-		result := askApproval(broker, context.Background())
+		result := askDraft(broker, context.Background())
 		pending := awaitPending(t, log.pending)
 		<-log.ended
 		clock = clock.Add(61 * time.Second)
@@ -293,7 +256,7 @@ func TestBrokerTellsTheRunWhyAQuestionEnded(t *testing.T) {
 }
 
 func TestInteractionEndOmitsADecisionWhenNobodyDecided(t *testing.T) {
-	raw, _ := json.Marshal(tools.InteractionEnd{InteractionID: "a", Kind: "approval", Tool: "bash", Outcome: tools.InteractionTimedOut})
+	raw, _ := json.Marshal(tools.InteractionEnd{InteractionID: "a", Kind: "draft", Tool: "bash", Outcome: tools.InteractionTimedOut})
 	if strings.Contains(string(raw), "decision") {
 		t.Fatalf("a timeout carries a decision: %s", raw)
 	}

@@ -417,7 +417,7 @@ func TestDecideIsReadOnlyAndShippedDefinitionMatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !tool.ReadOnly || tool.Approval != "" || tool.Definition.ID != DecideToolID || tool.Definition.Name != "decide" {
+	if !tool.ReadOnly || tool.Definition.ID != DecideToolID || tool.Definition.Name != "decide" {
 		t.Fatalf("tool = %+v", tool)
 	}
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "extension", "decide.json"))

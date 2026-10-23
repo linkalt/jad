@@ -19,12 +19,6 @@ func backgroundWriterSettings(max int64, agents ...sessionfs.NativeSubagentAgent
 	return settings
 }
 
-func askingWriteTool(name string) tools.Tool {
-	tool := writeTool(name)
-	tool.Approval = tools.ApprovalAsk
-	return tool
-}
-
 // backgroundCatalog is buildSubagentCatalog that also hands back the manager and the host.
 func backgroundCatalog(t *testing.T, settings sessionfs.NativeSubagentSettings, launcher SubagentLauncher, parent ...tools.Tool) (*tools.Catalog, *SubagentManager, *AsyncHost) {
 	t.Helper()
@@ -131,9 +125,9 @@ func TestBackgroundWriterOffByDefaultStillRunsToItsEnd(t *testing.T) {
 	}
 }
 
-func TestBackgroundWriterWithAnAskSettingToolIsStillHandedOff(t *testing.T) {
+func TestBackgroundWriterIsHandedOffWithNoApprovalGate(t *testing.T) {
 	release := make(chan struct{})
-	catalog, _, _ := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "write")), writingLauncher(release, nil), readOnlyTool("read"), askingWriteTool("write"))
+	catalog, _, _ := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "write")), writingLauncher(release, nil), readOnlyTool("read"), writeTool("write"))
 	defer close(release)
 	if out, returned := callReturnsWithin(t, catalog, `{"task":"fix","block_ms":0}`, 2*time.Second); !returned || !strings.Contains(out, "still running") {
 		t.Fatalf("a writer was not handed off though no approval gates it:\n%s", out)
@@ -143,7 +137,6 @@ func TestBackgroundWriterWithAnAskSettingToolIsStillHandedOff(t *testing.T) {
 func TestBackgroundSafeNeedsTheSettingTheAsyncHostAndAWriter(t *testing.T) {
 	host := newTestAsyncHost(t)
 	plain := subagentAgent{config: writerAgent("w", "read", "write"), nativeTools: withExecutors(t, readOnlyTool("read"), writeTool("write"))}
-	asking := subagentAgent{config: plain.config, nativeTools: withExecutors(t, readOnlyTool("read"), askingWriteTool("write"))}
 	reader := subagentAgent{config: agentNamed("r"), nativeTools: withExecutors(t, readOnlyTool("read"))}
 	on := backgroundWriterSettings(1)
 	off := on
@@ -157,7 +150,6 @@ func TestBackgroundSafeNeedsTheSettingTheAsyncHostAndAWriter(t *testing.T) {
 		"all auto":        {on, plain, host, true},
 		"setting off":     {off, plain, host, false},
 		"no async host":   {on, plain, nil, false},
-		"ask-marked tool": {on, asking, host, true},
 		"read-only agent": {on, reader, host, false},
 	} {
 		if got := backgroundSafe(tc.settings, tc.agent, tc.host); got != tc.want {

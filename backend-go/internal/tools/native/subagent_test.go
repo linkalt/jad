@@ -517,8 +517,8 @@ func TestSubagentDefinitionListsTheAgentsAndIsMarkedReadOnly(t *testing.T) {
 	described := agentNamed("explore")
 	described.Description = "Searches the code and reports findings."
 	_, tool := buildSubagentCatalog(t, subagentSettings(described, agentNamed("plain")), nil, readOnlyTool("read"))
-	if !tool.ReadOnly || tool.RequiresUserDecision || tool.Approval != "" {
-		t.Fatalf("flags = readOnly %v, userDecision %v, approval %q", tool.ReadOnly, tool.RequiresUserDecision, tool.Approval)
+	if !tool.ReadOnly || tool.RequiresUserDecision {
+		t.Fatalf("flags = readOnly %v, userDecision %v", tool.ReadOnly, tool.RequiresUserDecision)
 	}
 	description := tool.Definition.Description
 	if !strings.Contains(description, "\nAgents:\n- explore: Searches the code and reports findings.\n- plain") {
@@ -575,11 +575,11 @@ func buildSubagentCatalogFrom(t *testing.T, settings sessionfs.NativeSubagentSet
 }
 
 // mcpStub is a loaded MCP tool: the ID is what an agent's tools list writes.
-func mcpStub(t *testing.T, server, name, approval string) tools.Tool {
+func mcpStub(t *testing.T, server, name string) tools.Tool {
 	t.Helper()
 	tool := withExecutors(t, tools.Tool{Definition: tools.Definition{
 		ID: "mcp:" + server + ":" + name, Source: "mcp", Server: server, Name: "mcp_" + server + "_" + name + "_0123456789", Description: name,
-	}, Approval: approval})[0]
+	}})[0]
 	return tool
 }
 
@@ -612,9 +612,9 @@ func agentWithTools(name string, names ...string) sessionfs.NativeSubagentAgent 
 func TestSubagentChildGetsOnlyTheMCPToolsItsListNames(t *testing.T) {
 	launcher := &fakeLauncher{}
 	mcpTools := []tools.Tool{
-		mcpStub(t, "zvec", "search", ""),
-		mcpStub(t, "zvec", "reindex", ""),
-		mcpStub(t, "browser", "click", ""),
+		mcpStub(t, "zvec", "search"),
+		mcpStub(t, "zvec", "reindex"),
+		mcpStub(t, "browser", "click"),
 	}
 	catalog, err := buildWithMCP(t, subagentSettings(
 		agentWithTools("finder", "read", "mcp:zvec:search"),
@@ -644,7 +644,7 @@ func TestSubagentChildGetsOnlyTheMCPToolsItsListNames(t *testing.T) {
 }
 
 func TestSubagentBindRefusesAnMCPToolThatIsNotLoaded(t *testing.T) {
-	loaded := []tools.Tool{mcpStub(t, "zvec", "search", ""), mcpStub(t, "gated", "lookup", tools.ApprovalAsk)}
+	loaded := []tools.Tool{mcpStub(t, "zvec", "search"), mcpStub(t, "gated", "lookup")}
 	for name, tc := range map[string]struct{ tool, want string }{
 		"unknown tool":   {"mcp:zvec:nope", `lists "mcp:zvec:nope", which is not a loaded MCP tool (loaded: mcp:gated:lookup, mcp:zvec:search)`},
 		"unknown server": {"mcp:other:search", `lists "mcp:other:search", which is not a loaded MCP tool`},
@@ -674,10 +674,10 @@ func TestSubagentBindRefusesAnMCPToolThatIsNotLoaded(t *testing.T) {
 func TestSubagentWildcardGivesTheChildEveryToolOfThatServerOnce(t *testing.T) {
 	launcher := &fakeLauncher{}
 	mcpTools := []tools.Tool{
-		mcpStub(t, "zvec", "search", ""),
-		mcpStub(t, "zvec", "reindex", ""),
-		mcpStub(t, "zvecx", "other", ""),
-		mcpStub(t, "browser", "click", ""),
+		mcpStub(t, "zvec", "search"),
+		mcpStub(t, "zvec", "reindex"),
+		mcpStub(t, "zvecx", "other"),
+		mcpStub(t, "browser", "click"),
 	}
 	catalog, err := buildWithMCP(t, subagentSettings(
 		agentWithTools("wild", "read", "mcp:zvec:*"),
@@ -706,9 +706,9 @@ func TestSubagentWildcardGivesTheChildEveryToolOfThatServerOnce(t *testing.T) {
 
 func TestSubagentWildcardNamesAnEmptyServerAndIgnoresApprovalMarks(t *testing.T) {
 	loaded := []tools.Tool{
-		mcpStub(t, "mixed", "open", ""),
-		mcpStub(t, "mixed", "gated", tools.ApprovalAsk),
-		mcpStub(t, "gated", "lookup", tools.ApprovalAsk),
+		mcpStub(t, "mixed", "open"),
+		mcpStub(t, "mixed", "gated"),
+		mcpStub(t, "gated", "lookup"),
 	}
 	launcher := &fakeLauncher{}
 	catalog, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "mcp:mixed:*")), launcher, loaded, readOnlyTool("read"))
@@ -741,9 +741,9 @@ func withDeny(settings sessionfs.NativeSubagentSettings, deny ...string) session
 func TestSubagentProfileDenyRemovesToolsFromEveryChild(t *testing.T) {
 	launcher := &fakeLauncher{}
 	mcpTools := []tools.Tool{
-		mcpStub(t, "zvec", "search", ""),
-		mcpStub(t, "zvec", "reindex", ""),
-		mcpStub(t, "zvecx", "other", ""),
+		mcpStub(t, "zvec", "search"),
+		mcpStub(t, "zvec", "reindex"),
+		mcpStub(t, "zvecx", "other"),
 	}
 	catalog, err := buildWithMCP(t, withDeny(subagentSettings(
 		agentNamed("plain"),
@@ -779,7 +779,7 @@ func TestSubagentProfileDenyRemovesToolsFromEveryChild(t *testing.T) {
 // matches no loaded tool changes nothing (the profile checks that it names a tool).
 func TestSubagentProfileDenyOfAWholeServerAndOfNothing(t *testing.T) {
 	launcher := &fakeLauncher{}
-	mcpTools := []tools.Tool{mcpStub(t, "zvec", "search", ""), mcpStub(t, "browser", "click", "")}
+	mcpTools := []tools.Tool{mcpStub(t, "zvec", "search"), mcpStub(t, "browser", "click")}
 	catalog, err := buildWithMCP(t, withDeny(subagentSettings(
 		agentWithTools("a", "read", "mcp:zvec:search", "mcp:browser:click"),
 	), "mcp:zvec:*", "mcp:ghost:*"), launcher, mcpTools, readOnlyTool("read"))
@@ -795,7 +795,7 @@ func TestSubagentProfileDenyOfAWholeServerAndOfNothing(t *testing.T) {
 // An agent left with nothing to use fails the load, and the message says the deny list
 // is why, so the cause is not mistaken for a typo in the agent file.
 func TestSubagentProfileDenyThatEmptiesAnAgentIsAnError(t *testing.T) {
-	loaded := []tools.Tool{mcpStub(t, "zvec", "search", "")}
+	loaded := []tools.Tool{mcpStub(t, "zvec", "search")}
 	for name, tc := range map[string]struct {
 		agent sessionfs.NativeSubagentAgent
 		deny  []string
@@ -871,7 +871,7 @@ func TestSubagentWithMCPToolsAnswersUnavailableUntilBound(t *testing.T) {
 
 func TestSubagentMCPHookIsSafeWithoutASubagentTool(t *testing.T) {
 	var nilHook *SubagentMCP
-	if err := nilHook.Bind([]tools.Tool{mcpStub(t, "zvec", "search", "")}); err != nil {
+	if err := nilHook.Bind([]tools.Tool{mcpStub(t, "zvec", "search")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := (&SubagentMCP{}).Bind(nil); err != nil {

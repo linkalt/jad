@@ -139,18 +139,17 @@ func TestSubagentWriterNeverHandsOffEvenWhenAskedTo(t *testing.T) {
 	}
 }
 
-func TestSubagentWriterWithNobodyToAskIsBlockedLikeTheParent(t *testing.T) {
-	f := writerFixture(t, true)
-	// The run does not support interaction, so there is nobody to ask.
+func TestSubagentWriterWritesAtOnceWithNothingToAsk(t *testing.T) {
+	f := writerFixture(t, false)
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
-	if _, err := os.Stat(filepath.Join(f.workspace, "made.txt")); err == nil {
-		t.Fatal("a child wrote with approval required and nobody to ask")
+	if data, err := os.ReadFile(filepath.Join(f.workspace, "made.txt")); err != nil || string(data) != "by the child" {
+		t.Fatalf("made.txt = %q, %v; the child's write must run with no gate", data, err)
 	}
 	child := f.provider.forModel("child-model")
-	if len(child) < 2 || !strings.Contains(child[len(child)-1].Text, "approval_unavailable") {
-		t.Fatalf("the child did not see approval_unavailable")
+	if len(child) < 2 || strings.Contains(child[len(child)-1].Text, "approval") {
+		t.Fatalf("the child's write was gated")
 	}
 }
 

@@ -26,6 +26,7 @@ type providerStep struct {
 	call    string // JSON function_call item
 	message string
 	status  int
+	hold    chan struct{} // the provider answers only once this is closed
 }
 
 func writeCall(callID, path, content string) providerStep {
@@ -43,7 +44,6 @@ func readCall(callID, path string) providerStep {
 type checkpointFixtureOptions struct {
 	steps      []providerStep
 	checkpoint string // JSON of the checkpoint node; empty omits it
-	approval   bool   // write asks for approval
 	nested     bool   // the session directory sits inside the workspace
 }
 
@@ -90,6 +90,13 @@ func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *check
 			return
 		}
 		step := options.steps[index]
+		if step.hold != nil {
+			select {
+			case <-step.hold:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if step.status != 0 {
 			http.Error(w, "scripted failure", step.status)
 			return
@@ -116,9 +123,6 @@ func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *check
 	t.Cleanup(provider.Close)
 
 	writeSettings := map[string]any{"max_bytes": 4096}
-	if options.approval {
-		writeSettings["approval"] = "ask"
-	}
 	settings := map[string]any{"max_tool_rounds": 4}
 	if options.checkpoint != "" {
 		settings["checkpoint"] = json.RawMessage(options.checkpoint)
@@ -392,47 +396,20 @@ func TestASessionDirectoryInsideTheWorkspaceIsNeverPartOfASnapshotOrARestore(t *
 }
 
 func TestRestoreIsRefusedWith409WhileARunIsActiveAndTheFileIsLeftAlone(t *testing.T) {
+	release := make(chan struct{})
 	f := newCheckpointFixture(t, checkpointFixtureOptions{
 		checkpoint: `{"enabled":true}`,
-		approval:   true,
-		steps:      []providerStep{writeCall("w1", "a.txt", "agent"), {message: "done"}},
+		steps:      []providerStep{writeCall("w1", "a.txt", "agent"), {message: "done", hold: release}},
+	})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
 	})
 	f.put("a.txt", "original")
-	request, _ := http.NewRequest(http.MethodPost, f.api.URL+"/api/sessions/local:demo/run", strings.NewReader(`{"input":"go","supports_interaction":true}`))
-	request.Header.Set("Authorization", "Bearer "+integrationAPIToken)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	reader := bufio.NewReader(response.Body)
-	var pendingID string
-	deadline := time.Now().Add(10 * time.Second)
-	var event string
-	for pendingID == "" && time.Now().Before(deadline) {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			t.Fatalf("stream ended before the approval question: %v", err)
-		}
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "event:") {
-			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		} else if strings.HasPrefix(line, "data:") && event == "interaction" {
-			var data struct {
-				Pending *struct {
-					ID string `json:"id"`
-				} `json:"pending"`
-			}
-			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &data) == nil && data.Pending != nil {
-				pendingID = data.Pending.ID
-			}
-		}
-	}
-	if pendingID == "" {
-		t.Fatal("no approval question arrived")
-	}
-	// The run is parked on the approval; its checkpoint was taken before the question.
+	reader := f.startHeldRun(t)
 	_, records := f.checkpoints()
 	if len(records) != 1 || records[0]["state"] != "open" {
 		t.Fatalf("records = %v, want one open checkpoint", records)
@@ -441,19 +418,35 @@ func TestRestoreIsRefusedWith409WhileARunIsActiveAndTheFileIsLeftAlone(t *testin
 	if status != http.StatusConflict || !strings.Contains(body, "run is active") {
 		t.Fatalf("restore during a run: status = %d body = %s", status, body)
 	}
-	if f.file("a.txt") != "original" {
-		t.Fatalf("a.txt = %q: the parked write must not have run", f.file("a.txt"))
+	if f.file("a.txt") != "agent" {
+		t.Fatalf("a.txt = %q: the refused restore must leave the run's write alone", f.file("a.txt"))
 	}
-	if status, body := f.request(http.MethodPost, "/run/interaction", fmt.Sprintf(`{"interaction_id":%q,"decision":"accept"}`, pendingID), true); status != http.StatusOK {
-		t.Fatalf("answer status = %d body = %s", status, body)
-	}
+	close(release)
 	if _, err := io.Copy(io.Discard, reader); err != nil {
 		t.Fatal(err)
 	}
-	_, after := f.checkpoints()
-	if len(after) != 1 || after[0]["state"] != "complete" {
-		t.Fatalf("records after the run = %v", after)
+}
+
+// startHeldRun starts a run whose provider holds its second answer until release is closed,
+// after the write ran, and returns once the run has written and its checkpoint is open.
+func (f *checkpointFixture) startHeldRun(t *testing.T) *bufio.Reader {
+	t.Helper()
+	request, _ := http.NewRequest(http.MethodPost, f.api.URL+"/api/sessions/local:demo/run", strings.NewReader(`{"input":"go"}`))
+	request.Header.Set("Authorization", "Bearer "+integrationAPIToken)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { response.Body.Close() })
+	deadline := time.Now().Add(10 * time.Second)
+	for f.file("a.txt") != "agent" {
+		if time.Now().After(deadline) {
+			t.Fatal("the run never wrote a.txt")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return bufio.NewReader(response.Body)
 }
 
 func TestTheCheckpointRoutesAnswer404And400And401(t *testing.T) {
@@ -579,51 +572,24 @@ func TestAPreRestoreCheckpointLeftOpenIsReportedTheSameWayAndFinishedRecordsAreU
 }
 
 func TestACheckpointIsOpenNotInterruptedWhileItsRunIsLive(t *testing.T) {
+	release := make(chan struct{})
 	f := newCheckpointFixture(t, checkpointFixtureOptions{
 		checkpoint: `{"enabled":true}`,
-		approval:   true,
-		steps:      []providerStep{writeCall("w1", "a.txt", "agent"), {message: "done"}},
+		steps:      []providerStep{writeCall("w1", "a.txt", "agent"), {message: "done", hold: release}},
+	})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
 	})
 	f.put("a.txt", "original")
-	request, _ := http.NewRequest(http.MethodPost, f.api.URL+"/api/sessions/local:demo/run", strings.NewReader(`{"input":"go","supports_interaction":true}`))
-	request.Header.Set("Authorization", "Bearer "+integrationAPIToken)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	reader := bufio.NewReader(response.Body)
-	var pendingID, event string
-	deadline := time.Now().Add(10 * time.Second)
-	for pendingID == "" && time.Now().Before(deadline) {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			t.Fatalf("stream ended before the approval question: %v", err)
-		}
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "event:") {
-			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		} else if strings.HasPrefix(line, "data:") && event == "interaction" {
-			var data struct {
-				Pending *struct {
-					ID string `json:"id"`
-				} `json:"pending"`
-			}
-			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &data) == nil && data.Pending != nil {
-				pendingID = data.Pending.ID
-			}
-		}
-	}
-	if pendingID == "" {
-		t.Fatal("no approval question arrived")
-	}
+	reader := f.startHeldRun(t)
 	if _, records := f.checkpoints(); len(records) != 1 || records[0]["state"] != "open" {
 		t.Fatalf("records = %v, want one open checkpoint while the run is live", records)
 	}
-	if status, body := f.request(http.MethodPost, "/run/interaction", fmt.Sprintf(`{"interaction_id":%q,"decision":"accept"}`, pendingID), true); status != http.StatusOK {
-		t.Fatalf("answer status = %d body = %s", status, body)
-	}
+	close(release)
 	if _, err := io.Copy(io.Discard, reader); err != nil {
 		t.Fatal(err)
 	}

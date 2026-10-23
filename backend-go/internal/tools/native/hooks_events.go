@@ -36,8 +36,7 @@ type toolEventPayload struct {
 // does not exit 0: the call is then not run, later pre_tool commands do not start, no
 // post_tool command runs, and the result is a "blocked" one carrying the report. A call that
 // returns an error runs no post_tool command. It wraps Execute and ExecuteOutput alike, so
-// native and MCP tools are covered. It runs inside the approval step, so a call the user
-// approved can still be blocked here.
+// native and MCP tools are covered. It runs just before the call itself.
 func WithToolEventHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEnv string) tools.Tool {
 	if !hooks.ToolEventsActive() {
 		return tool

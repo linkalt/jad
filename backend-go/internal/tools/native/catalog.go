@@ -246,7 +246,6 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		tool.Approval = approvalMode(config.NativeWrite.Approval)
 		tool = withConfiguredHooks(config, tool)
 		loaded = append(loaded, tool)
 	}
@@ -260,7 +259,6 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		tool.Approval = approvalMode(config.NativeEdit.Approval)
 		tool = withConfiguredHooks(config, tool)
 		loaded = append(loaded, tool)
 	}
@@ -286,7 +284,6 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		tool.Approval = approvalMode(config.NativeBash.Approval)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeExec != nil {
@@ -299,7 +296,6 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		tool.Approval = approvalMode(config.NativeExec.Approval)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeGlob != nil {
@@ -336,7 +332,6 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		tool.Approval = approvalMode(config.NativeProcess.Approval)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeAsync != nil {
@@ -421,7 +416,6 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		tool.Approval = approvalMode(config.NativeToolSmith.Approval)
 		loaded = append(loaded, tool)
 	}
 	if config.ExtensionDecide != nil {
@@ -440,15 +434,6 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	loaded = WithToolEventHooksAll(loaded, config.Hooks, config.Model.APIKeyEnv)
 	toolSmithNested.Bind(loaded, config.ProfileTools.Deny)
 	return loaded, definitions, manager, nil
-}
-
-// approvalMode maps a tool's normalized approval setting to the catalog's field:
-// only "ask" holds a call, so every other value leaves the tool ungated.
-func approvalMode(configured string) string {
-	if configured == sessionfs.ApprovalAsk {
-		return tools.ApprovalAsk
-	}
-	return ""
 }
 
 func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {

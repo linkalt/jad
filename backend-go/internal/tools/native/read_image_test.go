@@ -199,7 +199,7 @@ func TestReadImageToolIsReadOnlyAndDescribed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !tool.ReadOnly || tool.Definition.ID != "native.read_image" || tool.Definition.Name != "read_image" || tool.Approval != "" {
+	if !tool.ReadOnly || tool.Definition.ID != "native.read_image" || tool.Definition.Name != "read_image" {
 		t.Fatalf("tool = %+v", tool.Definition)
 	}
 	if got := string(tool.Definition.InputSchema); !strings.Contains(got, `"required":["path"]`) {

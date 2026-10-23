@@ -1,10 +1,8 @@
 package session
 
 import (
-	"context"
 	"encoding/json"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"jad/backend-go/internal/checkpoint"
@@ -50,44 +48,5 @@ func TestToolSmithRunIsSerializedAndCheckpointedWhileListIsNot(t *testing.T) {
 	}
 	if got := toolBatchConcurrency([]json.RawMessage{listCall, listCall}, 8, "ordered", catalog.ChangesState); got != 8 {
 		t.Errorf("a batch of lists ran with concurrency %d, want 8", got)
-	}
-}
-
-func TestToolSmithApprovalAskGatesRunAndOffDoesNot(t *testing.T) {
-	for _, tc := range []struct {
-		approval string
-		prompts  int
-	}{{"ask", 1}, {"", 0}} {
-		catalog := toolSmithPolicyCatalog(t, tc.approval)
-		prompts := 0
-		execution := tools.ExecutionContext{RequestApproval: func(_ context.Context, call tools.ApprovalCall) tools.ApprovalVerdict {
-			prompts++
-			return tools.ApprovalVerdict{Code: tools.ApprovalDenied, Reason: "no"}
-		}}
-		raw, err := catalog.ExecuteFunctionCall(context.Background(), call("tool_smith", `{"function":"return 1"}`), execution)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if prompts != tc.prompts {
-			t.Errorf("approval %q: %d prompts, want %d", tc.approval, prompts, tc.prompts)
-		}
-		if blocked := strings.Contains(string(raw), "blocked"); blocked != (tc.prompts == 1) {
-			t.Errorf("approval %q: blocked = %v in %s", tc.approval, blocked, raw)
-		}
-	}
-}
-
-func TestToolSmithListPromptsUnderAskToday(t *testing.T) {
-	catalog := toolSmithPolicyCatalog(t, "ask")
-	prompts := 0
-	execution := tools.ExecutionContext{RequestApproval: func(context.Context, tools.ApprovalCall) tools.ApprovalVerdict {
-		prompts++
-		return tools.ApprovalVerdict{Code: tools.ApprovalDenied, Reason: "no"}
-	}}
-	if _, err := catalog.ExecuteFunctionCall(context.Background(), call("tool_smith", `{}`), execution); err != nil {
-		t.Fatal(err)
-	}
-	if prompts != 1 {
-		t.Errorf("list under ask prompted %d times; this test records the current behavior (1)", prompts)
 	}
 }

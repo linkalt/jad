@@ -247,12 +247,7 @@ func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *co
 		}
 		remoteName := remote.Name
 		serverID := server.ID
-		approval := ""
-		if server.Approval == sessionfs.ApprovalAsk {
-			approval = tools.ApprovalAsk
-		}
 		loaded = append(loaded, tools.Tool{
-			Approval: approval,
 			Definition: tools.Definition{
 				ID:          "mcp:" + server.ID + ":" + remote.Name,
 				Source:      "mcp",

@@ -64,7 +64,7 @@ type Step struct {
 // Message is the frontend's normalized transcript message shape.
 type Interaction struct {
 	ID string `json:"id"`
-	// Kind is "approval" for a yes or no on one call; absent means an editable draft.
+	// Kind is empty for a draft, the only kind of question.
 	Kind         string          `json:"kind,omitempty"`
 	Tool         string          `json:"tool"`
 	ToolCallID   string          `json:"tool_call_id"`

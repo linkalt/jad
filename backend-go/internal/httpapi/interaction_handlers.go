@@ -30,7 +30,7 @@ func (h *Handler) handleRunInteraction(w http.ResponseWriter, r *http.Request, r
 		writeJSONError(w, err)
 		return
 	}
-	id, reply, parseErr := parseInteractionReply(fields, run.interactions.Limits(), run.interactions.Kind())
+	id, reply, parseErr := parseInteractionReply(fields, run.interactions.Limits())
 	if parseErr != nil {
 		writeJSONError(w, &StatusError{Code: http.StatusBadRequest, Message: parseErr.Error()})
 		return
@@ -130,7 +130,7 @@ func parseInteractionExtend(fields map[string]json.RawMessage) (string, error) {
 	return id, nil
 }
 
-func parseInteractionReply(fields map[string]json.RawMessage, limits *tools.InteractionLimits, kind tools.InteractionKind) (string, tools.InteractionReply, error) {
+func parseInteractionReply(fields map[string]json.RawMessage, limits *tools.InteractionLimits) (string, tools.InteractionReply, error) {
 	var id string
 	if json.Unmarshal(fields["interaction_id"], &id) != nil || id == "" {
 		return "", tools.InteractionReply{}, errors.New("interaction_id must be a non-empty string")
@@ -138,10 +138,6 @@ func parseInteractionReply(fields map[string]json.RawMessage, limits *tools.Inte
 	var decision tools.InteractionDecision
 	if json.Unmarshal(fields["decision"], &decision) != nil || (decision != tools.InteractionAccept && decision != tools.InteractionUpdate && decision != tools.InteractionDecline) {
 		return "", tools.InteractionReply{}, errors.New("decision must be \"accept\", \"update\" or \"decline\"")
-	}
-	if kind == tools.InteractionKindApproval && decision == tools.InteractionUpdate {
-		// An edited call would run something the user was not shown as the question.
-		return "", tools.InteractionReply{}, errors.New("decision must be \"accept\" or \"decline\" when the question asks for approval")
 	}
 	reply := tools.InteractionReply{Decision: decision}
 	if rawReason, exists := fields["reason"]; exists {

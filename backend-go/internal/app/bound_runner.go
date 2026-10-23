@@ -9,7 +9,6 @@ import (
 	"jad/backend-go/internal/checkpoint"
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
-	"jad/backend-go/internal/tools"
 	"jad/backend-go/internal/tools/native"
 	"jad/backend-go/internal/transcript"
 	"jad/backend-go/internal/webui"
@@ -71,13 +70,6 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	options.MaxRunTokens = r.config.MaxRunTokens
 	options.MaxParallelToolCalls = int(r.config.MaxParallelToolCalls)
 	options.ToolCallScheduling = r.config.ToolCallScheduling
-	options.Approval = &tools.ApprovalOptions{
-		TimeoutMS:     r.config.Approval.TimeoutMS,
-		ExtendMS:      r.config.Approval.ExtendMS,
-		MaxTimeoutMS:  r.config.Approval.MaxTimeoutMS,
-		HeadlessAllow: r.config.Approval.Headless == sessionfs.ApprovalHeadlessAllow,
-		PreviewBytes:  r.config.Approval.PreviewBytes,
-	}
 	if r.config.Checkpoint.Enabled {
 		options.Checkpoint = checkpoint.ForSession(r.config, r.resolver.logger)
 	}

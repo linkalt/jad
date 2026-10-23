@@ -232,10 +232,10 @@ func TestAChildSeesOnlyTheHandlesItsOwnRunStarted(t *testing.T) {
 	close(release)
 }
 
-func TestANestedToolThatAsksIsRefusedBecauseAChildCannotAsk(t *testing.T) {
+func TestANestedToolRunsAtOnceInAChild(t *testing.T) {
 	var saw string
 	host := newTestAsyncHost(t)
-	smith := withExecutors(t, tools.Tool{Definition: tools.Definition{ID: toolSmithToolID, Source: "native", Name: "tool_smith", Description: "x"}, ReadOnly: true, Approval: tools.ApprovalAsk})
+	smith := withExecutors(t, tools.Tool{Definition: tools.Definition{ID: toolSmithToolID, Source: "native", Name: "tool_smith", Description: "x"}, ReadOnly: true})
 	parent := append(withExecutors(t, readOnlyTool("read")), smith...)
 	manager := NewSubagentManager()
 	t.Cleanup(func() { _ = manager.Close() })
@@ -252,7 +252,7 @@ func TestANestedToolThatAsksIsRefusedBecauseAChildCannotAsk(t *testing.T) {
 		t.Fatal(err)
 	}
 	subagentCall(t, catalog, `{"task":"x"}`)
-	if !strings.Contains(saw, "approval_unavailable") {
-		t.Errorf("a nested tool with approval ask ran or failed otherwise: %s", saw)
+	if strings.Contains(saw, "approval") || saw == "" {
+		t.Errorf("a nested tool was gated or never called: %q", saw)
 	}
 }

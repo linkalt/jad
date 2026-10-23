@@ -86,7 +86,7 @@ func normalizeExecArguments(arguments map[string]any, defaultLang string) map[st
 		}
 	}
 	if _, has := normalized["lang"]; !has && defaultLang != "" {
-		// Filled here, not at run time, so the approval question shows what will run.
+		// Filled here, not at run time, so the arguments the hooks and the log see are what runs.
 		normalized["lang"] = defaultLang
 	}
 	if _, has := normalized["code"]; !has {

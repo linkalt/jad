@@ -108,9 +108,6 @@ type RunOptions struct {
 	ImageStore    *imagestore.Store
 	ToolCatalog   *tools.Catalog
 	ToolExecution tools.ExecutionContext
-	// Approval holds the wait and preview values for tools whose approval is
-	// "ask". Nil means the host supplies none, so such a call is blocked.
-	Approval *tools.ApprovalOptions
 	// Checkpoint records the workspace before the run first changes it and when
 	// the run ends. Nil, or a service whose setting is off, means no checkpoint.
 	// A snapshot that fails is a recorded warning and never stops the call it precedes.
@@ -595,11 +592,6 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 				return nil
 			}
 			return resolved(identity, answer, proposed)
-		}
-		// One requester per round: its mutex keeps approvals to one question at a
-		// time, because the broker holds a single pending question.
-		if options.Approval != nil && toolExecution.RequestApproval == nil {
-			toolExecution.RequestApproval = tools.NewApprovalRequester(*options.Approval, toolExecution.RequestInteraction)
 		}
 		// A result is published the moment its call settles; the ids published
 		// here are skipped by the pass after persistence below.

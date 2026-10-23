@@ -221,20 +221,6 @@ func TestProfileMessageManifestMatchesTheInCodeSchemaAndNeedsAMessenger(t *testi
 	}
 }
 
-func TestProfileMessageToolApprovalFollowsSetting(t *testing.T) {
-	for approval, want := range map[string]string{"": "", sessionfs.ApprovalOff: "", sessionfs.ApprovalAsk: tools.ApprovalAsk} {
-		settings := profileMessageSettings()
-		settings.Approval = approval
-		tool, err := NewProfileMessageTool(settings, profileMessageTargets, &fakeMessenger{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if tool.Approval != want {
-			t.Errorf("approval %q: Tool.Approval = %q, want %q", approval, tool.Approval, want)
-		}
-	}
-}
-
 func TestProfileMessageToolWithoutTargetsIsAConfigError(t *testing.T) {
 	_, err := NewProfileMessageTool(profileMessageSettings(), nil, &fakeMessenger{})
 	if err == nil || !strings.Contains(err.Error(), "no profile to message") {
