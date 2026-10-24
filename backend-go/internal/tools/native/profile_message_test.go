@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,18 +18,64 @@ import (
 type fakeMessenger struct {
 	owner, target, message string
 	reply                  func(ctx context.Context) (string, error)
-	onCall                 func(busyWait time.Duration)
+	onCall                 func(request ProfileMessageRequest)
 	compact                bool
+	request                ProfileMessageRequest
+	prepareErr             error
 }
 
-func (f *fakeMessenger) Message(ctx context.Context, owner, target, message string, busyWait time.Duration, compact bool) (string, error) {
-	f.compact = compact
+func (f *fakeMessenger) Prepare(ctx context.Context, request ProfileMessageRequest) (ProfileMessagePlan, error) {
+	f.compact = request.Compact
+	f.request = request
 	if f.onCall != nil {
-		f.onCall(busyWait)
+		f.onCall(request)
 	}
-	f.owner, f.target, f.message = owner, target, message
-	return f.reply(ctx)
+	f.owner, f.target, f.message = request.OwnerKey, request.Target, request.Message
+	if f.prepareErr != nil {
+		return nil, f.prepareErr
+	}
+	return &fakePlan{reply: f.reply, request: request, child: IsChildCall(ctx), maxChain: ProfileChainMax(ctx)}, nil
 }
+
+type fakePlan struct {
+	reply    func(ctx context.Context) (string, error)
+	request  ProfileMessageRequest
+	child    bool
+	maxChain int
+}
+
+func (p *fakePlan) Start(context.Context) (ProfileMessageRun, error) {
+	run := &fakeRun{done: make(chan struct{}), started: make(chan struct{})}
+	if p.request.Timeout > 0 {
+		run.ctx, run.cancel = context.WithTimeout(context.Background(), p.request.Timeout)
+	} else {
+		run.ctx, run.cancel = context.WithCancel(context.Background())
+	}
+	close(run.started)
+	go func() {
+		defer close(run.done)
+		defer run.cancel()
+		text, err := p.reply(run.ctx)
+		run.outcome = ProfileMessageOutcome{Text: text, Err: err}
+	}()
+	return run, nil
+}
+
+type fakeRun struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	done    chan struct{}
+	started chan struct{}
+	outcome ProfileMessageOutcome
+	reason  atomic.Value
+}
+
+func (r *fakeRun) Queued() bool                   { return false }
+func (r *fakeRun) Started() <-chan struct{}       { return r.started }
+func (r *fakeRun) Done() <-chan struct{}          { return r.done }
+func (r *fakeRun) Outcome() ProfileMessageOutcome { return r.outcome }
+func (r *fakeRun) Status() string                 { return "fake is working" }
+func (r *fakeRun) Stop(reason string)             { r.reason.Store(reason); r.cancel() }
 
 var profileMessageTargets = []string{"reviewer", "team/coder"}
 
@@ -38,7 +85,7 @@ func profileMessageSettings() sessionfs.NativeProfileMessageSettings {
 
 func callProfileMessage(t *testing.T, settings sessionfs.NativeProfileMessageSettings, messenger ProfileMessenger, arguments string) string {
 	t.Helper()
-	tool, err := NewProfileMessageTool(settings, profileMessageTargets, messenger)
+	tool, err := NewProfileMessageTool(settings, profileMessageTargets, messenger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +165,7 @@ func TestProfileMessageSentinelErrorsAndFailure(t *testing.T) {
 
 func TestProfileMessageCallerCancelReturnsACancelledResult(t *testing.T) {
 	messenger := &fakeMessenger{reply: func(ctx context.Context) (string, error) { return "", ctx.Err() }}
-	tool, err := NewProfileMessageTool(profileMessageSettings(), profileMessageTargets, messenger)
+	tool, err := NewProfileMessageTool(profileMessageSettings(), profileMessageTargets, messenger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +218,7 @@ func TestProfileMessageRejectsMissingOrBlankArguments(t *testing.T) {
 }
 
 func TestProfileMessageToolIsNotReadOnlyAndListsProfiles(t *testing.T) {
-	tool, err := NewProfileMessageTool(profileMessageSettings(), profileMessageTargets, &fakeMessenger{})
+	tool, err := NewProfileMessageTool(profileMessageSettings(), profileMessageTargets, &fakeMessenger{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +228,7 @@ func TestProfileMessageToolIsNotReadOnlyAndListsProfiles(t *testing.T) {
 	if !strings.Contains(tool.Definition.Description, "reviewer, team/coder") {
 		t.Fatalf("description = %q", tool.Definition.Description)
 	}
-	if _, err := NewProfileMessageTool(profileMessageSettings(), profileMessageTargets, nil); err == nil {
+	if _, err := NewProfileMessageTool(profileMessageSettings(), profileMessageTargets, nil, nil); err == nil {
 		t.Fatal("nil messenger accepted")
 	}
 }
@@ -222,7 +269,7 @@ func TestProfileMessageManifestMatchesTheInCodeSchemaAndNeedsAMessenger(t *testi
 }
 
 func TestProfileMessageToolWithoutTargetsIsAConfigError(t *testing.T) {
-	_, err := NewProfileMessageTool(profileMessageSettings(), nil, &fakeMessenger{})
+	_, err := NewProfileMessageTool(profileMessageSettings(), nil, &fakeMessenger{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "no profile to message") {
 		t.Fatalf("error = %v", err)
 	}
@@ -269,15 +316,24 @@ func TestProfileMessageCatalogAllowsSessionProfilesExceptDeniedAndCaller(t *test
 	}
 }
 
-func TestProfileMessagePassesTheBusyWaitAndNamesWhatHoldsTheTarget(t *testing.T) {
+func TestProfileMessagePassesTheQueueSettingsAndNamesWhatHoldsTheTarget(t *testing.T) {
 	settings := profileMessageSettings()
 	settings.BusyWaitMs = 250
-	var waited time.Duration
-	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "", &ProfileBusyError{HeldBy: "team/coder"} }}
-	messenger.onCall = func(busyWait time.Duration) { waited = busyWait }
+	settings.MaxQueued = 3
+	messenger := &fakeMessenger{reply: func(context.Context) (string, error) {
+		return "", &ProfileBusyError{HeldBy: "team/coder", Waited: 250 * time.Millisecond}
+	}}
 	output := callProfileMessage(t, settings, messenger, `{"profile":"reviewer","message":"hi"}`)
-	if waited != 250*time.Millisecond {
-		t.Fatalf("busy wait = %v, want 250ms", waited)
+	if messenger.request.QueueWait != 250*time.Millisecond || messenger.request.Timeout != 5*time.Second {
+		t.Fatalf("queue wait %v, timeout %v; want 250ms and 5s", messenger.request.QueueWait, messenger.request.Timeout)
+	}
+	if messenger.request.MaxQueued != 3 {
+		t.Fatalf("max queued = %d, want 3: busy_wait_ms lets a call without an async host queue inline", messenger.request.MaxQueued)
+	}
+	noWait := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
+	callProfileMessage(t, profileMessageSettings(), noWait, `{"profile":"reviewer","message":"hi"}`)
+	if noWait.request.MaxQueued != 0 {
+		t.Fatalf("max queued = %d, want 0: with no async host and no busy_wait_ms nobody can collect a queued message", noWait.request.MaxQueued)
 	}
 	for _, want := range []string{"error_code: profile_busy", "a message from profile team/coder", "still busy after waiting 250 ms"} {
 		if !strings.Contains(output, want) {
@@ -285,10 +341,13 @@ func TestProfileMessagePassesTheBusyWaitAndNamesWhatHoldsTheTarget(t *testing.T)
 		}
 	}
 
-	settings.BusyWaitMs = 0
-	plain := callProfileMessage(t, settings, &fakeMessenger{reply: func(context.Context) (string, error) { return "", ErrProfileBusy }}, `{"profile":"reviewer","message":"hi"}`)
+	plain := callProfileMessage(t, profileMessageSettings(), &fakeMessenger{reply: func(context.Context) (string, error) { return "", ErrProfileBusy }}, `{"profile":"reviewer","message":"hi"}`)
 	if !strings.Contains(plain, "with a user run or a maintenance action") || strings.Contains(plain, "waiting") {
 		t.Errorf("plain busy text wrong: %s", plain)
+	}
+	full := callProfileMessage(t, profileMessageSettings(), &fakeMessenger{reply: func(context.Context) (string, error) { return "", &ProfileBusyError{QueueFull: 4} }}, `{"profile":"reviewer","message":"hi"}`)
+	if !strings.Contains(full, "4 messages are already waiting") || !strings.Contains(full, "max_queued_per_profile") {
+		t.Errorf("queue full text wrong: %s", full)
 	}
 }
 

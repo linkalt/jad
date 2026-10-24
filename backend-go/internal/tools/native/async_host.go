@@ -28,6 +28,9 @@ type AsyncHost struct {
 	processAdded   bool
 	subagents      []*SubagentManager
 	subagentSeen   bool
+
+	profileMessageSeen bool
+	profileMessages    map[string]ProfileMessageRun
 }
 
 // AsyncResources is implemented by the application resolver: it hands out the host shared

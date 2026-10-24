@@ -5,7 +5,7 @@
       "id": "native.profile_message",
       "source": "native",
       "name": "profile_message",
-      "description": "Send a message to another profile and get its final answer. That profile keeps its own conversation between calls, so a later call can build on an earlier one.",
+      "description": "Send a message to another profile and wait up to block_ms for its final answer. If the profile answers in time you get the answer; otherwise (it is still working, or busy and your message waits its turn) you get an id and the message goes on: use the async tool to wait for, list, inspect or stop it. That profile keeps its own conversation between calls, so a later call can build on an earlier one.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -18,6 +18,11 @@
             "type": "string",
             "minLength": 1,
             "description": "The message to send. The profile sees nothing of this conversation."
+          },
+          "block_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Most time to block for the answer. If the profile has not answered (or is busy and the message waits its turn) an id is returned; collect it with the async tool."
           }
         },
         "required": ["profile", "message"],

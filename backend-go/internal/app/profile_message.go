@@ -2,14 +2,11 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/sessionfs"
@@ -44,17 +41,18 @@ func (r *Resolver) profileRunStarter() httpapi.ProfileRunStarter {
 // tool running inside it knows which transcript the caller holds.
 type callerMessagesPathKey struct{}
 
-// Message sends one message to target and returns its final answer. The target run is the
-// target's own: the caller's transcript is held by the caller's running turn and is not
-// touched. The call ends when the target run ends, when ctx ends (the target is stopped
-// then), or at once when the target is busy.
-func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message string, busyWait time.Duration, compact bool) (string, error) {
-	reference, caller, found := strings.Cut(ownerKey, "\x00")
+// Prepare checks a message to the target profile and returns the plan that sends it. Every
+// check that can never succeed on a retry (cycle, chain, same transcript) fails here, before
+// the caller reserves a handle or any run starts. The target run is the target's own: the
+// caller's transcript is held by the caller's running turn and is not touched.
+func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMessageRequest) (native.ProfileMessagePlan, error) {
+	reference, caller, found := strings.Cut(request.OwnerKey, "\x00")
 	if !found {
-		return "", errors.New("profile message needs the calling session key")
+		return nil, errors.New("profile message needs the calling session key")
 	}
+	target := request.Target
 	if target == caller {
-		return "", native.ErrProfileCycle
+		return nil, native.ErrProfileCycle
 	}
 	callerMessagesPath, _ := ctx.Value(callerMessagesPathKey{}).(string)
 	if callerMessagesPath == "" && native.IsChildCall(ctx) {
@@ -62,26 +60,26 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		// Its caller is the session's profile, whose transcript the root run holds.
 		callerRunner, err := m.resolver.Resolve(ctx, reference, caller, "")
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if bound, ok := callerRunner.Runner.(boundRunner); ok {
 			callerMessagesPath = bound.config.MessagesPath
 		}
 	}
 	if callerMessagesPath == "" {
-		return "", errors.New("profile message needs the calling transcript path")
+		return nil, errors.New("profile message needs the calling transcript path")
 	}
 	starter := m.resolver.profileRunStarter()
 	if starter == nil {
-		return "", errors.New("profile messages are unavailable: the run registry is not set")
+		return nil, errors.New("profile messages are unavailable: the run registry is not set")
 	}
 	resolved, err := m.resolver.Resolve(ctx, reference, target, "")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	canonical := resolved.Profile
 	if canonical == caller {
-		return "", native.ErrProfileCycle
+		return nil, native.ErrProfileCycle
 	}
 	// The caller's chain is the one its running run recorded when profile_message started
 	// it, or just the caller when a user started it. The target may not be in it, and the
@@ -91,7 +89,7 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 		callerChain = recorded
 	}
 	if slices.Contains(callerChain, canonical) {
-		return "", native.ErrProfileCycle
+		return nil, native.ErrProfileCycle
 	}
 	maxChain := native.ProfileChainMax(ctx)
 	if maxChain < 1 {
@@ -99,77 +97,43 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 	}
 	chain := append(append([]string(nil), callerChain...), canonical)
 	if len(chain) > maxChain {
-		return "", native.ErrProfileChainTooLong
+		return nil, native.ErrProfileChainTooLong
 	}
 	// Another profile name over the caller's transcript would wait for the transcript
 	// the caller holds, so a retry can never succeed; refuse it. A running target is
 	// different: the start reports it as busy.
 	if sameTranscript(callerMessagesPath, resolved.Runner) {
-		return "", native.ErrProfileSameTranscript
+		return nil, native.ErrProfileSameTranscript
 	}
-	var beforeRun func(context.Context)
-	if compact {
-		runID, _ := ctx.Value(callerRunKey{}).(uint64)
-		beforeRun = func(ctx context.Context) {
-			if runID != 0 && !m.resolver.callerRuns.claim(runID, resolved.Reference+"\x00"+canonical) {
+	callerRun, _ := ctx.Value(callerRunKey{}).(uint64)
+	plan := &profileMessagePlan{
+		resolver:  m.resolver,
+		starter:   starter,
+		key:       resolved.Reference + "\x00" + canonical,
+		reference: resolved.Reference,
+		target:    canonical,
+		caller:    caller,
+		chain:     chain,
+		message:   request.Message,
+		timeout:   request.Timeout,
+		queueWait: request.QueueWait,
+		maxQueued: request.MaxQueued,
+	}
+	if request.Compact {
+		plan.beforeRun = func(ctx context.Context) {
+			if callerRun != 0 && !m.resolver.callerRuns.claim(callerRun, plan.key) {
 				return
 			}
 			compactTarget := m.resolver.compactProfile
 			if compactTarget == nil {
 				compactTarget = m.resolver.compactTarget
 			}
-			if err := compactTarget(ctx, resolved.Reference, canonical); err != nil {
-				m.resolver.logger.Warn("profile_message compaction failed; sending the message anyway", "session", resolved.Reference, "profile", canonical, "error", err)
+			if err := compactTarget(ctx, plan.reference, plan.target); err != nil {
+				m.resolver.logger.Warn("profile_message compaction failed; sending the message anyway", "session", plan.reference, "profile", plan.target, "error", err)
 			}
 		}
 	}
-	var lastText atomic.Value
-	run, err := starter.StartProfileRun(ctx, httpapi.ProfileRunRequest{
-		Reference: resolved.Reference,
-		Profile:   canonical,
-		Caller:    caller,
-		Chain:     chain,
-		Message:   message,
-		Wait:      busyWait > 0,
-		WaitLimit: busyWait,
-		BeforeRun: beforeRun,
-		OnCommitted: func(event json.RawMessage) {
-			if text := native.SubagentAnswerText(event); strings.TrimSpace(text) != "" {
-				lastText.Store(text)
-			}
-		},
-	})
-	if err != nil {
-		if errors.Is(err, httpapi.ErrSessionBusy) {
-			heldBy, _ := starter.RunningProfileRunCaller(resolved.Reference, canonical)
-			return "", &native.ProfileBusyError{HeldBy: heldBy}
-		}
-		return "", err
-	}
-	select {
-	case <-run.Done():
-	case <-ctx.Done():
-		run.Stop()
-		return "", ctx.Err()
-	}
-	switch run.Status() {
-	case "completed":
-	case "aborted":
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		return "", native.ErrProfileStopped
-	default:
-		return "", &native.ProfileFailedError{Message: run.Failure()}
-	}
-	answer := native.SubagentAnswerText(run.Final())
-	if strings.TrimSpace(answer) == "" {
-		answer, _ = lastText.Load().(string)
-	}
-	if strings.TrimSpace(answer) == "" {
-		return "", native.ErrProfileNoAnswer
-	}
-	return answer, nil
+	return plan, nil
 }
 
 // compactTarget compacts the target's transcript with the target's own compaction

@@ -49,8 +49,10 @@ type profileTurnsEntry struct {
 type Resolver struct {
 	// callerRuns tracks the targets each running caller run has compacted; callerRunSeq
 	// hands out the run ids.
-	callerRuns   callerRunTargets
-	callerRunSeq atomic.Uint64
+	callerRuns callerRunTargets
+	// profileQueues holds the profile_message calls waiting for a busy target profile.
+	profileQueues profileQueueSet
+	callerRunSeq  atomic.Uint64
 	// compactProfile replaces compactTarget in tests.
 	compactProfile func(ctx context.Context, reference, profile string) error
 	logger         *slog.Logger

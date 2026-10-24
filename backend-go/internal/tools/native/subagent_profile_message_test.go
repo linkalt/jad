@@ -18,9 +18,13 @@ type childMessenger struct {
 	ended    atomic.Int64
 }
 
-func (m *childMessenger) Message(ctx context.Context, _, _, _ string, _ time.Duration, _ bool) (string, error) {
+func (m *childMessenger) Prepare(ctx context.Context, _ ProfileMessageRequest) (ProfileMessagePlan, error) {
 	m.child.Store(IsChildCall(ctx))
 	m.maxChain.Store(int64(ProfileChainMax(ctx)))
+	return &fakePlan{reply: m.reply, request: ProfileMessageRequest{}}, nil
+}
+
+func (m *childMessenger) reply(ctx context.Context) (string, error) {
 	if m.started != nil {
 		close(m.started)
 		<-ctx.Done()
@@ -32,7 +36,7 @@ func (m *childMessenger) Message(ctx context.Context, _, _, _ string, _ time.Dur
 
 func profileMessageChild(t *testing.T, settings sessionfs.NativeSubagentSettings, messenger ProfileMessenger, run nestedBehaviour) *tools.Catalog {
 	t.Helper()
-	pm, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, MaxChain: 3}, profileMessageTargets, messenger)
+	pm, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, MaxChain: 3}, profileMessageTargets, messenger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,6 +126,10 @@ func TestStoppingAChildCancelsItsProfileMessageAndLeavesNoGoroutines(t *testing.
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the subagent call did not return after cancel")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for messenger.ended.Load() != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
 	}
 	if messenger.ended.Load() != 1 {
 		t.Fatalf("the messenger saw its context end %d times, want 1", messenger.ended.Load())

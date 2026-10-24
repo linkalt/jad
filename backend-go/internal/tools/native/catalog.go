@@ -116,7 +116,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		if len(targets) == 0 {
 			return nil, sessionfs.ProfileMessageNoTargetsError(config.SettingPath, config.Profile)
 		}
-		tool, err := NewProfileMessageTool(*config.NativeProfileMessage, targets, messenger)
+		tool, err := NewProfileMessageTool(*config.NativeProfileMessage, targets, messenger, asyncHost)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}

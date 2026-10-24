@@ -19,7 +19,8 @@ var profileMessageInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "profile":{"type":"string","minLength":1,"description":"Profile to message; one of the available profiles."},
-    "message":{"type":"string","minLength":1,"description":"The message to send. The profile sees nothing of this conversation."}
+    "message":{"type":"string","minLength":1,"description":"The message to send. The profile sees nothing of this conversation."},
+    "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the answer. If the profile has not answered (or is busy and the message waits its turn) an id is returned; collect it with the async tool."}
   },
   "required":["profile","message"],
   "additionalProperties":false
@@ -32,7 +33,13 @@ var ErrProfileBusy = errors.New("profile is busy")
 
 // ProfileBusyError is the busy error with what holds the target. HeldBy is the profile
 // whose profile_message call runs on the target, empty when something else holds it.
-type ProfileBusyError struct{ HeldBy string }
+type ProfileBusyError struct {
+	HeldBy string
+	// Waited is the queue wait that ended without the target getting free; QueueFull is
+	// the queue cap that refused the message. At most one is set.
+	Waited    time.Duration
+	QueueFull int
+}
 
 func (e *ProfileBusyError) Error() string { return ErrProfileBusy.Error() }
 
@@ -92,24 +99,81 @@ func ProfileChainMax(ctx context.Context) int {
 	return limit
 }
 
-// ProfileMessenger delivers one message to another profile and returns its final
-// answer. The app package implements it, because it owns the sessions. ownerKey is the
-// calling session's ExecutionContext.SessionKey. ctx ends when the caller stops or the
-// tool's timeout passes; the messenger must stop promptly then. compact asks for the
-// target's transcript to be compacted before the run, once per caller run and target.
+// ErrProfileTimeout is the outcome of a message that did not finish within
+// tools.native.profile_message.timeout_ms (queue time included).
+var ErrProfileTimeout = errors.New("profile did not answer in time")
+
+// ProfileMessageRequest is one message to another profile. OwnerKey is the calling
+// session's ExecutionContext.SessionKey.
+type ProfileMessageRequest struct {
+	OwnerKey string
+	Target   string
+	Message  string
+	// Compact asks for the target's transcript to be compacted before the run, once per
+	// caller run and target.
+	Compact bool
+	// QueueWait is the longest the message may wait for a busy target; zero sets no limit
+	// beyond Timeout. Timeout bounds the whole life of the message, queue time included.
+	QueueWait time.Duration
+	Timeout   time.Duration
+	// MaxQueued is the most messages that may wait for one target; a message over it fails
+	// at once as busy. Zero queues nobody.
+	MaxQueued int
+}
+
+// ProfileMessageOutcome is how a message ended. Text is the target's final answer, or the
+// last text it wrote when it did not finish. Err is nil for an answer; otherwise one of the
+// ErrProfile* values, a *ProfileFailedError or a *ProfileBusyError. Reason says who ended a
+// stopped message. Trace points at the turn in the target's transcript.
+type ProfileMessageOutcome struct {
+	Text   string
+	Err    error
+	Reason string
+	Trace  string
+}
+
+// ProfileMessageRun is a message in flight. It outlives the call that started it: only Stop
+// (or the message's own end) ends it.
+type ProfileMessageRun interface {
+	// Queued reports that the message waited for a busy target when it started.
+	Queued() bool
+	// Started is closed when the target run begins; Done when the message is over.
+	Started() <-chan struct{}
+	Done() <-chan struct{}
+	// Outcome is valid once Done is closed.
+	Outcome() ProfileMessageOutcome
+	// Status describes a message that is still going, for the async status action.
+	Status() string
+	// Stop ends the message: a queued one leaves the queue, a running one stops the
+	// target run. It does not wait.
+	Stop(reason string)
+}
+
+// ProfileMessagePlan is a message that passed every check and has not started yet, so the
+// caller can reserve a handle before any side effect.
+type ProfileMessagePlan interface {
+	// Start queues or starts the message. ctx bounds only the start itself, never the run.
+	Start(ctx context.Context) (ProfileMessageRun, error)
+}
+
+// ProfileMessenger delivers one message to another profile. The app package implements it,
+// because it owns the sessions. Prepare fails with the ErrProfile* errors when the message
+// can never be delivered (cycle, chain, same transcript).
 type ProfileMessenger interface {
-	Message(ctx context.Context, ownerKey string, target string, message string, busyWait time.Duration, compact bool) (string, error)
+	Prepare(ctx context.Context, request ProfileMessageRequest) (ProfileMessagePlan, error)
 }
 
 type profileMessageTool struct {
 	settings  sessionfs.NativeProfileMessageSettings
 	targets   []string
 	messenger ProfileMessenger
+	host      *AsyncHost
 }
 
 // NewProfileMessageTool builds the profile_message tool over a messenger. targets are the
-// profiles the model may message.
-func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targets []string, messenger ProfileMessenger) (tools.Tool, error) {
+// profiles the model may message. A non-nil host lets a message that outlasts block_ms
+// continue as a handle of the async tool.
+func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targets []string, messenger ProfileMessenger, host *AsyncHost) (tools.Tool, error) {
 	if messenger == nil {
 		return tools.Tool{}, errors.New("tools.native.profile_message needs a messenger")
 	}
@@ -126,13 +190,16 @@ func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targ
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native profile_message schema: %w", err)
 	}
-	runtime := &profileMessageTool{settings: settings, targets: targets, messenger: messenger}
+	if host != nil {
+		host.attachProfileMessage()
+	}
+	runtime := &profileMessageTool{settings: settings, targets: targets, messenger: messenger, host: host}
 	return tools.Tool{
 		Definition: tools.Definition{
 			ID:          profileMessageToolID,
 			Source:      "native",
 			Name:        "profile_message",
-			Description: "Send a message to another profile and get its final answer." + profileMessageListText(targets),
+			Description: profileMessageDescription + profileMessageListText(targets),
 			InputSchema: append(json.RawMessage(nil), profileMessageInputSchema...),
 		},
 		Validator:          validator,
@@ -143,6 +210,8 @@ func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targ
 	}, nil
 }
 
+const profileMessageDescription = "Send a message to another profile and wait up to block_ms for its final answer. If the profile answers in time you get the answer; otherwise (it is still working, or busy and your message waits its turn) you get an id and the message goes on: use the async tool to wait for, list, inspect or stop it."
+
 func profileMessageListText(targets []string) string {
 	return " Profiles: " + strings.Join(targets, ", ") + "."
 }
@@ -150,6 +219,14 @@ func profileMessageListText(targets []string) string {
 // normalizeProfileMessageArguments treats a blank profile or message as absent, so the
 // schema reports it as missing, and trims the profile id.
 func normalizeProfileMessageArguments(arguments map[string]any) map[string]any {
+	if block, ok := safeInteger(arguments["block_ms"]); ok {
+		copied := make(map[string]any, len(arguments))
+		for key, value := range arguments {
+			copied[key] = value
+		}
+		copied["block_ms"] = json.Number(fmt.Sprint(max(block, 0)))
+		arguments = copied
+	}
 	for _, key := range []string{"profile", "message"} {
 		value, ok := arguments[key].(string)
 		if !ok {
@@ -173,48 +250,65 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 			fmt.Sprintf("Profile %s is not available to message", profile),
 			tools.Information{Key: "available", Value: strings.Join(p.targets, ", ")}), nil
 	}
-	callCtx, cancel := context.WithTimeout(ctx, time.Duration(p.settings.TimeoutMs)*time.Millisecond)
-	defer cancel()
-	callCtx = WithProfileChainMax(callCtx, p.settings.MaxChain)
+	owner, canHandle := handleOwner(execution)
+	handled := p.host != nil && canHandle
+	request := ProfileMessageRequest{
+		OwnerKey:  execution.SessionKey,
+		Target:    profile,
+		Message:   message,
+		Compact:   p.settings.Compact == sessionfs.ProfileMessageCompactOn,
+		QueueWait: time.Duration(p.settings.BusyWaitMs) * time.Millisecond,
+		Timeout:   time.Duration(p.settings.TimeoutMs) * time.Millisecond,
+		MaxQueued: p.settings.MaxQueued,
+	}
+	if !handled && p.settings.BusyWaitMs == 0 {
+		// Nobody can collect a queued message later, so a busy target fails at once unless
+		// busy_wait_ms says how long this call may hold its run.
+		request.MaxQueued = 0
+	}
+	callCtx := WithProfileChainMax(ctx, p.settings.MaxChain)
 	if execution.AgentDepth > 0 {
 		callCtx = WithChildCall(callCtx)
 	}
-	reply, err := p.messenger.Message(callCtx, execution.SessionKey, profile, message, time.Duration(p.settings.BusyWaitMs)*time.Millisecond, p.settings.Compact == sessionfs.ProfileMessageCompactOn)
+	plan, err := p.messenger.Prepare(callCtx, request)
+	if err != nil {
+		return p.renderFailure(callID, profile, err), nil
+	}
+	if !handled {
+		return p.runInline(ctx, callID, profile, plan)
+	}
+	return p.runHandle(ctx, callID, profile, message, owner, plan, arguments)
+}
+
+func cancelledMessage(callID, profile string) string {
+	return tools.ExecutionError(callID, tools.StatusError, "cancelled", fmt.Sprintf("Message to profile %s was cancelled", profile))
+}
+
+// runInline is the call of a session or child that cannot collect a handle later: it waits
+// for the end of the message, and ending the call stops the target run.
+func (p *profileMessageTool) runInline(ctx context.Context, callID, profile string, plan ProfileMessagePlan) (string, error) {
+	run, err := plan.Start(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
-			return tools.ExecutionError(callID, tools.StatusError, "cancelled",
-				fmt.Sprintf("Message to profile %s was cancelled", profile)), nil
+			return cancelledMessage(callID, profile), nil
 		}
-		switch {
-		case errors.Is(err, ErrProfileSameTranscript):
-			return tools.ExecutionError(callID, tools.StatusError, "profile_same_transcript",
-				fmt.Sprintf("Profile %s shares this conversation and cannot be called", profile)), nil
-		case errors.Is(err, ErrProfileBusy):
-			return tools.ExecutionError(callID, tools.StatusError, "profile_busy", profileBusyText(profile, err, p.settings.BusyWaitMs)), nil
-		case errors.Is(err, ErrProfileStopped):
-			return tools.ExecutionError(callID, tools.StatusError, "profile_stopped",
-				fmt.Sprintf("Profile %s was stopped", profile)), nil
-		case errors.Is(err, ErrProfileNoAnswer):
-			return tools.ExecutionError(callID, tools.StatusError, "profile_no_answer",
-				fmt.Sprintf("Profile %s finished without an answer", profile)), nil
-		case errors.Is(err, ErrProfileChainTooLong):
-			return tools.ExecutionError(callID, tools.StatusError, "profile_chain_too_long",
-				fmt.Sprintf("Profile %s cannot be messaged from here: the chain of profile messages would pass tools.native.profile_message.max_chain (%d)", profile, p.settings.MaxChain)), nil
-		case errors.Is(err, ErrProfileCycle):
-			return tools.ExecutionError(callID, tools.StatusError, "profile_cycle",
-				fmt.Sprintf("Profile %s cannot be messaged from here: it would form a cycle", profile)), nil
-		case callCtx.Err() != nil:
-			return tools.ExecutionError(callID, tools.StatusError, "profile_timeout",
-				fmt.Sprintf("Profile %s did not answer within %d ms", profile, p.settings.TimeoutMs)), nil
-		}
-		text := fmt.Sprintf("Profile %s failed", profile)
-		var failed *ProfileFailedError
-		if errors.As(err, &failed) && failed.Message != "" {
-			text += ": " + failed.Message
-		}
-		return tools.ExecutionError(callID, tools.StatusError, "profile_failed", text), nil
+		return p.renderFailure(callID, profile, err), nil
 	}
-	text, cut := cutUTF8(strings.TrimSpace(reply), int64(p.settings.ResultMaxBytes))
+	select {
+	case <-run.Done():
+	case <-ctx.Done():
+		run.Stop("caller_cancelled")
+		return cancelledMessage(callID, profile), nil
+	}
+	return p.renderOutcome(callID, profile, run.Outcome())
+}
+
+// renderOutcome renders how a message ended: the answer, or the named failure.
+func (p *profileMessageTool) renderOutcome(callID, profile string, outcome ProfileMessageOutcome) (string, error) {
+	if outcome.Err != nil {
+		return p.renderFailure(callID, profile, outcome.Err), nil
+	}
+	text, cut := cutUTF8(strings.TrimSpace(outcome.Text), int64(p.settings.ResultMaxBytes))
 	information := []tools.Information{{Key: "profile", Value: profile}}
 	if cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
@@ -228,16 +322,54 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	})
 }
 
-func profileBusyText(profile string, err error, waitedMs int) string {
+func (p *profileMessageTool) renderFailure(callID, profile string, err error) string {
+	code, message := p.failure(profile, err)
+	return tools.ExecutionError(callID, tools.StatusError, code, message)
+}
+
+// failure names a message that did not end in an answer: the error code and its text.
+func (p *profileMessageTool) failure(profile string, err error) (code, message string) {
+	switch {
+	case errors.Is(err, ErrProfileSameTranscript):
+		return "profile_same_transcript", fmt.Sprintf("Profile %s shares this conversation and cannot be called", profile)
+	case errors.Is(err, ErrProfileBusy):
+		return "profile_busy", profileBusyText(profile, err)
+	case errors.Is(err, ErrProfileStopped):
+		return "profile_stopped", fmt.Sprintf("Profile %s was stopped", profile)
+	case errors.Is(err, ErrProfileNoAnswer):
+		return "profile_no_answer", fmt.Sprintf("Profile %s finished without an answer", profile)
+	case errors.Is(err, ErrProfileChainTooLong):
+		return "profile_chain_too_long", fmt.Sprintf("Profile %s cannot be messaged from here: the chain of profile messages would pass tools.native.profile_message.max_chain (%d)", profile, p.settings.MaxChain)
+	case errors.Is(err, ErrProfileCycle):
+		return "profile_cycle", fmt.Sprintf("Profile %s cannot be messaged from here: it would form a cycle", profile)
+	case errors.Is(err, ErrProfileTimeout), errors.Is(err, context.DeadlineExceeded):
+		return "profile_timeout", fmt.Sprintf("Profile %s did not answer within %d ms", profile, p.settings.TimeoutMs)
+	}
+	message = fmt.Sprintf("Profile %s failed", profile)
+	var failed *ProfileFailedError
+	if errors.As(err, &failed) && failed.Message != "" {
+		message += ": " + failed.Message
+	}
+	return "profile_failed", message
+}
+
+func profileBusyText(profile string, err error) string {
 	text := fmt.Sprintf("Profile %s is busy", profile)
 	var busy *ProfileBusyError
-	if errors.As(err, &busy) && busy.HeldBy != "" {
-		text += " with a message from profile " + busy.HeldBy
+	held := ""
+	if errors.As(err, &busy) {
+		held = busy.HeldBy
+	}
+	if held != "" {
+		text += " with a message from profile " + held
 	} else {
 		text += " with a user run or a maintenance action"
 	}
-	if waitedMs > 0 {
-		text += fmt.Sprintf("; it was still busy after waiting %d ms", waitedMs)
+	if busy != nil && busy.Waited > 0 {
+		text += fmt.Sprintf("; it was still busy after waiting %d ms", busy.Waited.Milliseconds())
+	}
+	if busy != nil && busy.QueueFull > 0 {
+		text += fmt.Sprintf("; %d messages are already waiting for it (tools.native.profile_message.max_queued_per_profile)", busy.QueueFull)
 	}
 	return text + "; try again later"
 }
