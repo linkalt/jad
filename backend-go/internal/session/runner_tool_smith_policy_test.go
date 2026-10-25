@@ -30,7 +30,7 @@ func TestToolSmithRunIsSerializedAndCheckpointedWhileListIsNot(t *testing.T) {
 	if run == nil {
 		t.Fatal("no checkpoint run")
 	}
-	runCall := call("tool_smith", `{"function":"return 1"}`)
+	runCall := call("tool_smith", `{"code":"return 1"}`)
 	listCall := call("tool_smith", `{}`)
 	for name, tc := range map[string]struct {
 		call  json.RawMessage

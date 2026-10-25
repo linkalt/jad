@@ -17,7 +17,7 @@ import (
 const (
 	toolSmithToolID     = "native.tool_smith"
 	toolSmithInputEnv   = "TOOL_SMITH_INPUT"
-	toolSmithRunExample = `{"function":"return 1;"}`
+	toolSmithRunExample = `{"code":"console.log(1);"}`
 )
 
 //go:embed tool_smith_prelude.ts
@@ -29,19 +29,19 @@ var toolSmithInputSchema = json.RawMessage(`{
     "filters":{
       "type":"array",
       "items":{"type":"string"},
-      "description":"Only with no function: list the saved functions whose name or description matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (read*, *file*); any other is a substring."
+      "description":"Only with no code: list the saved functions whose name or description matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (read*, *file*); any other is a substring."
     },
-    "function":{"type":"string","description":"TypeScript async function body to run."},
+    "code":{"type":"string","description":"TypeScript async function body to run. Write output with console.log; return is optional."},
     "input":{"type":"object","additionalProperties":true,"description":"JSON data bound to the input variable of the function body."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the result. If the script is still running an id is returned; collect it with the async tool."}
   },
   "additionalProperties":false
 }`)
 
-const toolSmithDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved functions of the library. Give function to execute a TypeScript function body in a child process and return one value (a body without return gives no [result] block, only its output), waiting up to block_ms; input is bound to the input variable. If the script is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it. Saved functions are reusable files called as fn.<name>(input) inside a function body. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do."
+const toolSmithDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved functions of the library. Give code to execute a TypeScript function body in a child process, waiting up to block_ms. Write output with console.log: stdout is the result of the script. return is optional and only for structured values; a returned value is shown in a [result] block, and a body without return gives no [result] block; input is bound to the input variable. If the script is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it. Saved functions are reusable files called as fn.<name>(input) inside a function body. The script runs with full interpreter privileges: the nested allow-list limits only the tools.* bridge, not what the script itself can do."
 
 // NewToolSmithTool creates the tool_smith tool. It is ReadOnly so several calls may
-// share a response, and a call with function says so through MayChangeFiles.
+// share a response, and a call with code says so through MayChangeFiles.
 // A non-nil host lets a run that outlasts block_ms continue as a handle of the async tool.
 func NewToolSmithTool(settings sessionfs.NativeToolSmithSettings, apiKeyEnv string, nested *ToolSmithNested, host *AsyncHost) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(toolSmithInputSchema)
@@ -63,10 +63,13 @@ func NewToolSmithTool(settings sessionfs.NativeToolSmithSettings, apiKeyEnv stri
 		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(toolSmithRunExample),
 		NormalizeArguments: normalizeToolSmithArguments,
-		RejectedProperties: map[string]string{"run": "run is not a parameter: pass the code as the top-level function string, with input and block_ms beside it, for example " + toolSmithRunExample},
+		RejectedProperties: map[string]string{
+			"run":      "run is not a parameter: pass the script body as the top-level code string, with input and block_ms beside it, for example " + toolSmithRunExample,
+			"function": "function is not a parameter any more: pass the script body as the top-level code string, with input and block_ms beside it, for example " + toolSmithRunExample,
+		},
 		MayChangeFiles: func(arguments map[string]any) bool {
-			_, hasFunction := arguments["function"]
-			return hasFunction
+			_, hasCode := arguments["code"]
+			return hasCode
 		},
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return executeToolSmith(ctx, arguments, settings, apiKeyEnv, nested, execution, host)
@@ -110,12 +113,12 @@ func executeToolSmith(
 	host *AsyncHost,
 ) (string, error) {
 	callID := execution.CallID
-	if _, hasFunction := arguments["function"]; !hasFunction {
+	if _, hasCode := arguments["code"]; !hasCode {
 		return executeToolSmithList(arguments, settings, execution), nil
 	}
-	body, _ := arguments["function"].(string)
+	body, _ := arguments["code"].(string)
 	if strings.TrimSpace(body) == "" {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "function is empty",
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "code is empty",
 			tools.Information{Key: "suggestion", Value: "example: " + toolSmithRunExample}), nil
 	}
 	input := map[string]any{}
@@ -133,7 +136,7 @@ func executeToolSmith(
 	}
 	if size := int64(len(body) + len(inputJSON)); size > settings.CodeMaxBytes {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input",
-			fmt.Sprintf("function and input are %d bytes, over the limit of %d", size, settings.CodeMaxBytes),
+			fmt.Sprintf("code and input are %d bytes, over the limit of %d", size, settings.CodeMaxBytes),
 			tools.Information{Key: "suggestion", Value: "save the code as a library function and call it, or shorten the input"}), nil
 	}
 	script := toolSmithScript{body: body, inputJSON: inputJSON, settings: settings, apiKeyEnv: apiKeyEnv, nested: nested, execution: execution}

@@ -128,7 +128,7 @@ func TestToolSmithSchemaHasNoListObject(t *testing.T) {
 	if _, has := schema.Properties["list"]; has {
 		t.Fatal("the schema still has a list object")
 	}
-	for _, name := range []string{"filters", "function", "input", "block_ms"} {
+	for _, name := range []string{"filters", "code", "input", "block_ms"} {
 		if _, has := schema.Properties[name]; !has {
 			t.Fatalf("the schema lacks %s", name)
 		}
@@ -145,7 +145,7 @@ func TestToolSmithSchemaHasNoListObject(t *testing.T) {
 
 func TestToolSmithRunWithinBlockMsReturnsTheResultAndConsumesTheSignal(t *testing.T) {
 	f := newToolSmithAsyncFixture(t, `echo quick > "$EXEC_RESULT"`)
-	out := f.run(t, "s1", `{"function":"return 1;","block_ms":5000}`)
+	out := f.run(t, "s1", `{"code":"return 1;","block_ms":5000}`)
 	if !strings.Contains(out, `"status":"ok"`) || !strings.Contains(execContent(out), "quick") {
 		t.Fatalf("result:\n%s", out)
 	}
@@ -163,7 +163,7 @@ func TestToolSmithEndToEndBlockMsHandleWaitOnceStopAndNoGoroutineLeak(t *testing
 	tmp := useOwnTempDir(t)
 	f := newToolSmithAsyncFixture(t, `sleep 1; echo slow-answer > "$EXEC_RESULT"`)
 	baseline := runtime.NumGoroutine()
-	started := f.run(t, "s1", `{"function":"return 1;","block_ms":50}`)
+	started := f.run(t, "s1", `{"code":"return 1;","block_ms":50}`)
 	id := smithRunIDOf(t, started)
 	if execField(started, "state") != "running" || !strings.Contains(started, "async tool") {
 		t.Fatalf("expected a running handle:\n%s", started)
@@ -189,7 +189,7 @@ func TestToolSmithEndToEndBlockMsHandleWaitOnceStopAndNoGoroutineLeak(t *testing
 		t.Fatalf("the ref file %s: %q %v", entry.Ref, data, err)
 	}
 
-	second := smithRunIDOf(t, f.run(t, "s1", `{"function":"return 2;","block_ms":0}`))
+	second := smithRunIDOf(t, f.run(t, "s1", `{"code":"return 2;","block_ms":0}`))
 	stop := callAsync(t, f.async, "s1", map[string]any{"action": "stop", "id": second})
 	if !strings.Contains(stop, "stopped") {
 		t.Fatalf("stop = %s", stop)
@@ -207,7 +207,7 @@ func TestToolSmithRunSurvivesTheEndOfTheCallAndIsStoppedByTheOwnerFanOut(t *test
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan string, 1)
 	go func() {
-		out, _ := f.smith.Execute(ctx, f.smith.NormalizeArguments(map[string]any{"function": "return 1;", "block_ms": json.Number("0")}),
+		out, _ := f.smith.Execute(ctx, f.smith.NormalizeArguments(map[string]any{"code": "return 1;", "block_ms": json.Number("0")}),
 			tools.ExecutionContext{CallID: "smith", WorkspaceRoot: f.root, SessionDir: f.root, SessionKey: "s1"})
 		done <- out
 	}()
@@ -238,7 +238,7 @@ func TestToolSmithRunWithoutAHostRunsToItsEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := smith.Execute(context.Background(), smith.NormalizeArguments(map[string]any{"function": "return 1;", "block_ms": json.Number("0")}),
+	out, err := smith.Execute(context.Background(), smith.NormalizeArguments(map[string]any{"code": "return 1;", "block_ms": json.Number("0")}),
 		tools.ExecutionContext{CallID: "smith", WorkspaceRoot: root, SessionDir: root, SessionKey: "s1"})
 	if err != nil || !strings.Contains(execContent(out), "blocked-result") {
 		t.Fatalf("a session without the async tool must run to its end: %s %v", out, err)
@@ -247,7 +247,7 @@ func TestToolSmithRunWithoutAHostRunsToItsEnd(t *testing.T) {
 
 func TestToolSmithRunTimeoutAndFailureStates(t *testing.T) {
 	f := newToolSmithAsyncFixture(t, `echo oops >&2; exit 3`)
-	id := smithRunIDOf(t, f.run(t, "s1", `{"function":"return 1;","block_ms":0}`))
+	id := smithRunIDOf(t, f.run(t, "s1", `{"code":"return 1;","block_ms":0}`))
 	waited := callAsync(t, f.async, "s1", map[string]any{"action": "wait", "wait_ms": json.Number("10000")})
 	if !strings.Contains(waited, id) || !strings.Contains(waited, `"code":"3"`) || strings.Contains(waited, `"ok":true`) {
 		t.Fatalf("a non-zero exit must not be ok:\n%s", waited)
@@ -266,7 +266,7 @@ func TestToolSmithRunIDsAreNotAcceptedAsPathsForDetail(t *testing.T) {
 
 func TestToolSmithSummariesSayScriptAndNoReturnMeansNoResultBlock(t *testing.T) {
 	f := newToolSmithAsyncFixture(t, `echo printed`)
-	out := f.run(t, "s1", `{"function":"console.log(1);","block_ms":5000}`)
+	out := f.run(t, "s1", `{"code":"console.log(1);","block_ms":5000}`)
 	if !strings.Contains(out, `"summary":"Script completed in `) || strings.Contains(out, "Command") {
 		t.Fatalf("summary wording:\n%s", out)
 	}
@@ -274,7 +274,7 @@ func TestToolSmithSummariesSayScriptAndNoReturnMeansNoResultBlock(t *testing.T) 
 		t.Fatalf("a body without a return value must show only its output:\n%s", out)
 	}
 	failing := newToolSmithAsyncFixture(t, `exit 3`)
-	out = failing.run(t, "s1", `{"function":"return 1;","block_ms":5000}`)
+	out = failing.run(t, "s1", `{"code":"return 1;","block_ms":5000}`)
 	if !strings.Contains(out, `"summary":"Script exited with 3"`) {
 		t.Fatalf("failure wording:\n%s", out)
 	}

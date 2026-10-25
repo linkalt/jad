@@ -54,7 +54,7 @@ func runToolSmith(ctx context.Context, root string, settings sessionfs.NativeToo
 }
 
 func smithRun(function string, input map[string]any) map[string]any {
-	arguments := map[string]any{"function": function}
+	arguments := map[string]any{"code": function}
 	if input != nil {
 		arguments["input"] = input
 	}
@@ -87,15 +87,16 @@ func TestToolSmithRunReturnsTheValueAndRemovesItsDirectory(t *testing.T) {
 	requireNoLeftovers(t, tmp)
 }
 
-func TestToolSmithRejectsTheRunKeyAndNamesFunction(t *testing.T) {
+func TestToolSmithRejectsTheOldKeysAndNamesCode(t *testing.T) {
 	catalog, err := BuildCatalog(toolSmithConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, arguments := range []string{
-		`{"run":{"function":"return 1;"}}`,
+		`{"run":{"code":"return 1;"}}`,
 		`{"run":"return 1;"}`,
-		`{"function":"return 1;","run":{"function":"return 2;"}}`,
+		`{"code":"return 1;","run":{"code":"return 2;"}}`,
+		`{"function":"return 1;"}`,
 		`{"script":"return 1;"}`,
 	} {
 		output := executeCatalogCall(t, catalog, "tool_smith", arguments)
@@ -103,9 +104,27 @@ func TestToolSmithRejectsTheRunKeyAndNamesFunction(t *testing.T) {
 			t.Errorf("arguments %s were accepted:\n%s", arguments, output)
 		}
 	}
-	output := executeCatalogCall(t, catalog, "tool_smith", `{"run":{"function":"return 1;"}}`)
-	if !strings.Contains(output, "top-level function string") || !strings.Contains(output, `{"function":"return 1;"}`) {
-		t.Errorf("the error does not name function:\n%s", output)
+	for _, arguments := range []string{`{"run":{"code":"return 1;"}}`, `{"function":"return 1;"}`} {
+		output := executeCatalogCall(t, catalog, "tool_smith", arguments)
+		if !strings.Contains(output, "top-level code string") || !strings.Contains(output, `{"code":"console.log(1);"}`) {
+			t.Errorf("the error for %s does not name code:\n%s", arguments, output)
+		}
+	}
+}
+
+func TestToolSmithRunStdoutOnlyScriptIsTheResult(t *testing.T) {
+	root := t.TempDir()
+	result := runToolSmith(context.Background(), root, toolSmithTestSettings(t, root), smithRun("console.log('hello stdout');", nil))
+	if !strings.Contains(result, `"status":"ok"`) || !strings.Contains(result, "hello stdout") || strings.Contains(result, "[result]") {
+		t.Fatalf("result:\n%s", result)
+	}
+}
+
+func TestToolSmithRunStdoutAndReturnShowBoth(t *testing.T) {
+	root := t.TempDir()
+	result := runToolSmith(context.Background(), root, toolSmithTestSettings(t, root), smithRun("console.log('side output'); return { v: 1 };", nil))
+	if !strings.Contains(result, "side output") || !strings.Contains(execContent(result), `{"v":1}`) {
+		t.Fatalf("result:\n%s", result)
 	}
 }
 
@@ -160,7 +179,7 @@ func TestToolSmithCatalogRejectsATimeoutArgument(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, arguments := range []string{
-		`{"function":"return 1;","timeout_ms":60000}`,
+		`{"code":"return 1;","timeout_ms":60000}`,
 	} {
 		output := executeCatalogCall(t, catalog, "tool_smith", arguments)
 		if !strings.Contains(output, `"status":"invalid_input"`) {
@@ -233,8 +252,8 @@ func TestToolSmithRunRefusesBadParameters(t *testing.T) {
 	root, tmp := t.TempDir(), useOwnTempDir(t)
 	settings := toolSmithTestSettings(t, root)
 	for name, arguments := range map[string]map[string]any{
-		"empty function":  {"function": ""},
-		"blank function":  {"function": "  \n"},
+		"empty code":      {"code": ""},
+		"blank code":      {"code": "  \n"},
 		"too large":       smithRun(strings.Repeat("x", int(settings.CodeMaxBytes)), nil),
 		"input too large": smithRun("return 1;", map[string]any{"big": strings.Repeat("x", int(settings.CodeMaxBytes))}),
 	} {
@@ -242,7 +261,7 @@ func TestToolSmithRunRefusesBadParameters(t *testing.T) {
 		if !strings.Contains(result, `"status":"invalid_input"`) {
 			t.Fatalf("%s:\n%s", name, result)
 		}
-		if name != "too large" && name != "input too large" && !strings.Contains(result, `{"function":"return 1;"}`) {
+		if name != "too large" && name != "input too large" && !strings.Contains(result, `{"code":"console.log(1);"}`) {
 			t.Fatalf("%s has no example:\n%s", name, result)
 		}
 	}
@@ -262,7 +281,7 @@ func TestToolSmithCallWithNeitherRunNorFiltersListsInsteadOfRefusing(t *testing.
 func TestToolSmithRunRejectsANonObjectInput(t *testing.T) {
 	root := t.TempDir()
 	for name, input := range map[string]any{"string": "x", "array": []any{1.0}} {
-		result := runToolSmith(context.Background(), root, toolSmithTestSettings(t, root), map[string]any{"function": "return 1;", "input": input})
+		result := runToolSmith(context.Background(), root, toolSmithTestSettings(t, root), map[string]any{"code": "return 1;", "input": input})
 		if execField(result, "error_code") != "invalid_input" || !strings.Contains(result, "input must be an object") {
 			t.Errorf("%s:\n%s", name, result)
 		}

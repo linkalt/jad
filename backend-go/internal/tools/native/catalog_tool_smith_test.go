@@ -97,9 +97,9 @@ func TestToolSmithChangesStateOnlyForARun(t *testing.T) {
 		arguments string
 		want      bool
 	}{
-		"function":              {`{"function":"return 1;"}`, true},
-		"function with input":   {`{"function":"return 1;","input":{"a":1}}`, true},
-		"function with filters": {`{"filters":["a"],"function":"return 1;"}`, true},
+		"code":                  {`{"code":"return 1;"}`, true},
+		"function with input":   {`{"code":"return 1;","input":{"a":1}}`, true},
+		"function with filters": {`{"filters":["a"],"code":"return 1;"}`, true},
 		"list with filters":     {`{"filters":["a"]}`, false},
 		"list wildcard":         {`{"filters":["read*"]}`, false},
 		"nothing":               {`{}`, false},
