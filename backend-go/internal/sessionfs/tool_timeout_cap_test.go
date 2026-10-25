@@ -20,6 +20,8 @@ func TestToolTimeoutSettingsAreCappedAtSixHours(t *testing.T) {
 			switch section {
 			case "bash":
 				_, err = normalizeNativeBashSettings(setting, dir, settingPath, dir, dir, "", dir, NativePathPolicy{}, NativePathPolicy{})
+			case "transcripts":
+				_, err = normalizeNativeTranscriptsSettings(setting, settingPath, NativePathPolicy{})
 			case "transcript":
 				_, err = normalizeNativeTranscriptSettings(setting, settingPath, NativePathPolicy{})
 			case "exec":
@@ -44,6 +46,7 @@ func TestToolTimeoutSettingsAreCappedAtSixHours(t *testing.T) {
 		{"exec max_timeout_ms", bashStyle("exec"), `{"max_timeout_ms":` + sixHours + `}`, `{"max_timeout_ms":` + over + `}`, "max_timeout_ms"},
 		{"tool_smith timeout_ms", bashStyle("tool_smith"), `{"timeout_ms":` + sixHours + `,"max_timeout_ms":` + sixHours + `}`, `{"timeout_ms":` + over + `}`, "timeout_ms"},
 		{"tool_smith max_timeout_ms", bashStyle("tool_smith"), `{"max_timeout_ms":` + sixHours + `}`, `{"max_timeout_ms":` + over + `}`, "max_timeout_ms"},
+		{"transcripts timeout_ms", bashStyle("transcripts"), `{"timeout_ms":` + sixHours + `}`, `{"timeout_ms":` + over + `}`, "timeout_ms"},
 		{"transcript timeout_ms", bashStyle("transcript"), `{"timeout_ms":` + sixHours + `}`, `{"timeout_ms":` + over + `}`, "timeout_ms"},
 		{"profile_message timeout_ms", func(body string) error {
 			_, err := normalizeNativeProfileMessageSettings(decideSettingsFor(`{"profile_message":`+body+`}`), "setting.json")

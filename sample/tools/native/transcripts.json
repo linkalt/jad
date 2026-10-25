@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.transcripts",
+      "source": "native",
+      "name": "transcripts",
+      "description": "List what the transcript tool can read, newest first: the profiles of your session (or sessions with path sessions, session:<id>), or the sub-agent runs of one profile (path profile:<category>/<name>). Each line gives the exact path to pass to transcript and the full messages.jsonl file path, with size and time of last activity. Use filters to narrow by name, status for runs, limit and cursor to page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What to list. Omit it for the profiles of your session. sessions lists the sessions; session:<id> lists the profiles of that session; profile:<category>/<name> (or profile:<session>/<category>/<name>) lists that profile's sub-agent runs."
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Only items whose name matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (dev*, *coder); any other is a substring. For runs the agent name and the parent call id are matched too."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "timed_out",
+              "stopped",
+              "lost"
+            ],
+            "description": "Only sub-agent runs in this state. Only with a profile: path."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Most items in this response; capped by the configuration."
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Continue where the previous response stopped; use the cursor it gave. Not with path, filters or status."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}

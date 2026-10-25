@@ -86,7 +86,7 @@ func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks,
 // BuildCatalogWithAsync is BuildCatalogWithMessenger plus the resolver that shares one
 // async host per tool storage folder. Without it the async tool opens a host of its own.
 func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecide == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeAsync == nil {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecide == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeAsync == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -112,6 +112,20 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		}
 		profiles, _ := messenger.(TranscriptProfiles)
 		tool, err := NewTranscriptTool(*config.NativeTranscript, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, subagentManager)
+		if err != nil {
+			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		tool.Definition = definition
+		loaded = append(loaded, tool)
+	}
+	if config.NativeTranscripts != nil {
+		definition, err := requireNativeDefinition(config, definitions, "transcripts", transcriptsToolID, transcriptsInputSchema)
+		if err != nil {
+			return nil, err
+		}
+		profiles, _ := messenger.(TranscriptProfiles)
+		sessions, _ := messenger.(TranscriptSessions)
+		tool, err := NewTranscriptsTool(*config.NativeTranscripts, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, sessions, subagentManager)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -488,6 +502,8 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeProfileMessage != nil
 	case "transcript":
 		return config.NativeTranscript != nil
+	case "transcripts":
+		return config.NativeTranscripts != nil
 	case "tool_smith":
 		return config.NativeToolSmith != nil
 	default:

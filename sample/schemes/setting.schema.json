@@ -1447,6 +1447,49 @@
               },
               "additionalProperties": false
             },
+            "transcripts": {
+              "type": "object",
+              "description": "Go backend only. Lists what the transcript tool can read, newest first: the profiles of a session, the sessions, or the sub-agent runs of a profile, each with the path to give transcript and the full messages.jsonl path, size and time of last activity. Read-only: it stats files and reads run manifests and never opens a transcript. It has no paths key; a listed file the read path rules deny is left out (tools.native.read.paths). Off unless this key is present. Needs transcripts in tool_definition_paths.",
+              "properties": {
+                "max_entries": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 500,
+                  "default": 50,
+                  "description": "Most items in one response; a call's limit may only lower it."
+                },
+                "scan_max_entries": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 50000,
+                  "default": 2000,
+                  "description": "Most candidate items one call examines; a listing with more fails and asks for filters. Not below max_entries."
+                },
+                "timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 21600000,
+                  "default": 30000,
+                  "description": "Time limit of one call, at most 6 hours."
+                },
+                "allow_other_sessions": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false lists only the calling session."
+                },
+                "allow_other_profiles": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false lists only the calling profile and its sub-agent runs."
+                },
+                "allow_children": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false refuses the tool to a sub-agent."
+                }
+              },
+              "additionalProperties": false
+            },
             "process": {
               "type": "object",
               "description": "Long-running shell process management. Processes are session-owned and stopped on orderly backend shutdown. A process gets the same environment allowlist as bash (PATH, HOME, locale and temp variables) plus env_file and env; other server variables are not inherited.",

@@ -165,6 +165,7 @@ type SessionConfig struct {
 	NativeProfileMessage *NativeProfileMessageSettings
 	NativeToolSmith      *NativeToolSmithSettings
 	NativeTranscript     *NativeTranscriptSettings
+	NativeTranscripts    *NativeTranscriptsSettings
 	// AgentToolsets holds, by key, the merged settings of the toolsets a sub-agent names
 	// in its toolset key. The key is the ids joined with "+" (one id: the id itself). Only the tool settings and MCP servers of an
 	// entry are used; it has no subagent tool.
@@ -471,6 +472,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	nativeTranscripts, err := normalizeNativeTranscriptsSettings(setting, settingPath, nativeReadPolicy)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	nativeProcess, err := normalizeNativeProcessSettings(
 		setting,
 		location.Root.GlobalJadRoot,
@@ -611,6 +616,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeProfileMessage:  nativeProfileMessage,
 		NativeToolSmith:       nativeToolSmith,
 		NativeTranscript:      nativeTranscript,
+		NativeTranscripts:     nativeTranscripts,
 		GlobalJadRoot:         location.Root.GlobalJadRoot,
 		MCPServers:            mcpServers,
 		StateContext:          stateContext,

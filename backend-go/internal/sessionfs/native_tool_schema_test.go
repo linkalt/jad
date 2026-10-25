@@ -100,6 +100,15 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"transcript timeout over six hours", "transcript", `{"timeout_ms":21600001}`, false},
 		{"transcript zero response max", "transcript", `{"response_max_bytes":0}`, false},
 		{"transcript bad allow_path", "transcript", `{"allow_path":"yes"}`, false},
+		{"transcripts every key", "transcripts", `{"max_entries":5,"scan_max_entries":10,"timeout_ms":1000,"allow_other_sessions":false,"allow_other_profiles":false,"allow_children":false}`, true},
+		{"transcripts no keys", "transcripts", `{}`, true},
+		{"transcripts unknown", "transcripts", `{"nope":1}`, false},
+		{"transcripts has no paths", "transcripts", `{"paths":` + paths + `}`, false},
+		{"transcripts has no allow_path", "transcripts", `{"allow_path":true}`, false},
+		{"transcripts timeout over six hours", "transcripts", `{"timeout_ms":21600001}`, false},
+		{"transcripts zero max_entries", "transcripts", `{"max_entries":0}`, false},
+		{"transcripts max_entries over cap", "transcripts", `{"max_entries":501}`, false},
+		{"transcripts bad switch", "transcripts", `{"allow_children":"yes"}`, false},
 		{"tool_smith unknown", "tool_smith", `{"nope":1}`, false},
 		{"tool_smith env_file", "tool_smith", `{"env_file":` + string(envFileJSON) + `}`, true},
 		{"tool_smith blank env_file", "tool_smith", `{"env_file":" "}`, false},
@@ -168,7 +177,7 @@ func TestExecAndReadImageSchemaKeysMatchTheLoader(t *testing.T) {
 	if strings.Join(decideKeys, ",") != strings.Join(wantDecide, ",") {
 		t.Errorf("decide schema keys\n  %v\nloader accepts\n  %v", decideKeys, wantDecide)
 	}
-	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys, "profile_message": nativeProfileMessageKeys, "tool_smith": nativeToolSmithKeys, "transcript": nativeTranscriptKeys} {
+	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys, "profile_message": nativeProfileMessageKeys, "tool_smith": nativeToolSmithKeys, "transcript": nativeTranscriptKeys, "transcripts": nativeTranscriptsKeys} {
 		got := flattenSchemaKeys(native[tool].(map[string]any), defs)
 		sort.Strings(got)
 		want = append([]string(nil), want...)
