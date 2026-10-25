@@ -108,7 +108,7 @@ func threeTurns(t *testing.T) string {
 
 func TestTranscriptReadsTheLastTurnByDefaultWithCallsAndResults(t *testing.T) {
 	out := runTranscript(t, transcriptTestSettings(), threeTurns(t), map[string]any{})
-	for _, want := range []string{"turns 3-3 of 3", "#3 user: third question", "#3 assistant: third answer"} {
+	for _, want := range []string{"turns 3-3; the transcript holds turns 1-3", "#3 user: third question", "#3 assistant: third answer"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in %s", want, out)
 		}
@@ -167,7 +167,7 @@ func TestTranscriptNumbersACompactedTranscriptByItsSessionTurnAndSaysSo(t *testi
 	path := filepath.Join(t.TempDir(), "messages.jsonl")
 	writeTestTranscript(t, path, userLine("kept"), answerLine(41, 1, textItem("kept answer")))
 	out := runTranscript(t, transcriptTestSettings(), path, map[string]any{})
-	if !strings.Contains(out, "#41 user: kept") || !strings.Contains(out, "compacted") {
+	if !strings.Contains(out, "#41 user: kept") || !strings.Contains(out, "compacted") || !strings.Contains(out, "turns 41-41; the transcript holds turns 41-41") {
 		t.Fatalf("out = %s", out)
 	}
 	if out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"turns": "41"}); !strings.Contains(out, "kept answer") {

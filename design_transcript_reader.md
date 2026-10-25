@@ -113,7 +113,8 @@ Tests that must fail on revert: read-only (no truncate), response cap, stale cur
 
 ## 8a. As built (phases 1-4)
 - Selectors, access switches and the read path rules are as in 2a and 4. `subagent` is resolved by run id through `SubagentManager.RunTranscript`; the subagent tool result does not carry the path for a finished run, so the id is the key. A run whose child has no transcript folder yet answers `no_transcript_yet`.
-- Not built: `list` of other sessions and profiles (it lists the caller's own files only), the `running` flag in the header, a line index cache.
+- Not built: `list` of other sessions and profiles (it lists the caller's own files only), the `running` flag in the header, a line index cache. Hand check on six real transcripts (18 KB to 1.5 MB): 0.6 to 16 ms per call.
+- The header names turn numbers: `turns A-B; the transcript holds turns C-D`, plus a compaction note when C is above 1.
 - `scan_max_bytes` applies to the whole file because turn numbers need one pass over it; the pass reads each line once and keeps only offsets.
 
 ## 9. Open questions (with recommendation)

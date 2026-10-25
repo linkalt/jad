@@ -332,9 +332,9 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 		used += size
 		index = group
 	}
-	header := label + fmt.Sprintf("turns %d-%d of %d", turns[first].number, turns[min(turnIndex, len(turns)-1)].number, len(turns))
+	header := label + fmt.Sprintf("turns %d-%d; the transcript holds turns %d-%d", turns[first].number, turns[min(turnIndex, len(turns)-1)].number, turns[0].number, turns[len(turns)-1].number)
 	if turns[0].number != 1 {
-		header += fmt.Sprintf("; the first turn is %d: the transcript was compacted, its earlier turns may be in the backup", turns[0].number)
+		header += ": it was compacted, its earlier turns may be in the backup"
 	}
 	nextCursor := ""
 	if next >= 0 {
