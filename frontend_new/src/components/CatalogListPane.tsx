@@ -10,7 +10,7 @@ import {Banner, Button, HStack, Icon, IconButton, StackItem, Text, TextInput, VS
 import {EmptyState} from '@astryxdesign/core/EmptyState';
 import {Link} from '@astryxdesign/core/Link';
 import {Selector} from '@astryxdesign/core/Selector';
-import {Table, pixel, proportional, useTableColumnResize, useTableSortable, type TablePlugin, type TableColumn} from '@astryxdesign/core/Table';
+import {Table, proportional, useTableColumnResize, useTableSortable, type TablePlugin, type TableColumn} from '@astryxdesign/core/Table';
 import {Tooltip} from '@astryxdesign/core/Tooltip';
 
 import type {CatalogFileInfo, CatalogKind} from '../api';
@@ -60,11 +60,23 @@ const textColumnWidth = proportional(appConfig.catalog_table_text_column_weight,
   minWidth: appConfig.catalog_table_text_column_min_width_px,
 });
 
-// Narrow and fixed: an icon button needs no room to grow, and a proportional
-// width would hand it a share of the table. `resizable: false` keeps it out of
-// the resize plugin's set altogether — no handle on its border, and no pixel
-// width committed for it when a neighbour is dragged.
-const actionColumnWidth = pixel(appConfig.catalog_action_column_width_px);
+// The Action column is the table's trailing flexible column. The resize plugin
+// drops any column marked `resizable: false` from its set — it is never in a drag
+// snapshot, so it can never change — and a flexible column hands its drag to the
+// next one, which makes the last flexible column the table's remainder, owning no
+// handle. That is what this column wants: Name gets the handle on the name|action
+// boundary, Action takes what the table has left, and no handle hangs on the
+// table's right edge where the plugin's remainder rule would ignore it.
+//
+// Its weight is set by the width the table cannot go below, because that is the one
+// thing this column can take away: the plugin charges a flexible column
+// floor * totalWeight / weight, and below 72 * 1.4 / 120 = 0.84 the Action floor is
+// what makes the table too wide for the pane at the dialog's narrowest. Its floor is
+// the header's own text box, so that the word cannot be ellipsized by a font arriving
+// in place of Inter.
+const actionColumnWidth = proportional(appConfig.catalog_action_column_weight, {
+  minWidth: appConfig.catalog_action_column_min_width_px,
+});
 
 function tableColumns(showSession: boolean, onDelete: (target: CatalogRowTarget) => void, isDisabled: boolean): TableColumn<CatalogRow>[] {
   const columns: TableColumn<CatalogRow>[] = [
@@ -79,7 +91,6 @@ function tableColumns(showSession: boolean, onDelete: (target: CatalogRowTarget)
     key: 'action',
     header: 'Action',
     width: actionColumnWidth,
-    resizable: false,
     // An icon column has no text to align to a leading edge: centred, the button
     // sits in the middle of its room instead of hugging the cell's padding.
     align: 'center',

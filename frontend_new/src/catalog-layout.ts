@@ -3,9 +3,11 @@
  * @input A viewport size, the heights and margins the catalog dialog may take from
  *   it, and a pointer distance
  * @output The CSS cap of the dialog surface, the body height it opens at, the sizes
- *   each region may be dragged between, the width change a centred drag asks for, and
- *   the distances a corner's two-axis drag asks of each region
- * @position Pure sizing rules for the catalog dialog; no React and no DOM
+ *   each region may be dragged between, the width change a centred drag asks for, the
+ *   distances a corner's two-axis drag asks of each region, and where the file
+ *   table's resize handles land
+ * @position Pure sizing rules for the catalog dialog and its file table; no React and
+ *   no DOM
  */
 
 /** The share of the window the dialog surface may never exceed, as Dialog wants it. */
@@ -90,4 +92,111 @@ export function cornerDelta(corner: DialogCorner, dx: number, dy: number): {inli
     inline: corner.endsWith('start') ? 0 - dx : dx,
     block: corner.startsWith('top') ? 0 - dy : dy,
   };
+}
+
+/** One column of the file table, as the resize plugin reads it. */
+export interface TableColumnShape {
+  key: string;
+  /** The column's share of the flexible width, or `null` for a fixed pixel column. */
+  weight: number | null;
+  /** The width the column cannot go below. A fixed column keeps its value as its floor. */
+  minWidthPx: number;
+  /** `false` for a column told to stay out of the plugin (`resizable: false`). */
+  isResizable?: boolean;
+}
+
+/** The handle one column's trailing edge carries, and what a drag of it trades width with. */
+export interface ColumnHandle {
+  key: string;
+  hasHandle: boolean;
+  neighbor: string | null;
+}
+
+/**
+ * Where the resize handles land: one entry per column that takes part, in render order.
+ * Mirrors the plugin, which filters out every `resizable: false` column, gives the last
+ * flexible column no handle at all — it is the table's remainder, with nothing on its far
+ * side to trade width with — and makes every other flexible column hand its drag to the
+ * next one. A boundary with no handle is a column nobody can widen; a handle on the last
+ * column is one the plugin's own remainder rule would ignore.
+ */
+export function columnHandles(columns: readonly TableColumnShape[]): ColumnHandle[] {
+  const resizable = columns.filter(column => column.isResizable !== false);
+  return resizable.map((column, index) => {
+    const isFlexible = column.weight !== null;
+    const isLast = index === resizable.length - 1;
+    return {
+      key: column.key,
+      hasHandle: !(isLast && isFlexible),
+      neighbor: isFlexible && !isLast ? resizable[index + 1].key : null,
+    };
+  });
+}
+
+/**
+ * The width the table cannot go below: fixed columns at their value, plus the smallest
+ * space in which every flexible column still meets its own floor. That is the plugin's
+ * own `planColumnSpace`, where a flexible column of weight `w` among `total` needs
+ * `floor * total / w`.
+ */
+export function tableMinimumWidthPx(columns: readonly TableColumnShape[]): number {
+  let fixedPx = 0;
+  let totalWeight = 0;
+  const flexible: TableColumnShape[] = [];
+  for (const column of columns) {
+    if (column.weight === null) {
+      fixedPx += column.minWidthPx;
+    } else {
+      totalWeight += column.weight;
+      flexible.push(column);
+    }
+  }
+  if (totalWeight === 0) {
+    return fixedPx;
+  }
+  let widest = 0;
+  for (const column of flexible) {
+    const needed = (column.minWidthPx * totalWeight) / (column.weight ?? 1);
+    if (needed > widest) {
+      widest = needed;
+    }
+  }
+  return fixedPx + widest;
+}
+
+/**
+ * How wide a column renders in a table of `tableWidthPx`: a fixed column at its value, a
+ * flexible one at its weight's share of the space the fixed columns leave, and never under
+ * its own floor.
+ */
+export function columnWidthAt(columns: readonly TableColumnShape[], key: string, tableWidthPx: number): number {
+  const column = columns.find(candidate => candidate.key === key);
+  if (column === undefined) {
+    return 0;
+  }
+  if (column.weight === null) {
+    return column.minWidthPx;
+  }
+  let fixedPx = 0;
+  let totalWeight = 0;
+  for (const other of columns) {
+    if (other.weight === null) {
+      fixedPx += other.minWidthPx;
+    } else {
+      totalWeight += other.weight;
+    }
+  }
+  if (totalWeight === 0) {
+    return column.minWidthPx;
+  }
+  const share = ((tableWidthPx - fixedPx) * column.weight) / totalWeight;
+  return Math.max(column.minWidthPx, share);
+}
+
+/**
+ * The narrowest column that shows a header whole: its text plus the padding either side
+ * of it. A column at or above this cannot be ellipsized, whatever font the text arrives in.
+ */
+export function headerColumnFloorPx(textWidthPx: number, paddingPx: number): number {
+  return Math.ceil(textWidthPx + 2 * paddingPx);
 }

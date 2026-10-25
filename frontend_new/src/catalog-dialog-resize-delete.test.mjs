@@ -34,7 +34,8 @@ test('the dialog sizes and the confirm width are configuration, not literals', (
     'catalog_dialog_chrome_height_px',
     'catalog_body_height_px',
     'catalog_body_min_height_px',
-    'catalog_action_column_width_px',
+    'catalog_action_column_weight',
+    'catalog_action_column_min_width_px',
     'catalog_confirm_dialog_width_px',
   ]) {
     assert.equal(typeof config[key], 'number', `${key} must exist`);
@@ -49,7 +50,7 @@ test('the dialog sizes and the confirm width are configuration, not literals', (
   // the search row and the count line) is 149px — so 300 leaves four whole rows.
   const rows = Math.floor((config.catalog_body_min_height_px - 149) / 37);
   assert.ok(rows >= 4, `the narrowest body still shows whole rows (${rows})`);
-  const floors = 3 * config.catalog_table_text_column_min_width_px + config.catalog_action_column_width_px;
+  const floors = 3 * config.catalog_table_text_column_min_width_px + config.catalog_action_column_min_width_px;
   assert.ok(
     config.catalog_dialog_min_width_px > config.catalog_file_list_width_px + floors,
     'the narrowest width still leaves the table its column floors',
@@ -214,30 +215,43 @@ test('the surface never scrolls: scrolling belongs to the panes inside it', () =
   assert.match(dialog, /<JsonCodeEditor[\s\S]*?height="100%"/, 'the JSON editor fills its pane instead of pushing the surface');
 });
 
-test('every kind gets the same last Action column, unsortable and undraggable', () => {
+test('every kind gets the same last Action column, unsortable and widened through its neighbour', () => {
   const column = actionColumn();
   assert.match(pane, /key: 'action',[\s\S]*?header: 'Action',/);
   assert.ok(pane.indexOf("key: 'action'") > pane.indexOf("key: 'name'"), 'the action column comes last');
   assert.ok(pane.indexOf("key: 'action'") > pane.indexOf("key: 'sessions'"), 'and after the Session column profiles add');
-  assert.match(column, /resizable: false/, 'no drag handle on its border');
+  // It takes part like every other column now: 'resizable: false' was what kept it out of
+  // the plugin's snapshots, and with it out, Name — the last flexible column left — lost
+  // its handle too, so the name|action boundary could not be dragged at all.
+  assert.equal(/resizable/.test(column), false, 'nothing opts this column out');
   assert.match(column, /width: actionColumnWidth/);
   assert.match(column, /align: 'center'/, 'the icon sits in the middle of its room, not at the leading edge');
-  assert.match(pane, /const actionColumnWidth = pixel\(appConfig\.catalog_action_column_width_px\);/);
-  assert.equal(/pixel\(\d/.test(pane), false, 'no hard-coded column width');
+  // The trailing flexible column rather than a fixed one: the plugin gives the last
+  // flexible column the table's remainder and no handle, so this shape puts Name's handle
+  // on the name|action boundary and leaves nothing dangling on the table's right edge.
+  // `catalog-layout.test.mjs` pins that consequence column by column.
+  assert.match(
+    pane,
+    /const actionColumnWidth = proportional\(appConfig\.catalog_action_column_weight, \{\s*minWidth: appConfig\.catalog_action_column_min_width_px,\s*\}\);/,
+  );
+  assert.equal(/pixel\(/.test(pane), false, 'no column of this table is a fixed width');
   assert.equal(/sortable/.test(column), false, 'the header offers no sort');
   assert.equal(/action/.test(listView), false, 'the pure sorter never learns to sort by it');
 });
 
 test('the Action column is wide enough for its own header', () => {
-  // Measured in the browser at the narrowest dialog width: the header cell keeps
-  // 8px of padding on each side (compact density, checked on th and td alike) and
-  // "Action" is 43.8px at the table's 14px label size, so the word needs 60px of
-  // column and was clipped to `Act…` at 56. 64 keeps it whole with a little room
-  // for a font metric that rounds the other way.
-  const headerFloor = 2 * 8 + 44;
-  assert.ok(config.catalog_action_column_width_px >= headerFloor, 'the word reads in full');
-  assert.ok(config.catalog_action_column_width_px < 2 * headerFloor, 'while staying an icon column');
-  const buttonRoom = config.catalog_action_column_width_px - 2 * 8;
+  // Measured in the browser at the table's 600 14px, where the header cell keeps 8px of
+  // padding on each side (compact density, checked on th and td alike): "Action" is 43.82
+  // in this machine's Inter — but Inter comes from Google Fonts with `display=swap`, and
+  // the same word measured 49.85 in Verdana and 50.22 in DejaVu Sans. At the old fixed 64
+  // the text box was 48, so any of those fallbacks painted `Acti…`. The floor is 72: the
+  // widest of those measurements plus its padding plus a few pixels, and it is what the
+  // column renders at when the table is squeezed to its own minimum width.
+  const widestFallback = 50.22;
+  const headerFloor = 2 * 8 + widestFallback;
+  assert.ok(config.catalog_action_column_min_width_px >= Math.ceil(headerFloor), 'the word reads in the widest fallback measured');
+  assert.ok(config.catalog_action_column_min_width_px < 2 * Math.ceil(headerFloor), 'while staying an icon column');
+  const buttonRoom = config.catalog_action_column_min_width_px - 2 * 8;
   assert.equal((buttonRoom - 28) % 2, 0, 'the 28px button centres on a whole pixel');
 });
 
