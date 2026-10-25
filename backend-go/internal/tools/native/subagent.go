@@ -236,6 +236,12 @@ func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools
 				return tools.Tool{}, fmt.Errorf("tools.native.subagent.agents.%s.toolset %q was not loaded", agent.Name, toolsetKey)
 			}
 			agentReadOnly, agentChangers = childToolPools(settings, toolset.native)
+			// A toolset cannot set profile_message; the session's tool is offered to the agent that lists it.
+			for _, tool := range readOnly {
+				if tool.Definition.ID == profileMessageToolID {
+					agentReadOnly = append(agentReadOnly[:len(agentReadOnly):len(agentReadOnly)], tool)
+				}
+			}
 			agentProcesses = toolset.processes
 		}
 		childTools, mcpIDs, err := subagentChildTools(agent, agentReadOnly, agentChangers)
