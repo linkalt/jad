@@ -966,3 +966,15 @@ Two bounds from the performance audit (P-044, P-045). Both keys are under `serve
 - **Selectors.** Exactly one of `profile` (with optional `session`), `subagent` or `path`. `path` is off unless `allow_path` is true and follows the read tool's path rules. `subagent` resolves the run id through the sub-agent manager: the subagent result carries the transcript path only for a stopped, timed-out or lost run (and a handle's end), so the id, which the manager always knows, is the reliable key.
 - **Settings.** Unknown or old keys are rejected naming the key; `timeout_ms` is capped at 6 hours; the tool has no `paths` key (it reuses `tools.native.read.paths`, like `read_image`). Foreign sessions, profiles and children are readable by default; `allow_other_sessions`, `allow_other_profiles`, `allow_children` turn each off.
 - **Read-only scanner (later phase).** The reader opens the file read-only and never uses `Journal.ReadRecordsRange`, which opens the transcript read-write and truncates an incomplete last line.
+
+## `provider_network`: the address family of provider connections (Go only, 2026-10-25)
+
+A host whose direct IPv6 route to the provider is reset mid-stream (a peer reset while reading) while IPv4 works could not be helped: providers used `http.DefaultClient`, and Go only falls back to the other family when a connect fails, not when a read does. HTTP/2 was ruled out as the cause by the report, so there is no HTTP-version option.
+
+- **`provider_network.network` (session setting, also in `defaults`, `settings` of a session or profile).** `"tcp"` (default, either family, nothing changes), `"tcp4"` or `"tcp6"`. An absent key takes the default; a null, non-string, unknown value or unknown key is a configuration error naming the allowed values or the key.
+- **Unset changes nothing.** With `tcp` and no OAuth or HTTP debug the provider client stays `nil`, so the SDK keeps `http.DefaultClient`.
+- **One base transport.** For `tcp4`/`tcp6` `http.DefaultTransport` is cloned once (proxy from the environment, TLS and `ForceAttemptHTTP2` stay) and only `DialContext` is replaced, with the default dialer's 30s timeout and keep-alive. The OAuth wrapper and the HTTP debug wrapper both sit on that one transport. With an HTTP(S) proxy the family applies to the dial to the proxy, because that is the connection the transport opens.
+- **Errors.** A failed dial reads `provider_network.network is "tcp6": <cause>`, so `tcp6` on a host without IPv6 points at the setting.
+- **The runner identity includes the setting**, so a changed value builds a new client.
+- **Not retried over the other family.** A request that failed after it was sent could have been started by the provider; retrying elsewhere risks a duplicate generation and bill. The user picks the family.
+- **Not covered:** the anthropic adapter (a separate service with its own config), the `fetch` tool (pins addresses for SSRF safety), MCP, `decide`, and the OAuth token refresh clients.

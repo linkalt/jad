@@ -374,6 +374,7 @@
           "tool_call_scheduling",
           "provider_retry",
           "provider_stream",
+          "provider_network",
           "openai_oauth",
           "max_run_tokens",
           "checkpoint",
@@ -408,6 +409,9 @@
         },
         "provider_stream": {
           "$ref": "#/properties/provider_stream"
+        },
+        "provider_network": {
+          "$ref": "#/properties/provider_network"
         },
         "openai_oauth": {
           "$ref": "#/properties/openai_oauth"
@@ -524,6 +528,15 @@
       "description": "Go backend only: guard for a model response stream that stops sending. Other keys are rejected.",
       "properties": {
         "idle_timeout_ms": {"type": "integer", "anyOf": [{"const": 0}, {"minimum": 1000, "maximum": 3600000}], "default": 300000, "description": "How long one provider call may go without a stream event before the run fails with a generic provider error (the cause is in the server log). 0 turns the guard off; otherwise at least 1000. The failed call is not retried, because output may already have been shown. Raise it for a model that thinks silently for longer than five minutes."}
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "provider_network": {
+      "type": "object",
+      "description": "Go backend only: the address family of connections to the model provider. Other keys are rejected. With an HTTP(S) proxy the family applies to the connection to the proxy.",
+      "properties": {
+        "network": {"enum": ["tcp", "tcp4", "tcp6"], "default": "tcp", "description": "tcp lets Go choose between IPv4 and IPv6 (the default, unchanged). tcp4 forces IPv4 and tcp6 forces IPv6; tcp6 on a host without IPv6 fails every call, naming provider_network."}
       },
       "additionalProperties": false,
       "default": {}
