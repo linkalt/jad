@@ -104,6 +104,20 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 	if err != nil {
 		return nil, err
 	}
+	// transcript is read-only, so it is built before the subagent tool and an agent can list it.
+	if config.NativeTranscript != nil {
+		definition, err := requireNativeDefinition(config, definitions, "transcript", transcriptToolID, transcriptInputSchema)
+		if err != nil {
+			return nil, err
+		}
+		profiles, _ := messenger.(TranscriptProfiles)
+		tool, err := NewTranscriptTool(*config.NativeTranscript, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, subagentManager)
+		if err != nil {
+			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		tool.Definition = definition
+		loaded = append(loaded, tool)
+	}
 	// profile_message is built before the subagent tool so an agent can list it, but it is
 	// added to the catalog after the subagent tool, where it always was.
 	var profileMessageTool *tools.Tool
@@ -400,18 +414,6 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			return nil, nil, nil, err
 		}
 		tool, err := NewSkillTool(*config.NativeSkill, config.GlobalJadRoot)
-		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
-		}
-		tool.Definition = definition
-		loaded = append(loaded, tool)
-	}
-	if config.NativeTranscript != nil {
-		definition, err := requireNativeDefinition(config, definitions, "transcript", transcriptToolID, transcriptInputSchema)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		tool, err := NewTranscriptTool(*config.NativeTranscript, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup})
 		if err != nil {
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}

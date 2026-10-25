@@ -737,6 +737,18 @@ func (m *SubagentManager) byID(id string) *subagentRun {
 	return m.runs[id]
 }
 
+// RunTranscript is where a run's transcript folder is and the session key that started the
+// run; dir is empty until the child has one. The transcript tool reads it.
+func (m *SubagentManager) RunTranscript(id string) (dir, owner string, found bool) {
+	run := m.byID(id)
+	if run == nil {
+		return "", "", false
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return run.dir, run.owner, true
+}
+
 // stop asks a run to end. It does not wait; the caller waits on run.done.
 func (m *SubagentManager) stop(run *subagentRun) { run.cancel() }
 

@@ -43,7 +43,7 @@ func TestBuildCatalogNeedsTheTranscriptManifest(t *testing.T) {
 func transcriptTestSettings() sessionfs.NativeTranscriptSettings {
 	return sessionfs.NativeTranscriptSettings{
 		ResponseMaxBytes: 64 * 1024, EntryMaxBytes: 4000, LineMaxBytes: 1 << 20, MaxTurnsPerCall: 50,
-		ScanMaxBytes: 1 << 30, ListMaxEntries: 100, TimeoutMs: 30000, AllowChildren: true,
+		ScanMaxBytes: 1 << 30, ListMaxEntries: 100, TimeoutMs: 30000, AllowOtherSessions: true, AllowOtherProfiles: true, AllowChildren: true,
 	}
 }
 
@@ -80,7 +80,7 @@ func writeTestTranscript(t *testing.T, path string, lines ...string) {
 
 func runTranscript(t *testing.T, settings sessionfs.NativeTranscriptSettings, path string, arguments map[string]any) string {
 	t.Helper()
-	tool, err := NewTranscriptTool(settings, TranscriptFiles{Messages: path})
+	tool, err := NewTranscriptTool(settings, TranscriptFiles{Messages: path}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestTranscriptScanStopsOnCancelAndLeaksNoGoroutine(t *testing.T) {
 		if err := scanTranscript(ctx, file, 0, info.Size(), 1<<20, func(transcriptLine) (bool, error) { return true, nil }); err == nil {
 			t.Fatal("a cancelled scan must report the context error")
 		}
-		tool, _ := NewTranscriptTool(transcriptTestSettings(), TranscriptFiles{Messages: path})
+		tool, _ := NewTranscriptTool(transcriptTestSettings(), TranscriptFiles{Messages: path}, nil, nil)
 		if out, _ := tool.Execute(ctx, map[string]any{}, tools.ExecutionContext{CallID: "c"}); !strings.Contains(out, "transcript_cancelled") {
 			t.Fatalf("out = %s", out)
 		}
@@ -408,7 +408,7 @@ func TestTranscriptListShowsTheOwnFiles(t *testing.T) {
 	if err := os.WriteFile(messages, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool, err := NewTranscriptTool(transcriptTestSettings(), TranscriptFiles{Messages: messages, Backup: filepath.Join(dir, "messages.backup.jsonl")})
+	tool, err := NewTranscriptTool(transcriptTestSettings(), TranscriptFiles{Messages: messages, Backup: filepath.Join(dir, "messages.backup.jsonl")}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestTranscriptListShowsTheOwnFiles(t *testing.T) {
 func TestTranscriptRefusesAChildWhenAllowChildrenIsOff(t *testing.T) {
 	settings := transcriptTestSettings()
 	settings.AllowChildren = false
-	tool, err := NewTranscriptTool(settings, TranscriptFiles{})
+	tool, err := NewTranscriptTool(settings, TranscriptFiles{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +432,7 @@ func TestTranscriptRefusesAChildWhenAllowChildrenIsOff(t *testing.T) {
 }
 
 func TestTranscriptIsAReadOnlyToolSoAnAgentCanListIt(t *testing.T) {
-	tool, err := NewTranscriptTool(sessionfs.NativeTranscriptSettings{}, TranscriptFiles{})
+	tool, err := NewTranscriptTool(sessionfs.NativeTranscriptSettings{}, TranscriptFiles{}, nil, nil)
 	if err != nil || !tool.ReadOnly {
 		t.Fatalf("tool = %+v, err = %v", tool, err)
 	}
@@ -503,7 +503,7 @@ func TestTranscriptReadsTheBackupAndAKeepsItsCursorOnIt(t *testing.T) {
 	writeTestTranscript(t, backup, lines...)
 	settings := transcriptTestSettings()
 	settings.ResponseMaxBytes = 400
-	tool, err := NewTranscriptTool(settings, TranscriptFiles{Messages: messages, Backup: backup})
+	tool, err := NewTranscriptTool(settings, TranscriptFiles{Messages: messages, Backup: backup}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +533,7 @@ func TestTranscriptReadsTheBackupAndAKeepsItsCursorOnIt(t *testing.T) {
 
 func TestTranscriptBackupMissingSaysSo(t *testing.T) {
 	path := threeTurns(t)
-	tool, _ := NewTranscriptTool(transcriptTestSettings(), TranscriptFiles{Messages: path, Backup: path + ".none"})
+	tool, _ := NewTranscriptTool(transcriptTestSettings(), TranscriptFiles{Messages: path, Backup: path + ".none"}, nil, nil)
 	out, _ := tool.Execute(t.Context(), map[string]any{"source": "backup"}, tools.ExecutionContext{CallID: "c"})
 	if !strings.Contains(out, "no_transcript") || !strings.Contains(out, "backup") {
 		t.Fatalf("out = %s", out)
