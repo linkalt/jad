@@ -474,15 +474,28 @@ func (r *Resolver) providerAPIKey(config sessionfs.SessionConfig) (string, error
 // newProviderStreamer builds the provider client of a loaded model: the OAuth
 // transport when the model uses it, wrapped by the HTTP debug logger when that is on.
 func (r *Resolver) newProviderStreamer(config sessionfs.SessionConfig, apiKey string) *openaiapi.Client {
+	httpClient := providerHTTPClient(config, r.logger)
+	retry := providerRetryConfig(config.ProviderRetry, r.logger)
+	return openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: config.Model.BaseURL, HTTPClient: httpClient, Retry: &retry, IdleTimeout: time.Duration(config.ProviderStream.IdleTimeoutMS) * time.Millisecond})
+}
+
+// providerHTTPClient returns nil when nothing changes the default client: no OAuth, no
+// HTTP debug and the default network. The base transport is built once and shared by the
+// OAuth wrapper and the debug wrapper.
+func providerHTTPClient(config sessionfs.SessionConfig, logger *slog.Logger) *http.Client {
 	var httpClient *http.Client
 	var network http.RoundTripper = http.DefaultTransport
+	if config.ProviderNetwork.Network != "" && config.ProviderNetwork.Network != "tcp" {
+		network = newNetworkTransport(config.ProviderNetwork.Network, providerDial)
+		httpClient = &http.Client{Transport: network}
+	}
 	if config.Model.AuthMode == "openai_oauth" {
 		network = oauthTransport(config, network)
 		httpClient = &http.Client{Transport: network}
 	}
 	if config.HTTPDebug.Enabled {
 		transport := httpdebug.NewTransport(config.StoragePaths.HTTPDebug, httpdebug.Settings{
-			Logger:                 r.logger,
+			Logger:                 logger,
 			Enabled:                true,
 			IncludeRequestHeaders:  config.HTTPDebug.IncludeRequestHeaders,
 			IncludeRequestBody:     config.HTTPDebug.IncludeRequestBody,
@@ -493,8 +506,7 @@ func (r *Resolver) newProviderStreamer(config sessionfs.SessionConfig, apiKey st
 		}, network)
 		httpClient = &http.Client{Transport: transport}
 	}
-	retry := providerRetryConfig(config.ProviderRetry, r.logger)
-	return openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: config.Model.BaseURL, HTTPClient: httpClient, Retry: &retry, IdleTimeout: time.Duration(config.ProviderStream.IdleTimeoutMS) * time.Millisecond})
+	return httpClient
 }
 
 // ListTools implements httpapi.SessionToolLister without requiring a provider
@@ -1012,27 +1024,30 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		ProviderRetry sessionfs.ProviderRetrySettings
 		// The client holds the idle timeout too.
 		ProviderStream sessionfs.ProviderStreamSettings
+		// The transport's dialer holds the address family.
+		ProviderNetwork sessionfs.ProviderNetworkSettings
 		// The runner holds the OAuth transport, so the credential file and the endpoint
 		// and margin it was built with identify the runner. The token is not included.
 		OAuthAuthFile string
 		OpenAIOAuth   sessionfs.OpenAIOAuthSettings
 	}{
-		ModelPath:      config.ModelPath,
-		Provider:       config.Model.Provider,
-		Model:          config.Model.Name,
-		APIKeyEnv:      config.Model.APIKeyEnv,
-		BaseURL:        config.Model.BaseURL,
-		AuthMode:       config.Model.AuthMode,
-		Request:        config.Model.Request,
-		HostedTools:    config.Model.HostedTools,
-		PromptRole:     config.Model.PromptRole,
-		PromptText:     config.Model.PromptText,
-		HTTPDebug:      config.HTTPDebug,
-		HTTPDebugDir:   config.StoragePaths.HTTPDebug,
-		ProviderRetry:  config.ProviderRetry,
-		ProviderStream: config.ProviderStream,
-		OAuthAuthFile:  config.Model.OAuthAuthFile,
-		OpenAIOAuth:    config.OpenAIOAuth,
+		ModelPath:       config.ModelPath,
+		Provider:        config.Model.Provider,
+		Model:           config.Model.Name,
+		APIKeyEnv:       config.Model.APIKeyEnv,
+		BaseURL:         config.Model.BaseURL,
+		AuthMode:        config.Model.AuthMode,
+		Request:         config.Model.Request,
+		HostedTools:     config.Model.HostedTools,
+		PromptRole:      config.Model.PromptRole,
+		PromptText:      config.Model.PromptText,
+		HTTPDebug:       config.HTTPDebug,
+		HTTPDebugDir:    config.StoragePaths.HTTPDebug,
+		ProviderRetry:   config.ProviderRetry,
+		ProviderStream:  config.ProviderStream,
+		ProviderNetwork: config.ProviderNetwork,
+		OAuthAuthFile:   config.Model.OAuthAuthFile,
+		OpenAIOAuth:     config.OpenAIOAuth,
 	}
 	keyHash := sha256.Sum256([]byte(apiKey))
 	identity.APIKeyHash = hex.EncodeToString(keyHash[:])

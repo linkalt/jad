@@ -190,6 +190,8 @@ type SessionConfig struct {
 	ProviderRetry ProviderRetrySettings
 	// ProviderStream bounds a response stream that has stopped sending.
 	ProviderStream ProviderStreamSettings
+	// ProviderNetwork chooses the address family of connections to the provider.
+	ProviderNetwork ProviderNetworkSettings
 	// OpenAIOAuth configures requests of a model file whose auth_mode is openai_oauth.
 	OpenAIOAuth OpenAIOAuthSettings
 	// MaxRunTokens is the most tokens one run may use before it starts another
@@ -320,6 +322,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	providerStream, err := normalizeProviderStreamSettings(setting["provider_stream"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	providerNetwork, err := normalizeProviderNetworkSettings(setting["provider_network"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -615,6 +621,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		ToolCallScheduling:    toolCallScheduling,
 		ProviderRetry:         providerRetry,
 		ProviderStream:        providerStream,
+		ProviderNetwork:       providerNetwork,
 		OpenAIOAuth:           openAIOAuth,
 		MaxRunTokens:          maxRunTokens,
 		Checkpoint:            checkpoint,
