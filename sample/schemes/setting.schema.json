@@ -1050,11 +1050,11 @@
                   "type": "string",
                   "minLength": 1,
                   "default": "bash",
-                  "description": "The interpreter a call without lang runs. A name or alias from langs (built-in or configured); an unknown name is a configuration error when the session loads. The language is filled in before the call runs."
+                  "description": "The interpreter a call without lang runs. A name or alias from runners (built-in or configured); an unknown name is a configuration error when the session loads. The language is filled in before the call runs."
                 },
-                "langs": {
+                "runners": {
                   "type": "object",
-                  "description": "Interpreters by name, merged over the built-in python, node, bash, sh, ruby and perl. An entry with a built-in name replaces it. A name or alias claimed by two entries is refused.",
+                  "description": "Interpreters by name, merged over the built-in python, node, bash, sh, ruby and perl (renamed from langs). An entry with a built-in name replaces it. A name or alias claimed by two entries is refused.",
                   "propertyNames": {
                     "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$"
                   },
@@ -1072,22 +1072,23 @@
                           "type": "string",
                           "minLength": 1
                         },
-                        "description": "The interpreter and its fixed flags, run without a shell. With code \"file\", one item contains {file}, replaced by the path of the code file."
+                        "description": "The interpreter and its fixed flags, run without a shell. Mode arg: one item contains {code}, replaced by the code. Mode file: one item contains {file}, replaced by the path of the code file. Mode stdin: neither."
                       },
-                      "code": {
+                      "mode": {
                         "type": "string",
                         "enum": [
-                          "stdin",
-                          "file"
+                          "arg",
+                          "file",
+                          "stdin"
                         ],
-                        "default": "stdin",
-                        "description": "How the program receives its code: on standard input, or as a temporary file that is removed after the call."
+                        "default": "arg",
+                        "description": "How the program receives its code: as an argument (the call's input then goes to stdin), as a temporary file removed after the call, or on standard input (refused for a call that has input)."
                       },
                       "ext": {
                         "type": "string",
                         "pattern": "^(\\.[A-Za-z0-9]{1,8})?$",
                         "default": "",
-                        "description": "Extension of the temporary code file, with its dot (code \"file\" only)."
+                        "description": "Extension of the temporary code file and of a saved function, with its dot."
                       },
                       "aliases": {
                         "type": "array",
@@ -1102,6 +1103,13 @@
                     "additionalProperties": false
                   }
                 },
+                "input_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Largest JSON input one call may write to the program's stdin, in UTF-8 bytes."},
+                "arg_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 100000, "description": "Largest code a mode arg runner receives as one argument; the kernel limits a single argument (128 KiB on Linux)."},
+                "functions_dir": {"type": "string", "minLength": 1, "default": ".jad/exec-functions", "description": "Folder of saved exec functions, relative to the workspace root; separate from tool_smith's."},
+                "list_max_results": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50, "description": "Most functions one listing shows."},
+                "list_max_files": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 200, "description": "Most files of functions_dir one listing scans."},
+                "list_header_bytes": {"type": "integer", "minimum": 1, "maximum": 65536, "default": 2048, "description": "Bytes read from the top of a function file for its description."},
+                "function_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 65536, "description": "Largest saved function file exec runs; larger files count as malformed."},
                 "code_max_bytes": {
                   "type": "integer",
                   "minimum": 1,

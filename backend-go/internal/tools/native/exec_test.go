@@ -19,10 +19,10 @@ func execTestSettings() sessionfs.NativeExecSettings {
 	return sessionfs.NativeExecSettings{
 		LangNames: names,
 		Langs: map[string]sessionfs.NativeExecLang{
-			"python": {Argv: []string{"python3", "-"}, Code: sessionfs.NativeExecCodeStdin, Ext: ".py", Aliases: []string{"python3", "py"}},
-			"node":   {Argv: []string{"node", "-"}, Code: sessionfs.NativeExecCodeStdin, Ext: ".js", Aliases: []string{"js"}},
-			"bash":   {Argv: []string{"bash", "-s", "--"}, Code: sessionfs.NativeExecCodeStdin, Ext: ".sh", Aliases: []string{"shell"}},
-			"sh":     {Argv: []string{"sh", "-s", "--"}, Code: sessionfs.NativeExecCodeStdin, Ext: ".sh", Aliases: []string{}},
+			"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: sessionfs.NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}},
+			"node":   {Argv: []string{"node", "-e", "{code}"}, Mode: sessionfs.NativeExecModeArg, Ext: ".js", Aliases: []string{"js"}},
+			"bash":   {Argv: []string{"bash", "-c", "{code}", "exec"}, Mode: sessionfs.NativeExecModeArg, Ext: ".sh", Aliases: []string{"shell"}},
+			"sh":     {Argv: []string{"sh", "-c", "{code}", "exec"}, Mode: sessionfs.NativeExecModeArg, Ext: ".sh", Aliases: []string{}},
 		},
 		DefaultLang:    "bash",
 		CodeMaxBytes:   64 * 1024,
@@ -232,10 +232,10 @@ func TestExecNamesTheSettingForAnInterpreterThatIsNotInstalled(t *testing.T) {
 	root := t.TempDir()
 	settings := execTestSettings()
 	settings.LangNames = append(settings.LangNames, "ghost")
-	settings.Langs["ghost"] = sessionfs.NativeExecLang{Argv: []string{"definitely-not-installed-xyz", "-"}, Code: sessionfs.NativeExecCodeStdin, Aliases: []string{}}
+	settings.Langs["ghost"] = sessionfs.NativeExecLang{Argv: []string{"definitely-not-installed-xyz", "-"}, Mode: sessionfs.NativeExecModeStdin, Aliases: []string{}}
 	result := runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": "ghost", "code": "x"})
 	if execField(result, "error_code") != "interpreter_unavailable" || execField(result, "interpreter") != "definitely-not-installed-xyz" ||
-		!strings.Contains(execField(result, "suggestion"), "tools.native.exec.langs.ghost.argv") {
+		!strings.Contains(execField(result, "suggestion"), "tools.native.exec.runners.ghost.argv") {
 		t.Fatalf("result = %s", result)
 	}
 }
@@ -245,7 +245,7 @@ func TestExecDeliversCodeAsAFileThatIsRemovedAfterwards(t *testing.T) {
 	root := t.TempDir()
 	settings := execTestSettings()
 	settings.LangNames = append(settings.LangNames, "viafile")
-	settings.Langs["viafile"] = sessionfs.NativeExecLang{Argv: []string{"bash", "{file}"}, Code: sessionfs.NativeExecCodeFile, Ext: ".sh", Aliases: []string{}}
+	settings.Langs["viafile"] = sessionfs.NativeExecLang{Argv: []string{"bash", "{file}"}, Mode: sessionfs.NativeExecModeFile, Ext: ".sh", Aliases: []string{}}
 	code := `echo "ran $(basename "$0") $1"; echo "dir=$(dirname "$0")" >&2`
 	result := runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": "viafile", "code": code, "args": []any{"z"}})
 	text := execContent(result)

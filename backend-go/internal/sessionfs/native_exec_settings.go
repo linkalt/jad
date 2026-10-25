@@ -16,19 +16,33 @@ const (
 	defaultNativeExecLineAware       = true
 	// defaultNativeExecLang is the interpreter a call without `lang` runs.
 	defaultNativeExecLang = "bash"
+	// defaultNativeExecInputMax bounds the JSON input written to a program's stdin.
+	defaultNativeExecInputMax int64 = 1024 * 1024
+	// defaultNativeExecArgMax keeps code passed as one argument well under the kernel limit
+	// of a single argument (128 KiB on Linux).
+	defaultNativeExecArgMax int64 = 100000
+	// defaultNativeExecFunctionsDir is its own folder, never tool_smith's.
+	defaultNativeExecFunctionsDir = ".jad/exec-functions"
 
-	// NativeExecCodeStdin and NativeExecCodeFile are the two ways a program receives its code.
-	NativeExecCodeStdin = "stdin"
-	NativeExecCodeFile  = "file"
+	// NativeExecModeArg, NativeExecModeFile and NativeExecModeStdin are the ways a program
+	// receives its code: as one argument ({code}), as a temporary file ({file}), or on
+	// standard input (only for a call without input).
+	NativeExecModeArg   = "arg"
+	NativeExecModeFile  = "file"
+	NativeExecModeStdin = "stdin"
 
 	nativeExecFilePlaceholder = "{file}"
+	nativeExecCodePlaceholder = "{code}"
 	maxNativeExecArgv         = 32
 )
 
 var (
-	nativeExecOwnKeys  = []string{"code_max_bytes", "default_lang", "langs", "line_aware", "result_max_bytes"}
+	nativeExecOwnKeys = []string{
+		"arg_max_bytes", "code_max_bytes", "default_lang", "function_max_bytes", "functions_dir", "input_max_bytes",
+		"line_aware", "list_header_bytes", "list_max_files", "list_max_results", "result_max_bytes", "runners",
+	}
 	nativeExecKeys     = append(append([]string{}, nativeBashStyleKeys...), nativeExecOwnKeys...)
-	nativeExecLangKeys = []string{"aliases", "argv", "code", "ext"}
+	nativeExecLangKeys = []string{"aliases", "argv", "ext", "mode"}
 
 	nativeExecNamePattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
 	nativeExecExtensionPattern = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
@@ -36,11 +50,12 @@ var (
 
 // NativeExecLang is one interpreter exec can run.
 type NativeExecLang struct {
-	// Argv is the interpreter and its fixed flags; {file} is replaced by the code file.
+	// Argv is the interpreter and its fixed flags; {code} is replaced by the code (mode arg)
+	// and {file} by the code file (mode file).
 	Argv []string
-	// Code is NativeExecCodeStdin or NativeExecCodeFile.
-	Code string
-	// Ext is the extension of the temporary code file (file delivery only), with its dot.
+	// Mode is NativeExecModeArg, NativeExecModeFile or NativeExecModeStdin.
+	Mode string
+	// Ext is the extension of the temporary code file and of a saved function, with its dot.
 	Ext string
 	// Aliases are other names the model may use for this language.
 	Aliases []string
@@ -58,23 +73,35 @@ type NativeExecSettings struct {
 	DefaultLang string
 	// CodeMaxBytes is the largest code text one call may carry; more is refused, never cut.
 	CodeMaxBytes int64
-	// ResultMaxBytes is the largest answer read back from $EXEC_RESULT.
+	// ResultMaxBytes is the largest answer read back from $JAD_RESULT.
 	ResultMaxBytes int64
+	// InputMaxBytes is the largest JSON input one call may write to the program's stdin.
+	InputMaxBytes int64
+	// ArgMaxBytes is the largest code a mode arg runner receives as one argument.
+	ArgMaxBytes int64
+	// FunctionsDir is the saved-function folder as configured, relative to the workspace.
+	FunctionsDir string
+	// ListMaxResults, ListMaxFiles, ListHeaderBytes and FunctionMaxBytes bound the listing
+	// and the reading of saved functions, with tool_smith's meaning.
+	ListMaxResults   int64
+	ListMaxFiles     int64
+	ListHeaderBytes  int64
+	FunctionMaxBytes int64
 	// LineAware cuts a truncated stream at line boundaries.
 	LineAware bool
 }
 
-// defaultNativeExecLangs are the interpreters available without configuration. The program
-// reads its code from standard input, so the working directory behaves as in a shell.
+// defaultNativeExecLangs are the interpreters available without configuration. The code
+// is one argument; bash and sh get a fixed $0 so the call's args start at $1.
 func defaultNativeExecLangs() ([]string, map[string]NativeExecLang) {
 	names := []string{"python", "node", "bash", "sh", "ruby", "perl"}
 	return names, map[string]NativeExecLang{
-		"python": {Argv: []string{"python3", "-"}, Code: NativeExecCodeStdin, Ext: ".py", Aliases: []string{"python3", "py"}},
-		"node":   {Argv: []string{"node", "-"}, Code: NativeExecCodeStdin, Ext: ".js", Aliases: []string{"nodejs", "js", "javascript"}},
-		"bash":   {Argv: []string{"bash", "-s", "--"}, Code: NativeExecCodeStdin, Ext: ".sh", Aliases: []string{"shell"}},
-		"sh":     {Argv: []string{"sh", "-s", "--"}, Code: NativeExecCodeStdin, Ext: ".sh", Aliases: []string{}},
-		"ruby":   {Argv: []string{"ruby", "-"}, Code: NativeExecCodeStdin, Ext: ".rb", Aliases: []string{"rb"}},
-		"perl":   {Argv: []string{"perl", "-"}, Code: NativeExecCodeStdin, Ext: ".pl", Aliases: []string{}},
+		"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}},
+		"node":   {Argv: []string{"node", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".js", Aliases: []string{"nodejs", "js", "javascript"}},
+		"bash":   {Argv: []string{"bash", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{"shell"}},
+		"sh":     {Argv: []string{"sh", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{}},
+		"ruby":   {Argv: []string{"ruby", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".rb", Aliases: []string{"rb"}},
+		"perl":   {Argv: []string{"perl", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".pl", Aliases: []string{}},
 	}
 }
 
@@ -115,6 +142,9 @@ func normalizeNativeExecSettings(
 	if err := rejectRemovedApproval(fields, section, settingPath); err != nil {
 		return nil, err
 	}
+	if _, old := fields["langs"]; old {
+		return nil, configError("%s: %s.langs was renamed runners; its entries use mode (arg, file or stdin) instead of code", settingPath, section)
+	}
 	for _, key := range keys {
 		if !containsString(nativeExecKeys, key) {
 			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeExecKeys, "")
@@ -129,7 +159,7 @@ func normalizeNativeExecSettings(
 	if settings.LineAware, err = bashBool(fields, "line_aware", defaultNativeExecLineAware, settingPath+": "+section); err != nil {
 		return nil, err
 	}
-	if settings.LangNames, settings.Langs, err = normalizeNativeExecLangs(fields["langs"], settingPath+": "+section+".langs"); err != nil {
+	if settings.LangNames, settings.Langs, err = normalizeNativeExecLangs(fields["runners"], settingPath+": "+section+".runners"); err != nil {
 		return nil, err
 	}
 	if settings.DefaultLang, err = normalizeNativeExecDefaultLang(fields, settings.LangNames, settings.Langs, settingPath+": "+section+".default_lang"); err != nil {
@@ -139,6 +169,27 @@ func normalizeNativeExecSettings(
 		return nil, err
 	}
 	if settings.ResultMaxBytes, err = configuredInteger(fields, "result_max_bytes", defaultNativeExecResultMax, 1, maxNativeToolBytes, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.InputMaxBytes, err = configuredInteger(fields, "input_max_bytes", defaultNativeExecInputMax, 1, maxNativeToolBytes, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.ArgMaxBytes, err = configuredInteger(fields, "arg_max_bytes", defaultNativeExecArgMax, 1, maxNativeToolBytes, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.FunctionsDir, err = bashString(fields, "functions_dir", defaultNativeExecFunctionsDir, settingPath+": "+section, false); err != nil {
+		return nil, err
+	}
+	if settings.ListMaxResults, err = configuredInteger(fields, "list_max_results", defaultNativeToolSmithListMaxResults, 1, maxNativeToolSmithListMaxResults, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.ListMaxFiles, err = configuredInteger(fields, "list_max_files", defaultNativeToolSmithListMaxFiles, 1, maxNativeToolSmithListMaxFiles, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.ListHeaderBytes, err = configuredInteger(fields, "list_header_bytes", defaultNativeToolSmithListHeaderBytes, 1, maxNativeToolSmithListHeaderBytes, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.FunctionMaxBytes, err = configuredInteger(fields, "function_max_bytes", defaultNativeToolSmithFunctionMax, 1, maxNativeToolBytes, settingPath, section); err != nil {
 		return nil, err
 	}
 	return settings, nil
@@ -201,7 +252,7 @@ func normalizeNativeExecDefaultLang(fields map[string]json.RawMessage, names []s
 			return name, nil
 		}
 	}
-	return "", configError("%s \"%s\" is not in tools.native.exec.langs (available: %s)", path, wanted, strings.Join(names, ", "))
+	return "", configError("%s \"%s\" is not in tools.native.exec.runners (available: %s)", path, wanted, strings.Join(names, ", "))
 }
 
 func normalizeNativeExecLang(raw json.RawMessage, path string) (NativeExecLang, error) {
@@ -231,23 +282,33 @@ func normalizeNativeExecLang(raw json.RawMessage, path string) (NativeExecLang, 
 		}
 		argv = append(argv, text)
 	}
-	lang := NativeExecLang{Argv: argv, Code: NativeExecCodeStdin, Aliases: []string{}}
-	if value, present := nullableField(fields, "code"); present {
-		if json.Unmarshal(value, &lang.Code) != nil || (lang.Code != NativeExecCodeStdin && lang.Code != NativeExecCodeFile) {
-			return NativeExecLang{}, configError("%s.code must be \"stdin\" or \"file\"", path)
+	lang := NativeExecLang{Argv: argv, Mode: NativeExecModeArg, Aliases: []string{}}
+	if _, old := fields["code"]; old {
+		return NativeExecLang{}, configError("%s.code was renamed mode (arg, file or stdin)", path)
+	}
+	if value, present := nullableField(fields, "mode"); present {
+		if json.Unmarshal(value, &lang.Mode) != nil || (lang.Mode != NativeExecModeArg && lang.Mode != NativeExecModeFile && lang.Mode != NativeExecModeStdin) {
+			return NativeExecLang{}, configError("%s.mode must be \"arg\", \"file\" or \"stdin\"", path)
 		}
 	}
-	placeholders := 0
+	files, codes := 0, 0
 	for _, item := range argv {
 		if strings.Contains(item, nativeExecFilePlaceholder) {
-			placeholders++
+			files++
+		}
+		if strings.Contains(item, nativeExecCodePlaceholder) {
+			codes++
 		}
 	}
-	if lang.Code == NativeExecCodeFile && placeholders == 0 {
-		return NativeExecLang{}, configError("%s.argv must contain %s when code is \"file\"", path, nativeExecFilePlaceholder)
+	wantFiles, wantCodes := 0, 0
+	switch lang.Mode {
+	case NativeExecModeArg:
+		wantCodes = 1
+	case NativeExecModeFile:
+		wantFiles = 1
 	}
-	if lang.Code == NativeExecCodeStdin && placeholders > 0 {
-		return NativeExecLang{}, configError("%s.argv must not contain %s when code is \"stdin\"", path, nativeExecFilePlaceholder)
+	if (files > 0) != (wantFiles > 0) || (codes > 0) != (wantCodes > 0) {
+		return NativeExecLang{}, configError("%s.argv must contain %s when mode is \"arg\", %s when mode is \"file\", and neither when mode is \"stdin\"", path, nativeExecCodePlaceholder, nativeExecFilePlaceholder)
 	}
 	if value, present := nullableField(fields, "ext"); present {
 		if json.Unmarshal(value, &lang.Ext) != nil || (lang.Ext != "" && !nativeExecExtensionPattern.MatchString(lang.Ext)) {

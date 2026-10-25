@@ -19,8 +19,8 @@ func TestExecDefaultLangResolvesToTheTableNameAndDefaultsToBash(t *testing.T) {
 		{"null", map[string]any{"default_lang": nil}, "bash"},
 		{"a name", map[string]any{"default_lang": "python"}, "python"},
 		{"an alias, any case, padded", map[string]any{"default_lang": " PY "}, "python"},
-		{"a configured language", map[string]any{"default_lang": "mine", "langs": map[string]any{"mine": map[string]any{"argv": []any{"bash", "-s", "--"}}}}, "mine"},
-		{"a replaced built-in keeps its name", map[string]any{"langs": map[string]any{"bash": map[string]any{"argv": []any{"bash", "-s"}}}}, "bash"},
+		{"a configured language", map[string]any{"default_lang": "mine", "runners": map[string]any{"mine": map[string]any{"argv": []any{"bash", "-c", "{code}"}}}}, "mine"},
+		{"a replaced built-in keeps its name", map[string]any{"runners": map[string]any{"bash": map[string]any{"argv": []any{"bash", "-c", "{code}"}}}}, "bash"},
 	}
 	for _, tc := range cases {
 		config, err := loadSetting(t, map[string]any{

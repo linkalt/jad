@@ -782,7 +782,7 @@
     "unknown_key": 1
    }
   },
-  "error": "tools.native.exec.unknown_key is not supported; supported keys are code_max_bytes, default_lang, drain_after_exit_ms, env, env_deny, env_file, kill_children_on_run_end, kill_deadline_ms, kill_grace_ms, kill_process_group, langs, line_aware, login_shell, max_bytes, max_line_chars, max_timeout_ms, paths, result_max_bytes, shell, spill, stderr, stdin_max_bytes, stdout, strip_ansi, timeout_ms"
+  "error": "tools.native.exec.unknown_key is not supported; supported keys are arg_max_bytes, code_max_bytes, default_lang, drain_after_exit_ms, env, env_deny, env_file, function_max_bytes, functions_dir, input_max_bytes, kill_children_on_run_end, kill_deadline_ms, kill_grace_ms, kill_process_group, line_aware, list_header_bytes, list_max_files, list_max_results, login_shell, max_bytes, max_line_chars, max_timeout_ms, paths, result_max_bytes, runners, shell, spill, stderr, stdin_max_bytes, stdout, strip_ansi, timeout_ms"
  },
  {
   "name": "exec code_max_bytes zero",
@@ -912,7 +912,7 @@
     "default_lang": "cobol"
    }
   },
-  "error": "tools.native.exec.default_lang \"cobol\" is not in tools.native.exec.langs (available: python, node, bash, sh, ruby, perl)"
+  "error": "tools.native.exec.default_lang \"cobol\" is not in tools.native.exec.runners (available: python, node, bash, sh, ruby, perl)"
  },
  {
   "name": "exec default_lang empty",
@@ -922,7 +922,7 @@
     "default_lang": ""
    }
   },
-  "error": "tools.native.exec.default_lang \"\" is not in tools.native.exec.langs (available: python, node, bash, sh, ruby, perl)"
+  "error": "tools.native.exec.default_lang \"\" is not in tools.native.exec.runners (available: python, node, bash, sh, ruby, perl)"
  },
  {
   "name": "exec default_lang number",
@@ -940,12 +940,12 @@
    "bash": {},
    "exec": {
     "default_lang": "mine",
-    "langs": {
+    "runners": {
      "mine": {
       "argv": [
        "bash",
-       "-s",
-       "--"
+       "-c",
+       "{code}"
       ]
      }
     }
@@ -958,11 +958,12 @@
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "bash": {
       "argv": [
        "bash",
-       "-s"
+       "-c",
+       "{code}"
       ]
      }
     }
@@ -975,17 +976,27 @@
   "native": {
    "bash": {},
    "exec": {
-    "langs": "python"
+    "runners": "python"
    }
   },
-  "error": "tools.native.exec.langs must be an object"
+  "error": "tools.native.exec.runners must be an object"
+ },
+ {
+  "name": "exec langs renamed",
+  "native": {
+   "bash": {},
+   "exec": {
+    "langs": {}
+   }
+  },
+  "error": "tools.native.exec.langs was renamed runners; its entries use mode (arg, file or stdin) instead of code"
  },
  {
   "name": "exec langs bad name",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "Bad Name": {
       "argv": [
        "x"
@@ -994,52 +1005,52 @@
     }
    }
   },
-  "error": "tools.native.exec.langs.Bad Name is not a valid language name (lowercase letters, digits, _ + . -)"
+  "error": "tools.native.exec.runners.Bad Name is not a valid language name (lowercase letters, digits, _ + . -)"
  },
  {
   "name": "exec lang not an object",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": "python"
     }
    }
   },
-  "error": "tools.native.exec.langs.x must be an object"
+  "error": "tools.native.exec.runners.x must be an object"
  },
  {
   "name": "exec lang without argv",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {}
     }
    }
   },
-  "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+  "error": "tools.native.exec.runners.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
  },
  {
   "name": "exec lang empty argv",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": []
      }
     }
    }
   },
-  "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+  "error": "tools.native.exec.runners.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
  },
  {
   "name": "exec lang empty argv item",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
        "a",
@@ -1049,14 +1060,14 @@
     }
    }
   },
-  "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+  "error": "tools.native.exec.runners.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
  },
  {
   "name": "exec lang argv not strings",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
        "a",
@@ -1066,14 +1077,14 @@
     }
    }
   },
-  "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+  "error": "tools.native.exec.runners.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
  },
  {
   "name": "exec lang argv too long",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
        "a",
@@ -1114,85 +1125,105 @@
     }
    }
   },
-  "error": "tools.native.exec.langs.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
+  "error": "tools.native.exec.runners.x.argv must be 1 to 32 non-empty strings: the interpreter and its flags"
  },
  {
-  "name": "exec lang bad code",
+  "name": "exec lang bad mode",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
-       "a"
+       "a",
+       "{code}"
       ],
-      "code": "pipe"
+      "mode": "pipe"
      }
     }
    }
   },
-  "error": "tools.native.exec.langs.x.code must be \"stdin\" or \"file\""
+  "error": "tools.native.exec.runners.x.mode must be \"arg\", \"file\" or \"stdin\""
  },
  {
   "name": "exec lang file without placeholder",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
        "a"
       ],
-      "code": "file"
+      "mode": "file"
      }
     }
    }
   },
-  "error": "tools.native.exec.langs.x.argv must contain {file} when code is \"file\""
+  "error": "tools.native.exec.runners.x.argv must contain {code} when mode is \"arg\", {file} when mode is \"file\", and neither when mode is \"stdin\""
  },
  {
   "name": "exec lang stdin with placeholder",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
        "a",
        "{file}"
+      ],
+      "mode": "stdin"
+     }
+    }
+   }
+  },
+  "error": "tools.native.exec.runners.x.argv must contain {code} when mode is \"arg\", {file} when mode is \"file\", and neither when mode is \"stdin\""
+ },
+ {
+  "name": "exec lang arg without placeholder",
+  "native": {
+   "bash": {},
+   "exec": {
+    "runners": {
+     "x": {
+      "argv": [
+       "a"
       ]
      }
     }
    }
   },
-  "error": "tools.native.exec.langs.x.argv must not contain {file} when code is \"stdin\""
+  "error": "tools.native.exec.runners.x.argv must contain {code} when mode is \"arg\", {file} when mode is \"file\", and neither when mode is \"stdin\""
  },
  {
   "name": "exec lang bad ext",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
-       "a"
+       "a",
+       "{code}"
       ],
       "ext": "py"
      }
     }
    }
   },
-  "error": "tools.native.exec.langs.x.ext must be empty or a dot and 1 to 8 letters or digits"
+  "error": "tools.native.exec.runners.x.ext must be empty or a dot and 1 to 8 letters or digits"
  },
  {
   "name": "exec lang bad alias",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
-       "a"
+       "a",
+       "{code}"
       ],
       "aliases": [
        "Bad Alias"
@@ -1201,51 +1232,54 @@
     }
    }
   },
-  "error": "tools.native.exec.langs.x.aliases must be language names"
+  "error": "tools.native.exec.runners.x.aliases must be language names"
  },
  {
   "name": "exec lang aliases not a list",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
-       "a"
+       "a",
+       "{code}"
       ],
       "aliases": "py"
      }
     }
    }
   },
-  "error": "tools.native.exec.langs.x.aliases must be language names"
+  "error": "tools.native.exec.runners.x.aliases must be language names"
  },
  {
   "name": "exec lang unknown key",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
-       "a"
+       "a",
+       "{code}"
       ],
       "extra": 1
      }
     }
    }
   },
-  "error": "tools.native.exec.langs.x.extra is not supported; did you mean ext?"
+  "error": "tools.native.exec.runners.x.extra is not supported; did you mean ext?"
  },
  {
   "name": "exec lang alias clashes with builtin",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
-       "a"
+       "a",
+       "{code}"
       ],
       "aliases": [
        "py"
@@ -1254,17 +1288,18 @@
     }
    }
   },
-  "error": "tools.native.exec.langs: \"py\" names both python and x"
+  "error": "tools.native.exec.runners: \"py\" names both python and x"
  },
  {
   "name": "exec lang alias clashes with another entry",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "x": {
       "argv": [
-       "a"
+       "a",
+       "{code}"
       ],
       "aliases": [
        "z"
@@ -1272,7 +1307,8 @@
      },
      "y": {
       "argv": [
-       "b"
+       "b",
+       "{code}"
       ],
       "aliases": [
        "z"
@@ -1281,20 +1317,19 @@
     }
    }
   },
-  "error": "tools.native.exec.langs: \"z\" names both x and y"
+  "error": "tools.native.exec.runners: \"z\" names both x and y"
  },
  {
   "name": "exec lang replaces a builtin and takes its aliases",
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "python": {
       "argv": [
        "python3",
        "-c",
-       "x",
-       "--"
+       "{code}"
       ],
       "aliases": [
        "pyx"
@@ -1310,15 +1345,14 @@
   "native": {
    "bash": {},
    "exec": {
-    "langs": {
+    "runners": {
      "viafile": {
       "argv": [
        "bash",
-       "{file}",
-       "--"
+       "{file}"
       ],
-      "code": "file",
-      "ext": ".sh"
+      "ext": ".sh",
+      "mode": "file"
      }
     }
    }

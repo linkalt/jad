@@ -271,20 +271,20 @@ func executeNativeExecAsync(
 		defer os.RemoveAll(workDir)
 		resultPath := filepath.Join(workDir, "result.txt")
 
-		flags := lang.Argv[1:]
+		programArgs := make([]string, len(lang.Argv)-1)
 		stdin := ""
-		programArgs := flags
-		if lang.Code == sessionfs.NativeExecCodeFile {
-			codePath := filepath.Join(workDir, "code"+lang.Ext)
+		codePath := filepath.Join(workDir, "code"+lang.Ext)
+		if lang.Mode == sessionfs.NativeExecModeFile {
 			if err := os.WriteFile(codePath, []byte(code), 0o600); err != nil {
 				return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The code file could not be written",
 					tools.Information{Key: "system_error", Value: err.Error()})}
 			}
-			programArgs = make([]string, len(flags))
-			for index, flag := range flags {
-				programArgs[index] = strings.ReplaceAll(flag, "{file}", codePath)
-			}
-		} else {
+		}
+		for index, flag := range lang.Argv[1:] {
+			flag = strings.ReplaceAll(flag, "{file}", codePath)
+			programArgs[index] = strings.ReplaceAll(flag, "{code}", code)
+		}
+		if lang.Mode == sessionfs.NativeExecModeStdin {
 			stdin = code
 		}
 		return runShellChildDetailed(ctx, shellChildRun{
@@ -297,7 +297,7 @@ func executeNativeExecAsync(
 			section:    "tools.native.exec",
 			extraEnv:   map[string]string{execResultEnv: resultPath},
 			resultFile: &shellResultFile{path: resultPath, maxBytes: settings.ResultMaxBytes},
-			program:    &shellProgram{name: name, setting: "tools.native.exec.langs." + name + ".argv", failureSuggestion: failureSuggestion},
+			program:    &shellProgram{name: name, setting: "tools.native.exec.runners." + name + ".argv", failureSuggestion: failureSuggestion},
 		}, settings.Child, apiKeyEnv, execution)
 	}
 	if _, canHandle := handleOwner(execution); host == nil || !canHandle {

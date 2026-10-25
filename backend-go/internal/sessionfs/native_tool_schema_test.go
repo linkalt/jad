@@ -68,7 +68,7 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"write removed approval", "write", `{"approval":"ask"}`, false},
 		{"exec removed approval", "exec", `{"approval":"ask"}`, false},
 		{"process removed approval", "process", `{"approval":"ask"}`, false},
-		{"exec every bash key", "exec", `{` + child + `,` + run + `,"line_aware":false,"default_lang":"bash","code_max_bytes":10,"result_max_bytes":10}`, true},
+		{"exec every bash key", "exec", `{` + child + `,` + run + `,"line_aware":false,"default_lang":"bash","code_max_bytes":10,"result_max_bytes":10,"input_max_bytes":10,"arg_max_bytes":10,"functions_dir":"f","list_max_results":1,"list_max_files":1,"list_header_bytes":1,"function_max_bytes":1}`, true},
 		{"exec unknown", "exec", `{"nope":1}`, false},
 		{"process child keys", "process", `{` + child + `,"stdout":{"head_bytes":1,"tail_bytes":1},"max_running":2}`, true},
 		{"process unknown", "process", `{"nope":1}`, false},

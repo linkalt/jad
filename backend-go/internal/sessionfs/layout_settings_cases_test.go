@@ -25,15 +25,15 @@ var goOnlyNativeTools = []string{"subagent", "read_image", "profile_message", "t
 // layoutErrorPrefix strips the file path (and the "settings" label) a layout error starts with.
 var layoutErrorPrefix = regexp.MustCompile(`^\S+\.json(: settings)?: `)
 
-// TestLayoutSettingsCases replays 136 settings through the catalog layout (the `native`
+// TestLayoutSettingsCases replays 138 settings through the catalog layout (the `native`
 // block goes in the toolset, the rest in the session's settings) and compares each
 // rejection's message with the text in testdata/layout-settings.cases.json. The texts were
 // written by the removed TypeScript loader and are fixed test data.
 func TestLayoutSettingsCases(t *testing.T) {
 	var cases []layoutSettingsCase
 	readJSONFile(t, "testdata/layout-settings.cases.json", &cases)
-	if len(cases) != 136 {
-		t.Fatalf("%d cases, want 136", len(cases))
+	if len(cases) != 138 {
+		t.Fatalf("%d cases, want 138", len(cases))
 	}
 	for _, tc := range cases {
 		t.Run(tc.Name, func(t *testing.T) {
