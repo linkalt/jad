@@ -291,7 +291,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		tool, err := NewExecTool(*config.NativeExec, config.Model.APIKeyEnv)
+		tool, err := NewExecTool(*config.NativeExec, config.Model.APIKeyEnv, asyncHost)
 		if err != nil {
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}

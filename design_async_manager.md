@@ -23,7 +23,7 @@ Non-goals:
 - No durable OS supervisor. A process or child does not survive a server restart (same boundary as `design_process.md` section 2).
 - No push into the model. Nothing wakes the model by itself; a signal is delivered only to a `wait` call (or shown to the user, section 12).
 - No cross-session or cross-user sharing of handles.
-- No change to `bash` (blocking, group cleaned up when it returns) or `exec`.
+- No change to `bash` (blocking, group cleaned up when it returns). `exec` was unchanged in phases 1 and 2; since 2026-10-25 it is a start tool like `tool_smith` (see DECISIONS.md, "`exec` is an async tool"): `block_ms`, kind `exec`, ids `exec_<8 hex>`, and it needs no `tools.native.async`.
 
 ## 2. Terminology
 

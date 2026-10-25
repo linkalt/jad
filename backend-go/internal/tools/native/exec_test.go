@@ -410,7 +410,7 @@ func TestExecWithoutALanguageRunsTheConfiguredDefault(t *testing.T) {
 func callExecThroughTheCatalog(t *testing.T, root string, settings sessionfs.NativeExecSettings, arguments string) string {
 	t.Helper()
 	settings.Child = bashTestSettings(t, root)
-	tool, err := NewExecTool(settings, "")
+	tool, err := NewExecTool(settings, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +443,7 @@ func TestExecThroughTheCatalogAcceptsCodeAlone(t *testing.T) {
 	settings := execTestSettings()
 	// The schema the model sees requires code only.
 	settings.Child = bashTestSettings(t, root)
-	tool, err := NewExecTool(settings, "")
+	tool, err := NewExecTool(settings, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

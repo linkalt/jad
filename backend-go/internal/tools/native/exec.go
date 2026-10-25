@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
+	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
@@ -17,7 +19,16 @@ const (
 	execToolID = "native.exec"
 	// execResultEnv names the file a program may write its answer to.
 	execResultEnv = "EXEC_RESULT"
+
+	asyncKindExec asyncmgr.Kind = "exec"
 )
+
+var execRunID = regexp.MustCompile("^exec_[0-9a-f]{8}$")
+
+var execAsync = shellAsyncSpec{
+	kind: asyncKindExec, idPrefix: "exec_", idPattern: execRunID,
+	noun: "Program", labelPrefix: "exec: ", resultsDir: "exec",
+}
 
 var execInputSchema = json.RawMessage(`{
   "type":"object",
@@ -26,20 +37,25 @@ var execInputSchema = json.RawMessage(`{
     "code":{"type":"string","minLength":1,"description":"Program source."},
     "args":{"type":"array","items":{"type":"string"},"description":"Arguments passed to the program as argv, with no shell quoting."},
     "cwd":{"type":"string","minLength":1,"description":"Directory to run in, relative to the workspace root or absolute. Defaults to the workspace root."},
-    "timeout_ms":{"type":"integer","description":"Wall-clock budget for this call in milliseconds; clamped to the configured range."}
+    "timeout_ms":{"type":"integer","description":"Wall-clock budget for this call in milliseconds; clamped to the configured range."},
+    "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the result. If the program is still running an id is returned; collect it with the async tool."}
   },
   "required":["code"],
   "additionalProperties":false
 }`)
 
-const execDescription = "Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call. Write a short answer to the file named by $EXEC_RESULT to see it ahead of the raw output."
+const execDescription = "Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call. Write a short answer to the file named by $EXEC_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it."
 
 // NewExecTool constructs native.exec. How a child runs comes from its own settings (Child);
 // exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.
-func NewExecTool(settings sessionfs.NativeExecSettings, apiKeyEnv string) (tools.Tool, error) {
+// A non-nil host lets a program that outlasts block_ms continue as a handle of the async tool.
+func NewExecTool(settings sessionfs.NativeExecSettings, apiKeyEnv string, host *AsyncHost) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(execInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native exec schema: %w", err)
+	}
+	if host != nil {
+		host.attachShell(execAsync)
 	}
 	return tools.Tool{
 		Definition: tools.Definition{
@@ -56,7 +72,7 @@ func NewExecTool(settings sessionfs.NativeExecSettings, apiKeyEnv string) (tools
 			return normalizeExecArguments(arguments, settings.DefaultLang)
 		},
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-			return executeNativeExec(ctx, arguments, settings, apiKeyEnv, execution), nil
+			return executeNativeExecAsync(ctx, arguments, settings, apiKeyEnv, execution, host)
 		},
 	}, nil
 }
@@ -76,6 +92,9 @@ func normalizeExecArguments(arguments map[string]any, defaultLang string) map[st
 		if alias, ok := firstString(arguments, "language", "interpreter"); ok {
 			normalized["lang"] = alias
 		}
+	}
+	if block, ok := safeInteger(normalized["block_ms"]); ok {
+		normalized["block_ms"] = json.Number(fmt.Sprint(max(block, 0)))
 	}
 	if lang, ok := normalized["lang"].(string); ok {
 		// A blank language is "not given" too.
@@ -175,6 +194,7 @@ func findExecLang(settings sessionfs.NativeExecSettings, requested string) (stri
 	return "", sessionfs.NativeExecLang{}, false
 }
 
+// executeNativeExec runs the program to its end.
 func executeNativeExec(
 	ctx context.Context,
 	arguments map[string]any,
@@ -182,68 +202,57 @@ func executeNativeExec(
 	apiKeyEnv string,
 	execution tools.ExecutionContext,
 ) string {
+	text, _ := executeNativeExecAsync(ctx, arguments, settings, apiKeyEnv, execution, nil)
+	return text
+}
+
+// executeNativeExecAsync validates the call, then runs the program: to its end when host is
+// nil or the call has no owner for a handle, else as a handle that the call waits for up
+// to block_ms.
+func executeNativeExecAsync(
+	ctx context.Context,
+	arguments map[string]any,
+	settings sessionfs.NativeExecSettings,
+	apiKeyEnv string,
+	execution tools.ExecutionContext,
+	host *AsyncHost,
+) (string, error) {
 	callID := execution.CallID
 	rawLang, _ := arguments["lang"].(string)
 	if rawLang == "" {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_lang", "The language is empty")
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_lang", "The language is empty"), nil
 	}
 	requested := trimJSSpace(rawLang)
 	code, _ := arguments["code"].(string)
 	if trimJSSpace(code) == "" {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_code", "The code is empty")
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_code", "The code is empty"), nil
 	}
 	name, lang, found := findExecLang(settings, requested)
 	if !found {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "unknown_lang", "Unknown language: "+requested,
 			tools.Information{Key: "available", Value: strings.Join(settings.LangNames, ", ")},
-			tools.Information{Key: "suggestion", Value: "use one of the available names, or add the interpreter to tools.native.exec.langs"})
+			tools.Information{Key: "suggestion", Value: "use one of the available names, or add the interpreter to tools.native.exec.langs"}), nil
 	}
 	if codeBytes := int64(len(code)); codeBytes > settings.CodeMaxBytes {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "code_too_large",
 			fmt.Sprintf("code is %d bytes, over the limit of %d", codeBytes, settings.CodeMaxBytes),
-			tools.Information{Key: "suggestion", Value: "write the program to a file with the write tool and run it with bash"})
+			tools.Information{Key: "suggestion", Value: "write the program to a file with the write tool and run it with bash"}), nil
 	}
 	var extra []string
 	if raw, present := arguments["args"]; present && raw != nil {
 		list, ok := raw.([]any)
 		if !ok {
-			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_args", "args must be a list of strings")
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_args", "args must be a list of strings"), nil
 		}
 		for _, item := range list {
 			text, ok := item.(string)
 			if !ok {
-				return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_args", "args must be a list of strings")
+				return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_args", "args must be a list of strings"), nil
 			}
 			extra = append(extra, text)
 		}
 	}
 
-	// A private directory per call holds the code file (file delivery) and the result file;
-	// it is removed afterwards, whatever the program did.
-	workDir, err := os.MkdirTemp("", "exec-")
-	if err != nil {
-		return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
-			tools.Information{Key: "system_error", Value: err.Error()})
-	}
-	defer os.RemoveAll(workDir)
-	resultPath := filepath.Join(workDir, "result.txt")
-
-	flags := lang.Argv[1:]
-	stdin := ""
-	programArgs := flags
-	if lang.Code == sessionfs.NativeExecCodeFile {
-		codePath := filepath.Join(workDir, "code"+lang.Ext)
-		if err := os.WriteFile(codePath, []byte(code), 0o600); err != nil {
-			return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The code file could not be written",
-				tools.Information{Key: "system_error", Value: err.Error()})
-		}
-		programArgs = make([]string, len(flags))
-		for index, flag := range flags {
-			programArgs[index] = strings.ReplaceAll(flag, "{file}", codePath)
-		}
-	} else {
-		stdin = code
-	}
 	common := parseBashArguments(arguments)
 	// A call without `lang` was given the default, so a failure may mean the code was
 	// written for another interpreter (a model that assumes Python sends Python).
@@ -251,16 +260,52 @@ func executeNativeExec(
 	if name == settings.DefaultLang {
 		failureSuggestion = defaultLangSuggestion(name, settings.LangNames)
 	}
-	return runShellChild(ctx, shellChildRun{
-		file:       lang.Argv[0],
-		argv:       append(append([]string(nil), programArgs...), extra...),
-		stdin:      stdin,
-		cwd:        common.cwd,
-		timeoutMs:  common.timeoutMs,
-		lineAware:  settings.LineAware,
-		section:    "tools.native.exec",
-		extraEnv:   map[string]string{execResultEnv: resultPath},
-		resultFile: &shellResultFile{path: resultPath, maxBytes: settings.ResultMaxBytes},
-		program:    &shellProgram{name: name, setting: "tools.native.exec.langs." + name + ".argv", failureSuggestion: failureSuggestion},
-	}, settings.Child, apiKeyEnv, execution)
+	run := func(ctx context.Context) shellRunResult {
+		// A private directory per call holds the code file (file delivery) and the result file;
+		// it is removed afterwards, whatever the program did.
+		workDir, err := os.MkdirTemp("", "exec-")
+		if err != nil {
+			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
+				tools.Information{Key: "system_error", Value: err.Error()})}
+		}
+		defer os.RemoveAll(workDir)
+		resultPath := filepath.Join(workDir, "result.txt")
+
+		flags := lang.Argv[1:]
+		stdin := ""
+		programArgs := flags
+		if lang.Code == sessionfs.NativeExecCodeFile {
+			codePath := filepath.Join(workDir, "code"+lang.Ext)
+			if err := os.WriteFile(codePath, []byte(code), 0o600); err != nil {
+				return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The code file could not be written",
+					tools.Information{Key: "system_error", Value: err.Error()})}
+			}
+			programArgs = make([]string, len(flags))
+			for index, flag := range flags {
+				programArgs[index] = strings.ReplaceAll(flag, "{file}", codePath)
+			}
+		} else {
+			stdin = code
+		}
+		return runShellChildDetailed(ctx, shellChildRun{
+			file:       lang.Argv[0],
+			argv:       append(append([]string(nil), programArgs...), extra...),
+			stdin:      stdin,
+			cwd:        common.cwd,
+			timeoutMs:  common.timeoutMs,
+			lineAware:  settings.LineAware,
+			section:    "tools.native.exec",
+			extraEnv:   map[string]string{execResultEnv: resultPath},
+			resultFile: &shellResultFile{path: resultPath, maxBytes: settings.ResultMaxBytes},
+			program:    &shellProgram{name: name, setting: "tools.native.exec.langs." + name + ".argv", failureSuggestion: failureSuggestion},
+		}, settings.Child, apiKeyEnv, execution)
+	}
+	if _, canHandle := handleOwner(execution); host == nil || !canHandle {
+		return run(ctx).text, nil
+	}
+	var blockMs *int64
+	if value, ok := safeInteger(arguments["block_ms"]); ok {
+		blockMs = &value
+	}
+	return startShellAsync(ctx, host, execAsync, execution, shellLabel(execAsync, code), blockMs, run)
 }
