@@ -63,6 +63,21 @@ func pidGone(pid int) bool {
 	return err == nil && strings.Contains(string(data), ") Z ")
 }
 
+// waitPidGone polls until the process is gone and reports the result of that same observation:
+// a second check could hit a different process that was handed the freed pid.
+func waitPidGone(pid int, limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for {
+		if pidGone(pid) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestManagedProcessKillsDescendantAfterExit(t *testing.T) {
 	manager, id, started := startDescendantTest(t, "sleep 300 & echo $!")
 	t.Cleanup(func() { killGroupOf(t, started.PID) })
@@ -75,11 +90,7 @@ func TestManagedProcessKillsDescendantAfterExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("descendant pid not in output %q: %v", logs.Output.text, err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for !pidGone(pid) && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !pidGone(pid) {
+	if !waitPidGone(pid, 2*time.Second) {
 		t.Fatalf("descendant %d still alive after the exit was recorded", pid)
 	}
 }
@@ -96,11 +107,7 @@ func TestManagedProcessKillsTermIgnoringDescendantWithKill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("descendant pid not in output %q: %v", logs.Output.text, err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for !pidGone(pid) && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !pidGone(pid) {
+	if !waitPidGone(pid, 2*time.Second) {
 		t.Fatalf("TERM-ignoring descendant %d survived the grace and SIGKILL", pid)
 	}
 }
