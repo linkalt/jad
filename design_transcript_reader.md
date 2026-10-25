@@ -20,10 +20,7 @@ Tool name `transcript`. Unknown or old keys fail with an error naming the key.
 
 | key | type | meaning |
 |---|---|---|
-| `profile` | string, optional | `<category>/<name>`; with no selector at all, the caller's own profile |
-| `session` | string, optional | session reference; only with `profile` (default: the caller's session) |
-| `subagent` | string, optional | sub-agent run id `sub_xxxxxxxx` (see 2a) |
-| `path` | string, optional | a transcript file by path; only when `allow_path` is true (see 2a) |
+| `path` | string, optional | which transcript, as `<kind>:<name>`; none means your own (a sub-agent's own run). Kinds in 2a |
 | `source` | `"messages"` (default) \| `"backup"` | live transcript or `messages.backup.jsonl` |
 | `turns` | string, optional | user-turn range, `"3"`, `"3-7"`, `"-5"` (last 5), `"12-"`. Turn = a user input line plus the assistant lines up to the next user line (same notion as `countUserTurns`) |
 | `tail` | int, optional | last N turns; shorthand for `turns:"-N"`; mutually exclusive with `turns` and `cursor` |
@@ -33,12 +30,21 @@ Tool name `transcript`. Unknown or old keys fail with an error naming the key.
 | `context` | int, optional | entries around each search hit (default 0) |
 | `full` | bool, optional | do not truncate payloads per entry (still bound by `response_max_bytes`) |
 | `cursor` | string, optional | opaque cursor from the previous page |
-| `list` | bool, optional | list readable sessions/profiles with turn counts and size instead of reading |
 
-### 2a. Selectors (option C, decided by the user)
-Flat and mutually exclusive: exactly one of `profile` (with optional `session`), `subagent` or `path`; none means the caller's own profile. Two given is an error that names both (`give only one of profile, subagent, path: got profile and path`). `session` without `profile` is an error naming `profile`.
+### 2a. The `path` input (rework: one parameter with kind prefixes)
+One optional string. The old keys `profile`, `session`, `subagent` and `list` are rejected with an error naming `path` (the `RejectedProperties` hint). No `--` discovery tool: a not-found error lists the nearest valid names (at most `suggest_max`, default 20), and a read's header prints the exact `path` string to reuse. A cursor carries that resolved string, so every page is checked again with the current switches; `path` with a cursor is an error.
 
-- **`path`:** off unless `allow_path` is true (error names `tools.native.transcript.allow_path`). The path must pass the same path policy as a `read` of that file (the tool reuses the read tool's `paths`, as `read_image` does, plus the call's `PathScope`), symlinks are resolved before the check, the file must be a regular file whose first record parses as a transcript record (a JSON object with `type`), and it is read by the same read-only scanner with the same caps.
+| `path` | reads |
+|---|---|
+| (none) | the caller's own transcript; for a sub-agent (`AgentDepth>0`) its own run, `subagent:<ExecutionContext.ProcessOwner>` (the manager sets `ProcessOwner` to the run id for every child, subagent_manager.go) |
+| `profile:<category>/<name>` | another profile in the current session (profile IDs are `<category>/<name>`, so the name itself holds the one slash) |
+| `profile:<session>/<category>/<name>` | a profile of another session |
+| `subagent:<run id>` | a run, resolved through `SubagentManager.RunTranscript` |
+| `subagent:<session>/<run id>` | the same, but the run's session must be that session (else not found) |
+| `path:<file>` | a file; off unless `allow_path`; read path rules, symlinks resolved, first-line transcript check |
+
+Refused with `invalid_path` (and the list of forms): an unknown prefix, an empty segment, `.` or `..`, a backslash or NUL, the wrong number of segments. A refused name never reaches a lookup. There is no `subagent:self`. The ownership rules and the `allow_*` switches are unchanged. `source: backup` does not apply to `subagent` or `path`.
+
 - **`subagent` (verified in code):** a sub-agent's transcript is `<subagent.storage_dir>/<call-id>-<hex>/messages.jsonl` (app/subagent.go:196-209). The subagent tool result does **not** always carry that path: only a stopped, timed-out or lost run returns `transcript` (subagent_call.go:198, `partialInformation`), and only runs that are still going or ended abnormally show their `run` id; a plain finished synchronous result carries neither. A handle (`block_ms` expired) ends with `subagentRunRef` = that same path (subagent_async.go:85). The run id is always resolvable in the manager (`SubagentManager.byID`, manifests persist ids and `Dir` across restarts). So `subagent` resolves the id through the manager, not through a path the model must copy: the run must be owned by the caller's session key, or any run when the caller is the session itself and `allow_children` permits. The file is then read by the same scanner. An id without a transcript yet (queued) fails with `no_transcript_yet`.
 
 Selecting by entry offset is not offered: offsets die at compaction. Turn numbers use `session_turn` where present, else the counted user turns **[unverified: whether `session_turn` stays stable across compaction; if not, number turns from the file start and say so in the output header]**.
@@ -58,7 +64,7 @@ Plain text, one header line then entries, nothing in JSON:
 - **Truncation:** per entry text/arguments/result capped at `entry_max_bytes` (head 70 % + tail 30 %, with `[truncated N bytes]`); `full:true` lifts the per-entry cap only. The whole response stops at `response_max_bytes` (same pattern as other native tools); on stop the header carries the `cursor` to continue. Image/base64 payloads (`data:` URLs, `input_image`) are replaced by `[image <mime> N bytes]`.
 - A result whose `call_id` is matched to a call is shown next to it; an orphan is shown on its own.
 - Large `function_call.arguments` (e.g. whole scripts) are cut like any other payload and flagged.
-- `list`: one line per readable `<session>  <category>/<name>  turns  bytes  mtime  running?`, capped at `list_max_entries` with a note when cut.
+- No `list`: discovery is the not-found suggestions and the header's `path`. The header of a read is `<path>: turns A-B; the transcript holds turns C-D`; the own transcript has no prefix.
 
 ## 4. Access rules
 - **Who may read what.** Container is the boundary; approvals do not exist. Proposal: *default allow every session and profile the server's session roots resolve* (`sessionfs.Resolve(roots, reference)` + `ProfileMessagesPath`), since profile_message already reaches other profiles. Restrict with config (`allow_other_sessions`, below) rather than prompts.
@@ -79,7 +85,7 @@ Capped, unknown keys rejected, in sample/schemes + setting.schema.json + config 
 | `entry_max_bytes` | 4000 | response_max_bytes | per payload |
 | `max_turns_per_call` | 50 | 1000 | upper bound for one page |
 | `scan_max_bytes` | 256 MiB | 4 GiB | most bytes scanned per call; fail `too_large: use turns/tail/cursor` |
-| `list_max_entries` | 200 | 5000 | |
+| `suggest_max` | 20 | 500 | most names a not-found error lists |
 | `allow_other_sessions` | true | | false: own session (any of its profiles) only |
 | `allow_other_profiles` | true | | false: own profile only |
 | `allow_children` | true | | children may read at all |
@@ -105,7 +111,7 @@ Capped, unknown keys rejected, in sample/schemes + setting.schema.json + config 
 Tests that must fail on revert: read-only (no truncate), response cap, stale cursor, scope denial, `allow_other_*`, symlink refusal.
 
 ## 8. Phases (one commit each)
-1. Settings + schema + sample + fixture; tool skeleton with `list` only for the caller's own session (this design file is committed here).
+1. Settings + schema + sample + fixture; tool skeleton (this design file is committed here).
 2. Read-only scanner, turn/tail ranges, rendering, truncation, caps, cursor.
 3. Filters (`role`, `tool`, `search`, `context`), `source:backup`.
 4. Selectors: `profile`/`session` through the port, `subagent` through the sub-agent manager, `path`; mutual exclusion errors; access config, path-scope check, children.
@@ -113,7 +119,7 @@ Tests that must fail on revert: read-only (no truncate), response cap, stale cur
 
 ## 8a. As built (phases 1-4)
 - Selectors, access switches and the read path rules are as in 2a and 4. `subagent` is resolved by run id through `SubagentManager.RunTranscript`; the subagent tool result does not carry the path for a finished run, so the id is the key. A run whose child has no transcript folder yet answers `no_transcript_yet`.
-- Not built: `list` of other sessions and profiles (it lists the caller's own files only), the `running` flag in the header, a line index cache. Hand check on six real transcripts (18 KB to 1.5 MB): 0.6 to 16 ms per call.
+- Not built: the `running` flag in the header and a line index cache. Hand check on six real transcripts (18 KB to 1.5 MB): 0.6 to 16 ms per call.
 - The header names turn numbers: `turns A-B; the transcript holds turns C-D`, plus a compaction note when C is above 1.
 - `scan_max_bytes` applies to the whole file because turn numbers need one pass over it; the pass reads each line once and keeps only offsets.
 
@@ -125,5 +131,8 @@ Tests that must fail on revert: read-only (no truncate), response cap, stale cur
 5. **Sub-agent run transcripts** are in v1 through the `subagent` selector (user decision, option C). Staged partial turns stay out of scope.
 6. **Line index cache for fast forward ranges.** Recommend no in v1 (scan cap protects); revisit if benchmarks on multi-hundred-MB files are slow.
 7. **Include `messages.backup.jsonl`?** Recommend yes via `source:"backup"` (it holds pre-compaction history, the main reason to look into a compacted session).
-8. **One tool or two (`transcript` + `transcript_list`)?** Recommend one tool with `list:true` (same flat-input style as exec listing).
+8. **One tool or two?** One tool; `list` was dropped in the `path` rework in favour of not-found suggestions.
 9. **Name.** `transcript` vs `history`; recommend `transcript` (matches the package and missing.md).
+
+## 8b. Rework: single `path`, no `list`
+Section 2a is the as-built input. `Candidates` on the profile port (implemented in app by `profileMessenger`) gives the profiles of a session, or the sessions when the session cannot be read; sub-agent suggestions are the caller's own runs. The suggestions are ranked by longest shared start or containment, so a typo lands first. `list_max_entries` became `suggest_max` (an old key is rejected naming it).
