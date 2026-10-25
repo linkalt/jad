@@ -87,6 +87,34 @@ func (s *profileQueueSet) position(key string, run *profileMessageRun) (int, int
 	return 0, len(q.waiting)
 }
 
+// waitsForCaller reports that queueing p would close a loop of profiles each waiting for
+// the next: the target already waits, directly or through others, for the caller's
+// profile. Such messages could only end by timeout. The caller holds s.mu.
+func (s *profileQueueSet) waitsForCaller(p *profileMessagePlan) bool {
+	seen := map[string]bool{p.target: true}
+	pending := []string{p.target}
+	for len(pending) > 0 {
+		node := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		for _, q := range s.queues {
+			for _, waiting := range q.waiting {
+				if waiting.plan.reference != p.reference || waiting.plan.caller != node {
+					continue
+				}
+				next := waiting.plan.target
+				if next == p.caller {
+					return true
+				}
+				if !seen[next] {
+					seen[next] = true
+					pending = append(pending, next)
+				}
+			}
+		}
+	}
+	return false
+}
+
 // pump starts the head of the line each time the target is free, in arrival order, until
 // the line is empty. Only the head waits for the transcript; the rest wait their turn here.
 // It owns one reference of q, taken by whoever started it.
@@ -166,11 +194,18 @@ func (p *profileMessagePlan) Start(ctx context.Context) (native.ProfileMessageRu
 			r.discard()
 			return nil, p.busy(p.maxQueued)
 		}
+		if set.waitsForCaller(p) {
+			set.mu.Unlock()
+			q.try.Unlock()
+			set.release(p.key, q)
+			r.discard()
+			return nil, native.ErrProfileCycle
+		}
+		r.queued = true
 		q.waiting = append(q.waiting, r)
 		set.mu.Unlock()
 		q.try.Unlock()
 		set.release(p.key, q)
-		r.queued = true
 		r.beginQueued()
 		return r, nil
 	}
@@ -179,11 +214,18 @@ func (p *profileMessagePlan) Start(ctx context.Context) (native.ProfileMessageRu
 	run, err := p.starter.StartProfileRun(ctx, p.request(r, false))
 	if errors.Is(err, httpapi.ErrSessionBusy) && p.maxQueued > 0 {
 		set.mu.Lock()
+		if set.waitsForCaller(p) {
+			set.mu.Unlock()
+			q.try.Unlock()
+			set.release(p.key, q)
+			r.discard()
+			return nil, native.ErrProfileCycle
+		}
+		r.queued = true
 		q.pumping = true
 		q.waiting = append(q.waiting, r)
 		set.mu.Unlock()
 		q.try.Unlock()
-		r.queued = true
 		r.beginQueued()
 		go set.pump(p.key, q)
 		return r, nil

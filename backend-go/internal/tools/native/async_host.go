@@ -31,6 +31,9 @@ type AsyncHost struct {
 
 	profileMessageSeen bool
 	profileMessages    map[string]ProfileMessageRun
+	// profileStarting holds the handles registered but not yet bound to a run, with the
+	// reason of a stop that arrived meanwhile.
+	profileStarting map[string]string
 }
 
 // AsyncResources is implemented by the application resolver: it hands out the host shared

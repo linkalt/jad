@@ -74,6 +74,7 @@ type controlMessenger struct {
 	queued     bool
 	prepareErr error
 	startErr   error
+	startHook  func()
 	prepared   int
 	runs       []*controlRun
 }
@@ -91,6 +92,9 @@ func (m *controlMessenger) Prepare(context.Context, ProfileMessageRequest) (Prof
 type controlPlan struct{ m *controlMessenger }
 
 func (p controlPlan) Start(context.Context) (ProfileMessageRun, error) {
+	if p.m.startHook != nil {
+		p.m.startHook()
+	}
 	p.m.mu.Lock()
 	defer p.m.mu.Unlock()
 	if p.m.startErr != nil {
@@ -455,3 +459,25 @@ func TestProfileMessageHandleCyclesLeaveNoGoroutines(t *testing.T) {
 }
 
 var _ = errors.Is
+
+func TestProfileMessageStopArrivingBeforeTheRunIsBoundStopsItOnceBound(t *testing.T) {
+	f := newProfileMessageHandleFixture(t, nil, func(c *asyncmgr.Config) { c.StopWaitMs = 0 })
+	f.messenger.startHook = func() {
+		id := handleIDPattern.FindString(f.asyncCall(t, sessionCaller, map[string]any{"action": "list", "state": "all"}))
+		if id == "" {
+			t.Error("the handle is not registered while the message starts")
+			return
+		}
+		f.asyncCall(t, sessionCaller, map[string]any{"action": "stop", "id": id})
+	}
+	f.send(t, sessionCaller, 0)
+	run := f.messenger.run(t, 0)
+	select {
+	case <-run.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stop that arrived before the run was bound was lost")
+	}
+	if reasons := run.stopped(); len(reasons) != 1 {
+		t.Fatalf("the run was asked to stop %v", reasons)
+	}
+}

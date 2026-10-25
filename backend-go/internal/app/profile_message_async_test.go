@@ -385,3 +385,53 @@ func TestProfileMessageHandleCyclesLeaveNoGoroutines(t *testing.T) {
 }
 
 func runtimeGoroutines() int { return runtime.NumGoroutine() }
+
+func TestProfileMessageConcurrentArrivalsQueueInOrderWithoutARace(t *testing.T) {
+	p := newPMFixture(t, func(s *sessionfs.NativeProfileMessageSettings) { s.MaxQueued = 8 })
+	release := p.holdTranscript(t)
+	var wg sync.WaitGroup
+	ids := make(chan string, 6)
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i == 3 {
+				release()
+			}
+			out := p.send(t, "alpha-1")
+			ids <- pmHandle.FindString(out)
+		}(i)
+	}
+	wg.Wait()
+	close(ids)
+	for id := range ids {
+		if id == "" {
+			continue
+		}
+		p.wait(t, id)
+	}
+}
+
+func TestProfileMessageRefusesAMessageThatWouldCloseAWaitForLoop(t *testing.T) {
+	p := newPMFixture(t, nil)
+	reviewerCtx := p.callerCtx(t, "review/reviewer")
+	coderCtx := p.callerCtx(t, "dev/coder")
+	reviewer := tools.ExecutionContext{SessionKey: strings.Replace(p.owner, "dev/coder", "review/reviewer", 1)}
+	coder := tools.ExecutionContext{SessionKey: p.owner}
+	// Both profiles are busy with their own work.
+	releaseReviewer := p.holdTranscript(t)
+	releaseCoder, err := p.f.service.resolver.LockSession(context.Background(), "local:demo", "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseCoder()
+	first := p.handle(t, p.sendAs(t, coderCtx, coder, "alpha-1"))
+	execution := reviewer
+	execution.CallID = "call"
+	out, err := p.message.Execute(reviewerCtx, map[string]any{"profile": "dev/coder", "message": "alpha-2", "block_ms": json.Number("0")}, execution)
+	if err != nil || !strings.Contains(out, "profile_cycle") || pmHandle.MatchString(out) {
+		t.Fatalf("the reviewer waiting for the coder who waits for the reviewer must be refused:\n%s %v", out, err)
+	}
+	releaseReviewer()
+	p.wait(t, first)
+}

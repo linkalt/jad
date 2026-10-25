@@ -34,13 +34,52 @@ func (h *AsyncHost) profileMessageRun(id string) ProfileMessageRun {
 	return h.profileMessages[id]
 }
 
-func (h *AsyncHost) setProfileMessageRun(id string, run ProfileMessageRun) {
+func (h *AsyncHost) beginProfileMessage(id string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.profileStarting == nil {
+		h.profileStarting = map[string]string{}
+	}
+	h.profileStarting[id] = ""
+}
+
+// setProfileMessageRun binds the run to its handle and returns the reason of a stop that
+// came in before the run existed, empty when there was none.
+func (h *AsyncHost) setProfileMessageRun(id string, run ProfileMessageRun) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.profileMessages == nil {
 		h.profileMessages = map[string]ProfileMessageRun{}
 	}
 	h.profileMessages[id] = run
+	reason := h.profileStarting[id]
+	delete(h.profileStarting, id)
+	return reason
+}
+
+func (h *AsyncHost) abandonProfileMessage(id string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.profileStarting, id)
+}
+
+// stopProfileMessage stops the run of a handle; a handle still starting is stopped as
+// soon as its run exists.
+func (h *AsyncHost) stopProfileMessage(id, reason string) {
+	h.mu.Lock()
+	run := h.profileMessages[id]
+	if _, starting := h.profileStarting[id]; run == nil && starting {
+		if h.profileStarting[id] == "" {
+			h.profileStarting[id] = reason
+			if reason == "" {
+				h.profileStarting[id] = "stopped"
+			}
+		}
+	}
+	h.mu.Unlock()
+	if run != nil {
+		run.Stop(reason)
+	}
 }
 
 func (h *AsyncHost) dropProfileMessageRun(id string) {
@@ -64,7 +103,9 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 	if cut {
 		label += "..."
 	}
+	host.beginProfileMessage(id)
 	if err := host.Manager().Register(asyncmgr.Registration{ID: id, Owner: owner, Kind: asyncKindProfileMessage, Label: label, Queued: true}); err != nil {
+		host.abandonProfileMessage(id)
 		code := "spawn_failed"
 		if errors.Is(err, asyncmgr.ErrCapacity) {
 			code = "async_capacity_reached"
@@ -73,6 +114,7 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 	}
 	run, err := plan.Start(ctx)
 	if err != nil {
+		host.abandonProfileMessage(id)
 		manager := host.Manager()
 		_, _ = manager.Complete(id, asyncmgr.Result{State: asyncmgr.StateFailed, Reason: boundedReason(err.Error())})
 		manager.MarkRead(owner, id)
@@ -81,7 +123,9 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 		}
 		return p.renderFailure(callID, profile, err), nil
 	}
-	host.setProfileMessageRun(id, run)
+	if reason := host.setProfileMessageRun(id, run); reason != "" {
+		run.Stop(reason)
+	}
 	ended := make(chan struct{})
 	go func() {
 		defer close(ended)
@@ -178,9 +222,7 @@ type profileMessageDriver struct{ host *AsyncHost }
 func (d *profileMessageDriver) Kind() asyncmgr.Kind { return asyncKindProfileMessage }
 
 func (d *profileMessageDriver) Stop(id, reason string) {
-	if run := d.host.profileMessageRun(id); run != nil {
-		run.Stop(reason)
-	}
+	d.host.stopProfileMessage(id, reason)
 }
 
 func (d *profileMessageDriver) Detail(id string, maxBytes int) string {
