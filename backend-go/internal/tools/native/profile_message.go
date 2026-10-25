@@ -175,6 +175,30 @@ type ProfileMessenger interface {
 	Prepare(ctx context.Context, request ProfileMessageRequest) (ProfileMessagePlan, error)
 }
 
+// ProfileMessageTranscripts is optionally implemented by a plan: the full paths of the target
+// profile's messages.jsonl and of the caller's own, empty when not known.
+type ProfileMessageTranscripts interface {
+	Transcripts() (target, caller string)
+}
+
+// transcriptInformation is the transcript key (the target's file) and caller_transcript key
+// of a plan that knows its files.
+func transcriptInformation(plan ProfileMessagePlan) []tools.Information {
+	known, ok := plan.(ProfileMessageTranscripts)
+	if !ok {
+		return nil
+	}
+	target, caller := known.Transcripts()
+	var information []tools.Information
+	if target != "" {
+		information = append(information, tools.Information{Key: "transcript", Value: target})
+	}
+	if caller != "" {
+		information = append(information, tools.Information{Key: "caller_transcript", Value: caller})
+	}
+	return information
+}
+
 type profileMessageTool struct {
 	settings  sessionfs.NativeProfileMessageSettings
 	targets   []string
@@ -286,7 +310,7 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	}
 	plan, err := p.messenger.Prepare(callCtx, request)
 	if err != nil {
-		return p.renderFailure(callID, profile, err), nil
+		return p.renderFailure(callID, profile, err, transcriptInformation(plan)...), nil
 	}
 	if !handled {
 		return p.runInline(ctx, callID, profile, plan)
@@ -317,16 +341,16 @@ func (p *profileMessageTool) runInline(ctx context.Context, callID, profile stri
 		run.Stop("caller_cancelled")
 		return cancelledMessage(callID, profile), nil
 	}
-	return p.renderOutcome(callID, profile, run.Outcome())
+	return p.renderOutcome(callID, profile, run.Outcome(), transcriptInformation(plan))
 }
 
 // renderOutcome renders how a message ended: the answer, or the named failure.
-func (p *profileMessageTool) renderOutcome(callID, profile string, outcome ProfileMessageOutcome) (string, error) {
+func (p *profileMessageTool) renderOutcome(callID, profile string, outcome ProfileMessageOutcome, transcripts []tools.Information) (string, error) {
 	if outcome.Err != nil {
-		return p.renderFailure(callID, profile, outcome.Err), nil
+		return p.renderFailure(callID, profile, outcome.Err, transcripts...), nil
 	}
 	text, cut := cutUTF8(strings.TrimSpace(outcome.Text), int64(p.settings.ResultMaxBytes))
-	information := []tools.Information{{Key: "profile", Value: profile}}
+	information := append([]tools.Information{{Key: "profile", Value: profile}}, transcripts...)
 	if cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
 	}
@@ -339,9 +363,9 @@ func (p *profileMessageTool) renderOutcome(callID, profile string, outcome Profi
 	})
 }
 
-func (p *profileMessageTool) renderFailure(callID, profile string, err error) string {
+func (p *profileMessageTool) renderFailure(callID, profile string, err error, information ...tools.Information) string {
 	code, message := p.failure(profile, err)
-	return tools.ExecutionError(callID, tools.StatusError, code, message)
+	return tools.ExecutionError(callID, tools.StatusError, code, message, information...)
 }
 
 // failure names a message that did not end in an answer: the error code and its text.

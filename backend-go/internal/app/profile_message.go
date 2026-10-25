@@ -119,6 +119,11 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		queueWait: request.QueueWait,
 		maxQueued: request.MaxQueued,
 		blocking:  request.Blocking,
+
+		callerMessages: callerMessagesPath,
+	}
+	if bound, ok := resolved.Runner.(boundRunner); ok {
+		plan.targetMessages = bound.config.MessagesPath
 	}
 	if request.Compact {
 		plan.beforeRun = func(ctx context.Context) {

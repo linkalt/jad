@@ -183,6 +183,13 @@ type profileMessagePlan struct {
 	maxQueued int
 	blocking  bool
 	beforeRun func(context.Context)
+	// targetMessages and callerMessages are the transcripts of the target and of the caller.
+	targetMessages, callerMessages string
+}
+
+// Transcripts implements native.ProfileMessageTranscripts.
+func (p *profileMessagePlan) Transcripts() (target, caller string) {
+	return p.targetMessages, p.callerMessages
 }
 
 func (p *profileMessagePlan) request(run *profileMessageRun, wait bool) httpapi.ProfileRunRequest {

@@ -91,6 +91,11 @@ func (m *controlMessenger) Prepare(context.Context, ProfileMessageRequest) (Prof
 
 type controlPlan struct{ m *controlMessenger }
 
+// Transcripts implements ProfileMessageTranscripts with fixed paths.
+func (controlPlan) Transcripts() (string, string) {
+	return "/state/demo/review/reviewer/messages.jsonl", "/state/demo/dev/coder/messages.jsonl"
+}
+
 func (p controlPlan) Start(context.Context) (ProfileMessageRun, error) {
 	if p.m.startHook != nil {
 		p.m.startHook()

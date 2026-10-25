@@ -162,7 +162,7 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return p.renderFailure(callID, profile, err), nil
+		return p.renderFailure(callID, profile, err, transcriptInformation(plan)...), nil
 	}
 	if reason := host.setProfileMessageRun(id, run); reason != "" {
 		run.Stop(reason)
@@ -179,7 +179,9 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 		outcome := run.Outcome()
 		host.dropProfileMessageRun(id)
 		// The signal is queued before ended closes, so a call released by it finds it.
-		_, _ = host.Manager().Complete(id, p.asyncResult(profile, outcome))
+		result := p.asyncResult(profile, outcome)
+		result.Ref = transcriptRef(plan)
+		_, _ = host.Manager().Complete(id, result)
 	}()
 
 	if blocker, ok := run.(ProfileMessageBlocker); ok {
@@ -190,7 +192,7 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 	select {
 	case <-ended:
 		host.Manager().MarkRead(owner, id)
-		return p.renderOutcome(callID, profile, run.Outcome())
+		return p.renderOutcome(callID, profile, run.Outcome(), transcriptInformation(plan))
 	case <-timer.C:
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -198,7 +200,7 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 	select {
 	case <-ended:
 		host.Manager().MarkRead(owner, id)
-		return p.renderOutcome(callID, profile, run.Outcome())
+		return p.renderOutcome(callID, profile, run.Outcome(), transcriptInformation(plan))
 	default:
 	}
 	state, note := "running", "is still working on it"
@@ -214,10 +216,10 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 		Status: tools.StatusOK,
 		Summary: fmt.Sprintf("Profile %s %s (message %s). Do not send the message again: use the async tool with id %s to wait for the answer (action wait), look at it (status) or stop it",
 			profile, note, id, id),
-		Information: []tools.Information{
+		Information: append([]tools.Information{
 			{Key: "run", Value: id},
 			{Key: "state", Value: state},
-		},
+		}, transcriptInformation(plan)...),
 	})
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "tool_output_failed", "The result could not be rendered"), nil
@@ -272,4 +274,14 @@ func (d *profileMessageDriver) Detail(id string, maxBytes int) string {
 	}
 	text, _ := cutUTF8(run.Status(), int64(maxBytes))
 	return text
+}
+
+// transcriptRef is the target's messages.jsonl, the ref of the handle: where the full work of a
+// message is, as the ref of a sub-agent handle is.
+func transcriptRef(plan ProfileMessagePlan) string {
+	if known, ok := plan.(ProfileMessageTranscripts); ok {
+		target, _ := known.Transcripts()
+		return target
+	}
+	return ""
 }

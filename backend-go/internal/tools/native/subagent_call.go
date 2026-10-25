@@ -194,6 +194,11 @@ func partialInformation(information []tools.Information, run subagentRunView) []
 			information = append(information, tools.Information{Key: "truncated", Value: true})
 		}
 	}
+	return withTranscript(information, run)
+}
+
+// withTranscript adds the full path of the child's messages.jsonl once the child has one.
+func withTranscript(information []tools.Information, run subagentRunView) []tools.Information {
 	if run.dir != "" {
 		information = append(information, tools.Information{Key: "transcript", Value: filepath.Join(run.dir, "messages.jsonl")})
 	}
@@ -244,12 +249,12 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 			Status: tools.StatusOK,
 			Summary: fmt.Sprintf("Agent %s is still %s (run %s). Do not start the task again: use the async tool with id %s to wait for the answer (action wait), look at it (status) or cancel it (stop)%s",
 				run.agent, run.state, run.id, run.id, backgroundWriterNote(run)),
-			Information: []tools.Information{
+			Information: withTranscript([]tools.Information{
 				{Key: "run", Value: run.id},
 				{Key: "state", Value: run.state},
 				{Key: "elapsed_ms", Value: run.elapsed.Milliseconds()},
 				{Key: "limit_ms", Value: run.timeoutMS},
-			},
+			}, run),
 		})
 	case subagentRunStopped:
 		information := []tools.Information{{Key: "rounds", Value: run.result.Rounds}, {Key: "tokens", Value: run.result.Tokens}}
@@ -296,17 +301,17 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 	case subagentRunFailed:
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_failed",
 			fmt.Sprintf("Agent %s failed: %s%s", run.agent, boundedReason(run.reason), changesNote(run)),
-			append([]tools.Information{{Key: "agent", Value: run.agent}}, changedInformation(run)...)...), nil
+			withTranscript(append([]tools.Information{{Key: "agent", Value: run.agent}}, changedInformation(run)...), run)...), nil
 	}
 	text := strings.TrimSpace(run.result.Text)
 	if text == "" {
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_empty_result",
 			fmt.Sprintf("Agent %s finished without an answer", run.agent),
-			append([]tools.Information{
+			withTranscript(append([]tools.Information{
 				{Key: "agent", Value: run.agent},
 				{Key: "rounds", Value: run.result.Rounds},
 				{Key: "tokens", Value: run.result.Tokens},
-			}, changedInformation(run)...)...), nil
+			}, changedInformation(run)...), run)...), nil
 	}
 	// The manager cut the answer to the limit when the run ended; this only reports it.
 	information := []tools.Information{
@@ -317,7 +322,7 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 	if run.cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
 	}
-	information = append(information, changedInformation(run)...)
+	information = withTranscript(append(information, changedInformation(run)...), run)
 	return tools.RenderToolResult(tools.ResultOptions{
 		ID:          callID,
 		Status:      tools.StatusOK,

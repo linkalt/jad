@@ -59,6 +59,26 @@ func TestProfileMessageDeliversToTheTargetTranscriptAndSecondCallSeesTheFirst(t 
 	}
 }
 
+func TestProfileMessagePlanNamesBothTranscripts(t *testing.T) {
+	f := newLayoutFixture(t)
+	plan, err := profileMessenger{resolver: f.service.resolver}.Prepare(callerContext(t, f, context.Background()), native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	known, ok := plan.(native.ProfileMessageTranscripts)
+	if !ok {
+		t.Fatalf("the plan %T must report its transcripts", plan)
+	}
+	target, caller := known.Transcripts()
+	state := filepath.Join(f.cwd, ".jad", "state", "demo")
+	if want := filepath.Join(state, "review", "reviewer", "messages.jsonl"); target != want {
+		t.Errorf("target transcript = %q, want %q", target, want)
+	}
+	if want := filepath.Join(state, "dev", "coder", "messages.jsonl"); caller != want {
+		t.Errorf("caller transcript = %q, want %q", caller, want)
+	}
+}
+
 func TestProfileMessageToABusyTargetFailsFast(t *testing.T) {
 	f := newLayoutFixture(t)
 	release, err := f.service.resolver.LockSession(context.Background(), "local:demo", "review/reviewer", "")
