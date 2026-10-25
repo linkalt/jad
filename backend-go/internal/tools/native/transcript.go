@@ -24,13 +24,18 @@ var transcriptInputSchema = json.RawMessage(`{
     "list":{"type":"boolean","description":"List the transcript files that can be read, with their size and time of last change, instead of reading."},
     "turns":{"type":"string","minLength":1,"description":"Which turns to read: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail or cursor, the last turn is read."},
     "tail":{"type":"integer","minimum":1,"description":"Read the last N turns; the same as turns -N. Not with turns or cursor."},
+    "source":{"type":"string","enum":["messages","backup"],"description":"messages (default) is the live transcript; backup is messages.backup.jsonl, the history before the last compaction."},
+    "role":{"type":"string","enum":["user","assistant","tool"],"description":"Only entries of this role; tool is a tool call and its result."},
+    "tool":{"type":"string","minLength":1,"description":"Only calls and results of tools whose name matches; * and ? are wildcards (read, exec*)."},
+    "search":{"type":"string","minLength":1,"description":"Only entries whose text contains this, case-insensitive, with context entries around each."},
+    "context":{"type":"integer","minimum":0,"description":"With search: how many entries to show on each side of a match. Default 0."},
     "full":{"type":"boolean","description":"Do not cut the text of one entry (the whole response is still capped)."},
     "cursor":{"type":"string","minLength":1,"description":"Continue where the previous response stopped; use the cursor it gave. Not with turns or tail."}
   },
   "additionalProperties":false
 }`)
 
-const transcriptDescription = "Read the messages.jsonl transcript of this session as text: user and assistant messages, tool calls and their results, by turn. Reasoning is not shown. Use turns or tail to choose which turns, cursor to continue a cut response, list to see which transcript files exist."
+const transcriptDescription = "Read the messages.jsonl transcript of this session as text: user and assistant messages, tool calls and their results, by turn. Reasoning is not shown. Use turns or tail to choose which turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue a cut response, list to see which transcript files exist."
 
 var transcriptRejectedProperties = map[string]string{
 	"offset": "transcript has no offset; select by turns, tail or cursor",
@@ -75,6 +80,7 @@ func NewTranscriptTool(settings sessionfs.NativeTranscriptSettings, own Transcri
 }
 
 type transcriptCursor struct {
+	Source   string `json:"s"`
 	Identity string `json:"i"`
 	Offset   int64  `json:"o"`
 	End      int64  `json:"e"`
@@ -141,13 +147,42 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 		return t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "Give only one of turns, tail and cursor")
 	}
 	full, _ := arguments["full"].(bool)
+	source, _ := arguments["source"].(string)
+	role, _ := arguments["role"].(string)
+	search, _ := arguments["search"].(string)
+	contextValue, _ := safeInteger(arguments["context"])
+	var toolFilter *compiledGlob
+	if pattern, _ := arguments["tool"].(string); pattern != "" {
+		var err error
+		if toolFilter, err = compileGlob(pattern); err != nil {
+			return t.fail(execution, tools.StatusInvalidInput, "invalid_tool_pattern", "tool is not a valid pattern", tools.Information{Key: "tool", Value: pattern})
+		}
+	}
+	var cursor transcriptCursor
+	if hasCursor {
+		var ok bool
+		if cursor, ok = decodeTranscriptCursor(cursorText); !ok {
+			return t.fail(execution, tools.StatusInvalidInput, "invalid_cursor", "cursor is not a cursor this tool gave")
+		}
+		if source != "" && source != cursor.Source {
+			return t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "source differs from the one the cursor was made for")
+		}
+		source = cursor.Source
+	}
+	if source == "" {
+		source = "messages"
+	}
+	path := t.own.Messages
+	if source == "backup" {
+		path = t.own.Backup
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(t.settings.TimeoutMs)*time.Millisecond)
 	defer cancel()
-	file, err := os.Open(t.own.Messages)
+	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return t.fail(execution, tools.StatusNotFound, "no_transcript", "This session has no transcript yet")
+			return t.fail(execution, tools.StatusNotFound, "no_transcript", "This session has no "+source+" transcript yet")
 		}
 		return t.fail(execution, tools.StatusError, "transcript_unreadable", "The transcript could not be opened")
 	}
@@ -176,10 +211,6 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 	var startOff, endOff int64
 	var first, last int
 	if hasCursor {
-		cursor, ok := decodeTranscriptCursor(cursorText)
-		if !ok {
-			return t.fail(execution, tools.StatusInvalidInput, "invalid_cursor", "cursor is not a cursor this tool gave")
-		}
 		if cursor.Identity != identity || cursor.End > complete {
 			return t.fail(execution, tools.StatusError, "cursor_stale", "The transcript changed (compaction or reset) since this cursor was made; repeat the call without cursor")
 		}
@@ -221,47 +252,57 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 	if full {
 		limit = 0
 	}
-	var entries []string
-	var used int64
-	next := int64(-1)
+	var collected []transcriptEntry
+	calls := map[string]string{}
+	needle := strings.ToLower(search)
 	turnIndex := first
 	err = scanTranscript(ctx, file, startOff, endOff, t.settings.LineMaxBytes, func(line transcriptLine) (bool, error) {
 		for turnIndex+1 < len(turns) && turns[turnIndex+1].off <= line.off {
 			turnIndex++
 		}
 		number := turns[turnIndex].number
-		var rendered []string
 		if line.tooLong {
-			rendered = []string{fmt.Sprintf("#%d [line of %d bytes skipped: over tools.native.transcript.line_max_bytes]", number, line.length)}
-		} else {
-			rendered = renderTranscriptRecord(line.data, number, limit)
+			collected = append(collected, transcriptEntry{turn: number, off: line.off, role: "unknown", text: fmt.Sprintf("#%d [line of %d bytes skipped: over tools.native.transcript.line_max_bytes]", number, line.length)})
+			return true, nil
 		}
-		var size int64
-		for _, entry := range rendered {
-			size += int64(len(entry)) + 1
-		}
-		if len(entries) > 0 && used+size > t.settings.ResponseMaxBytes {
-			next = line.off
-			return false, nil
-		}
-		entries = append(entries, rendered...)
-		used += size
+		collected = append(collected, renderTranscriptRecord(line.data, number, line.off, limit, calls, needle)...)
 		return true, nil
 	})
 	if err != nil {
 		return t.scanFailure(execution, err)
 	}
+	selected := selectTranscriptEntries(collected, role, toolFilter, search != "", int(contextValue))
+	var entries []string
+	var used int64
+	next := int64(-1)
+	for index := 0; index < len(selected); {
+		group := index
+		var size int64
+		for group < len(selected) && selected[group].off == selected[index].off {
+			size += int64(len(selected[group].text)) + 1
+			group++
+		}
+		if len(entries) > 0 && used+size > t.settings.ResponseMaxBytes {
+			next = selected[index].off
+			break
+		}
+		for _, entry := range selected[index:group] {
+			entries = append(entries, entry.text)
+		}
+		used += size
+		index = group
+	}
 	header := fmt.Sprintf("turns %d-%d of %d", turns[first].number, turns[min(turnIndex, len(turns)-1)].number, len(turns))
 	if turns[0].number != 1 {
 		header += fmt.Sprintf("; the first turn is %d: the transcript was compacted, its earlier turns may be in the backup", turns[0].number)
 	}
-	cursor := ""
+	nextCursor := ""
 	if next >= 0 {
-		cursor = encodeTranscriptCursor(transcriptCursor{Identity: identity, Offset: next, End: endOff})
+		nextCursor = encodeTranscriptCursor(transcriptCursor{Source: source, Identity: identity, Offset: next, End: endOff})
 	} else if endOff < complete {
-		cursor = encodeTranscriptCursor(transcriptCursor{Identity: identity, Offset: endOff, End: complete})
+		nextCursor = encodeTranscriptCursor(transcriptCursor{Source: source, Identity: identity, Offset: endOff, End: complete})
 	}
-	return t.render(execution, header, entries, cursor, next >= 0)
+	return t.render(execution, header, entries, nextCursor, next >= 0)
 }
 
 func (t *transcriptTool) scanFailure(execution tools.ExecutionContext, err error) string {

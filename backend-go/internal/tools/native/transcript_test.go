@@ -437,3 +437,105 @@ func TestTranscriptIsAReadOnlyToolSoAnAgentCanListIt(t *testing.T) {
 		t.Fatalf("tool = %+v, err = %v", tool, err)
 	}
 }
+
+func filterTranscript(t *testing.T) string {
+	path := filepath.Join(t.TempDir(), "messages.jsonl")
+	writeTestTranscript(t, path,
+		userLine("please find the Needle"),
+		answerLine(1, 1, callItem("c1", "read", `{"path":"a.go"}`)),
+		resultLine("c1", "package a // has a needle inside"),
+		answerLine(1, 2, callItem("c2", "exec", `{"code":"ls"}`)),
+		resultLine("c2", "file1 file2"),
+		answerLine(1, 3, textItem("nothing else")),
+	)
+	return path
+}
+
+func TestTranscriptFiltersByRole(t *testing.T) {
+	path := filterTranscript(t)
+	out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"role": "tool"})
+	if !strings.Contains(out, "call read") || !strings.Contains(out, "result [c2]") || strings.Contains(out, "user:") || strings.Contains(out, "assistant:") {
+		t.Fatalf("role tool: %s", out)
+	}
+	out = runTranscript(t, transcriptTestSettings(), path, map[string]any{"role": "user"})
+	if !strings.Contains(out, "user: please") || strings.Contains(out, "call read") {
+		t.Fatalf("role user: %s", out)
+	}
+}
+
+func TestTranscriptFiltersByToolNameForCallsAndTheirResults(t *testing.T) {
+	path := filterTranscript(t)
+	out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"tool": "ex*"})
+	if !strings.Contains(out, "call exec") || !strings.Contains(out, "result [c2] file1") || strings.Contains(out, "call read") || strings.Contains(out, "result [c1]") || strings.Contains(out, "user:") {
+		t.Fatalf("tool ex*: %s", out)
+	}
+}
+
+func TestTranscriptSearchesCaseInsensitivelyWithContext(t *testing.T) {
+	path := filterTranscript(t)
+	out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"search": "NEEDLE"})
+	if !strings.Contains(out, "user: please find the Needle") || !strings.Contains(out, "has a needle inside") || strings.Contains(out, "call exec") || strings.Contains(out, "nothing else") {
+		t.Fatalf("search: %s", out)
+	}
+	out = runTranscript(t, transcriptTestSettings(), path, map[string]any{"search": "file1", "context": json.Number("1")})
+	if !strings.Contains(out, "call exec") || !strings.Contains(out, "result [c2] file1") || !strings.Contains(out, "nothing else") || strings.Contains(out, "call read") {
+		t.Fatalf("search with context: %s", out)
+	}
+}
+
+func TestTranscriptSearchOnlyMatchesTheFilteredEntries(t *testing.T) {
+	path := filterTranscript(t)
+	out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"search": "needle", "role": "user"})
+	if !strings.Contains(out, "user: please") || strings.Contains(out, "has a needle inside") {
+		t.Fatalf("search + role: %s", out)
+	}
+}
+
+func TestTranscriptReadsTheBackupAndAKeepsItsCursorOnIt(t *testing.T) {
+	dir := t.TempDir()
+	messages := filepath.Join(dir, "messages.jsonl")
+	backup := filepath.Join(dir, "messages.backup.jsonl")
+	writeTestTranscript(t, messages, userLine("live"), answerLine(5, 1, textItem("live answer")))
+	lines := []string{userLine("old")}
+	for step := 1; step <= 12; step++ {
+		lines = append(lines, answerLine(1, step, textItem(fmt.Sprintf("old-%02d %s", step, strings.Repeat("b", 100)))))
+	}
+	writeTestTranscript(t, backup, lines...)
+	settings := transcriptTestSettings()
+	settings.ResponseMaxBytes = 400
+	tool, err := NewTranscriptTool(settings, TranscriptFiles{Messages: messages, Backup: backup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(arguments map[string]any) string {
+		out, err := tool.Execute(t.Context(), arguments, tools.ExecutionContext{CallID: "c"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	first := run(map[string]any{"source": "backup", "turns": "1"})
+	if !strings.Contains(first, "old-01") || strings.Contains(first, "live answer") {
+		t.Fatalf("backup: %s", first)
+	}
+	cursor := cursorOf(first)
+	if cursor == "" {
+		t.Fatal("expected a cursor")
+	}
+	second := run(map[string]any{"cursor": cursor})
+	if strings.Contains(second, "live answer") || !strings.Contains(second, "old-") {
+		t.Fatalf("a cursor must stay on the file it was made for: %s", second)
+	}
+	if out := run(map[string]any{"cursor": cursor, "source": "messages"}); !strings.Contains(out, "conflicting_selectors") {
+		t.Fatalf("source against the cursor: %s", out)
+	}
+}
+
+func TestTranscriptBackupMissingSaysSo(t *testing.T) {
+	path := threeTurns(t)
+	tool, _ := NewTranscriptTool(transcriptTestSettings(), TranscriptFiles{Messages: path, Backup: path + ".none"})
+	out, _ := tool.Execute(t.Context(), map[string]any{"source": "backup"}, tools.ExecutionContext{CallID: "c"})
+	if !strings.Contains(out, "no_transcript") || !strings.Contains(out, "backup") {
+		t.Fatalf("out = %s", out)
+	}
+}

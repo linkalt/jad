@@ -5,7 +5,7 @@
       "id": "native.transcript",
       "source": "native",
       "name": "transcript",
-      "description": "Read the messages.jsonl transcript of this session as text: user and assistant messages, tool calls and their results, by turn. Reasoning is not shown. Use turns or tail to choose which turns, cursor to continue a cut response, list to see which transcript files exist.",
+      "description": "Read the messages.jsonl transcript of this session as text: user and assistant messages, tool calls and their results, by turn. Reasoning is not shown. Use turns or tail to choose which turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue a cut response, list to see which transcript files exist.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -22,6 +22,38 @@
             "type": "integer",
             "minimum": 1,
             "description": "Read the last N turns; the same as turns -N. Not with turns or cursor."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "messages",
+              "backup"
+            ],
+            "description": "messages (default) is the live transcript; backup is messages.backup.jsonl, the history before the last compaction."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "tool"
+            ],
+            "description": "Only entries of this role; tool is a tool call and its result."
+          },
+          "tool": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Only calls and results of tools whose name matches; * and ? are wildcards (read, exec*)."
+          },
+          "search": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Only entries whose text contains this, case-insensitive, with context entries around each."
+          },
+          "context": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "With search: how many entries to show on each side of a match. Default 0."
           },
           "full": {
             "type": "boolean",

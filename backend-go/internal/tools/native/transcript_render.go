@@ -70,24 +70,40 @@ func transcriptText(raw json.RawMessage) string {
 	return string(raw)
 }
 
-// renderTranscriptRecord turns one transcript line into entries, one per message, tool call
-// or tool result. Reasoning is not shown. limit cuts each payload; zero keeps it whole.
-func renderTranscriptRecord(data []byte, turn int64, limit int) []string {
+// transcriptEntry is one line of output: a message, a tool call or a tool result. role is
+// what the role filter matches (user, assistant, tool, or the record's own role); tool is the
+// tool name of a call or of the result's call.
+type transcriptEntry struct {
+	turn    int64
+	off     int64
+	role    string
+	tool    string
+	text    string
+	matched bool
+}
+
+// renderTranscriptRecord turns one transcript line into entries. Reasoning is not shown.
+// limit cuts each payload (zero keeps it whole). calls maps call ids to tool names and is
+// filled by every call seen, so a result later knows its tool. needle, lower case, marks the
+// entries whose whole text contains it.
+func renderTranscriptRecord(data []byte, turn, off int64, limit int, calls map[string]string, needle string) []transcriptEntry {
 	var record transcriptRecord
 	if err := json.Unmarshal(data, &record); err != nil {
-		return []string{fmt.Sprintf("#%d [unreadable record]", turn)}
+		return []transcriptEntry{{turn: turn, off: off, role: "unknown", text: fmt.Sprintf("#%d [unreadable record]", turn)}}
 	}
-	entry := func(label, body string) string {
+	entry := func(role, tool, label, body string) transcriptEntry {
 		body = transcriptDataURL.ReplaceAllStringFunc(body, func(match string) string {
 			return fmt.Sprintf("[data URL %d bytes]", len(match))
 		})
-		return fmt.Sprintf("#%d %s%s", turn, label, cutMiddle(body, limit))
+		matched := needle != "" && strings.Contains(strings.ToLower(label+body), needle)
+		return transcriptEntry{turn: turn, off: off, role: role, tool: tool, matched: matched, text: fmt.Sprintf("#%d %s%s", turn, label, cutMiddle(body, limit))}
 	}
 	switch {
 	case record.Type == "function_call_output":
-		return []string{entry("result ["+record.CallID+"] ", transcriptText(record.Output))}
+		tool := calls[record.CallID]
+		return []transcriptEntry{entry("tool", tool, "result ["+record.CallID+"] ", transcriptText(record.Output))}
 	case record.Type == "response.completed" && record.Response != nil:
-		var entries []string
+		var entries []transcriptEntry
 		for _, raw := range record.Response.Output {
 			var item transcriptRecord
 			if json.Unmarshal(raw, &item) != nil {
@@ -95,12 +111,13 @@ func renderTranscriptRecord(data []byte, turn int64, limit int) []string {
 			}
 			switch item.Type {
 			case "message":
-				entries = append(entries, entry("assistant: ", transcriptText(item.Content)))
+				entries = append(entries, entry("assistant", "", "assistant: ", transcriptText(item.Content)))
 			case "function_call":
-				entries = append(entries, entry("call "+item.Name+" ["+item.CallID+"] ", transcriptText(item.Arguments)))
+				calls[item.CallID] = item.Name
+				entries = append(entries, entry("tool", item.Name, "call "+item.Name+" ["+item.CallID+"] ", transcriptText(item.Arguments)))
 			case "reasoning":
 			default:
-				entries = append(entries, fmt.Sprintf("#%d [%s]", turn, item.Type))
+				entries = append(entries, transcriptEntry{turn: turn, off: off, role: item.Type, text: fmt.Sprintf("#%d [%s]", turn, item.Type)})
 			}
 		}
 		return entries
@@ -109,7 +126,40 @@ func renderTranscriptRecord(data []byte, turn int64, limit int) []string {
 		if role == "" {
 			role = "message"
 		}
-		return []string{entry(role+": ", transcriptText(record.Content))}
+		return []transcriptEntry{entry(role, "", role+": ", transcriptText(record.Content))}
 	}
-	return []string{fmt.Sprintf("#%d [%s]", turn, record.Type)}
+	return []transcriptEntry{{turn: turn, off: off, role: record.Type, text: fmt.Sprintf("#%d [%s]", turn, record.Type)}}
+}
+
+// selectTranscriptEntries keeps the entries that pass the role and tool filters and, with a
+// search, those that match it plus context entries on each side.
+func selectTranscriptEntries(entries []transcriptEntry, role string, tool *compiledGlob, search bool, context int) []transcriptEntry {
+	keep := make([]bool, len(entries))
+	for index, entry := range entries {
+		keep[index] = (role == "" || entry.role == role) && (tool == nil || entry.role == "tool" && entry.tool != "" && tool.matches(entry.tool, entry.tool))
+	}
+	if search {
+		hit := make([]bool, len(entries))
+		for index, entry := range entries {
+			hit[index] = keep[index] && entry.matched
+		}
+		for index := range entries {
+			keep[index] = false
+		}
+		for index, matched := range hit {
+			if !matched {
+				continue
+			}
+			for near := max(index-context, 0); near <= min(index+context, len(entries)-1); near++ {
+				keep[near] = true
+			}
+		}
+	}
+	selected := entries[:0:0]
+	for index, entry := range entries {
+		if keep[index] {
+			selected = append(selected, entry)
+		}
+	}
+	return selected
 }
