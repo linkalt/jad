@@ -181,6 +181,23 @@ func TestExecListsHelpersPerLanguageAndFiltersNarrowThem(t *testing.T) {
 	}
 }
 
+func TestExecListWithoutALibraryOrRunnerFoldersIsEmpty(t *testing.T) {
+	root := t.TempDir()
+	settings := execTestSettings()
+	settings.FunctionsDir = ".jad/exec"
+	settings.ListMaxResults, settings.ListMaxFiles, settings.ListHeaderBytes, settings.FunctionMaxBytes = 50, 200, 2048, 4096
+	bash := bashTestSettings(t, root)
+	got := runExec(t, root, settings, bash, map[string]any{})
+	if !strings.Contains(got, "0 helpers") || strings.Contains(got, "list_failed") {
+		t.Fatalf("no library folder:\n%s", got)
+	}
+	root, settings = execHelpersFixture(t, map[string]string{"node/read.js": "// Read a file\n"})
+	got = runExec(t, root, settings, bashTestSettings(t, root), map[string]any{})
+	if !strings.Contains(got, "1 helper") || !strings.Contains(got, "read.js") || strings.Contains(got, "list_failed") {
+		t.Fatalf("only some runner folders:\n%s", got)
+	}
+}
+
 func TestExecListingCutsAtTheConfiguredLimitsAndSaysSo(t *testing.T) {
 	files := map[string]string{}
 	for _, name := range []string{"a", "b", "c"} {

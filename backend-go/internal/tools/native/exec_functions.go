@@ -1,8 +1,10 @@
 package native
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -186,16 +188,22 @@ func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSett
 		}
 	}
 	dir, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, execution.WorkspaceRoot)
-	if err != nil {
+	var files, scanned []execHelperFile
+	var strays []string
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// a library that was never created simply has no helpers
+	case err != nil:
 		return tools.ExecutionError(callID, tools.StatusError, "list_failed", "The function library could not be opened",
 			tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},
 			tools.Information{Key: "system_error", Value: err.Error()})
-	}
-	files, scanned, strays, err := scanExecHelpers(dir, settings)
-	if err != nil {
-		return tools.ExecutionError(callID, tools.StatusError, "list_failed", "The function library could not be read",
-			tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},
-			tools.Information{Key: "system_error", Value: err.Error()})
+	default:
+		files, scanned, strays, err = scanExecHelpers(dir, settings)
+		if err != nil {
+			return tools.ExecutionError(callID, tools.StatusError, "list_failed", "The function library could not be read",
+				tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},
+				tools.Information{Key: "system_error", Value: err.Error()})
+		}
 	}
 	var matched []execFunction
 	problems := append([]string(nil), strays...)
