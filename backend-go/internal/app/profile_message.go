@@ -118,6 +118,7 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		timeout:   request.Timeout,
 		queueWait: request.QueueWait,
 		maxQueued: request.MaxQueued,
+		blocking:  request.Blocking,
 	}
 	if request.Compact {
 		plan.beforeRun = func(ctx context.Context) {

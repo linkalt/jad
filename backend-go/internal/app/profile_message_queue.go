@@ -20,6 +20,37 @@ import (
 type profileQueueSet struct {
 	mu     sync.Mutex
 	queues map[string]*targetQueue
+	// edges counts, per session, the calls blocked right now on a message: profile from
+	// cannot go on until profile to answers. Only a call that waits is an edge; a handle
+	// nobody blocks on is not.
+	edges map[waitEdge]int
+}
+
+type waitEdge struct{ reference, from, to string }
+
+func (p *profileMessagePlan) edge() waitEdge {
+	return waitEdge{reference: p.reference, from: p.caller, to: p.target}
+}
+
+// beginWait records that a call of the caller's current run is blocked on the target until
+// the returned function is called (once is enough; more are ignored).
+func (s *profileQueueSet) beginWait(e waitEdge) func() {
+	s.mu.Lock()
+	if s.edges == nil {
+		s.edges = map[waitEdge]int{}
+	}
+	s.edges[e]++
+	s.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			if s.edges[e]--; s.edges[e] <= 0 {
+				delete(s.edges, e)
+			}
+			s.mu.Unlock()
+		})
+	}
 }
 
 // targetQueue is the first-come-first-served line for one target. While pumping is set,
@@ -87,28 +118,26 @@ func (s *profileQueueSet) position(key string, run *profileMessageRun) (int, int
 	return 0, len(q.waiting)
 }
 
-// waitsForCaller reports that queueing p would close a loop of profiles each waiting for
-// the next: the target already waits, directly or through others, for the caller's
-// profile. Such messages could only end by timeout. The caller holds s.mu.
+// waitsForCaller reports that a blocking message of p would close a loop of profiles each
+// blocked on the next: the target is blocked, directly or through others, on the caller's
+// profile (as a call waiting for an answer, or as a message waiting for a busy profile).
+// Such calls could only end by timeout. The caller holds s.mu.
 func (s *profileQueueSet) waitsForCaller(p *profileMessagePlan) bool {
 	seen := map[string]bool{p.target: true}
 	pending := []string{p.target}
 	for len(pending) > 0 {
 		node := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
-		for _, q := range s.queues {
-			for _, waiting := range q.waiting {
-				if waiting.plan.reference != p.reference || waiting.plan.caller != node {
-					continue
-				}
-				next := waiting.plan.target
-				if next == p.caller {
-					return true
-				}
-				if !seen[next] {
-					seen[next] = true
-					pending = append(pending, next)
-				}
+		for edge := range s.edges {
+			if edge.reference != p.reference || edge.from != node {
+				continue
+			}
+			if edge.to == p.caller {
+				return true
+			}
+			if !seen[edge.to] {
+				seen[edge.to] = true
+				pending = append(pending, edge.to)
 			}
 		}
 	}
@@ -152,6 +181,7 @@ type profileMessagePlan struct {
 	timeout   time.Duration
 	queueWait time.Duration
 	maxQueued int
+	blocking  bool
 	beforeRun func(context.Context)
 }
 
@@ -183,6 +213,9 @@ func (p *profileMessagePlan) busy(queueFull int) error {
 func (p *profileMessagePlan) Start(ctx context.Context) (native.ProfileMessageRun, error) {
 	r := newProfileMessageRun(p)
 	set := &p.resolver.profileQueues
+	if p.blocking {
+		r.startEnd = set.beginWait(p.edge())
+	}
 	q := set.acquire(p.key)
 	q.try.Lock()
 	set.mu.Lock()
@@ -194,7 +227,7 @@ func (p *profileMessagePlan) Start(ctx context.Context) (native.ProfileMessageRu
 			r.discard()
 			return nil, p.busy(p.maxQueued)
 		}
-		if set.waitsForCaller(p) {
+		if p.blocking && set.waitsForCaller(p) {
 			set.mu.Unlock()
 			q.try.Unlock()
 			set.release(p.key, q)
@@ -214,7 +247,7 @@ func (p *profileMessagePlan) Start(ctx context.Context) (native.ProfileMessageRu
 	run, err := p.starter.StartProfileRun(ctx, p.request(r, false))
 	if errors.Is(err, httpapi.ErrSessionBusy) && p.maxQueued > 0 {
 		set.mu.Lock()
-		if set.waitsForCaller(p) {
+		if p.blocking && set.waitsForCaller(p) {
 			set.mu.Unlock()
 			q.try.Unlock()
 			set.release(p.key, q)
@@ -255,6 +288,7 @@ type profileMessageRun struct {
 	startCancel context.CancelFunc
 
 	queued   bool
+	startEnd func()
 	startedC chan struct{}
 	doneC    chan struct{}
 	began    time.Time
@@ -283,6 +317,7 @@ func newProfileMessageRun(plan *profileMessagePlan) *profileMessageRun {
 
 // discard releases a message that never became visible to the caller.
 func (r *profileMessageRun) discard() {
+	r.EndStartWait()
 	r.startCancel()
 	r.cancel()
 }
@@ -296,6 +331,19 @@ func (r *profileMessageRun) beginQueued() {
 		r.mu.Unlock()
 	}
 	go r.watch()
+}
+
+// BeginWait records that one more call is blocked on this message until the returned
+// function is called.
+func (r *profileMessageRun) BeginWait() func() {
+	return r.plan.resolver.profileQueues.beginWait(r.plan.edge())
+}
+
+// EndStartWait ends the wait the sending call itself held from the start.
+func (r *profileMessageRun) EndStartWait() {
+	if r.startEnd != nil {
+		r.startEnd()
+	}
 }
 
 func (r *profileMessageRun) Queued() bool             { return r.queued }

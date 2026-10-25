@@ -119,6 +119,10 @@ type ProfileMessageRequest struct {
 	// MaxQueued is the most messages that may wait for one target; a message over it fails
 	// at once as busy. Zero queues nobody.
 	MaxQueued int
+	// Blocking says the calling run cannot go on until the message ends (or the call's
+	// block_ms passes), so a message that would wait for a profile that is itself blocked
+	// on the caller is refused as a cycle.
+	Blocking bool
 }
 
 // ProfileMessageOutcome is how a message ended. Text is the target's final answer, or the
@@ -147,6 +151,14 @@ type ProfileMessageRun interface {
 	// Stop ends the message: a queued one leaves the queue, a running one stops the
 	// target run. It does not wait.
 	Stop(reason string)
+}
+
+// ProfileMessageBlocker is implemented by a run that tracks who is blocked on it, so loops
+// of blocked profiles can be refused. BeginWait is for a later call that blocks on the
+// message (the async tool's wait); EndStartWait ends the wait the sending call held.
+type ProfileMessageBlocker interface {
+	BeginWait() (end func())
+	EndStartWait()
 }
 
 // ProfileMessagePlan is a message that passed every check and has not started yet, so the
@@ -252,7 +264,9 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	}
 	owner, canHandle := handleOwner(execution)
 	handled := p.host != nil && canHandle
+	block := p.blockFor(arguments)
 	request := ProfileMessageRequest{
+		Blocking:  !handled || block > 0,
 		OwnerKey:  execution.SessionKey,
 		Target:    profile,
 		Message:   message,
@@ -277,7 +291,7 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	if !handled {
 		return p.runInline(ctx, callID, profile, plan)
 	}
-	return p.runHandle(ctx, callID, profile, message, owner, plan, arguments)
+	return p.runHandle(ctx, callID, profile, message, owner, plan, block)
 }
 
 func cancelledMessage(callID, profile string) string {
@@ -293,6 +307,9 @@ func (p *profileMessageTool) runInline(ctx context.Context, callID, profile stri
 			return cancelledMessage(callID, profile), nil
 		}
 		return p.renderFailure(callID, profile, err), nil
+	}
+	if blocker, ok := run.(ProfileMessageBlocker); ok {
+		defer blocker.EndStartWait()
 	}
 	select {
 	case <-run.Done():

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -412,26 +413,105 @@ func TestProfileMessageConcurrentArrivalsQueueInOrderWithoutARace(t *testing.T) 
 	}
 }
 
-func TestProfileMessageRefusesAMessageThatWouldCloseAWaitForLoop(t *testing.T) {
-	p := newPMFixture(t, nil)
-	reviewerCtx := p.callerCtx(t, "review/reviewer")
-	coderCtx := p.callerCtx(t, "dev/coder")
-	reviewer := tools.ExecutionContext{SessionKey: strings.Replace(p.owner, "dev/coder", "review/reviewer", 1)}
-	coder := tools.ExecutionContext{SessionKey: p.owner}
-	// Both profiles are busy with their own work.
-	releaseReviewer := p.holdTranscript(t)
-	releaseCoder, err := p.f.service.resolver.LockSession(context.Background(), "local:demo", "dev/coder", "")
+func (p *pmFixture) sendTo(t *testing.T, ctx context.Context, execution tools.ExecutionContext, profile, text string, blockMs int) string {
+	t.Helper()
+	execution.CallID = "call"
+	out, err := p.message.Execute(ctx, map[string]any{"profile": profile, "message": text, "block_ms": json.Number(fmt.Sprint(blockMs))}, execution)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return out
+}
+
+func (p *pmFixture) waitEdges(t *testing.T, want int) {
+	t.Helper()
+	set := &p.f.service.resolver.profileQueues
+	pollFor(t, fmt.Sprintf("%d blocked calls", want), func() bool {
+		set.mu.Lock()
+		defer set.mu.Unlock()
+		return len(set.edges) == want
+	})
+}
+
+func (p *pmFixture) lockCoder(t *testing.T) func() {
+	t.Helper()
+	release, err := p.f.service.resolver.LockSession(context.Background(), "local:demo", "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return release
+}
+
+// reviewerMessagesCoder is the reviewer's run messaging the coder.
+func (p *pmFixture) reviewerMessagesCoder(t *testing.T, text string, blockMs int) string {
+	reviewer := tools.ExecutionContext{SessionKey: sessionKey("local:demo", "review/reviewer")}
+	return p.sendTo(t, p.callerCtx(t, "review/reviewer"), reviewer, "dev/coder", text, blockMs)
+}
+
+func TestProfileMessageRefusesALoopThroughACallBlockedOnAQueuedMessage(t *testing.T) {
+	p := newPMFixture(t, nil)
+	releaseReviewer := p.holdTranscript(t)
+	releaseCoder := p.lockCoder(t)
 	defer releaseCoder()
-	first := p.handle(t, p.sendAs(t, coderCtx, coder, "alpha-1"))
-	execution := reviewer
-	execution.CallID = "call"
-	out, err := p.message.Execute(reviewerCtx, map[string]any{"profile": "dev/coder", "message": "alpha-2", "block_ms": json.Number("0")}, execution)
-	if err != nil || !strings.Contains(out, "profile_cycle") || pmHandle.MatchString(out) {
-		t.Fatalf("the reviewer waiting for the coder who waits for the reviewer must be refused:\n%s %v", out, err)
+	coder := tools.ExecutionContext{SessionKey: p.owner}
+	done := make(chan string, 1)
+	go func() { done <- p.sendTo(t, p.callerCtx(t, "dev/coder"), coder, "review/reviewer", "alpha-1", 30000) }()
+	p.waitEdges(t, 1)
+	if out := p.reviewerMessagesCoder(t, "alpha-2", 30000); !strings.Contains(out, "profile_cycle") || pmHandle.MatchString(out) {
+		t.Fatalf("the reviewer blocking on a coder who blocks on the reviewer must be refused:\n%s", out)
 	}
 	releaseReviewer()
-	p.wait(t, first)
+	if out := <-done; !strings.Contains(out, "answer for alpha-1") {
+		t.Fatalf("the coder's own call:\n%s", out)
+	}
+	p.waitEdges(t, 0)
+}
+
+func TestProfileMessageRefusesALoopThroughARunningMessage(t *testing.T) {
+	p := newPMFixture(t, nil)
+	p.f.cancelled = make(chan struct{}, 4)
+	p.f.mu.Lock()
+	p.f.hold, p.f.reached = true, make(chan struct{}, 4)
+	p.f.mu.Unlock()
+	coder := tools.ExecutionContext{SessionKey: p.owner}
+	done := make(chan string, 1)
+	go func() { done <- p.sendTo(t, p.callerCtx(t, "dev/coder"), coder, "review/reviewer", "alpha-1", 30000) }()
+	awaitSignal(t, p.f.reached, "the reviewer's run for the coder's message")
+	if out := p.reviewerMessagesCoder(t, "alpha-2", 30000); !strings.Contains(out, "profile_cycle") {
+		t.Fatalf("the reviewer, busy with the coder's message, must not wait for the coder:\n%s", out)
+	}
+	if status, body := p.f.do(t, http.MethodPost, "/api/sessions/local:demo/reset", ""); status != http.StatusOK {
+		t.Fatalf("reset: %d %s", status, body)
+	}
+	<-done
+	p.waitEdges(t, 0)
+}
+
+func TestProfileMessageDoesNotCountAHandleNobodyBlocksOn(t *testing.T) {
+	p := newPMFixture(t, nil)
+	releaseReviewer := p.holdTranscript(t)
+	releaseCoder := p.lockCoder(t)
+	first := p.handle(t, p.send(t, "alpha-1"))
+	p.waitEdges(t, 0)
+	// The coder moved on: its message is a handle, not a wait, so the reviewer may queue.
+	out := p.reviewerMessagesCoder(t, "alpha-2", 0)
+	if strings.Contains(out, "profile_cycle") || !pmHandle.MatchString(out) {
+		t.Fatalf("a handle the caller does not block on is not a wait edge:\n%s", out)
+	}
+
+	// Once the coder blocks on that handle with an async wait, the edge exists.
+	reviewerHandle := p.handle(t, out)
+	waited := make(chan string, 1)
+	go func() { waited <- p.wait(t, first) }()
+	p.waitEdges(t, 1)
+	if out := p.reviewerMessagesCoder(t, "alpha-3", 30000); !strings.Contains(out, "profile_cycle") {
+		t.Fatalf("a coder blocked in async wait on the reviewer is a wait edge:\n%s", out)
+	}
+	releaseReviewer()
+	releaseCoder()
+	if got := <-waited; !strings.Contains(got, "answer for alpha-1") {
+		t.Fatalf("the awaited answer:\n%s", got)
+	}
+	p.waitEdges(t, 0)
+	p.asyncAs(t, sessionKey("local:demo", "review/reviewer"), map[string]any{"action": "stop", "id": reviewerHandle})
 }

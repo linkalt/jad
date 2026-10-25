@@ -88,10 +88,51 @@ func (h *AsyncHost) dropProfileMessageRun(id string) {
 	delete(h.profileMessages, id)
 }
 
+func (p *profileMessageTool) blockFor(arguments map[string]any) time.Duration {
+	if p.host == nil {
+		return 0
+	}
+	var blockMs *int64
+	if value, ok := safeInteger(arguments["block_ms"]); ok {
+		blockMs = &value
+	}
+	return p.host.Config().BlockDuration(blockMs)
+}
+
+// beginProfileMessageWaits marks the owner's run as blocked on the profile_message handles
+// an async wait is about to wait for (the named ones, or all of its live ones).
+func (h *AsyncHost) beginProfileMessageWaits(owner string, ids []string) func() {
+	if len(ids) == 0 {
+		list, err := h.manager.List(asyncmgr.ListQuery{Owner: owner, State: "active", Kind: asyncKindProfileMessage, Limit: h.Config().ListMaxLimit})
+		if err != nil {
+			return func() {}
+		}
+		for _, item := range list.Items {
+			ids = append(ids, item.ID)
+		}
+	}
+	var ends []func()
+	for _, id := range ids {
+		blocker, ok := h.profileMessageRun(id).(ProfileMessageBlocker)
+		if !ok {
+			continue
+		}
+		if _, err := h.manager.Status(owner, id); err != nil {
+			continue
+		}
+		ends = append(ends, blocker.BeginWait())
+	}
+	return func() {
+		for _, end := range ends {
+			end()
+		}
+	}
+}
+
 // runHandle sends the message as a handle of the async manager and blocks up to block_ms
 // for its end. The handle outlives the call: the call ending stops the wait, never the
 // message.
-func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, message, owner string, plan ProfileMessagePlan, arguments map[string]any) (string, error) {
+func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, message, owner string, plan ProfileMessagePlan, block time.Duration) (string, error) {
 	host := p.host
 	random := make([]byte, 4)
 	if _, err := rand.Read(random); err != nil {
@@ -141,11 +182,10 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 		_, _ = host.Manager().Complete(id, p.asyncResult(profile, outcome))
 	}()
 
-	var blockMs *int64
-	if value, ok := safeInteger(arguments["block_ms"]); ok {
-		blockMs = &value
+	if blocker, ok := run.(ProfileMessageBlocker); ok {
+		defer blocker.EndStartWait()
 	}
-	timer := time.NewTimer(host.Config().BlockDuration(blockMs))
+	timer := time.NewTimer(block)
 	defer timer.Stop()
 	select {
 	case <-ended:

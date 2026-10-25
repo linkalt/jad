@@ -169,7 +169,9 @@ func executeAsync(ctx context.Context, host *AsyncHost, arguments map[string]any
 		if value, ok := safeInteger(arguments["wait_ms"]); ok {
 			waitMs = &value
 		}
+		endWaits := host.beginProfileMessageWaits(owner, ids)
 		result, err := manager.Wait(ctx, owner, ids, cfg.WaitDuration(waitMs))
+		endWaits()
 		switch {
 		case errors.Is(err, asyncmgr.ErrUnknownHandle):
 			return asyncUnknownHandle(callID, err), nil
