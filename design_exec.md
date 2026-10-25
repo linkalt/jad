@@ -12,7 +12,7 @@ The shipped exec had a top-level `function` mode: the model named a saved file a
 - Kept: `code` + `lang`, JSON `input` on stdin, `$JAD_RESULT`, `block_ms` async handle, caps, scratch-directory cleanup and startup sweep.
 - New: per-language helper directories exposed to the running code through the interpreter's own search path, and `JAD_FUNCTIONS_DIR`.
 
-No native bridge: a script cannot call JAD tools (read/grep/glob). There is no template/prelude injection and no server callback or socket: a helper is called by the language's own mechanism (import, require, PATH lookup, subprocess).
+No native bridge: a script cannot call JAD tools (read/grep/glob). There is no server callback or socket. A helper is called by the language's own mechanism (import, require, PATH lookup, subprocess) or, in python, node, ts and ruby, through the global `fn` that a built-in template installs before the user's code runs (section 4); the template is a preload, so it injects nothing into the code itself.
 
 ## 2. Input schema (flat)
 
@@ -48,6 +48,16 @@ Only the per-call parameter is removed. The configured `timeout_ms` (default) an
 Two mechanisms, both set at call time and neither changing the user's code or its line numbers.
 
 **`fn` (python, node, ts, ruby).** A built-in template, embedded in the binary, is written into the call's scratch directory and attached before the user's code runs; it installs a global `fn`. `fn.<name>` looks the helper up in `$JAD_RUNNER_DIR` (= `functions_dir/<runner>`) when it is read, so a helper that the same program wrote a moment earlier is found. A missing helper fails with `no helper fn.<name> in <folder>`; a name that is not a plain helper name (path-like, `..`) fails with an explanation.
+
+**Listing and the call rule.** The listing shows what to type, with the file name second: `fn.read(...)   read.ts — reads a file`, `fn["my-helper"](...)` (js), `getattr(fn, "my-helper")(...)` (python), `fn.my_helper(...)` (ruby), a bare file name for bash and sh. A legend at the top states the rule below. `fn.<name>(...)` calls the helper's entry; the value returned by `fn.<name>` is also the module, so `fn.<name>.<member>(...)` keeps working.
+
+| runner | entry of `fn.<name>(...)` (first match) |
+|---|---|
+| ts, node | the default export (`module.exports` as a function); the export named `<name>` (also `_` or camelCase for `-` and `.`); the only exported function |
+| python | the function named `<name>` (a dash written `_`); the only public function defined in the module |
+| ruby | `self.call`; `self.<name>`; the only singleton method of the constant. `fn.<name>` with no arguments returns the constant |
+
+No match is an error that lists the exports and names the member call. A `_template` file written before this rule replaces the new built-in and keeps the old behaviour (`fn.<name>` is the module only).
 
 | runner | attachment (runner config `template`) | `fn.<name>` is | notes |
 |---|---|---|---|
