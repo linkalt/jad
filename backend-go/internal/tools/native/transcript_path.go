@@ -11,7 +11,7 @@ import (
 )
 
 // transcriptPathKinds are the forms of path, as the error for a bad one lists them.
-const transcriptPathKinds = "profile:<category>/<name>, profile:<session>/<category>/<name>, subagent:<run id>, subagent:<session>/<run id>, path:<file>"
+const transcriptPathKinds = "profile:<category>/<name>, profile:<session>/<category>/<name>, subagent:<run id>, subagent:<category>/<name>/<run id>, subagent:<session>/<category>/<name>/<run id>, path:<file>"
 
 var transcriptRunID = regexp.MustCompile("^sub_[0-9a-f]{8}$")
 
@@ -105,28 +105,55 @@ func (t *transcriptTool) resolve(ctx context.Context, selector, source string, e
 		return TranscriptFiles{Messages: target.realPath}, "path:" + target.displayPath, ""
 	case "subagent":
 		parts, ok := splitTranscriptName(rest)
-		if !ok || len(parts) > 2 || !transcriptRunID.MatchString(parts[len(parts)-1]) {
-			return invalid("subagent needs a run id (sub_ and eight hex digits), optionally after the session: subagent:<run id> or subagent:<session>/<run id>")
+		if !ok || (len(parts) != 1 && len(parts) != 3 && len(parts) != 4) || !transcriptRunID.MatchString(parts[len(parts)-1]) {
+			return invalid("subagent needs a run id (sub_ and eight hex digits) after the profile that started it: subagent:<run id> for your profile, subagent:<category>/<name>/<run id> or subagent:<session>/<category>/<name>/<run id>; a run lives inside a profile, so subagent:<session>/<run id> is gone")
 		}
 		if source == "backup" {
 			return TranscriptFiles{}, "", t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "source backup does not apply to subagent: a sub-agent transcript has no backup")
 		}
-		if t.runs == nil {
-			return TranscriptFiles{}, "", t.fail(execution, tools.StatusError, "subagent_unavailable", "Sub-agent runs are not available in this session")
-		}
 		id := parts[len(parts)-1]
-		dir, owner, found := t.runs.RunTranscript(id)
-		ownerSession, _, _ := strings.Cut(owner, "\x00")
-		if found && len(parts) == 2 && parts[0] != ownerSession && !strings.HasSuffix(ownerSession, ":"+parts[0]) {
-			found = false
+		canonical := "subagent:" + id
+		var dir, owner string
+		var found bool
+		var ids []string
+		own := len(parts) == 1
+		var target TranscriptTarget
+		if !own {
+			if t.profiles == nil {
+				return TranscriptFiles{}, "", t.fail(execution, tools.StatusError, "profile_unavailable", "Reading another profile's sub-agent run is not available here")
+			}
+			session := ""
+			if len(parts) == 4 {
+				session = parts[0]
+			}
+			var failure string
+			if target, failure = t.lookupProfile(ctx, execution, session, strings.Join(parts[len(parts)-3:len(parts)-1], "/")); failure != "" {
+				return TranscriptFiles{}, "", failure
+			}
+			otherSession, otherProfile := target.Session != callerSession, target.Profile != callerProfile
+			own = !otherSession && !otherProfile
+			if refusal := t.profileRefusal(otherSession, otherProfile); refusal != nil {
+				return forbid(refusal[0], refusal[1])
+			}
+			canonical = "subagent:" + target.Session + "/" + target.Profile + "/" + id
 		}
-		if !found {
-			var ids []string
+		if own {
+			canonical = "subagent:" + id
+			if t.runs == nil {
+				return TranscriptFiles{}, "", t.fail(execution, tools.StatusError, "subagent_unavailable", "Sub-agent runs are not available in this session")
+			}
+			dir, owner, found = t.runs.RunTranscript(id)
 			for _, run := range t.runs.ownedRuns(execution.SessionKey) {
 				ids = append(ids, run.id)
 			}
+		} else {
+			dir, owner, found = runOfTarget(target, id)
+			ids = subagentRunIDs(target.SubagentDir)
+		}
+		if !found {
 			return TranscriptFiles{}, "", t.notFound(execution, "no_such_run", "No sub-agent run "+rest, id, ids)
 		}
+		ownerSession, _, _ := strings.Cut(owner, "\x00")
 		if owner != execution.SessionKey {
 			if !t.settings.AllowChildren {
 				return forbid("transcript_subagent_denied", "This run was not started by this session: tools.native.transcript.allow_children is false")
@@ -142,7 +169,7 @@ func (t *transcriptTool) resolve(ctx context.Context, selector, source string, e
 		if t.deniedFile(files.Messages, policy) {
 			return forbid("path_denied", "The sub-agent transcript is denied by the read path rules")
 		}
-		return files, "subagent:" + id, ""
+		return files, canonical, ""
 	case "profile":
 		parts, ok := splitTranscriptName(rest)
 		if !ok || len(parts) < 2 || len(parts) > 3 {
@@ -151,25 +178,17 @@ func (t *transcriptTool) resolve(ctx context.Context, selector, source string, e
 		if t.profiles == nil {
 			return TranscriptFiles{}, "", t.fail(execution, tools.StatusError, "profile_unavailable", "Reading another profile's transcript is not available here")
 		}
-		session, profile := "", strings.Join(parts[len(parts)-2:], "/")
+		session := ""
 		if len(parts) == 3 {
 			session = parts[0]
 		}
-		target, err := t.profiles.Profile(ctx, execution.SessionKey, session, profile)
-		if err != nil {
-			profiles, sessions := t.profiles.Candidates(ctx, execution.SessionKey, session)
-			names, query := profiles, profile
-			if profiles == nil {
-				names, query = sessions, session
-			}
-			return TranscriptFiles{}, "", t.notFound(execution, "no_such_profile", err.Error(), query, names)
+		target, failure := t.lookupProfile(ctx, execution, session, strings.Join(parts[len(parts)-2:], "/"))
+		if failure != "" {
+			return TranscriptFiles{}, "", failure
 		}
 		otherSession, otherProfile := target.Session != callerSession, target.Profile != callerProfile
-		if otherSession && !t.settings.AllowOtherSessions {
-			return forbid("transcript_session_denied", "Another session's transcript: tools.native.transcript.allow_other_sessions is false")
-		}
-		if otherProfile && !t.settings.AllowOtherProfiles {
-			return forbid("transcript_profile_denied", "Another profile's transcript: tools.native.transcript.allow_other_profiles is false")
+		if refusal := t.profileRefusal(otherSession, otherProfile); refusal != nil {
+			return forbid(refusal[0], refusal[1])
 		}
 		if (otherSession || otherProfile) && t.deniedFile(target.Files.Messages, policy) {
 			return forbid("path_denied", "The transcript is denied by the read path rules")
@@ -177,4 +196,42 @@ func (t *transcriptTool) resolve(ctx context.Context, selector, source string, e
 		return target.Files, "profile:" + target.Session + "/" + target.Profile, ""
 	}
 	return invalid("unknown prefix " + kind + ":")
+}
+
+// lookupProfile finds a profile of a session, or fails with a not-found error that names the
+// nearest profiles or sessions.
+func (t *transcriptTool) lookupProfile(ctx context.Context, execution tools.ExecutionContext, session, profile string) (TranscriptTarget, string) {
+	target, err := t.profiles.Profile(ctx, execution.SessionKey, session, profile)
+	if err == nil {
+		return target, ""
+	}
+	profiles, sessions := t.profiles.Candidates(ctx, execution.SessionKey, session)
+	names, query := profiles, profile
+	if profiles == nil {
+		names, query = sessions, session
+	}
+	return TranscriptTarget{}, t.notFound(execution, "no_such_profile", err.Error(), query, names)
+}
+
+// profileRefusal is the error code and text of the switch that forbids reading a profile of
+// another session or another profile, nil when both are allowed.
+func (t *transcriptTool) profileRefusal(otherSession, otherProfile bool) []string {
+	if otherSession && !t.settings.AllowOtherSessions {
+		return []string{"transcript_session_denied", "Another session's transcript: tools.native.transcript.allow_other_sessions is false"}
+	}
+	if otherProfile && !t.settings.AllowOtherProfiles {
+		return []string{"transcript_profile_denied", "Another profile's transcript: tools.native.transcript.allow_other_profiles is false"}
+	}
+	return nil
+}
+
+// runOfTarget finds a run in the sub-agent storage of another profile: the live manager when
+// the profile has one, else the run's manifest on disk.
+func runOfTarget(target TranscriptTarget, id string) (dir, owner string, found bool) {
+	if target.Runs != nil {
+		if dir, owner, found = target.Runs.RunTranscript(id); found {
+			return dir, owner, true
+		}
+	}
+	return readSubagentManifest(target.SubagentDir, id)
 }

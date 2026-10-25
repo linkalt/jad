@@ -651,6 +651,14 @@ func (r *Resolver) sharedSubagentManager(config sessionfs.SessionConfig) *native
 	}
 }
 
+// existingSubagentManager returns the manager of a storage directory if one is built, else nil.
+// Unlike sharedSubagentManager it never builds one.
+func (r *Resolver) existingSubagentManager(storageDir string) *native.SubagentManager {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.subagentManagers[filepath.Clean(storageDir)]
+}
+
 // subagentBuild is one manager being built; done closes when it is in the map or the
 // build was given up.
 type subagentBuild struct {

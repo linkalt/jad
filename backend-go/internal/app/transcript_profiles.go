@@ -36,11 +36,16 @@ func (m profileMessenger) Profile(ctx context.Context, ownerKey, session, profil
 	if err != nil {
 		return native.TranscriptTarget{}, mapSessionError(err)
 	}
-	return native.TranscriptTarget{
+	target := native.TranscriptTarget{
 		Session: location.Reference,
 		Profile: config.Profile,
 		Files:   native.TranscriptFiles{Messages: messages, Backup: config.StoragePaths.MessagesBackup},
-	}, nil
+	}
+	if config.NativeSubagent != nil {
+		target.SubagentDir = config.NativeSubagent.StorageDir
+		target.Runs = m.resolver.existingSubagentManager(target.SubagentDir)
+	}
+	return target, nil
 }
 
 // Candidates implements native.TranscriptProfiles: the profiles of the session, or the

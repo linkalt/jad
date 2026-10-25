@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
@@ -41,13 +42,14 @@ func (f *fakeTranscriptProfiles) Profile(_ context.Context, _, session, profile 
 }
 
 type selectFixture struct {
-	dir      string
-	own      string
-	other    string
-	foreign  string
-	subRoot  string
-	manager  *SubagentManager
-	profiles *fakeTranscriptProfiles
+	dir        string
+	own        string
+	other      string
+	foreign    string
+	subRoot    string
+	foreignDir string
+	manager    *SubagentManager
+	profiles   *fakeTranscriptProfiles
 }
 
 const selectCaller = "demo\x00dev/coder"
@@ -67,10 +69,22 @@ func newSelectFixture(t *testing.T) *selectFixture {
 	f.manager.runs["sub_00000001"] = &subagentRun{id: "sub_00000001", owner: selectCaller, dir: f.subRoot}
 	f.manager.runs["sub_00000002"] = &subagentRun{id: "sub_00000002", owner: "elsewhere\x00dev/coder", dir: f.subRoot}
 	f.manager.runs["sub_00000003"] = &subagentRun{id: "sub_00000003", owner: selectCaller}
+	reviewerRuns := NewSubagentManager()
+	reviewerRuns.runs["sub_00000004"] = &subagentRun{id: "sub_00000004", owner: "demo\x00review/reviewer", dir: f.subRoot}
+	f.foreignDir = filepath.Join(dir, "foreign-subagents")
+	foreignRun := filepath.Join(f.foreignDir, "call-1")
+	if err := os.MkdirAll(foreignRun, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestTranscript(t, filepath.Join(foreignRun, "messages.jsonl"), userLine("foreign child task"), answerLine(1, 1, textItem("foreign child answer")))
+	foreignStore := newSubagentStore(f.foreignDir, nil)
+	if err := foreignStore.write(subagentManifest{Version: subagentManifestVersion, ID: "sub_00000005", Owner: "elsewhere\x00dev/coder", State: subagentRunDone, StartedAt: time.Now(), Dir: foreignRun}); err != nil {
+		t.Fatal(err)
+	}
 	f.profiles = &fakeTranscriptProfiles{targets: map[string]TranscriptTarget{
-		"|review/reviewer":     {Session: "demo", Profile: "review/reviewer", Files: TranscriptFiles{Messages: f.other}},
-		"demo|review/reviewer": {Session: "demo", Profile: "review/reviewer", Files: TranscriptFiles{Messages: f.other}},
-		"elsewhere|dev/coder":  {Session: "elsewhere", Profile: "dev/coder", Files: TranscriptFiles{Messages: f.foreign}},
+		"|review/reviewer":     {Session: "demo", Profile: "review/reviewer", Files: TranscriptFiles{Messages: f.other}, Runs: reviewerRuns},
+		"demo|review/reviewer": {Session: "demo", Profile: "review/reviewer", Files: TranscriptFiles{Messages: f.other}, Runs: reviewerRuns},
+		"elsewhere|dev/coder":  {Session: "elsewhere", Profile: "dev/coder", Files: TranscriptFiles{Messages: f.foreign}, SubagentDir: f.foreignDir},
 		"|dev/coder":           {Session: "demo", Profile: "dev/coder", Files: TranscriptFiles{Messages: f.own}},
 	}}
 	return f
@@ -117,9 +131,9 @@ func TestTranscriptPathRefusesBadNamesAndListsThePrefixes(t *testing.T) {
 	f := newSelectFixture(t)
 	settings := transcriptTestSettings()
 	settings.AllowPath = true
-	for _, bad := range []string{"nowhere:x", "profile:", "profile:review", "profile:a/b/c/d", "profile:review//reviewer", "profile:../review/reviewer", "profile:review/./reviewer", "profile:review/rev\\iewer", "profile:/review/reviewer", "subagent:sub_zz", "subagent:a/b/sub_00000001", "subagent:../sub_00000001", "subagent:", "plain"} {
+	for _, bad := range []string{"nowhere:x", "profile:", "profile:review", "profile:a/b/c/d", "profile:review//reviewer", "profile:../review/reviewer", "profile:review/./reviewer", "profile:review/rev\\iewer", "profile:/review/reviewer", "subagent:sub_zz", "subagent:demo/sub_00000001", "subagent:a/b/c/d/sub_00000001", "subagent:review/reviewer/sub_zz", "subagent:../sub_00000001", "subagent:", "plain"} {
 		out := f.run(t, settings, map[string]any{"path": bad}, tools.ExecutionContext{})
-		if !strings.Contains(out, "invalid_path") || !strings.Contains(out, "subagent:<run id>") || !strings.Contains(out, "profile:<category>/<name>") {
+		if !strings.Contains(out, "invalid_path") || !strings.Contains(out, "subagent:<run id>") || !strings.Contains(out, "subagent:<category>/<name>/<run id>") || !strings.Contains(out, "profile:<category>/<name>") {
 			t.Errorf("%q: %s", bad, out)
 		}
 	}
@@ -164,16 +178,84 @@ func TestTranscriptNotFoundNamesTheNearestCandidatesUpToTheCap(t *testing.T) {
 	}
 }
 
-func TestTranscriptSubagentWithSessionMustMatchTheRunsSession(t *testing.T) {
+func TestTranscriptSubagentFollowsTheProfileLayout(t *testing.T) {
 	f := newSelectFixture(t)
-	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:demo/sub_00000001"}, tools.ExecutionContext{}); !strings.Contains(out, "child answer") {
-		t.Fatalf("matching session: %s", out)
+	out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:review/reviewer/sub_00000004"}, tools.ExecutionContext{})
+	if !strings.Contains(out, "child answer") || !strings.Contains(out, "subagent:demo/review/reviewer/sub_00000004: ") {
+		t.Fatalf("a run of another profile in this session: %s", out)
 	}
-	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:elsewhere/sub_00000002"}, tools.ExecutionContext{}); !strings.Contains(out, "child answer") {
-		t.Fatalf("a run of another session: %s", out)
+	out = f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:elsewhere/dev/coder/sub_00000005"}, tools.ExecutionContext{})
+	if !strings.Contains(out, "foreign child answer") || !strings.Contains(out, "subagent:elsewhere/dev/coder/sub_00000005: ") {
+		t.Fatalf("a run of another session read from its manifest: %s", out)
 	}
-	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:elsewhere/sub_00000001"}, tools.ExecutionContext{}); !strings.Contains(out, "no_such_run") {
-		t.Fatalf("a session that does not own the run: %s", out)
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:dev/coder/sub_00000001"}, tools.ExecutionContext{}); !strings.Contains(out, "child answer") || !strings.Contains(out, "subagent:sub_00000001: ") {
+		t.Fatalf("the caller's own profile spelled out reads the same run under the short path: %s", out)
+	}
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:review/reviewer/sub_00000001"}, tools.ExecutionContext{}); !strings.Contains(out, "no_such_run") {
+		t.Fatalf("a run that belongs to another profile's storage: %s", out)
+	}
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:elsewhere/dev/coder/sub_00000004"}, tools.ExecutionContext{}); !strings.Contains(out, "no_such_run") || !strings.Contains(out, "sub_00000005") {
+		t.Fatalf("an unknown run lists the runs of that profile: %s", out)
+	}
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:nosuch/review/reviewer/sub_00000004"}, tools.ExecutionContext{}); !strings.Contains(out, "no_such_profile") {
+		t.Fatalf("an unknown session: %s", out)
+	}
+}
+
+func TestTranscriptSubagentOfAnotherProfileKeepsTheAccessSwitches(t *testing.T) {
+	f := newSelectFixture(t)
+	settings := transcriptTestSettings()
+	settings.AllowOtherProfiles = false
+	if out := f.run(t, settings, map[string]any{"path": "subagent:review/reviewer/sub_00000004"}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_profile_denied") {
+		t.Fatalf("other profiles off: %s", out)
+	}
+	settings = transcriptTestSettings()
+	settings.AllowOtherSessions = false
+	if out := f.run(t, settings, map[string]any{"path": "subagent:elsewhere/dev/coder/sub_00000005"}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_session_denied") {
+		t.Fatalf("other sessions off: %s", out)
+	}
+	settings = transcriptTestSettings()
+	settings.AllowChildren = false
+	if out := f.run(t, settings, map[string]any{"path": "subagent:review/reviewer/sub_00000004"}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_subagent_denied") {
+		t.Fatalf("a run the caller did not start with allow_children off: %s", out)
+	}
+	settings = transcriptTestSettings()
+	settings.Policy = sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: f.subRoot}}}
+	if out := f.run(t, settings, map[string]any{"path": "subagent:review/reviewer/sub_00000004"}, tools.ExecutionContext{}); !strings.Contains(out, "path_denied") {
+		t.Fatalf("a denied run folder: %s", out)
+	}
+}
+
+func TestTranscriptCursorKeepsTheProfileQualifiedRun(t *testing.T) {
+	f := newSelectFixture(t)
+	settings := transcriptTestSettings()
+	settings.ResponseMaxBytes = 25
+	out := f.run(t, settings, map[string]any{"path": "subagent:review/reviewer/sub_00000004", "turns": "1-"}, tools.ExecutionContext{})
+	cursor := cursorOf(out)
+	if cursor == "" {
+		t.Fatalf("response was not cut: %s", out)
+	}
+	if next := f.run(t, settings, map[string]any{"cursor": cursor}, tools.ExecutionContext{}); !strings.Contains(next, "subagent:demo/review/reviewer/sub_00000004: ") {
+		t.Fatalf("the cursor must carry the canonical path: %s", next)
+	}
+}
+
+func TestTranscriptResultNamesTheFileItRead(t *testing.T) {
+	f := newSelectFixture(t)
+	cases := map[string]string{
+		"":                                      f.own,
+		"profile:review/reviewer":               f.other,
+		"subagent:sub_00000001":                 filepath.Join(f.subRoot, "messages.jsonl"),
+		"subagent:review/reviewer/sub_00000004": filepath.Join(f.subRoot, "messages.jsonl"),
+	}
+	for path, want := range cases {
+		arguments := map[string]any{}
+		if path != "" {
+			arguments["path"] = path
+		}
+		if out := f.run(t, transcriptTestSettings(), arguments, tools.ExecutionContext{}); !strings.Contains(out, "transcript: "+want+"\n") {
+			t.Errorf("%q: the result must name %s: %s", path, want, out)
+		}
 	}
 }
 

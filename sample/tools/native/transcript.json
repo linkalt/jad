@@ -12,7 +12,7 @@
           "path": {
             "type": "string",
             "minLength": 1,
-            "description": "Which transcript to read; omit it for your own (a sub-agent reads its own run). profile:<category>/<name> is another profile in this session and profile:<session>/<category>/<name> one in another session; subagent:<run id> (sub_xxxxxxxx) or subagent:<session>/<run id> is a sub-agent run; path:<file> is a transcript file by filesystem path (off unless tools.native.transcript.allow_path is true). The header of a read and a not-found error give the exact path to reuse."
+            "description": "Which transcript to read; omit it for your own (a sub-agent reads its own run). profile:<category>/<name> is another profile in this session and profile:<session>/<category>/<name> one in another session; subagent:<run id> (sub_xxxxxxxx) is a run of your profile, subagent:<category>/<name>/<run id> a run of another profile in this session and subagent:<session>/<category>/<name>/<run id> one of another session; path:<file> is a transcript file by filesystem path (off unless tools.native.transcript.allow_path is true). The header of a read and a not-found error give the exact path to reuse."
           },
           "turns": {
             "type": "string",

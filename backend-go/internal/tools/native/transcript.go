@@ -22,7 +22,7 @@ const transcriptToolID = "native.transcript"
 var transcriptInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "path":{"type":"string","minLength":1,"description":"Which transcript to read; omit it for your own (a sub-agent reads its own run). profile:<category>/<name> is another profile in this session and profile:<session>/<category>/<name> one in another session; subagent:<run id> (sub_xxxxxxxx) or subagent:<session>/<run id> is a sub-agent run; path:<file> is a transcript file by filesystem path (off unless tools.native.transcript.allow_path is true). The header of a read and a not-found error give the exact path to reuse."},
+    "path":{"type":"string","minLength":1,"description":"Which transcript to read; omit it for your own (a sub-agent reads its own run). profile:<category>/<name> is another profile in this session and profile:<session>/<category>/<name> one in another session; subagent:<run id> (sub_xxxxxxxx) is a run of your profile, subagent:<category>/<name>/<run id> a run of another profile in this session and subagent:<session>/<category>/<name>/<run id> one of another session; path:<file> is a transcript file by filesystem path (off unless tools.native.transcript.allow_path is true). The header of a read and a not-found error give the exact path to reuse."},
     "turns":{"type":"string","minLength":1,"description":"Which turns to read: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail or cursor, the last turn is read."},
     "tail":{"type":"integer","minimum":1,"description":"Read the last N turns; the same as turns -N. Not with turns or cursor."},
     "source":{"type":"string","enum":["messages","backup"],"description":"messages (default) is the live transcript; backup is messages.backup.jsonl, the history before the last compaction."},
@@ -59,6 +59,10 @@ type TranscriptTarget struct {
 	Session string
 	Profile string
 	Files   TranscriptFiles
+	// SubagentDir is the profile's sub-agent storage directory, empty when it has none; Runs is
+	// its live manager, nil when none is running.
+	SubagentDir string
+	Runs        *SubagentManager
 }
 
 // TranscriptProfiles finds the transcript of a profile of a session (an empty session is the
@@ -241,7 +245,7 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 		return t.scanFailure(execution, err)
 	}
 	if len(turns) == 0 {
-		return t.render(execution, "transcript is empty", nil, "", false)
+		return t.render(execution, "transcript is empty", path, nil, "", false)
 	}
 
 	var startOff, endOff int64
@@ -338,7 +342,7 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 	} else if endOff < complete {
 		nextCursor = encodeTranscriptCursor(transcriptCursor{Selector: selector, Source: source, Identity: identity, Offset: endOff, End: complete})
 	}
-	return t.render(execution, header, entries, nextCursor, next >= 0)
+	return t.render(execution, header, path, entries, nextCursor, next >= 0)
 }
 
 func (t *transcriptTool) scanFailure(execution tools.ExecutionContext, err error) string {
@@ -351,13 +355,13 @@ func (t *transcriptTool) scanFailure(execution tools.ExecutionContext, err error
 	return t.fail(execution, tools.StatusError, "transcript_unreadable", "The transcript could not be read")
 }
 
-func (t *transcriptTool) render(execution tools.ExecutionContext, summary string, entries []string, cursor string, cut bool) string {
+func (t *transcriptTool) render(execution tools.ExecutionContext, summary, path string, entries []string, cursor string, cut bool) string {
 	text := strings.Join(entries, "\n")
 	if int64(len(text)) > t.settings.ResponseMaxBytes {
 		text = cutMiddle(text, int(t.settings.ResponseMaxBytes))
 		cut = true
 	}
-	var information []tools.Information
+	information := []tools.Information{{Key: "transcript", Value: path}}
 	if cursor != "" {
 		information = append(information, tools.Information{Key: "cursor", Value: cursor})
 	}

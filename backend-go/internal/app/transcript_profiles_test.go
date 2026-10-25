@@ -42,6 +42,31 @@ func TestTranscriptProfilesFindsOwnAndOtherProfilesWithoutCreatingFiles(t *testi
 	}
 }
 
+func TestTranscriptProfilesReportTheSubagentStorageOfTheProfile(t *testing.T) {
+	f := newLayoutFixture(t)
+	messenger := profileMessenger{resolver: f.service.resolver}
+	plain, err := messenger.Profile(context.Background(), profileMessageOwner, "", "review/reviewer")
+	if err != nil || plain.SubagentDir != "" || plain.Runs != nil {
+		t.Fatalf("a profile without the subagent tool has no storage: %+v, %v", plain, err)
+	}
+	// The profile files are read again on every lookup, so the toolset can change after the start.
+	subagent := []byte(`{"native":{"async":{},"subagent":{"agents":{"explore":{}}}},"mcp":{}}`)
+	if err := os.WriteFile(filepath.Join(f.root, "tools", "coding", "none.json"), subagent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other, err := messenger.Profile(context.Background(), profileMessageOwner, "", "review/reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(f.cwd, ".jad", "state", "demo", "review", "reviewer", "tools", ".subagents")
+	if other.SubagentDir != want {
+		t.Fatalf("SubagentDir = %q, want %q", other.SubagentDir, want)
+	}
+	if other.Runs != nil {
+		t.Fatal("a lookup must not build a manager")
+	}
+}
+
 func TestTranscriptProfilesCandidatesListProfilesOfTheSessionOrTheSessions(t *testing.T) {
 	f := newLayoutFixture(t)
 	messenger := profileMessenger{resolver: f.service.resolver}
