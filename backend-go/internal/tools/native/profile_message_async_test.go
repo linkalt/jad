@@ -462,8 +462,9 @@ var _ = errors.Is
 
 func TestProfileMessageStopArrivingBeforeTheRunIsBoundStopsItOnceBound(t *testing.T) {
 	f := newProfileMessageHandleFixture(t, nil, func(c *asyncmgr.Config) { c.StopWaitMs = 0 })
+	var id string
 	f.messenger.startHook = func() {
-		id := handleIDPattern.FindString(f.asyncCall(t, sessionCaller, map[string]any{"action": "list", "state": "all"}))
+		id = handleIDPattern.FindString(f.asyncCall(t, sessionCaller, map[string]any{"action": "list", "state": "all"}))
 		if id == "" {
 			t.Error("the handle is not registered while the message starts")
 			return
@@ -480,4 +481,7 @@ func TestProfileMessageStopArrivingBeforeTheRunIsBoundStopsItOnceBound(t *testin
 	if reasons := run.stopped(); len(reasons) != 1 {
 		t.Fatalf("the run was asked to stop %v", reasons)
 	}
+	// The record is completed by a goroutine after the run ends; wait for it so nothing
+	// still writes into the folder when the test's cleanup removes it.
+	f.asyncCall(t, sessionCaller, map[string]any{"action": "wait", "ids": []any{id}, "wait_ms": json.Number("5000")})
 }
