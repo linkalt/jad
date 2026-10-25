@@ -1,6 +1,8 @@
 # Design: native exec with saved helpers per language
 
-Status: REVISION 3 (replaces the "function mode" design shipped in 962bffa..42a90d2). exec is experimental; a clean break is fine. tool_smith is unchanged.
+Status: IMPLEMENTED (revision 3; replaces the "function mode" design shipped in 962bffa..42a90d2). As built: the default `functions_dir` is `.jad/exec`; the listing is grouped by runner with names as written and a malformed entry is reported as `<runner>/<file>`; helper names are `^[A-Za-z0-9][A-Za-z0-9_.-]*# Design: native exec with saved helpers per language
+
+; the cwd stays the workspace; the unverified claims in section 4 were checked with real interpreters (bash, python3, node, ruby, perl). exec is experimental; a clean break is fine. tool_smith is unchanged.
 
 ## 1. What changes and why
 
