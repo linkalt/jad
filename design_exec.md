@@ -54,6 +54,9 @@ Per runner, config key `lib_env` (default below) names an environment variable t
 | node | NODE_PATH | `require("read.js")`; CommonJS only (ESM import ignores NODE_PATH); a configured ts runner on a Node that strips types can `require("read.ts")` |
 | ruby | RUBYLIB | `require "read"` |
 | perl | PERL5LIB | `use Read;` (file Read.pm) |
+| ts (bun --no-install -e) | NODE_PATH | `import { x } from "read"` or `"read.ts"`; ESM, types and top-level await work; helpers import helpers the same way (verified with bun 1.4.4) |
+
+Why `bun` for ts and why `--no-install`: bun honours NODE_PATH for ESM `import` (node does not), with or without extension, in `-e` and file mode. A tsconfig `baseUrl` does not work for `-e`. Without `--no-install`, an unknown bare specifier makes bun fetch from the npm registry (auto-install); `--no-install` turns that off, so a typo fails with "Cannot find package" instead of a network call. `node` stays CommonJS-only by decision: its `require("name.js")` works, and moving ESM helpers there would need a loader flag or a generated file, which the design refuses; use ts for ESM helpers.
 
 Also always set: `JAD_FUNCTIONS_DIR` = absolute real root. Cross-language chaining is a subprocess by path: `$JAD_FUNCTIONS_DIR/bash/script1.sh`, `subprocess.run(["python3", os.environ["JAD_FUNCTIONS_DIR"]+"/python/x.py"], input=...)`. Helpers call other helpers the same way, because the child inherits the environment. Input to a helper is its stdin/args as the caller chooses; the contract between helpers is theirs.
 

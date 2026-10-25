@@ -99,7 +99,7 @@ type NativeExecSettings struct {
 // defaultNativeExecLangs are the interpreters available without configuration. The code
 // is one argument; bash and sh get a fixed $0 so the call's args start at $1.
 func defaultNativeExecLangs() ([]string, map[string]NativeExecLang) {
-	names := []string{"python", "node", "bash", "sh", "ruby", "perl"}
+	names := []string{"python", "node", "bash", "sh", "ruby", "perl", "ts"}
 	return names, map[string]NativeExecLang{
 		"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}, LibEnv: "PYTHONPATH"},
 		"node":   {Argv: []string{"node", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".js", Aliases: []string{"nodejs", "js", "javascript"}, LibEnv: "NODE_PATH"},
@@ -107,6 +107,7 @@ func defaultNativeExecLangs() ([]string, map[string]NativeExecLang) {
 		"sh":     {Argv: []string{"sh", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{}, LibEnv: "PATH"},
 		"ruby":   {Argv: []string{"ruby", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".rb", Aliases: []string{"rb"}, LibEnv: "RUBYLIB"},
 		"perl":   {Argv: []string{"perl", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".pl", Aliases: []string{}, LibEnv: "PERL5LIB"},
+		"ts":     {Argv: []string{"bun", "--no-install", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".ts", Aliases: []string{"typescript", "bun"}, LibEnv: "NODE_PATH"},
 	}
 }
 

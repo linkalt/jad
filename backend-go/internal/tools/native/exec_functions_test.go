@@ -275,3 +275,30 @@ func TestExecAcceptsNoFunctionArgvArgsOrTimeoutInTheSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestExecTsCodeImportsTsHelpersThatChainAndCallBash(t *testing.T) {
+	requireInterpreters(t, "bun", "bash")
+	root, settings := execHelpersFixture(t, map[string]string{
+		"bash/shout.sh": "#!/bin/sh\n# Upper-case the word\necho \"$1\" | tr a-z A-Z\n",
+		"ts/base.ts":    "// Add one\nexport const plus = (n: number): number => n + 1;\n",
+		"ts/top.ts":     "// Add two through base\nimport { plus } from \"base\";\nexport const plus2 = (n: number): number => plus(plus(n));\n",
+		"ts/viabash.ts": "// Shout through the bash helper\nimport { execFileSync } from \"node:child_process\";\nexport const shout = (w: string): string => execFileSync(process.env.JAD_FUNCTIONS_DIR + \"/bash/shout.sh\", [w]).toString().trim();\n",
+	})
+	bash := bashTestSettings(t, root)
+	code := "import { plus2 } from \"top\";\nimport { shout } from \"viabash\";\nconst n: number = (await Bun.stdin.json()).n;\nconsole.log(plus2(n), shout(\"hi\"));"
+	got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "ts", "code": code, "input": map[string]any{"n": 5}}))
+	if got != "7 HI\n" {
+		t.Fatalf("ts import chain = %q", got)
+	}
+	if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "typescript", "code": "import { plus } from \"base.ts\"; console.log(plus(1))"})); got != "2\n" {
+		t.Fatalf("ts alias with extension = %q", got)
+	}
+}
+
+func TestExecListsTsHelpers(t *testing.T) {
+	root, settings := execHelpersFixture(t, map[string]string{"ts/read.ts": "// Read a thing\nexport {};\n"})
+	text := execContent(runExec(t, root, settings, bashTestSettings(t, root), map[string]any{}))
+	if !strings.Contains(text, "ts:\n  read.ts — Read a thing") {
+		t.Fatalf("listing = %q", text)
+	}
+}

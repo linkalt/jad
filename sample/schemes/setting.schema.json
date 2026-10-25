@@ -1054,7 +1054,7 @@
                 },
                 "runners": {
                   "type": "object",
-                  "description": "Interpreters by name, merged over the built-in python, node, bash, sh, ruby and perl (renamed from langs). An entry with a built-in name replaces it. A name or alias claimed by two entries is refused.",
+                  "description": "Interpreters by name, merged over the built-in python, node, bash, sh, ruby, perl and ts (bun; renamed from langs). An entry with a built-in name replaces it. A name or alias claimed by two entries is refused.",
                   "propertyNames": {
                     "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$"
                   },

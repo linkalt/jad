@@ -912,7 +912,7 @@
     "default_lang": "cobol"
    }
   },
-  "error": "tools.native.exec.default_lang \"cobol\" is not in tools.native.exec.runners (available: python, node, bash, sh, ruby, perl)"
+  "error": "tools.native.exec.default_lang \"cobol\" is not in tools.native.exec.runners (available: python, node, bash, sh, ruby, perl, ts)"
  },
  {
   "name": "exec default_lang empty",
@@ -922,7 +922,7 @@
     "default_lang": ""
    }
   },
-  "error": "tools.native.exec.default_lang \"\" is not in tools.native.exec.runners (available: python, node, bash, sh, ruby, perl)"
+  "error": "tools.native.exec.default_lang \"\" is not in tools.native.exec.runners (available: python, node, bash, sh, ruby, perl, ts)"
  },
  {
   "name": "exec default_lang number",

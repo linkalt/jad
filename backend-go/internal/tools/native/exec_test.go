@@ -15,7 +15,7 @@ import (
 )
 
 func execTestSettings() sessionfs.NativeExecSettings {
-	names := []string{"python", "node", "bash", "sh"}
+	names := []string{"python", "node", "bash", "sh", "ts"}
 	return sessionfs.NativeExecSettings{
 		LangNames: names,
 		Langs: map[string]sessionfs.NativeExecLang{
@@ -23,6 +23,7 @@ func execTestSettings() sessionfs.NativeExecSettings {
 			"node":   {Argv: []string{"node", "-e", "{code}"}, Mode: sessionfs.NativeExecModeArg, Ext: ".js", Aliases: []string{"js"}, LibEnv: "NODE_PATH"},
 			"bash":   {Argv: []string{"bash", "-c", "{code}", "exec"}, Mode: sessionfs.NativeExecModeArg, Ext: ".sh", Aliases: []string{"shell"}, LibEnv: "PATH"},
 			"sh":     {Argv: []string{"sh", "-c", "{code}", "exec"}, Mode: sessionfs.NativeExecModeArg, Ext: ".sh", Aliases: []string{}, LibEnv: "PATH"},
+			"ts":     {Argv: []string{"bun", "--no-install", "-e", "{code}"}, Mode: sessionfs.NativeExecModeArg, Ext: ".ts", Aliases: []string{"typescript"}, LibEnv: "NODE_PATH"},
 		},
 		DefaultLang:    "bash",
 		CodeMaxBytes:   64 * 1024,
@@ -125,7 +126,7 @@ func TestExecFailureInTheDefaultLanguageSaysWhatRanAndHowToPickAnother(t *testin
 	if !strings.Contains(result, `"status":"error"`) || execField(result, "error_code") != "nonzero_exit" {
 		t.Fatalf("result = %s", result)
 	}
-	want := "ran as lang=bash, the default when lang is omitted; if the code is for another interpreter, pass lang (available: python, node, bash, sh)"
+	want := "ran as lang=bash, the default when lang is omitted; if the code is for another interpreter, pass lang (available: python, node, bash, sh, ts)"
 	if got := execField(result, "suggestion"); got != want {
 		t.Fatalf("suggestion = %q, want %q", got, want)
 	}
