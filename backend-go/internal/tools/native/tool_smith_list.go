@@ -1,8 +1,10 @@
 package native
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -82,21 +84,25 @@ func executeToolSmithList(arguments map[string]any, settings sessionfs.NativeToo
 	}
 
 	dir, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, execution.WorkspaceRoot)
-	if err != nil {
+	var files []string
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// a library that was never created simply has no functions
+	case err != nil:
 		return tools.ExecutionError(callID, tools.StatusError, "list_failed", "The function library could not be opened",
 			tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},
 			tools.Information{Key: "system_error", Value: err.Error()})
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return tools.ExecutionError(callID, tools.StatusError, "list_failed", "The function library could not be read",
-			tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},
-			tools.Information{Key: "system_error", Value: err.Error()})
-	}
-	var files []string
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".ts") {
-			files = append(files, entry.Name())
+	default:
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return tools.ExecutionError(callID, tools.StatusError, "list_failed", "The function library could not be read",
+				tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},
+				tools.Information{Key: "system_error", Value: err.Error()})
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".ts") {
+				files = append(files, entry.Name())
+			}
 		}
 	}
 	scanned := files

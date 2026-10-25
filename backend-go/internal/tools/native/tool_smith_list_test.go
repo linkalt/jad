@@ -113,7 +113,7 @@ func TestToolSmithListReadsOnlyTheHeaderBytes(t *testing.T) {
 	}
 }
 
-func TestToolSmithListEmptyLibraryIsOkAndMissingDirectoryIsAnError(t *testing.T) {
+func TestToolSmithListEmptyLibraryIsOkAndMissingDirectoryIsEmptyAndNonDirectoryIsAnError(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "fn"), 0o755); err != nil {
 		t.Fatal(err)
@@ -123,8 +123,12 @@ func TestToolSmithListEmptyLibraryIsOkAndMissingDirectoryIsAnError(t *testing.T)
 		t.Fatalf("empty:\n%s", result)
 	}
 	result = runToolSmithList(root, listTestSettings("missing"))
-	if !strings.Contains(result, `"status":"error"`) || execField(result, "error_code") != "list_failed" {
+	if !strings.Contains(result, `"status":"ok"`) || !strings.Contains(result, "0 functions") || execContent(result) != "" {
 		t.Fatalf("missing:\n%s", result)
+	}
+	result = runToolSmithList(root, listTestSettings(".jad/functions"), "read*")
+	if !strings.Contains(result, `"status":"ok"`) || !strings.Contains(result, "0 functions") {
+		t.Fatalf("missing parent with a filter:\n%s", result)
 	}
 	listTestWrite(t, root, "plain", "x")
 	if result = runToolSmithList(root, listTestSettings("plain")); execField(result, "error_code") != "list_failed" {
