@@ -129,7 +129,7 @@ func (m *Manager) popLocked(owner string, scope map[string]struct{}) (WaitResult
 		if int64(len(taken)) >= m.cfg.WaitMaxSignals {
 			break
 		}
-		entry := entryOf(*r.rec, int(m.cfg.SummaryMaxBytes))
+		entry := entryOf(*r.rec, int(m.cfg.SummaryMaxBytes), m.detailLimit())
 		if len(taken) == 0 {
 			entry = fitEntry(entry, budget)
 		}

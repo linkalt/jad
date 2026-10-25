@@ -341,7 +341,11 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	rec.Ref, _ = cutUTF8(res.Ref, refMaxBytes)
 	rec.Summary, rec.Cut = cutUTF8(res.Summary, int(m.cfg.SummaryMaxBytes))
 	rec.SrcCut = res.Cut
-	rec.Detail, rec.DetailCut = cutUTF8(res.Detail, int(m.cfg.StatusSummaryBytes))
+	rec.Detail, rec.DetailCut = cutUTF8(res.Detail, m.detailLimit())
+	if rec.Detail != "" {
+		// Entries render the detail, so the summary stays a short form instead of a second copy.
+		rec.Summary, _ = cutUTF8(rec.Summary, shortSummaryBytes)
+	}
 	rec.Trace, _ = cutUTF8(res.Trace, refMaxBytes)
 	rec.Cut = rec.Cut || res.Cut
 	rec.Bytes = res.Bytes
