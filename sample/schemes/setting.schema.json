@@ -1353,6 +1353,82 @@
               },
               "unevaluatedProperties": false
             },
+            "transcript": {
+              "type": "object",
+              "description": "Go backend only. Reads messages.jsonl transcripts as bounded text: the session's own, another profile's or session's, or a sub-agent run's. Read-only: the tool opens the file for reading and never repairs or writes it. It has no paths key; a path read follows the read path rules (tools.native.read.paths). Off unless this key is present. Needs transcript in tool_definition_paths.",
+              "properties": {
+                "response_max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 65536,
+                  "description": "Largest response; a longer one is cut and the result says so."
+                },
+                "entry_max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 4000,
+                  "description": "Largest text of one transcript entry; a longer one is cut."
+                },
+                "line_max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 268435456,
+                  "default": 16777216,
+                  "description": "Longest transcript line the reader accepts; a longer line is skipped and reported."
+                },
+                "max_turns_per_call": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "default": 50,
+                  "description": "Most turns one call returns."
+                },
+                "scan_max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967296,
+                  "default": 268435456,
+                  "description": "Most bytes one call scans."
+                },
+                "list_max_entries": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5000,
+                  "default": 200,
+                  "description": "Most transcripts one list returns."
+                },
+                "timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 21600000,
+                  "default": 30000,
+                  "description": "Longest one call may run, at most 6 hours."
+                },
+                "allow_other_sessions": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false limits the tool to the caller's own session."
+                },
+                "allow_other_profiles": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false limits the tool to the caller's own profile."
+                },
+                "allow_children": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false refuses the tool to a sub-agent."
+                },
+                "allow_path": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "true lets a call name a transcript file by path; the path must pass the read path rules."
+                }
+              },
+              "additionalProperties": false
+            },
             "process": {
               "type": "object",
               "description": "Long-running shell process management. Processes are session-owned and stopped on orderly backend shutdown. A process gets the same environment allowlist as bash (PATH, HOME, locale and temp variables) plus env_file and env; other server variables are not inherited.",

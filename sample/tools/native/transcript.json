@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.transcript",
+      "source": "native",
+      "name": "transcript",
+      "description": "List the messages.jsonl transcript files this session can read, with their size and time of last change.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "list": {
+            "type": "boolean",
+            "description": "List the transcript files that can be read, with their size and time of last change."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -948,3 +948,11 @@ Two bounds from the performance audit (P-044, P-045). Both keys are under `serve
   - **Listing.** Grouped by runner in table order, `name — description (input: ...)`, same limits and filters as `tool_smith`. Entries outside a runner folder, folders that are not runners, bad names, missing descriptions, oversize files and symlinks out of the library are listed as malformed.
   - **Code.** `planExecFunction`, `planExecArgv`, `loadExecFunction`, extension ownership and the `args` handling are deleted; `shellChildRun` gained `prependEnv`.
   - **Breaking.** `sample/tools/native/exec.json` changes with the binary; `.jad/exec-functions` is no longer read.
+
+
+## Native transcript tool (2026-10-27)
+
+- **Phase 1 only.** `tools.native.transcript` (off unless the key is present; needs `transcript` in `tool_definition_paths`) is registered with settings, schema, sample manifest and a `list` call that shows the caller's own `messages.jsonl` and backup. Reading comes in later phases; design in `design_transcript_reader.md`.
+- **Selectors.** Exactly one of `profile` (with optional `session`), `subagent` or `path`. `path` is off unless `allow_path` is true and follows the read tool's path rules. `subagent` resolves the run id through the sub-agent manager: the subagent result carries the transcript path only for a stopped, timed-out or lost run (and a handle's end), so the id, which the manager always knows, is the reliable key.
+- **Settings.** Unknown or old keys are rejected naming the key; `timeout_ms` is capped at 6 hours; the tool has no `paths` key (it reuses `tools.native.read.paths`, like `read_image`). Foreign sessions, profiles and children are readable by default; `allow_other_sessions`, `allow_other_profiles`, `allow_children` turn each off.
+- **Read-only scanner (later phase).** The reader opens the file read-only and never uses `Journal.ReadRecordsRange`, which opens the transcript read-write and truncates an incomplete last line.
