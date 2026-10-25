@@ -43,7 +43,7 @@ func TestBuildCatalogNeedsTheTranscriptManifest(t *testing.T) {
 func transcriptTestSettings() sessionfs.NativeTranscriptSettings {
 	return sessionfs.NativeTranscriptSettings{
 		ResponseMaxBytes: 64 * 1024, EntryMaxBytes: 4000, LineMaxBytes: 1 << 20, MaxTurnsPerCall: 50,
-		ScanMaxBytes: 1 << 30, ListMaxEntries: 100, TimeoutMs: 30000, AllowOtherSessions: true, AllowOtherProfiles: true, AllowChildren: true,
+		ScanMaxBytes: 1 << 30, SuggestMax: 20, TimeoutMs: 30000, AllowOtherSessions: true, AllowOtherProfiles: true, AllowChildren: true,
 	}
 }
 
@@ -399,22 +399,6 @@ func TestTranscriptScanStopsOnCancelAndLeaksNoGoroutine(t *testing.T) {
 	}
 	if after := runtime.NumGoroutine(); after > before {
 		t.Fatalf("goroutines %d -> %d", before, after)
-	}
-}
-
-func TestTranscriptListShowsTheOwnFiles(t *testing.T) {
-	dir := t.TempDir()
-	messages := filepath.Join(dir, "messages.jsonl")
-	if err := os.WriteFile(messages, []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	tool, err := NewTranscriptTool(transcriptTestSettings(), TranscriptFiles{Messages: messages, Backup: filepath.Join(dir, "messages.backup.jsonl")}, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := tool.Execute(t.Context(), map[string]any{"list": true}, tools.ExecutionContext{CallID: "c1"})
-	if err != nil || !strings.Contains(out, "messages  3 bytes") || strings.Contains(out, "backup") {
-		t.Fatalf("out = %q, err = %v", out, err)
 	}
 }
 

@@ -22,11 +22,7 @@ const transcriptToolID = "native.transcript"
 var transcriptInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "list":{"type":"boolean","description":"List the transcript files that can be read, with their size and time of last change, instead of reading."},
-    "profile":{"type":"string","minLength":1,"description":"Read another profile's transcript, as <category>/<name>, in this session or in the session named by session. Not with subagent or path."},
-    "session":{"type":"string","minLength":1,"description":"Session reference; only with profile."},
-    "subagent":{"type":"string","pattern":"^sub_[0-9a-f]{8}$","description":"Read the transcript of a sub-agent run by its run id (sub_xxxxxxxx). Not with profile or path."},
-    "path":{"type":"string","minLength":1,"description":"Read a transcript file by path; it must be a messages.jsonl transcript and pass the read path rules. Off unless tools.native.transcript.allow_path is true. Not with profile or subagent."},
+    "path":{"type":"string","minLength":1,"description":"Which transcript to read; omit it for your own (a sub-agent reads its own run). profile:<category>/<name> is another profile in this session and profile:<session>/<category>/<name> one in another session; subagent:<run id> (sub_xxxxxxxx) or subagent:<session>/<run id> is a sub-agent run; path:<file> is a transcript file by filesystem path (off unless tools.native.transcript.allow_path is true). The header of a read and a not-found error give the exact path to reuse."},
     "turns":{"type":"string","minLength":1,"description":"Which turns to read: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail or cursor, the last turn is read."},
     "tail":{"type":"integer","minimum":1,"description":"Read the last N turns; the same as turns -N. Not with turns or cursor."},
     "source":{"type":"string","enum":["messages","backup"],"description":"messages (default) is the live transcript; backup is messages.backup.jsonl, the history before the last compaction."},
@@ -40,11 +36,15 @@ var transcriptInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-const transcriptDescription = "Read a messages.jsonl transcript as text, this session's own by default, or another profile's (profile, session), a sub-agent run's (subagent) or a file (path): user and assistant messages, tool calls and their results, by turn. Reasoning is not shown. Use turns or tail to choose which turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue a cut response, list to see which transcript files exist."
+const transcriptDescription = "Read a messages.jsonl transcript as text, your own by default, or another profile's (path profile:<category>/<name>), a sub-agent run's (path subagent:<run id>) or a file (path path:<file>): user and assistant messages, tool calls and their results, by turn. Reasoning is not shown. Use turns or tail to choose which turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue a cut response."
 
 var transcriptRejectedProperties = map[string]string{
-	"offset": "transcript has no offset; select by turns, tail or cursor",
-	"limit":  "transcript has no limit; the response is capped by the configuration, use turns, tail or cursor",
+	"offset":   "transcript has no offset; select by turns, tail or cursor",
+	"limit":    "transcript has no limit; the response is capped by the configuration, use turns, tail or cursor",
+	"list":     "transcript has no list; a not-found error names the available profiles and sub-agent runs, and path selects one: profile:<category>/<name>, subagent:<run id> or path:<file>",
+	"profile":  "transcript has no profile; use path \"profile:<category>/<name>\"",
+	"session":  "transcript has no session; use path \"profile:<session>/<category>/<name>\"",
+	"subagent": "transcript has no subagent; use path \"subagent:<run id>\"",
 }
 
 // TranscriptFiles are the transcript files of the profile the tool is built for.
@@ -66,6 +66,9 @@ type TranscriptTarget struct {
 // "<reference>\x00<profile>". Without one, only the own transcript can be read.
 type TranscriptProfiles interface {
 	Profile(ctx context.Context, ownerKey, session, profile string) (TranscriptTarget, error)
+	// Candidates names what a failed Profile could have meant: the profiles of the session
+	// (an empty session is the caller's) or, when that session cannot be read, the sessions.
+	Candidates(ctx context.Context, ownerKey, session string) (profiles, sessions []string)
 }
 
 type transcriptTool struct {
@@ -101,21 +104,12 @@ func NewTranscriptTool(settings sessionfs.NativeTranscriptSettings, own Transcri
 	}, nil
 }
 
-// transcriptSelector names a transcript other than the own one. A cursor carries it, so a
-// page is checked again as the first call was.
-type transcriptSelector struct {
-	Profile  string `json:"p,omitempty"`
-	Session  string `json:"s,omitempty"`
-	Subagent string `json:"a,omitempty"`
-	Path     string `json:"f,omitempty"`
-}
-
 type transcriptCursor struct {
-	Selector transcriptSelector `json:"x"`
-	Source   string             `json:"s"`
-	Identity string             `json:"i"`
-	Offset   int64              `json:"o"`
-	End      int64              `json:"e"`
+	Selector string `json:"x"`
+	Source   string `json:"s"`
+	Identity string `json:"i"`
+	Offset   int64  `json:"o"`
+	End      int64  `json:"e"`
 }
 
 func encodeTranscriptCursor(cursor transcriptCursor) string {
@@ -169,9 +163,6 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 	if execution.AgentDepth > 0 && !t.settings.AllowChildren {
 		return t.fail(execution, tools.StatusForbidden, "transcript_children_denied", "A sub-agent may not read transcripts: tools.native.transcript.allow_children is false")
 	}
-	if list, _ := arguments["list"].(bool); list {
-		return t.list(execution)
-	}
 	turnsText, hasTurns := arguments["turns"].(string)
 	tailValue, hasTail := safeInteger(arguments["tail"])
 	cursorText, hasCursor := arguments["cursor"].(string)
@@ -190,9 +181,9 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 			return t.fail(execution, tools.StatusInvalidInput, "invalid_tool_pattern", "tool is not a valid pattern", tools.Information{Key: "tool", Value: pattern})
 		}
 	}
-	selector, failure := t.selectorFrom(arguments, hasCursor, execution)
-	if failure != "" {
-		return failure
+	selector, _ := arguments["path"].(string)
+	if hasCursor && selector != "" {
+		return t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "A cursor already names its transcript; do not give path with it")
 	}
 	var cursor transcriptCursor
 	if hasCursor {
@@ -211,9 +202,14 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(t.settings.TimeoutMs)*time.Millisecond)
 	defer cancel()
-	files, label, failure := t.resolve(ctx, selector, source, execution)
+	files, canonical, failure := t.resolve(ctx, selector, source, execution)
 	if failure != "" {
 		return failure
+	}
+	selector = canonical
+	label := ""
+	if canonical != "" {
+		label = canonical + ": "
 	}
 	path := files.Messages
 	if source == "backup" {
@@ -379,47 +375,6 @@ func (t *transcriptTool) render(execution tools.ExecutionContext, summary string
 	return rendered
 }
 
-func (t *transcriptTool) list(execution tools.ExecutionContext) string {
-	var lines []string
-	for _, file := range []struct{ name, path string }{{"messages", t.own.Messages}, {"backup", t.own.Backup}} {
-		if file.path == "" {
-			continue
-		}
-		info, err := os.Stat(file.path)
-		if err != nil {
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("%s  %d bytes  %s", file.name, info.Size(), info.ModTime().UTC().Format(time.RFC3339)))
-	}
-	return t.render(execution, fmt.Sprintf("%d transcript files", len(lines)), lines, "", false)
-}
-
-// selectorFrom reads profile, session, subagent and path. They are mutually exclusive, and
-// a cursor already names its transcript, so none may come with one.
-func (t *transcriptTool) selectorFrom(arguments map[string]any, hasCursor bool, execution tools.ExecutionContext) (transcriptSelector, string) {
-	var selector transcriptSelector
-	selector.Profile, _ = arguments["profile"].(string)
-	selector.Session, _ = arguments["session"].(string)
-	selector.Subagent, _ = arguments["subagent"].(string)
-	selector.Path, _ = arguments["path"].(string)
-	var given []string
-	for _, name := range []struct{ key, value string }{{"profile", selector.Profile}, {"subagent", selector.Subagent}, {"path", selector.Path}} {
-		if name.value != "" {
-			given = append(given, name.key)
-		}
-	}
-	if len(given) > 1 {
-		return selector, t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "Give only one of profile, subagent and path: got "+strings.Join(given, " and "))
-	}
-	if selector.Session != "" && selector.Profile == "" {
-		return selector, t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "session needs profile: name the profile whose transcript to read")
-	}
-	if hasCursor && (len(given) > 0 || selector.Session != "") {
-		return selector, t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "A cursor already names its transcript; do not give profile, session, subagent or path with it")
-	}
-	return selector, ""
-}
-
 // transcriptDenied reports whether the read path rules deny target: a deny rule covers it, or
 // the call's scope does not reach it. Unlike a read it does not require the workspace, because
 // the state of a session lives outside it.
@@ -430,80 +385,6 @@ func transcriptDenied(policy sessionfs.NativePathPolicy, target string) bool {
 		}
 	}
 	return len(policy.Within) > 0 && !withinAny(policy.Within, target)
-}
-
-// resolve finds the files of the selected transcript and checks that the caller may read them.
-// label starts the header for a transcript other than the own one.
-func (t *transcriptTool) resolve(ctx context.Context, selector transcriptSelector, source string, execution tools.ExecutionContext) (TranscriptFiles, string, string) {
-	forbid := func(code, summary string) (TranscriptFiles, string, string) {
-		return TranscriptFiles{}, "", t.fail(execution, tools.StatusForbidden, code, summary)
-	}
-	policy := scopedPolicy(t.settings.Policy, execution)
-	callerSession, callerProfile, _ := strings.Cut(execution.SessionKey, "\x00")
-	switch {
-	case selector.Path != "":
-		if source == "backup" {
-			return TranscriptFiles{}, "", t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "source backup does not apply to path: name the backup file itself")
-		}
-		if !t.settings.AllowPath {
-			return forbid("transcript_path_disabled", "Reading a transcript by path is off: set tools.native.transcript.allow_path to true")
-		}
-		target, failure := resolveExistingTarget(selector.Path, execution.WorkspaceRoot, policy, execution.CallID)
-		if failure != "" {
-			return TranscriptFiles{}, "", failure
-		}
-		if !looksLikeTranscript(target.realPath, t.settings.LineMaxBytes) {
-			return TranscriptFiles{}, "", t.fail(execution, tools.StatusInvalidInput, "not_a_transcript", "The file is not a messages.jsonl transcript", tools.Information{Key: "path", Value: target.displayPath})
-		}
-		return TranscriptFiles{Messages: target.realPath}, target.displayPath + ": ", ""
-	case selector.Subagent != "":
-		if source == "backup" {
-			return TranscriptFiles{}, "", t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "source backup does not apply to subagent: a sub-agent transcript has no backup")
-		}
-		if t.runs == nil {
-			return TranscriptFiles{}, "", t.fail(execution, tools.StatusError, "subagent_unavailable", "Sub-agent runs are not available in this session")
-		}
-		dir, owner, found := t.runs.RunTranscript(selector.Subagent)
-		if !found {
-			return TranscriptFiles{}, "", t.fail(execution, tools.StatusNotFound, "no_such_run", "No sub-agent run "+selector.Subagent)
-		}
-		if owner != execution.SessionKey {
-			if !t.settings.AllowChildren {
-				return forbid("transcript_subagent_denied", "This run was not started by this session: tools.native.transcript.allow_children is false")
-			}
-			if ownerSession, _, qualified := strings.Cut(owner, "\x00"); qualified && ownerSession != callerSession && !t.settings.AllowOtherSessions {
-				return forbid("transcript_session_denied", "This run belongs to another session: tools.native.transcript.allow_other_sessions is false")
-			}
-		}
-		if dir == "" {
-			return TranscriptFiles{}, "", t.fail(execution, tools.StatusNotFound, "no_transcript_yet", "Sub-agent run "+selector.Subagent+" has no transcript yet")
-		}
-		files := TranscriptFiles{Messages: filepath.Join(dir, "messages.jsonl")}
-		if denied := t.deniedFile(files.Messages, policy); denied {
-			return forbid("path_denied", "The sub-agent transcript is denied by the read path rules")
-		}
-		return files, "subagent " + selector.Subagent + ": ", ""
-	case selector.Profile != "":
-		if t.profiles == nil {
-			return TranscriptFiles{}, "", t.fail(execution, tools.StatusError, "profile_unavailable", "Reading another profile's transcript is not available here")
-		}
-		target, err := t.profiles.Profile(ctx, execution.SessionKey, selector.Session, selector.Profile)
-		if err != nil {
-			return TranscriptFiles{}, "", t.fail(execution, tools.StatusNotFound, "no_such_profile", err.Error())
-		}
-		otherSession, otherProfile := target.Session != callerSession, target.Profile != callerProfile
-		if otherSession && !t.settings.AllowOtherSessions {
-			return forbid("transcript_session_denied", "Another session's transcript: tools.native.transcript.allow_other_sessions is false")
-		}
-		if otherProfile && !t.settings.AllowOtherProfiles {
-			return forbid("transcript_profile_denied", "Another profile's transcript: tools.native.transcript.allow_other_profiles is false")
-		}
-		if (otherSession || otherProfile) && t.deniedFile(target.Files.Messages, policy) {
-			return forbid("path_denied", "The transcript is denied by the read path rules")
-		}
-		return target.Files, target.Profile + " @ " + target.Session + ": ", ""
-	}
-	return t.own, "", ""
 }
 
 // deniedFile applies the read path rules to the file as it is on disk, symlinks resolved.

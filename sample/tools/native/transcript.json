@@ -5,33 +5,14 @@
       "id": "native.transcript",
       "source": "native",
       "name": "transcript",
-      "description": "Read a messages.jsonl transcript as text, this session's own by default, or another profile's (profile, session), a sub-agent run's (subagent) or a file (path): user and assistant messages, tool calls and their results, by turn. Reasoning is not shown. Use turns or tail to choose which turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue a cut response, list to see which transcript files exist.",
+      "description": "Read a messages.jsonl transcript as text, your own by default, or another profile's (path profile:<category>/<name>), a sub-agent run's (path subagent:<run id>) or a file (path path:<file>): user and assistant messages, tool calls and their results, by turn. Reasoning is not shown. Use turns or tail to choose which turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue a cut response.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "list": {
-            "type": "boolean",
-            "description": "List the transcript files that can be read, with their size and time of last change, instead of reading."
-          },
-          "profile": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Read another profile's transcript, as <category>/<name>, in this session or in the session named by session. Not with subagent or path."
-          },
-          "session": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Session reference; only with profile."
-          },
-          "subagent": {
-            "type": "string",
-            "pattern": "^sub_[0-9a-f]{8}$",
-            "description": "Read the transcript of a sub-agent run by its run id (sub_xxxxxxxx). Not with profile or path."
-          },
           "path": {
             "type": "string",
             "minLength": 1,
-            "description": "Read a transcript file by path; it must be a messages.jsonl transcript and pass the read path rules. Off unless tools.native.transcript.allow_path is true. Not with profile or subagent."
+            "description": "Which transcript to read; omit it for your own (a sub-agent reads its own run). profile:<category>/<name> is another profile in this session and profile:<session>/<category>/<name> one in another session; subagent:<run id> (sub_xxxxxxxx) or subagent:<session>/<run id> is a sub-agent run; path:<file> is a transcript file by filesystem path (off unless tools.native.transcript.allow_path is true). The header of a read and a not-found error give the exact path to reuse."
           },
           "turns": {
             "type": "string",

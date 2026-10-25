@@ -1392,12 +1392,12 @@
                   "default": 268435456,
                   "description": "Most bytes one call scans."
                 },
-                "list_max_entries": {
+                "suggest_max": {
                   "type": "integer",
                   "minimum": 1,
-                  "maximum": 5000,
-                  "default": 200,
-                  "description": "Most transcripts one list returns."
+                  "maximum": 500,
+                  "default": 20,
+                  "description": "Most names a not-found error lists as the nearest valid profiles, sessions or sub-agent runs."
                 },
                 "timeout_ms": {
                   "type": "integer",

@@ -18,6 +18,19 @@ type fakeTranscriptProfiles struct {
 	asked   []string
 }
 
+func (f *fakeTranscriptProfiles) Candidates(_ context.Context, _, session string) ([]string, []string) {
+	if session == "" || session == "demo" || session == "elsewhere" {
+		var profiles []string
+		for key := range f.targets {
+			if _, profile, _ := strings.Cut(key, "|"); profile != "" {
+				profiles = append(profiles, profile)
+			}
+		}
+		return profiles, nil
+	}
+	return nil, []string{"demo", "elsewhere"}
+}
+
 func (f *fakeTranscriptProfiles) Profile(_ context.Context, _, session, profile string) (TranscriptTarget, error) {
 	f.asked = append(f.asked, session+"|"+profile)
 	target, ok := f.targets[session+"|"+profile]
@@ -83,33 +96,105 @@ func (f *selectFixture) run(t *testing.T, settings sessionfs.NativeTranscriptSet
 	return out
 }
 
-func TestTranscriptSelectorsAreMutuallyExclusiveAndNameBothKeys(t *testing.T) {
+func TestTranscriptOldSelectorKeysAreRejectedNamingPath(t *testing.T) {
+	f := newSelectFixture(t)
+	tool, _ := NewTranscriptTool(transcriptTestSettings(), TranscriptFiles{Messages: f.own}, f.profiles, f.manager)
+	catalog, err := tools.NewCatalog([]tools.Tool{tool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{"profile": `"review/reviewer"`, "session": `"demo"`, "subagent": `"sub_00000001"`, "list": `true`} {
+		call, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "c", "name": "transcript", "arguments": "{\"" + key + "\":" + value + "}"})
+		raw, err := catalog.ExecuteFunctionCall(t.Context(), call, tools.ExecutionContext{SessionKey: selectCaller})
+		out := string(raw)
+		if err != nil || !strings.Contains(out, "transcript has no "+key) || !strings.Contains(out, "path") {
+			t.Errorf("%s: %q, err %v", key, out, err)
+		}
+	}
+}
+
+func TestTranscriptPathRefusesBadNamesAndListsThePrefixes(t *testing.T) {
 	f := newSelectFixture(t)
 	settings := transcriptTestSettings()
 	settings.AllowPath = true
-	for _, tc := range []struct {
-		arguments map[string]any
-		want      string
-	}{
-		{map[string]any{"profile": "review/reviewer", "path": f.other}, "profile and path"},
-		{map[string]any{"profile": "review/reviewer", "subagent": "sub_00000001"}, "profile and subagent"},
-		{map[string]any{"subagent": "sub_00000001", "path": f.other}, "subagent and path"},
-		{map[string]any{"session": "demo"}, "session needs profile"},
-	} {
-		out := f.run(t, settings, tc.arguments, tools.ExecutionContext{})
-		if !strings.Contains(out, "conflicting_selectors") || !strings.Contains(out, tc.want) {
-			t.Errorf("%v: want %q, got %s", tc.arguments, tc.want, out)
+	for _, bad := range []string{"nowhere:x", "profile:", "profile:review", "profile:a/b/c/d", "profile:review//reviewer", "profile:../review/reviewer", "profile:review/./reviewer", "profile:review/rev\\iewer", "profile:/review/reviewer", "subagent:sub_zz", "subagent:a/b/sub_00000001", "subagent:../sub_00000001", "subagent:", "plain"} {
+		out := f.run(t, settings, map[string]any{"path": bad}, tools.ExecutionContext{})
+		if !strings.Contains(out, "invalid_path") || !strings.Contains(out, "subagent:<run id>") || !strings.Contains(out, "profile:<category>/<name>") {
+			t.Errorf("%q: %s", bad, out)
 		}
+	}
+	if len(f.profiles.asked) != 0 {
+		t.Fatalf("a refused name must not reach the lookup: %v", f.profiles.asked)
+	}
+}
+
+func TestTranscriptHeaderPrintsThePathToReuse(t *testing.T) {
+	f := newSelectFixture(t)
+	out := f.run(t, transcriptTestSettings(), map[string]any{"path": "profile:review/reviewer"}, tools.ExecutionContext{})
+	if !strings.Contains(out, "profile:demo/review/reviewer: ") {
+		t.Fatalf("profile header: %s", out)
+	}
+	out = f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:sub_00000001"}, tools.ExecutionContext{})
+	if !strings.Contains(out, "subagent:sub_00000001: ") {
+		t.Fatalf("subagent header: %s", out)
+	}
+}
+
+func TestTranscriptNotFoundNamesTheNearestCandidatesUpToTheCap(t *testing.T) {
+	f := newSelectFixture(t)
+	for i := 0; i < 30; i++ {
+		f.profiles.targets["|cat/p"+strings.Repeat("x", i)] = TranscriptTarget{}
+	}
+	settings := transcriptTestSettings()
+	settings.SuggestMax = 20
+	out := f.run(t, settings, map[string]any{"path": "profile:review/revewer"}, tools.ExecutionContext{})
+	if !strings.Contains(out, "no_such_profile") || !strings.Contains(out, "available") || !strings.Contains(out, "review/reviewer") {
+		t.Fatalf("not found: %s", out)
+	}
+	if got := strings.Count(out, "cat/p"); got > 20 {
+		t.Fatalf("%d suggestions, want at most 20: %s", got, out)
+	}
+	out = f.run(t, settings, map[string]any{"path": "profile:nosuch/review/reviewer"}, tools.ExecutionContext{})
+	if !strings.Contains(out, "elsewhere") || !strings.Contains(out, "demo") {
+		t.Fatalf("an unknown session must list the sessions: %s", out)
+	}
+	out = f.run(t, settings, map[string]any{"path": "subagent:sub_deadbeef"}, tools.ExecutionContext{})
+	if !strings.Contains(out, "no_such_run") || !strings.Contains(out, "sub_00000001") || strings.Contains(out, "sub_00000002") {
+		t.Fatalf("the caller's own runs are suggested: %s", out)
+	}
+}
+
+func TestTranscriptSubagentWithSessionMustMatchTheRunsSession(t *testing.T) {
+	f := newSelectFixture(t)
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:demo/sub_00000001"}, tools.ExecutionContext{}); !strings.Contains(out, "child answer") {
+		t.Fatalf("matching session: %s", out)
+	}
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:elsewhere/sub_00000002"}, tools.ExecutionContext{}); !strings.Contains(out, "child answer") {
+		t.Fatalf("a run of another session: %s", out)
+	}
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:elsewhere/sub_00000001"}, tools.ExecutionContext{}); !strings.Contains(out, "no_such_run") {
+		t.Fatalf("a session that does not own the run: %s", out)
+	}
+}
+
+func TestTranscriptDefaultIsTheSubagentsOwnRunWhenCalledByAChild(t *testing.T) {
+	f := newSelectFixture(t)
+	child := tools.ExecutionContext{AgentDepth: 1, ProcessOwner: "sub_00000001"}
+	if out := f.run(t, transcriptTestSettings(), map[string]any{}, child); !strings.Contains(out, "child answer") || strings.Contains(out, "own answer") {
+		t.Fatalf("a sub-agent without path must read its own run: %s", out)
+	}
+	if out := f.run(t, transcriptTestSettings(), map[string]any{}, tools.ExecutionContext{}); !strings.Contains(out, "own answer") {
+		t.Fatalf("the session's own run reads the session transcript: %s", out)
 	}
 }
 
 func TestTranscriptReadsAnotherProfileAndSessionByDefault(t *testing.T) {
 	f := newSelectFixture(t)
-	out := f.run(t, transcriptTestSettings(), map[string]any{"profile": "review/reviewer"}, tools.ExecutionContext{})
-	if !strings.Contains(out, "other answer") || !strings.Contains(out, "review/reviewer @ demo") {
+	out := f.run(t, transcriptTestSettings(), map[string]any{"path": "profile:review/reviewer"}, tools.ExecutionContext{})
+	if !strings.Contains(out, "other answer") || !strings.Contains(out, "profile:demo/review/reviewer") {
 		t.Fatalf("other profile: %s", out)
 	}
-	out = f.run(t, transcriptTestSettings(), map[string]any{"profile": "dev/coder", "session": "elsewhere"}, tools.ExecutionContext{})
+	out = f.run(t, transcriptTestSettings(), map[string]any{"path": "profile:elsewhere/dev/coder"}, tools.ExecutionContext{})
 	if !strings.Contains(out, "foreign answer") {
 		t.Fatalf("other session: %s", out)
 	}
@@ -119,18 +204,18 @@ func TestTranscriptAccessSwitchesRefuseOtherProfilesAndSessions(t *testing.T) {
 	f := newSelectFixture(t)
 	settings := transcriptTestSettings()
 	settings.AllowOtherProfiles = false
-	if out := f.run(t, settings, map[string]any{"profile": "review/reviewer"}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_profile_denied") || !strings.Contains(out, "allow_other_profiles") {
+	if out := f.run(t, settings, map[string]any{"path": "profile:review/reviewer"}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_profile_denied") || !strings.Contains(out, "allow_other_profiles") {
 		t.Fatalf("other profiles off: %s", out)
 	}
-	if out := f.run(t, settings, map[string]any{"profile": "dev/coder"}, tools.ExecutionContext{}); !strings.Contains(out, "own answer") {
+	if out := f.run(t, settings, map[string]any{"path": "profile:dev/coder"}, tools.ExecutionContext{}); !strings.Contains(out, "own answer") {
 		t.Fatalf("the caller's own profile stays readable: %s", out)
 	}
 	settings = transcriptTestSettings()
 	settings.AllowOtherSessions = false
-	if out := f.run(t, settings, map[string]any{"profile": "dev/coder", "session": "elsewhere"}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_session_denied") || !strings.Contains(out, "allow_other_sessions") {
+	if out := f.run(t, settings, map[string]any{"path": "profile:elsewhere/dev/coder"}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_session_denied") || !strings.Contains(out, "allow_other_sessions") {
 		t.Fatalf("other sessions off: %s", out)
 	}
-	if out := f.run(t, settings, map[string]any{"profile": "review/reviewer"}, tools.ExecutionContext{}); !strings.Contains(out, "other answer") {
+	if out := f.run(t, settings, map[string]any{"path": "profile:review/reviewer"}, tools.ExecutionContext{}); !strings.Contains(out, "other answer") {
 		t.Fatalf("another profile of the same session stays readable: %s", out)
 	}
 }
@@ -139,56 +224,56 @@ func TestTranscriptOtherProfileFollowsTheReadPathRules(t *testing.T) {
 	f := newSelectFixture(t)
 	settings := transcriptTestSettings()
 	settings.Policy = sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: f.other}}}
-	if out := f.run(t, settings, map[string]any{"profile": "review/reviewer"}, tools.ExecutionContext{}); !strings.Contains(out, "path_denied") {
+	if out := f.run(t, settings, map[string]any{"path": "profile:review/reviewer"}, tools.ExecutionContext{}); !strings.Contains(out, "path_denied") {
 		t.Fatalf("a denied transcript must not be read through the tool: %s", out)
 	}
 	settings.Policy = sessionfs.NativePathPolicy{}
 	scoped := tools.ExecutionContext{PathScope: &tools.PathScope{Allow: []string{f.dir + "/nowhere"}}}
-	if out := f.run(t, settings, map[string]any{"profile": "review/reviewer"}, scoped); !strings.Contains(out, "path_denied") {
+	if out := f.run(t, settings, map[string]any{"path": "profile:review/reviewer"}, scoped); !strings.Contains(out, "path_denied") {
 		t.Fatalf("a call scope that does not reach the transcript must refuse it: %s", out)
 	}
 }
 
 func TestTranscriptSubagentByRunIdOwnedOrAllowed(t *testing.T) {
 	f := newSelectFixture(t)
-	out := f.run(t, transcriptTestSettings(), map[string]any{"subagent": "sub_00000001"}, tools.ExecutionContext{})
-	if !strings.Contains(out, "child answer") || !strings.Contains(out, "subagent sub_00000001") {
+	out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:sub_00000001"}, tools.ExecutionContext{})
+	if !strings.Contains(out, "child answer") || !strings.Contains(out, "subagent:sub_00000001") {
 		t.Fatalf("owned run: %s", out)
 	}
-	if out := f.run(t, transcriptTestSettings(), map[string]any{"subagent": "sub_00000002"}, tools.ExecutionContext{}); !strings.Contains(out, "child answer") {
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:sub_00000002"}, tools.ExecutionContext{}); !strings.Contains(out, "child answer") {
 		t.Fatalf("a run of another session is readable by default: %s", out)
 	}
 	settings := transcriptTestSettings()
 	settings.AllowOtherSessions = false
-	if out := f.run(t, settings, map[string]any{"subagent": "sub_00000002"}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_session_denied") {
+	if out := f.run(t, settings, map[string]any{"path": "subagent:sub_00000002"}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_session_denied") {
 		t.Fatalf("another session's run with allow_other_sessions off: %s", out)
 	}
 	settings = transcriptTestSettings()
 	settings.AllowChildren = false
-	if out := f.run(t, settings, map[string]any{"subagent": "sub_00000002"}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_subagent_denied") {
+	if out := f.run(t, settings, map[string]any{"path": "subagent:sub_00000002"}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_subagent_denied") {
 		t.Fatalf("a run the caller does not own with allow_children off: %s", out)
 	}
-	if out := f.run(t, settings, map[string]any{"subagent": "sub_00000001"}, tools.ExecutionContext{}); !strings.Contains(out, "child answer") {
+	if out := f.run(t, settings, map[string]any{"path": "subagent:sub_00000001"}, tools.ExecutionContext{}); !strings.Contains(out, "child answer") {
 		t.Fatalf("the caller's own run stays readable: %s", out)
 	}
 }
 
 func TestTranscriptSubagentErrors(t *testing.T) {
 	f := newSelectFixture(t)
-	if out := f.run(t, transcriptTestSettings(), map[string]any{"subagent": "sub_deadbeef"}, tools.ExecutionContext{}); !strings.Contains(out, "no_such_run") {
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:sub_deadbeef"}, tools.ExecutionContext{}); !strings.Contains(out, "no_such_run") {
 		t.Fatalf("unknown run: %s", out)
 	}
-	if out := f.run(t, transcriptTestSettings(), map[string]any{"subagent": "sub_00000003"}, tools.ExecutionContext{}); !strings.Contains(out, "no_transcript_yet") {
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:sub_00000003"}, tools.ExecutionContext{}); !strings.Contains(out, "no_transcript_yet") {
 		t.Fatalf("run without a transcript: %s", out)
 	}
-	if out := f.run(t, transcriptTestSettings(), map[string]any{"subagent": "sub_00000001", "source": "backup"}, tools.ExecutionContext{}); !strings.Contains(out, "conflicting_selectors") {
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:sub_00000001", "source": "backup"}, tools.ExecutionContext{}); !strings.Contains(out, "conflicting_selectors") {
 		t.Fatalf("backup of a sub-agent: %s", out)
 	}
 }
 
 func TestTranscriptPathIsOffByDefault(t *testing.T) {
 	f := newSelectFixture(t)
-	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": f.other}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_path_disabled") || !strings.Contains(out, "allow_path") {
+	if out := f.run(t, transcriptTestSettings(), map[string]any{"path": "path:" + f.other}, tools.ExecutionContext{}); !strings.Contains(out, "transcript_path_disabled") || !strings.Contains(out, "allow_path") {
 		t.Fatalf("path with allow_path off: %s", out)
 	}
 }
@@ -197,11 +282,11 @@ func TestTranscriptPathReadsATranscriptThatPassesTheReadRules(t *testing.T) {
 	f := newSelectFixture(t)
 	settings := transcriptTestSettings()
 	settings.AllowPath = true
-	if out := f.run(t, settings, map[string]any{"path": f.other}, tools.ExecutionContext{}); !strings.Contains(out, "other answer") {
+	if out := f.run(t, settings, map[string]any{"path": "path:" + f.other}, tools.ExecutionContext{}); !strings.Contains(out, "other answer") {
 		t.Fatalf("path: %s", out)
 	}
 	settings.Policy = sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: f.other}}}
-	if out := f.run(t, settings, map[string]any{"path": f.other}, tools.ExecutionContext{}); !strings.Contains(out, "path_denied") {
+	if out := f.run(t, settings, map[string]any{"path": "path:" + f.other}, tools.ExecutionContext{}); !strings.Contains(out, "path_denied") {
 		t.Fatalf("a denied path: %s", out)
 	}
 }
@@ -214,7 +299,7 @@ func TestTranscriptPathRefusesAFileThatIsNotATranscriptAndAnEscapingSymlink(t *t
 	if err := os.WriteFile(notes, []byte("just some text\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out := f.run(t, settings, map[string]any{"path": notes}, tools.ExecutionContext{}); !strings.Contains(out, "not_a_transcript") {
+	if out := f.run(t, settings, map[string]any{"path": "path:" + notes}, tools.ExecutionContext{}); !strings.Contains(out, "not_a_transcript") {
 		t.Fatalf("text file: %s", out)
 	}
 	outside := t.TempDir()
@@ -223,10 +308,10 @@ func TestTranscriptPathRefusesAFileThatIsNotATranscriptAndAnEscapingSymlink(t *t
 	if err := os.Symlink(filepath.Join(outside, "secret.jsonl"), link); err != nil {
 		t.Fatal(err)
 	}
-	if out := f.run(t, settings, map[string]any{"path": link}, tools.ExecutionContext{}); strings.Contains(out, "secret") {
+	if out := f.run(t, settings, map[string]any{"path": "path:" + link}, tools.ExecutionContext{}); strings.Contains(out, "secret") {
 		t.Fatalf("a symlink out of the workspace must follow the read rules: %s", out)
 	}
-	if out := f.run(t, settings, map[string]any{"path": notes, "source": "backup"}, tools.ExecutionContext{}); !strings.Contains(out, "conflicting_selectors") {
+	if out := f.run(t, settings, map[string]any{"path": "path:" + notes, "source": "backup"}, tools.ExecutionContext{}); !strings.Contains(out, "conflicting_selectors") {
 		t.Fatalf("backup of a path: %s", out)
 	}
 }
@@ -240,16 +325,16 @@ func TestTranscriptCursorKeepsItsSelectorAndRefusesANewOne(t *testing.T) {
 	writeTestTranscript(t, f.other, lines...)
 	settings := transcriptTestSettings()
 	settings.ResponseMaxBytes = 400
-	first := f.run(t, settings, map[string]any{"profile": "review/reviewer", "turns": "1"}, tools.ExecutionContext{})
+	first := f.run(t, settings, map[string]any{"path": "profile:review/reviewer", "turns": "1"}, tools.ExecutionContext{})
 	cursor := cursorOf(first)
 	if cursor == "" {
 		t.Fatalf("expected a cursor: %s", first)
 	}
 	next := f.run(t, settings, map[string]any{"cursor": cursor}, tools.ExecutionContext{})
-	if !strings.Contains(next, "review/reviewer @ demo") || !strings.Contains(next, "page-") {
+	if !strings.Contains(next, "profile:demo/review/reviewer") || !strings.Contains(next, "page-") {
 		t.Fatalf("the cursor must continue on the profile it was made for: %s", next)
 	}
-	if out := f.run(t, settings, map[string]any{"cursor": cursor, "profile": "dev/coder"}, tools.ExecutionContext{}); !strings.Contains(out, "conflicting_selectors") {
+	if out := f.run(t, settings, map[string]any{"cursor": cursor, "path": "profile:dev/coder"}, tools.ExecutionContext{}); !strings.Contains(out, "conflicting_selectors") {
 		t.Fatalf("a cursor with a selector: %s", out)
 	}
 	settings.AllowOtherProfiles = false
@@ -261,7 +346,7 @@ func TestTranscriptCursorKeepsItsSelectorAndRefusesANewOne(t *testing.T) {
 func TestTranscriptWithoutASourceReadsOnlyTheOwnTranscript(t *testing.T) {
 	f := newSelectFixture(t)
 	tool, _ := NewTranscriptTool(transcriptTestSettings(), TranscriptFiles{Messages: f.own}, nil, nil)
-	for _, arguments := range []map[string]any{{"profile": "review/reviewer"}, {"subagent": "sub_00000001"}} {
+	for _, arguments := range []map[string]any{{"path": "profile:review/reviewer"}, {"path": "subagent:sub_00000001"}} {
 		out, _ := tool.Execute(t.Context(), arguments, tools.ExecutionContext{CallID: "c", SessionKey: selectCaller})
 		if !strings.Contains(out, "unavailable") {
 			t.Errorf("%v: %s", arguments, out)
@@ -286,7 +371,7 @@ func TestBuildCatalogGivesTheTranscriptToolTheMessengerProfilesAndTheRunManager(
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, arguments := range []string{`{"profile":"review/reviewer"}`, `{"subagent":"sub_00000001"}`} {
+	for _, arguments := range []string{`{"path":"profile:review/reviewer"}`, `{"path":"subagent:sub_00000001"}`} {
 		call, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "c", "name": "transcript", "arguments": arguments})
 		raw, err := catalog.ExecuteFunctionCall(t.Context(), call, tools.ExecutionContext{SessionKey: selectCaller, WorkspaceRoot: f.dir})
 		out := string(raw)

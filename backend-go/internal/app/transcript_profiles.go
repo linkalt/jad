@@ -42,3 +42,22 @@ func (m profileMessenger) Profile(ctx context.Context, ownerKey, session, profil
 		Files:   native.TranscriptFiles{Messages: messages, Backup: config.StoragePaths.MessagesBackup},
 	}, nil
 }
+
+// Candidates implements native.TranscriptProfiles: the profiles of the session, or the
+// sessions when that session cannot be read.
+func (m profileMessenger) Candidates(ctx context.Context, ownerKey, session string) (profiles, sessions []string) {
+	callerSession, _, _ := strings.Cut(ownerKey, "\x00")
+	if session == "" {
+		session = callerSession
+	}
+	if location, err := sessionfs.Resolve(m.resolver.roots, session); err == nil && location.UsesLayout() {
+		if info, err := sessionfs.ReadLayoutProfileInfo(location); err == nil {
+			return info.Profiles, nil
+		}
+	}
+	files, _ := sessionfs.ListSessionFiles(m.resolver.roots)
+	for _, file := range files {
+		sessions = append(sessions, file.ID)
+	}
+	return nil, sessions
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -38,5 +39,18 @@ func TestTranscriptProfilesFindsOwnAndOtherProfilesWithoutCreatingFiles(t *testi
 	}
 	if _, err := os.Stat(other.Files.Messages); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("looking a transcript up must not create it: %v", err)
+	}
+}
+
+func TestTranscriptProfilesCandidatesListProfilesOfTheSessionOrTheSessions(t *testing.T) {
+	f := newLayoutFixture(t)
+	messenger := profileMessenger{resolver: f.service.resolver}
+	profiles, sessions := messenger.Candidates(context.Background(), profileMessageOwner, "")
+	if sessions != nil || !slices.Contains(profiles, "review/reviewer") || !slices.Contains(profiles, "dev/coder") {
+		t.Fatalf("profiles = %v, sessions = %v", profiles, sessions)
+	}
+	profiles, sessions = messenger.Candidates(context.Background(), profileMessageOwner, "no-such-session")
+	if profiles != nil || !slices.Contains(sessions, "demo") {
+		t.Fatalf("profiles = %v, sessions = %v", profiles, sessions)
 	}
 }

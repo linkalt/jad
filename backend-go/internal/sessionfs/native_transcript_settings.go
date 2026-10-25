@@ -14,14 +14,14 @@ const (
 	maxNativeTranscriptMaxTurns             int64 = 1000
 	defaultNativeTranscriptScanMaxBytes     int64 = 256 * 1024 * 1024
 	maxNativeTranscriptScanMaxBytes         int64 = 4 * 1024 * 1024 * 1024
-	defaultNativeTranscriptListMaxEntries   int64 = 200
-	maxNativeTranscriptListMaxEntries       int64 = 5000
+	defaultNativeTranscriptSuggestMax       int64 = 20
+	maxNativeTranscriptSuggestMax           int64 = 500
 	defaultNativeTranscriptTimeoutMs        int64 = 30_000
 )
 
 var nativeTranscriptKeys = []string{
 	"response_max_bytes", "entry_max_bytes", "line_max_bytes", "max_turns_per_call", "scan_max_bytes",
-	"list_max_entries", "timeout_ms", "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_path",
+	"suggest_max", "timeout_ms", "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_path",
 }
 
 // NativeTranscriptSettings holds the limits and switches of native.transcript. The path
@@ -33,7 +33,7 @@ type NativeTranscriptSettings struct {
 	LineMaxBytes       int64
 	MaxTurnsPerCall    int64
 	ScanMaxBytes       int64
-	ListMaxEntries     int64
+	SuggestMax         int64
 	TimeoutMs          int64
 	AllowOtherSessions bool
 	AllowOtherProfiles bool
@@ -87,7 +87,7 @@ func normalizeNativeTranscriptSettings(setting map[string]json.RawMessage, setti
 		{&settings.LineMaxBytes, "line_max_bytes", defaultNativeTranscriptLineMaxBytes, 1, maxNativeTranscriptLineMaxBytes},
 		{&settings.MaxTurnsPerCall, "max_turns_per_call", defaultNativeTranscriptMaxTurns, 1, maxNativeTranscriptMaxTurns},
 		{&settings.ScanMaxBytes, "scan_max_bytes", defaultNativeTranscriptScanMaxBytes, 1, maxNativeTranscriptScanMaxBytes},
-		{&settings.ListMaxEntries, "list_max_entries", defaultNativeTranscriptListMaxEntries, 1, maxNativeTranscriptListMaxEntries},
+		{&settings.SuggestMax, "suggest_max", defaultNativeTranscriptSuggestMax, 1, maxNativeTranscriptSuggestMax},
 		{&settings.TimeoutMs, "timeout_ms", defaultNativeTranscriptTimeoutMs, 1, maxToolTimeoutMs},
 	} {
 		if *field.target, err = configuredInteger(fields, field.name, field.fallback, field.min, field.max, settingPath, section); err != nil {
