@@ -237,8 +237,8 @@ func LoadSessionSettingsScoped(location Location, requestedProfile, requestedMod
 // loadSessionSettingsFrom validates a setting-shaped map and turns it into a
 // SessionConfig. settingPath names the file the map came from in error messages and
 // is the base for relative storage paths. The layout loader (layout_load.go) feeds
-// it a map composed from the catalogs, so both layouts share every normalizer and
-// applyApprovalDefault. envFileBase is the folder a relative tools.native.*.env_file is
+// it a map composed from the catalogs, so both layouts share every normalizer.
+// envFileBase is the folder a relative tools.native.*.env_file is
 // resolved against: the session folder for a legacy session, the global root for a
 // catalog-layout session, whose toolset many sessions share.
 func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessage, settingPath, envFileBase, requestedProfile, requestedModel string) (SessionConfig, error) {

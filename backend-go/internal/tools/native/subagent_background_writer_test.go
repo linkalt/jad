@@ -125,12 +125,12 @@ func TestBackgroundWriterOffByDefaultStillRunsToItsEnd(t *testing.T) {
 	}
 }
 
-func TestBackgroundWriterIsHandedOffWithNoApprovalGate(t *testing.T) {
+func TestBackgroundWriterIsHandedOffWhenTheListNamesIt(t *testing.T) {
 	release := make(chan struct{})
 	catalog, _, _ := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "write")), writingLauncher(release, nil), readOnlyTool("read"), writeTool("write"))
 	defer close(release)
 	if out, returned := callReturnsWithin(t, catalog, `{"task":"fix","block_ms":0}`, 2*time.Second); !returned || !strings.Contains(out, "still running") {
-		t.Fatalf("a writer was not handed off though no approval gates it:\n%s", out)
+		t.Fatalf("a writer was not handed off though nothing else gates it:\n%s", out)
 	}
 }
 

@@ -672,7 +672,7 @@ func TestSubagentBindRefusesAnMCPToolThatIsNotLoaded(t *testing.T) {
 			}
 		})
 	}
-	// A server that asks for approval no longer matters: the tool binds like any other.
+	// An MCP tool of any server binds like any other.
 	if _, err := buildWithMCP(t, subagentSettings(agentWithTools("a", "read", "mcp:gated:lookup")), &fakeLauncher{}, loaded, readOnlyTool("read")); err != nil {
 		t.Fatalf("a tool marked ask must bind: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestSubagentWildcardGivesTheChildEveryToolOfThatServerOnce(t *testing.T) {
 	}
 }
 
-func TestSubagentWildcardNamesAnEmptyServerAndIgnoresApprovalMarks(t *testing.T) {
+func TestSubagentWildcardNamesAnEmptyServer(t *testing.T) {
 	loaded := []tools.Tool{
 		mcpStub(t, "mixed", "open"),
 		mcpStub(t, "mixed", "gated"),
