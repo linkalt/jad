@@ -31,9 +31,15 @@ const (
 	NativeExecModeFile  = "file"
 	NativeExecModeStdin = "stdin"
 
-	nativeExecFilePlaceholder = "{file}"
-	nativeExecCodePlaceholder = "{code}"
-	maxNativeExecArgv         = 32
+	// The built-in templates a runner may name; each installs the global fn before the code runs.
+	NativeExecTemplateJS     = "js"
+	NativeExecTemplatePython = "python"
+	NativeExecTemplateRuby   = "ruby"
+
+	nativeExecFilePlaceholder     = "{file}"
+	nativeExecCodePlaceholder     = "{code}"
+	nativeExecTemplatePlaceholder = "{template}"
+	maxNativeExecArgv             = 32
 )
 
 var (
@@ -42,7 +48,7 @@ var (
 		"line_aware", "list_header_bytes", "list_max_files", "list_max_results", "result_max_bytes", "runners",
 	}
 	nativeExecKeys     = append(append([]string{}, nativeBashStyleKeys...), nativeExecOwnKeys...)
-	nativeExecLangKeys = []string{"aliases", "argv", "ext", "lib_env", "mode"}
+	nativeExecLangKeys = []string{"aliases", "argv", "ext", "lib_env", "mode", "template"}
 
 	nativeExecNamePattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
 	nativeExecExtensionPattern = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
@@ -51,8 +57,8 @@ var (
 
 // NativeExecLang is one interpreter exec can run.
 type NativeExecLang struct {
-	// Argv is the interpreter and its fixed flags; {code} is replaced by the code (mode arg)
-	// and {file} by the code file (mode file).
+	// Argv is the interpreter and its fixed flags; {code} is replaced by the code (mode arg),
+	// {file} by the code file (mode file) and {template} by the template file (see Template).
 	Argv []string
 	// Mode is NativeExecModeArg, NativeExecModeFile or NativeExecModeStdin.
 	Mode string
@@ -64,6 +70,10 @@ type NativeExecLang struct {
 	// directory, functions_dir/<name>, so code finds its helpers by the interpreter's own means.
 	// Empty: the directory is not exposed.
 	LibEnv string
+	// Template names the built-in preload that installs fn (NativeExecTemplate*), replaceable by
+	// functions_dir/<name>/_template<ext>. js and ruby are attached where argv has {template};
+	// python is a sitecustomize.py in a directory put on PYTHONPATH. Empty: no fn.
+	Template string
 }
 
 // NativeExecSettings holds the normalized settings of native.exec. Child is how its
@@ -101,13 +111,13 @@ type NativeExecSettings struct {
 func defaultNativeExecLangs() ([]string, map[string]NativeExecLang) {
 	names := []string{"python", "node", "bash", "sh", "ruby", "perl", "ts"}
 	return names, map[string]NativeExecLang{
-		"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}, LibEnv: "PYTHONPATH"},
-		"node":   {Argv: []string{"node", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".js", Aliases: []string{"nodejs", "js", "javascript"}, LibEnv: "NODE_PATH"},
+		"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}, LibEnv: "PYTHONPATH", Template: NativeExecTemplatePython},
+		"node":   {Argv: []string{"node", "-r", "{template}", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".js", Aliases: []string{"nodejs", "js", "javascript"}, LibEnv: "NODE_PATH", Template: NativeExecTemplateJS},
 		"bash":   {Argv: []string{"bash", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{"shell"}, LibEnv: "PATH"},
 		"sh":     {Argv: []string{"sh", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{}, LibEnv: "PATH"},
-		"ruby":   {Argv: []string{"ruby", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".rb", Aliases: []string{"rb"}, LibEnv: "RUBYLIB"},
+		"ruby":   {Argv: []string{"ruby", "-r", "{template}", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".rb", Aliases: []string{"rb"}, LibEnv: "RUBYLIB", Template: NativeExecTemplateRuby},
 		"perl":   {Argv: []string{"perl", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".pl", Aliases: []string{}, LibEnv: "PERL5LIB"},
-		"ts":     {Argv: []string{"bun", "--no-install", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".ts", Aliases: []string{"typescript", "bun"}, LibEnv: "NODE_PATH"},
+		"ts":     {Argv: []string{"bun", "--no-install", "--preload", "{template}", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".ts", Aliases: []string{"typescript", "bun"}, LibEnv: "NODE_PATH", Template: NativeExecTemplateJS},
 	}
 }
 
@@ -325,6 +335,23 @@ func normalizeNativeExecLang(raw json.RawMessage, path string) (NativeExecLang, 
 		if json.Unmarshal(value, &lang.LibEnv) != nil || (lang.LibEnv != "" && !nativeExecLibEnvPattern.MatchString(lang.LibEnv)) {
 			return NativeExecLang{}, configError("%s.lib_env must be empty or an environment variable name", path)
 		}
+	}
+	if value, present := nullableField(fields, "template"); present {
+		if json.Unmarshal(value, &lang.Template) != nil || (lang.Template != NativeExecTemplateJS && lang.Template != NativeExecTemplatePython && lang.Template != NativeExecTemplateRuby) {
+			return NativeExecLang{}, configError("%s.template must be \"js\", \"python\" or \"ruby\"", path)
+		}
+	}
+	placeholders := 0
+	for _, item := range argv {
+		placeholders += strings.Count(item, nativeExecTemplatePlaceholder)
+	}
+	switch {
+	case lang.Template == NativeExecTemplatePython && placeholders > 0:
+		return NativeExecLang{}, configError("%s.argv must not contain %s: a python template is found through PYTHONPATH", path, nativeExecTemplatePlaceholder)
+	case (lang.Template == NativeExecTemplateJS || lang.Template == NativeExecTemplateRuby) && placeholders != 1:
+		return NativeExecLang{}, configError("%s.argv must contain %s exactly once when template is \"%s\"", path, nativeExecTemplatePlaceholder, lang.Template)
+	case lang.Template == "" && placeholders > 0:
+		return NativeExecLang{}, configError("%s.argv contains %s but the runner has no template", path, nativeExecTemplatePlaceholder)
 	}
 	if value, present := nullableField(fields, "aliases"); present {
 		var rawAliases []json.RawMessage

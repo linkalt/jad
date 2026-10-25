@@ -19,11 +19,11 @@ func execTestSettings() sessionfs.NativeExecSettings {
 	return sessionfs.NativeExecSettings{
 		LangNames: names,
 		Langs: map[string]sessionfs.NativeExecLang{
-			"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: sessionfs.NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}, LibEnv: "PYTHONPATH"},
-			"node":   {Argv: []string{"node", "-e", "{code}"}, Mode: sessionfs.NativeExecModeArg, Ext: ".js", Aliases: []string{"js"}, LibEnv: "NODE_PATH"},
+			"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: sessionfs.NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}, LibEnv: "PYTHONPATH", Template: sessionfs.NativeExecTemplatePython},
+			"node":   {Argv: []string{"node", "-r", "{template}", "-e", "{code}"}, Mode: sessionfs.NativeExecModeArg, Ext: ".js", Aliases: []string{"js"}, LibEnv: "NODE_PATH", Template: sessionfs.NativeExecTemplateJS},
 			"bash":   {Argv: []string{"bash", "-c", "{code}", "exec"}, Mode: sessionfs.NativeExecModeArg, Ext: ".sh", Aliases: []string{"shell"}, LibEnv: "PATH"},
 			"sh":     {Argv: []string{"sh", "-c", "{code}", "exec"}, Mode: sessionfs.NativeExecModeArg, Ext: ".sh", Aliases: []string{}, LibEnv: "PATH"},
-			"ts":     {Argv: []string{"bun", "--no-install", "-e", "{code}"}, Mode: sessionfs.NativeExecModeArg, Ext: ".ts", Aliases: []string{"typescript"}, LibEnv: "NODE_PATH"},
+			"ts":     {Argv: []string{"bun", "--no-install", "--preload", "{template}", "-e", "{code}"}, Mode: sessionfs.NativeExecModeArg, Ext: ".ts", Aliases: []string{"typescript"}, LibEnv: "NODE_PATH", Template: sessionfs.NativeExecTemplateJS},
 		},
 		DefaultLang:    "bash",
 		CodeMaxBytes:   64 * 1024,

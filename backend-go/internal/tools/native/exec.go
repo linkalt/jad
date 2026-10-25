@@ -20,6 +20,8 @@ const (
 	execResultEnv = "JAD_RESULT"
 	// execFunctionsDirEnv names the real root of the helper library for code that calls another language's helper.
 	execFunctionsDirEnv = "JAD_FUNCTIONS_DIR"
+	// execRunnerDirEnv names the runner's own helper folder, which a template's fn looks in at call time.
+	execRunnerDirEnv = "JAD_RUNNER_DIR"
 
 	asyncKindExec asyncmgr.Kind = "exec"
 )
@@ -44,7 +46,7 @@ var execInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-const execDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved helpers per language. Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call; a plain command is lang bash with the command as code. Code can call the saved helpers of its own language by the language's own means (import, require, a command on PATH) and those of another language through the directory in $JAD_FUNCTIONS_DIR. Pass data as input: the program reads it from stdin as JSON. Print the answer to stdout; for a short structured answer write to the file named by $JAD_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it."
+const execDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved helpers per language. Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call; a plain command is lang bash with the command as code. Code calls the saved helpers of its own language as fn.<name> (python, node, ts, ruby; found when the call is made, so a helper the program just wrote works) or by a bare command name (bash); helpers may also import each other. Another language's helper is run as a subprocess from the directory in $JAD_FUNCTIONS_DIR. Pass data as input: the program reads it from stdin as JSON. Print the answer to stdout; for a short structured answer write to the file named by $JAD_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it."
 
 // NewExecTool constructs native.exec. How a child runs comes from its own settings (Child);
 // exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.
@@ -199,7 +201,24 @@ func executeNativeExecAsync(
 		if problem != "" {
 			return shellRunResult{text: problem}
 		}
+		attachment, err := attachExecTemplate(settings, plan.lang, plan.langName, execution.WorkspaceRoot, workDir, argv)
+		if err != nil {
+			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "template_failed", "The template for "+plan.langName+" could not be prepared",
+				tools.Information{Key: "system_error", Value: err.Error()},
+				tools.Information{Key: "suggestion", Value: "fix or remove functions_dir/" + plan.langName + "/_template" + plan.lang.Ext})}
+		}
+		argv = attachment.argv
 		prepend, libraryEnv := execHelperEnvironment(settings, plan.lang, plan.langName, execution.WorkspaceRoot)
+		if attachment.pythonPath != "" {
+			if prepend == nil {
+				prepend = map[string]string{}
+			}
+			if existing := prepend["PYTHONPATH"]; existing != "" {
+				prepend["PYTHONPATH"] = attachment.pythonPath + string(os.PathListSeparator) + existing
+			} else {
+				prepend["PYTHONPATH"] = attachment.pythonPath
+			}
+		}
 		extraEnv := map[string]string{execResultEnv: resultPath}
 		for name, value := range libraryEnv {
 			extraEnv[name] = value

@@ -1072,7 +1072,7 @@
                           "type": "string",
                           "minLength": 1
                         },
-                        "description": "The interpreter and its fixed flags, run without a shell. Mode arg: one item contains {code}, replaced by the code. Mode file: one item contains {file}, replaced by the path of the code file. Mode stdin: neither."
+                        "description": "The interpreter and its fixed flags, run without a shell. Mode arg: one item contains {code}, replaced by the code. Mode file: one item contains {file}, replaced by the path of the code file. Mode stdin: neither. With a js or ruby template, one item contains {template}, replaced by the path of the template file."
                       },
                       "mode": {
                         "type": "string",
@@ -1095,6 +1095,11 @@
                         "pattern": "^([A-Za-z_][A-Za-z0-9_]{0,63})?$",
                         "default": "",
                         "description": "List variable (PATH, PYTHONPATH, NODE_PATH, RUBYLIB, PERL5LIB, ...) that receives functions_dir/<runner name> in front of its value, so code of this language finds its saved helpers by the interpreter's own means. Empty: not exposed. Built-ins: bash and sh PATH, python PYTHONPATH, node NODE_PATH, ruby RUBYLIB, perl PERL5LIB."
+                      },
+                      "template": {
+                        "type": "string",
+                        "enum": ["js", "python", "ruby"],
+                        "description": "Built-in preload that installs the global fn, so code calls a saved helper as fn.<name> (helpers are looked up when fn.<name> is read, so one written by the same program works). js: argv contains {template} once, e.g. node -r {template} or bun --preload {template}; fn.<name> is require() of functions_dir/<runner>/<name>, so no top-level await in a helper; fn[\"my-helper\"] for a dash. python: a sitecustomize.py in a per-call directory in front of PYTHONPATH (any sitecustomize it shadows is run after it); names are identifiers. ruby: argv contains {template} once (ruby -r {template}); fn.<name> loads <name>.rb and returns its capitalised constant. A file functions_dir/<runner>/_template<ext> replaces the built-in text. Empty: no fn (bash and sh use bare names through PATH)."
                       },
                       "aliases": {
                         "type": "array",

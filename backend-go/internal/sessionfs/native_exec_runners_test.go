@@ -16,7 +16,7 @@ func TestExecRunnersDefaultsDeliverCodeAsAnArgument(t *testing.T) {
 			t.Errorf("%s: mode = %q, want arg", name, exec.Langs[name].Mode)
 		}
 	}
-	if got := strings.Join(exec.Langs["ts"].Argv, " "); got != "bun --no-install -e {code}" || exec.Langs["ts"].Ext != ".ts" {
+	if got := strings.Join(exec.Langs["ts"].Argv, " "); got != "bun --no-install --preload {template} -e {code}" || exec.Langs["ts"].Ext != ".ts" || exec.Langs["ts"].Template != NativeExecTemplateJS {
 		t.Errorf("ts runner = %q ext %q", got, exec.Langs["ts"].Ext)
 	}
 	if exec.InputMaxBytes != 1024*1024 || exec.ArgMaxBytes != 100000 || exec.FunctionsDir != ".jad/exec" {
@@ -63,5 +63,50 @@ func TestExecRunnersRefuseABadLibEnv(t *testing.T) {
 	}}))
 	if err == nil || !strings.Contains(err.Error(), "tools.native.exec.runners.x.lib_env must be empty or an environment variable name") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestExecRunnersDefaultTemplates(t *testing.T) {
+	config, err := loadSetting(t, nativeTools(map[string]any{"bash": map[string]any{}, "exec": map[string]any{}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	langs := config.NativeExec.Langs
+	for name, want := range map[string]string{"python": "python", "node": "js", "ts": "js", "ruby": "ruby", "bash": "", "sh": "", "perl": ""} {
+		if langs[name].Template != want {
+			t.Errorf("%s: template = %q, want %q", name, langs[name].Template, want)
+		}
+	}
+}
+
+func TestExecRunnersRefuseABadTemplate(t *testing.T) {
+	for name, tc := range map[string]struct {
+		entry map[string]any
+		want  string
+	}{
+		"unknown":     {map[string]any{"argv": []any{"x", "{code}"}, "template": "perl"}, "x.template must be"},
+		"no marker":   {map[string]any{"argv": []any{"x", "{code}"}, "template": "js"}, "x.argv must contain {template} exactly once"},
+		"two markers": {map[string]any{"argv": []any{"x", "{template}", "{template}", "{code}"}, "template": "ruby"}, "exactly once"},
+		"python":      {map[string]any{"argv": []any{"x", "{template}", "{code}"}, "template": "python"}, "must not contain {template}"},
+		"orphan":      {map[string]any{"argv": []any{"x", "{template}", "{code}"}}, "has no template"},
+	} {
+		_, err := loadSetting(t, nativeTools(map[string]any{"bash": map[string]any{}, "exec": map[string]any{
+			"runners": map[string]any{"x": tc.entry},
+		}}))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
+func TestExecRunnersAcceptACustomTemplateRunner(t *testing.T) {
+	config, err := loadSetting(t, nativeTools(map[string]any{"bash": map[string]any{}, "exec": map[string]any{
+		"runners": map[string]any{"deno": map[string]any{"argv": []any{"deno", "eval", "--preload", "{template}", "{code}"}, "template": "js", "ext": ".ts"}},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.NativeExec.Langs["deno"].Template != "js" {
+		t.Errorf("deno = %+v", config.NativeExec.Langs["deno"])
 	}
 }

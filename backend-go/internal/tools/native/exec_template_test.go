@@ -1,0 +1,358 @@
+package native
+
+import (
+	"os"
+	osexec "os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"jad/backend-go/internal/sessionfs"
+)
+
+// realRuby is the ruby binary behind a version-manager shim, which cannot start in the exec child's
+// trimmed environment; it is plain "ruby" when there is no shim to see through.
+func realRuby() string {
+	path, err := osexec.LookPath("ruby")
+	if err != nil {
+		return "ruby"
+	}
+	out, err := osexec.Command(path, "-e", "print RbConfig.ruby").Output()
+	if err != nil || len(out) == 0 {
+		return "ruby"
+	}
+	return string(out)
+}
+
+// requireRunnableInterpreter skips when the interpreter is missing or cannot start in the exec child's
+// environment (a version-manager shim that needs variables the child does not get).
+func requireRunnableInterpreter(t *testing.T, lang, interp string) {
+	t.Helper()
+	requireInterpreters(t, interp)
+	root, settings := execTemplateSettings(nil)
+	defer os.RemoveAll(root)
+	if interp == "ruby" {
+		interp = realRuby()
+	}
+	settings.Langs["plain"] = sessionfs.NativeExecLang{Argv: []string{interp, "-e", "{code}"}, Mode: sessionfs.NativeExecModeArg, Aliases: []string{}}
+	settings.LangNames = append(settings.LangNames, "plain")
+	if interp == "python3" {
+		settings.Langs["plain"] = sessionfs.NativeExecLang{Argv: []string{interp, "-c", "{code}"}, Mode: sessionfs.NativeExecModeArg, Aliases: []string{}}
+	}
+	if got := runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": "plain", "code": "1"}); !strings.Contains(got, `"status":"ok"`) {
+		t.Skipf("%s (%s) cannot start in the exec environment", lang, interp)
+	}
+}
+
+func execTemplateSettings(files map[string]string) (string, sessionfs.NativeExecSettings) {
+	root, settings := execHelpersFixtureFor(files)
+	settings.LangNames = append(append([]string{}, settings.LangNames...), "ruby")
+	langs := map[string]sessionfs.NativeExecLang{}
+	for name, lang := range settings.Langs {
+		langs[name] = lang
+	}
+	langs["ruby"] = sessionfs.NativeExecLang{Argv: []string{realRuby(), "-r", "{template}", "-e", "{code}"}, Mode: sessionfs.NativeExecModeArg, Ext: ".rb", Aliases: []string{"rb"}, LibEnv: "RUBYLIB", Template: sessionfs.NativeExecTemplateRuby}
+	settings.Langs = langs
+	return root, settings
+}
+
+// execHelpersFixtureFor is execHelpersFixture without the testing.T, for table builders.
+func execHelpersFixtureFor(files map[string]string) (string, sessionfs.NativeExecSettings) {
+	root, err := os.MkdirTemp("", "exec-template-test-")
+	if err != nil {
+		panic(err)
+	}
+	base := filepath.Join(root, ".jad", "exec")
+	for name, content := range files {
+		path := filepath.Join(base, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			panic(err)
+		}
+		mode := os.FileMode(0o644)
+		if ext := filepath.Ext(name); ext == ".sh" || ext == "" {
+			mode = 0o755
+		}
+		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+			panic(err)
+		}
+	}
+	settings := execTestSettings()
+	settings.FunctionsDir = ".jad/exec"
+	settings.ListMaxResults, settings.ListMaxFiles, settings.ListHeaderBytes, settings.FunctionMaxBytes = 50, 200, 2048, 4096
+	return root, settings
+}
+
+type execFnCase struct {
+	lang, interp string
+	files        map[string]string
+	// code calls a helper, a helper that chains through fn, an async helper, and one created while it runs.
+	code string
+	want string
+	// missing is code that reads a helper that does not exist.
+	missing string
+}
+
+var execFnCases = []execFnCase{
+	{
+		lang: "ts", interp: "bun",
+		files: map[string]string{
+			"ts/base.ts": "// Add\nexport const plus = (a: number, b: number): number => a + b;\n",
+			"ts/top.ts":  "// Chain through fn\nexport const plus3 = (n: number): number => (globalThis as any).fn.base.plus(n, 3);\nexport const later = async (n: number): Promise<number> => { await 0; return n * 2; };\n",
+		},
+		code: "import { writeFileSync } from \"node:fs\";\n" +
+			"const n: number = (await Bun.stdin.json()).n;\n" +
+			"const a = fn.base.plus(n, 1);\n" +
+			"const b = fn.top.plus3(n);\n" +
+			"const c = await fn.top.later(n);\n" +
+			"writeFileSync(process.env.JAD_FUNCTIONS_DIR + \"/ts/late.ts\", \"export const v = () => 42;\");\n" +
+			"console.log(a, b, c, fn.late.v());",
+		want:    "6 8 10 42\n",
+		missing: "fn.nope.x()",
+	},
+	{
+		lang: "node", interp: "node",
+		files: map[string]string{
+			"node/base.js": "// Add\nexports.plus = (a, b) => a + b;\n",
+			"node/top.js":  "// Chain through fn\nexports.plus3 = (n) => fn.base.plus(n, 3);\nexports.later = async (n) => { await 0; return n * 2; };\n",
+		},
+		code: "const fs = require('fs');\n" +
+			"const n = JSON.parse(fs.readFileSync(0, 'utf8')).n;\n" +
+			"(async () => {\n" +
+			"  const a = fn.base.plus(n, 1), b = fn.top.plus3(n), c = await fn.top.later(n);\n" +
+			"  fs.writeFileSync(process.env.JAD_FUNCTIONS_DIR + '/node/late.js', 'exports.v = () => 42');\n" +
+			"  console.log(a, b, c, fn.late.v());\n" +
+			"})();",
+		want:    "6 8 10 42\n",
+		missing: "fn.nope.x()",
+	},
+	{
+		lang: "python", interp: "python3",
+		files: map[string]string{
+			"python/base.py": "# Add\ndef plus(a, b): return a + b\n",
+			"python/top.py":  "# Chain through fn\nasync def later(n):\n    return n * 2\n\ndef plus3(n): return fn.base.plus(n, 3)\n",
+		},
+		code: "import json, os, sys, asyncio\n" +
+			"n = json.load(sys.stdin)['n']\n" +
+			"a, b, c = fn.base.plus(n, 1), fn.top.plus3(n), asyncio.run(fn.top.later(n))\n" +
+			"open(os.environ['JAD_FUNCTIONS_DIR'] + '/python/late.py', 'w').write('def v(): return 42\\n')\n" +
+			"print(a, b, c, fn.late.v())",
+		want:    "6 8 10 42\n",
+		missing: "fn.nope.x()",
+	},
+	{
+		lang: "ruby", interp: "ruby",
+		files: map[string]string{
+			"ruby/base.rb": "# Add\nmodule Base; def self.plus(a, b) = a + b; end\n",
+			"ruby/top.rb":  "# Chain through fn\nmodule Top; def self.plus3(n) = fn.base.plus(n, 3); end\n",
+		},
+		code: "require 'json'\n" +
+			"n = JSON.parse($stdin.read)['n']\n" +
+			"File.write(ENV['JAD_FUNCTIONS_DIR'] + '/ruby/late.rb', 'module Late; def self.v = 42; end')\n" +
+			"puts [fn.base.plus(n, 1), fn.top.plus3(n), fn.late.v].join(' ')",
+		want:    "6 8 42\n",
+		missing: "fn.nope.x",
+	},
+}
+
+func TestExecFnCallsHelpersChainsAndSeesOnesCreatedWhileRunning(t *testing.T) {
+	for _, tc := range execFnCases {
+		t.Run(tc.lang, func(t *testing.T) {
+			requireRunnableInterpreter(t, tc.lang, tc.interp)
+			root, settings := execTemplateSettings(tc.files)
+			defer os.RemoveAll(root)
+			got := runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": tc.lang, "code": tc.code, "input": map[string]any{"n": 5}})
+			if execContent(got) != tc.want {
+				t.Fatalf("got %q, want %q\n%s", execContent(got), tc.want, got)
+			}
+		})
+	}
+}
+
+func TestExecFnMissingHelperNamesTheHelperAndTheFolder(t *testing.T) {
+	for _, tc := range execFnCases {
+		t.Run(tc.lang, func(t *testing.T) {
+			requireRunnableInterpreter(t, tc.lang, tc.interp)
+			root, settings := execTemplateSettings(tc.files)
+			defer os.RemoveAll(root)
+			got := runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": tc.lang, "code": tc.missing})
+			folder := filepath.Join(root, ".jad", "exec", tc.lang)
+			real, _ := filepath.EvalSymlinks(folder)
+			if !strings.Contains(got, "no helper fn.nope in "+real) || execField(got, "error_code") != "nonzero_exit" {
+				t.Fatalf("missing helper = %s", got)
+			}
+		})
+	}
+}
+
+func TestExecFnWithoutALibraryFolderSaysSoAndStillCreatesOne(t *testing.T) {
+	requireInterpreters(t, "node", "python3")
+	root, settings := execTemplateSettings(map[string]string{"bash/x.sh": "# x\n"})
+	defer os.RemoveAll(root)
+	bash := bashTestSettings(t, root)
+	for lang, code := range map[string]string{"node": "fn.nope", "python": "fn.nope"} {
+		got := runExec(t, root, settings, bash, map[string]any{"lang": lang, "code": code})
+		if !strings.Contains(got, "no helper fn.nope in ") || !strings.Contains(got, filepath.Join(".jad", "exec", lang)) {
+			t.Errorf("%s: %s", lang, got)
+		}
+	}
+	got := runExec(t, root, settings, bash, map[string]any{"lang": "node", "code": "require('fs').mkdirSync(process.env.JAD_RUNNER_DIR, {recursive: true}); require('fs').writeFileSync(process.env.JAD_RUNNER_DIR + '/made.js', 'exports.v = 7'); console.log(fn.made.v)"})
+	if execContent(got) != "7\n" {
+		t.Errorf("helper made in a folder that did not exist: %s", got)
+	}
+}
+
+func TestExecPythonFnSeesAHelperInAFolderCreatedAfterStart(t *testing.T) {
+	requireInterpreters(t, "python3")
+	root, settings := execTemplateSettings(map[string]string{"bash/x.sh": "# x\n"})
+	defer os.RemoveAll(root)
+	code := "import os\nprint(os.path.isdir(os.environ['JAD_RUNNER_DIR']))\n" +
+		"try:\n    fn.late\nexcept AttributeError as e:\n    print('first:', e)\n" +
+		"os.makedirs(os.environ['JAD_RUNNER_DIR'])\nopen(os.environ['JAD_RUNNER_DIR'] + '/late.py', 'w').write('v = 5\\n')\n" +
+		"print(fn.late.v)"
+	got := execContent(runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": "python", "code": code}))
+	if !strings.HasSuffix(got, "\n5\n") || !strings.HasPrefix(got, "False\nfirst: no helper fn.late in ") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestExecFnLineNumbersOfUserCodeAreUnchanged(t *testing.T) {
+	for _, tc := range []struct{ lang, interp, code, want string }{
+		{"ts", "bun", "const a = 1;\nconst b = 2;\nthrow new Error('line4');", "[eval]:3"},
+		{"node", "node", "const a = 1;\nconst b = 2;\nthrow new Error('line4');", "[eval]:3"},
+		{"python", "python3", "a = 1\nb = 2\nraise RuntimeError('x')", "line 3, in <module>"},
+		{"ruby", "ruby", "a = 1\nb = 2\nraise 'x'", "-e:3"},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			requireRunnableInterpreter(t, tc.lang, tc.interp)
+			root, settings := execTemplateSettings(map[string]string{tc.lang + "/x.txt": "# x\n"})
+			defer os.RemoveAll(root)
+			got := runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": tc.lang, "code": tc.code})
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("want %q in:\n%s", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestExecFnNamesThatAreNotIdentifiersAreExplained(t *testing.T) {
+	requireInterpreters(t, "node", "python3")
+	root, settings := execTemplateSettings(map[string]string{
+		"node/my-helper.js": "// Dash\nexports.v = 1;\n",
+		"python/my_py.py":   "# ok\nv = 2\n",
+	})
+	defer os.RemoveAll(root)
+	bash := bashTestSettings(t, root)
+	if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "node", "code": "console.log(fn['my-helper'].v)"})); got != "1\n" {
+		t.Errorf("fn[\"my-helper\"] = %q", got)
+	}
+	if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "python", "code": "print(fn.my_py.v, getattr(fn, 'my_py').v)"})); got != "2 2\n" {
+		t.Errorf("python = %q", got)
+	}
+	got := runExec(t, root, settings, bash, map[string]any{"lang": "node", "code": "fn['../x']"})
+	if !strings.Contains(got, "is not a helper name") {
+		t.Errorf("a path-like name must be refused: %s", got)
+	}
+	got = runExec(t, root, settings, bash, map[string]any{"lang": "python", "code": "getattr(fn, '../x')"})
+	if !strings.Contains(got, "is not a helper name") {
+		t.Errorf("python path-like name: %s", got)
+	}
+}
+
+func TestExecTemplateFileInTheLibraryReplacesTheBuiltIn(t *testing.T) {
+	requireInterpreters(t, "node", "python3", "bun")
+	root, settings := execTemplateSettings(map[string]string{
+		"node/_template.js":   "globalThis.fn = { who: 'custom-node' };\n",
+		"python/_template.py": "import builtins\nbuiltins.fn = type('F', (), {'who': 'custom-python'})\n",
+		"ts/_template.ts":     "(globalThis as any).fn = { who: 'custom-ts' };\n",
+		"node/real.js":        "// Real\nexports.v = 1;\n",
+	})
+	defer os.RemoveAll(root)
+	bash := bashTestSettings(t, root)
+	for lang, code := range map[string]string{"node": "console.log(fn.who)", "python": "print(fn.who)", "ts": "console.log(fn.who)"} {
+		want := "custom-" + lang + "\n"
+		if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": lang, "code": code})); got != want {
+			t.Errorf("%s: %q, want %q", lang, got, want)
+		}
+	}
+	text := execContent(runExec(t, root, settings, bash, map[string]any{}))
+	if strings.Contains(text, "_template") || strings.Contains(text, "malformed") || !strings.Contains(text, "real.js") {
+		t.Errorf("a template file must not be listed as a helper or a malformed one:\n%s", text)
+	}
+}
+
+func TestExecTemplateFileThatLeavesTheLibraryIsRefused(t *testing.T) {
+	requireInterpreters(t, "node")
+	root, settings := execTemplateSettings(map[string]string{"node/real.js": "// Real\n"})
+	defer os.RemoveAll(root)
+	outside := filepath.Join(t.TempDir(), "evil.js")
+	if err := os.WriteFile(outside, []byte("console.log('evil')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, ".jad", "exec", "node", "_template.js")); err != nil {
+		t.Skip("symlinks are not available")
+	}
+	got := runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": "node", "code": "console.log(1)"})
+	if strings.Contains(got, "evil") || execField(got, "error_code") != "template_failed" {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestExecPythonTemplateKeepsUserPythonPathAndChainsAShadowedSitecustomize(t *testing.T) {
+	requireInterpreters(t, "python3")
+	root, settings := execTemplateSettings(map[string]string{"python/base.py": "# b\nv = 3\n"})
+	defer os.RemoveAll(root)
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, "sitecustomize.py"), []byte("import builtins\nbuiltins.shadowed_ran = 'yes'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bash := bashTestSettings(t, root)
+	bash.Env = map[string]string{"PYTHONPATH": other}
+	got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "python", "code": "import sys\nprint(fn.base.v, shadowed_ran, sys.path.count(" + shellQuoteForTest(other) + "))"}))
+	if got != "3 yes 1\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestExecNodeAndTsKeepUserNodePath(t *testing.T) {
+	requireInterpreters(t, "node", "bun")
+	root, settings := execTemplateSettings(map[string]string{"node/base.js": "// b\nexports.v = 1;\n"})
+	defer os.RemoveAll(root)
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, "mine.js"), []byte("exports.v = 9;"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bash := bashTestSettings(t, root)
+	bash.Env = map[string]string{"NODE_PATH": other}
+	if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "node", "code": "console.log(fn.base.v, require('mine').v)"})); got != "1 9\n" {
+		t.Errorf("node = %q", got)
+	}
+	if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "ts", "code": "import { v } from \"mine\"; console.log(v)"})); got != "9\n" {
+		t.Errorf("ts = %q", got)
+	}
+}
+
+func TestExecBashBareNamesAreUnaffectedByTemplates(t *testing.T) {
+	requireInterpreters(t, "bash")
+	root, settings := execTemplateSettings(map[string]string{"bash/hello.sh": "#!/bin/sh\n# Hello\necho hello\n"})
+	defer os.RemoveAll(root)
+	if got := execContent(runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": "bash", "code": "hello.sh; echo \"[$JAD_RUNNER_DIR]\" | grep -c bash"})); got != "hello\n1\n" {
+		t.Errorf("bash = %q", got)
+	}
+}
+
+func TestExecTemplateScratchIsRemovedWithTheCall(t *testing.T) {
+	requireInterpreters(t, "python3", "node")
+	root, settings := execTemplateSettings(map[string]string{"node/x.js": "// x\n"})
+	defer os.RemoveAll(root)
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	bash := bashTestSettings(t, root)
+	for _, lang := range []string{"python", "node"} {
+		runExec(t, root, settings, bash, map[string]any{"lang": lang, "code": "1"})
+	}
+	if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
+		t.Fatalf("scratch left behind: %v", entries)
+	}
+}
+
+func shellQuoteForTest(text string) string { return "'" + strings.ReplaceAll(text, "'", "'\\''") + "'" }

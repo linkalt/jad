@@ -99,8 +99,10 @@ func TestExecHelperDirectoryIsPrependedAndKeepsTheExistingValue(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 	got = execContent(runExec(t, root, settings, bash, map[string]any{"lang": "python", "code": "import os; print(os.environ['PYTHONPATH'])"}))
-	if want := filepath.Join(lib, "python") + string(os.PathListSeparator) + "/keep/me\n"; got != want {
-		t.Fatalf("python path = %q, want %q", got, want)
+	// The per-call template directory comes first, then the helper folder, then the user's value.
+	parts := strings.Split(strings.TrimSpace(got), string(os.PathListSeparator))
+	if len(parts) != 3 || filepath.Base(parts[0]) != "template" || parts[1] != filepath.Join(lib, "python") || parts[2] != "/keep/me" {
+		t.Fatalf("python path = %q", got)
 	}
 }
 

@@ -36,14 +36,20 @@ func execHelperEnvironment(settings sessionfs.NativeExecSettings, runner session
 		return nil, nil
 	}
 	extra = map[string]string{execFunctionsDirEnv: root}
-	if runner.LibEnv == "" {
-		return nil, extra
-	}
 	dir, err := filepath.EvalSymlinks(filepath.Join(root, name))
-	if err != nil || !toolSmithInside(root, dir) || !toolSmithInside(realRoot, dir) {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Not created yet: a program may make it, and fn looks here at call time.
+		extra[execRunnerDirEnv] = filepath.Join(root, name)
+		return nil, extra
+	case err != nil || !toolSmithInside(root, dir) || !toolSmithInside(realRoot, dir):
 		return nil, extra
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return nil, extra
+	}
+	extra[execRunnerDirEnv] = dir
+	if runner.LibEnv == "" {
 		return nil, extra
 	}
 	return map[string]string{runner.LibEnv: dir}, extra
@@ -148,7 +154,7 @@ func scanExecHelpers(dir string, settings sessionfs.NativeExecSettings) (files [
 			continue
 		}
 		for _, entry := range inner {
-			if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || strings.HasPrefix(entry.Name(), execTemplateFilePrefix) {
 				continue
 			}
 			files = append(files, execHelperFile{runner: runner, name: entry.Name()})
