@@ -22,7 +22,7 @@ const (
 	// of a single argument (128 KiB on Linux).
 	defaultNativeExecArgMax int64 = 100000
 	// defaultNativeExecFunctionsDir is its own folder, never tool_smith's.
-	defaultNativeExecFunctionsDir = ".jad/exec-functions"
+	defaultNativeExecFunctionsDir = ".jad/exec"
 
 	// NativeExecModeArg, NativeExecModeFile and NativeExecModeStdin are the ways a program
 	// receives its code: as one argument ({code}), as a temporary file ({file}), or on
@@ -42,10 +42,11 @@ var (
 		"line_aware", "list_header_bytes", "list_max_files", "list_max_results", "result_max_bytes", "runners",
 	}
 	nativeExecKeys     = append(append([]string{}, nativeBashStyleKeys...), nativeExecOwnKeys...)
-	nativeExecLangKeys = []string{"aliases", "argv", "ext", "mode"}
+	nativeExecLangKeys = []string{"aliases", "argv", "ext", "lib_env", "mode"}
 
 	nativeExecNamePattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
 	nativeExecExtensionPattern = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
+	nativeExecLibEnvPattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 )
 
 // NativeExecLang is one interpreter exec can run.
@@ -55,10 +56,14 @@ type NativeExecLang struct {
 	Argv []string
 	// Mode is NativeExecModeArg, NativeExecModeFile or NativeExecModeStdin.
 	Mode string
-	// Ext is the extension of the temporary code file and of a saved function, with its dot.
+	// Ext is the extension of the temporary code file, with its dot.
 	Ext string
 	// Aliases are other names the model may use for this language.
 	Aliases []string
+	// LibEnv names the list variable (PATH, PYTHONPATH, ...) that receives the language's helper
+	// directory, functions_dir/<name>, so code finds its helpers by the interpreter's own means.
+	// Empty: the directory is not exposed.
+	LibEnv string
 }
 
 // NativeExecSettings holds the normalized settings of native.exec. Child is how its
@@ -96,12 +101,12 @@ type NativeExecSettings struct {
 func defaultNativeExecLangs() ([]string, map[string]NativeExecLang) {
 	names := []string{"python", "node", "bash", "sh", "ruby", "perl"}
 	return names, map[string]NativeExecLang{
-		"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}},
-		"node":   {Argv: []string{"node", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".js", Aliases: []string{"nodejs", "js", "javascript"}},
-		"bash":   {Argv: []string{"bash", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{"shell"}},
-		"sh":     {Argv: []string{"sh", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{}},
-		"ruby":   {Argv: []string{"ruby", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".rb", Aliases: []string{"rb"}},
-		"perl":   {Argv: []string{"perl", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".pl", Aliases: []string{}},
+		"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}, LibEnv: "PYTHONPATH"},
+		"node":   {Argv: []string{"node", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".js", Aliases: []string{"nodejs", "js", "javascript"}, LibEnv: "NODE_PATH"},
+		"bash":   {Argv: []string{"bash", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{"shell"}, LibEnv: "PATH"},
+		"sh":     {Argv: []string{"sh", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{}, LibEnv: "PATH"},
+		"ruby":   {Argv: []string{"ruby", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".rb", Aliases: []string{"rb"}, LibEnv: "RUBYLIB"},
+		"perl":   {Argv: []string{"perl", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".pl", Aliases: []string{}, LibEnv: "PERL5LIB"},
 	}
 }
 
@@ -313,6 +318,11 @@ func normalizeNativeExecLang(raw json.RawMessage, path string) (NativeExecLang, 
 	if value, present := nullableField(fields, "ext"); present {
 		if json.Unmarshal(value, &lang.Ext) != nil || (lang.Ext != "" && !nativeExecExtensionPattern.MatchString(lang.Ext)) {
 			return NativeExecLang{}, configError("%s.ext must be empty or a dot and 1 to 8 letters or digits", path)
+		}
+	}
+	if value, present := nullableField(fields, "lib_env"); present {
+		if json.Unmarshal(value, &lang.LibEnv) != nil || (lang.LibEnv != "" && !nativeExecLibEnvPattern.MatchString(lang.LibEnv)) {
+			return NativeExecLang{}, configError("%s.lib_env must be empty or an environment variable name", path)
 		}
 	}
 	if value, present := nullableField(fields, "aliases"); present {

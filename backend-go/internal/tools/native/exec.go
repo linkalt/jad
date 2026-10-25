@@ -18,6 +18,8 @@ const (
 	execToolID = "native.exec"
 	// execResultEnv names the file a program may write its answer to.
 	execResultEnv = "JAD_RESULT"
+	// execFunctionsDirEnv names the real root of the helper library for code that calls another language's helper.
+	execFunctionsDirEnv = "JAD_FUNCTIONS_DIR"
 
 	asyncKindExec asyncmgr.Kind = "exec"
 )
@@ -197,6 +199,11 @@ func executeNativeExecAsync(
 		if problem != "" {
 			return shellRunResult{text: problem}
 		}
+		prepend, libraryEnv := execHelperEnvironment(settings, plan.lang, plan.langName, execution.WorkspaceRoot)
+		extraEnv := map[string]string{execResultEnv: resultPath}
+		for name, value := range libraryEnv {
+			extraEnv[name] = value
+		}
 		return runShellChildDetailed(ctx, shellChildRun{
 			file:       file,
 			argv:       argv,
@@ -204,7 +211,8 @@ func executeNativeExecAsync(
 			cwd:        cwd,
 			lineAware:  settings.LineAware,
 			section:    "tools.native.exec",
-			extraEnv:   map[string]string{execResultEnv: resultPath},
+			extraEnv:   extraEnv,
+			prependEnv: prepend,
 			resultFile: &shellResultFile{path: resultPath, maxBytes: settings.ResultMaxBytes},
 			program:    &plan.program,
 		}, settings.Child, apiKeyEnv, execution)
@@ -224,6 +232,9 @@ func executeNativeExecAsync(
 type execPlan struct {
 	label   string
 	program shellProgram
+	// langName and lang are the runner the code runs in.
+	langName string
+	lang     sessionfs.NativeExecLang
 	// prepare writes any file into workDir and returns the program, its arguments and the
 	// stdin text; problem is a rendered error when it cannot.
 	prepare func(workDir string) (file string, argv []string, stdin, problem string)
@@ -299,8 +310,10 @@ func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSetting
 		failureSuggestion = defaultLangSuggestion(name, settings.LangNames)
 	}
 	return execPlan{
-		label:   shellLabel(execAsync, code),
-		program: shellProgram{name: name, setting: "tools.native.exec.runners." + name + ".argv", failureSuggestion: failureSuggestion},
+		label:    shellLabel(execAsync, code),
+		langName: name,
+		lang:     lang,
+		program:  shellProgram{name: name, setting: "tools.native.exec.runners." + name + ".argv", failureSuggestion: failureSuggestion},
 		prepare: func(workDir string) (string, []string, string, string) {
 			codePath := filepath.Join(workDir, "code"+lang.Ext)
 			if lang.Mode == sessionfs.NativeExecModeFile {

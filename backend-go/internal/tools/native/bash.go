@@ -157,6 +157,9 @@ type shellChildRun struct {
 	lineAware bool
 	// extraEnv is added after the allowlist and denials were applied.
 	extraEnv map[string]string
+	// prependEnv puts a directory in front of the list variable of that name (PATH, PYTHONPATH, ...),
+	// keeping the value the environment already has.
+	prependEnv map[string]string
 	// resultFile is a file the program may write its answer to; its text, cut to maxBytes,
 	// is shown ahead of the raw output, which is then labeled [output].
 	resultFile *shellResultFile
@@ -246,6 +249,9 @@ func runShellChildDetailed(
 	environment := buildNativeBashEnvironment(os.Environ(), settings, apiKeyEnv)
 	for _, name := range sortedKeys(run.extraEnv) {
 		environment = append(environment, name+"="+run.extraEnv[name])
+	}
+	for _, name := range sortedKeys(run.prependEnv) {
+		environment = prependEnvironmentList(environment, name, run.prependEnv[name])
 	}
 	child := runBashCommand(ctx, bashChildRequest{
 		file:                     run.file,
@@ -578,4 +584,18 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 		return render(tools.StatusError, subject+" exited with "+exitCode, fields...)
 	}
 	return render(tools.StatusOK, fmt.Sprintf("%s completed in %d ms", subject, result.durationMs))
+}
+
+// prependEnvironmentList sets name to dir followed by the list separator and the value name
+// already has; with no value it is just dir.
+func prependEnvironmentList(environment []string, name, dir string) []string {
+	for index := len(environment) - 1; index >= 0; index-- {
+		if existing, found := strings.CutPrefix(environment[index], name+"="); found {
+			if existing != "" {
+				dir += string(os.PathListSeparator) + existing
+			}
+			break
+		}
+	}
+	return append(environment, name+"="+dir)
 }

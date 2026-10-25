@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -12,27 +13,38 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-// execFunction is one saved function: a source file whose extension selects its runner.
+// execHelperName is a helper's file name: a letter or digit first, then letters, digits, _ . -.
+var execHelperName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// execFunction is one saved helper: a file in functions_dir/<runner>/.
 type execFunction struct {
 	name        string
 	runner      string
-	file        string
 	description string
 	input       string
 }
 
-// execFunctionExtensions maps an extension to the first runner, in table order, that
-// declares it, so a file has exactly one runner (.sh belongs to bash, not sh).
-func execFunctionExtensions(settings sessionfs.NativeExecSettings) map[string]string {
-	extensions := map[string]string{}
-	for _, name := range settings.LangNames {
-		if ext := settings.Langs[name].Ext; ext != "" {
-			if _, taken := extensions[ext]; !taken {
-				extensions[ext] = name
-			}
-		}
+// execHelperEnvironment returns what a run of this runner gets so its code can reach the helpers:
+// prepend puts functions_dir/<runner> in front of the runner's list variable, extra sets
+// JAD_FUNCTIONS_DIR to the real library root. Both are empty when the library does not exist;
+// prepend is empty when the runner's directory is missing or does not resolve inside the library.
+func execHelperEnvironment(settings sessionfs.NativeExecSettings, runner sessionfs.NativeExecLang, name, workspaceRoot string) (prepend map[string]string, extra map[string]string) {
+	root, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, workspaceRoot)
+	if err != nil {
+		return nil, nil
 	}
-	return extensions
+	extra = map[string]string{execFunctionsDirEnv: root}
+	if runner.LibEnv == "" {
+		return nil, extra
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Join(root, name))
+	if err != nil || !toolSmithInside(root, dir) || !toolSmithInside(realRoot, dir) {
+		return nil, extra
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return nil, extra
+	}
+	return map[string]string{runner.LibEnv: dir}, extra
 }
 
 // openExecFunction resolves one library file inside the functions directory and opens it
@@ -95,10 +107,7 @@ func execFunctionHeader(text string) (description, input string) {
 }
 
 // readExecFunctionEntry describes one library file; problem is non-empty when it is malformed.
-func readExecFunctionEntry(dir, realRoot, file, name, runner string, settings sessionfs.NativeExecSettings) (execFunction, string) {
-	if !toolSmithFunctionName.MatchString(name) {
-		return execFunction{}, "name must match ^[a-z][a-z0-9_]*$"
-	}
+func readExecFunctionEntry(dir, realRoot, file, runner string, settings sessionfs.NativeExecSettings) (execFunction, string) {
 	handle, problem := openExecFunction(dir, realRoot, file, settings.FunctionMaxBytes)
 	if problem != "" {
 		return execFunction{}, problem
@@ -112,33 +121,51 @@ func readExecFunctionEntry(dir, realRoot, file, name, runner string, settings se
 	if description == "" {
 		return execFunction{}, "missing a leading comment line (#, // or --) with a description"
 	}
-	return execFunction{name: name, runner: runner, file: file, description: description, input: input}, ""
+	return execFunction{name: filepath.Base(file), runner: runner, description: description, input: input}, ""
 }
 
-// scanExecFunctions lists the library files that belong to a runner, cut at list_max_files.
-func scanExecFunctions(dir string, settings sessionfs.NativeExecSettings) (files []string, scanned []string, runners map[string]string, err error) {
+// scanExecHelpers lists the files of every runner's directory under dir, in runner order, and
+// the entries of dir that no runner owns. scanned is cut at list_max_files.
+func scanExecHelpers(dir string, settings sessionfs.NativeExecSettings) (files []execHelperFile, scanned []execHelperFile, strays []string, err error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	extensions := execFunctionExtensions(settings)
-	runners = map[string]string{}
+	present := map[string]bool{}
 	for _, entry := range entries {
-		if entry.IsDir() {
+		present[entry.Name()] = true
+	}
+	for _, runner := range settings.LangNames {
+		if !present[runner] {
 			continue
 		}
-		ext := filepath.Ext(entry.Name())
-		if runner, known := extensions[ext]; known {
-			files = append(files, entry.Name())
-			runners[entry.Name()] = runner
+		delete(present, runner)
+		inner, err := os.ReadDir(filepath.Join(dir, runner))
+		if err != nil {
+			strays = append(strays, runner+"/: "+err.Error())
+			continue
+		}
+		for _, entry := range inner {
+			if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			files = append(files, execHelperFile{runner: runner, name: entry.Name()})
 		}
 	}
+	for name := range present {
+		if !strings.HasPrefix(name, ".") {
+			strays = append(strays, name+": not a runner name, so its files are not helpers")
+		}
+	}
+	sort.Strings(strays)
 	scanned = files
 	if int64(len(scanned)) > settings.ListMaxFiles {
 		scanned = scanned[:settings.ListMaxFiles]
 	}
-	return files, scanned, runners, nil
+	return files, scanned, strays, nil
 }
+
+type execHelperFile struct{ runner, name string }
 
 func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSettings, execution tools.ExecutionContext) string {
 	callID := execution.CallID
@@ -164,33 +191,49 @@ func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSett
 			tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},
 			tools.Information{Key: "system_error", Value: err.Error()})
 	}
-	files, scanned, runners, err := scanExecFunctions(dir, settings)
+	files, scanned, strays, err := scanExecHelpers(dir, settings)
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "list_failed", "The function library could not be read",
 			tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},
 			tools.Information{Key: "system_error", Value: err.Error()})
 	}
 	var matched []execFunction
-	var problems []string
+	problems := append([]string(nil), strays...)
 	for _, file := range scanned {
-		name := strings.TrimSuffix(file, filepath.Ext(file))
-		entry, problem := readExecFunctionEntry(dir, realRoot, file, name, runners[file], settings)
+		path := file.runner + "/" + file.name
+		if !execHelperName.MatchString(file.name) {
+			problems = append(problems, path+": name must match "+execHelperName.String())
+			continue
+		}
+		entry, problem := readExecFunctionEntry(dir, realRoot, path, file.runner, settings)
 		if problem != "" {
-			problems = append(problems, file+": "+problem)
+			problems = append(problems, path+": "+problem)
 			continue
 		}
 		if toolSmithMatchesFilters(toolSmithListEntry{name: entry.name, description: entry.description}, filters) {
 			matched = append(matched, entry)
 		}
 	}
-	sort.Slice(matched, func(i, j int) bool { return matched[i].name < matched[j].name })
+	runnerOrder := map[string]int{}
+	for index, name := range settings.LangNames {
+		runnerOrder[name] = index
+	}
+	sort.SliceStable(matched, func(i, j int) bool {
+		if matched[i].runner != matched[j].runner {
+			return runnerOrder[matched[i].runner] < runnerOrder[matched[j].runner]
+		}
+		return matched[i].name < matched[j].name
+	})
 	shown := matched
 	if int64(len(shown)) > settings.ListMaxResults {
 		shown = shown[:settings.ListMaxResults]
 	}
 	lines := make([]string, 0, len(shown)+len(problems)+2)
-	for _, entry := range shown {
-		line := entry.name + " [" + entry.runner + "] — " + entry.description
+	for index, entry := range shown {
+		if index == 0 || shown[index-1].runner != entry.runner {
+			lines = append(lines, entry.runner+":")
+		}
+		line := "  " + entry.name + " — " + entry.description
 		if entry.input != "" {
 			line += " (input: " + entry.input + ")"
 		}
@@ -200,14 +243,14 @@ func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSett
 		if len(lines) > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, fmt.Sprintf("malformed files (%d):", len(problems)))
+		lines = append(lines, fmt.Sprintf("malformed entries (%d):", len(problems)))
 		for _, problem := range problems {
 			lines = append(lines, "- "+problem)
 		}
 	}
-	summary := fmt.Sprintf("%d function%s", len(shown), pluralSuffix(len(shown)))
+	summary := fmt.Sprintf("%d helper%s", len(shown), pluralSuffix(len(shown)))
 	if len(problems) > 0 {
-		summary += fmt.Sprintf(", %d malformed file%s", len(problems), pluralSuffix(len(problems)))
+		summary += fmt.Sprintf(", %d malformed", len(problems))
 	}
 	options := tools.ResultOptions{ID: callID, Status: tools.StatusOK, Summary: summary}
 	if len(shown) < len(matched) || len(scanned) < len(files) {

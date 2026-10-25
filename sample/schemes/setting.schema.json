@@ -1039,7 +1039,7 @@
             },
             "exec": {
               "type": "object",
-              "description": "Inline code in a configured interpreter. It has its own child-process settings (bash_style): environment, timeouts, output budgets, spill files and path rules are read from tools.native.exec with bash's keys and defaults, and nothing is taken from tools.native.bash. Its spill files default to the folder .exec-output and are named exec-<call>.<stream>.log, not bash's .bash-output and bash-... (spill.storage_dir and the legacy templates still override the folder). exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.",
+              "description": "Inline code in a configured interpreter. It has its own child-process settings (bash_style): environment, timeouts, output budgets, spill files and path rules are read from tools.native.exec with bash's keys and defaults, and nothing is taken from tools.native.bash. Its spill files default to the folder .exec-output and are named exec-<call>.<stream>.log, not bash's .bash-output and bash-... (spill.storage_dir and the legacy templates still override the folder). exec adds the interpreter table, per-language helper folders, line-aware cutting and a result file. A call has no timeout of its own: timeout_ms here is the limit of every call (at most 6 hours), and max_timeout_ms has no effect on exec.",
               "allOf": [
                 {
                   "$ref": "#/$defs/bash_style"
@@ -1090,6 +1090,12 @@
                         "default": "",
                         "description": "Extension of the temporary code file and of a saved function, with its dot."
                       },
+                      "lib_env": {
+                        "type": "string",
+                        "pattern": "^([A-Za-z_][A-Za-z0-9_]{0,63})?$",
+                        "default": "",
+                        "description": "List variable (PATH, PYTHONPATH, NODE_PATH, RUBYLIB, PERL5LIB, ...) that receives functions_dir/<runner name> in front of its value, so code of this language finds its saved helpers by the interpreter's own means. Empty: not exposed. Built-ins: bash and sh PATH, python PYTHONPATH, node NODE_PATH, ruby RUBYLIB, perl PERL5LIB."
+                      },
                       "aliases": {
                         "type": "array",
                         "items": {
@@ -1105,7 +1111,7 @@
                 },
                 "input_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Largest JSON input one call may write to the program's stdin, in UTF-8 bytes."},
                 "arg_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 100000, "description": "Largest code a mode arg runner receives as one argument; the kernel limits a single argument (128 KiB on Linux)."},
-                "functions_dir": {"type": "string", "minLength": 1, "default": ".jad/exec-functions", "description": "Folder of saved exec functions, relative to the workspace root; separate from tool_smith's."},
+                "functions_dir": {"type": "string", "minLength": 1, "default": ".jad/exec", "description": "Root of the saved helpers, relative to the workspace root: one folder per runner name (bash/, python/, ...). Code reaches its own language's folder through the runner's lib_env and every folder through $JAD_FUNCTIONS_DIR. Separate from tool_smith's."},
                 "list_max_results": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50, "description": "Most functions one listing shows."},
                 "list_max_files": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 200, "description": "Most files of functions_dir one listing scans."},
                 "list_header_bytes": {"type": "integer", "minimum": 1, "maximum": 65536, "default": 2048, "description": "Bytes read from the top of a function file for its description."},
