@@ -14,6 +14,8 @@ import (
 
 var toolSmithFunctionName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+const toolSmithListLegend = "call as: fn.<name>(input) inside code (await it); each entry: call expression, file, description"
+
 type toolSmithListEntry struct {
 	name        string
 	description string
@@ -120,6 +122,9 @@ func executeToolSmithList(arguments map[string]any, settings sessionfs.NativeToo
 		shown = shown[:settings.ListMaxResults]
 	}
 	lines := make([]string, 0, len(shown)+len(problems)+2)
+	if len(shown) > 0 {
+		lines = append(lines, toolSmithListLegend)
+	}
 	for _, entry := range shown {
 		lines = append(lines, entry.line)
 	}
@@ -254,7 +259,7 @@ func readToolSmithListEntry(dir, realRoot, file string, headerBytes int64) (tool
 	if !found {
 		return toolSmithListEntry{}, fmt.Sprintf("no `export async function %s(` in the first %d bytes", name, headerBytes)
 	}
-	return toolSmithListEntry{name: name, description: description, line: name + "(" + signature + ") — " + description}, ""
+	return toolSmithListEntry{name: name, description: description, line: "fn." + name + "(" + signature + ")   " + file + " — " + description}, ""
 }
 
 // toolSmithHeaderDescription returns the first non-empty line of the leading // comment block.

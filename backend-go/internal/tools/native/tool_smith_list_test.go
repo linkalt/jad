@@ -45,7 +45,7 @@ func TestToolSmithListParsesHeaderAndSignature(t *testing.T) {
 	listTestWrite(t, root, "fn/notes.txt", "ignored")
 	result := runToolSmithList(root, listTestSettings("fn"))
 	content := execContent(result)
-	want := "inspect(input: {query: string, path?: string}) — Search project code\ntrace_callers() — Find callers of a symbol"
+	want := toolSmithListLegend + "\nfn.inspect(input: {query: string, path?: string})   inspect.ts — Search project code\nfn.trace_callers()   trace_callers.ts — Find callers of a symbol"
 	if !strings.Contains(result, `"status":"ok"`) || content != want {
 		t.Fatalf("content = %q\nresult:\n%s", content, result)
 	}
@@ -60,7 +60,7 @@ func TestToolSmithListFiltersMustAllMatchNameOrDescription(t *testing.T) {
 	if got := execContent(runToolSmithList(root, settings, "ALPHA")); !strings.Contains(got, "alpha_one") || !strings.Contains(got, "alpha_two") || strings.Contains(got, "beta") {
 		t.Fatalf("single filter: %q", got)
 	}
-	if got := execContent(runToolSmithList(root, settings, "alpha", "web")); !strings.HasPrefix(got, "alpha_one(") || strings.Contains(got, "alpha_two") {
+	if got := execContent(runToolSmithList(root, settings, "alpha", "web")); !strings.Contains(got, "fn.alpha_one(") || strings.Contains(got, "alpha_two") {
 		t.Fatalf("two filters: %q", got)
 	}
 	result := runToolSmithList(root, settings, "nothing-matches")
@@ -140,8 +140,12 @@ func TestToolSmithListReportsAllMalformedFilesInOneSection(t *testing.T) {
 	listTestWrite(t, root, "fn/wrongfn.ts", "// Described\nexport async function other() {}\n")
 	result := runToolSmithList(root, listTestSettings("fn"))
 	content := execContent(result)
-	if !strings.HasPrefix(content, "good(input: {a: string}) — Fine\n\nmalformed files (3):\n") {
+	if !strings.HasPrefix(content, toolSmithListLegend+"\nfn.good(input: {a: string})   good.ts — Fine\n\nmalformed files (3):\n") {
 		t.Fatalf("content = %q", content)
+	}
+	listTestWrite(t, root, "fn/my-helper.ts", "// Dash\nexport async function my() {}\n")
+	if got := execContent(runToolSmithList(root, listTestSettings("fn"))); !strings.Contains(got, "- my-helper.ts: name must match") || strings.Contains(got, "fn.my-helper") || strings.Contains(got, `fn["my-helper"]`) {
+		t.Fatalf("non-identifier name must be reported malformed, not listed: %q", got)
 	}
 	for _, want := range []string{"- BadName.ts: name must match", "- nohead.ts: missing leading // header", "- wrongfn.ts: no `export async function wrongfn(`"} {
 		if !strings.Contains(content, want) {
