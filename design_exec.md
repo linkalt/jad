@@ -45,22 +45,41 @@ Only the per-call parameter is removed. The configured `timeout_ms` (default) an
 
 ## 4. How running code reaches the helpers
 
-Per runner, config key `lib_env` (default below) names an environment variable that receives the runner's directory, PREPENDED to the existing value with the OS list separator. Exposed only when the directory exists and resolves inside the workspace.
+Two mechanisms, both set at call time and neither changing the user's code or its line numbers.
 
-| runner | lib_env | how code uses a helper (verified with real interpreters) |
-|---|---|---|
-| bash, sh | PATH | `script1.sh` or `script1 '{"a":1}'`; the file must be executable (chmod +x) and have a shebang |
-| python | PYTHONPATH | `import read` (file read.py) |
-| node | NODE_PATH | `require("read.js")`; CommonJS only (ESM import ignores NODE_PATH); a configured ts runner on a Node that strips types can `require("read.ts")` |
-| ruby | RUBYLIB | `require "read"` |
-| perl | PERL5LIB | `use Read;` (file Read.pm) |
-| ts (bun --no-install -e) | NODE_PATH | `import { x } from "read"` or `"read.ts"`; ESM, types and top-level await work; helpers import helpers the same way (verified with bun 1.4.4) |
+**`fn` (python, node, ts, ruby).** A built-in template, embedded in the binary, is written into the call's scratch directory and attached before the user's code runs; it installs a global `fn`. `fn.<name>` looks the helper up in `$JAD_RUNNER_DIR` (= `functions_dir/<runner>`) when it is read, so a helper that the same program wrote a moment earlier is found. A missing helper fails with `no helper fn.<name> in <folder>`; a name that is not a plain helper name (path-like, `..`) fails with an explanation.
 
-Why `bun` for ts and why `--no-install`: bun honours NODE_PATH for ESM `import` (node does not), with or without extension, in `-e` and file mode. A tsconfig `baseUrl` does not work for `-e`. Without `--no-install`, an unknown bare specifier makes bun fetch from the npm registry (auto-install); `--no-install` turns that off, so a typo fails with "Cannot find package" instead of a network call. `node` stays CommonJS-only by decision: its `require("name.js")` works, and moving ESM helpers there would need a loader flag or a generated file, which the design refuses; use ts for ESM helpers.
+| runner | attachment (runner config `template`) | `fn.<name>` is | notes |
+|---|---|---|---|
+| ts | `bun --no-install --preload {template} -e {code}`, template `js` | `require()` of the helper | sync: a helper must not use top-level `await` (its exported functions may be async and are awaited by the caller); `fn["my-helper"]` for a dash |
+| node | `node -r {template} -e {code}`, template `js` | `require()` of the helper (`name` or `name.js`) | same |
+| python | template `python`: a `sitecustomize.py` in a per-call directory put in front of `PYTHONPATH` | the imported module, re-imported when the file changed place | names are identifiers (`getattr(fn, "my-helper")` for a dash); `importlib.invalidate_caches()` runs before each lookup; a `sitecustomize` that ours shadows (venv, user site, `PYTHONPATH`) is run after ours |
+| ruby | `ruby -r {template} -e {code}`, template `ruby` | the capitalised constant (`fn.base` -> `Base`) after `require` of `<name>.rb` | `my_helper.rb` -> `MyHelper` |
+| bash, sh | no template | bare command name | PATH lookup is already per call |
 
-Also always set: `JAD_FUNCTIONS_DIR` = absolute real root. Cross-language chaining is a subprocess by path: `$JAD_FUNCTIONS_DIR/bash/script1.sh`, `subprocess.run(["python3", os.environ["JAD_FUNCTIONS_DIR"]+"/python/x.py"], input=...)`. Helpers call other helpers the same way, because the child inherits the environment. Input to a helper is its stdin/args as the caller chooses; the contract between helpers is theirs.
+Config shape of a runner: `argv`, `mode`, `ext`, `aliases`, `lib_env`, and `template` (`js`, `python` or `ruby`). `js` and `ruby` need `{template}` exactly once in argv; `python` must not have it; a `{template}` without a template is refused at load. The text is the built-in unless `functions_dir/<runner>/_template<ext>` exists (a regular file inside the library, else the call fails with `template_failed`); files starting with `_template` are not listed as helpers. The scratch directory is the call's (`exec-*`), removed with the call, also for handles, and swept at startup like the rest.
 
-Why no server: nothing needs to call back into JAD. Why no template: the language's own import/PATH is the call helper; injecting text around the user code would change line numbers and error text.
+**`lib_env` stays**, for helpers that import each other and for code that prefers the language's own way: it prepends `functions_dir/<runner>` to a list variable (existing values are kept, after ours): bash and sh `PATH`, python `PYTHONPATH` (the template directory first), node and ts `NODE_PATH`, ruby `RUBYLIB`, perl `PERL5LIB`. `fn` is a global of the user's code; a helper that wants another helper writes `fn.x` too (the global is there) or imports it. Perl has no template in v1.
+
+| runner | the language's own way (with `lib_env`) |
+|---|---|
+| bash, sh | `script1.sh`; the file must be executable and have a shebang |
+| python | `import read` |
+| node | `require("read.js")`; CommonJS only |
+| ruby | `require "read"` |
+| perl | `use Read;` |
+| ts | `import { x } from "read"` or `"read.ts"` (ESM works) |
+
+Why `bun` for ts and why `--no-install`: bun honours NODE_PATH for ESM `import` (node does not). Without `--no-install`, an unknown bare specifier makes bun fetch from the npm registry; with it a typo fails with "Cannot find package". `node` stays CommonJS-only by decision (ESM there would need a loader flag or generated file).
+
+**Facts found while validating (bun 1.4.4, node 26, python 3.15, ruby 4.0, bash 5.3):**
+- Late helpers already worked without a template for bash (PATH is searched per command) and ts (`await import("late")` through NODE_PATH); python finds a late helper only in a folder that existed at start unless `invalidate_caches()` runs, which the template does.
+- bun `--preload` combined with `-e` works and the Proxy global is visible; file mode and an entry file that `import()`s the code also work, but need no wrapper, so none is used.
+- `require()` of a bun helper with top-level `await` fails, so a Proxy that hands out promises cannot be called as `fn.x.y()`; hence sync `require` and "no top-level await in helpers".
+- Bash `command_not_found_handle` through `BASH_ENV` works but gains nothing over PATH and leaks `BASH_ENV` into helper children, so bash has no template.
+- A `runpy` entry point also works but adds frames and `~~^^` noise to tracebacks; `sitecustomize` keeps them the user's. `sitecustomize` is skipped under `python -I/-S`.
+
+Also always set: `JAD_FUNCTIONS_DIR` = absolute real root and `JAD_RUNNER_DIR` = this runner's folder (also when it does not exist yet). Cross-language chaining is a subprocess by path only: `$JAD_FUNCTIONS_DIR/bash/script1.sh`. There is no native bridge: nothing calls back into JAD.
 
 ## 5. Calling limits
 
@@ -92,7 +111,8 @@ filters (same semantics as tool_smith: lower-case, * and ? whole-string wildcard
 - exec.go: planExec reduced to code mode; planExecFunction/planExecArgv/args handling removed; execGiven kept; RejectedProperties extended; `timeout_ms` dropped from schema and from the call (parseBashArguments stays for bash).
 - exec_functions.go: scan per runner directory; loadExecFunction, ambiguity and extension ownership removed; header parser and entry reader kept.
 - bash.go: shellChildRun gets prependEnv (prepend to the built value).
-- native_exec_settings.go: runner key lib_env, functions_dir default, schema, fixtures.
+- native_exec_settings.go: runner keys lib_env and template, functions_dir default, schema, fixtures.
+- exec_template.go and exec_templates/: the embedded templates, the override file, the per-call attachment.
 - Tests: function-by-name tests replaced by helper-call tests.
 
 ## 9. Test plan
