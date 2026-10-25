@@ -23,12 +23,17 @@ type execAsyncFixture struct {
 
 func newExecAsyncFixture(t *testing.T) execAsyncFixture {
 	t.Helper()
+	return newExecAsyncFixtureTimeout(t, 20_000)
+}
+
+func newExecAsyncFixtureTimeout(t *testing.T, timeoutMs int64) execAsyncFixture {
+	t.Helper()
 	requireInterpreters(t, "bash")
 	root := t.TempDir()
 	host := newTestAsyncHost(t)
 	settings := execTestSettings()
 	settings.Child = bashTestSettings(t, root)
-	settings.Child.TimeoutMs = 20_000
+	settings.Child.TimeoutMs = timeoutMs
 	settings.Child.MaxTimeoutMs = 30_000
 	execTool, err := NewExecTool(settings, "", host)
 	if err != nil {
@@ -176,8 +181,9 @@ func TestExecHandleFoundRunningAfterARestartIsLost(t *testing.T) {
 
 func TestExecTimeoutIsTimedOutAndAFailedStartIsFailed(t *testing.T) {
 	f := newExecAsyncFixture(t)
-	slow := execRunIDOf(t, f.run(t, "s1", `{"code":"sleep 30","block_ms":0,"timeout_ms":1}`))
-	if entry := f.waitState(t, "s1", slow, asyncmgr.StateTimedOut); entry.Kind != asyncKindExec {
+	short := newExecAsyncFixtureTimeout(t, 1)
+	slow := execRunIDOf(t, short.run(t, "s1", `{"code":"sleep 30","block_ms":0}`))
+	if entry := short.waitState(t, "s1", slow, asyncmgr.StateTimedOut); entry.Kind != asyncKindExec {
 		t.Fatalf("entry = %+v", entry)
 	}
 	failing := execRunIDOf(t, f.run(t, "s1", `{"code":"echo oops >&2; exit 3","block_ms":0}`))

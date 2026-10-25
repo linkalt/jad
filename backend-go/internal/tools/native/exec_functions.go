@@ -142,9 +142,9 @@ func scanExecFunctions(dir string, settings sessionfs.NativeExecSettings) (files
 
 func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSettings, execution tools.ExecutionContext) string {
 	callID := execution.CallID
-	for _, key := range []string{"lang", "args", "input"} {
+	for _, key := range []string{"lang", "input"} {
 		if value, has := arguments[key]; has && value != nil {
-			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", key+" is only for running; give code, function or argv, or call exec with no parameters (or only filters) to list the saved functions")
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", key+" is only for running; give code, or call exec with no parameters (or only filters) to list the saved helpers")
 		}
 	}
 	var filters []toolSmithFilter
@@ -231,64 +231,4 @@ func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSett
 			tools.Information{Key: "system_error", Value: err.Error()})
 	}
 	return result
-}
-
-// loadExecFunction finds the saved function called name and returns its runner and source.
-// The source is read once from the opened file, so the run uses what was checked.
-func loadExecFunction(name string, settings sessionfs.NativeExecSettings, execution tools.ExecutionContext, invalid execInvalid) (runner, source string, failure string) {
-	fail := func(code, summary string, more ...tools.Information) (string, string, string) {
-		_, text := invalid(code, summary, more...)
-		return "", "", text
-	}
-	if !toolSmithFunctionName.MatchString(name) {
-		return fail("unknown_function", "function must match ^[a-z][a-z0-9_]*$: "+name,
-			tools.Information{Key: "suggestion", Value: "call exec with no parameters to list the saved functions"})
-	}
-	dir, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, execution.WorkspaceRoot)
-	if err != nil {
-		return fail("function_library_unavailable", "The function library could not be opened",
-			tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},
-			tools.Information{Key: "system_error", Value: err.Error()})
-	}
-	files, _, runners, err := scanExecFunctions(dir, settings)
-	if err != nil {
-		return fail("function_library_unavailable", "The function library could not be read",
-			tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},
-			tools.Information{Key: "system_error", Value: err.Error()})
-	}
-	var found []string
-	var similar []string
-	for _, file := range files {
-		base := strings.TrimSuffix(file, filepath.Ext(file))
-		switch {
-		case base == name:
-			found = append(found, file)
-		case strings.Contains(base, name) || strings.Contains(name, base):
-			similar = append(similar, base)
-		}
-	}
-	if len(found) == 0 {
-		more := []tools.Information{{Key: "suggestion", Value: "call exec with no parameters to list the saved functions"}}
-		if sort.Strings(similar); len(similar) > 0 {
-			if len(similar) > 5 {
-				similar = similar[:5]
-			}
-			more = append([]tools.Information{{Key: "similar", Value: strings.Join(similar, ", ")}}, more...)
-		}
-		return fail("unknown_function", "No saved function is called "+name, more...)
-	}
-	if len(found) > 1 {
-		return fail("ambiguous_function", "Several files are called "+name+": "+strings.Join(found, ", "),
-			tools.Information{Key: "suggestion", Value: "rename or remove all but one in " + settings.FunctionsDir})
-	}
-	handle, problem := openExecFunction(dir, realRoot, found[0], settings.FunctionMaxBytes)
-	if problem != "" {
-		return fail("function_unusable", found[0]+" "+problem)
-	}
-	defer handle.Close()
-	data, err := io.ReadAll(io.LimitReader(handle, settings.FunctionMaxBytes+1))
-	if err != nil || int64(len(data)) > settings.FunctionMaxBytes {
-		return fail("function_unusable", found[0]+" cannot be read in full")
-	}
-	return runners[found[0]], string(data), ""
 }

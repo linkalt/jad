@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"jad/backend-go/internal/asyncmgr"
@@ -33,21 +32,17 @@ var execAsync = shellAsyncSpec{
 var execInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "lang":{"type":"string","minLength":1,"description":"Interpreter name, e.g. python, node, bash. Only with code; defaults to bash."},
-    "code":{"type":"string","minLength":1,"description":"Program source, run by the interpreter named by lang."},
-    "function":{"type":"string","minLength":1,"description":"Name of a saved function to run (see the list from a call with no parameters). Use it instead of code or argv; its language comes from the file."},
-    "filters":{"type":"array","items":{"type":"string"},"description":"Only with no code, function or argv: list the saved functions whose name or description matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (read*, *file*); any other is a substring."},
-    "argv":{"type":"array","minItems":1,"items":{"type":"string"},"description":"A program and its arguments, run directly with no shell and no interpreter. Use it instead of code, without lang and args."},
+    "lang":{"type":"string","minLength":1,"description":"Interpreter name, e.g. python, node, bash. Defaults to bash."},
+    "code":{"type":"string","minLength":1,"description":"Program source, run by the interpreter named by lang. A plain command is lang bash with the command as code."},
+    "filters":{"type":"array","items":{"type":"string"},"description":"Only with no code: list the saved helpers whose name or description matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (read*, *file*); any other is a substring."},
     "input":{"description":"Any JSON value, written to the program's standard input as one line of JSON. Without input, stdin is empty."},
-    "args":{"type":"array","items":{"type":"string"},"description":"Extra arguments passed to the program after the code, with no shell quoting. Prefer input for data."},
     "cwd":{"type":"string","minLength":1,"description":"Directory to run in, relative to the workspace root or absolute. Defaults to the workspace root."},
-    "timeout_ms":{"type":"integer","description":"Wall-clock budget for this call in milliseconds; clamped to the configured range."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the result. If the program is still running an id is returned; collect it with the async tool."}
   },
   "additionalProperties":false
 }`)
 
-const execDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved functions. Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call. Give one of code (with lang), function (a saved one, called with input) or argv (a program run directly, no shell). Pass data as input: the program reads it from stdin as JSON. Print the answer to stdout; for a short structured answer write to the file named by $JAD_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it."
+const execDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved helpers per language. Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call; a plain command is lang bash with the command as code. Code can call the saved helpers of its own language by the language's own means (import, require, a command on PATH) and those of another language through the directory in $JAD_FUNCTIONS_DIR. Pass data as input: the program reads it from stdin as JSON. Print the answer to stdout; for a short structured answer write to the file named by $JAD_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it."
 
 // NewExecTool constructs native.exec. How a child runs comes from its own settings (Child);
 // exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.
@@ -94,11 +89,14 @@ var execRejectedProperties = map[string]string{
 	"stdin":       "exec has no stdin; use input (JSON) for data, and code for the program",
 	"workdir":     "exec has no workdir; use cwd",
 	"dir":         "exec has no dir; use cwd",
+	"function":    "exec has no function mode; saved helpers are called from code (call exec with no parameters to list them)",
+	"argv":        "exec has no argv; use code with lang (a plain command is lang bash, code the command)",
+	"args":        "exec has no args; pass data as input (JSON on stdin)",
+	"timeout_ms":  "exec has no timeout_ms; the timeout is the configured tools.native.exec.timeout_ms",
 }
 
 // normalizeExecArguments repairs what a model gets wrong without changing the intent: a
-// null or blank lang means "not given", block_ms is clamped, and numbers or booleans
-// given as args become strings.
+// null or blank lang means "not given", and block_ms is clamped.
 func normalizeExecArguments(arguments map[string]any, defaultLang string) map[string]any {
 	normalized := make(map[string]any, len(arguments))
 	for key, value := range arguments {
@@ -123,33 +121,7 @@ func normalizeExecArguments(arguments map[string]any, defaultLang string) map[st
 		// Filled here, not at run time, so the arguments the hooks and the log see are what runs.
 		normalized["lang"] = defaultLang
 	}
-	if list, ok := normalized["args"].([]any); ok {
-		converted := make([]any, len(list))
-		for index, item := range list {
-			converted[index] = execArgumentText(item)
-		}
-		normalized["args"] = converted
-	}
 	return normalized
-}
-
-// execArgumentText renders a number or boolean the way JavaScript's String() does; any
-// other value is left for the schema to reject.
-func execArgumentText(value any) any {
-	switch item := value.(type) {
-	case bool:
-		return strconv.FormatBool(item)
-	case json.Number:
-		return item.String()
-	case float64:
-		return strconv.FormatFloat(item, 'f', -1, 64)
-	case int:
-		return strconv.Itoa(item)
-	case int64:
-		return strconv.FormatInt(item, 10)
-	default:
-		return value
-	}
 }
 
 // defaultLangSuggestion is the advice on a failed call that ran in the default language.
@@ -200,14 +172,17 @@ func executeNativeExecAsync(
 	host *AsyncHost,
 ) (string, error) {
 	callID := execution.CallID
-	if !execGiven(arguments, "code") && !execGiven(arguments, "argv") && !execGiven(arguments, "function") {
+	if !execGiven(arguments, "code") {
 		return executeExecList(arguments, settings, execution), nil
 	}
 	plan, problem := planExec(arguments, settings, execution)
 	if problem != "" {
 		return problem, nil
 	}
-	common := parseBashArguments(arguments)
+	cwd := "."
+	if value, ok := arguments["cwd"].(string); ok {
+		cwd = value
+	}
 	run := func(ctx context.Context) shellRunResult {
 		// A private directory per call holds the code file (file delivery) and the result file;
 		// it is removed afterwards, whatever the program did.
@@ -226,8 +201,7 @@ func executeNativeExecAsync(
 			file:       file,
 			argv:       argv,
 			stdin:      stdin,
-			cwd:        common.cwd,
-			timeoutMs:  common.timeoutMs,
+			cwd:        cwd,
 			lineAware:  settings.LineAware,
 			section:    "tools.native.exec",
 			extraEnv:   map[string]string{execResultEnv: resultPath},
@@ -255,37 +229,20 @@ type execPlan struct {
 	prepare func(workDir string) (file string, argv []string, stdin, problem string)
 }
 
-type execInvalid func(code, summary string, more ...tools.Information) (execPlan, string)
-
 func execGiven(arguments map[string]any, key string) bool {
 	value, present := arguments[key]
 	return present && value != nil
 }
 
-// planExec validates the call against the mode it chose (code with lang, function, or argv)
-// and returns the plan, or a rendered error naming the keys at fault.
+// planExec validates the call and returns the plan, or a rendered error naming the keys at fault.
 func planExec(arguments map[string]any, settings sessionfs.NativeExecSettings, execution tools.ExecutionContext) (execPlan, string) {
 	callID := execution.CallID
 	invalid := func(code, summary string, more ...tools.Information) (execPlan, string) {
 		return execPlan{}, tools.ExecutionError(callID, tools.StatusInvalidInput, code, summary, more...)
 	}
-	var modes []string
-	for _, key := range []string{"code", "function", "argv"} {
-		if execGiven(arguments, key) {
-			modes = append(modes, key)
-		}
-	}
-	switch len(modes) {
-	case 2:
-		return invalid("conflicting_input", "give either "+modes[0]+" or "+modes[1]+", not both",
-			tools.Information{Key: "suggestion", Value: "code (with lang) runs source in an interpreter; function runs a saved function; argv runs a program directly"})
-	case 3:
-		return invalid("conflicting_input", "give only one of code, function and argv")
-	}
 	if execGiven(arguments, "filters") {
 		return invalid("conflicting_input", "filters is only for listing; call exec with no parameters (or only filters)")
 	}
-
 	stdin := ""
 	if value, present := arguments["input"]; present && value != nil {
 		encoded, err := json.Marshal(value)
@@ -298,78 +255,10 @@ func planExec(arguments map[string]any, settings sessionfs.NativeExecSettings, e
 		}
 		stdin = string(encoded) + "\n"
 	}
-
-	switch modes[0] {
-	case "argv":
-		return planExecArgv(arguments, settings, stdin, invalid)
-	case "function":
-		return planExecFunction(arguments, settings, execution, stdin, invalid)
-	}
 	return planExecCode(arguments, settings, stdin, invalid)
 }
 
-func planExecFunction(arguments map[string]any, settings sessionfs.NativeExecSettings, execution tools.ExecutionContext, stdin string, invalid execInvalid) (execPlan, string) {
-	if execGiven(arguments, "lang") {
-		return invalid("conflicting_input", "lang is only for code; a saved function brings its own language",
-			tools.Information{Key: "suggestion", Value: "drop lang"})
-	}
-	name, _ := arguments["function"].(string)
-	runner, source, failure := loadExecFunction(strings.TrimSpace(name), settings, execution, invalid)
-	if failure != "" {
-		return execPlan{}, failure
-	}
-	asCode := make(map[string]any, len(arguments))
-	for key, value := range arguments {
-		asCode[key] = value
-	}
-	delete(asCode, "function")
-	asCode["code"], asCode["lang"] = source, runner
-	plan, problem := planExecCode(asCode, settings, stdin, invalid)
-	if problem != "" {
-		return plan, problem
-	}
-	plan.label = shellLabel(execAsync, "function "+strings.TrimSpace(name))
-	// The runner came from the file, not from an omitted lang, so the default-language advice would mislead.
-	plan.program.failureSuggestion = ""
-	return plan, ""
-}
-
-func planExecArgv(arguments map[string]any, settings sessionfs.NativeExecSettings, stdin string, invalid execInvalid) (execPlan, string) {
-	if value, has := arguments["lang"]; has && value != nil {
-		return invalid("conflicting_input", "lang is only for code; argv runs a program directly",
-			tools.Information{Key: "suggestion", Value: "drop lang, or send the source as code"})
-	}
-	if value, has := arguments["args"]; has && value != nil {
-		return invalid("conflicting_input", "args is only for code; put every argument in argv")
-	}
-	list, ok := arguments["argv"].([]any)
-	if !ok || len(list) == 0 {
-		return invalid("invalid_argv", "argv must be a non-empty list of strings")
-	}
-	argv := make([]string, len(list))
-	total := 0
-	for index, item := range list {
-		text, ok := item.(string)
-		if !ok {
-			return invalid("invalid_argv", "argv must be a non-empty list of strings")
-		}
-		argv[index] = text
-		total += len(text)
-	}
-	if strings.TrimSpace(argv[0]) == "" {
-		return invalid("invalid_argv", "argv[0], the program, is empty")
-	}
-	if int64(total) > settings.CodeMaxBytes {
-		return invalid("code_too_large", fmt.Sprintf("argv is %d bytes, over the limit of %d", total, settings.CodeMaxBytes))
-	}
-	return execPlan{
-		label:   shellLabel(execAsync, strings.Join(argv, " ")),
-		program: shellProgram{name: argv[0]},
-		prepare: func(string) (string, []string, string, string) { return argv[0], argv[1:], stdin, "" },
-	}, ""
-}
-
-func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSettings, stdin string, invalid execInvalid) (execPlan, string) {
+func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSettings, stdin string, invalid func(code, summary string, more ...tools.Information) (execPlan, string)) (execPlan, string) {
 	rawLang, _ := arguments["lang"].(string)
 	if rawLang == "" {
 		return invalid("invalid_lang", "The language is empty")
@@ -403,20 +292,6 @@ func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSetting
 		return invalid("input_unsupported", "runner "+name+" reads its code from stdin, so a call with input cannot use it",
 			tools.Information{Key: "suggestion", Value: "set tools.native.exec.runners." + name + ".mode to arg or file"})
 	}
-	var extra []string
-	if raw, present := arguments["args"]; present && raw != nil {
-		list, ok := raw.([]any)
-		if !ok {
-			return invalid("invalid_args", "args must be a list of strings")
-		}
-		for _, item := range list {
-			text, ok := item.(string)
-			if !ok {
-				return invalid("invalid_args", "args must be a list of strings")
-			}
-			extra = append(extra, text)
-		}
-	}
 	// A call without lang was given the default, so a failure may mean the code was
 	// written for another interpreter (a model that assumes Python sends Python).
 	failureSuggestion := ""
@@ -434,7 +309,7 @@ func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSetting
 						tools.Information{Key: "system_error", Value: err.Error()})
 				}
 			}
-			argv := make([]string, 0, len(lang.Argv)-1+len(extra))
+			argv := make([]string, 0, len(lang.Argv)-1)
 			for _, flag := range lang.Argv[1:] {
 				flag = strings.ReplaceAll(flag, "{file}", codePath)
 				argv = append(argv, strings.ReplaceAll(flag, "{code}", code))
@@ -443,7 +318,7 @@ func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSetting
 			if lang.Mode == sessionfs.NativeExecModeStdin {
 				runStdin = code
 			}
-			return lang.Argv[0], append(argv, extra...), runStdin, ""
+			return lang.Argv[0], argv, runStdin, ""
 		},
 	}, ""
 }

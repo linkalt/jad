@@ -102,18 +102,6 @@ func TestExecRunsTheSmallestCallInEachBuiltInInterpreter(t *testing.T) {
 	}
 }
 
-func TestExecPassesArgsAsArgvWithoutShellQuoting(t *testing.T) {
-	requireInterpreters(t, "python3")
-	root := t.TempDir()
-	code := "import sys\nfor value in sys.argv[1:]:\n    print(repr(value))"
-	result := runExec(t, root, execTestSettings(), bashTestSettings(t, root), map[string]any{
-		"lang": "python", "code": code, "args": []any{"a b", "$HOME", "it's", "x;y", ""},
-	})
-	if got, want := execContent(result), "'a b'\n'$HOME'\n\"it's\"\n'x;y'\n''\n"; got != want {
-		t.Fatalf("argv = %q, want %q", got, want)
-	}
-}
-
 func TestExecReportsANonZeroExitWithItsOutput(t *testing.T) {
 	requireInterpreters(t, "python3")
 	root := t.TempDir()
@@ -248,10 +236,10 @@ func TestExecDeliversCodeAsAFileThatIsRemovedAfterwards(t *testing.T) {
 	settings := execTestSettings()
 	settings.LangNames = append(settings.LangNames, "viafile")
 	settings.Langs["viafile"] = sessionfs.NativeExecLang{Argv: []string{"bash", "{file}"}, Mode: sessionfs.NativeExecModeFile, Ext: ".sh", Aliases: []string{}}
-	code := `echo "ran $(basename "$0") $1"; echo "dir=$(dirname "$0")" >&2`
-	result := runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": "viafile", "code": code, "args": []any{"z"}})
+	code := `echo "ran $(basename "$0")"; echo "dir=$(dirname "$0")" >&2`
+	result := runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": "viafile", "code": code, "input": "z"})
 	text := execContent(result)
-	if !strings.Contains(text, "ran code.sh z") {
+	if !strings.Contains(text, "ran code.sh") {
 		t.Fatalf("content = %q", text)
 	}
 	match := regexp.MustCompile(`dir=(\S+)`).FindStringSubmatch(text)
@@ -362,20 +350,6 @@ func itoa(value int) string {
 	return strings.TrimSpace(strings.Join([]string{string(rune('0' + value/10)), string(rune('0' + value%10))}, ""))
 }
 
-func TestNormalizeExecArgumentsRepairsLangAndArgsButKeepsOtherNamesForTheSchemaToRefuse(t *testing.T) {
-	got := normalizeExecArguments(map[string]any{"lang": " Python ", "code": "print(1)", "args": []any{float64(1), true, "x"}, "language": "node"}, "bash")
-	if got["lang"] != "Python" || got["code"] != "print(1)" {
-		t.Fatalf("normalized = %v", got)
-	}
-	args, _ := got["args"].([]any)
-	if len(args) != 3 || args[0] != "1" || args[1] != "true" || args[2] != "x" {
-		t.Fatalf("args = %v", got["args"])
-	}
-	if got["language"] != "node" {
-		t.Fatalf("a near-miss name must reach the schema, not be rewritten: %v", got)
-	}
-}
-
 func callExecThroughTheCatalog(t *testing.T, root string, settings sessionfs.NativeExecSettings, arguments string) string {
 	t.Helper()
 	settings.Child = bashTestSettings(t, root)
@@ -466,5 +440,15 @@ func TestExecUsesItsOwnEnvironment(t *testing.T) {
 	result := runExec(t, root, execTestSettings(), child, map[string]any{"lang": "bash", "code": "echo $WHO"})
 	if got := execContent(result); got != "exec\n" {
 		t.Fatalf("exec environment: %q\n%s", got, result)
+	}
+}
+
+func TestNormalizeExecArgumentsRepairsLangButKeepsOtherNamesForTheSchemaToRefuse(t *testing.T) {
+	got := normalizeExecArguments(map[string]any{"lang": " Python ", "code": "print(1)", "language": "node"}, "bash")
+	if got["lang"] != "Python" || got["code"] != "print(1)" {
+		t.Fatalf("normalized = %v", got)
+	}
+	if got["language"] != "node" {
+		t.Fatalf("a near-miss name must reach the schema, not be rewritten: %v", got)
 	}
 }
