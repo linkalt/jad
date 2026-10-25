@@ -271,7 +271,7 @@ func (t *transcriptsTool) render(execution tools.ExecutionContext, request trans
 		options.Information = append(options.Information, tools.Information{Key: "note", Value: note})
 	}
 	if listing.hidden > 0 {
-		options.Information = append(options.Information, tools.Information{Key: "hidden", Value: fmt.Sprintf("%d denied by the read path rules", listing.hidden)})
+		options.Information = append(options.Information, tools.Information{Key: "hidden", Value: fmt.Sprintf("%d not readable by this caller (read path rules, or allow_* switches)", listing.hidden)})
 	}
 	if listing.skipped > 0 {
 		options.Information = append(options.Information, tools.Information{Key: "skipped", Value: fmt.Sprintf("%d could not be read", listing.skipped)})
@@ -292,8 +292,149 @@ func (t *transcriptsTool) render(execution tools.ExecutionContext, request trans
 	return result
 }
 
-func (t *transcriptsTool) listRuns(_ context.Context, _ transcriptsRequest, execution tools.ExecutionContext) (transcriptsListing, string) {
-	return transcriptsListing{}, t.fail(execution, tools.StatusError, "not_implemented", "listing sub-agent runs is not built yet")
+// transcriptsRun is a sub-agent run as the manifest on disk and the live manager know it.
+type transcriptsRun struct {
+	id, owner, agent, state string
+	dir                     string
+	startedAt, endedAt      time.Time
+}
+
+// callOf is the tool call that started a run: its folder is <call id>-<8 hex digits>.
+func (r transcriptsRun) callOf() string {
+	name := filepath.Base(r.dir)
+	if r.dir == "" || len(name) < 10 || name[len(name)-9] != '-' {
+		return ""
+	}
+	return name[:len(name)-9]
+}
+
+func (t *transcriptsTool) listRuns(ctx context.Context, request transcriptsRequest, execution tools.ExecutionContext) (transcriptsListing, string) {
+	callerSession, callerProfile, _ := strings.Cut(execution.SessionKey, "\x00")
+	profile := request.level.profile
+	listing := transcriptsListing{what: "sub-agent runs of profile:" + callerSession + "/" + profile}
+	var target TranscriptTarget
+	own := profile == callerProfile && (request.level.session == "" || request.level.session == callerSession)
+	switch {
+	case t.profiles != nil:
+		var err error
+		if target, err = t.profiles.Profile(ctx, execution.SessionKey, request.level.session, profile); err != nil {
+			profiles, sessions := t.profiles.Candidates(ctx, execution.SessionKey, request.level.session)
+			names, query := profiles, profile
+			if profiles == nil {
+				names, query = sessions, request.level.session
+			}
+			return listing, t.notFound(execution, "no_such_profile", err.Error(), query, names)
+		}
+		own = target.Session == callerSession && target.Profile == callerProfile
+		if target.Session != callerSession && !t.settings.AllowOtherSessions {
+			return listing, t.fail(execution, tools.StatusForbidden, "transcripts_session_denied", "Another session: tools.native.transcripts.allow_other_sessions is false")
+		}
+		if !own && target.Profile != callerProfile && !t.settings.AllowOtherProfiles {
+			return listing, t.fail(execution, tools.StatusForbidden, "transcripts_profile_denied", "Another profile: tools.native.transcripts.allow_other_profiles is false")
+		}
+	case own:
+		target = TranscriptTarget{Session: callerSession, Profile: callerProfile, Runs: t.runs}
+	default:
+		return listing, t.fail(execution, tools.StatusError, "profile_unavailable", "Listing another profile's sub-agent runs is not available here")
+	}
+	listing.what = "sub-agent runs of profile:" + target.Session + "/" + target.Profile
+	prefix := "subagent:"
+	if !own {
+		prefix += target.Session + "/" + target.Profile + "/"
+	}
+	if target.SubagentDir == "" && target.Runs == nil {
+		listing.notes = append(listing.notes, "this profile has no sub-agent storage")
+		return listing, ""
+	}
+	if !target.PersistRuns {
+		listing.notes = append(listing.notes, "persist_runs is off for this profile: a finished run has no manifest, so only runs the running server still holds are listed")
+	}
+	runs := map[string]transcriptsRun{}
+	if target.SubagentDir != "" {
+		for _, manifest := range newSubagentStore(target.SubagentDir, nil).load() {
+			runs[manifest.ID] = transcriptsRun{id: manifest.ID, owner: manifest.Owner, agent: manifest.Agent, state: manifest.State, dir: manifest.Dir, startedAt: manifest.StartedAt, endedAt: manifest.EndedAt}
+		}
+	}
+	if target.Runs != nil {
+		for _, run := range target.Runs.allRuns() {
+			view := run.view()
+			runs[run.id] = transcriptsRun{id: run.id, owner: run.owner, agent: view.agent, state: view.state, dir: view.dir, startedAt: view.startedAt, endedAt: view.endedAt}
+		}
+	}
+	if len(runs) > int(t.settings.ScanMaxEntries) {
+		return listing, t.tooMany(execution, len(runs))
+	}
+	realStorage := ""
+	if target.SubagentDir != "" {
+		realStorage, _ = filepath.EvalSymlinks(target.SubagentDir)
+	}
+	for _, run := range runs {
+		if err := ctx.Err(); err != nil {
+			return listing, t.contextFailure(execution, err)
+		}
+		if request.status != "" && run.state != request.status || !matchesFilters(request.filters, strings.ToLower(run.id), strings.ToLower(run.agent+" "+run.callOf())) {
+			continue
+		}
+		if !t.mayReadRun(run, execution, callerSession) {
+			listing.hidden++
+			continue
+		}
+		item, shown := t.runItem(run, prefix, target.SubagentDir, realStorage, execution)
+		if !shown {
+			listing.hidden++
+			continue
+		}
+		listing.items = append(listing.items, item)
+	}
+	return listing, ""
+}
+
+// mayReadRun applies to a listed run the rules transcript applies to reading it.
+func (t *transcriptsTool) mayReadRun(run transcriptsRun, execution tools.ExecutionContext, callerSession string) bool {
+	if run.owner == execution.SessionKey {
+		return true
+	}
+	ownerSession, _, _ := strings.Cut(run.owner, "\x00")
+	return t.settings.AllowChildren && (ownerSession == callerSession || t.settings.AllowOtherSessions)
+}
+
+// runItem formats one run; shown is false when the read path rules deny its transcript.
+func (t *transcriptsTool) runItem(run transcriptsRun, prefix, storage, realStorage string, execution tools.ExecutionContext) (transcriptsItem, bool) {
+	line := fmt.Sprintf("run %s | %s | agent %s | started %s", run.id, run.state, run.agent, transcriptsTime(run.startedAt))
+	if !run.endedAt.IsZero() {
+		line += " | ended " + transcriptsTime(run.endedAt)
+	}
+	if call := run.callOf(); call != "" {
+		line += " | call " + call
+	}
+	item := transcriptsItem{key: run.id, activity: run.startedAt.UnixNano()}
+	if !run.endedAt.IsZero() {
+		item.activity = run.endedAt.UnixNano()
+	}
+	path := prefix + run.id
+	if run.dir == "" {
+		item.line = line + " | no transcript yet | path " + path
+		return item, true
+	}
+	file := filepath.Join(run.dir, "messages.jsonl")
+	if realDir, err := filepath.EvalSymlinks(run.dir); storage != "" && (err != nil || !insideDirectory(storage, run.dir) || realStorage == "" || !insideDirectory(realStorage, realDir)) {
+		item.line = line + " | unreadable: the transcript folder is outside the sub-agent storage | path " + path
+		return item, true
+	}
+	if t.fileDenied(file, execution) {
+		return transcriptsItem{}, false
+	}
+	info := statTranscriptsFile(file)
+	switch {
+	case info.unreadable:
+		item.line = line + " | unreadable: messages.jsonl is not a regular file inside its folder | path " + path
+	case !info.exists:
+		item.line = line + " | no transcript yet | path " + path + " | file " + file
+	default:
+		item.activity = info.modified.UnixNano()
+		item.line = fmt.Sprintf("%s | active %s | %d bytes | path %s | file %s", line, transcriptsTime(info.modified), info.size, path, file)
+	}
+	return item, true
 }
 
 // notFound is a not-found error that lists the names nearest to query, at most max_entries.

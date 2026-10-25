@@ -43,6 +43,7 @@ func (m profileMessenger) Profile(ctx context.Context, ownerKey, session, profil
 	}
 	if config.NativeSubagent != nil {
 		target.SubagentDir = config.NativeSubagent.StorageDir
+		target.PersistRuns = config.NativeSubagent.PersistRuns
 		target.Runs = m.resolver.existingSubagentManager(target.SubagentDir)
 	}
 	return target, nil
@@ -65,4 +66,14 @@ func (m profileMessenger) Candidates(ctx context.Context, ownerKey, session stri
 		sessions = append(sessions, file.ID)
 	}
 	return nil, sessions
+}
+
+// Sessions implements native.TranscriptSessions: the references of the catalog sessions.
+func (m profileMessenger) Sessions(ctx context.Context) []string {
+	files, _ := sessionfs.ListSessionFiles(m.resolver.roots)
+	sessions := make([]string, 0, len(files))
+	for _, file := range files {
+		sessions = append(sessions, file.ID)
+	}
+	return sessions
 }

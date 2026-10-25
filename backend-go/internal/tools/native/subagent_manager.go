@@ -765,6 +765,17 @@ func (m *SubagentManager) ownedRuns(owner string) []*subagentRun {
 	return runs
 }
 
+// allRuns returns every retained run whatever its owner; a manager serves one storage directory.
+func (m *SubagentManager) allRuns() []*subagentRun {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	runs := make([]*subagentRun, 0, len(m.runs))
+	for _, run := range m.runs {
+		runs = append(runs, run)
+	}
+	return runs
+}
+
 // CancelOwner asks every queued or running child of one session to stop and reports
 // how many it asked. It does not wait: each run ends as stopped once its child
 // returns, and a later call by id reads that. The host calls it when the user stops

@@ -254,7 +254,7 @@ func TestTranscriptsOtherSessionProfilesAndPathRuleDenial(t *testing.T) {
 	secret := f.addProfile(t, "elsewhere", "dev/spy", "x\n", time.Minute)
 	f.settings.Policy = sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Dir(secret)}}}
 	out := f.call(t, nil, `{"path":"session:elsewhere"}`)
-	if strings.Contains(out, "dev/spy") || !strings.Contains(out, "1 denied by the read path rules") {
+	if strings.Contains(out, "dev/spy") || !strings.Contains(out, "1 not readable by this caller") {
 		t.Fatalf("denied profile must be hidden and counted:\n%s", out)
 	}
 	f.settings.Policy = sessionfs.NativePathPolicy{}

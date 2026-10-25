@@ -65,6 +65,17 @@ func TestTranscriptProfilesReportTheSubagentStorageOfTheProfile(t *testing.T) {
 	if other.Runs != nil {
 		t.Fatal("a lookup must not build a manager")
 	}
+	if !other.PersistRuns {
+		t.Fatal("persist_runs defaults to true and the target must say so")
+	}
+}
+
+func TestTranscriptSessionsListsTheCatalogSessions(t *testing.T) {
+	f := newLayoutFixture(t)
+	messenger := profileMessenger{resolver: f.service.resolver}
+	if sessions := messenger.Sessions(context.Background()); !slices.Contains(sessions, "demo") {
+		t.Fatalf("sessions = %v", sessions)
+	}
 }
 
 func TestTranscriptProfilesCandidatesListProfilesOfTheSessionOrTheSessions(t *testing.T) {

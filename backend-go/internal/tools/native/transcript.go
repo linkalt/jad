@@ -63,6 +63,9 @@ type TranscriptTarget struct {
 	// its live manager, nil when none is running.
 	SubagentDir string
 	Runs        *SubagentManager
+	// PersistRuns is whether the profile writes a manifest per run; without it a finished
+	// run is known only to the server that holds it.
+	PersistRuns bool
 }
 
 // TranscriptProfiles finds the transcript of a profile of a session (an empty session is the
