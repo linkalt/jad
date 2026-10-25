@@ -231,7 +231,3 @@ func (t *transcriptsTool) gate(level transcriptsLevel, execution tools.Execution
 	}
 	return ""
 }
-
-func (t *transcriptsTool) list(_ context.Context, _ transcriptsRequest, execution tools.ExecutionContext) string {
-	return t.fail(execution, tools.StatusError, "not_implemented", "not implemented yet")
-}
