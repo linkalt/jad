@@ -22,6 +22,15 @@ func (f fakeSessions) Sessions(context.Context) []string { return f }
 // profile twice so that an empty session name resolves.
 type uniqueProfiles struct{ *fakeTranscriptProfiles }
 
+// fakeProfilesMu guards the fake's record of lookups, which concurrent calls append to.
+var fakeProfilesMu sync.Mutex
+
+func (u uniqueProfiles) Profile(ctx context.Context, owner, session, profile string) (TranscriptTarget, error) {
+	fakeProfilesMu.Lock()
+	defer fakeProfilesMu.Unlock()
+	return u.fakeTranscriptProfiles.Profile(ctx, owner, session, profile)
+}
+
 func (u uniqueProfiles) Candidates(ctx context.Context, owner, session string) ([]string, []string) {
 	profiles, sessions := u.fakeTranscriptProfiles.Candidates(ctx, owner, session)
 	seen := map[string]bool{}
