@@ -15,6 +15,34 @@ globalThis.fn = new Proxy(target, {
     } catch (error) {
       throw new Error("no helper fn." + name + " in " + (dir || "(the helper library does not exist)"));
     }
-    return require(file);
+    return callable(require(file), name);
   },
 });
+
+// fn.<name> is also a call of the helper's entry: the default export, else the export named like the
+// file (or with its - and . written _ or camelCase), else its only function. Every export stays a property.
+function entryOf(module, name) {
+  if (typeof module.default === "function") return module.default;
+  const camel = name.replace(/[-._]+([A-Za-z0-9])/g, (_, c) => c.toUpperCase());
+  for (const candidate of [name, name.replace(/[-.]/g, "_"), camel]) {
+    if (typeof module[candidate] === "function") return module[candidate];
+  }
+  const functions = Object.keys(module).filter((key) => key !== "default" && typeof module[key] === "function");
+  return functions.length === 1 ? module[functions[0]] : null;
+}
+
+function callable(module, name) {
+  if (typeof module === "function" || module === null || typeof module !== "object") return module;
+  return new Proxy(function () {}, {
+    get: (_, key) => module[key],
+    has: (_, key) => key in module,
+    apply(_, self, args) {
+      const entry = entryOf(module, name);
+      if (!entry) {
+        const exported = Object.keys(module).filter((key) => typeof module[key] === "function");
+        throw new Error("fn." + name + " has no single entry to call (" + (exported.length ? "it exports " + exported.join(", ") + "; call fn." + name + "." + exported[0] + "(...)" : "it exports no function") + "): export a default function, or one named " + name);
+      }
+      return Reflect.apply(entry, module, args);
+    },
+  });
+}

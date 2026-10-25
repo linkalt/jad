@@ -153,9 +153,10 @@ func TestExecListsHelpersPerLanguageAndFiltersNarrowThem(t *testing.T) {
 	bash := bashTestSettings(t, root)
 	text := execContent(runExec(t, root, settings, bash, map[string]any{}))
 	for _, want := range []string{
-		"python:\n  read_json.py — Read a JSON file and print its keys (input: {path: string})",
+		"call as: fn.<name>(...) in ts/node/python/ruby",
+		"python:\n  fn.read_json(...)   read_json.py — Read a JSON file and print its keys (input: {path: string})",
 		"bash:\n  build — Build the project\n  script1.sh — Summarise the README",
-		"node:\n  read.js — Read a file",
+		"node:\n  fn.read(...)   read.js — Read a file",
 		"malformed entries (",
 		"bash/nodoc.sh: missing a leading comment",
 		"bash/Bad Name.sh: name must match",
@@ -314,10 +315,35 @@ func TestExecTsCodeImportsTsHelpersThatChainAndCallBash(t *testing.T) {
 	}
 }
 
+func TestExecHelperCallExpressionPerRunnerAndName(t *testing.T) {
+	js := sessionfs.NativeExecLang{Ext: ".ts", Template: sessionfs.NativeExecTemplateJS}
+	py := sessionfs.NativeExecLang{Ext: ".py", Template: sessionfs.NativeExecTemplatePython}
+	rb := sessionfs.NativeExecLang{Ext: ".rb", Template: sessionfs.NativeExecTemplateRuby}
+	sh := sessionfs.NativeExecLang{Ext: ".sh", LibEnv: "PATH"}
+	for _, tc := range []struct {
+		file string
+		lang sessionfs.NativeExecLang
+		want string
+	}{
+		{"read.ts", js, "fn.read(...)   read.ts"},
+		{"my-helper.ts", js, `fn["my-helper"](...)   my-helper.ts`},
+		{"2fast.ts", js, `fn["2fast"](...)   2fast.ts`},
+		{"grep.py", py, "fn.grep(...)   grep.py"},
+		{"my-helper.py", py, `getattr(fn, "my-helper")(...)   my-helper.py`},
+		{"my_helper.rb", rb, "fn.my_helper(...)   my_helper.rb"},
+		{"my-helper.rb", rb, `fn.public_send("my-helper", ...)   my-helper.rb`},
+		{"script1.sh", sh, "script1.sh"},
+	} {
+		if got := execHelperCall(tc.file, tc.lang); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.file, got, tc.want)
+		}
+	}
+}
+
 func TestExecListsTsHelpers(t *testing.T) {
 	root, settings := execHelpersFixture(t, map[string]string{"ts/read.ts": "// Read a thing\nexport {};\n"})
 	text := execContent(runExec(t, root, settings, bashTestSettings(t, root), map[string]any{}))
-	if !strings.Contains(text, "ts:\n  read.ts — Read a thing") {
+	if !strings.Contains(text, "ts:\n  fn.read(...)   read.ts — Read a thing") {
 		t.Fatalf("listing = %q", text)
 	}
 }

@@ -6,7 +6,41 @@ import os as _os
 import re as _re
 import sys as _sys
 
+import inspect as _inspect
+import types as _types
+
 _here = _os.path.dirname(_os.path.abspath(__file__))
+
+
+def _entry(module):
+    # The function named like the module (a dash written _), else its only public function.
+    candidate = getattr(module, module.__name__.replace("-", "_"), None)
+    if _inspect.isfunction(candidate):
+        return candidate
+    functions = [
+        value for key, value in vars(module).items()
+        if not key.startswith("_") and _inspect.isfunction(value) and value.__module__ == module.__name__
+    ]
+    return functions[0] if len(functions) == 1 else None
+
+
+class _Helper(_types.ModuleType):
+    def __call__(self, *args, **kwargs):
+        entry = _entry(self)
+        if entry is None:
+            names = [k for k, v in vars(self).items() if not k.startswith("_") and _inspect.isfunction(v) and v.__module__ == self.__name__]
+            raise TypeError(
+                "fn." + self.__name__ + " has no single entry to call ("
+                + ("it defines " + ", ".join(names) + "; call fn." + self.__name__ + "." + names[0] + "(...)" if names else "it defines no function")
+                + "): define a function named " + self.__name__.replace("-", "_")
+            )
+        return entry(*args, **kwargs)
+
+
+def _callable(module):
+    if type(module) is _types.ModuleType:
+        module.__class__ = _Helper
+    return module
 
 
 def _chain():
@@ -34,12 +68,12 @@ class _Fn:
             _sys.path.insert(0, directory)
         loaded = _sys.modules.get(name)
         if loaded is None:
-            return _importlib.import_module(name)
+            return _callable(_importlib.import_module(name))
         if getattr(getattr(loaded, "__spec__", None), "origin", None) == spec.origin:
-            return loaded
+            return _callable(loaded)
         module = _util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return module
+        return _callable(module)
 
 
 _builtins.fn = _Fn()

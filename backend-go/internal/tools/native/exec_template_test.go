@@ -168,6 +168,92 @@ func TestExecFnCallsHelpersChainsAndSeesOnesCreatedWhileRunning(t *testing.T) {
 	}
 }
 
+type execCallableCase struct {
+	lang, interp string
+	files        map[string]string
+	code, want   string
+}
+
+var execCallableCases = []execCallableCase{
+	{
+		lang: "ts", interp: "bun",
+		files: map[string]string{
+			"ts/read.ts":    "// Named like the file\nexport const read = (n: number): number => n + 1;\nexport const other = (n: number): number => n * 10;\n",
+			"ts/solo.ts":    "// The only function\nexport const whatever = (n: number): number => n + 2;\nexport const VALUE = 7;\n",
+			"ts/dflt.ts":    "// Default export\nexport default (n: number): number => n + 3;\nexport const extra = 1;\n",
+			"ts/many.ts":    "// Several, none named like the file\nexport const a = (): number => 1;\nexport const b = (): number => 2;\n",
+			"ts/asyn.ts":    "// Async entry\nexport default async (n: number): Promise<number> => { await 0; return n * 2; };\n",
+			"ts/chain.ts":   "// Chains through fn\nexport default (n: number): number => (globalThis as any).fn.read(n) + (globalThis as any).fn.solo(0);\n",
+			"ts/my-help.ts": "// Dashed\nexport const myHelp = (n: number): number => n + 100;\n",
+		},
+		code: "const n: number = (await Bun.stdin.json()).n;\n" +
+			"console.log(fn.read(n), fn.read.other(n), fn.solo(n), fn.solo.VALUE, fn.dflt(n), fn.dflt.extra, await fn.asyn(n), fn.chain(n), fn[\"my-help\"](n));\n" +
+			"try { fn.many(); } catch (e) { console.log(String(e.message).split(\"(\")[0] + \"|\" + String(e.message).includes(\"a, b\")); }",
+		want: "6 50 7 7 8 1 10 8 105\nfn.many has no single entry to call |true\n",
+	},
+	{
+		lang: "node", interp: "node",
+		files: map[string]string{
+			"node/read.js":  "// Named like the file\nexports.read = (n) => n + 1;\nexports.other = (n) => n * 10;\n",
+			"node/solo.js":  "// The only function\nexports.whatever = (n) => n + 2;\nexports.VALUE = 7;\n",
+			"node/dflt.js":  "// Default export\nmodule.exports = (n) => n + 3;\nmodule.exports.extra = 1;\n",
+			"node/many.js":  "// Several\nexports.a = () => 1;\nexports.b = () => 2;\n",
+			"node/asyn.js":  "// Async entry\nmodule.exports = async (n) => { await 0; return n * 2; };\n",
+			"node/chain.js": "// Chains through fn\nmodule.exports = (n) => fn.read(n) + fn.solo(0);\n",
+		},
+		code: "const n = JSON.parse(require('fs').readFileSync(0, 'utf8')).n;\n" +
+			"(async () => {\n" +
+			"  console.log(fn.read(n), fn.read.other(n), fn.solo(n), fn.solo.VALUE, fn.dflt(n), fn.dflt.extra, await fn.asyn(n), fn.chain(n));\n" +
+			"  try { fn.many(); } catch (e) { console.log(e.message.split('(')[0] + '|' + e.message.includes('a, b')); }\n" +
+			"})();",
+		want: "6 50 7 7 8 1 10 8\nfn.many has no single entry to call |true\n",
+	},
+	{
+		lang: "python", interp: "python3",
+		files: map[string]string{
+			"python/read.py":    "# Named like the module\ndef read(n): return n + 1\ndef other(n): return n * 10\n",
+			"python/solo.py":    "# The only function\nimport os\nVALUE = 7\ndef whatever(n): return n + 2\n",
+			"python/many.py":    "# Several\ndef a(): return 1\ndef b(): return 2\n",
+			"python/asyn.py":    "# Async entry\nasync def asyn(n): return n * 2\n",
+			"python/chain.py":   "# Chains through fn\ndef chain(n): return fn.read(n) + fn.solo(0)\n",
+			"python/my-help.py": "# Dashed\ndef my_help(n): return n + 100\n",
+		},
+		code: "import json, sys, asyncio\n" +
+			"n = json.load(sys.stdin)['n']\n" +
+			"print(fn.read(n), fn.read.other(n), fn.solo(n), fn.solo.VALUE, asyncio.run(fn.asyn(n)), fn.chain(n), getattr(fn, 'my-help').my_help(n))\n" +
+			"try:\n    fn.many()\nexcept TypeError as e:\n    print(str(e).split('(')[0] + '|' + str('a, b' in str(e)))\n",
+		want: "6 50 7 7 10 8 105\nfn.many has no single entry to call |True\n",
+	},
+	{
+		lang: "ruby", interp: "ruby",
+		files: map[string]string{
+			"ruby/read.rb":  "# Named like the file\nmodule Read; def self.read(n) = n + 1; def self.other(n) = n * 10; end\n",
+			"ruby/solo.rb":  "# The only method\nmodule Solo; VALUE = 7; def self.whatever(n) = n + 2; end\n",
+			"ruby/dflt.rb":  "# call wins\nmodule Dflt; def self.call(n) = n + 3; def self.extra = 1; end\n",
+			"ruby/many.rb":  "# Several\nmodule Many; def self.a = 1; def self.b = 2; end\n",
+			"ruby/chain.rb": "# Chains through fn\nmodule Chain; def self.call(n) = fn.read(n) + fn.solo(0); end\n",
+		},
+		code: "require 'json'\nn = JSON.parse($stdin.read)['n']\n" +
+			"puts [fn.read(n), fn.read.other(n), fn.solo(n), fn.solo::VALUE, fn.dflt(n), fn.dflt.extra, fn.chain(n)].join(' ')\n" +
+			"begin; fn.many(1); rescue => e; puts e.message.split('(')[0] + '|' + e.message.include?('a, b').to_s; end",
+		want: "6 50 7 7 8 1 8\nfn.many has no single entry to call |true\n",
+	},
+}
+
+func TestExecFnIsCallableThroughItsEntryAndKeepsEveryExportAsAProperty(t *testing.T) {
+	for _, tc := range execCallableCases {
+		t.Run(tc.lang, func(t *testing.T) {
+			requireRunnableInterpreter(t, tc.lang, tc.interp)
+			root, settings := execTemplateSettings(tc.files)
+			defer os.RemoveAll(root)
+			got := runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": tc.lang, "code": tc.code, "input": map[string]any{"n": 5}})
+			if execContent(got) != tc.want {
+				t.Fatalf("got %q, want %q\n%s", execContent(got), tc.want, got)
+			}
+		})
+	}
+}
+
 func TestExecFnMissingHelperNamesTheHelperAndTheFolder(t *testing.T) {
 	for _, tc := range execFnCases {
 		t.Run(tc.lang, func(t *testing.T) {

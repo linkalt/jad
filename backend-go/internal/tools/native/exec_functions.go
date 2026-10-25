@@ -175,6 +175,48 @@ func scanExecHelpers(dir string, settings sessionfs.NativeExecSettings) (files [
 
 type execHelperFile struct{ runner, name string }
 
+// execListLegend explains the call column of the listing and the rule that makes fn.<name> callable.
+var execListLegend = []string{
+	"call as: fn.<name>(...) in ts/node/python/ruby; the file name itself in bash/sh (the folder is on PATH)",
+	"fn.<name>(...) runs the helper's entry; every other export stays reachable as fn.<name>.<member>(...)",
+	"entry: ts/node = default export, else the export named <name>, else the only function; python = the function named <name>, else the only public function; ruby = self.call, else self.<name>, else the only singleton method (needs arguments; fn.<name> alone is the constant)",
+	"",
+}
+
+var (
+	execJSIdentifier     = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
+	execPythonIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
+
+// execHelperCall is what to type to call the helper stored in file: fn.<name>(...) for a runner with a
+// template (bracket or getattr form when the name is not an identifier), the file name for the others.
+// The file name follows the call when it differs.
+func execHelperCall(file string, lang sessionfs.NativeExecLang) string {
+	if lang.Template == "" {
+		return file
+	}
+	name := file
+	if lang.Ext != "" {
+		name = strings.TrimSuffix(file, lang.Ext)
+	}
+	var call string
+	switch {
+	case lang.Template == sessionfs.NativeExecTemplatePython && execPythonIdentifier.MatchString(name):
+		call = "fn." + name + "(...)"
+	case lang.Template == sessionfs.NativeExecTemplatePython:
+		call = `getattr(fn, "` + name + `")(...)`
+	case lang.Template == sessionfs.NativeExecTemplateRuby && execJSIdentifier.MatchString(name) && !strings.Contains(name, "$"):
+		call = "fn." + name + "(...)"
+	case lang.Template == sessionfs.NativeExecTemplateRuby:
+		call = `fn.public_send("` + name + `", ...)`
+	case execJSIdentifier.MatchString(name):
+		call = "fn." + name + "(...)"
+	default:
+		call = `fn["` + name + `"](...)`
+	}
+	return call + "   " + file
+}
+
 func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSettings, execution tools.ExecutionContext) string {
 	callID := execution.CallID
 	for _, key := range []string{"lang", "input"} {
@@ -243,11 +285,14 @@ func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSett
 		shown = shown[:settings.ListMaxResults]
 	}
 	lines := make([]string, 0, len(shown)+len(problems)+2)
+	if len(shown) > 0 {
+		lines = append(lines, execListLegend...)
+	}
 	for index, entry := range shown {
 		if index == 0 || shown[index-1].runner != entry.runner {
 			lines = append(lines, entry.runner+":")
 		}
-		line := "  " + entry.name + " — " + entry.description
+		line := "  " + execHelperCall(entry.name, settings.Langs[entry.runner]) + " — " + entry.description
 		if entry.input != "" {
 			line += " (input: " + entry.input + ")"
 		}
