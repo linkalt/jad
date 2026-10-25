@@ -410,7 +410,7 @@ func TestExecThroughTheCatalogAcceptsCodeAlone(t *testing.T) {
 	requireInterpreters(t, "bash", "python3")
 	root := t.TempDir()
 	settings := execTestSettings()
-	// The schema the model sees requires code only.
+	// Neither code nor argv is required by the schema: the executor names the missing key.
 	settings.Child = bashTestSettings(t, root)
 	tool, err := NewExecTool(settings, "", nil)
 	if err != nil {
@@ -419,8 +419,8 @@ func TestExecThroughTheCatalogAcceptsCodeAlone(t *testing.T) {
 	var schema struct {
 		Required []string `json:"required"`
 	}
-	if err := json.Unmarshal(tool.Definition.InputSchema, &schema); err != nil || len(schema.Required) != 1 || schema.Required[0] != "code" {
-		t.Fatalf("required = %v (%v), want [code]", schema.Required, err)
+	if err := json.Unmarshal(tool.Definition.InputSchema, &schema); err != nil || len(schema.Required) != 0 {
+		t.Fatalf("required = %v (%v), want none", schema.Required, err)
 	}
 	if got := execContent(callExecThroughTheCatalog(t, root, settings, `{"code":"echo $((6*7))"}`)); !strings.Contains(got, "42") {
 		t.Fatalf("code alone through the catalog: %q", got)

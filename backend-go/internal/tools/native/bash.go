@@ -520,6 +520,9 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 			if program != nil {
 				summary, code = program.name+" is not available", "interpreter_unavailable"
 				suggestion = "install " + program.name + " or point " + program.setting + " at it"
+				if program.setting == "" {
+					suggestion = "install " + program.name + " or check its path"
+				}
 			}
 			return render(tools.StatusError, summary,
 				tools.Information{Key: "error_type", Value: "execution"},

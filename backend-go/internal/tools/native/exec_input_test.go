@@ -1,6 +1,7 @@
 package native
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 func TestExecWritesTheInputAsJSONToStdin(t *testing.T) {
@@ -108,7 +110,6 @@ func TestExecOldNamesAreRefusedWithTheRightKey(t *testing.T) {
 		{"program", "ls", "use code"},
 		{"stdin", "x", "use input"},
 		{"workdir", ".", "use cwd"},
-		{"argv", []any{"ls"}, "use args"},
 	} {
 		got := callExecThroughTheCatalog(t, root, settings, `{"code":"echo hi","`+tc.old+`":`+jsonText(tc.value)+`}`)
 		if !strings.Contains(got, tc.want) || strings.Contains(got, "hi\n") {
@@ -190,5 +191,74 @@ func TestExecInputWorksThroughAHandle(t *testing.T) {
 	waited := callAsync(t, f.async, "s1", map[string]any{"action": "wait", "wait_ms": json.Number("10000")})
 	if !strings.Contains(waited, `{\"k\":1}`) && !strings.Contains(waited, `{"k":1}`) {
 		t.Fatalf("the handle lost its input:\n%s", waited)
+	}
+}
+
+func TestExecArgvRunsAProgramDirectlyWithoutAShell(t *testing.T) {
+	root := t.TempDir()
+	settings, bash := execTestSettings(), bashTestSettings(t, root)
+	result := runExec(t, root, settings, bash, map[string]any{"argv": []any{"printf", "%s|%s", "a b", "$HOME;x"}})
+	if got := execContent(result); got != "a b|$HOME;x" {
+		t.Fatalf("content = %q\n%s", got, result)
+	}
+	// Input reaches the program's stdin in this mode too.
+	result = runExec(t, root, settings, bash, map[string]any{"argv": []any{"cat"}, "input": map[string]any{"k": []any{1}}})
+	if got := execContent(result); got != "{\"k\":[1]}\n" {
+		t.Fatalf("argv with input = %q\n%s", got, result)
+	}
+	missing := runExec(t, root, settings, bash, map[string]any{"argv": []any{"definitely-not-installed-xyz"}})
+	if execField(missing, "error_code") != "interpreter_unavailable" || strings.Contains(execField(missing, "suggestion"), "point") {
+		t.Fatalf("missing program = %s", missing)
+	}
+}
+
+func TestExecModesAreMutuallyExclusiveAndNameTheKeys(t *testing.T) {
+	root := t.TempDir()
+	settings, bash := execTestSettings(), bashTestSettings(t, root)
+	for name, tc := range map[string]struct {
+		arguments map[string]any
+		want      string
+	}{
+		"code and argv": {map[string]any{"code": "echo", "argv": []any{"ls"}}, "give either code or argv, not both"},
+		"neither":       {map[string]any{}, "give code (with lang) or argv"},
+		"argv and lang": {map[string]any{"argv": []any{"ls"}, "lang": "python"}, "lang is only for code"},
+		"argv and args": {map[string]any{"argv": []any{"ls"}, "args": []any{"-l"}}, "args is only for code"},
+		"empty program": {map[string]any{"argv": []any{" "}}, "argv[0], the program, is empty"},
+		"empty argv":    {map[string]any{"argv": []any{}}, "non-empty list"},
+		"non-string":    {map[string]any{"argv": []any{"ls", 1}}, "non-empty list"},
+	} {
+		result := execNoDefaultLang(t, root, settings, bash, tc.arguments)
+		if !strings.Contains(result, tc.want) || execField(result, "error_code") == "" {
+			t.Errorf("%s: want %q in\n%s", name, tc.want, result)
+		}
+	}
+}
+
+func execNoDefaultLang(t *testing.T, root string, settings sessionfs.NativeExecSettings, bash sessionfs.NativeBashSettings, arguments map[string]any) string {
+	t.Helper()
+	settings.Child = bash
+	return executeNativeExec(context.Background(), arguments, settings, "", tools.ExecutionContext{CallID: "exec-call", WorkspaceRoot: root, SessionDir: root})
+}
+
+func TestExecArgvThroughTheCatalogNeedsNoCodeAndNoLang(t *testing.T) {
+	root := t.TempDir()
+	settings := execTestSettings()
+	got := execContent(callExecThroughTheCatalog(t, root, settings, `{"argv":["printf","%s","ok"]}`))
+	if got != "ok" {
+		t.Fatalf("argv through the catalog: %q", got)
+	}
+	both := callExecThroughTheCatalog(t, root, settings, `{"argv":["ls"],"lang":"python"}`)
+	if !strings.Contains(both, "lang is only for code") {
+		t.Fatalf("argv with the default-filled lang must still run or be refused clearly: %s", both)
+	}
+}
+
+func TestExecArgvWorksThroughAHandle(t *testing.T) {
+	f := newExecAsyncFixture(t)
+	started := f.run(t, "s1", `{"argv":["bash","-c","sleep 0.3; echo from-argv"],"block_ms":10}`)
+	id := execRunIDOf(t, started)
+	waited := callAsync(t, f.async, "s1", map[string]any{"action": "wait", "wait_ms": json.Number("10000")})
+	if !strings.Contains(waited, "from-argv") || !strings.Contains(waited, id) {
+		t.Fatalf("handle result:\n%s", waited)
 	}
 }

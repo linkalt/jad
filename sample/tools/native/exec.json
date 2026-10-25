@@ -5,19 +5,27 @@
    "id": "native.exec",
    "source": "native",
    "name": "exec",
-   "description": "Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call. Pass data as input: the program reads it from stdin as JSON. Print the answer to stdout; for a short structured answer write to the file named by $JAD_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it.",
+   "description": "Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call. Give either code (with lang) or argv (a program run directly, no shell). Pass data as input: the program reads it from stdin as JSON. Print the answer to stdout; for a short structured answer write to the file named by $JAD_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it.",
    "inputSchema": {
     "type": "object",
     "properties": {
      "lang": {
       "type": "string",
       "minLength": 1,
-      "description": "Interpreter name, e.g. python, node, bash. Defaults to bash."
+      "description": "Interpreter name, e.g. python, node, bash. Only with code; defaults to bash."
      },
      "code": {
       "type": "string",
       "minLength": 1,
-      "description": "Program source."
+      "description": "Program source, run by the interpreter named by lang."
+     },
+     "argv": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+       "type": "string"
+      },
+      "description": "A program and its arguments, run directly with no shell and no interpreter. Use it instead of code, without lang and args."
      },
      "input": {
       "description": "Any JSON value, written to the program's standard input as one line of JSON. Without input, stdin is empty."
@@ -44,9 +52,6 @@
       "description": "Most time to block for the result. If the program is still running an id is returned; collect it with the async tool."
      }
     },
-    "required": [
-     "code"
-    ],
     "additionalProperties": false
    }
   }
