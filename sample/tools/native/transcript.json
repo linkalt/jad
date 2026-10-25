@@ -5,13 +5,32 @@
       "id": "native.transcript",
       "source": "native",
       "name": "transcript",
-      "description": "List the messages.jsonl transcript files this session can read, with their size and time of last change.",
+      "description": "Read the messages.jsonl transcript of this session as text: user and assistant messages, tool calls and their results, by turn. Reasoning is not shown. Use turns or tail to choose which turns, cursor to continue a cut response, list to see which transcript files exist.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "list": {
             "type": "boolean",
-            "description": "List the transcript files that can be read, with their size and time of last change."
+            "description": "List the transcript files that can be read, with their size and time of last change, instead of reading."
+          },
+          "turns": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Which turns to read: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail or cursor, the last turn is read."
+          },
+          "tail": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Read the last N turns; the same as turns -N. Not with turns or cursor."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Do not cut the text of one entry (the whole response is still capped)."
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Continue where the previous response stopped; use the cursor it gave. Not with turns or tail."
           }
         },
         "additionalProperties": false
