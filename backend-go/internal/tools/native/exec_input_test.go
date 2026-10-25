@@ -220,7 +220,6 @@ func TestExecModesAreMutuallyExclusiveAndNameTheKeys(t *testing.T) {
 		want      string
 	}{
 		"code and argv": {map[string]any{"code": "echo", "argv": []any{"ls"}}, "give either code or argv, not both"},
-		"neither":       {map[string]any{}, "give code (with lang) or argv"},
 		"argv and lang": {map[string]any{"argv": []any{"ls"}, "lang": "python"}, "lang is only for code"},
 		"argv and args": {map[string]any{"argv": []any{"ls"}, "args": []any{"-l"}}, "args is only for code"},
 		"empty program": {map[string]any{"argv": []any{" "}}, "argv[0], the program, is empty"},

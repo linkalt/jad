@@ -5,7 +5,7 @@
    "id": "native.exec",
    "source": "native",
    "name": "exec",
-   "description": "Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call. Give either code (with lang) or argv (a program run directly, no shell). Pass data as input: the program reads it from stdin as JSON. Print the answer to stdout; for a short structured answer write to the file named by $JAD_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it.",
+   "description": "Call with no parameters (or only filters, e.g. read*) to list the saved functions. Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call. Give one of code (with lang), function (a saved one, called with input) or argv (a program run directly, no shell). Pass data as input: the program reads it from stdin as JSON. Print the answer to stdout; for a short structured answer write to the file named by $JAD_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -18,6 +18,18 @@
       "type": "string",
       "minLength": 1,
       "description": "Program source, run by the interpreter named by lang."
+     },
+     "function": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of a saved function to run (see the list from a call with no parameters). Use it instead of code or argv; its language comes from the file."
+     },
+     "filters": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Only with no code, function or argv: list the saved functions whose name or description matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (read*, *file*); any other is a substring."
      },
      "argv": {
       "type": "array",
