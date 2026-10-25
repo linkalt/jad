@@ -51,6 +51,7 @@ func NewToolSmithTool(settings sessionfs.NativeToolSmithSettings, apiKeyEnv stri
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native tool_smith schema: %w", err)
 	}
+	sweepStaleScratchOnce()
 	if host != nil {
 		host.attachShell(toolSmithAsync)
 	}

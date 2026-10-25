@@ -57,6 +57,7 @@ func NewExecTool(settings sessionfs.NativeExecSettings, apiKeyEnv string, host *
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native exec schema: %w", err)
 	}
+	sweepStaleScratchOnce()
 	if host != nil {
 		host.attachShell(execAsync)
 	}
