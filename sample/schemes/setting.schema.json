@@ -1122,7 +1122,7 @@
                   "minimum": 1,
                   "maximum": 10485760,
                   "default": 16384,
-                  "description": "Largest answer read back from the file named by $EXEC_RESULT. A longer one is cut at a character and result_truncated_bytes says how much was dropped."
+                  "description": "Largest answer read back from the file named by $JAD_RESULT. A longer one is cut at a character and result_truncated_bytes says how much was dropped."
                 },
                 "line_aware": {
                   "type": "boolean",

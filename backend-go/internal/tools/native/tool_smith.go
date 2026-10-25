@@ -20,6 +20,9 @@ const (
 	toolSmithRunExample = `{"code":"console.log(1);"}`
 )
 
+// toolSmithResultEnv is the name the prelude writes a returned value under; it predates exec's JAD_RESULT.
+const toolSmithResultEnv = "EXEC_RESULT"
+
 //go:embed tool_smith_prelude.ts
 var toolSmithPrelude string
 
@@ -202,7 +205,7 @@ func runToolSmithScript(ctx context.Context, script toolSmithScript) shellRunRes
 	for index, item := range settings.Interpreter {
 		argv[index] = strings.ReplaceAll(item, "{file}", wrapperPath)
 	}
-	extraEnv := map[string]string{execResultEnv: resultPath, toolSmithInputEnv: inputPath,
+	extraEnv := map[string]string{toolSmithResultEnv: resultPath, toolSmithInputEnv: inputPath,
 		toolSmithFunctionsEnv: filepath.Join(workDir, "fn-manifest.json")}
 	var bridge *toolSmithBridge
 	if allowed := script.nested.allowed(settings); len(allowed) > 0 {

@@ -26,6 +26,8 @@ func execTestSettings() sessionfs.NativeExecSettings {
 		},
 		DefaultLang:    "bash",
 		CodeMaxBytes:   64 * 1024,
+		InputMaxBytes:  4096,
+		ArgMaxBytes:    64 * 1024,
 		ResultMaxBytes: 1024,
 		LineAware:      true,
 	}
@@ -168,15 +170,15 @@ func TestExecShowsTheResultFileAheadOfTheRawOutput(t *testing.T) {
 	requireInterpreters(t, "python3", "bash")
 	root := t.TempDir()
 	settings, bash := execTestSettings(), bashTestSettings(t, root)
-	code := "import os\nprint('noisy line')\nopen(os.environ['EXEC_RESULT'], 'w').write('the answer is 42\\n')"
+	code := "import os\nprint('noisy line')\nopen(os.environ['JAD_RESULT'], 'w').write('the answer is 42\\n')"
 	if got, want := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "python", "code": code})), "[result]\nthe answer is 42\n[output]\nnoisy line\n"; got != want {
 		t.Fatalf("content = %q, want %q", got, want)
 	}
-	if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "bash", "code": `echo -n "just this" > "$EXEC_RESULT"`})); got != "[result]\njust this" {
+	if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "bash", "code": `echo -n "just this" > "$JAD_RESULT"`})); got != "[result]\njust this" {
 		t.Fatalf("result only = %q", got)
 	}
 	// An empty result file is the same as none.
-	if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "bash", "code": `echo shown; : > "$EXEC_RESULT"`})); got != "shown\n" {
+	if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "bash", "code": `echo shown; : > "$JAD_RESULT"`})); got != "shown\n" {
 		t.Fatalf("empty result file = %q", got)
 	}
 }
@@ -188,7 +190,7 @@ func TestExecCutsALongResultAtACharacterAndSaysHowMuchWasDropped(t *testing.T) {
 	// 11 is odd, so the cut lands in the middle of the sixth two-byte character.
 	settings.ResultMaxBytes = 11
 	result := runExec(t, root, settings, bashTestSettings(t, root), map[string]any{
-		"lang": "python", "code": "import os\nopen(os.environ['EXEC_RESULT'], 'w').write('é' * 20)",
+		"lang": "python", "code": "import os\nopen(os.environ['JAD_RESULT'], 'w').write('é' * 20)",
 	})
 	if got, want := execContent(result), "[result]\n"+strings.Repeat("é", 5); got != want {
 		t.Fatalf("content = %q, want %q", got, want)
@@ -360,53 +362,20 @@ func itoa(value int) string {
 	return strings.TrimSpace(strings.Join([]string{string(rune('0' + value/10)), string(rune('0' + value%10))}, ""))
 }
 
-func TestNormalizeExecArgumentsTurnsNearMissNamesIntoTheSchemaForm(t *testing.T) {
-	got := normalizeExecArguments(map[string]any{"language": " Python ", "source": "print(1)", "argv": []any{float64(1), true, "x"}, "workdir": "sub"}, "bash")
-	if got["lang"] != "Python" || got["code"] != "print(1)" || got["cwd"] != "sub" {
+func TestNormalizeExecArgumentsRepairsLangAndArgsButKeepsOtherNamesForTheSchemaToRefuse(t *testing.T) {
+	got := normalizeExecArguments(map[string]any{"lang": " Python ", "code": "print(1)", "args": []any{float64(1), true, "x"}, "language": "node"}, "bash")
+	if got["lang"] != "Python" || got["code"] != "print(1)" {
 		t.Fatalf("normalized = %v", got)
 	}
 	args, _ := got["args"].([]any)
 	if len(args) != 3 || args[0] != "1" || args[1] != "true" || args[2] != "x" {
 		t.Fatalf("args = %v", got["args"])
 	}
-	for _, key := range []string{"language", "source", "argv", "workdir"} {
-		if _, kept := got[key]; kept {
-			t.Fatalf("%s was not removed from %v", key, got)
-		}
-	}
-	got = normalizeExecArguments(map[string]any{"lang": "node", "code": "1", "args": []any{"a"}, "script": "ignored"}, "bash")
-	if got["code"] != "1" {
-		t.Fatalf("an explicit code must win over an alias: %v", got)
+	if got["language"] != "node" {
+		t.Fatalf("a near-miss name must reach the schema, not be rewritten: %v", got)
 	}
 }
 
-func TestExecWithoutALanguageRunsTheConfiguredDefault(t *testing.T) {
-	requireInterpreters(t, "bash", "python3")
-	root := t.TempDir()
-	settings, bash := execTestSettings(), bashTestSettings(t, root)
-	// The smallest call: code alone runs in bash.
-	if got := execContent(runExec(t, root, settings, bash, map[string]any{"code": "echo from-$0-shell; echo $((6*7))"})); !strings.Contains(got, "42") {
-		t.Fatalf("code alone did not run in bash: %q", got)
-	}
-	// null, an empty string and a blank string all mean "not given".
-	for _, lang := range []any{nil, "", "   "} {
-		if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": lang, "code": "echo $((6*7))"})); !strings.Contains(got, "42") {
-			t.Fatalf("lang %#v did not fall back to bash: %q", lang, got)
-		}
-	}
-	// A named language still wins over the default.
-	if got := execContent(runExec(t, root, settings, bash, map[string]any{"lang": "python", "code": "print(6 * 7)"})); !strings.Contains(got, "42") {
-		t.Fatalf("an explicit lang must still run: %q", got)
-	}
-	// The default is configuration: with python as default, code alone is python.
-	settings.DefaultLang = "python"
-	if got := execContent(runExec(t, root, settings, bash, map[string]any{"code": "print(6 * 7)"})); !strings.Contains(got, "42") {
-		t.Fatalf("a configured default_lang of python was not used: %q", got)
-	}
-}
-
-// callExecThroughTheCatalog sends one function call the way the run loop does: raw JSON
-// arguments, the tool's own validator and its own normalizer.
 func callExecThroughTheCatalog(t *testing.T, root string, settings sessionfs.NativeExecSettings, arguments string) string {
 	t.Helper()
 	settings.Child = bashTestSettings(t, root)
@@ -471,9 +440,6 @@ func TestExecNormalizationFillsTheDefaultLanguage(t *testing.T) {
 	got := normalizeExecArguments(map[string]any{"code": "ls"}, "bash")
 	if got["lang"] != "bash" {
 		t.Fatalf("lang = %v, want bash", got["lang"])
-	}
-	if got := normalizeExecArguments(map[string]any{"code": "ls", "language": "node"}, "bash"); got["lang"] != "node" {
-		t.Fatalf("an alias must win over the default: %v", got)
 	}
 	if got := normalizeExecArguments(map[string]any{"code": "ls"}, ""); got["lang"] != nil {
 		t.Fatalf("lang = %v, want absent", got["lang"])

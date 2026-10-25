@@ -18,7 +18,7 @@ import (
 const (
 	execToolID = "native.exec"
 	// execResultEnv names the file a program may write its answer to.
-	execResultEnv = "EXEC_RESULT"
+	execResultEnv = "JAD_RESULT"
 
 	asyncKindExec asyncmgr.Kind = "exec"
 )
@@ -35,7 +35,8 @@ var execInputSchema = json.RawMessage(`{
   "properties":{
     "lang":{"type":"string","minLength":1,"description":"Interpreter name, e.g. python, node, bash. Defaults to bash."},
     "code":{"type":"string","minLength":1,"description":"Program source."},
-    "args":{"type":"array","items":{"type":"string"},"description":"Arguments passed to the program as argv, with no shell quoting."},
+    "input":{"description":"Any JSON value, written to the program's standard input as one line of JSON. Without input, stdin is empty."},
+    "args":{"type":"array","items":{"type":"string"},"description":"Extra arguments passed to the program after the code, with no shell quoting. Prefer input for data."},
     "cwd":{"type":"string","minLength":1,"description":"Directory to run in, relative to the workspace root or absolute. Defaults to the workspace root."},
     "timeout_ms":{"type":"integer","description":"Wall-clock budget for this call in milliseconds; clamped to the configured range."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the result. If the program is still running an id is returned; collect it with the async tool."}
@@ -44,7 +45,7 @@ var execInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-const execDescription = "Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call. Write a short answer to the file named by $EXEC_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it."
+const execDescription = "Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call. Pass data as input: the program reads it from stdin as JSON. Print the answer to stdout; for a short structured answer write to the file named by $JAD_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it."
 
 // NewExecTool constructs native.exec. How a child runs comes from its own settings (Child);
 // exec adds the interpreter table, argv without a shell, line-aware cutting and a result file.
@@ -65,8 +66,9 @@ func NewExecTool(settings sessionfs.NativeExecSettings, apiKeyEnv string, host *
 			Description: execDescription,
 			InputSchema: append(json.RawMessage(nil), execInputSchema...),
 		},
-		Validator:        validator,
-		ExampleOperation: json.RawMessage(`{"code":"echo hello"}`),
+		Validator:          validator,
+		RejectedProperties: execRejectedProperties,
+		ExampleOperation:   json.RawMessage(`{"code":"echo hello"}`),
 		// The configured default language is bound here, where the settings are known.
 		NormalizeArguments: func(arguments map[string]any) map[string]any {
 			return normalizeExecArguments(arguments, settings.DefaultLang)
@@ -77,8 +79,24 @@ func NewExecTool(settings sessionfs.NativeExecSettings, apiKeyEnv string, host *
 	}, nil
 }
 
-// normalizeExecArguments turns the near-miss names a model uses for the same intent, and
-// numbers or booleans given as arguments, into what the schema asks for.
+// execRejectedProperties names the right key for a name an older exec, or another tool,
+// accepted. There is one way to say each thing.
+var execRejectedProperties = map[string]string{
+	"language":    "exec has no language; use lang",
+	"interpreter": "exec has no interpreter; use lang",
+	"source":      "exec has no source; use code",
+	"script":      "exec has no script; use code",
+	"program":     "exec has no program; use code",
+	"command":     "exec has no command; use code with lang",
+	"stdin":       "exec has no stdin; use input (JSON) for data, and code for the program",
+	"workdir":     "exec has no workdir; use cwd",
+	"dir":         "exec has no dir; use cwd",
+	"argv":        "exec has no argv here; use args for extra arguments after the code",
+}
+
+// normalizeExecArguments repairs what a model gets wrong without changing the intent: a
+// null or blank lang means "not given", block_ms is clamped, and numbers or booleans
+// given as args become strings.
 func normalizeExecArguments(arguments map[string]any, defaultLang string) map[string]any {
 	normalized := make(map[string]any, len(arguments))
 	for key, value := range arguments {
@@ -87,11 +105,6 @@ func normalizeExecArguments(arguments map[string]any, defaultLang string) map[st
 	if value, has := normalized["lang"]; has && value == nil {
 		// A model that fills an optional field with null means "not given".
 		delete(normalized, "lang")
-	}
-	if _, has := normalized["lang"]; !has {
-		if alias, ok := firstString(arguments, "language", "interpreter"); ok {
-			normalized["lang"] = alias
-		}
 	}
 	if block, ok := safeInteger(normalized["block_ms"]); ok {
 		normalized["block_ms"] = json.Number(fmt.Sprint(max(block, 0)))
@@ -104,19 +117,9 @@ func normalizeExecArguments(arguments map[string]any, defaultLang string) map[st
 			normalized["lang"] = lang
 		}
 	}
-	if _, has := normalized["lang"]; !has && defaultLang != "" {
+	if _, hasCode := normalized["code"]; hasCode && defaultLang != "" && normalized["lang"] == nil {
 		// Filled here, not at run time, so the arguments the hooks and the log see are what runs.
 		normalized["lang"] = defaultLang
-	}
-	if _, has := normalized["code"]; !has {
-		if alias, ok := firstString(arguments, "source", "script", "program"); ok {
-			normalized["code"] = alias
-		}
-	}
-	if _, has := normalized["args"]; !has {
-		if argv, ok := arguments["argv"].([]any); ok {
-			normalized["args"] = argv
-		}
 	}
 	if list, ok := normalized["args"].([]any); ok {
 		converted := make([]any, len(list))
@@ -125,30 +128,7 @@ func normalizeExecArguments(arguments map[string]any, defaultLang string) map[st
 		}
 		normalized["args"] = converted
 	}
-	if _, has := normalized["cwd"]; !has {
-		if alias, ok := firstString(arguments, "workdir", "dir"); ok {
-			normalized["cwd"] = alias
-		}
-	}
-	for _, key := range []string{"language", "interpreter", "source", "script", "program", "argv", "workdir", "dir"} {
-		delete(normalized, key)
-	}
 	return normalized
-}
-
-// firstString returns the first of the named arguments that is a string. An earlier name
-// whose value is not a string does not hide a later one that is: `a ?? b` in the
-// TypeScript backend picks the first present value, so a non-string stops the search.
-func firstString(arguments map[string]any, names ...string) (string, bool) {
-	for _, name := range names {
-		value, present := arguments[name]
-		if !present || value == nil {
-			continue
-		}
-		text, ok := value.(string)
-		return text, ok
-	}
-	return "", false
 }
 
 // execArgumentText renders a number or boolean the way JavaScript's String() does; any
@@ -238,6 +218,35 @@ func executeNativeExecAsync(
 			fmt.Sprintf("code is %d bytes, over the limit of %d", codeBytes, settings.CodeMaxBytes),
 			tools.Information{Key: "suggestion", Value: "write the program to a file with the write tool and run it with bash"}), nil
 	}
+	if lang.Mode == sessionfs.NativeExecModeArg {
+		if int64(len(code)) > settings.ArgMaxBytes {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "code_too_large",
+				fmt.Sprintf("code is %d bytes, over the limit of %d for a runner that takes it as an argument", len(code), settings.ArgMaxBytes),
+				tools.Information{Key: "suggestion", Value: "write the program to a file with the write tool and run it with bash, or give the runner mode file"}), nil
+		}
+		if strings.ContainsRune(code, 0) {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_code", "code contains a NUL byte, which an argument cannot carry"), nil
+		}
+	}
+	stdin := ""
+	if given, present := arguments["input"]; present && given != nil {
+		if lang.Mode == sessionfs.NativeExecModeStdin {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "input_unsupported",
+				"runner "+name+" reads its code from stdin, so a call with input cannot use it",
+				tools.Information{Key: "suggestion", Value: "set tools.native.exec.runners." + name + ".mode to arg or file"}), nil
+		}
+		encoded, err := json.Marshal(given)
+		if err != nil {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", "input is not valid JSON data",
+				tools.Information{Key: "system_error", Value: err.Error()}), nil
+		}
+		if size := int64(len(encoded)) + 1; size > settings.InputMaxBytes {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "input_too_large",
+				fmt.Sprintf("input is %d bytes, over the limit of %d", size, settings.InputMaxBytes),
+				tools.Information{Key: "suggestion", Value: "write the data to a file with the write tool and pass its path in input"}), nil
+		}
+		stdin = string(encoded) + "\n"
+	}
 	var extra []string
 	if raw, present := arguments["args"]; present && raw != nil {
 		list, ok := raw.([]any)
@@ -272,7 +281,6 @@ func executeNativeExecAsync(
 		resultPath := filepath.Join(workDir, "result.txt")
 
 		programArgs := make([]string, len(lang.Argv)-1)
-		stdin := ""
 		codePath := filepath.Join(workDir, "code"+lang.Ext)
 		if lang.Mode == sessionfs.NativeExecModeFile {
 			if err := os.WriteFile(codePath, []byte(code), 0o600); err != nil {
@@ -284,13 +292,14 @@ func executeNativeExecAsync(
 			flag = strings.ReplaceAll(flag, "{file}", codePath)
 			programArgs[index] = strings.ReplaceAll(flag, "{code}", code)
 		}
+		runStdin := stdin
 		if lang.Mode == sessionfs.NativeExecModeStdin {
-			stdin = code
+			runStdin = code
 		}
 		return runShellChildDetailed(ctx, shellChildRun{
 			file:       lang.Argv[0],
 			argv:       append(append([]string(nil), programArgs...), extra...),
-			stdin:      stdin,
+			stdin:      runStdin,
 			cwd:        common.cwd,
 			timeoutMs:  common.timeoutMs,
 			lineAware:  settings.LineAware,
