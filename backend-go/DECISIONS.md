@@ -978,3 +978,7 @@ A host whose direct IPv6 route to the provider is reset mid-stream (a peer reset
 - **The runner identity includes the setting**, so a changed value builds a new client.
 - **Not retried over the other family.** A request that failed after it was sent could have been started by the provider; retrying elsewhere risks a duplicate generation and bill. The user picks the family.
 - **Not covered:** the anthropic adapter (a separate service with its own config), the `fetch` tool (pins addresses for SSRF safety), MCP, `decide`, and the OAuth token refresh clients.
+
+## A toolset-based agent may list `subagent` and `profile_message` (Go only, 2026-10-25)
+
+An agent that names a `toolset` could not list `profile_message`: the child pool was built from the toolset's tools only, and the toolset (which must not set `profile_message`) never has it, so loading failed with "the session does not enable tools.native.profile_message". `subagent` already worked, because it is added to the agent's catalog by name. Now the session's own `profile_message` tool is added to the pool of an agent with a toolset, so `tools: ["grep","subagent","profile_message"]` loads and gets all three. A toolset file that sets `tools.native.profile_message` is still a configuration error; the agent's `tools` list still alone decides whether it gets the tool; a session without `profile_message` still fails to load for an agent that lists it. Nesting limits and narrowing are unchanged.
