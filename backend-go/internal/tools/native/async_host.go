@@ -20,14 +20,14 @@ type AsyncHost struct {
 	manager *asyncmgr.Manager
 	dir     string
 
-	mu             sync.Mutex
-	toolSmithSeen  bool
-	toolSmithRuns  map[string]*toolSmithRun
-	toolSmithSwept time.Time
-	processes      []processStopper
-	processAdded   bool
-	subagents      []*SubagentManager
-	subagentSeen   bool
+	mu           sync.Mutex
+	shellDrivers map[asyncmgr.Kind]bool
+	shellRuns    map[string]*shellRun
+	shellSwept   map[string]time.Time
+	processes    []processStopper
+	processAdded bool
+	subagents    []*SubagentManager
+	subagentSeen bool
 
 	profileMessageSeen bool
 	profileMessages    map[string]ProfileMessageRun

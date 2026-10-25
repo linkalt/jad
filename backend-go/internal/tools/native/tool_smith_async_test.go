@@ -256,7 +256,7 @@ func TestToolSmithRunTimeoutAndFailureStates(t *testing.T) {
 
 func TestToolSmithRunIDsAreNotAcceptedAsPathsForDetail(t *testing.T) {
 	f := newToolSmithAsyncFixture(t, `echo x > "$EXEC_RESULT"`)
-	driver := &toolSmithDriver{host: f.host}
+	driver := &shellDriver{host: f.host, spec: toolSmithAsync}
 	for _, id := range []string{"../../etc/passwd", "smith_../x", "smith_zzzzzzzz", ""} {
 		if got := driver.Detail(id, 100); got != "" {
 			t.Errorf("Detail(%q) = %q", id, got)

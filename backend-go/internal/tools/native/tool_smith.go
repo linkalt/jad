@@ -49,7 +49,7 @@ func NewToolSmithTool(settings sessionfs.NativeToolSmithSettings, apiKeyEnv stri
 		return tools.Tool{}, fmt.Errorf("compile native tool_smith schema: %w", err)
 	}
 	if host != nil {
-		host.attachToolSmith()
+		host.attachShell(toolSmithAsync)
 	}
 	return tools.Tool{
 		Definition: tools.Definition{
