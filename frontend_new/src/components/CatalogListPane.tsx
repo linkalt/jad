@@ -1,16 +1,17 @@
 /**
  * @file CatalogListPane.tsx
- * @input The files of one catalog kind, the search text and the filter choice
- * @output A search bar, a filter, a New button and a table of the matching files
+ * @input The files of one catalog kind, the search text, the filter choice and a delete request
+ * @output A search bar, a filter, a New button and a table of the matching files, each row with its own delete
  * @position The right panel of the catalog editor while no file is open
  */
 import {useMemo} from 'react';
 
-import {Banner, Button, HStack, StackItem, Text, TextInput, VStack} from '@astryxdesign/core';
+import {Banner, Button, HStack, Icon, IconButton, StackItem, Text, TextInput, VStack} from '@astryxdesign/core';
 import {EmptyState} from '@astryxdesign/core/EmptyState';
 import {Link} from '@astryxdesign/core/Link';
 import {Selector} from '@astryxdesign/core/Selector';
-import {Table, proportional, useTableColumnResize, useTableSortable, type TablePlugin, type TableColumn} from '@astryxdesign/core/Table';
+import {Table, pixel, proportional, useTableColumnResize, useTableSortable, type TablePlugin, type TableColumn} from '@astryxdesign/core/Table';
+import {Tooltip} from '@astryxdesign/core/Tooltip';
 
 import type {CatalogFileInfo, CatalogKind} from '../api';
 import {
@@ -21,10 +22,12 @@ import {
   filtersBySession,
   sortCatalogRows,
   type CatalogRow,
+  type CatalogRowTarget,
   type SortEntry,
 } from '../catalog-list-view';
 import type {CatalogKindView} from '../catalog-editor-view';
 import appConfig from '../config.json' with {type: 'json'};
+import {TrashIcon} from './AppIcons';
 
 export interface CatalogListPaneProps {
   kind: CatalogKind;
@@ -44,6 +47,8 @@ export interface CatalogListPaneProps {
   onOpen: (id: string) => void;
   onNew: () => void;
   onRetry: () => void;
+  /** Asks for one row to be deleted; the confirmation belongs to the dialog. */
+  onDelete: (target: CatalogRowTarget) => void;
 }
 
 export const DEFAULT_CATALOG_SORT: SortEntry[] = [
@@ -55,7 +60,13 @@ const textColumnWidth = proportional(appConfig.catalog_table_text_column_weight,
   minWidth: appConfig.catalog_table_text_column_min_width_px,
 });
 
-function tableColumns(showSession: boolean): TableColumn<CatalogRow>[] {
+// Narrow and fixed: an icon button needs no room to grow, and a proportional
+// width would hand it a share of the table. `resizable: false` keeps it out of
+// the resize plugin's set altogether — no handle on its border, and no pixel
+// width committed for it when a neighbour is dragged.
+const actionColumnWidth = pixel(appConfig.catalog_action_column_width_px);
+
+function tableColumns(showSession: boolean, onDelete: (target: CatalogRowTarget) => void, isDisabled: boolean): TableColumn<CatalogRow>[] {
   const columns: TableColumn<CatalogRow>[] = [
     {key: 'category', header: 'Category', sortable: true, renderCell: row => <Text type="supporting" color="secondary" maxLines={1}>{row.category}</Text>},
     {key: 'id', header: 'ID', sortable: true, width: textColumnWidth, renderCell: row => <Link isStandalone>{row.id}</Link>},
@@ -64,6 +75,33 @@ function tableColumns(showSession: boolean): TableColumn<CatalogRow>[] {
   if (showSession) {
     columns.unshift({key: 'sessions', header: 'Session', sortable: true, width: textColumnWidth, renderCell: row => <Text type="supporting" color="secondary" maxLines={1}>{row.sessions}</Text>});
   }
+  columns.push({
+    key: 'action',
+    header: 'Action',
+    width: actionColumnWidth,
+    resizable: false,
+    // An icon column has no text to align to a leading edge: centred, the button
+    // sits in the middle of its room instead of hugging the cell's padding.
+    align: 'center',
+    renderCell: row => (
+      <Tooltip content="Delete">
+        <IconButton
+          label={`Delete ${row.id}`}
+          icon={<Icon icon={TrashIcon} size="sm" />}
+          variant="destructive"
+          size="sm"
+          isDisabled={isDisabled}
+          // The whole body row opens the file, and IconButton hands the click
+          // straight to its own onClick without stopping it, so the delete stops
+          // it here — otherwise the row opens the file it is about to delete.
+          onClick={event => {
+            event.stopPropagation();
+            onDelete({id: row.id, etag: row.etag});
+          }}
+        />
+      </Tooltip>
+    ),
+  });
   return columns;
 }
 
@@ -85,6 +123,7 @@ export function CatalogListPane({
   onOpen,
   onNew,
   onRetry,
+  onDelete,
 }: CatalogListPaneProps) {
   const options = useMemo(() => filterOptions(kind, files), [kind, files]);
   const known = useMemo(() => filterValues(options), [options]);
@@ -93,7 +132,7 @@ export function CatalogListPane({
   const rows = useMemo(() => sortCatalogRows(catalogRows(kind, matched), sort), [kind, matched, sort]);
   const plural = view.plural.toLowerCase();
   const showSession = filtersBySession(kind);
-  const columns = useMemo(() => tableColumns(showSession), [showSession]);
+  const columns = useMemo(() => tableColumns(showSession, onDelete, isDisabled), [showSession, onDelete, isDisabled]);
   const sortPlugin = useTableSortable<CatalogRow>({sort, onSortChange: next => onSortChange([...next])});
   const resizePlugin = useTableColumnResize({
     columnWidths,

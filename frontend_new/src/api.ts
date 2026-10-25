@@ -2161,7 +2161,13 @@ export async function saveCatalogFile(
   return {info: {id: value.id, etag: value.etag}, created: response.status === 201};
 }
 
-/** `deleteState` also removes a session's transcripts and tool state; it only applies to sessions. */
+/**
+ * `deleteState` also removes a session's transcripts and tool state. Only the sessions
+ * route reads `state=delete`; the generic catalogue route takes the kind, the id and the
+ * version and ignores a query, so a profile's answer is dropped at the line below.
+ * The profile side is not wired server-side yet: the box is there, the parameter is
+ * not, and nothing here pretends otherwise.
+ */
 export async function deleteCatalogFile(
   kind: CatalogKind,
   id: string,

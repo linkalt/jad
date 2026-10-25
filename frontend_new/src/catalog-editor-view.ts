@@ -19,6 +19,12 @@ export interface CatalogKindView {
   idForm: IdForm;
   /** What the delete confirmation tells the user besides the name. */
   deleteNote: string;
+  /**
+   * The delete confirmation's "also delete its transcripts and tool state" box, and
+   * what unticking it means for this kind. Null where the kind keeps no state, so the
+   * box is offered exactly where a tick would mean something.
+   */
+  stateNote: string | null;
   /** The text a new file starts from. */
   template: string;
 }
@@ -30,6 +36,9 @@ export const CATALOG_KIND_VIEWS: Record<CatalogKind, CatalogKindView> = {
     idHint: 'Written <category>/<name>, for example coding/review.',
     idForm: 'category/name',
     deleteNote: 'The server refuses this while a session needs it.',
+    // A profile is copied into every session that runs it, so its transcripts and
+    // tool state live in those sessions' state folders rather than under the profile.
+    stateNote: 'Off keeps what every session that used this profile recorded with it.',
     template: '{\n  "schema_version": 1\n}\n',
   },
   models: {
@@ -38,6 +47,7 @@ export const CATALOG_KIND_VIEWS: Record<CatalogKind, CatalogKindView> = {
     idHint: 'Written <category>/<name>, for example openai/gpt-deep.',
     idForm: 'category/name',
     deleteNote: 'The server refuses this while a profile needs it.',
+    stateNote: null,
     template: '{\n  "schema_version": 1,\n  "provider": "openai",\n  "model": ""\n}\n',
   },
   sessions: {
@@ -46,6 +56,8 @@ export const CATALOG_KIND_VIEWS: Record<CatalogKind, CatalogKindView> = {
     idHint: 'Written <name>, or <root>:<name> when there is more than one session root.',
     idForm: 'session',
     deleteNote: 'A run in progress is stopped first.',
+    // One state folder per session, and only this kind's route can remove it.
+    stateNote: 'Off keeps the state folder, so a session created again under this name finds it.',
     template: '{\n  "schema_version": 1,\n  "cwd": ""\n}\n',
   },
   toolsets: {
@@ -54,6 +66,7 @@ export const CATALOG_KIND_VIEWS: Record<CatalogKind, CatalogKindView> = {
     idHint: 'Written <category>/<name>, for example coding/review.',
     idForm: 'category/name',
     deleteNote: 'The server refuses this while a profile needs it.',
+    stateNote: null,
     template: '{\n  "schema_version": 1\n}\n',
   },
   mcp: {
@@ -62,6 +75,7 @@ export const CATALOG_KIND_VIEWS: Record<CatalogKind, CatalogKindView> = {
     idHint: 'Written <category>/<name>, for example jad/zvec-grep.',
     idForm: 'category/name',
     deleteNote: 'The server refuses this while a toolset needs it.',
+    stateNote: null,
     template: '{\n  "schema_version": 1,\n  "transport": {\n    "type": "stdio",\n    "command": ""\n  }\n}\n',
   },
 };
@@ -147,6 +161,54 @@ export function deleteFailure(error: unknown): DeleteFailure {
     if (error.status === 412) return {kind: 'stale', message: STALE_FILE_MESSAGE};
   }
   return {kind: 'other', message};
+}
+
+/** What one confirmation dialog says; the same dialog asks every question the editor puts. */
+export interface DeletePrompt {
+  title: string;
+  description: string;
+  actionLabel: string;
+}
+
+export const DISCARD_PROMPT: DeletePrompt = {
+  title: 'Discard your changes?',
+  description: 'The text has changes that are not saved.',
+  actionLabel: 'Discard',
+};
+
+export interface DeletePromptInput {
+  /** The file to be deleted, or null when the editor has no ID to name. */
+  id: string | null;
+  /** Whether the confirmation's "also delete its transcripts" box is ticked. */
+  deleteState: boolean;
+}
+
+/**
+ * What the tick decides, said in the kind's own terms, or nothing where the kind
+ * keeps no state. A session owns its state folder; a profile is copied into the
+ * state of every session that ran it, so its answer spans those sessions rather than
+ * one folder under the profile. These are the two kinds that carry the box.
+ */
+function stateSentence(kind: CatalogKind, deleteState: boolean): string {
+  if (kind === 'sessions') return ` Its transcripts and tool state are ${deleteState ? 'deleted too' : 'kept'}.`;
+  if (kind === 'profiles') return ` Its transcripts and tool state are ${deleteState ? 'deleted' : 'kept'} in every session that ran it.`;
+  return '';
+}
+
+/**
+ * The delete question: one wording for both deletes, the file open in the editor
+ * and a single row taken from the list. It reads the box the confirmation shows
+ * rather than an answer chosen somewhere else, so the sentence and the request
+ * cannot disagree.
+ */
+export function deletePrompt(kind: CatalogKind, view: CatalogKindView, input: DeletePromptInput): DeletePrompt {
+  const name = input.id ?? `This ${view.noun}`;
+  const state = stateSentence(kind, input.deleteState);
+  return {
+    title: `Delete this ${view.noun}?`,
+    description: `${name} will be removed. ${view.deleteNote}${state}`,
+    actionLabel: 'Delete',
+  };
 }
 
 /** Files sort by id so a list does not reshuffle after a save. */

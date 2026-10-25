@@ -1,19 +1,22 @@
 /**
  * @file CatalogEditorDialog.tsx
  * @input Whether the dialog is open, and a callback to close it
- * @output A modal that lists the profile, model, session, toolset or MCP server files and edits one as raw JSON
+ * @output A resizable modal that lists the profile, model, session, toolset or MCP server files and edits one as raw JSON, or deletes one
  * @position The management surface for <.jad>/{profiles,models,tools,mcp} and the session files; every write goes through the catalog routes
  *
  * The text is checked against the kind's scheme as you type; the server's loader
  * has the last word, and its message is shown verbatim when it refuses a write.
  * A save carries the version the file had when it was opened, so an edit made
  * elsewhere in the meantime is refused instead of overwritten.
+ *
+ * Both axes are the user's, from any edge or corner: the body is dragged wider and
+ * taller, each bounded by what the centred, CSS-clamped surface can actually paint.
  */
 import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react';
 
 import {Banner, Button, Dialog, HStack, Icon, IconButton, Layout, LayoutContent, LayoutFooter, StackItem, Text, TextInput, VStack} from '@astryxdesign/core';
-import {AlertDialog} from '@astryxdesign/core/AlertDialog';
-import {CheckboxInput} from '@astryxdesign/core/CheckboxInput';
+import {ResizeHandle, useResizable, type ResizableProps, type ResizableRegion} from '@astryxdesign/core/Resizable';
+import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {Divider} from '@astryxdesign/core/Divider';
 import {Item} from '@astryxdesign/core/Item';
 import {Breadcrumbs, BreadcrumbItem} from '@astryxdesign/core/Breadcrumbs';
@@ -30,21 +33,26 @@ import {
   type CatalogKind,
 } from '../api';
 import {FILTER_ALL, type SortEntry} from '../catalog-list-view';
-import {cappedHeight} from '../catalog-layout';
+import {bodyDefaultHeight, bodyHeightBound, centredEdgeDelta, dialogMaxHeight, dialogWidthBound, regionFloor} from '../catalog-layout';
 import appConfig from '../config.json' with {type: 'json'};
 import {createCatalogValidator} from '../catalog-validation';
 import type {DocumentProblem} from '../json-document';
 import {
   CATALOG_KIND_VIEWS,
+  DISCARD_PROMPT,
   canSave as canSaveGate,
   deleteFailure,
+  deletePrompt,
   hasUnsavedWork,
   newIdProblem,
   normalizeLineBreaks,
   saveFailure,
   sortedIds,
+  type DeletePrompt,
 } from '../catalog-editor-view';
+import {CatalogCornerGrips} from './CatalogCornerGrips';
 import {CatalogListPane, DEFAULT_CATALOG_SORT} from './CatalogListPane';
+import {CatalogConfirmDialog} from './CatalogConfirmDialog';
 import {CatalogSchemaTab} from './CatalogSchemaTab';
 import {JsonCodeEditor} from './JsonCodeEditor';
 
@@ -56,6 +64,25 @@ const menuStyles = stylex.create({
     backgroundColor: colorVars['--color-border-emphasized'],
     fontWeight: fontWeightVars['--font-weight-medium'],
   },
+});
+
+// A handle's overlay band is anchored to the inline-end and block-end edges, which is
+// where the outward-growing edges already are. The other two edges re-anchor the same
+// band: merged after the component's own styles, so these insets are the ones that
+// land, and no second kind of grip has to be invented for two of the four edges.
+const frameStyles = stylex.create({
+  startEdge: {insetInlineEnd: 'auto', insetInlineStart: 0},
+  topEdge: {bottom: 'auto', top: 0},
+  // The surface is a frame, never a scroll container. The styled `dialog` resolves to
+  // `overflow: auto` (measured: the same element with its classes stripped computes
+  // `auto`; a bare <dialog> computes `visible`), so a single pixel of overflow paints
+  // both bars — as it did in the reporter's Firefox 158 on a fractional 1429.58px
+  // surface: `scrollWidth - clientWidth = 1`, `scrollHeight - clientHeight = 1`.
+  // Nothing here scrolls as a whole: the file table and the JSON editor scroll inside
+  // their own panes, which is where a bar belongs. `clip`, not `hidden`: hidden still
+  // scrolls by script and by keyboard, and dragging is bounded by the window, so a
+  // scrollbar here could only ever report the engine's rounding.
+  surface: {overflow: 'clip'},
 });
 
 type EditorTab = 'editor' | 'schema';
@@ -77,6 +104,8 @@ type Pending =
   | {kind: 'back'}
   | {kind: 'close'}
   | {kind: 'delete'}
+  /** A row deleted straight from the list; the editor is closed, so it carries its own version. */
+  | {kind: 'row-delete'; id: string; etag: string}
   | null;
 
 type Notice = {kind: 'error' | 'success'; title: string; message: string};
@@ -100,7 +129,6 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const [notice, setNotice] = useState<Notice | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
-  const [deleteState, setDeleteState] = useState(false);
   const [pending, setPending] = useState<Pending>(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState(FILTER_ALL);
@@ -112,7 +140,65 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const validatorRef = useRef<ReturnType<typeof createCatalogValidator> | null>(null);
   const loadToken = useRef(0);
 
+  // Both axes are draggable, and both are bounded by what the surface can paint
+  // rather than by the configured numbers alone: `Dialog` clamps its own box, so a
+  // region allowed past the clamp keeps a size nothing can show — measured, a 200 px
+  // width drag on a 1238 px window left 1206 painted and 1240 stored, and the next
+  // drag spent its first 34 px on the invisible excess. The viewport is tracked, not
+  // read once, so a window that shrinks pulls both stored sizes down with it.
+  const [viewport, setViewport] = useState(() => ({width: window.innerWidth, height: window.innerHeight}));
+  useEffect(() => {
+    const onResize = (): void => setViewport({width: window.innerWidth, height: window.innerHeight});
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const widthBound = dialogWidthBound(
+    viewport.width,
+    appConfig.catalog_dialog_viewport_margin_px,
+    appConfig.catalog_dialog_max_width_px,
+  );
+  const heightBound = bodyHeightBound(
+    viewport.height,
+    appConfig.catalog_dialog_max_height_percent,
+    appConfig.catalog_dialog_chrome_height_px,
+  );
+  // A window narrower or shorter than the configured floor cannot paint that floor, so
+  // the floor follows the bound down: a minimum above its own maximum would leave the
+  // region claiming a size the surface does not have.
+  const widthFloor = regionFloor(appConfig.catalog_dialog_min_width_px, widthBound);
+  const heightFloor = regionFloor(appConfig.catalog_body_min_height_px, heightBound);
+
+  // Each size is kept in localStorage under its own key, so both survive the close
+  // that unmounts this component and a page reload. The reset-on-close effect below
+  // deliberately does not touch them: that clears what the list was showing, not a
+  // layout choice the user made.
+  const widthRegion = useResizable({
+    defaultSize: pixel(appConfig.catalog_dialog_width_px),
+    minSize: pixel(widthFloor),
+    maxSize: pixel(widthBound),
+    direction: 'horizontal',
+    autoSaveId: 'jad-catalog-dialog-width',
+  });
+  const heightRegion = useResizable({
+    defaultSize: pixel(bodyDefaultHeight(viewport.height, appConfig.catalog_body_height_px, appConfig.catalog_body_viewport_percent)),
+    minSize: pixel(heightFloor),
+    maxSize: pixel(heightBound),
+    direction: 'vertical',
+    autoSaveId: 'jad-catalog-dialog-height',
+  });
+
   const view = CATALOG_KIND_VIEWS[kind];
+  // The dialog is centred on both axes, so the edge under the pointer travels half of
+  // the size it gains. Without this both handles lag the cursor by 50 % for the whole
+  // drag, which reads as a stuck handle rather than a heavy one. One helper, so the
+  // two axes cannot drift apart.
+  const centredProps = (region: ResizableRegion): ResizableProps => ({
+    ...region.props,
+    _onResizeMove: (delta: number) => region.props._onResizeMove(centredEdgeDelta(delta)),
+  });
+  const widthDragProps = centredProps(widthRegion);
+  const heightDragProps = centredProps(heightRegion);
+
   const list = lists[kind];
   const files = list?.files ?? NO_FILES;
   const ids = useMemo(() => sortedIds(files.map(file => file.id)), [files]);
@@ -156,7 +242,6 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
       setSort(DEFAULT_CATALOG_SORT);
       setColumnWidths({});
       setTab('editor');
-      setDeleteState(false);
       setDraft({mode: 'none'});
       setText('');
       setNotice(null);
@@ -198,7 +283,6 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     const token = ++loadToken.current;
     setDraft({mode: 'loading', id});
     setTab('editor');
-    setDeleteState(false);
     setNotice(null);
     try {
       const file = await fetchCatalogFile(kind, id);
@@ -219,7 +303,6 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setNewId('');
     setText(view.template);
     setTab('editor');
-    setDeleteState(false);
     setNotice(null);
     setDraft({mode: 'new', id: ''});
   }, [view.template]);
@@ -232,7 +315,6 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setSort(DEFAULT_CATALOG_SORT);
     setColumnWidths({});
     setTab('editor');
-    setDeleteState(false);
     setDraft({mode: 'none'});
     setText('');
     setNewId('');
@@ -247,7 +329,6 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setText('');
     setNewId('');
     setTab('editor');
-    setDeleteState(false);
     setNotice(null);
     setCheckError(null);
     setChecked({text: '', problems: NO_PROBLEMS});
@@ -283,7 +364,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     else onClose();
   };
 
-  const confirmPending = (): void => {
+  const confirmPending = (deleteState: boolean): void => {
     const action = pending;
     setPending(null);
     if (!action) return;
@@ -293,7 +374,8 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     else if (action.kind === 'switch') {
       if (action.target === 'new') startNew();
       else void openExisting(action.target);
-    } else if (action.kind === 'delete') void performDelete();
+    } else if (action.kind === 'delete') void performDelete(deleteState);
+    else if (action.kind === 'row-delete') void performRowDelete(action.id, action.etag, deleteState);
   };
 
   const save = async (): Promise<void> => {
@@ -316,7 +398,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     }
   };
 
-  const performDelete = async (): Promise<void> => {
+  const performDelete = async (deleteState: boolean): Promise<void> => {
     if (draft.mode !== 'existing') return;
     setIsBusy(true);
     setNotice(null);
@@ -325,8 +407,27 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
       const removed = draft.id;
       setDraft({mode: 'none'});
       setText('');
-      setDeleteState(false);
       setNotice({kind: 'success', title: 'Done', message: `Deleted ${removed}.`});
+      await reloadList();
+      onChanged();
+    } catch (caught) {
+      setNotice({kind: 'error', title: 'Not deleted', message: deleteFailure(caught).message});
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  /**
+   * Deletes one row of the list. The editor is closed in this mode, so the row
+   * carries the version it was listed at. Only a session has a state folder, so
+   * only a session's row asks about it, and the answer comes from the confirm.
+   */
+  const performRowDelete = async (id: string, etag: string, deleteState: boolean): Promise<void> => {
+    setIsBusy(true);
+    setNotice(null);
+    try {
+      await deleteCatalogFile(kind, id, etag, {deleteState});
+      setNotice({kind: 'success', title: 'Done', message: `Deleted ${id}.`});
       await reloadList();
       onChanged();
     } catch (caught) {
@@ -352,6 +453,16 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     idProblem,
   });
   const title = draft.mode === 'existing' ? `${view.noun}: ${draft.id}` : draft.mode === 'new' ? `New ${view.noun}` : view.plural;
+  // One confirm asks every question. The wording is decided in one pure place and
+  // re-reads as its checkbox is ticked, instead of branching four ways here.
+  const isDelete = pending?.kind === 'delete' || pending?.kind === 'row-delete';
+  const promptFor = (deleteState: boolean): DeletePrompt => {
+    if (pending?.kind === 'delete') {
+      return deletePrompt(kind, view, {id: draft.mode === 'existing' ? draft.id : null, deleteState});
+    }
+    if (pending?.kind === 'row-delete') return deletePrompt(kind, view, {id: pending.id, deleteState});
+    return DISCARD_PROMPT;
+  };
 
   return (
     <>
@@ -360,15 +471,16 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
         onOpenChange={open => {
           if (!open) requestClose();
         }}
-        width={appConfig.catalog_dialog_width_px}
-        maxHeight={appConfig.catalog_dialog_max_height}
+        width={widthRegion.size}
+        maxHeight={dialogMaxHeight(appConfig.catalog_dialog_max_height_percent)}
+        xstyle={frameStyles.surface}
         purpose="form"
         aria-label={`Catalog: ${title}`}
       >
         <Layout
           content={
             <LayoutContent padding={0}>
-              <HStack gap={3} align="stretch" padding={4} height={cappedHeight(appConfig.catalog_body_height_px, appConfig.catalog_body_viewport_percent)}>
+              <HStack gap={3} align="stretch" padding={4} height={heightRegion.size}>
                 <StackItem size="static">
                   <VStack gap={1} width={appConfig.catalog_file_list_width_px} role="navigation" aria-label="Catalog kinds">
                     {MENU_KINDS.map(option => (
@@ -416,6 +528,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                       onOpen={id => requestSwitch(id)}
                       onNew={() => requestSwitch('new')}
                       onRetry={() => void reloadList()}
+                      onDelete={target => setPending({kind: 'row-delete', ...target})}
                     />
                   )}
                   {draft.mode !== 'none' && (
@@ -455,15 +568,6 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                     <StackItem size="fill" isScrollable id={panelId('schema')} role="tabpanel" aria-label="Schema">
                       <CatalogSchemaTab kind={kind} />
                     </StackItem>
-                  )}
-                  {draft.mode === 'existing' && kind === 'sessions' && tab === 'editor' && (
-                    <CheckboxInput
-                      label="Also delete its transcripts and tool state when deleting"
-                      description="Off keeps the state folder, so a session created again under this name finds it."
-                      value={deleteState}
-                      onChange={setDeleteState}
-                      isDisabled={isBusy}
-                    />
                   )}
                   {hasEditor && tab === 'editor' && (
                     <>
@@ -505,6 +609,50 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                   )}
                 </VStack>
                 </StackItem>
+                {/* The whole border resizes: four overlaid edges on the surface's own
+                    edges (it is the nearest positioned ancestor — `position: fixed` —
+                    so these are the edges the user drags, not rules inside it), and
+                    four corners that move both regions at once. The start-side edges
+                    are `isReversed` because a drag outwards grows the box there too.
+                    Only the two edges the user is told about carry a pill at rest;
+                    eight of them would read as decoration. */}
+                <ResizeHandle
+                  direction="horizontal"
+                  position="overlay"
+                  pillPlacement="center"
+                  isAlwaysVisible
+                  label="Resize catalog dialog"
+                  resizable={widthDragProps}
+                />
+                <ResizeHandle
+                  direction="horizontal"
+                  position="overlay"
+                  pillPlacement="center"
+                  isAlwaysVisible={false}
+                  isReversed
+                  xstyle={frameStyles.startEdge}
+                  label="Resize catalog dialog from the left edge"
+                  resizable={widthDragProps}
+                />
+                <ResizeHandle
+                  direction="vertical"
+                  position="overlay"
+                  pillPlacement="center"
+                  isAlwaysVisible
+                  label="Resize catalog dialog height"
+                  resizable={heightDragProps}
+                />
+                <ResizeHandle
+                  direction="vertical"
+                  position="overlay"
+                  pillPlacement="center"
+                  isAlwaysVisible={false}
+                  isReversed
+                  xstyle={frameStyles.topEdge}
+                  label="Resize catalog dialog from the top edge"
+                  resizable={heightDragProps}
+                />
+                <CatalogCornerGrips width={widthRegion.props} height={heightRegion.props} />
               </HStack>
             </LayoutContent>
           }
@@ -530,19 +678,15 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
           }
         />
       </Dialog>
-      <AlertDialog
+      {/* One confirm stands behind every question. It stays mounted and is opened
+          by `isOpen` so its own close path runs — that is what returns focus to the
+          button that asked — and it starts every answer from unticked. */}
+      <CatalogConfirmDialog
         isOpen={pending !== null}
-        onOpenChange={open => {
-          if (!open) setPending(null);
-        }}
-        title={pending?.kind === 'delete' ? `Delete this ${view.noun}?` : 'Discard your changes?'}
-        description={
-          pending?.kind === 'delete'
-            ? `${draft.mode === 'existing' ? draft.id : `This ${view.noun}`} will be removed. ${view.deleteNote}${kind === 'sessions' ? (deleteState ? ' Its transcripts and tool state are deleted too.' : ' Its transcripts and tool state are kept.') : ''}`
-            : 'The text has changes that are not saved.'
-        }
-        actionLabel={pending?.kind === 'delete' ? 'Delete' : 'Discard'}
-        onAction={confirmPending}
+        prompt={promptFor}
+        stateNote={isDelete ? view.stateNote : null}
+        onCancel={() => setPending(null)}
+        onConfirm={confirmPending}
       />
     </>
   );

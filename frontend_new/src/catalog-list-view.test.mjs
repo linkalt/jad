@@ -106,6 +106,15 @@ test('rows carry one value per column, so a column sorts by its own key', () => 
   assert.equal(catalogRows('profiles', profiles)[0].sessions, 'Alpha, gamma');
 });
 
+test('each row carries its version, so a delete from the list can send it', () => {
+  assert.deepEqual(catalogRows('models', models).map(row => [row.id, row.etag]), [
+    ['openai/gpt-deep', '1'],
+    ['openai/small', '2'],
+    ['local/llama', '3'],
+  ]);
+  assert.equal(catalogRows('sessions', sessions)[0].etag, '1');
+});
+
 test('sorting follows the entries in turn and honours the direction', () => {
   const rows = catalogRows('models', models);
   const order = sort => sortCatalogRows(rows, sort).map(row => row.id);

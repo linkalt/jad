@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
 const {CatalogRequestError} = await import('./api.ts');
-const {CATALOG_KIND_VIEWS, STALE_FILE_MESSAGE, canSave, deleteFailure, hasUnsavedWork, isDirty, newIdProblem, normalizeLineBreaks, saveFailure, sortedIds} =
+const {CATALOG_KIND_VIEWS, DISCARD_PROMPT, STALE_FILE_MESSAGE, canSave, deleteFailure, deletePrompt, hasUnsavedWork, isDirty, newIdProblem, normalizeLineBreaks, saveFailure, sortedIds} =
   await import('./catalog-editor-view.ts');
 
 const NEW_PROFILE_TEXT = CATALOG_KIND_VIEWS.profiles.template;
@@ -159,4 +159,67 @@ test('every kind has its own hint, delete note and template', () => {
   assert.equal(CATALOG_KIND_VIEWS.sessions.idForm, 'session');
   assert.equal(CATALOG_KIND_VIEWS.profiles.idForm, 'category/name');
   assert.notEqual(CATALOG_KIND_VIEWS.sessions.deleteNote, CATALOG_KIND_VIEWS.profiles.deleteNote);
+});
+
+test('a delete from the editor and a delete from the list ask the same question', () => {
+  const view = CATALOG_KIND_VIEWS.profiles;
+  const question = deletePrompt('profiles', view, {id: 'coding/review', deleteState: false});
+  assert.deepEqual(question, {
+    title: 'Delete this profile?',
+    description: `coding/review will be removed. ${view.deleteNote} Its transcripts and tool state are kept in every session that ran it.`,
+    actionLabel: 'Delete',
+  });
+  // A profile is copied into each session that runs it, so its state is spread over
+  // those sessions rather than sitting in a folder of its own. One sentence says so.
+  assert.match(
+    deletePrompt('profiles', view, {id: 'coding/review', deleteState: true}).description,
+    /\. Its transcripts and tool state are deleted in every session that ran it\.$/,
+  );
+  assert.equal(
+    deletePrompt('profiles', view, {id: 'coding/review', deleteState: true}).title,
+    question.title,
+    'the box changes the consequence, not the question',
+  );
+  const unnamed = deletePrompt('models', CATALOG_KIND_VIEWS.models, {id: null, deleteState: false});
+  assert.equal(unnamed.description.startsWith('This model will be removed. '), true);
+});
+
+test('the state box is offered for the two kinds that own state, and nowhere else', () => {
+  // Sessions own a state folder; profiles own their share of the state in every
+  // session that ran them. Models, toolsets and MCP servers keep none, so a box there
+  // would be a control that cannot change anything.
+  assert.equal(typeof CATALOG_KIND_VIEWS.sessions.stateNote, 'string');
+  assert.equal(typeof CATALOG_KIND_VIEWS.profiles.stateNote, 'string');
+  for (const kind of ['models', 'toolsets', 'mcp']) {
+    assert.equal(CATALOG_KIND_VIEWS[kind].stateNote, null, kind);
+    const view = CATALOG_KIND_VIEWS[kind];
+    assert.equal(
+      deletePrompt(kind, view, {id: 'a/b', deleteState: true}).description,
+      deletePrompt(kind, view, {id: 'a/b', deleteState: false}).description,
+      `${kind} has nothing for a tick to change`,
+    );
+  }
+  assert.notEqual(CATALOG_KIND_VIEWS.sessions.stateNote, CATALOG_KIND_VIEWS.profiles.stateNote, 'each says what unticking keeps');
+});
+
+test('a session delete mentions its own state folder, and the tick alone decides which way', () => {
+  const view = CATALOG_KIND_VIEWS.sessions;
+  const kept = deletePrompt('sessions', view, {id: 'demo', deleteState: false});
+  assert.equal(kept.title, 'Delete this session?');
+  assert.equal(kept.actionLabel, 'Delete');
+  assert.match(kept.description, /Its transcripts and tool state are kept\.$/);
+  assert.match(deletePrompt('sessions', view, {id: 'demo', deleteState: true}).description, /are deleted too\.$/);
+  assert.equal(
+    deletePrompt('sessions', view, {id: 'demo', deleteState: true}).title,
+    kept.title,
+    'the box changes the consequence, not the question',
+  );
+});
+
+test('the discard question keeps its own wording', () => {
+  assert.deepEqual(DISCARD_PROMPT, {
+    title: 'Discard your changes?',
+    description: 'The text has changes that are not saved.',
+    actionLabel: 'Discard',
+  });
 });
