@@ -1,6 +1,6 @@
 // Package imagedata decodes an image a caller sent as base64 or as a data URL and checks
-// by its bytes that it is a type the providers take. The decide tool and the run request
-// share it, so both refuse the same input for the same reason.
+// by its bytes that it is a type the providers take. The run request uses it, so a bad
+// image is refused with one reason.
 package imagedata
 
 import (

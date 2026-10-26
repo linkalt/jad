@@ -9,6 +9,7 @@ import (
 
 const (
 	defaultExtensionDecideSystemoneBaseURL                = "https://openrouter.ai/api/alpha"
+	defaultExtensionDecideSystemonePath                   = "/decisions"
 	defaultExtensionDecideSystemoneAPIKeyEnv              = "OPENROUTER_API_KEY"
 	defaultExtensionDecideSystemoneModel                  = "openai/gpt-6-luna-decisions"
 	defaultExtensionDecideSystemoneTimeoutMS        int64 = 30_000
@@ -20,15 +21,17 @@ const (
 )
 
 var (
-	extensionDecideSystemoneKeys    = []string{"base_url", "api_key_env", "model", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes"}
+	extensionDecideSystemoneKeys    = []string{"base_url", "path", "api_key_env", "model", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes"}
 	extensionDecideSystemoneEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 // ExtensionDecideSystemoneSettings contains the normalized endpoint and limits for extension.decide_systemone.
 // Every field is resolved: a key left out of setting.json holds its default.
 type ExtensionDecideSystemoneSettings struct {
-	// BaseURL is the URL the tool appends "/decisions" to, without a trailing slash.
+	// BaseURL is the URL the tool appends Path to, without a trailing slash.
 	BaseURL string
+	// Path is appended to BaseURL: "/decisions" for OpenRouter, "/v1/systemone" for the TypeSafe API.
+	Path string
 	// APIKeyEnv names the environment variable holding the key. It is read on each call.
 	APIKeyEnv string
 	Model     string
@@ -84,6 +87,12 @@ func normalizeExtensionDecideSystemoneSettings(setting map[string]json.RawMessag
 	settings.BaseURL = strings.TrimRight(settings.BaseURL, "/")
 	if parsed, err := url.Parse(settings.BaseURL); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, configError("%s: %s.base_url must be an http or https URL", settingPath, section)
+	}
+	if settings.Path, err = extensionDecideSystemoneString(fields, "path", defaultExtensionDecideSystemonePath, settingPath); err != nil {
+		return nil, err
+	}
+	if parsed, err := url.Parse(settings.Path); err != nil || !strings.HasPrefix(settings.Path, "/") || strings.HasPrefix(settings.Path, "//") || parsed.Host != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, configError("%s: %s.path must start with a single / and be a path only", settingPath, section)
 	}
 	if settings.APIKeyEnv, err = extensionDecideSystemoneString(fields, "api_key_env", defaultExtensionDecideSystemoneAPIKeyEnv, settingPath); err != nil {
 		return nil, err

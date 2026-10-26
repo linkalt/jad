@@ -45,7 +45,7 @@ func newDecideSystemoneRig(t *testing.T, status int, reply string, adjust func(*
 		_, _ = io.WriteString(w, reply)
 	}))
 	t.Cleanup(rig.server.Close)
-	rig.settings = sessionfs.ExtensionDecideSystemoneSettings{BaseURL: rig.server.URL, APIKeyEnv: "DECIDE_KEY", Model: "m-1", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 1000, MaxResponseBytes: 4096}
+	rig.settings = sessionfs.ExtensionDecideSystemoneSettings{BaseURL: rig.server.URL, Path: "/decisions", APIKeyEnv: "DECIDE_KEY", Model: "m-1", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 1000, MaxResponseBytes: 4096}
 	if adjust != nil {
 		adjust(&rig.settings)
 	}
@@ -295,7 +295,7 @@ func TestDecideSystemoneTimeoutStopsASlowProvider(t *testing.T) {
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
 	t.Cleanup(slow.Close)
 	t.Cleanup(func() { close(release) })
-	settings := sessionfs.ExtensionDecideSystemoneSettings{BaseURL: slow.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 100, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
+	settings := sessionfs.ExtensionDecideSystemoneSettings{BaseURL: slow.URL, Path: "/decisions", APIKeyEnv: "K", Model: "m", TimeoutMS: 100, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
 	tool, err := newDecideSystemoneTool(settings, func(string) string { return "k" }, slow.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +322,7 @@ func TestDecideSystemoneDoesNotFollowARedirectWithTheKey(t *testing.T) {
 		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 	}))
 	t.Cleanup(redirector.Close)
-	settings := sessionfs.ExtensionDecideSystemoneSettings{BaseURL: redirector.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
+	settings := sessionfs.ExtensionDecideSystemoneSettings{BaseURL: redirector.URL, Path: "/decisions", APIKeyEnv: "K", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
 	// The client the tool builds for itself, with only the key injected.
 	tool, err := newDecideSystemoneTool(settings, func(string) string { return "k" }, newDecideSystemoneHTTPClient())
 	if err != nil {
@@ -462,6 +462,7 @@ func TestDecideSystemoneRejectsMissingNumbersUnknownChoicesAndKeyEcho(t *testing
 		"json message": `{"error":{"message":"Incorrect API key provided: secret-key. Find it at the dashboard."}}`,
 		"plain body":   `bad key secret-key`,
 		"json string":  `{"error":"secret-key is not valid"}`,
+		"422 detail":   `{"detail":[{"loc":["body","state"],"msg":"bad secret-key","type":"missing"}]}`,
 	} {
 		t.Run("echoed key, "+name, func(t *testing.T) {
 			rig := newDecideSystemoneRig(t, 401, reply, nil)
@@ -675,4 +676,44 @@ func executeCatalogCall(t *testing.T, catalog *tools.Catalog, name, arguments st
 		t.Fatal(err)
 	}
 	return item.Output
+}
+
+func TestDecideSystemoneUsesTheConfiguredPathForTheTypeSafeAPI(t *testing.T) {
+	rig := newDecideSystemoneRig(t, 200, `{"model":"jev-latest","answers":{"q1":{"type":"noul","noul":0.5}},"usage":{"input_tokens":1,"output_tokens":1}}`, func(s *sessionfs.ExtensionDecideSystemoneSettings) {
+		s.Path, s.Model = "/v1/systemone", "jev-latest"
+	})
+	output := rig.call(t, `{"input":"x",`+predicateQuestion+`}`)
+	request := rig.requests[0]
+	if !strings.Contains(output, `"status":"ok"`) || request.Path != "/v1/systemone" || request.Authorization != "Bearer secret-key" || request.Body["model"] != "jev-latest" {
+		t.Fatalf("request = %+v\n%s", request, output)
+	}
+}
+
+func TestDecideSystemoneReportsA422DetailWithItsLocation(t *testing.T) {
+	reply := `{"detail":[{"loc":["body","questions","q1","criteria"],"msg":"Field required","type":"missing"},{"loc":["body","state"],"msg":"Input should be a valid string","type":"string_type"}]}`
+	rig := newDecideSystemoneRig(t, 422, reply, nil)
+	output := rig.call(t, `{"input":"x",`+predicateQuestion+`}`)
+	if !strings.Contains(output, `"status":"invalid_input"`) || !strings.Contains(output, "error_code: request_rejected") ||
+		!strings.Contains(output, "body.questions.q1.criteria: Field required; body.state: Input should be a valid string") {
+		t.Fatalf("got:\n%s", output)
+	}
+	var items []string
+	for i := 0; i < 30; i++ {
+		items = append(items, `{"loc":["body","questions","q`+strings.Repeat("x", 20)+`"],"msg":"line one\nline two","type":"x"}`)
+	}
+	rig = newDecideSystemoneRig(t, 422, `{"detail":[`+strings.Join(items, ",")+`]}`, nil)
+	output = rig.call(t, `{"input":"x",`+predicateQuestion+`}`)
+	bounded := false
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "reason: ") {
+			bounded = len(line) <= 420 && strings.HasSuffix(line, "...")
+		}
+	}
+	if !bounded {
+		t.Fatalf("reason not bounded to one line:\n%s", output)
+	}
+	rig = newDecideSystemoneRig(t, 422, `{"detail":"plain detail"}`, nil)
+	if output = rig.call(t, `{"input":"x",`+predicateQuestion+`}`); !strings.Contains(output, "plain detail") {
+		t.Fatalf("got:\n%s", output)
+	}
 }

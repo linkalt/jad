@@ -81,7 +81,7 @@ func requestDecisions(ctx context.Context, client *http.Client, settings session
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, settings.BaseURL+"/decisions", bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, settings.BaseURL+settings.Path, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -110,23 +110,29 @@ func requestDecisions(ctx context.Context, client *http.Client, settings session
 	return answers, nil
 }
 
-// decideSystemoneErrorMessage takes the provider's error text from either error shape and cuts
-// it, so a long validation report stays small.
+// decideSystemoneErrorMessage takes the provider's error text from the error shapes it
+// knows ({"error":{"message"}}, {"error":"text"}, and the 422 {"detail":[{"loc","msg"}]}
+// of the System One API) and cuts it, so a long validation report stays small.
 func decideSystemoneErrorMessage(data []byte) string {
 	var envelope struct {
-		Error json.RawMessage `json:"error"`
+		Error  json.RawMessage `json:"error"`
+		Detail json.RawMessage `json:"detail"`
 	}
 	text := strings.TrimSpace(string(data))
-	if json.Unmarshal(data, &envelope) == nil && len(envelope.Error) > 0 {
-		var object struct {
-			Message string `json:"message"`
-		}
-		var plain string
-		switch {
-		case json.Unmarshal(envelope.Error, &object) == nil && object.Message != "":
-			text = object.Message
-		case json.Unmarshal(envelope.Error, &plain) == nil && plain != "":
-			text = plain
+	if json.Unmarshal(data, &envelope) == nil {
+		if len(envelope.Error) > 0 {
+			var object struct {
+				Message string `json:"message"`
+			}
+			var plain string
+			switch {
+			case json.Unmarshal(envelope.Error, &object) == nil && object.Message != "":
+				text = object.Message
+			case json.Unmarshal(envelope.Error, &plain) == nil && plain != "":
+				text = plain
+			}
+		} else if detail := decideSystemoneDetailText(envelope.Detail); detail != "" {
+			text = detail
 		}
 	}
 	text = oneLine(text)
@@ -134,6 +140,38 @@ func decideSystemoneErrorMessage(data []byte) string {
 		text = cut + "..."
 	}
 	return text
+}
+
+// decideSystemoneDetailText renders a 422 detail: a list of {loc, msg} as
+// "body.questions.q1.criteria: Field required; ...", or a plain string.
+func decideSystemoneDetailText(raw json.RawMessage) string {
+	var plain string
+	if json.Unmarshal(raw, &plain) == nil {
+		return plain
+	}
+	var items []struct {
+		Loc []json.RawMessage `json:"loc"`
+		Msg string            `json:"msg"`
+	}
+	if json.Unmarshal(raw, &items) != nil {
+		return ""
+	}
+	entries := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Msg == "" {
+			continue
+		}
+		path := make([]string, 0, len(item.Loc))
+		for _, part := range item.Loc {
+			path = append(path, decideSystemoneScalarText(part))
+		}
+		if len(path) > 0 {
+			entries = append(entries, strings.Join(path, ".")+": "+item.Msg)
+		} else {
+			entries = append(entries, item.Msg)
+		}
+	}
+	return strings.Join(entries, "; ")
 }
 
 func decideSystemoneRequestError(callID string, err error) string {
