@@ -134,3 +134,6 @@ Each phase: gofmt, vet, diff --check, full tests, `-race -count=3`.
 7. A remote addresses only sessions that already exist.
 8. Hop limit default 3; a remote may call back into the first JAD, bounded by hops.
 Section 2 above says "same folders as profiles/agents": read it as the `remotes/` folder. httpdebug check: it already redacts Authorization, api-key, cookie headers and secret-like query keys (httpdebug/transport.go, test at transport_test.go); the remote client does not use httpdebug at all and gets its own redaction test in phase 2.
+
+## 11. Implemented (2026-10-29)
+Phases 1-7 are in. Differences from the text above: sub-agent targets are `remote:<name>/<session>/<category>/<profile>/<agent>` (the profile gives the context the agent runs in, as `subagent` runs for a local profile; the earlier `<category>/<agent>` was too short to name it); `transcripts` accepts `remote:<name>` for the default session and `remote:<name>/session:<id>`; the switch is `allow_remote` plus `remotes` in each of the two tools; a cursor from a remote read is `remote:<name>/<cursor>`. See DECISIONS.md, "Remote JAD calling".
