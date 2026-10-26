@@ -23,24 +23,26 @@ var transcriptInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "path":{"type":"string","minLength":1,"description":"Which transcript to read; omit it for your own (a sub-agent reads its own run). profile:<category>/<name> is another profile in this session and profile:<session>/<category>/<name> one in another session; subagent:<run id> (sub_xxxxxxxx) is a run of your profile, subagent:<category>/<name>/<run id> a run of another profile in this session and subagent:<session>/<category>/<name>/<run id> one of another session; path:<file> is a transcript file by filesystem path (off unless tools.native.transcript.allow_path is true). The header of a read and a not-found error give the exact path to reuse."},
-    "turns":{"type":"string","minLength":1,"description":"List mode: which turns to list: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail or cursor, the last turn is listed."},
-    "tail":{"type":"integer","minimum":1,"description":"List mode: list the last N turns; the same as turns -N. Not with turns or cursor."},
+    "turns":{"type":"string","minLength":1,"description":"List mode: which turns to list: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail, step or cursor, the last turn is listed."},
+    "tail":{"type":"integer","minimum":1,"description":"List mode: list the last N turns; the same as turns -N. Not with turns, step or cursor."},
     "source":{"type":"string","enum":["messages","backup"],"description":"messages (default) is the live transcript; backup is messages.backup.jsonl, the history before the last compaction."},
     "role":{"type":"string","enum":["user","assistant","tool"],"description":"List mode: only steps of this role; tool is a tool call (with its result)."},
     "tool":{"type":"string","minLength":1,"description":"List mode: only calls of tools whose name matches; * and ? are wildcards (read, exec*)."},
     "search":{"type":"string","minLength":1,"description":"List mode: only steps whose whole text (a call's arguments and result too) contains this, case-insensitive; the line shows only the preview."},
     "context":{"type":"integer","minimum":0,"description":"With search: how many steps to list on each side of a match. Default 0."},
-    "cursor":{"type":"string","minLength":1,"description":"Continue where the previous response stopped; use the cursor it gave. Not with turns or tail."}
+    "step":{"type":"string","minLength":1,"description":"Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4. Step numbers come from the list. Not with turns, tail, role, tool, search or context."},
+    "part":{"type":"string","enum":["call","result","both","reasoning"],"description":"With step: both (default) is a tool call and its result and the text of a message; call is the call and messages only, result the results only, reasoning the reasoning steps only (they are never listed)."},
+    "cursor":{"type":"string","minLength":1,"description":"Continue where the previous response stopped; use the cursor it gave. Not with turns, tail, step or part."}
   },
   "additionalProperties":false
 }`)
 
-const transcriptDescription = "Read a messages.jsonl transcript, your own by default, or another profile's (path profile:<category>/<name>), a sub-agent run's (path subagent:<run id>) or a file (path path:<file>). It lists one short line per step (turn.step, e.g. 3.2) of the chosen turns: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. Use turns or tail to choose turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue."
+const transcriptDescription = "Read a messages.jsonl transcript, your own by default, or another profile's (path profile:<category>/<name>), a sub-agent run's (path subagent:<run id>) or a file (path path:<file>). Two modes. Without step it lists one short line per step (turn.step, e.g. 3.2) of the chosen turns: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. With step (3.2 or 3.1-3.4) it returns that step whole, part choosing the call, the result or the reasoning, paged by cursor. Use turns or tail to choose turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue."
 
 var transcriptRejectedProperties = map[string]string{
 	"offset":   "transcript has no offset; select by turns, tail or cursor",
 	"limit":    "transcript has no limit; the response is capped by the configuration, use turns, tail or cursor",
-	"full":     "transcript has no full; the list shows previews",
+	"full":     "transcript has no full; give step (3.2 or 3.1-3.4) to read a step whole",
 	"list":     "transcript has no list; a not-found error names the available profiles and sub-agent runs, and path selects one: profile:<category>/<name>, subagent:<run id> or path:<file>",
 	"profile":  "transcript has no profile; use path \"profile:<category>/<name>\"",
 	"session":  "transcript has no session; use path \"profile:<session>/<category>/<name>\"",
@@ -182,6 +184,28 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 	if hasTurns && (hasTail || hasCursor) || hasTail && hasCursor {
 		return t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "Give only one of turns, tail and cursor")
 	}
+	stepText, hasStep := arguments["step"].(string)
+	part, hasPart := arguments["part"].(string)
+	if hasStep || hasPart {
+		if hasCursor {
+			return t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "A cursor already names its step; do not give step or part with it")
+		}
+		for _, key := range []string{"turns", "tail", "role", "tool", "search", "context"} {
+			if _, given := arguments[key]; given {
+				return t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "step reads one step whole; it does not take "+key)
+			}
+		}
+		if !hasStep {
+			return t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "part needs step")
+		}
+	}
+	var stepFrom, stepTo transcriptStepID
+	if hasStep {
+		var ok bool
+		if stepFrom, stepTo, ok = parseTranscriptSteps(stepText); !ok {
+			return t.fail(execution, tools.StatusInvalidInput, "invalid_step", "step must be turn.step, like 3.2, or a range like 3.1-3.4", tools.Information{Key: "step", Value: stepText})
+		}
+	}
 	source, _ := arguments["source"].(string)
 	role, _ := arguments["role"].(string)
 	search, _ := arguments["search"].(string)
@@ -208,6 +232,18 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 		}
 		source = cursor.Source
 		selector = cursor.Selector
+		if cursor.To != "" {
+			var okFrom, okTo bool
+			stepFrom, okFrom = parseTranscriptStepID(cursor.From)
+			stepTo, okTo = parseTranscriptStepID(cursor.To)
+			if !okFrom || !okTo {
+				return t.fail(execution, tools.StatusInvalidInput, "invalid_cursor", "cursor is not a cursor this tool gave")
+			}
+			hasStep, part = true, cursor.Part
+		}
+	}
+	if part == "" {
+		part = "both"
 	}
 	if source == "" {
 		source = "messages"
@@ -254,6 +290,18 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 	}
 	if len(turns) == 0 {
 		return t.render(execution, "transcript is empty", path, nil, "", false)
+	}
+
+	if hasStep {
+		var offset int64
+		if hasCursor {
+			if cursor.Identity != identity {
+				return t.fail(execution, tools.StatusError, "cursor_stale", "The transcript changed (compaction or reset) since this cursor was made; repeat the call without cursor")
+			}
+			offset = cursor.Bytes
+		}
+		return t.detail(transcriptRun{ctx: ctx, execution: execution, file: file, turns: turns, complete: complete, identity: identity, selector: selector, source: source, path: path, label: label},
+			stepFrom, stepTo, part, offset)
 	}
 
 	var startOff, endOff int64

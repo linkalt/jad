@@ -2,7 +2,7 @@
   "schema_version": 1,
   "tools": [
     {
-      "description": "Read a messages.jsonl transcript, your own by default, or another profile's (path profile:\u003ccategory\u003e/\u003cname\u003e), a sub-agent run's (path subagent:\u003crun id\u003e) or a file (path path:\u003cfile\u003e). It lists one short line per step (turn.step, e.g. 3.2) of the chosen turns: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. Use turns or tail to choose turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue.",
+      "description": "Read a messages.jsonl transcript, your own by default, or another profile's (path profile:\u003ccategory\u003e/\u003cname\u003e), a sub-agent run's (path subagent:\u003crun id\u003e) or a file (path path:\u003cfile\u003e). Two modes. Without step it lists one short line per step (turn.step, e.g. 3.2) of the chosen turns: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. With step (3.2 or 3.1-3.4) it returns that step whole, part choosing the call, the result or the reasoning, paged by cursor. Use turns or tail to choose turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue.",
       "id": "native.transcript",
       "inputSchema": {
         "additionalProperties": false,
@@ -13,8 +13,18 @@
             "type": "integer"
           },
           "cursor": {
-            "description": "Continue where the previous response stopped; use the cursor it gave. Not with turns or tail.",
+            "description": "Continue where the previous response stopped; use the cursor it gave. Not with turns, tail, step or part.",
             "minLength": 1,
+            "type": "string"
+          },
+          "part": {
+            "description": "With step: both (default) is a tool call and its result and the text of a message; call is the call and messages only, result the results only, reasoning the reasoning steps only (they are never listed).",
+            "enum": [
+              "call",
+              "result",
+              "both",
+              "reasoning"
+            ],
             "type": "string"
           },
           "path": {
@@ -44,8 +54,13 @@
             ],
             "type": "string"
           },
+          "step": {
+            "description": "Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4. Step numbers come from the list. Not with turns, tail, role, tool, search or context.",
+            "minLength": 1,
+            "type": "string"
+          },
           "tail": {
-            "description": "List mode: list the last N turns; the same as turns -N. Not with turns or cursor.",
+            "description": "List mode: list the last N turns; the same as turns -N. Not with turns, step or cursor.",
             "minimum": 1,
             "type": "integer"
           },
@@ -55,7 +70,7 @@
             "type": "string"
           },
           "turns": {
-            "description": "List mode: which turns to list: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail or cursor, the last turn is listed.",
+            "description": "List mode: which turns to list: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail, step or cursor, the last turn is listed.",
             "minLength": 1,
             "type": "string"
           }
