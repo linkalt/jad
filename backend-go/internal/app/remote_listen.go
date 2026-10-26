@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -72,16 +73,42 @@ func ListenUnix(path string, mode os.FileMode) (net.Listener, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("server.remote_api.listen_unix: %s: %w", path, err)
 	}
-	// The umask makes the socket private from the moment it exists; the chmod then sets the mode.
-	previous := umask(0o177)
-	listener, err := net.Listen("unix", path)
-	umask(previous)
+	// The socket is bound inside a fresh 0700 directory, set to its mode and only then renamed
+	// into place, so it is never reachable by others and no process-wide umask is touched.
+	staging, err := os.MkdirTemp(filepath.Dir(path), ".js")
 	if err != nil {
 		return nil, fmt.Errorf("server.remote_api.listen_unix: %w", err)
 	}
-	if err := os.Chmod(path, mode); err != nil {
+	defer os.Remove(staging)
+	staged := filepath.Join(staging, "s")
+	listener, err := netListen("unix", staged)
+	if err != nil {
+		return nil, fmt.Errorf("server.remote_api.listen_unix: %w", err)
+	}
+	if err := os.Chmod(staged, mode); err != nil {
 		listener.Close()
 		return nil, fmt.Errorf("server.remote_api.listen_unix: chmod %s: %w", path, err)
 	}
-	return listener, nil
+	if err := os.Rename(staged, path); err != nil {
+		listener.Close()
+		return nil, fmt.Errorf("server.remote_api.listen_unix: %w", err)
+	}
+	return &unixListener{Listener: listener, path: path}, nil
+}
+
+var netListen = net.Listen
+
+// unixListener removes the socket file at its final path when it closes; the inner listener
+// only knows the staging path.
+type unixListener struct {
+	net.Listener
+	path string
+}
+
+func (l *unixListener) Close() error {
+	err := l.Listener.Close()
+	if info, statErr := os.Lstat(l.path); statErr == nil && info.Mode()&os.ModeSocket != 0 {
+		_ = os.Remove(l.path)
+	}
+	return err
 }
