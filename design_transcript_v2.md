@@ -13,7 +13,7 @@ messages.jsonl holds four kinds of items: user, assistant, tool (a `function_cal
 - Reasoning takes a number but is never listed, counted or marked: numbers have gaps where it was. The header says gaps are reasoning. `step` + `part: reasoning` reads it on request (summary/content text; encrypted content is never shown).
 
 ## 3. Two modes, by `step`
-**List (no `step`)** – one line per step, newest turn selection as before: `turns`, `tail`, `cursor`, default the last turn; filters `role` (user|assistant|tool; tool = call steps and orphan results), `tool` (glob on the call's tool), `search` (+`context` steps each side). Search tests the FULL text (message text; for a call its name, arguments and result) but prints the normal preview line.
+**List (no `step`)** – one line per step, **newest step first** (descending file order, across turns: 17.100, 17.99, … 17.0, 16.40, …). Without `turns` the whole transcript is listed (page by page); `turns` (`3`, `3-7`, `-5`, `12-`) limits it, still newest first. `tail` is removed: newest-first makes it redundant (the first page is the newest steps; `turns -N` is the last N turns) and the key is rejected with that hint. Filters `role` (user|assistant|tool; tool = call steps and orphan results), `tool` (glob on the call's tool), `search` (+`context` steps each side). Search tests the FULL text (message text; for a call its name, arguments and result) but prints the normal preview line.
 
     <label>turns 3-3 of 1-3 (turn numbers survive compaction; steps are turn.step in file order, N.0 is the user message, gaps are reasoning)
     3.0 user: Create ONE new file: frontend/src/…+2210 bytes…rc/App.tsx
@@ -23,9 +23,9 @@ messages.jsonl holds four kinds of items: user, assistant, tool (a `function_cal
 - user/assistant: the text, whitespace runs collapsed to one space (one line per step), cut to `preview_bytes`.
 - call: tool name, `ok`/`error` (the envelope `status` of the result: `ok` is ok, anything else error; `unknown` when it cannot be read; `no-result` when no result is in the file), result size in bytes, then the arguments as compact JSON: keys in full, each top-level value cut to `value_bytes` (a string is cut inside its quotes; an object/array value is cut as its compact text). Arguments that are not a JSON object are one value.
 - result: not listed (only the marker on the call line). Reasoning: nowhere.
-- Paging: at most `max_list_entries` steps and `response_max_bytes` per page; the cursor names the next step (turn index + step) and the end of the range, plus the file identity. A page always holds at least one step.
+- Paging: at most `max_list_entries` steps and `response_max_bytes` per page; the cursor names the next (newest still unlisted) step, the byte range that was selected and the file identity; the next page continues toward older steps. The range end is fixed in the cursor, so steps appended between pages are never shown by it and never shift or duplicate the older pages. A page always holds at least one step.
 
-**Detail (`step` given)** – `step: "3.2"` or a range `"3.1-3.4"` (file order, may cross turns), `part: call|result|both|reasoning` (default both; reasoning is only shown when asked). `step` excludes `turns`, `tail`, `role`, `tool`, `search`, `context`.
+**Detail (`step` given)** – `step: "3.2"` or a range `"3.1-3.4"` (file order, may cross turns), `part: call|result|both|reasoning` (default both; reasoning is only shown when asked). A range stays in ascending order inside one detail response (it reads one passage). `step` excludes `turns`, `role`, `tool`, `search`, `context`.
 
     step 3.2 call grep ok, part both; bytes 0-1832 of 1832
     == 3.2 call grep [call_01Q] ok 1423B

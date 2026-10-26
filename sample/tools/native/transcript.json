@@ -2,7 +2,7 @@
   "schema_version": 1,
   "tools": [
     {
-      "description": "Read a messages.jsonl transcript, your own by default, or another profile's (path profile:\u003ccategory\u003e/\u003cname\u003e), a sub-agent run's (path subagent:\u003crun id\u003e) or a file (path path:\u003cfile\u003e). Two modes. Without step it lists one short line per step (turn.step, e.g. 3.2) of the chosen turns: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. With step (3.2 or 3.1-3.4) it returns that step whole, part choosing the call, the result or the reasoning, paged by cursor. Use turns or tail to choose turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue.",
+      "description": "Read a messages.jsonl transcript, your own by default, or another profile's (path profile:\u003ccategory\u003e/\u003cname\u003e), a sub-agent run's (path subagent:\u003crun id\u003e) or a file (path path:\u003cfile\u003e). Two modes. Without step it lists one short line per step (turn.step, e.g. 3.2), newest step first across the whole transcript or the chosen turns: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. With step (3.2 or 3.1-3.4) it returns that step whole, part choosing the call, the result or the reasoning, paged by cursor. Use turns to choose turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue.",
       "id": "native.transcript",
       "inputSchema": {
         "additionalProperties": false,
@@ -13,7 +13,7 @@
             "type": "integer"
           },
           "cursor": {
-            "description": "Continue where the previous response stopped; use the cursor it gave. Not with turns, tail, step or part.",
+            "description": "Continue where the previous response stopped; use the cursor it gave. Not with turns, step or part.",
             "minLength": 1,
             "type": "string"
           },
@@ -55,14 +55,9 @@
             "type": "string"
           },
           "step": {
-            "description": "Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4. Step numbers come from the list. Not with turns, tail, role, tool, search or context.",
+            "description": "Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4, which is returned oldest first. Step numbers come from the list. Not with turns, role, tool, search or context.",
             "minLength": 1,
             "type": "string"
-          },
-          "tail": {
-            "description": "List mode: list the last N turns; the same as turns -N. Not with turns, step or cursor.",
-            "minimum": 1,
-            "type": "integer"
           },
           "tool": {
             "description": "List mode: only calls of tools whose name matches; * and ? are wildcards (read, exec*).",
@@ -70,7 +65,7 @@
             "type": "string"
           },
           "turns": {
-            "description": "List mode: which turns to list: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail, step or cursor, the last turn is listed.",
+            "description": "List mode: which turns to list: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, step or cursor the whole transcript is listed, newest step first, a page at a time.",
             "minLength": 1,
             "type": "string"
           }

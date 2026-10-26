@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"encoding/json"
 	"fmt"
 	"jad/backend-go/internal/tools"
 	"os"
@@ -150,7 +149,6 @@ func TestTranscriptDetailRejectsBadAndConflictingArguments(t *testing.T) {
 		{map[string]any{"step": "9.1"}, "no_such_step"},
 		{map[string]any{"step": "1.99"}, "no_such_step"},
 		{map[string]any{"step": "1.2", "turns": "1"}, "conflicting_selectors"},
-		{map[string]any{"step": "1.2", "tail": json.Number("1")}, "conflicting_selectors"},
 		{map[string]any{"step": "1.2", "role": "tool"}, "conflicting_selectors"},
 		{map[string]any{"step": "1.2", "search": "x"}, "conflicting_selectors"},
 		{map[string]any{"part": "call"}, "conflicting_selectors"},
@@ -240,7 +238,7 @@ func TestTranscriptListAndDetailReadWhileARunAppendsWithoutRaces(t *testing.T) {
 					t.Errorf("detail: %s", out)
 					return
 				}
-				if out := runTranscript(t, settings, path, map[string]any{"turns": "1-2"}); !strings.Contains(out, "1.2 call read unknown 2000B") {
+				if out := runTranscript(t, settings, path, map[string]any{"turns": "1"}); !strings.Contains(out, "1.2 call read unknown 2000B") {
 					t.Errorf("list: %s", out)
 					return
 				}

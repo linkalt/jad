@@ -106,19 +106,24 @@ func threeTurns(t *testing.T) string {
 	return path
 }
 
-func TestTranscriptReadsTheLastTurnByDefaultWithCallsAndResults(t *testing.T) {
+func TestTranscriptListsTheWholeTranscriptNewestStepFirstByDefault(t *testing.T) {
 	out := runTranscript(t, transcriptTestSettings(), threeTurns(t), map[string]any{})
-	for _, want := range []string{"turns 3-3; the transcript holds turns 1-3", "3.0 user: third question", "3.1 assistant: third answer"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing %q in %s", want, out)
-		}
+	if !strings.Contains(out, "turns 1-3; the transcript holds turns 1-3; newest step first") {
+		t.Errorf("header: %s", out)
 	}
-	if strings.Contains(out, "second") {
-		t.Errorf("only the last turn was asked: %s", out)
+	want := []string{"3.1 assistant", "3.0 user", "2.1 assistant", "2.0 user", "1.3 assistant", "1.2 call read", "1.0 user"}
+	got := stepLines(out)
+	if len(got) != len(want) {
+		t.Fatalf("lines = %q", got)
+	}
+	for index := range want {
+		if !strings.HasPrefix(got[index], want[index]) {
+			t.Errorf("line %d = %q, want prefix %q", index, got[index], want[index])
+		}
 	}
 }
 
-func TestTranscriptTurnRangesAndTail(t *testing.T) {
+func TestTranscriptTurnRanges(t *testing.T) {
 	path := threeTurns(t)
 	for _, tc := range []struct {
 		arguments map[string]any
@@ -126,10 +131,9 @@ func TestTranscriptTurnRangesAndTail(t *testing.T) {
 		not       []string
 	}{
 		{map[string]any{"turns": "1"}, []string{"1.0 user: first question", "1.2 call read unknown 9B {\"path\":\"a.go\"}", "1.3 assistant: first answer"}, []string{"second", "private musings", "package a", "1.1"}},
-		{map[string]any{"turns": "2-3"}, []string{"second answer", "third answer"}, []string{"first"}},
-		{map[string]any{"turns": "-2"}, []string{"second question", "third question"}, []string{"first"}},
-		{map[string]any{"turns": "2-"}, []string{"second question", "third answer"}, []string{"first"}},
-		{map[string]any{"tail": json.Number("3")}, []string{"first question", "third answer"}, nil},
+		{map[string]any{"turns": "2-3"}, []string{"second answer", "third answer"}, []string{"first question", "first answer"}},
+		{map[string]any{"turns": "-2"}, []string{"second question", "third question"}, []string{"first question", "first answer"}},
+		{map[string]any{"turns": "2-"}, []string{"second question", "third answer"}, []string{"first question", "first answer"}},
 	} {
 		out := runTranscript(t, transcriptTestSettings(), path, tc.arguments)
 		for _, want := range tc.want {
@@ -154,7 +158,7 @@ func TestTranscriptRejectsBadSelectors(t *testing.T) {
 		{map[string]any{"turns": "x"}, "invalid_turns"},
 		{map[string]any{"turns": "5-2"}, "invalid_turns"},
 		{map[string]any{"turns": "9"}, "no_such_turns"},
-		{map[string]any{"turns": "1", "tail": json.Number("2")}, "conflicting_selectors"},
+		{map[string]any{"turns": "1", "cursor": "x"}, "conflicting_selectors"},
 		{map[string]any{"cursor": "!!"}, "invalid_cursor"},
 	} {
 		if out := runTranscript(t, transcriptTestSettings(), path, tc.arguments); !strings.Contains(out, tc.code) {
@@ -217,7 +221,7 @@ func TestTranscriptPagesWithACursorWithoutLosingOrRepeatingAnEntry(t *testing.T)
 	arguments := map[string]any{"turns": "1"}
 	for page := 0; page < 40; page++ {
 		out := runTranscript(t, settings, path, arguments)
-		for step := 1; step <= 30; step++ {
+		for step := 30; step >= 1; step-- {
 			if marker := fmt.Sprintf("entry-%02d ", step); strings.Contains(out, marker) {
 				seen = append(seen, marker)
 			}
@@ -232,7 +236,7 @@ func TestTranscriptPagesWithACursorWithoutLosingOrRepeatingAnEntry(t *testing.T)
 		t.Fatalf("paged %d entries, want 30: %v", len(seen), seen)
 	}
 	for index, marker := range seen {
-		if want := fmt.Sprintf("entry-%02d ", index+1); marker != want || !strings.Contains(unbounded, want) {
+		if want := fmt.Sprintf("entry-%02d ", 30-index); marker != want || !strings.Contains(unbounded, want) {
 			t.Fatalf("entry %d = %q, want %q", index, marker, want)
 		}
 	}
@@ -502,7 +506,7 @@ func TestTranscriptReadsTheBackupAndAKeepsItsCursorOnIt(t *testing.T) {
 		return out
 	}
 	first := run(map[string]any{"source": "backup", "turns": "1"})
-	if !strings.Contains(first, "old-01") || strings.Contains(first, "live answer") {
+	if !strings.Contains(first, "old-12") || strings.Contains(first, "live answer") {
 		t.Fatalf("backup: %s", first)
 	}
 	cursor := cursorOf(first)
