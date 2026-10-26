@@ -127,17 +127,17 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 			Environment:     cloneEnvironment(resolverEnvironment),
 		},
 	}
-	if err := config.CheckRemoteListenHost(); err != nil {
+	if err := config.checkRemoteListenHost(); err != nil {
 		return Config{}, err
 	}
 	return config, nil
 }
 
-// CheckRemoteListenHost refuses a wildcard listen address when the remote API is on: the bearer
+// checkRemoteListenHost refuses a wildcard listen address when the remote API is on: the bearer
 // token of every remote would then answer on every interface of the machine, in clear text. The
 // default host is loopback; reaching the API from another machine means naming one address, the
 // VPN address, in server.host or HOST.
-func (c Config) CheckRemoteListenHost() error {
+func (c Config) checkRemoteListenHost() error {
 	if !c.RemoteAPI.Enabled {
 		return nil
 	}

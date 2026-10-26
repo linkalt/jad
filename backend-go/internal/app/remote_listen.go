@@ -19,7 +19,7 @@ type RemoteHandlers struct {
 
 // HandlersFor builds them from the service. The remote routes answer on the plain listener:
 // the bearer token of a remote travels in clear text, so that listener must sit behind a VPN
-// or a loopback address (see Config.CheckRemoteListenHost).
+// or a loopback address (see LoadConfig).
 func (s *Service) HandlersFor(config Config) RemoteHandlers {
 	handlers := RemoteHandlers{Main: s.Handler}
 	if s.Remote == nil {
