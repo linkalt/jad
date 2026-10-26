@@ -1,11 +1,10 @@
 {
   "schema_version": 1,
   "kind": "remote",
-  "description": "Build machine; reviewers only.",
+  "description": "Build machine; reviewers only. Plain http: the bearer token travels in clear text, so reach it over a VPN or a unix socket.",
   "remote": {
-    "url": "https://build.example.net:8443",
+    "url": "http://build.example.net:8787",
     "token_env": "JAD_REMOTE_BUILD_BOX_TOKEN",
-    "ca_file": "/etc/jad/build-ca.pem",
     "default_session": "main",
     "profiles": ["review/*"]
   }

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "JAD remote entry",
-  "description": "<remotes folder>/<name>.json: another JAD server this one may call with profile_message, subagent, transcript and transcripts. The file name (without .json) is the remote's name, written remote:<name>/... in a tool call. It holds no model, tools or instructions, and never the token itself. TLS is always verified; there is no option to turn that off, to use plain http or to use a proxy.",
+  "description": "<remotes folder>/<name>.json: another JAD server this one may call with profile_message, subagent, transcript and transcripts. The file name (without .json) is the remote's name, written remote:<name>/... in a tool call. It holds no model, tools or instructions, and never the token itself. A remote is reached over plain http or a unix socket: the bearer token travels in clear text over http, so put that connection behind a VPN or use a unix socket. There is no TLS and no proxy.",
   "type": "object",
   "properties": {
     "schema_version": { "const": 1 },
@@ -10,10 +10,9 @@
     "remote": {
       "type": "object",
       "properties": {
-        "url": { "type": "string", "pattern": "^(https://[^/?#@]+/?|unix:///.+)$", "description": "https://host[:port] or unix:///absolute/path.sock. Plain http is refused. No path, query, fragment or credentials." },
+        "url": { "type": "string", "pattern": "^(http://[^/?#@]+/?|unix:///.+)$", "description": "http://host[:port] or unix:///absolute/path.sock. https is refused. No path, query, fragment or credentials. The token of an http url travels in clear text." },
         "token_env": { "type": "string", "pattern": "^JAD_REMOTE_[A-Za-z0-9_]+$", "description": "Name of the environment variable, which must start with JAD_REMOTE_ (a remote file cannot read provider keys or other variables), that holds the bearer token (at least 32 printable characters). Set exactly one of token_env and token_file." },
         "token_file": { "type": "string", "minLength": 1, "description": "File that holds the token, relative to this file or absolute. On unix it must not be readable by group or others." },
-        "ca_file": { "type": "string", "minLength": 1, "description": "Extra PEM root certificates for an https url, added to the system roots." },
         "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Per HTTP request. Default 30000." },
         "max_response_bytes": { "type": "integer", "minimum": 1, "maximum": 67108864, "description": "Largest response body accepted; a larger one is an error, never a cut. Default 1048576." },
         "retries": { "type": "integer", "minimum": 0, "maximum": 5, "description": "Retries of a request that failed to connect or got a 5xx (a send repeats with the same request id, so the remote never starts it twice). Default 2." },

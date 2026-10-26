@@ -3,7 +3,7 @@
 Status: design only, nothing implemented. Items marked **[unverified]** were not confirmed in code. Section 1 was read from code in `backend-go/internal/httpapi` (handler.go, profile_run.go, catalog_files_handlers.go) and `tools/native`.
 
 ## 0. Goal
-A local JAD is the CLIENT. `profile_message` and `subagent` can target a profile/agent on another JAD over https or a unix socket, async through the existing handle model. `transcripts` / `transcript` list and read remote transcripts read-only, behind their own off-by-default switch. Permission is decided by the REMOTE (token table). No native bridge, no approvals.
+A local JAD is the CLIENT. `profile_message` and `subagent` can target a profile/agent on another JAD over plain http or a unix socket, async through the existing handle model. `transcripts` / `transcript` list and read remote transcripts read-only, behind their own off-by-default switch. Permission is decided by the REMOTE (token table). No native bridge, no approvals.
 
 ## 1. Inventory: what the server has today
 Auth: ONE static bearer token (`HandlerConfig.APIToken`, >=32 bytes, SHA-256 compared in constant time, handler.go `authorized`). Everything under `/api/sessions`, `/api/catalog`, `/api/library` needs it; `/api/health` does not. A token is all-or-nothing: it can do anything the web UI can (write catalog files, reset, compact). CORS allow-list for browsers only. Listener: `net.Listen("tcp", host:port)` in cmd/jad/main.go, plain HTTP, no TLS, no unix socket.
@@ -33,9 +33,8 @@ Same folders and naming as profiles/agents (`<category>/<name>.json`). `kind: "r
 ```json
 { "schema_version": 1, "kind": "remote", "description": "build box",
   "remote": {
-    "url": "https://host:8443",            // or "unix:///run/jad/api.sock"
+    "url": "http://host:8787",              // or "unix:///run/jad/api.sock"
     "token_env": "JAD_REMOTE_BUILD_TOKEN",  // exactly one of token_env | token_file
-    "ca_file": "/etc/jad/ca.pem",           // optional extra roots, https only
     "timeout_ms": 30000,                    // per HTTP request, capped
     "max_response_bytes": 1048576,          // capped
     "default_session": "main",              // optional
@@ -43,7 +42,7 @@ Same folders and naming as profiles/agents (`<category>/<name>.json`). `kind: "r
   } }
 ```
 - No inline token. `token_file` must be a regular file, not group/world readable (unix), read at each connection, trimmed. A missing env/file is an error naming the key, never the value.
-- `url`: scheme `https` or `unix` only; `http://` is rejected (no insecure option); https needs a host, no userinfo, no query/fragment. Unix path must be absolute. TLS: system roots plus `ca_file`, TLS 1.2 minimum, hostname verified, no skip-verify key exists.
+- `url`: scheme `http` or `unix` only; `https://` is rejected with the reason; http needs a host, no userinfo, no query/fragment. Unix path must be absolute. There is no TLS: the bearer token of an `http` url travels in clear text, so that connection must be a VPN or a private network, and a unix socket is the local option. There is no `ca_file`, `insecure` or `skip_verify` key; all of them are refused by name.
 - Addressing in tools: `session/category/profile` goes in the target field next to the remote name: `remote:<name>/<session>/<category>/<profile>`. With `default_session`, `remote:<name>/<category>/<profile>` also works (3 vs 2 segments, same trick as `profile:`).
 - Shows in the catalog and in `transcripts` as kind `remote` (listing a remote shows its name, url host (no token, no path of unix socket beyond its basename), and whether reading is enabled).
 
@@ -66,15 +65,15 @@ Grammar: `remote:<name>/` is a PREFIX in front of an existing `kind:` selector, 
 - Remote text is untrusted data: the tools wrap/mark it as the model-visible result like any other tool output; it never becomes instructions to the client harness.
 
 ## 5. Transport (client)
-- One `http.Client` per remote entry, built from an explicit `http.Transport` (not DefaultTransport): https via TLS config above; unix via `DialContext` to the socket and a fixed dummy host `jad` (URL host not resolved; unix needs the Host header only).
-- `Proxy: nil` (no env proxies for remote calls; open question Q6), `DisableCompression` false, HTTP/1.1 + h2 allowed on https.
+- One `http.Client` per remote entry, built from an explicit `http.Transport` (not DefaultTransport): plain http over tcp; unix via `DialContext` to the socket and a fixed dummy host `jad` (URL host not resolved; unix needs the Host header only).
+- `Proxy: nil` (no env proxies for remote calls; open question Q6), `DisableCompression` false, HTTP/1.1.
 - `CheckRedirect`: return `http.ErrUseLastResponse`; any 3xx is an error "remote redirected; redirects are not followed" (stops token forwarding and SSRF pivots). Authorization header is set per request, never in the client default.
-- Timeouts: dial/TLS/response-header from `timeout_ms` (cap e.g. 5 min); whole-request context from the tool's own deadline; `wait_ms` polls are shorter than `timeout_ms`.
+- Timeouts: dial/response-header from `timeout_ms` (cap e.g. 5 min); whole-request context from the tool's own deadline; `wait_ms` polls are shorter than `timeout_ms`.
 - Response cap: `io.LimitReader(max_response_bytes+1)`; over-cap is an error, never truncated JSON. Content-Type must be JSON/text as expected.
 - No connection to loopback/link-local is blocked by default (a remote on localhost or a unix socket is legitimate); the guard against SSRF is that URLs come only from operator-written remote files, never from model input. The model supplies only the remote NAME. A name not in the catalog is `unknown_remote` listing nearest names (like the profile errors).
 
 ## 6. Server side: minimal additions (token table)
-Server config gets `server.remote_api`: `enabled` (default false), `listen_unix` and/or `tls {cert_file,key_file}` on the existing listener (plain TCP stays for the UI; remote API only when TLS or unix is configured, refused over plain TCP), and a token table:
+Server config gets `server.remote_api`: `enabled` (default false), the routes on the existing plain http listener, an optional `listen_unix` for a socket-only or extra listener, and a token table:
 
 ```json
 "tokens": [
@@ -109,17 +108,17 @@ Run ids are scoped to the token (a token sees only runs it started). **Idempoten
 ## 8. Security review
 - SSRF: no model-controlled URL; no redirects; unix path only from files; names validated like profile names.
 - Token leakage: only from env/file at request time, in the Authorization header; never logged, never in INFORMATION, error text, transcripts (tool args hold remote name only), debug capture (`httpdebug` must redact Authorization for remote clients **[unverified: check httpdebug redaction before implementing]**), `%v` of config structs (token fields are not stored, only the source name).
-- TLS: verification always on, no insecure key; unix socket permissions are the operator's job but the file is checked to be a socket.
+- Clear-text token: the bearer token of an `http` remote is visible to anyone on the path, so the deployment puts that connection on a VPN or a private network, or uses a unix socket; the server refuses a wildcard listen address (see section 11). The unix socket's permissions are the operator's job but the file is checked to be a socket, and a socket owned by another user or in a directory others can write to is refused before the token is sent.
 - Resource: response cap, timeouts, per-remote concurrency cap (e.g. 8 in flight), poll rate floor.
 - Path leakage: remote rendering mode strips file paths and the `transcript` INFORMATION key; `path:` forbidden after `remote:`; remote error messages are passed through the remote's own client-safe layer.
 - Prompt injection: remote output is data; it is returned like tool output.
 - Confused deputy: the remote token, not the local agent's rights, bounds what the remote does; a local profile with `remote` access can only reach what its token allows; locally the profile's tools list decides whether `profile_message`/`subagent` exist at all, and the entry's `profiles` allow-list narrows.
-- Replays: request_id idempotency plus TLS; tokens have expiry and revocation.
+- Replays: request_id idempotency; tokens have expiry and revocation.
 
 ## 9. Phase plan (one commit each, tests listed)
-1. **Remote entry file + loader**: `kind: remote`, strict schema, secret sources, URL validation, catalog/`transcripts` listing as `remote` (no network). Tests: strict keys, inline token rejected, http:// rejected, token never in `String()`/errors, schema agreement.
-2. **Client transport**: `remote` package: http.Client factory (https+CA, unix), no redirects, caps, timeouts, Authorization header, fake server tests (httptest TLS + unix), redirect refusal, oversize, goroutine leaks, token redaction in errors/debug.
-3. **Server remote API skeleton**: TLS/unix listener option, token table with hashes, scopes, revocation, hop header, `/profiles`, `/runs/{id}` status/stop; tests per token table row, 403 matrix, revoked token.
+1. **Remote entry file + loader**: `kind: remote`, strict schema, secret sources, URL validation, catalog/`transcripts` listing as `remote` (no network). Tests: strict keys, inline token rejected, https:// rejected, token never in `String()`/errors, schema agreement.
+2. **Client transport**: `remote` package: http.Client factory (http, unix), no redirects, caps, timeouts, Authorization header, fake server tests (httptest + unix), redirect refusal, oversize, goroutine leaks, token redaction in errors/debug.
+3. **Server remote API skeleton**: listener option, token table with hashes, scopes, revocation, hop header, `/profiles`, `/runs/{id}` status/stop; tests per token table row, 403 matrix, revoked token.
 4. **Remote profile_message**: `POST /messages` with request_id idempotency + RemoteMessenger + async driver; tests: busy, retry no duplicate, drop -> lost, stop, chain/hops guard, handle wait/status/stop.
 5. **Remote subagent**: `POST /subagents`, local run record + driver; tests as 4 plus depth limits unchanged.
 6. **Remote transcripts**: server `GET /transcripts|/transcript` using the real tools in no-paths mode; client `remote:` prefix grammar in `transcript`/`transcripts`, `allow_remote` switches; tests: grammar, path stripping, switch off, token without transcripts action, cursor pass-through, emitted strings round-trip.
@@ -131,11 +130,20 @@ Each phase: gofmt, vet, diff --check, full tests, `-race -count=3`.
 2. Remote sub-agent target: `remote:<name>/<session>/<category>/<agent>`.
 3. Remote runs are followed by polling with `wait_ms`; no held stream.
 4. After a client restart remote handles end like local ones; they are not rebuilt.
-5. Server routes (`/api/remote/v1`, token table, TLS or unix listener) are in scope for v1.
+5. Server routes (`/api/remote/v1`, token table, http listener) are in scope for v1.
 6. HTTPS_PROXY and proxy env are ignored for remotes.
 7. A remote addresses only sessions that already exist.
 8. Hop limit default 3; a remote may call back into the first JAD, bounded by hops.
 Section 2 above says "same folders as profiles/agents": read it as the `remotes/` folder. httpdebug check: it already redacts Authorization, api-key, cookie headers and secret-like query keys (httpdebug/transport.go, test at transport_test.go); the remote client does not use httpdebug at all and gets its own redaction test in phase 2.
 
-## 11. Implemented (2026-10-29)
+## 11. HTTPS removed: plain http and unix only (2026-10-30, user decision)
+
+The user runs local -> VPN -> local and asked for the simpler thing: **there is no TLS any more, anywhere in remote calling.** The client's `url` is `http://host[:port]` or `unix:///absolute/path.sock`; an `https://` url is refused by name ("https was removed ..."), as are the TLS keys of a remote file (`ca_file`, `insecure`, `insecure_skip_verify`, `skip_verify`, `tls`). On the server, `server.remote_api` no longer has `tls_cert_file`/`tls_key_file` (both refused by name with the reason) and the main listener is never wrapped in TLS; the `/api/remote/v1` routes answer on the plain listener, and on `listen_unix` when it is set.
+
+Everything else is unchanged: the bearer token table (hashes, globs, actions, expiry, revocation, reload), `token_env`/`token_file` and their permission checks, the hop guard, `request_id` idempotency, no redirects, no proxy from the environment, the response and body caps, token scrubbing from errors, and the unix socket ownership and directory checks.
+
+- **Clear-text token.** Over tcp the bearer token is readable by anyone on the path. The deployment must put that connection on a VPN or a private network; a unix socket is the local option. This is stated in `DECISIONS.md`, in this file, in the sample remote file (`sample/jad/remotes/build-box.json`) and in the schemas.
+- **Listen address.** A wildcard is refused: with `server.remote_api` enabled, `server.host`/`HOST` must name one address (`app.Config.CheckRemoteListenHost`). The default stays `127.0.0.1`; reaching the API from the VPN peer means writing that VPN address into `server.host`, so exposing the token-taking routes is always deliberate. There is no new listener: the remote routes share the main one.
+
+## 12. Implemented (2026-10-29)
 Phases 1-7 are in. Differences from the text above: sub-agent targets are `remote:<name>/<session>/<category>/<profile>/<agent>` (the profile gives the context the agent runs in, as `subagent` runs for a local profile; the earlier `<category>/<agent>` was too short to name it); `transcripts` accepts `remote:<name>` for the default session and `remote:<name>/session:<id>`; the switch is `allow_remote` plus `remotes` in each of the two tools; a cursor from a remote read is `remote:<name>/<cursor>`. See DECISIONS.md, "Remote JAD calling".
