@@ -148,3 +148,12 @@ func TestListAndLoad(t *testing.T) {
 		t.Fatalf("missing folder must list as empty: %v %v", entries, problems)
 	}
 }
+
+func TestParseEntryRefusesCharacterClassGlobs(t *testing.T) {
+	for _, glob := range []string{"review[^x]*", "[a-z]*/x"} {
+		body := `{"kind":"remote","remote":{"url":"unix:///run/jad/api.sock","token_file":"t","profiles":["` + glob + `"]}}`
+		if _, err := parse(t, body); err == nil || !strings.Contains(err.Error(), "[classes]") {
+			t.Errorf("%q: a class can match '/' and must be refused: %v", glob, err)
+		}
+	}
+}

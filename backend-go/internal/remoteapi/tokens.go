@@ -14,8 +14,10 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,6 +38,10 @@ var (
 	errBadToken  = errors.New("token not accepted")
 	maxTokenFile = int64(1 << 20)
 )
+
+// tokenFileCheckInterval is the shortest time between two looks at the table file, so a burst
+// of requests costs one read; a revocation applies within this time.
+const tokenFileCheckInterval = 250 * time.Millisecond
 
 // Token is one row of the table. Only the SHA-256 of the secret is stored.
 type Token struct {
@@ -109,8 +115,8 @@ func ParseTokens(data []byte) ([]Token, error) {
 			return nil, fmt.Errorf("%s (%s): max_hops must not be negative", where, row.ID)
 		}
 		for _, glob := range append(append([]string(nil), row.Profiles...), row.Agents...) {
-			if _, err := path.Match(glob, "a/b/c/d"); err != nil || strings.TrimSpace(glob) == "" {
-				return nil, fmt.Errorf("%s (%s): %q is not a valid glob over session/category/name", where, row.ID, glob)
+			if _, err := path.Match(glob, "a/b/c/d"); err != nil || strings.TrimSpace(glob) == "" || strings.Contains(glob, "[") {
+				return nil, fmt.Errorf("%s (%s): %q is not a valid glob over session/category/name (no [classes])", where, row.ID, glob)
 			}
 		}
 		for _, action := range row.Actions {
@@ -155,23 +161,27 @@ func matchAny(globs []string, target string) bool {
 	return false
 }
 
-// TokenTable authenticates a bearer secret. With a file it re-reads the file when it changes,
-// so a revoked flag, a removed row or a new expiry applies to the next request; if the file
-// becomes unreadable or invalid after it loaded, every request is refused until it is fixed.
+// TokenTable authenticates a bearer secret. With a file it re-reads the file when its content
+// or mode changes (looking at most every tokenFileCheckInterval), so a revoked flag, a removed
+// row or a new expiry applies to the next request after that; if the file becomes unreadable,
+// invalid or open to group or others after it loaded, every request is refused until it is fixed.
 type TokenTable struct {
-	file   string
-	logger *slog.Logger
-	now    func() time.Time
+	file     string
+	logger   *slog.Logger
+	now      func() time.Time
+	interval time.Duration
 
-	mu     sync.Mutex
-	tokens []Token
-	stamp  stamp
-	broken bool
+	lastCheck atomic.Int64
+	mu        sync.RWMutex
+	tokens    []Token
+	state     fileState
+	broken    bool
 }
 
-type stamp struct {
-	size    int64
-	modTime time.Time
+// fileState identifies the table file version that was loaded: its content hash and mode.
+type fileState struct {
+	sum  [sha256.Size]byte
+	perm os.FileMode
 }
 
 // NewTokenTable loads the file once and fails if it is not valid.
@@ -182,10 +192,13 @@ func NewTokenTable(file string, logger *slog.Logger, now func() time.Time) (*Tok
 	if now == nil {
 		now = time.Now
 	}
-	table := &TokenTable{file: file, logger: logger, now: now}
-	if err := table.reload(); err != nil {
+	table := &TokenTable{file: file, logger: logger, now: now, interval: tokenFileCheckInterval}
+	tokens, state, err := table.read()
+	if err != nil {
 		return nil, err
 	}
+	table.tokens, table.state = tokens, state
+	table.lastCheck.Store(time.Now().UnixNano())
 	return table, nil
 }
 
@@ -197,46 +210,59 @@ func StaticTokenTable(tokens []Token, now func() time.Time) *TokenTable {
 	return &TokenTable{tokens: tokens, now: now, logger: slog.New(slog.DiscardHandler)}
 }
 
-func (t *TokenTable) reload() error {
+// read loads and parses the file. The state is returned even when the content is invalid, so
+// an unchanged invalid file is not parsed and logged again.
+func (t *TokenTable) read() ([]Token, fileState, error) {
 	info, err := os.Stat(t.file)
 	if err != nil {
-		return fmt.Errorf("token table %s cannot be read", t.file)
+		return nil, fileState{}, fmt.Errorf("token table %s cannot be read", t.file)
 	}
 	if !info.Mode().IsRegular() || info.Size() > maxTokenFile {
-		return fmt.Errorf("token table %s must be a regular file under %d bytes", t.file, maxTokenFile)
+		return nil, fileState{}, fmt.Errorf("token table %s must be a regular file under %d bytes", t.file, maxTokenFile)
 	}
 	data, err := os.ReadFile(t.file)
 	if err != nil {
-		return fmt.Errorf("token table %s cannot be read", t.file)
+		return nil, fileState{}, fmt.Errorf("token table %s cannot be read", t.file)
+	}
+	state := fileState{sum: sha256.Sum256(data), perm: info.Mode().Perm()}
+	if runtime.GOOS != "windows" && state.perm&0o077 != 0 {
+		return nil, state, fmt.Errorf("token table %s must not be accessible by group or others (chmod 600)", t.file)
 	}
 	tokens, err := ParseTokens(data)
 	if err != nil {
-		return fmt.Errorf("%s: %w", t.file, err)
+		return nil, state, fmt.Errorf("%s: %w", t.file, err)
 	}
-	t.tokens, t.stamp, t.broken = tokens, stamp{info.Size(), info.ModTime()}, false
-	return nil
+	return tokens, state, nil
 }
 
+// refresh looks at the file when the check interval has passed.
 func (t *TokenTable) refresh() {
 	if t.file == "" {
 		return
 	}
-	info, err := os.Stat(t.file)
-	if err == nil && t.stamp == (stamp{info.Size(), info.ModTime()}) && !t.broken {
+	last := t.lastCheck.Load()
+	if time.Duration(time.Now().UnixNano()-last) < t.interval {
 		return
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.lastCheck.Load() != last {
+		return
+	}
+	t.lastCheck.Store(time.Now().UnixNano())
+	tokens, state, err := t.read()
 	if err != nil {
-		t.broken = true
-		t.logger.Error("remote api token table cannot be read; refusing every request", "file", t.file)
+		if !t.broken || state != t.state {
+			t.logger.Error("remote api token table is not usable; refusing every request", "error", err.Error())
+		}
+		t.tokens, t.state, t.broken = nil, state, true
 		return
 	}
-	if err := t.reload(); err != nil {
-		t.broken = true
-		t.stamp = stamp{info.Size(), info.ModTime()}
-		t.logger.Error("remote api token table is invalid; refusing every request", "error", err.Error())
+	if state == t.state && !t.broken {
 		return
 	}
-	t.logger.Info("remote api token table reloaded", "tokens", len(t.tokens))
+	t.tokens, t.state, t.broken = tokens, state, false
+	t.logger.Info("remote api token table reloaded", "tokens", len(tokens))
 }
 
 // Authenticate finds the token for an Authorization header value. The returned token is a
@@ -248,16 +274,17 @@ func (t *TokenTable) Authenticate(header string) (Token, error) {
 		return Token{}, errNoToken
 	}
 	candidate := sha256.Sum256([]byte(strings.TrimSpace(secret)))
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.refresh()
-	if t.broken {
+	t.mu.RLock()
+	tokens, broken := t.tokens, t.broken
+	t.mu.RUnlock()
+	if broken {
 		return Token{}, errBadToken
 	}
 	var found *Token
-	for index := range t.tokens {
-		if subtle.ConstantTimeCompare(candidate[:], t.tokens[index].hash[:]) == 1 {
-			found = &t.tokens[index]
+	for index := range tokens {
+		if subtle.ConstantTimeCompare(candidate[:], tokens[index].hash[:]) == 1 {
+			found = &tokens[index]
 		}
 	}
 	if found == nil {

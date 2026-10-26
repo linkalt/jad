@@ -599,6 +599,7 @@ func TestTokenFileReloadRevokesAtOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	table.interval = 0
 	if _, err := table.Authenticate("Bearer " + secretA); err != nil {
 		t.Fatal(err)
 	}
@@ -650,6 +651,124 @@ func TestTranscriptRouteNeedsTheActionAndABackendThatServesIt(t *testing.T) {
 	for _, query := range []string{"/transcript?bogus=1", "/transcripts?limit=-1", "/transcripts?path=", "/transcripts?path=a&path=b", "/transcript?search=%00"} {
 		if status, _ := f.do("GET", Prefix+query, secretA, nil); status != http.StatusBadRequest {
 			t.Errorf("%s: %d", query, status)
+		}
+	}
+}
+
+func TestTokenFileMustBePrivateAndChangesAreSeenByContent(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "tokens.json")
+	row := func(revoked string) string {
+		return fmt.Sprintf(`{"tokens":[{"id":"a","sha256":%q,"revoked":%s,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA), revoked)
+	}
+	if err := os.WriteFile(file, []byte(row("false")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(file, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewTokenTable(file, nil, nil); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Fatalf("a table open to others must not load: %v", err)
+	}
+	if err := os.Chmod(file, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	table, err := NewTokenTable(file, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table.interval = 0
+	if _, err := table.Authenticate("Bearer " + secretA); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(file)
+	if err := os.WriteFile(file, []byte(row("true ")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(file, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.Stat(file); after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) {
+		t.Fatalf("the test needs the same size and mtime: %d/%d", after.Size(), info.Size())
+	}
+	if _, err := table.Authenticate("Bearer " + secretA); err == nil {
+		t.Fatal("a same-size, same-mtime rewrite that revokes a token must be seen")
+	}
+	if err := os.WriteFile(file, []byte(row("false")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := table.Authenticate("Bearer " + secretA); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(file, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := table.Authenticate("Bearer " + secretA); err == nil {
+		t.Fatal("a table that became open to others must refuse every request")
+	}
+}
+
+func TestTokenFileIsLookedAtOncePerInterval(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "tokens.json")
+	body := fmt.Sprintf(`{"tokens":[{"id":"a","sha256":%q,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA))
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	table, err := NewTokenTable(file, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table.interval = time.Hour
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := table.Authenticate("Bearer " + secretA); err != nil {
+		t.Fatalf("inside the interval the table is not read again: %v", err)
+	}
+	table.interval = 0
+	if _, err := table.Authenticate("Bearer " + secretA); err == nil {
+		t.Fatal("a vanished table must refuse every request once it is looked at")
+	}
+}
+
+func TestTokenFileReloadAndAuthenticateRace(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "tokens.json")
+	row := func(revoked bool) []byte {
+		return []byte(fmt.Sprintf(`{"tokens":[{"id":"a","sha256":%q,"revoked":%v,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA), revoked))
+	}
+	if err := os.WriteFile(file, row(false), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	table, err := NewTokenTable(file, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table.interval = 0
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				_, _ = table.Authenticate("Bearer " + secretA)
+			}
+		}()
+	}
+	for i := range 50 {
+		tmp := file + ".new"
+		_ = os.WriteFile(tmp, row(i%2 == 0), 0o600)
+		_ = os.Rename(tmp, file)
+	}
+	wg.Wait()
+}
+
+func TestGlobsWithCharacterClassesAreRejected(t *testing.T) {
+	for _, glob := range []string{"main[^x]*", "main/[a-z]*/x", "ma[i]n/*/*"} {
+		for _, key := range []string{"profiles", "agents"} {
+			body := fmt.Sprintf(`{"tokens":[{"id":"a","sha256":%q,%q:[%q],"actions":["message"]}]}`, hashOf(secretA), key, glob)
+			if _, err := ParseTokens([]byte(body)); err == nil {
+				t.Errorf("%s %q must be refused: a class can match '/'", key, glob)
+			}
 		}
 	}
 }

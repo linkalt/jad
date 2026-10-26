@@ -21,7 +21,7 @@
         "poll_ms": { "type": "integer", "minimum": 100, "maximum": 60000, "description": "Longest one status poll of a remote run waits on the remote. Default 20000." },
         "lost_after_ms": { "type": "integer", "minimum": 1000, "maximum": 3600000, "description": "How long a remote run may be unreachable before its handle becomes lost. Default 60000." },
         "default_session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", "description": "Session on the remote used when a target is written remote:<name>/<category>/<name>." },
-        "profiles": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Globs of category/name that narrow what a model here may reach on this remote (never widens the remote token's own rights)." }
+        "profiles": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Globs of category/name (no [classes]; '*' does not cross '/') that narrow what a model here may reach on this remote (never widens the remote token's own rights)." }
       },
       "required": ["url"],
       "additionalProperties": false

@@ -149,8 +149,8 @@ func ParseEntry(name, path string, data []byte) (Entry, error) {
 		return Entry{}, fmt.Errorf("%s: remote.default_session is not a valid session id", path)
 	}
 	for _, glob := range r.Profiles {
-		if strings.TrimSpace(glob) == "" || strings.ContainsAny(glob, "\x00\\") {
-			return Entry{}, fmt.Errorf("%s: remote.profiles entries must be non-empty globs like category/name", path)
+		if strings.TrimSpace(glob) == "" || strings.ContainsAny(glob, "\x00\\[") {
+			return Entry{}, fmt.Errorf("%s: remote.profiles entries must be non-empty globs like category/name, without [classes]", path)
 		}
 	}
 	for _, field := range []struct {
