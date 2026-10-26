@@ -27,10 +27,9 @@ var DecideSystemoneInputSchema = json.RawMessage(`{
       "items":{"anyOf":[
         {"type":"string","minLength":1},
         {"type":"object","properties":{"type":{"type":"string","enum":["text"]},"text":{"type":"string","minLength":1}},"required":["type","text"],"additionalProperties":false},
-        {"type":"object","properties":{"type":{"type":"string","enum":["json"]},"value":{}},"required":["type","value"],"additionalProperties":false},
-        {"type":"object","properties":{"type":{"type":"string","enum":["image"]},"path":{"type":"string","minLength":1,"description":"A file in the workspace, or a stored-image://<name> reference."},"data":{"type":"string","minLength":1,"description":"The image as base64 or a data URL."}},"required":["type"],"additionalProperties":false}
+        {"type":"object","properties":{"type":{"type":"string","enum":["json"]},"value":{}},"required":["type","value"],"additionalProperties":false}
       ]},
-      "description":"What to evaluate, in order: a string or {type:text,text}, {type:json,value} for structured data, or {type:image,path} for a png, jpeg, webp or gif (give exactly one of path and data; prefer path). Every question is asked about all of it."
+      "description":"What to evaluate, in order: a string or {type:text,text}, {type:json,value} for structured data. Every question is asked about all of it."
     },
     "questions":{
       "type":"array",
@@ -64,26 +63,15 @@ type decideSystemoneQuestion struct {
 // decideSystemoneOption is a choice (Label is its value) or a score level.
 type decideSystemoneOption struct{ Label, Description string }
 
-// decideSystemoneInputPart is one part of the input: text, a JSON value when JSON is set, or an
-// image when ImagePath or ImageData is set. Image is the data URL sent, filled in by
-// loadDecideSystemoneImages.
+// decideSystemoneInputPart is one part of the input: text, or a JSON value when JSON is set.
 type decideSystemoneInputPart struct {
-	Text      string
-	JSON      json.RawMessage
-	ImagePath string
-	ImageData string
-	Image     string
+	Text string
+	JSON json.RawMessage
 }
 
-func (p decideSystemoneInputPart) isImage() bool { return p.ImagePath != "" || p.ImageData != "" }
-
-// size is the part's text bytes as sent: the text, or the compact JSON. An image is
-// limited by max_image_bytes and max_images instead.
+// size is the part's bytes as sent: the text, or the compact JSON.
 func (p decideSystemoneInputPart) size() int {
-	switch {
-	case p.isImage():
-		return 0
-	case p.JSON != nil:
+	if p.JSON != nil {
 		return len(p.JSON)
 	}
 	return len(p.Text)
@@ -94,8 +82,8 @@ func (p decideSystemoneInputPart) size() int {
 type decideSystemoneEnvironment func(name string) string
 
 // NewDecideSystemoneTool creates extension.decide_systemone from its normalized settings.
-func NewDecideSystemoneTool(settings sessionfs.ExtensionDecideSystemoneSettings, images DecideSystemoneImages) (tools.Tool, error) {
-	return newDecideSystemoneTool(settings, images, os.Getenv, newDecideSystemoneHTTPClient())
+func NewDecideSystemoneTool(settings sessionfs.ExtensionDecideSystemoneSettings) (tools.Tool, error) {
+	return newDecideSystemoneTool(settings, os.Getenv, newDecideSystemoneHTTPClient())
 }
 
 // newDecideSystemoneHTTPClient never follows a redirect: the request carries the API key, and
@@ -104,7 +92,7 @@ func newDecideSystemoneHTTPClient() *http.Client {
 	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func newDecideSystemoneTool(settings sessionfs.ExtensionDecideSystemoneSettings, images DecideSystemoneImages, environment decideSystemoneEnvironment, client *http.Client) (tools.Tool, error) {
+func newDecideSystemoneTool(settings sessionfs.ExtensionDecideSystemoneSettings, environment decideSystemoneEnvironment, client *http.Client) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(DecideSystemoneInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile decide_systemone schema: %w", err)
@@ -122,7 +110,7 @@ func newDecideSystemoneTool(settings sessionfs.ExtensionDecideSystemoneSettings,
 		ExampleOperation:   json.RawMessage(`{"input":["I was charged twice."],"questions":[{"name":"billing","instructions":"Is this a billing problem?"}]}`),
 		NormalizeArguments: normalizeDecideSystemoneArguments,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-			return executeDecideSystemone(ctx, arguments, settings, images, environment, client, execution), nil
+			return executeDecideSystemone(ctx, arguments, settings, environment, client, execution), nil
 		},
 	}, nil
 }
@@ -210,7 +198,7 @@ func normalizeDecideSystemoneInput(input any) any {
 	return fixed
 }
 
-func executeDecideSystemone(ctx context.Context, arguments map[string]any, settings sessionfs.ExtensionDecideSystemoneSettings, images DecideSystemoneImages, environment decideSystemoneEnvironment, client *http.Client, execution tools.ExecutionContext) string {
+func executeDecideSystemone(ctx context.Context, arguments map[string]any, settings sessionfs.ExtensionDecideSystemoneSettings, environment decideSystemoneEnvironment, client *http.Client, execution tools.ExecutionContext) string {
 	callID := execution.CallID
 	input, err := parseDecideSystemoneInput(arguments["input"])
 	if err != nil {
@@ -229,9 +217,6 @@ func executeDecideSystemone(ctx context.Context, arguments map[string]any, setti
 	}
 	if int64(len(questions)) > settings.MaxQuestions {
 		return decideSystemoneError(callID, tools.StatusInvalidInput, "too_many_questions", fmt.Sprintf("%d questions; the limit is %d", len(questions), settings.MaxQuestions))
-	}
-	if failure := loadDecideSystemoneImages(input, images, settings, execution); failure != "" {
-		return failure
 	}
 	key := strings.TrimSpace(environment(settings.APIKeyEnv))
 	if key == "" {
@@ -277,16 +262,6 @@ func parseDecideSystemoneInput(raw any) ([]decideSystemoneInputPart, error) {
 			part.Text = value
 		case map[string]any:
 			kind, _ := value["type"].(string)
-			if kind == "image" {
-				part.ImagePath, _ = value["path"].(string)
-				part.ImageData, _ = value["data"].(string)
-				part.ImagePath, part.ImageData = strings.TrimSpace(part.ImagePath), strings.TrimSpace(part.ImageData)
-				if (part.ImagePath == "") == (part.ImageData == "") {
-					return nil, fmt.Errorf("input part %d: an image needs exactly one of path and data", index+1)
-				}
-				parts = append(parts, part)
-				continue
-			}
 			if kind == "json" {
 				encoded, err := marshalDecideSystemoneJSON(value["value"])
 				if err != nil {

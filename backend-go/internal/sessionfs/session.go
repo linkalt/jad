@@ -455,7 +455,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	extensionDecideSystemone, err := normalizeExtensionDecideSystemoneSettings(setting, location.Root.GlobalJadRoot, settingPath)
+	extensionDecideSystemone, err := normalizeExtensionDecideSystemoneSettings(setting, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}

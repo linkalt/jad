@@ -2017,12 +2017,7 @@
           "properties": {
             "decide_systemone": {
               "type": "object",
-              "description": "Go backend only. Asks a hosted classifier typed questions (predicate probability, choice, score) about a text and returns the answers; no tools, no free text. Read-only, so a sub-agent can list it in its tools. Off unless this key is present. Needs a key in the environment variable named by api_key_env, read on each call; the model file's key is not used. An image given by path follows decide_systemone's own path rules (read_style): without paths it reaches the workspace only, not what read allows. Needs extension.decide_systemone in tool_definition_paths (sample/tools/extension/decide_systemone.json).",
-              "allOf": [
-                {
-                  "$ref": "#/$defs/read_style"
-                }
-              ],
+              "description": "Go backend only. Asks a hosted classifier typed questions (predicate probability, choice, score) about a text and returns the answers; no tools, no free text. Read-only, so a sub-agent can list it in its tools. Off unless this key is present. Needs a key in the environment variable named by api_key_env, read on each call; the model file's key is not used. Needs extension.decide_systemone in tool_definition_paths (sample/tools/extension/decide_systemone.json).",
               "properties": {
                 "backend": {"type": "string", "enum": ["openrouter", "openai"], "default": "openrouter", "description": "openrouter uses OpenRouter's alpha Decisions endpoint; openai uses POST /v1/decisions. The two have different request shapes; the tool translates."},
                 "base_url": {"type": "string", "minLength": 1, "description": "The tool appends /decisions. Default https://openrouter.ai/api/alpha for openrouter and https://api.openai.com/v1 for openai."},
@@ -2031,9 +2026,7 @@
                 "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000, "default": 30000, "description": "Whole-request time limit."},
                 "max_questions": {"type": "integer", "minimum": 1, "maximum": 128, "default": 16, "description": "Most questions one call may carry."},
                 "max_input_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 200000, "description": "Most bytes of input text one call may carry."},
-                "max_response_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Most response bytes read from the provider."},
-                "max_images": {"type": "integer", "minimum": 1, "maximum": 64, "default": 8, "description": "Most image parts one call may carry."},
-                "max_image_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 5242880, "description": "Largest image, as a file or as decoded base64, read for one call. It limits what is read, before image_resize runs."}
+                "max_response_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Most response bytes read from the provider."}
               },
               "unevaluatedProperties": false
             }

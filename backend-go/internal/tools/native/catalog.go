@@ -12,7 +12,6 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"jad/backend-go/internal/imageresize"
 	"jad/backend-go/internal/imagestore"
 	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/sessionfs"
@@ -468,8 +467,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		images := extension.DecideSystemoneImages{Store: imagestore.FromSettings(config.ImageStore), Resizer: imageresize.FromSettings(config.ImageResize), ReadFile: readImageFile}
-		tool, err := extension.NewDecideSystemoneTool(*config.ExtensionDecideSystemone, images)
+		tool, err := extension.NewDecideSystemoneTool(*config.ExtensionDecideSystemone)
 		if err != nil {
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}

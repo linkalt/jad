@@ -15,13 +15,10 @@ const (
 	maxExtensionDecideSystemoneMaxQuestions         int64 = 128
 	defaultExtensionDecideSystemoneMaxInputBytes    int64 = 200_000
 	defaultExtensionDecideSystemoneMaxResponseBytes int64 = 1_048_576
-	defaultExtensionDecideSystemoneMaxImages        int64 = 8
-	maxExtensionDecideSystemoneMaxImages            int64 = 64
-	defaultExtensionDecideSystemoneMaxImageBytes    int64 = 5 * 1024 * 1024
 )
 
 var (
-	extensionDecideSystemoneKeys     = []string{"backend", "base_url", "api_key_env", "model", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes", "max_images", "max_image_bytes", "paths"}
+	extensionDecideSystemoneKeys     = []string{"backend", "base_url", "api_key_env", "model", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes"}
 	extensionDecideSystemoneBackends = []string{"openrouter", "openai"}
 	extensionDecideSystemoneEnvName  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
@@ -50,16 +47,9 @@ type ExtensionDecideSystemoneSettings struct {
 	MaxInputBytes int64
 	// MaxResponseBytes is the most response bytes read from the provider.
 	MaxResponseBytes int64
-	// MaxImages is the most image parts one call may carry.
-	MaxImages int64
-	// MaxImageBytes is the largest image, as a file or as decoded base64, read for a call.
-	MaxImageBytes int64
-	// Policy is decide_systemone's own path rules for an image given by path. Without paths it is
-	// the empty policy, which reaches the workspace only.
-	Policy NativePathPolicy
 }
 
-func normalizeExtensionDecideSystemoneSettings(setting map[string]json.RawMessage, globalJadRoot, settingPath string) (*ExtensionDecideSystemoneSettings, error) {
+func normalizeExtensionDecideSystemoneSettings(setting map[string]json.RawMessage, settingPath string) (*ExtensionDecideSystemoneSettings, error) {
 	toolsRaw, exists := setting["tools"]
 	if !exists {
 		return nil, nil
@@ -95,12 +85,7 @@ func normalizeExtensionDecideSystemoneSettings(setting map[string]json.RawMessag
 		}
 	}
 
-	settings := &ExtensionDecideSystemoneSettings{Policy: NativePathPolicy{Paths: []NativePathRule{}}}
-	if rawPaths, exists := fields["paths"]; exists {
-		if settings.Policy, err = normalizeNativePathPolicy(rawPaths, globalJadRoot, settingPath+": "+section+".paths"); err != nil {
-			return nil, err
-		}
-	}
+	settings := &ExtensionDecideSystemoneSettings{}
 	if settings.Backend, err = extensionDecideSystemoneString(fields, "backend", defaultExtensionDecideSystemoneBackend, settingPath); err != nil {
 		return nil, err
 	}
@@ -134,12 +119,6 @@ func normalizeExtensionDecideSystemoneSettings(setting map[string]json.RawMessag
 		return nil, err
 	}
 	if settings.MaxResponseBytes, err = configuredInteger(fields, "max_response_bytes", defaultExtensionDecideSystemoneMaxResponseBytes, 1, maxNativeToolBytes, settingPath, section); err != nil {
-		return nil, err
-	}
-	if settings.MaxImages, err = configuredInteger(fields, "max_images", defaultExtensionDecideSystemoneMaxImages, 1, maxExtensionDecideSystemoneMaxImages, settingPath, section); err != nil {
-		return nil, err
-	}
-	if settings.MaxImageBytes, err = configuredInteger(fields, "max_image_bytes", defaultExtensionDecideSystemoneMaxImageBytes, 1, maxNativeToolBytes, settingPath, section); err != nil {
 		return nil, err
 	}
 	return settings, nil

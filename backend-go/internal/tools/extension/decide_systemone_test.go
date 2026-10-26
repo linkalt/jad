@@ -55,7 +55,7 @@ func newDecideSystemoneRig(t *testing.T, backend string, status int, reply strin
 		}
 		return ""
 	}
-	tool, err := newDecideSystemoneTool(rig.settings, DecideSystemoneImages{}, environment, rig.server.Client())
+	tool, err := newDecideSystemoneTool(rig.settings, environment, rig.server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +360,7 @@ func TestDecideSystemoneTimeoutStopsASlowProvider(t *testing.T) {
 	t.Cleanup(slow.Close)
 	t.Cleanup(func() { close(release) })
 	settings := sessionfs.ExtensionDecideSystemoneSettings{Backend: "openai", BaseURL: slow.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 100, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
-	tool, err := newDecideSystemoneTool(settings, DecideSystemoneImages{}, func(string) string { return "k" }, slow.Client())
+	tool, err := newDecideSystemoneTool(settings, func(string) string { return "k" }, slow.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestDecideSystemoneDoesNotFollowARedirectWithTheKey(t *testing.T) {
 	t.Cleanup(redirector.Close)
 	settings := sessionfs.ExtensionDecideSystemoneSettings{Backend: "openai", BaseURL: redirector.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
 	// The client the tool builds for itself, with only the key injected.
-	tool, err := newDecideSystemoneTool(settings, DecideSystemoneImages{}, func(string) string { return "k" }, newDecideSystemoneHTTPClient())
+	tool, err := newDecideSystemoneTool(settings, func(string) string { return "k" }, newDecideSystemoneHTTPClient())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestDecideSystemoneDoesNotFollowARedirectWithTheKey(t *testing.T) {
 
 func TestDecideSystemoneCancelledCall(t *testing.T) {
 	rig := newDecideSystemoneRig(t, "openai", 200, openAIReply, nil)
-	tool, err := newDecideSystemoneTool(rig.settings, DecideSystemoneImages{}, func(string) string { return "k" }, rig.server.Client())
+	tool, err := newDecideSystemoneTool(rig.settings, func(string) string { return "k" }, rig.server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +413,7 @@ func TestDecideSystemoneCancelledCall(t *testing.T) {
 }
 
 func TestDecideSystemoneIsReadOnlyAndShippedDefinitionMatches(t *testing.T) {
-	tool, err := NewDecideSystemoneTool(sessionfs.ExtensionDecideSystemoneSettings{}, DecideSystemoneImages{})
+	tool, err := NewDecideSystemoneTool(sessionfs.ExtensionDecideSystemoneSettings{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -704,6 +704,8 @@ func TestDecideSystemoneRefusesInputsItCannotSend(t *testing.T) {
 		"empty array":        {`[]`, "schema"},
 		"empty string":       {`[""]`, "schema"},
 		"image part":         {`[{"type":"image","image_url":"data:image/png;base64,AAAA"}]`, "schema"},
+		"image path part":    {`[{"type":"image","path":"a.png"}]`, "schema"},
+		"image data part":    {`[{"type":"image","data":"AAAA"}]`, "schema"},
 		"unknown field":      {`[{"type":"text","text":"x","extra":1}]`, "schema"},
 		"text without text":  {`[{"type":"text"}]`, "schema"},
 		"json without value": {`[{"type":"json"}]`, "schema"},
