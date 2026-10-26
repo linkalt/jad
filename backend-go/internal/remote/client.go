@@ -105,6 +105,9 @@ func NewClient(entry Entry, options Options) (*Client, error) {
 			if info.Mode()&os.ModeSocket == 0 {
 				return nil, fmt.Errorf("remote %s: %s is not a unix socket", entry.Name, socket)
 			}
+			if err := checkSocketOwner(socket, info); err != nil {
+				return nil, fmt.Errorf("remote %s: %w", entry.Name, err)
+			}
 			return dialer.DialContext(ctx, "unix", socket)
 		}
 		base = "http://" + unixHost
