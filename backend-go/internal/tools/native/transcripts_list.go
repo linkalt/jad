@@ -387,6 +387,9 @@ func (t *transcriptsTool) listRuns(ctx context.Context, request transcriptsReque
 		if err := ctx.Err(); err != nil {
 			return listing, t.contextFailure(execution, err)
 		}
+		if target.MayAgent != nil && !target.MayAgent(run.agent) {
+			continue
+		}
 		if request.status != "" && run.state != request.status || !matchesFilters(request.filters, strings.ToLower(run.id), strings.ToLower(run.agent+" "+run.callOf())) {
 			continue
 		}

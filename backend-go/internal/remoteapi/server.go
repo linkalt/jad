@@ -96,11 +96,12 @@ type Backend interface {
 
 // TranscriptRequest is a read of transcripts for a token: Tool is "transcript" or "transcripts",
 // Arguments the tool's input (already checked for keys and types), MayProfile whether the
-// token's globs reach "session/category/profile".
+// token's globs reach "session/category/profile" and MayAgent "session/category/profile/agent".
 type TranscriptRequest struct {
 	Tool       string
 	Arguments  map[string]any
 	MayProfile func(target string) bool
+	MayAgent   func(target string) bool
 }
 
 // TranscriptBackend is the optional part of a Backend that serves transcripts: it runs the
@@ -685,7 +686,7 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request, token 
 			arguments[key] = values[0]
 		}
 	}
-	output, err := backend.Transcript(r.Context(), TranscriptRequest{Tool: tool, Arguments: arguments, MayProfile: token.MayProfile})
+	output, err := backend.Transcript(r.Context(), TranscriptRequest{Tool: tool, Arguments: arguments, MayProfile: token.MayProfile, MayAgent: token.MayAgent})
 	if err != nil {
 		var refusal *Refusal
 		if errors.As(err, &refusal) {

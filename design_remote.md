@@ -92,10 +92,12 @@ Only a hash of the token is stored; reload on file change revokes immediately; e
 | `POST /subagents` {session, agent, task, request_id, hops, ...} -> {run_id} | subagent |
 | `GET /runs/{id}?wait_ms=` -> {state, final text, failure, started} | status |
 | `POST /runs/{id}/stop` | stop |
-| `GET /transcripts?...` / `GET /transcript?...` -> rendered text | transcripts |
+| `GET /transcripts?...` / `GET /transcript?...` -> rendered text (profiles by the token's `profiles` globs; sub-agent runs also by its `agents` globs, a run of an agent outside them answers like one that does not exist) | transcripts |
 | `GET /profiles?session=` | any |
 
 Run ids are scoped to the token (a token sees only runs it started). **Idempotency:** `request_id` (client UUID) is stored with the run; a repeat returns the same run id instead of a second message. Loop guard: client sends `Jad-Hops: n+1` and the chain; remote rejects when `hops > min(token.max_hops, server limit)` with 508-style error `remote_hop_limit`, and the existing `max_chain` check runs with the received chain.
+
+**The hop count is caller-supplied.** The server trusts `X-Jad-Hops`: a token holder can send `0` every time, so the limit only bounds peers that are honest (other JAD servers running this client). It is a loop guard, not a security boundary; what a token may do is decided by its actions and globs, and `max_runs_per_token` bounds how much one token can run at once.
 
 ## 7. Failure modes
 - Connection drops before the response of `POST /messages`: retry with the same `request_id` (safe), up to a small configured count; after that the handle ends `lost` with "remote may have started the run; run id unknown, check remote transcripts".

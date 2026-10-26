@@ -314,3 +314,51 @@ func TestRemoteTranscriptForgedCursorsCannotLeaveTheTokenScope(t *testing.T) {
 		}
 	}
 }
+
+func writeRemoteSubagentRun(t *testing.T, storage, id, agent, transcript string) {
+	t.Helper()
+	dir := filepath.Join(storage, id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "messages.jsonl"), []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, _ := json.Marshal(map[string]any{"version": 1, "id": id, "owner": "demo\x00dev/coder", "agent": agent, "task": "t", "state": "done", "started_at": "2026-01-01T00:00:00Z", "ended_at": "2026-01-01T00:01:00Z", "dir": dir})
+	if err := os.MkdirAll(filepath.Join(storage, ".runs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(storage, ".runs", id+".json"), manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemoteSubagentTranscriptsFollowTheTokensAgentGlobs(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
+	server := startRemoteServer(t, f, tokenTable(tokenRow("scoped", remoteTestSecret, `"profiles":["demo/dev/*"],"agents":["demo/dev/coder/explore"],"actions":["transcripts"]`)))
+	target, err := profileMessenger{resolver: server.service.resolver}.Profile(context.Background(), profileMessageOwner, "demo", "dev/coder")
+	if err != nil || target.SubagentDir == "" {
+		t.Fatalf("the fixture's profile needs a sub-agent storage: %v %q", err, target.SubagentDir)
+	}
+	writeRemoteSubagentRun(t, target.SubagentDir, "sub_00000001", "explore", remoteTranscriptJSONL)
+	writeRemoteSubagentRun(t, target.SubagentDir, "sub_00000002", "secretagent", remoteUser("hidden agent question")+remoteAnswer(1, "hidden agent answer"))
+	read := func(tool, path string) string {
+		_, body := server.call(t, "GET", remoteapi.Prefix+"/"+tool+"?path="+url.QueryEscape(path), remoteTestSecret, nil)
+		return fmt.Sprint(body["output"])
+	}
+	if out := read("transcript", "subagent:demo/dev/coder/sub_00000001"); !strings.Contains(out, "forty-two") {
+		t.Fatalf("an agent the token reaches must be readable:\n%s", out)
+	}
+	hidden := read("transcript", "subagent:demo/dev/coder/sub_00000002")
+	missing := read("transcript", "subagent:demo/dev/coder/sub_0000ffff")
+	if strings.Contains(hidden, "hidden agent") || strings.Contains(hidden, "secretagent") {
+		t.Fatalf("an agent outside the token's agent globs leaks:\n%s", hidden)
+	}
+	if strings.ReplaceAll(hidden, "sub_00000002", "sub_0000ffff") != missing {
+		t.Fatalf("out of scope must answer exactly like not found:\n%s\nvs\n%s", hidden, missing)
+	}
+	listing := read("transcripts", "profile:demo/dev/coder")
+	if !strings.Contains(listing, "sub_00000001") || strings.Contains(listing, "sub_00000002") || strings.Contains(listing, "secretagent") {
+		t.Fatalf("the run listing must show only the reachable agent:\n%s", listing)
+	}
+}

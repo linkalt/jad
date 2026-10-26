@@ -69,6 +69,9 @@ type TranscriptTarget struct {
 	// PersistRuns is whether the profile writes a manifest per run; without it a finished
 	// run is known only to the server that holds it.
 	PersistRuns bool
+	// MayAgent, when set, limits which sub-agent runs of this profile are visible by agent
+	// name; a run it refuses looks exactly like one that does not exist.
+	MayAgent func(agent string) bool
 }
 
 // TranscriptProfiles finds the transcript of a profile of a session (an empty session is the

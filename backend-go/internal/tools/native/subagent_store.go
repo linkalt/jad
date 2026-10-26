@@ -208,25 +208,28 @@ func knownSubagentRunState(state string) bool {
 
 // readSubagentManifest is where a run of another profile's storage directory has its transcript
 // folder and who started it, read from the run's manifest without touching the directory.
-func readSubagentManifest(storageDir, id string) (dir, owner string, found bool) {
+func readSubagentManifest(storageDir, id string) (dir, owner, agent string, found bool) {
 	if storageDir == "" {
-		return "", "", false
+		return "", "", "", false
 	}
 	store := newSubagentStore(storageDir, nil)
 	manifest, err := store.read(filepath.Join(store.dir, id+".json"), id)
 	if err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	return manifest.Dir, manifest.Owner, true
+	return manifest.Dir, manifest.Owner, manifest.Agent, true
 }
 
 // subagentRunIDs lists the runs that have a manifest in a storage directory.
-func subagentRunIDs(storageDir string) []string {
+func subagentRunIDs(storageDir string, mayAgent func(string) bool) []string {
 	if storageDir == "" {
 		return nil
 	}
 	var ids []string
 	for _, manifest := range newSubagentStore(storageDir, nil).load() {
+		if mayAgent != nil && !mayAgent(manifest.Agent) {
+			continue
+		}
 		ids = append(ids, manifest.ID)
 	}
 	return ids

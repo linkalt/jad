@@ -147,8 +147,12 @@ func (t *transcriptTool) resolve(ctx context.Context, selector, source string, e
 				ids = append(ids, run.id)
 			}
 		} else {
-			dir, owner, found = runOfTarget(target, id)
-			ids = subagentRunIDs(target.SubagentDir)
+			var agent string
+			dir, owner, agent, found = runOfTarget(target, id)
+			if found && target.MayAgent != nil && !target.MayAgent(agent) {
+				found = false
+			}
+			ids = subagentRunIDs(target.SubagentDir, target.MayAgent)
 		}
 		if !found {
 			return TranscriptFiles{}, "", t.notFound(execution, "no_such_run", "No sub-agent run "+rest, id, ids)
@@ -227,10 +231,12 @@ func (t *transcriptTool) profileRefusal(otherSession, otherProfile bool) []strin
 
 // runOfTarget finds a run in the sub-agent storage of another profile: the live manager when
 // the profile has one, else the run's manifest on disk.
-func runOfTarget(target TranscriptTarget, id string) (dir, owner string, found bool) {
+func runOfTarget(target TranscriptTarget, id string) (dir, owner, agent string, found bool) {
 	if target.Runs != nil {
-		if dir, owner, found = target.Runs.RunTranscript(id); found {
-			return dir, owner, true
+		if run := target.Runs.byID(id); run != nil {
+			run.mu.Lock()
+			defer run.mu.Unlock()
+			return run.dir, run.owner, run.agent, true
 		}
 	}
 	return readSubagentManifest(target.SubagentDir, id)

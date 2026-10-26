@@ -21,6 +21,8 @@ var errRemoteProfileHidden = errors.New("profile not found")
 type tokenProfiles struct {
 	inner profileMessenger
 	may   func(target string) bool
+	// mayAgent limits sub-agent runs to the agents the token's globs reach.
+	mayAgent func(target string) bool
 }
 
 func (p tokenProfiles) Profile(ctx context.Context, ownerKey, session, profile string) (native.TranscriptTarget, error) {
@@ -31,6 +33,8 @@ func (p tokenProfiles) Profile(ctx context.Context, ownerKey, session, profile s
 	if err != nil || !p.may(target.Session+"/"+target.Profile) {
 		return native.TranscriptTarget{}, errRemoteProfileHidden
 	}
+	canonical := target.Session + "/" + target.Profile + "/"
+	target.MayAgent = func(agent string) bool { return p.mayAgent(canonical + agent) }
 	return target, nil
 }
 
@@ -94,7 +98,7 @@ func (b remoteBackend) Transcript(ctx context.Context, request remoteapi.Transcr
 	if err != nil {
 		return "", err
 	}
-	profiles := tokenProfiles{inner: profileMessenger{resolver: b.resolver}, may: request.MayProfile}
+	profiles := tokenProfiles{inner: profileMessenger{resolver: b.resolver}, may: request.MayProfile, mayAgent: request.MayAgent}
 	var tool tools.Tool
 	if request.Tool == "transcript" {
 		tool, err = native.NewTranscriptTool(transcriptSettings, native.TranscriptFiles{}, profiles, nil)
