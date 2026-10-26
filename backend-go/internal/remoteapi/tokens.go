@@ -142,6 +142,11 @@ func (t *Token) MayProfile(target string) bool { return matchAny(t.Profiles, tar
 func (t *Token) MayAgent(target string) bool   { return matchAny(t.Agents, target) }
 
 func matchAny(globs []string, target string) bool {
+	for _, segment := range strings.Split(target, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
 	for _, glob := range globs {
 		if ok, err := path.Match(glob, target); err == nil && ok {
 			return true
