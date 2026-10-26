@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools/native"
 )
@@ -208,4 +209,10 @@ func canonicalPath(path string) string {
 		return filepath.Join(parent, filepath.Base(path))
 	}
 	return path
+}
+
+// RemoteDirectory implements native.RemoteDirectories: the view of a remotes folder whose
+// clients and follower goroutines the resolver owns and closes.
+func (m profileMessenger) RemoteDirectory(dir string) *remote.Directory {
+	return m.resolver.remotes.Directory(dir)
 }

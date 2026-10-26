@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,6 +34,23 @@ type remoteServer struct {
 	table    string
 	handlers RemoteHandlers
 	server   *httptest.Server
+	gate     *outageGate
+}
+
+// outageGate lets a test cut every connection to the server, as a network outage does.
+type outageGate struct {
+	next http.Handler
+	cut  atomic.Bool
+}
+
+func (g *outageGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if g.cut.Load() {
+		if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+			conn.Close()
+			return
+		}
+	}
+	g.next.ServeHTTP(w, r)
 }
 
 // startRemoteServer turns the sub-agent fixture's config into a remote-API server: the same
@@ -51,9 +69,10 @@ func startRemoteServer(t *testing.T, f subagentFixture, tokens string) *remoteSe
 	}
 	t.Cleanup(service.Close)
 	handlers := service.HandlersFor(config)
-	server := httptest.NewTLSServer(handlers.Main)
+	gate := &outageGate{next: handlers.Main}
+	server := httptest.NewTLSServer(gate)
 	t.Cleanup(server.Close)
-	return &remoteServer{f: f, service: service, url: server.URL, table: table, handlers: handlers, server: server}
+	return &remoteServer{f: f, service: service, url: server.URL, table: table, handlers: handlers, server: server, gate: gate}
 }
 
 func tokenTable(rows ...string) string { return `{"tokens":[` + strings.Join(rows, ",") + `]}` }

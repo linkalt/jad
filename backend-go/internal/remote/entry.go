@@ -39,8 +39,10 @@ const (
 
 var (
 	// NamePattern is a remote's name: the file name without .json, one path segment.
-	NamePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
-	envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	NamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+	// envNamePattern limits token_env to the JAD_REMOTE_ prefix: a remote file names where its
+	// token is read from and where it is sent, so it must not be able to name a provider key.
+	envNamePattern = regexp.MustCompile(`^JAD_REMOTE_[A-Za-z0-9_]+$`)
 	// SessionPattern is a session id as the remote's routes take it.
 	SessionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 	tokenPattern   = regexp.MustCompile(`^[\x21-\x7e]+$`)
@@ -132,7 +134,7 @@ func ParseEntry(name, path string, data []byte) (Entry, error) {
 	case r.TokenEnv == "" && r.TokenFile == "":
 		return Entry{}, fmt.Errorf("%s: remote needs token_env or token_file; the token itself is never written in the file", path)
 	case r.TokenEnv != "" && !envNamePattern.MatchString(r.TokenEnv):
-		return Entry{}, fmt.Errorf("%s: remote.token_env must be an environment variable name", path)
+		return Entry{}, fmt.Errorf("%s: remote.token_env must be an environment variable named JAD_REMOTE_<something>: a remote file may not read other variables such as provider keys", path)
 	}
 	if r.TokenFile != "" {
 		entry.TokenFile = resolveFrom(base, r.TokenFile)
@@ -281,8 +283,8 @@ func (e Entry) Token(environment func(string) string) (string, error) {
 	return token, nil
 }
 
-// Allows reports whether the client-side allow-list lets a model reach target
-// ("category/name" of a profile or agent).
+// Allows reports whether the client-side allow-list lets a model reach target:
+// "category/name" of a profile, or "category/name/agent" of a sub-agent.
 func (e Entry) Allows(target string) bool {
 	if len(e.Profiles) == 0 {
 		return true

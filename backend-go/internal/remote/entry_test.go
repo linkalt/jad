@@ -15,7 +15,7 @@ func parse(t *testing.T, body string) (Entry, error) {
 }
 
 func TestParseEntryHTTPS(t *testing.T) {
-	entry, err := parse(t, `{"kind":"remote","remote":{"url":"https://host.example:8443/","token_env":"BOX_TOKEN","ca_file":"ca.pem","default_session":"main","profiles":["review/*"]}}`)
+	entry, err := parse(t, `{"kind":"remote","remote":{"url":"https://host.example:8443/","token_env":"JAD_REMOTE_BOX","ca_file":"ca.pem","default_session":"main","profiles":["review/*"]}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,25 +42,26 @@ func TestParseEntryUnix(t *testing.T) {
 
 func TestParseEntryRefusals(t *testing.T) {
 	cases := map[string]struct{ body, want string }{
-		"plain http":      {`{"kind":"remote","remote":{"url":"http://h:1","token_env":"T"}}`, "plain http is not allowed"},
-		"ftp":             {`{"kind":"remote","remote":{"url":"ftp://h","token_env":"T"}}`, "must be https"},
-		"userinfo":        {`{"kind":"remote","remote":{"url":"https://u:p@h","token_env":"T"}}`, "credentials"},
-		"query":           {`{"kind":"remote","remote":{"url":"https://h/?a=b","token_env":"T"}}`, "credentials, a query"},
-		"path":            {`{"kind":"remote","remote":{"url":"https://h/api","token_env":"T"}}`, "no path"},
-		"relative unix":   {`{"kind":"remote","remote":{"url":"unix://rel.sock","token_env":"T"}}`, "unix:///absolute"},
+		"plain http":      {`{"kind":"remote","remote":{"url":"http://h:1","token_env":"JAD_REMOTE_T"}}`, "plain http is not allowed"},
+		"ftp":             {`{"kind":"remote","remote":{"url":"ftp://h","token_env":"JAD_REMOTE_T"}}`, "must be https"},
+		"userinfo":        {`{"kind":"remote","remote":{"url":"https://u:p@h","token_env":"JAD_REMOTE_T"}}`, "credentials"},
+		"query":           {`{"kind":"remote","remote":{"url":"https://h/?a=b","token_env":"JAD_REMOTE_T"}}`, "credentials, a query"},
+		"path":            {`{"kind":"remote","remote":{"url":"https://h/api","token_env":"JAD_REMOTE_T"}}`, "no path"},
+		"relative unix":   {`{"kind":"remote","remote":{"url":"unix://rel.sock","token_env":"JAD_REMOTE_T"}}`, "unix:///absolute"},
 		"no token":        {`{"kind":"remote","remote":{"url":"https://h"}}`, "needs token_env or token_file"},
-		"both tokens":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"T","token_file":"f"}}`, "alternatives"},
+		"both tokens":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","token_file":"f"}}`, "alternatives"},
 		"inline token":    {`{"kind":"remote","remote":{"url":"https://h","token":"abc"}}`, `"token" is not allowed`},
-		"top-level token": {`{"kind":"remote","token":"abc","remote":{"url":"https://h","token_env":"T"}}`, `"token" is not allowed`},
-		"insecure":        {`{"kind":"remote","remote":{"url":"https://h","token_env":"T","insecure_skip_verify":true}}`, "TLS is always verified"},
-		"proxy":           {`{"kind":"remote","remote":{"url":"https://h","token_env":"T","proxy":"http://p"}}`, "no proxy"},
-		"wrong kind":      {`{"kind":"profile","remote":{"url":"https://h","token_env":"T"}}`, `kind must be "remote"`},
-		"model":           {`{"kind":"remote","model":"x","remote":{"url":"https://h","token_env":"T"}}`, "unknown field"},
-		"bad env name":    {`{"kind":"remote","remote":{"url":"https://h","token_env":"A B"}}`, "environment variable name"},
-		"ca on unix":      {`{"kind":"remote","remote":{"url":"unix:///a.sock","token_env":"T","ca_file":"x"}}`, "ca_file only applies"},
-		"timeout cap":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"T","timeout_ms":999999999}}`, "timeout_ms must be between"},
-		"retries cap":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"T","retries":99}}`, "retries must be between"},
-		"bad session":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"T","default_session":"a/b"}}`, "default_session"},
+		"top-level token": {`{"kind":"remote","token":"abc","remote":{"url":"https://h","token_env":"JAD_REMOTE_T"}}`, `"token" is not allowed`},
+		"insecure":        {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","insecure_skip_verify":true}}`, "TLS is always verified"},
+		"proxy":           {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","proxy":"http://p"}}`, "no proxy"},
+		"wrong kind":      {`{"kind":"profile","remote":{"url":"https://h","token_env":"JAD_REMOTE_T"}}`, `kind must be "remote"`},
+		"model":           {`{"kind":"remote","model":"x","remote":{"url":"https://h","token_env":"JAD_REMOTE_T"}}`, "unknown field"},
+		"bad env name":    {`{"kind":"remote","remote":{"url":"https://h","token_env":"A B"}}`, "JAD_REMOTE_"},
+		"provider key":    {`{"kind":"remote","remote":{"url":"https://h","token_env":"OPENAI_API_KEY"}}`, "may not read other variables"},
+		"ca on unix":      {`{"kind":"remote","remote":{"url":"unix:///a.sock","token_env":"JAD_REMOTE_T","ca_file":"x"}}`, "ca_file only applies"},
+		"timeout cap":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","timeout_ms":999999999}}`, "timeout_ms must be between"},
+		"retries cap":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","retries":99}}`, "retries must be between"},
+		"bad session":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","default_session":"a/b"}}`, "default_session"},
 		"no remote":       {`{"kind":"remote"}`, "remote is required"},
 	}
 	for name, test := range cases {
@@ -83,11 +84,11 @@ func TestTokenSources(t *testing.T) {
 	if got, err := fromFile.Token(nil); err != nil || got != goodToken {
 		t.Fatalf("file token: %q %v", got, err)
 	}
-	fromEnv := Entry{Name: "box", TokenEnv: "BOX_TOKEN"}
+	fromEnv := Entry{Name: "box", TokenEnv: "JAD_REMOTE_BOX"}
 	if got, err := fromEnv.Token(func(string) string { return " " + goodToken + " " }); err != nil || got != goodToken {
 		t.Fatalf("env token: %q %v", got, err)
 	}
-	if _, err := fromEnv.Token(func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "BOX_TOKEN is not set") {
+	if _, err := fromEnv.Token(func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "JAD_REMOTE_BOX is not set") {
 		t.Fatalf("unset env: %v", err)
 	}
 }
@@ -103,7 +104,7 @@ func TestTokenErrorsNeverContainTheToken(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), "short") || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("a short token must be refused without echoing it: %v", err)
 	}
-	_, err = Entry{Name: "box", TokenEnv: "T"}.Token(func(string) string { return secret })
+	_, err = Entry{Name: "box", TokenEnv: "JAD_REMOTE_T"}.Token(func(string) string { return secret })
 	if err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("env token echoed: %v", err)
 	}
@@ -129,9 +130,9 @@ func TestListAndLoad(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("b.json", `{"kind":"remote","remote":{"url":"https://b:1","token_env":"T"}}`)
-	write("a.json", `{"kind":"remote","remote":{"url":"unix:///a.sock","token_env":"T"}}`)
-	write("broken.json", `{"kind":"remote","remote":{"url":"http://x","token_env":"T"}}`)
+	write("b.json", `{"kind":"remote","remote":{"url":"https://b:1","token_env":"JAD_REMOTE_T"}}`)
+	write("a.json", `{"kind":"remote","remote":{"url":"unix:///a.sock","token_env":"JAD_REMOTE_T"}}`)
+	write("broken.json", `{"kind":"remote","remote":{"url":"http://x","token_env":"JAD_REMOTE_T"}}`)
 	write("notes.txt", "x")
 	entries, problems := List(dir)
 	if len(entries) != 2 || entries[0].Name != "a" || entries[1].Name != "b" || len(problems) != 1 {

@@ -33,7 +33,7 @@ func writeCA(t *testing.T, server *httptest.Server) string {
 
 func tlsEntry(t *testing.T, server *httptest.Server, caFile string) Entry {
 	t.Helper()
-	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"`+server.URL+`","token_env":"T","timeout_ms":2000,"max_response_bytes":1024,"retries":2}}`))
+	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"`+server.URL+`","token_env":"JAD_REMOTE_T","timeout_ms":2000,"max_response_bytes":1024,"retries":2}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestClientUnixSocket(t *testing.T) {
 	})}
 	go server.Serve(listener)
 	defer server.Close()
-	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"unix://`+socket+`","token_env":"T"}}`))
+	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"unix://`+socket+`","token_env":"JAD_REMOTE_T"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestClientUnixPathMustBeASocket(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"unix://`+file+`","token_env":"T","retries":0}}`))
+	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"unix://`+file+`","token_env":"JAD_REMOTE_T","retries":0}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestClientNoGoroutineLeak(t *testing.T) {
 }
 
 func TestClientErrorsNeverContainTheToken(t *testing.T) {
-	entry := Entry{Name: "box", URL: "https://127.0.0.1:1", Host: "127.0.0.1:1", TokenEnv: "T", Timeout: 500, MaxResponseBytes: 1024, MaxInFlight: 1, Retries: 1}
+	entry := Entry{Name: "box", URL: "https://127.0.0.1:1", Host: "127.0.0.1:1", TokenEnv: "JAD_REMOTE_T", Timeout: 500, MaxResponseBytes: 1024, MaxInFlight: 1, Retries: 1}
 	client := newClient(t, entry)
 	err := client.Do(context.Background(), Request{Method: "GET", Path: "/x", Retry: true}, nil)
 	if err == nil || strings.Contains(err.Error(), secretToken) || strings.Contains(err.Error(), "Bearer") {

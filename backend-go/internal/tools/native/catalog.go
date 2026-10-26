@@ -14,6 +14,7 @@ import (
 
 	"jad/backend-go/internal/imageresize"
 	"jad/backend-go/internal/imagestore"
+	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 	"jad/backend-go/internal/tools/extension"
@@ -141,14 +142,18 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, err
 		}
 		targets := sessionfs.ProfileMessageTargets(config.Profiles, config.Profile, config.NativeProfileMessage.DenyProfiles)
-		if len(targets) == 0 {
+		remotes, remoteNames, err := remoteDirectory(config, messenger)
+		if err != nil {
+			return nil, err
+		}
+		if len(targets) == 0 && len(remoteNames) == 0 {
 			return nil, sessionfs.ProfileMessageNoTargetsError(config.SettingPath, config.Profile)
 		}
-		tool, err := NewProfileMessageTool(*config.NativeProfileMessage, targets, messenger, asyncHost)
+		tool, err := NewProfileMessageToolWithRemotes(*config.NativeProfileMessage, targets, messenger, asyncHost, remotes)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
-		tool.Definition.Description = definition.Description + profileMessageListText(targets)
+		tool.Definition.Description = definition.Description + profileMessageListText(targets, remoteNames)
 		wrapped := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
 		profileMessageTool = &wrapped
 	}
@@ -584,4 +589,35 @@ func sameJSON(left, right json.RawMessage) (bool, error) {
 		return false, err
 	}
 	return reflect.DeepEqual(leftValue, rightValue), nil
+}
+
+// RemoteDirectories is implemented by a messenger that can reach other JAD servers: it gives
+// the hub's view of a remotes folder.
+type RemoteDirectories interface {
+	RemoteDirectory(dir string) *remote.Directory
+}
+
+// remoteDirectory resolves tools.native.profile_message.remotes: every name must have a valid
+// file in the session's remotes folder, so a typo is a configuration error, not a failed call.
+func remoteDirectory(config sessionfs.SessionConfig, messenger ProfileMessenger) (*remote.Directory, []string, error) {
+	names := config.NativeProfileMessage.Remotes
+	if len(names) == 0 {
+		return nil, nil, nil
+	}
+	provider, ok := messenger.(RemoteDirectories)
+	if !ok || config.RemotesDir == "" {
+		return nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.profile_message.remotes needs a catalog-layout session with a remotes folder", config.SettingPath)}
+	}
+	directory := provider.RemoteDirectory(config.RemotesDir)
+	available, _ := remote.List(config.RemotesDir)
+	have := make([]string, 0, len(available))
+	for _, entry := range available {
+		have = append(have, entry.Name)
+	}
+	for _, name := range names {
+		if _, err := directory.Entry(name); err != nil {
+			return nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.profile_message.remotes names remote %q: %v (remotes in %s: %s)", config.SettingPath, name, remoteProblem(name, err), config.RemotesDir, strings.Join(have, ", "))}
+		}
+	}
+	return directory, names, nil
 }

@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "max_chain", "max_queued_per_profile"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "max_chain", "max_queued_per_profile", "remotes"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -53,6 +53,9 @@ type NativeProfileMessageSettings struct {
 	// MaxChain is the most profiles one message chain may hold, the first caller included.
 	// 2 lets a profile message another but that one message no further.
 	MaxChain int
+	// Remotes are the names of the remote entries (the remotes folder) the model may message
+	// with remote:<name>/...; none by default, so a session reaches no other server unless it says so.
+	Remotes []string
 	// Compact is "off" (default) or "on"; on compacts the target's transcript before the
 	// first message to it in each run of the caller.
 	Compact string
@@ -129,7 +132,11 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 			return nil, configError("%s: %s.compact must be \"off\" or \"on\"", settingPath, section)
 		}
 	}
-	return &NativeProfileMessageSettings{DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact}, nil
+	remotes, err := normalizeRemoteNames(fields["remotes"], settingPath, section)
+	if err != nil {
+		return nil, err
+	}
+	return &NativeProfileMessageSettings{Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.
@@ -172,4 +179,28 @@ func normalizeProfileMessageDenyProfiles(raw json.RawMessage, settingPath, secti
 		seen[id] = struct{}{}
 	}
 	return profiles, nil
+}
+
+var remoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+
+// normalizeRemoteNames reads a tool's remotes allow-list: distinct remote entry names.
+func normalizeRemoteNames(raw json.RawMessage, settingPath, section string) ([]string, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil, nil
+	}
+	var names []string
+	if json.Unmarshal(raw, &names) != nil || names == nil {
+		return nil, configError("%s: %s.remotes must be an array of remote names", settingPath, section)
+	}
+	seen := map[string]struct{}{}
+	for _, name := range names {
+		if !remoteNamePattern.MatchString(name) {
+			return nil, configError("%s: %s.remotes entry %q is not a remote name (letters, digits, '_' and '-')", settingPath, section, name)
+		}
+		if _, dup := seen[name]; dup {
+			return nil, configError("%s: %s.remotes lists %q more than once", settingPath, section, name)
+		}
+		seen[name] = struct{}{}
+	}
+	return names, nil
 }

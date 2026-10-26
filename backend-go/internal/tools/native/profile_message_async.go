@@ -245,6 +245,8 @@ func (p *profileMessageTool) asyncResult(profile string, outcome ProfileMessageO
 		result.State = asyncmgr.StateStopped
 	case errors.Is(outcome.Err, ErrProfileTimeout):
 		result.State = asyncmgr.StateTimedOut
+	case errors.Is(outcome.Err, ErrRemoteLost):
+		result.State = asyncmgr.StateLost
 	default:
 		result.State = asyncmgr.StateFailed
 	}

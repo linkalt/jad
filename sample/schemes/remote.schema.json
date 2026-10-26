@@ -11,7 +11,7 @@
       "type": "object",
       "properties": {
         "url": { "type": "string", "pattern": "^(https://[^/?#@]+/?|unix:///.+)$", "description": "https://host[:port] or unix:///absolute/path.sock. Plain http is refused. No path, query, fragment or credentials." },
-        "token_env": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Name of the environment variable that holds the bearer token (at least 32 printable characters). Set exactly one of token_env and token_file." },
+        "token_env": { "type": "string", "pattern": "^JAD_REMOTE_[A-Za-z0-9_]+$", "description": "Name of the environment variable, which must start with JAD_REMOTE_ (a remote file cannot read provider keys or other variables), that holds the bearer token (at least 32 printable characters). Set exactly one of token_env and token_file." },
         "token_file": { "type": "string", "minLength": 1, "description": "File that holds the token, relative to this file or absolute. On unix it must not be readable by group or others." },
         "ca_file": { "type": "string", "minLength": 1, "description": "Extra PEM root certificates for an https url, added to the system roots." },
         "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Per HTTP request. Default 30000." },

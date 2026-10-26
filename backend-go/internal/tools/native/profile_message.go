@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
@@ -218,16 +219,28 @@ type profileMessageTool struct {
 	targets   []string
 	messenger ProfileMessenger
 	host      *AsyncHost
+	remotes   remoteSettings
 }
 
 // NewProfileMessageTool builds the profile_message tool over a messenger. targets are the
 // profiles the model may message. A non-nil host lets a message that outlasts block_ms
 // continue as a handle of the async tool.
 func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targets []string, messenger ProfileMessenger, host *AsyncHost) (tools.Tool, error) {
+	return NewProfileMessageToolWithRemotes(settings, targets, messenger, host, nil)
+}
+
+// NewProfileMessageToolWithRemotes is NewProfileMessageTool plus the remotes folder the
+// session's tools.native.profile_message.remotes names are read from. A nil directory offers
+// no remote target.
+func NewProfileMessageToolWithRemotes(settings sessionfs.NativeProfileMessageSettings, targets []string, messenger ProfileMessenger, host *AsyncHost, remotes *remote.Directory) (tools.Tool, error) {
 	if messenger == nil {
 		return tools.Tool{}, errors.New("tools.native.profile_message needs a messenger")
 	}
-	if len(targets) == 0 {
+	remoteNames := settings.Remotes
+	if remotes == nil {
+		remoteNames = nil
+	}
+	if len(targets) == 0 && len(remoteNames) == 0 {
 		return tools.Tool{}, sessionfs.ErrProfileMessageNoTargets
 	}
 	if settings.TimeoutMs < 1 {
@@ -243,13 +256,13 @@ func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targ
 	if host != nil {
 		host.attachProfileMessage()
 	}
-	runtime := &profileMessageTool{settings: settings, targets: targets, messenger: messenger, host: host}
+	runtime := &profileMessageTool{settings: settings, targets: targets, messenger: messenger, host: host, remotes: remoteSettings{names: remoteNames, directory: remotes}}
 	return tools.Tool{
 		Definition: tools.Definition{
 			ID:          profileMessageToolID,
 			Source:      "native",
 			Name:        "profile_message",
-			Description: profileMessageDescription + profileMessageListText(targets),
+			Description: profileMessageDescription + profileMessageListText(targets, remoteNames),
 			InputSchema: append(json.RawMessage(nil), profileMessageInputSchema...),
 		},
 		Validator:          validator,
@@ -262,8 +275,15 @@ func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targ
 
 const profileMessageDescription = "Send a message to another profile and wait up to block_ms for its final answer. If the profile answers in time you get the answer; otherwise (it is still working, or busy and your message waits its turn) you get an id and the message goes on: use the async tool to wait for, list, inspect or stop it."
 
-func profileMessageListText(targets []string) string {
-	return " Profiles: " + strings.Join(targets, ", ") + "."
+func profileMessageListText(targets, remotes []string) string {
+	text := ""
+	if len(targets) > 0 {
+		text = " Profiles: " + strings.Join(targets, ", ") + "."
+	}
+	if len(remotes) > 0 {
+		text += " Remote profiles on other JAD servers are written remote:<name>/<session>/<category>/<profile> (remotes: " + strings.Join(remotes, ", ") + "); the remote decides what you may reach."
+	}
+	return text
 }
 
 // normalizeProfileMessageArguments treats a blank profile or message as absent, so the
@@ -295,6 +315,9 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	callID := execution.CallID
 	profile, _ := arguments["profile"].(string)
 	message, _ := arguments["message"].(string)
+	if _, _, isRemote := remote.Split(profile); isRemote {
+		return p.executeRemote(ctx, arguments, execution, profile, message)
+	}
 	if !slices.Contains(p.targets, profile) {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "unknown_profile",
 			fmt.Sprintf("Profile %s is not available to message", profile),
@@ -399,6 +422,12 @@ func (p *profileMessageTool) failure(profile string, err error) (code, message s
 		return "profile_cycle", fmt.Sprintf("Profile %s cannot be messaged from here: it would form a cycle", profile)
 	case errors.Is(err, ErrProfileTimeout), errors.Is(err, context.DeadlineExceeded):
 		return "profile_timeout", fmt.Sprintf("Profile %s did not answer within %d ms", profile, p.settings.TimeoutMs)
+	case errors.Is(err, ErrRemoteLost):
+		return "remote_lost", fmt.Sprintf("Profile %s was lost: the remote could not be reached. The message may still be running there; check the remote's transcripts before sending it again", profile)
+	}
+	var remoteFailed *RemoteFailedError
+	if errors.As(err, &remoteFailed) {
+		return remoteFailed.Code, remoteFailed.Message
 	}
 	message = fmt.Sprintf("Profile %s failed", profile)
 	var failed *ProfileFailedError

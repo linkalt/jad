@@ -83,6 +83,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 		return SessionConfig{}, err
 	}
 	config.Warnings = built.warnings
+	config.RemotesDir = layout.Remotes
 	// The normalizers know a profile only by its storage key; callers get the ID.
 	config.Profile = entry.ID()
 	config.DefaultProfile = defaultProfile

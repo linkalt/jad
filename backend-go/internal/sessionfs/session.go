@@ -166,6 +166,9 @@ type SessionConfig struct {
 	NativeToolSmith      *NativeToolSmithSettings
 	NativeTranscript     *NativeTranscriptSettings
 	NativeTranscripts    *NativeTranscriptsSettings
+	// RemotesDir is the remotes folder of the catalog layout (<name>.json entries of other
+	// JAD servers); empty outside the layout.
+	RemotesDir string
 	// AgentToolsets holds, by key, the merged settings of the toolsets a sub-agent names
 	// in its toolset key. The key is the ids joined with "+" (one id: the id itself). Only the tool settings and MCP servers of an
 	// entry are used; it has no subagent tool.

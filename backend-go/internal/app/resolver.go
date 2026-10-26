@@ -23,6 +23,7 @@ import (
 	"jad/backend-go/internal/httpdebug"
 	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/openaiapi"
+	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessionlock"
@@ -85,6 +86,9 @@ type Resolver struct {
 	storeSessions map[string]map[string]struct{}
 	mutationLock  *native.PathLocks
 	closed        bool
+
+	// remotes owns the clients and follower goroutines of remote profile_message calls.
+	remotes *remote.Hub
 
 	// profileRuns registers profile_message runs in the HTTP run registry; nil means no tracking.
 	profileRuns atomic.Pointer[httpapi.ProfileRunStarter]
@@ -237,6 +241,7 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		profileTurnCounts: make(map[string]profileTurnsEntry),
 		processManagers:   make(map[string]*native.ManagedProcessManager),
 		processSessions:   make(map[string]map[string]struct{}),
+		remotes:           remote.NewHub(func(name string) string { return copyEnvironment[name] }),
 		subagentManagers:  make(map[string]*native.SubagentManager),
 		asyncHosts:        make(map[string]*native.AsyncHost),
 		mcpManagers:       make(map[string]*mcpclient.Manager),
@@ -963,6 +968,9 @@ func (r *Resolver) Close() {
 	for _, done := range pending {
 		<-done
 	}
+	// Remote followers first: they report their end to the async managers closed below, and
+	// closing the hub sends each remote run a stop.
+	r.remotes.Close()
 	// Children first: they may be using MCP tools the next loop closes.
 	for _, manager := range subagentManagers {
 		_ = manager.Close()
