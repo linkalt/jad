@@ -62,7 +62,7 @@ func startRemoteServer(t *testing.T, f subagentFixture, tokens string) *remoteSe
 		t.Fatal(err)
 	}
 	config := f.config
-	config.RemoteAPI = sessionfs.RemoteAPISettings{Enabled: true, TokensFile: table, TLSCertFile: "x", TLSKeyFile: "y", MaxHops: 3, MaxRuns: 16, RunTimeoutMs: 60_000, RunRetentionMs: 60_000, WaitMaxMs: 5_000, BodyMaxBytes: 1 << 20, ResultMaxBytes: 64 << 10}
+	config.RemoteAPI = sessionfs.RemoteAPISettings{Enabled: true, TokensFile: table, MaxHops: 3, MaxRuns: 16, RunTimeoutMs: 60_000, RunRetentionMs: 60_000, WaitMaxMs: 5_000, BodyMaxBytes: 1 << 20, ResultMaxBytes: 64 << 10}
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func startRemoteServer(t *testing.T, f subagentFixture, tokens string) *remoteSe
 	t.Cleanup(service.Close)
 	handlers := service.HandlersFor(config)
 	gate := &outageGate{next: handlers.Main}
-	server := httptest.NewTLSServer(gate)
+	server := httptest.NewServer(gate)
 	t.Cleanup(server.Close)
 	return &remoteServer{f: f, service: service, url: server.URL, table: table, handlers: handlers, server: server, gate: gate}
 }
@@ -307,19 +307,26 @@ func TestUnixSocketListenerIsPrivateAndReplacesAStaleSocketOnly(t *testing.T) {
 	}
 }
 
-func TestPlainListenerNeverServesTheRemoteAPI(t *testing.T) {
+// The remote routes answer on the plain listener: that is how a second JAD reaches this one.
+func TestPlainListenerServesTheRemoteAPI(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
 	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
 	plain := httptest.NewServer(server.handlers.Main)
 	t.Cleanup(plain.Close)
-	request, _ := http.NewRequest("GET", plain.URL+remoteapi.Prefix+"/profiles?session=demo", nil)
-	request.Header.Set("Authorization", "Bearer "+remoteTestSecret)
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
+	call := func(token string) int {
+		request, _ := http.NewRequest("GET", plain.URL+remoteapi.Prefix+"/profiles?session=demo", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		return response.StatusCode
 	}
-	response.Body.Close()
-	if response.StatusCode != 404 {
-		t.Fatalf("remote API over plain http: %d", response.StatusCode)
+	if status := call(remoteTestSecret); status != 200 {
+		t.Fatalf("a remote token over the plain listener: %d", status)
+	}
+	if status := call(integrationAPIToken); status != 401 {
+		t.Fatalf("the UI token must not open the remote routes: %d", status)
 	}
 }

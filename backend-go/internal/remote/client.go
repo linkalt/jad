@@ -3,8 +3,6 @@ package remote
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,9 +72,9 @@ type Client struct {
 	slots     chan struct{}
 }
 
-// NewClient builds the client of one entry: TLS verified against the system roots plus
-// ca_file, no proxy, no redirects, a unix dialer for unix:// urls.
-func NewClient(entry Entry, options Options) (*Client, error) {
+// NewClient builds the client of one entry: plain http over tcp or over a unix dialer,
+// no proxy, no redirects.
+func NewClient(entry Entry, options Options) *Client {
 	if options.Environment == nil {
 		options.Environment = os.Getenv
 	}
@@ -84,14 +82,12 @@ func NewClient(entry Entry, options Options) (*Client, error) {
 		options.RetryBackoff = DefaultRetryBackoff
 	}
 	transport := &http.Transport{
-		// An explicit nil: HTTPS_PROXY and friends never apply to a remote.
+		// An explicit nil: HTTP_PROXY, HTTPS_PROXY and friends never apply to a remote.
 		Proxy:                 nil,
 		MaxIdleConns:          entry.MaxInFlight,
 		MaxIdleConnsPerHost:   entry.MaxInFlight,
 		IdleConnTimeout:       time.Duration(entry.Timeout) * time.Millisecond,
-		TLSHandshakeTimeout:   time.Duration(entry.Timeout) * time.Millisecond,
 		ResponseHeaderTimeout: 0,
-		ForceAttemptHTTP2:     entry.Unix == "",
 	}
 	base := entry.URL
 	if entry.Unix != "" {
@@ -111,25 +107,8 @@ func NewClient(entry Entry, options Options) (*Client, error) {
 			return dialer.DialContext(ctx, "unix", socket)
 		}
 		base = "http://" + unixHost
-	} else {
-		config := &tls.Config{MinVersion: tls.VersionTLS12}
-		if entry.CAFile != "" {
-			pool, err := x509.SystemCertPool()
-			if err != nil || pool == nil {
-				pool = x509.NewCertPool()
-			}
-			pem, err := os.ReadFile(entry.CAFile)
-			if err != nil {
-				return nil, fmt.Errorf("remote %s: ca_file %s cannot be read", entry.Name, entry.CAFile)
-			}
-			if !pool.AppendCertsFromPEM(pem) {
-				return nil, fmt.Errorf("remote %s: ca_file %s holds no PEM certificate", entry.Name, entry.CAFile)
-			}
-			config.RootCAs = pool
-		}
-		transport.TLSClientConfig = config
 	}
-	c := &Client{
+	return &Client{
 		entry:     entry,
 		transport: transport,
 		base:      base,
@@ -142,7 +121,6 @@ func NewClient(entry Entry, options Options) (*Client, error) {
 			},
 		},
 	}
-	return c, nil
 }
 
 // Entry is the remote the client reaches.
@@ -311,16 +289,11 @@ func safeText(text string, limit int) string {
 
 // networkText names a transport failure without the url or header values.
 func networkText(err error) string {
-	var certificate x509.UnknownAuthorityError
-	var hostname x509.HostnameError
-	var invalid x509.CertificateInvalidError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return "the request timed out"
 	case errors.Is(err, context.Canceled):
 		return "the request was cancelled"
-	case errors.As(err, &certificate), errors.As(err, &hostname), errors.As(err, &invalid):
-		return "TLS certificate verification failed: " + safeText(err.Error(), 200)
 	}
 	var operation *net.OpError
 	if errors.As(err, &operation) {

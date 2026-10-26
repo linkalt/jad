@@ -78,7 +78,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 	}
 	resolverEnvironment := cloneEnvironment(environment)
 	delete(resolverEnvironment, apiTokenEnvironmentName)
-	return Config{
+	config := Config{
 		Host:              host,
 		Port:              port,
 		ReadHeaderTimeout: loaded.Server.ReadHeaderTimeout,
@@ -126,7 +126,26 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 			SessionsDir:     options.SessionsDir,
 			Environment:     cloneEnvironment(resolverEnvironment),
 		},
-	}, nil
+	}
+	if err := config.CheckRemoteListenHost(); err != nil {
+		return Config{}, err
+	}
+	return config, nil
+}
+
+// CheckRemoteListenHost refuses a wildcard listen address when the remote API is on: the bearer
+// token of every remote would then answer on every interface of the machine, in clear text. The
+// default host is loopback; reaching the API from another machine means naming one address, the
+// VPN address, in server.host or HOST.
+func (c Config) CheckRemoteListenHost() error {
+	if !c.RemoteAPI.Enabled {
+		return nil
+	}
+	switch strings.TrimSpace(c.Host) {
+	case "", "0.0.0.0", "::", "[::]":
+		return fmt.Errorf("server.host must name the one address the remote API is reached at, the default 127.0.0.1 or the VPN address, when server.remote_api is enabled: a wildcard would answer on every interface, and the bearer token travels in clear text")
+	}
+	return nil
 }
 
 func currentEnvironment() map[string]string {

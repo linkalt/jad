@@ -64,10 +64,7 @@ func (h *Hub) client(key string, entry Entry) (*Client, error) {
 	if existing := h.clients[key]; existing != nil && reflect.DeepEqual(existing.entry, entry) {
 		return existing.client, nil
 	}
-	client, err := NewClient(entry, Options{Environment: h.environment})
-	if err != nil {
-		return nil, err
-	}
+	client := NewClient(entry, Options{Environment: h.environment})
 	if existing := h.clients[key]; existing != nil {
 		existing.client.Close()
 	}

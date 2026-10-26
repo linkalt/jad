@@ -18,9 +18,9 @@ const runID = "rr_0123456789abcdef"
 
 func runClient(t *testing.T, handler http.HandlerFunc, lostAfterMs int64) *Client {
 	t.Helper()
-	server := httptest.NewTLSServer(handler)
+	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	entry := tlsEntry(t, server, writeCA(t, server))
+	entry := httpEntry(t, server)
 	entry.Retries, entry.PollMs, entry.LostAfterMs, entry.MaxResponseBytes = 2, 200, lostAfterMs, 1<<20
 	return newClient(t, entry)
 }
@@ -188,7 +188,7 @@ func TestHubReusesClientsAndClosesEverything(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeEntry("https://one.example:1")
+	writeEntry("http://one.example:1")
 	hub := NewHub(func(string) string { return secretToken })
 	directory := hub.Directory(dir)
 	first, err := directory.Client("a")
@@ -198,7 +198,7 @@ func TestHubReusesClientsAndClosesEverything(t *testing.T) {
 	if again, _ := directory.Client("a"); again != first {
 		t.Fatal("the same entry must reuse its client and connections")
 	}
-	writeEntry("https://two.example:2")
+	writeEntry("http://two.example:2")
 	if changed, _ := directory.Client("a"); changed == first || changed.Entry().Host != "two.example:2" {
 		t.Fatal("an edited entry must apply to the next call")
 	}

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -111,7 +110,7 @@ func (b *peerBackend) run(t *testing.T, index int) *peerRun {
 	return nil
 }
 
-// peer is a fake remote JAD: the real remote API over a fake backend, behind TLS.
+// peer is a fake remote JAD: the real remote API over a fake backend, on plain http.
 type peer struct {
 	backend *peerBackend
 	server  *httptest.Server
@@ -159,14 +158,10 @@ func startPeer(t *testing.T, grant string) *peer {
 		t.Fatal(err)
 	}
 	handler := &switchHandler{next: api}
-	server := httptest.NewTLSServer(handler)
+	server := httptest.NewServer(handler)
 	t.Cleanup(func() { server.Close(); api.Close() })
 	dir := t.TempDir()
-	ca := filepath.Join(dir, "ca.pem")
-	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	entry := fmt.Sprintf(`{"kind":"remote","description":"peer","remote":{"url":%q,"token_env":"JAD_REMOTE_PEER","ca_file":%q,"timeout_ms":3000,"poll_ms":200,"lost_after_ms":1500,"retries":1,"default_session":"main"}}`, server.URL, ca)
+	entry := fmt.Sprintf(`{"kind":"remote","description":"peer","remote":{"url":%q,"token_env":"JAD_REMOTE_PEER","timeout_ms":3000,"poll_ms":200,"lost_after_ms":1500,"retries":1,"default_session":"main"}}`, server.URL)
 	if err := os.WriteFile(filepath.Join(dir, "peer.json"), []byte(entry), 0o600); err != nil {
 		t.Fatal(err)
 	}

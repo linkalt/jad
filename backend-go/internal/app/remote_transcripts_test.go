@@ -66,7 +66,7 @@ type remoteReaders struct {
 
 func startRemoteReaders(t *testing.T, server *remoteServer, allow bool, names ...string) remoteReaders {
 	t.Helper()
-	client := startRemoteClient(t, server.url, writeServerCA(t, server), "")
+	client := startRemoteClient(t, server.url, "")
 	directory := client.hub.Directory(client.dir)
 	transcript, err := native.NewTranscriptToolWithRemotes(transcriptSettings(allow, names...), native.TranscriptFiles{}, nil, nil, directory)
 	if err != nil {

@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"net/http"
 	"os"
@@ -44,11 +43,11 @@ type remoteClient struct {
 	dir     string
 }
 
-func startRemoteClient(t *testing.T, entryURL, caFile string, extra string) *remoteClient {
+func startRemoteClient(t *testing.T, entryURL, extra string) *remoteClient {
 	t.Helper()
 	local := newLayoutFixture(t)
 	dir := t.TempDir()
-	entry := fmt.Sprintf(`{"kind":"remote","remote":{"url":%q,"token_env":"JAD_REMOTE_E2E","timeout_ms":5000,"poll_ms":300,"lost_after_ms":1500,"retries":1,"default_session":"demo"%s%s}}`, entryURL, optionalCA(caFile), extra)
+	entry := fmt.Sprintf(`{"kind":"remote","remote":{"url":%q,"token_env":"JAD_REMOTE_E2E","timeout_ms":5000,"poll_ms":300,"lost_after_ms":1500,"retries":1,"default_session":"demo"%s}}`, entryURL, extra)
 	if err := os.WriteFile(filepath.Join(dir, "peer.json"), []byte(entry), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -80,13 +79,6 @@ func startRemoteClient(t *testing.T, entryURL, caFile string, extra string) *rem
 	return &remoteClient{t: t, message: message, async: async, owner: sessionKey(reference, "dev/coder"), hub: hub, dir: dir}
 }
 
-func optionalCA(caFile string) string {
-	if caFile == "" {
-		return ""
-	}
-	return fmt.Sprintf(`,"ca_file":%q`, caFile)
-}
-
 func (c *remoteClient) call(target string, block int64) string {
 	c.t.Helper()
 	out, err := c.message.Execute(context.Background(), map[string]any{"profile": target, "message": "what is the answer", "block_ms": json.Number(fmt.Sprint(block))},
@@ -106,23 +98,14 @@ func (c *remoteClient) asyncCall(arguments map[string]any) string {
 	return out
 }
 
-func writeServerCA(t *testing.T, server *remoteServer) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "ca.pem")
-	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.server.Certificate().Raw}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 func e2eServer(t *testing.T) (*remoteServer, subagentFixture) {
 	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
 	return startRemoteServer(t, f, tokenTable(tokenRow("client", e2eToken, fullGrant))), f
 }
 
-func TestRemoteE2EProfileMessageOverTLS(t *testing.T) {
+func TestRemoteE2EProfileMessageOverTCP(t *testing.T) {
 	server, f := e2eServer(t)
-	client := startRemoteClient(t, server.url, writeServerCA(t, server), "")
+	client := startRemoteClient(t, server.url, "")
 	out := client.call("remote:peer/dev/coder", 30_000)
 	if !strings.Contains(out, "answered") || !strings.Contains(out, "parent saw") {
 		t.Fatalf("result:\n%s", out)
@@ -156,7 +139,7 @@ func TestRemoteE2EProfileMessageOverAUnixSocket(t *testing.T) {
 	socketServer := &http.Server{Handler: server.service.Remote}
 	go socketServer.Serve(listener)
 	t.Cleanup(func() { socketServer.Close() })
-	client := startRemoteClient(t, "unix://"+socket, "", "")
+	client := startRemoteClient(t, "unix://"+socket, "")
 	out := client.call("remote:peer/demo/dev/coder", 30_000)
 	if !strings.Contains(out, "parent saw") {
 		t.Fatalf("result over the socket:\n%s", out)
@@ -172,7 +155,7 @@ func TestRemoteE2EHandleWaitAndStopActOnTheRemoteRun(t *testing.T) {
 	f.provider.childEntered = make(chan struct{}, 8)
 	f.provider.childRelease = make(chan struct{})
 	t.Cleanup(func() { close(f.provider.childRelease) })
-	client := startRemoteClient(t, server.url, writeServerCA(t, server), "")
+	client := startRemoteClient(t, server.url, "")
 	out := client.call("remote:peer/dev/coder", 0)
 	id := regexpHandle.FindString(out)
 	if id == "" {
@@ -207,7 +190,7 @@ func TestRemoteE2EConnectionDropBecomesLostAndTheRemoteKeepsItsRun(t *testing.T)
 	f.provider.childEntered = make(chan struct{}, 8)
 	f.provider.childRelease = make(chan struct{})
 	t.Cleanup(func() { close(f.provider.childRelease) })
-	client := startRemoteClient(t, server.url, writeServerCA(t, server), "")
+	client := startRemoteClient(t, server.url, "")
 	out := client.call("remote:peer/dev/coder", 0)
 	id := regexpHandle.FindString(out)
 	select {
@@ -229,7 +212,7 @@ func TestRemoteE2EConnectionDropBecomesLostAndTheRemoteKeepsItsRun(t *testing.T)
 func TestRemoteE2ERefusalsFromTheServerReachTheModelWithoutLeaks(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
 	server := startRemoteServer(t, f, tokenTable(tokenRow("client", e2eToken, `"profiles":["demo/other/*"],"actions":["message","status","stop"]`)))
-	client := startRemoteClient(t, server.url, writeServerCA(t, server), "")
+	client := startRemoteClient(t, server.url, "")
 	out := client.call("remote:peer/dev/coder", 5000)
 	if !strings.Contains(out, "remote_forbidden") || strings.Contains(out, e2eToken) {
 		t.Fatalf("scope refusal:\n%s", out)
@@ -237,10 +220,13 @@ func TestRemoteE2ERefusalsFromTheServerReachTheModelWithoutLeaks(t *testing.T) {
 	if len(f.provider.forModel("parent-model")) != 0 {
 		t.Fatal("a refused message ran the profile")
 	}
-	noTLS := startRemoteClient(t, server.url, "", "")
-	out = noTLS.call("remote:peer/dev/coder", 5000)
-	if !strings.Contains(out, "TLS certificate verification failed") || strings.Contains(out, e2eToken) {
-		t.Fatalf("an untrusted certificate must fail verification:\n%s", out)
+	// A remote file still written for the https era is refused by the loader, and the refusal
+	// the model sees names the url, never the token.
+	https := "https://" + strings.TrimPrefix(server.url, "http://")
+	client = startRemoteClient(t, https, "")
+	out = client.call("remote:peer/dev/coder", 5000)
+	if !strings.Contains(out, "https was removed") || strings.Contains(out, e2eToken) {
+		t.Fatalf("an https remote must be refused:\n%s", out)
 	}
 }
 

@@ -16,8 +16,8 @@ import (
 // instance.
 type Service struct {
 	Handler http.Handler
-	// Remote serves /api/remote/v1; nil unless server.remote_api is enabled. It is for the
-	// TLS and unix listeners only, never the plain one.
+	// Remote serves /api/remote/v1; nil unless server.remote_api is enabled. It answers on the
+	// main listener, which is plain http, and on the unix socket when listen_unix is set.
 	Remote   http.Handler
 	remote   *remoteapi.Server
 	api      *httpapi.Handler

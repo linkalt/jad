@@ -54,14 +54,12 @@ type Entry struct {
 	Name        string
 	Description string
 	URL         string
-	// Unix is the socket path when URL is unix://; Host is the https host:port otherwise.
+	// Unix is the socket path when URL is unix://; Host is the http host:port otherwise.
 	Unix string
 	Host string
 	// TokenEnv or TokenFile (absolute) is the token source; exactly one is set.
-	TokenEnv  string
-	TokenFile string
-	// CAFile is an extra PEM root file for https, absolute; empty means system roots only.
-	CAFile           string
+	TokenEnv         string
+	TokenFile        string
 	Timeout          int64
 	MaxResponseBytes int64
 	Retries          int
@@ -85,7 +83,6 @@ type fileRemote struct {
 	URL              string   `json:"url"`
 	TokenEnv         string   `json:"token_env"`
 	TokenFile        string   `json:"token_file"`
-	CAFile           string   `json:"ca_file"`
 	TimeoutMs        *int64   `json:"timeout_ms"`
 	MaxResponseBytes *int64   `json:"max_response_bytes"`
 	Retries          *int64   `json:"retries"`
@@ -97,7 +94,12 @@ type fileRemote struct {
 }
 
 // inlineSecretKeys are keys a remote file must not carry: the message names the allowed sources.
-var inlineSecretKeys = []string{"token", "password", "secret", "authorization", "api_key", "bearer", "insecure", "insecure_skip_verify", "skip_verify", "proxy"}
+var inlineSecretKeys = []string{"token", "password", "secret", "authorization", "api_key", "bearer", "proxy"}
+
+// removedTLSKeys were the TLS options of the https era. They are refused by name, with the
+// reason, instead of the generic unknown-key error: a file that still carries one was written
+// for a connection this build no longer makes.
+var removedTLSKeys = []string{"ca_file", "insecure", "insecure_skip_verify", "skip_verify", "tls"}
 
 // ParseEntry reads one remote file. path is used for messages and to resolve relative paths.
 func ParseEntry(name, path string, data []byte) (Entry, error) {
@@ -138,12 +140,6 @@ func ParseEntry(name, path string, data []byte) (Entry, error) {
 	}
 	if r.TokenFile != "" {
 		entry.TokenFile = resolveFrom(base, r.TokenFile)
-	}
-	if r.CAFile != "" {
-		if entry.Unix != "" {
-			return Entry{}, fmt.Errorf("%s: remote.ca_file only applies to an https url", path)
-		}
-		entry.CAFile = resolveFrom(base, r.CAFile)
 	}
 	if r.DefaultSession != "" && !SessionPattern.MatchString(r.DefaultSession) {
 		return Entry{}, fmt.Errorf("%s: remote.default_session is not a valid session id", path)
@@ -189,8 +185,8 @@ func ParseEntry(name, path string, data []byte) (Entry, error) {
 	return entry, nil
 }
 
-// checkRemoteKeys gives a clear message for the keys that would hold a secret or weaken
-// TLS, before the generic unknown-key error.
+// checkRemoteKeys gives a clear message for a key that would hold a secret or asks for a TLS
+// setting, before the generic unknown-key error.
 func checkRemoteKeys(path string, data []byte) error {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil {
@@ -203,7 +199,12 @@ func checkRemoteKeys(path string, data []byte) error {
 	for _, level := range []map[string]json.RawMessage{top, inner} {
 		for _, key := range inlineSecretKeys {
 			if _, has := level[key]; has {
-				return fmt.Errorf("%s: %q is not allowed in a remote file: the token comes from token_env or token_file, and TLS is always verified and no proxy is used", path, key)
+				return fmt.Errorf("%s: %q is not allowed in a remote file: the token comes from token_env or token_file, and no proxy is used", path, key)
+			}
+		}
+		for _, key := range removedTLSKeys {
+			if _, has := level[key]; has {
+				return fmt.Errorf("%s: %q was removed: a remote is reached over plain http or a unix socket, so there is no TLS to configure and no certificate to trust; delete the key", path, key)
 			}
 		}
 	}
@@ -219,22 +220,22 @@ func (e *Entry) setURL(path, raw string) error {
 		return fmt.Errorf("%s: remote.url must not carry credentials, a query or a fragment", path)
 	}
 	switch parsed.Scheme {
-	case "https":
+	case "http":
 		if parsed.Hostname() == "" || (parsed.Path != "" && parsed.Path != "/") {
-			return fmt.Errorf("%s: remote.url must be https://host[:port] with no path", path)
+			return fmt.Errorf("%s: remote.url must be http://host[:port] with no path", path)
 		}
 		e.Host = parsed.Host
-		e.URL = "https://" + parsed.Host
+		e.URL = "http://" + parsed.Host
 	case "unix":
 		if parsed.Host != "" || !filepath.IsAbs(parsed.Path) || parsed.Path == "/" {
 			return fmt.Errorf("%s: remote.url for a unix socket must be unix:///absolute/path.sock", path)
 		}
 		e.Unix = filepath.Clean(parsed.Path)
 		e.URL = "unix://" + e.Unix
-	case "http":
-		return fmt.Errorf("%s: remote.url must be https or unix: plain http is not allowed", path)
+	case "https":
+		return fmt.Errorf("%s: remote.url must be http://host[:port] or unix:///path.sock: https was removed, and the bearer token travels in clear text over http, so reach the remote over a VPN or a unix socket", path)
 	default:
-		return fmt.Errorf("%s: remote.url must be https://host[:port] or unix:///path.sock", path)
+		return fmt.Errorf("%s: remote.url must be http://host[:port] or unix:///path.sock", path)
 	}
 	return nil
 }

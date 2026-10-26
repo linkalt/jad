@@ -16,10 +16,17 @@ const (
 	maxRemoteAPIResult    = 16 << 20
 )
 
-var remoteAPIKeys = []string{"enabled", "tokens_file", "listen_unix", "listen_unix_mode", "tls_cert_file", "tls_key_file", "max_hops", "max_runs", "max_runs_per_token", "run_timeout_ms", "run_retention_ms", "wait_max_ms", "body_max_bytes", "result_max_bytes"}
+var remoteAPIKeys = []string{"enabled", "tokens_file", "listen_unix", "listen_unix_mode", "max_hops", "max_runs", "max_runs_per_token", "run_timeout_ms", "run_retention_ms", "wait_max_ms", "body_max_bytes", "result_max_bytes"}
+
+// removedRemoteAPIKeys are keys of the https era. They are refused by name with the reason, so
+// a user never keeps a certificate believing the remote API is still behind TLS.
+var removedRemoteAPIKeys = []string{"tls_cert_file", "tls_key_file"}
+
+// removedRemoteAPIHint replaces the removed TLS settings.
+const removedRemoteAPIHint = "the remote routes are served on the plain http listener now, where the bearer token travels in clear text: put that listener behind a VPN or serve listen_unix instead; delete the key"
 
 // RemoteAPISettings is server.remote_api: the /api/remote/v1 routes other JAD servers call.
-// They are served only over TLS or a unix socket, never on the plain TCP listener.
+// They are served on the main listener, which is plain http, and on ListenUnix when it is set.
 type RemoteAPISettings struct {
 	Enabled bool
 	// TokensFile is the absolute token table; required when Enabled.
@@ -27,11 +34,8 @@ type RemoteAPISettings struct {
 	// ListenUnix is the absolute socket path; empty serves no socket. ListenUnixMode is its permission.
 	ListenUnix     string
 	ListenUnixMode uint32
-	// TLSCertFile and TLSKeyFile make the main listener serve HTTPS (both or neither); the
-	// remote routes then answer there too.
-	TLSCertFile, TLSKeyFile string
-	MaxHops                 int
-	MaxRuns                 int
+	MaxHops        int
+	MaxRuns        int
 	// MaxRunsPerToken bounds the live runs one token may have; finished runs do not count.
 	MaxRunsPerToken int
 	// RunTimeoutMs bounds a message run started by the remote API (queue time excluded).
@@ -52,6 +56,9 @@ func normalizeRemoteAPI(raw json.RawMessage, path, base string) (RemoteAPISettin
 		return RemoteAPISettings{}, fmt.Errorf("%s: server.remote_api must be an object", path)
 	}
 	for key := range fields {
+		if containsString(removedRemoteAPIKeys, key) {
+			return RemoteAPISettings{}, fmt.Errorf("%s: server.remote_api.%s was removed; %s", path, key, removedRemoteAPIHint)
+		}
 		if !containsString(remoteAPIKeys, key) {
 			return RemoteAPISettings{}, fmt.Errorf("%s: server.remote_api.%s is not a setting (%s)", path, key, strings.Join(remoteAPIKeys, ", "))
 		}
@@ -88,7 +95,7 @@ func normalizeRemoteAPI(raw json.RawMessage, path, base string) (RemoteAPISettin
 	for _, field := range []struct {
 		name   string
 		target *string
-	}{{"tokens_file", &settings.TokensFile}, {"listen_unix", &settings.ListenUnix}, {"tls_cert_file", &settings.TLSCertFile}, {"tls_key_file", &settings.TLSKeyFile}} {
+	}{{"tokens_file", &settings.TokensFile}, {"listen_unix", &settings.ListenUnix}} {
 		if err := text(field.name, field.target); err != nil {
 			return RemoteAPISettings{}, err
 		}
@@ -118,10 +125,6 @@ func normalizeRemoteAPI(raw json.RawMessage, path, base string) (RemoteAPISettin
 	switch {
 	case settings.TokensFile == "":
 		return RemoteAPISettings{}, fmt.Errorf("%s: server.remote_api.tokens_file is required when it is enabled", path)
-	case (settings.TLSCertFile == "") != (settings.TLSKeyFile == ""):
-		return RemoteAPISettings{}, fmt.Errorf("%s: server.remote_api.tls_cert_file and tls_key_file go together", path)
-	case settings.TLSCertFile == "" && settings.ListenUnix == "":
-		return RemoteAPISettings{}, fmt.Errorf("%s: server.remote_api needs tls_cert_file and tls_key_file, or listen_unix: the remote routes are never served over plain http", path)
 	case settings.ListenUnix != "" && !filepath.IsAbs(settings.ListenUnix):
 		return RemoteAPISettings{}, fmt.Errorf("%s: server.remote_api.listen_unix must be an absolute path", path)
 	}

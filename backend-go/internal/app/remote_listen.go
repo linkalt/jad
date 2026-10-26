@@ -1,7 +1,6 @@
 package app
 
 import (
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -12,27 +11,22 @@ import (
 )
 
 // RemoteHandlers are the handlers for the listeners of one server. Main serves the UI routes
-// and, only when it is HTTPS, the remote routes; Socket serves the remote routes alone on the
-// unix socket.
+// and the remote routes; Socket serves the remote routes alone on the unix socket.
 type RemoteHandlers struct {
 	Main   http.Handler
 	Socket http.Handler
 }
 
-// HandlersFor builds them from the service. The plain listener never reaches the remote API:
-// a request for /api/remote/ over plain http is a 404 whatever the token.
+// HandlersFor builds them from the service. The remote routes answer on the plain listener:
+// the bearer token of a remote travels in clear text, so that listener must sit behind a VPN
+// or a loopback address (see Config.CheckRemoteListenHost).
 func (s *Service) HandlersFor(config Config) RemoteHandlers {
 	handlers := RemoteHandlers{Main: s.Handler}
 	if s.Remote == nil {
 		return handlers
 	}
-	tlsMain := config.RemoteAPI.TLSCertFile != ""
 	handlers.Main = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/remote/") || r.URL.Path == "/api/remote" {
-			if !tlsMain || r.TLS == nil {
-				http.NotFound(w, r)
-				return
-			}
 			s.Remote.ServeHTTP(w, r)
 			return
 		}
@@ -42,18 +36,6 @@ func (s *Service) HandlersFor(config Config) RemoteHandlers {
 		handlers.Socket = s.Remote
 	}
 	return handlers
-}
-
-// TLSConfig loads the certificate of server.remote_api; nil when the main listener stays plain.
-func (c Config) TLSConfig() (*tls.Config, error) {
-	if c.RemoteAPI.TLSCertFile == "" {
-		return nil, nil
-	}
-	certificate, err := tls.LoadX509KeyPair(c.RemoteAPI.TLSCertFile, c.RemoteAPI.TLSKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("server.remote_api: load tls_cert_file and tls_key_file: %w", err)
-	}
-	return &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}, nil
 }
 
 // ListenUnix opens the socket with the configured mode. A stale socket file is replaced; any

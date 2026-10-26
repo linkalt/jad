@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -84,14 +83,6 @@ func run() error {
 		return fmt.Errorf("listen on %s: %w", address, err)
 	}
 	handlers := service.HandlersFor(config)
-	tlsConfig, err := config.TLSConfig()
-	if err != nil {
-		listener.Close()
-		return err
-	}
-	if tlsConfig != nil {
-		listener = tls.NewListener(listener, tlsConfig)
-	}
 	server := config.NewHTTPServer(handlers.Main)
 	serveErrors := make(chan error, 2)
 	go func() { serveErrors <- server.Serve(listener) }()
@@ -110,8 +101,7 @@ func run() error {
 	}
 	logger.Info("Go agent API listening",
 		slog.String("address", listener.Addr().String()),
-		slog.Bool("tls", tlsConfig != nil),
-		slog.Bool("remote_api", handlers.Socket != nil || (config.RemoteAPI.Enabled && tlsConfig != nil)),
+		slog.Bool("remote_api", config.RemoteAPI.Enabled),
 		slog.String("log_level", config.Log.Level),
 		slog.String("log_file", config.Log.File))
 

@@ -19,7 +19,7 @@ func readerWithEntry(t *testing.T, defaultSession string, profiles string) remot
 	if profiles != "" {
 		extra += `,"profiles":[` + profiles + `]`
 	}
-	body := `{"kind":"remote","remote":{"url":"https://example.invalid:8443","token_env":"JAD_REMOTE_X"` + extra + `}}`
+	body := `{"kind":"remote","remote":{"url":"http://example.invalid:8787","token_env":"JAD_REMOTE_X"` + extra + `}}`
 	if err := os.WriteFile(filepath.Join(dir, "peer.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

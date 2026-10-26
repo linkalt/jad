@@ -34,18 +34,20 @@ func TestRemoteAPIMaxRunsPerToken(t *testing.T) {
 	}
 }
 
-func TestRemoteAPIEnabledNeedsTokensAndATransport(t *testing.T) {
+func TestRemoteAPIEnabledNeedsTokens(t *testing.T) {
 	settings, err := remoteAPI(t, `{"enabled":true,"tokens_file":"tokens.json","listen_unix":"/run/jad.sock","listen_unix_mode":432}`)
 	if err != nil || settings.TokensFile != "/etc/jad/tokens.json" || settings.ListenUnixMode != 0o660 {
 		t.Fatalf("%+v %v", settings, err)
 	}
-	if settings, err = remoteAPI(t, `{"enabled":true,"tokens_file":"t.json","tls_cert_file":"c.pem","tls_key_file":"k.pem","max_hops":5}`); err != nil || settings.TLSCertFile != "/etc/jad/c.pem" || settings.MaxHops != 5 {
+	if settings, err = remoteAPI(t, `{"enabled":true,"tokens_file":"t.json","listen_unix":"/run/jad.sock","max_hops":5}`); err != nil || settings.ListenUnix != "/run/jad.sock" || settings.MaxHops != 5 {
 		t.Fatalf("%+v %v", settings, err)
+	}
+	// The routes answer on the plain http listener, so a token table alone is enough.
+	if settings, err = remoteAPI(t, `{"enabled":true,"tokens_file":"t.json"}`); err != nil || !settings.Enabled || settings.ListenUnix != "" {
+		t.Fatalf("tcp only: %+v %v", settings, err)
 	}
 	for name, c := range map[string]struct{ body, want string }{
 		"no tokens":        {`{"enabled":true,"listen_unix":"/run/x.sock"}`, "tokens_file is required"},
-		"plain http":       {`{"enabled":true,"tokens_file":"t"}`, "never served over plain http"},
-		"half tls":         {`{"enabled":true,"tokens_file":"t","tls_cert_file":"c"}`, "go together"},
 		"unknown key":      {`{"enabled":true,"insecure":true}`, "is not a setting"},
 		"hops cap":         {`{"max_hops":99}`, "max_hops must be an integer between 1 and 16"},
 		"world socket":     {`{"listen_unix_mode":511}`, "listen_unix_mode"},
@@ -58,5 +60,16 @@ func TestRemoteAPIEnabledNeedsTokensAndATransport(t *testing.T) {
 	}
 	if _, err := remoteAPI(t, `{"enabled":false,"max_hops":2}`); err != nil {
 		t.Fatalf("a disabled section is not validated for transports: %v", err)
+	}
+}
+
+// The TLS settings of the https era are refused by name: a user who keeps them must not
+// believe the remote API is still behind a certificate.
+func TestRemoteAPIRefusesTheRemovedTLSSettingsByName(t *testing.T) {
+	for _, key := range []string{"tls_cert_file", "tls_key_file"} {
+		_, err := remoteAPI(t, `{"enabled":true,"tokens_file":"t.json","`+key+`":"c.pem"}`)
+		if err == nil || !strings.Contains(err.Error(), "server.remote_api."+key+" was removed") || !strings.Contains(err.Error(), "plain http") {
+			t.Errorf("%s: want a named removed-key error with the reason, got %v", key, err)
+		}
 	}
 }

@@ -92,3 +92,32 @@ func TestLoadConfigPassesMaxConcurrentRunsToTheHTTPConfig(t *testing.T) {
 		t.Fatalf("HTTP.MaxConcurrentRuns = %d, want 7 from server.max_concurrent_runs", config.HTTP.MaxConcurrentRuns)
 	}
 }
+
+// The remote API's bearer token travels in clear text, so its listener names one address: the
+// default loopback, or the VPN address a peer reaches. A wildcard would answer on every
+// interface and is refused.
+func TestLoadConfigRefusesAWildcardHostForTheRemoteAPI(t *testing.T) {
+	cwd := t.TempDir()
+	setting := `{"session_roots":[],"server":{"remote_api":{"enabled":true,"tokens_file":"tokens.json"}}}`
+	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
+		_, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOST": host}})
+		if err == nil || !strings.Contains(err.Error(), "server.host must name the one address") {
+			t.Errorf("host %q: %v", host, err)
+		}
+	}
+	for _, host := range []string{"127.0.0.1", "::1", "10.8.0.2"} {
+		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOST": host}})
+		if err != nil || config.Host != host {
+			t.Errorf("host %q: %+v %v", host, config.Host, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(`{"session_roots":[],"server":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOST": "0.0.0.0"}}); err != nil {
+		t.Errorf("a wildcard host without the remote API must still be accepted: %v", err)
+	}
+}

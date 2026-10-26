@@ -14,15 +14,15 @@ func parse(t *testing.T, body string) (Entry, error) {
 	return ParseEntry("box", "/etc/jad/remotes/box.json", []byte(body))
 }
 
-func TestParseEntryHTTPS(t *testing.T) {
-	entry, err := parse(t, `{"kind":"remote","remote":{"url":"https://host.example:8443/","token_env":"JAD_REMOTE_BOX","ca_file":"ca.pem","default_session":"main","profiles":["review/*"]}}`)
+func TestParseEntryHTTP(t *testing.T) {
+	entry, err := parse(t, `{"kind":"remote","remote":{"url":"http://host.example:8787/","token_env":"JAD_REMOTE_BOX","default_session":"main","profiles":["review/*"]}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry.URL != "https://host.example:8443" || entry.Host != "host.example:8443" || entry.Unix != "" {
+	if entry.URL != "http://host.example:8787" || entry.Host != "host.example:8787" || entry.Unix != "" {
 		t.Fatalf("entry: %+v", entry)
 	}
-	if entry.CAFile != "/etc/jad/remotes/ca.pem" || entry.Timeout != DefaultTimeoutMs || entry.Retries != DefaultRetries || entry.MaxResponseBytes != DefaultMaxResponseBytes {
+	if entry.Timeout != DefaultTimeoutMs || entry.Retries != DefaultRetries || entry.MaxResponseBytes != DefaultMaxResponseBytes {
 		t.Fatalf("defaults: %+v", entry)
 	}
 	if !entry.Allows("review/a") || entry.Allows("dev/coder") {
@@ -42,26 +42,25 @@ func TestParseEntryUnix(t *testing.T) {
 
 func TestParseEntryRefusals(t *testing.T) {
 	cases := map[string]struct{ body, want string }{
-		"plain http":      {`{"kind":"remote","remote":{"url":"http://h:1","token_env":"JAD_REMOTE_T"}}`, "plain http is not allowed"},
-		"ftp":             {`{"kind":"remote","remote":{"url":"ftp://h","token_env":"JAD_REMOTE_T"}}`, "must be https"},
-		"userinfo":        {`{"kind":"remote","remote":{"url":"https://u:p@h","token_env":"JAD_REMOTE_T"}}`, "credentials"},
-		"query":           {`{"kind":"remote","remote":{"url":"https://h/?a=b","token_env":"JAD_REMOTE_T"}}`, "credentials, a query"},
-		"path":            {`{"kind":"remote","remote":{"url":"https://h/api","token_env":"JAD_REMOTE_T"}}`, "no path"},
+		"https":           {`{"kind":"remote","remote":{"url":"https://h:1","token_env":"JAD_REMOTE_T"}}`, "https was removed"},
+		"ftp":             {`{"kind":"remote","remote":{"url":"ftp://h","token_env":"JAD_REMOTE_T"}}`, "must be http://host[:port]"},
+		"userinfo":        {`{"kind":"remote","remote":{"url":"http://u:p@h","token_env":"JAD_REMOTE_T"}}`, "credentials"},
+		"query":           {`{"kind":"remote","remote":{"url":"http://h/?a=b","token_env":"JAD_REMOTE_T"}}`, "credentials, a query"},
+		"path":            {`{"kind":"remote","remote":{"url":"http://h/api","token_env":"JAD_REMOTE_T"}}`, "no path"},
+		"no host":         {`{"kind":"remote","remote":{"url":"http://","token_env":"JAD_REMOTE_T"}}`, "must be http://host[:port]"},
 		"relative unix":   {`{"kind":"remote","remote":{"url":"unix://rel.sock","token_env":"JAD_REMOTE_T"}}`, "unix:///absolute"},
-		"no token":        {`{"kind":"remote","remote":{"url":"https://h"}}`, "needs token_env or token_file"},
-		"both tokens":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","token_file":"f"}}`, "alternatives"},
-		"inline token":    {`{"kind":"remote","remote":{"url":"https://h","token":"abc"}}`, `"token" is not allowed`},
-		"top-level token": {`{"kind":"remote","token":"abc","remote":{"url":"https://h","token_env":"JAD_REMOTE_T"}}`, `"token" is not allowed`},
-		"insecure":        {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","insecure_skip_verify":true}}`, "TLS is always verified"},
-		"proxy":           {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","proxy":"http://p"}}`, "no proxy"},
-		"wrong kind":      {`{"kind":"profile","remote":{"url":"https://h","token_env":"JAD_REMOTE_T"}}`, `kind must be "remote"`},
-		"model":           {`{"kind":"remote","model":"x","remote":{"url":"https://h","token_env":"JAD_REMOTE_T"}}`, "unknown field"},
-		"bad env name":    {`{"kind":"remote","remote":{"url":"https://h","token_env":"A B"}}`, "JAD_REMOTE_"},
-		"provider key":    {`{"kind":"remote","remote":{"url":"https://h","token_env":"OPENAI_API_KEY"}}`, "may not read other variables"},
-		"ca on unix":      {`{"kind":"remote","remote":{"url":"unix:///a.sock","token_env":"JAD_REMOTE_T","ca_file":"x"}}`, "ca_file only applies"},
-		"timeout cap":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","timeout_ms":999999999}}`, "timeout_ms must be between"},
-		"retries cap":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","retries":99}}`, "retries must be between"},
-		"bad session":     {`{"kind":"remote","remote":{"url":"https://h","token_env":"JAD_REMOTE_T","default_session":"a/b"}}`, "default_session"},
+		"no token":        {`{"kind":"remote","remote":{"url":"http://h"}}`, "needs token_env or token_file"},
+		"both tokens":     {`{"kind":"remote","remote":{"url":"http://h","token_env":"JAD_REMOTE_T","token_file":"f"}}`, "alternatives"},
+		"inline token":    {`{"kind":"remote","remote":{"url":"http://h","token":"abc"}}`, `"token" is not allowed`},
+		"top-level token": {`{"kind":"remote","token":"abc","remote":{"url":"http://h","token_env":"JAD_REMOTE_T"}}`, `"token" is not allowed`},
+		"proxy":           {`{"kind":"remote","remote":{"url":"http://h","token_env":"JAD_REMOTE_T","proxy":"http://p"}}`, "no proxy"},
+		"wrong kind":      {`{"kind":"profile","remote":{"url":"http://h","token_env":"JAD_REMOTE_T"}}`, `kind must be "remote"`},
+		"model":           {`{"kind":"remote","model":"x","remote":{"url":"http://h","token_env":"JAD_REMOTE_T"}}`, "unknown field"},
+		"bad env name":    {`{"kind":"remote","remote":{"url":"http://h","token_env":"A B"}}`, "JAD_REMOTE_"},
+		"provider key":    {`{"kind":"remote","remote":{"url":"http://h","token_env":"OPENAI_API_KEY"}}`, "may not read other variables"},
+		"timeout cap":     {`{"kind":"remote","remote":{"url":"http://h","token_env":"JAD_REMOTE_T","timeout_ms":999999999}}`, "timeout_ms must be between"},
+		"retries cap":     {`{"kind":"remote","remote":{"url":"http://h","token_env":"JAD_REMOTE_T","retries":99}}`, "retries must be between"},
+		"bad session":     {`{"kind":"remote","remote":{"url":"http://h","token_env":"JAD_REMOTE_T","default_session":"a/b"}}`, "default_session"},
 		"no remote":       {`{"kind":"remote"}`, "remote is required"},
 	}
 	for name, test := range cases {
@@ -71,6 +70,20 @@ func TestParseEntryRefusals(t *testing.T) {
 				t.Fatalf("want %q, got %v", test.want, err)
 			}
 		})
+	}
+}
+
+// The https era of remote files is gone: its TLS keys stay refused by name, so an old file
+// never silently reaches a server unverified.
+func TestParseEntryRefusesRemovedTLSKeys(t *testing.T) {
+	for _, key := range []string{"ca_file", "insecure", "insecure_skip_verify", "skip_verify", "tls"} {
+		body := `{"kind":"remote","remote":{"url":"http://h:1","token_env":"JAD_REMOTE_T","` + key + `":"x"}}`
+		if _, err := parse(t, body); err == nil || !strings.Contains(err.Error(), `"`+key+`" was removed`) || !strings.Contains(err.Error(), "no TLS") {
+			t.Errorf("%s: want a named removed-key error, got %v", key, err)
+		}
+	}
+	if _, err := parse(t, `{"kind":"remote","ca_file":"ca.pem","remote":{"url":"unix:///a.sock","token_env":"JAD_REMOTE_T"}}`); err == nil || !strings.Contains(err.Error(), "ca_file") {
+		t.Errorf("a top-level ca_file must be refused by name: %v", err)
 	}
 }
 
@@ -130,9 +143,9 @@ func TestListAndLoad(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("b.json", `{"kind":"remote","remote":{"url":"https://b:1","token_env":"JAD_REMOTE_T"}}`)
+	write("b.json", `{"kind":"remote","remote":{"url":"http://b:1","token_env":"JAD_REMOTE_T"}}`)
 	write("a.json", `{"kind":"remote","remote":{"url":"unix:///a.sock","token_env":"JAD_REMOTE_T"}}`)
-	write("broken.json", `{"kind":"remote","remote":{"url":"http://x","token_env":"JAD_REMOTE_T"}}`)
+	write("broken.json", `{"kind":"remote","remote":{"url":"https://x","token_env":"JAD_REMOTE_T"}}`)
 	write("notes.txt", "x")
 	entries, problems := List(dir)
 	if len(entries) != 2 || entries[0].Name != "a" || entries[1].Name != "b" || len(problems) != 1 {
