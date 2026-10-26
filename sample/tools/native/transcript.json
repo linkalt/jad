@@ -2,72 +2,68 @@
   "schema_version": 1,
   "tools": [
     {
+      "description": "Read a messages.jsonl transcript, your own by default, or another profile's (path profile:\u003ccategory\u003e/\u003cname\u003e), a sub-agent run's (path subagent:\u003crun id\u003e) or a file (path path:\u003cfile\u003e). It lists one short line per step (turn.step, e.g. 3.2) of the chosen turns: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. Use turns or tail to choose turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue.",
       "id": "native.transcript",
-      "source": "native",
-      "name": "transcript",
-      "description": "Read a messages.jsonl transcript as text, your own by default, or another profile's (path profile:<category>/<name>), a sub-agent run's (path subagent:<run id>) or a file (path path:<file>): user and assistant messages, tool calls and their results, by turn. Reasoning is not shown. Use turns or tail to choose which turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue a cut response.",
       "inputSchema": {
-        "type": "object",
+        "additionalProperties": false,
         "properties": {
+          "context": {
+            "description": "With search: how many steps to list on each side of a match. Default 0.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cursor": {
+            "description": "Continue where the previous response stopped; use the cursor it gave. Not with turns or tail.",
+            "minLength": 1,
+            "type": "string"
+          },
           "path": {
-            "type": "string",
+            "description": "Which transcript to read; omit it for your own (a sub-agent reads its own run). profile:\u003ccategory\u003e/\u003cname\u003e is another profile in this session and profile:\u003csession\u003e/\u003ccategory\u003e/\u003cname\u003e one in another session; subagent:\u003crun id\u003e (sub_xxxxxxxx) is a run of your profile, subagent:\u003ccategory\u003e/\u003cname\u003e/\u003crun id\u003e a run of another profile in this session and subagent:\u003csession\u003e/\u003ccategory\u003e/\u003cname\u003e/\u003crun id\u003e one of another session; path:\u003cfile\u003e is a transcript file by filesystem path (off unless tools.native.transcript.allow_path is true). The header of a read and a not-found error give the exact path to reuse.",
             "minLength": 1,
-            "description": "Which transcript to read; omit it for your own (a sub-agent reads its own run). profile:<category>/<name> is another profile in this session and profile:<session>/<category>/<name> one in another session; subagent:<run id> (sub_xxxxxxxx) is a run of your profile, subagent:<category>/<name>/<run id> a run of another profile in this session and subagent:<session>/<category>/<name>/<run id> one of another session; path:<file> is a transcript file by filesystem path (off unless tools.native.transcript.allow_path is true). The header of a read and a not-found error give the exact path to reuse."
-          },
-          "turns": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Which turns to read: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail or cursor, the last turn is read."
-          },
-          "tail": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Read the last N turns; the same as turns -N. Not with turns or cursor."
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "messages",
-              "backup"
-            ],
-            "description": "messages (default) is the live transcript; backup is messages.backup.jsonl, the history before the last compaction."
+            "type": "string"
           },
           "role": {
-            "type": "string",
+            "description": "List mode: only steps of this role; tool is a tool call (with its result).",
             "enum": [
               "user",
               "assistant",
               "tool"
             ],
-            "description": "Only entries of this role; tool is a tool call and its result."
-          },
-          "tool": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Only calls and results of tools whose name matches; * and ? are wildcards (read, exec*)."
+            "type": "string"
           },
           "search": {
-            "type": "string",
+            "description": "List mode: only steps whose whole text (a call's arguments and result too) contains this, case-insensitive; the line shows only the preview.",
             "minLength": 1,
-            "description": "Only entries whose text contains this, case-insensitive, with context entries around each."
+            "type": "string"
           },
-          "context": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "With search: how many entries to show on each side of a match. Default 0."
+          "source": {
+            "description": "messages (default) is the live transcript; backup is messages.backup.jsonl, the history before the last compaction.",
+            "enum": [
+              "messages",
+              "backup"
+            ],
+            "type": "string"
           },
-          "full": {
-            "type": "boolean",
-            "description": "Do not cut the text of one entry (the whole response is still capped)."
+          "tail": {
+            "description": "List mode: list the last N turns; the same as turns -N. Not with turns or cursor.",
+            "minimum": 1,
+            "type": "integer"
           },
-          "cursor": {
-            "type": "string",
+          "tool": {
+            "description": "List mode: only calls of tools whose name matches; * and ? are wildcards (read, exec*).",
             "minLength": 1,
-            "description": "Continue where the previous response stopped; use the cursor it gave. Not with turns or tail."
+            "type": "string"
+          },
+          "turns": {
+            "description": "List mode: which turns to list: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail or cursor, the last turn is listed.",
+            "minLength": 1,
+            "type": "string"
           }
         },
-        "additionalProperties": false
-      }
+        "type": "object"
+      },
+      "name": "transcript",
+      "source": "native"
     }
   ]
 }

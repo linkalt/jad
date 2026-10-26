@@ -448,7 +448,7 @@ func TestBuildCatalogGivesTheTranscriptToolTheMessengerProfilesAndTheRunManager(
 		SettingPath:         filepath.Join(f.dir, "setting.json"),
 		ToolDefinitionPaths: []string{sampleTranscriptManifest},
 		StoragePaths:        sessionfs.SessionStoragePaths{Messages: f.own},
-		NativeTranscript:    &sessionfs.NativeTranscriptSettings{ResponseMaxBytes: 1 << 16, EntryMaxBytes: 4000, LineMaxBytes: 1 << 20, MaxTurnsPerCall: 50, ScanMaxBytes: 1 << 30, TimeoutMs: 30000, AllowOtherSessions: true, AllowOtherProfiles: true, AllowChildren: true},
+		NativeTranscript:    &sessionfs.NativeTranscriptSettings{ResponseMaxBytes: 1 << 16, PreviewBytes: 200, ValueBytes: 80, MaxListEntries: 100, MaxDetailBytes: 16384, LineMaxBytes: 1 << 20, ScanMaxBytes: 1 << 30, TimeoutMs: 30000, AllowOtherSessions: true, AllowOtherProfiles: true, AllowChildren: true},
 	}, nil, nil, nil, nil, nil, nil, nil, f.manager, nil, messengerWithProfiles{f.profiles})
 	if err != nil {
 		t.Fatal(err)

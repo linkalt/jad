@@ -22,7 +22,7 @@ func TestTranscriptSettingsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.ResponseMaxBytes != 64*1024 || settings.EntryMaxBytes != 4000 || settings.MaxTurnsPerCall != 50 || settings.TimeoutMs != 30000 {
+	if settings.ResponseMaxBytes != 64*1024 || settings.TimeoutMs != 30000 {
 		t.Fatalf("limits = %+v", settings)
 	}
 	if settings.PreviewBytes != 200 || settings.ValueBytes != 80 || settings.MaxListEntries != 100 || settings.MaxDetailBytes != 16384 {
@@ -37,7 +37,7 @@ func TestTranscriptSettingsDefaults(t *testing.T) {
 }
 
 func TestTranscriptSettingsRejectUnknownAndOldKeysNamingThem(t *testing.T) {
-	for _, key := range []string{"paths", "path", "approval", "nope"} {
+	for _, key := range []string{"paths", "path", "approval", "nope", "entry_max_bytes", "max_turns_per_call"} {
 		_, err := normalizeNativeTranscriptSettings(transcriptSettingsFor(`{"`+key+`":1}`), "s.json", NativePathPolicy{})
 		if err == nil || !strings.Contains(err.Error(), "tools.native.transcript."+key) {
 			t.Errorf("key %s: error = %v", key, err)

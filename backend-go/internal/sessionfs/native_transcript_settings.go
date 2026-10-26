@@ -7,11 +7,8 @@ import (
 
 const (
 	defaultNativeTranscriptResponseMaxBytes int64 = 64 * 1024
-	defaultNativeTranscriptEntryMaxBytes    int64 = 4000
 	defaultNativeTranscriptLineMaxBytes     int64 = 16 * 1024 * 1024
 	maxNativeTranscriptLineMaxBytes         int64 = 256 * 1024 * 1024
-	defaultNativeTranscriptMaxTurns         int64 = 50
-	maxNativeTranscriptMaxTurns             int64 = 1000
 	defaultNativeTranscriptScanMaxBytes     int64 = 256 * 1024 * 1024
 	maxNativeTranscriptScanMaxBytes         int64 = 4 * 1024 * 1024 * 1024
 	defaultNativeTranscriptSuggestMax       int64 = 20
@@ -26,7 +23,7 @@ const (
 )
 
 var nativeTranscriptKeys = []string{
-	"response_max_bytes", "entry_max_bytes", "line_max_bytes", "max_turns_per_call", "scan_max_bytes",
+	"response_max_bytes", "line_max_bytes", "scan_max_bytes",
 	"suggest_max", "timeout_ms", "preview_bytes", "value_bytes", "max_list_entries", "max_detail_bytes", "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_path",
 }
 
@@ -35,9 +32,7 @@ var nativeTranscriptKeys = []string{
 type NativeTranscriptSettings struct {
 	Policy             NativePathPolicy
 	ResponseMaxBytes   int64
-	EntryMaxBytes      int64
 	LineMaxBytes       int64
-	MaxTurnsPerCall    int64
 	ScanMaxBytes       int64
 	SuggestMax         int64
 	TimeoutMs          int64
@@ -93,9 +88,7 @@ func normalizeNativeTranscriptSettings(setting map[string]json.RawMessage, setti
 		fallback, min, max int64
 	}{
 		{&settings.ResponseMaxBytes, "response_max_bytes", defaultNativeTranscriptResponseMaxBytes, 1, maxNativeToolBytes},
-		{&settings.EntryMaxBytes, "entry_max_bytes", defaultNativeTranscriptEntryMaxBytes, 1, maxNativeToolBytes},
 		{&settings.LineMaxBytes, "line_max_bytes", defaultNativeTranscriptLineMaxBytes, 1, maxNativeTranscriptLineMaxBytes},
-		{&settings.MaxTurnsPerCall, "max_turns_per_call", defaultNativeTranscriptMaxTurns, 1, maxNativeTranscriptMaxTurns},
 		{&settings.ScanMaxBytes, "scan_max_bytes", defaultNativeTranscriptScanMaxBytes, 1, maxNativeTranscriptScanMaxBytes},
 		{&settings.SuggestMax, "suggest_max", defaultNativeTranscriptSuggestMax, 1, maxNativeTranscriptSuggestMax},
 		{&settings.PreviewBytes, "preview_bytes", defaultNativeTranscriptPreviewBytes, 1, maxNativeTranscriptPreviewBytes},

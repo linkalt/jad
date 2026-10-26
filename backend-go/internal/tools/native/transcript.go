@@ -23,24 +23,24 @@ var transcriptInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "path":{"type":"string","minLength":1,"description":"Which transcript to read; omit it for your own (a sub-agent reads its own run). profile:<category>/<name> is another profile in this session and profile:<session>/<category>/<name> one in another session; subagent:<run id> (sub_xxxxxxxx) is a run of your profile, subagent:<category>/<name>/<run id> a run of another profile in this session and subagent:<session>/<category>/<name>/<run id> one of another session; path:<file> is a transcript file by filesystem path (off unless tools.native.transcript.allow_path is true). The header of a read and a not-found error give the exact path to reuse."},
-    "turns":{"type":"string","minLength":1,"description":"Which turns to read: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail or cursor, the last turn is read."},
-    "tail":{"type":"integer","minimum":1,"description":"Read the last N turns; the same as turns -N. Not with turns or cursor."},
+    "turns":{"type":"string","minLength":1,"description":"List mode: which turns to list: 3, 3-7, -5 (the last five) or 12- (from turn 12). A turn is a user message and the answer to it. Without turns, tail or cursor, the last turn is listed."},
+    "tail":{"type":"integer","minimum":1,"description":"List mode: list the last N turns; the same as turns -N. Not with turns or cursor."},
     "source":{"type":"string","enum":["messages","backup"],"description":"messages (default) is the live transcript; backup is messages.backup.jsonl, the history before the last compaction."},
-    "role":{"type":"string","enum":["user","assistant","tool"],"description":"Only entries of this role; tool is a tool call and its result."},
-    "tool":{"type":"string","minLength":1,"description":"Only calls and results of tools whose name matches; * and ? are wildcards (read, exec*)."},
-    "search":{"type":"string","minLength":1,"description":"Only entries whose text contains this, case-insensitive, with context entries around each."},
-    "context":{"type":"integer","minimum":0,"description":"With search: how many entries to show on each side of a match. Default 0."},
-    "full":{"type":"boolean","description":"Do not cut the text of one entry (the whole response is still capped)."},
+    "role":{"type":"string","enum":["user","assistant","tool"],"description":"List mode: only steps of this role; tool is a tool call (with its result)."},
+    "tool":{"type":"string","minLength":1,"description":"List mode: only calls of tools whose name matches; * and ? are wildcards (read, exec*)."},
+    "search":{"type":"string","minLength":1,"description":"List mode: only steps whose whole text (a call's arguments and result too) contains this, case-insensitive; the line shows only the preview."},
+    "context":{"type":"integer","minimum":0,"description":"With search: how many steps to list on each side of a match. Default 0."},
     "cursor":{"type":"string","minLength":1,"description":"Continue where the previous response stopped; use the cursor it gave. Not with turns or tail."}
   },
   "additionalProperties":false
 }`)
 
-const transcriptDescription = "Read a messages.jsonl transcript as text, your own by default, or another profile's (path profile:<category>/<name>), a sub-agent run's (path subagent:<run id>) or a file (path path:<file>): user and assistant messages, tool calls and their results, by turn. Reasoning is not shown. Use turns or tail to choose which turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue a cut response."
+const transcriptDescription = "Read a messages.jsonl transcript, your own by default, or another profile's (path profile:<category>/<name>), a sub-agent run's (path subagent:<run id>) or a file (path path:<file>). It lists one short line per step (turn.step, e.g. 3.2) of the chosen turns: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. Use turns or tail to choose turns, role, tool and search to filter, source backup for the history before the last compaction, cursor to continue."
 
 var transcriptRejectedProperties = map[string]string{
 	"offset":   "transcript has no offset; select by turns, tail or cursor",
 	"limit":    "transcript has no limit; the response is capped by the configuration, use turns, tail or cursor",
+	"full":     "transcript has no full; the list shows previews",
 	"list":     "transcript has no list; a not-found error names the available profiles and sub-agent runs, and path selects one: profile:<category>/<name>, subagent:<run id> or path:<file>",
 	"profile":  "transcript has no profile; use path \"profile:<category>/<name>\"",
 	"session":  "transcript has no session; use path \"profile:<session>/<category>/<name>\"",
@@ -117,6 +117,12 @@ type transcriptCursor struct {
 	Identity string `json:"i"`
 	Offset   int64  `json:"o"`
 	End      int64  `json:"e"`
+	// From is the first step still to list (list mode) or the first step of the detail range;
+	// To, Part and Bytes are set only in detail mode (Bytes: how far into its text).
+	From  string `json:"f,omitempty"`
+	To    string `json:"t,omitempty"`
+	Part  string `json:"p,omitempty"`
+	Bytes int64  `json:"b,omitempty"`
 }
 
 func encodeTranscriptCursor(cursor transcriptCursor) string {
@@ -176,7 +182,6 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 	if hasTurns && (hasTail || hasCursor) || hasTail && hasCursor {
 		return t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "Give only one of turns, tail and cursor")
 	}
-	full, _ := arguments["full"].(bool)
 	source, _ := arguments["source"].(string)
 	role, _ := arguments["role"].(string)
 	search, _ := arguments["search"].(string)
@@ -253,6 +258,7 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 
 	var startOff, endOff int64
 	var first, last int
+	var resume transcriptStepID
 	if hasCursor {
 		if cursor.Identity != identity || cursor.End > complete {
 			return t.fail(execution, tools.StatusError, "cursor_stale", "The transcript changed (compaction or reset) since this cursor was made; repeat the call without cursor")
@@ -260,6 +266,7 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 		startOff, endOff = cursor.Offset, cursor.End
 		first = max(sort.Search(len(turns), func(i int) bool { return turns[i].off > startOff })-1, 0)
 		last = sort.Search(len(turns), func(i int) bool { return turns[i].off >= endOff }) - 1
+		resume, _ = parseTranscriptStepID(cursor.From)
 	} else {
 		selected := transcriptRange{tail: 1}
 		switch {
@@ -281,9 +288,6 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 		if first > last {
 			return t.fail(execution, tools.StatusNotFound, "no_such_turns", fmt.Sprintf("The transcript has turns %d to %d", turns[0].number, turns[len(turns)-1].number))
 		}
-		if int64(last-first+1) > t.settings.MaxTurnsPerCall {
-			last = first + int(t.settings.MaxTurnsPerCall) - 1
-		}
 		startOff = turns[first].off
 		endOff = complete
 		if last+1 < len(turns) {
@@ -291,61 +295,45 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 		}
 	}
 
-	limit := int(t.settings.EntryMaxBytes)
-	if full {
-		limit = 0
-	}
-	var collected []transcriptEntry
-	calls := map[string]string{}
-	needle := strings.ToLower(search)
-	turnIndex := first
+	walk := newTranscriptWalk(turns, first, strings.ToLower(search), int(t.settings.PreviewBytes), int(t.settings.ValueBytes))
 	err = scanTranscript(ctx, file, startOff, endOff, t.settings.LineMaxBytes, func(line transcriptLine) (bool, error) {
-		for turnIndex+1 < len(turns) && turns[turnIndex+1].off <= line.off {
-			turnIndex++
-		}
-		number := turns[turnIndex].number
-		if line.tooLong {
-			collected = append(collected, transcriptEntry{turn: number, off: line.off, role: "unknown", text: fmt.Sprintf("#%d [line of %d bytes skipped: over tools.native.transcript.line_max_bytes]", number, line.length)})
-			return true, nil
-		}
-		collected = append(collected, renderTranscriptRecord(line.data, number, line.off, limit, calls, needle)...)
+		walk.visit(line)
 		return true, nil
 	})
 	if err != nil {
 		return t.scanFailure(execution, err)
 	}
-	selected := selectTranscriptEntries(collected, role, toolFilter, search != "", int(contextValue))
-	var entries []string
+	selected := selectTranscriptSteps(walk.steps, role, toolFilter, search != "", int(contextValue))
+	if hasCursor {
+		selected = selected[sort.Search(len(selected), func(i int) bool { return !selected[i].id.less(resume) }):]
+	}
+	var lines []string
 	var used int64
-	next := int64(-1)
-	for index := 0; index < len(selected); {
-		group := index
-		var size int64
-		for group < len(selected) && selected[group].off == selected[index].off {
-			size += int64(len(selected[group].text)) + 1
-			group++
-		}
-		if len(entries) > 0 && used+size > t.settings.ResponseMaxBytes {
-			next = selected[index].off
+	var next *transcriptStep
+	for _, step := range selected {
+		line := stepLine(step)
+		if len(lines) > 0 && (int64(len(lines)) >= t.settings.MaxListEntries || used+int64(len(line))+1 > t.settings.ResponseMaxBytes) {
+			next = step
 			break
 		}
-		for _, entry := range selected[index:group] {
-			entries = append(entries, entry.text)
-		}
-		used += size
-		index = group
+		lines = append(lines, line)
+		used += int64(len(line)) + 1
 	}
-	header := label + fmt.Sprintf("turns %d-%d; the transcript holds turns %d-%d", turns[first].number, turns[min(turnIndex, len(turns)-1)].number, turns[0].number, turns[len(turns)-1].number)
+	header := label + fmt.Sprintf("turns %d-%d; the transcript holds turns %d-%d", turns[first].number, turns[min(walk.turnIndex, len(turns)-1)].number, turns[0].number, turns[len(turns)-1].number)
 	if turns[0].number != 1 {
 		header += ": it was compacted, its earlier turns may be in the backup"
 	}
+	header += "; steps are turn.step in file order, N.0 is the user message, gaps are reasoning"
+	if len(lines) == 0 {
+		header += "; no step matches"
+	}
 	nextCursor := ""
-	if next >= 0 {
-		nextCursor = encodeTranscriptCursor(transcriptCursor{Selector: selector, Source: source, Identity: identity, Offset: next, End: endOff})
+	if next != nil {
+		nextCursor = encodeTranscriptCursor(transcriptCursor{Selector: selector, Source: source, Identity: identity, Offset: next.turnOff, End: endOff, From: next.id.String()})
 	} else if endOff < complete {
 		nextCursor = encodeTranscriptCursor(transcriptCursor{Selector: selector, Source: source, Identity: identity, Offset: endOff, End: complete})
 	}
-	return t.render(execution, header, path, entries, nextCursor, next >= 0)
+	return t.render(execution, header, path, lines, nextCursor, next != nil)
 }
 
 func (t *transcriptTool) scanFailure(execution tools.ExecutionContext, err error) string {
@@ -361,7 +349,7 @@ func (t *transcriptTool) scanFailure(execution tools.ExecutionContext, err error
 func (t *transcriptTool) render(execution tools.ExecutionContext, summary, path string, entries []string, cursor string, cut bool) string {
 	text := strings.Join(entries, "\n")
 	if int64(len(text)) > t.settings.ResponseMaxBytes {
-		text = cutMiddle(text, int(t.settings.ResponseMaxBytes))
+		text = midCut(text, int(t.settings.ResponseMaxBytes))
 		cut = true
 	}
 	information := []tools.Information{{Key: "transcript", Value: path}}

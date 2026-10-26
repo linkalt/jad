@@ -42,7 +42,7 @@ func TestBuildCatalogNeedsTheTranscriptManifest(t *testing.T) {
 
 func transcriptTestSettings() sessionfs.NativeTranscriptSettings {
 	return sessionfs.NativeTranscriptSettings{
-		ResponseMaxBytes: 64 * 1024, EntryMaxBytes: 4000, LineMaxBytes: 1 << 20, MaxTurnsPerCall: 50,
+		ResponseMaxBytes: 64 * 1024, PreviewBytes: 200, ValueBytes: 80, MaxListEntries: 100, MaxDetailBytes: 16384, LineMaxBytes: 1 << 20,
 		ScanMaxBytes: 1 << 30, SuggestMax: 20, TimeoutMs: 30000, AllowOtherSessions: true, AllowOtherProfiles: true, AllowChildren: true,
 	}
 }
@@ -95,7 +95,7 @@ func threeTurns(t *testing.T) string {
 	path := filepath.Join(t.TempDir(), "messages.jsonl")
 	writeTestTranscript(t, path,
 		userLine("first question"),
-		answerLine(1, 1, map[string]any{"type": "reasoning", "summary": []any{}}, callItem("call_a", "read", `{"path":"a.go"}`)),
+		answerLine(1, 1, map[string]any{"type": "reasoning", "summary": []any{map[string]any{"text": "private musings"}}}, callItem("call_a", "read", `{"path":"a.go"}`)),
 		resultLine("call_a", "package a"),
 		answerLine(1, 2, textItem("first answer")),
 		userLine("second question"),
@@ -108,7 +108,7 @@ func threeTurns(t *testing.T) string {
 
 func TestTranscriptReadsTheLastTurnByDefaultWithCallsAndResults(t *testing.T) {
 	out := runTranscript(t, transcriptTestSettings(), threeTurns(t), map[string]any{})
-	for _, want := range []string{"turns 3-3; the transcript holds turns 1-3", "#3 user: third question", "#3 assistant: third answer"} {
+	for _, want := range []string{"turns 3-3; the transcript holds turns 1-3", "3.0 user: third question", "3.1 assistant: third answer"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in %s", want, out)
 		}
@@ -125,7 +125,7 @@ func TestTranscriptTurnRangesAndTail(t *testing.T) {
 		want      []string
 		not       []string
 	}{
-		{map[string]any{"turns": "1"}, []string{"first question", "call read [call_a] {\"path\":\"a.go\"}", "result [call_a] package a", "first answer"}, []string{"second", "reasoning"}},
+		{map[string]any{"turns": "1"}, []string{"1.0 user: first question", "1.2 call read unknown 9B {\"path\":\"a.go\"}", "1.3 assistant: first answer"}, []string{"second", "private musings", "package a", "1.1"}},
 		{map[string]any{"turns": "2-3"}, []string{"second answer", "third answer"}, []string{"first"}},
 		{map[string]any{"turns": "-2"}, []string{"second question", "third question"}, []string{"first"}},
 		{map[string]any{"turns": "2-"}, []string{"second question", "third answer"}, []string{"first"}},
@@ -167,7 +167,7 @@ func TestTranscriptNumbersACompactedTranscriptByItsSessionTurnAndSaysSo(t *testi
 	path := filepath.Join(t.TempDir(), "messages.jsonl")
 	writeTestTranscript(t, path, userLine("kept"), answerLine(41, 1, textItem("kept answer")))
 	out := runTranscript(t, transcriptTestSettings(), path, map[string]any{})
-	if !strings.Contains(out, "#41 user: kept") || !strings.Contains(out, "compacted") || !strings.Contains(out, "turns 41-41; the transcript holds turns 41-41") {
+	if !strings.Contains(out, "41.0 user: kept") || !strings.Contains(out, "compacted") || !strings.Contains(out, "turns 41-41; the transcript holds turns 41-41") {
 		t.Fatalf("out = %s", out)
 	}
 	if out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"turns": "41"}); !strings.Contains(out, "kept answer") {
@@ -175,19 +175,22 @@ func TestTranscriptNumbersACompactedTranscriptByItsSessionTurnAndSaysSo(t *testi
 	}
 }
 
-func TestTranscriptCutsLongEntriesAndReplacesDataURLs(t *testing.T) {
+func TestTranscriptCutsLongPreviewsAndValuesInTheMiddleAndHidesDataURLs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "messages.jsonl")
 	image := "data:image/png;base64," + strings.Repeat("QUJD", 400)
-	writeTestTranscript(t, path, userLine("q"), answerLine(1, 1, callItem("c", "exec", strings.Repeat("x", 9000))), resultLine("c", "see "+image))
+	writeTestTranscript(t, path, userLine(strings.Repeat("h", 500)+strings.Repeat("t", 500)),
+		answerLine(1, 1, callItem("c", "exec", `{"code":"`+strings.Repeat("x", 9000)+`","note":"short"}`)), resultLine("c", "see "+image))
 	settings := transcriptTestSettings()
-	settings.EntryMaxBytes = 100
+	settings.PreviewBytes, settings.ValueBytes = 100, 40
 	out := runTranscript(t, settings, path, map[string]any{})
-	if !strings.Contains(out, "truncated") || strings.Contains(out, "QUJD") || !strings.Contains(out, "[data URL") {
+	if !strings.Contains(out, "…+") || strings.Contains(out, "QUJD") || strings.Contains(out, strings.Repeat("x", 50)) || !strings.Contains(out, `"note":"short"`) || !strings.Contains(out, `{"code":"xxx`) {
 		t.Fatalf("out = %s", out)
 	}
-	full := runTranscript(t, transcriptTestSettings(), path, map[string]any{"full": true})
-	if !strings.Contains(full, strings.Repeat("x", 9000)) {
-		t.Fatalf("full must keep the whole entry")
+	if !strings.Contains(out, "1.0 user: hhh") || !strings.Contains(out, "ttt\n") && !strings.Contains(out, "ttt") {
+		t.Fatalf("user preview keeps head and tail: %s", out)
+	}
+	if strings.Contains(out, "see data") || strings.Contains(out, "[data URL") {
+		t.Fatalf("a result is not listed: %s", out)
 	}
 }
 
@@ -438,7 +441,7 @@ func filterTranscript(t *testing.T) string {
 func TestTranscriptFiltersByRole(t *testing.T) {
 	path := filterTranscript(t)
 	out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"role": "tool"})
-	if !strings.Contains(out, "call read") || !strings.Contains(out, "result [c2]") || strings.Contains(out, "user:") || strings.Contains(out, "assistant:") {
+	if !strings.Contains(out, "call read") || !strings.Contains(out, "call exec") || strings.Contains(out, "user:") || strings.Contains(out, "assistant:") {
 		t.Fatalf("role tool: %s", out)
 	}
 	out = runTranscript(t, transcriptTestSettings(), path, map[string]any{"role": "user"})
@@ -450,7 +453,7 @@ func TestTranscriptFiltersByRole(t *testing.T) {
 func TestTranscriptFiltersByToolNameForCallsAndTheirResults(t *testing.T) {
 	path := filterTranscript(t)
 	out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"tool": "ex*"})
-	if !strings.Contains(out, "call exec") || !strings.Contains(out, "result [c2] file1") || strings.Contains(out, "call read") || strings.Contains(out, "result [c1]") || strings.Contains(out, "user:") {
+	if !strings.Contains(out, "call exec") || strings.Contains(out, "call read") || strings.Contains(out, "user:") {
 		t.Fatalf("tool ex*: %s", out)
 	}
 }
@@ -458,11 +461,11 @@ func TestTranscriptFiltersByToolNameForCallsAndTheirResults(t *testing.T) {
 func TestTranscriptSearchesCaseInsensitivelyWithContext(t *testing.T) {
 	path := filterTranscript(t)
 	out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"search": "NEEDLE"})
-	if !strings.Contains(out, "user: please find the Needle") || !strings.Contains(out, "has a needle inside") || strings.Contains(out, "call exec") || strings.Contains(out, "nothing else") {
+	if !strings.Contains(out, "user: please find the Needle") || !strings.Contains(out, "call read") || strings.Contains(out, "has a needle inside") || strings.Contains(out, "call exec") || strings.Contains(out, "nothing else") {
 		t.Fatalf("search: %s", out)
 	}
 	out = runTranscript(t, transcriptTestSettings(), path, map[string]any{"search": "file1", "context": json.Number("1")})
-	if !strings.Contains(out, "call exec") || !strings.Contains(out, "result [c2] file1") || !strings.Contains(out, "nothing else") || strings.Contains(out, "call read") {
+	if !strings.Contains(out, "call exec") || strings.Contains(out, "file1") || !strings.Contains(out, "nothing else") || !strings.Contains(out, "call read") || strings.Contains(out, "user:") {
 		t.Fatalf("search with context: %s", out)
 	}
 }
@@ -470,7 +473,7 @@ func TestTranscriptSearchesCaseInsensitivelyWithContext(t *testing.T) {
 func TestTranscriptSearchOnlyMatchesTheFilteredEntries(t *testing.T) {
 	path := filterTranscript(t)
 	out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"search": "needle", "role": "user"})
-	if !strings.Contains(out, "user: please") || strings.Contains(out, "has a needle inside") {
+	if !strings.Contains(out, "user: please") || strings.Contains(out, "call read") {
 		t.Fatalf("search + role: %s", out)
 	}
 }
