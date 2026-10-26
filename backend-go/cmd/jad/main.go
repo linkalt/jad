@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -82,11 +83,35 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", address, err)
 	}
-	server := config.NewHTTPServer(service.Handler)
-	serveErrors := make(chan error, 1)
+	handlers := service.HandlersFor(config)
+	tlsConfig, err := config.TLSConfig()
+	if err != nil {
+		listener.Close()
+		return err
+	}
+	if tlsConfig != nil {
+		listener = tls.NewListener(listener, tlsConfig)
+	}
+	server := config.NewHTTPServer(handlers.Main)
+	serveErrors := make(chan error, 2)
 	go func() { serveErrors <- server.Serve(listener) }()
+	var socketServer *http.Server
+	servers := 1
+	if handlers.Socket != nil {
+		socketListener, err := app.ListenUnix(config.RemoteAPI.ListenUnix, os.FileMode(config.RemoteAPI.ListenUnixMode))
+		if err != nil {
+			server.Close()
+			return err
+		}
+		socketServer = config.NewHTTPServer(handlers.Socket)
+		go func() { serveErrors <- socketServer.Serve(socketListener) }()
+		servers++
+		logger.Info("Go agent remote API listening", slog.String("socket", config.RemoteAPI.ListenUnix))
+	}
 	logger.Info("Go agent API listening",
 		slog.String("address", listener.Addr().String()),
+		slog.Bool("tls", tlsConfig != nil),
+		slog.Bool("remote_api", handlers.Socket != nil || (config.RemoteAPI.Enabled && tlsConfig != nil)),
 		slog.String("log_level", config.Log.Level),
 		slog.String("log_file", config.Log.File))
 
@@ -101,11 +126,17 @@ func run() error {
 	}
 
 	service.Close()
+	if socketServer != nil {
+		_, _ = config.ShutdownHTTPServer(socketServer, logger)
+		_ = os.Remove(config.RemoteAPI.ListenUnix)
+	}
 	if _, err := config.ShutdownHTTPServer(server, logger); err != nil {
 		return fmt.Errorf("shut down HTTP server: %w", err)
 	}
-	if err := <-serveErrors; !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve HTTP requests during shutdown: %w", err)
+	for range servers {
+		if err := <-serveErrors; !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve HTTP requests during shutdown: %w", err)
+		}
 	}
 	return nil
 }

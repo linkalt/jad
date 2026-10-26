@@ -222,6 +222,26 @@
           "items": {"type": "string", "format": "uri", "pattern": "^https?://[^/]+$"},
           "default": [],
           "description": "Exact browser origins permitted to call the API; configure the frontend dev-server origin when using its proxy. The server also requires JAD_API_TOKEN in the environment."
+        },
+        "remote_api": {
+          "type": "object",
+          "description": "Go backend only. Lets other JAD servers call profiles and sub-agents here (and read transcripts) under /api/remote/v1, with tokens from its own table, never the JAD_API_TOKEN. Off by default. Served only over TLS (tls_cert_file + tls_key_file make the main listener HTTPS) or over a unix socket (listen_unix); never on plain http. A change applies after a restart; the token file is re-read on every change, so revoking a token is immediate.",
+          "properties": {
+            "enabled": {"type": "boolean", "default": false},
+            "tokens_file": {"type": "string", "pattern": "\\S", "description": "JSON token table: {\"tokens\":[{\"id\":\"build-box\",\"sha256\":\"<64 hex of the token's SHA-256>\",\"expires\":\"2026-12-31T00:00:00Z\",\"revoked\":false,\"profiles\":[\"main/review/*\"],\"agents\":[\"main/review/*/explore\"],\"actions\":[\"message\",\"subagent\",\"status\",\"stop\",\"transcripts\"],\"max_hops\":2}]}. profiles are globs over session/category/profile, agents over session/category/profile/agent ('*' does not cross '/'); a token with no glob reaches nothing. Only the hash is stored. Relative to this file."},
+            "listen_unix": {"type": "string", "pattern": "\\S", "description": "Absolute path of a unix socket to serve the remote routes on. The file is created with listen_unix_mode and removed at shutdown; a stale socket file is replaced, any other file at the path is an error."},
+            "listen_unix_mode": {"type": "integer", "minimum": 384, "maximum": 438, "default": 384, "description": "Permission bits of the socket as a decimal number (384 = 0600). Default 0600."},
+            "tls_cert_file": {"type": "string", "pattern": "\\S", "description": "PEM certificate chain; with tls_key_file the main listener serves HTTPS (TLS 1.2 or newer) for the UI routes and the remote routes."},
+            "tls_key_file": {"type": "string", "pattern": "\\S"},
+            "max_hops": {"type": "integer", "minimum": 1, "maximum": 16, "default": 3, "description": "Most JAD servers a request may have passed through; a token's own max_hops can only lower it."},
+            "max_runs": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 256, "description": "Most remote runs held at once (running plus finished and not yet expired)."},
+            "run_timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 21600000, "default": 3600000, "description": "Longest a message run started through the remote API may take; it is then stopped (a sub-agent run keeps its agent's own timeout_ms)."},
+            "run_retention_ms": {"type": "integer", "minimum": 1000, "maximum": 86400000, "default": 600000, "description": "How long a finished remote run stays readable."},
+            "wait_max_ms": {"type": "integer", "minimum": 1, "maximum": 60000, "default": 25000, "description": "Longest a status request may wait for a run to end."},
+            "body_max_bytes": {"type": "integer", "minimum": 1, "maximum": 16777216, "default": 1048576},
+            "result_max_bytes": {"type": "integer", "minimum": 1, "maximum": 16777216, "default": 262144, "description": "A run's answer is cut to this many bytes (UTF-8 safe) and flagged cut."}
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": true,

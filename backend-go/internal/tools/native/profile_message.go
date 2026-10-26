@@ -87,6 +87,20 @@ func WithProfileChainMax(ctx context.Context, limit int) context.Context {
 	return context.WithValue(ctx, profileChainMaxKey{}, limit)
 }
 
+type remoteHopsKey struct{}
+
+// WithRemoteHops carries the remote hop count of the call in ctx, so the run a message starts
+// inherits it.
+func WithRemoteHops(ctx context.Context, hops int) context.Context {
+	return context.WithValue(ctx, remoteHopsKey{}, hops)
+}
+
+// RemoteHopsOf is the remote hop count carried by ctx, zero when none.
+func RemoteHopsOf(ctx context.Context) int {
+	hops, _ := ctx.Value(remoteHopsKey{}).(int)
+	return hops
+}
+
 // WithChildCall marks ctx as the context of a call made by a sub-agent run.
 func WithChildCall(ctx context.Context) context.Context {
 	return context.WithValue(ctx, childCallKey{}, true)
@@ -304,7 +318,7 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		// busy_wait_ms says how long this call may hold its run.
 		request.MaxQueued = 0
 	}
-	callCtx := WithProfileChainMax(ctx, p.settings.MaxChain)
+	callCtx := WithRemoteHops(WithProfileChainMax(ctx, p.settings.MaxChain), execution.RemoteHops)
 	if execution.AgentDepth > 0 {
 		callCtx = WithChildCall(callCtx)
 	}

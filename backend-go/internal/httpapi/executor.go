@@ -59,6 +59,9 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	// ui.message is the first visible change, so a client that attaches before any
 	// output receives only the run summary.
 	toolExecution := tools.ExecutionContext{}
+	run.mu.Lock()
+	toolExecution.RemoteHops = run.hops
+	run.mu.Unlock()
 	if run.canRequestInteraction() && run.interactions != nil {
 		toolExecution.RequestInteraction = run.interactions.Request
 	}

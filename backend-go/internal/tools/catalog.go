@@ -64,6 +64,9 @@ type ExecutionContext struct {
 	// empty at depth 0.
 	AgentDepth int
 	RootRun    string
+	// RemoteHops is how many JAD servers the request that started this run passed through
+	// (0 for a run a user started). A remote call made from here sends RemoteHops+1.
+	RemoteHops int
 }
 
 // PathScope is a per-call narrowing of a tool's path policy. Allow, when not empty,

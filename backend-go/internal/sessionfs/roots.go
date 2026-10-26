@@ -99,6 +99,8 @@ type ServerSettings struct {
 	RunContentFlushInterval    time.Duration
 	RunContentMaxIndexSegments int
 	AllowedOrigins             []string
+	// RemoteAPI is server.remote_api; see RemoteAPISettings.
+	RemoteAPI RemoteAPISettings
 }
 
 // Root identifies one independent session directory and the workspace used to
@@ -252,7 +254,7 @@ func Load(options LoadOptions) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	serverSettings, err := normalizeServerSettings(setting["server"], settingPath+": server")
+	serverSettings, err := normalizeServerSettings(setting["server"], settingPath+": server", filepath.Dir(settingPath))
 	if err != nil {
 		return Config{}, err
 	}
@@ -497,7 +499,7 @@ func parseRootEntry(raw json.RawMessage, index int, entryPath string) (rootEntry
 	return rootEntry{id: *id, label: *label, path: path}, nil
 }
 
-func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, error) {
+func normalizeServerSettings(raw json.RawMessage, path, base string) (ServerSettings, error) {
 	settings := Defaults()
 	if len(raw) == 0 {
 		return settings, nil
@@ -693,6 +695,11 @@ func normalizeServerSettings(raw json.RawMessage, path string) (ServerSettings, 
 		}
 		settings.AllowedOrigins = append([]string(nil), origins...)
 	}
+	remoteAPI, err := normalizeRemoteAPI(fields["remote_api"], path, base)
+	if err != nil {
+		return ServerSettings{}, err
+	}
+	settings.RemoteAPI = remoteAPI
 	return settings, nil
 }
 

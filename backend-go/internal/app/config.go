@@ -39,9 +39,11 @@ type Config struct {
 	// RecoverSubagentRunsAtStart does the same for the sub-agent run manifests.
 	RecoverSubagentRunsAtStart bool
 	Roots                      []sessionfs.Root
-	HTTP                       httpapi.Config
-	Environment                map[string]string
-	RootLibraryOptions         contentlibrary.Options
+	// RemoteAPI is server.remote_api.
+	RemoteAPI          sessionfs.RemoteAPISettings
+	HTTP               httpapi.Config
+	Environment        map[string]string
+	RootLibraryOptions contentlibrary.Options
 }
 
 // LoadConfig reads root settings and server environment overrides. A supplied
@@ -90,6 +92,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 		RecoverProcessesAtStart:    loaded.Server.RecoverProcessesAtStart,
 		RecoverSubagentRunsAtStart: loaded.Server.RecoverSubagentRunsAtStart,
 		Roots:                      append([]sessionfs.Root(nil), loaded.Roots...),
+		RemoteAPI:                  loaded.Server.RemoteAPI,
 		HTTP: httpapi.Config{
 			APIToken:                   environment[apiTokenEnvironmentName],
 			AllowedOrigins:             append([]string(nil), loaded.Server.AllowedOrigins...),

@@ -2,18 +2,24 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
 	"jad/backend-go/internal/contentlibrary"
 	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/remoteapi"
 )
 
 // Service owns the HTTP adapter and filesystem resolver for one server
 // instance.
 type Service struct {
-	Handler  http.Handler
+	Handler http.Handler
+	// Remote serves /api/remote/v1; nil unless server.remote_api is enabled. It is for the
+	// TLS and unix listeners only, never the plain one.
+	Remote   http.Handler
+	remote   *remoteapi.Server
 	api      *httpapi.Handler
 	resolver *Resolver
 
@@ -42,6 +48,29 @@ func NewService(config Config) (*Service, error) {
 	}
 	resolver.SetProfileRuns(api.ProfileRuns())
 	service := &Service{Handler: api, api: api, resolver: resolver}
+	if config.RemoteAPI.Enabled {
+		table, err := remoteapi.NewTokenTable(config.RemoteAPI.TokensFile, config.HTTP.Logger, nil)
+		if err != nil {
+			service.Close()
+			return nil, fmt.Errorf("server.remote_api: %w", err)
+		}
+		server, err := remoteapi.NewServer(remoteapi.Options{
+			Tokens:         table,
+			Backend:        resolver.RemoteBackend(time.Duration(config.RemoteAPI.RunTimeoutMs) * time.Millisecond),
+			Logger:         config.HTTP.Logger,
+			MaxHops:        config.RemoteAPI.MaxHops,
+			MaxRuns:        config.RemoteAPI.MaxRuns,
+			RunRetention:   time.Duration(config.RemoteAPI.RunRetentionMs) * time.Millisecond,
+			WaitMax:        time.Duration(config.RemoteAPI.WaitMaxMs) * time.Millisecond,
+			BodyMaxBytes:   config.RemoteAPI.BodyMaxBytes,
+			ResultMaxBytes: int(config.RemoteAPI.ResultMaxBytes),
+		})
+		if err != nil {
+			service.Close()
+			return nil, err
+		}
+		service.remote, service.Remote = server, server
+	}
 	options := StorageRecoveryOptions{Processes: config.RecoverProcessesAtStart, SubagentRuns: config.RecoverSubagentRunsAtStart}
 	if options.Processes || options.SubagentRuns {
 		service.startStorageRecovery(options)
@@ -86,6 +115,9 @@ func (s *Service) Close() {
 			<-s.recovering
 		}
 	})
+	if s.remote != nil {
+		s.remote.Close()
+	}
 	if s.api != nil {
 		s.api.Close()
 	}

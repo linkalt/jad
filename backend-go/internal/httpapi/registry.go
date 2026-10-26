@@ -255,7 +255,9 @@ type activeRun struct {
 	caller    string
 	// chain is the profiles a tool-started run descends through, ending with its own; set
 	// under mu before the run starts, empty for a user run.
-	chain               []string
+	chain []string
+	// hops is the remote hop count a tool-started run inherits; set under mu before it starts.
+	hops                int
 	cancel              context.CancelFunc
 	ctx                 context.Context
 	interactions        *interactionbroker.Broker

@@ -52,6 +52,7 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		SessionDir:    execution.SessionDir,
 		SessionKey:    execution.SessionKey,
 		AgentName:     agent.config.Name,
+		RemoteHops:    execution.RemoteHops,
 	}
 	var ownScope *tools.PathScope
 	if agent.config.Paths.Set() {
@@ -62,7 +63,7 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 	// session has a place left; otherwise it runs to its end inside this call, where the
 	// checkpoint belongs.
 	background, note := false, ""
-	if changes && agent.background && s.async != nil && execution.SessionKey != "" && depth == 0 {
+	if externalObserver(ctx) == nil && changes && agent.background && s.async != nil && execution.SessionKey != "" && depth == 0 {
 		if background = s.manager.reserveWriter(execution.SessionKey, int(s.settings.MaxBackgroundWriters)); !background {
 			note = fmt.Sprintf("Not handed off: the session already has %d background writer(s) going (tools.native.subagent.max_background_writers), so this call ran to its end", s.settings.MaxBackgroundWriters)
 		}
@@ -71,7 +72,8 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 	// own, and exists only when the child has the async tool to collect it.
 	owner, canHandle := handleOwner(execution)
 	var handle *subagentAsyncHandle
-	if s.async != nil && (!changes || background) && canHandle {
+	observe := externalObserver(ctx)
+	if observe == nil && s.async != nil && (!changes || background) && canHandle {
 		handle = newSubagentAsyncHandle(s.async, owner, agent.config.Name, subagentTaskPreview(task))
 	}
 	run, err := s.manager.start(subagentStart{
@@ -122,6 +124,9 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 			code = "async_capacity_reached"
 		}
 		return tools.ExecutionError(callID, tools.StatusError, code, err.Error()), nil
+	}
+	if observe != nil {
+		observe(&ExternalRun{run: run})
 	}
 	// A run without a handle (a writer, or a session without the async tool) has nobody to
 	// collect it later: the checkpoint belongs to this call, which waits

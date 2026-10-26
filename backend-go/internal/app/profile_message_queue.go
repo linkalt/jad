@@ -182,6 +182,7 @@ type profileMessagePlan struct {
 	queueWait time.Duration
 	maxQueued int
 	blocking  bool
+	hops      int
 	beforeRun func(context.Context)
 	// targetMessages and callerMessages are the transcripts of the target and of the caller.
 	targetMessages, callerMessages string
@@ -199,6 +200,7 @@ func (p *profileMessagePlan) request(run *profileMessageRun, wait bool) httpapi.
 		Caller:    p.caller,
 		Chain:     p.chain,
 		Message:   p.message,
+		Hops:      p.hops,
 		Wait:      wait,
 		BeforeRun: p.beforeRun,
 		OnCommitted: func(event json.RawMessage) {
