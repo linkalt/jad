@@ -2019,10 +2019,9 @@
               "type": "object",
               "description": "Go backend only. Asks a hosted classifier typed questions (predicate probability, choice, score) about a text and returns the answers; no tools, no free text. Read-only, so a sub-agent can list it in its tools. Off unless this key is present. Needs a key in the environment variable named by api_key_env, read on each call; the model file's key is not used. Needs extension.decide_systemone in tool_definition_paths (sample/tools/extension/decide_systemone.json).",
               "properties": {
-                "backend": {"type": "string", "enum": ["openrouter", "openai"], "default": "openrouter", "description": "openrouter uses OpenRouter's alpha Decisions endpoint; openai uses POST /v1/decisions. The two have different request shapes; the tool translates."},
-                "base_url": {"type": "string", "minLength": 1, "description": "The tool appends /decisions. Default https://openrouter.ai/api/alpha for openrouter and https://api.openai.com/v1 for openai."},
-                "api_key_env": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Environment variable holding the key. Default OPENROUTER_API_KEY or OPENAI_API_KEY by backend."},
-                "model": {"type": "string", "minLength": 1, "description": "Default openai/gpt-6-luna-decisions for openrouter and gpt-6-luna for openai."},
+                "base_url": {"type": "string", "minLength": 1, "description": "The tool appends /decisions. Default https://openrouter.ai/api/alpha."},
+                "api_key_env": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Environment variable holding the key. Default OPENROUTER_API_KEY."},
+                "model": {"type": "string", "minLength": 1, "description": "Default openai/gpt-6-luna-decisions."},
                 "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000, "default": 30000, "description": "Whole-request time limit."},
                 "max_questions": {"type": "integer", "minimum": 1, "maximum": 128, "default": 16, "description": "Most questions one call may carry."},
                 "max_input_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 200000, "description": "Most bytes of input text one call may carry."},

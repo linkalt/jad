@@ -8,7 +8,9 @@ import (
 )
 
 const (
-	defaultExtensionDecideSystemoneBackend                = "openrouter"
+	defaultExtensionDecideSystemoneBaseURL                = "https://openrouter.ai/api/alpha"
+	defaultExtensionDecideSystemoneAPIKeyEnv              = "OPENROUTER_API_KEY"
+	defaultExtensionDecideSystemoneModel                  = "openai/gpt-6-luna-decisions"
 	defaultExtensionDecideSystemoneTimeoutMS        int64 = 30_000
 	maxExtensionDecideSystemoneTimeoutMS            int64 = 300_000
 	defaultExtensionDecideSystemoneMaxQuestions     int64 = 16
@@ -18,23 +20,13 @@ const (
 )
 
 var (
-	extensionDecideSystemoneKeys     = []string{"backend", "base_url", "api_key_env", "model", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes"}
-	extensionDecideSystemoneBackends = []string{"openrouter", "openai"}
-	extensionDecideSystemoneEnvName  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	extensionDecideSystemoneKeys    = []string{"base_url", "api_key_env", "model", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes"}
+	extensionDecideSystemoneEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
-// extensionDecideSystemoneBackendDefaults are the endpoint, key variable and model used when a
-// setting leaves them out. They are defaults, not limits: every one can be set.
-var extensionDecideSystemoneBackendDefaults = map[string]struct{ BaseURL, APIKeyEnv, Model string }{
-	"openrouter": {"https://openrouter.ai/api/alpha", "OPENROUTER_API_KEY", "openai/gpt-6-luna-decisions"},
-	"openai":     {"https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-6-luna"},
-}
-
 // ExtensionDecideSystemoneSettings contains the normalized endpoint and limits for extension.decide_systemone.
-// Every field is resolved: a key left out of setting.json holds its backend's default.
+// Every field is resolved: a key left out of setting.json holds its default.
 type ExtensionDecideSystemoneSettings struct {
-	// Backend is "openrouter" (its alpha Decisions endpoint) or "openai" (/v1/decisions).
-	Backend string
 	// BaseURL is the URL the tool appends "/decisions" to, without a trailing slash.
 	BaseURL string
 	// APIKeyEnv names the environment variable holding the key. It is read on each call.
@@ -86,27 +78,20 @@ func normalizeExtensionDecideSystemoneSettings(setting map[string]json.RawMessag
 	}
 
 	settings := &ExtensionDecideSystemoneSettings{}
-	if settings.Backend, err = extensionDecideSystemoneString(fields, "backend", defaultExtensionDecideSystemoneBackend, settingPath); err != nil {
-		return nil, err
-	}
-	if !containsString(extensionDecideSystemoneBackends, settings.Backend) {
-		return nil, configError("%s: %s.backend must be one of %s", settingPath, section, strings.Join(extensionDecideSystemoneBackends, ", "))
-	}
-	defaults := extensionDecideSystemoneBackendDefaults[settings.Backend]
-	if settings.BaseURL, err = extensionDecideSystemoneString(fields, "base_url", defaults.BaseURL, settingPath); err != nil {
+	if settings.BaseURL, err = extensionDecideSystemoneString(fields, "base_url", defaultExtensionDecideSystemoneBaseURL, settingPath); err != nil {
 		return nil, err
 	}
 	settings.BaseURL = strings.TrimRight(settings.BaseURL, "/")
 	if parsed, err := url.Parse(settings.BaseURL); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, configError("%s: %s.base_url must be an http or https URL", settingPath, section)
 	}
-	if settings.APIKeyEnv, err = extensionDecideSystemoneString(fields, "api_key_env", defaults.APIKeyEnv, settingPath); err != nil {
+	if settings.APIKeyEnv, err = extensionDecideSystemoneString(fields, "api_key_env", defaultExtensionDecideSystemoneAPIKeyEnv, settingPath); err != nil {
 		return nil, err
 	}
 	if !extensionDecideSystemoneEnvName.MatchString(settings.APIKeyEnv) {
 		return nil, configError("%s: %s.api_key_env must be an environment variable name", settingPath, section)
 	}
-	if settings.Model, err = extensionDecideSystemoneString(fields, "model", defaults.Model, settingPath); err != nil {
+	if settings.Model, err = extensionDecideSystemoneString(fields, "model", defaultExtensionDecideSystemoneModel, settingPath); err != nil {
 		return nil, err
 	}
 	if settings.TimeoutMS, err = configuredInteger(fields, "timeout_ms", defaultExtensionDecideSystemoneTimeoutMS, 1, maxExtensionDecideSystemoneTimeoutMS, settingPath, section); err != nil {

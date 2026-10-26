@@ -32,7 +32,7 @@ type decideSystemoneRecorded struct {
 	Body                        map[string]any
 }
 
-func newDecideSystemoneRig(t *testing.T, backend string, status int, reply string, adjust func(*sessionfs.ExtensionDecideSystemoneSettings)) *decideSystemoneRig {
+func newDecideSystemoneRig(t *testing.T, status int, reply string, adjust func(*sessionfs.ExtensionDecideSystemoneSettings)) *decideSystemoneRig {
 	t.Helper()
 	rig := &decideSystemoneRig{}
 	rig.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +45,7 @@ func newDecideSystemoneRig(t *testing.T, backend string, status int, reply strin
 		_, _ = io.WriteString(w, reply)
 	}))
 	t.Cleanup(rig.server.Close)
-	rig.settings = sessionfs.ExtensionDecideSystemoneSettings{Backend: backend, BaseURL: rig.server.URL, APIKeyEnv: "DECIDE_KEY", Model: "m-1", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 1000, MaxResponseBytes: 4096}
+	rig.settings = sessionfs.ExtensionDecideSystemoneSettings{BaseURL: rig.server.URL, APIKeyEnv: "DECIDE_KEY", Model: "m-1", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 1000, MaxResponseBytes: 4096}
 	if adjust != nil {
 		adjust(&rig.settings)
 	}
@@ -101,8 +101,8 @@ const mixedQuestions = `{"input":"I was charged twice.","questions":[
  {"name":"team","instructions":"Who handles it?","choices":[{"value":"billing","description":"Payments."},"technical","other"]},
  {"name":"severity","instructions":"How severe?","levels":[{"label":"Cosmetic","description":"Looks only."},"Workaround","Blocked"]}]}`
 
-func TestDecideSystemoneOpenRouterRequestAndAnswers(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openrouter", 200, openRouterReply, nil)
+func TestDecideSystemoneRequestAndAnswers(t *testing.T) {
+	rig := newDecideSystemoneRig(t, 200, openRouterReply, nil)
 	output := rig.call(t, mixedQuestions)
 	if !strings.Contains(output, `"status":"ok"`) || !strings.Contains(output, "Answered 3 questions") {
 		t.Fatalf("not ok:\n%s", output)
@@ -155,67 +155,8 @@ func TestDecideSystemoneOpenRouterRequestAndAnswers(t *testing.T) {
 	}
 }
 
-const openAIReply = `{"model":"gpt-6-luna","usage":{"input_tokens":3},"answers":[
- {"type":"predicate","name":"billing","probability":0.12},
- {"type":"choice","name":"team","choice":"other","confidence":0.5,"probabilities":[{"value":"billing","probability":0.3},{"value":"technical","probability":0.2},{"value":"other","probability":0.5}]},
- {"type":"score","name":"severity","score":0.2,"confidence":0.8,"probabilities":[{"label":"Cosmetic","value":0,"probability":0.8},{"label":"Workaround","value":1,"probability":0.2},{"label":"Blocked","value":2,"probability":0}]}]}`
-
-func TestDecideSystemoneOpenAIRequestAndAnswers(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openai", 200, openAIReply, nil)
-	output := rig.call(t, mixedQuestions)
-	if !strings.Contains(output, `"status":"ok"`) {
-		t.Fatalf("not ok:\n%s", output)
-	}
-	request := rig.requests[0]
-	if request.Path != "/decisions" || request.Body["input"] != "I was charged twice." || request.Body["model"] != "m-1" {
-		t.Fatalf("request = %+v", request)
-	}
-	questions := request.Body["questions"].([]any)
-	if len(questions) != 3 {
-		t.Fatalf("questions = %#v", questions)
-	}
-	predicate := questions[0].(map[string]any)
-	if predicate["type"] != "predicate" || predicate["name"] != "billing" {
-		t.Fatalf("predicate sent as %#v", predicate)
-	}
-	choice := questions[1].(map[string]any)
-	choices := choice["choices"].([]any)
-	if choice["type"] != "choice" || len(choices) != 3 || choices[0].(map[string]any)["description"] != "Payments." || choices[1].(map[string]any)["value"] != "technical" {
-		t.Fatalf("choice sent as %#v", choice)
-	}
-	if _, has := choices[1].(map[string]any)["description"]; has {
-		t.Fatalf("an empty description was sent: %#v", choices[1])
-	}
-	level := questions[2].(map[string]any)["levels"].([]any)[0].(map[string]any)
-	if level["label"] != "Cosmetic" || level["description"] != "Looks only." {
-		t.Fatalf("level sent as %#v", level)
-	}
-
-	answers := decideSystemoneContent(t, output)["answers"].([]any)
-	if answers[0].(map[string]any)["probability"] != 0.12 || answers[1].(map[string]any)["choice"] != "other" {
-		t.Fatalf("answers = %#v", answers)
-	}
-	score := answers[2].(map[string]any)
-	if score["level"] != "Cosmetic" || score["probabilities"].(map[string]any)["Workaround"] != 0.2 {
-		t.Fatalf("score answer = %#v", score)
-	}
-}
-
-func TestDecideSystemoneOpenAIRefusalWithoutNameFollowsQuestionOrder(t *testing.T) {
-	reply := `{"answers":[{"type":"refusal"},{"type":"predicate","name":"b","probability":1}]}`
-	rig := newDecideSystemoneRig(t, "openai", 200, reply, nil)
-	output := rig.call(t, `{"input":"x","questions":[{"name":"a","instructions":"A?"},{"name":"b","instructions":"B?"}]}`)
-	answers := decideSystemoneContent(t, output)["answers"].([]any)
-	if answers[0].(map[string]any)["status"] != "refused" || answers[1].(map[string]any)["probability"] != 1.0 {
-		t.Fatalf("answers = %#v", answers)
-	}
-	if _, has := answers[0].(map[string]any)["probability"]; has {
-		t.Fatal("a refusal must not carry a probability the model could read as 0")
-	}
-}
-
 func TestDecideSystemoneMarksAQuestionTheProviderDidNotAnswer(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openrouter", 200, `{"answers":{"a":{"type":"noul","noul":0}}}`, nil)
+	rig := newDecideSystemoneRig(t, 200, `{"answers":{"a":{"type":"noul","noul":0}}}`, nil)
 	output := rig.call(t, `{"input":"x","questions":[{"name":"a","instructions":"A?"},{"name":"b","instructions":"B?"}]}`)
 	answers := decideSystemoneContent(t, output)["answers"].([]any)
 	if answers[1].(map[string]any)["status"] != "missing" {
@@ -227,7 +168,7 @@ func TestDecideSystemoneMarksAQuestionTheProviderDidNotAnswer(t *testing.T) {
 }
 
 func TestDecideSystemoneSmallestCallAndNormalizedArguments(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openrouter", 200, `{"answers":{"q1":{"type":"noul","noul":1},"q2":{"type":"noul","noul":0}}}`, nil)
+	rig := newDecideSystemoneRig(t, 200, `{"answers":{"q1":{"type":"noul","noul":1},"q2":{"type":"noul","noul":0}}}`, nil)
 	// No name, no type; "NOUL" and padding are repaired instead of rejected.
 	output := rig.call(t, `{"input":"x","questions":[{"instructions":"  Is it x?  "},{"type":" NOUL ","instructions":"Is it y?"}]}`)
 	if !strings.Contains(output, `"status":"ok"`) {
@@ -244,7 +185,7 @@ func TestDecideSystemoneSmallestCallAndNormalizedArguments(t *testing.T) {
 }
 
 func TestDecideSystemoneRefusesBadQuestionsBeforeAnyRequest(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openrouter", 200, `{"answers":{}}`, nil)
+	rig := newDecideSystemoneRig(t, 200, `{"answers":{}}`, nil)
 	for name, tc := range map[string]struct{ arguments, want string }{
 		"choice without choices":  {`{"input":"x","questions":[{"name":"a","type":"choice","instructions":"?"}]}`, `question "a" is a choice and needs choices`},
 		"score without levels":    {`{"input":"x","questions":[{"name":"a","type":"score","instructions":"?"}]}`, `question "a" is a score and needs levels`},
@@ -273,7 +214,7 @@ func TestDecideSystemoneRefusesBadQuestionsBeforeAnyRequest(t *testing.T) {
 }
 
 func TestDecideSystemoneSchemaRejectsMissingParts(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openrouter", 200, `{"answers":{}}`, nil)
+	rig := newDecideSystemoneRig(t, 200, `{"answers":{}}`, nil)
 	for name, arguments := range map[string]string{
 		"no input":        `{"questions":[{"instructions":"?"}]}`,
 		"no questions":    `{"input":"x"}`,
@@ -297,21 +238,16 @@ func TestDecideSystemoneSchemaRejectsMissingParts(t *testing.T) {
 func TestDecideSystemoneReportsProviderFailures(t *testing.T) {
 	const call = `{"input":"x","questions":[{"instructions":"?"}]}`
 	for name, tc := range map[string]struct {
-		backend, reply string
-		status         int
-		code, state    string
+		reply       string
+		status      int
+		code, state string
 	}{
-		"unauthorized":     {"openrouter", `{"error":{"message":"Missing Authentication header","code":401}}`, 401, "unauthorized", "error"},
-		"forbidden":        {"openai", `{"error":{"message":"no access"}}`, 403, "unauthorized", "error"},
-		"rate limited":     {"openai", `{"error":{"message":"slow down"}}`, 429, "rate_limited", "error"},
-		"rejected request": {"openrouter", `{"error":{"message":"[{\"code\":\"invalid_union\"}]","code":400}}`, 400, "request_rejected", "invalid_input"},
-		"server error":     {"openai", `upstream down`, 502, "provider_error", "error"},
-		"plain error text": {"openai", `{"error":"bad thing"}`, 500, "provider_error", "error"},
-		"not json":         {"openrouter", `<html>`, 200, "bad_response", "error"},
-		"no answers":       {"openai", `{"model":"x"}`, 200, "bad_response", "error"},
+		"unauthorized":     {`{"error":{"message":"Missing Authentication header","code":401}}`, 401, "unauthorized", "error"},
+		"rejected request": {`{"error":{"message":"[{\"code\":\"invalid_union\"}]","code":400}}`, 400, "request_rejected", "invalid_input"},
+		"not json":         {`<html>`, 200, "bad_response", "error"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rig := newDecideSystemoneRig(t, tc.backend, tc.status, tc.reply, nil)
+			rig := newDecideSystemoneRig(t, tc.status, tc.reply, nil)
 			output := rig.call(t, call)
 			if !strings.Contains(output, `"status":"`+tc.state+`"`) || !strings.Contains(output, `error_code: `+tc.code) {
 				t.Fatalf("want %s/%s, got:\n%s", tc.state, tc.code, output)
@@ -322,7 +258,7 @@ func TestDecideSystemoneReportsProviderFailures(t *testing.T) {
 
 func TestDecideSystemoneErrorTextIsOneBoundedLineAndNeverHoldsTheKey(t *testing.T) {
 	long := `{"error":{"message":"` + strings.Repeat("line one\\n", 200) + `"}}`
-	rig := newDecideSystemoneRig(t, "openai", 400, long, nil)
+	rig := newDecideSystemoneRig(t, 400, long, nil)
 	output := rig.call(t, `{"input":"x","questions":[{"instructions":"?"}]}`)
 	reason := ""
 	for _, line := range strings.Split(output, "\n") {
@@ -339,7 +275,7 @@ func TestDecideSystemoneErrorTextIsOneBoundedLineAndNeverHoldsTheKey(t *testing.
 }
 
 func TestDecideSystemoneRefusesAnOversizedResponse(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openai", 200, `{"answers":[],"pad":"`+strings.Repeat("x", 5000)+`"}`, nil)
+	rig := newDecideSystemoneRig(t, 200, `{"answers":{},"pad":"`+strings.Repeat("x", 5000)+`"}`, nil)
 	output := rig.call(t, `{"input":"x","questions":[{"instructions":"?"}]}`)
 	if !strings.Contains(output, "error_code: bad_response") || !strings.Contains(output, "larger than 4096 bytes") {
 		t.Fatalf("got:\n%s", output)
@@ -347,7 +283,7 @@ func TestDecideSystemoneRefusesAnOversizedResponse(t *testing.T) {
 }
 
 func TestDecideSystemoneMissingKeyDoesNotCallTheProvider(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openai", 200, openAIReply, func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.APIKeyEnv = "UNSET_KEY" })
+	rig := newDecideSystemoneRig(t, 200, openRouterReply, func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.APIKeyEnv = "UNSET_KEY" })
 	output := rig.call(t, `{"input":"x","questions":[{"instructions":"?"}]}`)
 	if !strings.Contains(output, "error_code: api_key_missing") || !strings.Contains(output, "UNSET_KEY") || len(rig.requests) != 0 {
 		t.Fatalf("requests %d:\n%s", len(rig.requests), output)
@@ -359,7 +295,7 @@ func TestDecideSystemoneTimeoutStopsASlowProvider(t *testing.T) {
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
 	t.Cleanup(slow.Close)
 	t.Cleanup(func() { close(release) })
-	settings := sessionfs.ExtensionDecideSystemoneSettings{Backend: "openai", BaseURL: slow.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 100, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
+	settings := sessionfs.ExtensionDecideSystemoneSettings{BaseURL: slow.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 100, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
 	tool, err := newDecideSystemoneTool(settings, func(string) string { return "k" }, slow.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -386,7 +322,7 @@ func TestDecideSystemoneDoesNotFollowARedirectWithTheKey(t *testing.T) {
 		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 	}))
 	t.Cleanup(redirector.Close)
-	settings := sessionfs.ExtensionDecideSystemoneSettings{Backend: "openai", BaseURL: redirector.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
+	settings := sessionfs.ExtensionDecideSystemoneSettings{BaseURL: redirector.URL, APIKeyEnv: "K", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 100, MaxResponseBytes: 100}
 	// The client the tool builds for itself, with only the key injected.
 	tool, err := newDecideSystemoneTool(settings, func(string) string { return "k" }, newDecideSystemoneHTTPClient())
 	if err != nil {
@@ -399,7 +335,7 @@ func TestDecideSystemoneDoesNotFollowARedirectWithTheKey(t *testing.T) {
 }
 
 func TestDecideSystemoneCancelledCall(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openai", 200, openAIReply, nil)
+	rig := newDecideSystemoneRig(t, 200, openRouterReply, nil)
 	tool, err := newDecideSystemoneTool(rig.settings, func(string) string { return "k" }, rig.server.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -454,7 +390,7 @@ func TestDecideSystemoneScoreOutsideTheLevelsIsClamped(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			reply, _ := json.Marshal(map[string]any{"answers": map[string]any{"s": map[string]any{"type": "score", "score": tc.score, "confidence": 1, "probabilities": map[string]float64{"0": 0.5, "1": 0.5}}}})
-			rig := newDecideSystemoneRig(t, "openrouter", 200, string(reply), nil)
+			rig := newDecideSystemoneRig(t, 200, string(reply), nil)
 			output := rig.call(t, `{"input":"x","questions":[{"name":"s","instructions":"?","levels":["Low","High"]}]}`)
 			answer := decideSystemoneContent(t, output)["answers"].([]any)[0].(map[string]any)
 			if answer["level"] != tc.want {
@@ -469,18 +405,14 @@ func TestDecideSystemoneScoreOutsideTheLevelsIsClamped(t *testing.T) {
 func TestDecideSystemoneAnswerThatDoesNotFitItsQuestionIsUnusableNotZero(t *testing.T) {
 	const predicate = `{"input":"x","questions":[{"name":"q1","instructions":"?"}]}`
 	const choice = `{"input":"x","questions":[{"name":"q1","instructions":"?","choices":["a","b"]}]}`
-	for name, tc := range map[string]struct{ backend, reply, arguments, status string }{
-		"openrouter choice answer to predicate": {"openrouter", `{"answers":{"q1":{"type":"choice","choice":"a","confidence":1}}}`, predicate, "unusable"},
-		"openrouter unknown type":               {"openrouter", `{"answers":{"q1":{"type":"mystery"}}}`, predicate, "unusable"},
-		"openrouter null choice":                {"openrouter", `{"answers":{"q1":{"type":"choice","choice":null}}}`, choice, "unusable"},
-		"openrouter refusal":                    {"openrouter", `{"answers":{"q1":{"type":"refusal"}}}`, predicate, "refused"},
-		"openai choice answer to predicate":     {"openai", `{"answers":[{"type":"choice","name":"q1","choice":"a","confidence":1}]}`, predicate, "unusable"},
-		"openai predicate answer to choice":     {"openai", `{"answers":[{"type":"predicate","name":"q1","probability":0.9}]}`, choice, "unusable"},
-		"openai null choice":                    {"openai", `{"answers":[{"type":"choice","name":"q1","choice":null}]}`, choice, "unusable"},
-		"openai refusal":                        {"openai", `{"answers":[{"type":"refusal","name":"q1"}]}`, predicate, "refused"},
+	for name, tc := range map[string]struct{ reply, arguments, status string }{
+		"openrouter choice answer to predicate": {`{"answers":{"q1":{"type":"choice","choice":"a","confidence":1}}}`, predicate, "unusable"},
+		"openrouter unknown type":               {`{"answers":{"q1":{"type":"mystery"}}}`, predicate, "unusable"},
+		"openrouter null choice":                {`{"answers":{"q1":{"type":"choice","choice":null}}}`, choice, "unusable"},
+		"openrouter refusal":                    {`{"answers":{"q1":{"type":"refusal"}}}`, predicate, "refused"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rig := newDecideSystemoneRig(t, tc.backend, 200, tc.reply, nil)
+			rig := newDecideSystemoneRig(t, 200, tc.reply, nil)
 			answer := decideSystemoneContent(t, rig.call(t, tc.arguments))["answers"].([]any)[0].(map[string]any)
 			if answer["status"] != tc.status {
 				t.Fatalf("answer = %#v, want status %s", answer, tc.status)
@@ -500,17 +432,13 @@ func TestDecideSystemoneRejectsMissingNumbersUnknownChoicesAndKeyEcho(t *testing
 	const predicate = `{"input":"x","questions":[{"name":"q1","instructions":"?"}]}`
 	const choice = `{"input":"x","questions":[{"name":"q1","instructions":"?","choices":["a","b"]}]}`
 	const score = `{"input":"x","questions":[{"name":"q1","instructions":"?","levels":["lo","hi"]}]}`
-	for name, tc := range map[string]struct{ backend, reply, arguments string }{
-		"openai predicate without probability":    {"openai", `{"answers":[{"type":"predicate","name":"q1"}]}`, predicate},
-		"openai predicate null probability":       {"openai", `{"answers":[{"type":"predicate","name":"q1","probability":null}]}`, predicate},
-		"openai score without score":              {"openai", `{"answers":[{"type":"score","name":"q1","confidence":1}]}`, score},
-		"openrouter predicate without noul":       {"openrouter", `{"answers":{"q1":{"type":"noul"}}}`, predicate},
-		"openrouter score without score":          {"openrouter", `{"answers":{"q1":{"type":"score","confidence":1}}}`, score},
-		"openai choice not among the options":     {"openai", `{"answers":[{"type":"choice","name":"q1","choice":"A","confidence":1}]}`, choice},
-		"openrouter choice not among the options": {"openrouter", `{"answers":{"q1":{"type":"choice","choice":"c","confidence":1}}}`, choice},
+	for name, tc := range map[string]struct{ reply, arguments string }{
+		"openrouter predicate without noul":       {`{"answers":{"q1":{"type":"noul"}}}`, predicate},
+		"openrouter score without score":          {`{"answers":{"q1":{"type":"score","confidence":1}}}`, score},
+		"openrouter choice not among the options": {`{"answers":{"q1":{"type":"choice","choice":"c","confidence":1}}}`, choice},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rig := newDecideSystemoneRig(t, tc.backend, 200, tc.reply, nil)
+			rig := newDecideSystemoneRig(t, 200, tc.reply, nil)
 			answer := decideSystemoneContent(t, rig.call(t, tc.arguments))["answers"].([]any)[0].(map[string]any)
 			if answer["status"] != "unusable" {
 				t.Fatalf("answer = %#v, want status unusable", answer)
@@ -524,7 +452,7 @@ func TestDecideSystemoneRejectsMissingNumbersUnknownChoicesAndKeyEcho(t *testing
 	}
 
 	// A real zero still counts as an answer.
-	rig := newDecideSystemoneRig(t, "openai", 200, `{"answers":[{"type":"predicate","name":"q1","probability":0}]}`, nil)
+	rig := newDecideSystemoneRig(t, 200, `{"answers":{"q1":{"type":"noul","noul":0}}}`, nil)
 	if answer := decideSystemoneContent(t, rig.call(t, predicate))["answers"].([]any)[0].(map[string]any); answer["probability"] != 0.0 || answer["status"] != nil {
 		t.Fatalf("a real 0 was dropped: %#v", answer)
 	}
@@ -536,19 +464,12 @@ func TestDecideSystemoneRejectsMissingNumbersUnknownChoicesAndKeyEcho(t *testing
 		"json string":  `{"error":"secret-key is not valid"}`,
 	} {
 		t.Run("echoed key, "+name, func(t *testing.T) {
-			rig := newDecideSystemoneRig(t, "openai", 401, reply, nil)
+			rig := newDecideSystemoneRig(t, 401, reply, nil)
 			output := rig.call(t, predicate)
 			if strings.Contains(output, "secret-key") || !strings.Contains(output, "[redacted]") {
 				t.Fatalf("the key was not redacted:\n%s", output)
 			}
 		})
-	}
-
-	// An entry with no label would write an empty JSON key.
-	rig = newDecideSystemoneRig(t, "openai", 200, `{"answers":[{"type":"choice","name":"q1","choice":"a","confidence":1,"probabilities":[{"value":"a","probability":0.6},{"probability":0.2},{"probability":0.2}]}]}`, nil)
-	output := rig.call(t, choice)
-	if strings.Contains(output, `"":`) {
-		t.Fatalf("an empty probability label was written:\n%s", output)
 	}
 }
 
@@ -573,14 +494,12 @@ func TestDecideSystemoneTransportErrorKeepsItsKindAndHidesTheKey(t *testing.T) {
 func TestDecideSystemoneAnswerOfAnotherTypeWithANumberIsUnusable(t *testing.T) {
 	const predicate = `{"input":"x","questions":[{"name":"q1","instructions":"?"}]}`
 	const score = `{"input":"x","questions":[{"name":"q1","instructions":"?","levels":["lo","hi"]}]}`
-	for name, tc := range map[string]struct{ backend, reply, arguments string }{
-		"openai score answer to predicate":     {"openai", `{"answers":[{"type":"score","name":"q1","score":1,"confidence":1}]}`, predicate},
-		"openai predicate answer to score":     {"openai", `{"answers":[{"type":"predicate","name":"q1","probability":0.9}]}`, score},
-		"openrouter score answer to predicate": {"openrouter", `{"answers":{"q1":{"type":"score","score":1,"confidence":1}}}`, predicate},
-		"openrouter noul answer to score":      {"openrouter", `{"answers":{"q1":{"type":"noul","noul":0.9}}}`, score},
+	for name, tc := range map[string]struct{ reply, arguments string }{
+		"openrouter score answer to predicate": {`{"answers":{"q1":{"type":"score","score":1,"confidence":1}}}`, predicate},
+		"openrouter noul answer to score":      {`{"answers":{"q1":{"type":"noul","noul":0.9}}}`, score},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rig := newDecideSystemoneRig(t, tc.backend, 200, tc.reply, nil)
+			rig := newDecideSystemoneRig(t, 200, tc.reply, nil)
 			answer := decideSystemoneContent(t, rig.call(t, tc.arguments))["answers"].([]any)[0].(map[string]any)
 			if answer["status"] != "unusable" {
 				t.Fatalf("answer = %#v, want unusable", answer)
@@ -592,12 +511,11 @@ func TestDecideSystemoneAnswerOfAnotherTypeWithANumberIsUnusable(t *testing.T) {
 // One answer with a field of the wrong kind must cost that answer only.
 func TestDecideSystemoneOneMalformedAnswerDoesNotDiscardTheOthers(t *testing.T) {
 	const arguments = `{"input":"x","questions":[{"name":"a","instructions":"?"},{"name":"b","instructions":"?"}]}`
-	for name, tc := range map[string]struct{ backend, reply string }{
-		"openai":     {"openai", `{"answers":[{"type":"predicate","name":"a","probability":"high"},{"type":"predicate","name":"b","probability":0.7}]}`},
-		"openrouter": {"openrouter", `{"answers":{"a":{"type":"noul","noul":"high"},"b":{"type":"noul","noul":0.7}}}`},
+	for name, tc := range map[string]struct{ reply string }{
+		"openrouter": {`{"answers":{"a":{"type":"noul","noul":"high"},"b":{"type":"noul","noul":0.7}}}`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rig := newDecideSystemoneRig(t, tc.backend, 200, tc.reply, nil)
+			rig := newDecideSystemoneRig(t, 200, tc.reply, nil)
 			output := rig.call(t, arguments)
 			if !strings.Contains(output, `"status":"ok"`) {
 				t.Fatalf("one odd field failed the whole call:\n%s", output)
@@ -612,17 +530,14 @@ func TestDecideSystemoneOneMalformedAnswerDoesNotDiscardTheOthers(t *testing.T) 
 
 const predicateQuestion = `"questions":[{"name":"q1","instructions":"?"}]`
 
-func decideSystemoneOKReply(backend string) string {
-	if backend == "openai" {
-		return `{"answers":[{"type":"predicate","name":"q1","probability":0.5}]}`
-	}
+func decideSystemoneOKReply() string {
 	return `{"answers":{"q1":{"type":"noul","noul":0.5}}}`
 }
 
 func TestDecideSystemoneInputIsAnArrayOfTextAndJSONParts(t *testing.T) {
 	const mixed = `{"input":["Customer complains.",{"type":"text","text":"Second note."},{"type":"json","value":{"charged":20,"expected":10,"tag":"<b>&"}}],` + predicateQuestion + `}`
 	t.Run("openrouter sends the parts as a list, JSON as itself", func(t *testing.T) {
-		rig := newDecideSystemoneRig(t, "openrouter", 200, decideSystemoneOKReply("openrouter"), nil)
+		rig := newDecideSystemoneRig(t, 200, decideSystemoneOKReply(), nil)
 		if output := rig.call(t, mixed); !strings.Contains(output, `"status":"ok"`) {
 			t.Fatalf("not ok:\n%s", output)
 		}
@@ -635,38 +550,14 @@ func TestDecideSystemoneInputIsAnArrayOfTextAndJSONParts(t *testing.T) {
 			t.Fatalf("a JSON part must be sent as a JSON value, got %#v", state[2])
 		}
 	})
-	t.Run("openai sends one user message of input_text parts", func(t *testing.T) {
-		rig := newDecideSystemoneRig(t, "openai", 200, decideSystemoneOKReply("openai"), nil)
-		if output := rig.call(t, mixed); !strings.Contains(output, `"status":"ok"`) {
-			t.Fatalf("not ok:\n%s", output)
-		}
-		messages, ok := rig.requests[0].Body["input"].([]any)
-		if !ok || len(messages) != 1 || messages[0].(map[string]any)["role"] != "user" {
-			t.Fatalf("input = %#v", rig.requests[0].Body["input"])
-		}
-		parts := messages[0].(map[string]any)["content"].([]any)
-		if len(parts) != 3 {
-			t.Fatalf("parts = %#v", parts)
-		}
-		for index, want := range []string{"Customer complains.", "Second note.", `{"charged":20,"expected":10,"tag":"<b>&"}`} {
-			part := parts[index].(map[string]any)
-			if part["type"] != "input_text" || part["text"] != want {
-				t.Fatalf("part %d = %#v, want input_text %q", index, part, want)
-			}
-		}
-	})
 }
 
 func TestDecideSystemoneAllTextInputIsSentAsOneString(t *testing.T) {
 	const input = `{"input":["First.",{"type":"text","text":"Second."}],` + predicateQuestion + `}`
-	for backend, field := range map[string]string{"openai": "input", "openrouter": "state"} {
-		t.Run(backend, func(t *testing.T) {
-			rig := newDecideSystemoneRig(t, backend, 200, decideSystemoneOKReply(backend), nil)
-			rig.call(t, input)
-			if got := rig.requests[0].Body[field]; got != "First.\n\nSecond." {
-				t.Fatalf("%s = %#v", field, got)
-			}
-		})
+	rig := newDecideSystemoneRig(t, 200, decideSystemoneOKReply(), nil)
+	rig.call(t, input)
+	if got := rig.requests[0].Body["state"]; got != "First.\n\nSecond." {
+		t.Fatalf("state = %#v", got)
 	}
 }
 
@@ -678,7 +569,7 @@ func TestDecideSystemoneInputAcceptsABareStringOrOnePartButTheSchemaStaysAnArray
 		"plain in array": `["Just text."]`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			rig := newDecideSystemoneRig(t, "openrouter", 200, decideSystemoneOKReply("openrouter"), nil)
+			rig := newDecideSystemoneRig(t, 200, decideSystemoneOKReply(), nil)
 			output := rig.call(t, `{"input":`+input+`,`+predicateQuestion+`}`)
 			if !strings.Contains(output, `"status":"ok"`) || rig.requests[0].Body["state"] != "Just text." {
 				t.Fatalf("state = %#v\n%s", rig.requests[0].Body["state"], output)
@@ -699,7 +590,7 @@ func TestDecideSystemoneInputAcceptsABareStringOrOnePartButTheSchemaStaysAnArray
 }
 
 func TestDecideSystemoneRefusesInputsItCannotSend(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openrouter", 200, decideSystemoneOKReply("openrouter"), nil)
+	rig := newDecideSystemoneRig(t, 200, decideSystemoneOKReply(), nil)
 	for name, tc := range map[string]struct{ input, want string }{
 		"empty array":        {`[]`, "schema"},
 		"empty string":       {`[""]`, "schema"},
@@ -727,7 +618,7 @@ func TestDecideSystemoneRefusesInputsItCannotSend(t *testing.T) {
 }
 
 func TestDecideSystemoneAcceptsEveryKindOfJSONValue(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openrouter", 200, decideSystemoneOKReply("openrouter"), nil)
+	rig := newDecideSystemoneRig(t, 200, decideSystemoneOKReply(), nil)
 	for name, value := range map[string]string{"object": `{"a":1}`, "array": `[1,"two",null]`, "string": `"text"`, "number": `3.5`, "false": `false`, "zero": `0`, "empty object": `{}`} {
 		output := rig.call(t, `{"input":[{"type":"json","value":`+value+`}],`+predicateQuestion+`}`)
 		if !strings.Contains(output, `"status":"ok"`) {
@@ -740,7 +631,7 @@ func TestDecideSystemoneAcceptsEveryKindOfJSONValue(t *testing.T) {
 }
 
 func TestDecideSystemoneInputLimitCountsAllPartsAndTheJSONAsSent(t *testing.T) {
-	rig := newDecideSystemoneRig(t, "openrouter", 200, decideSystemoneOKReply("openrouter"), func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.MaxInputBytes = 20 })
+	rig := newDecideSystemoneRig(t, 200, decideSystemoneOKReply(), func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.MaxInputBytes = 20 })
 	// 10 text bytes + 10 bytes of compact JSON ({"a":"xxxx"} is 12) stay near the limit.
 	if output := rig.call(t, `{"input":["0123456789",{"type":"json","value":{"a":"xx"}}],`+predicateQuestion+`}`); !strings.Contains(output, `"status":"ok"`) {
 		t.Fatalf("20 bytes refused:\n%s", output)

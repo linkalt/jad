@@ -77,13 +77,7 @@ func (e *decideSystemoneResponseError) Error() string { return e.Message }
 
 // requestDecisions sends one request and returns the answers by question name.
 func requestDecisions(ctx context.Context, client *http.Client, settings sessionfs.ExtensionDecideSystemoneSettings, key string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) (map[string]decideSystemoneAnswer, error) {
-	var body any
-	if settings.Backend == "openai" {
-		body = openAIDecisionsRequest(settings.Model, input, questions)
-	} else {
-		body = openRouterDecisionsRequest(settings.Model, input, questions)
-	}
-	payload, err := json.Marshal(body)
+	payload, err := json.Marshal(systemoneRequest(settings.Model, input, questions))
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
@@ -109,12 +103,7 @@ func requestDecisions(ctx context.Context, client *http.Client, settings session
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		return nil, &decideSystemoneHTTPError{Status: response.StatusCode, Message: decideSystemoneRedact(decideSystemoneErrorMessage(data), key)}
 	}
-	var answers map[string]decideSystemoneAnswer
-	if settings.Backend == "openai" {
-		answers, err = parseOpenAIDecisions(data, questions)
-	} else {
-		answers, err = parseOpenRouterDecisions(data, questions)
-	}
+	answers, err := parseSystemoneAnswers(data, questions)
 	if err != nil {
 		return nil, &decideSystemoneResponseError{err.Error()}
 	}
@@ -173,8 +162,6 @@ func decideSystemoneRequestError(callID string, err error) string {
 	}
 }
 
-// ---- OpenAI: POST /v1/decisions ----
-
 // decideSystemoneAllText joins the parts into one string when every part is text.
 func decideSystemoneAllText(input []decideSystemoneInputPart) (string, bool) {
 	texts := make([]string, 0, len(input))
@@ -187,28 +174,10 @@ func decideSystemoneAllText(input []decideSystemoneInputPart) (string, bool) {
 	return strings.Join(texts, "\n\n"), true
 }
 
-// openAIDecisionsInput is a string when the input is all text, as in OpenAI's own
-// examples, and otherwise one user message whose parts are input_text, a JSON value
-// being its compact text.
-func openAIDecisionsInput(input []decideSystemoneInputPart) any {
-	if text, ok := decideSystemoneAllText(input); ok {
-		return text
-	}
-	parts := make([]map[string]any, 0, len(input))
-	for _, part := range input {
-		text := part.Text
-		if part.JSON != nil {
-			text = string(part.JSON)
-		}
-		parts = append(parts, map[string]any{"type": "input_text", "text": text})
-	}
-	return []map[string]any{{"role": "user", "content": parts}}
-}
-
-// openRouterDecisionsState is a string when the input is all text, and otherwise the
+// systemoneState is a string when the input is all text, and otherwise the
 // list of its parts, a text as a string and a JSON value as itself: the endpoint reads
 // "a plain string, or a JSON object or array of related context".
-func openRouterDecisionsState(input []decideSystemoneInputPart) any {
+func systemoneState(input []decideSystemoneInputPart) any {
 	if text, ok := decideSystemoneAllText(input); ok {
 		return text
 	}
@@ -223,107 +192,6 @@ func openRouterDecisionsState(input []decideSystemoneInputPart) any {
 	return state
 }
 
-func openAIDecisionsRequest(model string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) map[string]any {
-	items := make([]map[string]any, 0, len(questions))
-	for _, question := range questions {
-		item := map[string]any{"type": question.Type, "name": question.Name, "instructions": question.Instructions}
-		switch question.Type {
-		case "choice":
-			choices := make([]map[string]any, 0, len(question.Options))
-			for _, option := range question.Options {
-				choice := map[string]any{"value": option.Label}
-				if option.Description != "" {
-					choice["description"] = option.Description
-				}
-				choices = append(choices, choice)
-			}
-			item["choices"] = choices
-		case "score":
-			levels := make([]map[string]any, 0, len(question.Options))
-			for _, option := range question.Options {
-				level := map[string]any{"label": option.Label}
-				if option.Description != "" {
-					level["description"] = option.Description
-				}
-				levels = append(levels, level)
-			}
-			item["levels"] = levels
-		}
-		items = append(items, item)
-	}
-	return map[string]any{"model": model, "input": openAIDecisionsInput(input), "questions": items}
-}
-
-func parseOpenAIDecisions(data []byte, questions []decideSystemoneQuestion) (map[string]decideSystemoneAnswer, error) {
-	var response struct {
-		Answers []json.RawMessage `json:"answers"`
-	}
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, fmt.Errorf("the response is not valid JSON: %w", err)
-	}
-	if response.Answers == nil {
-		return nil, errors.New("the response has no answers")
-	}
-	answers := make(map[string]decideSystemoneAnswer, len(response.Answers))
-	for index, raw := range response.Answers {
-		var item struct {
-			Type          string          `json:"type"`
-			Name          string          `json:"name"`
-			Probability   *float64        `json:"probability"`
-			Choice        json.RawMessage `json:"choice"`
-			Score         *float64        `json:"score"`
-			Confidence    float64         `json:"confidence"`
-			Probabilities []struct {
-				Value       json.RawMessage `json:"value"`
-				Label       string          `json:"label"`
-				Probability float64         `json:"probability"`
-			} `json:"probabilities"`
-		}
-		// A refusal may come without its name; the answers follow the question order.
-		name := ""
-		if index < len(questions) {
-			name = questions[index].Name
-		}
-		if err := json.Unmarshal(raw, &item); err != nil {
-			// One odd field costs that answer only, not the others.
-			if name != "" {
-				answers[name] = decideSystemoneAnswer{Broken: true}
-			}
-			continue
-		}
-		if item.Name != "" {
-			name = item.Name
-		}
-		answer := decideSystemoneAnswer{Type: item.Type, Confidence: item.Confidence}
-		switch item.Type {
-		case "refusal":
-			answer.Refused = true
-		case "predicate":
-			if item.Probability != nil {
-				answer.Probability, answer.HasNumber = *item.Probability, true
-			}
-		case "choice":
-			answer.Choice = decideSystemoneScalarText(item.Choice)
-		case "score":
-			if item.Score != nil {
-				answer.Score, answer.HasNumber = *item.Score, true
-			}
-		}
-		for _, probability := range item.Probabilities {
-			label := probability.Label
-			if label == "" {
-				label = decideSystemoneScalarText(probability.Value)
-			}
-			if label == "" {
-				continue
-			}
-			answer.Probabilities = append(answer.Probabilities, decideSystemoneProbability{Label: label, Probability: probability.Probability})
-		}
-		answers[name] = answer
-	}
-	return answers, nil
-}
-
 // decideSystemoneScalarText renders a JSON string, number or bool without quotes.
 func decideSystemoneScalarText(raw json.RawMessage) string {
 	var text string
@@ -333,9 +201,9 @@ func decideSystemoneScalarText(raw json.RawMessage) string {
 	return strings.TrimSpace(string(raw))
 }
 
-// ---- OpenRouter: POST /api/alpha/decisions ----
+// ---- Request and answers ----
 
-func openRouterDecisionsRequest(model string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) map[string]any {
+func systemoneRequest(model string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) map[string]any {
 	items := make(map[string]any, len(questions))
 	for _, question := range questions {
 		item := map[string]any{"instructions": question.Instructions}
@@ -362,7 +230,7 @@ func openRouterDecisionsRequest(model string, input []decideSystemoneInputPart, 
 		}
 		items[question.Name] = item
 	}
-	return map[string]any{"model": model, "state": openRouterDecisionsState(input), "questions": items}
+	return map[string]any{"model": model, "state": systemoneState(input), "questions": items}
 }
 
 func firstNonEmpty(values ...string) string {
@@ -374,7 +242,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func parseOpenRouterDecisions(data []byte, questions []decideSystemoneQuestion) (map[string]decideSystemoneAnswer, error) {
+func parseSystemoneAnswers(data []byte, questions []decideSystemoneQuestion) (map[string]decideSystemoneAnswer, error) {
 	var response struct {
 		Answers map[string]json.RawMessage `json:"answers"`
 	}

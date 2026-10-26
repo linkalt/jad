@@ -13,7 +13,7 @@ import (
 
 func TestBuildCatalogLoadsConfiguredDecideSystemoneAndRequiresItsManifest(t *testing.T) {
 	directory := t.TempDir()
-	settings := &sessionfs.ExtensionDecideSystemoneSettings{Backend: "openai", BaseURL: "http://127.0.0.1:1", APIKeyEnv: "K", Model: "m", TimeoutMS: 1000, MaxQuestions: 1, MaxInputBytes: 10, MaxResponseBytes: 10}
+	settings := &sessionfs.ExtensionDecideSystemoneSettings{BaseURL: "http://127.0.0.1:1", APIKeyEnv: "K", Model: "m", TimeoutMS: 1000, MaxQuestions: 1, MaxInputBytes: 10, MaxResponseBytes: 10}
 	_, err := BuildCatalog(sessionfs.SessionConfig{SettingPath: filepath.Join(directory, "setting.json"), ExtensionDecideSystemone: settings})
 	if err == nil || !strings.Contains(err.Error(), "tools.extension.decide_systemone is configured but extension.decide_systemone is missing from tool_definition_paths") {
 		t.Fatalf("missing manifest error = %v", err)

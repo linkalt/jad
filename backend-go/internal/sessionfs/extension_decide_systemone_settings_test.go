@@ -19,7 +19,7 @@ func decideSystemoneSettingsFor(native string) map[string]json.RawMessage {
 	return map[string]json.RawMessage{"tools": json.RawMessage(`{"native":` + native + `}`)}
 }
 
-func TestNormalizeExtensionDecideSystemoneSettingsDefaultsPerBackend(t *testing.T) {
+func TestNormalizeExtensionDecideSystemoneSettingsDefaults(t *testing.T) {
 	absent, err := normalizeExtensionDecideSystemoneSettings(extensionSettingsFor(`{}`), "setting.json")
 	if err != nil || absent != nil {
 		t.Fatalf("absent decide = %+v, %v; want nil", absent, err)
@@ -32,10 +32,9 @@ func TestNormalizeExtensionDecideSystemoneSettingsDefaultsPerBackend(t *testing.
 		native string
 		want   ExtensionDecideSystemoneSettings
 	}{
-		"empty object is openrouter": {`{"decide_systemone":{}}`, ExtensionDecideSystemoneSettings{Backend: "openrouter", BaseURL: "https://openrouter.ai/api/alpha", APIKeyEnv: "OPENROUTER_API_KEY", Model: "openai/gpt-6-luna-decisions", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576}},
-		"openai":                     {`{"decide_systemone":{"backend":"openai"}}`, ExtensionDecideSystemoneSettings{Backend: "openai", BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY", Model: "gpt-6-luna", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576}},
-		"nulls use the defaults":     {`{"decide_systemone":{"backend":null,"model":null,"timeout_ms":null}}`, ExtensionDecideSystemoneSettings{Backend: "openrouter", BaseURL: "https://openrouter.ai/api/alpha", APIKeyEnv: "OPENROUTER_API_KEY", Model: "openai/gpt-6-luna-decisions", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576}},
-		"every key set":              {`{"decide_systemone":{"backend":"openai","base_url":"http://127.0.0.1:9/v1/","api_key_env":"MY_KEY","model":"m","timeout_ms":5,"max_questions":2,"max_input_bytes":7,"max_response_bytes":9}}`, ExtensionDecideSystemoneSettings{Backend: "openai", BaseURL: "http://127.0.0.1:9/v1", APIKeyEnv: "MY_KEY", Model: "m", TimeoutMS: 5, MaxQuestions: 2, MaxInputBytes: 7, MaxResponseBytes: 9}},
+		"empty object":           {`{"decide_systemone":{}}`, ExtensionDecideSystemoneSettings{BaseURL: "https://openrouter.ai/api/alpha", APIKeyEnv: "OPENROUTER_API_KEY", Model: "openai/gpt-6-luna-decisions", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576}},
+		"nulls use the defaults": {`{"decide_systemone":{"base_url":null,"model":null,"timeout_ms":null}}`, ExtensionDecideSystemoneSettings{BaseURL: "https://openrouter.ai/api/alpha", APIKeyEnv: "OPENROUTER_API_KEY", Model: "openai/gpt-6-luna-decisions", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576}},
+		"every key set":          {`{"decide_systemone":{"base_url":"https://api.typesafe.ai/","api_key_env":"TYPESAFE_API_KEY","model":"jev-latest","timeout_ms":5,"max_questions":2,"max_input_bytes":7,"max_response_bytes":9}}`, ExtensionDecideSystemoneSettings{BaseURL: "https://api.typesafe.ai", APIKeyEnv: "TYPESAFE_API_KEY", Model: "jev-latest", TimeoutMS: 5, MaxQuestions: 2, MaxInputBytes: 7, MaxResponseBytes: 9}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := normalizeExtensionDecideSystemoneSettings(extensionSettingsFor(tc.native), "setting.json")
@@ -52,11 +51,10 @@ func TestNormalizeExtensionDecideSystemoneSettingsRejectsInvalidSettings(t *test
 		"max_images removed":      {`{"decide_systemone":{"max_images":2}}`, "tools.extension.decide_systemone.max_images is not supported"},
 		"max_image_bytes removed": {`{"decide_systemone":{"max_image_bytes":2}}`, "tools.extension.decide_systemone.max_image_bytes is not supported"},
 		"paths removed":           {`{"decide_systemone":{"paths":{"allow":["/tmp"]}}}`, "tools.extension.decide_systemone.paths is not supported"},
-		"unrelated":               {`{"decide_systemone":{"approval":"ask"}}`, "tools.extension.decide_systemone.approval is not supported; supported keys are api_key_env, backend, base_url, max_input_bytes, max_questions, max_response_bytes, model, timeout_ms"},
+		"unrelated":               {`{"decide_systemone":{"approval":"ask"}}`, "tools.extension.decide_systemone.approval is not supported; supported keys are api_key_env, base_url, max_input_bytes, max_questions, max_response_bytes, model, timeout_ms"},
 		"not object":              {`{"decide_systemone":[]}`, "tools.extension.decide_systemone must be an object"},
 		"null":                    {`{"decide_systemone":null}`, "tools.extension.decide_systemone must be an object"},
-		"unknown backend":         {`{"decide_systemone":{"backend":"anthropic"}}`, "tools.extension.decide_systemone.backend must be one of openrouter, openai"},
-		"backend not string":      {`{"decide_systemone":{"backend":3}}`, "tools.extension.decide_systemone.backend must be a non-empty string"},
+		"openai backend removed":  {`{"decide_systemone":{"backend":"openai"}}`, "tools.extension.decide_systemone.backend is not supported"},
 		"empty model":             {`{"decide_systemone":{"model":"  "}}`, "tools.extension.decide_systemone.model must be a non-empty string"},
 		"base url scheme":         {`{"decide_systemone":{"base_url":"ftp://x"}}`, "tools.extension.decide_systemone.base_url must be an http or https URL"},
 		"base url no host":        {`{"decide_systemone":{"base_url":"https://"}}`, "tools.extension.decide_systemone.base_url must be an http or https URL"},
@@ -128,17 +126,11 @@ func TestDecideSystemoneSchemaListsTheKeysTheLoaderAccepts(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("schema keys %v, loader accepts %v", got, want)
 	}
-	if !reflect.DeepEqual(properties["backend"].Enum, extensionDecideSystemoneBackends) {
-		t.Fatalf("schema backends %v, loader accepts %v", properties["backend"].Enum, extensionDecideSystemoneBackends)
-	}
 	defaults := map[string]float64{"timeout_ms": float64(defaultExtensionDecideSystemoneTimeoutMS), "max_questions": float64(defaultExtensionDecideSystemoneMaxQuestions), "max_input_bytes": float64(defaultExtensionDecideSystemoneMaxInputBytes), "max_response_bytes": float64(defaultExtensionDecideSystemoneMaxResponseBytes)}
 	for key, value := range defaults {
 		if properties[key].Default != value {
 			t.Errorf("schema default of %s = %v, loader default %v", key, properties[key].Default, value)
 		}
-	}
-	if properties["backend"].Default != defaultExtensionDecideSystemoneBackend {
-		t.Errorf("schema default backend = %v, loader default %v", properties["backend"].Default, defaultExtensionDecideSystemoneBackend)
 	}
 }
 
@@ -172,11 +164,11 @@ func TestShippedTriagerSampleLoadsAsAnAgent(t *testing.T) {
 }
 
 func TestDecideSystemoneLivesUnderToolsExtensionOnly(t *testing.T) {
-	config, err := loadSetting(t, map[string]any{"tools": map[string]any{"native": map[string]any{}, "extension": map[string]any{"decide_systemone": map[string]any{"backend": "openai"}}}})
+	config, err := loadSetting(t, map[string]any{"tools": map[string]any{"native": map[string]any{}, "extension": map[string]any{"decide_systemone": map[string]any{"max_questions": 3}}}})
 	if err != nil {
 		t.Fatalf("tools.extension.decide_systemone was rejected: %v", err)
 	}
-	if config.ExtensionDecideSystemone == nil || config.ExtensionDecideSystemone.Backend != "openai" {
+	if config.ExtensionDecideSystemone == nil || config.ExtensionDecideSystemone.MaxQuestions != 3 {
 		t.Fatalf("ExtensionDecideSystemone = %+v", config.ExtensionDecideSystemone)
 	}
 	_, err = loadSetting(t, nativeTools(map[string]any{"decide_systemone": map[string]any{}}))
