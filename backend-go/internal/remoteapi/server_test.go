@@ -494,6 +494,59 @@ func TestOneTokenCannotFillTheServerWithFinishedOrLiveRuns(t *testing.T) {
 	}
 }
 
+func TestReusedRequestIDWithOtherContentIsRefused(t *testing.T) {
+	f := newFixture(t, defaultTable(t), nil)
+	if status, _ := f.do("POST", Prefix+"/messages", secretA, message("main", "review/a", "req-same-0001")); status != 202 {
+		t.Fatal(status)
+	}
+	other := message("main", "review/b", "req-same-0001")
+	if status, body := f.do("POST", Prefix+"/messages", secretA, other); status != 409 || body["code"] != "request_id_reused" {
+		t.Fatalf("other profile: %d %v", status, body)
+	}
+	other = message("main", "review/a", "req-same-0001")
+	other["message"] = "something else"
+	if status, body := f.do("POST", Prefix+"/messages", secretA, other); status != 409 || body["code"] != "request_id_reused" {
+		t.Fatalf("other text: %d %v", status, body)
+	}
+	if status, _ := f.do("POST", Prefix+"/messages", secretA, message("main", "review/a", "req-same-0001")); status != 200 {
+		t.Fatalf("the identical repeat is still the same run: %d", status)
+	}
+	if len(f.backend.messages) != 1 {
+		t.Fatalf("started %d times", len(f.backend.messages))
+	}
+}
+
+func TestCloseDuringStartStopsTheRunThatWasStarting(t *testing.T) {
+	f := newFixture(t, defaultTable(t), nil)
+	f.backend.delay = make(chan struct{})
+	done := make(chan int, 1)
+	go func() {
+		status, _ := f.do("POST", Prefix+"/messages", secretA, message("main", "review/a", "req-race-0001"))
+		done <- status
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		f.backend.mu.Lock()
+		started := len(f.backend.messages)
+		f.backend.mu.Unlock()
+		if started == 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	f.server.Close()
+	close(f.backend.delay)
+	<-done
+	f.backend.mu.Lock()
+	run := f.backend.runs[0]
+	f.backend.mu.Unlock()
+	select {
+	case <-run.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("a run that finished starting after Close was left running")
+	}
+}
+
 func TestCloseStopsLiveRuns(t *testing.T) {
 	f := newFixture(t, defaultTable(t), nil)
 	f.do("POST", Prefix+"/messages", secretA, message("main", "review/a", "req-close-0001"))

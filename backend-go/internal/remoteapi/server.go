@@ -3,6 +3,7 @@ package remoteapi
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -137,9 +138,11 @@ type Server struct {
 
 type runEntry struct {
 	id, token, requestKey, kind string
-	run                         Run
-	started                     time.Time
-	ended                       time.Time
+	// fingerprint is the hash of what the request asked for, so a reused request id with other content is refused.
+	fingerprint [sha256.Size]byte
+	run         Run
+	started     time.Time
+	ended       time.Time
 	// ready closes when the start has finished; startErr is set when it failed.
 	ready    chan struct{}
 	startErr error
@@ -355,7 +358,8 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, token Token
 		return
 	}
 	key := token.ID + "\x00" + body.RequestID
-	entry, status := s.begin(r.Context(), token, key, kind, func(ctx context.Context) (Run, error) {
+	fingerprint := sha256.Sum256([]byte(strings.Join([]string{kind, body.Session, target, body.Agent, text}, "\x00")))
+	entry, status := s.begin(r.Context(), token, key, kind, fingerprint, func(ctx context.Context) (Run, error) {
 		caller := "remote:" + token.ID
 		if kind == "subagent" {
 			return s.opts.Backend.StartSubagent(ctx, SubagentRequest{Session: body.Session, Profile: target, Agent: body.Agent, Task: text, Caller: caller, Hops: hops})
@@ -377,7 +381,7 @@ type beginStatus struct {
 // begin starts the run once per (token, request id): a repeat gets the same run back, so a
 // retried send never starts the work twice. The start runs outside the lock; a repeat that
 // arrives meanwhile waits for it.
-func (s *Server) begin(ctx context.Context, token Token, key, kind string, start func(context.Context) (Run, error)) (*runEntry, beginStatus) {
+func (s *Server) begin(ctx context.Context, token Token, key, kind string, fingerprint [sha256.Size]byte, start func(context.Context) (Run, error)) (*runEntry, beginStatus) {
 	s.mu.Lock()
 	s.sweepLocked()
 	if s.closed {
@@ -387,6 +391,9 @@ func (s *Server) begin(ctx context.Context, token Token, key, kind string, start
 	if id, ok := s.requests[key]; ok {
 		if entry := s.runs[id]; entry != nil {
 			s.mu.Unlock()
+			if entry.fingerprint != fingerprint {
+				return nil, beginStatus{err: &Refusal{Code: "request_id_reused", Message: "this request_id was already used for a different request"}}
+			}
 			select {
 			case <-entry.ready:
 			case <-ctx.Done():
@@ -410,7 +417,7 @@ func (s *Server) begin(ctx context.Context, token Token, key, kind string, start
 	}
 	random := make([]byte, 8)
 	_, _ = rand.Read(random)
-	entry := &runEntry{id: "rr_" + hex.EncodeToString(random), token: token.ID, requestKey: key, kind: kind, started: s.opts.Now(), ready: make(chan struct{})}
+	entry := &runEntry{id: "rr_" + hex.EncodeToString(random), token: token.ID, requestKey: key, kind: kind, fingerprint: fingerprint, started: s.opts.Now(), ready: make(chan struct{})}
 	s.runs[entry.id] = entry
 	s.requests[key] = entry.id
 	s.mu.Unlock()
@@ -426,8 +433,12 @@ func (s *Server) begin(ctx context.Context, token Token, key, kind string, start
 		return nil, beginStatus{err: err}
 	}
 	entry.run = run
+	closed := s.closed
 	s.mu.Unlock()
 	close(entry.ready)
+	if closed {
+		run.Stop("server_shutdown")
+	}
 	go func() {
 		<-run.Done()
 		s.mu.Lock()
