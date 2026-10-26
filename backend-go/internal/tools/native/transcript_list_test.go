@@ -209,3 +209,25 @@ func TestTranscriptListAlwaysHoldsOneStepWhateverTheBudget(t *testing.T) {
 		t.Fatalf("out = %s", out)
 	}
 }
+
+func TestTranscriptKeysStayWholeEvenWhenLong(t *testing.T) {
+	got := compactArguments(`{"a_very_long_argument_name_that_exceeds_the_value_limit":"`+strings.Repeat("v", 100)+`"}`, 10)
+	if !strings.HasPrefix(got, `{"a_very_long_argument_name_that_exceeds_the_value_limit":"`) {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestTranscriptSearchMatchesACallsNameAndArguments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages.jsonl")
+	writeTestTranscript(t, path, userLine("q"), answerLine(1, 1, callItem("c", "exec", `{"code":"`+strings.Repeat("p", 300)+`NEEDLEARG"}`), callItem("d", "read", `{}`)))
+	settings := transcriptTestSettings()
+	settings.ValueBytes = 10
+	got := stepLines(runTranscript(t, settings, path, map[string]any{"search": "needlearg"}))
+	if len(got) != 1 || !strings.HasPrefix(got[0], "1.1 call exec") || strings.Contains(got[0], "NEEDLEARG") {
+		t.Fatalf("lines = %q", got)
+	}
+	got = stepLines(runTranscript(t, settings, path, map[string]any{"search": "read"}))
+	if len(got) != 1 || !strings.HasPrefix(got[0], "1.2 call read") {
+		t.Fatalf("the tool name is searched too: %q", got)
+	}
+}

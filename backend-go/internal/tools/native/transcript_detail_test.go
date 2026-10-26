@@ -1,8 +1,14 @@
 package native
 
 import (
+	"context"
+	"runtime"
+	"sync"
+	"time"
+
 	"encoding/json"
 	"fmt"
+	"jad/backend-go/internal/tools"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,5 +205,83 @@ func TestTranscriptDetailKeepsTheTurnNumbersOfACompactedFile(t *testing.T) {
 	}
 	if out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"step": "1.1"}); !strings.Contains(out, "no_such_step") {
 		t.Fatalf("turn 1 is not in this file: %s", out)
+	}
+}
+
+func TestTranscriptListAndDetailReadWhileARunAppendsWithoutRaces(t *testing.T) {
+	path := detailTranscript(t, strings.Repeat("r", 2000))
+	settings := transcriptTestSettings()
+	settings.MaxDetailBytes = 300
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			return
+		}
+		defer file.Close()
+		for i := 0; i < 200; i++ {
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Millisecond):
+			}
+			_, _ = file.WriteString(answerLine(2, 2+i, textItem(fmt.Sprintf("late %d", i))) + "\n")
+		}
+	}()
+	var group sync.WaitGroup
+	for range 4 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for range 30 {
+				if out := runTranscript(t, settings, path, map[string]any{"step": "1.2"}); !strings.Contains(out, "== 1.2 call read") {
+					t.Errorf("detail: %s", out)
+					return
+				}
+				if out := runTranscript(t, settings, path, map[string]any{"turns": "1-2"}); !strings.Contains(out, "1.2 call read unknown 2000B") {
+					t.Errorf("list: %s", out)
+					return
+				}
+			}
+		}()
+	}
+	group.Wait()
+	close(stop)
+	<-done
+}
+
+func TestTranscriptDetailScanStopsOnCancelAndLeaksNoGoroutine(t *testing.T) {
+	path := detailTranscript(t, "R")
+	before := runtime.NumGoroutine()
+	for range 20 {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		tool, _ := NewTranscriptTool(transcriptTestSettings(), TranscriptFiles{Messages: path}, nil, nil)
+		if out, _ := tool.Execute(ctx, map[string]any{"step": "1.2"}, tools.ExecutionContext{CallID: "c"}); !strings.Contains(out, "transcript_cancelled") {
+			t.Fatalf("out = %s", out)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if after := runtime.NumGoroutine(); after > before {
+		t.Fatalf("goroutines %d -> %d", before, after)
+	}
+}
+
+func TestTranscriptDetailNeverWritesTheFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages.jsonl")
+	content := userLine("q") + "\n" + answerLine(1, 1, textItem("done")) + "\n" + `{"type":"response.comple`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out := runTranscript(t, transcriptTestSettings(), path, map[string]any{"step": "1.1"}); !strings.Contains(out, "== 1.1 assistant\ndone") {
+		t.Fatalf("out = %s", out)
+	}
+	if after, _ := os.ReadFile(path); string(after) != content {
+		t.Fatalf("the reader changed the transcript: %q", after)
 	}
 }
