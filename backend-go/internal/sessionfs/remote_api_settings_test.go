@@ -21,6 +21,19 @@ func TestRemoteAPIDefaultsAreOff(t *testing.T) {
 	}
 }
 
+func TestRemoteAPIMaxRunsPerToken(t *testing.T) {
+	settings, err := remoteAPI(t, ``)
+	if err != nil || settings.MaxRunsPerToken != 16 {
+		t.Fatalf("default: %+v %v", settings, err)
+	}
+	if settings, err = remoteAPI(t, `{"max_runs_per_token":4}`); err != nil || settings.MaxRunsPerToken != 4 {
+		t.Fatalf("set: %+v %v", settings, err)
+	}
+	if _, err = remoteAPI(t, `{"max_runs_per_token":0}`); err == nil || !strings.Contains(err.Error(), "max_runs_per_token must be an integer between 1") {
+		t.Fatalf("zero: %v", err)
+	}
+}
+
 func TestRemoteAPIEnabledNeedsTokensAndATransport(t *testing.T) {
 	settings, err := remoteAPI(t, `{"enabled":true,"tokens_file":"tokens.json","listen_unix":"/run/jad.sock","listen_unix_mode":432}`)
 	if err != nil || settings.TokensFile != "/etc/jad/tokens.json" || settings.ListenUnixMode != 0o660 {

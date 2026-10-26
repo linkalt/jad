@@ -55,15 +55,16 @@ func NewService(config Config) (*Service, error) {
 			return nil, fmt.Errorf("server.remote_api: %w", err)
 		}
 		server, err := remoteapi.NewServer(remoteapi.Options{
-			Tokens:         table,
-			Backend:        resolver.RemoteBackend(time.Duration(config.RemoteAPI.RunTimeoutMs) * time.Millisecond),
-			Logger:         config.HTTP.Logger,
-			MaxHops:        config.RemoteAPI.MaxHops,
-			MaxRuns:        config.RemoteAPI.MaxRuns,
-			RunRetention:   time.Duration(config.RemoteAPI.RunRetentionMs) * time.Millisecond,
-			WaitMax:        time.Duration(config.RemoteAPI.WaitMaxMs) * time.Millisecond,
-			BodyMaxBytes:   config.RemoteAPI.BodyMaxBytes,
-			ResultMaxBytes: int(config.RemoteAPI.ResultMaxBytes),
+			Tokens:          table,
+			Backend:         resolver.RemoteBackend(time.Duration(config.RemoteAPI.RunTimeoutMs) * time.Millisecond),
+			Logger:          config.HTTP.Logger,
+			MaxHops:         config.RemoteAPI.MaxHops,
+			MaxRuns:         config.RemoteAPI.MaxRuns,
+			MaxRunsPerToken: config.RemoteAPI.MaxRunsPerToken,
+			RunRetention:    time.Duration(config.RemoteAPI.RunRetentionMs) * time.Millisecond,
+			WaitMax:         time.Duration(config.RemoteAPI.WaitMaxMs) * time.Millisecond,
+			BodyMaxBytes:    config.RemoteAPI.BodyMaxBytes,
+			ResultMaxBytes:  int(config.RemoteAPI.ResultMaxBytes),
 		})
 		if err != nil {
 			service.Close()

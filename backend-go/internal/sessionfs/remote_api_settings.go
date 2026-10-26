@@ -16,7 +16,7 @@ const (
 	maxRemoteAPIResult    = 16 << 20
 )
 
-var remoteAPIKeys = []string{"enabled", "tokens_file", "listen_unix", "listen_unix_mode", "tls_cert_file", "tls_key_file", "max_hops", "max_runs", "run_timeout_ms", "run_retention_ms", "wait_max_ms", "body_max_bytes", "result_max_bytes"}
+var remoteAPIKeys = []string{"enabled", "tokens_file", "listen_unix", "listen_unix_mode", "tls_cert_file", "tls_key_file", "max_hops", "max_runs", "max_runs_per_token", "run_timeout_ms", "run_retention_ms", "wait_max_ms", "body_max_bytes", "result_max_bytes"}
 
 // RemoteAPISettings is server.remote_api: the /api/remote/v1 routes other JAD servers call.
 // They are served only over TLS or a unix socket, never on the plain TCP listener.
@@ -32,6 +32,8 @@ type RemoteAPISettings struct {
 	TLSCertFile, TLSKeyFile string
 	MaxHops                 int
 	MaxRuns                 int
+	// MaxRunsPerToken bounds the live runs one token may have; finished runs do not count.
+	MaxRunsPerToken int
 	// RunTimeoutMs bounds a message run started by the remote API (queue time excluded).
 	RunTimeoutMs   int64
 	RunRetentionMs int64
@@ -41,7 +43,7 @@ type RemoteAPISettings struct {
 }
 
 func normalizeRemoteAPI(raw json.RawMessage, path, base string) (RemoteAPISettings, error) {
-	settings := RemoteAPISettings{MaxHops: 3, MaxRuns: 256, RunTimeoutMs: 3_600_000, RunRetentionMs: 10 * 60 * 1000, WaitMaxMs: 25_000, BodyMaxBytes: 1 << 20, ResultMaxBytes: 256 << 10, ListenUnixMode: 0o600}
+	settings := RemoteAPISettings{MaxHops: 3, MaxRuns: 256, MaxRunsPerToken: 16, RunTimeoutMs: 3_600_000, RunRetentionMs: 10 * 60 * 1000, WaitMaxMs: 25_000, BodyMaxBytes: 1 << 20, ResultMaxBytes: 256 << 10, ListenUnixMode: 0o600}
 	if len(raw) == 0 || string(raw) == "null" {
 		return settings, nil
 	}
@@ -94,13 +96,13 @@ func normalizeRemoteAPI(raw json.RawMessage, path, base string) (RemoteAPISettin
 			*field.target = resolveFrom(base, *field.target)
 		}
 	}
-	hops, runs, mode := int64(settings.MaxHops), int64(settings.MaxRuns), int64(settings.ListenUnixMode)
+	hops, runs, perToken, mode := int64(settings.MaxHops), int64(settings.MaxRuns), int64(settings.MaxRunsPerToken), int64(settings.ListenUnixMode)
 	for _, field := range []struct {
 		name     string
 		target   *int64
 		min, max int64
 	}{
-		{"max_hops", &hops, 1, maxRemoteAPIHops}, {"max_runs", &runs, 1, maxRemoteAPIRuns},
+		{"max_hops", &hops, 1, maxRemoteAPIHops}, {"max_runs", &runs, 1, maxRemoteAPIRuns}, {"max_runs_per_token", &perToken, 1, maxRemoteAPIRuns},
 		{"run_timeout_ms", &settings.RunTimeoutMs, 1000, 6 * 60 * 60 * 1000}, {"run_retention_ms", &settings.RunRetentionMs, 1000, maxRemoteAPIRetention}, {"wait_max_ms", &settings.WaitMaxMs, 1, maxRemoteAPIWait},
 		{"body_max_bytes", &settings.BodyMaxBytes, 1, maxRemoteAPIBody}, {"result_max_bytes", &settings.ResultMaxBytes, 1, maxRemoteAPIResult},
 		{"listen_unix_mode", &mode, 0o600, 0o666},
@@ -109,7 +111,7 @@ func normalizeRemoteAPI(raw json.RawMessage, path, base string) (RemoteAPISettin
 			return RemoteAPISettings{}, err
 		}
 	}
-	settings.MaxHops, settings.MaxRuns, settings.ListenUnixMode = int(hops), int(runs), uint32(mode)
+	settings.MaxHops, settings.MaxRuns, settings.MaxRunsPerToken, settings.ListenUnixMode = int(hops), int(runs), int(perToken), uint32(mode)
 	if !settings.Enabled {
 		return settings, nil
 	}

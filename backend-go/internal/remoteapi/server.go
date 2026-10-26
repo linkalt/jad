@@ -26,6 +26,7 @@ const (
 	DefaultMaxHops        = 3
 	MaxMaxHops            = 16
 	DefaultMaxRuns        = 256
+	DefaultMaxRunsPerTok  = 16
 	MaxMaxRuns            = 10_000
 	DefaultRunRetentionMs = 10 * 60 * 1000
 	MaxRunRetentionMs     = 24 * 60 * 60 * 1000
@@ -114,12 +115,14 @@ type Options struct {
 	Logger  *slog.Logger
 	Now     func() time.Time
 	// MaxHops is the server's hop limit; a token's own max_hops can only lower it.
-	MaxHops        int
-	MaxRuns        int
-	RunRetention   time.Duration
-	WaitMax        time.Duration
-	BodyMaxBytes   int64
-	ResultMaxBytes int
+	MaxHops int
+	// MaxRuns bounds the runs held (live and finished); MaxRunsPerToken bounds the live runs of one token.
+	MaxRuns         int
+	MaxRunsPerToken int
+	RunRetention    time.Duration
+	WaitMax         time.Duration
+	BodyMaxBytes    int64
+	ResultMaxBytes  int
 }
 
 // Server serves /api/remote/v1.
@@ -158,6 +161,9 @@ func NewServer(opts Options) (*Server, error) {
 	}
 	if opts.MaxRuns <= 0 {
 		opts.MaxRuns = DefaultMaxRuns
+	}
+	if opts.MaxRunsPerToken <= 0 {
+		opts.MaxRunsPerToken = DefaultMaxRunsPerTok
 	}
 	if opts.RunRetention <= 0 {
 		opts.RunRetention = DefaultRunRetentionMs * time.Millisecond
@@ -392,9 +398,15 @@ func (s *Server) begin(ctx context.Context, token Token, key, kind string, start
 			return entry, beginStatus{http: http.StatusOK}
 		}
 	}
-	if len(s.runs) >= s.opts.MaxRuns {
+	live := 0
+	for _, held := range s.runs {
+		if held.token == token.ID && held.ended.IsZero() {
+			live++
+		}
+	}
+	if live >= s.opts.MaxRunsPerToken || (len(s.runs) >= s.opts.MaxRuns && !s.evictFinishedLocked(token.ID)) {
 		s.mu.Unlock()
-		return nil, beginStatus{err: &Refusal{Code: "too_many_runs", Message: "too many remote runs are held; wait for some to end"}}
+		return nil, beginStatus{err: &Refusal{Code: "too_many_runs", Message: "too many remote runs are going; wait for some to end"}}
 	}
 	random := make([]byte, 8)
 	_, _ = rand.Read(random)
@@ -423,6 +435,27 @@ func (s *Server) begin(ctx context.Context, token Token, key, kind string, start
 		s.mu.Unlock()
 	}()
 	return entry, beginStatus{http: http.StatusAccepted}
+}
+
+// evictFinishedLocked drops the oldest finished run to make room, the token's own first so one
+// token's churn does not erase another's results; false when every held run is still live.
+func (s *Server) evictFinishedLocked(tokenID string) bool {
+	var oldest *runEntry
+	for _, held := range s.runs {
+		if held.ended.IsZero() {
+			continue
+		}
+		if oldest == nil || (held.token == tokenID) != (oldest.token == tokenID) && held.token == tokenID ||
+			(held.token == tokenID) == (oldest.token == tokenID) && held.ended.Before(oldest.ended) {
+			oldest = held
+		}
+	}
+	if oldest == nil {
+		return false
+	}
+	delete(s.runs, oldest.id)
+	delete(s.requests, oldest.requestKey)
+	return true
 }
 
 // sweepLocked forgets finished runs past their retention.

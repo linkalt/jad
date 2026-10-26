@@ -461,6 +461,39 @@ func TestRunLimitAndRetention(t *testing.T) {
 	}
 }
 
+func TestOneTokenCannotFillTheServerWithFinishedOrLiveRuns(t *testing.T) {
+	table := tokens(t, fmt.Sprintf(`{"tokens":[
+ {"id":"a","sha256":%q,"profiles":["main/*/*"],"actions":["message","status"]},
+ {"id":"b","sha256":%q,"profiles":["main/*/*"],"actions":["message","status"]}]}`, hashOf(secretA), hashOf(secretB)))
+	f := newFixture(t, table, func(o *Options) { o.MaxRuns = 4; o.MaxRunsPerToken = 2 })
+	post := func(secret, id string) int {
+		status, _ := f.do("POST", Prefix+"/messages", secret, message("main", "review/a", id))
+		return status
+	}
+	for i := 1; i <= 2; i++ {
+		if status := post(secretA, fmt.Sprintf("req-live-%04d", i)); status != 202 {
+			t.Fatalf("live run %d: %d", i, status)
+		}
+	}
+	if status := post(secretA, "req-live-0003"); status != 429 {
+		t.Fatalf("a token over its live cap: %d", status)
+	}
+	f.backend.runs[0].finish(RunResult{State: "done"})
+	f.backend.runs[1].finish(RunResult{State: "done"})
+	time.Sleep(20 * time.Millisecond)
+	for i := 3; i <= 6; i++ {
+		if status := post(secretA, fmt.Sprintf("req-fin-%04d", i)); status != 202 {
+			t.Fatalf("finished runs must not count against the live cap: run %d got %d", i, status)
+			return
+		}
+		f.backend.runs[len(f.backend.runs)-1].finish(RunResult{State: "done"})
+		time.Sleep(20 * time.Millisecond)
+	}
+	if status := post(secretB, "req-other-0001"); status != 202 {
+		t.Fatalf("another token must still get a slot when the table is full of finished runs: %d", status)
+	}
+}
+
 func TestCloseStopsLiveRuns(t *testing.T) {
 	f := newFixture(t, defaultTable(t), nil)
 	f.do("POST", Prefix+"/messages", secretA, message("main", "review/a", "req-close-0001"))
