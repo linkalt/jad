@@ -99,9 +99,16 @@ func run() error {
 		servers++
 		logger.Info("Go agent remote API listening", slog.String("socket", config.RemoteAPI.ListenUnix))
 	}
+	// Which listener serves /api/remote/v1: the socket alone when listen_unix is set, else the
+	// plain TCP listener. No token or path of the token file is logged.
+	remoteSocket := ""
+	if config.RemoteAPI.Enabled {
+		remoteSocket = config.RemoteAPI.ListenUnix
+	}
 	logger.Info("Go agent API listening",
 		slog.String("address", listener.Addr().String()),
-		slog.Bool("remote_api", config.RemoteAPI.Enabled),
+		slog.Bool("remote_api_tcp", config.RemoteAPI.Enabled && config.RemoteAPI.ListenUnix == ""),
+		slog.String("remote_api_socket", remoteSocket),
 		slog.String("log_level", config.Log.Level),
 		slog.String("log_file", config.Log.File))
 

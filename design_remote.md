@@ -5,7 +5,7 @@ Status: design only, nothing implemented. Items marked **[unverified]** were not
 ## 0. Goal
 A local JAD is the CLIENT. `profile_message` and `subagent` can target a profile/agent on another JAD over plain http or a unix socket, async through the existing handle model. `transcripts` / `transcript` list and read remote transcripts read-only, behind their own off-by-default switch. Permission is decided by the REMOTE (token table). No native bridge, no approvals.
 
-## 1. Inventory: what the server has today
+## 1. Inventory: what the server had before this work (2026-10-26; the TLS and unix-socket row is therefore "no")
 Auth: ONE static bearer token (`HandlerConfig.APIToken`, >=32 bytes, SHA-256 compared in constant time, handler.go `authorized`). Everything under `/api/sessions`, `/api/catalog`, `/api/library` needs it; `/api/health` does not. A token is all-or-nothing: it can do anything the web UI can (write catalog files, reset, compact). CORS allow-list for browsers only. Listener: `net.Listen("tcp", host:port)` in cmd/jad/main.go, plain HTTP, no TLS, no unix socket.
 
 | Need | Exists? | Endpoint / gap |

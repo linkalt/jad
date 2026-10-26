@@ -93,41 +93,55 @@ func TestLoadConfigPassesMaxConcurrentRunsToTheHTTPConfig(t *testing.T) {
 	}
 }
 
-// The remote API's bearer token travels in clear text, so its listener names one address: the
-// default loopback, or the VPN address a peer reaches. A wildcard would answer on every
-// interface and is refused.
+// The remote API's bearer token travels in clear text over TCP, so its listener names one
+// address: the default loopback, or the VPN address a peer reaches. Every spelling of "every
+// interface" is refused, and so is anything that is not an address or a plain hostname; with
+// listen_unix set nothing answers on TCP, so any host is fine.
 func TestLoadConfigRefusesAWildcardHostForTheRemoteAPI(t *testing.T) {
 	cwd := t.TempDir()
-	setting := `{"session_roots":[],"server":{"remote_api":{"enabled":true,"tokens_file":"tokens.json"}}}`
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
+	writeSetting := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
-		_, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOST": host}})
+	load := func(host string) (Config, error) {
+		return LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOST": host}})
+	}
+	refused := func(host, body string) {
+		t.Helper()
+		writeSetting(body)
+		_, err := load(host)
 		if err == nil || !strings.Contains(err.Error(), "server.host must name the one address") {
 			t.Errorf("host %q: %v", host, err)
 		}
 	}
-	for _, host := range []string{"127.0.0.1", "::1", "10.8.0.2"} {
-		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOST": host}})
-		if err != nil || config.Host != host {
+	accepted := func(host, body string) {
+		t.Helper()
+		writeSetting(body)
+		config, err := load(host)
+		if err != nil || config.Host != strings.TrimSpace(host) {
 			t.Errorf("host %q: %+v %v", host, config.Host, err)
 		}
 	}
+	tcpOnly := `{"session_roots":[],"server":{"remote_api":{"enabled":true,"tokens_file":"tokens.json"}}}`
+	socketOnly := `{"session_roots":[],"server":{"remote_api":{"enabled":true,"tokens_file":"tokens.json","listen_unix":"/run/jad/remote.sock"}}}`
+	wildcards := []string{"", "0.0.0.0", "::", "[::]", "0:0:0:0:0:0:0:0", "::0", "[::0]", "::ffff:0.0.0.0",
+		"[::ffff:0.0.0.0]", "::%eth0", "0.0.0.0.", " [::] "}
+	for _, host := range wildcards {
+		refused(host, tcpOnly)
+	}
+	// Neither an address nor a plain hostname: the resolver would decide, so it is refused.
+	for _, host := range []string{"*", "-bad", "trailing-", "a..b", "host:8787", "http://x"} {
+		refused(host, tcpOnly)
+	}
+	for _, host := range []string{"127.0.0.1", "::1", "10.8.0.2", "localhost", "jad.vpn.example", "fe80::1%eth0"} {
+		accepted(host, tcpOnly)
+	}
 	// With listen_unix set the socket is the only listener, so any host is fine.
-	socketSetting := `{"session_roots":[],"server":{"remote_api":{"enabled":true,"tokens_file":"tokens.json","listen_unix":"/run/jad/remote.sock"}}}`
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(socketSetting), 0o600); err != nil {
-		t.Fatal(err)
+	for _, host := range wildcards {
+		accepted(host, socketOnly)
 	}
-	for _, host := range []string{"", "0.0.0.0", "::"} {
-		if _, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOST": host}}); err != nil {
-			t.Errorf("a socket-only remote API with host %q: %v", host, err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(`{"session_roots":[],"server":{}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOST": "0.0.0.0"}}); err != nil {
-		t.Errorf("a wildcard host without the remote API must still be accepted: %v", err)
-	}
+	// Without the remote API a wildcard host is fine: the UI listener is another matter.
+	accepted("0.0.0.0", `{"session_roots":[],"server":{}}`)
 }

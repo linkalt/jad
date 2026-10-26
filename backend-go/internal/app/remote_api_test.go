@@ -7,12 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -311,21 +311,24 @@ func TestUnixSocketListenerIsPrivateAndReplacesAStaleSocketOnly(t *testing.T) {
 	}
 }
 
-// getRemoteJSON does a GET with a bearer token and decodes the JSON answer.
-func getRemoteJSON(t *testing.T, client *http.Client, url, secret string) (int, map[string]any) {
+// rawCall sends one request with the remote token and returns its status and exact body.
+func rawCall(t *testing.T, url, method string) (int, string) {
 	t.Helper()
-	request, _ := http.NewRequest("GET", url, nil)
-	if secret != "" {
-		request.Header.Set("Authorization", "Bearer "+secret)
+	request, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	response, err := client.Do(request)
+	request.Header.Set("Authorization", "Bearer "+remoteTestSecret)
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	var out map[string]any
-	_ = json.NewDecoder(response.Body).Decode(&out)
-	return response.StatusCode, out
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response.StatusCode, string(body)
 }
 
 // The remote routes answer on the plain listener: that is how a second JAD reaches this one.
@@ -385,12 +388,25 @@ func TestUnixSocketOnlyRemoteAPIKeepsTheTCPListenerOut(t *testing.T) {
 		t.Fatalf("the socket answered %v", profiles)
 	}
 
-	// The TCP listener does not know the route at all.
+	// The TCP listener does not know the remote routes at all: every method and shape answers
+	// exactly, body included, like a route it never had.
 	plain := httptest.NewServer(handlers.Main)
 	t.Cleanup(plain.Close)
-	status, body := getRemoteJSON(t, http.DefaultClient, plain.URL+remoteapi.Prefix+"/profiles?session=demo", remoteTestSecret)
-	unknownStatus, unknownBody := getRemoteJSON(t, http.DefaultClient, plain.URL+"/api/remote/not-a-route", remoteTestSecret)
-	if status != http.StatusNotFound || status != unknownStatus || !reflect.DeepEqual(body, unknownBody) {
-		t.Fatalf("TCP answered %d %v for the remote API and %d %v for an unknown route", status, body, unknownStatus, unknownBody)
+	for _, probe := range []struct{ method, path string }{
+		{"GET", remoteapi.Prefix + "/profiles?session=demo"},
+		{"POST", remoteapi.Prefix + "/messages"},
+		{"GET", remoteapi.Prefix + "/transcripts/"},
+		{"GET", "/api/remote"},
+		{"HEAD", remoteapi.Prefix + "/profiles?session=demo"},
+		{"OPTIONS", remoteapi.Prefix + "/profiles?session=demo"},
+	} {
+		status, body := rawCall(t, plain.URL+probe.path, probe.method)
+		unknownStatus, unknownBody := rawCall(t, plain.URL+"/api/remote/not-a-route", probe.method)
+		if status != unknownStatus || body != unknownBody {
+			t.Fatalf("%s %s answered %d %q, an unknown route answered %d %q", probe.method, probe.path, status, body, unknownStatus, unknownBody)
+		}
+	}
+	if status, body := rawCall(t, plain.URL+remoteapi.Prefix+"/profiles?session=demo", "GET"); status != http.StatusNotFound {
+		t.Fatalf("TCP answered %d %q for the remote API", status, body)
 	}
 }

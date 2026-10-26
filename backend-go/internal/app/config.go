@@ -5,7 +5,9 @@ package app
 import (
 	"fmt"
 	"net/http"
+	"net/netip"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -133,6 +135,30 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 	return config, nil
 }
 
+// listenHostPattern is a plain hostname: dot-separated labels of letters, digits, '-' and '_'.
+// net.Listen resolves anything else (a URL, a host:port, stray punctuation) unpredictably, so
+// such a server.host is refused rather than left to the resolver.
+var listenHostPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?)*$`)
+
+// listensOnEveryInterface reports whether net.Listen would bind every interface for host: the
+// empty host, an unspecified address in any spelling (0.0.0.0, ::, ::0, 0:0:0:0:0:0:0:0,
+// ::ffff:0.0.0.0, bracketed or with a zone), or a value that is neither an address nor a plain
+// hostname. A hostname resolving to such an address is out of scope: it is a name the operator
+// wrote, not a wildcard spelling.
+func listensOnEveryInterface(host string) bool {
+	host = strings.TrimSpace(host)
+	if inner, ok := strings.CutPrefix(host, "["); ok {
+		host, _ = strings.CutSuffix(inner, "]")
+	}
+	if host == "" {
+		return true
+	}
+	if address, err := netip.ParseAddr(host); err == nil {
+		return address.WithZone("").Unmap().IsUnspecified()
+	}
+	return !listenHostPattern.MatchString(host)
+}
+
 // checkRemoteListenHost refuses a wildcard listen address when the remote API answers on the
 // TCP listener: the bearer token of every remote would then answer on every interface of the
 // machine, in clear text. A listen_unix server never does, so any host is fine there. The
@@ -142,8 +168,7 @@ func (c Config) checkRemoteListenHost() error {
 	if !c.RemoteAPI.Enabled || c.RemoteAPI.ListenUnix != "" {
 		return nil
 	}
-	switch strings.TrimSpace(c.Host) {
-	case "", "0.0.0.0", "::", "[::]":
+	if listensOnEveryInterface(c.Host) {
 		return fmt.Errorf("server.host must name the one address the remote API is reached at, the default 127.0.0.1 or the VPN address, when server.remote_api is enabled: a wildcard would answer on every interface, and the bearer token travels in clear text")
 	}
 	return nil
