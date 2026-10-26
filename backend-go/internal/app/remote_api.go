@@ -90,7 +90,7 @@ func (b remoteBackend) SendMessage(ctx context.Context, request remoteapi.Messag
 		Reference: resolved.Reference,
 		Profile:   resolved.Profile,
 		Caller:    request.Caller,
-		Chain:     []string{request.Caller, resolved.Profile},
+		Chain:     []string{request.Caller, chainNode(resolved.Reference, resolved.Profile)},
 		Message:   request.Message,
 		Hops:      request.Hops,
 		OnCommitted: func(event json.RawMessage) {

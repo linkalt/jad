@@ -32,6 +32,7 @@ func TestNormalizeNativeProfileMessageSettings(t *testing.T) {
 		"queue cap set":            {`{"profile_message":{"max_queued_per_profile":9}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, MaxQueued: 9, Compact: ProfileMessageCompactOff}},
 		"queue cap zero":           {`{"profile_message":{"max_queued_per_profile":0}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, MaxQueued: 0, Compact: ProfileMessageCompactOff}},
 		"queue cap null":           {`{"profile_message":{"max_queued_per_profile":null}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, MaxQueued: 4, Compact: ProfileMessageCompactOff}},
+		"sessions set":             {`{"profile_message":{"sessions":["work-*","shared"]}}`, NativeProfileMessageSettings{Sessions: []string{"work-*", "shared"}, TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, MaxQueued: 4, Compact: ProfileMessageCompactOff}},
 		"max chain set":            {`{"profile_message":{"max_chain":4}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 4, MaxQueued: 4, Compact: ProfileMessageCompactOff}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -66,6 +67,11 @@ func TestNormalizeNativeProfileMessageSettingsRejectsInvalidSettings(t *testing.
 		"timeout text":           {`{"profile_message":{"timeout_ms":"slow"}}`, "timeout_ms"},
 		"timeout huge":           {`{"profile_message":{"timeout_ms":99999999999}}`, "timeout_ms"},
 		"approval removed":       {`{"profile_message":{"approval":"ask"}}`, "tools.native.profile_message.approval was removed"},
+		"sessions not a list":    {`{"profile_message":{"sessions":"a"}}`, "sessions must be an array of session id globs"},
+		"sessions class":         {`{"profile_message":{"sessions":["a[b]"]}}`, "is not a session id glob"},
+		"sessions slash":         {`{"profile_message":{"sessions":["a/b"]}}`, "is not a session id glob"},
+		"sessions root":          {`{"profile_message":{"sessions":["local:a"]}}`, "is not a session id glob"},
+		"sessions dup":           {`{"profile_message":{"sessions":["a","a"]}}`, `lists "a" more than once`},
 		"compact null":           {`{"profile_message":{"compact":null}}`, `compact must be "off" or "on"`},
 		"compact ask":            {`{"profile_message":{"compact":"ask"}}`, `compact must be "off" or "on"`},
 		"compact bool":           {`{"profile_message":{"compact":true}}`, `compact must be "off" or "on"`},

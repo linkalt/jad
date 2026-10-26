@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "max_chain", "max_queued_per_profile", "remotes"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "max_chain", "max_queued_per_profile", "remotes", "sessions"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -53,6 +53,10 @@ type NativeProfileMessageSettings struct {
 	// MaxChain is the most profiles one message chain may hold, the first caller included.
 	// 2 lets a profile message another but that one message no further.
 	MaxChain int
+	// Sessions are globs of session ids (not root-qualified; '*' and '?' only) whose profiles
+	// the model may message as <session>/<category>/<profile>, besides its own session's.
+	// None by default, so a session reaches only its own profiles unless it says so.
+	Sessions []string
 	// Remotes are the names of the remote entries (the remotes folder) the model may message
 	// with remote:<name>/...; none by default, so a session reaches no other server unless it says so.
 	Remotes []string
@@ -136,7 +140,11 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact}, nil
+	sessions, err := normalizeSessionGlobs(fields["sessions"], settingPath, section)
+	if err != nil {
+		return nil, err
+	}
+	return &NativeProfileMessageSettings{Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.
@@ -179,6 +187,30 @@ func normalizeProfileMessageDenyProfiles(raw json.RawMessage, settingPath, secti
 		seen[id] = struct{}{}
 	}
 	return profiles, nil
+}
+
+// sessionGlobPattern allows no '[', '/' or ':' so a glob can neither cross a segment nor name a root.
+var sessionGlobPattern = regexp.MustCompile(`^[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,127}$`)
+
+func normalizeSessionGlobs(raw json.RawMessage, settingPath, section string) ([]string, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil, nil
+	}
+	var globs []string
+	if json.Unmarshal(raw, &globs) != nil || globs == nil {
+		return nil, configError("%s: %s.sessions must be an array of session id globs", settingPath, section)
+	}
+	seen := map[string]struct{}{}
+	for _, glob := range globs {
+		if !sessionGlobPattern.MatchString(glob) {
+			return nil, configError("%s: %s.sessions entry %q is not a session id glob (letters, digits, '.', '_', '-', '*' and '?')", settingPath, section, glob)
+		}
+		if _, dup := seen[glob]; dup {
+			return nil, configError("%s: %s.sessions lists %q more than once", settingPath, section, glob)
+		}
+		seen[glob] = struct{}{}
+	}
+	return globs, nil
 }
 
 var remoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)

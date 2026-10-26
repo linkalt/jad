@@ -51,8 +51,19 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 	if !found {
 		return nil, errors.New("profile message needs the calling session key")
 	}
+	callerRef := reference
+	if location, err := sessionfs.Resolve(m.resolver.roots, reference); err == nil {
+		callerRef = location.Reference
+	}
 	target := request.Target
-	if target == caller {
+	targetReference := reference
+	if request.Session != "" {
+		var err error
+		if targetReference, err = m.otherSession(request.Session, target); err != nil {
+			return nil, err
+		}
+	}
+	if request.Session == "" && target == caller {
 		return nil, native.ErrProfileCycle
 	}
 	callerMessagesPath, _ := ctx.Value(callerMessagesPathKey{}).(string)
@@ -74,29 +85,31 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 	if starter == nil {
 		return nil, errors.New("profile messages are unavailable: the run registry is not set")
 	}
-	resolved, err := m.resolver.Resolve(ctx, reference, target, "")
+	resolved, err := m.resolver.Resolve(ctx, targetReference, target, "")
 	if err != nil {
 		return nil, err
 	}
 	canonical := resolved.Profile
-	if canonical == caller {
+	if resolved.Reference == callerRef && canonical == caller {
 		return nil, native.ErrProfileCycle
 	}
 	// The caller's chain is the one its running run recorded when profile_message started
 	// it, or just the caller when a user started it. The target may not be in it, and the
 	// chain with the target added may not pass max_chain.
-	callerChain := []string{caller}
-	if recorded, nested := starter.RunningProfileRunChain(resolved.Reference, caller); nested && len(recorded) > 0 {
+	// Entries carry their session, since profile names repeat across sessions.
+	callerChain := []string{chainNode(callerRef, caller)}
+	if recorded, nested := starter.RunningProfileRunChain(callerRef, caller); nested && len(recorded) > 0 {
 		callerChain = recorded
 	}
-	if slices.Contains(callerChain, canonical) {
+	node := chainNode(resolved.Reference, canonical)
+	if slices.Contains(callerChain, node) {
 		return nil, native.ErrProfileCycle
 	}
 	maxChain := native.ProfileChainMax(ctx)
 	if maxChain < 1 {
 		maxChain = sessionfs.DefaultProfileMessageMaxChain
 	}
-	chain := append(append([]string(nil), callerChain...), canonical)
+	chain := append(append([]string(nil), callerChain...), node)
 	if len(chain) > maxChain {
 		return nil, native.ErrProfileChainTooLong
 	}
@@ -114,6 +127,7 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		reference: resolved.Reference,
 		target:    canonical,
 		caller:    caller,
+		callerRef: callerRef,
 		chain:     chain,
 		message:   request.Message,
 		timeout:   request.Timeout,
@@ -142,6 +156,24 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		}
 	}
 	return plan, nil
+}
+
+// chainNode names a profile of a session in a message chain or wait edge.
+func chainNode(reference, profile string) string { return reference + "\x00" + profile }
+
+// otherSession is the reference of an existing catalog-layout session that has the profile.
+// A session or profile that does not exist is native.ErrProfileUnknown, whatever the reason,
+// so it reads like one the settings do not allow.
+func (m profileMessenger) otherSession(session, profile string) (string, error) {
+	location, err := sessionfs.Resolve(m.resolver.roots, session)
+	if err != nil || !location.UsesLayout() {
+		return "", native.ErrProfileUnknown
+	}
+	info, err := sessionfs.ReadLayoutProfileInfo(location)
+	if err != nil || !slices.Contains(info.Profiles, profile) {
+		return "", native.ErrProfileUnknown
+	}
+	return location.Reference, nil
 }
 
 // compactTarget compacts the target's transcript with the target's own compaction

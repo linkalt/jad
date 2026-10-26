@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -19,7 +21,7 @@ const profileMessageToolID = "native.profile_message"
 var profileMessageInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "profile":{"type":"string","minLength":1,"description":"Profile to message; one of the available profiles."},
+    "profile":{"type":"string","minLength":1,"description":"Profile to message: one of the available profiles, or <session>/<category>/<profile> for a profile of another session this session may reach."},
     "message":{"type":"string","minLength":1,"description":"The message to send. The profile sees nothing of this conversation."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the answer. If the profile has not answered (or is busy and the message waits its turn) an id is returned; collect it with the async tool."}
   },
@@ -55,6 +57,10 @@ func (e *ProfileFailedError) Error() string { return "profile run failed" }
 // ErrProfileStopped is returned by a ProfileMessenger when the target run was stopped
 // by the user while the caller was still waiting.
 var ErrProfileStopped = errors.New("profile run was stopped")
+
+// ErrProfileUnknown is returned by a ProfileMessenger when the target session or profile
+// does not exist. The tool answers it exactly like a target its settings do not allow.
+var ErrProfileUnknown = errors.New("profile is unknown")
 
 // ErrProfileSameTranscript is returned by a ProfileMessenger when the target profile
 // shares the calling profile's transcript, so the call can never succeed.
@@ -122,8 +128,10 @@ var ErrProfileTimeout = errors.New("profile did not answer in time")
 // session's ExecutionContext.SessionKey.
 type ProfileMessageRequest struct {
 	OwnerKey string
-	Target   string
-	Message  string
+	// Session is the session of Target, empty for the calling session.
+	Session string
+	Target  string
+	Message string
 	// Compact asks for the target's transcript to be compacted before the run, once per
 	// caller run and target.
 	Compact bool
@@ -240,7 +248,7 @@ func NewProfileMessageToolWithRemotes(settings sessionfs.NativeProfileMessageSet
 	if remotes == nil {
 		remoteNames = nil
 	}
-	if len(targets) == 0 && len(remoteNames) == 0 {
+	if len(targets) == 0 && len(remoteNames) == 0 && len(settings.Sessions) == 0 {
 		return tools.Tool{}, sessionfs.ErrProfileMessageNoTargets
 	}
 	if settings.TimeoutMs < 1 {
@@ -262,7 +270,7 @@ func NewProfileMessageToolWithRemotes(settings sessionfs.NativeProfileMessageSet
 			ID:          profileMessageToolID,
 			Source:      "native",
 			Name:        "profile_message",
-			Description: profileMessageDescription + profileMessageListText(targets, remoteNames),
+			Description: profileMessageDescription + profileMessageListText(targets, settings.Sessions, remoteNames),
 			InputSchema: append(json.RawMessage(nil), profileMessageInputSchema...),
 		},
 		Validator:          validator,
@@ -275,10 +283,13 @@ func NewProfileMessageToolWithRemotes(settings sessionfs.NativeProfileMessageSet
 
 const profileMessageDescription = "Send a message to another profile and wait up to block_ms for its final answer. If the profile answers in time you get the answer; otherwise (it is still working, or busy and your message waits its turn) you get an id and the message goes on: use the async tool to wait for, list, inspect or stop it."
 
-func profileMessageListText(targets, remotes []string) string {
+func profileMessageListText(targets, sessions, remotes []string) string {
 	text := ""
 	if len(targets) > 0 {
 		text = " Profiles: " + strings.Join(targets, ", ") + "."
+	}
+	if len(sessions) > 0 {
+		text += " Profiles of other existing sessions are written <session>/<category>/<profile> (sessions: " + strings.Join(sessions, ", ") + ")."
 	}
 	if len(remotes) > 0 {
 		text += " Remote profiles on other JAD servers are written remote:<name>/<session>/<category>/<profile> (remotes: " + strings.Join(remotes, ", ") + "); the remote decides what you may reach."
@@ -318,10 +329,9 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	if _, _, isRemote := remote.Split(profile); isRemote {
 		return p.executeRemote(ctx, arguments, execution, profile, message)
 	}
-	if !slices.Contains(p.targets, profile) {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "unknown_profile",
-			fmt.Sprintf("Profile %s is not available to message", profile),
-			tools.Information{Key: "available", Value: strings.Join(p.targets, ", ")}), nil
+	session, target, allowed := p.localTarget(profile)
+	if !allowed {
+		return p.unknownProfile(callID, profile), nil
 	}
 	owner, canHandle := handleOwner(execution)
 	handled := p.host != nil && canHandle
@@ -329,7 +339,8 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	request := ProfileMessageRequest{
 		Blocking:  !handled || block > 0,
 		OwnerKey:  execution.SessionKey,
-		Target:    profile,
+		Session:   session,
+		Target:    target,
 		Message:   message,
 		Compact:   p.settings.Compact == sessionfs.ProfileMessageCompactOn,
 		QueueWait: time.Duration(p.settings.BusyWaitMs) * time.Millisecond,
@@ -346,6 +357,9 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		callCtx = WithChildCall(callCtx)
 	}
 	plan, err := p.messenger.Prepare(callCtx, request)
+	if errors.Is(err, ErrProfileUnknown) {
+		return p.unknownProfile(callID, profile), nil
+	}
 	if err != nil {
 		return p.renderFailure(callID, profile, err, transcriptInformation(plan)...), nil
 	}
@@ -353,6 +367,37 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		return p.runInline(ctx, callID, profile, plan)
 	}
 	return p.runHandle(ctx, callID, profile, message, owner, plan, block)
+}
+
+var localProfilePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// localTarget splits a local profile argument: <category>/<profile> of the calling session, or
+// <session>/<category>/<profile> when a tools.native.profile_message.sessions glob allows the
+// session. A profile denied by deny_profiles is denied in every session.
+func (p *profileMessageTool) localTarget(profile string) (session, target string, allowed bool) {
+	switch len(strings.Split(profile, "/")) {
+	default:
+		return "", profile, slices.Contains(p.targets, profile)
+	case 3:
+		session, target, _ = strings.Cut(profile, "/")
+		if !remote.SessionPattern.MatchString(session) || session == "." || session == ".." || !localProfilePattern.MatchString(target) || slices.Contains(p.settings.DenyProfiles, target) {
+			return "", "", false
+		}
+		for _, glob := range p.settings.Sessions {
+			if ok, err := path.Match(glob, session); err == nil && ok {
+				return session, target, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+// unknownProfile is the answer for a target that is not allowed and for one that does not
+// exist, so the two cannot be told apart.
+func (p *profileMessageTool) unknownProfile(callID, profile string) string {
+	return tools.ExecutionError(callID, tools.StatusInvalidInput, "unknown_profile",
+		fmt.Sprintf("Profile %s is not available to message", profile),
+		tools.Information{Key: "available", Value: strings.Join(p.targets, ", ")})
 }
 
 func cancelledMessage(callID, profile string) string {

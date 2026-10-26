@@ -154,14 +154,14 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		if err != nil {
 			return nil, err
 		}
-		if len(targets) == 0 && len(remoteNames) == 0 {
+		if len(targets) == 0 && len(remoteNames) == 0 && len(config.NativeProfileMessage.Sessions) == 0 {
 			return nil, sessionfs.ProfileMessageNoTargetsError(config.SettingPath, config.Profile)
 		}
 		tool, err := NewProfileMessageToolWithRemotes(*config.NativeProfileMessage, targets, messenger, asyncHost, remotes)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
-		tool.Definition.Description = definition.Description + profileMessageListText(targets, remoteNames)
+		tool.Definition.Description = definition.Description + profileMessageListText(targets, config.NativeProfileMessage.Sessions, remoteNames)
 		wrapped := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
 		profileMessageTool = &wrapped
 	}

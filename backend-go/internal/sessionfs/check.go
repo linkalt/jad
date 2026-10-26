@@ -92,7 +92,7 @@ func (r *CheckReport) checkProfileMessage(id string, config SessionConfig) {
 	if config.NativeProfileMessage == nil {
 		return
 	}
-	if len(ProfileMessageTargets(config.Profiles, config.Profile, config.NativeProfileMessage.DenyProfiles)) == 0 {
+	if len(config.NativeProfileMessage.Sessions) == 0 && len(ProfileMessageTargets(config.Profiles, config.Profile, config.NativeProfileMessage.DenyProfiles)) == 0 {
 		r.add("session", id, ProfileMessageNoTargetsError(config.SettingPath, config.Profile))
 	}
 }

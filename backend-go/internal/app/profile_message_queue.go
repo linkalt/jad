@@ -26,10 +26,10 @@ type profileQueueSet struct {
 	edges map[waitEdge]int
 }
 
-type waitEdge struct{ reference, from, to string }
+type waitEdge struct{ from, to string }
 
 func (p *profileMessagePlan) edge() waitEdge {
-	return waitEdge{reference: p.reference, from: p.caller, to: p.target}
+	return waitEdge{from: chainNode(p.callerRef, p.caller), to: chainNode(p.reference, p.target)}
 }
 
 // beginWait records that a call of the caller's current run is blocked on the target until
@@ -123,16 +123,17 @@ func (s *profileQueueSet) position(key string, run *profileMessageRun) (int, int
 // profile (as a call waiting for an answer, or as a message waiting for a busy profile).
 // Such calls could only end by timeout. The caller holds s.mu.
 func (s *profileQueueSet) waitsForCaller(p *profileMessagePlan) bool {
-	seen := map[string]bool{p.target: true}
-	pending := []string{p.target}
+	target, caller := chainNode(p.reference, p.target), chainNode(p.callerRef, p.caller)
+	seen := map[string]bool{target: true}
+	pending := []string{target}
 	for len(pending) > 0 {
 		node := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
 		for edge := range s.edges {
-			if edge.reference != p.reference || edge.from != node {
+			if edge.from != node {
 				continue
 			}
-			if edge.to == p.caller {
+			if edge.to == caller {
 				return true
 			}
 			if !seen[edge.to] {
@@ -176,6 +177,7 @@ type profileMessagePlan struct {
 	reference string
 	target    string
 	caller    string
+	callerRef string
 	chain     []string
 	message   string
 	timeout   time.Duration
