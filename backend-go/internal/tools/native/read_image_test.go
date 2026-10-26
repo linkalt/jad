@@ -102,7 +102,7 @@ var defaultReadImageSettings = sessionfs.NativeReadImageSettings{MaxImageBytes: 
 
 func TestReadImageSmallestCallReturnsOneImagePart(t *testing.T) {
 	rig := newReadImageRig(t, defaultReadImageSettings, nil)
-	picture := decidePNG(t, 8, 8)
+	picture := decideSystemonePNG(t, 8, 8)
 	rig.write(t, "shot.png", picture)
 	mime, data := requireImagePart(t, rig.call(t, `{"path":"shot.png"}`))
 	if mime != "image/png" || string(data) != string(picture) {
@@ -112,13 +112,13 @@ func TestReadImageSmallestCallReturnsOneImagePart(t *testing.T) {
 
 func TestReadImagePathIsTrimmed(t *testing.T) {
 	rig := newReadImageRig(t, defaultReadImageSettings, nil)
-	rig.write(t, "shot.png", decidePNG(t, 8, 8))
+	rig.write(t, "shot.png", decideSystemonePNG(t, 8, 8))
 	requireImagePart(t, rig.call(t, `{"path":"  shot.png\n"}`))
 }
 
 func TestReadImageTypeComesFromTheBytesNotTheName(t *testing.T) {
 	rig := newReadImageRig(t, defaultReadImageSettings, nil)
-	rig.write(t, "really-a-png.txt", decidePNG(t, 8, 8))
+	rig.write(t, "really-a-png.txt", decideSystemonePNG(t, 8, 8))
 	rig.write(t, "fake.png", []byte("this is plain text, not an image"))
 	mime, _ := requireImagePart(t, rig.call(t, `{"path":"really-a-png.txt"}`))
 	if mime != "image/png" {
@@ -137,7 +137,7 @@ func TestReadImageRefusesWhatIsNotAnImageFile(t *testing.T) {
 }
 
 func TestReadImageHonoursTheSizeLimit(t *testing.T) {
-	picture := decidePNG(t, 16, 16)
+	picture := decideSystemonePNG(t, 16, 16)
 	rig := newReadImageRig(t, sessionfs.NativeReadImageSettings{MaxImageBytes: int64(len(picture)) - 1}, nil)
 	rig.write(t, "big.png", picture)
 	requireReadImageRefused(t, rig.call(t, `{"path":"big.png"}`), "invalid_input", "image_too_large")
@@ -149,7 +149,7 @@ func TestReadImageHonoursTheSizeLimit(t *testing.T) {
 
 func TestReadImageUsesTheReadPathPolicy(t *testing.T) {
 	outside := t.TempDir()
-	if err := os.WriteFile(filepath.Join(outside, "secret.png"), decidePNG(t, 8, 8), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(outside, "secret.png"), decideSystemonePNG(t, 8, 8), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	path := quoteJSON(filepath.Join(outside, "secret.png"))
@@ -167,7 +167,7 @@ func TestReadImageUsesTheReadPathPolicy(t *testing.T) {
 
 func TestReadImageOpensAStoredReference(t *testing.T) {
 	store := imagestore.New(imagestore.Options{Dir: t.TempDir(), MinBytes: 1, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 24})
-	picture := decidePNG(t, 8, 8)
+	picture := decideSystemonePNG(t, 8, 8)
 	item := []byte(`{"type":"function_call_output","call_id":"c","output":[{"type":"input_image","image_url":"data:image/png;base64,` + base64.StdEncoding.EncodeToString(picture) + `"}]}`)
 	stored, _ := store.Externalize(item)
 	names := imagestore.RefNames(stored)

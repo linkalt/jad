@@ -49,11 +49,11 @@ func TestToolTimeoutSettingsAreCappedAtSixHours(t *testing.T) {
 		{"transcripts timeout_ms", bashStyle("transcripts"), `{"timeout_ms":` + sixHours + `}`, `{"timeout_ms":` + over + `}`, "timeout_ms"},
 		{"transcript timeout_ms", bashStyle("transcript"), `{"timeout_ms":` + sixHours + `}`, `{"timeout_ms":` + over + `}`, "timeout_ms"},
 		{"profile_message timeout_ms", func(body string) error {
-			_, err := normalizeNativeProfileMessageSettings(decideSettingsFor(`{"profile_message":`+body+`}`), "setting.json")
+			_, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":`+body+`}`), "setting.json")
 			return err
 		}, `{"timeout_ms":` + sixHours + `}`, `{"timeout_ms":` + over + `}`, "timeout_ms"},
 		{"profile_message busy_wait_ms", func(body string) error {
-			_, err := normalizeNativeProfileMessageSettings(decideSettingsFor(`{"profile_message":`+body+`}`), "setting.json")
+			_, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":`+body+`}`), "setting.json")
 			return err
 		}, `{"timeout_ms":` + sixHours + `,"busy_wait_ms":` + sixHours + `}`, `{"busy_wait_ms":` + over + `}`, "busy_wait_ms"},
 		{"subagent agent timeout_ms", func(body string) error {

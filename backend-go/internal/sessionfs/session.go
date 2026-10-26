@@ -136,36 +136,36 @@ type SessionConfig struct {
 	SettingPath     string
 	// StateDir is <state>/<session id>: the folder the session keeps its state in, and the
 	// "session directory" of relative image_store.dir and the {session_dir} spill placeholder.
-	StateDir             string
-	MessagesPath         string
-	MessagesBackupPath   string
-	UsageCachePath       string
-	StagingDir           string
-	StoragePaths         SessionStoragePaths
-	WorkingDir           string
-	SessionFiles         SessionFileListingSettings
-	NativeReadPolicy     NativePathPolicy
-	NativeRead           *NativeReadSettings
-	NativeGrep           *NativeGrepSettings
-	NativeWrite          *NativeWriteSettings
-	NativeEdit           *NativeEditSettings
-	NativeBash           *NativeBashSettings
-	NativeExec           *NativeExecSettings
-	NativeGlob           *NativeGlobSettings
-	NativeReadImage      *NativeReadImageSettings
-	NativeProcess        *NativeProcessSettings
-	NativeAsync          *NativeAsyncSettings
-	NativeTask           *NativeTaskSettings
-	NativeMemory         *NativeMemorySettings
-	NativeFetch          *NativeFetchSettings
-	NativeRequestDraft   *NativeRequestDraftSettings
-	NativeSkill          *NativeSkillSettings
-	ExtensionDecide      *ExtensionDecideSettings
-	NativeSubagent       *NativeSubagentSettings
-	NativeProfileMessage *NativeProfileMessageSettings
-	NativeToolSmith      *NativeToolSmithSettings
-	NativeTranscript     *NativeTranscriptSettings
-	NativeTranscripts    *NativeTranscriptsSettings
+	StateDir                 string
+	MessagesPath             string
+	MessagesBackupPath       string
+	UsageCachePath           string
+	StagingDir               string
+	StoragePaths             SessionStoragePaths
+	WorkingDir               string
+	SessionFiles             SessionFileListingSettings
+	NativeReadPolicy         NativePathPolicy
+	NativeRead               *NativeReadSettings
+	NativeGrep               *NativeGrepSettings
+	NativeWrite              *NativeWriteSettings
+	NativeEdit               *NativeEditSettings
+	NativeBash               *NativeBashSettings
+	NativeExec               *NativeExecSettings
+	NativeGlob               *NativeGlobSettings
+	NativeReadImage          *NativeReadImageSettings
+	NativeProcess            *NativeProcessSettings
+	NativeAsync              *NativeAsyncSettings
+	NativeTask               *NativeTaskSettings
+	NativeMemory             *NativeMemorySettings
+	NativeFetch              *NativeFetchSettings
+	NativeRequestDraft       *NativeRequestDraftSettings
+	NativeSkill              *NativeSkillSettings
+	ExtensionDecideSystemone *ExtensionDecideSystemoneSettings
+	NativeSubagent           *NativeSubagentSettings
+	NativeProfileMessage     *NativeProfileMessageSettings
+	NativeToolSmith          *NativeToolSmithSettings
+	NativeTranscript         *NativeTranscriptSettings
+	NativeTranscripts        *NativeTranscriptsSettings
 	// RemotesDir is the remotes folder of the catalog layout (<name>.json entries of other
 	// JAD servers); empty outside the layout.
 	RemotesDir string
@@ -455,7 +455,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	extensionDecide, err := normalizeExtensionDecideSettings(setting, location.Root.GlobalJadRoot, settingPath)
+	extensionDecideSystemone, err := normalizeExtensionDecideSystemoneSettings(setting, location.Root.GlobalJadRoot, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -581,68 +581,68 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	return SessionConfig{
-		SessionName:           sessionName,
-		Profile:               profile,
-		DefaultProfile:        defaultProfile,
-		Profiles:              pathProfiles,
-		ModelPath:             resolvedModelPath,
-		ReasoningEffort:       reasoningEffort,
-		ModelDefault:          modelDefault,
-		Models:                models,
-		SettingPath:           settingPath,
-		StateDir:              location.StateDir(),
-		MessagesPath:          messagesPath,
-		MessagesBackupPath:    messagesBackupPath,
-		UsageCachePath:        usageCachePath,
-		StagingDir:            stagingDir,
-		StoragePaths:          storagePaths,
-		WorkingDir:            cwd,
-		SessionFiles:          sessionFiles,
-		NativeReadPolicy:      nativeReadPolicy,
-		NativeRead:            nativeRead,
-		NativeGrep:            nativeGrep,
-		NativeWrite:           nativeWrite,
-		NativeEdit:            nativeEdit,
-		NativeBash:            nativeBash,
-		NativeExec:            nativeExec,
-		NativeGlob:            nativeGlob,
-		NativeReadImage:       nativeReadImage,
-		NativeProcess:         nativeProcess,
-		NativeAsync:           nativeAsync,
-		NativeTask:            nativeTask,
-		NativeMemory:          nativeMemory,
-		NativeFetch:           nativeFetch,
-		NativeRequestDraft:    nativeRequestDraft,
-		NativeSkill:           nativeSkill,
-		ExtensionDecide:       extensionDecide,
-		NativeSubagent:        nativeSubagent,
-		NativeProfileMessage:  nativeProfileMessage,
-		NativeToolSmith:       nativeToolSmith,
-		NativeTranscript:      nativeTranscript,
-		NativeTranscripts:     nativeTranscripts,
-		GlobalJadRoot:         location.Root.GlobalJadRoot,
-		MCPServers:            mcpServers,
-		StateContext:          stateContext,
-		HTTPDebug:             httpDebug,
-		ToolDefinitionPaths:   toolDefinitionPaths,
-		MaxToolRounds:         maxToolRounds,
-		MaxParallelToolCalls:  maxParallelToolCalls,
-		ToolCallScheduling:    toolCallScheduling,
-		ProviderRetry:         providerRetry,
-		ProviderStream:        providerStream,
-		ProviderNetwork:       providerNetwork,
-		OpenAIOAuth:           openAIOAuth,
-		MaxRunTokens:          maxRunTokens,
-		Checkpoint:            checkpoint,
-		Hooks:                 hooks,
-		ProfileTools:          profileTools,
-		ImageResize:           imageResize,
-		ImageStore:            imageStore,
-		BackupTurns:           backupTurns,
-		Compaction:            compactionSettings,
-		Persistence:           persistence,
-		FrontCompaction:       frontCompaction,
-		FrontCompactionConfig: frontCompactionConfig,
+		SessionName:              sessionName,
+		Profile:                  profile,
+		DefaultProfile:           defaultProfile,
+		Profiles:                 pathProfiles,
+		ModelPath:                resolvedModelPath,
+		ReasoningEffort:          reasoningEffort,
+		ModelDefault:             modelDefault,
+		Models:                   models,
+		SettingPath:              settingPath,
+		StateDir:                 location.StateDir(),
+		MessagesPath:             messagesPath,
+		MessagesBackupPath:       messagesBackupPath,
+		UsageCachePath:           usageCachePath,
+		StagingDir:               stagingDir,
+		StoragePaths:             storagePaths,
+		WorkingDir:               cwd,
+		SessionFiles:             sessionFiles,
+		NativeReadPolicy:         nativeReadPolicy,
+		NativeRead:               nativeRead,
+		NativeGrep:               nativeGrep,
+		NativeWrite:              nativeWrite,
+		NativeEdit:               nativeEdit,
+		NativeBash:               nativeBash,
+		NativeExec:               nativeExec,
+		NativeGlob:               nativeGlob,
+		NativeReadImage:          nativeReadImage,
+		NativeProcess:            nativeProcess,
+		NativeAsync:              nativeAsync,
+		NativeTask:               nativeTask,
+		NativeMemory:             nativeMemory,
+		NativeFetch:              nativeFetch,
+		NativeRequestDraft:       nativeRequestDraft,
+		NativeSkill:              nativeSkill,
+		ExtensionDecideSystemone: extensionDecideSystemone,
+		NativeSubagent:           nativeSubagent,
+		NativeProfileMessage:     nativeProfileMessage,
+		NativeToolSmith:          nativeToolSmith,
+		NativeTranscript:         nativeTranscript,
+		NativeTranscripts:        nativeTranscripts,
+		GlobalJadRoot:            location.Root.GlobalJadRoot,
+		MCPServers:               mcpServers,
+		StateContext:             stateContext,
+		HTTPDebug:                httpDebug,
+		ToolDefinitionPaths:      toolDefinitionPaths,
+		MaxToolRounds:            maxToolRounds,
+		MaxParallelToolCalls:     maxParallelToolCalls,
+		ToolCallScheduling:       toolCallScheduling,
+		ProviderRetry:            providerRetry,
+		ProviderStream:           providerStream,
+		ProviderNetwork:          providerNetwork,
+		OpenAIOAuth:              openAIOAuth,
+		MaxRunTokens:             maxRunTokens,
+		Checkpoint:               checkpoint,
+		Hooks:                    hooks,
+		ProfileTools:             profileTools,
+		ImageResize:              imageResize,
+		ImageStore:               imageStore,
+		BackupTurns:              backupTurns,
+		Compaction:               compactionSettings,
+		Persistence:              persistence,
+		FrontCompaction:          frontCompaction,
+		FrontCompactionConfig:    frontCompactionConfig,
 		// The model file is read by WithModel, so a settings-only caller is not
 		// affected by a missing or malformed model.json. Only the prompt, which
 		// comes from the settings, is filled in here.

@@ -2,9 +2,9 @@
   "schema_version": 1,
   "tools": [
     {
-      "id": "extension.decide",
+      "id": "extension.decide_systemone",
       "source": "extension",
-      "name": "decide",
+      "name": "decide_systemone",
       "description": "Ask a fast classifier typed questions about some text or JSON. predicate: probability 0-1 that a condition holds. choice: the best of your choices, with confidence. score: a rating against ordered levels, lowest first. Use it for yes/no checks, routing and severity, not for open-ended answers.",
       "inputSchema": {
         "type": "object",

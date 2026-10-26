@@ -22,7 +22,7 @@ import (
 	"jad/backend-go/internal/tools/extension"
 )
 
-func decidePNG(t *testing.T, width, height int) []byte {
+func decideSystemonePNG(t *testing.T, width, height int) []byte {
 	t.Helper()
 	picture := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
@@ -41,14 +41,14 @@ func decidePNG(t *testing.T, width, height int) []byte {
 	return out.Bytes()
 }
 
-// imageRig is a decide tool with a workspace, wired to a fake provider.
+// imageRig is a decide_systemone tool with a workspace, wired to a fake provider.
 type imageRig struct {
 	catalog   *tools.Catalog
 	workspace string
 	requests  []map[string]any
 }
 
-func newImageRig(t *testing.T, backend string, images extension.DecideImages, adjust func(*sessionfs.ExtensionDecideSettings)) *imageRig {
+func newImageRig(t *testing.T, backend string, images extension.DecideSystemoneImages, adjust func(*sessionfs.ExtensionDecideSystemoneSettings)) *imageRig {
 	t.Helper()
 	rig := &imageRig{workspace: t.TempDir()}
 	if resolved, err := filepath.EvalSymlinks(rig.workspace); err == nil {
@@ -66,12 +66,12 @@ func newImageRig(t *testing.T, backend string, images extension.DecideImages, ad
 		_, _ = w.Write([]byte(reply))
 	}))
 	t.Cleanup(server.Close)
-	settings := sessionfs.ExtensionDecideSettings{Backend: backend, BaseURL: server.URL, APIKeyEnv: "DECIDE_IMAGE_TEST_KEY", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 1000, MaxResponseBytes: 4096, MaxImages: 2, MaxImageBytes: 4000}
+	settings := sessionfs.ExtensionDecideSystemoneSettings{Backend: backend, BaseURL: server.URL, APIKeyEnv: "DECIDE_IMAGE_TEST_KEY", Model: "m", TimeoutMS: 5000, MaxQuestions: 4, MaxInputBytes: 1000, MaxResponseBytes: 4096, MaxImages: 2, MaxImageBytes: 4000}
 	if adjust != nil {
 		adjust(&settings)
 	}
 	t.Setenv("DECIDE_IMAGE_TEST_KEY", "key")
-	tool, err := extension.NewDecideTool(settings, images)
+	tool, err := extension.NewDecideSystemoneTool(settings, images)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func newImageRig(t *testing.T, backend string, images extension.DecideImages, ad
 
 func (r *imageRig) call(t *testing.T, arguments string) string {
 	t.Helper()
-	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "call_1", "name": "decide", "arguments": arguments})
+	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "call_1", "name": "decide_systemone", "arguments": arguments})
 	raw, err := r.catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: r.workspace})
 	if err != nil {
 		t.Fatal(err)
@@ -127,9 +127,9 @@ func requireRefused(t *testing.T, rig *imageRig, output, code string) {
 	}
 }
 
-func TestDecideImageFileGoesToOpenAIAsInputImage(t *testing.T) {
-	rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
-	data := decidePNG(t, 8, 8)
+func TestDecideSystemoneImageFileGoesToOpenAIAsInputImage(t *testing.T) {
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
+	data := decideSystemonePNG(t, 8, 8)
 	rig.write(t, "shots/a.png", data)
 	requireOK(t, rig.call(t, `{"input":["Look at this:",{"type":"image","path":"shots/a.png"}],`+imageQuestion+`}`))
 	if len(rig.requests) != 1 {
@@ -150,9 +150,9 @@ func TestDecideImageFileGoesToOpenAIAsInputImage(t *testing.T) {
 	}
 }
 
-func TestDecideImageGoesToOpenRouterAsImageURLInState(t *testing.T) {
-	rig := newImageRig(t, "openrouter", extension.DecideImages{ReadFile: readImageFile}, nil)
-	data := decidePNG(t, 8, 8)
+func TestDecideSystemoneImageGoesToOpenRouterAsImageURLInState(t *testing.T) {
+	rig := newImageRig(t, "openrouter", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
+	data := decideSystemonePNG(t, 8, 8)
 	rig.write(t, "a.png", data)
 	requireOK(t, rig.call(t, `{"input":["note",{"type":"json","value":{"k":1}},{"type":"image","path":"a.png"}],`+imageQuestion+`}`))
 	state := rig.requests[0]["state"].([]any)
@@ -169,17 +169,17 @@ func TestDecideImageGoesToOpenRouterAsImageURLInState(t *testing.T) {
 	}
 }
 
-func TestDecideImageOnlyInputIsNotSentAsText(t *testing.T) {
-	rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
-	rig.write(t, "a.png", decidePNG(t, 8, 8))
+func TestDecideSystemoneImageOnlyInputIsNotSentAsText(t *testing.T) {
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
+	rig.write(t, "a.png", decideSystemonePNG(t, 8, 8))
 	requireOK(t, rig.call(t, `{"input":[{"type":"image","path":"a.png"}],`+imageQuestion+`}`))
 	if _, isString := rig.requests[0]["input"].(string); isString {
 		t.Fatal("an image-only input was sent as a string")
 	}
 }
 
-func TestDecideImageDataAcceptsBase64DataURLAndWhitespace(t *testing.T) {
-	data := decidePNG(t, 8, 8)
+func TestDecideSystemoneImageDataAcceptsBase64DataURLAndWhitespace(t *testing.T) {
+	data := decideSystemonePNG(t, 8, 8)
 	encoded := base64.StdEncoding.EncodeToString(data)
 	want := "data:image/png;base64," + encoded
 	forms := map[string]string{
@@ -190,7 +190,7 @@ func TestDecideImageDataAcceptsBase64DataURLAndWhitespace(t *testing.T) {
 	}
 	for name, form := range forms {
 		t.Run(name, func(t *testing.T) {
-			rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
+			rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
 			requireOK(t, rig.call(t, `{"input":[{"type":"image","data":"`+form+`"}],`+imageQuestion+`}`))
 			parts := rig.requests[0]["input"].([]any)[0].(map[string]any)["content"].([]any)
 			if got := parts[0].(map[string]any)["image_url"]; got != want {
@@ -200,20 +200,20 @@ func TestDecideImageDataAcceptsBase64DataURLAndWhitespace(t *testing.T) {
 	}
 }
 
-func TestDecideImageTypeComesFromTheBytesNotTheName(t *testing.T) {
-	rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
-	rig.write(t, "photo.txt", decidePNG(t, 8, 8))
+func TestDecideSystemoneImageTypeComesFromTheBytesNotTheName(t *testing.T) {
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
+	rig.write(t, "photo.txt", decideSystemonePNG(t, 8, 8))
 	requireOK(t, rig.call(t, `{"input":[{"type":"image","path":"photo.txt"}],`+imageQuestion+`}`))
 
-	rig = newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
+	rig = newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
 	rig.write(t, "fake.png", []byte("this is only text"))
 	requireRefused(t, rig, rig.call(t, `{"input":[{"type":"image","path":"fake.png"}],`+imageQuestion+`}`), "unsupported_image")
 	requireRefused(t, rig, rig.call(t, `{"input":[{"type":"image","data":"`+base64.StdEncoding.EncodeToString([]byte("<svg></svg>"))+`"}],`+imageQuestion+`}`), "unsupported_image")
 }
 
-func TestDecideImagePartNeedsExactlyOneOfPathAndData(t *testing.T) {
-	rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
-	rig.write(t, "a.png", decidePNG(t, 8, 8))
+func TestDecideSystemoneImagePartNeedsExactlyOneOfPathAndData(t *testing.T) {
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
+	rig.write(t, "a.png", decideSystemonePNG(t, 8, 8))
 	for name, part := range map[string]string{
 		"neither": `{"type":"image"}`,
 		"both":    `{"type":"image","path":"a.png","data":"AAAA"}`,
@@ -226,18 +226,18 @@ func TestDecideImagePartNeedsExactlyOneOfPathAndData(t *testing.T) {
 	}
 }
 
-func TestDecideImageTypeIsCaseInsensitive(t *testing.T) {
-	rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
-	rig.write(t, "a.png", decidePNG(t, 8, 8))
+func TestDecideSystemoneImageTypeIsCaseInsensitive(t *testing.T) {
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
+	rig.write(t, "a.png", decideSystemonePNG(t, 8, 8))
 	requireOK(t, rig.call(t, `{"input":[{"type":" IMAGE ","path":"a.png"}],`+imageQuestion+`}`))
 }
 
-func TestDecideImagePathStaysInTheWorkspace(t *testing.T) {
+func TestDecideSystemoneImagePathStaysInTheWorkspace(t *testing.T) {
 	outside := t.TempDir()
-	if err := os.WriteFile(filepath.Join(outside, "secret.png"), decidePNG(t, 8, 8), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(outside, "secret.png"), decideSystemonePNG(t, 8, 8), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
 	if err := os.Symlink(filepath.Join(outside, "secret.png"), filepath.Join(rig.workspace, "link.png")); err != nil {
 		t.Fatal(err)
 	}
@@ -254,33 +254,33 @@ func TestDecideImagePathStaysInTheWorkspace(t *testing.T) {
 	}
 }
 
-func TestDecideImagePathHonoursItsOwnDenyRules(t *testing.T) {
+func TestDecideSystemoneImagePathHonoursItsOwnDenyRules(t *testing.T) {
 	workspace := t.TempDir()
 	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
 		workspace = resolved
 	}
 	policy := sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(workspace, "private")}}}
-	rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, func(s *sessionfs.ExtensionDecideSettings) { s.Policy = policy })
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.Policy = policy })
 	rig.workspace = workspace
-	rig.write(t, "private/a.png", decidePNG(t, 8, 8))
-	rig.write(t, "public/a.png", decidePNG(t, 8, 8))
+	rig.write(t, "private/a.png", decideSystemonePNG(t, 8, 8))
+	rig.write(t, "public/a.png", decideSystemonePNG(t, 8, 8))
 	requireRefused(t, rig, rig.call(t, `{"input":[{"type":"image","path":"private/a.png"}],`+imageQuestion+`}`), "path_denied")
 	requireOK(t, rig.call(t, `{"input":[{"type":"image","path":"public/a.png"}],`+imageQuestion+`}`))
 }
 
-func TestDecideImageMissingFileAndDirectory(t *testing.T) {
-	rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
-	rig.write(t, "dir/x.png", decidePNG(t, 8, 8))
+func TestDecideSystemoneImageMissingFileAndDirectory(t *testing.T) {
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
+	rig.write(t, "dir/x.png", decideSystemonePNG(t, 8, 8))
 	requireRefused(t, rig, rig.call(t, `{"input":[{"type":"image","path":"nope.png"}],`+imageQuestion+`}`), "not_found")
 	requireRefused(t, rig, rig.call(t, `{"input":[{"type":"image","path":"dir"}],`+imageQuestion+`}`), "not_a_file")
 }
 
-func TestDecideImageSizeLimits(t *testing.T) {
-	big := decidePNG(t, 120, 120)
+func TestDecideSystemoneImageSizeLimits(t *testing.T) {
+	big := decideSystemonePNG(t, 120, 120)
 	if len(big) < 4000 {
 		t.Fatalf("test image too small: %d", len(big))
 	}
-	rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
 	rig.write(t, "big.png", big)
 	requireRefused(t, rig, rig.call(t, `{"input":[{"type":"image","path":"big.png"}],`+imageQuestion+`}`), "image_too_large")
 	requireRefused(t, rig, rig.call(t, `{"input":[{"type":"image","data":"`+base64.StdEncoding.EncodeToString(big)+`"}],`+imageQuestion+`}`), "image_too_large")
@@ -288,27 +288,27 @@ func TestDecideImageSizeLimits(t *testing.T) {
 	requireRefused(t, rig, rig.call(t, `{"input":[{"type":"image","data":"`+strings.Repeat("A", 100000)+`"}],`+imageQuestion+`}`), "image_too_large")
 }
 
-func TestDecideImageCountLimitAndTextLimitAreSeparate(t *testing.T) {
-	rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
-	rig.write(t, "a.png", decidePNG(t, 8, 8))
+func TestDecideSystemoneImageCountLimitAndTextLimitAreSeparate(t *testing.T) {
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
+	rig.write(t, "a.png", decideSystemonePNG(t, 8, 8))
 	three := `{"type":"image","path":"a.png"},{"type":"image","path":"a.png"},{"type":"image","path":"a.png"}`
 	requireRefused(t, rig, rig.call(t, `{"input":[`+three+`],`+imageQuestion+`}`), "too_many_images")
 	// Two images are within max_images, and the text limit is 1000 bytes while one image is not text.
 	requireOK(t, rig.call(t, `{"input":["x",{"type":"image","path":"a.png"},{"type":"image","path":"a.png"}],`+imageQuestion+`}`))
-	requireRefused(t, newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil), rig.call(t, `{"input":["`+strings.Repeat("x", 1001)+`",{"type":"image","path":"a.png"}],`+imageQuestion+`}`), "input_too_large")
+	requireRefused(t, newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil), rig.call(t, `{"input":["`+strings.Repeat("x", 1001)+`",{"type":"image","path":"a.png"}],`+imageQuestion+`}`), "input_too_large")
 }
 
-func TestDecideImageReadsStoredReference(t *testing.T) {
+func TestDecideSystemoneImageReadsStoredReference(t *testing.T) {
 	dir := t.TempDir()
 	store := imagestore.New(imagestore.Options{Dir: dir, MinBytes: 1, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 24})
-	data := decidePNG(t, 8, 8)
+	data := decideSystemonePNG(t, 8, 8)
 	item := []byte(`{"type":"function_call_output","call_id":"c","output":[{"type":"input_image","image_url":"data:image/png;base64,` + base64.StdEncoding.EncodeToString(data) + `"}]}`)
 	stored, stats := store.Externalize(item)
 	names := imagestore.RefNames(stored)
 	if stats.Stored != 1 || len(names) != 1 {
 		t.Fatalf("setup: stats %+v names %v", stats, names)
 	}
-	rig := newImageRig(t, "openai", extension.DecideImages{Store: store, ReadFile: readImageFile}, nil)
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{Store: store, ReadFile: readImageFile}, nil)
 	requireOK(t, rig.call(t, `{"input":[{"type":"image","path":"stored-image://`+names[0]+`"}],`+imageQuestion+`}`))
 	parts := rig.requests[0]["input"].([]any)[0].(map[string]any)["content"].([]any)
 	if got := parts[0].(map[string]any)["image_url"]; got != "data:image/png;base64,"+base64.StdEncoding.EncodeToString(data) {
@@ -320,12 +320,12 @@ func TestDecideImageReadsStoredReference(t *testing.T) {
 	requireRefused(t, rig, rig.call(t, `{"input":[{"type":"image","path":"`+missing+`"}],`+imageQuestion+`}`), "image_not_found")
 	requireRefused(t, rig, rig.call(t, `{"input":[{"type":"image","path":"stored-image://../../etc/passwd"}],`+imageQuestion+`}`), "image_not_found")
 
-	off := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, nil)
+	off := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, nil)
 	requireRefused(t, off, off.call(t, `{"input":[{"type":"image","path":"stored-image://`+names[0]+`"}],`+imageQuestion+`}`), "image_not_found")
 }
 
-func TestDecideImageIsResizedLikeANativeImage(t *testing.T) {
-	big := decidePNG(t, 400, 300)
+func TestDecideSystemoneImageIsResizedLikeANativeImage(t *testing.T) {
+	big := decideSystemonePNG(t, 400, 300)
 	options := imageresize.Options{MaxEdgePx: 100, MaxBytes: 1 << 20, MaxPixels: 1 << 26, JPEGQuality: 85, CacheEntries: 4}
 	sentWidth := func(t *testing.T, appliesTo []string) int {
 		t.Helper()
@@ -333,7 +333,7 @@ func TestDecideImageIsResizedLikeANativeImage(t *testing.T) {
 		if appliesTo != nil {
 			resizer = imageresize.New(options, appliesTo)
 		}
-		rig := newImageRig(t, "openai", extension.DecideImages{Resizer: resizer, ReadFile: readImageFile}, func(s *sessionfs.ExtensionDecideSettings) { s.MaxImageBytes = 1 << 20 })
+		rig := newImageRig(t, "openai", extension.DecideSystemoneImages{Resizer: resizer, ReadFile: readImageFile}, func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.MaxImageBytes = 1 << 20 })
 		rig.write(t, "big.png", big)
 		requireOK(t, rig.call(t, `{"input":[{"type":"image","path":"big.png"}],`+imageQuestion+`}`))
 		url := rig.requests[0]["input"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["image_url"].(string)
@@ -352,7 +352,7 @@ func TestDecideImageIsResizedLikeANativeImage(t *testing.T) {
 		t.Fatalf("native resize sent width %d, want 100", width)
 	}
 	if width := sentWidth(t, []string{"mcp"}); width != 400 {
-		t.Fatalf("mcp-only resize changed a decide image: width %d", width)
+		t.Fatalf("mcp-only resize changed a decide_systemone image: width %d", width)
 	}
 	if width := sentWidth(t, nil); width != 400 {
 		t.Fatalf("no resizer changed the image: width %d", width)
@@ -362,10 +362,10 @@ func TestDecideImageIsResizedLikeANativeImage(t *testing.T) {
 // The size limit applies to what was read, so an image that is resized to fit is still
 // refused when the file itself is over the limit: the limit protects memory, not the
 // provider request.
-func TestDecideImageFileOverTheLimitIsRefusedEvenIfResizeWouldShrinkIt(t *testing.T) {
-	big := decidePNG(t, 400, 300)
+func TestDecideSystemoneImageFileOverTheLimitIsRefusedEvenIfResizeWouldShrinkIt(t *testing.T) {
+	big := decideSystemonePNG(t, 400, 300)
 	options := imageresize.Options{MaxEdgePx: 50, MaxBytes: 1 << 20, MaxPixels: 1 << 26, JPEGQuality: 85, CacheEntries: 4}
-	rig := newImageRig(t, "openai", extension.DecideImages{Resizer: imageresize.New(options, []string{"native"}), ReadFile: readImageFile}, func(s *sessionfs.ExtensionDecideSettings) { s.MaxImageBytes = int64(len(big)) - 1 })
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{Resizer: imageresize.New(options, []string{"native"}), ReadFile: readImageFile}, func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.MaxImageBytes = int64(len(big)) - 1 })
 	rig.write(t, "big.png", big)
 	requireRefused(t, rig, rig.call(t, `{"input":[{"type":"image","path":"big.png"}],`+imageQuestion+`}`), "image_too_large")
 }
@@ -399,9 +399,9 @@ func (c *countingReader) Read(p []byte) (int, error) {
 }
 
 // A file over the limit is refused by the read itself, with no request sent.
-func TestDecideImageFileOverTheLimitIsRefusedByTheRead(t *testing.T) {
-	big := decidePNG(t, 120, 120)
-	rig := newImageRig(t, "openai", extension.DecideImages{ReadFile: readImageFile}, func(s *sessionfs.ExtensionDecideSettings) { s.MaxImageBytes = int64(len(big)) - 1 })
+func TestDecideSystemoneImageFileOverTheLimitIsRefusedByTheRead(t *testing.T) {
+	big := decideSystemonePNG(t, 120, 120)
+	rig := newImageRig(t, "openai", extension.DecideSystemoneImages{ReadFile: readImageFile}, func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.MaxImageBytes = int64(len(big)) - 1 })
 	rig.write(t, "grown.png", big)
 	data, failure := readImageFile("grown.png", sessionfs.NativePathPolicy{}, nil, int64(len(big))-1, tools.ExecutionContext{CallID: "c", WorkspaceRoot: rig.workspace}, "input part 1")
 	if failure == "" || data != nil || !strings.Contains(failure, "image_too_large") {

@@ -16,15 +16,15 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-// decideAnswer is one answer in a form both providers map to. Score is the
+// decideSystemoneAnswer is one answer in a form both providers map to. Score is the
 // probability-weighted 0-based level index, so it can fall between levels.
-type decideAnswer struct {
+type decideSystemoneAnswer struct {
 	Type          string
 	Probability   float64
 	Choice        string
 	Score         float64
 	Confidence    float64
-	Probabilities []decideProbability
+	Probabilities []decideSystemoneProbability
 	Refused       bool
 	// HasNumber is set when the provider gave the number its type needs (probability
 	// or score). A missing or null number is not a 0.
@@ -33,46 +33,50 @@ type decideAnswer struct {
 	Broken bool
 }
 
-type decideProbability struct {
+type decideSystemoneProbability struct {
 	Label       string
 	Probability float64
 }
 
-// decideHTTPError is a provider answer that was not 2xx.
-type decideHTTPError struct {
+// decideSystemoneHTTPError is a provider answer that was not 2xx.
+type decideSystemoneHTTPError struct {
 	Status  int
 	Message string
 }
 
-// decideTransportError keeps the original error, so a timeout or a cancel is still
+// decideSystemoneTransportError keeps the original error, so a timeout or a cancel is still
 // recognised, and hides the key from its text.
-type decideTransportError struct {
+type decideSystemoneTransportError struct {
 	Err error
 	Key string
 }
 
-func (e *decideTransportError) Error() string { return decideRedact(e.Err.Error(), e.Key) }
-func (e *decideTransportError) Unwrap() error { return e.Err }
+func (e *decideSystemoneTransportError) Error() string {
+	return decideSystemoneRedact(e.Err.Error(), e.Key)
+}
+func (e *decideSystemoneTransportError) Unwrap() error { return e.Err }
 
-// decideRedact removes the API key from provider text, because some providers echo
+// decideSystemoneRedact removes the API key from provider text, because some providers echo
 // the key they rejected.
-func decideRedact(text, key string) string {
+func decideSystemoneRedact(text, key string) string {
 	if key == "" {
 		return text
 	}
 	return strings.ReplaceAll(text, key, "[redacted]")
 }
 
-func (e *decideHTTPError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message) }
+func (e *decideSystemoneHTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message)
+}
 
-// decideResponseError is a 2xx answer the tool cannot use: too large, not JSON, or
+// decideSystemoneResponseError is a 2xx answer the tool cannot use: too large, not JSON, or
 // without answers.
-type decideResponseError struct{ Message string }
+type decideSystemoneResponseError struct{ Message string }
 
-func (e *decideResponseError) Error() string { return e.Message }
+func (e *decideSystemoneResponseError) Error() string { return e.Message }
 
 // requestDecisions sends one request and returns the answers by question name.
-func requestDecisions(ctx context.Context, client *http.Client, settings sessionfs.ExtensionDecideSettings, key string, input []decideInputPart, questions []decideQuestion) (map[string]decideAnswer, error) {
+func requestDecisions(ctx context.Context, client *http.Client, settings sessionfs.ExtensionDecideSystemoneSettings, key string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) (map[string]decideSystemoneAnswer, error) {
 	var body any
 	if settings.Backend == "openai" {
 		body = openAIDecisionsRequest(settings.Model, input, questions)
@@ -92,7 +96,7 @@ func requestDecisions(ctx context.Context, client *http.Client, settings session
 	request.Header.Set("Accept", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, &decideTransportError{Err: err, Key: key}
+		return nil, &decideSystemoneTransportError{Err: err, Key: key}
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, settings.MaxResponseBytes+1))
@@ -100,26 +104,26 @@ func requestDecisions(ctx context.Context, client *http.Client, settings session
 		return nil, err
 	}
 	if int64(len(data)) > settings.MaxResponseBytes {
-		return nil, &decideResponseError{fmt.Sprintf("response is larger than %d bytes", settings.MaxResponseBytes)}
+		return nil, &decideSystemoneResponseError{fmt.Sprintf("response is larger than %d bytes", settings.MaxResponseBytes)}
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return nil, &decideHTTPError{Status: response.StatusCode, Message: decideRedact(decideErrorMessage(data), key)}
+		return nil, &decideSystemoneHTTPError{Status: response.StatusCode, Message: decideSystemoneRedact(decideSystemoneErrorMessage(data), key)}
 	}
-	var answers map[string]decideAnswer
+	var answers map[string]decideSystemoneAnswer
 	if settings.Backend == "openai" {
 		answers, err = parseOpenAIDecisions(data, questions)
 	} else {
 		answers, err = parseOpenRouterDecisions(data, questions)
 	}
 	if err != nil {
-		return nil, &decideResponseError{err.Error()}
+		return nil, &decideSystemoneResponseError{err.Error()}
 	}
 	return answers, nil
 }
 
-// decideErrorMessage takes the provider's error text from either error shape and cuts
+// decideSystemoneErrorMessage takes the provider's error text from either error shape and cuts
 // it, so a long validation report stays small.
-func decideErrorMessage(data []byte) string {
+func decideSystemoneErrorMessage(data []byte) string {
 	var envelope struct {
 		Error json.RawMessage `json:"error"`
 	}
@@ -143,16 +147,16 @@ func decideErrorMessage(data []byte) string {
 	return text
 }
 
-func decideRequestError(callID string, err error) string {
-	var httpError *decideHTTPError
-	var responseError *decideResponseError
+func decideSystemoneRequestError(callID string, err error) string {
+	var httpError *decideSystemoneHTTPError
+	var responseError *decideSystemoneResponseError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return decideError(callID, tools.StatusError, "timeout", "The decisions request timed out")
+		return decideSystemoneError(callID, tools.StatusError, "timeout", "The decisions request timed out")
 	case errors.Is(err, context.Canceled):
-		return decideError(callID, tools.StatusError, "cancelled", "The decisions request was cancelled")
+		return decideSystemoneError(callID, tools.StatusError, "cancelled", "The decisions request was cancelled")
 	case errors.As(err, &responseError):
-		return decideError(callID, tools.StatusError, "bad_response", "The provider's answer could not be used", tools.Information{Key: "reason", Value: oneLine(responseError.Message)})
+		return decideSystemoneError(callID, tools.StatusError, "bad_response", "The provider's answer could not be used", tools.Information{Key: "reason", Value: oneLine(responseError.Message)})
 	case errors.As(err, &httpError):
 		code, status := "provider_error", tools.StatusError
 		switch {
@@ -163,16 +167,16 @@ func decideRequestError(callID string, err error) string {
 		case httpError.Status >= 400 && httpError.Status < 500:
 			code, status = "request_rejected", tools.StatusInvalidInput
 		}
-		return decideError(callID, status, code, "The provider answered HTTP "+strconv.Itoa(httpError.Status), tools.Information{Key: "reason", Value: httpError.Message})
+		return decideSystemoneError(callID, status, code, "The provider answered HTTP "+strconv.Itoa(httpError.Status), tools.Information{Key: "reason", Value: httpError.Message})
 	default:
-		return decideError(callID, tools.StatusError, "request_failed", "The decisions request failed", tools.Information{Key: "reason", Value: oneLine(err.Error())})
+		return decideSystemoneError(callID, tools.StatusError, "request_failed", "The decisions request failed", tools.Information{Key: "reason", Value: oneLine(err.Error())})
 	}
 }
 
 // ---- OpenAI: POST /v1/decisions ----
 
-// decideAllText joins the parts into one string when every part is text.
-func decideAllText(input []decideInputPart) (string, bool) {
+// decideSystemoneAllText joins the parts into one string when every part is text.
+func decideSystemoneAllText(input []decideSystemoneInputPart) (string, bool) {
 	texts := make([]string, 0, len(input))
 	for _, part := range input {
 		if part.JSON != nil || part.isImage() {
@@ -186,8 +190,8 @@ func decideAllText(input []decideInputPart) (string, bool) {
 // openAIDecisionsInput is a string when the input is all text, as in OpenAI's own
 // examples, and otherwise one user message whose parts are input_text, a JSON value
 // being its compact text, and input_image with the image as a data URL.
-func openAIDecisionsInput(input []decideInputPart) any {
-	if text, ok := decideAllText(input); ok {
+func openAIDecisionsInput(input []decideSystemoneInputPart) any {
+	if text, ok := decideSystemoneAllText(input); ok {
 		return text
 	}
 	parts := make([]map[string]any, 0, len(input))
@@ -208,8 +212,8 @@ func openAIDecisionsInput(input []decideInputPart) any {
 // openRouterDecisionsState is a string when the input is all text, and otherwise the
 // list of its parts, a text as a string and a JSON value as itself: the endpoint reads
 // "a plain string, or a JSON object or array of related context".
-func openRouterDecisionsState(input []decideInputPart) any {
-	if text, ok := decideAllText(input); ok {
+func openRouterDecisionsState(input []decideSystemoneInputPart) any {
+	if text, ok := decideSystemoneAllText(input); ok {
 		return text
 	}
 	state := make([]any, 0, len(input))
@@ -225,7 +229,7 @@ func openRouterDecisionsState(input []decideInputPart) any {
 	return state
 }
 
-func openAIDecisionsRequest(model string, input []decideInputPart, questions []decideQuestion) map[string]any {
+func openAIDecisionsRequest(model string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) map[string]any {
 	items := make([]map[string]any, 0, len(questions))
 	for _, question := range questions {
 		item := map[string]any{"type": question.Type, "name": question.Name, "instructions": question.Instructions}
@@ -256,7 +260,7 @@ func openAIDecisionsRequest(model string, input []decideInputPart, questions []d
 	return map[string]any{"model": model, "input": openAIDecisionsInput(input), "questions": items}
 }
 
-func parseOpenAIDecisions(data []byte, questions []decideQuestion) (map[string]decideAnswer, error) {
+func parseOpenAIDecisions(data []byte, questions []decideSystemoneQuestion) (map[string]decideSystemoneAnswer, error) {
 	var response struct {
 		Answers []json.RawMessage `json:"answers"`
 	}
@@ -266,7 +270,7 @@ func parseOpenAIDecisions(data []byte, questions []decideQuestion) (map[string]d
 	if response.Answers == nil {
 		return nil, errors.New("the response has no answers")
 	}
-	answers := make(map[string]decideAnswer, len(response.Answers))
+	answers := make(map[string]decideSystemoneAnswer, len(response.Answers))
 	for index, raw := range response.Answers {
 		var item struct {
 			Type          string          `json:"type"`
@@ -289,14 +293,14 @@ func parseOpenAIDecisions(data []byte, questions []decideQuestion) (map[string]d
 		if err := json.Unmarshal(raw, &item); err != nil {
 			// One odd field costs that answer only, not the others.
 			if name != "" {
-				answers[name] = decideAnswer{Broken: true}
+				answers[name] = decideSystemoneAnswer{Broken: true}
 			}
 			continue
 		}
 		if item.Name != "" {
 			name = item.Name
 		}
-		answer := decideAnswer{Type: item.Type, Confidence: item.Confidence}
+		answer := decideSystemoneAnswer{Type: item.Type, Confidence: item.Confidence}
 		switch item.Type {
 		case "refusal":
 			answer.Refused = true
@@ -305,7 +309,7 @@ func parseOpenAIDecisions(data []byte, questions []decideQuestion) (map[string]d
 				answer.Probability, answer.HasNumber = *item.Probability, true
 			}
 		case "choice":
-			answer.Choice = decideScalarText(item.Choice)
+			answer.Choice = decideSystemoneScalarText(item.Choice)
 		case "score":
 			if item.Score != nil {
 				answer.Score, answer.HasNumber = *item.Score, true
@@ -314,20 +318,20 @@ func parseOpenAIDecisions(data []byte, questions []decideQuestion) (map[string]d
 		for _, probability := range item.Probabilities {
 			label := probability.Label
 			if label == "" {
-				label = decideScalarText(probability.Value)
+				label = decideSystemoneScalarText(probability.Value)
 			}
 			if label == "" {
 				continue
 			}
-			answer.Probabilities = append(answer.Probabilities, decideProbability{Label: label, Probability: probability.Probability})
+			answer.Probabilities = append(answer.Probabilities, decideSystemoneProbability{Label: label, Probability: probability.Probability})
 		}
 		answers[name] = answer
 	}
 	return answers, nil
 }
 
-// decideScalarText renders a JSON string, number or bool without quotes.
-func decideScalarText(raw json.RawMessage) string {
+// decideSystemoneScalarText renders a JSON string, number or bool without quotes.
+func decideSystemoneScalarText(raw json.RawMessage) string {
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
 		return text
@@ -337,7 +341,7 @@ func decideScalarText(raw json.RawMessage) string {
 
 // ---- OpenRouter: POST /api/alpha/decisions ----
 
-func openRouterDecisionsRequest(model string, input []decideInputPart, questions []decideQuestion) map[string]any {
+func openRouterDecisionsRequest(model string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) map[string]any {
 	items := make(map[string]any, len(questions))
 	for _, question := range questions {
 		item := map[string]any{"instructions": question.Instructions}
@@ -376,7 +380,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func parseOpenRouterDecisions(data []byte, questions []decideQuestion) (map[string]decideAnswer, error) {
+func parseOpenRouterDecisions(data []byte, questions []decideSystemoneQuestion) (map[string]decideSystemoneAnswer, error) {
 	var response struct {
 		Answers map[string]json.RawMessage `json:"answers"`
 	}
@@ -386,7 +390,7 @@ func parseOpenRouterDecisions(data []byte, questions []decideQuestion) (map[stri
 	if response.Answers == nil {
 		return nil, errors.New("the response has no answers")
 	}
-	answers := make(map[string]decideAnswer, len(response.Answers))
+	answers := make(map[string]decideSystemoneAnswer, len(response.Answers))
 	for _, question := range questions {
 		raw, found := response.Answers[question.Name]
 		if !found {
@@ -401,10 +405,10 @@ func parseOpenRouterDecisions(data []byte, questions []decideQuestion) (map[stri
 			Probabilities map[string]float64 `json:"probabilities"`
 		}
 		if err := json.Unmarshal(raw, &item); err != nil {
-			answers[question.Name] = decideAnswer{Broken: true}
+			answers[question.Name] = decideSystemoneAnswer{Broken: true}
 			continue
 		}
-		answer := decideAnswer{Confidence: item.Confidence}
+		answer := decideSystemoneAnswer{Confidence: item.Confidence}
 		switch item.Type {
 		case "noul":
 			answer.Type = "predicate"
@@ -412,10 +416,10 @@ func parseOpenRouterDecisions(data []byte, questions []decideQuestion) (map[stri
 				answer.Probability, answer.HasNumber = *item.Noul, true
 			}
 		case "choice":
-			answer.Type, answer.Choice = "choice", decideScalarText(item.Choice)
+			answer.Type, answer.Choice = "choice", decideSystemoneScalarText(item.Choice)
 			for _, option := range question.Options {
 				if probability, found := item.Probabilities[option.Label]; found {
-					answer.Probabilities = append(answer.Probabilities, decideProbability{Label: option.Label, Probability: probability})
+					answer.Probabilities = append(answer.Probabilities, decideSystemoneProbability{Label: option.Label, Probability: probability})
 				}
 			}
 		case "score":
@@ -426,13 +430,13 @@ func parseOpenRouterDecisions(data []byte, questions []decideQuestion) (map[stri
 			// The keys are the 0-based level indices; show the level labels instead.
 			for index, option := range question.Options {
 				if probability, found := item.Probabilities[strconv.Itoa(index)]; found {
-					answer.Probabilities = append(answer.Probabilities, decideProbability{Label: option.Label, Probability: probability})
+					answer.Probabilities = append(answer.Probabilities, decideSystemoneProbability{Label: option.Label, Probability: probability})
 				}
 			}
 		case "refusal":
 			answer.Type, answer.Refused = item.Type, true
 		default:
-			// Kept as it came, so renderDecideAnswers sees it does not fit the question.
+			// Kept as it came, so renderDecideSystemoneAnswers sees it does not fit the question.
 			answer.Type = item.Type
 		}
 		answers[question.Name] = answer
@@ -442,10 +446,10 @@ func parseOpenRouterDecisions(data []byte, questions []decideQuestion) (map[stri
 
 // ---- Result ----
 
-// renderDecideAnswers writes the answers in question order as compact JSON. A question
+// renderDecideSystemoneAnswers writes the answers in question order as compact JSON. A question
 // the provider did not answer is listed as missing, so the model never reads a gap
 // as a negative.
-func renderDecideAnswers(questions []decideQuestion, answers map[string]decideAnswer) (string, error) {
+func renderDecideSystemoneAnswers(questions []decideSystemoneQuestion, answers map[string]decideSystemoneAnswer) (string, error) {
 	var out bytes.Buffer
 	out.WriteString(`{"answers":[`)
 	for index, question := range questions {
@@ -459,26 +463,26 @@ func renderDecideAnswers(questions []decideQuestion, answers map[string]decideAn
 			item["status"] = "missing"
 		case answer.Refused:
 			item["status"] = "refused"
-		case !decideAnswerFits(question, answer):
+		case !decideSystemoneAnswerFits(question, answer):
 			// Never show a number the provider did not give: a made-up 0 reads as "no".
 			item["status"] = "unusable"
 		default:
 			switch question.Type {
 			case "predicate":
-				item["probability"] = roundDecide(answer.Probability)
+				item["probability"] = roundDecideSystemone(answer.Probability)
 			case "choice":
-				item["choice"], item["confidence"] = answer.Choice, roundDecide(answer.Confidence)
+				item["choice"], item["confidence"] = answer.Choice, roundDecideSystemone(answer.Confidence)
 			case "score":
-				item["score"], item["confidence"] = roundDecide(answer.Score), roundDecide(answer.Confidence)
-				if level := nearestDecideLevel(question, answer.Score); level != "" {
+				item["score"], item["confidence"] = roundDecideSystemone(answer.Score), roundDecideSystemone(answer.Confidence)
+				if level := nearestDecideSystemoneLevel(question, answer.Score); level != "" {
 					item["level"] = level
 				}
 			}
 			if len(answer.Probabilities) > 0 && question.Type != "predicate" {
-				item["probabilities"] = orderedDecideProbabilities(answer.Probabilities)
+				item["probabilities"] = orderedDecideSystemoneProbabilities(answer.Probabilities)
 			}
 		}
-		encoded, err := marshalDecideItem(item)
+		encoded, err := marshalDecideSystemoneItem(item)
 		if err != nil {
 			return "", err
 		}
@@ -488,10 +492,10 @@ func renderDecideAnswers(questions []decideQuestion, answers map[string]decideAn
 	return out.String(), nil
 }
 
-// decideAnswerFits reports whether an answer is of its question's type and has the
+// decideSystemoneAnswerFits reports whether an answer is of its question's type and has the
 // value that type needs: the number for a predicate or a score, and for a choice one
 // of the options that were offered.
-func decideAnswerFits(question decideQuestion, answer decideAnswer) bool {
+func decideSystemoneAnswerFits(question decideSystemoneQuestion, answer decideSystemoneAnswer) bool {
 	if answer.Broken || answer.Type != question.Type {
 		return false
 	}
@@ -506,7 +510,7 @@ func decideAnswerFits(question decideQuestion, answer decideAnswer) bool {
 	return false
 }
 
-func nearestDecideLevel(question decideQuestion, score float64) string {
+func nearestDecideSystemoneLevel(question decideSystemoneQuestion, score float64) string {
 	if len(question.Options) == 0 {
 		return ""
 	}
@@ -520,12 +524,12 @@ func nearestDecideLevel(question decideQuestion, score float64) string {
 	return question.Options[index].Label
 }
 
-func roundDecide(value float64) float64 { return math.Round(value*10000) / 10000 }
+func roundDecideSystemone(value float64) float64 { return math.Round(value*10000) / 10000 }
 
-// orderedDecideProbabilities keeps the provider's order in a JSON object.
-type orderedDecideProbabilities []decideProbability
+// orderedDecideSystemoneProbabilities keeps the provider's order in a JSON object.
+type orderedDecideSystemoneProbabilities []decideSystemoneProbability
 
-func (p orderedDecideProbabilities) MarshalJSON() ([]byte, error) {
+func (p orderedDecideSystemoneProbabilities) MarshalJSON() ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteByte('{')
 	for index, entry := range p {
@@ -538,14 +542,14 @@ func (p orderedDecideProbabilities) MarshalJSON() ([]byte, error) {
 		}
 		out.Write(label)
 		out.WriteByte(':')
-		out.WriteString(strconv.FormatFloat(roundDecide(entry.Probability), 'f', -1, 64))
+		out.WriteString(strconv.FormatFloat(roundDecideSystemone(entry.Probability), 'f', -1, 64))
 	}
 	out.WriteByte('}')
 	return out.Bytes(), nil
 }
 
-// marshalDecideItem writes the answer fields in a fixed, readable order.
-func marshalDecideItem(item map[string]any) ([]byte, error) {
+// marshalDecideSystemoneItem writes the answer fields in a fixed, readable order.
+func marshalDecideSystemoneItem(item map[string]any) ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteByte('{')
 	first := true

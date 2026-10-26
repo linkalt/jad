@@ -9,7 +9,7 @@ import (
 
 func TestNormalizeNativeReadImageSettings(t *testing.T) {
 	const root = "/jad"
-	absent, err := normalizeNativeReadImageSettings(decideSettingsFor(`{"read":{"paths":{"allow":["/tmp/pics"]}}}`), root, "setting.json")
+	absent, err := normalizeNativeReadImageSettings(decideSystemoneSettingsFor(`{"read":{"paths":{"allow":["/tmp/pics"]}}}`), root, "setting.json")
 	if err != nil || absent != nil {
 		t.Fatalf("a missing read_image key = %+v, err=%v; want the tool off", absent, err)
 	}
@@ -19,7 +19,7 @@ func TestNormalizeNativeReadImageSettings(t *testing.T) {
 	}
 
 	// read's rules are not read_image's: without its own paths it gets the empty default.
-	defaults, err := normalizeNativeReadImageSettings(decideSettingsFor(`{"read":{"paths":{"allow":["/tmp/pics"]}},"read_image":{}}`), root, "setting.json")
+	defaults, err := normalizeNativeReadImageSettings(decideSystemoneSettingsFor(`{"read":{"paths":{"allow":["/tmp/pics"]}},"read_image":{}}`), root, "setting.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestNormalizeNativeReadImageSettings(t *testing.T) {
 		t.Fatalf("defaults = %+v, want %+v", defaults, want)
 	}
 
-	set, err := normalizeNativeReadImageSettings(decideSettingsFor(`{"read_image":{"max_image_bytes":1234,"paths":{"allow":["/tmp/pics"],"deny":["private"]}}}`), root, "setting.json")
+	set, err := normalizeNativeReadImageSettings(decideSystemoneSettingsFor(`{"read_image":{"max_image_bytes":1234,"paths":{"allow":["/tmp/pics"],"deny":["private"]}}}`), root, "setting.json")
 	if err != nil || set.MaxImageBytes != 1234 {
 		t.Fatalf("max_image_bytes = %+v, err=%v", set, err)
 	}
@@ -50,7 +50,7 @@ func TestNormalizeNativeReadImageSettingsRejectsInvalidSettings(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := normalizeNativeReadImageSettings(decideSettingsFor(tc.native), "/jad", "setting.json")
+			_, err := normalizeNativeReadImageSettings(decideSystemoneSettingsFor(tc.native), "/jad", "setting.json")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want it to contain %q", err, tc.want)
 			}

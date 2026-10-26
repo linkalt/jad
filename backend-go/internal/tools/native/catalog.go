@@ -87,7 +87,7 @@ func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks,
 // BuildCatalogWithAsync is BuildCatalogWithMessenger plus the resolver that shares one
 // async host per tool storage folder. Without it the async tool opens a host of its own.
 func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecide == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeAsync == nil {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecideSystemone == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeAsync == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -259,8 +259,8 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 				return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s is configured but native.%s is missing from tool_definition_paths", config.SettingPath, name, name)}
 			}
 		}
-		if config.ExtensionDecide != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.extension.decide is configured but extension.decide is missing from tool_definition_paths", config.SettingPath)}
+		if config.ExtensionDecideSystemone != nil {
+			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.extension.decide_systemone is configured but extension.decide_systemone is missing from tool_definition_paths", config.SettingPath)}
 		}
 	}
 	definitions, err := loadDefinitions(config.ToolDefinitionPaths)
@@ -463,13 +463,13 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
-	if config.ExtensionDecide != nil {
-		definition, err := requireDefinition(config, definitions, "extension", "decide", extension.DecideToolID, extension.DecideInputSchema)
+	if config.ExtensionDecideSystemone != nil {
+		definition, err := requireDefinition(config, definitions, "extension", "decide_systemone", extension.DecideSystemoneToolID, extension.DecideSystemoneInputSchema)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		images := extension.DecideImages{Store: imagestore.FromSettings(config.ImageStore), Resizer: imageresize.FromSettings(config.ImageResize), ReadFile: readImageFile}
-		tool, err := extension.NewDecideTool(*config.ExtensionDecide, images)
+		images := extension.DecideSystemoneImages{Store: imagestore.FromSettings(config.ImageStore), Resizer: imageresize.FromSettings(config.ImageResize), ReadFile: readImageFile}
+		tool, err := extension.NewDecideSystemoneTool(*config.ExtensionDecideSystemone, images)
 		if err != nil {
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}

@@ -10,7 +10,7 @@ import (
 )
 
 func TestNormalizeNativeProfileMessageSettings(t *testing.T) {
-	absent, err := normalizeNativeProfileMessageSettings(decideSettingsFor(`{}`), "setting.json")
+	absent, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{}`), "setting.json")
 	if err != nil || absent != nil {
 		t.Fatalf("absent = %+v, %v; want nil", absent, err)
 	}
@@ -36,7 +36,7 @@ func TestNormalizeNativeProfileMessageSettings(t *testing.T) {
 		"max chain set":            {`{"profile_message":{"max_chain":4}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 4, MaxQueued: 4, Compact: ProfileMessageCompactOff}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := normalizeNativeProfileMessageSettings(decideSettingsFor(tc.native), "setting.json")
+			got, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(tc.native), "setting.json")
 			if err != nil || got == nil || !reflect.DeepEqual(*got, tc.want) {
 				t.Fatalf("settings = %+v, %v\nwant %+v", got, err, tc.want)
 			}
@@ -88,7 +88,7 @@ func TestNormalizeNativeProfileMessageSettingsRejectsInvalidSettings(t *testing.
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := normalizeNativeProfileMessageSettings(decideSettingsFor(tc.native), "setting.json")
+			_, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(tc.native), "setting.json")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want it to contain %q", err, tc.want)
 			}

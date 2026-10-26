@@ -76,9 +76,9 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"bash bad type", "bash", `{"timeout_ms":"slow"}`, false},
 		{"exec bad type", "exec", `{"timeout_ms":0}`, false},
 		{"read_image bad paths", "read_image", `{"paths":3}`, false},
-		{"decide paths", "decide", `{"paths":` + paths + `,"max_images":2}`, true},
-		{"decide unknown", "decide", `{"nope":1}`, false},
-		{"decide bad paths", "decide", `{"paths":3}`, false},
+		{"decide_systemone paths", "decide_systemone", `{"paths":` + paths + `,"max_images":2}`, true},
+		{"decide_systemone unknown", "decide_systemone", `{"nope":1}`, false},
+		{"decide_systemone bad paths", "decide_systemone", `{"paths":3}`, false},
 		{"profile_message every key", "profile_message", `{"deny_profiles":["dev/a","exec/fast"],"timeout_ms":1000,"result_max_bytes":100}`, true},
 		{"profile_message removed approval", "profile_message", `{"approval":"ask"}`, false},
 		{"profile_message unknown", "profile_message", `{"nope":1}`, false},
@@ -130,7 +130,7 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 				t.Fatal(err)
 			}
 			node := "native"
-			if tc.tool == "decide" {
+			if tc.tool == "decide_systemone" {
 				node = "extension"
 			}
 			text := `{"` + node + `":{"` + tc.tool + `":` + tc.config + `}}`
@@ -170,12 +170,12 @@ func TestExecAndReadImageSchemaKeysMatchTheLoader(t *testing.T) {
 	}
 
 	extensionBlock := setting["properties"].(map[string]any)["tools"].(map[string]any)["properties"].(map[string]any)["extension"].(map[string]any)["properties"].(map[string]any)
-	decideKeys := flattenSchemaKeys(extensionBlock["decide"].(map[string]any), defs)
-	sort.Strings(decideKeys)
-	wantDecide := append([]string(nil), extensionDecideKeys...)
-	sort.Strings(wantDecide)
-	if strings.Join(decideKeys, ",") != strings.Join(wantDecide, ",") {
-		t.Errorf("decide schema keys\n  %v\nloader accepts\n  %v", decideKeys, wantDecide)
+	decideSystemoneKeys := flattenSchemaKeys(extensionBlock["decide_systemone"].(map[string]any), defs)
+	sort.Strings(decideSystemoneKeys)
+	wantDecideSystemone := append([]string(nil), extensionDecideSystemoneKeys...)
+	sort.Strings(wantDecideSystemone)
+	if strings.Join(decideSystemoneKeys, ",") != strings.Join(wantDecideSystemone, ",") {
+		t.Errorf("decide_systemone schema keys\n  %v\nloader accepts\n  %v", decideSystemoneKeys, wantDecideSystemone)
 	}
 	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys, "profile_message": nativeProfileMessageKeys, "tool_smith": nativeToolSmithKeys, "transcript": nativeTranscriptKeys, "transcripts": nativeTranscriptsKeys} {
 		got := flattenSchemaKeys(native[tool].(map[string]any), defs)

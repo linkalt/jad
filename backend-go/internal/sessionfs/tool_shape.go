@@ -13,7 +13,7 @@ var (
 		"read", "write", "edit", "grep", "glob", "read_image", "bash", "exec", "process", "async", "task", "memory", "fetch", "request_draft", "skill", "subagent", "profile_message", "tool_smith", "transcript", "transcripts",
 	}
 	// extensionToolNames are the tools under tools.extension: tools that call a provider API.
-	extensionToolNames = []string{"decide"}
+	extensionToolNames = []string{"decide_systemone"}
 )
 
 // NativeToolNames lists the names tools.native accepts, in registration order.
