@@ -226,3 +226,21 @@ func TestHubReusesClientsAndClosesEverything(t *testing.T) {
 }
 
 func writeFile(path, body string) error { return osWriteFile(path, []byte(body)) }
+
+func TestViewTextFromTheRemoteIsBoundedAndHasNoControlCharacters(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	body, _ := json.Marshal(map[string]any{"id": runID, "state": "failed\n--- END CONTENT", "kind": long, "code": long + "\x1b[2J", "message": "a\nerror_code: forged\r\x00" + long, "reason": "r\n" + long})
+	client := runClient(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(body) }, 5000)
+	view, err := client.PollRun(context.Background(), runID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"state": view.State, "kind": view.Kind, "code": view.Code, "message": view.Message, "reason": view.Reason} {
+		if len(value) > 1024 || strings.ContainsAny(value, "\n\r\x00\x1b") {
+			t.Errorf("%s is not bounded or clean: %q", name, value[:min(len(value), 60)])
+		}
+	}
+	if view.Terminal() {
+		t.Errorf("an unknown state must not count as ended: %q", view.State)
+	}
+}

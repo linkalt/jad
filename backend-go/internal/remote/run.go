@@ -39,6 +39,16 @@ type View struct {
 	Reason    string `json:"reason"`
 }
 
+// clean bounds the remote's short texts and strips control characters: they reach the
+// model's context and the async records, so a remote must not be able to forge lines there.
+func (v *View) clean() {
+	v.State = safeText(v.State, 32)
+	v.Kind = safeText(v.Kind, 32)
+	v.Code = safeText(v.Code, 64)
+	v.Message = safeText(v.Message, 1024)
+	v.Reason = safeText(v.Reason, 128)
+}
+
 // Terminal reports whether the run has ended.
 func (v View) Terminal() bool {
 	switch v.State {
@@ -76,6 +86,7 @@ func (c *Client) StartRun(ctx context.Context, kind string, body map[string]any,
 	if !runIDPattern.MatchString(view.ID) {
 		return View{}, fmt.Errorf("remote %s: the answer does not name a run", c.entry.Name)
 	}
+	view.clean()
 	return view, nil
 }
 
@@ -92,6 +103,7 @@ func (c *Client) PollRun(ctx context.Context, id string, wait time.Duration) (Vi
 	if err := c.Do(ctx, Request{Method: http.MethodGet, Path: path, Wait: wait}, &view); err != nil {
 		return View{}, err
 	}
+	view.clean()
 	return view, nil
 }
 
@@ -104,6 +116,7 @@ func (c *Client) StopRun(ctx context.Context, id string) (View, error) {
 	if err := c.Do(ctx, Request{Method: http.MethodPost, Path: apiPrefix + "runs/" + id + "/stop", Retry: true}, &view); err != nil {
 		return View{}, err
 	}
+	view.clean()
 	return view, nil
 }
 
