@@ -89,7 +89,7 @@ var execRejectedProperties = map[string]string{
 	"source":      "exec has no source; use code",
 	"script":      "exec has no script; use code",
 	"program":     "exec has no program; use code",
-	"command":     "exec has no command; use code with lang",
+	"command":     "command is only an alias of code (a string); send code, or the same text in both",
 	"stdin":       "exec has no stdin; use input (JSON) for data, and code for the program",
 	"workdir":     "exec has no workdir; use cwd",
 	"dir":         "exec has no dir; use cwd",
@@ -110,6 +110,7 @@ func normalizeExecArguments(arguments map[string]any, defaultLang string) map[st
 		// A model that fills an optional field with null means "not given".
 		delete(normalized, "lang")
 	}
+	foldExecCommandAlias(normalized)
 	if block, ok := safeInteger(normalized["block_ms"]); ok {
 		normalized["block_ms"] = json.Number(fmt.Sprint(max(block, 0)))
 	}
@@ -126,6 +127,31 @@ func normalizeExecArguments(arguments map[string]any, defaultLang string) map[st
 		normalized["lang"] = defaultLang
 	}
 	return normalized
+}
+
+// foldExecCommandAlias moves command into code. A null command is "not given". A command
+// that cannot be folded (a different code, or not a string) stays, so the schema refuses it
+// with the hint in execRejectedProperties instead of one value being chosen silently.
+func foldExecCommandAlias(arguments map[string]any) {
+	command, has := arguments["command"]
+	if !has {
+		return
+	}
+	if command == nil {
+		delete(arguments, "command")
+		return
+	}
+	text, isString := command.(string)
+	if !isString {
+		return
+	}
+	code, hasCode := arguments["code"]
+	if !hasCode || code == nil {
+		arguments["code"] = text
+		delete(arguments, "command")
+	} else if existing, ok := code.(string); ok && existing == text {
+		delete(arguments, "command")
+	}
 }
 
 // defaultLangSuggestion is the advice on a failed call that ran in the default language.

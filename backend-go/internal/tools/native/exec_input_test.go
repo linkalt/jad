@@ -91,7 +91,6 @@ func TestExecOldNamesAreRefusedWithTheRightKey(t *testing.T) {
 		value any
 		want  string
 	}{
-		{"command", "ls", "use code with lang"},
 		{"function", "read", "exec has no function mode"},
 		{"argv", []any{"ls"}, "exec has no argv; use code with lang"},
 		{"args", []any{"x"}, "pass data as input"},
@@ -188,4 +187,42 @@ func execNoDefaultLang(t *testing.T, root string, settings sessionfs.NativeExecS
 	t.Helper()
 	settings.Child = bash
 	return executeNativeExec(context.Background(), arguments, settings, "", tools.ExecutionContext{CallID: "exec-call", WorkspaceRoot: root, SessionDir: root})
+}
+
+func TestExecCommandIsAnAliasOfCode(t *testing.T) {
+	requireInterpreters(t, "bash")
+	root := t.TempDir()
+	settings := execTestSettings()
+	for _, tc := range []struct {
+		name, args string
+		ran        bool
+		want       string
+	}{
+		{"command only", `{"command":"echo aliased"}`, true, ""},
+		{"code only", `{"code":"echo aliased"}`, true, ""},
+		{"both equal", `{"code":"echo aliased","command":"echo aliased"}`, true, ""},
+		{"command with null code", `{"code":null,"command":"echo aliased"}`, true, ""},
+		{"both different", `{"code":"echo one","command":"echo two"}`, false, "only an alias of code"},
+		{"non-string command", `{"command":["echo","x"]}`, false, "only an alias of code"},
+		{"neither", `{"lang":"bash"}`, false, ""},
+	} {
+		got := callExecThroughTheCatalog(t, root, settings, tc.args)
+		if tc.ran != strings.Contains(got, "aliased\n") || (tc.want != "" && !strings.Contains(got, tc.want)) {
+			t.Errorf("%s: %s", tc.name, got)
+		}
+		if strings.Contains(got, "echo two") && strings.Contains(got, "two\n") {
+			t.Errorf("%s ran the alias: %s", tc.name, got)
+		}
+	}
+}
+
+func TestExecNormalizeFoldsTheCommandAlias(t *testing.T) {
+	got := normalizeExecArguments(map[string]any{"command": "ls"}, "bash")
+	if got["code"] != "ls" || got["lang"] != "bash" || got["command"] != nil {
+		t.Fatalf("%v", got)
+	}
+	got = normalizeExecArguments(map[string]any{"code": "a", "command": "b"}, "bash")
+	if got["code"] != "a" || got["command"] != "b" {
+		t.Fatalf("a conflict must be kept for the schema to refuse: %v", got)
+	}
 }

@@ -27,7 +27,7 @@ No native bridge: a script cannot call JAD tools (read/grep/glob). There is no s
 
 - `code` present: run. `code` absent: list the helpers (`filters` optional). `lang`, `input` with a listing is invalid_input.
 - A plain command is `{"lang":"bash","code":"git status"}`. There is no argv form.
-- Refused with the replacement named (RejectedProperties): `function` -> "exec has no function mode; call a saved helper from code (see the list from a call with no parameters)"; `argv` -> "exec has no argv; use code with lang (a command is lang bash, code \"git status\")"; `args` -> "exec has no args; pass data as input (JSON on stdin)"; `timeout_ms` -> "exec has no timeout_ms; the timeout is configured (tools.native.exec.timeout_ms)". Older near-miss names keep their hints.
+- Refused with the replacement named (RejectedProperties): `function` -> "exec has no function mode; call a saved helper from code (see the list from a call with no parameters)"; `argv` -> "exec has no argv; use code with lang (a command is lang bash, code \"git status\")"; `args` -> "exec has no args; pass data as input (JSON on stdin)"; `timeout_ms` -> "exec has no timeout_ms; the timeout is configured (tools.native.exec.timeout_ms)". Older near-miss names keep their hints, except `command`, which is folded into `code` as an alias (equal values accepted, different values refused).
 - `filters` together with `code` stays conflicting_input.
 
 ### timeout_ms interpretation
