@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "kind": "remote",
+  "description": "Build machine; reviewers only.",
+  "remote": {
+    "url": "https://build.example.net:8443",
+    "token_env": "JAD_REMOTE_BUILD_BOX_TOKEN",
+    "ca_file": "/etc/jad/build-ca.pem",
+    "default_session": "main",
+    "profiles": ["review/*"]
+  }
+}

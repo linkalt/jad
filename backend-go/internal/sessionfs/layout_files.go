@@ -19,6 +19,7 @@ type Layout struct {
 	Models              string
 	Tools               string
 	MCP                 string
+	Remotes             string
 	State               string
 	Defaults            map[string]json.RawMessage
 	ToolDefinitionPaths []string

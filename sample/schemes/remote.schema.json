@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JAD remote entry",
+  "description": "<remotes folder>/<name>.json: another JAD server this one may call with profile_message, subagent, transcript and transcripts. The file name (without .json) is the remote's name, written remote:<name>/... in a tool call. It holds no model, tools or instructions, and never the token itself. TLS is always verified; there is no option to turn that off, to use plain http or to use a proxy.",
+  "type": "object",
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "remote" },
+    "description": { "type": "string", "description": "Shown in the remote's listing." },
+    "remote": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string", "pattern": "^(https://[^/?#@]+/?|unix:///.+)$", "description": "https://host[:port] or unix:///absolute/path.sock. Plain http is refused. No path, query, fragment or credentials." },
+        "token_env": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Name of the environment variable that holds the bearer token (at least 32 printable characters). Set exactly one of token_env and token_file." },
+        "token_file": { "type": "string", "minLength": 1, "description": "File that holds the token, relative to this file or absolute. On unix it must not be readable by group or others." },
+        "ca_file": { "type": "string", "minLength": 1, "description": "Extra PEM root certificates for an https url, added to the system roots." },
+        "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Per HTTP request. Default 30000." },
+        "max_response_bytes": { "type": "integer", "minimum": 1, "maximum": 67108864, "description": "Largest response body accepted; a larger one is an error, never a cut. Default 1048576." },
+        "retries": { "type": "integer", "minimum": 0, "maximum": 5, "description": "Retries of a request that failed to connect or got a 5xx (a send repeats with the same request id, so the remote never starts it twice). Default 2." },
+        "poll_ms": { "type": "integer", "minimum": 100, "maximum": 60000, "description": "Longest one status poll of a remote run waits on the remote. Default 20000." },
+        "lost_after_ms": { "type": "integer", "minimum": 1000, "maximum": 3600000, "description": "How long a remote run may be unreachable before its handle becomes lost. Default 60000." },
+        "default_session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", "description": "Session on the remote used when a target is written remote:<name>/<category>/<name>." },
+        "profiles": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Globs of category/name that narrow what a model here may reach on this remote (never widens the remote token's own rights)." }
+      },
+      "required": ["url"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["kind", "remote"],
+  "additionalProperties": false
+}

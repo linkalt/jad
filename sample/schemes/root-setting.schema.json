@@ -285,7 +285,7 @@
     },
     "catalogs": {
       "type": "object",
-      "description": "Folders of the catalogs, relative to the system setting.json parent. Each is read as <folder>/<category>/<name>.json (state is the exception: <folder>/<session>/<profile>/). Defaults: .jad/profiles, .jad/models, .jad/tools, .jad/mcp, .jad/state.",
+      "description": "Folders of the catalogs, relative to the system setting.json parent. Each is read as <folder>/<category>/<name>.json (state is the exception: <folder>/<session>/<profile>/). The remotes folder holds <name>.json files of kind remote (other JAD servers this one may call); there is no category level. Defaults: .jad/profiles, .jad/models, .jad/tools, .jad/mcp, .jad/remotes, .jad/state.",
       "properties": {
         "profiles": {
           "type": "string",
@@ -300,6 +300,10 @@
           "pattern": "\\S"
         },
         "mcp": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "remotes": {
           "type": "string",
           "pattern": "\\S"
         },

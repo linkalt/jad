@@ -15,6 +15,7 @@ var layoutCatalogDefaults = map[string]string{
 	"models":   ".jad/models",
 	"tools":    ".jad/tools",
 	"mcp":      ".jad/mcp",
+	"remotes":  ".jad/remotes",
 	"state":    ".jad/state",
 }
 
@@ -32,7 +33,7 @@ func layoutFromSetting(setting map[string]json.RawMessage, settingPath string) (
 		}
 		for key, rawValue := range configured {
 			if _, known := layoutCatalogDefaults[key]; !known {
-				return nil, configError("%s: catalogs.%s is not a catalog (profiles, models, tools, mcp, state)", settingPath, key)
+				return nil, configError("%s: catalogs.%s is not a catalog (profiles, models, tools, mcp, remotes, state)", settingPath, key)
 			}
 			var folder string
 			if err := json.Unmarshal(rawValue, &folder); err != nil || strings.TrimSpace(folder) == "" {
@@ -47,6 +48,7 @@ func layoutFromSetting(setting map[string]json.RawMessage, settingPath string) (
 		Models:   resolveFrom(base, folders["models"]),
 		Tools:    resolveFrom(base, folders["tools"]),
 		MCP:      resolveFrom(base, folders["mcp"]),
+		Remotes:  resolveFrom(base, folders["remotes"]),
 		State:    resolveFrom(base, folders["state"]),
 		Defaults: map[string]json.RawMessage{},
 	}
