@@ -124,12 +124,13 @@ Run ids are scoped to the token (a token sees only runs it started). **Idempoten
 7. **Docs/schema/sample/DECISIONS.md**.
 Each phase: gofmt, vet, diff --check, full tests, `-race -count=3`.
 
-## 10. Open questions (need the user)
-Q1. Directory: remote files in `profiles/` (same listing, so `kind` must be checked on every profile load) or in a sibling `remotes/` folder? Proposal: the same folders as requested, with `kind: "remote"` but a profile loader that skips them; agents folder also allowed. Cost: every loader/validator must learn to skip `remote`; a sibling dir is simpler and safer.
-Q2. Must remote runs be addressable by `session/category/profile` only (user decision) even for `subagent`? A sub-agent is started from an AGENT file, not a profile. Proposal: `subagent` target `remote:<name>/<session>/<category>/<agent>` where the agent is a file in the remote; the session picks the remote's context (cwd, settings).
-Q3. Poll (`wait_ms` long-poll) vs SSE re-attach for remote runs? Recommended: poll, no stream held.
-Q4. After client restart, rebuild remote handles from a small local record, or let them end (as local async handles do)? Recommended: let them end, state it.
-Q5. Server side in scope for v1 as the minimal routes of section 6, or should the first release only target a server that already has them? Without them nothing works (section 1).
-Q6. Honour HTTPS_PROXY for remotes? Proposed no (explicit `proxy` key later).
-Q7. Should the remote answer for sessions that do not exist yet (create), or only existing ones? Proposed: existing only.
-Q8. Hop limit default and whether a remote may call back into the first JAD (allowed, bounded by hops).
+## 10. Decisions (final, from the user)
+1. Remote entry files live in a sibling `remotes/` folder, not in profiles/agents. Loaders of profiles/agents need no change; `kind: "remote"` is still required in the file.
+2. Remote sub-agent target: `remote:<name>/<session>/<category>/<agent>`.
+3. Remote runs are followed by polling with `wait_ms`; no held stream.
+4. After a client restart remote handles end like local ones; they are not rebuilt.
+5. Server routes (`/api/remote/v1`, token table, TLS or unix listener) are in scope for v1.
+6. HTTPS_PROXY and proxy env are ignored for remotes.
+7. A remote addresses only sessions that already exist.
+8. Hop limit default 3; a remote may call back into the first JAD, bounded by hops.
+Section 2 above says "same folders as profiles/agents": read it as the `remotes/` folder. httpdebug check: it already redacts Authorization, api-key, cookie headers and secret-like query keys (httpdebug/transport.go, test at transport_test.go); the remote client does not use httpdebug at all and gets its own redaction test in phase 2.
