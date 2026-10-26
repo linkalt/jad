@@ -24,16 +24,18 @@ type tokenProfiles struct {
 }
 
 func (p tokenProfiles) Profile(ctx context.Context, ownerKey, session, profile string) (native.TranscriptTarget, error) {
-	target, err := p.inner.Profile(ctx, ownerKey, session, profile)
-	if err != nil {
-		return native.TranscriptTarget{}, err
+	if !p.may(session + "/" + profile) {
+		return native.TranscriptTarget{}, errRemoteProfileHidden
 	}
-	if !p.may(target.Session + "/" + target.Profile) {
+	target, err := p.inner.Profile(ctx, ownerKey, session, profile)
+	if err != nil || !p.may(target.Session+"/"+target.Profile) {
 		return native.TranscriptTarget{}, errRemoteProfileHidden
 	}
 	return target, nil
 }
 
+// Candidates names only profiles the token reaches and never other sessions, so a missing
+// session, a missing profile and one outside the token look the same.
 func (p tokenProfiles) Candidates(ctx context.Context, ownerKey, session string) ([]string, []string) {
 	profiles, _ := p.inner.Candidates(ctx, ownerKey, session)
 	visible := make([]string, 0, len(profiles))

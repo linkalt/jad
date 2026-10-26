@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -246,5 +247,70 @@ func TestRemoteTranscriptOutageAndRedirectGiveCleanErrors(t *testing.T) {
 	server.gate.cut.Store(false)
 	if out = readers.run(t, readers.transcript, map[string]any{"path": "remote:peer/profile:demo/dev/coder"}); !strings.Contains(out, "forty-two") {
 		t.Fatalf("the next call works again:\n%s", out)
+	}
+}
+
+func TestRemoteTranscriptErrorsLeakNoPathNorOutOfScopeName(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
+	server := startRemoteServer(t, f, tokenTable(tokenRow("narrow", remoteTestSecret, `"profiles":["demo/review/*"],"actions":["transcripts"]`)))
+	writeRemoteTranscript(t, server, "dev/coder", remoteTranscriptJSONL)
+	read := func(tool, path string) string {
+		_, body := server.call(t, "GET", remoteapi.Prefix+"/"+tool+"?path="+url.QueryEscape(path), remoteTestSecret, nil)
+		return fmt.Sprint(body["output"])
+	}
+	for _, tool := range []string{"transcript", "transcripts"} {
+		hidden := read(tool, "profile:demo/dev/coder")
+		for _, path := range []string{"profile:demo/dev/nothere", "profile:demo/review/nothere", "profile:nosuch/dev/coder"} {
+			out := read(tool, path)
+			if out != hidden {
+				t.Errorf("%s %s differs from an out-of-scope profile:\n%s\nvs\n%s", tool, path, out, hidden)
+			}
+		}
+		for _, leak := range []string{server.f.workspace, ".json", "dev/coder", "available"} {
+			if strings.Contains(hidden, leak) {
+				t.Errorf("%s leaks %q:\n%s", tool, leak, hidden)
+			}
+		}
+	}
+	if out := strings.ReplaceAll(read("transcripts", "session:nosuch"), "nosuch", "demo"); out != read("transcripts", "session:demo") {
+		t.Errorf("a missing session differs from one with nothing visible:\n%s", out)
+	}
+}
+
+func TestRemoteTranscriptForgedCursorsCannotLeaveTheTokenScope(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
+	server := startRemoteServer(t, f, tokenTable(tokenRow("narrow", remoteTestSecret, `"profiles":["demo/review/*"],"actions":["transcripts"]`)))
+	writeRemoteTranscript(t, server, "dev/coder", remoteTranscriptJSONL)
+	secret := filepath.Join(t.TempDir(), "secret.jsonl")
+	if err := os.WriteFile(secret, []byte(remoteTranscriptJSONL), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	forge := func(value any) string {
+		raw, _ := json.Marshal(value)
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	cursors := map[string][]string{
+		"transcript": {
+			forge(map[string]any{"x": "path:" + secret, "s": "messages", "i": "", "o": 0, "e": 0}),
+			forge(map[string]any{"x": "profile:demo/dev/coder", "s": "messages", "i": "", "o": 0, "e": 0}),
+			forge(map[string]any{"x": "subagent:sub_00000000", "s": "messages", "i": "", "o": 0, "e": 0}),
+			forge(map[string]any{"x": "", "s": "messages", "i": "", "o": 0, "e": 0}),
+		},
+		"transcripts": {
+			forge(map[string]any{"l": "profile:demo/dev/coder", "a": 0, "k": ""}),
+			forge(map[string]any{"l": "sessions", "a": 0, "k": ""}),
+			forge(map[string]any{"l": "session:demo", "a": 0, "k": ""}),
+		},
+	}
+	for tool, list := range cursors {
+		for _, cursor := range list {
+			_, body := server.call(t, "GET", remoteapi.Prefix+"/"+tool+"?cursor="+url.QueryEscape(cursor), remoteTestSecret, nil)
+			out := fmt.Sprint(body["output"])
+			for _, leak := range []string{"forty-two", "secret question", "dev/coder", secret, "messages.jsonl"} {
+				if strings.Contains(out, leak) {
+					t.Errorf("%s forged cursor leaks %q:\n%s", tool, leak, out)
+				}
+			}
+		}
 	}
 }
