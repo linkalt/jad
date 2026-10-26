@@ -1389,6 +1389,34 @@
                   "default": 4000,
                   "description": "Largest text of one transcript entry; a longer one is cut."
                 },
+                "preview_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65536,
+                  "default": 200,
+                  "description": "List mode: most bytes of a user or assistant text shown on its line; a longer text is cut in the middle."
+                },
+                "value_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65536,
+                  "default": 80,
+                  "description": "List mode: most bytes of each argument value of a tool call shown on its line; a longer value is cut in the middle, the keys stay whole."
+                },
+                "max_list_entries": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5000,
+                  "default": 100,
+                  "description": "List mode: most steps one call lists."
+                },
+                "max_detail_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 16384,
+                  "description": "Detail mode: most bytes of a step one call returns; the rest is paged with a cursor."
+                },
                 "line_max_bytes": {
                   "type": "integer",
                   "minimum": 1,

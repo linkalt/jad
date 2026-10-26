@@ -17,11 +17,17 @@ const (
 	defaultNativeTranscriptSuggestMax       int64 = 20
 	maxNativeTranscriptSuggestMax           int64 = 500
 	defaultNativeTranscriptTimeoutMs        int64 = 30_000
+	defaultNativeTranscriptPreviewBytes     int64 = 200
+	defaultNativeTranscriptValueBytes       int64 = 80
+	maxNativeTranscriptPreviewBytes         int64 = 64 * 1024
+	defaultNativeTranscriptMaxListEntries   int64 = 100
+	maxNativeTranscriptMaxListEntries       int64 = 5000
+	defaultNativeTranscriptMaxDetailBytes   int64 = 16 * 1024
 )
 
 var nativeTranscriptKeys = []string{
 	"response_max_bytes", "entry_max_bytes", "line_max_bytes", "max_turns_per_call", "scan_max_bytes",
-	"suggest_max", "timeout_ms", "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_path",
+	"suggest_max", "timeout_ms", "preview_bytes", "value_bytes", "max_list_entries", "max_detail_bytes", "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_path",
 }
 
 // NativeTranscriptSettings holds the limits and switches of native.transcript. The path
@@ -35,6 +41,10 @@ type NativeTranscriptSettings struct {
 	ScanMaxBytes       int64
 	SuggestMax         int64
 	TimeoutMs          int64
+	PreviewBytes       int64
+	ValueBytes         int64
+	MaxListEntries     int64
+	MaxDetailBytes     int64
 	AllowOtherSessions bool
 	AllowOtherProfiles bool
 	AllowChildren      bool
@@ -88,6 +98,10 @@ func normalizeNativeTranscriptSettings(setting map[string]json.RawMessage, setti
 		{&settings.MaxTurnsPerCall, "max_turns_per_call", defaultNativeTranscriptMaxTurns, 1, maxNativeTranscriptMaxTurns},
 		{&settings.ScanMaxBytes, "scan_max_bytes", defaultNativeTranscriptScanMaxBytes, 1, maxNativeTranscriptScanMaxBytes},
 		{&settings.SuggestMax, "suggest_max", defaultNativeTranscriptSuggestMax, 1, maxNativeTranscriptSuggestMax},
+		{&settings.PreviewBytes, "preview_bytes", defaultNativeTranscriptPreviewBytes, 1, maxNativeTranscriptPreviewBytes},
+		{&settings.ValueBytes, "value_bytes", defaultNativeTranscriptValueBytes, 1, maxNativeTranscriptPreviewBytes},
+		{&settings.MaxListEntries, "max_list_entries", defaultNativeTranscriptMaxListEntries, 1, maxNativeTranscriptMaxListEntries},
+		{&settings.MaxDetailBytes, "max_detail_bytes", defaultNativeTranscriptMaxDetailBytes, 1, maxNativeToolBytes},
 		{&settings.TimeoutMs, "timeout_ms", defaultNativeTranscriptTimeoutMs, 1, maxToolTimeoutMs},
 	} {
 		if *field.target, err = configuredInteger(fields, field.name, field.fallback, field.min, field.max, settingPath, section); err != nil {

@@ -25,6 +25,9 @@ func TestTranscriptSettingsDefaults(t *testing.T) {
 	if settings.ResponseMaxBytes != 64*1024 || settings.EntryMaxBytes != 4000 || settings.MaxTurnsPerCall != 50 || settings.TimeoutMs != 30000 {
 		t.Fatalf("limits = %+v", settings)
 	}
+	if settings.PreviewBytes != 200 || settings.ValueBytes != 80 || settings.MaxListEntries != 100 || settings.MaxDetailBytes != 16384 {
+		t.Fatalf("list and detail limits = %+v", settings)
+	}
 	if !settings.AllowOtherSessions || !settings.AllowOtherProfiles || !settings.AllowChildren {
 		t.Fatalf("other sessions, profiles and children are readable by default: %+v", settings)
 	}
@@ -47,5 +50,24 @@ func TestTranscriptSettingsKeepTheReadPolicy(t *testing.T) {
 	settings, err := normalizeNativeTranscriptSettings(transcriptSettingsFor(`{}`), "s.json", policy)
 	if err != nil || len(settings.Policy.Paths) != 1 {
 		t.Fatalf("policy = %+v, err = %v", settings, err)
+	}
+}
+
+func TestTranscriptSettingsCapTheListAndDetailLimits(t *testing.T) {
+	for _, body := range []string{`{"preview_bytes":0}`, `{"preview_bytes":65537}`, `{"value_bytes":65537}`, `{"max_list_entries":5001}`, `{"max_detail_bytes":0}`, `{"max_detail_bytes":10485761}`, `{"value_bytes":null}`} {
+		_, err := normalizeNativeTranscriptSettings(transcriptSettingsFor(body), "s.json", NativePathPolicy{})
+		if body == `{"value_bytes":null}` {
+			if err != nil {
+				t.Errorf("%s: %v", body, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("%s accepted", body)
+		}
+	}
+	settings, err := normalizeNativeTranscriptSettings(transcriptSettingsFor(`{"preview_bytes":65536,"value_bytes":1,"max_list_entries":5000,"max_detail_bytes":10485760}`), "s.json", NativePathPolicy{})
+	if err != nil || settings.PreviewBytes != 65536 || settings.ValueBytes != 1 || settings.MaxListEntries != 5000 || settings.MaxDetailBytes != 10485760 {
+		t.Fatalf("settings = %+v, err = %v", settings, err)
 	}
 }
