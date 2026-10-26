@@ -23,6 +23,8 @@ const (
 	DefaultMaxResponseBytes = 1 << 20
 	MaxMaxResponseBytes     = 64 << 20
 	DefaultRetries          = 2
+	DefaultMaxInFlight      = 8
+	MaxMaxInFlight          = 64
 	MaxRetries              = 5
 	DefaultPollMs           = 20_000
 	MinPollMs               = 100
@@ -61,6 +63,7 @@ type Entry struct {
 	Timeout          int64
 	MaxResponseBytes int64
 	Retries          int
+	MaxInFlight      int
 	PollMs           int64
 	LostAfterMs      int64
 	DefaultSession   string
@@ -84,6 +87,7 @@ type fileRemote struct {
 	TimeoutMs        *int64   `json:"timeout_ms"`
 	MaxResponseBytes *int64   `json:"max_response_bytes"`
 	Retries          *int64   `json:"retries"`
+	MaxInFlight      *int64   `json:"max_in_flight"`
 	PollMs           *int64   `json:"poll_ms"`
 	LostAfterMs      *int64   `json:"lost_after_ms"`
 	DefaultSession   string   `json:"default_session"`
@@ -172,6 +176,13 @@ func ParseEntry(name, path string, data []byte) (Entry, error) {
 			return Entry{}, fmt.Errorf("%s: remote.retries must be between 0 and %d", path, MaxRetries)
 		}
 		entry.Retries = int(*r.Retries)
+	}
+	entry.MaxInFlight = DefaultMaxInFlight
+	if r.MaxInFlight != nil {
+		if *r.MaxInFlight < 1 || *r.MaxInFlight > MaxMaxInFlight {
+			return Entry{}, fmt.Errorf("%s: remote.max_in_flight must be between 1 and %d", path, MaxMaxInFlight)
+		}
+		entry.MaxInFlight = int(*r.MaxInFlight)
 	}
 	return entry, nil
 }
