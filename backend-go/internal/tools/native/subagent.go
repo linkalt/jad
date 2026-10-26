@@ -8,7 +8,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
+	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
@@ -142,6 +144,8 @@ type subagentTool struct {
 	// async makes read-only runs handles of the async manager; nil when the session has no
 	// async tool.
 	async *AsyncHost
+	// remotes is the other JAD servers a call may start an agent on; empty offers none.
+	remotes remoteAgentSettings
 }
 
 // NewSubagentTool builds the subagent tool over the already built tools of the same
@@ -208,6 +212,12 @@ func childToolPools(settings sessionfs.NativeSubagentSettings, available []tools
 // newSubagentToolAsync is newSubagentTool plus the async host that tracks every read-only run
 // the tool starts as a handle owned by the calling session. A nil host starts no handles.
 func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, processes ProcessManager, host *AsyncHost) (tools.Tool, error) {
+	return newSubagentToolRemotes(settings, parentTools, toolsets, launcher, mcp, manager, processes, host, nil)
+}
+
+// newSubagentToolRemotes is newSubagentToolAsync plus the remotes folder the session's
+// tools.native.subagent.remotes names are read from.
+func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, processes ProcessManager, host *AsyncHost, remotes *remote.Directory) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(subagentInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native subagent schema: %w", err)
@@ -223,8 +233,14 @@ func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools
 	}
 	readOnly, changers := childToolPools(settings, parentTools)
 	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager, async: host}
+	if remotes != nil && len(settings.Remotes) > 0 {
+		runtime.remotes = remoteAgentSettings{names: settings.Remotes, directory: remotes, timeout: time.Duration(settings.RemoteTimeoutMs) * time.Millisecond}
+	}
 	if host != nil {
 		host.attachSubagent(manager)
+		if len(runtime.remotes.names) > 0 {
+			host.attachRemoteSubagent()
+		}
 	}
 	for _, agent := range settings.Agents {
 		agent = withoutDeniedTools(agent, settings.DenyTools)
@@ -273,7 +289,7 @@ func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools
 			ID:          subagentToolID,
 			Source:      "native",
 			Name:        "subagent",
-			Description: subagentDescription + subagentListText(settings, runtime.backgroundNames()),
+			Description: subagentDescription + subagentListText(settings, runtime.backgroundNames()) + remoteListText(runtime.remotes.names),
 			InputSchema: append(json.RawMessage(nil), subagentInputSchema...),
 		},
 		Validator:        validator,
@@ -358,6 +374,10 @@ func containsName(names []string, name string) bool {
 func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
 	task, _ := arguments["task"].(string)
 	if strings.TrimSpace(task) == "" {
+		return false
+	}
+	if agent, _ := arguments["agent"].(string); strings.HasPrefix(agent, remote.Prefix) {
+		// Whatever a remote agent changes, it changes on the remote machine.
 		return false
 	}
 	agent, problem := s.selectAgent(arguments)

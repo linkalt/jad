@@ -52,7 +52,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -67,6 +67,12 @@ type NativeSubagentSettings struct {
 	// ResultMaxBytes is the most child text one call returns; a longer answer is cut
 	// and the result says so.
 	ResultMaxBytes int64
+	// Remotes are the remote entries (remotes folder) whose agents the model may start with
+	// agent "remote:<name>/<session>/<category>/<profile>/<agent>"; none by default.
+	Remotes []string
+	// RemoteTimeoutMs bounds a remote sub-agent run from the local side: past it the run is
+	// stopped on the remote and ends as timed_out.
+	RemoteTimeoutMs int64
 	// MaxConcurrent is the most children that run at once. Children outlive a call, so
 	// the limit counts every child of the same storage directory, across runs; the
 	// session that first uses the directory sets it.
@@ -251,6 +257,12 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 	}
 	settings := &NativeSubagentSettings{}
 	if settings.ResultMaxBytes, err = configuredInteger(fields, "result_max_bytes", defaultNativeSubagentResultMaxBytes, 1, maxNativeToolBytes, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.Remotes, err = normalizeRemoteNames(fields["remotes"], settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.RemoteTimeoutMs, err = configuredInteger(fields, "remote_timeout_ms", defaultNativeSubagentTimeoutMS, 1000, maxNativeSubagentTimeoutMS, settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.MaxConcurrent, err = configuredInteger(fields, "max_concurrent", defaultNativeSubagentMaxConcurrent, 1, maxNativeSubagentConcurrent, settingPath, section); err != nil {

@@ -142,7 +142,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, err
 		}
 		targets := sessionfs.ProfileMessageTargets(config.Profiles, config.Profile, config.NativeProfileMessage.DenyProfiles)
-		remotes, remoteNames, err := remoteDirectory(config, messenger)
+		remotes, remoteNames, err := remoteDirectory(config, "profile_message", config.NativeProfileMessage.Remotes, messenger)
 		if err != nil {
 			return nil, err
 		}
@@ -173,7 +173,11 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		if profileMessageTool != nil {
 			childPool = append(append([]tools.Tool(nil), loaded...), *profileMessageTool)
 		}
-		tool, err := newSubagentToolAsync(subagentSettings, childPool, agentToolsets, launcher, mcp, subagentManager, manager, asyncHost)
+		subagentRemotes, _, err := remoteDirectory(config, "subagent", subagentSettings.Remotes, messenger)
+		if err != nil {
+			return nil, err
+		}
+		tool, err := newSubagentToolRemotes(subagentSettings, childPool, agentToolsets, launcher, mcp, subagentManager, manager, asyncHost, subagentRemotes)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -599,14 +603,13 @@ type RemoteDirectories interface {
 
 // remoteDirectory resolves tools.native.profile_message.remotes: every name must have a valid
 // file in the session's remotes folder, so a typo is a configuration error, not a failed call.
-func remoteDirectory(config sessionfs.SessionConfig, messenger ProfileMessenger) (*remote.Directory, []string, error) {
-	names := config.NativeProfileMessage.Remotes
+func remoteDirectory(config sessionfs.SessionConfig, tool string, names []string, messenger ProfileMessenger) (*remote.Directory, []string, error) {
 	if len(names) == 0 {
 		return nil, nil, nil
 	}
 	provider, ok := messenger.(RemoteDirectories)
 	if !ok || config.RemotesDir == "" {
-		return nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.profile_message.remotes needs a catalog-layout session with a remotes folder", config.SettingPath)}
+		return nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s.remotes needs a catalog-layout session with a remotes folder", config.SettingPath, tool)}
 	}
 	directory := provider.RemoteDirectory(config.RemotesDir)
 	available, _ := remote.List(config.RemotesDir)
@@ -616,7 +619,7 @@ func remoteDirectory(config sessionfs.SessionConfig, messenger ProfileMessenger)
 	}
 	for _, name := range names {
 		if _, err := directory.Entry(name); err != nil {
-			return nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.profile_message.remotes names remote %q: %v (remotes in %s: %s)", config.SettingPath, name, remoteProblem(name, err), config.RemotesDir, strings.Join(have, ", "))}
+			return nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s.remotes names remote %q: %v (remotes in %s: %s)", config.SettingPath, tool, name, remoteProblem(name, err), config.RemotesDir, strings.Join(have, ", "))}
 		}
 	}
 	return directory, names, nil

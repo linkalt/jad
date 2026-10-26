@@ -61,6 +61,7 @@ func (r *peerRun) stops() []string {
 type peerBackend struct {
 	mu       sync.Mutex
 	messages []remoteapi.MessageRequest
+	subs     []remoteapi.SubagentRequest
 	runs     []*peerRun
 	err      error
 }
@@ -79,8 +80,19 @@ func (b *peerBackend) SendMessage(_ context.Context, r remoteapi.MessageRequest)
 	b.runs = append(b.runs, run)
 	return run, nil
 }
-func (b *peerBackend) StartSubagent(context.Context, remoteapi.SubagentRequest) (remoteapi.Run, error) {
-	return nil, remoteapi.ErrUnknownTarget
+func (b *peerBackend) StartSubagent(_ context.Context, r remoteapi.SubagentRequest) (remoteapi.Run, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.err != nil {
+		return nil, b.err
+	}
+	if r.Agent == "ghost" {
+		return nil, remoteapi.ErrUnknownTarget
+	}
+	b.subs = append(b.subs, r)
+	run := newPeerRun()
+	b.runs = append(b.runs, run)
+	return run, nil
 }
 func (b *peerBackend) run(t *testing.T, index int) *peerRun {
 	t.Helper()
@@ -486,7 +498,7 @@ func TestRemoteConfigNamesMustHaveAFile(t *testing.T) {
 	config := sessionfs.SessionConfig{SettingPath: "setting.json", RemotesDir: t.TempDir(), NativeProfileMessage: &sessionfs.NativeProfileMessageSettings{Remotes: []string{"nowhere"}}}
 	hub := remote.NewHub(nil)
 	defer hub.Close()
-	_, _, err := remoteDirectory(config, remoteMessenger{controlMessenger: &controlMessenger{}, hub: hub})
+	_, _, err := remoteDirectory(config, "profile_message", config.NativeProfileMessage.Remotes, remoteMessenger{controlMessenger: &controlMessenger{}, hub: hub})
 	if err == nil || !strings.Contains(err.Error(), `names remote "nowhere"`) || !strings.Contains(err.Error(), "no file") {
 		t.Fatalf("a remote name without a file must be a configuration error: %v", err)
 	}

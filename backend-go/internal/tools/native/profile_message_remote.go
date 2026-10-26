@@ -107,27 +107,29 @@ type remotePlan struct {
 // Start sends the message. It returns an error only when the remote refused it or could not be
 // reached before an answer; a message sent and then lost is the run's outcome.
 func (p *remotePlan) Start(ctx context.Context) (ProfileMessageRun, error) {
-	client, err := p.directory.Client(p.target.Remote)
-	if err != nil {
-		return nil, &RemoteFailedError{Code: "remote_unavailable", Message: remoteProblem(p.target.Remote, err)}
-	}
-	view, err := client.StartRun(ctx, "messages", map[string]any{
+	run, err := startRemoteRun(ctx, p.directory, p.target, "messages", map[string]any{
 		"session": p.target.Session, "profile": p.target.Profile, "message": p.message,
-	}, p.hops)
+	}, p.hops, p.timeout, "profile")
 	if err != nil {
-		return nil, startError(p.target.Remote, err)
+		return nil, err
 	}
-	run := &remoteRun{
-		client: client,
-		target: p.target,
-		id:     view.ID,
-		began:  time.Now(),
-		start:  make(chan struct{}),
-		done:   make(chan struct{}),
-		state:  view.State,
+	return run, nil
+}
+
+// startRemoteRun starts a run on the remote (kind "messages" or "subagents") and follows it on
+// a goroutine of the hub until it ends.
+func startRemoteRun(ctx context.Context, directory *remote.Directory, target remote.Target, kind string, body map[string]any, hops int, timeout time.Duration, what string) (*remoteRun, error) {
+	client, err := directory.Client(target.Remote)
+	if err != nil {
+		return nil, &RemoteFailedError{Code: "remote_unavailable", Message: remoteProblem(target.Remote, err)}
 	}
+	view, err := client.StartRun(ctx, kind, body, hops)
+	if err != nil {
+		return nil, startError(target.Remote, err)
+	}
+	run := &remoteRun{client: client, target: target, what: what, id: view.ID, began: time.Now(), start: make(chan struct{}), done: make(chan struct{}), state: view.State}
 	close(run.start)
-	if !p.directory.Go(func(hubCtx context.Context) { run.follow(hubCtx, p.timeout) }) {
+	if !directory.Go(func(hubCtx context.Context) { run.follow(hubCtx, timeout) }) {
 		return nil, &RemoteFailedError{Code: "remote_unavailable", Message: "the server is shutting down"}
 	}
 	return run, nil
@@ -184,10 +186,12 @@ func remoteMessage(name string, failure *remote.Error) string {
 type remoteRun struct {
 	client *remote.Client
 	target remote.Target
-	id     string
-	began  time.Time
-	start  chan struct{}
-	done   chan struct{}
+	// what is "profile" or "agent", for the status text.
+	what  string
+	id    string
+	began time.Time
+	start chan struct{}
+	done  chan struct{}
 
 	mu         sync.Mutex
 	state      string
@@ -211,7 +215,7 @@ func (r *remoteRun) Status() string {
 	r.mu.Lock()
 	state := r.state
 	r.mu.Unlock()
-	return fmt.Sprintf("remote profile %s is %s: %ds used", r.target.String(), state, int64(time.Since(r.began).Seconds()))
+	return fmt.Sprintf("remote %s %s is %s: %ds used", r.what, r.target.String(), state, int64(time.Since(r.began).Seconds()))
 }
 
 // Stop asks the remote to stop the run; the follow loop then sees it end. It does not wait.

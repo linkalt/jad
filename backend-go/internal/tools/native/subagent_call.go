@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"jad/backend-go/internal/asyncmgr"
+	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/tools"
 )
 
@@ -24,6 +25,9 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		return renderSubagentList(execution.CallID, s.agents, s.settings.ResultMaxBytes, s.settings)
+	}
+	if agent, _ := arguments["agent"].(string); strings.HasPrefix(agent, remote.Prefix) {
+		return s.startRemote(ctx, execution.CallID, agent, task, arguments, execution)
 	}
 	return s.startRun(ctx, execution.CallID, task, arguments, execution)
 }

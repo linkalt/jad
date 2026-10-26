@@ -30,6 +30,7 @@ type AsyncHost struct {
 	subagentSeen bool
 
 	profileMessageSeen bool
+	remoteSubagentSeen bool
 	profileMessages    map[string]ProfileMessageRun
 	// profileStarting holds the handles registered but not yet bound to a run, with the
 	// reason of a stop that arrived meanwhile.

@@ -1,0 +1,290 @@
+package native
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"jad/backend-go/internal/asyncmgr"
+	"jad/backend-go/internal/remote"
+	"jad/backend-go/internal/remoteapi"
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
+)
+
+var remoteRunHandle = regexp.MustCompile(`rs_[0-9a-f]{8}`)
+
+const remoteAgent = "remote:peer/main/review/reviewer/explore"
+
+type remoteSubagentFixture struct {
+	peer  *peer
+	hub   *remote.Hub
+	host  *AsyncHost
+	tool  tools.Tool
+	async tools.Tool
+	local *fakeLauncher
+}
+
+func newRemoteSubagentFixture(t *testing.T, grant string, mutate func(*sessionfs.NativeSubagentSettings)) *remoteSubagentFixture {
+	t.Helper()
+	p := startPeer(t, grant)
+	hub := remote.NewHub(func(name string) string {
+		if name == "JAD_REMOTE_PEER" {
+			return remoteSecret
+		}
+		return ""
+	})
+	t.Cleanup(hub.Close)
+	host, err := NewAsyncHost(filepath.Join(t.TempDir(), ".async"), asyncmgr.DefaultConfig(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(host.Close)
+	settings := subagentSettings(agentNamed("explore"))
+	settings.Remotes, settings.RemoteTimeoutMs, settings.ResultMaxBytes = []string{"peer"}, 20_000, 4096
+	if mutate != nil {
+		mutate(&settings)
+	}
+	local := &fakeLauncher{run: func(context.Context, SubagentRequest) (SubagentResult, error) {
+		return SubagentResult{Text: "local child"}, nil
+	}}
+	parent := withExecutors(t, readOnlyTool("read"))
+	tool, err := newSubagentToolRemotes(settings, parent, nil, local, nil, NewSubagentManager(), nil, host, hub.Directory(p.dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	async, err := NewAsyncTool(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &remoteSubagentFixture{peer: p, hub: hub, host: host, tool: tool, async: async, local: local}
+}
+
+func (f *remoteSubagentFixture) start(t *testing.T, agent string, block int64, execution tools.ExecutionContext) string {
+	t.Helper()
+	if execution.CallID == "" {
+		execution.CallID = "call"
+	}
+	out, err := f.tool.Execute(context.Background(), map[string]any{"task": "find the answer", "agent": agent, "block_ms": json.Number(fmt.Sprint(block))}, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func (f *remoteSubagentFixture) asyncCall(t *testing.T, arguments map[string]any) string {
+	t.Helper()
+	out, err := f.async.Execute(context.Background(), arguments, tools.ExecutionContext{CallID: "async", SessionKey: remoteCaller.SessionKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestRemoteSubagentAnswersWithinBlockMs(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "the answer is 42"}) }()
+	out := f.start(t, remoteAgent, 5000, remoteCaller)
+	if !strings.Contains(out, "the answer is 42") || !strings.Contains(out, "finished") {
+		t.Fatalf("result:\n%s", out)
+	}
+	request := f.peer.backend.subs[0]
+	if request.Session != "main" || request.Profile != "review/reviewer" || request.Agent != "explore" || request.Task != "find the answer" || request.Hops != 1 || request.Caller != "remote:peer" {
+		t.Fatalf("what the peer saw: %+v", request)
+	}
+	if f.local.count() != 0 {
+		t.Fatal("a remote agent started a local child")
+	}
+	if strings.Contains(out, "transcript:") {
+		t.Fatalf("a remote result must not name a transcript file:\n%s", out)
+	}
+}
+
+func TestRemoteSubagentHandleWaitStatusAndStop(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	out := f.start(t, remoteAgent, 0, remoteCaller)
+	id := remoteRunHandle.FindString(out)
+	if id == "" || !strings.Contains(out, "still running") {
+		t.Fatalf("expected a handle:\n%s", out)
+	}
+	if status := f.asyncCall(t, map[string]any{"action": "status", "id": id}); !strings.Contains(status, "remote agent") || !strings.Contains(status, "running") {
+		t.Fatalf("status:\n%s", status)
+	}
+	if list := f.asyncCall(t, map[string]any{"action": "list"}); !strings.Contains(list, `"kind":"remote_subagent"`) {
+		t.Fatalf("list:\n%s", list)
+	}
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "found it"})
+	}()
+	waited := f.asyncCall(t, map[string]any{"action": "wait", "ids": []any{id}, "wait_ms": json.Number("10000")})
+	if !strings.Contains(waited, "found it") || !strings.Contains(waited, `"state":"done"`) {
+		t.Fatalf("wait:\n%s", waited)
+	}
+
+	second := remoteRunHandle.FindString(f.start(t, remoteAgent, 0, remoteCaller))
+	run := f.peer.backend.run(t, 1)
+	stopped := f.asyncCall(t, map[string]any{"action": "stop", "id": second})
+	if !strings.Contains(stopped, `"state":"stopped"`) {
+		t.Fatalf("stop:\n%s", stopped)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(run.stops()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(run.stops()) == 0 {
+		t.Fatal("async stop never reached the remote run")
+	}
+}
+
+func TestRemoteSubagentConnectionDropBecomesLost(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	id := remoteRunHandle.FindString(f.start(t, remoteAgent, 0, remoteCaller))
+	f.peer.handler.cut.Store(true)
+	waited := f.asyncCall(t, map[string]any{"action": "wait", "ids": []any{id}, "wait_ms": json.Number("20000")})
+	if !strings.Contains(waited, `"state":"lost"`) || !strings.Contains(waited, "may still be running there") {
+		t.Fatalf("a dropped connection must end the handle as lost:\n%s", waited)
+	}
+}
+
+func TestRemoteSubagentLocalTimeoutStopsTheRemoteRun(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.RemoteTimeoutMs = 400 })
+	id := remoteRunHandle.FindString(f.start(t, remoteAgent, 0, remoteCaller))
+	run := f.peer.backend.run(t, 0)
+	waited := f.asyncCall(t, map[string]any{"action": "wait", "ids": []any{id}, "wait_ms": json.Number("10000")})
+	if !strings.Contains(waited, `"state":"timed_out"`) {
+		t.Fatalf("timeout:\n%s", waited)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(run.stops()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(run.stops()) == 0 {
+		t.Fatal("the remote run kept going after the local timeout")
+	}
+}
+
+func TestRemoteSubagentRefusals(t *testing.T) {
+	cases := map[string]struct{ grant, agent, want string }{
+		"remote not listed for agents":  {peerGrant, "remote:ghost/main/review/reviewer/explore", "unknown_remote"},
+		"token may not reach the agent": {`"profiles":["*/*/*"],"agents":["main/dev/*/*"],"actions":["subagent","status","stop"]`, remoteAgent, "remote_forbidden"},
+		"token may not start agents":    {`"profiles":["*/*/*"],"agents":["*/*/*/*"],"actions":["message","status"]`, remoteAgent, "remote_forbidden"},
+		"profile reference only":        {peerGrant, "remote:peer/main/review", "bad_remote_reference"},
+		"path in the reference":         {peerGrant, "remote:peer/main/review/reviewer/..", "bad_remote_reference"},
+		"unknown agent on the remote":   {peerGrant, "remote:peer/main/review/reviewer/ghost", "remote_unknown_target"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newRemoteSubagentFixture(t, c.grant, nil)
+			out := f.start(t, c.agent, 5000, remoteCaller)
+			if !strings.Contains(out, "error_code: "+c.want) {
+				t.Fatalf("want %s:\n%s", c.want, out)
+			}
+			if len(f.peer.backend.subs) != 0 {
+				t.Fatal("a refused call reached the peer's agent")
+			}
+		})
+	}
+}
+
+func TestRemoteSubagentIsOffUnlessTheSessionListsTheRemote(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.Remotes = nil })
+	out := f.start(t, remoteAgent, 5000, remoteCaller)
+	if !strings.Contains(out, "remote_unavailable") || len(f.peer.backend.subs) != 0 {
+		t.Fatalf("a session that did not enable remotes must not reach one:\n%s", out)
+	}
+	if strings.Contains(f.tool.Definition.Description, "remote:") {
+		t.Fatalf("the model is told about remotes it cannot use:\n%s", f.tool.Definition.Description)
+	}
+}
+
+func TestRemoteSubagentDescriptionNamesTheRemotes(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	if !strings.Contains(f.tool.Definition.Description, "remote:<name>/<session>/<category>/<profile>/<agent> (remotes: peer)") {
+		t.Fatalf("description:\n%s", f.tool.Definition.Description)
+	}
+}
+
+func TestRemoteSubagentNeverChangesLocalCheckpointOrLimits(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	if f.tool.MayChangeFiles(map[string]any{"task": "x", "agent": remoteAgent}) {
+		t.Fatal("a remote agent changes files on the remote machine, not under this session's checkpoint")
+	}
+	if !f.tool.ReadOnly {
+		t.Fatal("the tool stays read-only for local scheduling")
+	}
+	for i := 0; i < 5; i++ {
+		f.start(t, remoteAgent, 0, remoteCaller)
+	}
+	if running := f.tool.Definition.Name; running == "" || f.local.count() != 0 {
+		t.Fatal("remote starts must not use the local sub-agent manager's slots")
+	}
+}
+
+func TestRemoteSubagentHopsAreSentAndLimited(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	execution := remoteCaller
+	execution.RemoteHops = 3
+	out := f.start(t, remoteAgent, 5000, execution)
+	if !strings.Contains(out, "remote_hop_limit") || len(f.peer.backend.subs) != 0 {
+		t.Fatalf("hop limit:\n%s", out)
+	}
+	execution.RemoteHops = 1
+	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "ok"}) }()
+	f.start(t, remoteAgent, 5000, execution)
+	if f.peer.backend.subs[0].Hops != 2 {
+		t.Fatalf("hops = %d", f.peer.backend.subs[0].Hops)
+	}
+}
+
+func TestRemoteSubagentLocalAgentsAreUntouched(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	out, err := f.tool.Execute(context.Background(), map[string]any{"task": "local work", "agent": "explore", "block_ms": json.Number("5000")}, tools.ExecutionContext{CallID: "c", SessionKey: "s1:main"})
+	if err != nil || !strings.Contains(out, "local child") {
+		t.Fatalf("a local agent still runs locally: %v\n%s", err, out)
+	}
+	if len(f.peer.backend.subs) != 0 {
+		t.Fatal("a local agent call went to the remote")
+	}
+}
+
+func TestRemoteSubagentCloseLeavesNoGoroutines(t *testing.T) {
+	before := runtime.NumGoroutine()
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	for i := 0; i < 3; i++ {
+		f.start(t, remoteAgent, 0, remoteCaller)
+	}
+	f.hub.Close()
+	f.host.Close()
+	f.peer.server.Close()
+	f.peer.api.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > before+4 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if after := runtime.NumGoroutine(); after > before+4 {
+		t.Fatalf("goroutines: %d before, %d after", before, after)
+	}
+}
+
+func TestRemoteSubagentConfigNamesMustHaveAFile(t *testing.T) {
+	config := sessionfs.SessionConfig{SettingPath: "setting.json", RemotesDir: t.TempDir()}
+	hub := remote.NewHub(nil)
+	defer hub.Close()
+	_, _, err := remoteDirectory(config, "subagent", []string{"nowhere"}, remoteMessenger{controlMessenger: &controlMessenger{}, hub: hub})
+	if err == nil || !strings.Contains(err.Error(), "tools.native.subagent.remotes") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func (f *fakeLauncher) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.requests)
+}
