@@ -11,18 +11,24 @@ import (
 )
 
 // RemoteHandlers are the handlers for the listeners of one server. Main serves the UI routes
-// and the remote routes; Socket serves the remote routes alone on the unix socket.
+// and, when no socket is configured, the remote routes; Socket serves the remote routes alone
+// on the unix socket.
 type RemoteHandlers struct {
 	Main   http.Handler
 	Socket http.Handler
 }
 
-// HandlersFor builds them from the service. The remote routes answer on the plain listener:
-// the bearer token of a remote travels in clear text, so that listener must sit behind a VPN
-// or a loopback address (see LoadConfig).
+// HandlersFor builds them from the service. The remote routes have exactly one listener: the
+// unix socket when listen_unix is set, which never exposes them on the network, and the plain
+// TCP listener otherwise. That listener carries the bearer token of every remote in clear text,
+// so it must sit behind a VPN or a loopback address (see LoadConfig).
 func (s *Service) HandlersFor(config Config) RemoteHandlers {
 	handlers := RemoteHandlers{Main: s.Handler}
 	if s.Remote == nil {
+		return handlers
+	}
+	if config.RemoteAPI.ListenUnix != "" {
+		handlers.Socket = s.Remote
 		return handlers
 	}
 	handlers.Main = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -32,9 +38,6 @@ func (s *Service) HandlersFor(config Config) RemoteHandlers {
 		}
 		s.Handler.ServeHTTP(w, r)
 	})
-	if config.RemoteAPI.ListenUnix != "" {
-		handlers.Socket = s.Remote
-	}
 	return handlers
 }
 

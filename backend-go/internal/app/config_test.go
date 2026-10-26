@@ -114,6 +114,16 @@ func TestLoadConfigRefusesAWildcardHostForTheRemoteAPI(t *testing.T) {
 			t.Errorf("host %q: %+v %v", host, config.Host, err)
 		}
 	}
+	// With listen_unix set the socket is the only listener, so any host is fine.
+	socketSetting := `{"session_roots":[],"server":{"remote_api":{"enabled":true,"tokens_file":"tokens.json","listen_unix":"/run/jad/remote.sock"}}}`
+	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(socketSetting), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"", "0.0.0.0", "::"} {
+		if _, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOST": host}}); err != nil {
+			t.Errorf("a socket-only remote API with host %q: %v", host, err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(`{"session_roots":[],"server":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}

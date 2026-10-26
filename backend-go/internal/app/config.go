@@ -133,12 +133,13 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 	return config, nil
 }
 
-// checkRemoteListenHost refuses a wildcard listen address when the remote API is on: the bearer
-// token of every remote would then answer on every interface of the machine, in clear text. The
+// checkRemoteListenHost refuses a wildcard listen address when the remote API answers on the
+// TCP listener: the bearer token of every remote would then answer on every interface of the
+// machine, in clear text. A listen_unix server never does, so any host is fine there. The
 // default host is loopback; reaching the API from another machine means naming one address, the
 // VPN address, in server.host or HOST.
 func (c Config) checkRemoteListenHost() error {
-	if !c.RemoteAPI.Enabled {
+	if !c.RemoteAPI.Enabled || c.RemoteAPI.ListenUnix != "" {
 		return nil
 	}
 	switch strings.TrimSpace(c.Host) {

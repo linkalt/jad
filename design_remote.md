@@ -73,7 +73,7 @@ Grammar: `remote:<name>/` is a PREFIX in front of an existing `kind:` selector, 
 - No connection to loopback/link-local is blocked by default (a remote on localhost or a unix socket is legitimate); the guard against SSRF is that URLs come only from operator-written remote files, never from model input. The model supplies only the remote NAME. A name not in the catalog is `unknown_remote` listing nearest names (like the profile errors).
 
 ## 6. Server side: minimal additions (token table)
-Server config gets `server.remote_api`: `enabled` (default false), the routes on the existing plain http listener, an optional `listen_unix` for a socket-only or extra listener, and a token table:
+Server config gets `server.remote_api`: `enabled` (default false), the routes on the existing plain http listener or, when `listen_unix` is set, only on that unix socket (never both), and a token table:
 
 ```json
 "tokens": [
@@ -138,12 +138,12 @@ Section 2 above says "same folders as profiles/agents": read it as the `remotes/
 
 ## 11. HTTPS removed: plain http and unix only (2026-10-30, user decision)
 
-The user runs local -> VPN -> local and asked for the simpler thing: **there is no TLS any more, anywhere in remote calling.** The client's `url` is `http://host[:port]` or `unix:///absolute/path.sock`; an `https://` url is refused by name ("https was removed ..."), as are the TLS keys of a remote file (`ca_file`, `insecure`, `insecure_skip_verify`, `skip_verify`, `tls`). On the server, `server.remote_api` no longer has `tls_cert_file`/`tls_key_file` (both refused by name with the reason) and the main listener is never wrapped in TLS; the `/api/remote/v1` routes answer on the plain listener, and on `listen_unix` when it is set.
+The user runs local -> VPN -> local and asked for the simpler thing: **there is no TLS any more, anywhere in remote calling.** The client's `url` is `http://host[:port]` or `unix:///absolute/path.sock`; an `https://` url is refused by name ("https was removed ..."), as are the TLS keys of a remote file (`ca_file`, `insecure`, `insecure_skip_verify`, `skip_verify`, `tls`). On the server, `server.remote_api` no longer has `tls_cert_file`/`tls_key_file` (both refused by name with the reason) and the main listener is never wrapped in TLS; the `/api/remote/v1` routes answer on the plain listener, or only on the unix socket when `listen_unix` is set: a socket keeps them off the network entirely.
 
 Everything else is unchanged: the bearer token table (hashes, globs, actions, expiry, revocation, reload), `token_env`/`token_file` and their permission checks, the hop guard, `request_id` idempotency, no redirects, no proxy from the environment, the response and body caps, token scrubbing from errors, and the unix socket ownership and directory checks.
 
 - **Clear-text token.** Over tcp the bearer token is readable by anyone on the path. The deployment must put that connection on a VPN or a private network; a unix socket is the local option. This is stated in `DECISIONS.md`, in this file, in the sample remote file (`sample/jad/remotes/build-box.json`) and in the schemas.
-- **Listen address.** A wildcard is refused: with `server.remote_api` enabled, `server.host`/`HOST` must name one address (`app.LoadConfig`, which refuses a wildcard host). The default stays `127.0.0.1`; reaching the API from the VPN peer means writing that VPN address into `server.host`, so exposing the token-taking routes is always deliberate. There is no new listener: the remote routes share the main one.
+- **Listen address.** A wildcard is refused: with `server.remote_api` enabled and no `listen_unix`, `server.host`/`HOST` must name one address (`app.LoadConfig`, which refuses a wildcard host); a socket-only server is never on TCP, so any host is accepted there. The default stays `127.0.0.1`; reaching the API from the VPN peer means writing that VPN address into `server.host`, so exposing the token-taking routes is always deliberate. There is no new listener: the remote routes share the main one.
 
 ## 12. Implemented (2026-10-29)
 Phases 1-7 are in. Differences from the text above: sub-agent targets are `remote:<name>/<session>/<category>/<profile>/<agent>` (the profile gives the context the agent runs in, as `subagent` runs for a local profile; the earlier `<category>/<agent>` was too short to name it); `transcripts` accepts `remote:<name>` for the default session and `remote:<name>/session:<id>`; the switch is `allow_remote` plus `remotes` in each of the two tools; a cursor from a remote read is `remote:<name>/<cursor>`. See DECISIONS.md, "Remote JAD calling".

@@ -26,7 +26,8 @@ var removedRemoteAPIKeys = []string{"tls_cert_file", "tls_key_file"}
 const removedRemoteAPIHint = "the remote routes are served on the plain http listener now, where the bearer token travels in clear text: put that listener behind a VPN or serve listen_unix instead; delete the key"
 
 // RemoteAPISettings is server.remote_api: the /api/remote/v1 routes other JAD servers call.
-// They are served on the main listener, which is plain http, and on ListenUnix when it is set.
+// They are served on ListenUnix when it is set, which keeps them off the network, and on the
+// main listener, which is plain http, when it is empty.
 type RemoteAPISettings struct {
 	Enabled bool
 	// TokensFile is the absolute token table; required when Enabled.

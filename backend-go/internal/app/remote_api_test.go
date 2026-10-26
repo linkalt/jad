@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,11 +12,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/remoteapi"
 	"jad/backend-go/internal/sessionfs"
 )
@@ -29,6 +32,7 @@ func remoteHash(secret string) string {
 
 type remoteServer struct {
 	f        subagentFixture
+	config   Config
 	service  *Service
 	url      string
 	table    string
@@ -72,7 +76,7 @@ func startRemoteServer(t *testing.T, f subagentFixture, tokens string) *remoteSe
 	gate := &outageGate{next: handlers.Main}
 	server := httptest.NewServer(gate)
 	t.Cleanup(server.Close)
-	return &remoteServer{f: f, service: service, url: server.URL, table: table, handlers: handlers, server: server, gate: gate}
+	return &remoteServer{f: f, config: config, service: service, url: server.URL, table: table, handlers: handlers, server: server, gate: gate}
 }
 
 func tokenTable(rows ...string) string { return `{"tokens":[` + strings.Join(rows, ",") + `]}` }
@@ -307,6 +311,23 @@ func TestUnixSocketListenerIsPrivateAndReplacesAStaleSocketOnly(t *testing.T) {
 	}
 }
 
+// getRemoteJSON does a GET with a bearer token and decodes the JSON answer.
+func getRemoteJSON(t *testing.T, client *http.Client, url, secret string) (int, map[string]any) {
+	t.Helper()
+	request, _ := http.NewRequest("GET", url, nil)
+	if secret != "" {
+		request.Header.Set("Authorization", "Bearer "+secret)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(response.Body).Decode(&out)
+	return response.StatusCode, out
+}
+
 // The remote routes answer on the plain listener: that is how a second JAD reaches this one.
 func TestPlainListenerServesTheRemoteAPI(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
@@ -328,5 +349,48 @@ func TestPlainListenerServesTheRemoteAPI(t *testing.T) {
 	}
 	if status := call(integrationAPIToken); status != 401 {
 		t.Fatalf("the UI token must not open the remote routes: %d", status)
+	}
+}
+
+// With listen_unix set the socket is the only listener of the remote routes: the TCP listener
+// answers like any unknown route, whatever bearer token the request carries.
+func TestUnixSocketOnlyRemoteAPIKeepsTheTCPListenerOut(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
+	socket := filepath.Join(t.TempDir(), "r.sock")
+	config := server.config
+	config.RemoteAPI.ListenUnix = socket
+	handlers := server.service.HandlersFor(config)
+	if handlers.Socket == nil {
+		t.Fatal("listen_unix must serve the remote routes")
+	}
+	listener, err := ListenUnix(socket, 0o600)
+	if err != nil {
+		t.Skip("unix sockets unavailable: ", err)
+	}
+	socketServer := &http.Server{Handler: handlers.Socket}
+	go socketServer.Serve(listener)
+	t.Cleanup(func() { socketServer.Close() })
+
+	// The socket serves them, through the real client.
+	entry := remote.Entry{Name: "peer", URL: "unix://" + socket, Unix: socket, TokenEnv: "JAD_REMOTE_GATE",
+		Timeout: 5000, MaxResponseBytes: 1 << 20, MaxInFlight: 1, PollMs: 200, LostAfterMs: 1000}
+	client := remote.NewClient(entry, remote.Options{Environment: func(string) string { return remoteTestSecret }})
+	defer client.Close()
+	var profiles map[string]any
+	if err := client.Do(context.Background(), remote.Request{Method: "GET", Path: remoteapi.Prefix + "/profiles?session=demo", Hops: 1}, &profiles); err != nil {
+		t.Fatalf("the socket must serve the remote API: %v", err)
+	}
+	if list, _ := profiles["profiles"].([]any); len(list) == 0 {
+		t.Fatalf("the socket answered %v", profiles)
+	}
+
+	// The TCP listener does not know the route at all.
+	plain := httptest.NewServer(handlers.Main)
+	t.Cleanup(plain.Close)
+	status, body := getRemoteJSON(t, http.DefaultClient, plain.URL+remoteapi.Prefix+"/profiles?session=demo", remoteTestSecret)
+	unknownStatus, unknownBody := getRemoteJSON(t, http.DefaultClient, plain.URL+"/api/remote/not-a-route", remoteTestSecret)
+	if status != http.StatusNotFound || status != unknownStatus || !reflect.DeepEqual(body, unknownBody) {
+		t.Fatalf("TCP answered %d %v for the remote API and %d %v for an unknown route", status, body, unknownStatus, unknownBody)
 	}
 }

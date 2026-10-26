@@ -18,7 +18,7 @@
           "type": "string",
           "pattern": "\\S",
           "default": "127.0.0.1",
-          "description": "Address the server listens on; HOST overrides it. With server.remote_api enabled it must name one address, never a wildcard such as 0.0.0.0 or ::, because the bearer token of a remote then answers there in clear text."
+          "description": "Address the server listens on; HOST overrides it. With server.remote_api enabled and no listen_unix it must name one address, never a wildcard such as 0.0.0.0 or ::, because the bearer token of a remote then answers there in clear text."
         },
         "port": {
           "type": "integer",
@@ -226,7 +226,7 @@
         },
         "remote_api": {
           "type": "object",
-          "description": "Go backend only. Lets other JAD servers call profiles and sub-agents here (and read transcripts) under /api/remote/v1, with tokens from its own table, never the JAD_API_TOKEN. Off by default. Served on the main listener, which is plain http, and on listen_unix when it is set: the bearer token of a remote then travels in clear text, so keep that listener behind a VPN or on loopback, or serve only listen_unix. With it enabled server.host (or HOST) must name one address, never a wildcard. A change applies after a restart; the token file is re-read on every change, so revoking a token is immediate.",
+          "description": "Go backend only. Lets other JAD servers call profiles and sub-agents here (and read transcripts) under /api/remote/v1, with tokens from its own table, never the JAD_API_TOKEN. Off by default. Served on exactly one listener: listen_unix when it is set, which keeps the routes off the network, otherwise the main listener, which is plain http. The bearer token of a remote travels in clear text over TCP, so keep such a listener behind a VPN or on loopback, or set listen_unix. With it enabled and listen_unix empty, server.host (or HOST) must name one address, never a wildcard. A change applies after a restart; the token file is re-read on every change, so revoking a token is immediate.",
           "properties": {
             "enabled": {"type": "boolean", "default": false},
             "tokens_file": {"type": "string", "pattern": "\\S", "description": "JSON token table: {\"tokens\":[{\"id\":\"build-box\",\"sha256\":\"<64 hex of the token's SHA-256>\",\"expires\":\"2026-12-31T00:00:00Z\",\"revoked\":false,\"profiles\":[\"main/review/*\"],\"agents\":[\"main/review/*/explore\"],\"actions\":[\"message\",\"subagent\",\"status\",\"stop\",\"transcripts\"],\"max_hops\":2}]}. profiles are globs over session/category/profile, agents over session/category/profile/agent ('*' does not cross '/'; [classes] are refused); a token with no glob reaches nothing. Only the hash is stored. The file must be mode 0600 (no group or other access) or the server refuses to start; it is re-read when its content or mode changes, checked at most every 250 ms. Relative to this file."},
