@@ -17,6 +17,17 @@ import (
 // transcriptsLegend explains the fields of an item line; it is printed once above the items.
 const transcriptsLegend = "each line: kind name | last activity (UTC) | size in bytes | path = what to give the transcript tool | file = the full messages.jsonl path"
 
+// transcriptsLegendNoFile is the legend when file paths are hidden (the remote API).
+const transcriptsLegendNoFile = "each line: kind name | last activity (UTC) | size in bytes | path = what to give the transcript tool"
+
+// fileField is the " | file <path>" end of a line, empty when paths are hidden.
+func (t *transcriptsTool) fileField(path string) string {
+	if t.settings.HidePaths {
+		return ""
+	}
+	return " | file " + path
+}
+
 // transcriptsItem is one listed thing, with its line already formatted. Items are ordered by
 // activity (Unix nanoseconds, newest first), then key.
 type transcriptsItem struct {
@@ -215,7 +226,7 @@ func (t *transcriptsTool) profileItem(name, path string, files TranscriptFiles, 
 		item.line = label + " | unreadable: messages.jsonl is not a regular file inside its folder"
 		return item
 	case !file.exists:
-		item.line = label + " | no transcript yet | path " + path + " | file " + files.Messages
+		item.line = label + " | no transcript yet | path " + path + t.fileField(files.Messages)
 		return item
 	}
 	item.activity = file.modified.UnixNano()
@@ -225,7 +236,7 @@ func (t *transcriptsTool) profileItem(name, path string, files TranscriptFiles, 
 			backup = "yes"
 		}
 	}
-	item.line = fmt.Sprintf("%s | active %s | %d bytes | backup %s | path %s | file %s", label, transcriptsTime(file.modified), file.size, backup, path, files.Messages)
+	item.line = fmt.Sprintf("%s | active %s | %d bytes | backup %s | path %s%s", label, transcriptsTime(file.modified), file.size, backup, path, t.fileField(files.Messages))
 	return item
 }
 
@@ -261,7 +272,11 @@ func (t *transcriptsTool) render(execution tools.ExecutionContext, request trans
 	}
 	var lines []string
 	if len(shown) > 0 {
-		lines = append(lines, transcriptsLegend)
+		if t.settings.HidePaths {
+			lines = append(lines, transcriptsLegendNoFile)
+		} else {
+			lines = append(lines, transcriptsLegend)
+		}
 		for _, item := range shown {
 			lines = append(lines, item.line)
 		}
@@ -429,10 +444,10 @@ func (t *transcriptsTool) runItem(run transcriptsRun, prefix, storage, realStora
 	case info.unreadable:
 		item.line = line + " | unreadable: messages.jsonl is not a regular file inside its folder | path " + path
 	case !info.exists:
-		item.line = line + " | no transcript yet | path " + path + " | file " + file
+		item.line = line + " | no transcript yet | path " + path + t.fileField(file)
 	default:
 		item.activity = info.modified.UnixNano()
-		item.line = fmt.Sprintf("%s | active %s | %d bytes | path %s | file %s", line, transcriptsTime(info.modified), info.size, path, file)
+		item.line = fmt.Sprintf("%s | active %s | %d bytes | path %s%s", line, transcriptsTime(info.modified), info.size, path, t.fileField(file))
 	}
 	return item, true
 }

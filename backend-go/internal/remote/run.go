@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"time"
@@ -160,4 +161,23 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// ReadTranscript asks the remote to run its transcript or transcripts tool (tool is one of the
+// two) with query as the tool's input, and returns the rendered result. Reads are retried.
+func (c *Client) ReadTranscript(ctx context.Context, tool string, query url.Values, hops int) (string, error) {
+	if tool != "transcript" && tool != "transcripts" {
+		return "", fmt.Errorf("remote %s: %q is not a readable tool", c.entry.Name, tool)
+	}
+	var answer struct {
+		Output string `json:"output"`
+	}
+	path := apiPrefix + tool
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	if err := c.Do(ctx, Request{Method: http.MethodGet, Path: path, Hops: hops, Retry: true}, &answer); err != nil {
+		return "", err
+	}
+	return answer.Output, nil
 }

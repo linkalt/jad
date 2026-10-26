@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -321,6 +322,10 @@ func networkText(err error) string {
 	var operation *net.OpError
 	if errors.As(err, &operation) {
 		return "cannot connect (" + safeText(operation.Op, 20) + ")"
+	}
+	var wrapped *url.Error
+	if errors.As(err, &wrapped) {
+		err = wrapped.Err
 	}
 	return "request failed: " + safeText(err.Error(), 200)
 }

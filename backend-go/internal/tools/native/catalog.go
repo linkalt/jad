@@ -112,7 +112,11 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, err
 		}
 		profiles, _ := messenger.(TranscriptProfiles)
-		tool, err := NewTranscriptTool(*config.NativeTranscript, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, subagentManager)
+		remotes, _, err := remoteDirectory(config, "transcript", config.NativeTranscript.Remotes, messenger)
+		if err != nil {
+			return nil, err
+		}
+		tool, err := NewTranscriptToolWithRemotes(*config.NativeTranscript, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, subagentManager, remotes)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -126,7 +130,11 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		}
 		profiles, _ := messenger.(TranscriptProfiles)
 		sessions, _ := messenger.(TranscriptSessions)
-		tool, err := NewTranscriptsTool(*config.NativeTranscripts, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, sessions, subagentManager)
+		remotes, _, err := remoteDirectory(config, "transcripts", config.NativeTranscripts.Remotes, messenger)
+		if err != nil {
+			return nil, err
+		}
+		tool, err := NewTranscriptsToolWithRemotes(*config.NativeTranscripts, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, sessions, subagentManager, remotes)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}

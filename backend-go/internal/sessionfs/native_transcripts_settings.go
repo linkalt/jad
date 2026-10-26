@@ -14,7 +14,7 @@ const (
 )
 
 var nativeTranscriptsKeys = []string{
-	"max_entries", "scan_max_entries", "timeout_ms", "allow_other_sessions", "allow_other_profiles", "allow_children",
+	"max_entries", "scan_max_entries", "timeout_ms", "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_remote", "remotes",
 }
 
 // NativeTranscriptsSettings holds the limits and switches of native.transcripts. The switches
@@ -27,6 +27,12 @@ type NativeTranscriptsSettings struct {
 	AllowOtherSessions bool
 	AllowOtherProfiles bool
 	AllowChildren      bool
+	// AllowRemote and Remotes: see NativeTranscriptSettings. Listing a remote reads its
+	// profiles and runs through the remote API.
+	AllowRemote bool
+	Remotes     []string
+	// HidePaths leaves file paths out of every line; the remote API sets it.
+	HidePaths bool
 }
 
 func normalizeNativeTranscriptsSettings(setting map[string]json.RawMessage, settingPath string, readPolicy NativePathPolicy) (*NativeTranscriptsSettings, error) {
@@ -85,12 +91,22 @@ func normalizeNativeTranscriptsSettings(setting map[string]json.RawMessage, sett
 		{&settings.AllowOtherSessions, "allow_other_sessions"},
 		{&settings.AllowOtherProfiles, "allow_other_profiles"},
 		{&settings.AllowChildren, "allow_children"},
+		{&settings.AllowRemote, "allow_remote"},
 	} {
 		if value, has := fields[field.name]; has && strings.TrimSpace(string(value)) != "null" {
 			if json.Unmarshal(value, field.target) != nil {
 				return nil, configError("%s: %s.%s must be a boolean", settingPath, section, field.name)
 			}
 		}
+	}
+	if settings.Remotes, err = normalizeRemoteNames(fields["remotes"], settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.AllowRemote && len(settings.Remotes) == 0 {
+		return nil, configError("%s: %s.allow_remote needs remotes: the names of the remote entries to list", settingPath, section)
+	}
+	if !settings.AllowRemote && len(settings.Remotes) > 0 {
+		return nil, configError("%s: %s.remotes is set but allow_remote is not true", settingPath, section)
 	}
 	if settings.MaxEntries > settings.ScanMaxEntries {
 		return nil, configError("%s: %s.max_entries must not exceed scan_max_entries", settingPath, section)

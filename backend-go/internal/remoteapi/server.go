@@ -92,6 +92,21 @@ type Backend interface {
 	StartSubagent(ctx context.Context, request SubagentRequest) (Run, error)
 }
 
+// TranscriptRequest is a read of transcripts for a token: Tool is "transcript" or "transcripts",
+// Arguments the tool's input (already checked for keys and types), MayProfile whether the
+// token's globs reach "session/category/profile".
+type TranscriptRequest struct {
+	Tool       string
+	Arguments  map[string]any
+	MayProfile func(target string) bool
+}
+
+// TranscriptBackend is the optional part of a Backend that serves transcripts: it runs the
+// real transcript tools with file paths hidden and returns their rendered result.
+type TranscriptBackend interface {
+	Transcript(ctx context.Context, request TranscriptRequest) (string, error)
+}
+
 // Options configure a Server.
 type Options struct {
 	Tokens  *TokenTable
@@ -211,6 +226,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleStart(w, r, token, hops, "message")
 	case r.Method == http.MethodPost && len(segments) == 1 && segments[0] == "subagents":
 		s.handleStart(w, r, token, hops, "subagent")
+	case r.Method == http.MethodGet && len(segments) == 1 && (segments[0] == "transcript" || segments[0] == "transcripts"):
+		s.handleTranscript(w, r, token, segments[0])
 	case r.Method == http.MethodGet && len(segments) == 2 && segments[0] == "runs":
 		s.handleRun(w, r, token, segments[1])
 	case r.Method == http.MethodPost && len(segments) == 3 && segments[0] == "runs" && segments[2] == "stop":
@@ -572,4 +589,67 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]string{"error": message, "code": code})
+}
+
+// transcriptKeys are the query keys of each route; "int" keys are numbers, "list" repeats.
+var transcriptKeys = map[string]map[string]string{
+	"transcript":  {"path": "", "turns": "", "source": "", "role": "", "tool": "", "search": "", "context": "int", "step": "", "part": "", "cursor": ""},
+	"transcripts": {"path": "", "filters": "list", "status": "", "limit": "int", "cursor": ""},
+}
+
+const transcriptValueMax = 2048
+
+func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request, token Token, tool string) {
+	backend, ok := s.opts.Backend.(TranscriptBackend)
+	if !ok || !token.Allows(ActionTranscripts) {
+		s.deny(w, token, ActionTranscripts, tool)
+		return
+	}
+	keys := transcriptKeys[tool]
+	arguments := map[string]any{}
+	for key, values := range r.URL.Query() {
+		kind, known := keys[key]
+		if !known {
+			writeError(w, http.StatusBadRequest, "bad_request", key+" is not a "+tool+" key")
+			return
+		}
+		for _, value := range values {
+			if len(value) > transcriptValueMax || strings.ContainsRune(value, 0) {
+				writeError(w, http.StatusBadRequest, "bad_request", key+" is too long or not text")
+				return
+			}
+		}
+		switch kind {
+		case "list":
+			list := make([]any, 0, len(values))
+			for _, value := range values {
+				list = append(list, value)
+			}
+			arguments[key] = list
+		case "int":
+			number, err := strconv.ParseInt(values[0], 10, 32)
+			if len(values) != 1 || err != nil || number < 0 {
+				writeError(w, http.StatusBadRequest, "bad_request", key+" must be a non-negative integer")
+				return
+			}
+			arguments[key] = json.Number(values[0])
+		default:
+			if len(values) != 1 || values[0] == "" {
+				writeError(w, http.StatusBadRequest, "bad_request", key+" must be given once and not empty")
+				return
+			}
+			arguments[key] = values[0]
+		}
+	}
+	output, err := backend.Transcript(r.Context(), TranscriptRequest{Tool: tool, Arguments: arguments, MayProfile: token.MayProfile})
+	if err != nil {
+		var refusal *Refusal
+		if errors.As(err, &refusal) {
+			writeError(w, http.StatusBadRequest, refusal.Code, refusal.Message)
+			return
+		}
+		s.backendError(w, token, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": output})
 }

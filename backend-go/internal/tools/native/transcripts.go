@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
@@ -26,7 +27,7 @@ var transcriptsInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-const transcriptsDescription = "List what the transcript tool can read, newest first: the profiles of your session (or sessions with path sessions, session:<id>), or the sub-agent runs of one profile (path profile:<category>/<name>). Each line gives the exact path to pass to transcript and the full messages.jsonl file path, with size and time of last activity. Use filters to narrow by name, status for runs, limit and cursor to page."
+const transcriptsDescription = "List what the transcript tool can read, newest first (path remote:<name>/session:<id> lists a remote JAD server when remote reading is on): the profiles of your session (or sessions with path sessions, session:<id>), or the sub-agent runs of one profile (path profile:<category>/<name>). Each line gives the exact path to pass to transcript and the full messages.jsonl file path, with size and time of last activity. Use filters to narrow by name, status for runs, limit and cursor to page."
 
 // transcriptsKinds are the forms of path, as the error for a bad one lists them.
 const transcriptsKinds = "sessions, session:<id>, profile:<category>/<name>, profile:<session>/<category>/<name>"
@@ -116,16 +117,23 @@ type transcriptsTool struct {
 	profiles TranscriptProfiles
 	sessions TranscriptSessions
 	runs     *SubagentManager
+	remotes  remoteReader
 }
 
 // NewTranscriptsTool constructs native.transcripts. profiles, sessions and runs find what the
 // own session does not hold and may be nil; the listing then shows what it can.
 func NewTranscriptsTool(settings sessionfs.NativeTranscriptsSettings, own TranscriptFiles, profiles TranscriptProfiles, sessions TranscriptSessions, runs *SubagentManager) (tools.Tool, error) {
+	return NewTranscriptsToolWithRemotes(settings, own, profiles, sessions, runs, nil)
+}
+
+// NewTranscriptsToolWithRemotes is NewTranscriptsTool plus the remotes folder; it lists a remote
+// only when settings.AllowRemote is on and the name is in settings.Remotes.
+func NewTranscriptsToolWithRemotes(settings sessionfs.NativeTranscriptsSettings, own TranscriptFiles, profiles TranscriptProfiles, sessions TranscriptSessions, runs *SubagentManager, remotes *remote.Directory) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(transcriptsInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native transcripts schema: %w", err)
 	}
-	tool := &transcriptsTool{settings: settings, own: own, profiles: profiles, sessions: sessions, runs: runs}
+	tool := &transcriptsTool{settings: settings, own: own, profiles: profiles, sessions: sessions, runs: runs, remotes: remoteReader{allow: settings.AllowRemote, names: settings.Remotes, directory: remotes}}
 	return tools.Tool{
 		Definition: tools.Definition{
 			ID:          transcriptsToolID,
@@ -160,6 +168,13 @@ type transcriptsRequest struct {
 func (t *transcriptsTool) execute(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) string {
 	if execution.AgentDepth > 0 && !t.settings.AllowChildren {
 		return t.fail(execution, tools.StatusForbidden, "transcripts_children_denied", "A sub-agent may not list transcripts: tools.native.transcripts.allow_children is false")
+	}
+	if name, _, wrapped := splitRemoteCursor(stringArgument(arguments, "cursor")); wrapped {
+		return t.executeRemote(ctx, arguments, execution, name)
+	}
+	if path := stringArgument(arguments, "path"); strings.HasPrefix(path, remote.Prefix) {
+		name, _, _ := remote.Split(path)
+		return t.executeRemote(ctx, arguments, execution, name)
 	}
 	request, failure := t.parse(arguments, execution)
 	if failure != "" {

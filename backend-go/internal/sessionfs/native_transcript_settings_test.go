@@ -71,3 +71,29 @@ func TestTranscriptSettingsCapTheListAndDetailLimits(t *testing.T) {
 		t.Fatalf("settings = %+v, err = %v", settings, err)
 	}
 }
+
+func TestTranscriptRemoteSettings(t *testing.T) {
+	good, err := normalizeNativeTranscriptSettings(transcriptSettingsFor(`{"allow_remote":true,"remotes":["peer"]}`), "s.json", NativePathPolicy{})
+	if err != nil || !good.AllowRemote || len(good.Remotes) != 1 {
+		t.Fatalf("%+v %v", good, err)
+	}
+	if def, _ := normalizeNativeTranscriptSettings(transcriptSettingsFor(`{}`), "s.json", NativePathPolicy{}); def.AllowRemote || len(def.Remotes) != 0 {
+		t.Fatal("remote reading is off by default")
+	}
+	for _, body := range []string{`{"allow_remote":true}`, `{"remotes":["peer"]}`, `{"allow_remote":true,"remotes":["bad name"]}`} {
+		if _, err := normalizeNativeTranscriptSettings(transcriptSettingsFor(body), "s.json", NativePathPolicy{}); err == nil {
+			t.Errorf("%s must be refused", body)
+		}
+	}
+	many, err := normalizeNativeTranscriptsSettings(transcriptsSettingsFor(`{"allow_remote":true,"remotes":["peer"]}`), "s.json", NativePathPolicy{})
+	if err != nil || !many.AllowRemote {
+		t.Fatalf("%+v %v", many, err)
+	}
+	if _, err := normalizeNativeTranscriptsSettings(transcriptsSettingsFor(`{"allow_remote":true}`), "s.json", NativePathPolicy{}); err == nil {
+		t.Error("allow_remote without remotes must be refused")
+	}
+	one, all, err := RemoteAPITranscriptSettings()
+	if err != nil || !one.HidePaths || !all.HidePaths || one.AllowPath {
+		t.Fatalf("the remote API reads without paths and without path: %+v %+v %v", one, all, err)
+	}
+}

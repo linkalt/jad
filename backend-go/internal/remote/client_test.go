@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -371,5 +373,13 @@ func TestClientMissingTokenFailsBeforeAnyRequest(t *testing.T) {
 	}
 	if reached.Load() {
 		t.Fatal("a request was sent without a token")
+	}
+}
+
+func TestNetworkTextHidesTheRequestURL(t *testing.T) {
+	err := &url.Error{Op: "Get", URL: "https://host.invalid:1/api/remote/v1/transcript?path=secret", Err: io.EOF}
+	text := networkText(err)
+	if strings.Contains(text, "host.invalid") || strings.Contains(text, "path=secret") || !strings.Contains(text, "EOF") {
+		t.Fatalf("%q", text)
 	}
 }

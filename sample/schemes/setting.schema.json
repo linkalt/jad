@@ -1457,7 +1457,9 @@
                   "type": "boolean",
                   "default": false,
                   "description": "true lets a call name a transcript file by path; the path must pass the read path rules."
-                }
+                },
+                "allow_remote": {"type": "boolean", "default": false, "description": "Go backend only. true lets the tool read the transcripts of other JAD servers on the remotes named in remotes (remote:<name>/profile:<session>/<category>/<name>, remote:<name>/subagent:<run id>, remote:<name>/session:<id>). Off by default. The remote's own token must also allow transcripts there; the remote shortens the output itself and shows no file path."},
+                "remotes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"}, "description": "Go backend only. Names of remote entries (files in the remotes folder, see remote.schema.json) the tool may use as remote:<name>/... . Needed with allow_remote, and only then. Each name must have a valid file, checked when the session loads."}
               },
               "additionalProperties": false
             },
@@ -1500,7 +1502,9 @@
                   "type": "boolean",
                   "default": true,
                   "description": "false refuses the tool to a sub-agent."
-                }
+                },
+                "allow_remote": {"type": "boolean", "default": false, "description": "Go backend only. true lets the tool list the transcripts of other JAD servers on the remotes named in remotes (remote:<name>/profile:<session>/<category>/<name>, remote:<name>/subagent:<run id>, remote:<name>/session:<id>). Off by default. The remote's own token must also allow transcripts there; the remote shortens the output itself and shows no file path."},
+                "remotes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"}, "description": "Go backend only. Names of remote entries (files in the remotes folder, see remote.schema.json) the tool may use as remote:<name>/... . Needed with allow_remote, and only then. Each name must have a valid file, checked when the session loads."}
               },
               "additionalProperties": false
             },

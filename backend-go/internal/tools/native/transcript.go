@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
@@ -85,16 +86,23 @@ type transcriptTool struct {
 	own      TranscriptFiles
 	profiles TranscriptProfiles
 	runs     *SubagentManager
+	remotes  remoteReader
 }
 
 // NewTranscriptTool constructs native.transcript. own is the transcript of the session and
 // profile the catalog is built for; profiles and runs find the others and may be nil.
 func NewTranscriptTool(settings sessionfs.NativeTranscriptSettings, own TranscriptFiles, profiles TranscriptProfiles, runs *SubagentManager) (tools.Tool, error) {
+	return NewTranscriptToolWithRemotes(settings, own, profiles, runs, nil)
+}
+
+// NewTranscriptToolWithRemotes is NewTranscriptTool plus the remotes folder; it reads a remote
+// only when settings.AllowRemote is on and the name is in settings.Remotes.
+func NewTranscriptToolWithRemotes(settings sessionfs.NativeTranscriptSettings, own TranscriptFiles, profiles TranscriptProfiles, runs *SubagentManager, remotes *remote.Directory) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(transcriptInputSchema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native transcript schema: %w", err)
 	}
-	tool := &transcriptTool{settings: settings, own: own, profiles: profiles, runs: runs}
+	tool := &transcriptTool{settings: settings, own: own, profiles: profiles, runs: runs, remotes: remoteReader{allow: settings.AllowRemote, names: settings.Remotes, directory: remotes}}
 	return tools.Tool{
 		Definition: tools.Definition{
 			ID:          transcriptToolID,
@@ -180,6 +188,13 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 	}
 	turnsText, hasTurns := arguments["turns"].(string)
 	cursorText, hasCursor := arguments["cursor"].(string)
+	if name, _, wrapped := splitRemoteCursor(cursorText); wrapped && hasCursor {
+		return t.executeRemote(ctx, arguments, execution, name)
+	}
+	if selector, _ := arguments["path"].(string); strings.HasPrefix(selector, remote.Prefix) {
+		name, _, _ := remote.Split(selector)
+		return t.executeRemote(ctx, arguments, execution, name)
+	}
 	if hasTurns && hasCursor {
 		return t.fail(execution, tools.StatusInvalidInput, "conflicting_selectors", "Give only one of turns and cursor")
 	}
@@ -397,7 +412,10 @@ func (t *transcriptTool) render(execution tools.ExecutionContext, summary, path 
 		text = midCut(text, int(t.settings.ResponseMaxBytes))
 		cut = true
 	}
-	information := []tools.Information{{Key: "transcript", Value: path}}
+	var information []tools.Information
+	if !t.settings.HidePaths {
+		information = append(information, tools.Information{Key: "transcript", Value: path})
+	}
 	if cursor != "" {
 		information = append(information, tools.Information{Key: "cursor", Value: cursor})
 	}

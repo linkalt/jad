@@ -532,3 +532,38 @@ func TestTokenFileReloadRevokesAtOnce(t *testing.T) {
 		t.Fatal("a missing table must fail at start")
 	}
 }
+
+type transcriptFake struct {
+	*fakeBackend
+	got []TranscriptRequest
+}
+
+func (b *transcriptFake) Transcript(_ context.Context, r TranscriptRequest) (string, error) {
+	b.got = append(b.got, r)
+	return "rendered", nil
+}
+
+func TestTranscriptRouteNeedsTheActionAndABackendThatServesIt(t *testing.T) {
+	plain := newFixture(t, defaultTable(t), nil)
+	if status, _ := plain.do("GET", Prefix+"/transcripts?path=session:main", secretA, nil); status != http.StatusForbidden {
+		t.Fatalf("a backend without transcripts: %d", status)
+	}
+	backend := &transcriptFake{fakeBackend: &fakeBackend{profiles: map[string][]string{"main": {"review/a"}}}}
+	f := newFixture(t, defaultTable(t), func(o *Options) { o.Backend = backend })
+	if status, _ := f.do("GET", Prefix+"/transcripts?path=session:main", secretB, nil); status != http.StatusForbidden || len(backend.got) != 0 {
+		t.Fatalf("a token without the transcripts action: %d", status)
+	}
+	status, body := f.do("GET", Prefix+"/transcripts?path=session:main&filters=a&filters=b&limit=3", secretA, nil)
+	if status != 200 || body["output"] != "rendered" || len(backend.got) != 1 {
+		t.Fatalf("%d %v", status, body)
+	}
+	got := backend.got[0]
+	if got.Tool != "transcripts" || got.Arguments["limit"] != json.Number("3") || len(got.Arguments["filters"].([]any)) != 2 || !got.MayProfile("main/review/a") || got.MayProfile("main/dev/coder") {
+		t.Fatalf("%+v", got)
+	}
+	for _, query := range []string{"/transcript?bogus=1", "/transcripts?limit=-1", "/transcripts?path=", "/transcripts?path=a&path=b", "/transcript?search=%00"} {
+		if status, _ := f.do("GET", Prefix+query, secretA, nil); status != http.StatusBadRequest {
+			t.Errorf("%s: %d", query, status)
+		}
+	}
+}

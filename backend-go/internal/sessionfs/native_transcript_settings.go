@@ -24,7 +24,7 @@ const (
 
 var nativeTranscriptKeys = []string{
 	"response_max_bytes", "line_max_bytes", "scan_max_bytes",
-	"suggest_max", "timeout_ms", "preview_bytes", "value_bytes", "max_list_entries", "max_detail_bytes", "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_path",
+	"suggest_max", "timeout_ms", "preview_bytes", "value_bytes", "max_list_entries", "max_detail_bytes", "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_path", "allow_remote", "remotes",
 }
 
 // NativeTranscriptSettings holds the limits and switches of native.transcript. The path
@@ -44,6 +44,12 @@ type NativeTranscriptSettings struct {
 	AllowOtherProfiles bool
 	AllowChildren      bool
 	AllowPath          bool
+	// AllowRemote lets the tool read transcripts of other JAD servers (remote:<name>/...);
+	// Remotes are the remote entries it may use. Off by default.
+	AllowRemote bool
+	Remotes     []string
+	// HidePaths leaves file paths out of every result. It is not a key: the remote API sets it.
+	HidePaths bool
 }
 
 func normalizeNativeTranscriptSettings(setting map[string]json.RawMessage, settingPath string, readPolicy NativePathPolicy) (*NativeTranscriptSettings, error) {
@@ -109,6 +115,7 @@ func normalizeNativeTranscriptSettings(setting map[string]json.RawMessage, setti
 		{&settings.AllowOtherProfiles, "allow_other_profiles"},
 		{&settings.AllowChildren, "allow_children"},
 		{&settings.AllowPath, "allow_path"},
+		{&settings.AllowRemote, "allow_remote"},
 	} {
 		if value, has := fields[field.name]; has && strings.TrimSpace(string(value)) != "null" {
 			if json.Unmarshal(value, field.target) != nil {
@@ -116,5 +123,47 @@ func normalizeNativeTranscriptSettings(setting map[string]json.RawMessage, setti
 			}
 		}
 	}
+	if settings.Remotes, err = normalizeRemoteNames(fields["remotes"], settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.AllowRemote && len(settings.Remotes) == 0 {
+		return nil, configError("%s: %s.allow_remote needs remotes: the names of the remote entries to read", settingPath, section)
+	}
+	if !settings.AllowRemote && len(settings.Remotes) > 0 {
+		return nil, configError("%s: %s.remotes is set but allow_remote is not true", settingPath, section)
+	}
 	return settings, nil
+}
+
+// RemoteAPITranscriptSettings are the settings of the transcript and transcripts tools the
+// remote API runs for a token: every profile the token's globs reach is readable, no path, no
+// other remote, and no file path in a result.
+func RemoteAPITranscriptSettings() (NativeTranscriptSettings, NativeTranscriptsSettings, error) {
+	build := func(tool string) (map[string]json.RawMessage, error) {
+		raw, err := json.Marshal(map[string]any{"tools": map[string]any{"native": map[string]any{tool: map[string]any{}}}})
+		if err != nil {
+			return nil, err
+		}
+		var setting map[string]json.RawMessage
+		return setting, json.Unmarshal(raw, &setting)
+	}
+	one, err := build("transcript")
+	if err != nil {
+		return NativeTranscriptSettings{}, NativeTranscriptsSettings{}, err
+	}
+	transcript, err := normalizeNativeTranscriptSettings(one, "remote api", NativePathPolicy{})
+	if err != nil {
+		return NativeTranscriptSettings{}, NativeTranscriptsSettings{}, err
+	}
+	many, err := build("transcripts")
+	if err != nil {
+		return NativeTranscriptSettings{}, NativeTranscriptsSettings{}, err
+	}
+	transcripts, err := normalizeNativeTranscriptsSettings(many, "remote api", NativePathPolicy{})
+	if err != nil {
+		return NativeTranscriptSettings{}, NativeTranscriptsSettings{}, err
+	}
+	transcript.AllowPath, transcript.HidePaths = false, true
+	transcripts.HidePaths = true
+	return *transcript, *transcripts, nil
 }
