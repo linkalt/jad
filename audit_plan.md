@@ -1,14 +1,14 @@
 # Audit plan: backend-go code quality and performance
 
 Status: plan only, no review done. Prepared at HEAD `4fb4d51`, go1.27.3 linux/amd64, 12 CPUs. Line counts in section 3 were measured by the command in section 3.1.
-Reviewers never change code. The user approves every fix (section 6).
+Model: four different reviewer agents (section 4.1) run on ONE machine; ALL FOUR do a FULL review of the SAME phase, independently. A coordinator compares the four reports, one serialized step measures, the user approves, then fixes. Reviewers never change code.
 
 ## 1. Scope, goals, "done"
 
 - **In scope:** all 37 packages under `backend-go/cmd` (4) and `backend-go/internal` (33), 79.6k non-test lines (377 files), 96120 test lines (measured by the section 3.4 check and 3.1 command).
-- **Out of scope:** `frontend/`, `frontend_new/`, generated files (for example `html-to-markdown-rs_cgo_link.go`), `testdata/`, `sample/` content except where a setting is defined. Tests are review targets only for test quality (lens 4), and as evidence (lens 1 to 3).
-- **Goals:** find defects (lens 1, 2), measured cost (lens 3) and change-resistance problems (lens 4), rank them, and give the user a bounded fix backlog.
-- **Done** = for each of the 8 phases (and sub-passes) all 4 lens files exist, every finding meets the evidence rule (section 5), the merge file is written (section 6), and the user has approved, rejected or deferred every finding. Fixes are a later stage, not part of "done" for the audit.
+- **Out of scope:** `frontend/`, `frontend_new/`, generated files (for example `html-to-markdown-rs_cgo_link.go`), `testdata/`, `sample/` content except where a setting is defined. Tests are review targets only for test quality (checklist D) and as evidence.
+- **Goals:** per phase, four independent full reviews of the same files, compared to separate consensus from single-reviewer claims; a measured, ranked, bounded fix backlog for the user.
+- **Done** = for each of the 8 phases (and sub-passes) all 4 reviewer files exist, every finding meets the evidence rule (section 5), the merge file records which reviewers found what (section 6), measurements of the performance hypotheses are done, and the user has approved, rejected or deferred every finding. Fixes are a later stage and not part of "done" for the audit.
 
 ### 1.1 Prior material (read first; do not re-report)
 
@@ -25,9 +25,9 @@ Rule for reviewers: before filing, grep these files for the area and `git log --
 
 **Not yet independently reviewed** (must be reviewed inside their phase, section 3): remote work, `f0e8b78`, `decide_systemone`, `exec` alias and rework, transcript v1/v2, the `transcripts` tool, the async "latest" block, asyncmgr Close fix, toolset fix, `provider_network`, `tool_smith` listing.
 
-## 2. Baseline (run once before any review; record in `audit_findings/baseline.md`)
+## 2. Baseline (run ONCE by the coordinator, serialized, before any review; record in `audit_findings/baseline.md`)
 
-Run on an otherwise idle machine, one command at a time, from `backend-go/`. Never `go test ./...`. Never restart or kill the running backend. Scratch in `/tmp`, removed afterwards.
+One command at a time, from `backend-go/`, while no reviewer is running. The machine is shared and not assumed quiet: record `uptime` load before and after. Never `go test ./...`. Never restart or kill the running backend. Scratch in `/tmp`, removed afterwards.
 
 ```
 go build ./cmd/... ./internal/...
@@ -41,11 +41,11 @@ git diff --check
 Record: exit codes, per-package ok/FAIL and time, the section 3.1 line-count table, `go version`, and whether `staticcheck` or `golangci-lint` is installed (at plan time: neither is; do not install; `go vet` only).
 
 **Known flaky tests** (record the observed rate; do not report as new findings):
-- `TestRemoteProfileMessageCloseEndsFollowersWithoutLeaks`, `TestRemoteSubagentCloseLeavesNoGoroutines` (tools/native): `.async: directory not empty` on temp-dir cleanup. Root cause was `asyncmgr.Manager.Close` not waiting for `Complete` writes; fixed in `176fd7d`. If it still appears, it is a finding (lens 1).
+- `TestRemoteProfileMessageCloseEndsFollowersWithoutLeaks`, `TestRemoteSubagentCloseLeavesNoGoroutines` (tools/native): `.async: directory not empty` on temp-dir cleanup. Root cause was `asyncmgr.Manager.Close` not waiting for `Complete` writes; fixed in `176fd7d`. If it still appears, it is a finding (checklist A).
 - `TestSlowSubscriberIsDroppedAndDoesNotHoldBackThePublisher` (httpapi): test timing assumption, fixed in `4fb4d51`.
-- A failure of any other test in the baseline is itself a lens 1 finding with the log attached.
+- A failure of any other test in the baseline is itself a correctness finding with the log attached. Reviewers are told the baseline result and flaky list in their prompt, so they do not rerun the suite.
 
-**Benchmarks for lens 3.** 100 benchmarks already exist (`grep -rhE '^func Benchmark' --include=*_test.go internal cmd`), in app 7, asyncmgr 1 file (3), httpapi 10 files, session 4, sessionfs 2, tools/native 15, transcript 11, others. Run the ones for the phase's packages with `-run '^$' -bench . -benchmem -count=10` and compare to numbers in `audit_backend.md` and `audit_performance_plan.md` (differences under 5% are noise; `backend-go/README.md:25-31`; `benchstat` only if present, else compare medians by hand). Run them alone, never beside another build or test.
+**Benchmarks for the measurement step (section 6.3).** Reviewers do NOT run benchmarks, pprof or `-race`. 100 benchmarks already exist (`grep -rhE '^func Benchmark' --include=*_test.go internal cmd`), in app 7, asyncmgr 1 file (3), httpapi 10 files, session 4, sessionfs 2, tools/native 15, transcript 11, others. The measurement step runs those the reviewers' hypotheses point to with `-run '^$' -bench <name> -benchmem -count=10`, one at a time. Because the machine is not quiet, each claim needs a relative measurement (baseline and candidate interleaved in one session, or the same benchmark at two workload sizes), the load average, and a noisy label when the spread of the 10 runs exceeds 5% (`backend-go/README.md:25-31`; `benchstat` only if present, else medians by hand). Absolute numbers from `audit_backend.md` are context only.
 
 Existing candidates by hot path:
 
@@ -60,7 +60,7 @@ Existing candidates by hot path:
 | Process and sub-agent managers | `BenchmarkProcessStartToExit`, `BenchmarkProcessListManyFinished`, `BenchmarkSubagentListManyFinished`, `BenchmarkPersistManifestParallel` | tools/native |
 | Locks, images, MCP | `BenchmarkAcquireWaiters`, `BenchmarkOpenFromIndex`, `BenchmarkLoadToolsServers` | sessionlock, imagestore, tools/mcp |
 
-Gaps lens 3 should fill with a new benchmark in `/tmp` or as a proposed test (not committed by the reviewer): `internal/catalog` Scan (no benchmark), the async latest builder (`tools/native/async_latest.go`), `transcript`/`transcripts` tool list and detail on a large session, `remote` client round trip against an `httptest` server, `anthropicadapter` stream translation, `webui` increments, `tools` catalog build per run. Profiles (`-cpuprofile`, `-memprofile`, `-mutexprofile`, `-blockprofile`) only on a benchmark that shows a cost.
+Gaps where reviewers may propose a new benchmark (written to `/tmp` by the measurement step, not committed): `internal/catalog` Scan (no benchmark), the async latest builder (`tools/native/async_latest.go`), `transcript`/`transcripts` tool list and detail on a large session, `remote` client round trip against an `httptest` server, `anthropicadapter` stream translation, `webui` increments, `tools` catalog build per run. Profiles (`-cpuprofile`, `-memprofile`, `-mutexprofile`, `-blockprofile`) only on a benchmark that shows a cost, in the measurement step. Provider behaviour uses `httptest` fakes only.
 
 ## 3. Phases
 
@@ -73,7 +73,7 @@ cd backend-go; for d in $(find cmd internal -type d|sort); do n=$(ls $d/*.go 2>/
 
 ### 3.2 Phase table
 
-Each reviewer gets one phase (or sub-pass) and one lens. Package lists in the `phasemap` block are the single source of truth for the check in 3.4.
+All four reviewers get the same phase (or sub-pass) and review all of it. Package lists in the `phasemap` block are the single source of truth for the check in 3.4.
 
 | Phase | Packages (non-test lines) | Total | Why this position |
 |---|---|---|---|
@@ -123,7 +123,7 @@ Commit ranges are inclusive. "Remote range" = `git log f001094^..HEAD --grep=rem
 | 7b | Transcript v1 and v2 (`2b3e224`, `857b774`, `b94fd7f..c789a9f`: `transcript.go`, `transcript_steps.go`, `transcript_detail.go`, `transcript_cut.go`, `transcript_render.go`); `transcripts` (`2828a68..010e616`: `transcripts.go`, `transcripts_list.go`); remote transcripts (`1bf45fe`, `64e407b`, `a6150e3`: `transcript_remote.go`, `transcript_path.go`); `0fda7ef` and `91c92e6..` catalog registration | Reading another session's files: path parsing, cursor forgery, scope leaks, messages.jsonl reasoning exposure; memory store per-write scans (F-13); `memory_store.go` (1.1k). |
 | 8 | none by SHA in `transcript`; `imagedata` changed by `a095d7e..b8a2967` | Journal append/fsync (P-012..P-014 done: re-verify), `appendFileIfAbsent` scan (F-07), hash per round (F-02), recovery, `messages.jsonl` golden contract (any proposed change goes through `messages-golden-diff`), image quota scan and mutex across I/O (B-C5), content cache fallback (A-8 fixed: verify). |
 
-Ordering: 1 and 2 first (config and validation vocabulary), then 4 before 6 (lifetimes used by tools), 3 and 5 in parallel with them (independent), 7 and 8 last. Read-only lens work for different phases may run in parallel. Any measuring (lens 3 benchmarks, `-race` runs) runs alone, one at a time. Lens 1 may run `-race -count=3` only on its own phase's packages, and only when no benchmark is running.
+Ordering (one phase at a time): 1, 2 (config and validation vocabulary), 4 (lifetimes used by tools), 3, 5, 6, 7, 8 (callers last). One phase at a time: all four reviewers finish phase N (and the merge and measurement for it are done or running) before phase N+1 reviews start. Nothing else runs during a measurement step, so reviewers of the next phase wait for it.
 
 ### 3.4 Coverage check (run after any edit of the phase map)
 
@@ -159,127 +159,157 @@ PY
 ```
 Expected: `missing [] duplicated {}`, exit 0.
 
-## 4. Lens briefs
+## 4. Reviewers, checklist, workflow
 
-Common to all lenses: read the phase's files in full for the lens; use the code graph / `grep` to find callers; cite `file:line` read in this session; verify against source before filing; check section 1.1 first; do not change code, do not run `git add/commit`, do not restart the backend, do not run `go test ./...`, never kill processes by name. Findings about code outside the phase go in a "cross-phase leads" section with file:line, not as findings.
+### 4.1 Reviewers (fill before the first phase; ids are not known to the plan author)
 
-### Lens 1: correctness and concurrency
-- **Look for:** data races and unsynchronised shared state; goroutines without an owner or a stop path; `Close`/shutdown that returns before work stops (the `176fd7d` class); locks held across I/O or callbacks; lock-order inversions; channel misuse (send on closed, never closed, blocking send under lock); `context` not propagated or leaked cancel; timers (`AfterFunc`) outliving their owner; error paths that drop errors, leave partial files or leave a handle `running` forever; integer and slice bounds; time and cursor arithmetic; panics outside a `recover` boundary (D-1); idempotency of recovery after crash; behaviour on restart with half-written state.
-- **Evidence:** a failing or flaky test, a `-race` report, a deterministic interleaving written as a test sketch (in `/tmp`), or a traced call path with line numbers. Use `go vet`, `go test -race -count=3 <pkgs>`, `go test -run X -count=50 -cpu 1,4` under parallel load for flake hunts.
-- **Do not:** report style, report theoretical races guarded by a lock you did not read, or add sleeps/retries to hide a flake.
+| Slot | Profile / model id | Notes (strengths, known limits) |
+|---|---|---|
+| R1 | `<fill>` | |
+| R2 | `<fill>` | |
+| R3 | `<fill>` | |
+| R4 | `<fill>` | |
 
-### Lens 2: security and boundaries
-- **Look for:** every input that crosses a trust boundary (HTTP bodies, query and path params, remote tokens, manifests and settings files on disk, tool arguments from the model, MCP/extension output, env); path traversal, symlink and TOCTOU on files and directories (`..`, absolute, name validation, `O_NOFOLLOW`, `SameFile`); SSRF and redirects; command and argument injection in spawned processes; env inheritance; secrets in logs, errors, results, transcripts, http_debug, process arguments; file and socket modes and umask; auth (constant-time compare, missing checks on a route, scope/globs enforcement for remote tokens, error text leaking server paths or profile names); resource limits on untrusted sizes (body, line, depth, count); scrubbing consistency.
-- **Evidence:** a concrete input and the line where it is accepted, a test or small program in `/tmp` demonstrating it against the real function (`httptest`, temp dirs), or the missing check shown by comparing with the sibling route/tool that has it. Rate by who can reach it (local user, token holder, model, remote peer).
-- **Do not:** run anything against real networks or real credentials, read real secret files, or file hardening wishes without a reachable path (put those under "hardening, unreachable").
+The reviewer id used in file names and finding records is the slot (`r1`..`r4`), mapped to the profile here. Slots must be different profiles/models; the mapping is not shown to a reviewer.
 
-### Lens 3: performance
-- **Look for:** repeated I/O (re-stat, re-read, re-parse per request or per round); O(n^2) on turns, lines or sessions; whole-file reads for partial needs; unbounded maps, caches, slices, queues, retained runs; allocation on hot paths (string/[]byte churn, `fmt` on success path, repeated `json.Marshal`/`Unmarshal` of the same value, reflection, `append` without capacity); locks held too long and contention (mutex/block profile); polling instead of events; fsync counts; goroutine-per-item fan-out without a ceiling; subprocess spawn per call. Start from the hot-path table in section 2.
-- **Evidence:** a benchmark (`-bench -benchmem -count=10`, run alone) or a profile with the top frames; or reasoning explicitly labelled `unmeasured` with a stated workload size. State workload (sessions, turns, bytes) with every number. Do not claim improvement ranges without a measured prototype in `/tmp`.
-- **Do not:** micro-optimise cold code, propose caches without an invalidation story, run benchmarks while another is running, commit benchmark files (propose them), or report differences under 5% as findings.
+### 4.2 Lens checklist (every reviewer applies ALL of it to the WHOLE phase)
 
-### Lens 4: maintainability
-- **Look for:** duplicated logic across files and packages (candidates already known: F-26 items); dead code and unused exported symbols (`grep -rn`, `go vet`, graph in/out degree zero); files above about 700 lines and functions above about 80 lines with mixed responsibilities; names that mislead; settings read in more than one place; patterns that diverge from the neighbours (settings validation, error wrapping, path helpers, async handle kinds, scrubbing); comments that restate code or are stale; test quality: tests that assert nothing, sleep-based sync, shared global state, missing failure-path tests for the recently added code, coverage of the new commits (`go test -cover` per package), fakes that diverge from the real type; fit with `backend-go/CLAUDE.md` and `DECISIONS.md`.
-- **Evidence:** the two or more locations with `file:line` (duplication), a grep showing no callers (dead code), line counts, or a test that passes with the code mutated (`mutate-check.sh` on a copy is not allowed to leave changes; describe the mutation instead).
-- **Do not:** propose rewrites, new abstractions for fewer than three uses, renames without a reader-facing reason, or style that `gofmt`/`go vet` already settle.
+Lenses are checklist headings, not assignments. Use them to avoid blind spots; a finding carries the lens letter it fits best.
 
-## 5. Per-phase procedure and findings format
+- **A. Correctness and concurrency.** Data races and shared state without a guard; goroutines without owner or stop path; `Close`/shutdown that returns before work stops (the `176fd7d` class); locks held across I/O or callbacks, lock-order inversions; channel misuse; `context` not propagated; timers outliving their owner; error paths that drop errors, leave partial files or leave a handle `running`; bounds and cursor/time arithmetic; panics outside a `recover` boundary (D-1); crash/restart with half-written state; idempotent recovery.
+- **B. Security and boundaries.** Every trust boundary (HTTP bodies and params, remote tokens, files on disk, model tool arguments, MCP/extension output, env): validation, path traversal, symlinks and TOCTOU, SSRF and redirects, argument/command injection, env inheritance, secrets in logs/errors/results/transcripts, file and socket modes, auth (constant-time compare, scope/globs enforcement, error text leaking server paths), limits on untrusted sizes, scrubbing consistency. Name who can reach it (local user, token holder, model, remote peer).
+- **C. Performance.** Repeated I/O (re-stat, re-read, re-parse per request or round); O(n^2) on turns, lines, sessions; whole-file reads for partial needs; unbounded maps, caches, queues, retained runs; hot-path allocation (string/[]byte churn, repeated marshal, reflection, `append` without capacity); locks held too long; polling instead of events; fsync counts; goroutine-per-item without ceiling; subprocess per call. Reviewers do NOT measure: they list hypotheses (section 5.3) with workload size and the benchmark to run.
+- **D. Maintainability.** Duplication (list all locations), dead code (grep with empty result), files above about 700 lines and functions above about 80 with mixed duties, misleading names, settings read in more than one place, divergence from neighbouring patterns (validation, error wrapping, path helpers, async kinds, scrubbing), stale or restating comments, test quality (asserts nothing, sleep-based sync, shared globals, missing failure-path tests for the new commits, fakes diverging from real types), fit with `backend-go/CLAUDE.md` and `DECISIONS.md`.
 
-1. Coordinator runs section 2 once; records `audit_findings/baseline.md`.
-2. For phase P, four reviewers start in parallel (read-only; measurement tasks serialised by the coordinator).
-3. Each reads section 1.1 material for the phase, then the files, then writes its file.
-4. Coordinator checks the file against the format (reject files with findings lacking `file:line`).
+**Not to do (all lenses):** style that `gofmt`/`go vet` settle; rewrites; abstractions for fewer than three uses; hardening wishes without a reachable path (put under "hardening, unreachable"); repeats of fixed prior art (section 1.1); speculative reading outside the phase (note it as a cross-phase lead with `file:line`).
 
-**File convention:** `audit_findings/<phase>_<lens>.md`, where phase is `p1`..`p8` with sub-pass suffix (`p2a`, `p6c`) and lens is `correctness`, `security`, `performance`, `maintainability`. Example `audit_findings/p4_security.md`. The directory is created by the first reviewer. Merge outputs: `audit_findings/merged_<phase>.md` and `audit_findings/MERGED.md`. (`/audit_*.md` in `.gitignore` matches only root files; whether `audit_findings/` is committed is an open question, section 8.)
+### 4.3 Workflow per reviewer (the `feature-development` skill, adapted to review)
 
-**File layout:** header (phase, lens, HEAD sha, files read, commands run with exit codes, time), then findings, then "cross-phase leads", then "checked and sound" (one line each, so the next reviewer does not redo it), then "not reviewed" (what was skipped and why).
+Source: `.jad/prompts/skills/feature-development/SKILL.md`. Steps 1-4 map directly; step 5 ("Implement and verify") becomes "Report" in the audit. The skill's execution rules apply unchanged: explore for the objective only, targeted reads, no re-reading of understood code, the initial plan is provisional, every extra investigation answers a specific question, report unrelated bugs without fixing them, never claim a test passed unless it was run and passed.
 
-**Finding format** (one block per finding):
+1. **Explore and understand the phase.** Entry points, data flow, state and lifecycle, configuration and persistence, constraints; the prior-audit entries and DECISIONS records for the area (section 1.1); the unreviewed commits of the phase (section 3.3). Output: a short understanding note (in the report header).
+2. **Draft the review plan and hypotheses.** What to check per checklist lens, with assumptions marked "assumed" vs "verified". No findings yet.
+3. **Trace impacted code to verify each hypothesis.** Callers/callees, shared state, lifecycle and shutdown, error paths, configuration, existing tests. Run only build/vet and targeted tests with `-count=1` where a hypothesis needs it (section 4.4). No speculative reading outside the phase; expand only when a trace reveals an important dependency.
+4. **Revise and finalize the findings.** Drop disproved hypotheses (list them under "checked and sound", one line each), keep the evidence of the rest, set severity and effort.
+5. **Report (replaces implement and verify).** Write the findings file (section 5). Every finding is evidence-backed (`file:line` plus reproduction, test or trace) or labelled `unmeasured`. State what was not covered and which commands ran with exit codes.
+
+Fixes follow the skill's step 5 in full later (section 6.5), as separate bounded commits after the user approves the merged list.
+
+### 4.4 Independence and same-machine rules (reviewers)
+
+- Write only your own file `audit_findings/<phase>_<reviewer-id>.md`. Do NOT open any other `audit_findings/` file, other reviewers' notes or the merge files until your own file is finished and you have reported. Do not discuss findings with other reviewers.
+- Never change code, config or git state: no edit, `git add/commit/stash/checkout/reset/clean`, `go clean`, `go mod tidy`, no `go generate`. The worktree and the Go build/test cache are shared with the other three reviewers and with the running backend.
+- Allowed commands: reading tools, `grep`, `git log/show/diff/blame`, `go build`, `go vet`, `gofmt -l`, and targeted `go test ./internal/<pkg>/ -run <Name> -count=1` for a hypothesis. Not allowed: `-race`, `-bench`, `-cpuprofile` and other profiles, `-count>1` loops, `-cpu` sweeps, `go test ./...`, anything that binds a fixed port or leaves files outside `/tmp`. Write scratch files only under `/tmp/<reviewer-id>/` and remove them at the end.
+- Never restart or kill the backend or any process; never kill by name or pattern.
+- Do not use the network or real credentials; tests use `httptest`, temp dirs and fakes.
+- A test that fails when you run it may be a known flaky test (section 2) or a collision with another reviewer's run: rerun once, and record both results; do not report it as a defect without a cause.
+
+## 5. Findings: file, format, evidence
+
+**File convention:** `audit_findings/<phase>_<reviewer-id>.md`, phase `p1`..`p8` with sub-pass suffix (`p2a`, `p6c`), reviewer id `r1`..`r4`. Example `audit_findings/p4_r2.md`. Coordinator outputs: `baseline.md`, `<phase>_merged.md`, `<phase>_measure.md`, `MERGED.md`. The directory is local and uncommitted, like the other root `audit_*` files (decided); created by the coordinator before the first phase.
+
+**File layout:** header (phase, reviewer id, HEAD sha, files read, commands with exit codes, date); 1 understanding note; 2 hypotheses list (id, statement, status verified/disproved/unverified); 3 findings; 4 performance hypotheses for measurement (5.3); 5 cross-phase leads; 6 checked and sound; 7 not covered and why.
+
+### 5.1 Finding format (one block per finding)
 ```
-### <PHASE>-<LENSLETTER><nn>  <one-line title>
+### <PHASE>-<REVIEWER>-<nn>  <one-line title>
 - severity: critical | high | medium | low
-- lens: correctness | security | performance | maintainability
-- location: path/file.go:123 (more locations listed the same way)
-- evidence: <reproduction, test, benchmark with numbers, or reasoning>   [measured | read | unmeasured]
+- lens: A correctness | B security | C performance | D maintainability
+- location: path/file.go:123 (more locations the same way)
+- evidence: <reproduction, test, trace or benchmark>   [measured | read | unmeasured]
 - suggested fix: <smallest change; name the files>
 - effort: S (under 1 h) | M (under 1 day) | L
 - prior art: <old id and status, or "new">
 ```
-Lens letters: C, S, P, M. Severity: critical = data loss, remote or unauthenticated compromise, or crash/hang of the whole server in normal use; high = reachable bug or leak with real impact, or a measured cost above 20% on a hot path; medium = real but narrow or conditional; low = small cost, hygiene, or unreachable hardening.
+Severity: critical = data loss, remote or unauthenticated compromise, or hang/crash of the whole server in normal use; high = reachable bug or leak with real impact, or a measured cost above 20% on a hot path; medium = real but narrow or conditional; low = small cost, hygiene, unreachable hardening.
 
-**Evidence rule:** no finding without `file:line`. A claim without a reproduction, test or measurement is labelled `[unmeasured]` or `[read]` and cannot be rated above medium (security: above medium only with a concrete input shown). Numbers always carry workload and command.
+### 5.2 Evidence rule
+No finding without `file:line`. A claim without reproduction, test or trace is labelled `[unmeasured]` or `[read]` and cannot be rated above medium (security: above medium only with a concrete input shown). Numbers carry workload and command. Because reviewers do not benchmark, a performance finding from a reviewer is `[read]`/`[unmeasured]` until the measurement step; the measured value replaces the label there.
 
-## 6. Merge, approval gate, fixes
-
-- **Merge** (coordinator, per phase then global): collect the four files; dedupe findings pointing to the same `file:line` or cause (keep the highest severity, list all lens ids); verify every critical/high by reading the source or re-running the reproduction (reviewer claims are leads); drop findings that repeat fixed prior art; rank by severity, then evidence (`measured` > `read` > `unmeasured`), then effort (S first). Output `merged_<phase>.md` and a ranked `MERGED.md` with a status column (`open`, `approved`, `rejected`, `deferred`, `fixed <sha>`).
-- **Approval gate:** the user decides each finding (or each batch) before any code changes. Nothing is fixed without an `approved` status.
-- **Fixes:** a separate stage by an implementing agent, not the reviewers. One bounded commit per fix or small related group; every bug fix with a regression test proven to fail without the fix (`mutate-check.sh`); performance fixes with a benchmark before and after; changes that can touch `messages.jsonl` run `messages-golden-diff`; settings follow the config rules (defaults, schema, sample, DECISIONS.md). Per batch: `gofmt -l`, `go vet`, `git diff --check`, affected package tests; at the end `verify-go.sh` with `--race` on touched packages. No push.
-
-## 7. Prompt templates (paste one per reviewer; fill the `<...>`)
-
-Shared acceptance (included in each): the report file exists in the section 5 layout; every finding has `file:line`, severity, evidence tag, fix, effort; prior art checked; no code, git state or running processes changed.
-
-### 7.1 Correctness and concurrency
+### 5.3 Performance hypothesis list (section 4 of the reviewer file)
 ```
-You are reviewer 1 (correctness and concurrency) in a read-only audit of backend-go/.
-Goal: find defects in <PHASE NAME> (lens: races, lifetimes, error paths, shutdown, crash recovery).
-Target files: <FILE LIST from audit_plan.md phasemap for <PHASE>> (non-test; read tests only as evidence).
-Newly added, never independently reviewed, review with priority: <COMMITS and files from audit_plan.md 3.3 for <PHASE>>.
-Context: read audit_plan.md sections 1.1, 4 (Lens 1) and 5; backend-go/CLAUDE.md; the DECISIONS.md entries for the area; then grep the prior audits (audit_backend.md, audit_performance_plan.md, audit_audit.md, audit_design*.md) for the area. Do not repeat fixed items; REJECTED items need new evidence.
-Constraints: read-only. No edits, no git add/commit, no restart or kill of any process, no `go test ./...` (use `go test ./internal/<pkg>/`), scratch in /tmp only and removed afterwards. Race runs: `go test -race -count=3` on this phase's packages only, one at a time.
-Acceptance: write audit_findings/<phase>_correctness.md in the audit_plan.md section 5 format. No finding without file:line; unmeasured claims labelled and not above medium.
-Report: file path, counts of findings by severity, commands run with exit codes, areas not covered.
+- H<nn>: <what is slow/unbounded>, file:line
+  workload: <sessions/turns/bytes/concurrency that make it matter>
+  benchmark: <existing name from section 2, or the proposed new one and its fixture>
+  expected: <relative effect, e.g. "scales with turns", "extra stat per call">
 ```
 
-### 7.2 Security and boundaries
+## 6. Merge, measurement, approval, fixes
+
+### 6.1 Per phase order
+1. Reviewers R1-R4 run in parallel on the same phase (section 4.3). 2. Coordinator merges (6.2). 3. Coordinator runs the serialized measurement step (6.3). 4. Phase results are added to `MERGED.md`. 5. After all phases, the ranked list goes to the user (6.4). 6. Fixes (6.5).
+
+### 6.2 Merge (coordinator; reads all four files only after all four are finished)
+- Normalise each finding to a key: cause plus `file:line` (same defect described differently is one finding). Record per finding which reviewers found it (`found by: r1, r3`).
+- **Consensus** (2+ reviewers): higher confidence; take the highest evidence and the median severity; still verify any critical/high by reading the source.
+- **Unique** (1 reviewer): no ranking until the coordinator runs a verification pass (read the source, reproduce with a test in `/tmp`); outcome `confirmed`, `disproved` or `unverified`. Unverified stays in the list, flagged.
+- **Contradictions** (one reviewer lists the code under "checked and sound" or disputes severity, another files a bug): resolve with evidence (source reading or reproduction) and record both positions and the result.
+- Drop repeats of fixed prior art; mark re-confirmed open items with the old id. Record disagreement counts per reviewer pair in `<phase>_merged.md` (useful to judge reviewer reliability). Output: `<phase>_merged.md` with a table (id, title, severity, lens, location, found by, status) and the evidence for every non-consensus decision.
+
+### 6.3 Measurement step (coordinator/executor, serialized)
+Runs after the merge, alone on the machine (no reviewer, build or test running; check `uptime` before and after). Inputs: the performance hypotheses (5.3) from all four files, merged and deduplicated, plus performance findings that need a number. For each: run the named benchmark (`-run '^$' -bench <name> -benchmem -count=10`), relative measurement (two workload sizes, or before/after of a `/tmp` prototype, never both in different sessions), `-race -count=1` only on the phase's packages once, pprof only where a benchmark shows a cost. Label results `noisy` when the 10-run spread exceeds 5%; repeat once; if still noisy keep the finding `unmeasured`. Output `<phase>_measure.md`: hypothesis, command, load average, numbers, verdict (confirmed / not confirmed / noisy). No repo files are changed (prototypes and new benchmarks in `/tmp`, removed afterwards).
+
+### 6.4 Approval gate
+`MERGED.md` ranks all findings by severity, then evidence (`measured` > `confirmed read` > `unmeasured`), then consensus count, then effort (S first), with a status column (`open`, `approved`, `rejected`, `deferred`, `fixed <sha>`). The user decides each finding or batch. Nothing is fixed without `approved`.
+
+### 6.5 Fixes
+A separate stage by an implementing agent following `feature-development` steps 1-5 per batch (explore, plan, trace impact, revise, implement and verify). One bounded commit per fix or small related group. Every bug fix has a regression test proven to fail without the fix (`mutate-check.sh`); performance fixes have a benchmark before and after; changes that can touch `messages.jsonl` run `messages-golden-diff`; settings follow the config rules (default, schema, sample, DECISIONS.md). Per batch: `gofmt -l`, `go vet`, `git diff --check`, affected package tests; at the end `verify-go.sh` with `--race` on touched packages. No push. Reviewers do not fix.
+
+## 7. Prompt templates
+
+Fill the `<...>` fields. File lists come from the `phasemap` block (3.2), commits from 3.3, baseline facts from `baseline.md`.
+
+### 7.1 Reviewer prompt (identical for R1..R4 except `<reviewer-id>`)
 ```
-You are reviewer 2 (security and boundaries) in a read-only audit of backend-go/.
-Goal: find reachable security defects in <PHASE NAME>: input validation, path handling, secrets, access rules, resource limits.
-Target files: <FILE LIST from audit_plan.md phasemap for <PHASE>>.
-Newly added, never independently reviewed, review with priority: <COMMITS and files from audit_plan.md 3.3 for <PHASE>>.
-Context: read audit_plan.md sections 1.1, 4 (Lens 2) and 5; backend-go/CLAUDE.md; DECISIONS.md for the area; prior audits (fetch SSRF, process env, http_debug, remote token scope were handled before: verify, do not repeat).
-Constraints: read-only. Use only httptest, temp dirs and fake credentials; no real network, no real secrets, no edits, no git add/commit, no process kills or backend restart, no `go test ./...`. Scratch in /tmp, removed afterwards.
-Acceptance: write audit_findings/<phase>_security.md in the section 5 format. Each finding names who can reach it (local user, token holder, model, remote peer) and the exact input; unreachable hardening goes in its own section.
-Report: file path, findings by severity, commands run with exit codes, areas not covered.
+You are reviewer <reviewer-id> in an independent, read-only audit of backend-go/ (code quality and performance). Three other agents review the SAME phase independently; your report is compared with theirs, so be complete and evidence-based, and do not look at their work.
+
+Goal: a FULL review of phase <PHASE> (<name>) applying the whole checklist below: correctness and concurrency, security and boundaries, performance (as hypotheses), maintainability.
+Scope (non-test files; read tests only as evidence and for test quality): <FILE LIST for the phase from audit_plan.md phasemap>. Stay inside it; note outside issues as cross-phase leads with file:line.
+Context to read first: audit_plan.md sections 1.1, 4 and 5; backend-go/CLAUDE.md; DECISIONS.md entries for this area; prior audits (audit_backend.md, audit_performance_plan.md, audit_audit.md, audit_design.md, audit_design0.md, audit_design1.md): do not repeat fixed items, REJECTED items need new evidence, open items are cited by old id.
+Never independently reviewed, check these with priority: <COMMITS and files for the phase from audit_plan.md 3.3>. Known risk areas: <risk column>.
+Baseline (coordinator already ran it; do not rerun the suite): <build/vet/gofmt/test results and known flaky tests from baseline.md>.
+Checklist (apply every item to the whole phase): <paste audit_plan.md 4.2 A-D>.
+Workflow (skill .jad/prompts/skills/feature-development/SKILL.md, adapted; read it): 1 explore and understand the phase; 2 draft review hypotheses, assumed vs verified; 3 trace code to verify each hypothesis (callers, callees, shared state, lifecycle, errors, config, tests), no speculative reading outside the phase; 4 revise: drop disproved, keep evidence; 5 report instead of implement. Keep the skill's execution rules; report unrelated bugs; never claim a test passed unless you ran it.
+Independence and machine rules: write only audit_findings/<PHASE>_<reviewer-id>.md; do not open any other file in audit_findings/ before finishing and reporting; never change code or git state (no edit, add, commit, stash, checkout, reset, clean, go clean); the worktree and the Go cache are shared with three other agents. Allowed: reading, grep, git log/show/diff, go build, go vet, gofmt -l, and targeted `go test ./internal/<pkg>/ -run <Name> -count=1`. Forbidden: -race, -bench, profiles, -count>1, -cpu, `go test ./...`, fixed ports, network, real credentials, killing or restarting any process. Scratch only in /tmp/<reviewer-id>/, removed at the end.
+Output format: audit_plan.md sections 5 and 5.1-5.3 (file layout, finding blocks, performance hypothesis list). No finding without file:line; claims without reproduction/test/trace are labelled [read] or [unmeasured] and not rated above medium; list "checked and sound" and "not covered".
+Report back (short): file path, finding counts by severity and lens, hypotheses count, commands run with exit codes, areas not covered.
 ```
 
-### 7.3 Performance
+### 7.2 Coordinator prompt (merge)
 ```
-You are reviewer 3 (performance) in a read-only audit of backend-go/.
-Goal: find measured or well-reasoned costs in <PHASE NAME>: repeated I/O, allocations on hot paths, long lock holds, unbounded growth.
-Target files: <FILE LIST from audit_plan.md phasemap for <PHASE>>; hot-path benchmarks: <ROWS from audit_plan.md section 2 table for this phase>.
-Newly added, never independently reviewed, review with priority: <COMMITS and files from audit_plan.md 3.3 for <PHASE>>.
-Context: read audit_plan.md sections 1.1, 2, 4 (Lens 3) and 5; backend-go/CLAUDE.md; backend-go/README.md benchmark section; audit_backend.md baseline table and audit_performance_plan.md (P-ids) so numbers can be compared and fixed items are not repeated.
-Constraints: read-only for the repo. Benchmarks and profiles run one at a time, alone, `-run '^$' -bench <name> -benchmem -count=10`; new benchmarks live in /tmp or are proposed in the report, not committed. No edits, no git add/commit, no process kills, no `go test ./...`. Scratch in /tmp, removed afterwards.
-Acceptance: write audit_findings/<phase>_performance.md in the section 5 format. Every number has workload size and command; unmeasured items labelled `unmeasured`; differences under 5% not reported.
-Report: file path, findings by severity, benchmarks run (command, exit code, key numbers), proposed new benchmarks, areas not covered.
+You are the coordinator for phase <PHASE>. The four independent reports are audit_findings/<PHASE>_r1.md .. _r4.md (all finished). Read audit_plan.md sections 5 and 6.2.
+Task: write audit_findings/<PHASE>_merged.md. Normalise findings by cause + file:line; mark for each which reviewers found it. Split into consensus (2+), unique (1), contradictions. Verify every unique finding and every critical/high by reading the source or reproducing in /tmp (outcome confirmed / disproved / unverified). Resolve contradictions with evidence and record both positions. Drop repeats of fixed prior art (grep the prior audits and git log). Merge the performance hypotheses (dedupe) into a measurement list. Add per reviewer-pair agreement counts.
+Constraints: read-only for the repo; no code changes; no benchmarks or -race in this step; no deletion of reviewer files.
+Report: merged file path, counts (consensus/unique/contradictions, by severity), verification outcomes, the measurement list size, unresolved items.
 ```
 
-### 7.4 Maintainability
+### 7.3 Measurement prompt (serialized)
 ```
-You are reviewer 4 (maintainability) in a read-only audit of backend-go/.
-Goal: find duplication, dead code, misleading names, divergence from existing patterns and weak tests in <PHASE NAME>.
-Target files: <FILE LIST from audit_plan.md phasemap for <PHASE>> and their _test.go files (test quality only).
-Newly added, never independently reviewed, review with priority: <COMMITS and files from audit_plan.md 3.3 for <PHASE>>.
-Context: read audit_plan.md sections 1.1, 4 (Lens 4) and 5; backend-go/CLAUDE.md; DECISIONS.md for the area; prior audits (F-22, F-24, F-26 were handled: check status in audit_backend.md Log).
-Constraints: read-only. Propose no rewrites and no new abstractions for fewer than three uses. No edits, no mutation left in the tree, no git add/commit, no process kills, no `go test ./...`. Scratch in /tmp, removed afterwards.
-Acceptance: write audit_findings/<phase>_maintainability.md in the section 5 format; duplication findings list every location; dead-code findings include the grep command and its empty result; test-quality findings name the test and what it fails to check.
-Report: file path, findings by severity, commands run with exit codes, `go test -cover` numbers for the phase packages if run, areas not covered.
+You are the executor for the measurement step of phase <PHASE>. Read audit_plan.md section 6.3 and audit_findings/<PHASE>_merged.md (measurement list).
+Preconditions: no reviewer or other build/test is running; record `uptime` before and after.
+Task: for each hypothesis run the named benchmark one at a time (`-run '^$' -bench <Name> -benchmem -count=10`), as a relative measurement (two workload sizes or a /tmp prototype versus current in the same session), then `go test -race -count=1` once on the phase's packages; pprof only for a benchmark that shows a cost. Mark results noisy when the spread exceeds 5%, repeat once, else keep `unmeasured`. Machine is shared and not quiet: no absolute claims.
+Constraints: no repo changes (prototypes and new benchmarks in /tmp, removed at the end); never kill or restart processes; never `go test ./...`.
+Output: audit_findings/<PHASE>_measure.md (hypothesis, command, load average, numbers, verdict). Report: path, verdict counts, commands with exit codes, noisy items.
 ```
 
 ## 8. Risks and open questions
 
 Risks:
-- Phase 6 (13.7k) and 7 (14.7k) are large; sub-passes keep each reviewer near 5-8k lines, but a reviewer may still skim. The "not reviewed" section is mandatory so gaps are visible.
-- Reviewer claims are leads: the merge step must re-verify critical/high; budget about as much coordinator time as one reviewer pass per phase.
-- Lens 3 numbers are noisy on a shared machine (12 CPUs, background jobs); the previous quiet-machine re-run is still deferred. Measure alone or label results.
-- Prior-art "still open" entries in `audit_performance_plan.md` section 3 predate its fix batches; some are fixed. Reviewers must check the tree.
-- Flaky tests can look like lens 1 findings; use the baseline record and `-count`/`-cpu` runs.
-- `audit_*.md` at the repo root is git-ignored: this plan was committed with `git add -f`.
+- Reviewer disagreement: four agents will differ in depth and severity. The merge records agreement and verifies unique and contradicted items instead of voting; consensus alone is not proof (they may share a blind spot or all read the same stale audit entry).
+- Shared worktree and build cache: a reviewer that edits, stashes, checks out or cleans breaks the other three. The rules in 4.4 forbid it; the coordinator checks `git status --short` and `git stash list` after each review round and discards a round if the tree changed.
+- Concurrent reviewer test runs can collide on temp dirs/ports and trigger the known flaky tests; reviewers are limited to `-count=1` targeted tests and told to record collisions rather than report them.
+- Independence can leak: a reviewer may open another's file. The prompt forbids it; the coordinator compares file modification times with the finish order and notes any suspicion.
+- Phases 6 and 7 are large (sub-passes of 4-8k lines); a reviewer may skim. "Not covered" is mandatory so gaps are visible, and uncovered parts are visible when all four list the same gap.
+- Reviewer claims are leads: merge must re-verify critical/high and all unique findings; budget about one reviewer pass of coordinator time per phase.
+- The machine is shared and noisy: only relative measurements, serialized, with load recorded; the earlier quiet-machine re-run (deferred in `audit_performance_plan.md`) is still open.
+- Prior-art "still open" entries in `audit_performance_plan.md` section 3 predate its fix batches; some are fixed. Check the tree.
+- Flaky tests can look like correctness findings; use the baseline list and rerun once.
+- `audit_*.md` at the repo root is git-ignored: this plan is tracked only because it was added with `git add -f`; `audit_findings/` stays untracked and local.
+
+Decided (not open): findings stay local and uncommitted; performance uses `httptest` fakes only; the machine is shared so measurement is serialized and relative.
 
 Open questions for the user:
-1. Are `audit_findings/` files committed (they are not ignored) or kept local like `audit_*.md`?
-2. Should phase 2b be split further, and may 6 and 7 sub-passes run as separate reviewer sessions (assumed yes)?
-3. Is a quiet-machine slot available for lens 3 and the `-race` baseline (the process tool, one at a time)?
-4. Should lens 3 include end-to-end latency against a real provider (plan assumes `httptest` fakes only)?
-5. Severity bar for "critical" in security: is a local-user-only issue on a loopback server ever above medium?
+1. Reviewer slots R1-R4: which four profiles/models (table 4.1)?
+2. Should phase 2b (9.6k lines) be split further for the reviewers? (Assumed: yes, at the `session*.go, roots.go` boundary, if a reviewer reports it did not finish.)
+3. Severity bar for security "critical": may a local-user-only issue on a loopback server ever exceed medium? (Assumed: no.)
+4. Phase order is 1, 2, 4, 3, 5, 6, 7, 8 (section 3.3); confirm.
