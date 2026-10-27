@@ -143,6 +143,13 @@ type Service struct {
 	logger       *slog.Logger
 	mu           *sync.Mutex
 	size         *repoSize
+	// gcPending is set under mu by a prune that dropped records while the
+	// repository was over a quarter of max_total_bytes; the run's Finish, or a
+	// Begin that opened no checkpoint, starts the gc once mu is released.
+	gcPending bool
+	// reclaiming tracks the background gc, so a test can wait for the one a run
+	// started before it measures the repository.
+	reclaiming sync.WaitGroup
 }
 
 // repoSize is the last measured size of one private repository, shared by the
@@ -157,6 +164,13 @@ type repoSize struct {
 
 // commitObjectAllowance is added to the cached size per commit written (one loose object's disk block).
 const commitObjectAllowance = 4096
+
+// reclaimSizeDivisor is the share of max_total_bytes at which a prune that dropped
+// records is followed by a gc: a quarter. Below it the objects the dropped refs
+// leave behind are a small part of what the size gate counts, so a gc would cost
+// more than it frees; above it most of the repository is garbage. DECISIONS.md
+// ("Pruning is followed by a gc") records the measurement behind the number.
+const reclaimSizeDivisor = 4
 
 var repoSizes sync.Map
 
@@ -468,17 +482,64 @@ func (s *Service) keep(id, suffix, tree, message string) error {
 	return s.git.setRef(refPrefix+id+"-"+suffix, commit)
 }
 
-func (s *Service) prune(records []Record) []Record {
+// prune drops the records beyond max_checkpoints and the refs that name their
+// snapshots. It reports how many records it dropped: the objects those refs kept
+// alive stay in the repository until a gc.
+func (s *Service) prune(records []Record) ([]Record, int) {
 	excess := int64(len(records)) - s.options.Settings.MaxCheckpoints
 	if excess <= 0 {
-		return records
+		return records, 0
 	}
 	for _, dropped := range records[:excess] {
 		for _, suffix := range []string{"before", "after"} {
 			_ = s.git.deleteRef(refPrefix + dropped.ID + "-" + suffix)
 		}
 	}
-	return records[excess:]
+	return records[excess:], int(excess)
+}
+
+// reclaimDue reports whether the objects a prune leaves behind are worth a gc:
+// the measured repository size is over a quarter of max_total_bytes, so most of
+// what the size gate counts is garbage rather than the checkpoints that are kept.
+func (s *Service) reclaimDue(dropped int) bool {
+	return dropped > 0 && s.size.known && s.size.bytes > s.options.Settings.MaxTotalBytes/reclaimSizeDivisor
+}
+
+// startPendingReclaim runs the gc a prune asked for, if any, in the background.
+// The caller must have released the staging mutex: the gc takes it again, so it
+// never interleaves with a capture and never holds up the run that pruned.
+func (s *Service) startPendingReclaim() {
+	s.mu.Lock()
+	pending := s.gcPending
+	s.gcPending = false
+	s.mu.Unlock()
+	if !pending {
+		return
+	}
+	s.reclaiming.Add(1)
+	go func() {
+		defer s.reclaiming.Done()
+		s.reclaim()
+	}()
+}
+
+// reclaim is `git gc --prune=now`, the only command that frees what a prune only
+// unreferenced. It never fails the run: a gc that cannot run is logged, and the
+// next prune asks again. A successful gc drops the cached size, because it shrinks
+// the repository far more than a snapshot grows it and every service of the
+// staging directory reads the same cache: without that the gate would keep
+// refusing a repository gc has already emptied.
+func (s *Service) reclaim() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := os.Stat(filepath.Join(s.git.gitDir, "HEAD")); err != nil {
+		return
+	}
+	if err := s.git.gc(); err != nil {
+		s.logger.Warn("checkpoint: cannot reclaim the private repository", "error", err)
+		return
+	}
+	s.size.known = false
 }
 
 func newCheckpointID() string {
@@ -501,6 +562,17 @@ func stateFor(err error) string {
 // a snapshot that cannot be taken is a record with a warning. The returned id is
 // empty when no checkpoint is open.
 func (s *Service) Begin(turnID string, sessionTurn int64) string {
+	id := s.begin(turnID, sessionTurn)
+	if id == "" {
+		// No checkpoint is open, so no Finish will come: the gc a prune asked for
+		// has to start here, once the staging mutex is released.
+		s.startPendingReclaim()
+	}
+	return id
+}
+
+// begin takes the checkpoint under the staging mutex.
+func (s *Service) begin(turnID string, sessionTurn int64) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record := Record{ID: newCheckpointID(), Kind: KindRun, TurnID: turnID, SessionTurn: sessionTurn, CreatedAt: timestamp(), State: StateOpen}
@@ -517,7 +589,11 @@ func (s *Service) Begin(turnID string, sessionTurn int64) string {
 		record.FileCount = &captured.fileCount
 		record.RepositoryBytes = &captured.bytes
 	}
-	if err := s.writeAll(s.prune(append(s.readAll(), record))); err != nil {
+	records, dropped := s.prune(append(s.readAll(), record))
+	if s.reclaimDue(dropped) {
+		s.gcPending = true
+	}
+	if err := s.writeAll(records); err != nil {
 		// Without the record there is nothing to finish or restore later.
 		s.logger.Error("checkpoint: cannot record checkpoint", "checkpoint", record.ID, "error", err)
 		return ""
@@ -530,6 +606,9 @@ func (s *Service) Begin(turnID string, sessionTurn int64) string {
 
 // Finish records the state when the run ended. It never fails the run.
 func (s *Service) Finish(id string) {
+	// Registered before the unlock, so the gc a prune asked for starts after the
+	// staging mutex is released (defers run in reverse order).
+	defer s.startPendingReclaim()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	records := s.readAll()
@@ -688,7 +767,11 @@ func (s *Service) restore(record Record, mode string, dryRun bool) (RestoreResul
 	if len(changes.conflicts) > 0 {
 		undo.Warning += fmt.Sprintf("; left %d changed path(s) alone", len(changes.conflicts))
 	}
-	if err := s.writeAll(s.prune(append(s.readAll(), undo))); err != nil {
+	records, dropped := s.prune(append(s.readAll(), undo))
+	if s.reclaimDue(dropped) {
+		s.gcPending = true
+	}
+	if err := s.writeAll(records); err != nil {
 		return RestoreResult{}, err
 	}
 	result.UndoCheckpointID = undo.ID

@@ -235,6 +235,15 @@ func (g *shadowGit) deleteRef(ref string) error {
 	return err
 }
 
+// gc reclaims what deleteRef only unreferenced: --prune=now drops the objects the
+// deleted refs kept alive at once, where a plain gc would keep them in a cruft
+// pack for gc.pruneExpire (two weeks by default). The repository is bare and its
+// refs carry no reflog, so nothing can bring a pruned object back.
+func (g *shadowGit) gc() error {
+	_, err := g.run([]string{"gc", "--prune=now", "--quiet"}, runOptions{})
+	return err
+}
+
 var objectSizeLine = regexp.MustCompile(`^(size|size-pack|size-garbage):\s+(\d+)`)
 
 // repositoryBytes is what the private repository occupies: loose objects plus packs.
