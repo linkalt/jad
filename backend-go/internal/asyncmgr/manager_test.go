@@ -407,3 +407,48 @@ func TestStatusUsesDetailerForLiveHandles(t *testing.T) {
 		t.Fatalf("live Status = %+v", e)
 	}
 }
+
+func TestCloseWaitsForACompleteThatIsStillWritingItsRecord(t *testing.T) {
+	f := newFixture(t, nil)
+	f.opts.StopWait = 5 * time.Second
+	f.open(t)
+	f.start(t, "s1", "a")
+	f.m.ioMu.Lock()
+	completed := make(chan struct{})
+	go func() {
+		defer close(completed)
+		_, _ = f.m.Complete("a", Result{State: StateDone, OK: true})
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		f.m.mu.Lock()
+		writing := f.m.completing > 0
+		f.m.mu.Unlock()
+		if writing {
+			break
+		}
+		if time.Now().After(deadline) {
+			f.m.ioMu.Unlock()
+			t.Fatal("Complete never started writing")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	closed := make(chan struct{})
+	go func() {
+		f.m.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		f.m.ioMu.Unlock()
+		t.Fatal("Close returned while Complete still had files to write")
+	case <-time.After(150 * time.Millisecond):
+	}
+	f.m.ioMu.Unlock()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not return after the write finished")
+	}
+	<-completed
+}

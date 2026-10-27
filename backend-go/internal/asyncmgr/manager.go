@@ -87,6 +87,8 @@ type Manager struct {
 	rows      map[string]*row
 	owners    map[string]*ownerStats
 	liveTotal int
+	// completing counts Complete calls past the claim that still write files; Close waits for them.
+	completing int
 	// finished counts terminal, read rows; nextExpiry is a lower bound of when an
 	// unread signal or a finished row may expire (zero = none), so prune can skip its scan.
 	finished   int
@@ -372,6 +374,7 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 		return false, nil
 	}
 	r.finishing = true
+	m.completing++
 	rec := *r.rec
 	after := r.after
 	m.mu.Unlock()
@@ -417,6 +420,10 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	m.mu.Unlock()
 
 	m.applyWork(work, true)
+	m.mu.Lock()
+	m.completing--
+	m.notifyLocked()
+	m.mu.Unlock()
 	return true, nil
 }
 
@@ -581,12 +588,15 @@ func (m *Manager) Close() {
 	for _, t := range targets {
 		t.driver.Stop(t.id, ReasonShutdown)
 	}
-	if m.opts.StopWait > 0 && len(targets) > 0 {
+	m.mu.Lock()
+	writing := m.completing > 0
+	m.mu.Unlock()
+	if m.opts.StopWait > 0 && (len(targets) > 0 || writing) {
 		timer := time.NewTimer(m.opts.StopWait)
 		defer timer.Stop()
 		for {
 			m.mu.Lock()
-			live, ch := m.liveTotal, m.changed
+			live, ch := m.liveTotal+m.completing, m.changed
 			m.mu.Unlock()
 			if live == 0 {
 				break
