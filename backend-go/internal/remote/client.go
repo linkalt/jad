@@ -70,6 +70,7 @@ type Client struct {
 	base      string
 	options   Options
 	slots     chan struct{}
+	control   chan struct{}
 }
 
 // NewClient builds the client of one entry: plain http over tcp or over a unix dialer,
@@ -114,6 +115,7 @@ func NewClient(entry Entry, options Options) *Client {
 		base:      base,
 		options:   options,
 		slots:     make(chan struct{}, entry.MaxInFlight),
+		control:   make(chan struct{}, ControlSlots),
 		http: &http.Client{
 			Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -142,6 +144,9 @@ type Request struct {
 	Wait time.Duration
 	// Retry says a failed request may be sent again: reads, and sends that carry a request id.
 	Retry bool
+	// Control marks a short call (a stop) that takes a slot of its own, so long status polls
+	// holding every ordinary slot cannot starve it.
+	Control bool
 	// Raw, when set, receives the body bytes instead of JSON decoding into out.
 	Raw *[]byte
 }
@@ -153,9 +158,13 @@ func (c *Client) Do(ctx context.Context, request Request, out any) error {
 	if err != nil {
 		return err
 	}
+	slots := c.slots
+	if request.Control {
+		slots = c.control
+	}
 	select {
-	case c.slots <- struct{}{}:
-		defer func() { <-c.slots }()
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
 	case <-ctx.Done():
 		return ctx.Err()
 	}

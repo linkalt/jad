@@ -113,7 +113,7 @@ func (c *Client) StopRun(ctx context.Context, id string) (View, error) {
 		return View{}, fmt.Errorf("remote %s: invalid run id", c.entry.Name)
 	}
 	var view View
-	if err := c.Do(ctx, Request{Method: http.MethodPost, Path: apiPrefix + "runs/" + id + "/stop", Retry: true}, &view); err != nil {
+	if err := c.Do(ctx, Request{Method: http.MethodPost, Path: apiPrefix + "runs/" + id + "/stop", Retry: true, Control: true}, &view); err != nil {
 		return View{}, err
 	}
 	view.clean()

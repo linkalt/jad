@@ -244,3 +244,44 @@ func TestViewTextFromTheRemoteIsBoundedAndHasNoControlCharacters(t *testing.T) {
 		t.Errorf("an unknown state must not count as ended: %q", view.State)
 	}
 }
+
+func TestStopRunIsNotStarvedByFollowerPolls(t *testing.T) {
+	var polls atomic.Int32
+	var stopped atomic.Bool
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/stop") {
+			stopped.Store(true)
+			_, _ = w.Write([]byte(`{"id":"` + runID + `","state":"stopped"}`))
+			return
+		}
+		polls.Add(1)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		_, _ = w.Write([]byte(`{"id":"` + runID + `","state":"running"}`))
+	}))
+	defer server.Close()
+	defer close(release)
+	entry := httpEntry(t, server)
+	entry.MaxInFlight = 2
+	client := newClient(t, entry)
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer cancel()
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = client.PollRun(ctx, runID, time.Minute) }()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for polls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+	defer stopCancel()
+	if _, err := client.StopRun(stopCtx, runID); err != nil || !stopped.Load() {
+		t.Fatalf("stop starved behind polls: err=%v reached=%v", err, stopped.Load())
+	}
+}

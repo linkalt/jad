@@ -25,13 +25,15 @@ const (
 	DefaultRetries          = 2
 	DefaultMaxInFlight      = 8
 	MaxMaxInFlight          = 64
-	MaxRetries              = 5
-	DefaultPollMs           = 20_000
-	MinPollMs               = 100
-	MaxPollMs               = 60_000
-	DefaultLostAfterMs      = 60_000
-	MinLostAfterMs          = 1_000
-	MaxLostAfterMs          = 3_600_000
+	// ControlSlots is how many control calls (stops) may run at once, on top of max_in_flight.
+	ControlSlots       = 2
+	MaxRetries         = 5
+	DefaultPollMs      = 20_000
+	MinPollMs          = 100
+	MaxPollMs          = 60_000
+	DefaultLostAfterMs = 60_000
+	MinLostAfterMs     = 1_000
+	MaxLostAfterMs     = 3_600_000
 	// MinTokenBytes matches the server's minimum for its API tokens.
 	MinTokenBytes = 32
 	maxTokenFile  = 4096
