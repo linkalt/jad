@@ -124,6 +124,14 @@ func TestSlowSubscriberIsDroppedAndDoesNotHoldBackThePublisher(t *testing.T) {
 		if err := run.publishMessage(benchmarkMessage(1, 1024, revision)); err != nil {
 			t.Fatal(err)
 		}
+		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Microsecond) {
+			fast.mu.Lock()
+			drained := len(fast.queue) == 0
+			fast.mu.Unlock()
+			if drained {
+				break
+			}
+		}
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("200 publishes took %v with a stalled subscriber", elapsed)
