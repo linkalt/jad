@@ -547,3 +547,128 @@ func TestReportShowsARecordLeftOpenAsInterruptedOnlyWhileNoRunIsLive(t *testing.
 		t.Fatalf("a finished record = %+v, want it untouched", finished[0])
 	}
 }
+
+// swapDirForSymlink makes a restore fail after its checkout: the run replaces the
+// directory d with a symlink, so the restore writes d/b.txt back and then cannot
+// remove the now non-empty directory d.
+func swapDirForSymlink(t *testing.T, f *fixture) string {
+	t.Helper()
+	f.seed(t)
+	id := f.begin(t, "turn-1", 1)
+	if err := os.RemoveAll(f.path("d")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("a.txt", f.path("d")); err != nil {
+		t.Fatal(err)
+	}
+	f.service.Finish(id)
+	return id
+}
+
+func undoRecords(f *fixture) []Record {
+	var undos []Record
+	for _, record := range f.service.List() {
+		if record.Kind == KindPreRestore {
+			undos = append(undos, record)
+		}
+	}
+	return undos
+}
+
+func TestARestoreThatFailsMidWayLeavesAnUndoRecordThatRestoresThePreRestoreState(t *testing.T) {
+	for _, mode := range []string{ModeSafe, ModeFull} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t, nil)
+			id := swapDirForSymlink(t, f)
+
+			if _, err := f.service.Restore(id, RestoreOptions{Mode: mode}); err == nil {
+				t.Fatal("the restore succeeded, want the removal of the non-empty directory to fail")
+			}
+			undos := undoRecords(f)
+			if len(undos) != 1 || undos[0].State != StateFailed || undos[0].BeforeTree == "" || undos[0].RestoredFrom != id || undos[0].Warning == "" {
+				t.Fatalf("undo records = %+v, want one failed pre_restore record with its state", undos)
+			}
+			if !f.exists("d/b.txt") {
+				t.Fatal("the restore did not write anything before failing; the test no longer exercises a half-restored tree")
+			}
+
+			if _, err := f.service.Restore(undos[0].ID, RestoreOptions{Mode: ModeFull}); err != nil {
+				t.Fatal(err)
+			}
+			if target, err := os.Readlink(f.path("d")); err != nil || target != "a.txt" {
+				t.Fatalf("d after the undo = %q, %v; want the symlink the workspace had before the restore", target, err)
+			}
+		})
+	}
+}
+
+func TestTheUndoRecordIsStoredOpenBeforeTheFirstWorkspaceWrite(t *testing.T) {
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed")
+	}
+	snapshot := filepath.Join(t.TempDir(), "metadata-at-first-write.json")
+	wrapper := filepath.Join(t.TempDir(), "git-wrapper.sh")
+	f := newFixture(t, func(settings *sessionfs.CheckpointSettings) { settings.GitBinary = wrapper })
+	script := "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = checkout-index ]; then cp '" + filepath.Join(f.staging, MetadataFile) + "' '" + snapshot + "'; fi\ndone\nexec " + realGit + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.seed(t)
+	id := f.begin(t, "turn-1", 1)
+	f.write(t, "a.txt", "a1\n")
+	f.service.Finish(id)
+
+	if _, err := f.service.Restore(id, RestoreOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(snapshot)
+	if err != nil {
+		t.Fatalf("checkout-index never ran: %v", err)
+	}
+	var stored struct{ Checkpoints []Record }
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	var undo *Record
+	for position := range stored.Checkpoints {
+		if stored.Checkpoints[position].Kind == KindPreRestore {
+			undo = &stored.Checkpoints[position]
+		}
+	}
+	if undo == nil || undo.State != StateOpen || undo.BeforeTree == "" || undo.RestoredFrom != id {
+		t.Fatalf("pre_restore record at the first write = %+v, want it stored open with its state", undo)
+	}
+}
+
+func TestARestoreWhoseCheckoutOrSecondCaptureFailsLeavesAFailedUndoRecord(t *testing.T) {
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed")
+	}
+	for name, script := range map[string]string{
+		"checkout":       `case " $* " in *" checkout-index "*) echo boom >&2; exit 1;; esac`,
+		"second capture": `case " $* " in *" checkout-index "*) touch "$MARK";; *" add "*) [ -e "$MARK" ] && { echo boom >&2; exit 1; };; esac`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			wrapper := filepath.Join(t.TempDir(), "git-wrapper.sh")
+			t.Setenv("MARK", filepath.Join(t.TempDir(), "mark"))
+			if err := os.WriteFile(wrapper, []byte("#!/bin/sh\n"+script+"\nexec "+realGit+" \"$@\"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			f := newFixture(t, func(settings *sessionfs.CheckpointSettings) { settings.GitBinary = wrapper })
+			f.seed(t)
+			id := f.begin(t, "turn-1", 1)
+			f.write(t, "a.txt", "a1\n")
+			f.service.Finish(id)
+
+			if _, err := f.service.Restore(id, RestoreOptions{}); err == nil {
+				t.Fatal("the restore succeeded, want the git failure")
+			}
+			undos := undoRecords(f)
+			if len(undos) != 1 || undos[0].State != StateFailed || undos[0].BeforeTree == "" || undos[0].Warning == "" {
+				t.Fatalf("undo records = %+v, want one failed pre_restore record", undos)
+			}
+		})
+	}
+}

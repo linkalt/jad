@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"jad/backend-go/internal/logging"
@@ -738,8 +739,22 @@ func (s *Service) restore(record Record, mode string, dryRun bool) (RestoreResul
 	if err := s.keep(undo.ID, "before", current.tree, "before restore of "+record.ID); err != nil {
 		return RestoreResult{}, err
 	}
-	if err := s.git.checkout(record.BeforeTree, result.Restored); err != nil {
+	// Recorded before the first workspace write: a restore that fails or is cut
+	// short from here on still leaves a record that names the pre-restore state.
+	if err := s.storeRecord(undo); err != nil {
 		return RestoreResult{}, err
+	}
+	failed := func(err error) (RestoreResult, error) {
+		undo.State = StateFailed
+		undo.FinishedAt = timestamp()
+		undo.Warning = fmt.Sprintf("The restore of %s failed part-way (%v); the workspace may be partly restored, and this checkpoint holds the state before it", record.ID, err)
+		if storeErr := s.storeRecord(undo); storeErr != nil {
+			s.logger.Error("checkpoint: cannot record the failed restore", "checkpoint", undo.ID, "error", storeErr)
+		}
+		return RestoreResult{}, err
+	}
+	if err := s.git.checkout(record.BeforeTree, result.Restored); err != nil {
+		return failed(err)
 	}
 	workspace := filepath.Clean(s.options.Workspace)
 	for _, change := range changes.remove {
@@ -747,16 +762,17 @@ func (s *Service) restore(record Record, mode string, dryRun bool) (RestoreResul
 		if !strings.HasPrefix(target, workspace+string(filepath.Separator)) {
 			continue
 		}
-		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-			return RestoreResult{}, err
+		// ENOTDIR: checkout already replaced a parent directory with a file or symlink.
+		if err := os.Remove(target); err != nil && !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTDIR) {
+			return failed(err)
 		}
 	}
 	after, err := s.capture()
 	if err != nil {
-		return RestoreResult{}, err
+		return failed(err)
 	}
 	if err := s.keep(undo.ID, "after", after.tree, "after restore of "+record.ID); err != nil {
-		return RestoreResult{}, err
+		return failed(err)
 	}
 	undo.AfterTree = after.tree
 	undo.FileCount = &after.fileCount
@@ -767,15 +783,27 @@ func (s *Service) restore(record Record, mode string, dryRun bool) (RestoreResul
 	if len(changes.conflicts) > 0 {
 		undo.Warning += fmt.Sprintf("; left %d changed path(s) alone", len(changes.conflicts))
 	}
-	records, dropped := s.prune(append(s.readAll(), undo))
-	if s.reclaimDue(dropped) {
-		s.gcPending = true
-	}
-	if err := s.writeAll(records); err != nil {
+	if err := s.storeRecord(undo); err != nil {
 		return RestoreResult{}, err
 	}
 	result.UndoCheckpointID = undo.ID
 	return result, nil
+}
+
+// storeRecord writes record over the stored one with its id, or appends it and prunes.
+func (s *Service) storeRecord(record Record) error {
+	records := s.readAll()
+	for position := range records {
+		if records[position].ID == record.ID {
+			records[position] = record
+			return s.writeAll(records)
+		}
+	}
+	records, dropped := s.prune(append(records, record))
+	if s.reclaimDue(dropped) {
+		s.gcPending = true
+	}
+	return s.writeAll(records)
 }
 
 // plan decides which paths to write back, which to delete, and which the user
