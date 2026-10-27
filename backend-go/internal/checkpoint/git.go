@@ -119,11 +119,23 @@ type limitedBuffer struct {
 	max      int64
 	overflow bool
 	cancel   context.CancelFunc
+	// stopAfter, when positive, cancels the command once more than stopAfter NUL
+	// separators were written; stopped records that.
+	stopAfter int64
+	nuls      int64
+	stopped   bool
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if b.overflow {
+	if b.overflow || b.stopped {
 		return len(p), nil
+	}
+	if b.stopAfter > 0 {
+		b.nuls += int64(bytes.Count(p, []byte{0}))
+		if b.nuls > b.stopAfter {
+			b.stopped = true
+			b.cancel()
+		}
 	}
 	if int64(b.buffer.Len())+int64(len(p)) > b.max {
 		b.overflow = true
@@ -139,6 +151,9 @@ type runOptions struct {
 	index   string
 	input   []byte
 	unbound bool
+	// stopAfter ends the command early, without error, once its output holds more
+	// than this many NUL-terminated entries.
+	stopAfter int64
 }
 
 func (g *shadowGit) run(args []string, options runOptions) ([]byte, error) {
@@ -156,11 +171,14 @@ func (g *shadowGit) run(args []string, options runOptions) ([]byte, error) {
 	if options.input != nil {
 		command.Stdin = bytes.NewReader(options.input)
 	}
-	stdout := &limitedBuffer{max: g.maxOutput, cancel: cancel}
+	stdout := &limitedBuffer{max: g.maxOutput, cancel: cancel, stopAfter: options.stopAfter}
 	stderr := &limitedBuffer{max: maxStderrBytes}
 	command.Stdout = stdout
 	command.Stderr = stderr
 	err := command.Run()
+	if stdout.stopped {
+		return stdout.buffer.Bytes(), nil
+	}
 	if stdout.overflow {
 		return nil, &GitError{Failure: GitFailed, Message: fmt.Sprintf("git %s returned more than %d bytes", args[0], g.maxOutput)}
 	}
@@ -223,6 +241,18 @@ func privateDir(dir string) error {
 		return err
 	}
 	return os.Chmod(dir, 0o700)
+}
+
+// exceedsFiles reports whether the workspace holds more than limit files that
+// are not yet in the snapshot index and not excluded. Staging adds every one of
+// them, so the answer is a lower bound on the snapshot's file count; the listing
+// stops as soon as the limit is passed and writes no object.
+func (g *shadowGit) exceedsFiles(limit int64) (bool, error) {
+	listing, err := g.run([]string{"ls-files", "-z", "--others", "--exclude-standard"}, runOptions{index: snapshotIndex, stopAfter: limit})
+	if err != nil {
+		return false, err
+	}
+	return int64(bytes.Count(listing, []byte{0})) > limit, nil
 }
 
 // snapshot stages the whole workspace in the private index and returns the tree

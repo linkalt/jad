@@ -455,6 +455,11 @@ func (s *Service) capture() (capture, error) {
 	if before > s.options.Settings.MaxTotalBytes {
 		return capture{}, &skipped{fmt.Sprintf("the checkpoint repository holds %d bytes, over checkpoint.max_total_bytes (%d)", before, s.options.Settings.MaxTotalBytes)}
 	}
+	if over, err := s.git.exceedsFiles(s.options.Settings.MaxFiles); err != nil {
+		return capture{}, err
+	} else if over {
+		return capture{}, &skipped{fmt.Sprintf("the workspace has more than %d files, over checkpoint.max_files (%d)", s.options.Settings.MaxFiles, s.options.Settings.MaxFiles)}
+	}
 	// The snapshot writes objects, so the cached size is stale until re-measured below.
 	s.size.known = false
 	tree, fileCount, err := s.git.snapshot()

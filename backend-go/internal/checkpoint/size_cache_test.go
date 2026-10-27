@@ -154,15 +154,15 @@ func TestARestoreMeasuresTheRepositoryAgain(t *testing.T) {
 	}
 }
 
-func TestSkippedCaptureOverMaxFilesDoesNotLeaveAStaleSize(t *testing.T) {
+func TestSkippedCaptureOverMaxFilesKeepsTheCachedSize(t *testing.T) {
 	f, logPath := loggedFixture(t, func(s *sessionfs.CheckpointSettings) { s.MaxFiles = 1 })
 	f.write(t, "a.txt", "one")
 	f.write(t, "b.txt", "two")
 	f.service.Begin("turn", 1)
 	before := countCalls(t, logPath, "count-objects")
 	f.service.Begin("turn", 2)
-	if got := countCalls(t, logPath, "count-objects") - before; got != 1 {
-		t.Fatalf("count-objects ran %d times after a skipped capture, want 1 (the snapshot staged objects, so the gate re-measures)", got)
+	if got := countCalls(t, logPath, "count-objects") - before; got != 0 {
+		t.Fatalf("count-objects ran %d times after a skipped capture, want 0 (nothing was staged, so the cached size is still exact)", got)
 	}
 }
 
@@ -185,5 +185,49 @@ func TestConcurrentCapturesShareOneCachedSizeSafely(t *testing.T) {
 	group.Wait()
 	if got := len(f.service.List()); got == 0 {
 		t.Fatal("no checkpoint was recorded")
+	}
+}
+
+func TestOverMaxFilesWorkspaceIsSkippedWithoutStaging(t *testing.T) {
+	f, logPath := loggedFixture(t, func(s *sessionfs.CheckpointSettings) { s.MaxFiles = 3 })
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		f.write(t, name+".txt", name)
+	}
+	if id := f.service.Begin("turn", 1); id != "" {
+		t.Fatalf("Begin returned %q for a skipped snapshot", id)
+	}
+	records := f.service.List()
+	if len(records) != 1 || records[0].State != StateSkipped || !strings.Contains(records[0].Warning, "max_files") {
+		t.Fatalf("records = %+v", records)
+	}
+	if got := countCalls(t, logPath, "add"); got != 0 {
+		t.Fatalf("add ran %d times for an over-limit workspace, want 0", got)
+	}
+}
+
+func TestWorkspaceAtMaxFilesStillCaptures(t *testing.T) {
+	f, logPath := loggedFixture(t, func(s *sessionfs.CheckpointSettings) { s.MaxFiles = 3 })
+	for _, name := range []string{"a", "b", "c"} {
+		f.write(t, name+".txt", name)
+	}
+	if id := f.service.Begin("turn", 1); id == "" {
+		t.Fatalf("Begin skipped a workspace at the limit: %+v", f.service.List())
+	}
+	if got := countCalls(t, logPath, "add"); got != 1 {
+		t.Fatalf("add ran %d times, want 1", got)
+	}
+}
+
+func TestLimitedBufferStopsTheCommandPastTheEntryLimit(t *testing.T) {
+	cancelled := 0
+	buffer := &limitedBuffer{max: 1 << 20, cancel: func() { cancelled++ }, stopAfter: 2}
+	_, _ = buffer.Write([]byte("a\x00b\x00"))
+	if buffer.stopped || cancelled != 0 {
+		t.Fatalf("stopped at the limit: stopped=%v cancelled=%d", buffer.stopped, cancelled)
+	}
+	_, _ = buffer.Write([]byte("c\x00"))
+	_, _ = buffer.Write([]byte("d\x00"))
+	if !buffer.stopped || cancelled != 1 {
+		t.Fatalf("not stopped past the limit: stopped=%v cancelled=%d", buffer.stopped, cancelled)
 	}
 }
