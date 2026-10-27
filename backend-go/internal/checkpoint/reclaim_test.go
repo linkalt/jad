@@ -2,6 +2,7 @@ package checkpoint
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -100,7 +101,7 @@ func TestPruningReclaimsTheDiskTheDroppedCheckpointsHeld(t *testing.T) {
 		f.write(t, "a.txt", incompressible(turn, 16*1024))
 		f.service.Finish(id)
 		f.service.reclaiming.Wait()
-		measured, err := f.service.git.repositoryBytes()
+		measured, err := f.service.git.repositoryBytes(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,7 +144,7 @@ func TestAReclaimLetsTheSizeGateRecoverInTheSameAndInAFreshService(t *testing.T)
 	kept := int(f.service.options.Settings.MaxCheckpoints)
 	turn := int64(0)
 	for ; turn < 100; turn++ {
-		id := f.service.Begin("turn", turn)
+		id := f.service.Begin(context.Background(), "turn", turn)
 		if id == "" {
 			break
 		}
@@ -159,20 +160,20 @@ func TestAReclaimLetsTheSizeGateRecoverInTheSameAndInAFreshService(t *testing.T)
 	// Records keep coming while the gate refuses snapshots. The Begin past
 	// max_checkpoints prunes, and the gc that follows is what lets the gate recover.
 	for len(f.service.List()) < kept {
-		if id := f.service.Begin("turn", turn); id != "" {
+		if id := f.service.Begin(context.Background(), "turn", turn); id != "" {
 			t.Fatalf("the size gate let a snapshot through with %d bytes, over checkpoint.max_total_bytes (%d)", f.service.size.bytes, f.service.options.Settings.MaxTotalBytes)
 		}
 		turn++
 	}
-	if id := f.service.Begin("turn", turn); id != "" {
+	if id := f.service.Begin(context.Background(), "turn", turn); id != "" {
 		t.Fatal("the size gate let a snapshot through before the prune")
 	}
 	f.service.reclaiming.Wait()
-	if id := f.service.Begin("turn", turn+1); id == "" {
+	if id := f.service.Begin(context.Background(), "turn", turn+1); id == "" {
 		t.Fatalf("the size gate still refuses after the gc, with %d bytes cached", f.service.size.bytes)
 	}
 	fresh := NewService(f.service.options)
-	if id := fresh.Begin("turn", turn+2); id == "" {
+	if id := fresh.Begin(context.Background(), "turn", turn+2); id == "" {
 		t.Fatalf("the size gate still refuses a fresh service after the gc, with %d bytes cached", fresh.size.bytes)
 	}
 }
@@ -186,7 +187,7 @@ func TestNoReclaimWithoutADroppedRecord(t *testing.T) {
 	})
 	f.write(t, "a.txt", "a0\n")
 	for turn := int64(1); turn <= 5; turn++ {
-		if id := f.service.Begin("turn", turn); id != "" {
+		if id := f.service.Begin(context.Background(), "turn", turn); id != "" {
 			f.write(t, "a.txt", fmt.Sprintf("a%d\n", turn))
 			f.service.Finish(id)
 		}

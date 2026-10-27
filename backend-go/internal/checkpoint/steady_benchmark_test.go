@@ -1,6 +1,7 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,7 +36,7 @@ func BenchmarkBeginFinishSteady(b *testing.B) {
 			service := NewService(Options{Settings: defaultSettings(), Workspace: workspace, StagingDir: staging, Durability: "process"})
 			changed := filepath.Join(workspace, "d000", "f00000.txt")
 			run := func(iteration int) {
-				id := service.Begin("turn", int64(iteration))
+				id := service.Begin(context.Background(), "turn", int64(iteration))
 				if id == "" {
 					b.Fatal("Begin took no checkpoint")
 				}

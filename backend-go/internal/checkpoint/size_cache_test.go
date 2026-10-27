@@ -1,6 +1,7 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -59,7 +60,7 @@ func TestARunMeasuresTheRepositoryOncePerCaptureAndNotBeforeEachOne(t *testing.T
 	f, logPath := loggedFixture(t, nil)
 	f.write(t, "a.txt", "one")
 	for run := 0; run < 3; run++ {
-		id := f.service.Begin("turn", int64(run))
+		id := f.service.Begin(context.Background(), "turn", int64(run))
 		if id == "" {
 			t.Fatal("Begin took no checkpoint")
 		}
@@ -75,12 +76,12 @@ func TestARunMeasuresTheRepositoryOncePerCaptureAndNotBeforeEachOne(t *testing.T
 func TestACachedSizeStillEnforcesMaxTotalBytes(t *testing.T) {
 	f, _ := loggedFixture(t, func(s *sessionfs.CheckpointSettings) { s.MaxTotalBytes = 1 << 40 })
 	f.write(t, "a.txt", "one")
-	if id := f.service.Begin("turn", 1); id == "" {
+	if id := f.service.Begin(context.Background(), "turn", 1); id == "" {
 		t.Fatal("first Begin took no checkpoint")
 	}
 	f.service.options.Settings.MaxTotalBytes = 1
 	f.write(t, "a.txt", "two")
-	if id := f.service.Begin("turn", 2); id != "" {
+	if id := f.service.Begin(context.Background(), "turn", 2); id != "" {
 		t.Fatal("Begin took a checkpoint with the repository over max_total_bytes")
 	}
 	var record Record
@@ -97,9 +98,9 @@ func TestACachedSizeStillEnforcesMaxTotalBytes(t *testing.T) {
 func TestTheCachedSizeGrowsByTheCommitAllowanceAndStaysWithinOneBlockPerKeptCommit(t *testing.T) {
 	f, _ := loggedFixture(t, nil)
 	f.write(t, "a.txt", "one")
-	id := f.service.Begin("turn", 1)
+	id := f.service.Begin(context.Background(), "turn", 1)
 	cached := f.service.size.bytes
-	measured, err := f.service.git.repositoryBytes()
+	measured, err := f.service.git.repositoryBytes(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,12 +113,12 @@ func TestTheCachedSizeGrowsByTheCommitAllowanceAndStaysWithinOneBlockPerKeptComm
 func TestAFirstCaptureOfANewServiceMeasuresTheRepositoryAgain(t *testing.T) {
 	f, logPath := loggedFixture(t, nil)
 	f.write(t, "a.txt", "one")
-	f.service.Begin("turn", 1)
+	f.service.Begin(context.Background(), "turn", 1)
 	before := countCalls(t, logPath, "count-objects")
 	repoSizes.Delete(filepath.Clean(f.staging)) // a restart: no remembered size
 	restarted := NewService(f.service.options)
 	f.write(t, "a.txt", "two")
-	restarted.Begin("turn", 2)
+	restarted.Begin(context.Background(), "turn", 2)
 	if got := countCalls(t, logPath, "count-objects") - before; got != 2 {
 		t.Fatalf("a restarted service ran count-objects %d times in its first capture, want 2 (gate and record)", got)
 	}
@@ -126,12 +127,12 @@ func TestAFirstCaptureOfANewServiceMeasuresTheRepositoryAgain(t *testing.T) {
 func TestARemovedRepositoryIsMeasuredAgainAndRecreated(t *testing.T) {
 	f, logPath := loggedFixture(t, nil)
 	f.write(t, "a.txt", "one")
-	f.service.Begin("turn", 1)
+	f.service.Begin(context.Background(), "turn", 1)
 	if err := os.RemoveAll(f.service.git.gitDir); err != nil {
 		t.Fatal(err)
 	}
 	before := countCalls(t, logPath, "count-objects")
-	if id := f.service.Begin("turn", 2); id == "" {
+	if id := f.service.Begin(context.Background(), "turn", 2); id == "" {
 		t.Fatal("Begin did not recover from a removed repository")
 	}
 	if got := countCalls(t, logPath, "count-objects") - before; got != 2 {
@@ -142,11 +143,11 @@ func TestARemovedRepositoryIsMeasuredAgainAndRecreated(t *testing.T) {
 func TestARestoreMeasuresTheRepositoryAgain(t *testing.T) {
 	f, logPath := loggedFixture(t, nil)
 	f.write(t, "a.txt", "one")
-	id := f.service.Begin("turn", 1)
+	id := f.service.Begin(context.Background(), "turn", 1)
 	f.write(t, "a.txt", "two")
 	f.service.Finish(id)
 	before := countCalls(t, logPath, "count-objects")
-	if _, err := f.service.Restore(id, RestoreOptions{Mode: ModeFull}); err != nil {
+	if _, err := f.service.Restore(context.Background(), id, RestoreOptions{Mode: ModeFull}); err != nil {
 		t.Fatal(err)
 	}
 	if got := countCalls(t, logPath, "count-objects") - before; got < 3 {
@@ -158,9 +159,9 @@ func TestSkippedCaptureOverMaxFilesKeepsTheCachedSize(t *testing.T) {
 	f, logPath := loggedFixture(t, func(s *sessionfs.CheckpointSettings) { s.MaxFiles = 1 })
 	f.write(t, "a.txt", "one")
 	f.write(t, "b.txt", "two")
-	f.service.Begin("turn", 1)
+	f.service.Begin(context.Background(), "turn", 1)
 	before := countCalls(t, logPath, "count-objects")
-	f.service.Begin("turn", 2)
+	f.service.Begin(context.Background(), "turn", 2)
 	if got := countCalls(t, logPath, "count-objects") - before; got != 0 {
 		t.Fatalf("count-objects ran %d times after a skipped capture, want 0 (nothing was staged, so the cached size is still exact)", got)
 	}
@@ -176,7 +177,7 @@ func TestConcurrentCapturesShareOneCachedSizeSafely(t *testing.T) {
 		go func(worker int) {
 			defer group.Done()
 			for run := 0; run < 3; run++ {
-				if id := other.Begin(fmt.Sprintf("t%d-%d", worker, run), int64(run)); id != "" {
+				if id := other.Begin(context.Background(), fmt.Sprintf("t%d-%d", worker, run), int64(run)); id != "" {
 					other.Finish(id)
 				}
 			}
@@ -193,7 +194,7 @@ func TestOverMaxFilesWorkspaceIsSkippedWithoutStaging(t *testing.T) {
 	for _, name := range []string{"a", "b", "c", "d", "e"} {
 		f.write(t, name+".txt", name)
 	}
-	if id := f.service.Begin("turn", 1); id != "" {
+	if id := f.service.Begin(context.Background(), "turn", 1); id != "" {
 		t.Fatalf("Begin returned %q for a skipped snapshot", id)
 	}
 	records := f.service.List()
@@ -210,7 +211,7 @@ func TestWorkspaceAtMaxFilesStillCaptures(t *testing.T) {
 	for _, name := range []string{"a", "b", "c"} {
 		f.write(t, name+".txt", name)
 	}
-	if id := f.service.Begin("turn", 1); id == "" {
+	if id := f.service.Begin(context.Background(), "turn", 1); id == "" {
 		t.Fatalf("Begin skipped a workspace at the limit: %+v", f.service.List())
 	}
 	if got := countCalls(t, logPath, "add"); got != 1 {

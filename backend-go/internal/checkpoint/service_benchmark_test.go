@@ -1,6 +1,7 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -37,7 +38,7 @@ func BenchmarkBeginFinish(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for iteration := 0; iteration < b.N; iteration++ {
-				id := service.Begin("turn", int64(iteration))
+				id := service.Begin(context.Background(), "turn", int64(iteration))
 				if id == "" {
 					b.Fatal("Begin took no checkpoint")
 				}

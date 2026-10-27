@@ -1,6 +1,7 @@
 package checkpoint
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -434,18 +435,18 @@ type capture struct {
 }
 
 // capture stages the workspace and returns its tree, or a *skipped error over a limit.
-func (s *Service) capture() (capture, error) {
+func (s *Service) capture(ctx context.Context) (capture, error) {
 	if err := s.assertWorkspaceAllowed(); err != nil {
 		return capture{}, err
 	}
 	if _, err := os.Stat(filepath.Join(s.git.gitDir, "HEAD")); err != nil {
 		s.size.known = false
 	}
-	if err := s.git.prepare(ExclusionPatterns(s.options.Workspace, s.options.HarnessPaths)); err != nil {
+	if err := s.git.prepare(ctx, ExclusionPatterns(s.options.Workspace, s.options.HarnessPaths)); err != nil {
 		return capture{}, err
 	}
 	if !s.size.known {
-		measured, err := s.git.repositoryBytes()
+		measured, err := s.git.repositoryBytes(ctx)
 		if err != nil {
 			return capture{}, err
 		}
@@ -455,21 +456,21 @@ func (s *Service) capture() (capture, error) {
 	if before > s.options.Settings.MaxTotalBytes {
 		return capture{}, &skipped{fmt.Sprintf("the checkpoint repository holds %d bytes, over checkpoint.max_total_bytes (%d)", before, s.options.Settings.MaxTotalBytes)}
 	}
-	if over, err := s.git.exceedsFiles(s.options.Settings.MaxFiles); err != nil {
+	if over, err := s.git.exceedsFiles(ctx, s.options.Settings.MaxFiles); err != nil {
 		return capture{}, err
 	} else if over {
 		return capture{}, &skipped{fmt.Sprintf("the workspace has more than %d files, over checkpoint.max_files (%d)", s.options.Settings.MaxFiles, s.options.Settings.MaxFiles)}
 	}
 	// The snapshot writes objects, so the cached size is stale until re-measured below.
 	s.size.known = false
-	tree, fileCount, err := s.git.snapshot()
+	tree, fileCount, err := s.git.snapshot(ctx)
 	if err != nil {
 		return capture{}, err
 	}
 	if int64(fileCount) > s.options.Settings.MaxFiles {
 		return capture{}, &skipped{fmt.Sprintf("the workspace has %d files, over checkpoint.max_files (%d)", fileCount, s.options.Settings.MaxFiles)}
 	}
-	size, err := s.git.repositoryBytes()
+	size, err := s.git.repositoryBytes(ctx)
 	if err != nil {
 		return capture{}, err
 	}
@@ -477,15 +478,15 @@ func (s *Service) capture() (capture, error) {
 	return capture{tree: tree, fileCount: fileCount, bytes: size}, nil
 }
 
-func (s *Service) keep(id, suffix, tree, message string) error {
-	commit, err := s.git.commit(tree, message)
+func (s *Service) keep(ctx context.Context, id, suffix, tree, message string) error {
+	commit, err := s.git.commit(ctx, tree, message)
 	if err != nil {
 		return err
 	}
 	if s.size.known {
 		s.size.bytes += commitObjectAllowance
 	}
-	return s.git.setRef(refPrefix+id+"-"+suffix, commit)
+	return s.git.setRef(ctx, refPrefix+id+"-"+suffix, commit)
 }
 
 // prune drops the records beyond max_checkpoints and the refs that name their
@@ -498,7 +499,7 @@ func (s *Service) prune(records []Record) ([]Record, int) {
 	}
 	for _, dropped := range records[:excess] {
 		for _, suffix := range []string{"before", "after"} {
-			_ = s.git.deleteRef(refPrefix + dropped.ID + "-" + suffix)
+			_ = s.git.deleteRef(context.Background(), refPrefix+dropped.ID+"-"+suffix)
 		}
 	}
 	return records[excess:], int(excess)
@@ -541,7 +542,7 @@ func (s *Service) reclaim() {
 	if _, err := os.Stat(filepath.Join(s.git.gitDir, "HEAD")); err != nil {
 		return
 	}
-	if err := s.git.gc(); err != nil {
+	if err := s.git.gc(context.Background()); err != nil {
 		s.logger.Warn("checkpoint: cannot reclaim the private repository", "error", err)
 		return
 	}
@@ -567,8 +568,8 @@ func stateFor(err error) string {
 // Begin records the state before a run changes anything. It never fails the run:
 // a snapshot that cannot be taken is a record with a warning. The returned id is
 // empty when no checkpoint is open.
-func (s *Service) Begin(turnID string, sessionTurn int64) string {
-	id := s.begin(turnID, sessionTurn)
+func (s *Service) Begin(ctx context.Context, turnID string, sessionTurn int64) string {
+	id := s.begin(ctx, turnID, sessionTurn)
 	if id == "" {
 		// No checkpoint is open, so no Finish will come: the gc a prune asked for
 		// has to start here, once the staging mutex is released.
@@ -578,15 +579,15 @@ func (s *Service) Begin(turnID string, sessionTurn int64) string {
 }
 
 // begin takes the checkpoint under the staging mutex.
-func (s *Service) begin(turnID string, sessionTurn int64) string {
+func (s *Service) begin(ctx context.Context, turnID string, sessionTurn int64) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record := Record{ID: newCheckpointID(), Kind: KindRun, TurnID: turnID, SessionTurn: sessionTurn, CreatedAt: timestamp(), State: StateOpen}
-	if captured, err := s.capture(); err != nil {
+	if captured, err := s.capture(ctx); err != nil {
 		record.State = stateFor(err)
 		record.Warning = "Checkpoint not taken: " + err.Error()
 		record.FinishedAt = record.CreatedAt
-	} else if err := s.keep(record.ID, "before", captured.tree, "before "+turnID); err != nil {
+	} else if err := s.keep(ctx, record.ID, "before", captured.tree, "before "+turnID); err != nil {
 		record.State = stateFor(err)
 		record.Warning = "Checkpoint not taken: " + err.Error()
 		record.FinishedAt = record.CreatedAt
@@ -612,6 +613,9 @@ func (s *Service) begin(turnID string, sessionTurn int64) string {
 
 // Finish records the state when the run ended. It never fails the run.
 func (s *Service) Finish(id string) {
+	// The deferred end of a run, so a stop that cancelled the run must not cancel it: it
+	// stays bounded by timeout_ms and is what safe restore needs.
+	ctx := context.Background()
 	// Registered before the unlock, so the gc a prune asked for starts after the
 	// staging mutex is released (defers run in reverse order).
 	defer s.startPendingReclaim()
@@ -629,9 +633,9 @@ func (s *Service) Finish(id string) {
 		return
 	}
 	record := &records[index]
-	captured, err := s.capture()
+	captured, err := s.capture(ctx)
 	if err == nil {
-		err = s.keep(record.ID, "after", captured.tree, "after "+record.TurnID)
+		err = s.keep(ctx, record.ID, "after", captured.tree, "after "+record.TurnID)
 	}
 	if err != nil {
 		record.State = stateFor(err)
@@ -666,7 +670,7 @@ func paths(changes []TreeChange) []string {
 
 // Restore reverts what a checkpoint's run changed. A restore first records its
 // own checkpoint, so it can be undone. It returns *Error for a refusal.
-func (s *Service) Restore(id string, options RestoreOptions) (RestoreResult, error) {
+func (s *Service) Restore(ctx context.Context, id string, options RestoreOptions) (RestoreResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	records := s.readAll()
@@ -697,7 +701,7 @@ func (s *Service) Restore(id string, options RestoreOptions) (RestoreResult, err
 	if mode == ModeSafe && record.AfterTree == "" {
 		return RestoreResult{}, &Error{CodeConflict, fmt.Sprintf("checkpoint %s has no run-end snapshot, so a safe restore cannot tell what the run changed; use mode \"full\"", id)}
 	}
-	result, err := s.restore(*record, mode, options.DryRun)
+	result, err := s.restore(ctx, *record, mode, options.DryRun)
 	if err == nil {
 		return result, nil
 	}
@@ -713,16 +717,16 @@ func (s *Service) Restore(id string, options RestoreOptions) (RestoreResult, err
 	return RestoreResult{}, err
 }
 
-func (s *Service) restore(record Record, mode string, dryRun bool) (RestoreResult, error) {
+func (s *Service) restore(ctx context.Context, record Record, mode string, dryRun bool) (RestoreResult, error) {
 	s.size.known = false
-	if err := s.git.prepare(ExclusionPatterns(s.options.Workspace, s.options.HarnessPaths)); err != nil {
+	if err := s.git.prepare(ctx, ExclusionPatterns(s.options.Workspace, s.options.HarnessPaths)); err != nil {
 		return RestoreResult{}, err
 	}
-	current, err := s.capture()
+	current, err := s.capture(ctx)
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	changes, err := s.plan(record, current.tree, mode)
+	changes, err := s.plan(ctx, record, current.tree, mode)
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -741,24 +745,24 @@ func (s *Service) restore(record Record, mode string, dryRun bool) (RestoreResul
 		ID: newCheckpointID(), Kind: KindPreRestore, TurnID: "restore-" + record.ID, SessionTurn: record.SessionTurn,
 		CreatedAt: timestamp(), State: StateOpen, BeforeTree: current.tree, RestoredFrom: record.ID,
 	}
-	if err := s.keep(undo.ID, "before", current.tree, "before restore of "+record.ID); err != nil {
+	if err := s.keep(ctx, undo.ID, "before", current.tree, "before restore of "+record.ID); err != nil {
 		return RestoreResult{}, err
 	}
 	// Recorded before the first workspace write: a restore that fails or is cut
 	// short from here on still leaves a record that names the pre-restore state.
-	if err := s.storeRecord(undo); err != nil {
+	if err := s.storeRecord(ctx, undo); err != nil {
 		return RestoreResult{}, err
 	}
 	failed := func(err error) (RestoreResult, error) {
 		undo.State = StateFailed
 		undo.FinishedAt = timestamp()
 		undo.Warning = fmt.Sprintf("The restore of %s failed part-way (%v); the workspace may be partly restored, and this checkpoint holds the state before it", record.ID, err)
-		if storeErr := s.storeRecord(undo); storeErr != nil {
+		if storeErr := s.storeRecord(ctx, undo); storeErr != nil {
 			s.logger.Error("checkpoint: cannot record the failed restore", "checkpoint", undo.ID, "error", storeErr)
 		}
 		return RestoreResult{}, err
 	}
-	if err := s.git.checkout(record.BeforeTree, result.Restored); err != nil {
+	if err := s.git.checkout(ctx, record.BeforeTree, result.Restored); err != nil {
 		return failed(err)
 	}
 	workspace := filepath.Clean(s.options.Workspace)
@@ -772,11 +776,11 @@ func (s *Service) restore(record Record, mode string, dryRun bool) (RestoreResul
 			return failed(err)
 		}
 	}
-	after, err := s.capture()
+	after, err := s.capture(ctx)
 	if err != nil {
 		return failed(err)
 	}
-	if err := s.keep(undo.ID, "after", after.tree, "after restore of "+record.ID); err != nil {
+	if err := s.keep(ctx, undo.ID, "after", after.tree, "after restore of "+record.ID); err != nil {
 		return failed(err)
 	}
 	undo.AfterTree = after.tree
@@ -788,7 +792,7 @@ func (s *Service) restore(record Record, mode string, dryRun bool) (RestoreResul
 	if len(changes.conflicts) > 0 {
 		undo.Warning += fmt.Sprintf("; left %d changed path(s) alone", len(changes.conflicts))
 	}
-	if err := s.storeRecord(undo); err != nil {
+	if err := s.storeRecord(ctx, undo); err != nil {
 		return RestoreResult{}, err
 	}
 	result.UndoCheckpointID = undo.ID
@@ -796,7 +800,7 @@ func (s *Service) restore(record Record, mode string, dryRun bool) (RestoreResul
 }
 
 // storeRecord writes record over the stored one with its id, or appends it and prunes.
-func (s *Service) storeRecord(record Record) error {
+func (s *Service) storeRecord(ctx context.Context, record Record) error {
 	records := s.readAll()
 	for position := range records {
 		if records[position].ID == record.ID {
@@ -813,10 +817,10 @@ func (s *Service) storeRecord(record Record) error {
 
 // plan decides which paths to write back, which to delete, and which the user
 // changed after the run.
-func (s *Service) plan(record Record, currentTree, mode string) (plan, error) {
+func (s *Service) plan(ctx context.Context, record Record, currentTree, mode string) (plan, error) {
 	if mode == ModeFull {
 		// Turn the current workspace into `before`: what exists only now goes, the rest is written back.
-		changes, err := s.git.diff(currentTree, record.BeforeTree)
+		changes, err := s.git.diff(ctx, currentTree, record.BeforeTree)
 		if err != nil {
 			return plan{}, err
 		}
@@ -830,11 +834,11 @@ func (s *Service) plan(record Record, currentTree, mode string) (plan, error) {
 		}
 		return result, nil
 	}
-	ran, err := s.git.diff(record.BeforeTree, record.AfterTree)
+	ran, err := s.git.diff(ctx, record.BeforeTree, record.AfterTree)
 	if err != nil {
 		return plan{}, err
 	}
-	since, err := s.git.diff(record.AfterTree, currentTree)
+	since, err := s.git.diff(ctx, record.AfterTree, currentTree)
 	if err != nil {
 		return plan{}, err
 	}

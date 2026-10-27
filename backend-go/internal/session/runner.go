@@ -437,7 +437,7 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	// and again when it ends, so the user can undo it. The end is recorded
 	// whatever the outcome, like the TypeScript try/finally.
 	checkpointRun := checkpoint.NewRun(options.Checkpoint, turnID, sessionTurn)
-	checkpointRun.Start()
+	checkpointRun.Start(ctx)
 	defer checkpointRun.Finish()
 	var responseTools []json.RawMessage
 	if options.ToolCatalog != nil {
@@ -578,7 +578,7 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 
 		// Takes the checkpoint once, just before the first call that can change
 		// files. A user-decision tool runs alone, so only its call counts then.
-		checkpointRun.BeforeCalls(roundChangesWorkspace(options.ToolCatalog, calls, checkpointRun))
+		checkpointRun.BeforeCalls(ctx, roundChangesWorkspace(options.ToolCatalog, calls, checkpointRun))
 		// Remember how a user-decision tool was answered: a decline, a timeout or a
 		// cancellation ends the run once its result is persisted, because the model
 		// must not carry on as if the user had approved the draft.

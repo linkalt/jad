@@ -156,8 +156,8 @@ type runOptions struct {
 	stopAfter int64
 }
 
-func (g *shadowGit) run(args []string, options runOptions) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+func (g *shadowGit) run(parent context.Context, args []string, options runOptions) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(parent, g.timeout)
 	defer cancel()
 	full := make([]string, 0, len(fixedConfig)*2+len(args))
 	for _, entry := range fixedConfig {
@@ -181,6 +181,9 @@ func (g *shadowGit) run(args []string, options runOptions) ([]byte, error) {
 	}
 	if stdout.overflow {
 		return nil, &GitError{Failure: GitFailed, Message: fmt.Sprintf("git %s returned more than %d bytes", args[0], g.maxOutput)}
+	}
+	if parent.Err() != nil {
+		return nil, parent.Err()
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return nil, &GitError{Failure: GitTimeout, Message: fmt.Sprintf("git %s did not finish within %d ms", args[0], g.timeout.Milliseconds())}
@@ -207,12 +210,12 @@ func (g *shadowGit) run(args []string, options runOptions) ([]byte, error) {
 }
 
 // prepare creates the private repository on first use and writes the exclusion list.
-func (g *shadowGit) prepare(excludePatterns []string) error {
+func (g *shadowGit) prepare(ctx context.Context, excludePatterns []string) error {
 	if _, err := os.Stat(filepath.Join(g.gitDir, "HEAD")); err != nil {
 		if err := privateDir(g.gitDir); err != nil {
 			return err
 		}
-		if _, err := g.run([]string{"init", "--bare", "--quiet", g.gitDir}, runOptions{unbound: true}); err != nil {
+		if _, err := g.run(ctx, []string{"init", "--bare", "--quiet", g.gitDir}, runOptions{unbound: true}); err != nil {
 			return err
 		}
 	}
@@ -247,8 +250,8 @@ func privateDir(dir string) error {
 // are not yet in the snapshot index and not excluded. Staging adds every one of
 // them, so the answer is a lower bound on the snapshot's file count; the listing
 // stops as soon as the limit is passed and writes no object.
-func (g *shadowGit) exceedsFiles(limit int64) (bool, error) {
-	listing, err := g.run([]string{"ls-files", "-z", "--others", "--exclude-standard"}, runOptions{index: snapshotIndex, stopAfter: limit})
+func (g *shadowGit) exceedsFiles(ctx context.Context, limit int64) (bool, error) {
+	listing, err := g.run(ctx, []string{"ls-files", "-z", "--others", "--exclude-standard"}, runOptions{index: snapshotIndex, stopAfter: limit})
 	if err != nil {
 		return false, err
 	}
@@ -257,33 +260,33 @@ func (g *shadowGit) exceedsFiles(limit int64) (bool, error) {
 
 // snapshot stages the whole workspace in the private index and returns the tree
 // and its file count.
-func (g *shadowGit) snapshot() (string, int, error) {
-	if _, err := g.run([]string{"add", "--all", "--", "."}, runOptions{index: snapshotIndex}); err != nil {
+func (g *shadowGit) snapshot(ctx context.Context) (string, int, error) {
+	if _, err := g.run(ctx, []string{"add", "--all", "--", "."}, runOptions{index: snapshotIndex}); err != nil {
 		return "", 0, err
 	}
-	tree, err := g.run([]string{"write-tree"}, runOptions{index: snapshotIndex})
+	tree, err := g.run(ctx, []string{"write-tree"}, runOptions{index: snapshotIndex})
 	if err != nil {
 		return "", 0, err
 	}
-	listing, err := g.run([]string{"ls-files", "-z"}, runOptions{index: snapshotIndex})
+	listing, err := g.run(ctx, []string{"ls-files", "-z"}, runOptions{index: snapshotIndex})
 	if err != nil {
 		return "", 0, err
 	}
 	return strings.TrimSpace(string(tree)), bytes.Count(listing, []byte{0}), nil
 }
 
-func (g *shadowGit) commit(tree, message string) (string, error) {
-	output, err := g.run([]string{"commit-tree", tree, "-m", message}, runOptions{})
+func (g *shadowGit) commit(ctx context.Context, tree, message string) (string, error) {
+	output, err := g.run(ctx, []string{"commit-tree", tree, "-m", message}, runOptions{})
 	return strings.TrimSpace(string(output)), err
 }
 
-func (g *shadowGit) setRef(ref, commit string) error {
-	_, err := g.run([]string{"update-ref", ref, commit}, runOptions{})
+func (g *shadowGit) setRef(ctx context.Context, ref, commit string) error {
+	_, err := g.run(ctx, []string{"update-ref", ref, commit}, runOptions{})
 	return err
 }
 
-func (g *shadowGit) deleteRef(ref string) error {
-	_, err := g.run([]string{"update-ref", "-d", ref}, runOptions{})
+func (g *shadowGit) deleteRef(ctx context.Context, ref string) error {
+	_, err := g.run(ctx, []string{"update-ref", "-d", ref}, runOptions{})
 	return err
 }
 
@@ -291,16 +294,16 @@ func (g *shadowGit) deleteRef(ref string) error {
 // deleted refs kept alive at once, where a plain gc would keep them in a cruft
 // pack for gc.pruneExpire (two weeks by default). The repository is bare and its
 // refs carry no reflog, so nothing can bring a pruned object back.
-func (g *shadowGit) gc() error {
-	_, err := g.run([]string{"gc", "--prune=now", "--quiet"}, runOptions{})
+func (g *shadowGit) gc(ctx context.Context) error {
+	_, err := g.run(ctx, []string{"gc", "--prune=now", "--quiet"}, runOptions{})
 	return err
 }
 
 var objectSizeLine = regexp.MustCompile(`^(size|size-pack|size-garbage):\s+(\d+)`)
 
 // repositoryBytes is what the private repository occupies: loose objects plus packs.
-func (g *shadowGit) repositoryBytes() (int64, error) {
-	output, err := g.run([]string{"count-objects", "-v"}, runOptions{})
+func (g *shadowGit) repositoryBytes(ctx context.Context) (int64, error) {
+	output, err := g.run(ctx, []string{"count-objects", "-v"}, runOptions{})
 	if err != nil {
 		return 0, err
 	}
@@ -315,11 +318,11 @@ func (g *shadowGit) repositoryBytes() (int64, error) {
 }
 
 // diff lists the paths that differ between two trees, with the mode and blob of each side.
-func (g *shadowGit) diff(from, to string) ([]TreeChange, error) {
+func (g *shadowGit) diff(ctx context.Context, from, to string) ([]TreeChange, error) {
 	if from == to {
 		return nil, nil
 	}
-	raw, err := g.run([]string{"diff-tree", "-r", "-z", "--no-renames", "--raw", "--no-abbrev", from, to}, runOptions{})
+	raw, err := g.run(ctx, []string{"diff-tree", "-r", "-z", "--no-renames", "--raw", "--no-abbrev", from, to}, runOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -347,14 +350,14 @@ func (g *shadowGit) diff(from, to string) ([]TreeChange, error) {
 }
 
 // checkout writes paths of tree into the workspace, replacing what is there.
-func (g *shadowGit) checkout(tree string, paths []string) error {
+func (g *shadowGit) checkout(ctx context.Context, tree string, paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	if _, err := g.run([]string{"read-tree", tree}, runOptions{index: restoreIndex}); err != nil {
+	if _, err := g.run(ctx, []string{"read-tree", tree}, runOptions{index: restoreIndex}); err != nil {
 		return err
 	}
-	_, err := g.run([]string{"checkout-index", "--force", "-z", "--stdin"}, runOptions{
+	_, err := g.run(ctx, []string{"checkout-index", "--force", "-z", "--stdin"}, runOptions{
 		index: restoreIndex,
 		input: []byte(strings.Join(paths, "\x00") + "\x00"),
 	})

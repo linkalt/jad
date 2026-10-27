@@ -1,6 +1,7 @@
 package checkpoint
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 )
@@ -56,27 +57,27 @@ func NewRun(service *Service, turnID string, sessionTurn int64) *Run {
 	return &Run{service: service, turnID: turnID, sessionTurn: sessionTurn}
 }
 
-func (r *Run) take() {
+func (r *Run) take(ctx context.Context) {
 	if r.attempted {
 		return
 	}
 	r.attempted = true
-	r.id = r.service.Begin(r.turnID, r.sessionTurn)
+	r.id = r.service.Begin(ctx, r.turnID, r.sessionTurn)
 }
 
 // Start takes the checkpoint before the first provider request when the setting
 // is run_start.
-func (r *Run) Start() {
+func (r *Run) Start(ctx context.Context) {
 	if r != nil && r.service.SnapshotOn() == "run_start" {
-		r.take()
+		r.take(ctx)
 	}
 }
 
 // BeforeCalls runs before the calls of one tool round; for first_mutation it
 // takes the checkpoint at the first changing call.
-func (r *Run) BeforeCalls(changesWorkspace bool) {
+func (r *Run) BeforeCalls(ctx context.Context, changesWorkspace bool) {
 	if r != nil && changesWorkspace && r.service.SnapshotOn() == "first_mutation" {
-		r.take()
+		r.take(ctx)
 	}
 }
 

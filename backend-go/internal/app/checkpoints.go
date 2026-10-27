@@ -36,7 +36,7 @@ func (m boundMutation) RestoreCheckpoint(ctx context.Context, id string, request
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	result, err := checkpoint.ForSession(m.config, nil).Restore(id, checkpoint.RestoreOptions{DryRun: request.DryRun, Mode: request.Mode})
+	result, err := checkpoint.ForSession(m.config, nil).Restore(ctx, id, checkpoint.RestoreOptions{DryRun: request.DryRun, Mode: request.Mode})
 	if err != nil {
 		var refusal *checkpoint.Error
 		if errors.As(err, &refusal) {

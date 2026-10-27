@@ -1,6 +1,7 @@
 package checkpoint
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -94,7 +95,7 @@ func (f *fixture) seed(t *testing.T) {
 
 func (f *fixture) begin(t *testing.T, turn string, number int64) string {
 	t.Helper()
-	id := f.service.Begin(turn, number)
+	id := f.service.Begin(context.Background(), turn, number)
 	if id == "" {
 		t.Fatalf("Begin(%s) took no checkpoint: %+v", turn, f.service.List())
 	}
@@ -123,7 +124,7 @@ func TestSafeRestoreRevertsEditsDeletionsNewFilesModesAndSymlinks(t *testing.T) 
 	_ = os.Symlink("d", f.path("link"))
 	f.service.Finish(id)
 
-	result, err := f.service.Restore(id, RestoreOptions{})
+	result, err := f.service.Restore(context.Background(), id, RestoreOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +157,7 @@ func TestDryRunListsPathsChangesNothingAndWritesNoCheckpoint(t *testing.T) {
 	f.service.Finish(id)
 	listed := len(f.service.List())
 
-	result, err := f.service.Restore(id, RestoreOptions{DryRun: true})
+	result, err := f.service.Restore(context.Background(), id, RestoreOptions{DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,7 @@ func TestSafeRestoreLeavesAFileTheUserChangedAfterTheRun(t *testing.T) {
 	f.service.Finish(id)
 	f.write(t, "a.txt", "user edit after the run\n")
 
-	result, err := f.service.Restore(id, RestoreOptions{})
+	result, err := f.service.Restore(context.Background(), id, RestoreOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +199,7 @@ func TestFullRestoreMakesTheWorkspaceEqualToBeforeTheRun(t *testing.T) {
 	f.write(t, "a.txt", "user\n")
 	f.write(t, "later.txt", "later\n")
 
-	result, err := f.service.Restore(id, RestoreOptions{Mode: ModeFull})
+	result, err := f.service.Restore(context.Background(), id, RestoreOptions{Mode: ModeFull})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +216,7 @@ func TestARestoreIsUndoableThroughTheCheckpointItRecords(t *testing.T) {
 	f.write(t, "new.txt", "new\n")
 	f.service.Finish(id)
 
-	restored, err := f.service.Restore(id, RestoreOptions{})
+	restored, err := f.service.Restore(context.Background(), id, RestoreOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +232,7 @@ func TestARestoreIsUndoableThroughTheCheckpointItRecords(t *testing.T) {
 	if undo == nil || undo.Kind != KindPreRestore || undo.RestoredFrom != id {
 		t.Fatalf("undo record = %+v", undo)
 	}
-	if _, err := f.service.Restore(restored.UndoCheckpointID, RestoreOptions{Mode: ModeFull}); err != nil {
+	if _, err := f.service.Restore(context.Background(), restored.UndoCheckpointID, RestoreOptions{Mode: ModeFull}); err != nil {
 		t.Fatal(err)
 	}
 	if f.read(t, "a.txt") != "agent\n" || f.read(t, "new.txt") != "new\n" {
@@ -270,7 +271,7 @@ func TestTheUsersOwnGitRepositoryIsUntouched(t *testing.T) {
 	id := f.begin(t, "turn-1", 1)
 	f.write(t, "b2.txt", "n\n")
 	f.service.Finish(id)
-	if _, err := f.service.Restore(id, RestoreOptions{}); err != nil {
+	if _, err := f.service.Restore(context.Background(), id, RestoreOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if f.exists("b2.txt") {
@@ -294,7 +295,7 @@ func TestIgnoredFilesHarnessDirectoriesAndBackupsAreNeitherSnapshottedNorRestore
 	f.write(t, "a.txt", "a1\n")
 	f.service.Finish(id)
 
-	result, err := f.service.Restore(id, RestoreOptions{})
+	result, err := f.service.Restore(context.Background(), id, RestoreOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,21 +322,21 @@ func TestExclusionPatternsKeepOnlyHarnessPathsInsideTheWorkspaceAndEscapeGlobs(t
 func TestAWorkspaceOverMaxFilesIsSkippedWithAWarning(t *testing.T) {
 	f := newFixture(t, func(s *sessionfs.CheckpointSettings) { s.MaxFiles = 2 })
 	f.seed(t)
-	if id := f.service.Begin("turn-1", 1); id != "" {
+	if id := f.service.Begin(context.Background(), "turn-1", 1); id != "" {
 		t.Fatalf("Begin returned %q for a skipped snapshot", id)
 	}
 	records := f.service.List()
 	if len(records) != 1 || records[0].State != StateSkipped || !strings.Contains(records[0].Warning, "max_files") {
 		t.Fatalf("records = %+v", records)
 	}
-	_, err := f.service.Restore(records[0].ID, RestoreOptions{DryRun: true})
+	_, err := f.service.Restore(context.Background(), records[0].ID, RestoreOptions{DryRun: true})
 	wantError(t, err, CodeConflict)
 }
 
 func TestAMissingGitBinaryIsRecordedAsFailedAndNeverBlocks(t *testing.T) {
 	f := newFixture(t, func(s *sessionfs.CheckpointSettings) { s.GitBinary = "/nonexistent/git" })
 	f.seed(t)
-	if id := f.service.Begin("turn-1", 1); id != "" {
+	if id := f.service.Begin(context.Background(), "turn-1", 1); id != "" {
 		t.Fatalf("Begin returned %q without git", id)
 	}
 	records := f.service.List()
@@ -351,7 +352,7 @@ func TestAFilesystemRootOrTheHomeDirectoryIsRefusedAsAWorkspace(t *testing.T) {
 		}
 		staging := t.TempDir()
 		service := NewService(Options{Settings: defaultSettings(), Workspace: workspace, StagingDir: staging, Durability: "process"})
-		if id := service.Begin("turn-1", 1); id != "" {
+		if id := service.Begin(context.Background(), "turn-1", 1); id != "" {
 			t.Fatalf("Begin(%s) returned %q", workspace, id)
 		}
 		records := service.List()
@@ -378,7 +379,7 @@ func TestOnlyMaxCheckpointsRecordsAreKeptOldestPrunedFirst(t *testing.T) {
 	if !reflect.DeepEqual(listed, []string{ids[4], ids[3], ids[2]}) {
 		t.Fatalf("listed = %v, ids = %v", listed, ids)
 	}
-	_, err := f.service.Restore(ids[0], RestoreOptions{DryRun: true})
+	_, err := f.service.Restore(context.Background(), ids[0], RestoreOptions{DryRun: true})
 	wantError(t, err, CodeNotFound)
 }
 
@@ -392,7 +393,7 @@ func TestSafeRestoreNeedsTheRunEndSnapshotButFullRestoreDoesNot(t *testing.T) {
 	if !strings.Contains(refusal.Message, "run-end snapshot") {
 		t.Fatalf("message = %q", refusal.Message)
 	}
-	if _, err := f.service.Restore(id, RestoreOptions{Mode: ModeFull}); err != nil {
+	if _, err := f.service.Restore(context.Background(), id, RestoreOptions{Mode: ModeFull}); err != nil {
 		t.Fatal(err)
 	}
 	if f.read(t, "a.txt") != "a0\n" {
@@ -402,13 +403,13 @@ func TestSafeRestoreNeedsTheRunEndSnapshotButFullRestoreDoesNot(t *testing.T) {
 
 func wantErrorFrom(t *testing.T, service *Service, id string) *Error {
 	t.Helper()
-	_, err := service.Restore(id, RestoreOptions{})
+	_, err := service.Restore(context.Background(), id, RestoreOptions{})
 	return wantError(t, err, CodeConflict)
 }
 
 func TestRestoringACheckpointThatDoesNotExistIsNotFound(t *testing.T) {
 	f := newFixture(t, nil)
-	_, err := f.service.Restore("ckpt-nope", RestoreOptions{DryRun: true})
+	_, err := f.service.Restore(context.Background(), "ckpt-nope", RestoreOptions{DryRun: true})
 	wantError(t, err, CodeNotFound)
 }
 
@@ -460,21 +461,21 @@ func TestARunTakesOneCheckpointAtItsFirstChangingCallNoneForAReadOnlyRun(t *test
 	f := newFixture(t, nil)
 	f.seed(t)
 	readOnly := NewRun(f.service, "turn-1", 1)
-	readOnly.Start()
-	readOnly.BeforeCalls(false)
+	readOnly.Start(context.Background())
+	readOnly.BeforeCalls(context.Background(), false)
 	readOnly.Finish()
 	if n := len(f.service.List()); n != 0 {
 		t.Fatalf("a read-only run recorded %d checkpoints", n)
 	}
 
 	changing := NewRun(f.service, "turn-2", 2)
-	changing.Start()
-	changing.BeforeCalls(false)
+	changing.Start(context.Background())
+	changing.BeforeCalls(context.Background(), false)
 	if n := len(f.service.List()); n != 0 {
 		t.Fatalf("a run recorded %d checkpoints before any changing call", n)
 	}
-	changing.BeforeCalls(true)
-	changing.BeforeCalls(true)
+	changing.BeforeCalls(context.Background(), true)
+	changing.BeforeCalls(context.Background(), true)
 	changing.Finish()
 	records := f.service.List()
 	if len(records) != 1 || records[0].State != StateComplete {
@@ -486,11 +487,11 @@ func TestRunStartTakesTheCheckpointBeforeAnyCallEvenARead(t *testing.T) {
 	f := newFixture(t, func(s *sessionfs.CheckpointSettings) { s.SnapshotOn = "run_start" })
 	f.seed(t)
 	run := NewRun(f.service, "turn-1", 1)
-	run.Start()
+	run.Start(context.Background())
 	if n := len(f.service.List()); n != 1 {
 		t.Fatalf("records after Start = %d, want 1", n)
 	}
-	run.BeforeCalls(true)
+	run.BeforeCalls(context.Background(), true)
 	run.Finish()
 	records := f.service.List()
 	if len(records) != 1 || records[0].State != StateComplete {
@@ -505,8 +506,8 @@ func TestNewRunIsNilWhenCheckpointsAreOffAndItsMethodsAreSafe(t *testing.T) {
 	if run != nil {
 		t.Fatal("NewRun returned a run while checkpoints are off")
 	}
-	run.Start()
-	run.BeforeCalls(true)
+	run.Start(context.Background())
+	run.BeforeCalls(context.Background(), true)
 	run.Finish()
 	if run.IncludeMCPTools() {
 		t.Fatal("a nil run reports MCP tools as changes")
@@ -581,7 +582,7 @@ func TestARestoreThatFailsMidWayLeavesAnUndoRecordThatRestoresThePreRestoreState
 			f := newFixture(t, nil)
 			id := swapDirForSymlink(t, f)
 
-			if _, err := f.service.Restore(id, RestoreOptions{Mode: mode}); err == nil {
+			if _, err := f.service.Restore(context.Background(), id, RestoreOptions{Mode: mode}); err == nil {
 				t.Fatal("the restore succeeded, want the removal of the non-empty directory to fail")
 			}
 			undos := undoRecords(f)
@@ -592,7 +593,7 @@ func TestARestoreThatFailsMidWayLeavesAnUndoRecordThatRestoresThePreRestoreState
 				t.Fatal("the restore did not write anything before failing; the test no longer exercises a half-restored tree")
 			}
 
-			if _, err := f.service.Restore(undos[0].ID, RestoreOptions{Mode: ModeFull}); err != nil {
+			if _, err := f.service.Restore(context.Background(), undos[0].ID, RestoreOptions{Mode: ModeFull}); err != nil {
 				t.Fatal(err)
 			}
 			if target, err := os.Readlink(f.path("d")); err != nil || target != "a.txt" {
@@ -619,7 +620,7 @@ func TestTheUndoRecordIsStoredOpenBeforeTheFirstWorkspaceWrite(t *testing.T) {
 	f.write(t, "a.txt", "a1\n")
 	f.service.Finish(id)
 
-	if _, err := f.service.Restore(id, RestoreOptions{}); err != nil {
+	if _, err := f.service.Restore(context.Background(), id, RestoreOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(snapshot)
@@ -662,7 +663,7 @@ func TestARestoreWhoseCheckoutOrSecondCaptureFailsLeavesAFailedUndoRecord(t *tes
 			f.write(t, "a.txt", "a1\n")
 			f.service.Finish(id)
 
-			if _, err := f.service.Restore(id, RestoreOptions{}); err == nil {
+			if _, err := f.service.Restore(context.Background(), id, RestoreOptions{}); err == nil {
 				t.Fatal("the restore succeeded, want the git failure")
 			}
 			undos := undoRecords(f)
@@ -693,7 +694,7 @@ func TestRestoreIsByteExactDespiteWorkspaceGitAttributes(t *testing.T) {
 		}
 	}
 	f.service.Finish(id)
-	if _, err := f.service.Restore(id, RestoreOptions{}); err != nil {
+	if _, err := f.service.Restore(context.Background(), id, RestoreOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range files {
