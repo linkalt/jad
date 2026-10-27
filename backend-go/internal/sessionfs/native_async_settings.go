@@ -13,6 +13,7 @@ var nativeAsyncKeys = []string{
 	"max_handles", "max_handles_total", "default_block_ms", "max_block_ms", "default_wait_ms", "max_wait_ms",
 	"wait_max_signals", "list_default_limit", "list_max_limit", "summary_max_bytes", "status_summary_max_bytes",
 	"response_max_bytes", "keep_finished", "retention_days", "unread_max", "unread_ttl_days", "stop_wait_ms", "sse_max_ids", "index_flush_ms",
+	"latest_bytes", "latest_lines", "latest_total_bytes", "latest_value_bytes", "latest_scan_max_bytes",
 }
 
 // NativeAsyncSettings holds the normalized tools.native.async settings: the bounds of the
@@ -69,6 +70,9 @@ func normalizeNativeAsyncSettings(setting map[string]json.RawMessage, settingPat
 		"unread_max": &config.UnreadMax, "unread_ttl_days": &config.UnreadTTLDays,
 		"stop_wait_ms": &config.StopWaitMs, "sse_max_ids": &config.SSEMaxIDs,
 		"index_flush_ms": &config.IndexFlushMs,
+		"latest_bytes":   &config.LatestBytes, "latest_lines": &config.LatestLines,
+		"latest_total_bytes": &config.LatestTotalBytes, "latest_value_bytes": &config.LatestValueBytes,
+		"latest_scan_max_bytes": &config.LatestScanMaxBytes,
 	}
 	for _, key := range nativeAsyncKeys {
 		target := targets[key]

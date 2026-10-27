@@ -42,6 +42,9 @@ type row struct {
 	finishing        bool
 	after            endAction
 	rec              *Record
+	// progress is the driver side cursor of what a "latest" view already showed; it lives
+	// only while the handle is live.
+	progress any
 }
 
 // endAction says what happens to a handle's signal when its end arrives after a user
@@ -295,6 +298,45 @@ func (m *Manager) Register(reg Registration) error {
 	return nil
 }
 
+// LiveInfo reports the kind, state and start time of a live handle of owner; ok is false for
+// an unknown, foreign or ended handle.
+func (m *Manager) LiveInfo(owner, id string) (kind Kind, state State, started time.Time, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.rows[id]
+	if r == nil || r.owner != owner || r.state.Terminal() {
+		return "", "", time.Time{}, false
+	}
+	return r.kind, r.state, r.started, true
+}
+
+// Driver is the driver registered for kind, or nil.
+func (m *Manager) Driver(kind Kind) Driver {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.drivers[kind]
+}
+
+// Progress is what SetProgress stored for a live handle, nil when nothing or the handle ended.
+func (m *Manager) Progress(id string) any {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r := m.rows[id]; r != nil {
+		return r.progress
+	}
+	return nil
+}
+
+// SetProgress keeps a driver cursor on a live handle. It is in memory only and is dropped
+// when the handle ends; an ended or unknown handle ignores it.
+func (m *Manager) SetProgress(id string, progress any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r := m.rows[id]; r != nil && !r.state.Terminal() {
+		r.progress = progress
+	}
+}
+
 // MarkRunning moves a queued handle to running. Any other state is left alone.
 func (m *Manager) MarkRunning(id string) {
 	m.mu.Lock()
@@ -358,6 +400,7 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	m.mu.Lock()
 	m.mutateLocked(r, func(r *row) {
 		r.state, r.ok, r.changed, r.unread, r.finishing = rec.State, rec.OK, now, after == endKeep, false
+		r.progress = nil
 	})
 	r.rec = &rec
 	if after != endKeep {

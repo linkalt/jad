@@ -40,6 +40,16 @@ type Config struct {
 	// IndexFlushMs delays index.json rewrites so a burst of state changes costs one
 	// write (0 = write at every change). Record files are always written at once.
 	IndexFlushMs int64 `json:"index_flush_ms"`
+	// LatestBytes is the most new output a "latest" block shows per stream (and the longest
+	// preview line of an agent's activity); LatestLines the most activity lines of one block;
+	// LatestTotalBytes the most block text one wait, list or status response adds;
+	// LatestValueBytes the longest argument value shown in an activity line; LatestScanMaxBytes
+	// the largest transcript an activity block will scan.
+	LatestBytes        int64 `json:"latest_bytes"`
+	LatestLines        int64 `json:"latest_lines"`
+	LatestTotalBytes   int64 `json:"latest_total_bytes"`
+	LatestValueBytes   int64 `json:"latest_value_bytes"`
+	LatestScanMaxBytes int64 `json:"latest_scan_max_bytes"`
 }
 
 // MaxIndexFlushMs is the largest index_flush_ms.
@@ -59,6 +69,7 @@ func DefaultConfig() Config {
 		SummaryMaxBytes: 512, StatusSummaryBytes: 4096, ResponseMaxBytes: 8192,
 		KeepFinished: 200, RetentionDays: 14, UnreadMax: 100, UnreadTTLDays: 7,
 		StopWaitMs: 2_000, SSEMaxIDs: 10, IndexFlushMs: 150,
+		LatestBytes: 500, LatestLines: 3, LatestTotalBytes: 2000, LatestValueBytes: 80, LatestScanMaxBytes: 8 << 20,
 	}
 }
 
@@ -75,6 +86,8 @@ func (c Config) Validate() error {
 		{"list_max_limit", c.ListMaxLimit}, {"summary_max_bytes", c.SummaryMaxBytes},
 		{"status_summary_max_bytes", c.StatusSummaryBytes}, {"response_max_bytes", c.ResponseMaxBytes},
 		{"keep_finished", c.KeepFinished}, {"unread_max", c.UnreadMax},
+		{"latest_bytes", c.LatestBytes}, {"latest_lines", c.LatestLines}, {"latest_total_bytes", c.LatestTotalBytes},
+		{"latest_value_bytes", c.LatestValueBytes}, {"latest_scan_max_bytes", c.LatestScanMaxBytes},
 	}
 	for _, field := range positive {
 		if field.value < 1 {
@@ -104,6 +117,12 @@ func (c Config) Validate() error {
 	}
 	if c.ResponseMaxBytes < c.SummaryMaxBytes+EntryOverheadBytes {
 		return fmt.Errorf("response_max_bytes must be at least summary_max_bytes + %d so one full entry fits", EntryOverheadBytes)
+	}
+	if c.LatestTotalBytes < c.LatestBytes {
+		return fmt.Errorf("latest_total_bytes must be greater than or equal to latest_bytes")
+	}
+	if c.LatestValueBytes > c.LatestBytes {
+		return fmt.Errorf("latest_value_bytes must be less than or equal to latest_bytes")
 	}
 	if c.UnreadMax < c.WaitMaxSignals {
 		return fmt.Errorf("unread_max must be greater than or equal to wait_max_signals")

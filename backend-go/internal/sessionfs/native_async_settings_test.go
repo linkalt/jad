@@ -43,7 +43,8 @@ func TestNativeAsyncSettingsEveryKeyOverridesAndNullKeepsDefault(t *testing.T) {
 	}
 	want := asyncmgr.Config{MaxHandles: 3, MaxHandlesTotal: 9, DefaultBlockMs: 5, MaxBlockMs: 50, DefaultWaitMs: 6, MaxWaitMs: 60,
 		WaitMaxSignals: 4, ListDefaultLimit: 5, ListMaxLimit: 25, SummaryMaxBytes: 100, StatusSummaryBytes: 200, ResponseMaxBytes: 4000,
-		KeepFinished: 7, RetentionDays: 0, UnreadMax: 8, UnreadTTLDays: 0, StopWaitMs: 0, SSEMaxIDs: 4}
+		KeepFinished: 7, RetentionDays: 0, UnreadMax: 8, UnreadTTLDays: 0, StopWaitMs: 0, SSEMaxIDs: 4,
+		LatestBytes: 500, LatestLines: 3, LatestTotalBytes: 2000, LatestValueBytes: 80, LatestScanMaxBytes: 8 << 20}
 	if settings.Config != want {
 		t.Fatalf("config = %+v, want %+v", settings.Config, want)
 	}
@@ -69,6 +70,11 @@ func TestNativeAsyncSettingsRejectsBadInput(t *testing.T) {
 		"flush too long":     `{"native":{"async":{"index_flush_ms":60001}}}`,
 		"sse ids negative":   `{"native":{"async":{"sse_max_ids":-1}}}`,
 		"sse ids too many":   `{"native":{"async":{"sse_max_ids":101}}}`,
+		"latest zero":        `{"native":{"async":{"latest_bytes":0}}}`,
+		"latest lines zero":  `{"native":{"async":{"latest_lines":0}}}`,
+		"total below bytes":  `{"native":{"async":{"latest_bytes":600,"latest_total_bytes":500}}}`,
+		"value above bytes":  `{"native":{"async":{"latest_bytes":50,"latest_value_bytes":80}}}`,
+		"latest string":      `{"native":{"async":{"latest_bytes":"500"}}}`,
 	}
 	for name, tools := range cases {
 		if _, err := normalizeAsync(t, tools); err == nil {
@@ -127,5 +133,20 @@ func TestStateContextAsyncProviderNeedsTheAsyncTool(t *testing.T) {
 	configured, err := normalizeStateContextSettings(enabled, settingPath, "", nil, nil, nil, nil, &NativeAsyncSettings{})
 	if err != nil || len(configured.Triggers["compaction"].Tools) != 1 || configured.Triggers["compaction"].Tools[0] != "async" {
 		t.Fatalf("configured async provider = %+v, error = %v", configured, err)
+	}
+}
+
+func TestNativeAsyncSettingsLatestKeysOverrideAndDefault(t *testing.T) {
+	settings, err := normalizeAsync(t, `{"native":{"async":{"latest_bytes":200,"latest_lines":5,"latest_total_bytes":900,"latest_value_bytes":40,"latest_scan_max_bytes":1000}}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := settings.Config
+	if c.LatestBytes != 200 || c.LatestLines != 5 || c.LatestTotalBytes != 900 || c.LatestValueBytes != 40 || c.LatestScanMaxBytes != 1000 {
+		t.Fatalf("latest settings = %+v", c)
+	}
+	d := asyncmgr.DefaultConfig()
+	if d.LatestBytes != 500 || d.LatestLines != 3 || d.LatestTotalBytes != 2000 {
+		t.Fatalf("defaults = %+v", d)
 	}
 }
