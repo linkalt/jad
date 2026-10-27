@@ -286,6 +286,15 @@ func TestClientUnixSocketOwnerAndDirectoryAreChecked(t *testing.T) {
 	if err := call(open); err != nil || openCalls.Load() != 1 {
 		t.Fatalf("a sticky shared directory is fine: %v", err)
 	}
+
+	grouped := shortSocket(t)
+	groupedCalls := serve(grouped)
+	if err := os.Chmod(filepath.Dir(grouped), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := call(grouped); err == nil || !strings.Contains(err.Error(), "other users can write") || groupedCalls.Load() != 0 {
+		t.Fatalf("a group-writable directory without the sticky bit must be refused: %v", err)
+	}
 }
 
 func TestClientMaxInFlight(t *testing.T) {
