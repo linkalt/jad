@@ -375,3 +375,17 @@ func TestLatestIsNotShownForAFinishedHandle(t *testing.T) {
 		t.Fatalf("finished handle shows a latest block:\n%s", status)
 	}
 }
+
+func TestLatestForARunningToolSmithShowsNewOutputOnlyThenNothingNew(t *testing.T) {
+	f := newToolSmithAsyncFixture(t, `echo smith-early; sleep 30`)
+	started := f.run(t, "s1", `{"code":"return 1;","block_ms":600}`)
+	id := smithRunIDOf(t, started)
+	if !strings.Contains(execField(started, "latest"), "smith-early") {
+		t.Fatalf("the still-running start result lacks the latest block:\n%s", started)
+	}
+	status := callAsync(t, f.async, "s1", map[string]any{"action": "status", "id": id})
+	if text := latestTextOf(t, status, id); strings.Contains(text, "smith-early") || !strings.Contains(text, "no new output since") {
+		t.Fatalf("what the start call showed was shown again:\n%s", text)
+	}
+	callAsync(t, f.async, "s1", map[string]any{"action": "stop", "id": id})
+}
