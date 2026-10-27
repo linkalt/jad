@@ -51,14 +51,19 @@ func newListServer(t *testing.T, id string, options listServerOptions, shared *l
 	inner := mcpSDK.NewStreamableHTTPHandler(func(*http.Request) *mcpSDK.Server { return server }, nil)
 	release := make(chan struct{})
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isList := false
 		if r.Method == http.MethodPost {
 			body, _ := io.ReadAll(r.Body)
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			if bytes.Contains(body, []byte(`"method":"initialize"`)) {
 				stats.initializes.Add(1)
 			}
+			isList = bytes.Contains(body, []byte(`"method":"tools/list"`))
 		}
-		if stats.inflight != nil && r.Method == http.MethodPost {
+		// Only tools/list is counted: the deferred decrement runs after the response is
+		// written, so a worker can already be on its next server while its previous
+		// request is still counted; a list is always preceded by further round trips.
+		if stats.inflight != nil && isList {
 			now := stats.inflight.Add(1)
 			defer stats.inflight.Add(-1)
 			for {
