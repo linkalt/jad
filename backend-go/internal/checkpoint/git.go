@@ -75,6 +75,7 @@ var fixedConfig = []string{
 	"core.fileMode=true",
 	"core.symlinks=true",
 	"core.fsmonitor=false",
+	"core.sharedRepository=0600",
 	"core.hooksPath=/dev/null",
 	"gc.auto=0",
 	"maintenance.auto=false",
@@ -190,17 +191,31 @@ func (g *shadowGit) run(args []string, options runOptions) ([]byte, error) {
 // prepare creates the private repository on first use and writes the exclusion list.
 func (g *shadowGit) prepare(excludePatterns []string) error {
 	if _, err := os.Stat(filepath.Join(g.gitDir, "HEAD")); err != nil {
-		if err := os.MkdirAll(g.gitDir, 0o755); err != nil {
+		if err := privateDir(g.gitDir); err != nil {
 			return err
 		}
 		if _, err := g.run([]string{"init", "--bare", "--quiet", g.gitDir}, runOptions{unbound: true}); err != nil {
 			return err
 		}
 	}
-	if err := os.MkdirAll(filepath.Join(g.gitDir, "info"), 0o755); err != nil {
+	if err := privateDir(filepath.Dir(g.gitDir)); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(g.gitDir, "info", "exclude"), []byte(strings.Join(excludePatterns, "\n")+"\n"), 0o644)
+	if err := privateDir(g.gitDir); err != nil {
+		return err
+	}
+	if err := privateDir(filepath.Join(g.gitDir, "info")); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(g.gitDir, "info", "exclude"), []byte(strings.Join(excludePatterns, "\n")+"\n"), 0o600)
+}
+
+// privateDir creates dir owner-only and tightens one that already exists.
+func privateDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0o700)
 }
 
 // snapshot stages the whole workspace in the private index and returns the tree

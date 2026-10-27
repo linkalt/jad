@@ -344,7 +344,7 @@ func (s *Service) writeAll(records []Record) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.metadataPath), 0o755); err != nil {
+	if err := privateDir(filepath.Dir(s.metadataPath)); err != nil {
 		return err
 	}
 	return writeFileAtomic(s.metadataPath, append(encoded, '\n'), s.options.Durability)
