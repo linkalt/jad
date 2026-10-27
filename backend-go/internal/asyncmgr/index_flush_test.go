@@ -156,3 +156,31 @@ func TestActiveListIsScopedToTheOwnerAndSeesLiveAndUnread(t *testing.T) {
 		t.Fatalf("next page = %+v", next.Items)
 	}
 }
+
+func TestRecoverAdoptsTerminalRecordOverLiveIndexRow(t *testing.T) {
+	f := newFixture(t, slowIndex)
+	f.start(t, "o", "a")
+	f.m.flushIndexNow()
+	f.finish(t, "a", Result{})
+	// crash inside the flush delay: a.json is terminal, index.json still lists "a" running.
+	if rows, _ := f.m.readIndex(); len(rows) != 1 || rows[0].State.Terminal() {
+		t.Fatalf("stale index = %+v", rows)
+	}
+	f.opts.Server = ServerID{PID: 300, Start: 3}
+	f.open(t)
+	list, err := f.m.List(ListQuery{Owner: "o", State: "all", Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 || list.Items[0].State != StateDone || !list.Items[0].Unread {
+		t.Fatalf("recovered list = %+v", list.Items)
+	}
+	if c := f.m.Counts("o"); c.Active != 0 {
+		t.Fatalf("active after recovery = %d, want 0", c.Active)
+	}
+	f.m.Close()
+	f.open(t)
+	if c := f.m.Counts("o"); c.Active != 0 {
+		t.Fatalf("active after second restart = %d, want 0", c.Active)
+	}
+}

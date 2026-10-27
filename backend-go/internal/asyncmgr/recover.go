@@ -53,10 +53,20 @@ func (m *Manager) recover() error {
 
 	sort.Slice(loaded, func(i, j int) bool { return loaded[i].ID < loaded[j].ID })
 	for _, rec := range loaded {
+		r := m.rows[rec.ID]
 		if rec.State.Terminal() {
+			// The record is written before the delayed index, so a crash in between leaves
+			// the index row live for a handle that already finished.
+			if r != nil && !r.state.Terminal() {
+				m.mutateLocked(r, func(r *row) {
+					r.state, r.ok, r.changed, r.unread = rec.State, rec.OK, rec.EndedAt, rec.Unread
+				})
+				if !rec.Unread {
+					r.rec = nil
+				}
+			}
 			continue
 		}
-		r := m.rows[rec.ID]
 		if r == nil || m.foreignLive(rec) {
 			continue
 		}
