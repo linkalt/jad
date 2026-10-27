@@ -207,8 +207,15 @@ func (g *shadowGit) prepare(excludePatterns []string) error {
 	if err := privateDir(filepath.Join(g.gitDir, "info")); err != nil {
 		return err
 	}
+	if err := os.WriteFile(filepath.Join(g.gitDir, "info", "attributes"), []byte(neutralAttributes), 0o600); err != nil {
+		return err
+	}
 	return os.WriteFile(filepath.Join(g.gitDir, "info", "exclude"), []byte(strings.Join(excludePatterns, "\n")+"\n"), 0o600)
 }
+
+// neutralAttributes sits in info/attributes, which outranks every workspace
+// .gitattributes, so no eol, ident, filter or encoding conversion alters bytes.
+const neutralAttributes = "* -text -eol -ident -filter -working-tree-encoding\n"
 
 // privateDir creates dir owner-only and tightens one that already exists.
 func privateDir(dir string) error {

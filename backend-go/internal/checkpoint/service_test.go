@@ -672,3 +672,33 @@ func TestARestoreWhoseCheckoutOrSecondCaptureFailsLeavesAFailedUndoRecord(t *tes
 		})
 	}
 }
+
+func TestRestoreIsByteExactDespiteWorkspaceGitAttributes(t *testing.T) {
+	f := newFixture(t, nil)
+	files := map[string]string{
+		".gitattributes": "* text eol=crlf\n*.id ident\n*.flt filter=upper\n*.bin -text\n",
+		"lf.txt":         "line1\nline2\n",
+		"crlf.txt":       "line1\r\nline2\r\n",
+		"ident.id":       "$Id: keep-me $\n$Id$\n",
+		"f.flt":          "lower\n",
+		"d.bin":          "a\r\nb\n",
+	}
+	for name, content := range files {
+		f.write(t, name, content)
+	}
+	id := f.begin(t, "turn-1", 1)
+	for name := range files {
+		if name != ".gitattributes" {
+			f.write(t, name, "changed\n")
+		}
+	}
+	f.service.Finish(id)
+	if _, err := f.service.Restore(id, RestoreOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range files {
+		if got := f.read(t, name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+}
