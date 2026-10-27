@@ -168,10 +168,10 @@ Expected: `missing [] duplicated {}`, exit 0.
 
 | Slot | Profile / model id | Notes (strengths, known limits) |
 |---|---|---|
-| R1 | `<fill>` | |
-| R2 | `<fill>` | |
-| R3 | `<fill>` | |
-| R4 | `<fill>` | |
+| R1 | `jad/reviewer` (id `r1`) | |
+| R2 | `jad/reviewer1` (id `r2`) | |
+| R3 | `jad/reviewer2` (id `r3`) | |
+| R4 | `jad/reviewer3` (id `r4`) | |
 
 The reviewer id used in file names and finding records is the slot (`r1`..`r4`), mapped to the profile here. Slots must be different profiles/models; the mapping is not shown to a reviewer.
 
