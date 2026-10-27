@@ -410,3 +410,52 @@ func TestUnixSocketOnlyRemoteAPIKeepsTheTCPListenerOut(t *testing.T) {
 		t.Fatalf("TCP answered %d %q for the remote API", status, body)
 	}
 }
+
+func TestRemoteAPISubagentResolvesPathsInTheTargetSessionsWorkspace(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
+	other := filepath.Join(f.workspace, "other-workspace")
+	writeFile(t, filepath.Join(other, "notes.txt"), []byte("the other workspace says 7\n"))
+	raw, err := os.ReadFile(f.sessionFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var session map[string]any
+	if err := json.Unmarshal(raw, &session); err != nil {
+		t.Fatal(err)
+	}
+	session["cwd"] = other
+	encoded, _ := json.Marshal(session)
+	writeFile(t, filepath.Join(filepath.Dir(f.sessionFile), "other.json"), encoded)
+	if processDir, _ := os.Getwd(); processDir == f.workspace || processDir == other {
+		t.Fatalf("the test process runs in a session workspace: %s", processDir)
+	}
+	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
+
+	childRead := func(sessionID, requestID string, extra map[string]any) string {
+		body := map[string]any{"session": sessionID, "profile": "dev/coder", "agent": "explore", "task": "find the answer", "request_id": requestID}
+		for key, value := range extra {
+			body[key] = value
+		}
+		status, started := server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, body)
+		if status != 202 {
+			t.Fatalf("start %s: %d %v", sessionID, status, started)
+		}
+		if done := server.waitDone(t, started["id"].(string)); done["state"] != "done" {
+			t.Fatalf("outcome %s: %v", sessionID, done)
+		}
+		requests := f.provider.forModel("child-model")
+		return requests[len(requests)-1].Text
+	}
+
+	if text := childRead("demo", "req-cwd-00001", nil); !strings.Contains(text, "the secret is 42") || strings.Contains(text, "the other workspace says 7") {
+		t.Fatalf("the child of demo did not read demo's workspace: %s", text)
+	}
+	if text := childRead("other", "req-cwd-00002", nil); !strings.Contains(text, "the other workspace says 7") || strings.Contains(text, "the secret is 42") {
+		t.Fatalf("the child of other did not read other's workspace: %s", text)
+	}
+	status, body := server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
+		"session": "other", "profile": "dev/coder", "agent": "explore", "task": "x", "request_id": "req-cwd-00003", "cwd": f.workspace})
+	if status != 400 || body["code"] != "bad_request" {
+		t.Fatalf("a cwd field must be refused: %d %v", status, body)
+	}
+}
