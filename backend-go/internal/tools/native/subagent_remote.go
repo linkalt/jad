@@ -35,6 +35,13 @@ func (d *remoteSubagentDriver) Kind() asyncmgr.Kind { return asyncKindRemoteSuba
 
 func (d *remoteSubagentDriver) Stop(id, reason string) { d.host.stopProfileMessage(id, reason) }
 
+func (d *remoteSubagentDriver) latest(id string, info latestInfo, prev any, cfg asyncmgr.Config, now time.Time) (string, any) {
+	if remote, ok := d.host.profileMessageRun(id).(*remoteRun); ok {
+		return remoteLatest(remote, info, now), prev
+	}
+	return "", prev
+}
+
 func (d *remoteSubagentDriver) Detail(id string, maxBytes int) string {
 	run := d.host.profileMessageRun(id)
 	if run == nil {
@@ -172,7 +179,7 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 		Status: tools.StatusOK,
 		Summary: fmt.Sprintf("Agent %s is still running (run %s). Do not start the task again: use the async tool with id %s to wait for the answer (action wait), look at it (status) or cancel it (stop)",
 			target.String(), id, id),
-		Information: []tools.Information{{Key: "run", Value: id}, {Key: "state", Value: "running"}},
+		Information: append([]tools.Information{{Key: "run", Value: id}, {Key: "state", Value: "running"}}, s.async.latestInformation(owner, id)...),
 	})
 }
 

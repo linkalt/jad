@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"jad/backend-go/internal/asyncmgr"
@@ -114,6 +115,15 @@ func (d *processDriver) Stop(id, reason string) {
 	}
 }
 
+func (d *processDriver) latest(id string, info latestInfo, prev any, cfg asyncmgr.Config, now time.Time) (string, any) {
+	for _, stopper := range d.host.processManagers() {
+		if stopper.hasProcess(id) {
+			return outputLatest(stopper.outputCollector(id), info, prev, cfg, now)
+		}
+	}
+	return "", prev
+}
+
 func (d *processDriver) Detail(id string, maxBytes int) string {
 	for _, stopper := range d.host.processManagers() {
 		if stopper.hasProcess(id) {
@@ -128,6 +138,7 @@ type processStopper interface {
 	hasProcess(id string) bool
 	stopAsync(id, reason string)
 	detailText(id string, maxBytes int) string
+	outputCollector(id string) *bashOutputCollector
 }
 
 func (manager *ManagedProcessManager) hasProcess(id string) bool {
@@ -140,6 +151,16 @@ func (manager *ManagedProcessManager) hasProcess(id string) bool {
 // the manager's own waiter reports the end.
 func (manager *ManagedProcessManager) stopAsync(id, reason string) {
 	go manager.Stop(id, reason)
+}
+
+// outputCollector is the live output windows of a process, nil when it is not running here.
+func (manager *ManagedProcessManager) outputCollector(id string) *bashOutputCollector {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if entry := manager.entries[id]; entry != nil {
+		return entry.collector
+	}
+	return nil
 }
 
 // detailText is the live output of a running process, cut to its last maxBytes.

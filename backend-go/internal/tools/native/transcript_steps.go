@@ -14,6 +14,7 @@ import (
 type transcriptStep struct {
 	id      transcriptStepID
 	turnOff int64
+	off     int64 // where the line that made the step starts
 	ord     int64
 	kind    string // user, assistant, message, call, result, reasoning, marker
 	role    string // what the role filter matches
@@ -49,6 +50,7 @@ type transcriptWalk struct {
 	counter   int64
 	ord       int64
 	started   bool
+	lineOff   int64
 }
 
 func newTranscriptWalk(turns []transcriptTurn, first int, needle string, preview, value int) *transcriptWalk {
@@ -78,6 +80,7 @@ func (w *transcriptWalk) add(step *transcriptStep, opens bool) *transcriptStep {
 	}
 	step.id = transcriptStepID{turn.number, w.counter}
 	step.turnOff = turn.off
+	step.off = w.lineOff
 	step.ord = w.ord
 	w.ord++
 	step.full = w.keeps(step.id)
@@ -193,6 +196,7 @@ func transcriptResultStatus(text string) string {
 
 // visit takes one transcript line in file order.
 func (w *transcriptWalk) visit(line transcriptLine) {
+	w.lineOff = line.off
 	w.advance(line.off)
 	if line.tooLong {
 		w.marker(fmt.Sprintf("[line of %d bytes skipped: over tools.native.transcript.line_max_bytes]", line.length))

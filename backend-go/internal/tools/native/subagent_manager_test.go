@@ -259,7 +259,7 @@ func TestSubagentRefusesARunWhenTheQueueIsFull(t *testing.T) {
 	if !strings.Contains(third, "error_code: subagent_busy") {
 		t.Errorf("third run should be refused:\n%s", third)
 	}
-	if list := asyncCall(t, catalog, `{"action":"list"}`); strings.Count(list, "sub_") != 2 {
+	if list := asyncCall(t, catalog, `{"action":"list"}`); strings.Count(list, `"kind":"subagent","state"`) != 2 {
 		t.Errorf("the refused run left a handle:\n%s", list)
 	}
 }

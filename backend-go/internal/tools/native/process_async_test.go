@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"jad/backend-go/internal/asyncmgr"
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
 
@@ -22,6 +23,11 @@ type processAsyncFixture struct {
 }
 
 func newProcessAsyncFixture(t *testing.T) processAsyncFixture {
+	t.Helper()
+	return newProcessAsyncFixtureWith(t, func(*sessionfs.NativeProcessSettings) {})
+}
+
+func newProcessAsyncFixtureWith(t *testing.T, mutate func(*sessionfs.NativeProcessSettings)) processAsyncFixture {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("managed process groups require a POSIX platform")
@@ -37,6 +43,7 @@ func newProcessAsyncFixture(t *testing.T) processAsyncFixture {
 	settings := processTestRequest(dir, "", 1<<20).Policy
 	settings.StorageDir = filepath.Join(dir, "processes")
 	settings.Shell = "/bin/sh"
+	mutate(&settings)
 	process, err := NewProcessToolWithAsync(settings, manager, "KEY", host)
 	if err != nil {
 		t.Fatal(err)

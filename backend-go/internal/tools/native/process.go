@@ -203,6 +203,7 @@ func executeNativeProcessAsync(
 		}
 	} else if tracked != nil {
 		extra = append(extra, tools.Information{Key: "hint", Value: "still running; wait for it with the async tool in a later call, or stop it there"})
+		extra = append(extra, host.latestInformation(owner, current.ID)...)
 	}
 	return renderProcessSnapshot(execution.CallID, "start", *current, extra)
 }

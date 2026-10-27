@@ -246,6 +246,9 @@ func runShellChildDetailed(
 		settings.StripANSI,
 	)
 	collector.lineAware = run.lineAware
+	if watch := outputWatchFrom(ctx); watch != nil {
+		watch.set(collector)
+	}
 	environment := buildNativeBashEnvironment(os.Environ(), settings, apiKeyEnv)
 	for _, name := range sortedKeys(run.extraEnv) {
 		environment = append(environment, name+"="+run.extraEnv[name])

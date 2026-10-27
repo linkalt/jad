@@ -38,6 +38,7 @@ type shellAsyncSpec struct {
 
 // shellRun is one child that runs as a handle.
 type shellRun struct {
+	watch  *outputWatch
 	id     string
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -159,7 +160,9 @@ func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, 
 	host.sweepShellResults(spec)
 
 	runCtx, cancel := context.WithCancel(context.Background())
-	handle := &shellRun{id: id, cancel: cancel, done: make(chan struct{}), start: time.Now(), label: label}
+	watch := newOutputWatch()
+	runCtx = withOutputWatch(runCtx, watch)
+	handle := &shellRun{id: id, cancel: cancel, done: make(chan struct{}), start: time.Now(), label: label, watch: watch}
 	host.setShellRun(handle)
 	go func() {
 		defer close(handle.done)
@@ -195,10 +198,10 @@ func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, 
 		ID:      callID,
 		Status:  tools.StatusOK,
 		Summary: fmt.Sprintf("%s %s is still running. Do not start it again: use the async tool with id %s to wait for the result (action wait), look at it (status) or stop it", spec.noun, id, id),
-		Information: []tools.Information{
+		Information: append([]tools.Information{
 			{Key: "run", Value: id},
 			{Key: "state", Value: "running"},
-		},
+		}, host.latestInformation(owner, id)...),
 	})
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "tool_output_failed", "The result could not be rendered"), nil
@@ -260,6 +263,14 @@ func (d *shellDriver) Stop(id, reason string) {
 	if run := d.host.shellRun(id); run != nil {
 		run.stopWith(reason)
 	}
+}
+
+func (d *shellDriver) latest(id string, info latestInfo, prev any, cfg asyncmgr.Config, now time.Time) (string, any) {
+	run := d.host.shellRun(id)
+	if run == nil {
+		return "", prev
+	}
+	return outputLatest(run.watch.get(), info, prev, cfg, now)
 }
 
 func (d *shellDriver) Detail(id string, maxBytes int) string {

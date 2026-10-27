@@ -191,6 +191,7 @@ func executeAsync(ctx context.Context, host *AsyncHost, arguments map[string]any
 		if result.Dropped > 0 {
 			information = append(information, tools.Information{Key: "dropped_unread", Value: result.Dropped})
 		}
+		information = appendLatest(information, host.latestBlocks(owner, host.liveHandleIDs(owner, ids)))
 		return renderAsync(callID, fmt.Sprintf("%d signal(s), %d pending", len(result.Signals), result.Pending), information)
 	case asyncActionList:
 		limit := int64(0)
@@ -220,6 +221,13 @@ func executeAsync(ctx context.Context, host *AsyncHost, arguments map[string]any
 		if result.Dropped > 0 {
 			information = append(information, tools.Information{Key: "dropped_unread", Value: result.Dropped})
 		}
+		var live []string
+		for _, item := range items {
+			if !item.State.Terminal() {
+				live = append(live, item.ID)
+			}
+		}
+		information = appendLatest(information, host.latestBlocks(owner, live))
 		return renderAsync(callID, fmt.Sprintf("%d handle(s) listed, %d active", len(items), result.Counts.Active), information)
 	}
 	id := asyncText(arguments["id"])
@@ -242,9 +250,19 @@ func executeAsync(ctx context.Context, host *AsyncHost, arguments map[string]any
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "async_"+action+"_failed", err.Error()), nil
 	}
-	return renderAsync(callID, fmt.Sprintf("%s %s is %s", entry.Kind, entry.ID, entry.State), []tools.Information{
-		{Key: "action", Value: action}, {Key: "entry", Value: entry},
-	})
+	information := []tools.Information{{Key: "action", Value: action}, {Key: "entry", Value: entry}}
+	if action == asyncActionStatus {
+		information = appendLatest(information, host.latestBlocks(owner, []string{id}))
+	}
+	return renderAsync(callID, fmt.Sprintf("%s %s is %s", entry.Kind, entry.ID, entry.State), information)
+}
+
+// appendLatest adds one "latest" line per block: id, kind, then the block text.
+func appendLatest(information []tools.Information, blocks []latestBlock) []tools.Information {
+	if len(blocks) > 0 {
+		information = append(information, tools.Information{Key: "latest", Value: blocks})
+	}
+	return information
 }
 
 func asyncText(value any) string {

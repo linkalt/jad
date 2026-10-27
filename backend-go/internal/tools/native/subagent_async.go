@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"jad/backend-go/internal/asyncmgr"
 )
@@ -105,6 +106,17 @@ func (d *subagentDriver) Stop(id, reason string) {
 	if run := d.find(id); run != nil {
 		run.stopWith(reason)
 	}
+}
+
+func (d *subagentDriver) latest(id string, info latestInfo, prev any, cfg asyncmgr.Config, now time.Time) (string, any) {
+	run := d.find(id)
+	if run == nil {
+		return "", prev
+	}
+	run.mu.Lock()
+	dir := run.dir
+	run.mu.Unlock()
+	return activityLatest(transcriptOf(dir), info, prev, cfg, now)
 }
 
 func (d *subagentDriver) Detail(id string, maxBytes int) string {

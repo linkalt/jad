@@ -3,6 +3,9 @@ package native
 import (
 	"bytes"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 	"unicode/utf8"
 )
 
@@ -93,6 +96,9 @@ func (tracker *bashUTF8Tracker) end() {
 }
 
 type bashStreamCollector struct {
+	// mu lets a reader on another goroutine (a "latest" view of a running handle) look at the
+	// windows while the pipe reader appends to them.
+	mu            sync.Mutex
 	limits        bashStreamLimits
 	head          []byte
 	tail          []byte
@@ -106,6 +112,8 @@ func newBashStreamCollector(limits bashStreamLimits) *bashStreamCollector {
 }
 
 func (collector *bashStreamCollector) push(chunk []byte) {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
 	collector.producedBytes += int64(len(chunk))
 	if !collector.binary && bytes.IndexByte(chunk, 0) >= 0 {
 		collector.binary = true
@@ -135,6 +143,8 @@ func (collector *bashStreamCollector) push(chunk []byte) {
 }
 
 func (collector *bashStreamCollector) end() {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
 	collector.utf8Tracker.end()
 	if collector.utf8Tracker.invalid {
 		collector.binary = true
@@ -167,6 +177,8 @@ type frozenStream struct {
 }
 
 func (collector *bashStreamCollector) freeze() frozenStream {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
 	return frozenStream{
 		head:          string(collector.head),
 		tail:          string(collector.tail),
@@ -220,6 +232,8 @@ type bashOutputCollector struct {
 	stripANSI    bool
 	// lineAware ends a cut stream's head and starts its tail on line boundaries.
 	lineAware bool
+	// lastOutput is the unix-nano time of the latest chunk of either stream, 0 before any.
+	lastOutput atomic.Int64
 }
 
 func newBashOutputCollector(stdout, stderr bashStreamLimits, maxLineChars int, stripANSI bool) *bashOutputCollector {
@@ -232,6 +246,7 @@ func newBashOutputCollector(stdout, stderr bashStreamLimits, maxLineChars int, s
 }
 
 func (collector *bashOutputCollector) push(stream bashStream, chunk []byte) {
+	defer collector.lastOutput.Store(time.Now().UnixNano())
 	if stream == bashStdout {
 		collector.stdout.push(chunk)
 		return
@@ -427,4 +442,32 @@ func itoaBash(value int64) string {
 		value /= 10
 	}
 	return string(buffer[index:])
+}
+
+// since returns what the stream produced after its first offset bytes, as far as the head
+// and tail windows still hold it, the stream's produced byte count, and how many of those
+// new bytes the windows no longer hold.
+func (collector *bashStreamCollector) since(offset int64) (text string, produced, lost int64) {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	produced = collector.producedBytes
+	window := collector.tail
+	if produced == int64(len(collector.head)+len(collector.tail)) {
+		window = append(append([]byte(nil), collector.head...), collector.tail...)
+	}
+	held := produced - int64(len(window))
+	offset = min(max(offset, 0), produced)
+	if offset < held {
+		return string(window), produced, held - offset
+	}
+	return string(window[offset-held:]), produced, 0
+}
+
+// lastOutputAt is when either stream last received a chunk; the zero time before any.
+func (collector *bashOutputCollector) lastOutputAt() time.Time {
+	nanos := collector.lastOutput.Load()
+	if nanos == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nanos)
 }

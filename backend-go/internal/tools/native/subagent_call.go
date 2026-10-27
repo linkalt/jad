@@ -190,7 +190,11 @@ func (s *subagentTool) await(ctx context.Context, callID string, run *subagentRu
 	if run.async != nil && view.state != subagentRunQueued && view.state != subagentRunRunning {
 		run.async.markRead(run.id)
 	}
-	return s.renderRun(callID, view)
+	var latest []tools.Information
+	if run.async != nil && (view.state == subagentRunQueued || view.state == subagentRunRunning) {
+		latest = s.async.latestInformation(run.owner, run.id)
+	}
+	return s.renderRun(callID, view, latest...)
 }
 
 // partialInformation adds what a cut-off run left behind to a result: a flag that the
@@ -207,11 +211,11 @@ func partialInformation(information []tools.Information, run subagentRunView) []
 }
 
 // withTranscript adds the full path of the child's messages.jsonl once the child has one.
-func withTranscript(information []tools.Information, run subagentRunView) []tools.Information {
+func withTranscript(information []tools.Information, run subagentRunView, after ...tools.Information) []tools.Information {
 	if run.dir != "" {
 		information = append(information, tools.Information{Key: "transcript", Value: filepath.Join(run.dir, "messages.jsonl")})
 	}
-	return information
+	return append(information, after...)
 }
 
 // partialContent is the last text the child wrote before it was cut off, or nil when
@@ -250,7 +254,7 @@ func stopReasonNote(run subagentRunView) string {
 	return ": " + run.reason
 }
 
-func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, error) {
+func (s *subagentTool) renderRun(callID string, run subagentRunView, latest ...tools.Information) (string, error) {
 	switch run.state {
 	case subagentRunQueued, subagentRunRunning:
 		return tools.RenderToolResult(tools.ResultOptions{
@@ -263,7 +267,7 @@ func (s *subagentTool) renderRun(callID string, run subagentRunView) (string, er
 				{Key: "state", Value: run.state},
 				{Key: "elapsed_ms", Value: run.elapsed.Milliseconds()},
 				{Key: "limit_ms", Value: run.timeoutMS},
-			}, run),
+			}, run, latest...),
 		})
 	case subagentRunStopped:
 		information := []tools.Information{{Key: "rounds", Value: run.result.Rounds}, {Key: "tokens", Value: run.result.Tokens}}

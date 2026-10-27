@@ -167,6 +167,7 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 	if reason := host.setProfileMessageRun(id, run); reason != "" {
 		run.Stop(reason)
 	}
+	host.seedActivity(id, transcriptRef(plan))
 	ended := make(chan struct{})
 	go func() {
 		defer close(ended)
@@ -216,10 +217,10 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 		Status: tools.StatusOK,
 		Summary: fmt.Sprintf("Profile %s %s (message %s). Do not send the message again: use the async tool with id %s to wait for the answer (action wait), look at it (status) or stop it",
 			profile, note, id, id),
-		Information: append([]tools.Information{
+		Information: append(append([]tools.Information{
 			{Key: "run", Value: id},
 			{Key: "state", Value: state},
-		}, transcriptInformation(plan)...),
+		}, transcriptInformation(plan)...), host.latestInformation(owner, id)...),
 	})
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "tool_output_failed", "The result could not be rendered"), nil
@@ -267,6 +268,17 @@ func (d *profileMessageDriver) Kind() asyncmgr.Kind { return asyncKindProfileMes
 
 func (d *profileMessageDriver) Stop(id, reason string) {
 	d.host.stopProfileMessage(id, reason)
+}
+
+func (d *profileMessageDriver) latest(id string, info latestInfo, prev any, cfg asyncmgr.Config, now time.Time) (string, any) {
+	run := d.host.profileMessageRun(id)
+	if remote, ok := run.(*remoteRun); ok {
+		return remoteLatest(remote, info, now), prev
+	}
+	if run == nil {
+		return "", prev
+	}
+	return activityLatest("", info, prev, cfg, now)
 }
 
 func (d *profileMessageDriver) Detail(id string, maxBytes int) string {

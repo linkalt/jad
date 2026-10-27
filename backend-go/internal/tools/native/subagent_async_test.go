@@ -99,7 +99,7 @@ func TestSubagentAsyncStatesKeepTheirNameAndAreNotOK(t *testing.T) {
 	for len(got) < 2 {
 		out := callAsync(t, f.async, "s1", map[string]any{"action": "wait", "wait_ms": int64(5000)})
 		for _, id := range []string{failed, timedOut} {
-			if strings.Contains(out, id) {
+			if strings.Contains(out, `"id":"`+id+`","kind":"subagent","state"`) {
 				got[id] = out
 			}
 		}
