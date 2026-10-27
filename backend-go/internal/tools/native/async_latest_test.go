@@ -136,7 +136,7 @@ func TestLatestOfSeveralHandlesInOneWaitAndFinishedOnesAreUnchanged(t *testing.T
 	f := newLatestFixture(t)
 	a := f.start(t, "s1", "sleep 0.3; echo from-a; sleep 30")
 	b := f.start(t, "s1", "sleep 0.3; echo from-b; sleep 30")
-	done := f.start(t, "s1", "echo finished-text")
+	done := f.start(t, "s1", "sleep 1; echo finished-text")
 	f.waitForOutput(t, a, "from-a")
 	f.waitForOutput(t, b, "from-b")
 	out := callAsync(t, f.async, "s1", map[string]any{"action": "wait", "wait_ms": json.Number("5000")})
