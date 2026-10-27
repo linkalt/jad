@@ -184,3 +184,44 @@ func TestRecoverAdoptsTerminalRecordOverLiveIndexRow(t *testing.T) {
 		t.Fatalf("active after second restart = %d, want 0", c.Active)
 	}
 }
+
+func dirSnapshot(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[e.Name()] = string(data)
+	}
+	return out
+}
+
+func TestCompleteAfterCloseDoesNotWriteTheFolder(t *testing.T) {
+	f := newFixture(t, nil)
+	f.opts.StopWait = 0
+	f.m.Close()
+	f.open(t)
+	f.start(t, "o", "a")
+	f.m.Close()
+	before := dirSnapshot(t, f.dir)
+	if ok, err := f.m.Complete("a", Result{State: StateDone, OK: true}); err != nil || !ok {
+		t.Fatalf("Complete after Close = %v, %v", ok, err)
+	}
+	f.m.flushIndexNow()
+	f.m.applyWork(pruneWork{removes: []string{"a"}}, true)
+	after := dirSnapshot(t, f.dir)
+	if len(after) != len(before) {
+		t.Fatalf("files after Close: %v, before: %v", after, before)
+	}
+	for name, body := range before {
+		if after[name] != body {
+			t.Fatalf("%s changed after Close", name)
+		}
+	}
+}

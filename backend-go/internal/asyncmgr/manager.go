@@ -74,6 +74,9 @@ type Manager struct {
 	// ioMu serializes file writes. Lock order: ioMu, then mu. Nothing takes ioMu while
 	// holding mu.
 	ioMu sync.Mutex
+	// ioClosed (guarded by ioMu) is set by Close once the final index is written; later
+	// record, removal and index writes are skipped so nothing touches the folder after Close.
+	ioClosed bool
 	// indexMu and indexDirty coalesce index.json rewrites (see writeIndex).
 	indexMu    sync.Mutex
 	indexDirty atomic.Bool
@@ -617,9 +620,12 @@ func (m *Manager) Close() {
 	}
 	m.flushMu.Unlock()
 	m.flushIndexNow()
-	// A concurrent writer may own the coalesced write; wait so nothing touches the folder after Close.
+	// A concurrent writer may own the coalesced write; wait for it, then shut the folder.
 	m.indexMu.Lock()
 	m.indexMu.Unlock()
+	m.ioMu.Lock()
+	m.ioClosed = true
+	m.ioMu.Unlock()
 }
 
 func sortedRows(set map[string]*row) []*row {

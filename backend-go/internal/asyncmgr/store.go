@@ -68,6 +68,9 @@ func (m *Manager) writeRecord(rec Record) error {
 	}
 	m.ioMu.Lock()
 	defer m.ioMu.Unlock()
+	if m.ioClosed {
+		return nil
+	}
 	return writeFileAtomic(m.recordPath(rec.ID), append(data, '\n'))
 }
 
@@ -91,6 +94,9 @@ func (m *Manager) readRecord(id string) (Record, error) {
 func (m *Manager) updateRecord(id string, change func(*Record)) {
 	m.ioMu.Lock()
 	defer m.ioMu.Unlock()
+	if m.ioClosed {
+		return
+	}
 	data, err := os.ReadFile(m.recordPath(id))
 	if err != nil {
 		return
@@ -112,6 +118,9 @@ func (m *Manager) updateRecord(id string, change func(*Record)) {
 func (m *Manager) removeRecord(id string) {
 	m.ioMu.Lock()
 	defer m.ioMu.Unlock()
+	if m.ioClosed {
+		return
+	}
 	if err := os.Remove(m.recordPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		m.opts.Logger.Warn("async record not removed", "handle", id, "error", err)
 	}
@@ -180,6 +189,10 @@ func (m *Manager) flushIndex() {
 		return
 	}
 	m.ioMu.Lock()
+	if m.ioClosed {
+		m.ioMu.Unlock()
+		return
+	}
 	err = writeFileAtomic(filepath.Join(m.dir, indexFile), append(body, '\n'))
 	m.ioMu.Unlock()
 	if err != nil {
