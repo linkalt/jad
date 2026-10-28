@@ -619,10 +619,7 @@ func scanTranscriptIndex(shared *sharedSession, config sessionfs.SessionConfig) 
 	index.size = stat.Size
 	index.generation = stat.generation()
 	if (!cacheValid || scanThrough > usageOffset) && scanThrough <= index.size {
-		if err := writeUsageCacheCheckpoint(config, index.usage, scanThrough, lastResponseKey); err != nil {
-			return transcriptIndex{}, fmt.Errorf("write session usage cache: %w", err)
-		}
-		index.wroteUsageCache = true
+		index.wroteUsageCache = shared.writeUsageCache(config, index.usage, scanThrough, lastResponseKey)
 	}
 	return index, nil
 }

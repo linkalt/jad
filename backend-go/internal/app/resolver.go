@@ -128,6 +128,9 @@ type sharedSession struct {
 	turnStartsMu sync.Mutex
 	turnStarts   *turnStartsCache
 	runners      map[string]*session.Runner
+
+	logger           *slog.Logger
+	usageCacheFailed atomic.Bool
 }
 
 // sessionKey names one session and profile, like the HTTP run registry's key. It is the
@@ -899,7 +902,11 @@ func (r *Resolver) buildStore(config sessionfs.SessionConfig, storeOptions trans
 			shared, err = nil, fmt.Errorf("open transcript store: panic: %v", recovered)
 		}
 	}()
-	return r.openStore(config, storeOptions, durability)
+	shared, err = r.openStore(config, storeOptions, durability)
+	if shared != nil {
+		shared.logger = r.logger
+	}
+	return shared, err
 }
 
 func openSharedSession(config sessionfs.SessionConfig, storeOptions transcript.TurnStoreOptions, durability transcript.DurabilityMode) (*sharedSession, error) {

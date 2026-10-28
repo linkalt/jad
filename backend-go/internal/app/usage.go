@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/transcript"
 	"jad/backend-go/internal/webui"
@@ -210,4 +211,19 @@ func writeUsageCacheCheckpoint(config sessionfs.SessionConfig, summary webui.Usa
 		}
 	}
 	return nil
+}
+
+// writeUsageCache stores the cache best-effort: a failed write is logged on the
+// first failure of a run of failures and never fails the caller. It reports
+// whether the cache was written.
+func (s *sharedSession) writeUsageCache(config sessionfs.SessionConfig, summary webui.UsageSummary, offset int64, lastResponseKey string) bool {
+	err := writeUsageCacheCheckpoint(config, summary, offset, lastResponseKey)
+	if err == nil {
+		s.usageCacheFailed.Store(false)
+		return true
+	}
+	if !s.usageCacheFailed.Swap(true) {
+		logging.Or(s.logger).Warn("usage cache write failed; continuing without it", "path", config.UsageCachePath, "error", err)
+	}
+	return false
 }

@@ -30,9 +30,7 @@ func (s *sharedSession) compactPreservingUsage(config sessionfs.SessionConfig, o
 		return result, nil
 	}
 	summary := resetLatestResponseUsage(before.usage)
-	if err := writeUsageCacheCheckpoint(config, summary, info.Size(), before.lastResponseKey); err != nil {
-		return result, fmt.Errorf("write usage cache after compaction: %w", err)
-	}
+	s.writeUsageCache(config, summary, info.Size(), before.lastResponseKey)
 	return result, nil
 }
 
@@ -53,9 +51,7 @@ func (s *sharedSession) frontCompactPreservingUsage(config sessionfs.SessionConf
 		return result, nil
 	}
 	summary := resetLatestResponseUsage(before.usage)
-	if err := writeUsageCacheCheckpoint(config, summary, info.Size(), before.lastResponseKey); err != nil {
-		return result, fmt.Errorf("write usage cache after front compaction: %w", err)
-	}
+	s.writeUsageCache(config, summary, info.Size(), before.lastResponseKey)
 	return result, nil
 }
 
