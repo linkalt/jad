@@ -228,6 +228,13 @@ func (g *shadowGit) prepare(ctx context.Context, excludePatterns []string) error
 	if err := privateDir(filepath.Join(g.gitDir, "info")); err != nil {
 		return err
 	}
+	// A git killed by a cancelled context or the timeout leaves its index lock behind. Callers hold the
+	// staging mutex and no git of this service runs between commands, so a lock here is stale.
+	for _, index := range []string{snapshotIndex, restoreIndex} {
+		if err := os.Remove(filepath.Join(g.gitDir, index+".lock")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
 	if err := os.WriteFile(filepath.Join(g.gitDir, "info", "attributes"), []byte(neutralAttributes), 0o600); err != nil {
 		return err
 	}
