@@ -1,8 +1,12 @@
 package httpapi
 
 import (
+	"log/slog"
+	"runtime/debug"
 	"slices"
 	"time"
+
+	"jad/backend-go/internal/logging"
 )
 
 // AsyncState is what a run stream tells a client about the session's async handles:
@@ -47,6 +51,11 @@ func (h *Handler) watchAsyncState(run *activeRun, reference, profile string) fun
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logging.Or(h.logger).Error("async state watcher panicked", slog.Any("panic", recovered), slog.String("stack", string(debug.Stack())))
+			}
+		}()
 		interval := h.toolStreamInterval
 		publish := func() {
 			state := read()

@@ -459,7 +459,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	launched := false
 	defer func() {
 		if !launched {
-			run.finish("failed", nil)
+			run.finish("failed", failureEvents("The run failed before it started."))
 			processUnlock()
 		}
 	}()

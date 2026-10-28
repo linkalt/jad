@@ -33,7 +33,6 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	ctx := responses.WithRetryNotifier(run.context(), run.setProviderRetry)
 	logger := logging.Or(h.logger).With(runLogAttrs(run)...)
 	reference, profile, _ := strings.Cut(run.key, "\x00")
-	defer h.watchAsyncState(run, reference, profile)()
 	started := time.Now()
 	logger.Info("run started")
 	// The turn and message the run's user input was saved as, once it is saved.
@@ -54,6 +53,7 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 		}
 		logger.Info("run finished", slog.String("status", run.state()), slog.Float64("duration_ms", durationMS(time.Since(started))))
 	}()
+	defer h.watchAsyncState(run, reference, profile)()
 	timestamp := time.Now().Local().Format("3:04 PM")
 	// No empty placeholder message is published: like the TypeScript run, the first
 	// ui.message is the first visible change, so a client that attaches before any

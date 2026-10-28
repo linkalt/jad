@@ -340,3 +340,29 @@ func TestProfileRunFailureIsTheClientSafeMessage(t *testing.T) {
 		t.Fatalf("failure = %q", failure)
 	}
 }
+
+func TestStartProfileRunPanicBeforeLaunchFailsTheRunAndReleasesTheTranscript(t *testing.T) {
+	f := newProfileRunFixture(t, 0)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the BeforeRun panic did not propagate")
+			}
+		}()
+		_, _ = f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{
+			Reference: "canonical", Profile: "dev", Caller: "c", Message: "hello",
+			BeforeRun: func(context.Context) { panic("before run failed") },
+		})
+	}()
+	if _, ok := f.handler.ProfileRuns().RunningProfileRunCaller("canonical", "dev"); ok {
+		t.Fatal("the run is still running")
+	}
+	if status := f.handler.runs.SessionRuns("canonical", "").ByProfile["dev"].Status; status != "failed" {
+		t.Fatalf("run status = %q, want failed", status)
+	}
+	release, err := f.resolver.TryLockSession(context.Background(), "canonical", "dev", "")
+	if err != nil {
+		t.Fatalf("the transcript stayed locked: %v", err)
+	}
+	release()
+}

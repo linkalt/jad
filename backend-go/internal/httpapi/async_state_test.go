@@ -196,3 +196,36 @@ func mustJSON(t *testing.T, value any) []byte {
 	}
 	return data
 }
+
+type panickingWatchResolver struct {
+	asyncResolver
+	panicOnWatch bool
+}
+
+func (r *panickingWatchResolver) WatchSessionAsync(reference, profile string, notify func()) (func() AsyncState, func()) {
+	if r.panicOnWatch {
+		panic("watch registration failed")
+	}
+	return func() AsyncState { panic("read failed") }, func() {}
+}
+
+func TestPanicRegisteringTheAsyncWatcherFailsTheRun(t *testing.T) {
+	handler := newAsyncTestHandler(t, &panickingWatchResolver{panicOnWatch: true}, 0)
+	run, err := handler.runs.begin("session\x00dev/coder", "turn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.executeRun(run, runnerFunc(func(context.Context, json.RawMessage, session.RunOptions) (session.RunResult, error) {
+		t.Fatal("the runner must not start")
+		return session.RunResult{}, nil
+	}), json.RawMessage(`"input"`))
+	if got := run.state(); got != "failed" {
+		t.Fatalf("run state = %q, want failed", got)
+	}
+}
+
+func TestPanicInTheAsyncWatcherGoroutineIsRecovered(t *testing.T) {
+	handler := newAsyncTestHandler(t, &panickingWatchResolver{}, 0)
+	queue := runWith(t, handler, func(session.RunOptions) {})
+	_ = asyncEvents(t, queue)
+}

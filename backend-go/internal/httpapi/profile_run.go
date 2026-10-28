@@ -110,6 +110,13 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 		return nil, err
 	}
 	run := started.run
+	launched := false
+	defer func() {
+		if !launched {
+			run.finish("failed", failureEvents("The run failed before it started."))
+			started.processUnlock()
+		}
+	}()
 	handle := &ProfileRun{run: run}
 	run.mu.Lock()
 	run.supportsInteraction = true
@@ -122,6 +129,7 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 	run.onCommitted = request.OnCommitted
 	run.onResult = func(event json.RawMessage) { handle.final = event }
 	h.attachContentCache(run)
+	launched = true
 	go func() {
 		defer started.processUnlock()
 		h.executeRun(run, started.resolved.Runner, input)
