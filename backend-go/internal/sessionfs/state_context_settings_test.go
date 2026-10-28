@@ -278,3 +278,36 @@ func TestNormalizeStateContextSettingsAcceptsRunStart(t *testing.T) {
 		t.Fatalf("max_prompt_bytes on run_start error = %v; want it rejected", err)
 	}
 }
+
+func TestStateContextPromptDocumentsRefuseDuplicatePath(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "a.md"), []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := normalizeStateContextRawIn(t, cwd, `{"triggers":{"compaction":{"tools":["task"],"prompt_documents":["a.md","./a.md"]}}}`, nil, &NativeTaskSettings{}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "prompt_documents[1] repeats") {
+		t.Fatalf("duplicate document error = %v", err)
+	}
+}
+
+func TestStateContextPromptDocumentsStopAtMaxBytesBeforeReading(t *testing.T) {
+	cwd := t.TempDir()
+	write := func(name string, size int) {
+		if err := os.WriteFile(filepath.Join(cwd, name), []byte(strings.Repeat("x", size)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("small.md", 1000)
+	write("fits.md", 1000)
+	write("big.md", 3500)
+	config := func(docs string) string {
+		return `{"triggers":{"compaction":{"tools":["task"],"max_bytes":4096,"prompt_documents":` + docs + `}}}`
+	}
+	if _, err := normalizeStateContextRawIn(t, cwd, config(`["small.md","fits.md"]`), nil, &NativeTaskSettings{}, nil, nil); err != nil {
+		t.Fatalf("within budget: %v", err)
+	}
+	_, err := normalizeStateContextRawIn(t, cwd, config(`["small.md","big.md","fits.md"]`), nil, &NativeTaskSettings{}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "prompt_documents[1]") || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("over budget error = %v", err)
+	}
+}

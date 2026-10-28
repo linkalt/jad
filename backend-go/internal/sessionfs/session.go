@@ -1105,7 +1105,7 @@ func loadPrompt(setting, profile map[string]json.RawMessage, cwd, path string) (
 	}
 	var paths []string
 	for index, document := range documents {
-		contents, resolved, err := readPromptDocument(document, index, "prompt_documents", cwd, path)
+		contents, resolved, err := readPromptDocument(document, index, "prompt_documents", cwd, path, maxPromptDocumentBytes)
 		if err != nil {
 			return "", "", nil, err
 		}
@@ -1117,7 +1117,7 @@ func loadPrompt(setting, profile map[string]json.RawMessage, cwd, path string) (
 
 // readPromptDocument reads one prompt document: ~ is expanded and a relative path
 // resolves from cwd. field names the setting in errors.
-func readPromptDocument(document string, index int, field, cwd, path string) (contents, resolvedPath string, err error) {
+func readPromptDocument(document string, index int, field, cwd, path string, limit int64) (contents, resolvedPath string, err error) {
 	if strings.TrimSpace(document) == "" {
 		return "", "", configError("%s: %s[%d] must be a non-empty string", path, field, index)
 	}
@@ -1126,7 +1126,7 @@ func readPromptDocument(document string, index int, field, cwd, path string) (co
 		resolved = filepath.Join(cwd, resolved)
 	}
 	resolved = filepath.Clean(resolved)
-	data, err := readRegularFile(resolved, maxPromptDocumentBytes)
+	data, err := readRegularFile(resolved, min(limit, maxPromptDocumentBytes))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", "", configError("%s: %s[%d] could not be read: %s", path, field, index, resolved)

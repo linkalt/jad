@@ -41,6 +41,9 @@ func readRegularFile(path string, max int64) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
+	if info.Size() > max {
+		return nil, fmt.Errorf("%s is larger than %d bytes", path, max)
+	}
 	contents, err := io.ReadAll(io.LimitReader(file, max+1))
 	if err != nil {
 		return nil, err

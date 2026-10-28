@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -190,7 +191,7 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 	if int64(len(header)) > trigger.MaxBytes {
 		return StateContextTrigger{}, configError("%s: statecontext.header is larger than %s.max_bytes", settingPath, section)
 	}
-	if trigger.Prompt, trigger.PromptDocuments, err = stateContextTriggerPrompt(fields, section, settingPath, cwd); err != nil {
+	if trigger.Prompt, trigger.PromptDocuments, err = stateContextTriggerPrompt(fields, section, settingPath, cwd, int64(len(header)), trigger.MaxBytes); err != nil {
 		return StateContextTrigger{}, err
 	}
 	if name == StateContextTriggerUser {
@@ -209,14 +210,18 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 
 // stateContextTriggerPrompt joins the inline prompt and the prompt documents of one
 // trigger. The documents are read now, so an edit applies from the next settings load.
-func stateContextTriggerPrompt(fields map[string]json.RawMessage, section, settingPath, cwd string) (string, []string, error) {
+// A document is read only if it fits what is left of max_bytes after the header and the text
+// before it; one that does not is a config error, and the file is never read in full.
+func stateContextTriggerPrompt(fields map[string]json.RawMessage, section, settingPath, cwd string, headerBytes, maxBytes int64) (string, []string, error) {
 	var texts, paths []string
+	used := headerBytes
 	if value, exists := fields["prompt"]; exists && strings.TrimSpace(string(value)) != "null" {
 		var prompt string
 		if err := json.Unmarshal(value, &prompt); err != nil || strings.TrimSpace(prompt) == "" {
 			return "", nil, configError("%s: %s.prompt must be a non-empty string", settingPath, section)
 		}
 		texts = append(texts, prompt)
+		used += int64(len(prompt))
 	}
 	if value, exists := fields["prompt_documents"]; exists && strings.TrimSpace(string(value)) != "null" {
 		var documents []string
@@ -224,10 +229,18 @@ func stateContextTriggerPrompt(fields map[string]json.RawMessage, section, setti
 			return "", nil, configError("%s: %s.prompt_documents must be an array of paths", settingPath, section)
 		}
 		for index, document := range documents {
-			contents, resolved, err := readPromptDocument(document, index, section+".prompt_documents", cwd, settingPath)
+			separator := int64(0)
+			if len(texts) > 0 {
+				separator = 2
+			}
+			contents, resolved, err := readPromptDocument(document, index, section+".prompt_documents", cwd, settingPath, max(maxBytes-used-separator, 0))
 			if err != nil {
 				return "", nil, err
 			}
+			if slices.Contains(paths, resolved) {
+				return "", nil, configError("%s: %s.prompt_documents[%d] repeats %s", settingPath, section, index, resolved)
+			}
+			used += separator + int64(len(contents))
 			texts = append(texts, contents)
 			paths = append(paths, resolved)
 		}
