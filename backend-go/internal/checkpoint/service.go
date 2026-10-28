@@ -766,9 +766,17 @@ func (s *Service) restore(ctx context.Context, record Record, mode string, dryRu
 		return failed(err)
 	}
 	workspace := filepath.Clean(s.options.Workspace)
+	realWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return failed(err)
+	}
 	for _, change := range changes.remove {
 		target := filepath.Join(workspace, filepath.FromSlash(change.Path))
 		if !strings.HasPrefix(target, workspace+string(filepath.Separator)) {
+			continue
+		}
+		// The checkout may have turned a parent directory into a symlink; os.Remove would follow it.
+		if !parentIsPlain(realWorkspace, workspace, target) {
 			continue
 		}
 		// ENOTDIR: checkout already replaced a parent directory with a file or symlink.
@@ -858,4 +866,16 @@ func (s *Service) plan(ctx context.Context, record Record, currentTree, mode str
 		}
 	}
 	return result, nil
+}
+
+// parentIsPlain reports whether target's parent directory resolves, without any symlink, to the
+// same place its lexical path names inside the workspace.
+func parentIsPlain(realWorkspace, workspace, target string) bool {
+	parent := filepath.Dir(target)
+	resolved, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return false
+	}
+	relative, err := filepath.Rel(workspace, parent)
+	return err == nil && resolved == filepath.Join(realWorkspace, relative)
 }
