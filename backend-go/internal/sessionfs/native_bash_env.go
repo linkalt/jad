@@ -1,7 +1,6 @@
 package sessionfs
 
 import (
-	"os"
 	"regexp"
 	"strings"
 	"unicode"
@@ -10,7 +9,7 @@ import (
 var bashEnvAssignmentPattern = regexp.MustCompile(`^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$`)
 
 func loadNativeBashEnvFile(path, settingPath string) (map[string]string, error) {
-	contents, err := os.ReadFile(path)
+	contents, err := readConfigTextFile(path)
 	if err != nil {
 		return nil, configError("%s: could not read %s: %v", settingPath, path, err)
 	}

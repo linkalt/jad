@@ -142,7 +142,7 @@ func loadSubagentFolder(name, folder string) (NativeSubagentAgent, error) {
 		return NativeSubagentAgent{}, configError("%s: could not read the prompt: %v", promptPath, err)
 	}
 	if hasPrompt {
-		contents, err := os.ReadFile(promptPath)
+		contents, err := readConfigTextFile(promptPath)
 		if err != nil {
 			return NativeSubagentAgent{}, configError("%s: could not read the prompt: %v", promptPath, err)
 		}

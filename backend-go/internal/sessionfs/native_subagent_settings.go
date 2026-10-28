@@ -2,7 +2,6 @@ package sessionfs
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -566,9 +565,9 @@ func loadSubagentPrompt(fields map[string]json.RawMessage, leading []string, cwd
 			return nil, "", configError("%s: %s.prompt_documents lists %s twice", settingPath, section, resolved)
 		}
 		seen[resolved] = struct{}{}
-		contents, err := os.ReadFile(resolved)
+		contents, err := readConfigTextFile(resolved)
 		if err != nil {
-			return nil, "", configError("%s: %s.prompt_documents[%d] could not be read: %s", settingPath, section, index, resolved)
+			return nil, "", configError("%s: %s.prompt_documents[%d] could not be read: %s: %v", settingPath, section, index, resolved, err)
 		}
 		parts = append(parts, string(contents))
 		resolvedPaths = append(resolvedPaths, resolved)
