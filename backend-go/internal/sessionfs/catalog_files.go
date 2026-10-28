@@ -137,7 +137,7 @@ func ListCatalogFiles(layout Layout, kind CatalogKind) ([]CatalogFileInfo, error
 	}
 	infos := make([]CatalogFileInfo, 0, entries.Len())
 	for _, entry := range entries.Entries() {
-		data, err := os.ReadFile(entry.Path)
+		data, err := readRegularFile(entry.Path, maxInternalJSONFileBytes)
 		if err != nil {
 			return nil, configError("%s: could not be read: %v", entry.Path, err)
 		}
@@ -171,7 +171,7 @@ func ReadCatalogFile(layout Layout, kind CatalogKind, id string) (CatalogFile, e
 	if err != nil {
 		return CatalogFile{}, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := readRegularFile(path, maxInternalJSONFileBytes)
 	if errors.Is(err, fs.ErrNotExist) {
 		return CatalogFile{}, &CatalogError{Kind: CatalogNotFound, Message: fmt.Sprintf("%s %q does not exist", kind, id)}
 	}
@@ -230,7 +230,7 @@ func checkWritePrecondition(path, kind, id string, condition WriteCondition) (bo
 	if condition.IfMatch == "" {
 		return false, nil, &CatalogError{Kind: CatalogPreconditionRequired, Message: "If-Match is required to replace a file"}
 	}
-	current, err := os.ReadFile(path)
+	current, err := readRegularFile(path, maxInternalJSONFileBytes)
 	if err != nil {
 		return false, nil, configError("%s: could not be read: %v", path, err)
 	}

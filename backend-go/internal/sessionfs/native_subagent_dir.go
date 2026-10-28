@@ -113,7 +113,7 @@ func loadSubagentFolder(name, folder string) (NativeSubagentAgent, error) {
 		return NativeSubagentAgent{}, configError("%s: could not read configuration: %v", settingsPath, err)
 	}
 	if hasSettings {
-		raw, err := os.ReadFile(settingsPath)
+		raw, err := readRegularFile(settingsPath, maxInternalJSONFileBytes)
 		if err != nil {
 			return NativeSubagentAgent{}, configError("%s: could not read configuration: %v", settingsPath, err)
 		}

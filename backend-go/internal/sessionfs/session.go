@@ -1126,9 +1126,12 @@ func readPromptDocument(document string, index int, field, cwd, path string) (co
 		resolved = filepath.Join(cwd, resolved)
 	}
 	resolved = filepath.Clean(resolved)
-	data, err := os.ReadFile(resolved)
+	data, err := readRegularFile(resolved, maxPromptDocumentBytes)
 	if err != nil {
-		return "", "", configError("%s: %s[%d] could not be read: %s", path, field, index, resolved)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", "", configError("%s: %s[%d] could not be read: %s", path, field, index, resolved)
+		}
+		return "", "", configError("%s: %s[%d] could not be read: %v", path, field, index, err)
 	}
 	return string(data), resolved, nil
 }
@@ -1166,7 +1169,7 @@ func resolveConfiguredPath(fields map[string]json.RawMessage, name, fallback, ba
 // an error. The text of an invalid-JSON error carries Go's decoder message, which cannot
 // match V8's.
 func readSessionObject(path string) (map[string]json.RawMessage, error) {
-	contents, err := os.ReadFile(path)
+	contents, err := readRegularFile(path, maxInternalJSONFileBytes)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, configError("%s: file is required", path)

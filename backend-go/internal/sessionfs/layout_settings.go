@@ -87,7 +87,7 @@ func SetLayoutModelDefault(location Location, profile, model string, durability 
 	if err != nil {
 		return ModelDefaultUpdate{}, configError("%s: could not be read: %v", entry.Path, err)
 	}
-	contents, err := os.ReadFile(entry.Path)
+	contents, err := readRegularFile(entry.Path, maxInternalJSONFileBytes)
 	if err != nil {
 		return ModelDefaultUpdate{}, configError("%s: could not be read: %v", entry.Path, err)
 	}

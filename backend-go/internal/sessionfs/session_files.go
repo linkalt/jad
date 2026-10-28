@@ -41,7 +41,7 @@ func listSessionFiles(roots []Root, onUnreadable func(location Location, err err
 				continue
 			}
 			location := makeLocation(root, id, len(roots))
-			data, err := os.ReadFile(location.SettingFile())
+			data, err := readRegularFile(location.SettingFile(), maxInternalJSONFileBytes)
 			if err != nil {
 				if onUnreadable != nil {
 					onUnreadable(location, err)
@@ -143,7 +143,7 @@ func ReadSessionFile(roots []Root, reference string) (CatalogFile, error) {
 	if err != nil {
 		return CatalogFile{}, err
 	}
-	data, err := os.ReadFile(location.SettingFile())
+	data, err := readRegularFile(location.SettingFile(), maxInternalJSONFileBytes)
 	if err != nil {
 		return CatalogFile{}, configError("%s: could not be read: %v", location.SettingFile(), err)
 	}

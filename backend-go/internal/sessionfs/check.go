@@ -3,7 +3,6 @@ package sessionfs
 import (
 	"errors"
 	"fmt"
-	"os"
 
 	"jad/backend-go/internal/catalog"
 )
@@ -78,7 +77,7 @@ func (r *CheckReport) checkCatalog(layout Layout, roots []Root, kind CatalogKind
 	}
 	for _, entry := range entries.Entries() {
 		r.Checked++
-		data, err := os.ReadFile(entry.Path)
+		data, err := readRegularFile(entry.Path, maxInternalJSONFileBytes)
 		if err == nil {
 			err = validateCatalogFile(layout, roots, kind, entry.Path, data, validateServer)
 		}

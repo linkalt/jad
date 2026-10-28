@@ -376,7 +376,7 @@ func defaultSessionRoots(cwd string) ([]Root, error) {
 }
 
 func readObject(path string) (map[string]json.RawMessage, error) {
-	contents, err := os.ReadFile(path)
+	contents, err := readRegularFile(path, maxInternalJSONFileBytes)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("%s: file is required", path)

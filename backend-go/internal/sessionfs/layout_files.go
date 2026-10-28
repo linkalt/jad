@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"os"
 	"sort"
 	"strings"
 
@@ -169,7 +168,7 @@ type layoutToolsetMCP struct {
 // readLayoutFile decodes one catalog file strictly: an unknown key is an error that
 // names the file, so a typo cannot silently drop a setting.
 func readLayoutFile(path string, into any) error {
-	contents, err := os.ReadFile(path)
+	contents, err := readRegularFile(path, maxInternalJSONFileBytes)
 	if err != nil {
 		return configError("%s: could not be read: %v", path, err)
 	}
