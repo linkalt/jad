@@ -65,6 +65,8 @@ type PendingInteraction struct {
 	ExpiresAt    string          `json:"expires_at"`
 	MaxExpiresAt string          `json:"max_expires_at"`
 	ExtendMS     int64           `json:"extend_ms"`
+	// Seq orders the broker's transitions for the run registry; it is never sent.
+	Seq uint64 `json:"-"`
 }
 
 // Clone returns a copy that shares no memory with the receiver.
@@ -83,6 +85,7 @@ type InteractionEnd struct {
 	Tool          string              `json:"tool"`
 	Outcome       InteractionOutcome  `json:"outcome"`
 	Decision      InteractionDecision `json:"decision,omitempty"`
+	Seq           uint64              `json:"-"`
 }
 
 type InteractionReply struct {

@@ -31,6 +31,22 @@ func (r *activeRun) setPendingInteraction(pending *tools.PendingInteraction, end
 		r.mu.Unlock()
 		return
 	}
+	id, seq := "", uint64(0)
+	if next != nil {
+		id, seq = next.ID, next.Seq
+	} else if ended != nil {
+		id, seq = ended.InteractionID, ended.Seq
+	}
+	if seq != 0 {
+		if seq <= r.interactionSeq[id] {
+			r.mu.Unlock()
+			return
+		}
+		if r.interactionSeq == nil {
+			r.interactionSeq = make(map[string]uint64)
+		}
+		r.interactionSeq[id] = seq
+	}
 	if next == nil && r.pendingInteraction == nil {
 		r.mu.Unlock()
 		return

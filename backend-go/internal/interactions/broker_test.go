@@ -178,7 +178,7 @@ func TestBrokerTellsTheRunWhyAQuestionEnded(t *testing.T) {
 			awaitAnswer(t, result)
 			<-log.pending
 			ended := <-log.ended
-			want := tools.InteractionEnd{InteractionID: pending.ID, Tool: "bash", Outcome: tools.InteractionAnswered, Decision: decision}
+			want := tools.InteractionEnd{InteractionID: pending.ID, Tool: "bash", Outcome: tools.InteractionAnswered, Decision: decision, Seq: 2}
 			if ended == nil || *ended != want {
 				t.Fatalf("answered %q: ended = %+v, want %+v", decision, ended, want)
 			}
@@ -194,7 +194,7 @@ func TestBrokerTellsTheRunWhyAQuestionEnded(t *testing.T) {
 		awaitAnswer(t, result)
 		<-log.pending
 		ended := <-log.ended
-		want := tools.InteractionEnd{InteractionID: pending.ID, Tool: "bash", Outcome: tools.InteractionCancelled}
+		want := tools.InteractionEnd{InteractionID: pending.ID, Tool: "bash", Outcome: tools.InteractionCancelled, Seq: 2}
 		if ended == nil || *ended != want {
 			t.Fatalf("stopped: ended = %+v, want %+v", ended, want)
 		}

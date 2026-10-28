@@ -281,6 +281,9 @@ type activeRun struct {
 	subscribers        map[*eventQueue]struct{}
 	done               chan struct{}
 
+	// interactionSeq is the newest broker transition applied per interaction id. Guarded by mu.
+	interactionSeq map[string]uint64
+
 	// providerRetry is the provider retry the run is waiting on, replayed to a client
 	// that attaches mid-wait. nil when the run is not waiting. Guarded by mu.
 	providerRetry *providerRetryWait
@@ -786,6 +789,12 @@ func (r *activeRun) publish(name string, data any) error {
 func (r *activeRun) finish(status string, terminal []streamEvent) {
 	if r.interactions != nil {
 		r.interactions.Cancel("The run ended before the draft was answered.")
+	}
+	r.mu.Lock()
+	stuck := r.pendingInteraction
+	r.mu.Unlock()
+	if stuck != nil {
+		r.setPendingInteraction(nil, &tools.InteractionEnd{InteractionID: stuck.ID, Tool: stuck.Tool, Outcome: tools.InteractionCancelled})
 	}
 	r.mu.Lock()
 	if r.status != "running" {

@@ -19,6 +19,7 @@ type Broker struct {
 	mu       sync.Mutex
 	entry    *pendingEntry
 	onChange func(*tools.PendingInteraction, *tools.InteractionEnd)
+	seq      uint64
 	now      func() time.Time
 }
 
@@ -113,6 +114,9 @@ func (b *Broker) Request(ctx context.Context, identity tools.InteractionIdentity
 		b.mu.Unlock()
 		return tools.InteractionAnswer{}, errors.New("an interaction is already pending for this run")
 	}
+	b.seq++
+	pending.Seq = b.seq
+	entry.pending.Seq = b.seq
 	b.entry = entry
 	entry.timer = time.AfterFunc(maxDuration(0, expiresAt.Sub(b.now())), func() { b.timeout(entry) })
 	b.mu.Unlock()
@@ -182,6 +186,8 @@ func (b *Broker) Extend(id string) tools.InteractionExtendStatus {
 	}
 	entry.expiresAt = next
 	entry.pending.ExpiresAt = interactionTimestamp(next)
+	b.seq++
+	entry.pending.Seq = b.seq
 	entry.timer.Reset(maxDuration(0, next.Sub(now)))
 	pending := entry.pending.Clone()
 	b.mu.Unlock()
@@ -247,7 +253,10 @@ func (b *Broker) settleLocked(entry *pendingEntry, answer tools.InteractionAnswe
 		entry.timer.Stop()
 	}
 	entry.settled <- answer
-	return interactionEnd(entry.pending, answer)
+	b.seq++
+	ended := interactionEnd(entry.pending, answer)
+	ended.Seq = b.seq
+	return ended
 }
 
 func interactionEnd(pending tools.PendingInteraction, answer tools.InteractionAnswer) *tools.InteractionEnd {
