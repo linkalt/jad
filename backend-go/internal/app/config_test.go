@@ -127,7 +127,7 @@ func TestLoadConfigRefusesAWildcardHostForTheRemoteAPI(t *testing.T) {
 	tcpOnly := `{"session_roots":[],"server":{"remote_api":{"enabled":true,"tokens_file":"tokens.json"}}}`
 	socketOnly := `{"session_roots":[],"server":{"remote_api":{"enabled":true,"tokens_file":"tokens.json","listen_unix":"/run/jad/remote.sock"}}}`
 	wildcards := []string{"", "0.0.0.0", "::", "[::]", "0:0:0:0:0:0:0:0", "::0", "[::0]", "::ffff:0.0.0.0",
-		"[::ffff:0.0.0.0]", "::%eth0", "0.0.0.0.", " [::] "}
+		"[::ffff:0.0.0.0]", "::%eth0", "0.0.0.0.", " [::] ", "0", "0.0", "0x0", "00", "0.0.0", "127.1", "0x7f.1", "1.2-3"}
 	for _, host := range wildcards {
 		refused(host, tcpOnly)
 	}
@@ -135,7 +135,7 @@ func TestLoadConfigRefusesAWildcardHostForTheRemoteAPI(t *testing.T) {
 	for _, host := range []string{"*", "-bad", "trailing-", "a..b", "host:8787", "http://x"} {
 		refused(host, tcpOnly)
 	}
-	for _, host := range []string{"127.0.0.1", "::1", "10.8.0.2", "localhost", "jad.vpn.example", "fe80::1%eth0"} {
+	for _, host := range []string{"127.0.0.1", "::1", "10.8.0.2", "localhost", "jad.vpn.example", "fe80::1%eth0", "host1", "1host", "10.example"} {
 		accepted(host, tcpOnly)
 	}
 	// With listen_unix set the socket is the only listener, so any host is fine.

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"jad/backend-go/internal/contentlibrary"
 	"jad/backend-go/internal/httpapi"
@@ -143,7 +144,7 @@ var listenHostPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z
 // listensOnEveryInterface reports whether net.Listen would bind every interface for host: the
 // empty host, an unspecified address in any spelling (0.0.0.0, ::, ::0, 0:0:0:0:0:0:0:0,
 // ::ffff:0.0.0.0, bracketed or with a zone), or a value that is neither an address nor a plain
-// hostname. A hostname resolving to such an address is out of scope: it is a name the operator
+// hostname (numeric spellings such as 0, 0.0, 00, 0x0 are not hostnames). A hostname resolving to such an address is out of scope: it is a name the operator
 // wrote, not a wildcard spelling.
 func listensOnEveryInterface(host string) bool {
 	host = strings.TrimSpace(host)
@@ -156,8 +157,15 @@ func listensOnEveryInterface(host string) bool {
 	if address, err := netip.ParseAddr(host); err == nil {
 		return address.WithZone("").Unmap().IsUnspecified()
 	}
-	return !listenHostPattern.MatchString(host)
+	if !listenHostPattern.MatchString(host) {
+		return true
+	}
+	// The cgo resolver reads 0, 0.0, 00, 0x0 as 0.0.0.0 (inet_aton): a name needs a letter and a last label that is not a number.
+	last := host[strings.LastIndexByte(host, '.')+1:]
+	return !strings.ContainsFunc(host, unicode.IsLetter) || listenHostNumericLabel.MatchString(last)
 }
+
+var listenHostNumericLabel = regexp.MustCompile(`^(?:[0-9]+|0[xX][0-9A-Fa-f]*)$`)
 
 // checkRemoteListenHost refuses a wildcard listen address when the remote API answers on the
 // TCP listener: the bearer token of every remote would then answer on every interface of the
