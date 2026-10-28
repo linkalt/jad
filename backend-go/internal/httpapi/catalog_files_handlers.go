@@ -18,6 +18,8 @@ type CatalogFileInfo struct {
 	Category string `json:"category,omitempty"`
 	// Sessions lists the sessions that can use a profile; it is set for profiles only.
 	Sessions []CatalogSessionRef `json:"sessions,omitempty"`
+	// Error is set on a session file the listing could not read; the entry has no etag.
+	Error string `json:"error,omitempty"`
 }
 
 // CatalogSessionRef names one session in a profile's listing.

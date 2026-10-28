@@ -20,8 +20,8 @@ type fakeCatalogSessions struct {
 	onCancel func()
 }
 
-func (f *fakeCatalogSessions) ListSessionConfigs(context.Context) ([]CatalogFileInfo, error) {
-	return nil, nil
+func (f *fakeCatalogSessions) ListSessionConfigs(context.Context) ([]CatalogFileInfo, bool, error) {
+	return nil, false, nil
 }
 func (f *fakeCatalogSessions) ReadSessionConfig(context.Context, string) (CatalogFile, error) {
 	return CatalogFile{}, nil

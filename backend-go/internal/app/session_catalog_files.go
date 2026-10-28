@@ -14,19 +14,22 @@ import (
 	"jad/backend-go/internal/tools/native"
 )
 
-func (r *Resolver) ListSessionConfigs(ctx context.Context) ([]httpapi.CatalogFileInfo, error) {
+func (r *Resolver) ListSessionConfigs(ctx context.Context) ([]httpapi.CatalogFileInfo, bool, error) {
 	if err := requireSettingsContext(ctx); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	files, err := sessionfs.ListSessionFiles(r.roots)
+	result, err := sessionfs.ListSessionFilesReport(r.roots)
 	if err != nil {
-		return nil, mapCatalogFileError(err)
+		return nil, false, mapCatalogFileError(err)
 	}
-	listing := make([]httpapi.CatalogFileInfo, len(files))
-	for index, file := range files {
-		listing[index] = httpapi.CatalogFileInfo{ID: file.ID, ETag: file.ETag, Name: file.Name, Category: file.Category}
+	listing := make([]httpapi.CatalogFileInfo, 0, len(result.Files)+len(result.Skipped))
+	for _, file := range result.Files {
+		listing = append(listing, httpapi.CatalogFileInfo{ID: file.ID, ETag: file.ETag, Name: file.Name, Category: file.Category})
 	}
-	return listing, nil
+	for _, skipped := range result.Skipped {
+		listing = append(listing, httpapi.CatalogFileInfo{ID: skipped.ID, Error: skipped.Error})
+	}
+	return listing, result.Truncated, nil
 }
 
 func (r *Resolver) ReadSessionConfig(ctx context.Context, reference string) (httpapi.CatalogFile, error) {

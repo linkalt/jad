@@ -14,7 +14,9 @@ import (
 // or <root>:<id> when there is more than one session root. A delete is a check, then the
 // handler stops the session's runs, then the removal.
 type CatalogSessions interface {
-	ListSessionConfigs(ctx context.Context) ([]CatalogFileInfo, error)
+	// ListSessionConfigs also reports the files it could not read (with Error set) and whether
+	// its read budget cut the listing short.
+	ListSessionConfigs(ctx context.Context) (files []CatalogFileInfo, truncated bool, err error)
 	ReadSessionConfig(ctx context.Context, reference string) (CatalogFile, error)
 	WriteSessionConfig(ctx context.Context, reference string, data []byte, ifMatch, ifNoneMatch string) (info CatalogFileInfo, created bool, err error)
 	// CheckSessionConfigDelete refuses a delete whose precondition fails and returns the
@@ -37,7 +39,7 @@ func (h *Handler) handleCatalogSessions(w http.ResponseWriter, r *http.Request, 
 			writeJSONError(w, &StatusError{Code: http.StatusMethodNotAllowed, Message: "method not allowed"})
 			return
 		}
-		files, err := h.catalogSessions.ListSessionConfigs(r.Context())
+		files, truncated, err := h.catalogSessions.ListSessionConfigs(r.Context())
 		if err != nil {
 			writeJSONError(w, err)
 			return
@@ -45,7 +47,7 @@ func (h *Handler) handleCatalogSessions(w http.ResponseWriter, r *http.Request, 
 		if files == nil {
 			files = []CatalogFileInfo{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"files": files})
+		writeJSON(w, http.StatusOK, map[string]any{"files": files, "truncated": truncated})
 	case 4:
 		h.handleCatalogSession(w, r, segments[3])
 	default:

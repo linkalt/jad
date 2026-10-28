@@ -14,16 +14,52 @@ import (
 	"jad/backend-go/internal/sessionlock"
 )
 
-// ListSessionFiles lists the catalog-layout sessions of every root with the version of each
-// <id>.json file. The ID is the session reference the other routes take.
-func ListSessionFiles(roots []Root) ([]CatalogFileInfo, error) {
-	return listSessionFiles(roots, nil)
+// maxSessionListingBytes bounds the session file bytes one listing reads; the files left are
+// not read and the listing is marked truncated.
+const maxSessionListingBytes int64 = 64 << 20
+
+// SkippedSession is a session file a listing could not read, with the reason.
+type SkippedSession struct {
+	ID    string
+	Error string
 }
 
-// listSessionFiles is ListSessionFiles; with onUnreadable set, a session file that cannot
-// be read is passed to it and skipped instead of failing the listing.
-func listSessionFiles(roots []Root, onUnreadable func(location Location, err error)) ([]CatalogFileInfo, error) {
+// SessionListing is the tolerant result of listing the sessions: the readable ones, the ones
+// skipped because they could not be read, and whether the read budget cut the listing short.
+type SessionListing struct {
+	Files     []CatalogFileInfo
+	Skipped   []SkippedSession
+	Truncated bool
+}
+
+// ListSessionFiles lists the catalog-layout sessions of every root with the version of each
+// <id>.json file. The ID is the session reference the other routes take. A file that cannot
+// be read is left out; ListSessionFilesReport also reports it.
+func ListSessionFiles(roots []Root) ([]CatalogFileInfo, error) {
+	listing, err := ListSessionFilesReport(roots)
+	return listing.Files, err
+}
+
+// ListSessionFilesReport is ListSessionFiles with the skipped files and the truncation flag.
+func ListSessionFilesReport(roots []Root) (SessionListing, error) {
+	var listing SessionListing
+	files, truncated, err := listSessionFiles(roots, maxSessionListingBytes, func(location Location, err error) {
+		listing.Skipped = append(listing.Skipped, SkippedSession{ID: location.Reference, Error: err.Error()})
+	})
+	if err != nil {
+		return SessionListing{}, err
+	}
+	sort.Slice(listing.Skipped, func(i, j int) bool { return listing.Skipped[i].ID < listing.Skipped[j].ID })
+	listing.Files, listing.Truncated = files, truncated
+	return listing, nil
+}
+
+// listSessionFiles passes a session file that cannot be read to onUnreadable and skips it. A
+// positive budget stops reading once that many bytes were read and reports the listing truncated.
+func listSessionFiles(roots []Root, budget int64, onUnreadable func(location Location, err error)) ([]CatalogFileInfo, bool, error) {
 	var infos []CatalogFileInfo
+	var read int64
+	truncated := false
 	for _, root := range roots {
 		if root.Layout == nil {
 			continue
@@ -33,27 +69,29 @@ func listSessionFiles(roots []Root, onUnreadable func(location Location, err err
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
-			return nil, fmt.Errorf("read session root %q: %w", root.ID, err)
+			return nil, false, fmt.Errorf("read session root %q: %w", root.ID, err)
 		}
 		for _, entry := range entries {
 			id, ok := SessionFileID(entry)
 			if !ok {
 				continue
 			}
+			if budget > 0 && read >= budget {
+				truncated = true
+				break
+			}
 			location := makeLocation(root, id, len(roots))
 			data, err := readRegularFile(location.SettingFile(), maxInternalJSONFileBytes)
 			if err != nil {
-				if onUnreadable != nil {
-					onUnreadable(location, err)
-					continue
-				}
-				return nil, configError("%s: could not be read: %v", location.SettingFile(), err)
+				onUnreadable(location, err)
+				continue
 			}
+			read += int64(len(data))
 			infos = append(infos, CatalogFileInfo{ID: location.Reference, ETag: CatalogETag(data), Name: fileDisplayName(data), Category: fileCategory(data), scope: fileScope(data)})
 		}
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
-	return infos, nil
+	return infos, truncated, nil
 }
 
 // fileScope is the profile selection a session file sets. A file that does not parse selects nothing
@@ -75,7 +113,7 @@ func ProfileSessions(layout Layout, roots []Root) (map[string][]SessionRef, erro
 	if err != nil {
 		return nil, configError("%v", err)
 	}
-	sessions, err := listSessionFiles(roots, func(Location, error) {})
+	sessions, _, err := listSessionFiles(roots, 0, func(Location, error) {})
 	if err != nil {
 		return nil, err
 	}

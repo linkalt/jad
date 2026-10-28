@@ -97,7 +97,7 @@ func (r *CheckReport) checkProfileMessage(id string, config SessionConfig) {
 }
 
 func (r *CheckReport) checkSessions(roots []Root) {
-	files, err := listSessionFiles(roots, func(location Location, err error) {
+	files, _, err := listSessionFiles(roots, 0, func(location Location, err error) {
 		r.Checked++
 		r.add("session", location.Reference, err)
 	})

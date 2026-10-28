@@ -95,7 +95,10 @@ func TestEveryConfigReaderRefusesNonRegularAndOversizeFiles(t *testing.T) {
 			}},
 		{"ListSessionFiles", maxInternalJSONFileBytes, func(_ Layout, l Location, _ string) string { return l.File },
 			func(l Layout, loc Location, _ string) error {
-				_, err := ListSessionFiles(layoutRoots(l, loc))
+				listing, err := ListSessionFilesReport(layoutRoots(l, loc))
+				if err == nil && len(listing.Skipped) > 0 {
+					err = errors.New(listing.Skipped[0].Error)
+				}
 				return err
 			}},
 	}
