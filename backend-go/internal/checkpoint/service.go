@@ -94,6 +94,8 @@ type RestoreResult struct {
 	// UndoCheckpointID names the checkpoint that undoes this restore; absent for
 	// a dry run or when nothing changed.
 	UndoCheckpointID string `json:"undo_checkpoint_id,omitempty"`
+	// Warning is set when the restore could not cover part of the workspace.
+	Warning string `json:"warning,omitempty"`
 }
 
 // RestoreOptions selects a dry run and a mode; an empty Mode takes the setting's default.
@@ -432,6 +434,8 @@ type capture struct {
 	tree      string
 	fileCount int
 	bytes     int64
+	// nested lists the nested git repositories left out of the snapshot.
+	nested []string
 }
 
 // capture stages the workspace and returns its tree, or a *skipped error over a limit.
@@ -456,14 +460,16 @@ func (s *Service) capture(ctx context.Context) (capture, error) {
 	if before > s.options.Settings.MaxTotalBytes {
 		return capture{}, &skipped{fmt.Sprintf("the checkpoint repository holds %d bytes, over checkpoint.max_total_bytes (%d)", before, s.options.Settings.MaxTotalBytes)}
 	}
-	if over, err := s.git.exceedsFiles(ctx, s.options.Settings.MaxFiles); err != nil {
+	over, nested, err := s.git.exceedsFiles(ctx, s.options.Settings.MaxFiles)
+	if err != nil {
 		return capture{}, err
-	} else if over {
+	}
+	if over {
 		return capture{}, &skipped{fmt.Sprintf("the workspace has more than %d files, over checkpoint.max_files (%d)", s.options.Settings.MaxFiles, s.options.Settings.MaxFiles)}
 	}
 	// The snapshot writes objects, so the cached size is stale until re-measured below.
 	s.size.known = false
-	tree, fileCount, err := s.git.snapshot(ctx)
+	tree, fileCount, err := s.git.snapshot(ctx, nested)
 	if err != nil {
 		return capture{}, err
 	}
@@ -475,7 +481,7 @@ func (s *Service) capture(ctx context.Context) (capture, error) {
 		return capture{}, err
 	}
 	s.size.bytes, s.size.known = size, true
-	return capture{tree: tree, fileCount: fileCount, bytes: size}, nil
+	return capture{tree: tree, fileCount: fileCount, bytes: size, nested: nested}, nil
 }
 
 func (s *Service) keep(ctx context.Context, id, suffix, tree, message string) error {
@@ -737,6 +743,9 @@ func (s *Service) restore(ctx context.Context, record Record, mode string, dryRu
 	if result.Conflicts == nil {
 		result.Conflicts = []string{}
 	}
+	if len(current.nested) > 0 {
+		result.Warning = fmt.Sprintf("Not restored: nested git repositories are not checkpointed (%s)", strings.Join(current.nested, ", "))
+	}
 	if dryRun || (len(changes.restore) == 0 && len(changes.remove) == 0) {
 		return result, nil
 	}
@@ -799,6 +808,9 @@ func (s *Service) restore(ctx context.Context, record Record, mode string, dryRu
 	undo.Warning = fmt.Sprintf("Restored %d and deleted %d path(s) from %s", len(changes.restore), len(changes.remove), record.ID)
 	if len(changes.conflicts) > 0 {
 		undo.Warning += fmt.Sprintf("; left %d changed path(s) alone", len(changes.conflicts))
+	}
+	if result.Warning != "" {
+		undo.Warning += "; " + result.Warning
 	}
 	if err := s.storeRecord(ctx, undo); err != nil {
 		return RestoreResult{}, err

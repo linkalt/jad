@@ -256,19 +256,32 @@ func privateDir(dir string) error {
 // exceedsFiles reports whether the workspace holds more than limit files that
 // are not yet in the snapshot index and not excluded. Staging adds every one of
 // them, so the answer is a lower bound on the snapshot's file count; the listing
-// stops as soon as the limit is passed and writes no object.
-func (g *shadowGit) exceedsFiles(ctx context.Context, limit int64) (bool, error) {
+// stops as soon as the limit is passed and writes no object. It also returns the
+// nested git repositories (listed as "dir/") that the snapshot leaves out.
+func (g *shadowGit) exceedsFiles(ctx context.Context, limit int64) (bool, []string, error) {
 	listing, err := g.run(ctx, []string{"ls-files", "-z", "--others", "--exclude-standard"}, runOptions{index: snapshotIndex, stopAfter: limit})
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
-	return int64(bytes.Count(listing, []byte{0})) > limit, nil
+	var nested []string
+	for _, entry := range strings.Split(string(listing), "\x00") {
+		if strings.HasSuffix(entry, "/") {
+			nested = append(nested, strings.TrimSuffix(entry, "/"))
+		}
+	}
+	return int64(bytes.Count(listing, []byte{0})) > limit, nested, nil
 }
 
 // snapshot stages the whole workspace in the private index and returns the tree
-// and its file count.
-func (g *shadowGit) snapshot(ctx context.Context) (string, int, error) {
-	if _, err := g.run(ctx, []string{"add", "--all", "--", "."}, runOptions{index: snapshotIndex}); err != nil {
+// and its file count. Nested git repositories are not staged: git would record one
+// as a single gitlink that checkout cannot restore, and fails the whole add for one
+// without a commit.
+func (g *shadowGit) snapshot(ctx context.Context, nested []string) (string, int, error) {
+	add := []string{"add", "--all", "--", "."}
+	for _, dir := range nested {
+		add = append(add, ":(exclude,literal)"+dir)
+	}
+	if _, err := g.run(ctx, add, runOptions{index: snapshotIndex}); err != nil {
 		return "", 0, err
 	}
 	tree, err := g.run(ctx, []string{"write-tree"}, runOptions{index: snapshotIndex})
