@@ -113,15 +113,22 @@ func appendToolOutputs(store *transcript.TurnStore, calls, completed []json.RawM
 	completedByCallID := make(map[string]json.RawMessage, len(completed))
 	for _, output := range completed {
 		if callID := functionCallID(output); callID != "" {
-			completedByCallID[callID] = cloneRaw(output)
+			if _, exists := completedByCallID[callID]; !exists {
+				completedByCallID[callID] = cloneRaw(output)
+			}
 		}
 	}
 	ordered := make([]json.RawMessage, 0, len(calls))
+	seen := make(map[string]struct{}, len(calls))
 	for _, call := range calls {
 		callID := functionCallID(call)
 		if callID == "" {
 			continue
 		}
+		if _, repeated := seen[callID]; repeated {
+			continue
+		}
+		seen[callID] = struct{}{}
 		if output, ok := completedByCallID[callID]; ok {
 			ordered = append(ordered, output)
 			continue
@@ -213,11 +220,22 @@ func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.
 
 	byCallID := make(map[string]json.RawMessage, len(calls))
 	toExecute := make([]json.RawMessage, 0, len(calls))
+	seen := make(map[string]struct{}, len(calls))
+	repeats := make(map[int]json.RawMessage)
 	for index, call := range calls {
 		callID := functionCallID(call)
 		if callID == "" {
 			return round, errors.New("function call is missing call_id")
 		}
+		if _, repeated := seen[callID]; repeated {
+			output, err := missingToolOutput(callID, "duplicate_call_id", "This call was not executed because its call_id repeats an earlier call in the same response; only the first call with an id runs.")
+			if err != nil {
+				return round, err
+			}
+			repeats[index] = output
+			continue
+		}
+		seen[callID] = struct{}{}
 		if decisionIndex >= 0 && index != decisionIndex {
 			output, err := missingToolOutput(callID, "user_decision_required", "This call was not executed because a user-decision tool in the same response must be resolved first; re-plan after its result.")
 			if err != nil {
@@ -256,7 +274,11 @@ func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.
 	)
 
 	round.Completed = make([]json.RawMessage, 0, len(byCallID))
-	for _, call := range calls {
+	for index, call := range calls {
+		if output, ok := repeats[index]; ok {
+			round.Completed = append(round.Completed, output)
+			continue
+		}
 		if output, ok := byCallID[functionCallID(call)]; ok {
 			round.Completed = append(round.Completed, output)
 		}

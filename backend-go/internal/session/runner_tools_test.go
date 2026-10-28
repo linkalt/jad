@@ -562,3 +562,50 @@ func newStreamerRunner(t *testing.T, store *transcript.TurnStore, streamer *mult
 	}
 	return streamerRunner{streamer: streamer, runner: runner}
 }
+
+func TestExecuteToolRoundRefusesRepeatedCallID(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","additionalProperties":false}`)
+	validator, err := tools.CompileSchema(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executions := 0
+	catalog, err := tools.NewCatalog([]tools.Tool{{
+		Definition: tools.Definition{ID: "native.lookup", Source: "native", Name: "lookup", InputSchema: schema},
+		Validator:  validator,
+		Execute: func(context.Context, map[string]any, tools.ExecutionContext) (string, error) {
+			executions++
+			return `{"id":"c","status":"ok","summary":"done"}` + "\n", nil
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := []json.RawMessage{
+		json.RawMessage(`{"type":"function_call","call_id":"dup","name":"lookup","arguments":"{}"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"other","name":"lookup","arguments":"{}"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"dup","name":"lookup","arguments":"{}"}`),
+	}
+	var published []string
+	round, err := executeToolRound(context.Background(), catalog, calls, tools.ExecutionContext{}, 1, "", func(output json.RawMessage) {
+		published = append(published, functionCallID(output))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executions != 2 || len(round.Completed) != 3 || len(round.Published) != 2 || len(published) != 2 {
+		t.Fatalf("executions=%d completed=%d published=%v", executions, len(round.Completed), published)
+	}
+	if !strings.Contains(string(round.Completed[2]), "duplicate_call_id") || strings.Contains(string(round.Completed[0]), "duplicate_call_id") {
+		t.Fatalf("completed = %s", round.Completed)
+	}
+
+	store, _, _ := newTestStore(t, transcript.ResponseMetadataMode(""))
+	persisted, err := appendToolOutputs(store, calls, round.Completed, "x", "y")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 2 || functionCallID(persisted[0]) != "dup" || functionCallID(persisted[1]) != "other" || strings.Contains(string(persisted[0]), "duplicate_call_id") {
+		t.Fatalf("persisted = %s", persisted)
+	}
+}
