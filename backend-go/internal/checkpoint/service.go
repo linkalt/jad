@@ -788,6 +788,10 @@ func (s *Service) restore(ctx context.Context, record Record, mode string, dryRu
 		if !parentIsPlain(realWorkspace, workspace, target) {
 			continue
 		}
+		// A planned removal is a file or symlink; a directory here is what checkout wrote over it.
+		if info, err := os.Lstat(target); err == nil && info.IsDir() {
+			continue
+		}
 		// ENOTDIR: checkout already replaced a parent directory with a file or symlink.
 		if err := os.Remove(target); err != nil && !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTDIR) {
 			return failed(err)

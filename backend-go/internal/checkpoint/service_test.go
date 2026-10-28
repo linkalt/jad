@@ -550,10 +550,13 @@ func TestReportShowsARecordLeftOpenAsInterruptedOnlyWhileNoRunIsLive(t *testing.
 }
 
 // swapDirForSymlink makes a restore fail after its checkout: the run replaces the
-// directory d with a symlink, so the restore writes d/b.txt back and then cannot
-// remove the now non-empty directory d.
+// directory d with a symlink, so the restore writes d/b.txt back, and adds a file
+// in a read-only directory, which the restore then cannot remove.
 func swapDirForSymlink(t *testing.T, f *fixture) string {
 	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("a read-only directory does not stop root")
+	}
 	f.seed(t)
 	id := f.begin(t, "turn-1", 1)
 	if err := os.RemoveAll(f.path("d")); err != nil {
@@ -562,6 +565,11 @@ func swapDirForSymlink(t *testing.T, f *fixture) string {
 	if err := os.Symlink("a.txt", f.path("d")); err != nil {
 		t.Fatal(err)
 	}
+	f.write(t, "locked/new.txt", "n\n")
+	if err := os.Chmod(f.path("locked"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(f.path("locked"), 0o755) })
 	f.service.Finish(id)
 	return id
 }
@@ -583,7 +591,10 @@ func TestARestoreThatFailsMidWayLeavesAnUndoRecordThatRestoresThePreRestoreState
 			id := swapDirForSymlink(t, f)
 
 			if _, err := f.service.Restore(context.Background(), id, RestoreOptions{Mode: mode}); err == nil {
-				t.Fatal("the restore succeeded, want the removal of the non-empty directory to fail")
+				t.Fatal("the restore succeeded, want the removal in the read-only directory to fail")
+			}
+			if err := os.Chmod(f.path("locked"), 0o755); err != nil {
+				t.Fatal(err)
 			}
 			undos := undoRecords(f)
 			if len(undos) != 1 || undos[0].State != StateFailed || undos[0].BeforeTree == "" || undos[0].RestoredFrom != id || undos[0].Warning == "" {
