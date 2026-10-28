@@ -459,7 +459,7 @@ func canonicalFetchHost(hostname, port, scheme string) string {
 
 func containsHost(hosts []string, host string) bool {
 	for _, candidate := range hosts {
-		if strings.EqualFold(candidate, host) {
+		if strings.EqualFold(strings.TrimRight(candidate, "."), strings.TrimRight(host, ".")) {
 			return true
 		}
 	}

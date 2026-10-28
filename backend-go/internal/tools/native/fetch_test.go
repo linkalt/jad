@@ -197,6 +197,9 @@ func TestFetchURLPolicyAndPublicAddressRanges(t *testing.T) {
 		{"https://user:secret@allowed.example/", "invalid_url"},
 		{"https://blocked.example/", "host_denied"},
 		{"https://other.example/", "host_denied"},
+		{"https://blocked.example./", "host_denied"},
+		{"https://BLOCKED.Example../x", "host_denied"},
+		{"https://other.example./", "host_denied"},
 	} {
 		_, err := validateFetchURL(context.Background(), test.url, settings, resolver)
 		var requestError *fetchRequestError
@@ -698,5 +701,20 @@ func BenchmarkNativeFetchHTMLConversion(b *testing.B) {
 		if result == nil || result.Content == nil {
 			b.Fatal("converter returned no content")
 		}
+	}
+}
+
+func TestFetchURLPolicyTreatsRootedHostAsTheSameHost(t *testing.T) {
+	resolver := &staticFetchResolver{addresses: []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}}
+	allowed := fetchTestSettings(t.TempDir())
+	allowed.AllowedHosts = []string{"allowed.example"}
+	for _, value := range []string{"https://allowed.example/", "https://ALLOWED.example./x"} {
+		if _, err := validateFetchURL(context.Background(), value, allowed, resolver); err != nil {
+			t.Errorf("validateFetchURL(%q) = %v, want allowed", value, err)
+		}
+	}
+	open := fetchTestSettings(t.TempDir())
+	if _, err := validateFetchURL(context.Background(), "https://example.com./", open, resolver); err != nil {
+		t.Errorf("rooted host without policy = %v, want allowed", err)
 	}
 }
