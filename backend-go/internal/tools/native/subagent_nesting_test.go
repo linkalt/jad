@@ -204,7 +204,9 @@ func TestAChildSeesOnlyTheHandlesItsOwnRunStarted(t *testing.T) {
 	siblingSaw := make(chan string, 1)
 	var bossOne atomic.Value
 	release := make(chan struct{})
-	catalog, _, _ := nestingFixture(t, nestingSettings(nestingAgent("boss", "read", "subagent", "async"), agentNamed("leaf")),
+	settings := nestingSettings(nestingAgent("boss", "read", "subagent", "async"), agentNamed("leaf"))
+	settings.BackgroundWriters, settings.MaxBackgroundWriters = true, 4
+	catalog, _, _ := nestingFixture(t, settings,
 		map[string]nestedBehaviour{
 			"boss": func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
 				if request.Task == "one" {

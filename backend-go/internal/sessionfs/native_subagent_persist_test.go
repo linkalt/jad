@@ -85,6 +85,19 @@ func TestSubagentAgentMayListChangeToolsWithNoFlag(t *testing.T) {
 	}
 }
 
+func TestSubagentAgentListingToolSmithSubagentOrProfileMessageChangesFiles(t *testing.T) {
+	for _, tool := range []string{"tool_smith", "subagent", "profile_message"} {
+		got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"fixer":{"tools":["read","`+tool+`"]}}}`), "/s/setting.json", "/w", "")
+		if err != nil || !got.Agents[0].ChangesFiles() {
+			t.Errorf("%s: %v, %v", tool, got, err)
+		}
+	}
+	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"reader":{"tools":["read","grep","glob"]}}}`), "/s/setting.json", "/w", "")
+	if err != nil || got.Agents[0].ChangesFiles() {
+		t.Errorf("read-only agent: %v, %v", got, err)
+	}
+}
+
 func TestSubagentChangeToolsOfAnAgentFolderLoadWithNoFlag(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "fixer"), 0o755); err != nil {
