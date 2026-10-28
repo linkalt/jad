@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -212,5 +213,30 @@ func TestTheFolderFormOfASessionIsNeitherListedNorRead(t *testing.T) {
 		t.Fatal("a session in the old folder form was read")
 	} else if kind, ok := catalogErrorKind(err); !ok || kind != CatalogNotFound {
 		t.Fatalf("ReadSessionFile(old) error = %v, want not found", err)
+	}
+}
+
+func TestWriteSessionFileRefusesAnIDAnotherRootHolds(t *testing.T) {
+	roots := sessionRoots(t, 2)
+	original := filepath.Join(roots[0].Directory, "demo.json")
+	if err := os.WriteFile(original, []byte(`{"x":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, created, err := WriteSessionFile(roots, "b:demo", []byte(`{"x":2}`), WriteCondition{IfNoneMatch: "*"}, false)
+	kind, ok := catalogErrorKind(err)
+	if err == nil || created || !ok || kind != CatalogInUse {
+		t.Fatalf("created=%v err=%v kind=%v", created, err, kind)
+	}
+	for _, want := range []string{`"demo"`, `"a"`, `"b"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %s", err, want)
+		}
+	}
+	entries, readErr := os.ReadDir(roots[1].Directory)
+	if readErr != nil || len(entries) != 0 {
+		t.Errorf("root b was written to: %v %v", entries, readErr)
+	}
+	if data, _ := os.ReadFile(original); string(data) != `{"x":1}` {
+		t.Errorf("original changed: %s", data)
 	}
 }

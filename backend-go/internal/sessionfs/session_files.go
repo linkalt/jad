@@ -162,6 +162,11 @@ func WriteSessionFile(roots []Root, reference string, data []byte, condition Wri
 	if err != nil {
 		return CatalogFileInfo{}, false, err
 	}
+	if !exists {
+		if err := checkSessionIDFreeInOtherRoots(roots, location); err != nil {
+			return CatalogFileInfo{}, false, err
+		}
+	}
 	if err := validateSessionFile(location, data); err != nil {
 		return CatalogFileInfo{}, false, err
 	}
@@ -173,6 +178,21 @@ func WriteSessionFile(roots []Root, reference string, data []byte, condition Wri
 		return CatalogFileInfo{}, false, err
 	}
 	return CatalogFileInfo{ID: location.Reference, ETag: CatalogETag(data)}, !exists, nil
+}
+
+// checkSessionIDFreeInOtherRoots refuses a create of an id that another root already
+// holds: every root shares one state folder per id (see checkUniqueSessionIDs).
+func checkSessionIDFreeInOtherRoots(roots []Root, location Location) error {
+	for _, other := range roots {
+		if other.ID == location.Root.ID {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(other.Directory, location.SessionID+sessionFileSuffix))
+		if err == nil && info.Mode().IsRegular() {
+			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("session %q is already in session root %q; %q would share its state folder, so use another name", location.SessionID, other.ID, location.Root.ID)}
+		}
+	}
+	return nil
 }
 
 // validateSessionFile loads data as the session would be loaded: from a temporary folder, so
