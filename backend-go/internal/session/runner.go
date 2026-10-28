@@ -582,12 +582,11 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		// Remember how a user-decision tool was answered: a decline, a timeout or a
 		// cancellation ends the run once its result is persisted, because the model
 		// must not carry on as if the user had approved the draft.
-		var decisionAnswer *tools.InteractionAnswer
+		var decisionAnswer decisionRecorder
 		toolExecution := options.ToolExecution
 		resolved := toolExecution.OnInteractionResolved
 		toolExecution.OnInteractionResolved = func(identity tools.InteractionIdentity, answer tools.InteractionAnswer, proposed json.RawMessage) error {
-			recorded := answer
-			decisionAnswer = &recorded
+			decisionAnswer.record(answer)
 			if resolved == nil {
 				return nil
 			}
@@ -632,7 +631,7 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		if decisionAnswer != nil && (decisionAnswer.Decision == tools.InteractionDecline || decisionAnswer.Outcome != tools.InteractionAnswered) {
+		if decisionAnswer.declined() {
 			return result, nil
 		}
 	}
@@ -977,4 +976,29 @@ func copyRawItems(items []json.RawMessage) [][]byte {
 		copies[index] = cloneRaw(item)
 	}
 	return copies
+}
+
+// decisionRecorder keeps the first negative answer (decline, timeout, cancellation) so a later accept never overwrites it; otherwise the last answer wins.
+type decisionRecorder struct {
+	mu     sync.Mutex
+	answer *tools.InteractionAnswer
+}
+
+func isNegativeAnswer(answer tools.InteractionAnswer) bool {
+	return answer.Decision == tools.InteractionDecline || answer.Outcome != tools.InteractionAnswered
+}
+
+func (d *decisionRecorder) record(answer tools.InteractionAnswer) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.answer != nil && isNegativeAnswer(*d.answer) {
+		return
+	}
+	d.answer = &answer
+}
+
+func (d *decisionRecorder) declined() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.answer != nil && isNegativeAnswer(*d.answer)
 }
