@@ -77,6 +77,42 @@ func profileToolEntryRegistered(config sessionfs.SessionConfig, entry string, re
 	return false
 }
 
+// checkHookMatches refuses a pre_tool or post_tool hook whose match names no registered
+// tool, which would otherwise never fire (a blocking guard silently absent). A match
+// naming a disabled MCP server only warns: the server may be switched on again.
+func checkHookMatches(config sessionfs.SessionConfig, registered []tools.Definition, warn func(string)) error {
+	for event, list := range map[string][]sessionfs.ToolEventHook{"pre_tool": config.Hooks.PreTool, "post_tool": config.Hooks.PostTool} {
+		for index, hook := range list {
+			if hook.Match == "*" || profileToolEntryRegistered(config, hook.Match, registered) {
+				continue
+			}
+			if hookMatchNamesDisabledServer(config, hook.Match) {
+				if warn != nil {
+					warn(fmt.Sprintf("%s: hooks.%s[%d].match %q names a disabled MCP server; the hook does not fire", config.SettingPath, event, index, hook.Match))
+				}
+				continue
+			}
+			return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: hooks.%s[%d].match lists %q, which is not a registered tool (registered: %s)",
+				config.SettingPath, event, index, hook.Match, registeredToolList(registered))}
+		}
+	}
+	return nil
+}
+
+func hookMatchNamesDisabledServer(config sessionfs.SessionConfig, match string) bool {
+	rest, ok := strings.CutPrefix(match, sessionfs.ProfileToolMCPPrefix)
+	if !ok {
+		return false
+	}
+	server, _, _ := strings.Cut(rest, ":")
+	for _, reference := range config.MCPServers {
+		if reference.ID == server && !reference.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
 // registeredToolList names the tools a profile may list: native tools by name, MCP
 // tools by id.
 func registeredToolList(registered []tools.Definition) string {

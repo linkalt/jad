@@ -601,6 +601,13 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
+	if err := checkHookMatches(config, registered.Definitions(), func(message string) {
+		if r.logger != nil {
+			r.logger.Warn(message, "profile", config.Profile)
+		}
+	}); err != nil {
+		return nil, nil, nil, nil, mapSessionError(err)
+	}
 	return registered, processManager, taskStore, memoryStore, nil
 }
 
