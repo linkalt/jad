@@ -76,11 +76,13 @@ type Resolver struct {
 	processSessions  map[string]map[string]struct{}
 	subagentManagers map[string]*native.SubagentManager
 	// asyncHosts holds one async manager per tool storage folder (its .async folder).
-	asyncHosts   map[string]*native.AsyncHost
-	mcpManagers  map[string]*mcpclient.Manager
-	taskStores   map[string]*native.TaskStore
-	memoryStores map[string]*native.MemoryStore
-	fetchStores  map[string]*native.FetchStore
+	asyncHosts    map[string]*native.AsyncHost
+	asyncBuilds   map[string]chan struct{}
+	openAsyncHost func(string, asyncmgr.Config, *slog.Logger) (*native.AsyncHost, error)
+	mcpManagers   map[string]*mcpclient.Manager
+	taskStores    map[string]*native.TaskStore
+	memoryStores  map[string]*native.MemoryStore
+	fetchStores   map[string]*native.FetchStore
 	// storeSessions lists the session files that use each task, memory and fetch store,
 	// keyed by kind and storage key, so deleting the last of them can release the store.
 	storeSessions map[string]map[string]struct{}
@@ -247,6 +249,8 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		remotes:           remote.NewHub(func(name string) string { return copyEnvironment[name] }),
 		subagentManagers:  make(map[string]*native.SubagentManager),
 		asyncHosts:        make(map[string]*native.AsyncHost),
+		asyncBuilds:       make(map[string]chan struct{}),
+		openAsyncHost:     native.NewAsyncHost,
 		mcpManagers:       make(map[string]*mcpclient.Manager),
 		taskStores:        make(map[string]*native.TaskStore),
 		memoryStores:      make(map[string]*native.MemoryStore),
@@ -604,20 +608,52 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 // shared by every session that uses it.
 func (r *Resolver) AsyncHost(config native.AsyncHostConfig) (*native.AsyncHost, error) {
 	key := filepath.Clean(config.Dir)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if host := r.asyncHosts[key]; host != nil {
-		return host, nil
+	for {
+		r.mu.Lock()
+		if host := r.asyncHosts[key]; host != nil {
+			r.mu.Unlock()
+			return host, nil
+		}
+		if r.closed {
+			r.mu.Unlock()
+			return nil, errors.New("resolver is closed")
+		}
+		if done := r.asyncBuilds[key]; done != nil {
+			// Opening runs the recovery of the directory, which must run once: wait for
+			// the opener, then look again.
+			r.mu.Unlock()
+			<-done
+			continue
+		}
+		done := make(chan struct{})
+		r.asyncBuilds[key] = done
+		r.mu.Unlock()
+		return r.finishAsyncHost(key, done, config)
 	}
-	if r.closed {
-		return nil, errors.New("resolver is closed")
-	}
-	host, err := native.NewAsyncHost(key, config.Config, r.logger)
-	if err != nil {
-		return nil, err
-	}
-	r.asyncHosts[key] = host
-	return host, nil
+}
+
+// finishAsyncHost opens the manager without holding mu (it reads and rewrites files),
+// then publishes it. A resolver that closed meanwhile does not get it: Close never saw
+// this host, so it is closed here.
+func (r *Resolver) finishAsyncHost(key string, done chan struct{}, config native.AsyncHostConfig) (published *native.AsyncHost, err error) {
+	var host *native.AsyncHost
+	defer func() {
+		r.mu.Lock()
+		delete(r.asyncBuilds, key)
+		closed := r.closed
+		if host != nil && !closed {
+			r.asyncHosts[key] = host
+			published = host
+		}
+		r.mu.Unlock()
+		close(done)
+		if host != nil && closed {
+			host.Close()
+			published, err = nil, errors.New("resolver is closed")
+		}
+	}()
+	host, err = r.openAsyncHost(key, config.Config, r.logger)
+	return nil, err
 }
 
 func (r *Resolver) sharedProcessManager(config sessionfs.SessionConfig) native.ProcessManager {
@@ -970,6 +1006,9 @@ func (r *Resolver) Close() {
 	pending := make([]chan struct{}, 0, len(r.subagentBuilds))
 	for _, build := range r.subagentBuilds {
 		pending = append(pending, build.done)
+	}
+	for _, done := range r.asyncBuilds {
+		pending = append(pending, done)
 	}
 	r.mu.Unlock()
 	for _, done := range pending {
