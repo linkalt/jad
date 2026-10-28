@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"math"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 )
 
@@ -61,6 +63,9 @@ func normalizeSessionFileListing(raw json.RawMessage, path string) (SessionFileL
 	}
 	fields, err := decodeConfigObject(raw, path+": session_files")
 	if err != nil {
+		return SessionFileListingSettings{}, err
+	}
+	if err := rejectUnknownKeys(fields, path+": session_files", []string{"enabled", "include_hidden", "include_directories", "max_depth", "max_entries", "max_results", "ignore_directories"}); err != nil {
 		return SessionFileListingSettings{}, err
 	}
 	if settings.Enabled, err = sessionFileBool(fields, "enabled", settings.Enabled, path); err != nil {
@@ -216,6 +221,20 @@ func resolveNativeRulePath(configuredPath, globalJadRoot string) string {
 		return filepath.Clean(value)
 	}
 	return resolveFrom(globalJadRoot, value)
+}
+
+func rejectUnknownKeys(fields map[string]json.RawMessage, fieldPath string, allowed []string) error {
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if !slices.Contains(allowed, key) {
+			return unsupportedToolKey(fieldPath, key, allowed, "")
+		}
+	}
+	return nil
 }
 
 func decodeConfigObject(raw json.RawMessage, path string) (map[string]json.RawMessage, error) {

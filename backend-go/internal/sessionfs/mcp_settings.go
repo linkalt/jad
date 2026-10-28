@@ -34,6 +34,12 @@ func normalizeMCPServers(raw json.RawMessage, cwd, settingPath string) ([]MCPSer
 		if err := json.Unmarshal(entry, &fields); err != nil || fields == nil {
 			return nil, configError("%s must be an object", entryPath)
 		}
+		if err := rejectRemovedApproval(fields, fmt.Sprintf("mcp_servers[%d]", index), settingPath); err != nil {
+			return nil, err
+		}
+		if err := rejectUnknownKeys(fields, entryPath, []string{"id", "config_path", "enabled", "deny_tools"}); err != nil {
+			return nil, err
+		}
 		id, err := mcpRequiredString(fields["id"], fmt.Sprintf("mcp_servers[%d].id", index), settingPath)
 		if err != nil {
 			return nil, err
@@ -58,7 +64,7 @@ func normalizeMCPServers(raw json.RawMessage, cwd, settingPath string) ([]MCPSer
 
 		enabled := false
 		if value, exists := fields["enabled"]; exists {
-			if err := json.Unmarshal(value, &enabled); err != nil {
+			if err := json.Unmarshal(value, &enabled); err != nil || strings.TrimSpace(string(value)) == "null" {
 				return nil, configError("%s.enabled must be a boolean", entryPath)
 			}
 		}
@@ -82,9 +88,6 @@ func normalizeMCPServers(raw json.RawMessage, cwd, settingPath string) ([]MCPSer
 				seenNames[name] = struct{}{}
 				denyTools = append(denyTools, name)
 			}
-		}
-		if err := rejectRemovedApproval(fields, fmt.Sprintf("mcp_servers[%d]", index), settingPath); err != nil {
-			return nil, err
 		}
 		servers = append(servers, MCPServerReference{ID: id, ConfigPath: configPath, Enabled: enabled, DenyTools: denyTools})
 	}

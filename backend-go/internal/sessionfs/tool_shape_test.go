@@ -38,11 +38,11 @@ func TestLoadSessionConfigMatchesToolNamespaceValidation(t *testing.T) {
 }
 
 func TestNormalizeMCPServersNullDenyToolsUsesDefault(t *testing.T) {
-	servers, err := normalizeMCPServers([]byte(`[{"id":"fixture","config_path":"server.json","enabled":null,"deny_tools":null}]`), "/workspace", "/session/setting.json")
+	servers, err := normalizeMCPServers([]byte(`[{"id":"fixture","config_path":"server.json","enabled":true,"deny_tools":null}]`), "/workspace", "/session/setting.json")
 	if err != nil {
 		t.Fatalf("normalizeMCPServers() error = %v", err)
 	}
-	if len(servers) != 1 || servers[0].Enabled || servers[0].DenyTools == nil || len(servers[0].DenyTools) != 0 {
-		t.Fatalf("normalized MCP server = %#v, want disabled server with empty deny list", servers)
+	if len(servers) != 1 || !servers[0].Enabled || servers[0].DenyTools == nil || len(servers[0].DenyTools) != 0 {
+		t.Fatalf("normalized MCP server = %#v, want enabled server with empty deny list", servers)
 	}
 }
