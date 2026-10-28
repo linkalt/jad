@@ -146,7 +146,7 @@ func encodeTranscriptCursor(cursor transcriptCursor) string {
 func decodeTranscriptCursor(text string) (transcriptCursor, bool) {
 	var cursor transcriptCursor
 	raw, err := base64.RawURLEncoding.DecodeString(text)
-	if err != nil || json.Unmarshal(raw, &cursor) != nil || cursor.Offset < 0 || cursor.End < cursor.Offset {
+	if err != nil || json.Unmarshal(raw, &cursor) != nil || cursor.Offset < 0 || cursor.Bytes < 0 || cursor.End < cursor.Offset {
 		return transcriptCursor{}, false
 	}
 	return cursor, true

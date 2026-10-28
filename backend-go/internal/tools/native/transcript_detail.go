@@ -77,7 +77,7 @@ func detailBlock(step *transcriptStep, part string) (string, bool) {
 // pageOfText cuts [offset, offset+size) out of text on rune boundaries and returns the page
 // and the offset of the next one (len(text) when it was the last).
 func pageOfText(text string, offset, size int) (string, int) {
-	offset = min(offset, len(text))
+	offset = max(0, min(offset, len(text)))
 	for offset < len(text) && !utf8.RuneStart(text[offset]) {
 		offset++
 	}

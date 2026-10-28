@@ -2,6 +2,8 @@ package native
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"runtime"
 	"sync"
 	"time"
@@ -281,5 +283,32 @@ func TestTranscriptDetailNeverWritesTheFile(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(path); string(after) != content {
 		t.Fatalf("the reader changed the transcript: %q", after)
+	}
+}
+
+func TestTranscriptRejectsANegativeByteCursor(t *testing.T) {
+	path := detailTranscript(t, strings.Repeat("r", 3000))
+	settings := transcriptTestSettings()
+	settings.MaxDetailBytes = 400
+	raw, err := base64.RawURLEncoding.DecodeString(cursorOf(runTranscript(t, settings, path, map[string]any{"step": "1.2"})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["b"] = -5
+	forged, _ := json.Marshal(fields)
+	out := runTranscript(t, settings, path, map[string]any{"cursor": base64.RawURLEncoding.EncodeToString(forged)})
+	if !strings.Contains(out, "invalid_cursor") {
+		t.Fatalf("a negative byte offset must be refused as an invalid cursor: %.200s", out)
+	}
+}
+
+func TestPageOfTextClampsANegativeOffset(t *testing.T) {
+	page, next := pageOfText("abcdef", -5, 3)
+	if page != "abc" || next != 3 {
+		t.Fatalf("page = %q next = %d", page, next)
 	}
 }
