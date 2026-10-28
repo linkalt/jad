@@ -68,30 +68,63 @@ func (r *activeRun) setPendingInteraction(pending *tools.PendingInteraction, end
 		return
 	}
 
-	var messageEvent *streamEvent
-	if r.latestMessage != nil {
-		message := r.snapshotMessageLocked()
+	for queue := range r.subscribers {
+		if !queue.push(interactionEvent, false) {
+			delete(r.subscribers, queue)
+		}
+	}
+	r.mu.Unlock()
+	r.publishInteractionMessage(next)
+}
+
+// publishInteractionMessage re-publishes the message with the pending question. The
+// content read and the encode run outside the lock; the result is committed only if
+// neither the message nor the question changed meanwhile. If the question changed, the
+// call that changed it publishes the message.
+func (r *activeRun) publishInteractionMessage(next *tools.PendingInteraction) {
+	for {
+		r.mu.Lock()
+		if r.latestMessage == nil || r.pendingInteraction != next {
+			r.mu.Unlock()
+			return
+		}
+		base := r.latestMessage
+		cache, final := r.content, r.contentFinal
+		r.mu.Unlock()
+
+		message := *base
+		message.Parts = append([]webui.Part(nil), message.Parts...)
+		if !final && cache != nil && message.Text == "" {
+			injectContent(&message, cache.Snapshot())
+		}
 		if next == nil {
 			message.Pending = nil
 		} else {
 			message.Pending = pendingToWebUI(*next)
 		}
-		r.latestMessage = &message
-		if event, eventErr := makeSSEEvent("ui.message", map[string]any{"message": message}); eventErr == nil {
-			r.latest = &event
-			messageEvent = &event
+		event, err := makeSSEEvent("ui.message", map[string]any{"message": message})
+
+		r.mu.Lock()
+		if r.pendingInteraction != next {
+			r.mu.Unlock()
+			return
 		}
-	}
-	for queue := range r.subscribers {
-		if !queue.push(interactionEvent, false) {
-			delete(r.subscribers, queue)
+		if r.latestMessage != base {
+			r.mu.Unlock()
 			continue
 		}
-		if messageEvent != nil && !queue.push(*messageEvent, true) {
-			delete(r.subscribers, queue)
+		r.latestMessage = &message
+		if err == nil {
+			r.latest = &event
+			for queue := range r.subscribers {
+				if !queue.push(event, true) {
+					delete(r.subscribers, queue)
+				}
+			}
 		}
+		r.mu.Unlock()
+		return
 	}
-	r.mu.Unlock()
 }
 
 func pendingToWebUI(pending tools.PendingInteraction) *webui.Interaction {
