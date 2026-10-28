@@ -1,6 +1,7 @@
 package sessionfs
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -285,7 +286,7 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[
 		}
 	}
 	setting := mergeSettings(mergeSettings(c.layout.Defaults, sessionLayer), profile.Settings)
-	if _, set := setting["cwd"]; !set {
+	if raw, set := setting["cwd"]; !set || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		// Falling back to the root folder would run tools inside .jad/.
 		return nil, nil, configError("%s: cwd is required; set defaults.cwd in the root setting, cwd or settings.cwd in the session, or settings.cwd in the profile", c.sessionPath)
 	}

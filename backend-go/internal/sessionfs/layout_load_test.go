@@ -1037,6 +1037,18 @@ func TestLayoutRequiresACWD(t *testing.T) {
 	}
 }
 
+func TestLayoutRefusesANullCWD(t *testing.T) {
+	layout, location, _ := sampleLayout(t)
+	editJSON(t, location.File, func(m map[string]any) {
+		delete(m, "cwd")
+		m["settings"] = map[string]any{"cwd": nil}
+	})
+	_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
+	if err == nil || !strings.Contains(err.Error(), "cwd is required") {
+		t.Fatalf("settings.cwd null: error = %v", err)
+	}
+}
+
 // setAgentModel writes agent x's agent.json in the session cwd with the given model value
 // (none when empty) and returns the cwd.
 func setAgentModel(t *testing.T, location Location, model string) string {
