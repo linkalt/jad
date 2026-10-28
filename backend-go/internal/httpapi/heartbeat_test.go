@@ -98,7 +98,8 @@ func TestZeroHeartbeatIntervalSendsNoKeepAliveFrames(t *testing.T) {
 func TestNewHandlerRejectsAnOutOfRangeHeartbeatInterval(t *testing.T) {
 	for _, interval := range []time.Duration{-time.Millisecond, 5*time.Minute + time.Millisecond} {
 		_, err := NewHandler(Config{
-			APIToken: testAPIToken, MaxBodyBytes: 1024, SSEMaxBufferedBytes: 1024,
+			ShutdownTimeout: 50 * time.Millisecond,
+			APIToken:        testAPIToken, MaxBodyBytes: 1024, SSEMaxBufferedBytes: 1024,
 			RunStateRetention: time.Minute, MaxPageTurns: 50, SSEHeartbeatInterval: interval,
 		}, &fakeResolver{})
 		if err == nil {

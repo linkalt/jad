@@ -54,6 +54,9 @@ type Config struct {
 	// SSEWriteTimeout is how long one write to a run stream may take before the
 	// subscriber is dropped (server.sse_write_timeout_ms). Zero disables the limit.
 	SSEWriteTimeout time.Duration
+	// ShutdownTimeout bounds how long Close waits for cancelled runs to end
+	// (server.shutdown_timeout_ms). Zero waits without a limit.
+	ShutdownTimeout time.Duration
 	// SessionDeleteStopWait is how long a session delete waits for the session's stopped runs.
 	SessionDeleteStopWait      time.Duration
 	RunStateRetention          time.Duration
@@ -127,6 +130,7 @@ type Handler struct {
 	runContentMemoryBytes     int
 	runContentFallbackMax     int
 	sseWriteTimeout           time.Duration
+	shutdownTimeout           time.Duration
 	runContentWriteBatchBytes int
 	runContentFlushInterval   time.Duration
 	runs                      *runRegistry
@@ -272,6 +276,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		runContentMemoryBytes:     config.RunContentMemoryBytes,
 		runContentFallbackMax:     config.RunContentFallbackMaxBytes,
 		sseWriteTimeout:           config.SSEWriteTimeout,
+		shutdownTimeout:           config.ShutdownTimeout,
 		runContentWriteBatchBytes: config.RunContentWriteBatchBytes,
 		runContentFlushInterval:   config.RunContentFlushInterval,
 		runs:                      newRunRegistry(config.RunStateRetention, config.SSEMaxBufferedBytes, config.MaxConcurrentRuns),
@@ -279,10 +284,11 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	}, nil
 }
 
-// Close cancels active session runs. Call it during server shutdown.
+// Close cancels active session runs and waits for them to end, at most the shutdown timeout.
+// Call it during server shutdown.
 func (h *Handler) Close() {
 	if h != nil && h.runs != nil {
-		h.runs.close()
+		h.runs.close(h.shutdownTimeout)
 	}
 }
 

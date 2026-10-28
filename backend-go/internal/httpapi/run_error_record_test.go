@@ -39,7 +39,8 @@ func executeWithRecorder(t *testing.T, runner RunSession) (*activeRun, *syncBuff
 	t.Helper()
 	logger, output := capturedLogger(slog.LevelInfo)
 	handler, err := NewHandler(Config{
-		Logger: logger, APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 4096,
+		ShutdownTimeout: 50 * time.Millisecond,
+		Logger:          logger, APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 4096,
 		RunStateRetention: time.Minute, ToolStreamInterval: time.Minute, MaxPageTurns: 50,
 	}, &fakeResolver{})
 	if err != nil {

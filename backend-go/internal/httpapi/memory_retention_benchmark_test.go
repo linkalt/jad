@@ -80,7 +80,7 @@ func BenchmarkFinishedRunRetention(b *testing.B) {
 					}
 					held := heapAfterGC()
 					b.ReportMetric(float64(int64(held)-int64(base))/runs, "retained-B/run")
-					registry.close()
+					registry.close(time.Second)
 				}
 			})
 		}
@@ -168,7 +168,7 @@ func BenchmarkStalledSubscriberMemory(b *testing.B) {
 				b.ReportMetric(float64(bytes)/float64(subscribers), "queued-B/subscriber")
 				b.ReportMetric(float64(len(run.subscribers)), "still-attached")
 				runtime.KeepAlive(queues)
-				registry.close()
+				registry.close(time.Second)
 			}
 		})
 	}

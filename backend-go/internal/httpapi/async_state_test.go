@@ -50,7 +50,8 @@ func (r *asyncResolver) set(state AsyncState) {
 func newAsyncTestHandler(t *testing.T, resolver SessionResolver, interval time.Duration) *Handler {
 	t.Helper()
 	handler, err := NewHandler(Config{
-		APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 4096,
+		ShutdownTimeout: 50 * time.Millisecond,
+		APIToken:        testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 4096,
 		RunStateRetention: time.Minute, ToolStreamInterval: interval, MaxPageTurns: 50,
 	}, resolver)
 	if err != nil {

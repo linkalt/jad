@@ -597,7 +597,8 @@ func TestNewHandlerRequiresExplicitSafeConfiguration(t *testing.T) {
 		t.Error("NewHandler accepted a nil session resolver")
 	}
 	zeroRetention, err := NewHandler(Config{
-		APIToken: testAPIToken, MaxBodyBytes: 1024, SSEMaxBufferedBytes: 1024,
+		ShutdownTimeout: 50 * time.Millisecond,
+		APIToken:        testAPIToken, MaxBodyBytes: 1024, SSEMaxBufferedBytes: 1024,
 		RunStateRetention: 0, AllowZeroRunStateRetention: true, MaxPageTurns: 50,
 	}, resolver)
 	if err != nil {
@@ -718,6 +719,9 @@ func (r *fakeResolver) Resolve(_ context.Context, reference, profile, model stri
 
 func testHandler(t *testing.T, resolver SessionResolver, config Config) *Handler {
 	t.Helper()
+	if config.ShutdownTimeout == 0 {
+		config.ShutdownTimeout = 50 * time.Millisecond
+	}
 	if config.SnapshotTurns == 0 {
 		config.SnapshotTurns = 24
 	}

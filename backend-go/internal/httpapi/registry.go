@@ -444,7 +444,7 @@ func (r *runRegistry) runningInSession(reference string) []*activeRun {
 	return running
 }
 
-func (r *runRegistry) close() {
+func (r *runRegistry) close(wait time.Duration) {
 	r.mu.Lock()
 	r.closed = true
 	var active []*activeRun
@@ -454,6 +454,19 @@ func (r *runRegistry) close() {
 	r.mu.Unlock()
 	for _, run := range active {
 		run.stop()
+	}
+	var expired <-chan time.Time
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		expired = timer.C
+	}
+	for _, run := range active {
+		select {
+		case <-run.done:
+		case <-expired:
+			return
+		}
 	}
 }
 

@@ -16,7 +16,8 @@ func runWithLogger(t *testing.T, level slog.Level, runner runnerFunc) (*activeRu
 	t.Helper()
 	logger, output := capturedLogger(level)
 	handler, err := NewHandler(Config{
-		Logger: logger, APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 4096,
+		ShutdownTimeout: 50 * time.Millisecond,
+		Logger:          logger, APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 4096,
 		RunStateRetention: time.Minute, ToolStreamInterval: time.Minute, MaxPageTurns: 50,
 	}, &fakeResolver{})
 	if err != nil {

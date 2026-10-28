@@ -43,6 +43,7 @@ func TestExecuteRunCoalescesSSEAppendDeltasUntilCommit(t *testing.T) {
 	})
 
 	handler, err := NewHandler(Config{
+		ShutdownTimeout:     50 * time.Millisecond,
 		APIToken:            testAPIToken,
 		MaxBodyBytes:        4096,
 		SSEMaxBufferedBytes: 4096,
@@ -142,6 +143,7 @@ func TestExecuteRunDropsCoalescedSnapshotWhenTheRunFails(t *testing.T) {
 	})
 
 	handler, err := NewHandler(Config{
+		ShutdownTimeout:     50 * time.Millisecond,
 		APIToken:            testAPIToken,
 		MaxBodyBytes:        4096,
 		SSEMaxBufferedBytes: 4096,

@@ -133,7 +133,7 @@ func TestSpilledFileThatFailsLaterFallsBackWithinTheCap(t *testing.T) {
 
 func TestCommittedMessageNeverTakesTheTruncatedText(t *testing.T) {
 	registry := newRunRegistry(time.Minute, 1<<20, 0)
-	defer registry.close()
+	defer registry.close(time.Second)
 	run, err := registry.begin("key", "turn")
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +153,7 @@ func TestCommittedMessageNeverTakesTheTruncatedText(t *testing.T) {
 
 func TestLateSubscriberSeesTheCutTextAndLiveSubscribersAreUnaffected(t *testing.T) {
 	registry := newRunRegistry(time.Minute, 1<<20, 0)
-	defer registry.close()
+	defer registry.close(time.Second)
 	run, err := registry.begin("key", "turn")
 	if err != nil {
 		t.Fatal(err)

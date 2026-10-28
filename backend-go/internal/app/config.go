@@ -103,6 +103,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 			SSEMaxBufferedBytes:        loaded.Server.SSEMaxBufferedBytes,
 			SSEHeartbeatInterval:       loaded.Server.SSEHeartbeatInterval,
 			SSEWriteTimeout:            loaded.Server.SSEWriteTimeout,
+			ShutdownTimeout:            loaded.Server.ShutdownTimeout,
 			SessionDeleteStopWait:      loaded.Server.SessionDeleteStopWait,
 			RunStateRetention:          loaded.Server.RunStateRetention,
 			AllowZeroRunStateRetention: loaded.Server.AllowZeroRunStateRetention,
