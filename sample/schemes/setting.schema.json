@@ -1999,7 +1999,7 @@
                 "status_summary_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 4096, "description": "Most bytes of the summary text the status action returns. Not below summary_max_bytes."},
                 "response_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 8192, "description": "Byte budget of one async response; entries that do not fit stay queued or on the next page. At least summary_max_bytes + 1024."},
                 "keep_finished": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 200, "description": "Terminal handle records kept; the oldest read ones beyond this are deleted with their result files."},
-                "retention_days": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 14, "description": "Terminal handle records older than this many days are deleted. 0 turns age pruning off."},
+                "retention_days": {"type": "integer", "minimum": 0, "maximum": 100000, "default": 14, "description": "Terminal handle records older than this many days are deleted. 0 turns age pruning off."},
                 "unread_max": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 100, "description": "Most undelivered completion signals kept per session; older ones are marked read and counted as dropped. Not below wait_max_signals."},
                 "index_flush_ms": {"type": "integer", "minimum": 0, "maximum": 60000, "default": 150, "description": "Delay before the async handle index file is rewritten after a change, so a burst of changes costs one write. The index is only a cache rebuilt from the handle records; 0 writes it at every change."},
                 "latest_bytes": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 500, "description": "When a wait returns because block_ms or wait_ms ran out while the work is still going, the most new output per stream (stdout, stderr) a latest block shows, cut at the front with a marker; also the longest line of an agent's activity. Only what is new since the last time that handle's progress was shown. Not above latest_total_bytes."},
@@ -2009,7 +2009,7 @@
                 "latest_scan_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 8388608, "description": "Largest transcript a latest block will read to describe an agent's activity; a larger one shows only its path."},
                 "sse_max_ids": {"type": "integer", "minimum": 0, "maximum": 100, "default": 10, "description": "Most live handle ids the run stream's async_state event carries next to the counts. 0 sends counts only."},
                 "stop_wait_ms": {"type": "integer", "minimum": 0, "maximum": 21600000, "default": 2000, "description": "How long an async stop and a shutdown wait for the work to report that it ended. 0 does not wait."},
-                "unread_ttl_days": {"type": "integer", "minimum": 0, "maximum": 10000000, "default": 7, "description": "Undelivered signals older than this many days expire. 0 keeps them until the record is pruned."}
+                "unread_ttl_days": {"type": "integer", "minimum": 0, "maximum": 100000, "default": 7, "description": "Undelivered signals older than this many days expire. 0 keeps them until the record is pruned."}
               },
               "additionalProperties": false
             }

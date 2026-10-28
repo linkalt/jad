@@ -225,3 +225,19 @@ func TestCompleteAfterCloseDoesNotWriteTheFolder(t *testing.T) {
 		}
 	}
 }
+
+func TestPruneWithHugeDayCountsKeepsRecordsAndSignals(t *testing.T) {
+	f := newFixture(t, func(c *Config) { c.KeepFinished = 5; c.RetentionDays = 10_000_000; c.UnreadTTLDays = 10_000_000 })
+	for _, id := range names("h", 3) {
+		f.start(t, "o", id)
+		f.finish(t, id, Result{})
+	}
+	f.clock.Advance(48 * time.Hour)
+	f.m.Prune()
+	if c := f.m.Counts("o"); c.Total != 3 || c.Unread != 3 {
+		t.Fatalf("counts after prune = %+v, want 3 records and 3 unread", c)
+	}
+	if got := DaysDuration(10_000_000); got <= 0 {
+		t.Fatalf("DaysDuration wrapped to %v", got)
+	}
+}

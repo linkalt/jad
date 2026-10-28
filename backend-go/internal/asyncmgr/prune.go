@@ -1,9 +1,20 @@
 package asyncmgr
 
 import (
+	"math"
 	"sort"
 	"time"
 )
+
+// DaysDuration converts days to a Duration, saturating instead of wrapping so a huge
+// value can never turn a prune cutoff into a time in the future.
+func DaysDuration(days int64) time.Duration {
+	const day = 24 * time.Hour
+	if days > int64(math.MaxInt64/day) {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(days) * day
+}
 
 // flip is a record whose unread flag must be cleared on disk.
 type flip struct {
@@ -81,7 +92,7 @@ func (m *Manager) pruneLocked(now time.Time) pruneWork {
 	}
 	defer m.recomputeExpiryLocked()
 	if m.cfg.UnreadTTLDays > 0 {
-		cutoff := now.Add(-time.Duration(m.cfg.UnreadTTLDays) * 24 * time.Hour)
+		cutoff := now.Add(-DaysDuration(m.cfg.UnreadTTLDays))
 		for _, s := range m.owners {
 			for _, r := range sortedRows(s.unread) {
 				if r.changed.Before(cutoff) {
@@ -111,7 +122,7 @@ func (m *Manager) pruneLocked(now time.Time) pruneWork {
 		drop = int(excess)
 	}
 	if m.cfg.RetentionDays > 0 {
-		cutoff := now.Add(-time.Duration(m.cfg.RetentionDays) * 24 * time.Hour)
+		cutoff := now.Add(-DaysDuration(m.cfg.RetentionDays))
 		for drop < len(finished) && finished[drop].changed.Before(cutoff) {
 			drop++
 		}
@@ -135,7 +146,7 @@ func (m *Manager) noteExpiryLocked(r *row) {
 	if days <= 0 {
 		return
 	}
-	at := r.changed.Add(time.Duration(days) * 24 * time.Hour)
+	at := r.changed.Add(DaysDuration(days))
 	if m.nextExpiry.IsZero() || at.Before(m.nextExpiry) {
 		m.nextExpiry = at
 	}

@@ -56,25 +56,27 @@ func TestNativeAsyncSettingsEveryKeyOverridesAndNullKeepsDefault(t *testing.T) {
 
 func TestNativeAsyncSettingsRejectsBadInput(t *testing.T) {
 	cases := map[string]string{
-		"unknown key":        `{"native":{"async":{"max_handle":3}}}`,
-		"not an object":      `{"native":{"async":[]}}`,
-		"string value":       `{"native":{"async":{"max_handles":"3"}}}`,
-		"zero handles":       `{"native":{"async":{"max_handles":0}}}`,
-		"negative retention": `{"native":{"async":{"retention_days":-1}}}`,
-		"huge":               `{"native":{"async":{"keep_finished":99999999999}}}`,
-		"wait order":         `{"native":{"async":{"default_wait_ms":500,"max_wait_ms":100}}}`,
-		"block order":        `{"native":{"async":{"default_block_ms":500,"max_block_ms":100}}}`,
-		"budget too small":   `{"native":{"async":{"response_max_bytes":600}}}`,
-		"unread below wait":  `{"native":{"async":{"unread_max":2}}}`,
-		"flush negative":     `{"native":{"async":{"index_flush_ms":-1}}}`,
-		"flush too long":     `{"native":{"async":{"index_flush_ms":60001}}}`,
-		"sse ids negative":   `{"native":{"async":{"sse_max_ids":-1}}}`,
-		"sse ids too many":   `{"native":{"async":{"sse_max_ids":101}}}`,
-		"latest zero":        `{"native":{"async":{"latest_bytes":0}}}`,
-		"latest lines zero":  `{"native":{"async":{"latest_lines":0}}}`,
-		"total below bytes":  `{"native":{"async":{"latest_bytes":600,"latest_total_bytes":500}}}`,
-		"value above bytes":  `{"native":{"async":{"latest_bytes":50,"latest_value_bytes":80}}}`,
-		"latest string":      `{"native":{"async":{"latest_bytes":"500"}}}`,
+		"unknown key":         `{"native":{"async":{"max_handle":3}}}`,
+		"not an object":       `{"native":{"async":[]}}`,
+		"string value":        `{"native":{"async":{"max_handles":"3"}}}`,
+		"zero handles":        `{"native":{"async":{"max_handles":0}}}`,
+		"negative retention":  `{"native":{"async":{"retention_days":-1}}}`,
+		"huge":                `{"native":{"async":{"keep_finished":99999999999}}}`,
+		"retention too long":  `{"native":{"async":{"retention_days":100001}}}`,
+		"unread ttl too long": `{"native":{"async":{"unread_ttl_days":100001}}}`,
+		"wait order":          `{"native":{"async":{"default_wait_ms":500,"max_wait_ms":100}}}`,
+		"block order":         `{"native":{"async":{"default_block_ms":500,"max_block_ms":100}}}`,
+		"budget too small":    `{"native":{"async":{"response_max_bytes":600}}}`,
+		"unread below wait":   `{"native":{"async":{"unread_max":2}}}`,
+		"flush negative":      `{"native":{"async":{"index_flush_ms":-1}}}`,
+		"flush too long":      `{"native":{"async":{"index_flush_ms":60001}}}`,
+		"sse ids negative":    `{"native":{"async":{"sse_max_ids":-1}}}`,
+		"sse ids too many":    `{"native":{"async":{"sse_max_ids":101}}}`,
+		"latest zero":         `{"native":{"async":{"latest_bytes":0}}}`,
+		"latest lines zero":   `{"native":{"async":{"latest_lines":0}}}`,
+		"total below bytes":   `{"native":{"async":{"latest_bytes":600,"latest_total_bytes":500}}}`,
+		"value above bytes":   `{"native":{"async":{"latest_bytes":50,"latest_value_bytes":80}}}`,
+		"latest string":       `{"native":{"async":{"latest_bytes":"500"}}}`,
 	}
 	for name, tools := range cases {
 		if _, err := normalizeAsync(t, tools); err == nil {
@@ -148,5 +150,15 @@ func TestNativeAsyncSettingsLatestKeysOverrideAndDefault(t *testing.T) {
 	d := asyncmgr.DefaultConfig()
 	if d.LatestBytes != 500 || d.LatestLines != 3 || d.LatestTotalBytes != 2000 {
 		t.Fatalf("defaults = %+v", d)
+	}
+}
+
+func TestNativeAsyncSettingsAcceptsTheMaximumDayCounts(t *testing.T) {
+	settings, err := normalizeAsync(t, `{"native":{"async":{"retention_days":100000,"unread_ttl_days":100000}}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Config.RetentionDays != 100000 || settings.Config.UnreadTTLDays != 100000 {
+		t.Fatalf("days = %d/%d", settings.Config.RetentionDays, settings.Config.UnreadTTLDays)
 	}
 }

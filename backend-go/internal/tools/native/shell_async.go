@@ -130,7 +130,7 @@ func (h *AsyncHost) sweepShellResults(spec shellAsyncSpec) {
 	if err != nil {
 		return
 	}
-	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	cutoff := time.Now().Add(-asyncmgr.DaysDuration(days))
 	for _, entry := range entries {
 		if info, err := entry.Info(); err == nil && info.Mode().IsRegular() && info.ModTime().Before(cutoff) {
 			_ = os.Remove(filepath.Join(dir, entry.Name()))

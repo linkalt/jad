@@ -9,6 +9,10 @@ import (
 
 const maxNativeAsyncValue int64 = 10_000_000
 
+// maxNativeAsyncDays keeps retention_days and unread_ttl_days far below the point
+// (about 106,751 days) where a day count no longer fits a time.Duration.
+const maxNativeAsyncDays int64 = 100_000
+
 var nativeAsyncKeys = []string{
 	"max_handles", "max_handles_total", "default_block_ms", "max_block_ms", "default_wait_ms", "max_wait_ms",
 	"wait_max_signals", "list_default_limit", "list_max_limit", "summary_max_bytes", "status_summary_max_bytes",
@@ -81,6 +85,9 @@ func normalizeNativeAsyncSettings(setting map[string]json.RawMessage, settingPat
 			minimum = 0
 		}
 		maximum := maxNativeAsyncValue
+		if strings.HasSuffix(key, "_days") {
+			maximum = maxNativeAsyncDays
+		}
 		if strings.HasSuffix(key, "_ms") && key != "index_flush_ms" {
 			maximum = maxToolTimeoutMs
 		}
